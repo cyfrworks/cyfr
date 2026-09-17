@@ -25,7 +25,7 @@ defmodule Cyfr.VocabularyDriftTest do
   @orchestrator_literal_allowed %{}
 
   @type_value ~r/"(?:soul|role)"/
-  @type_key ~r/\["(?:soul|role)"\]|"(?:soul|role)"\s*=>/
+  @type_key ~r/\["(?:soul|role)"\]|"(?:soul|role)"\s*=>|Arg\.new\("(?:soul|role)",/
 
   # Lines that spell an agent type as a bare value, by file and exact count.
   @type_literal_allowed %{
@@ -35,6 +35,11 @@ defmodule Cyfr.VocabularyDriftTest do
 
   defp type_value_line?(line) do
     String.replace(line, @type_key, "") =~ @type_value
+  end
+
+  test "the scan distinguishes argument names from agent type values" do
+    refute type_value_line?("Arg.new(\"role\", :string, required: true)")
+    assert type_value_line?("agent.type == \"role\"")
   end
 
   # One walk of the tree serves every pin.

@@ -18,62 +18,68 @@ defmodule Sanctum.MCP.OAuthTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "oauth",
-      title: "OAuth Provider Configuration",
+    alias Cyfr.Ops.{Arg, Operation}
+    # External only, like every other credential write (key.create,
+    # vault.create, webhook.create). This one writes the operator's
+    # OAuth *client* secret, so a component reaching it from inside
+    # the sandbox would be the widest of the set, not the narrowest.
+    #
+    # The mutations are interactive for the same reason `vault.*` is:
+    # this is the athanor's OAuth app identity, the material
+    # `vault.authorize` spends to obtain third-party tokens. It sits on
+    # the OUTBOUND side of the credential line, with vault entries —
+    # not with the inbound credentials CYFR mints for itself (key,
+    # webhook), which stay permission-gated. No API key can point the
+    # athanor's next consent screen at someone else's OAuth app.
+    # `list` stays a read.
+    Operation.tool(
+      [
+        Operation.new(
+          "oauth",
+          "set_client",
+          "Set client oauth",
+          [
+            Arg.new("provider", :string,
+              required: true,
+              description: "OAuth provider name (e.g. 'google')"
+            ),
+            Arg.new("client_id", :string,
+              required: true,
+              description: "The OAuth app's client id"
+            ),
+            Arg.new("client_secret", :string,
+              nullable: true,
+              description: "The OAuth app's client secret (omit for public clients)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new("oauth", "list", "List oauth", [],
+          kind: :read,
+          planes: [:external],
+          permission: :vault_read
+        ),
+        Operation.new(
+          "oauth",
+          "delete_client",
+          "Delete client oauth",
+          [
+            Arg.new("provider", :string,
+              required: true,
+              description: "OAuth provider name (e.g. 'google')"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          consent: :interactive
+        )
+      ],
       description:
-        "Store, list and remove OAuth app client credentials per provider. Grants are " <>
-          "connection-keyed: start them with vault.authorize.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          # External only, like every other credential write (key.create,
-          # vault.create, webhook.create). This one writes the operator's
-          # OAuth *client* secret, so a component reaching it from inside
-          # the sandbox would be the widest of the set, not the narrowest.
-          #
-          # The mutations are interactive for the same reason `vault.*` is:
-          # this is the athanor's OAuth app identity, the material
-          # `vault.authorize` spends to obtain third-party tokens. It sits on
-          # the OUTBOUND side of the credential line, with vault entries —
-          # not with the inbound credentials CYFR mints for itself (key,
-          # webhook), which stay permission-gated. No API key can point the
-          # athanor's next consent screen at someone else's OAuth app.
-          # `list` stays a read.
-          "set_client" => %{kind: :write, planes: [:external], consent: :interactive},
-          "list" => %{kind: :read, planes: [:external], permission: :vault_read},
-          "delete_client" => %{
-            kind: :destructive,
-            planes: [:external],
-            consent: :interactive
-          }
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => ["set_client", "list", "delete_client"],
-            "description" => "Action to perform"
-          },
-          "provider" => %{
-            "type" => "string",
-            "description" => "OAuth provider name (e.g. 'google')"
-          },
-          "client_id" => %{
-            "type" => "string",
-            "description" => "The OAuth app's client id"
-          },
-          "client_secret" => %{
-            "type" => "string",
-            "description" => "The OAuth app's client secret (omit for public clients)"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+        "Store, list and remove OAuth app client credentials per provider. Grants are connection-keyed: start them with vault.authorize.",
+      title: "OAuth Provider Configuration"
+    )
   end
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do

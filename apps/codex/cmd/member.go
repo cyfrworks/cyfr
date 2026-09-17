@@ -30,19 +30,18 @@ var memberCmd = &cobra.Command{
 		"invitation that activates on that person's first sign-in.",
 }
 
-func memberArgs(cmd *cobra.Command, action string) map[string]any {
-	payload := map[string]any{"action": action}
+func memberAthanor(cmd *cobra.Command) ops.Field[string] {
 	if athanor, _ := cmd.Flags().GetString("athanor"); athanor != "" {
-		payload["athanor"] = athanor
+		return ops.Value(athanor)
 	}
-	return payload
+	return ops.Field[string]{}
 }
 
 var memberListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the members",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), ops.Member, memberArgs(cmd, "list"))
+		result, err := newClient().CallTool(cmd.Context(), ops.Member, ops.MemberListArgs{Athanor: memberAthanor(cmd)})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -71,8 +70,12 @@ var memberAddCmd = &cobra.Command{
 	Short: "Add someone",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		payload := memberArgs(cmd, "add")
-		payload[memberKey(args[0])] = args[0]
+		payload := ops.MemberAddArgs{Athanor: memberAthanor(cmd)}
+		if memberKey(args[0]) == "email" {
+			payload.Email = ops.Value(args[0])
+		} else {
+			payload.UserId = ops.Value(args[0])
+		}
 		result, err := newClient().CallTool(cmd.Context(), ops.Member, payload)
 		if err != nil {
 			return handleToolError(err)
@@ -91,8 +94,12 @@ var memberRemoveCmd = &cobra.Command{
 	Short: "Remove someone",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		payload := memberArgs(cmd, "remove")
-		payload[memberKey(args[0])] = args[0]
+		payload := ops.MemberRemoveArgs{Athanor: memberAthanor(cmd)}
+		if memberKey(args[0]) == "email" {
+			payload.Email = ops.Value(args[0])
+		} else {
+			payload.UserId = ops.Value(args[0])
+		}
 		result, err := newClient().CallTool(cmd.Context(), ops.Member, payload)
 		if err != nil {
 			return handleToolError(err)
@@ -110,7 +117,7 @@ var memberLeaveCmd = &cobra.Command{
 	Use:   "leave",
 	Short: "Leave the group",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), ops.Member, memberArgs(cmd, "leave"))
+		result, err := newClient().CallTool(cmd.Context(), ops.Member, ops.MemberLeaveArgs{Athanor: memberAthanor(cmd)})
 		if err != nil {
 			return handleToolError(err)
 		}

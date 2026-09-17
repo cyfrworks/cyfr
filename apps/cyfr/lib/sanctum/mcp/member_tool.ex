@@ -23,59 +23,83 @@ defmodule Sanctum.MCP.MemberTool do
 
   @person_only ~w(add remove leave)
 
-  # An `athanor` argument names the athanor an action works on: an id, a
-  # group slug, or `@<namespace>`; absent, the caller's focused athanor.
-  @athanor_arg %{
-    "type" => "string",
-    "description" =>
-      "The athanor to act on — an id, a group slug, or @<namespace>. " <>
-        "Defaults to the athanor in focus."
-  }
-
   @doc false
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "member",
-      title: "Members",
+    alias Cyfr.Ops.{Arg, Operation}
+
+    Operation.tool(
+      [
+        Operation.new(
+          "member",
+          "list",
+          "List member",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            ),
+            Arg.new("limit", :integer,
+              description: "Page size for list (default and ceiling 500)"
+            ),
+            Arg.new("offset", :integer, description: "Rows to skip for list (default 0)")
+          ],
+          kind: :read,
+          planes: [:external]
+        ),
+        Operation.new(
+          "member",
+          "add",
+          "Add member",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            ),
+            Arg.new("email", :string, description: "The person's email (add, remove)"),
+            Arg.new("user_id", :string,
+              description: "The person's user id, when already on this server (add, remove)"
+            )
+          ],
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "member",
+          "remove",
+          "Remove member",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            ),
+            Arg.new("email", :string, description: "The person's email (add, remove)"),
+            Arg.new("user_id", :string,
+              description: "The person's user id, when already on this server (add, remove)"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external]
+        ),
+        Operation.new(
+          "member",
+          "leave",
+          "Leave member",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            )
+          ],
+          kind: :write,
+          planes: [:external]
+        )
+      ],
       description:
-        "Who is in an athanor. Any member may add (by email or user id), remove, or " <>
-          "leave — there are no roles. Adding an email the server has not seen leaves an " <>
-          "invitation that activates on that person's first sign-in.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          "list" => %{kind: :read, planes: [:external]},
-          "add" => %{kind: :write, planes: [:external]},
-          "remove" => %{kind: :destructive, planes: [:external]},
-          "leave" => %{kind: :write, planes: [:external]}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => ["list", "add", "remove", "leave"],
-            "description" => "Action to perform"
-          },
-          "athanor" => @athanor_arg,
-          "email" => %{"type" => "string", "description" => "The person's email (add, remove)"},
-          "user_id" => %{
-            "type" => "string",
-            "description" => "The person's user id, when already on this server (add, remove)"
-          },
-          "limit" => %{
-            "type" => "integer",
-            "description" => "Page size for list (default and ceiling 500)"
-          },
-          "offset" => %{"type" => "integer", "description" => "Rows to skip for list (default 0)"}
-        },
-        "required" => ["action"]
-      }
-    }
+        "Who is in an athanor. Any member may add (by email or user id), remove, or leave — there are no roles. Adding an email the server has not seen leaves an invitation that activates on that person's first sign-in.",
+      title: "Members"
+    )
   end
 
   def handle(%Context{auth_method: :api_key}, %{"action" => action})

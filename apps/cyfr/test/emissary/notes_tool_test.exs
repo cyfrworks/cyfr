@@ -351,7 +351,11 @@ defmodule Emissary.MCP.NotesToolTest do
     ]
 
     retired_args = args |> Map.put("name", "retired") |> Map.put(retired, "thread_1")
-    assert {:ok, _} = in_chain(ctx, retired_args, auth, old_lineage)
+
+    assert {:error, {:invalid_argument, "Unknown field: " <> ^retired}} =
+             in_chain(ctx, retired_args, auth, old_lineage)
+
+    assert {:ok, _} = in_chain(ctx, Map.delete(retired_args, retired), auth, old_lineage)
 
     assert {:ok, %{thread: nil, execution: "exec_1"}} =
              in_chain(ctx, %{"action" => "read", "name" => "retired"}, auth)

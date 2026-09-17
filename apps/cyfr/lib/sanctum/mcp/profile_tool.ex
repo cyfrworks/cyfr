@@ -20,83 +20,195 @@ defmodule Sanctum.MCP.ProfileTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "profile",
-      title: "Profiles & Consent",
+    alias Cyfr.Ops.{Arg, Operation}
+    # Dispatch applies the coarse consent class; the domain applies
+    # the exact one (commit's digest-pinned key-capability arm lives
+    # in Sanctum.Consent.Commit and stays there).
+    bindings_arg =
+      Arg.new(
+        "bindings",
+        {:array,
+         Arg.new(
+           nil,
+           {:record,
+            [
+              Arg.new("need", :string),
+              Arg.new("entry_id", :string, required: true),
+              Arg.new("fields", {:array, Arg.new(nil, :string)}),
+              Arg.new("scopes", {:array, Arg.new(nil, :string)})
+            ]}
+         )},
+        description:
+          "grant only: the credentials to bind, [{need:'@ingress', entry_id, fields, scopes}]"
+      )
+
+    decisions_arg =
+      Arg.new(
+        "decisions",
+        {:record,
+         [
+           Arg.new("ref", :string),
+           Arg.new("kind", :string, enum: ["owner", "public"]),
+           Arg.new("label", :string),
+           Arg.new("scope", :string, enum: ["versionless", "pinned"]),
+           Arg.new("invoke_mode", :string, enum: ["open_inert", "edge_only"]),
+           bindings_arg,
+           Arg.new(
+             "selections",
+             {:array,
+              Arg.new(
+                nil,
+                {:record,
+                 [
+                   Arg.new("dep", :string, required: true),
+                   Arg.new("label", :string),
+                   Arg.new("from", :string),
+                   Arg.new("fields", {:array, Arg.new(nil, :string)})
+                 ]}
+              )}
+           ),
+           Arg.new(
+             "tool_servers",
+             {:array,
+              Arg.new(
+                nil,
+                {:record,
+                 [
+                   Arg.new("server_name", :string, required: true),
+                   Arg.new("tool_patterns", {:array, Arg.new(nil, :string)})
+                 ]}
+              )}
+           ),
+           Arg.new("override", :boolean),
+           Arg.new("publish_from", :string),
+           Arg.new("need_ids", {:array, Arg.new(nil, :string)}),
+           Arg.new("durable_storage", :boolean)
+         ]},
+        required: true,
+        description:
+          "The operator's choices: ref, scope, invoke_mode, bindings [{need:'@ingress', entry_id, fields, scopes}], override"
+      )
+
+    Operation.tool(
+      [
+        Operation.new(
+          "profile",
+          "plan",
+          "Plan profile",
+          [
+            Arg.new("ref", :string,
+              required: true,
+              description: "Component reference to grant (name-level or versioned)"
+            ),
+            Arg.new("kind", :string, enum: ["owner", "public"]),
+            Arg.new("label", :string, description: "Profile label (default 'default')")
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :staging
+        ),
+        Operation.new("profile", "preview", "Preview profile", [decisions_arg],
+          kind: :write,
+          planes: [:external],
+          consent: :staging
+        ),
+        Operation.new(
+          "profile",
+          "commit",
+          "Commit profile",
+          [
+            decisions_arg,
+            Arg.new("plan_token", :string, required: true, description: "From plan"),
+            Arg.new("proof", :string, required: true, description: "From preview"),
+            Arg.new("commit_digest", :string,
+              required: true,
+              description: "The digest preview rendered — what is being approved"
+            ),
+            Arg.new("expected_consent_revision", :integer,
+              required: true,
+              nullable: true,
+              description: "The revision plan reported"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :staging
+        ),
+        Operation.new(
+          "profile",
+          "grant",
+          "Grant profile",
+          [
+            Arg.new("profile_id", :string,
+              required: true,
+              description: "Profile id (grant/list/revoke)"
+            ),
+            bindings_arg,
+            Arg.new("expected_consent_revision", :integer,
+              required: true,
+              nullable: true,
+              description: "The revision plan reported"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "profile",
+          "publish",
+          "Publish profile",
+          [
+            Arg.new("profile_id", :string,
+              required: true,
+              description: "Profile id (grant/list/revoke)"
+            ),
+            Arg.new("need_ids", {:array, Arg.new(nil, :string)},
+              description:
+                "publish only: edge keys whose credentials the public profile keeps (default none — expose without credentials)"
+            ),
+            Arg.new("durable_storage", :boolean,
+              description:
+                "publish only: allow durable writes (default false — read-only storage)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :staging
+        ),
+        Operation.new(
+          "profile",
+          "list",
+          "List profile",
+          [
+            Arg.new("ref", :string,
+              required: true,
+              description: "Component reference to grant (name-level or versioned)"
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          consent: :staging
+        ),
+        Operation.new(
+          "profile",
+          "revoke",
+          "Revoke profile",
+          [
+            Arg.new("profile_id", :string,
+              required: true,
+              description: "Profile id (grant/list/revoke)"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          consent: :interactive
+        )
+      ],
       description:
-        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and " <>
-          "candidates, preview renders exactly what would be granted and mints the proof, " <>
-          "commit verifies the proof against a live recomputation and writes an immutable " <>
-          "revision. Nothing is granted outside this walk.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          # Dispatch applies the coarse consent class; the domain applies
-          # the exact one (commit's digest-pinned key-capability arm lives
-          # in Sanctum.Consent.Commit and stays there).
-          "plan" => %{kind: :write, planes: [:external], consent: :staging},
-          "preview" => %{kind: :write, planes: [:external], consent: :staging},
-          "commit" => %{kind: :write, planes: [:external], consent: :staging},
-          "grant" => %{kind: :write, planes: [:external], consent: :interactive},
-          "publish" => %{kind: :write, planes: [:external], consent: :staging},
-          "list" => %{kind: :read, planes: [:external], consent: :staging},
-          "revoke" => %{kind: :destructive, planes: [:external], consent: :interactive}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => ["plan", "preview", "commit", "grant", "publish", "list", "revoke"],
-            "description" => "Action to perform"
-          },
-          "need_ids" => %{
-            "type" => "array",
-            "items" => %{"type" => "string"},
-            "description" =>
-              "publish only: edge keys whose credentials the public profile keeps " <>
-                "(default none — expose without credentials)"
-          },
-          "durable_storage" => %{
-            "type" => "boolean",
-            "description" =>
-              "publish only: allow durable writes (default false — read-only storage)"
-          },
-          "ref" => %{
-            "type" => "string",
-            "description" => "Component reference to grant (name-level or versioned)"
-          },
-          "label" => %{"type" => "string", "description" => "Profile label (default 'default')"},
-          "kind" => %{"type" => "string", "enum" => ["owner", "public"]},
-          "profile_id" => %{"type" => "string", "description" => "Profile id (grant/list/revoke)"},
-          "bindings" => %{
-            "type" => "array",
-            "description" =>
-              "grant only: the credentials to bind, " <>
-                "[{need:'@ingress', entry_id, fields, scopes}]"
-          },
-          "decisions" => %{
-            "type" => "object",
-            "description" =>
-              "The operator's choices: ref, scope, invoke_mode, bindings " <>
-                "[{need:'@ingress', entry_id, fields, scopes}], override"
-          },
-          "plan_token" => %{"type" => "string", "description" => "From plan"},
-          "proof" => %{"type" => "string", "description" => "From preview"},
-          "commit_digest" => %{
-            "type" => "string",
-            "description" => "The digest preview rendered — what is being approved"
-          },
-          "expected_consent_revision" => %{
-            "type" => "integer",
-            "description" => "The revision plan reported"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates, preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision. Nothing is granted outside this walk.",
+      title: "Profiles & Consent"
+    )
   end
 
   def handle(%Context{} = ctx, %{"action" => "plan", "ref" => ref} = args) do

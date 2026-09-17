@@ -752,7 +752,7 @@ Each issue's `fix` object contains the MCP tool, action, and args to start the c
 
 ### Scheduling Recurring Executions
 
-CYFR supports cron-based scheduling for recurring component execution. Create schedules via the MCP `schedule` tool or the `cyfr schedule` CLI commands.
+CYFR supports cron-based scheduling for recurring component execution. Create schedules via the MCP `schedule` tool or the `cyfr schedule` CLI commands. Bind each schedule to a consented execution profile using `profile_id` (MCP) or `--profile` (CLI); `cyfr profile list` shows available profile IDs.
 
 **Creating a schedule via MCP:**
 
@@ -766,6 +766,7 @@ CYFR supports cron-based scheduling for recurring component execution. Create sc
       "name": "daily-report",
       "cron_expression": "0 9 * * *",
       "reference": "formula:local.report:1.0.0",
+      "profile_id": "prf_...",
       "input": {"format": "summary"}
     }
   }
@@ -784,7 +785,7 @@ CYFR supports cron-based scheduling for recurring component execution. Create sc
 **Managing schedules:**
 
 ```bash
-cyfr schedule create --name daily-report --cron "0 9 * * *" --ref "formula:local.report:1.0.0"
+cyfr schedule create --profile <profile_id> --name daily-report --cron "0 9 * * *" --ref "formula:local.report:1.0.0"
 cyfr schedule list
 cyfr schedule pause <schedule_id>
 cyfr schedule resume <schedule_id>

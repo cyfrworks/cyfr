@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/cyfr/codex/internal/mcp"
+	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/ref"
 )
 
@@ -17,9 +18,7 @@ import (
 // Uses the "list" action which runs locally and is fast, rather than "search"
 // which may hit the remote registry.
 func FetchComponents(ctx context.Context, client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool(ctx, "component", map[string]any{
-		"action": "list",
-	})
+	result, err := client.CallTool(ctx, "component", ops.ComponentListArgs{})
 	if err != nil {
 		return nil, fmt.Errorf("fetch components: %w", err)
 	}
@@ -64,12 +63,9 @@ func extractComponents(result map[string]any) ([]Option, error) {
 // exact name (and optionally namespace) matches, returning a slice of version
 // strings.
 func FetchVersions(ctx context.Context, client *mcp.Client, name, namespace, componentType string) ([]string, error) {
-	args := map[string]any{
-		"action": "search",
-		"query":  name,
-	}
+	args := ops.ComponentSearchArgs{Query: ops.Value(name)}
 	if componentType != "" {
-		args["type"] = componentType
+		args.Type = ops.Value(componentType)
 	}
 
 	result, err := client.CallTool(ctx, "component", args)
@@ -115,9 +111,7 @@ func FetchVersions(ctx context.Context, client *mcp.Client, name, namespace, com
 
 // FetchKeys calls key list and returns options for selection.
 func FetchKeys(ctx context.Context, client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool(ctx, "key", map[string]any{
-		"action": "list",
-	})
+	result, err := client.CallTool(ctx, "key", ops.KeyListArgs{})
 	if err != nil {
 		return nil, fmt.Errorf("fetch keys: %w", err)
 	}
@@ -126,9 +120,7 @@ func FetchKeys(ctx context.Context, client *mcp.Client) ([]Option, error) {
 
 // FetchGuides calls aqua list and returns options for selection.
 func FetchGuides(ctx context.Context, client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool(ctx, "aqua", map[string]any{
-		"action": "list",
-	})
+	result, err := client.CallTool(ctx, "aqua", ops.AquaListArgs{})
 	if err != nil {
 		return nil, fmt.Errorf("fetch guides: %w", err)
 	}
@@ -138,9 +130,7 @@ func FetchGuides(ctx context.Context, client *mcp.Client) ([]Option, error) {
 // FetchScrolls calls aqua skill_list and returns the scrolls as options
 // for selection.
 func FetchScrolls(ctx context.Context, client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool(ctx, "aqua", map[string]any{
-		"action": "skill_list",
-	})
+	result, err := client.CallTool(ctx, "aqua", ops.AquaSkillListArgs{})
 	if err != nil {
 		return nil, fmt.Errorf("fetch scrolls: %w", err)
 	}

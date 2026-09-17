@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/cyfr/codex/internal/ops"
 	"strings"
@@ -41,10 +42,7 @@ var profileListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), ops.Profile, map[string]any{
-			"action": ops.ProfileList,
-			"ref":    args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfileListArgs{Ref: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -86,10 +84,7 @@ var profileRevokeCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), ops.Profile, map[string]any{
-			"action":     ops.ProfileRevoke,
-			"profile_id": args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfileRevokeArgs{ProfileId: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -116,10 +111,7 @@ var profileGrantCmd = &cobra.Command{
 		client := newClient()
 		ref := args[0]
 
-		plan, err := client.CallTool(cmd.Context(), ops.Profile, map[string]any{
-			"action": ops.ProfilePlan,
-			"ref":    ref,
-		})
+		plan, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfilePlanArgs{Ref: ref})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -132,12 +124,9 @@ var profileGrantCmd = &cobra.Command{
 			return err
 		}
 
-		decisions := map[string]any{"ref": ref, "bindings": bindings}
+		decisions := ops.ProfilePreviewArgsDecisions{Ref: ops.Value(ref), Bindings: ops.Value(bindings)}
 
-		preview, err := client.CallTool(cmd.Context(), ops.Profile, map[string]any{
-			"action":    ops.ProfilePreview,
-			"decisions": decisions,
-		})
+		preview, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfilePreviewArgs{Decisions: decisions})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -152,14 +141,28 @@ var profileGrantCmd = &cobra.Command{
 			}
 		}
 
-		result, err := client.CallTool(cmd.Context(), ops.Profile, map[string]any{
-			"action":                    ops.ProfileCommit,
-			"decisions":                 decisions,
-			"plan_token":                plan["plan_token"],
-			"proof":                     preview["proof"],
-			"commit_digest":             preview["commit_digest"],
-			"expected_consent_revision": plan["expected_consent_revision"],
-		})
+		commitBindings := make([]ops.ProfileCommitArgsDecisionsBindingsItem, len(bindings))
+		for i, binding := range bindings {
+			commitBindings[i] = ops.ProfileCommitArgsDecisionsBindingsItem(binding)
+		}
+		planToken, tokenOK := plan["plan_token"].(string)
+		proof, proofOK := preview["proof"].(string)
+		digest, digestOK := preview["commit_digest"].(string)
+		rawRevision, revisionOK := plan["expected_consent_revision"]
+		if !tokenOK || !proofOK || !digestOK || !revisionOK {
+			return fmt.Errorf("server returned an incomplete consent preview")
+		}
+		revisionJSON, err := json.Marshal(rawRevision)
+		if err != nil {
+			return fmt.Errorf("invalid consent revision: %w", err)
+		}
+		var revision *int
+		if err := json.Unmarshal(revisionJSON, &revision); err != nil {
+			return fmt.Errorf("invalid consent revision: %w", err)
+		}
+		result, err := client.CallTool(cmd.Context(), ops.Profile, ops.ProfileCommitArgs{
+			Decisions: ops.ProfileCommitArgsDecisions{Ref: ops.Value(ref), Bindings: ops.Value(commitBindings)},
+			PlanToken: planToken, Proof: proof, CommitDigest: digest, ExpectedConsentRevision: revision})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -177,7 +180,7 @@ var profileGrantCmd = &cobra.Command{
 // One vault entry per need: from --entry need=entry_id flags, or asked for
 // interactively. A need left unbound
 // is a deliberate choice — an app can be granted with no credentials at all.
-func collectBindings(cmd *cobra.Command, plan map[string]any) ([]map[string]any, error) {
+func collectBindings(cmd *cobra.Command, plan map[string]any) ([]ops.ProfilePreviewArgsDecisionsBindingsItem, error) {
 	preset := map[string]string{}
 
 	flags, _ := cmd.Flags().GetStringSlice("entry")
@@ -191,7 +194,7 @@ func collectBindings(cmd *cobra.Command, plan map[string]any) ([]map[string]any,
 
 	needs, _ := plan["needs"].([]any)
 	candidates, _ := plan["candidates"].([]any)
-	bindings := []map[string]any{}
+	bindings := []ops.ProfilePreviewArgsDecisionsBindingsItem{}
 
 	for _, entry := range needs {
 		need, ok := entry.(map[string]any)
@@ -202,7 +205,7 @@ func collectBindings(cmd *cobra.Command, plan map[string]any) ([]map[string]any,
 		name := str(need["need"])
 
 		if entryID, given := preset[name]; given {
-			bindings = append(bindings, map[string]any{"need": name, "entry_id": entryID})
+			bindings = append(bindings, ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(name), EntryId: entryID})
 			continue
 		}
 
@@ -215,7 +218,7 @@ func collectBindings(cmd *cobra.Command, plan map[string]any) ([]map[string]any,
 			return nil, err
 		}
 		if entryID != "" {
-			bindings = append(bindings, map[string]any{"need": name, "entry_id": entryID})
+			bindings = append(bindings, ops.ProfilePreviewArgsDecisionsBindingsItem{Need: ops.Value(name), EntryId: entryID})
 		}
 	}
 

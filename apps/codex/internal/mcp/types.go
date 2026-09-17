@@ -3,6 +3,8 @@
 
 package mcp
 
+import "encoding/json"
+
 // JSONRPCRequest is a JSON-RPC 2.0 request.
 type JSONRPCRequest struct {
 	JSONRPC string `json:"jsonrpc"`
@@ -48,8 +50,8 @@ type ServerInfo struct {
 
 // ToolCallParams are the parameters for tools/call.
 type ToolCallParams struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
 }
 
 // ToolCallResult is the result of tools/call.

@@ -17,89 +17,166 @@ defmodule Sanctum.MCP.WebhookTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "webhook",
-      title: "Webhook Management",
+    alias Cyfr.Ops.{Arg, Operation}
+    # create/update also require the registration's consent binding —
+    # a conditional Authz check the annotation cannot express; it
+    # stays in Sanctum.Webhook.
+    Operation.tool(
+      [
+        Operation.new(
+          "webhook",
+          "create",
+          "Create webhook",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "Human-readable name for the webhook (unique per tenant)"
+            ),
+            Arg.new("target_ref", :string,
+              required: true,
+              description:
+                "Component reference to invoke on inbound delivery (e.g. 'f:local.handle-github-push')"
+            ),
+            Arg.new("profile_id", :string,
+              required: true,
+              description:
+                "Profile the webhook fires under (required on create). Deliveries run with this profile's consented authority; binding takes the consent authorization class, so an interactive session or consent-capable key is needed."
+            ),
+            Arg.new("input_template", {:map, Arg.new(nil, :json)},
+              description:
+                "JSON object merged into the invocation envelope. The reserved key '_webhook' is set by the controller and must not be present here. Max 16 KB."
+            ),
+            Arg.new("signature_header", :string,
+              description:
+                "HTTP header carrying the HMAC signature (default 'x-cyfr-signature'). Use 'x-hub-signature-256' for GitHub, 'stripe-signature' for Stripe, etc."
+            ),
+            Arg.new("timestamp_header", :string,
+              description:
+                "HTTP header carrying a unix-seconds timestamp for replay protection. When set, HMAC payload becomes '<ts>.<raw_body>' (Stripe-style) and requests outside ±5 min are rejected. Without it (and without idempotency_key_header) a captured delivery replays indefinitely — a signature stays valid forever — so create refuses unless you pass replay_protection: 'none'. Set it to whatever the sender emits ('stripe-signature' carries its own; GitHub has no timestamp header). Empty string clears the field."
+            ),
+            Arg.new("idempotency_key_header", :string,
+              description:
+                "HTTP header carrying a unique event id (e.g. 'x-github-delivery' for GitHub, the Stripe event id for Stripe). When set, repeat deliveries with the same id short-circuit to a 200 with status 'duplicate' for as long as the delivery record is retained (the retention scheduler's cadence; unbounded when retention is off), and deliveries MISSING the header are refused with 400. Left unset, a sender's own retries each run the bound component again. Empty string clears the field."
+            ),
+            Arg.new("replay_protection", :string,
+              description:
+                "Required on create when NEITHER timestamp_header NOR idempotency_key_header is set, and on any update that would clear the last one: pass 'none' to state that this webhook accepts replayed deliveries. There is no default — the decision has to be made rather than fallen into.",
+              enum: ["none"]
+            ),
+            Arg.new("description", :string,
+              description: "Free-form description for operator reference"
+            ),
+            Arg.new("rate_limit", :string,
+              description:
+                "Per-slug rate limit (e.g. '100/1m', '1000/1h'). Default 100/1m if unset."
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new("webhook", "list", "List webhook", [],
+          kind: :read,
+          planes: [:external, :in_chain],
+          permission: :storage_read
+        ),
+        Operation.new(
+          "webhook",
+          "get",
+          "Get webhook",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "Human-readable name for the webhook (unique per tenant)"
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain],
+          permission: :storage_read
+        ),
+        Operation.new(
+          "webhook",
+          "update",
+          "Update webhook",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "Human-readable name for the webhook (unique per tenant)"
+            ),
+            Arg.new("target_ref", :string,
+              description:
+                "Component reference to invoke on inbound delivery (e.g. 'f:local.handle-github-push')"
+            ),
+            Arg.new("profile_id", :string,
+              description:
+                "Profile the webhook fires under (required on create). Deliveries run with this profile's consented authority; binding takes the consent authorization class, so an interactive session or consent-capable key is needed."
+            ),
+            Arg.new("input_template", {:map, Arg.new(nil, :json)},
+              description:
+                "JSON object merged into the invocation envelope. The reserved key '_webhook' is set by the controller and must not be present here. Max 16 KB."
+            ),
+            Arg.new("signature_header", :string,
+              description:
+                "HTTP header carrying the HMAC signature (default 'x-cyfr-signature'). Use 'x-hub-signature-256' for GitHub, 'stripe-signature' for Stripe, etc."
+            ),
+            Arg.new("timestamp_header", :string,
+              description:
+                "HTTP header carrying a unix-seconds timestamp for replay protection. When set, HMAC payload becomes '<ts>.<raw_body>' (Stripe-style) and requests outside ±5 min are rejected. Without it (and without idempotency_key_header) a captured delivery replays indefinitely — a signature stays valid forever — so create refuses unless you pass replay_protection: 'none'. Set it to whatever the sender emits ('stripe-signature' carries its own; GitHub has no timestamp header). Empty string clears the field."
+            ),
+            Arg.new("idempotency_key_header", :string,
+              description:
+                "HTTP header carrying a unique event id (e.g. 'x-github-delivery' for GitHub, the Stripe event id for Stripe). When set, repeat deliveries with the same id short-circuit to a 200 with status 'duplicate' for as long as the delivery record is retained (the retention scheduler's cadence; unbounded when retention is off), and deliveries MISSING the header are refused with 400. Left unset, a sender's own retries each run the bound component again. Empty string clears the field."
+            ),
+            Arg.new("replay_protection", :string,
+              description:
+                "Required on create when NEITHER timestamp_header NOR idempotency_key_header is set, and on any update that would clear the last one: pass 'none' to state that this webhook accepts replayed deliveries. There is no default — the decision has to be made rather than fallen into.",
+              enum: ["none"]
+            ),
+            Arg.new("description", :string,
+              description: "Free-form description for operator reference"
+            ),
+            Arg.new("rate_limit", :string,
+              description:
+                "Per-slug rate limit (e.g. '100/1m', '1000/1h'). Default 100/1m if unset."
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new(
+          "webhook",
+          "revoke",
+          "Revoke webhook",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "Human-readable name for the webhook (unique per tenant)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new(
+          "webhook",
+          "rotate",
+          "Rotate webhook",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "Human-readable name for the webhook (unique per tenant)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        )
+      ],
       description:
         "Manage inbound webhooks — stable URLs that accept HMAC-SHA256-signed POSTs and dispatch to a target component. Secrets are returned plaintext exactly once on create/rotate.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: false,
-        actions: %{
-          # create/update also require the registration's consent binding —
-          # a conditional Authz check the annotation cannot express; it
-          # stays in Sanctum.Webhook.
-          "create" => %{kind: :write, planes: [:external], permission: :admin},
-          "list" => %{kind: :read, planes: [:external, :in_chain], permission: :storage_read},
-          "get" => %{kind: :read, planes: [:external, :in_chain], permission: :storage_read},
-          "update" => %{kind: :write, planes: [:external], permission: :admin},
-          "revoke" => %{kind: :write, planes: [:external], permission: :admin},
-          "rotate" => %{kind: :write, planes: [:external], permission: :admin}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => ["create", "list", "get", "update", "revoke", "rotate"],
-            "description" => "Action to perform"
-          },
-          "name" => %{
-            "type" => "string",
-            "description" => "Human-readable name for the webhook (unique per tenant)"
-          },
-          "target_ref" => %{
-            "type" => "string",
-            "description" =>
-              "Component reference to invoke on inbound delivery (e.g. 'f:local.handle-github-push')"
-          },
-          "profile_id" => %{
-            "type" => "string",
-            "description" =>
-              "Profile the webhook fires under (required on create). Deliveries run " <>
-                "with this profile's consented authority; binding takes the consent " <>
-                "authorization class, so an interactive session or consent-capable key is needed."
-          },
-          "input_template" => %{
-            "type" => "object",
-            "description" =>
-              "JSON object merged into the invocation envelope. The reserved key '_webhook' is set by the controller and must not be present here. Max 16 KB."
-          },
-          "signature_header" => %{
-            "type" => "string",
-            "description" =>
-              "HTTP header carrying the HMAC signature (default 'x-cyfr-signature'). Use 'x-hub-signature-256' for GitHub, 'stripe-signature' for Stripe, etc."
-          },
-          "replay_protection" => %{
-            "type" => "string",
-            "enum" => ["none"],
-            "description" =>
-              "Required on create when NEITHER timestamp_header NOR idempotency_key_header is set, and on any update that would clear the last one: pass 'none' to state that this webhook accepts replayed deliveries. There is no default — the decision has to be made rather than fallen into."
-          },
-          "timestamp_header" => %{
-            "type" => "string",
-            "description" =>
-              "HTTP header carrying a unix-seconds timestamp for replay protection. When set, HMAC payload becomes '<ts>.<raw_body>' (Stripe-style) and requests outside ±5 min are rejected. Without it (and without idempotency_key_header) a captured delivery replays indefinitely — a signature stays valid forever — so create refuses unless you pass replay_protection: 'none'. Set it to whatever the sender emits ('stripe-signature' carries its own; GitHub has no timestamp header). Empty string clears the field."
-          },
-          "idempotency_key_header" => %{
-            "type" => "string",
-            "description" =>
-              "HTTP header carrying a unique event id (e.g. 'x-github-delivery' for GitHub, the Stripe event id for Stripe). When set, repeat deliveries with the same id short-circuit to a 200 with status 'duplicate' for as long as the delivery record is retained (the retention scheduler's cadence; unbounded when retention is off), and deliveries MISSING the header are refused with 400. Left unset, a sender's own retries each run the bound component again. Empty string clears the field."
-          },
-          "description" => %{
-            "type" => "string",
-            "description" => "Free-form description for operator reference"
-          },
-          "rate_limit" => %{
-            "type" => "string",
-            "description" =>
-              "Per-slug rate limit (e.g. '100/1m', '1000/1h'). Default 100/1m if unset."
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+      title: "Webhook Management"
+    )
   end
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do

@@ -14,15 +14,14 @@ defmodule Emissary.MCP.Router do
 
   ## Authorization Model
 
-  The Router gates; the dispatcher authorizes. The Router answers only the
-  coarse question — may an unauthenticated caller reach this tool action at
-  all? — by asking `Cyfr.Ops.Visibility`, which reads the action's
-  access annotation. `Cyfr.Ops.Catalog` then enforces the same
-  annotation (`auth`, `permission`, `consent`) at dispatch, and handlers keep
-  only the residual checks an annotation cannot express (tenant presence,
-  ownership, definition authority, the domain's finer consent arms) — via
-  `Context.require_permission/3` and friends, never a second copy
-  of the permission gate.
+  The Router gates; the dispatcher authorizes. For a declared action the
+  Router asks `Cyfr.Ops.Catalog.authorize_declared_action/4` before
+  validating remaining fields, so an unauthorized caller receives the
+  catalog's access refusal rather than a schema-detail error. Discovery
+  still reads the same annotations through `Cyfr.Ops.Visibility`.
+  Handlers keep only the residual checks an annotation cannot express
+  (tenant presence, ownership, definition authority, the domain's finer
+  consent arms).
 
   Authentication itself happens earlier, in `EmissaryWeb.Plugs.Authenticate`.
 
@@ -47,9 +46,8 @@ defmodule Emissary.MCP.Router do
 
   require Logger
 
-  alias Cyfr.Ops.{Catalog, Contract}
+  alias Cyfr.Ops.Catalog
   alias Emissary.MCP.{Message, Protocol, ResourceRegistry}
-  alias Cyfr.Ops.Visibility
 
   @server_capabilities %{
     # `listChanged: true` is a promise to actually push. It is true for tools
@@ -160,90 +158,90 @@ defmodule Emissary.MCP.Router do
           {:error, :invalid_params, "Unknown tool: #{name}"}
 
         {:ok, tool_def} ->
-          arguments = params["arguments"] || %{}
+          arguments = Map.get(params, "arguments", %{})
 
-          case Contract.validate(
-                 arguments,
-                 tool_def["inputSchema"] || %{}
-               ) do
-            {:error, validation_msg} ->
-              {:error, :invalid_params, validation_msg}
+          case Catalog.authorize_declared_action(name, ctx, arguments) do
+            {:error, reason} ->
+              if Sanctum.Unauthorized.reason?(reason) do
+                {:error, Sanctum.Unauthorized.code(reason),
+                 Sanctum.Unauthorized.message(reason, ctx.auth_method)}
+              else
+                {:error, :invalid_params, Cyfr.Ops.Error.message(reason)}
+              end
 
             :ok ->
-              action = arguments["action"]
+              case Catalog.validate_arguments(name, arguments) do
+                {:error, reason} ->
+                  {:error, :invalid_params, Cyfr.Ops.Error.message(reason)}
 
-              if not Visibility.admits_action?(name, action, ctx) do
-                # One prose (the CLI adds its own `cyfr login` hint off the
-                # :auth_required code, so the sentence needn't carry it).
-                {:error, :auth_required, Sanctum.Unauthorized.message(:unauthenticated)}
-              else
-                has_output_schema = Map.has_key?(tool_def, "outputSchema")
+                {:ok, arguments} ->
+                  has_output_schema = Map.has_key?(tool_def, "outputSchema")
 
-                case Catalog.call_external(name, ctx, arguments, runner: :supervised) do
-                  {:ok, result} ->
-                    text =
-                      case Jason.encode(result) do
-                        {:ok, encoded} ->
-                          encoded
+                  case Catalog.call_external(name, ctx, arguments, runner: :supervised) do
+                    {:ok, result} ->
+                      text =
+                        case Jason.encode(result) do
+                          {:ok, encoded} ->
+                            encoded
 
-                        {:error, encode_error} ->
-                          require Logger
+                          {:error, encode_error} ->
+                            require Logger
 
-                          Logger.error(
-                            "[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}"
-                          )
+                            Logger.error(
+                              "[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}"
+                            )
 
-                          ~s({"error":"Tool returned non-serializable result"})
+                            ~s({"error":"Tool returned non-serializable result"})
+                        end
+
+                      call_result = %{
+                        "content" => [%{"type" => "text", "text" => text}],
+                        "isError" => false
+                      }
+
+                      # A tool that declares an outputSchema also answers in structuredContent,
+                      # so a client gets the typed value without re-parsing the text block.
+                      call_result =
+                        if has_output_schema and is_map(result) do
+                          Map.put(call_result, "structuredContent", result)
+                        else
+                          call_result
+                        end
+
+                      {:ok, call_result}
+
+                    # An authorization refusal is a protocol-level error with
+                    # the auth code, not a tool result: a client branches on
+                    # `-33004` (and the CLI on `-33001`) where an isError text
+                    # block gives it nothing to branch on. Raised or returned,
+                    # it arrives as the `Sanctum.Unauthorized` vocabulary and
+                    # is rendered here — the wire boundary.
+                    {:error, reason} ->
+                      cond do
+                        Sanctum.Unauthorized.reason?(reason) ->
+                          {:error, Sanctum.Unauthorized.code(reason),
+                           Sanctum.Unauthorized.message(reason, ctx.auth_method)}
+
+                        # Return the consent signal as a JSON-RPC code with structured error.data.
+                        Emissary.MCP.ConsentSignal.signal?(reason) ->
+                          {tag, _} = reason
+
+                          {:error, tag, Emissary.MCP.ConsentSignal.message(reason),
+                           Emissary.MCP.ConsentSignal.data(reason)}
+
+                        true ->
+                          {:ok,
+                           %{
+                             "content" => [
+                               %{
+                                 "type" => "text",
+                                 "text" => format_error_reason(reason)
+                               }
+                             ],
+                             "isError" => true
+                           }}
                       end
-
-                    call_result = %{
-                      "content" => [%{"type" => "text", "text" => text}],
-                      "isError" => false
-                    }
-
-                    # A tool that declares an outputSchema also answers in structuredContent,
-                    # so a client gets the typed value without re-parsing the text block.
-                    call_result =
-                      if has_output_schema and is_map(result) do
-                        Map.put(call_result, "structuredContent", result)
-                      else
-                        call_result
-                      end
-
-                    {:ok, call_result}
-
-                  # An authorization refusal is a protocol-level error with
-                  # the auth code, not a tool result: a client branches on
-                  # `-33004` (and the CLI on `-33001`) where an isError text
-                  # block gives it nothing to branch on. Raised or returned,
-                  # it arrives as the `Sanctum.Unauthorized` vocabulary and
-                  # is rendered here — the wire boundary.
-                  {:error, reason} ->
-                    cond do
-                      Sanctum.Unauthorized.reason?(reason) ->
-                        {:error, Sanctum.Unauthorized.code(reason),
-                         Sanctum.Unauthorized.message(reason, ctx.auth_method)}
-
-                      # Return the consent signal as a JSON-RPC code with structured error.data.
-                      Emissary.MCP.ConsentSignal.signal?(reason) ->
-                        {tag, _} = reason
-
-                        {:error, tag, Emissary.MCP.ConsentSignal.message(reason),
-                         Emissary.MCP.ConsentSignal.data(reason)}
-
-                      true ->
-                        {:ok,
-                         %{
-                           "content" => [
-                             %{
-                               "type" => "text",
-                               "text" => format_error_reason(reason)
-                             }
-                           ],
-                           "isError" => true
-                         }}
-                    end
-                end
+                  end
               end
           end
       end

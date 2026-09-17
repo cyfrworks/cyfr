@@ -333,12 +333,7 @@ defmodule Aqua.Loop.Request do
           %{
             "name" => tool,
             "description" => (definition["description"] || "") <> asks(tool, kept, policy),
-            "parameters" =>
-              schema
-              |> Map.put(
-                "properties",
-                Map.put(properties, "action", Map.put(action_prop, "enum", kept))
-              )
+            "parameters" => Cyfr.Ops.Operation.restrict_schema(schema, kept)
           }
         end
 

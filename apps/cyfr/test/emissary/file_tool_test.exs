@@ -32,12 +32,30 @@ defmodule Emissary.MCP.FileToolTest do
   test "the annotations: reads behind storage_read, changes behind storage_write, no chain" do
     actions = Tool.definition().annotations.actions
 
-    assert actions["list"] == %{kind: :read, planes: [:external], permission: :storage_read}
-    assert actions["read"] == %{kind: :read, planes: [:external], permission: :storage_read}
-    assert actions["write"] == %{kind: :write, planes: [:external], permission: :storage_write}
+    assert actions["list"] == %{
+             kind: :read,
+             planes: [:external],
+             permission: :storage_read,
+             auth: :required
+           }
+
+    assert actions["read"] == %{
+             kind: :read,
+             planes: [:external],
+             permission: :storage_read,
+             auth: :required
+           }
+
+    assert actions["write"] == %{
+             kind: :write,
+             planes: [:external],
+             permission: :storage_write,
+             auth: :required
+           }
 
     assert actions["delete"] == %{
              kind: :destructive,
+             auth: :required,
              planes: [:external],
              permission: :storage_write
            }

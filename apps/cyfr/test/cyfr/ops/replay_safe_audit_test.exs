@@ -4,8 +4,7 @@
 defmodule Cyfr.Ops.ReplaySafeAuditTest do
   @moduledoc """
   `recovery: :replay_safe` is a reviewed property of a read: the boot
-  audit refuses it on any other kind, any other value and any declared
-  action outside the enum; the reader answers it for a read alone; the set
+  audit refuses it on any other kind, any other value; the reader answers it for a read alone; the set
   a recovered turn may re-dispatch is derived from the declarations, and
   that derived set is the review record.
   """
@@ -20,29 +19,30 @@ defmodule Cyfr.Ops.ReplaySafeAuditTest do
     def service, do: "carrier"
 
     def tools do
+      alias Cyfr.Ops.Operation
+
+      valid =
+        for {action, kind} <- [{"peek", :read}, {"poke", :write}, {"odd", :read}] do
+          Operation.new("carrier", action, "Replay probe", [], kind: kind, planes: [:in_chain])
+        end
+
+      definition = Operation.tool(valid)
+
+      operations =
+        Enum.map(valid, fn op ->
+          %{op | recovery: if(op.action == "odd", do: :reconcile, else: :replay_safe)}
+        end)
+
       [
         %{
-          name: "carrier",
-          description: "reads and a write",
-          annotations: %{
-            actions: %{
-              "peek" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-              "poke" => %{kind: :write, planes: [:in_chain], recovery: :replay_safe},
-              "odd" => %{kind: :read, planes: [:in_chain], recovery: :reconcile},
-              "hidden" => %{kind: :write, planes: [:in_chain], recovery: :replay_safe}
-            }
-          },
-          input_schema: %{
-            "type" => "object",
-            "properties" => %{
-              "action" => %{"type" => "string", "enum" => ["peek", "poke", "odd"]}
-            }
-          }
+          definition
+          | operations: operations,
+            annotations: %{actions: Map.new(operations, &{&1.action, Operation.annotations(&1)})}
         }
       ]
     end
 
-    def handle(_ctx, _args), do: {:ok, %{}}
+    def handle(_tool, _ctx, _args), do: {:ok, %{}}
   end
 
   test "the audit refuses replay safety on a write and any value but replay_safe" do
@@ -50,9 +50,8 @@ defmodule Cyfr.Ops.ReplaySafeAuditTest do
 
     assert Enum.map(missing, &{&1.action, &1.reason}) |> Enum.sort() ==
              [
-               {"hidden", :invalid_recovery},
-               {"odd", :invalid_recovery},
-               {"poke", :invalid_recovery}
+               {"odd", :invalid_operation},
+               {"poke", :invalid_operation}
              ]
   end
 

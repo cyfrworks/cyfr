@@ -200,193 +200,233 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   def tools do
+    alias Cyfr.Ops.{Arg, Operation}
+    # In-chain, an execution reads its own payload alone, for the
+    # attempt the host stamped on its lineage.
+    # Both the settable keys and the cleanup vocabulary derive from
+    # the retention roster (`Cyfr.Retention.kinds/0`), so a new kind
+    # is on this surface the moment it exists — the enum cannot fall
+    # behind the policy module again.
     [
-      %{
-        name: "record",
-        title: "Execution Records",
+      Operation.tool(
+        [
+          Operation.new(
+            "record",
+            "get",
+            "Get record",
+            [Arg.new("id", :string, required: true, description: "Execution ID")],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          ),
+          Operation.new(
+            "record",
+            "list",
+            "List record",
+            [
+              Arg.new("user_id", :string, description: "User who initiated execution"),
+              Arg.new("status", :string,
+                description: "Execution status: running, completed, failed, cancelled"
+              ),
+              Arg.new("limit", :integer,
+                description: "Maximum number of records to return (default: 20)"
+              ),
+              Arg.new("parent_execution_id", :string,
+                description: "Filter by the parent execution ID"
+              )
+            ],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          ),
+          Operation.new(
+            "record",
+            "payload",
+            "Payload record",
+            [
+              Arg.new("id", :string, required: true, description: "Execution ID"),
+              Arg.new("kind", :string,
+                description: "payload only: which retained payload (default result)",
+                enum: ["input", "result"]
+              ),
+              Arg.new("attempt", :string,
+                description:
+                  "payload only: the attempt whose payload to answer (default: the execution's current attempt)"
+              )
+            ],
+            kind: :read,
+            planes: [:external, :in_chain],
+            permission: :storage_read
+          )
+        ],
         description: "Query execution records - get or list executions",
-        annotations: %{
-          readOnlyHint: true,
-          destructiveHint: false,
-          actions: %{
-            "get" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "list" => %{kind: :read, planes: [:external], permission: :storage_read},
-            # In-chain, an execution reads its own payload alone, for the
-            # attempt the host stamped on its lineage.
-            "payload" => %{
-              kind: :read,
-              planes: [:external, :in_chain],
-              permission: :storage_read
-            }
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["get", "list", "payload"],
-              "description" => "Action to perform"
-            },
-            "id" => %{
-              "type" => "string",
-              "description" => "Execution ID"
-            },
-            "kind" => %{
-              "type" => "string",
-              "enum" => ["input", "result"],
-              "description" => "payload only: which retained payload (default result)"
-            },
-            "attempt" => %{
-              "type" => "string",
-              "description" =>
-                "payload only: the attempt whose payload to answer (default: the execution's current attempt)"
-            },
-            "user_id" => %{
-              "type" => "string",
-              "description" => "User who initiated execution"
-            },
-            "component_type" => %{
-              "type" => "string",
-              "description" => "Component type: catalyst, reagent, or formula"
-            },
-            "status" => %{
-              "type" => "string",
-              "description" => "Execution status: running, completed, failed, cancelled"
-            },
-            "limit" => %{
-              "type" => "integer",
-              "description" => "Maximum number of records to return (default: 20)"
-            }
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "mcp_log",
-        title: "MCP Request Logs",
+        title: "Execution Records"
+      ),
+      Operation.tool(
+        [
+          Operation.new(
+            "mcp_log",
+            "list",
+            "List mcp log",
+            [
+              Arg.new("request_id", :string,
+                description:
+                  "The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it."
+              ),
+              Arg.new("tool", :string, description: "Tool name filter"),
+              Arg.new("since", :string,
+                description: "ISO8601 timestamp — return logs after this time"
+              ),
+              Arg.new("user_id", :string, description: "Filter by user ID"),
+              Arg.new("status", :string, description: "Filter by status"),
+              Arg.new("limit", :integer, description: "Max results (default: 20)")
+            ],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          ),
+          Operation.new(
+            "mcp_log",
+            "get",
+            "Get mcp log",
+            [Arg.new("id", :string, required: true, description: "Request ID")],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          ),
+          Operation.new(
+            "mcp_log",
+            "correlate",
+            "Correlate mcp log",
+            [
+              Arg.new("request_id", :string,
+                required: true,
+                description:
+                  "The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it."
+              )
+            ],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          ),
+          Operation.new(
+            "mcp_log",
+            "fan_outs",
+            "Fan outs mcp log",
+            [
+              Arg.new("request_ids", {:array, Arg.new(nil, :string)},
+                required: true,
+                description: "Batch of request IDs for fan_outs action"
+              )
+            ],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          ),
+          Operation.new(
+            "mcp_log",
+            "stats",
+            "Stats mcp log",
+            [
+              Arg.new("since_hours", :integer,
+                description: "Number of hours of request statistics (default: 1)"
+              )
+            ],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          )
+        ],
         description: "Query MCP request logs - list, get, correlate, fan_outs, or view stats",
-        annotations: %{
-          readOnlyHint: true,
-          destructiveHint: false,
-          actions: %{
-            "list" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "get" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "correlate" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "fan_outs" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "stats" => %{kind: :read, planes: [:external], permission: :storage_read}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["list", "get", "correlate", "fan_outs", "stats"],
-              "description" => "Action to perform"
-            },
-            "id" => %{"type" => "string", "description" => "Request ID"},
-            "request_id" => %{
-              "type" => "string",
-              "description" =>
-                "The ingress request. Groups a whole chain: the call an ingress " <>
-                  "received and every tool a running component reached beneath it."
-            },
-            "request_ids" => %{
-              "type" => "array",
-              "items" => %{"type" => "string"},
-              "description" => "Batch of request IDs for fan_outs action"
-            },
-            "tool" => %{"type" => "string", "description" => "Tool name filter"},
-            "since" => %{
-              "type" => "string",
-              "description" => "ISO8601 timestamp — return logs after this time"
-            },
-            "user_id" => %{"type" => "string", "description" => "Filter by user ID"},
-            "status" => %{"type" => "string", "description" => "Filter by status"},
-            "limit" => %{"type" => "integer", "description" => "Max results (default: 20)"}
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "policy_log",
-        title: "Policy Logs",
+        title: "MCP Request Logs"
+      ),
+      Operation.tool(
+        [
+          Operation.new(
+            "policy_log",
+            "list",
+            "List policy log",
+            [
+              Arg.new("request_id", :string, description: "Filter by request ID"),
+              Arg.new("execution_id", :string, description: "Filter by execution ID"),
+              Arg.new("user_id", :string, description: "Filter by user ID"),
+              Arg.new("event_type", :string, description: "Filter by event type"),
+              Arg.new("limit", :integer, description: "Max results (default: 20)")
+            ],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          ),
+          Operation.new(
+            "policy_log",
+            "get",
+            "Get policy log",
+            [Arg.new("id", :string, required: true, description: "Policy log ID")],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          ),
+          Operation.new(
+            "policy_log",
+            "correlate",
+            "Correlate policy log",
+            [Arg.new("request_id", :string, required: true, description: "Filter by request ID")],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          )
+        ],
         description: "Query policy consultation logs - list, get, or correlate logs",
-        annotations: %{
-          readOnlyHint: true,
-          destructiveHint: false,
-          actions: %{
-            "list" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "get" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "correlate" => %{kind: :read, planes: [:external], permission: :storage_read}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["list", "get", "correlate"],
-              "description" => "Action to perform"
-            },
-            "id" => %{"type" => "string", "description" => "Policy log ID"},
-            "request_id" => %{"type" => "string", "description" => "Filter by request ID"},
-            "execution_id" => %{"type" => "string", "description" => "Filter by execution ID"},
-            "user_id" => %{"type" => "string", "description" => "Filter by user ID"},
-            "event_type" => %{"type" => "string", "description" => "Filter by event type"},
-            "limit" => %{"type" => "integer", "description" => "Max results (default: 20)"}
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "retention",
-        title: "Retention",
+        title: "Policy Logs"
+      ),
+      Operation.tool(
+        [
+          Operation.new("retention", "get", "Get retention", [],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          ),
+          Operation.new(
+            "retention",
+            "set",
+            "Set retention",
+            [
+              Arg.new(
+                "settings",
+                {:record,
+                 Enum.map(Cyfr.Retention.kinds(), fn kind ->
+                   Arg.new(kind.key(), :integer, description: setting_description(kind))
+                 end)},
+                required: true,
+                description: "Retention settings"
+              )
+            ],
+            kind: :write,
+            planes: [:external],
+            permission: :storage_write
+          ),
+          Operation.new(
+            "retention",
+            "cleanup",
+            "Cleanup retention",
+            [
+              Arg.new("cleanup_type", :string,
+                enum: Enum.map(Cyfr.Retention.kinds(), & &1.key()),
+                description: "Kind of records to clean up"
+              ),
+              Arg.new("dry_run", :boolean,
+                description: "If true, show what would be deleted without actually deleting"
+              )
+            ],
+            kind: :destructive,
+            planes: [:external],
+            permission: :admin
+          )
+        ],
         description:
           "Manage data retention policies - get settings, set settings, or run cleanup",
-        annotations: %{
-          readOnlyHint: false,
-          destructiveHint: true,
-          actions: %{
-            "get" => %{kind: :read, planes: [:external], permission: :storage_read},
-            "set" => %{kind: :write, planes: [:external], permission: :storage_write},
-            "cleanup" => %{kind: :destructive, planes: [:external], permission: :admin}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["get", "set", "cleanup"],
-              "description" => "Action to perform"
-            },
-            # Both the settable keys and the cleanup vocabulary derive from
-            # the retention roster (`Cyfr.Retention.kinds/0`), so a new kind
-            # is on this surface the moment it exists — the enum cannot fall
-            # behind the policy module again.
-            "settings" => %{
-              "type" => "object",
-              "properties" =>
-                Map.new(Cyfr.Retention.kinds(), fn kind ->
-                  {kind.key(), %{"type" => "integer", "description" => setting_description(kind)}}
-                end),
-              "description" => "Retention settings (for set action)"
-            },
-            "cleanup_type" => %{
-              "type" => "string",
-              "enum" => Enum.map(Cyfr.Retention.kinds(), & &1.key()),
-              "description" => "Kind of records to clean up (for cleanup action)"
-            },
-            "dry_run" => %{
-              "type" => "boolean",
-              "description" => "If true, show what would be deleted without actually deleting"
-            }
-          },
-          "required" => ["action"]
-        }
-      }
+        title: "Retention"
+      )
     ]
   end
 

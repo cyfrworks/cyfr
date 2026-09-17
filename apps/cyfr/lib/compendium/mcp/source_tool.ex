@@ -52,81 +52,140 @@ defmodule Compendium.MCP.SourceTool do
 
   @doc false
   def definition do
-    %{
-      name: "source",
-      title: "Component source",
+    alias Cyfr.Ops.{Arg, Operation}
+
+    Operation.tool(
+      [
+        Operation.new(
+          "source",
+          "tree",
+          "Tree source",
+          [
+            Arg.new("path", :string,
+              required: true,
+              description:
+                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
+            )
+          ],
+          kind: :read,
+          planes: [:in_chain],
+          permission: :storage_read,
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "source",
+          "read",
+          "Read source",
+          [
+            Arg.new("path", :string,
+              required: true,
+              description:
+                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
+            )
+          ],
+          kind: :read,
+          planes: [:in_chain],
+          permission: :storage_read,
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "source",
+          "grep",
+          "Grep source",
+          [
+            Arg.new("path", :string,
+              required: true,
+              description:
+                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
+            ),
+            Arg.new("pattern", :string,
+              required: true,
+              description: "grep: a regular expression"
+            ),
+            Arg.new("include", :string,
+              description: "grep: only files whose name ends with this, e.g. .rs"
+            )
+          ],
+          kind: :read,
+          planes: [:in_chain],
+          permission: :storage_read,
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "source",
+          "write",
+          "Write source",
+          [
+            Arg.new("path", :string,
+              required: true,
+              description:
+                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
+            ),
+            Arg.new("content", :string,
+              required: true,
+              description: "write: the file's new content"
+            )
+          ],
+          kind: :write,
+          planes: [:in_chain],
+          permission: :storage_write
+        ),
+        Operation.new(
+          "source",
+          "edit",
+          "Edit source",
+          [
+            Arg.new("path", :string,
+              required: true,
+              description:
+                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
+            ),
+            Arg.new(
+              "edits",
+              {:array,
+               Arg.new(
+                 nil,
+                 {:record,
+                  [
+                    Arg.new("action", :string,
+                      required: true,
+                      enum: ["replace", "insert", "delete"]
+                    ),
+                    Arg.new("start", :integer, required: true),
+                    Arg.new("end", :integer),
+                    Arg.new("content", :string)
+                  ]}
+               )},
+              required: true,
+              description:
+                "edit: line operations applied together, highest line first; each is {action: replace|insert|delete, start, end, content}",
+              min: 1
+            )
+          ],
+          kind: :write,
+          planes: [:in_chain],
+          permission: :storage_write
+        ),
+        Operation.new(
+          "source",
+          "delete",
+          "Delete source",
+          [
+            Arg.new("path", :string,
+              required: true,
+              description:
+                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
+            )
+          ],
+          kind: :destructive,
+          planes: [:in_chain],
+          permission: :storage_write
+        )
+      ],
       description:
-        "The source of a component you are authoring, under " <>
-          "components/{type}s/local/{name}/{version}/. Read, search and edit it; " <>
-          "the compiled artifact is written by a build, not here.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          "tree" => %{
-            kind: :read,
-            planes: [:in_chain],
-            permission: :storage_read,
-            recovery: :replay_safe
-          },
-          "read" => %{
-            kind: :read,
-            planes: [:in_chain],
-            permission: :storage_read,
-            recovery: :replay_safe
-          },
-          "grep" => %{
-            kind: :read,
-            planes: [:in_chain],
-            permission: :storage_read,
-            recovery: :replay_safe
-          },
-          "write" => %{
-            kind: :write,
-            planes: [:in_chain],
-            permission: :storage_write
-          },
-          "edit" => %{
-            kind: :write,
-            planes: [:in_chain],
-            permission: :storage_write
-          },
-          "delete" => %{
-            kind: :destructive,
-            planes: [:in_chain],
-            permission: :storage_write
-          }
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => ["tree", "read", "grep", "write", "edit", "delete"]
-          },
-          "path" => %{
-            "type" => "string",
-            "description" =>
-              "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
-          },
-          "content" => %{"type" => "string", "description" => "write: the file's new content"},
-          "pattern" => %{"type" => "string", "description" => "grep: a regular expression"},
-          "include" => %{
-            "type" => "string",
-            "description" => "grep: only files whose name ends with this, e.g. .rs"
-          },
-          "edits" => %{
-            "type" => "array",
-            "description" =>
-              "edit: line operations applied together, highest line first; " <>
-                "each is {action: replace|insert|delete, start, end, content}",
-            "items" => %{"type" => "object"}
-          }
-        },
-        "required" => ["action", "path"]
-      }
-    }
+        "The source of a component you are authoring, under components/{type}s/local/{name}/{version}/. Read, search and edit it; the compiled artifact is written by a build, not here.",
+      title: "Component source"
+    )
   end
 
   @impl true

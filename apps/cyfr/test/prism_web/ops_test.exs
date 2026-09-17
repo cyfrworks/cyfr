@@ -4,7 +4,7 @@
 defmodule PrismWeb.OpsTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Cyfr.Ops.{Catalog, Operation}
   alias PrismWeb.Ops
 
   defmodule ListProvider do
@@ -16,20 +16,20 @@ defmodule PrismWeb.OpsTest do
     def handle("helper_list_probe", _ctx, %{"action" => "refused"}), do: {:error, "Not allowed."}
   end
 
-  @annotations %{
-    actions: %{
-      "wrapped" => %{kind: :read, planes: [:external]},
-      "bare" => %{kind: :read, planes: [:external]},
-      "shapeless" => %{kind: :read, planes: [:external]},
-      "refused" => %{kind: :read, planes: [:external]}
-    }
-  }
-
   setup do
+    Cyfr.Test.Sandbox.setup!()
+
     Catalog.register_tool(
       "helper_list_probe",
       ListProvider,
-      %{annotations: @annotations},
+      Operation.tool(
+        for action <- ~w(wrapped bare shapeless refused) do
+          Operation.new("helper_list_probe", action, "List probe", [],
+            kind: :read,
+            planes: [:external]
+          )
+        end
+      ),
       :timer.minutes(1)
     )
 

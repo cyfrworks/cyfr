@@ -27,11 +27,9 @@ var listCmd = &cobra.Command{
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		toolArgs := map[string]any{
-			"action": "list",
-		}
+		toolArgs := ops.ComponentListArgs{}
 		if t, _ := cmd.Flags().GetString("type"); t != "" {
-			toolArgs["type"] = t
+			toolArgs.Type = ops.Value(t)
 		}
 		result, err := client.CallTool(cmd.Context(), ops.Component, toolArgs)
 		if err != nil {

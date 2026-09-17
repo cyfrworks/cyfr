@@ -25,92 +25,159 @@ defmodule Sanctum.MCP.AthanorTool do
   # second vocabulary for a call that can never arrive.
   @person_only ~w(create rename archive unarchive settings provision purge destroy)
 
-  # An `athanor` argument names the athanor an action works on: an id, a
-  # group slug, or `@<namespace>`; absent, the caller's focused athanor.
-  @athanor_arg %{
-    "type" => "string",
-    "description" =>
-      "The athanor to act on — an id, a group slug, or @<namespace>. " <>
-        "Defaults to the athanor in focus."
-  }
-
   @doc false
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "athanor",
-      title: "Athanors",
+    alias Cyfr.Ops.{Arg, Operation}
+    # A pair is minted BY a person, WITH a person — interactive on
+    # the annotation so dispatch, discovery and the typed refusal all
+    # read one declaration; no standing credential mints a DM.
+    Operation.tool(
+      [
+        Operation.new("athanor", "list", "List athanor", [], kind: :read, planes: [:external]),
+        Operation.new(
+          "athanor",
+          "get",
+          "Get athanor",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            )
+          ],
+          kind: :read,
+          planes: [:external]
+        ),
+        Operation.new(
+          "athanor",
+          "create",
+          "Create athanor",
+          [
+            Arg.new("name", :string, required: true, description: "Group name (create, rename)"),
+            Arg.new("slug", :string,
+              description: "Optional slug for create; derived from the name when absent"
+            )
+          ],
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "athanor",
+          "pair",
+          "Pair athanor",
+          [
+            Arg.new("user", :string,
+              required: true,
+              description:
+                "pair: the other person's user id — someone you already share an active estate with"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "athanor",
+          "rename",
+          "Rename athanor",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            ),
+            Arg.new("name", :string, required: true, description: "Group name (create, rename)")
+          ],
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "athanor",
+          "archive",
+          "Archive athanor",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            )
+          ],
+          kind: :destructive,
+          planes: [:external]
+        ),
+        Operation.new(
+          "athanor",
+          "unarchive",
+          "Unarchive athanor",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            )
+          ],
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "athanor",
+          "settings",
+          "Settings athanor",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            ),
+            Arg.new("settings", {:map, Arg.new(nil, :json)},
+              required: true,
+              description: "For settings: keys to merge into the athanor's settings"
+            )
+          ],
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "athanor",
+          "provision",
+          "Provision athanor",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            )
+          ],
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "athanor",
+          "purge",
+          "Purge athanor",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            )
+          ],
+          kind: :destructive,
+          planes: [:external]
+        ),
+        Operation.new(
+          "athanor",
+          "destroy",
+          "Destroy athanor",
+          [
+            Arg.new("athanor", :string,
+              description:
+                "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
+            )
+          ],
+          kind: :destructive,
+          planes: [:external]
+        )
+      ],
       description:
-        "The athanors you belong to — your own and your groups. Create a group " <>
-          "(you are its first member), rename it, archive it, patch its settings — " <>
-          "or pair: open a DM with someone you already share an estate with, a " <>
-          "frozen two-person athanor that ends when either of you leaves. " <>
-          "A person's own athanor is minted at sign-in; a group is archived, never deleted.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          "list" => %{kind: :read, planes: [:external]},
-          "get" => %{kind: :read, planes: [:external]},
-          "create" => %{kind: :write, planes: [:external]},
-          # A pair is minted BY a person, WITH a person — interactive on
-          # the annotation so dispatch, discovery and the typed refusal all
-          # read one declaration; no standing credential mints a DM.
-          "pair" => %{kind: :write, planes: [:external], consent: :interactive},
-          "rename" => %{kind: :write, planes: [:external]},
-          "archive" => %{kind: :destructive, planes: [:external]},
-          "unarchive" => %{kind: :write, planes: [:external]},
-          "settings" => %{kind: :write, planes: [:external]},
-          "provision" => %{kind: :write, planes: [:external]},
-          "purge" => %{kind: :destructive, planes: [:external]},
-          "destroy" => %{kind: :destructive, planes: [:external]}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => [
-              "list",
-              "get",
-              "create",
-              "pair",
-              "rename",
-              "archive",
-              "unarchive",
-              "settings",
-              "provision",
-              "purge",
-              "destroy"
-            ],
-            "description" =>
-              "Action to perform (provision: retry a seeding that failed — idempotent; " <>
-                "purge: platform admin deletes an archived athanor's storage tree; " <>
-                "destroy: platform admin ERASES an archived athanor — storage AND every " <>
-                "row it owns, irreversibly, leaving only the archived tombstone)"
-          },
-          "athanor" => @athanor_arg,
-          "name" => %{"type" => "string", "description" => "Group name (create, rename)"},
-          "user" => %{
-            "type" => "string",
-            "description" =>
-              "pair: the other person's user id — someone you already share an active " <>
-                "estate with"
-          },
-          "slug" => %{
-            "type" => "string",
-            "description" => "Optional slug for create; derived from the name when absent"
-          },
-          "settings" => %{
-            "type" => "object",
-            "description" => "For settings: keys to merge into the athanor's settings"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+        "The athanors you belong to — your own and your groups. Create a group (you are its first member), rename it, archive it, patch its settings — or pair: open a DM with someone you already share an estate with, a frozen two-person athanor that ends when either of you leaves. A person's own athanor is minted at sign-in; a group is archived, never deleted.",
+      title: "Athanors"
+    )
   end
 
   def handle(%Context{auth_method: :api_key}, %{"action" => action})

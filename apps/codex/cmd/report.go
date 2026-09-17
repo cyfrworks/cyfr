@@ -72,16 +72,13 @@ Reports appear in the admin UI. Categories:
 		}
 
 		client := newClient()
-		toolArgs := map[string]any{
-			"action":   "report",
-			"category": category,
-			"details":  details,
-		}
+		toolArgs := ops.RegistryReportArgs{Category: category,
+			Details: details}
 		if componentRef != "" {
-			toolArgs["target_component_ref"] = componentRef
+			toolArgs.TargetComponentRef = ops.Value(componentRef)
 		}
 		if namespace != "" {
-			toolArgs["target_namespace"] = namespace
+			toolArgs.TargetNamespace = ops.Value(namespace)
 		}
 
 		result, err := client.CallTool(cmd.Context(), ops.Registry, toolArgs)

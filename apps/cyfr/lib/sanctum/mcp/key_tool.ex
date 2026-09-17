@@ -17,60 +17,86 @@ defmodule Sanctum.MCP.KeyTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "key",
-      title: "API Key Management",
+    alias Cyfr.Ops.{Arg, Operation}
+
+    Operation.tool(
+      [
+        Operation.new(
+          "key",
+          "create",
+          "Create key",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "Human-readable name for the key"
+            ),
+            Arg.new("type", :string,
+              description: "Key type: application (frontend), service (backend), admin (CI/CD)",
+              enum: ["application", "service", "admin"]
+            ),
+            Arg.new("scope", {:array, Arg.new(nil, :string)},
+              description: "Permissions scope for the key"
+            ),
+            Arg.new("ip_allowlist", {:array, Arg.new(nil, :string)},
+              description: "List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])"
+            ),
+            Arg.new("rate_limit", :string, description: "Rate limit (e.g., '100/1m')")
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new(
+          "key",
+          "get",
+          "Get key",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "Human-readable name for the key"
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new("key", "list", "List key", [],
+          kind: :read,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new(
+          "key",
+          "revoke",
+          "Revoke key",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "Human-readable name for the key"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new(
+          "key",
+          "rotate",
+          "Rotate key",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "Human-readable name for the key"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        )
+      ],
       description: "Manage API keys - create, get, list, revoke, or rotate keys",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: false,
-        actions: %{
-          "create" => %{kind: :write, planes: [:external], permission: :admin},
-          "get" => %{kind: :read, planes: [:external], permission: :admin},
-          "list" => %{kind: :read, planes: [:external], permission: :admin},
-          "revoke" => %{kind: :write, planes: [:external], permission: :admin},
-          "rotate" => %{kind: :write, planes: [:external], permission: :admin}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => ["create", "get", "list", "revoke", "rotate"],
-            "description" => "Action to perform"
-          },
-          "name" => %{
-            "type" => "string",
-            "description" => "Human-readable name for the key"
-          },
-          "key" => %{
-            "type" => "string",
-            "description" => "API key value (for validation)"
-          },
-          "type" => %{
-            "type" => "string",
-            "enum" => ["application", "service", "admin"],
-            "description" => "Key type: application (frontend), service (backend), admin (CI/CD)"
-          },
-          "scope" => %{
-            "type" => "array",
-            "items" => %{"type" => "string"},
-            "description" => "Permissions scope for the key"
-          },
-          "rate_limit" => %{
-            "type" => "string",
-            "description" => "Rate limit (e.g., '100/1m')"
-          },
-          "ip_allowlist" => %{
-            "type" => "array",
-            "items" => %{"type" => "string"},
-            "description" => "List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+      title: "API Key Management"
+    )
   end
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do

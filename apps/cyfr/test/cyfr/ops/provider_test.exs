@@ -4,122 +4,114 @@
 defmodule Cyfr.Ops.ProviderTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.Provider
+  alias Cyfr.Ops.{Arg, Operation, Provider}
 
-  describe "behaviour definition" do
-    test "defines tools/0 callback" do
-      callbacks = Provider.behaviour_info(:callbacks)
+  defmodule MockToolProvider do
+    @behaviour Cyfr.Ops.Provider
 
-      assert {:tools, 0} in callbacks
+    @impl true
+    def service, do: "mock"
+
+    @impl true
+    def tools do
+      [
+        Operation.tool(
+          [
+            Operation.new("mock", "echo", "Echo an input", [Arg.new("input", :string)],
+              kind: :read,
+              planes: [:external]
+            )
+          ],
+          description: "A mock tool for testing"
+        )
+      ]
     end
 
-    test "defines handle/3 callback" do
-      callbacks = Provider.behaviour_info(:callbacks)
+    @impl true
+    def handle("mock", _ctx, %{"action" => "echo"} = args),
+      do: {:ok, %{echoed: args["input"]}}
 
-      assert {:handle, 3} in callbacks
+    def handle(_tool, _ctx, _args), do: {:error, "Unknown tool"}
+  end
+
+  test "the shared behaviour defines provider callbacks" do
+    callbacks = Provider.behaviour_info(:callbacks)
+    assert {:service, 0} in callbacks
+    assert {:tools, 0} in callbacks
+    assert {:handle, 3} in callbacks
+  end
+
+  test "providers expose canonical operations and derived discovery and policy" do
+    [tool] = MockToolProvider.tools()
+    assert tool.name == "mock"
+    assert [%Operation{action: "echo"}] = tool.operations
+    assert tool.input_schema == Operation.schema(tool.operations)
+    assert Provider.action_enum(tool) == ["echo"]
+
+    assert tool.annotations.actions["echo"] == %{
+             kind: :read,
+             planes: [:external],
+             auth: :required
+           }
+
+    assert {:ok, %{"action" => "echo", "input" => "hello"}} =
+             Operation.cast(tool, %{"action" => "echo", "input" => "hello"})
+  end
+
+  test "a provider handles its declared operation with an opaque context" do
+    assert {:ok, %{echoed: "hello"}} =
+             MockToolProvider.handle("mock", make_ref(), %{"action" => "echo", "input" => "hello"})
+
+    assert {:error, _} = MockToolProvider.handle("unknown", make_ref(), %{})
+  end
+
+  test "every loadable configured provider implements the moved behaviour" do
+    for module <- Cyfr.Ops.Catalog.available_providers() do
+      assert function_exported?(module, :service, 0)
+      assert function_exported?(module, :tools, 0)
+      assert function_exported?(module, :handle, 3)
+
+      for tool <- module.tools() do
+        assert is_list(tool.operations) and tool.operations != []
+        Enum.each(tool.operations, &Operation.validate!/1)
+        assert tool.input_schema == Operation.schema(tool.operations)
+      end
     end
   end
 
-  describe "type specifications" do
-    test "tool_definition type is documented" do
-      # Verify the module compiles and exports expected types
-      # The type specs are checked at compile time, but we can verify
-      # the module is properly loaded
-      assert Code.ensure_loaded?(Provider)
-    end
+  test "optional tool metadata accompanies derived annotations" do
+    [definition] = MockToolProvider.tools()
 
-    test "handle_result type is documented" do
-      assert Code.ensure_loaded?(Provider)
-    end
-  end
-
-  describe "provider implementation verification" do
-    defmodule MockToolProvider do
-      @behaviour Cyfr.Ops.Provider
-
-      @impl true
-      def tools do
-        [
-          %{
-            name: "mock/test",
-            description: "A mock tool for testing",
-            input_schema: %{
-              "type" => "object",
-              "properties" => %{
-                "input" => %{"type" => "string"}
-              }
-            }
-          }
-        ]
-      end
-
-      @impl true
-      def handle("mock/test", _ctx, args) do
-        {:ok, %{echoed: args["input"]}}
-      end
-
-      def handle(_tool, _ctx, _args) do
-        {:error, "Unknown tool"}
-      end
-    end
-
-    test "mock provider implements tools/0 correctly" do
-      tools = MockToolProvider.tools()
-
-      assert is_list(tools)
-      assert length(tools) == 1
-
-      [tool] = tools
-      assert tool.name == "mock/test"
-      assert is_binary(tool.description)
-      assert is_map(tool.input_schema)
-    end
-
-    test "mock provider implements handle/3 correctly" do
-      ctx = Sanctum.TestContext.local()
-
-      assert {:ok, result} = MockToolProvider.handle("mock/test", ctx, %{"input" => "hello"})
-      assert result.echoed == "hello"
-    end
-
-    test "mock provider returns error for unknown tool" do
-      ctx = Sanctum.TestContext.local()
-
-      assert {:error, _} = MockToolProvider.handle("unknown/tool", ctx, %{})
-    end
-  end
-
-  describe "tool definition structure" do
-    test "required fields are name, description, input_schema" do
-      # This is a documentation/specification test
-      # A valid tool definition must have these fields
-      valid_tool = %{
-        name: "service/action",
-        description: "Does something useful",
-        input_schema: %{"type" => "object"}
-      }
-
-      assert Map.has_key?(valid_tool, :name)
-      assert Map.has_key?(valid_tool, :description)
-      assert Map.has_key?(valid_tool, :input_schema)
-    end
-
-    test "optional fields include title, icons, output_schema, annotations" do
-      # A documentation test for the optional tool-definition fields
-      full_tool = %{
-        name: "service/action",
-        description: "Does something useful",
-        input_schema: %{"type" => "object"},
+    tool =
+      Operation.tool(definition.operations,
         title: "Human Readable Name",
         icons: [%{src: "icon.png", mimeType: "image/png"}],
-        output_schema: %{"type" => "object"},
-        annotations: %{readOnly: true}
-      }
+        output_schema: %{"type" => "object"}
+      )
 
-      assert Map.has_key?(full_tool, :title)
-      assert Map.has_key?(full_tool, :icons)
-      assert Map.has_key?(full_tool, :output_schema)
-      assert Map.has_key?(full_tool, :annotations)
+    assert tool.title == "Human Readable Name"
+    assert tool.icons == [%{src: "icon.png", mimeType: "image/png"}]
+    assert tool.output_schema == %{"type" => "object"}
+    assert tool.annotations == definition.annotations
+  end
+
+  test "thread consent restarts accept committed integer revisions and absent result metadata" do
+    tool = Emissary.MCP.ThreadTool.definition()
+
+    for metadata <- [
+          %{},
+          %{"profile_id" => nil, "revision" => nil},
+          %{"profile_id" => "profile", "revision" => 2}
+        ] do
+      args = Map.merge(%{"action" => "restart_for_consent", "thread" => "thread"}, metadata)
+      assert {:ok, ^args} = Operation.cast(tool, args)
     end
+
+    assert {:error, {:invalid_argument, _}} =
+             Operation.cast(tool, %{
+               "action" => "restart_for_consent",
+               "thread" => "thread",
+               "revision" => "2"
+             })
   end
 end

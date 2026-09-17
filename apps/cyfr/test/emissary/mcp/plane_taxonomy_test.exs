@@ -2,25 +2,19 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Emissary.MCP.PlaneTaxonomyTest.Probes do
   @moduledoc false
-  # Deliberately malformed annotations, one per failure mode, so the audit
-  # is shown to report *which* thing is wrong rather than only that
-  # something is.
-
-  defp tool(annotation) do
-    %{
-      name: "probe",
-      description: "probe",
-      input_schema: %{"properties" => %{"action" => %{"enum" => ["act"]}}},
-      annotations: %{actions: %{"act" => annotation}}
-    }
+  # Start from valid declarations, then corrupt one field to exercise the
+  # catalog's refusal of malformed provider output independently of constructors.
+  defp tool(changes) do
+    op = Cyfr.Ops.Operation.new("probe", "act", "Probe", [], kind: :read, planes: [:external])
+    %{name: "probe", operations: [struct!(op, changes)]}
   end
 
-  def kind_only, do: [tool(%{kind: :read})]
-  def planes_only, do: [tool(%{planes: [:external]})]
-  def invalid_plane, do: [tool(%{kind: :read, planes: [:sideways]})]
-  def empty_planes, do: [tool(%{kind: :read, planes: []})]
-  def invalid_standing, do: [tool(%{kind: :write, planes: [:external], standing: :thred})]
-  def unannotated, do: [tool(nil)]
+  def kind_only, do: [tool(planes: nil)]
+  def planes_only, do: [tool(kind: nil)]
+  def invalid_plane, do: [tool(planes: [:sideways])]
+  def empty_planes, do: [tool(planes: [])]
+  def invalid_standing, do: [tool(standing: :thred)]
+  def unannotated, do: [%{name: "probe"}]
 
   # One provider module per probe: the audit takes its roster as an
   # argument, so no test touches global provider config.
@@ -106,17 +100,17 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       end
     end
 
-    test "the audit reports what is wrong, not merely that something is" do
+    test "the audit refuses malformed declarations and absent operations" do
       # A missing plane must be as loud as a missing kind — otherwise a
       # half-annotated action passes the gate it exists to fail.
       for {probe, reason} <- [
-            {Probes.KindOnly, :missing_planes},
-            {Probes.PlanesOnly, :missing_kind},
-            {Probes.InvalidPlane, :invalid_planes},
-            {Probes.EmptyPlanes, :missing_planes},
+            {Probes.KindOnly, :invalid_operation},
+            {Probes.PlanesOnly, :invalid_operation},
+            {Probes.InvalidPlane, :invalid_operation},
+            {Probes.EmptyPlanes, :invalid_operation},
             # A misspelt standing rule would otherwise ship as "any scope".
-            {Probes.InvalidStanding, :invalid_standing},
-            {Probes.Unannotated, :missing_annotation}
+            {Probes.InvalidStanding, :invalid_operation},
+            {Probes.Unannotated, :missing_operations}
           ] do
         assert {:error, [%{reason: ^reason}]} = Catalog.audit_action_kinds([probe]),
                "#{inspect(probe)} was not reported as #{reason}"

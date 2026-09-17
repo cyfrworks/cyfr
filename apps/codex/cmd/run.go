@@ -99,9 +99,7 @@ Run without arguments for interactive selection.`,
 		client := newClient()
 
 		if listFlag, _ := cmd.Flags().GetBool("list"); listFlag {
-			result, err := client.CallTool(cmd.Context(), ops.Execution, map[string]any{
-				"action": ops.ExecutionList,
-			})
+			result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionListArgs{})
 			if err != nil {
 				return handleToolError(err)
 			}
@@ -109,10 +107,7 @@ Run without arguments for interactive selection.`,
 		}
 
 		if logsID, _ := cmd.Flags().GetString("logs"); logsID != "" {
-			result, err := client.CallTool(cmd.Context(), ops.Execution, map[string]any{
-				"action":       ops.ExecutionLogs,
-				"execution_id": logsID,
-			})
+			result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionLogsArgs{ExecutionId: logsID})
 			if err != nil {
 				return handleToolError(err)
 			}
@@ -120,10 +115,7 @@ Run without arguments for interactive selection.`,
 		}
 
 		if cancelID, _ := cmd.Flags().GetString("cancel"); cancelID != "" {
-			result, err := client.CallTool(cmd.Context(), ops.Execution, map[string]any{
-				"action":       ops.ExecutionCancel,
-				"execution_id": cancelID,
-			})
+			result, err := client.CallTool(cmd.Context(), ops.Execution, ops.ExecutionCancelArgs{ExecutionId: cancelID})
 			if err != nil {
 				return handleToolError(err)
 			}
@@ -192,17 +184,14 @@ Run without arguments for interactive selection.`,
 			}
 		}
 
-		toolArgs := map[string]any{
-			"action":    "run",
-			"reference": refString,
-		}
+		toolArgs := ops.ExecutionRunArgs{Reference: refString}
 		if execInput != nil {
-			toolArgs["input"] = execInput
+			toolArgs.Input = ops.Value(execInput)
 		}
 		// Which profile's consent this runs under. With several profiles
 		// and no selector the server refuses rather than guessing.
 		if profile, _ := cmd.Flags().GetString("profile"); profile != "" {
-			toolArgs["profile"] = profile
+			toolArgs.Profile = ops.Value(profile)
 		}
 
 		result, err := client.CallTool(cmd.Context(), ops.Execution, toolArgs)

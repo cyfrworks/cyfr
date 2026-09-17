@@ -52,119 +52,163 @@ defmodule Emissary.MCP.NotesTool do
 
   @doc false
   def definition do
-    %{
-      name: "notes",
-      title: "Notes",
+    alias Cyfr.Ops.{Arg, Operation}
+    # In-chain as well as at the door: the writes are `ask` in the
+    # soul's policy, so from a chain each one is a card a person
+    # clicked; the reads are `auto`, bounded to the room by the
+    # domain. Interactive on every action — the credential gate is
+    # the same on both planes.
+    Operation.tool(
+      [
+        Operation.new(
+          "notes",
+          "keep",
+          "Keep notes",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "What the note is called (keep, pin, read, forget)"
+            ),
+            Arg.new("content", :string,
+              required: true,
+              description: "keep: what to file. pin: the page — empty content clears it"
+            ),
+            Arg.new("thread", :string,
+              description:
+                "keep, pin, at the door: provenance — the thread the note was kept from. In a chain the host stamps it and this is ignored."
+            ),
+            Arg.new("execution", :string,
+              description:
+                "keep, pin, at the door: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored."
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          standing: :thread
+        ),
+        Operation.new(
+          "notes",
+          "pin",
+          "Pin notes",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "What the note is called (keep, pin, read, forget)"
+            ),
+            Arg.new("content", :string,
+              required: true,
+              description: "keep: what to file. pin: the page — empty content clears it"
+            ),
+            Arg.new("thread", :string,
+              description:
+                "keep, pin, at the door: provenance — the thread the note was kept from. In a chain the host stamps it and this is ignored."
+            ),
+            Arg.new("execution", :string,
+              description:
+                "keep, pin, at the door: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored."
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          standing: false
+        ),
+        Operation.new(
+          "notes",
+          "list",
+          "List notes",
+          [
+            Arg.new("scope", :string,
+              description:
+                "Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.",
+              enum: ["estate", "mine", "everywhere"]
+            ),
+            Arg.new("limit", :integer,
+              description: "list, search: how many to answer at most (default 100).",
+              min: 1,
+              max: 500
+            ),
+            Arg.new("after", :string,
+              description: "list, search: the `next` cursor a previous page answered."
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "notes",
+          "read",
+          "Read notes",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "What the note is called (keep, pin, read, forget)"
+            ),
+            Arg.new("scope", :string,
+              description:
+                "Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.",
+              enum: ["estate", "mine", "everywhere"]
+            ),
+            Arg.new("athanor_id", :string,
+              description:
+                "read: the estate a search answered for the note — reads it there, under your own seat."
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "notes",
+          "forget",
+          "Forget notes",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "What the note is called (keep, pin, read, forget)"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external, :in_chain],
+          consent: :interactive
+        ),
+        Operation.new(
+          "notes",
+          "search",
+          "Search notes",
+          [
+            Arg.new("query", :string,
+              required: true,
+              description: "search: text to find in a note's name or body"
+            ),
+            Arg.new("scope", :string,
+              description:
+                "Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.",
+              enum: ["estate", "mine", "everywhere"]
+            ),
+            Arg.new("limit", :integer,
+              description: "list, search: how many to answer at most (default 100).",
+              min: 1,
+              max: 500
+            ),
+            Arg.new("after", :string,
+              description: "list, search: the `next` cursor a previous page answered."
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          recovery: :replay_safe
+        )
+      ],
       description:
-        "What was kept out of a thread. Distinct from the transcript: erasing a " <>
-          "thread does not erase what someone kept from it. A note lands in the estate " <>
-          "you are working in; two pinned pages (about-you, about-us) are read into " <>
-          "every turn and held short.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          # In-chain as well as at the door: the writes are `ask` in the
-          # soul's policy, so from a chain each one is a card a person
-          # clicked; the reads are `auto`, bounded to the room by the
-          # domain. Interactive on every action — the credential gate is
-          # the same on both planes.
-          "keep" => %{
-            kind: :write,
-            planes: [:external, :in_chain],
-            consent: :interactive,
-            standing: :thread
-          },
-          "pin" => %{
-            kind: :write,
-            planes: [:external, :in_chain],
-            consent: :interactive,
-            standing: false
-          },
-          "forget" => %{
-            kind: :destructive,
-            planes: [:external, :in_chain],
-            consent: :interactive
-          },
-          "list" => %{
-            kind: :read,
-            planes: [:external, :in_chain],
-            consent: :interactive,
-            recovery: :replay_safe
-          },
-          "read" => %{
-            kind: :read,
-            planes: [:external, :in_chain],
-            consent: :interactive,
-            recovery: :replay_safe
-          },
-          "search" => %{
-            kind: :read,
-            planes: [:external, :in_chain],
-            consent: :interactive,
-            recovery: :replay_safe
-          }
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => ["keep", "pin", "list", "read", "forget", "search"]
-          },
-          "name" => %{
-            "type" => "string",
-            "description" => "What the note is called (keep, pin, read, forget)"
-          },
-          "content" => %{
-            "type" => "string",
-            "description" => "keep: what to file. pin: the page — empty content clears it"
-          },
-          "query" => %{
-            "type" => "string",
-            "description" => "search: text to find in a note's name or body"
-          },
-          "scope" => %{
-            "type" => "string",
-            "enum" => ["estate", "mine", "everywhere"],
-            "description" =>
-              "Reads only: where to look — the estate in focus (default), your own " <>
-                "athanor, or every estate you belong to. Writes take none; a note " <>
-                "lands where you are."
-          },
-          "athanor_id" => %{
-            "type" => "string",
-            "description" =>
-              "read: the estate a search answered for the note — reads it there, " <>
-                "under your own seat."
-          },
-          "limit" => %{
-            "type" => "integer",
-            "minimum" => 1,
-            "maximum" => Notes.page_max(),
-            "description" => "list, search: how many to answer at most (default 100)."
-          },
-          "after" => %{
-            "type" => "string",
-            "description" => "list, search: the `next` cursor a previous page answered."
-          },
-          "thread" => %{
-            "type" => "string",
-            "description" =>
-              "keep, pin, at the door: provenance — the thread the note was kept " <>
-                "from. In a chain the host stamps it and this is ignored."
-          },
-          "execution" => %{
-            "type" => "string",
-            "description" =>
-              "keep, pin, at the door: provenance — the execution the note was kept from. " <>
-                "In a chain the host stamps it and this is ignored."
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+        "What was kept out of a thread. Distinct from the transcript: erasing a thread does not erase what someone kept from it. A note lands in the estate you are working in; two pinned pages (about-you, about-us) are read into every turn and held short.",
+      title: "Notes"
+    )
   end
 
   @impl true

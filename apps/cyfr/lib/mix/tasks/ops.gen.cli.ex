@@ -2,21 +2,16 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Mix.Tasks.Ops.Gen.Cli do
-  @shortdoc "Render the operation catalog's tool and action names for the CLI"
+  @shortdoc "Render typed operation arguments for the CLI"
 
   @moduledoc """
-  Renders every `tool.action` the operation catalog serves outside a
-  running chain into `apps/codex/internal/ops/catalog_gen.go`: one Go
-  constant per tool, one per action, and the actions per tool. The CLI's built-in commands name
-  operations through these constants, so a renamed or retired action
-  fails `go build`; `Cyfr.Ops.LiteralDriftTest` refuses a checked-in
-  render that is stale.
+  Renders external operation names and typed arguments from the catalog's
+  declarations into `apps/codex/internal/ops/catalog_gen.go`. Optional fields
+  preserve omission separately from an explicit zero, false, empty or null.
+  Each argument struct serializes its declared action discriminator.
 
-      mix ops.gen.cli          # write the file
-      mix ops.gen.cli --check  # exit 1 when the checked-in file is stale
-
-  Only names are rendered: per-action argument contracts are not in the
-  catalog's declarations yet.
+      mix ops.gen.cli
+      mix ops.gen.cli --check
   """
 
   use Mix.Task
@@ -48,14 +43,19 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   end
 
   @doc """
-  Whether a checked-in file carries the render: `gofmt` aligns the
-  constants, so runs of spaces are not compared.
+  Whether a checked-in file carries the render, ignoring whitespace
+  that `gofmt` changes around declarations and fields.
   """
   @spec current?({:ok, String.t()} | {:error, term()}, String.t()) :: boolean()
-  def current?({:ok, file}, rendered), do: squeeze(file) == squeeze(rendered)
+  def current?({:ok, file}, rendered), do: tokens(file) == tokens(rendered)
   def current?(_missing, _rendered), do: false
 
-  defp squeeze(text), do: Regex.replace(~r/ +/, text, " ")
+  defp tokens(text) do
+    Regex.scan(
+      ~r/`[^`]*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\/[^\r\n]*|\/\*[\s\S]*?\*\/|[\p{L}\p{N}_]+|<<=|>>=|&\^=|:=|==|!=|<=|>=|&&|\|\||<<|>>|&\^|\+\+|--|\.\.\.|<-|[+*\/=%&|^!-]=|\S/u,
+      text
+    )
+  end
 
   # The Go toolchain formats what it will compile; without one the file is
   # written as rendered and `gofmt` runs where the CLI is built.
@@ -69,14 +69,24 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   @doc "The file's text, from the loaded catalog."
   @spec render() :: String.t()
   def render do
+    operations =
+      for provider <- Cyfr.Ops.Catalog.configured_providers(),
+          tool <- provider.tools(),
+          operation <- tool.operations,
+          :external in operation.planes,
+          do: operation
+
+    render(operations)
+  end
+
+  @doc "Render explicit declarations, without starting the catalog."
+  @spec render([Cyfr.Ops.Operation.t()]) :: String.t()
+  def render(operations) do
+    operations = Enum.sort_by(operations, &{&1.tool, &1.action})
+
     by_tool =
-      Cyfr.Ops.Catalog.external_tool_actions()
-      |> Enum.map(fn pair ->
-        [tool, action] = String.split(pair, ".", parts: 2)
-        {tool, action}
-      end)
-      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-      |> Enum.map(fn {tool, actions} -> {tool, Enum.sort(actions)} end)
+      operations
+      |> Enum.group_by(& &1.tool, & &1.action)
       |> Enum.sort()
 
     tools =
@@ -108,6 +118,8 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
     // operation the catalog no longer serves fails the build here.
     package ops
 
+    import "encoding/json"
+
     // Tools.
     const (
     #{tools}
@@ -122,7 +134,81 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
     var Actions = map[string][]string{
     #{table}
     }
+
+    #{Enum.map_join(operations, "\n", &operation_struct/1)}
     """
+  end
+
+  defp operation_struct(operation) do
+    name = ident(operation.tool) <> ident(operation.action) <> "Args"
+    {definition, nested} = record_struct(name, operation.args)
+
+    """
+    // #{name} carries arguments for #{operation.tool}.#{operation.action}.
+    #{definition}
+    // MarshalJSON supplies the operation's fixed action discriminator.
+    func (args #{name}) MarshalJSON() ([]byte, error) {
+      type fields #{name}
+      return json.Marshal(struct {
+        Action string `json:"action"`
+        fields
+      }{Action: #{ident(operation.tool)}#{ident(operation.action)}, fields: fields(args)})
+    }
+    #{nested}
+    """
+  end
+
+  defp record_struct(name, args) do
+    fields =
+      Enum.map(args, fn arg ->
+        {type, nested} = go_type(arg.type, name <> ident(arg.name))
+        type = if arg.nullable, do: "*" <> type, else: type
+        type = if arg.required, do: type, else: "Field[#{type}]"
+        tag = arg.name <> if(arg.required, do: "", else: ",omitzero")
+        comment = comment(arg.description)
+        {"#{comment}  #{ident(arg.name)} #{type} `json:#{Jason.encode!(tag)}`", nested}
+      end)
+
+    definition = "type #{name} struct {\n#{Enum.map_join(fields, "\n", &elem(&1, 0))}\n}\n"
+    {definition, Enum.map_join(fields, "\n", &elem(&1, 1))}
+  end
+
+  defp comment(nil), do: ""
+
+  defp comment(text) do
+    text
+    |> String.split(~r/\R/)
+    |> Enum.map_join("", &("  // " <> &1 <> "\n"))
+  end
+
+  defp go_type(:string, _name), do: {"string", ""}
+  defp go_type(:integer, _name), do: {"int", ""}
+  defp go_type(:number, _name), do: {"float64", ""}
+  defp go_type(:boolean, _name), do: {"bool", ""}
+  defp go_type(:json, _name), do: {"any", ""}
+
+  defp go_type({:record, args}, name) do
+    {definition, nested} = record_struct(name, args)
+
+    decoder = """
+    // UnmarshalJSON refuses unknown fields and preserves required presence.
+    func (args *#{name}) UnmarshalJSON(data []byte) error {
+      type fields #{name}
+      var value fields
+      if err := decodeRecord(data, &value); err != nil { return err }
+      *args = #{name}(value)
+      return nil
+    }
+    """
+
+    {name, definition <> decoder <> nested}
+  end
+
+  defp go_type({kind, item}, name) when kind in [:array, :map] do
+    {type, nested} = go_type(item.type, name <> "Item")
+    type = if item.nullable, do: "*" <> type, else: type
+    prefix = if kind == :array, do: "[]", else: "map[string]"
+    {prefix <> type, nested}
   end
 
   # `mcp_log` → `McpLog`, `skill_create` → `SkillCreate`.

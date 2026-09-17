@@ -29,7 +29,7 @@ func init() {
 	mcpCmd.AddCommand(mcpRefreshCmd)
 	mcpCmd.AddCommand(mcpRestartCmd)
 
-	mcpUpdateCmd.Flags().Int64("epoch", 0, "The epoch `cyfr mcp get` showed (required)")
+	mcpUpdateCmd.Flags().Int("epoch", 0, "The epoch `cyfr mcp get` showed (required)")
 	_ = mcpUpdateCmd.MarkFlagRequired("epoch")
 }
 
@@ -68,7 +68,7 @@ Adding a server takes a signed-in session (cyfr login); an API key cannot.`,
 	Args: cobra.RangeArgs(0, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var name string
-		var config map[string]any
+		var config ops.McpServersCreateArgsConfig
 
 		switch {
 		case len(args) >= 2:
@@ -116,19 +116,9 @@ Adding a server takes a signed-in session (cyfr login); an API key cannot.`,
 			return errors.New("Usage: cyfr mcp add <name> '<config-json>'")
 		}
 
-		if config == nil {
-			return errors.New("Config JSON is required.")
-		}
-		if err := checkServerConfig(config); err != nil {
-			return err
-		}
-
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
-			"action": ops.McpServersCreate,
-			"name":   name,
-			"config": config,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersCreateArgs{Name: name,
+			Config: config})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -178,25 +168,19 @@ key cannot.`,
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		epoch, _ := cmd.Flags().GetInt64("epoch")
+		epoch, _ := cmd.Flags().GetInt("epoch")
 		if epoch < 1 {
 			return errors.New("--epoch must be the epoch `cyfr mcp get` showed.")
 		}
-		var config map[string]any
+		var config ops.McpServersUpdateArgsConfig
 		if err := json.Unmarshal([]byte(args[1]), &config); err != nil {
 			return fmt.Errorf("Invalid JSON config: %w", err)
 		}
-		if err := checkServerConfig(config); err != nil {
-			return err
-		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
-			"action": ops.McpServersUpdate,
-			"name":   name,
-			"epoch":  epoch,
-			"config": config,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersUpdateArgs{Name: name,
+			Epoch:  epoch,
+			Config: config})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -228,10 +212,7 @@ var mcpRemoveCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
-			"action": ops.McpServersDelete,
-			"name":   name,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersDeleteArgs{Name: name})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -251,9 +232,7 @@ var mcpListCmd = &cobra.Command{
 	Example: "  cyfr mcp list",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
-			"action": ops.McpServersList,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersListArgs{})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -302,10 +281,7 @@ var mcpGetCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
-			"action": ops.McpServersGet,
-			"name":   name,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersGetArgs{Name: name})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -331,10 +307,7 @@ var mcpTestCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
-			"action": ops.McpServersTest,
-			"name":   name,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersTestArgs{Name: name})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -349,10 +322,7 @@ var mcpEnableCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
-			"action": ops.McpServersEnable,
-			"name":   args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersEnableArgs{Name: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -372,10 +342,7 @@ var mcpDisableCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
-			"action": ops.McpServersDisable,
-			"name":   args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersDisableArgs{Name: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -396,11 +363,9 @@ var mcpRefreshCmd = &cobra.Command{
   cyfr mcp refresh notion   # refresh one`,
 	Args: cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		toolArgs := map[string]any{
-			"action": ops.McpServersRefresh,
-		}
+		toolArgs := ops.McpServersRefreshArgs{}
 		if len(args) >= 1 {
-			toolArgs["name"] = args[0]
+			toolArgs.Name = ops.Value(args[0])
 		}
 
 		client := newClient()
@@ -449,10 +414,7 @@ var mcpRestartCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpServers, map[string]any{
-			"action": ops.McpServersRestart,
-			"name":   name,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpServers, ops.McpServersRestartArgs{Name: name})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -465,25 +427,11 @@ var mcpRestartCmd = &cobra.Command{
 	},
 }
 
-// checkServerConfig refuses a config that names neither an http url nor a
-// stdio transport; the server validates everything else.
-func checkServerConfig(config map[string]any) error {
-	if config["transport"] == "stdio" {
-		return nil
-	}
-	if _, ok := config["url"]; !ok {
-		return errors.New("Config must include a \"url\" field, or \"transport\":\"stdio\" and its \"backends\".")
-	}
-	return nil
-}
-
 // fetchServerOptions lists the configured MCP servers as picker options,
 // labelling each with its status.
 func fetchServerOptions(ctx context.Context) ([]prompt.Option, error) {
 	client := newClient()
-	result, err := client.CallTool(ctx, ops.McpServers, map[string]any{
-		"action": ops.McpServersList,
-	})
+	result, err := client.CallTool(ctx, ops.McpServers, ops.McpServersListArgs{})
 	if err != nil {
 		return nil, err
 	}

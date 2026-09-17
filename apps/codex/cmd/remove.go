@@ -59,10 +59,7 @@ var removeCmd = &cobra.Command{
 			}
 		}
 
-		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
-			"action":    ops.ComponentDelete,
-			"reference": normalized,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Component, ops.ComponentDeleteArgs{Reference: normalized})
 		if err != nil {
 			return handleToolError(err, "Delete failed")
 		}

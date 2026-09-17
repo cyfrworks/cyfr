@@ -71,176 +71,362 @@ defmodule Emissary.MCP.ThreadTool do
 
   @doc false
   def definition do
-    %{
-      name: "thread",
-      title: "Threads",
+    alias Cyfr.Ops.{Arg, Operation}
+    # `:external` on every action: a running agent must not be able to
+    # read or post into threads, its own included. And
+    # `:interactive` on every action: only a person's own session may
+    # speak, decide, or read as them — never a standing credential.
+    # Advisory: maxLength counts graphemes; the governing bound is
+    # the runner's 32 KiB byte check, which every sender passes
+    # through (the console included).
+    Operation.tool(
+      [
+        Operation.new(
+          "thread",
+          "create",
+          "Create thread",
+          [Arg.new("title", :string, description: "create: the thread's title")],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new("thread", "list", "List thread", [],
+          kind: :read,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "get",
+          "Get thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "messages",
+          "Messages thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            ),
+            Arg.new("after_seq", :integer,
+              description:
+                "events: replay messages after this seq. Omit to start from the beginning."
+            ),
+            Arg.new("limit", :integer,
+              description:
+                "events: rows per page (default and ceiling 500). Page by passing the returned cursor as after_seq."
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "send",
+          "Send thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            ),
+            Arg.new("message", :string,
+              required: true,
+              description: "send: the text to say (at most 32 KiB of text)",
+              max: 32768
+            ),
+            Arg.new("agent", :string,
+              description: "send: the agent to address when the text names none"
+            ),
+            Arg.new(
+              "attachments",
+              {:array,
+               Arg.new(
+                 nil,
+                 {:record,
+                  [
+                    Arg.new("filename", :string, required: true),
+                    Arg.new("stored_name", :string, required: true),
+                    Arg.new("media_type", :string, required: true),
+                    Arg.new("size", :integer, required: true)
+                  ]}
+               )},
+              description: "send: the refs `attach` answered for this message id"
+            ),
+            Arg.new("client_id", :string,
+              description:
+                "send: the sender's own id for this send, so a retry answers the same message"
+            ),
+            Arg.new("id", :string,
+              description:
+                "send: a pre-minted message id (mint one, attach the files under it, then send)"
+            ),
+            Arg.new("model", :string, description: "send: a model override for this turn"),
+            Arg.new(
+              "room",
+              {:record,
+               [
+                 Arg.new("athanor_id", :string, required: true),
+                 Arg.new("thread_id", :string, required: true),
+                 Arg.new("title", :string),
+                 Arg.new("estate", :string)
+               ]},
+              description:
+                "send: the room the sender has open beside this thread (athanor_id, thread_id, title, estate); its newest lines are read for this one turn, never stored"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "attach",
+          "Attach thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            ),
+            Arg.new("message_id", :string,
+              required: true,
+              description:
+                "approve/decline: the approval card; attach: the message the files belong to"
+            ),
+            Arg.new(
+              "files",
+              {:array,
+               Arg.new(
+                 nil,
+                 {:record,
+                  [
+                    Arg.new("filename", :string, required: true),
+                    Arg.new("media_type", :string, required: true),
+                    Arg.new("data", :string, required: true)
+                  ]}
+               )},
+              required: true,
+              description: "attach: the files as {filename, media_type, data} with base64 data"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "stop",
+          "Stop thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "approve",
+          "Approve thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            ),
+            Arg.new("message_id", :string,
+              required: true,
+              description:
+                "approve/decline: the approval card; attach: the message the files belong to"
+            ),
+            Arg.new("scope", :string,
+              description:
+                "approve: once | thread | always. decline: once | never. Standing scopes are refused for destructive and external actions.",
+              enum: ["once", "thread", "always"]
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "decline",
+          "Decline thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            ),
+            Arg.new("message_id", :string,
+              required: true,
+              description:
+                "approve/decline: the approval card; attach: the message the files belong to"
+            ),
+            Arg.new("scope", :string,
+              description:
+                "approve: once | thread | always. decline: once | never. Standing scopes are refused for destructive and external actions.",
+              enum: ["once", "never"]
+            ),
+            Arg.new("reason", :string, description: "decline: why")
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "revoke_grant",
+          "Revoke grant thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            ),
+            Arg.new("agent_name", :string,
+              required: true,
+              description: "revoke_grant: the agent the standing answer was given for"
+            ),
+            Arg.new("tool", :string, required: true, description: "revoke_grant: the tool"),
+            Arg.new("tool_action", :string,
+              required: true,
+              description: "revoke_grant: the action"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "restart_for_consent",
+          "Restart for consent thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            ),
+            Arg.new("profile_id", :string,
+              nullable: true,
+              description: "restart_for_consent: the profile the consent was granted on"
+            ),
+            Arg.new("revision", :integer,
+              nullable: true,
+              description: "restart_for_consent: the consent revision granted"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "events",
+          "Events thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            ),
+            Arg.new("after_seq", :integer,
+              description:
+                "events: replay messages after this seq. Omit to start from the beginning."
+            ),
+            Arg.new("limit", :integer,
+              description:
+                "events: rows per page (default and ceiling 500). Page by passing the returned cursor as after_seq."
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "follow",
+          "Follow thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "unfollow",
+          "Unfollow thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "aloud",
+          "Aloud thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            ),
+            Arg.new("message_ids", {:array, Arg.new(nil, :string)},
+              required: true,
+              description:
+                "aloud: your own messages to copy, in any order — or your assistant's replies to you in your own athanor"
+            ),
+            Arg.new("target_athanor", :string,
+              required: true,
+              description: "aloud: the estate to post into (you must be a member)"
+            ),
+            Arg.new("target_thread", :string,
+              required: true,
+              description: "aloud: the thread in that estate to post onto"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
+          "delete",
+          "Delete thread",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          consent: :interactive
+        )
+      ],
       description:
-        "Talk to an agent: open or list threads, send a message, follow the reply, " <>
-          "stop a turn, decide the approval cards a turn raises, follow or unfollow a " <>
-          "thread, and say one of your own private lines aloud into an estate you " <>
-          "belong to. Addressing: in an estate with one person every send starts a " <>
-          "turn; with more than one, a send starts a turn only when it names one — " <>
-          "@aqua for the estate's assistant, or @<role> for one of its roles. An " <>
-          "unaddressed send is people talking: it " <>
-          "persists and starts nothing (the result says running: false). A send may " <>
-          "carry a pre-minted id with files attached under it, a model, an agent, the " <>
-          "sender's own client id, and the room open beside the thread. " <>
-          "Wraps the same runner and the same verbs the console drives, with the " <>
-          "same gates — this is not a second way to run an agent.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: false,
-        actions: %{
-          # `:external` on every action: a running agent must not be able to
-          # read or post into threads, its own included. And
-          # `:interactive` on every action: only a person's own session may
-          # speak, decide, or read as them — never a standing credential.
-          "create" => %{kind: :write, planes: [:external], consent: :interactive},
-          "list" => %{kind: :read, planes: [:external], consent: :interactive},
-          "get" => %{kind: :read, planes: [:external], consent: :interactive},
-          "messages" => %{kind: :read, planes: [:external], consent: :interactive},
-          "send" => %{kind: :write, planes: [:external], consent: :interactive},
-          "attach" => %{kind: :write, planes: [:external], consent: :interactive},
-          "stop" => %{kind: :write, planes: [:external], consent: :interactive},
-          "approve" => %{kind: :write, planes: [:external], consent: :interactive},
-          "decline" => %{kind: :write, planes: [:external], consent: :interactive},
-          "revoke_grant" => %{kind: :write, planes: [:external], consent: :interactive},
-          "restart_for_consent" => %{kind: :write, planes: [:external], consent: :interactive},
-          "events" => %{kind: :read, planes: [:external], consent: :interactive},
-          "follow" => %{kind: :write, planes: [:external], consent: :interactive},
-          "unfollow" => %{kind: :write, planes: [:external], consent: :interactive},
-          "aloud" => %{kind: :write, planes: [:external], consent: :interactive},
-          "delete" => %{kind: :destructive, planes: [:external], consent: :interactive}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => [
-              "create",
-              "list",
-              "get",
-              "messages",
-              "send",
-              "attach",
-              "stop",
-              "approve",
-              "decline",
-              "revoke_grant",
-              "restart_for_consent",
-              "events",
-              "follow",
-              "unfollow",
-              "aloud",
-              "delete"
-            ]
-          },
-          "thread" => %{
-            "type" => "string",
-            "description" => "Thread id (all actions except create and list)"
-          },
-          "title" => %{"type" => "string", "description" => "create: the thread's title"},
-          "message" => %{
-            "type" => "string",
-            # Advisory: maxLength counts graphemes; the governing bound is
-            # the runner's 32 KiB byte check, which every sender passes
-            # through (the console included).
-            "maxLength" => 32_768,
-            "description" => "send: the text to say (at most 32 KiB of text)"
-          },
-          "message_id" => %{
-            "type" => "string",
-            "description" =>
-              "approve/decline: the approval card; attach: the message the files belong to"
-          },
-          "id" => %{
-            "type" => "string",
-            "description" =>
-              "send: a pre-minted message id (mint one, attach the files under it, then send)"
-          },
-          "client_id" => %{
-            "type" => "string",
-            "description" =>
-              "send: the sender's own id for this send, so a retry answers the same message"
-          },
-          "attachments" => %{
-            "type" => "array",
-            "items" => %{"type" => "object"},
-            "description" => "send: the refs `attach` answered for this message id"
-          },
-          "agent" => %{
-            "type" => "string",
-            "description" => "send: the agent to address when the text names none"
-          },
-          "model" => %{
-            "type" => "string",
-            "description" => "send: a model override for this turn"
-          },
-          "room" => %{
-            "type" => "object",
-            "description" =>
-              "send: the room the sender has open beside this thread " <>
-                "(athanor_id, thread_id, title, estate); its newest lines are read " <>
-                "for this one turn, never stored"
-          },
-          "files" => %{
-            "type" => "array",
-            "items" => %{"type" => "object"},
-            "description" => "attach: the files as {filename, media_type, data} with base64 data"
-          },
-          "agent_name" => %{
-            "type" => "string",
-            "description" => "revoke_grant: the agent the standing answer was given for"
-          },
-          "tool" => %{"type" => "string", "description" => "revoke_grant: the tool"},
-          "tool_action" => %{"type" => "string", "description" => "revoke_grant: the action"},
-          "profile_id" => %{
-            "type" => "string",
-            "description" => "restart_for_consent: the profile the consent was granted on"
-          },
-          "revision" => %{
-            "type" => "string",
-            "description" => "restart_for_consent: the consent revision granted"
-          },
-          "message_ids" => %{
-            "type" => "array",
-            "items" => %{"type" => "string"},
-            "description" =>
-              "aloud: your own messages to copy, in any order — or your assistant's replies to you in your own athanor"
-          },
-          "target_athanor" => %{
-            "type" => "string",
-            "description" => "aloud: the estate to post into (you must be a member)"
-          },
-          "target_thread" => %{
-            "type" => "string",
-            "description" => "aloud: the thread in that estate to post onto"
-          },
-          "scope" => %{
-            "type" => "string",
-            "enum" => ["once", "thread", "always", "never"],
-            "description" =>
-              "approve: once | thread | always. decline: once | never. " <>
-                "Standing scopes are refused for destructive and external actions."
-          },
-          "reason" => %{"type" => "string", "description" => "decline: why"},
-          "after_seq" => %{
-            "type" => "integer",
-            "description" =>
-              "events: replay messages after this seq. Omit to start from the beginning."
-          },
-          "limit" => %{
-            "type" => "integer",
-            "description" =>
-              "events: rows per page (default and ceiling 500). Page by passing " <>
-                "the returned cursor as after_seq."
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, follow or unfollow a thread, and say one of your own private lines aloud into an estate you belong to. Addressing: in an estate with one person every send starts a turn; with more than one, a send starts a turn only when it names one — @aqua for the estate's assistant, or @<role> for one of its roles. An unaddressed send is people talking: it persists and starts nothing (the result says running: false). A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the room open beside the thread. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+      title: "Threads"
+    )
   end
 
   @impl true
@@ -492,10 +678,8 @@ defmodule Emissary.MCP.ThreadTool do
          "target_thread" => target_thread
        })
        when is_list(ids) and is_binary(target_athanor) and is_binary(target_thread) do
-    # The validator does not look inside arrays, so the ids' shape and the
-    # list's length are checked here: every element copies bytes into the
-    # target estate, and a bound is what keeps one call from moving a
-    # whole thread.
+    # Keep the direct domain entry bounded too: every selected message
+    # copies bytes into the target estate.
     cond do
       not Enum.all?(ids, &is_binary/1) ->
         {:error, {:invalid_argument, "aloud takes a list of message ids"}}

@@ -37,9 +37,7 @@ var retentionShowCmd = &cobra.Command{
 	Example: "  cyfr retention show",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Retention, map[string]any{
-			"action": ops.RetentionGet,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Retention, ops.RetentionGetArgs{})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -54,26 +52,23 @@ var retentionSetCmd = &cobra.Command{
 	Example: `  cyfr retention set --executions 100 --builds 50
   cyfr retention set --executions 200`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		settings := map[string]any{}
+		settings := ops.RetentionSetArgsSettings{}
 
 		if cmd.Flags().Changed("executions") {
 			v, _ := cmd.Flags().GetInt("executions")
-			settings["executions"] = v
+			settings.Executions = ops.Value(v)
 		}
 		if cmd.Flags().Changed("builds") {
 			v, _ := cmd.Flags().GetInt("builds")
-			settings["builds"] = v
+			settings.Builds = ops.Value(v)
 		}
 
-		if len(settings) == 0 {
+		if settings.Executions.IsZero() && settings.Builds.IsZero() {
 			return errors.New("Specify at least one of --executions or --builds")
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Retention, map[string]any{
-			"action":   ops.RetentionSet,
-			"settings": settings,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Retention, ops.RetentionSetArgs{Settings: settings})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -91,16 +86,14 @@ var retentionCleanupCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		toolArgs := map[string]any{
-			"action": "cleanup",
-		}
+		toolArgs := ops.RetentionCleanupArgs{}
 
 		if cmd.Flags().Changed("type") {
 			v, _ := cmd.Flags().GetString("type")
-			toolArgs["cleanup_type"] = v
+			toolArgs.CleanupType = ops.Value(v)
 		}
-		if dryRun, _ := cmd.Flags().GetBool("dry-run"); dryRun {
-			toolArgs["dry_run"] = true
+		if dryRun, _ := cmd.Flags().GetBool("dry-run"); cmd.Flags().Changed("dry-run") {
+			toolArgs.DryRun = ops.Value(dryRun)
 		}
 
 		result, err := client.CallTool(cmd.Context(), ops.Retention, toolArgs)

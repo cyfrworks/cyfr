@@ -32,57 +32,74 @@ defmodule Locus.MCP do
   # ============================================================================
 
   def tools do
+    alias Cyfr.Ops.{Arg, Operation}
+
     [
-      %{
-        name: "build",
-        title: "Build",
+      Operation.tool(
+        [
+          Operation.new(
+            "build",
+            "compile",
+            "Compile build",
+            [
+              Arg.new("reference", :string,
+                required: true,
+                description:
+                  "Component reference to compile, e.g. 'catalyst:local.my-api:0.1.0' (compile action)"
+              ),
+              Arg.new("async", :boolean,
+                description:
+                  "compile only: return a build_id immediately and run the build in the background; poll with action=status or subscribe to the build:<id> topic"
+              ),
+              Arg.new("build_id", :string,
+                description:
+                  "Build identifier — optional for compile (minted when absent), required for status"
+              ),
+              Arg.new("resolve", :boolean,
+                description:
+                  "compile only, Rust: resolve the crates afresh and keep the new Cargo.lock — needed after a dependency changes; otherwise a component with a Cargo.lock builds locked to it"
+              )
+            ],
+            kind: :execute,
+            planes: [:external, :in_chain],
+            permission: :execute
+          ),
+          Operation.new(
+            "build",
+            "validate",
+            "Validate build",
+            [
+              Arg.new("wasm_base64", :string,
+                required: true,
+                description: "Base64-encoded WASM binary (validate action)"
+              )
+            ],
+            kind: :read,
+            planes: [:external, :in_chain]
+          ),
+          Operation.new("build", "toolchains", "Toolchains build", [],
+            kind: :read,
+            planes: [:external, :in_chain]
+          ),
+          Operation.new(
+            "build",
+            "status",
+            "Status build",
+            [
+              Arg.new("build_id", :string,
+                required: true,
+                description:
+                  "Build identifier — optional for compile (minted when absent), required for status"
+              )
+            ],
+            kind: :read,
+            planes: [:external, :in_chain],
+            permission: :execute
+          )
+        ],
         description: "Compile components by reference and manage build toolchains",
-        annotations: %{
-          readOnlyHint: false,
-          destructiveHint: false,
-          actions: %{
-            "compile" => %{kind: :execute, planes: [:external, :in_chain], permission: :execute},
-            "validate" => %{kind: :read, planes: [:external, :in_chain]},
-            "toolchains" => %{kind: :read, planes: [:external, :in_chain]},
-            "status" => %{kind: :read, planes: [:external, :in_chain], permission: :execute}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["compile", "validate", "toolchains", "status"],
-              "description" => "Action to perform"
-            },
-            "async" => %{
-              "type" => "boolean",
-              "description" =>
-                "compile only: return a build_id immediately and run the build in the background; poll with action=status or subscribe to the build:<id> topic"
-            },
-            "build_id" => %{
-              "type" => "string",
-              "description" =>
-                "Build identifier — optional for compile (minted when absent), required for status"
-            },
-            "reference" => %{
-              "type" => "string",
-              "description" =>
-                "Component reference to compile, e.g. 'catalyst:local.my-api:0.1.0' (compile action)"
-            },
-            "resolve" => %{
-              "type" => "boolean",
-              "description" =>
-                "compile only, Rust: resolve the crates afresh and keep the new Cargo.lock — needed after a dependency changes; otherwise a component with a Cargo.lock builds locked to it"
-            },
-            "wasm_base64" => %{
-              "type" => "string",
-              "description" => "Base64-encoded WASM binary (validate action)"
-            }
-          },
-          "required" => ["action"]
-        }
-      }
+        title: "Build"
+      )
     ]
   end
 

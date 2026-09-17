@@ -319,7 +319,7 @@ defmodule Compendium.MCPTest do
 
     test "component tool has type filter enum" do
       tool = Enum.find(MCP.tools(), &(&1.name == "component"))
-      type_schema = tool.input_schema["properties"]["type"]
+      type_schema = action_schema(tool, "search")["properties"]["type"]
 
       assert type_schema["type"] == "string"
       assert "catalyst" in type_schema["enum"]
@@ -691,7 +691,7 @@ defmodule Compendium.MCPTest do
     test "register action does not require directory parameter" do
       tool = Enum.find(MCP.tools(), &(&1.name == "component"))
       # The schema does not accept a directory property.
-      refute Map.has_key?(tool.input_schema["properties"], "directory")
+      refute Map.has_key?(action_schema(tool, "register")["properties"], "directory")
     end
   end
 
@@ -886,7 +886,7 @@ defmodule Compendium.MCPTest do
 
     test "has digest property in tool schema" do
       tool = Enum.find(MCP.tools(), &(&1.name == "component"))
-      digest_schema = tool.input_schema["properties"]["digest"]
+      digest_schema = action_schema(tool, "get_blob")["properties"]["digest"]
 
       assert digest_schema["type"] == "string"
       assert digest_schema["description"] =~ "digest"
@@ -2116,7 +2116,8 @@ defmodule Compendium.MCPTest do
 
       enum =
         registry_tool
-        |> get_in([:input_schema, "properties", "category", "enum"])
+        |> action_schema("report")
+        |> get_in(["properties", "category", "enum"])
         |> MapSet.new()
 
       assert MapSet.equal?(enum, @expected_report_categories),
@@ -2220,5 +2221,11 @@ defmodule Compendium.MCPTest do
   defp err_msg(reason) do
     Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
+  end
+
+  defp action_schema(tool, action) do
+    Enum.find(tool.input_schema["oneOf"], fn branch ->
+      get_in(branch, ["properties", "action", "const"]) == action
+    end) || flunk("missing schema for #{tool.name}.#{action}")
   end
 end

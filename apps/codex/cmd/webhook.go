@@ -27,6 +27,7 @@ func init() {
 	webhookCmd.AddCommand(webhookRotateCmd)
 
 	webhookCreateCmd.Flags().String("name", "", "Webhook name (required in non-interactive mode)")
+	webhookCreateCmd.Flags().String("profile", "", "Consented execution profile ID")
 	webhookCreateCmd.Flags().String("target", "", "Target component reference (e.g. f:local.handle-github-push)")
 	webhookCreateCmd.Flags().String("signature-header", "", "HTTP header carrying the signature (default x-cyfr-signature)")
 	webhookCreateCmd.Flags().String("rate-limit", "", "Rate limit override (e.g. 100/1m)")
@@ -38,6 +39,7 @@ func init() {
 	webhookUpdateCmd.Flags().String("signature-header", "", "New signature header")
 	webhookUpdateCmd.Flags().String("rate-limit", "", "New rate limit")
 	webhookUpdateCmd.Flags().String("description", "", "New description")
+	webhookUpdateCmd.Flags().String("profile", "", "Replacement consented execution profile ID")
 	webhookUpdateCmd.Flags().String("input", "", "New input template (inline JSON object)")
 	webhookUpdateCmd.Flags().String("input-file", "", "Path to JSON file with new input template")
 }
@@ -62,9 +64,9 @@ var webhookCreateCmd = &cobra.Command{
 an HMAC secret. The secret is shown exactly once — copy it now.
 
 Run without --name for an interactive form.`,
-	Example: `  cyfr webhook create --name github-push --target f:local.handle-github-push
-  cyfr webhook create --name slack-alerts --target f:local.notify --input '{"channel":"alerts"}'
-  cyfr webhook create --name stripe --target f:local.handle-stripe --signature-header stripe-signature`,
+	Example: `  cyfr webhook create --profile <profile-id> --name github-push --target f:local.handle-github-push
+  cyfr webhook create --profile <profile-id> --name slack-alerts --target f:local.notify --input '{"channel":"alerts"}'
+  cyfr webhook create --profile <profile-id> --name stripe --target f:local.handle-stripe --signature-header stripe-signature`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, _ := cmd.Flags().GetString("name")
 		target, _ := cmd.Flags().GetString("target")
@@ -78,7 +80,7 @@ Run without --name for an interactive form.`,
 
 		if name == "" {
 			if !prompt.IsInteractive(flagNoInteractive) {
-				return errors.New("--name is required. Usage: cyfr webhook create --name <name> --target <ref>")
+				return errors.New("--name is required. Usage: cyfr webhook create --profile <profile-id> --name <name> --target <ref>")
 			}
 
 			form, err := prompt.RunWebhookCreateForm()
@@ -108,7 +110,7 @@ Run without --name for an interactive form.`,
 			inputTemplate = parsed
 		} else {
 			if target == "" {
-				return errors.New("--target is required when --name is set. Usage: cyfr webhook create --name <name> --target <ref>")
+				return errors.New("--target is required when --name is set. Usage: cyfr webhook create --profile <profile-id> --name <name> --target <ref>")
 			}
 
 			parsed, err := parseInputTemplate(inputJSON, inputFile)
@@ -118,22 +120,24 @@ Run without --name for an interactive form.`,
 			inputTemplate = parsed
 		}
 
-		toolArgs := map[string]any{
-			"action":     "create",
-			"name":       name,
-			"target_ref": target,
+		profileID, _ := cmd.Flags().GetString("profile")
+		profileID, err := requireExecutionProfile(profileID)
+		if err != nil {
+			return err
 		}
+		toolArgs := ops.WebhookCreateArgs{Name: name, ProfileId: profileID,
+			TargetRef: target}
 		if inputTemplate != nil {
-			toolArgs["input_template"] = inputTemplate
+			toolArgs.InputTemplate = ops.Value(inputTemplate)
 		}
 		if sigHeader != "" {
-			toolArgs["signature_header"] = sigHeader
+			toolArgs.SignatureHeader = ops.Value(sigHeader)
 		}
 		if rateLimit != "" {
-			toolArgs["rate_limit"] = rateLimit
+			toolArgs.RateLimit = ops.Value(rateLimit)
 		}
 		if description != "" {
-			toolArgs["description"] = description
+			toolArgs.Description = ops.Value(description)
 		}
 
 		client := newClient()
@@ -159,10 +163,7 @@ var webhookGetCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Webhook, map[string]any{
-			"action": ops.WebhookGet,
-			"name":   args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Webhook, ops.WebhookGetArgs{Name: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -182,9 +183,7 @@ var webhookListCmd = &cobra.Command{
 	Example: "  cyfr webhook list",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Webhook, map[string]any{
-			"action": ops.WebhookList,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Webhook, ops.WebhookListArgs{})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -209,22 +208,23 @@ use 'cyfr webhook rotate' to replace it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 
-		toolArgs := map[string]any{
-			"action": "update",
-			"name":   name,
+		toolArgs := ops.WebhookUpdateArgs{Name: name}
+		if cmd.Flags().Changed("profile") {
+			profileID, _ := cmd.Flags().GetString("profile")
+			toolArgs.ProfileId = ops.Value(profileID)
 		}
 
-		if target, _ := cmd.Flags().GetString("target"); target != "" {
-			toolArgs["target_ref"] = target
+		if target, _ := cmd.Flags().GetString("target"); cmd.Flags().Changed("target") {
+			toolArgs.TargetRef = ops.Value(target)
 		}
-		if sigHeader, _ := cmd.Flags().GetString("signature-header"); sigHeader != "" {
-			toolArgs["signature_header"] = sigHeader
+		if sigHeader, _ := cmd.Flags().GetString("signature-header"); cmd.Flags().Changed("signature-header") {
+			toolArgs.SignatureHeader = ops.Value(sigHeader)
 		}
-		if rateLimit, _ := cmd.Flags().GetString("rate-limit"); rateLimit != "" {
-			toolArgs["rate_limit"] = rateLimit
+		if rateLimit, _ := cmd.Flags().GetString("rate-limit"); cmd.Flags().Changed("rate-limit") {
+			toolArgs.RateLimit = ops.Value(rateLimit)
 		}
-		if description, _ := cmd.Flags().GetString("description"); description != "" {
-			toolArgs["description"] = description
+		if description, _ := cmd.Flags().GetString("description"); cmd.Flags().Changed("description") {
+			toolArgs.Description = ops.Value(description)
 		}
 
 		inputJSON, _ := cmd.Flags().GetString("input")
@@ -235,13 +235,13 @@ use 'cyfr webhook rotate' to replace it.`,
 				return fmt.Errorf("Invalid input_template: %w", err)
 			}
 			if parsed != nil {
-				toolArgs["input_template"] = parsed
+				toolArgs.InputTemplate = ops.Value(parsed)
 			}
 		}
 
 		// Reject no-op updates client-side (server will too, but a clearer message helps).
-		if len(toolArgs) <= 2 {
-			return errors.New("No fields to update. Pass at least one of --target, --signature-header, --rate-limit, --description, --input, or --input-file.")
+		if toolArgs.ProfileId.IsZero() && toolArgs.TargetRef.IsZero() && toolArgs.SignatureHeader.IsZero() && toolArgs.RateLimit.IsZero() && toolArgs.Description.IsZero() && toolArgs.InputTemplate.IsZero() {
+			return errors.New("No fields to update. Pass at least one of --profile, --target, --signature-header, --rate-limit, --description, --input, or --input-file.")
 		}
 
 		client := newClient()
@@ -272,10 +272,7 @@ var webhookRevokeCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Webhook, map[string]any{
-			"action": ops.WebhookRevoke,
-			"name":   name,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Webhook, ops.WebhookRevokeArgs{Name: name})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -301,10 +298,7 @@ var webhookRotateCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Webhook, map[string]any{
-			"action": ops.WebhookRotate,
-			"name":   name,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Webhook, ops.WebhookRotateArgs{Name: name})
 		if err != nil {
 			return handleToolError(err)
 		}

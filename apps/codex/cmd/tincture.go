@@ -69,11 +69,8 @@ var tinctureVisibilityGetCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.TinctureVisibility, map[string]any{
-			"action":    ops.TinctureVisibilityGet,
-			"publisher": publisher,
-			"name":      name,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.TinctureVisibility, ops.TinctureVisibilityGetArgs{Publisher: publisher,
+			Name: name})
 		if err != nil {
 			return handleToolError(err, "Visibility query failed")
 		}

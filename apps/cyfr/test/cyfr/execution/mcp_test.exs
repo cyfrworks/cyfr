@@ -567,11 +567,14 @@ defmodule Cyfr.Execution.MCPTest do
       tools = MCP.tools()
       tool = Enum.find(tools, &(&1.name == "execution"))
 
-      verify_schema = tool.input_schema["properties"]["verify"]
-      assert verify_schema != nil
-      assert verify_schema["type"] == "object"
-      assert verify_schema["properties"]["identity"]["type"] == "string"
-      assert verify_schema["properties"]["issuer"]["type"] == "string"
+      for action <- ["run", "run_stream"] do
+        verify_schema = action_schema(tool, action)["properties"]["verify"]
+        assert verify_schema != nil
+        assert verify_schema["type"] == "object"
+        assert verify_schema["properties"]["identity"]["type"] == "string"
+        assert verify_schema["properties"]["issuer"]["type"] == "string"
+        assert verify_schema["additionalProperties"] == false
+      end
     end
 
     test "accepts verify block with identity and issuer", %{ctx: ctx, ref: ref} do
@@ -991,5 +994,11 @@ defmodule Cyfr.Execution.MCPTest do
   defp err_msg(reason) do
     Cyfr.Ops.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
+  end
+
+  defp action_schema(tool, action) do
+    Enum.find(tool.input_schema["oneOf"], fn branch ->
+      get_in(branch, ["properties", "action", "const"]) == action
+    end) || flunk("missing schema for #{tool.name}.#{action}")
   end
 end

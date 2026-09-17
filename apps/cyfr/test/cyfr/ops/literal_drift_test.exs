@@ -4,14 +4,14 @@
 defmodule Cyfr.Ops.LiteralDriftTest do
   @moduledoc """
   Every operation a client spells as a literal exists in the catalog, and
-  the CLI's generated table of names is the catalog's.
+  the CLI's generated names and argument structs are the catalog's.
 
   The CLI names the operations its built-in commands call through
   `apps/codex/internal/ops/catalog_gen.go`, rendered by `mix ops.gen.cli`
   from the catalog: a renamed or retired action fails `go build` there.
   This test refuses a checked-in render that is stale, so the build sees
-  the catalog as it is. Argument names are not in the table — a command's
-  arguments are bound by its own test until the catalog declares them.
+  the catalog as it is. Argument fields and their presence are generated from the same
+  declarations; renamed fields fail the Go build.
 
   The one library site that dispatches by name across an app boundary
   (the build host registering a compiled component) still spells a

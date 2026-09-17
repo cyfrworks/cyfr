@@ -54,10 +54,7 @@ var searchCmd = &cobra.Command{
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
-			"action": ops.ComponentSearch,
-			"query":  strings.Join(args, " "),
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Component, ops.ComponentSearchArgs{Query: ops.Value(strings.Join(args, " "))})
 		if err != nil {
 			return handleToolError(err, "Search failed")
 		}
@@ -217,12 +214,9 @@ var inspectCmd = &cobra.Command{
 			return err
 		}
 
-		callArgs := map[string]any{
-			"action":    "inspect",
-			"reference": normalized,
-		}
-		if includeReadme, _ := cmd.Flags().GetBool("readme"); includeReadme {
-			callArgs["include_readme"] = true
+		callArgs := ops.ComponentInspectArgs{Reference: normalized}
+		if includeReadme, _ := cmd.Flags().GetBool("readme"); cmd.Flags().Changed("readme") {
+			callArgs.IncludeReadme = ops.Value(includeReadme)
 		}
 		result, err := client.CallTool(cmd.Context(), ops.Component, callArgs)
 		if err != nil {
@@ -262,11 +256,8 @@ var pullCmd = &cobra.Command{
 		}
 		progressID := randomHex(8)
 
-		result, err := client.CallToolWithProgress(cmd.Context(), ops.Component, map[string]any{
-			"action":      ops.ComponentPull,
-			"reference":   normalized,
-			"progress_id": progressID,
-		}, progressPrinter())
+		result, err := client.CallToolWithProgress(cmd.Context(), ops.Component, ops.ComponentPullArgs{Reference: normalized,
+			ProgressId: ops.Value(progressID)}, progressPrinter())
 		if err != nil {
 			return handleToolError(err, "Pull failed")
 		}
@@ -304,13 +295,10 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 
 		progressID := randomHex(8)
 
-		toolArgs := map[string]any{
-			"action":      "push",
-			"reference":   normalized,
-			"progress_id": progressID,
-		}
+		toolArgs := ops.ComponentPushArgs{Reference: normalized,
+			ProgressId: ops.Value(progressID)}
 		if registry, _ := cmd.Flags().GetString("registry"); registry != "" {
-			toolArgs["registry"] = registry
+			toolArgs.Registry = ops.Value(registry)
 		}
 		result, err := client.CallToolWithProgress(cmd.Context(), ops.Component, toolArgs, progressPrinter())
 		if err != nil {
@@ -340,14 +328,11 @@ Tinctures get HTML/JS/CSS scaffolding. Use --template react for a React + TypeSc
 		version, _ := cmd.Flags().GetString("version")
 		template, _ := cmd.Flags().GetString("template")
 
-		toolArgs := map[string]any{
-			"action":  "create",
-			"type":    componentType,
-			"name":    name,
-			"version": version,
-		}
+		toolArgs := ops.ComponentCreateArgs{Type: componentType,
+			Name:    name,
+			Version: ops.Value(version)}
 		if template != "" {
-			toolArgs["template"] = template
+			toolArgs.Template = ops.Value(template)
 		}
 
 		client := newClient()
@@ -403,15 +388,12 @@ Copies source code, manifest, and compiled artifact. Requires source code
 			return err
 		}
 
-		toolArgs := map[string]any{
-			"action":    "fork",
-			"reference": normalized,
-		}
+		toolArgs := ops.ComponentForkArgs{Reference: normalized}
 		if name, _ := cmd.Flags().GetString("name"); name != "" {
-			toolArgs["name"] = name
+			toolArgs.Name = ops.Value(name)
 		}
 		if version, _ := cmd.Flags().GetString("version"); version != "" {
-			toolArgs["version"] = version
+			toolArgs.Version = ops.Value(version)
 		}
 
 		result, err := client.CallTool(cmd.Context(), ops.Component, toolArgs)
@@ -473,11 +455,8 @@ token for the component's namespace (i.e. you are the publisher).`,
 		}
 		reason, _ := cmd.Flags().GetString("reason")
 
-		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
-			"action":    ops.ComponentDeprecate,
-			"reference": normalized,
-			"reason":    reason,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Component, ops.ComponentDeprecateArgs{Reference: normalized,
+			Reason: reason})
 		if err != nil {
 			return handleToolError(err, "Deprecate failed")
 		}
@@ -516,11 +495,8 @@ token for the component's namespace.`,
 		}
 		reason, _ := cmd.Flags().GetString("reason")
 
-		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
-			"action":    ops.ComponentYank,
-			"reference": normalized,
-			"reason":    reason,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Component, ops.ComponentYankArgs{Reference: normalized,
+			Reason: ops.Value(reason)})
 		if err != nil {
 			return handleToolError(err, "Yank failed")
 		}
@@ -553,10 +529,7 @@ var registryDiscoverCmd = &cobra.Command{
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Component, map[string]any{
-			"action":   ops.ComponentDiscover,
-			"registry": args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Component, ops.ComponentDiscoverArgs{Registry: ops.Value(args[0])})
 		if err != nil {
 			return handleToolError(err, "Discover failed")
 		}

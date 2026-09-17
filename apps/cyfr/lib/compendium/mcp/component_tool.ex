@@ -28,198 +28,337 @@ defmodule Compendium.MCP.ComponentTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Compendium.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "component",
-      title: "Component",
+    alias Cyfr.Ops.{Arg, Operation}
+    # Registration indexes the athanor's components tree without granting
+    # consent. It requires a console or CLI caller: staging consent refuses
+    # guests, and omitting :in_chain excludes formula and AQUA invocation.
+    # Operation planes and Context.plane are separate checks.
+    # Reverts a bundled component's local edits to exactly what the
+    # release shipped — destructive to the edits, mirror of aqua.reset.
+    # deprecate/yank were the one write pair with no permission gate —
+    # discovery already advertised :component_manage, and every
+    # sibling mutation carries it; the handlers' namespace-bearer
+    # check remains as the registry-identity residual.
+    # deprecate/yank action params
+    # search action params
+    # inspect/pull action params
+    # inspect action params
+    # Signature verification is controlled by the server’s
+    # require_signed_pulls setting and rechecked at execution.
+    # create/fork action params
+    # register action: no additional params (scans all component directories)
+    Operation.tool(
+      [
+        Operation.new(
+          "component",
+          "search",
+          "Search component",
+          [
+            Arg.new("query", :string, description: "Search query (search action)"),
+            Arg.new("type", :string,
+              description:
+                "Component type (required for create action, optional filter for search/list)",
+              enum: Cyfr.ComponentRef.valid_types()
+            ),
+            Arg.new("category", :string, description: "Filter by category (search action)"),
+            Arg.new("tags", {:array, Arg.new(nil, :string)},
+              description: "Filter by tags, AND logic (search action)"
+            ),
+            Arg.new("license", :string,
+              description: "Filter by license, SPDX identifier (search action)"
+            ),
+            Arg.new("limit", :integer,
+              description: "Maximum results to return (search action)",
+              default: 20
+            ),
+            Arg.new("source", :string,
+              description:
+                "Search scope: 'local' (skip remote), 'remote' (remote only), 'all' (default, both)",
+              enum: ["local", "remote", "all"]
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "component",
+          "inspect",
+          "Inspect component",
+          [
+            Arg.new("reference", :string,
+              required: true,
+              description:
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
+            ),
+            Arg.new("include_readme", :boolean,
+              description: "Include README.md content in inspect result (default false)"
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain],
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "component",
+          "pull",
+          "Pull component",
+          [
+            Arg.new("reference", :string,
+              required: true,
+              description:
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
+            ),
+            Arg.new("progress_id", :string,
+              description: "Correlation ID for transfer progress events"
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "component",
+          "push",
+          "Push component",
+          [
+            Arg.new("reference", :string,
+              required: true,
+              description:
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
+            ),
+            Arg.new("registry", :string,
+              description: "OCI registry hostname for push/discover (e.g., ghcr.io)"
+            ),
+            Arg.new("progress_id", :string,
+              description: "Correlation ID for transfer progress events"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "component",
+          "register",
+          "Register component",
+          [
+            Arg.new("register_id", :string,
+              description: "Correlation ID for registration progress events"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :staging,
+          permission: :component_manage
+        ),
+        Operation.new("component", "categories", "Categories component", [],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "component",
+          "get_blob",
+          "Get blob component",
+          [
+            Arg.new("digest", :string,
+              required: true,
+              description: "Component digest (get_blob action)"
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain],
+          permission: :component_read
+        ),
+        Operation.new(
+          "component",
+          "discover",
+          "Discover component",
+          [
+            Arg.new("namespace", :string,
+              description: "Publisher namespace filter (discover action)"
+            ),
+            Arg.new("registry", :string,
+              description: "OCI registry hostname for push/discover (e.g., ghcr.io)"
+            ),
+            Arg.new("type", :string,
+              description:
+                "Component type (required for create action, optional filter for search/list)",
+              enum: Cyfr.ComponentRef.valid_types()
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain],
+          permission: :component_read
+        ),
+        Operation.new(
+          "component",
+          "setup_plan",
+          "Setup plan component",
+          [
+            Arg.new("reference", :string,
+              required: true,
+              description:
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "component",
+          "list",
+          "List component",
+          [
+            Arg.new("type", :string,
+              description:
+                "Component type (required for create action, optional filter for search/list)",
+              enum: Cyfr.ComponentRef.valid_types()
+            ),
+            Arg.new("limit", :integer,
+              description: "Maximum results to return (search action)",
+              default: 20
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain],
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "component",
+          "status",
+          "Status component",
+          [
+            Arg.new("reference", :string,
+              description:
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "component",
+          "delete",
+          "Delete component",
+          [
+            Arg.new("reference", :string,
+              required: true,
+              description:
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "component",
+          "reset",
+          "Reset component",
+          [
+            Arg.new("reference", :string,
+              required: true,
+              description:
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "component",
+          "create",
+          "Create component",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Component name, lowercase alphanumeric with hyphens (create/fork action)"
+            ),
+            Arg.new("type", :string,
+              required: true,
+              description:
+                "Component type (required for create action, optional filter for search/list)",
+              enum: Cyfr.ComponentRef.valid_types()
+            ),
+            Arg.new("version", :string,
+              description: "Semver version (create/fork action)",
+              default: "0.1.0"
+            ),
+            Arg.new("template", :string,
+              description: "Scaffold template (tincture only). Omit for vanilla HTML/JS/CSS.",
+              enum: ["react"]
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "component",
+          "fork",
+          "Fork component",
+          [
+            Arg.new("reference", :string,
+              required: true,
+              description:
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
+            ),
+            Arg.new("name", :string,
+              description:
+                "Component name, lowercase alphanumeric with hyphens (create/fork action)"
+            ),
+            Arg.new("version", :string, description: "Semver version (create/fork action)")
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "component",
+          "deprecate",
+          "Deprecate component",
+          [
+            Arg.new("reference", :string,
+              required: true,
+              description:
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
+            ),
+            Arg.new("reason", :string,
+              required: true,
+              description:
+                "Human-readable explanation surfaced to pullers (deprecate/yank). Required for deprecate; optional for yank. Max 256 chars."
+            )
+          ],
+          kind: :destructive,
+          planes: [:external, :in_chain],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "component",
+          "yank",
+          "Yank component",
+          [
+            Arg.new("reference", :string,
+              required: true,
+              description:
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
+            ),
+            Arg.new("reason", :string,
+              description:
+                "Human-readable explanation surfaced to pullers (deprecate/yank). Required for deprecate; optional for yank. Max 256 chars."
+            )
+          ],
+          kind: :destructive,
+          planes: [:external, :in_chain],
+          permission: :component_manage
+        )
+      ],
       description:
         "Component discovery and registry operations. Search/list results include a component_ref field (format: type:publisher.name:version, e.g. catalyst:moonmoon69.airtable:0.1.0) usable directly as the reference argument for pull, inspect, setup_plan, and request_setup.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          "search" => %{kind: :read, planes: [:external, :in_chain]},
-          "inspect" => %{kind: :read, planes: [:external, :in_chain], recovery: :replay_safe},
-          "pull" => %{
-            kind: :write,
-            planes: [:external, :in_chain],
-            permission: :component_manage
-          },
-          "push" => %{kind: :write, planes: [:external], permission: :component_manage},
-          # Registration indexes the athanor's components tree without granting
-          # consent. It requires a console or CLI caller: staging consent refuses
-          # guests, and omitting :in_chain excludes formula and AQUA invocation.
-          # Operation planes and Context.plane are separate checks.
-          "register" => %{
-            kind: :write,
-            planes: [:external],
-            permission: :component_manage,
-            consent: :staging
-          },
-          "categories" => %{kind: :read, planes: [:external, :in_chain]},
-          "get_blob" => %{
-            kind: :read,
-            planes: [:external, :in_chain],
-            permission: :component_read
-          },
-          "discover" => %{
-            kind: :read,
-            planes: [:external, :in_chain],
-            permission: :component_read
-          },
-          "setup_plan" => %{kind: :read, planes: [:external, :in_chain]},
-          "list" => %{kind: :read, planes: [:external, :in_chain], recovery: :replay_safe},
-          "status" => %{kind: :read, planes: [:external, :in_chain]},
-          "delete" => %{kind: :destructive, planes: [:external], permission: :component_manage},
-          # Reverts a bundled component's local edits to exactly what the
-          # release shipped — destructive to the edits, mirror of aqua.reset.
-          "reset" => %{
-            kind: :destructive,
-            planes: [:external],
-            permission: :component_manage
-          },
-          "create" => %{
-            kind: :write,
-            planes: [:external, :in_chain],
-            permission: :component_manage
-          },
-          "fork" => %{
-            kind: :write,
-            planes: [:external, :in_chain],
-            permission: :component_manage
-          },
-          # deprecate/yank were the one write pair with no permission gate —
-          # discovery already advertised :component_manage, and every
-          # sibling mutation carries it; the handlers' namespace-bearer
-          # check remains as the registry-identity residual.
-          "deprecate" => %{
-            kind: :destructive,
-            planes: [:external, :in_chain],
-            permission: :component_manage
-          },
-          "yank" => %{
-            kind: :destructive,
-            planes: [:external, :in_chain],
-            permission: :component_manage
-          }
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => [
-              "search",
-              "inspect",
-              "pull",
-              "push",
-              "register",
-              "categories",
-              "get_blob",
-              "discover",
-              "setup_plan",
-              "list",
-              "status",
-              "delete",
-              "reset",
-              "create",
-              "fork",
-              "deprecate",
-              "yank"
-            ],
-            "description" => "Action to perform"
-          },
-          # deprecate/yank action params
-          "reason" => %{
-            "type" => "string",
-            "description" =>
-              "Human-readable explanation surfaced to pullers (deprecate/yank). Required for deprecate; optional for yank. Max 256 chars."
-          },
-          # search action params
-          "query" => %{
-            "type" => "string",
-            "description" => "Search query (search action)"
-          },
-          "type" => %{
-            "type" => "string",
-            "enum" => Cyfr.ComponentRef.valid_types(),
-            "description" =>
-              "Component type (required for create action, optional filter for search/list)"
-          },
-          "category" => %{
-            "type" => "string",
-            "description" => "Filter by category (search action)"
-          },
-          "tags" => %{
-            "type" => "array",
-            "items" => %{"type" => "string"},
-            "description" => "Filter by tags, AND logic (search action)"
-          },
-          "has_source" => %{
-            "type" => "boolean",
-            "description" => "Only show components with source available (search action)"
-          },
-          "source" => %{
-            "type" => "string",
-            "enum" => ["local", "remote", "all"],
-            "description" =>
-              "Search scope: 'local' (skip remote), 'remote' (remote only), 'all' (default, both)"
-          },
-          "license" => %{
-            "type" => "string",
-            "description" => "Filter by license, SPDX identifier (search action)"
-          },
-          "limit" => %{
-            "type" => "integer",
-            "default" => 20,
-            "description" => "Maximum results to return (search action)"
-          },
-          # inspect/pull action params
-          "reference" => %{
-            "type" => "string",
-            "description" =>
-              "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results. For status, omit it for a whole-athanor overview (provenance, shipped versions and superseded flags per component)."
-          },
-          # inspect action params
-          "include_readme" => %{
-            "type" => "boolean",
-            "description" => "Include README.md content in inspect result (default false)"
-          },
-          # Signature verification is controlled by the server’s
-          # require_signed_pulls setting and rechecked at execution.
-          "digest" => %{
-            "type" => "string",
-            "description" => "Component digest (get_blob action)"
-          },
-          "registry" => %{
-            "type" => "string",
-            "description" => "OCI registry hostname for push/discover (e.g., ghcr.io)"
-          },
-          "namespace" => %{
-            "type" => "string",
-            "description" => "Publisher namespace filter (discover action)"
-          },
-          # create/fork action params
-          "name" => %{
-            "type" => "string",
-            "description" =>
-              "Component name, lowercase alphanumeric with hyphens (create/fork action)"
-          },
-          "version" => %{
-            "type" => "string",
-            "default" => "0.1.0",
-            "description" => "Semver version (create/fork action)"
-          },
-          "template" => %{
-            "type" => "string",
-            "enum" => ["react"],
-            "description" => "Scaffold template (tincture only). Omit for vanilla HTML/JS/CSS."
-          }
-          # register action: no additional params (scans all component directories)
-        },
-        "required" => ["action"]
-      }
-    }
+      title: "Component"
+    )
   end
 
   def handle(%Context{} = ctx, %{"action" => "search"} = args) do

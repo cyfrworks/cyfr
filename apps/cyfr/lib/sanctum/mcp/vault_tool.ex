@@ -20,88 +20,172 @@ defmodule Sanctum.MCP.VaultTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "vault",
-      title: "Vault",
+    alias Cyfr.Ops.{Arg, Operation}
+    # Mutations are interactive-consent surfaces (OIDC sessions only,
+    # by owner decision — no permission conjunct); list admits the
+    # staging class so keys can enumerate entries.
+    Operation.tool(
+      [
+        Operation.new("vault", "list", "List vault", [],
+          kind: :read,
+          planes: [:external],
+          consent: :staging
+        ),
+        Operation.new(
+          "vault",
+          "create",
+          "Create vault",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "Entry label — unique among living entries in the tenant"
+            ),
+            Arg.new("kind", :string,
+              required: true,
+              description: "What the entry holds",
+              enum: ["api_key", "oauth", "bundle"]
+            ),
+            Arg.new("fields", {:map, Arg.new(nil, :string)},
+              description: "Secret material as name → value; names mirror field_names"
+            ),
+            Arg.new("provider_hint", :string,
+              description: "Immutable provider tag (e.g. 'google'); set at create only"
+            ),
+            Arg.new("oauth_scopes", {:array, Arg.new(nil, :string)},
+              description: "Binding field: scopes this credential was authorized for"
+            ),
+            Arg.new(
+              "oauth_endpoints",
+              {:record,
+               [
+                 Arg.new("authorize_url", :string),
+                 Arg.new("token_url", :string),
+                 Arg.new("provider", :string),
+                 Arg.new("auth_style", :string, enum: ["params", "header"]),
+                 Arg.new("extra_params", {:map, Arg.new(nil, :string)})
+               ]}
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "vault",
+          "rename",
+          "Rename vault",
+          [
+            Arg.new("id", :string, required: true, description: "Vault entry id (vlt_…)"),
+            Arg.new("name", :string,
+              required: true,
+              description: "Entry label — unique among living entries in the tenant"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "vault",
+          "rotate",
+          "Rotate vault",
+          [
+            Arg.new("id", :string, required: true, description: "Vault entry id (vlt_…)"),
+            Arg.new("fields", {:map, Arg.new(nil, :string)},
+              required: true,
+              description: "Secret material as name → value; names mirror field_names"
+            ),
+            Arg.new("expected_payload_rev", :integer,
+              required: true,
+              description: "CAS token for rotate — the revision the caller last saw"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "vault",
+          "rebind",
+          "Rebind vault",
+          [
+            Arg.new("id", :string, required: true, description: "Vault entry id (vlt_…)"),
+            Arg.new("field_names", {:array, Arg.new(nil, :string)},
+              description: "Binding field: the material's field schema (rebind only)"
+            ),
+            Arg.new("oauth_scopes", {:array, Arg.new(nil, :string)},
+              description: "Binding field: scopes this credential was authorized for"
+            ),
+            Arg.new(
+              "oauth_endpoints",
+              {:record,
+               [
+                 Arg.new("authorize_url", :string),
+                 Arg.new("token_url", :string),
+                 Arg.new("provider", :string),
+                 Arg.new("auth_style", :string, enum: ["params", "header"]),
+                 Arg.new("extra_params", {:map, Arg.new(nil, :string)})
+               ]}
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "vault",
+          "authorize",
+          "Authorize vault",
+          [
+            Arg.new("id", :string, description: "Vault entry id (vlt_…)"),
+            Arg.new("name", :string,
+              description: "Entry label — unique among living entries in the tenant"
+            ),
+            Arg.new("provider_hint", :string,
+              description: "Immutable provider tag (e.g. 'google'); set at create only"
+            ),
+            Arg.new("oauth_scopes", {:array, Arg.new(nil, :string)},
+              description: "Binding field: scopes this credential was authorized for"
+            ),
+            Arg.new(
+              "oauth_endpoints",
+              {:record,
+               [
+                 Arg.new("authorize_url", :string),
+                 Arg.new("token_url", :string),
+                 Arg.new("provider", :string),
+                 Arg.new("auth_style", :string, enum: ["params", "header"]),
+                 Arg.new("extra_params", {:map, Arg.new(nil, :string)})
+               ]}
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "vault",
+          "revoke",
+          "Revoke vault",
+          [Arg.new("id", :string, required: true, description: "Vault entry id (vlt_…)")],
+          kind: :destructive,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "vault",
+          "delete",
+          "Delete vault",
+          [Arg.new("id", :string, required: true, description: "Vault entry id (vlt_…)")],
+          kind: :destructive,
+          planes: [:external],
+          consent: :interactive
+        )
+      ],
       description:
-        "Manage vault entries — the operator's credentials, shared across " <>
-          "profiles through consent edges. Material is sealed at rest and never read back; " <>
-          "rotate replaces material without re-consent, rebind changes what the credential " <>
-          "talks to and blocks affected profiles until re-consented.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          # Mutations are interactive-consent surfaces (OIDC sessions only,
-          # by owner decision — no permission conjunct); list admits the
-          # staging class so keys can enumerate entries.
-          "list" => %{kind: :read, planes: [:external], consent: :staging},
-          "create" => %{kind: :write, planes: [:external], consent: :interactive},
-          "rename" => %{kind: :write, planes: [:external], consent: :interactive},
-          "rotate" => %{kind: :write, planes: [:external], consent: :interactive},
-          "rebind" => %{kind: :write, planes: [:external], consent: :interactive},
-          "authorize" => %{kind: :write, planes: [:external], consent: :interactive},
-          "revoke" => %{kind: :destructive, planes: [:external], consent: :interactive},
-          "delete" => %{kind: :destructive, planes: [:external], consent: :interactive}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => [
-              "list",
-              "create",
-              "rename",
-              "rotate",
-              "rebind",
-              "authorize",
-              "revoke",
-              "delete"
-            ],
-            "description" => "Action to perform"
-          },
-          "id" => %{"type" => "string", "description" => "Vault entry id (vlt_…)"},
-          "name" => %{
-            "type" => "string",
-            "description" => "Entry label — unique among living entries in the tenant"
-          },
-          "kind" => %{
-            "type" => "string",
-            "enum" => ["api_key", "oauth", "bundle"],
-            "description" => "What the entry holds"
-          },
-          "provider_hint" => %{
-            "type" => "string",
-            "description" => "Immutable provider tag (e.g. 'google'); set at create only"
-          },
-          "fields" => %{
-            "type" => "object",
-            "description" => "Secret material as name → value; names mirror field_names"
-          },
-          "expected_payload_rev" => %{
-            "type" => "integer",
-            "description" => "CAS token for rotate — the revision the caller last saw"
-          },
-          "oauth_endpoints" => %{
-            "type" => "object",
-            "description" => "Binding field: token endpoint etc. Changing it is a rebind."
-          },
-          "oauth_scopes" => %{
-            "type" => "array",
-            "items" => %{"type" => "string"},
-            "description" => "Binding field: scopes this credential was authorized for"
-          },
-          "field_names" => %{
-            "type" => "array",
-            "items" => %{"type" => "string"},
-            "description" => "Binding field: the material's field schema (rebind only)"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+        "Manage vault entries — the operator's credentials, shared across profiles through consent edges. Material is sealed at rest and never read back; rotate replaces material without re-consent, rebind changes what the credential talks to and blocks affected profiles until re-consented.",
+      title: "Vault"
+    )
   end
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do

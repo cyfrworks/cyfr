@@ -31,16 +31,12 @@ fails.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		session, sessionErr := client.CallTool(cmd.Context(), ops.Session, map[string]any{
-			"action": ops.SessionWhoami,
-		})
+		session, sessionErr := client.CallTool(cmd.Context(), ops.Session, ops.SessionWhoamiArgs{})
 		if sessionErr != nil {
 			return handleToolError(sessionErr)
 		}
 
-		registry, registryErr := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-			"action": ops.RegistryWhoami,
-		})
+		registry, registryErr := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryWhoamiArgs{})
 		// Don't abort on registry errors — the local identity is still useful.
 
 		composed := composeWhoami(session, registry, registryErr)

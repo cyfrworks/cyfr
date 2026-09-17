@@ -41,7 +41,7 @@ var athanorListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the athanors you belong to",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, map[string]any{"action": ops.AthanorList})
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, ops.AthanorListArgs{})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -66,9 +66,9 @@ var athanorGetCmd = &cobra.Command{
 	Short: "Show an athanor (the one in focus when omitted)",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		payload := map[string]any{"action": "get"}
+		payload := ops.AthanorGetArgs{}
 		if len(args) == 1 {
-			payload["athanor"] = args[0]
+			payload.Athanor = ops.Value(args[0])
 		}
 		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, payload)
 		if err != nil {
@@ -93,9 +93,9 @@ var athanorCreateCmd = &cobra.Command{
 	Short: "Create a group — you are its first member",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		payload := map[string]any{"action": "create", "name": args[0]}
+		payload := ops.AthanorCreateArgs{Name: args[0]}
 		if slug, _ := cmd.Flags().GetString("slug"); slug != "" {
-			payload["slug"] = slug
+			payload.Slug = ops.Value(slug)
 		}
 		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, payload)
 		if err != nil {
@@ -116,9 +116,8 @@ var athanorRenameCmd = &cobra.Command{
 	Short: "Rename an athanor (its slug stays)",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, map[string]any{
-			"action": ops.AthanorRename, "athanor": args[0], "name": args[1],
-		})
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, ops.AthanorRenameArgs{Athanor: ops.Value(args[0]),
+			Name: args[1]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -136,9 +135,7 @@ var athanorArchiveCmd = &cobra.Command{
 	Short: "Archive a group (nothing is deleted; every ingress refuses it)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, map[string]any{
-			"action": ops.AthanorArchive, "athanor": args[0],
-		})
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, ops.AthanorArchiveArgs{Athanor: ops.Value(args[0])})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -156,9 +153,7 @@ var athanorUnarchiveCmd = &cobra.Command{
 	Short: "Reopen an archived group",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, map[string]any{
-			"action": ops.AthanorUnarchive, "athanor": args[0],
-		})
+		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, ops.AthanorUnarchiveArgs{Athanor: ops.Value(args[0])})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -188,9 +183,9 @@ var athanorSettingsCmd = &cobra.Command{
 			fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 			return nil
 		}
-		payload := map[string]any{"action": "settings", "settings": settings}
+		payload := ops.AthanorSettingsArgs{Settings: settings}
 		if len(args) == 1 {
-			payload["athanor"] = args[0]
+			payload.Athanor = ops.Value(args[0])
 		}
 		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, payload)
 		if err != nil {
@@ -210,9 +205,9 @@ var athanorProvisionCmd = &cobra.Command{
 	Short: "Retry a provisioning that failed (idempotent)",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		payload := map[string]any{"action": "provision"}
+		payload := ops.AthanorProvisionArgs{}
 		if len(args) == 1 {
-			payload["athanor"] = args[0]
+			payload.Athanor = ops.Value(args[0])
 		}
 		result, err := newClient().CallTool(cmd.Context(), ops.Athanor, payload)
 		if err != nil {
@@ -270,9 +265,7 @@ var athanorUseCmd = &cobra.Command{
 	Short: "Point this session at an athanor (an id, a group slug, or @namespace)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), ops.Session, map[string]any{
-			"action": ops.SessionUse, "athanor": args[0],
-		})
+		result, err := newClient().CallTool(cmd.Context(), ops.Session, ops.SessionUseArgs{Athanor: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}

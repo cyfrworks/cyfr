@@ -20,6 +20,7 @@ func init() {
 	scheduleCreateCmd.Flags().String("name", "", "Schedule name")
 	scheduleCreateCmd.Flags().String("cron", "", "Cron expression (e.g. '*/5 * * * *')")
 	scheduleCreateCmd.Flags().String("ref", "", "Component reference")
+	scheduleCreateCmd.Flags().String("profile", "", "Consented execution profile ID")
 	scheduleCreateCmd.Flags().String("input", "", "JSON input for execution")
 
 	scheduleGetCmd.Flags().Bool("json", false, "") // inherits from root but explicit for clarity
@@ -28,6 +29,7 @@ func init() {
 	scheduleUpdateCmd.Flags().String("name", "", "New schedule name")
 	scheduleUpdateCmd.Flags().String("cron", "", "New cron expression")
 	scheduleUpdateCmd.Flags().String("ref", "", "New component reference")
+	scheduleUpdateCmd.Flags().String("profile", "", "Replacement consented execution profile ID")
 	scheduleUpdateCmd.Flags().String("input", "", "New JSON input")
 
 	scheduleCmd.AddCommand(scheduleCreateCmd)
@@ -51,9 +53,9 @@ var scheduleCmd = &cobra.Command{
 var scheduleCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new cron schedule [interactive]",
-	Example: `  cyfr schedule create --name daily-report --cron "0 9 * * *" --ref "catalyst:local.reporter"
-  cyfr schedule create --name processor --cron "*/5 * * * *" --ref "reagent:local.proc" --input '{"key":"value"}'
-  cyfr schedule create --name pinned --cron "0 * * * *" --ref "catalyst:local.reporter:1.0.0"
+	Example: `  cyfr schedule create --profile <profile-id> --name daily-report --cron "0 9 * * *" --ref "catalyst:local.reporter"
+  cyfr schedule create --profile <profile-id> --name processor --cron "*/5 * * * *" --ref "reagent:local.proc" --input '{"key":"value"}'
+  cyfr schedule create --profile <profile-id> --name pinned --cron "0 * * * *" --ref "catalyst:local.reporter:1.0.0"
   cyfr schedule create  # interactive mode`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
@@ -66,7 +68,7 @@ var scheduleCreateCmd = &cobra.Command{
 		// Interactive mode if flags not provided
 		if name == "" || cron == "" || refStr == "" {
 			if !prompt.IsInteractive(flagNoInteractive) {
-				return errors.New("Usage: cyfr schedule create --name <name> --cron '<expr>' --ref <reference>")
+				return errors.New("Usage: cyfr schedule create --profile <profile-id> --name <name> --cron '<expr>' --ref <reference>")
 			}
 
 			if name == "" {
@@ -96,7 +98,7 @@ var scheduleCreateCmd = &cobra.Command{
 				refStr, err = pickTarget(cmd.Context(), nil, selector{
 					Title: "Select a component",
 					Empty: "No components found. Register one first.",
-					Usage: "Usage: cyfr schedule create --name <name> --cron '<expr>' --ref <reference>",
+					Usage: "Usage: cyfr schedule create --profile <profile-id> --name <name> --cron '<expr>' --ref <reference>",
 					Fetch: func(ctx context.Context) ([]prompt.Option, error) {
 						return prompt.FetchComponents(ctx, client)
 					},
@@ -107,19 +109,21 @@ var scheduleCreateCmd = &cobra.Command{
 			}
 		}
 
-		toolArgs := map[string]any{
-			"action":          "create",
-			"name":            name,
-			"cron_expression": cron,
-			"reference":       refStr,
+		profileID, _ := cmd.Flags().GetString("profile")
+		profileID, err := requireExecutionProfile(profileID)
+		if err != nil {
+			return err
 		}
+		toolArgs := ops.ScheduleCreateArgs{Name: name, ProfileId: profileID,
+			CronExpression: cron,
+			Reference:      refStr}
 
 		if inputStr != "" {
 			var inputMap map[string]any
 			if err := json.Unmarshal([]byte(inputStr), &inputMap); err != nil {
 				return fmt.Errorf("Invalid JSON input: %w", err)
 			}
-			toolArgs["input"] = inputMap
+			toolArgs.Input = ops.Value(inputMap)
 		}
 
 		result, err := client.CallTool(cmd.Context(), ops.Schedule, toolArgs)
@@ -143,9 +147,7 @@ var scheduleListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), ops.Schedule, map[string]any{
-			"action": ops.ScheduleList,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, ops.ScheduleListArgs{})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -162,10 +164,7 @@ var scheduleGetCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), ops.Schedule, map[string]any{
-			"action":      ops.ScheduleGet,
-			"schedule_id": args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, ops.ScheduleGetArgs{ScheduleId: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -178,28 +177,29 @@ var scheduleUpdateCmd = &cobra.Command{
 	Short: "Update a cron schedule",
 	Long:  "Update one or more fields of an existing schedule. Only explicitly set flags are sent.",
 	Example: `  cyfr schedule update my-schedule --cron "0 */2 * * *"
-  cyfr schedule update my-schedule --ref "catalyst:local.reporter" --name new-name
+  cyfr schedule update my-schedule --name new-name
   cyfr schedule update my-schedule --input '{"key":"new-value"}'`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		toolArgs := map[string]any{
-			"action":      "update",
-			"schedule_id": args[0],
+		toolArgs := ops.ScheduleUpdateArgs{ScheduleId: args[0]}
+		if cmd.Flags().Changed("profile") {
+			profileID, _ := cmd.Flags().GetString("profile")
+			toolArgs.ProfileId = ops.Value(profileID)
 		}
 
 		if cmd.Flags().Changed("name") {
 			v, _ := cmd.Flags().GetString("name")
-			toolArgs["name"] = v
+			toolArgs.Name = ops.Value(v)
 		}
 		if cmd.Flags().Changed("cron") {
 			v, _ := cmd.Flags().GetString("cron")
-			toolArgs["cron_expression"] = v
+			toolArgs.CronExpression = ops.Value(v)
 		}
 		if cmd.Flags().Changed("ref") {
 			v, _ := cmd.Flags().GetString("ref")
-			toolArgs["reference"] = v
+			toolArgs.Reference = ops.Value(v)
 		}
 		if cmd.Flags().Changed("input") {
 			inputStr, _ := cmd.Flags().GetString("input")
@@ -207,7 +207,7 @@ var scheduleUpdateCmd = &cobra.Command{
 			if err := json.Unmarshal([]byte(inputStr), &inputMap); err != nil {
 				return fmt.Errorf("Invalid JSON input: %w", err)
 			}
-			toolArgs["input"] = inputMap
+			toolArgs.Input = ops.Nullable(inputMap)
 		}
 
 		result, err := client.CallTool(cmd.Context(), ops.Schedule, toolArgs)
@@ -232,10 +232,7 @@ var schedulePauseCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), ops.Schedule, map[string]any{
-			"action":      ops.SchedulePause,
-			"schedule_id": args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, ops.SchedulePauseArgs{ScheduleId: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -257,10 +254,7 @@ var scheduleResumeCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), ops.Schedule, map[string]any{
-			"action":      ops.ScheduleResume,
-			"schedule_id": args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, ops.ScheduleResumeArgs{ScheduleId: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -282,10 +276,7 @@ var scheduleDeleteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
 
-		result, err := client.CallTool(cmd.Context(), ops.Schedule, map[string]any{
-			"action":      ops.ScheduleDelete,
-			"schedule_id": args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Schedule, ops.ScheduleDeleteArgs{ScheduleId: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}

@@ -77,10 +77,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 		}
 
 		// Start device flow
-		result, err := client.CallTool(cmd.Context(), ops.Session, map[string]any{
-			"action":   ops.SessionDeviceInit,
-			"provider": provider,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Session, ops.SessionDeviceInitArgs{Provider: ops.Value(provider)})
 		if err != nil {
 			return fmt.Errorf("Failed to start login: %w", err)
 		}
@@ -181,11 +178,8 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 
 			// Re-probe after policy acceptance to mint push tokens and store them
 			// in the local CredentialStore.
-			probeResult, perr := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-				"action":       ops.RegistryProbe,
-				"provider":     provider,
-				"access_token": accessToken,
-			})
+			probeResult, perr := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryProbeArgs{Provider: provider,
+				AccessToken: accessToken})
 			if perr != nil {
 				return fmt.Errorf("Acceptance recorded but token refresh failed: %w\n"+
 					"Please run `cyfr login` again.", perr)
@@ -271,11 +265,8 @@ func pollDeviceAuth(ctx context.Context, client *mcp.Client, provider, deviceCod
 		case <-time.After(interval):
 		}
 
-		pollResult, err := client.CallTool(ctx, ops.Session, map[string]any{
-			"action":      ops.SessionDevicePoll,
-			"device_code": deviceCode,
-			"provider":    provider,
-		})
+		pollResult, err := client.CallTool(ctx, ops.Session, ops.SessionDevicePollArgs{DeviceCode: deviceCode,
+			Provider: ops.Value(provider)})
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil, err
@@ -351,12 +342,9 @@ func promptAndClaimPersonalNamespace(ctx context.Context, client *mcp.Client, pr
 			continue
 		}
 
-		args := map[string]any{
-			"action":       "claim_personal",
-			"username":     username,
-			"provider":     provider,
-			"access_token": accessToken,
-		}
+		args := ops.RegistryClaimPersonalArgs{Username: username,
+			Provider:    provider,
+			AccessToken: accessToken}
 
 		result, err := client.CallTool(ctx, ops.Registry, args)
 		if err == nil {
@@ -446,9 +434,7 @@ func runLegalAcceptInteractive(ctx context.Context, client *mcp.Client, provider
 		return false
 	}
 
-	verRaw, err := client.CallTool(ctx, ops.Registry, map[string]any{
-		"action": ops.RegistryLegalVersion,
-	})
+	verRaw, err := client.CallTool(ctx, ops.Registry, ops.RegistryLegalVersionArgs{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Couldn't fetch current policy version: %v\n", err)
 		return false
@@ -482,10 +468,7 @@ func runLegalAcceptInteractive(ctx context.Context, client *mcp.Client, provider
 			continue
 		}
 
-		body, err := client.CallTool(ctx, ops.Registry, map[string]any{
-			"action": ops.RegistryLegalPage,
-			"name":   name,
-		})
+		body, err := client.CallTool(ctx, ops.Registry, ops.RegistryLegalPageArgs{Name: name})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Couldn't fetch '%s': %v\n", name, err)
 			return false
@@ -514,12 +497,9 @@ func runLegalAcceptInteractive(ctx context.Context, client *mcp.Client, provider
 		}
 	}
 
-	_, err = client.CallTool(ctx, ops.Registry, map[string]any{
-		"action":         ops.RegistryLegalAccept,
-		"provider":       provider,
-		"access_token":   accessToken,
-		"policy_version": policyVersion,
-	})
+	_, err = client.CallTool(ctx, ops.Registry, ops.RegistryLegalAcceptArgs{Provider: provider,
+		AccessToken:   ops.Value(accessToken),
+		PolicyVersion: policyVersion})
 	if err != nil {
 		msg := err.Error()
 		switch {
@@ -597,9 +577,7 @@ var logoutCmd = &cobra.Command{
 			}
 		}
 
-		result, err := client.CallTool(cmd.Context(), ops.Session, map[string]any{
-			"action": ops.SessionLogout,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Session, ops.SessionLogoutArgs{})
 		if err != nil {
 			// Session was already gone on the server — that's fine
 			if flagJSON {

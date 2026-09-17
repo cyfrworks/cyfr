@@ -21,15 +21,15 @@ defmodule Cyfr.Ops.CatalogTest.BlockingProvider do
   # the call is provably still running instead of guessing at a delay. Asked
   # to, it answers at once with the process it ran on, crashes, or raises
   # the refusal a handler's tenant gate raises.
-  def handle(_tool, _ctx, %{crash: true}), do: raise("boom from provider")
+  def handle(_tool, _ctx, %{"crash" => true}), do: raise("boom from provider")
 
-  def handle(_tool, _ctx, %{refuse: true}),
+  def handle(_tool, _ctx, %{"refuse" => true}),
     do: raise(Sanctum.UnauthorizedError, reason: :missing_tenant)
 
-  def handle(_tool, _ctx, %{release: true}), do: {:ok, %{ran_on: self()}}
+  def handle(_tool, _ctx, %{"release" => true}), do: {:ok, %{ran_on: self()}}
 
-  def handle(_tool, _ctx, args) do
-    send(Map.fetch!(args, :reply_to), {:handler_running, self()})
+  def handle(_tool, _ctx, _args) do
+    send(:catalog_blocking_observer, {:handler_running, self()})
     Process.sleep(:infinity)
   end
 end
@@ -40,16 +40,8 @@ defmodule Cyfr.Ops.CatalogTest.ReplaySafeWrite do
   def service, do: "poker"
 
   def tools do
-    [
-      %{
-        name: "poker",
-        description: "a write",
-        annotations: %{
-          actions: %{"poke" => %{kind: :write, planes: [:in_chain], recovery: :replay_safe}}
-        },
-        input_schema: %{"properties" => %{"action" => %{"enum" => ["poke"]}}}
-      }
-    ]
+    op = Cyfr.Ops.Operation.new("poker", "poke", "Write", [], kind: :write, planes: [:in_chain])
+    [%{name: "poker", operations: [%{op | recovery: :replay_safe}]}]
   end
 
   def handle(_name, _ctx, _args), do: {:ok, %{}}
@@ -63,7 +55,7 @@ defmodule Cyfr.Ops.CatalogTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Cyfr.Ops.{Arg, Catalog, Operation}
   alias Sanctum.Context
 
   setup do
@@ -277,21 +269,20 @@ defmodule Cyfr.Ops.CatalogTest do
     @crash_tool "crash_barrier_test_tool"
 
     defp register_crashing_tool do
-      # The dispatch gate refuses actions without an access declaration, so
-      # the injected meta must annotate every action the tests drive.
-      annotations = %{
-        actions: %{
-          "raise" => %{kind: :execute, planes: [:external]},
-          "exit" => %{kind: :execute, planes: [:external]},
-          "unauthorized" => %{kind: :execute, planes: [:external]},
-          "ok" => %{kind: :read, planes: [:external]}
-        }
-      }
+      definition =
+        Operation.tool(
+          for action <- ~w(raise exit unauthorized ok) do
+            Operation.new(@crash_tool, action, "Crash barrier probe", [],
+              kind: if(action == "ok", do: :read, else: :execute),
+              planes: [:external]
+            )
+          end
+        )
 
       Catalog.register_tool(
         @crash_tool,
         Cyfr.Ops.CatalogTest.CrashingProvider,
-        %{annotations: annotations},
+        definition,
         :timer.minutes(1)
       )
 
@@ -446,12 +437,28 @@ defmodule Cyfr.Ops.CatalogTest do
     @blocking_tool "cancellation_test_tool"
 
     defp register_blocking_tool do
-      annotations = %{actions: %{"block" => %{kind: :execute, planes: [:external]}}}
+      Process.register(self(), :catalog_blocking_observer)
+
+      definition =
+        Operation.tool([
+          Operation.new(
+            @blocking_tool,
+            "block",
+            "Cancellation probe",
+            [
+              Arg.new("crash", :boolean),
+              Arg.new("refuse", :boolean),
+              Arg.new("release", :boolean)
+            ],
+            kind: :execute,
+            planes: [:external]
+          )
+        ])
 
       Catalog.register_tool(
         @blocking_tool,
         Cyfr.Ops.CatalogTest.BlockingProvider,
-        %{annotations: annotations},
+        definition,
         :timer.minutes(1)
       )
 
@@ -465,7 +472,7 @@ defmodule Cyfr.Ops.CatalogTest do
       caller = self()
 
       spawn(fn ->
-        args = %{"action" => "block", :reply_to => caller}
+        args = %{"action" => "block"}
 
         send(
           caller,
@@ -508,9 +515,7 @@ defmodule Cyfr.Ops.CatalogTest do
     test "the default runner is inline: the handler runs on the caller's process, unregistered" do
       register_blocking_tool()
       ctx = %{Sanctum.TestContext.local() | request_id: "req_inline"}
-      caller = self()
-
-      args = %{"action" => "block", :reply_to => caller, :release => true}
+      args = %{"action" => "block", "release" => true}
       assert {:ok, %{ran_on: pid}} = Catalog.call_external(@blocking_tool, ctx, args)
       assert pid == self()
       assert [] = :ets.lookup(Emissary.MCP.RunningTasks, "req_inline")
@@ -525,7 +530,7 @@ defmodule Cyfr.Ops.CatalogTest do
           assert {:error, {:crashed, message}} =
                    Catalog.call_external(@blocking_tool, ctx, %{
                      "action" => "block",
-                     :crash => true
+                     "crash" => true
                    })
 
           assert message =~ "crashed"
@@ -534,7 +539,7 @@ defmodule Cyfr.Ops.CatalogTest do
       assert log =~ "crashed"
 
       assert {:error, :missing_tenant} =
-               Catalog.call_external(@blocking_tool, ctx, %{"action" => "block", :refuse => true})
+               Catalog.call_external(@blocking_tool, ctx, %{"action" => "block", "refuse" => true})
     end
   end
 
@@ -784,7 +789,7 @@ defmodule Cyfr.Ops.CatalogTest do
       )
 
       assert_raise RuntimeError,
-                   ~r/failed the catalog audit.*poker\.poke: invalid_recovery/s,
+                   ~r/failed the catalog audit.*poker\.poke: invalid_operation/s,
                    fn ->
                      Catalog.init([])
                    end

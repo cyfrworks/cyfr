@@ -368,10 +368,19 @@ defmodule Opus.SecurityTest do
       tools = MCP.tools()
       tool = Enum.find(tools, &(&1.name == "execution"))
 
-      assert tool.input_schema["properties"]["verify"] != nil
-      assert tool.input_schema["properties"]["verify"]["type"] == "object"
-      assert tool.input_schema["properties"]["verify"]["properties"]["identity"] != nil
-      assert tool.input_schema["properties"]["verify"]["properties"]["issuer"] != nil
+      # The schema is action-discriminated: each `oneOf` branch pins its
+      # action and owns that action's arguments, so `verify` lives on the
+      # `run` branch rather than at the top level.
+      run =
+        Enum.find(tool.input_schema["oneOf"], fn branch ->
+          get_in(branch, ["properties", "action", "const"]) == "run"
+        end)
+
+      assert run != nil
+      verify = run["properties"]["verify"]
+      assert verify["type"] == "object"
+      assert verify["properties"]["identity"] != nil
+      assert verify["properties"]["issuer"] != nil
     end
 
     test "verify block is optional (no signature error without it)", %{ctx: ctx, ref: ref} do

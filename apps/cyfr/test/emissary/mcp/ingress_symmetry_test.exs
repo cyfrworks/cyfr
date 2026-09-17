@@ -10,7 +10,7 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Cyfr.Ops.{Arg, Catalog, Operation}
 
   defmodule Provider do
     # Records exactly what it was handed, so the test can tell "refused before
@@ -25,23 +25,18 @@ defmodule Emissary.MCP.IngressSymmetryTest do
     def handle("ingress_probe", _ctx, _args), do: {:error, "unknown action"}
   end
 
-  @schema %{
-    "type" => "object",
-    "properties" => %{
-      "action" => %{"type" => "string", "enum" => ["echo"]},
-      "id" => %{"type" => "string"}
-    },
-    "required" => ["action"]
-  }
-
   setup do
+    Cyfr.Test.Sandbox.setup!()
+
     Catalog.register_tool(
       "ingress_probe",
       Provider,
-      %{
-        annotations: %{actions: %{"echo" => %{kind: :read, planes: [:external]}}},
-        input_schema: @schema
-      },
+      Operation.tool([
+        Operation.new("ingress_probe", "echo", "Echo", [Arg.new("id", :string)],
+          kind: :read,
+          planes: [:external]
+        )
+      ]),
       :timer.minutes(1)
     )
 
@@ -80,11 +75,13 @@ defmodule Emissary.MCP.IngressSymmetryTest do
     assert_receive {:reached_handler, %{"action" => "echo", "id" => "abc"}}, 2_000
   end
 
-  test "a tool with no schema is unaffected", %{ctx: ctx} do
+  test "a tool with no additional arguments still refuses unknown actions", %{ctx: ctx} do
     Catalog.register_tool(
       "ingress_probe_bare",
       Provider,
-      %{annotations: %{actions: %{"echo" => %{kind: :read, planes: [:external]}}}},
+      Operation.tool([
+        Operation.new("ingress_probe_bare", "echo", "Echo", [], kind: :read, planes: [:external])
+      ]),
       :timer.minutes(1)
     )
 

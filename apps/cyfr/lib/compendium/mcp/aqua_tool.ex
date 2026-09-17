@@ -61,195 +61,309 @@ defmodule Compendium.MCP.AquaTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Compendium.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "aqua",
-      title: "AQUA Agent System",
+    alias Cyfr.Ops.{Arg, Operation}
+    # The soul and the roles are the athanor's own. Reading them is
+    # open to any authenticated caller, a running chain included —
+    # a turn resolves its orchestrator through `get`, so the reads
+    # carry no consent class and stay reachable from every surface
+    # that can start one. Editing them — the closet, the prompts,
+    # the `tool_policy` that decides what a chain may call — is a
+    # member's act from outside, never something a chain can do to
+    # itself.
+    # Every write is `consent: :interactive`: a person's own session
+    # changes the soul, the closet and the scrolls, never a standing
+    # credential — an API key, a `*` key included, is refused at the
+    # registry's dispatch gate and does not see these actions in
+    # `tools/list`.
+    #
+    # A scroll is a procedure the estate learns. Writing one is a
+    # member's act at the door and a card from a chain — the soul's
+    # policy holds both writes at `ask`, so an agent proposes a
+    # scroll and a person clicks. In-chain the interactive class
+    # keeps its surface half, so the proposal needs an `:oidc`-rooted
+    # turn: a schedule- or key-started turn cannot write a scroll,
+    # exactly like a note. And a scroll is read into every turn's
+    # prompt index, so each write deserves its own click — no
+    # standing "Always" at any scope (`standing: false`). Deleting
+    # stays a member's act alone: never proposable, never standing.
+    # Reset restores shipped units — one role by name, else every
+    # edited copy. With all=true it also deletes member-created
+    # roles and scrolls.
+    Operation.tool(
+      [
+        Operation.new(
+          "aqua",
+          "list",
+          "List aqua",
+          [
+            Arg.new("detail", :boolean,
+              description:
+                "For list: include each agent's full fields (model, tool_policy, catalyst_ref, content, disabled) — one call instead of a get per agent"
+            ),
+            Arg.new("include_disabled", :boolean,
+              description:
+                "For list: include roles set aside with disabled: true, which the roster otherwise leaves out"
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "aqua",
+          "get",
+          "Get aqua",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "aqua",
+          "create",
+          "Create aqua",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+            ),
+            Arg.new("title", :string,
+              description: "Human-readable title (for create/update actions)"
+            ),
+            Arg.new("description", :string,
+              description:
+                "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
+            ),
+            Arg.new("catalyst_ref", :string,
+              description: "Versionless catalyst reference (for create/update actions)"
+            ),
+            Arg.new("model", :string,
+              description: "Model identifier (for create/update actions)"
+            ),
+            Arg.new("tool_policy", {:map, Arg.new(nil, :string, enum: ["ask", "auto"])},
+              description:
+                "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's: every member edits the same allowlist."
+            ),
+            Arg.new("content", :string,
+              description:
+                "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive,
+          permission: :component_manage
+        ),
+        Operation.new(
+          "aqua",
+          "update",
+          "Update aqua",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+            ),
+            Arg.new("title", :string,
+              nullable: true,
+              description: "Human-readable title (for create/update actions)"
+            ),
+            Arg.new("description", :string,
+              nullable: true,
+              description:
+                "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
+            ),
+            Arg.new("catalyst_ref", :string,
+              nullable: true,
+              description: "Versionless catalyst reference (for create/update actions)"
+            ),
+            Arg.new("model", :string,
+              nullable: true,
+              description: "Model identifier (for create/update actions)"
+            ),
+            Arg.new("tool_policy", {:map, Arg.new(nil, :string, enum: ["ask", "auto"])},
+              nullable: true,
+              description:
+                "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's: every member edits the same allowlist."
+            ),
+            Arg.new(
+              "tool_policy_patch",
+              {:map, Arg.new(nil, :string, nullable: true, enum: ["ask", "auto", nil])},
+              description:
+                "update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two members editing different keys at once keep both. Not with tool_policy."
+            ),
+            Arg.new("content", :string,
+              description:
+                "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
+            ),
+            Arg.new("disabled", :boolean,
+              nullable: true,
+              description:
+                "Take a role out of the closet without deleting its file (for update; shipped roles cannot be deleted — disable them instead)"
+            ),
+            Arg.new("expected_digest", :string,
+              description:
+                "update only: the content_digest that get answered for the prompt being edited. The update is refused as a conflict when the prompt has changed since, so one member's edit never writes over another's."
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive,
+          permission: :component_manage
+        ),
+        Operation.new(
+          "aqua",
+          "delete",
+          "Delete aqua",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          consent: :interactive,
+          permission: :component_manage
+        ),
+        Operation.new(
+          "aqua",
+          "reset",
+          "Reset aqua",
+          [
+            Arg.new("name", :string,
+              description:
+                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+            ),
+            Arg.new("all", :boolean,
+              description:
+                "For reset: also DELETE member-created roles and scrolls, so the tree becomes exactly the shipped set (default false keeps them)"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          consent: :interactive,
+          permission: :component_manage
+        ),
+        Operation.new("aqua", "status", "Status aqua", [],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new("aqua", "skill_list", "Skill list aqua", [],
+          kind: :read,
+          planes: [:external, :in_chain],
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "aqua",
+          "skill_get",
+          "Skill get aqua",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain],
+          recovery: :replay_safe
+        ),
+        Operation.new(
+          "aqua",
+          "skill_create",
+          "Skill create aqua",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+            ),
+            Arg.new("description", :string,
+              required: true,
+              description:
+                "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
+            ),
+            Arg.new("content", :string,
+              required: true,
+              description:
+                "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          permission: :component_manage,
+          standing: false
+        ),
+        Operation.new(
+          "aqua",
+          "skill_update",
+          "Skill update aqua",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+            ),
+            Arg.new("description", :string,
+              description:
+                "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
+            ),
+            Arg.new("content", :string,
+              description:
+                "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          permission: :component_manage,
+          standing: false
+        ),
+        Operation.new(
+          "aqua",
+          "skill_delete",
+          "Skill delete aqua",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          consent: :interactive,
+          permission: :component_manage
+        ),
+        Operation.new(
+          "aqua",
+          "skill_reset",
+          "Skill reset aqua",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          consent: :interactive,
+          permission: :component_manage
+        )
+      ],
       description:
         "The estate's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it clones into, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the estate made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one role with name, else every one; member-created roles and scrolls are kept unless all=true).",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          # The soul and the roles are the athanor's own. Reading them is
-          # open to any authenticated caller, a running chain included —
-          # a turn resolves its orchestrator through `get`, so the reads
-          # carry no consent class and stay reachable from every surface
-          # that can start one. Editing them — the closet, the prompts,
-          # the `tool_policy` that decides what a chain may call — is a
-          # member's act from outside, never something a chain can do to
-          # itself.
-          "list" => %{kind: :read, planes: [:external, :in_chain]},
-          "get" => %{kind: :read, planes: [:external, :in_chain]},
-          "status" => %{kind: :read, planes: [:external, :in_chain]},
-          "skill_list" => %{kind: :read, planes: [:external, :in_chain], recovery: :replay_safe},
-          "skill_get" => %{kind: :read, planes: [:external, :in_chain], recovery: :replay_safe},
-          # Every write is `consent: :interactive`: a person's own session
-          # changes the soul, the closet and the scrolls, never a standing
-          # credential — an API key, a `*` key included, is refused at the
-          # registry's dispatch gate and does not see these actions in
-          # `tools/list`.
-          #
-          # A scroll is a procedure the estate learns. Writing one is a
-          # member's act at the door and a card from a chain — the soul's
-          # policy holds both writes at `ask`, so an agent proposes a
-          # scroll and a person clicks. In-chain the interactive class
-          # keeps its surface half, so the proposal needs an `:oidc`-rooted
-          # turn: a schedule- or key-started turn cannot write a scroll,
-          # exactly like a note. And a scroll is read into every turn's
-          # prompt index, so each write deserves its own click — no
-          # standing "Always" at any scope (`standing: false`). Deleting
-          # stays a member's act alone: never proposable, never standing.
-          "skill_create" => %{
-            kind: :write,
-            planes: [:external, :in_chain],
-            permission: :component_manage,
-            consent: :interactive,
-            standing: false
-          },
-          "skill_update" => %{
-            kind: :write,
-            planes: [:external, :in_chain],
-            permission: :component_manage,
-            consent: :interactive,
-            standing: false
-          },
-          "skill_delete" => %{
-            kind: :destructive,
-            planes: [:external],
-            permission: :component_manage,
-            consent: :interactive
-          },
-          "skill_reset" => %{
-            kind: :destructive,
-            planes: [:external],
-            permission: :component_manage,
-            consent: :interactive
-          },
-          "create" => %{
-            kind: :write,
-            planes: [:external],
-            permission: :component_manage,
-            consent: :interactive
-          },
-          "update" => %{
-            kind: :write,
-            planes: [:external],
-            permission: :component_manage,
-            consent: :interactive
-          },
-          "delete" => %{
-            kind: :destructive,
-            planes: [:external],
-            permission: :component_manage,
-            consent: :interactive
-          },
-          # Reset restores shipped units — one role by name, else every
-          # edited copy. With all=true it also deletes member-created
-          # roles and scrolls.
-          "reset" => %{
-            kind: :destructive,
-            planes: [:external],
-            permission: :component_manage,
-            consent: :interactive
-          }
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => [
-              "list",
-              "get",
-              "create",
-              "update",
-              "delete",
-              "reset",
-              "status",
-              "skill_list",
-              "skill_get",
-              "skill_create",
-              "skill_update",
-              "skill_delete",
-              "skill_reset"
-            ],
-            "description" =>
-              "Action: list/get the soul ('aqua'), roles and guides; create/update/delete to manage roles (the soul is edited with update and never created or deleted; docs are read-only); status for per-file provenance (bundled/bundled_modified/user); skill_list/skill_get to read scrolls, skill_create/skill_update to write one (name, description, content), skill_delete to remove one the estate made, skill_reset to restore an edited scroll to what ships; or reset to restore edited copies of shipped files (one role with name, else every one; member-created roles and scrolls are kept unless all=true)."
-          },
-          "name" => %{
-            "type" => "string",
-            "description" =>
-              "Soul ('aqua'), role, guide, or scroll name (for get/update/delete/reset and the skill_* actions)"
-          },
-          "detail" => %{
-            "type" => "boolean",
-            "description" =>
-              "For list: include each agent's full fields (model, tool_policy, " <>
-                "catalyst_ref, content, disabled) — one call instead of a get per agent"
-          },
-          "include_disabled" => %{
-            "type" => "boolean",
-            "description" =>
-              "For list: include roles set aside with disabled: true, which the " <>
-                "roster otherwise leaves out"
-          },
-          "title" => %{
-            "type" => "string",
-            "description" => "Human-readable title (for create/update actions)"
-          },
-          "description" => %{
-            "type" => "string",
-            "description" =>
-              "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
-          },
-          "content" => %{
-            "type" => "string",
-            "description" =>
-              "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
-          },
-          "tool_policy" => %{
-            "type" => "object",
-            "additionalProperties" => %{"type" => "string", "enum" => ["ask", "auto"]},
-            "description" =>
-              "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's: every member edits the same allowlist."
-          },
-          "tool_policy_patch" => %{
-            "type" => "object",
-            "additionalProperties" => %{
-              "type" => ["string", "null"],
-              "enum" => ["ask", "auto", nil]
-            },
-            "description" =>
-              "update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two members editing different keys at once keep both. Not with tool_policy."
-          },
-          "expected_digest" => %{
-            "type" => "string",
-            "description" =>
-              "update only: the content_digest that get answered for the prompt being edited. The update is refused as a conflict when the prompt has changed since, so one member's edit never writes over another's."
-          },
-          "catalyst_ref" => %{
-            "type" => "string",
-            "description" => "Versionless catalyst reference (for create/update actions)"
-          },
-          "model" => %{
-            "type" => "string",
-            "description" => "Model identifier (for create/update actions)"
-          },
-          "disabled" => %{
-            "type" => "boolean",
-            "description" =>
-              "Take a role out of the closet without deleting its file (for update; shipped roles cannot be deleted — disable them instead)"
-          },
-          "all" => %{
-            "type" => "boolean",
-            "description" =>
-              "For reset: also DELETE member-created roles and scrolls, so the tree becomes exactly the shipped set (default false keeps them)"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+      title: "AQUA Agent System"
+    )
   end
 
   # --- list ---

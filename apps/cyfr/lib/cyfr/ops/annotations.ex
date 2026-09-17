@@ -129,12 +129,8 @@ defmodule Cyfr.Ops.Annotations do
   end
 
   @doc """
-  The action map read strictly from a provider's atom-keyed `tools/0`
-  shape — no other spelling accepted. The boot audit uses this arm: the
-  registry caches `Map.get(tool, :annotations)`, so a provider that
-  spelled the key any other way would register with no annotations and
-  default-deny at dispatch. The audit must reject exactly what the load
-  would break.
+  The derived action map from a provider's atom-keyed `tools/0` definition.
+  `Cyfr.Ops.Operation` materializes it from the canonical operations.
   """
   @spec declared_actions(map()) :: %{optional(String.t()) => map()}
   def declared_actions(%{annotations: %{actions: actions}}) when is_map(actions), do: actions

@@ -903,7 +903,7 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | `cyfr list` | `component` | `list` | `type` |
 | — | `component` | `setup_plan` | `reference` (shows the component's needs and whether each is bound + live) |
 | — | `tools` | `list` | `component_ref` (optional — filters to the component's consented tool allowlist) |
-| `cyfr schedule create` | `schedule` | `create` | `name`, `cron_expression`, `reference`, `input` |
+| `cyfr schedule create` | `schedule` | `create` | `name`, `cron_expression`, `reference`, `profile_id` (`--profile`), `input` |
 | `cyfr schedule list` | `schedule` | `list` | `limit` |
 | `cyfr schedule pause` | `schedule` | `pause` | `schedule_id` |
 | `cyfr schedule resume` | `schedule` | `resume` | `schedule_id` |

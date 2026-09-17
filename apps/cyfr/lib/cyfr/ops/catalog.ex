@@ -54,7 +54,7 @@ defmodule Cyfr.Ops.Catalog do
   @behaviour Sanctum.Catalog
   require Logger
 
-  alias Cyfr.Ops.Annotations
+  alias Cyfr.Ops.{Annotations, Operation}
   alias Sanctum.Context
 
   # 24 hours
@@ -145,7 +145,7 @@ defmodule Cyfr.Ops.Catalog do
           case Enum.filter(listed, &(&1 in reachable)) do
             [] -> nil
             ^listed -> tool_def
-            pruned -> put_in(tool_def, ["inputSchema", "properties", "action", "enum"], pruned)
+            pruned -> Cyfr.Ops.Visibility.restrict_actions(tool_def, pruned)
           end
 
         {_, _} ->
@@ -170,6 +170,15 @@ defmodule Cyfr.Ops.Catalog do
   # does. Tests plant probe providers through here instead of writing the
   # cache key, which is this module's private representation.
   def register_tool(name, module, meta, ttl \\ @cache_ttl) do
+    meta =
+      Operation.tool(
+        Map.fetch!(meta, :operations),
+        Map.to_list(Map.take(meta, [:description, :title, :icons, :output_schema]))
+      )
+
+    if meta.name != name,
+      do: raise(ArgumentError, "registered tool identity does not match its operations")
+
     Arca.Cache.put({:mcp_tool, name}, {module, meta}, ttl)
     Arca.Cache.invalidate(:mcp_tool_list)
   end
@@ -237,6 +246,9 @@ defmodule Cyfr.Ops.Catalog do
     do_call(name, ctx, args, Keyword.delete(opts, :in_chain))
   end
 
+  def call_external(_name, %Context{}, _args, _opts),
+    do: {:error, {:invalid_argument, "Arguments must be an object"}}
+
   @doc """
   Call a tool from **inside a running chain** — the only entry that accepts
   an authority.
@@ -278,9 +290,10 @@ defmodule Cyfr.Ops.Catalog do
     args =
       args
       |> Map.drop(["parent_execution_id", "root_execution_id", "thread_id", "attempt"])
-      |> put_lineage(Keyword.get(opts, :lineage))
 
     with :ok <- check_in_chain_reachable(name, args),
+         :ok <- authorize_declared_action(name, ctx, args, true),
+         {:ok, args} <- validate_chain_arguments(name, args),
          {:ok, target, server} <- in_chain_target(ctx, name, args) do
       case Sanctum.Authority.step(authority, guest_fn, target) do
         {:allow_tool, resource} ->
@@ -338,6 +351,9 @@ defmodule Cyfr.Ops.Catalog do
       end
     end
   end
+
+  def call_in_chain(_name, %Context{}, _args, %Cyfr.Authority{}, _opts),
+    do: {:error, {:invalid_argument, "Arguments must be an object"}}
 
   # A spawn-shaped call charges the reservation row beside the slot. The
   # loop names the charge per dispatch; a call under a chain's attempt
@@ -493,10 +509,16 @@ defmodule Cyfr.Ops.Catalog do
         {:ok, {_module, meta}} ->
           planes = Annotations.planes(meta, action)
 
-          if :in_chain in planes do
-            :ok
-          else
-            {:error, "Tool action '#{name}.#{action}' is not reachable from a running chain"}
+          cond do
+            is_nil(Annotations.annotation(meta, action)) ->
+              with {:ok, _} <- Operation.cast(meta, args),
+                   do: {:error, {:unknown_action, "#{name}.#{action}"}}
+
+            :in_chain in planes ->
+              :ok
+
+            true ->
+              {:error, "Tool action '#{name}.#{action}' is not reachable from a running chain"}
           end
 
         :miss ->
@@ -561,7 +583,7 @@ defmodule Cyfr.Ops.Catalog do
         case Enum.filter(listed, &(&1 in reachable)) do
           [] -> nil
           ^listed -> tool_def
-          pruned -> put_in(tool_def, ["inputSchema", "properties", "action", "enum"], pruned)
+          pruned -> Cyfr.Ops.Visibility.restrict_actions(tool_def, pruned)
         end
 
       {_, _} ->
@@ -728,9 +750,7 @@ defmodule Cyfr.Ops.Catalog do
 
       is_nil(annotation) ->
         # Default-deny: an action without an access declaration is not
-        # dispatchable, whatever the handler would have said. The HTTP path
-        # never gets here (Cyfr.Ops.Contract enforces the schema enum first);
-        # this refuses the in-process callers.
+        # dispatchable, whatever the handler would have said.
         {:error, {:unknown_action, "#{name}.#{action}"}}
 
       not in_chain? and :external not in Annotations.planes(meta, action) ->
@@ -746,33 +766,52 @@ defmodule Cyfr.Ops.Catalog do
     end
   end
 
-  # Validate declared input schemas for HTTP and in-process calls.
-  # Tools without a schema are unconstrained here.
-  defp validate_against_schema(meta, args) do
-    case Map.get(meta, :input_schema) do
-      schema when is_map(schema) and map_size(schema) > 0 ->
-        case Cyfr.Ops.Contract.validate(args, without_action_rules(schema)) do
-          :ok -> :ok
-          {:error, message} -> {:error, {:invalid_argument, message}}
-        end
+  # A declared action is authorized before its remaining fields are
+  # validated. Missing or unknown action identity stays a cast error so
+  # every ingress reports the same refusal. Remote `server:tool` names
+  # keep their existing proxied authorization.
+  @doc false
+  @spec authorize_declared_action(String.t(), Context.t(), term(), boolean()) ::
+          :ok
+          | {:error,
+             Sanctum.Unauthorized.reason() | :action_missing | {:unknown_action, String.t()}}
+  def authorize_declared_action(name, ctx, args, in_chain? \\ false)
 
-      _ ->
-        :ok
+  def authorize_declared_action(_name, _ctx, args, _in_chain?) when not is_map(args), do: :ok
+
+  def authorize_declared_action(name, ctx, args, in_chain?) when is_binary(name) do
+    if String.contains?(name, ":") do
+      :ok
+    else
+      case lookup(name) do
+        {:ok, {_module, meta}} -> authorize_declared_action(name, meta, ctx, args, in_chain?)
+        :miss -> :ok
+      end
     end
   end
 
-  # The annotation layer validates action and returns its typed errors.
-  # Schema validation covers the remaining input fields.
-  defp without_action_rules(schema) do
-    schema
-    |> update_in_if(["properties", "action"], &Map.delete(&1, "enum"))
-    |> Map.replace_lazy("required", fn required ->
-      if is_list(required), do: required -- ["action"], else: required
-    end)
+  defp authorize_declared_action(name, meta, ctx, args, in_chain?) when is_map(meta) do
+    action = args["action"] || args[:action]
+
+    if is_binary(action) and match?(%{}, Annotations.annotation(meta, action)) do
+      authorize_annotated_action(name, meta, ctx, args, in_chain?)
+    else
+      :ok
+    end
   end
 
-  defp update_in_if(schema, path, fun) do
-    if get_in(schema, path), do: update_in(schema, path, fun), else: schema
+  @doc "Validate a registered operation's arguments through its canonical declaration."
+  @spec validate_arguments(String.t(), term()) :: {:ok, map()} | {:error, term()}
+  def validate_arguments(name, args) do
+    case lookup(name) do
+      {:ok, {_module, meta}} -> Operation.cast(meta, args)
+      :miss -> {:error, {:not_found, "tool", name}}
+    end
+  end
+
+  # Remote tools carry their own schemas and are not local operation providers.
+  defp validate_chain_arguments(name, args) do
+    if String.contains?(name, ":"), do: {:ok, args}, else: validate_arguments(name, args)
   end
 
   # `scope: :platform` is the operator capability, not a widened tenant scope:
@@ -864,7 +903,8 @@ defmodule Cyfr.Ops.Catalog do
       end
 
     action = args["action"] || args[:action]
-    started = %{tool: name, action: action, method: "tools/call", input: args}
+    logged_args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
+    started = %{tool: name, action: action, method: "tools/call", input: logged_args}
     opts = Keyword.put(opts, :action, action)
 
     Emissary.MCP.RequestLog.around(log_mode, ctx, call_id, started, fn ->
@@ -883,8 +923,9 @@ defmodule Cyfr.Ops.Catalog do
     case lookup(name) do
       {:ok, {module, meta}} ->
         result =
-          with :ok <- validate_against_schema(meta, args),
-               :ok <- authorize_annotated_action(name, meta, ctx, args, in_chain?) do
+          with :ok <- authorize_declared_action(name, ctx, args, in_chain?),
+               {:ok, args} <- Operation.cast(meta, args) do
+            args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
             execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
           else
             {:error, _} = refusal -> refusal
@@ -910,6 +951,7 @@ defmodule Cyfr.Ops.Catalog do
               # when the server row opts in — enforced where the row is in
               # hand, not left to the wiring.
               plane = if Keyword.get(opts, :in_chain, false), do: :in_chain, else: :external
+              args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
 
               execute_tool_call(name, ctx, opts, fn ->
                 Emissary.MCP.ExternalProvider.try_handle(name, ctx, args, plane,
@@ -954,11 +996,9 @@ defmodule Cyfr.Ops.Catalog do
   end
 
   @doc """
-  Audit every internal tool provider for complete per-action annotations.
-  For each tool, every verb in `input_schema.properties.action.enum` and
-  every verb `annotations.actions` declares must carry a valid annotation:
-  a `kind`, a non-empty list of valid `planes`, and valid values for the
-  optional keys, `recovery: :replay_safe` on a read only.
+  Audit every internal provider's canonical operations and permissions.
+  `Cyfr.Ops.Operation` validates the declaration structure; this catalog
+  additionally requires each permission to be known by Sanctum.
 
   The taxonomy is only as good as its coverage: an unannotated action has
   no risk class and no reachability, so it cannot be reasoned about at
@@ -989,63 +1029,52 @@ defmodule Cyfr.Ops.Catalog do
     end
   end
 
-  defp audit_tool(module, tool) do
-    enum =
-      get_in(tool, [Access.key(:input_schema, %{}), "properties", "action", "enum"]) || []
+  defp audit_tool(module, %{name: name, operations: operations})
+       when is_list(operations) and operations != [] do
+    Enum.flat_map(operations, fn operation ->
+      result =
+        try do
+          Operation.validate!(operation)
 
-    # Strict read on purpose: the audit must reject exactly the spelling
-    # the registry load would break on, not tolerate it.
-    actions_meta = Annotations.declared_actions(tool)
+          cond do
+            operation.tool != name ->
+              {:error, :invalid_operation}
 
-    Enum.flat_map(Enum.uniq(enum ++ Map.keys(actions_meta)), fn verb ->
-      case audit_action(Map.get(actions_meta, verb)) do
-        :ok -> []
-        {:error, reason} -> [%{provider: module, tool: tool.name, action: verb, reason: reason}]
+            Enum.count(operations, &(is_map(&1) and Map.get(&1, :action) == operation.action)) !=
+                1 ->
+              {:error, :invalid_operation}
+
+            not is_nil(operation.permission) and not known_permission?(operation.permission) ->
+              {:error, :invalid_permission}
+
+            true ->
+              :ok
+          end
+        rescue
+          ArgumentError -> {:error, :invalid_operation}
+        end
+
+      case result do
+        :ok ->
+          []
+
+        {:error, reason} ->
+          [
+            %{
+              provider: module,
+              tool: name,
+              action: if(is_map(operation), do: Map.get(operation, :action)),
+              reason: reason
+            }
+          ]
       end
     end)
   end
 
-  @valid_planes [:external, :in_chain]
-  @valid_host [:intercepted]
-  @valid_auth [:anonymous, :signed_in, :required]
-  @valid_consent [:interactive, :staging]
-  @valid_scopes [:platform]
-  @valid_standing [:thread, false]
-  @valid_recovery [:replay_safe]
-
-  defp audit_action(%{} = annotation) do
-    kind = Map.get(annotation, :kind)
-    planes = Map.get(annotation, :planes)
-    auth = Map.get(annotation, :auth, :required)
-    permission = Map.get(annotation, :permission)
-    consent = Map.get(annotation, :consent)
-    scope = Map.get(annotation, :scope)
-    standing = Map.get(annotation, :standing)
-    host = Map.get(annotation, :host)
-    recovery = Map.get(annotation, :recovery)
-
-    cond do
-      is_nil(kind) or not is_atom(kind) -> {:error, :missing_kind}
-      not is_list(planes) or planes == [] -> {:error, :missing_planes}
-      not Enum.all?(planes, &(&1 in @valid_planes)) -> {:error, :invalid_planes}
-      not (is_nil(host) or host in @valid_host) -> {:error, :invalid_host}
-      # The host intercepts what the catalog never dispatches in-chain.
-      host == :intercepted and :in_chain in planes -> {:error, :invalid_host}
-      auth not in @valid_auth -> {:error, :invalid_auth}
-      not (is_nil(permission) or known_permission?(permission)) -> {:error, :invalid_permission}
-      not (is_nil(consent) or consent in @valid_consent) -> {:error, :invalid_consent}
-      not (is_nil(scope) or scope in @valid_scopes) -> {:error, :invalid_scope}
-      not (is_nil(standing) or standing in @valid_standing) -> {:error, :invalid_standing}
-      # An operator-only action is an external-plane act; nothing in a chain is one.
-      scope == :platform and planes != [:external] -> {:error, :invalid_scope}
-      not (is_nil(recovery) or recovery in @valid_recovery) -> {:error, :invalid_recovery}
-      # Replay safety is a reviewed property of a read; a write can never carry it.
-      not is_nil(recovery) and kind != :read -> {:error, :invalid_recovery}
-      true -> :ok
-    end
-  end
-
-  defp audit_action(_annotation), do: {:error, :missing_annotation}
+  defp audit_tool(module, tool),
+    do: [
+      %{provider: module, tool: Map.get(tool, :name), action: nil, reason: :missing_operations}
+    ]
 
   @doc """
   Every `tool.action` declared `recovery: :replay_safe`, derived from the
@@ -1068,16 +1097,16 @@ defmodule Cyfr.Ops.Catalog do
     |> Enum.sort()
   end
 
-  defp known_permission?(permission) when is_atom(permission),
+  # `Operation.validate!/1` has already established that a non-nil
+  # permission is an atom by the time the audit reaches this check.
+  defp known_permission?(permission),
     do: Atom.to_string(permission) in Sanctum.Atoms.known_permissions()
-
-  defp known_permission?(_), do: false
 
   @doc """
   The planes an action may be annotated with.
   """
   @spec valid_planes() :: [Cyfr.Ops.Provider.plane()]
-  def valid_planes, do: @valid_planes
+  defdelegate valid_planes(), to: Operation
 
   # ============================================================================
   # GenServer Callbacks
@@ -1313,20 +1342,7 @@ defmodule Cyfr.Ops.Catalog do
       |> Enum.flat_map(fn module ->
         module.tools()
         |> Enum.map(fn tool ->
-          meta = %{
-            name: tool.name,
-            description: tool.description,
-            input_schema: tool.input_schema,
-            # Optional per-tool fields
-            title: Map.get(tool, :title),
-            icons: Map.get(tool, :icons),
-            output_schema: Map.get(tool, :output_schema),
-            # Per-action access declarations ride in annotations.actions —
-            # the dispatch gate and discovery both read them from here.
-            annotations: Map.get(tool, :annotations)
-          }
-
-          register_tool(tool.name, module, meta)
+          register_tool(tool.name, module, tool)
           tool.name
         end)
       end)

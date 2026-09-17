@@ -102,7 +102,8 @@ defmodule PrismWeb.Ops do
 
   defp normalize_tool_call(tool_name, args) do
     case String.split(tool_name, "/", parts: 2) do
-      [name, action] -> {name, Map.put(args, "action", action)}
+      [name, action] when is_map(args) -> {name, Map.put(args, "action", action)}
+      [name, _action] -> {name, args}
       [name] -> {name, args}
     end
   end

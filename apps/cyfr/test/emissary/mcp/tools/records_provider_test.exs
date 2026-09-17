@@ -313,9 +313,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
       roster = Enum.map(Cyfr.Retention.kinds(), & &1.key())
 
-      assert retention.input_schema["properties"]["cleanup_type"]["enum"] == roster
+      assert action_schema(retention, "cleanup")["properties"]["cleanup_type"]["enum"] == roster
 
-      assert retention.input_schema["properties"]["settings"]["properties"]
+      assert action_schema(retention, "set")["properties"]["settings"]["properties"]
              |> Map.keys()
              |> Enum.sort() == Enum.sort(roster)
     end
@@ -854,16 +854,17 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       # required args must be added here — the "Unauthorized" assert below
       # fails on the missing-arg error otherwise, forcing the pin.
       extra_args = fn
-        "get" -> %{"id" => "guard_probe"}
-        "correlate" -> %{"request_id" => "guard_probe"}
-        "fan_outs" -> %{"request_ids" => ["guard_probe"]}
-        "set" -> %{"settings" => %{"executions" => 5}}
+        {"retention", "get"} -> %{}
+        {_, action} when action in ["get", "payload"] -> %{"id" => "guard_probe"}
+        {_, "correlate"} -> %{"request_id" => "guard_probe"}
+        {_, "fan_outs"} -> %{"request_ids" => ["guard_probe"]}
+        {_, "set"} -> %{"settings" => %{"executions" => 5}}
         _ -> %{}
       end
 
       for tool <- MCP.tools(),
           action <- tool.input_schema["properties"]["action"]["enum"] do
-        args = Map.put(extra_args.(action), "action", action)
+        args = Map.put(extra_args.({tool.name, action}), "action", action)
 
         case Cyfr.Ops.Catalog.call_external(tool.name, no_perm_ctx, args) do
           {:error, reason} ->
@@ -916,5 +917,11 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     if Arca.Repo.__adapter__() == Ecto.Adapters.Postgres,
       do: Arca.Repo.query!("DROP TABLE executions CASCADE"),
       else: Arca.Repo.query!("DROP TABLE executions")
+  end
+
+  defp action_schema(tool, action) do
+    Enum.find(tool.input_schema["oneOf"], fn branch ->
+      get_in(branch, ["properties", "action", "const"]) == action
+    end) || flunk("missing schema for #{tool.name}.#{action}")
   end
 end

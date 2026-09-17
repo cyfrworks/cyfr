@@ -28,52 +28,59 @@ defmodule Emissary.MCP.FileTool do
 
   @doc false
   def definition do
-    %{
-      name: "file",
+    alias Cyfr.Ops.{Arg, Operation}
+
+    path =
+      Arg.new("path", :string, description: "A folder-relative path, like data/reports/q3.csv")
+
+    Operation.tool(
+      [
+        Operation.new(
+          "file",
+          "list",
+          "List a folder; an omitted or empty path lists the root folders",
+          [path],
+          kind: :read,
+          planes: [:external],
+          permission: :storage_read
+        ),
+        Operation.new("file", "read", "Read a file as text or base64 bytes", [Arg.required(path)],
+          kind: :read,
+          planes: [:external],
+          permission: :storage_read
+        ),
+        Operation.new(
+          "file",
+          "write",
+          "Write file content",
+          [
+            Arg.required(path),
+            Arg.new("content", :string,
+              required: true,
+              description: "Text or base64-encoded content"
+            ),
+            Arg.new("encoding", :string,
+              enum: ["utf8", "base64"],
+              description: "Content encoding; defaults to utf8"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :storage_write
+        ),
+        Operation.new("file", "delete", "Delete a file or folder", [Arg.required(path)],
+          kind: :destructive,
+          planes: [:external],
+          permission: :storage_write
+        )
+      ],
       title: "Files",
       description:
         "The athanor's files, as the Files page shows them. data/ is yours to fill; " <>
           "components/ and aqua/ hold shaped units you may edit in place; notes/ and " <>
           "threads/ are read here and managed on their own pages. Paths are " <>
-          "folder-relative, like data/reports/q3.csv.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          "list" => %{kind: :read, planes: [:external], permission: :storage_read},
-          "read" => %{kind: :read, planes: [:external], permission: :storage_read},
-          "write" => %{kind: :write, planes: [:external], permission: :storage_write},
-          "delete" => %{kind: :destructive, planes: [:external], permission: :storage_write}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => ["list", "read", "write", "delete"],
-            "description" =>
-              "list: the entries under a folder (an empty path lists the folders); " <>
-                "read: one file's content (utf8 text, or base64 for bytes); " <>
-                "write: put content at a path; delete: remove a file, or a folder whole."
-          },
-          "path" => %{
-            "type" => "string",
-            "description" => "A folder-relative path, like data/reports/q3.csv"
-          },
-          "content" => %{
-            "type" => "string",
-            "description" => "write: what to put there — text, or base64 with encoding=base64"
-          },
-          "encoding" => %{
-            "type" => "string",
-            "enum" => ["utf8", "base64"],
-            "description" => "write: how content is encoded (default utf8)"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+          "folder-relative, like data/reports/q3.csv."
+    )
   end
 
   @impl true

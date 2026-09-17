@@ -18,40 +18,30 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "tincture_visibility",
-      title: "Tincture Visibility",
+    alias Cyfr.Ops.{Arg, Operation}
+
+    Operation.tool(
+      [
+        Operation.new(
+          "tincture_visibility",
+          "get",
+          "Get tincture visibility",
+          [
+            Arg.new("publisher", :string,
+              required: true,
+              description: "Tincture publisher (e.g. 'local', 'moonmoon69')"
+            ),
+            Arg.new("name", :string, required: true, description: "Tincture name")
+          ],
+          kind: :read,
+          planes: [:external, :in_chain],
+          permission: :storage_read
+        )
+      ],
       description:
-        "Report whether a tincture has an active public profile. Public-ness is a " <>
-          "published profile, not a policy bit — publish with profile.publish, " <>
-          "unpublish with profile.revoke.",
-      annotations: %{
-        readOnlyHint: true,
-        destructiveHint: false,
-        actions: %{
-          "get" => %{kind: :read, planes: [:external, :in_chain], permission: :storage_read}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => ["get"],
-            "description" => "Action to perform"
-          },
-          "publisher" => %{
-            "type" => "string",
-            "description" => "Tincture publisher (e.g. 'local', 'moonmoon69')"
-          },
-          "name" => %{
-            "type" => "string",
-            "description" => "Tincture name"
-          }
-        },
-        "required" => ["action", "publisher", "name"]
-      }
-    }
+        "Report whether a tincture has an active public profile. Public-ness is a published profile, not a policy bit — publish with profile.publish, unpublish with profile.revoke.",
+      title: "Tincture Visibility"
+    )
   end
 
   def handle(%Context{} = ctx, %{

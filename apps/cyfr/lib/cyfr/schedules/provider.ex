@@ -24,94 +24,184 @@ defmodule Cyfr.Schedules.Provider do
   def read(_ctx, _uri), do: {:error, "No resources"}
 
   def tools do
+    alias Cyfr.Ops.{Arg, Operation}
+    # create/update also require the registration's consent binding —
+    # a conditional Authz check that stays in the handler.
     [
-      %{
-        name: "schedule",
-        title: "Cron Schedule",
+      Operation.tool(
+        [
+          Operation.new(
+            "schedule",
+            "create",
+            "Create schedule",
+            [
+              Arg.new("name", :string,
+                required: true,
+                description:
+                  "Human-readable schedule name, unique within the athanor (create/update)"
+              ),
+              Arg.new("cron_expression", :string,
+                required: true,
+                description:
+                  "Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval."
+              ),
+              Arg.new("reference", :string,
+                required: true,
+                description: "Component reference string (create/update)"
+              ),
+              Arg.new("profile_id", :string,
+                required: true,
+                description:
+                  "Profile the schedule fires under; its consent authorizes the binding (create, required; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument."
+              ),
+              Arg.new("input", {:map, Arg.new(nil, :json)},
+                description: "Input data to pass to the component (create/update)"
+              ),
+              Arg.new("metadata", {:map, Arg.new(nil, :json)},
+                description:
+                  "Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's estate, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it."
+              ),
+              Arg.new("concurrency", :string,
+                description:
+                  "Whether a due occurrence runs while another of this schedule is still open (default forbid)",
+                enum: ["forbid", "allow"]
+              )
+            ],
+            kind: :write,
+            planes: [:external],
+            permission: :execute
+          ),
+          Operation.new(
+            "schedule",
+            "list",
+            "List schedule",
+            [
+              Arg.new("limit", :integer,
+                description: "Maximum results to return (list)",
+                default: 25
+              )
+            ],
+            kind: :read,
+            planes: [:external, :in_chain],
+            permission: :execute
+          ),
+          Operation.new(
+            "schedule",
+            "get",
+            "Get schedule",
+            [
+              Arg.new("schedule_id", :string,
+                required: true,
+                description: "Schedule ID or name (get/update/pause/resume/delete)"
+              )
+            ],
+            kind: :read,
+            planes: [:external, :in_chain],
+            permission: :execute
+          ),
+          Operation.new(
+            "schedule",
+            "update",
+            "Update schedule",
+            [
+              Arg.new("schedule_id", :string,
+                required: true,
+                description: "Schedule ID or name (get/update/pause/resume/delete)"
+              ),
+              Arg.new("name", :string,
+                description:
+                  "Human-readable schedule name, unique within the athanor (create/update)"
+              ),
+              Arg.new("cron_expression", :string,
+                description:
+                  "Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval."
+              ),
+              Arg.new("reference", :string,
+                description: "Component reference to run under the schedule profile"
+              ),
+              Arg.new("profile_id", :string,
+                description:
+                  "Profile the schedule fires under; its consent authorizes the binding (create, required; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument."
+              ),
+              Arg.new("input", {:map, Arg.new(nil, :json)},
+                nullable: true,
+                description: "Input data to pass to the component (create/update)"
+              ),
+              Arg.new("metadata", {:map, Arg.new(nil, :json)},
+                nullable: true,
+                description:
+                  "Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's estate, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it."
+              ),
+              Arg.new("concurrency", :string,
+                description:
+                  "Whether a due occurrence runs while another of this schedule is still open (default forbid)",
+                enum: ["forbid", "allow"]
+              )
+            ],
+            kind: :write,
+            planes: [:external],
+            permission: :execute
+          ),
+          Operation.new(
+            "schedule",
+            "pause",
+            "Pause schedule",
+            [
+              Arg.new("schedule_id", :string,
+                required: true,
+                description: "Schedule ID or name (get/update/pause/resume/delete)"
+              )
+            ],
+            kind: :write,
+            planes: [:external],
+            permission: :execute
+          ),
+          Operation.new(
+            "schedule",
+            "resume",
+            "Resume schedule",
+            [
+              Arg.new("schedule_id", :string,
+                required: true,
+                description: "Schedule ID or name (get/update/pause/resume/delete)"
+              )
+            ],
+            kind: :write,
+            planes: [:external],
+            permission: :execute
+          ),
+          Operation.new(
+            "schedule",
+            "delete",
+            "Delete schedule",
+            [
+              Arg.new("schedule_id", :string,
+                required: true,
+                description: "Schedule ID or name (get/update/pause/resume/delete)"
+              )
+            ],
+            kind: :destructive,
+            planes: [:external],
+            permission: :execute
+          ),
+          Operation.new(
+            "schedule",
+            "re_resolve",
+            "Re resolve schedule",
+            [
+              Arg.new("schedule_id", :string,
+                required: true,
+                description: "Schedule ID or name (get/update/pause/resume/delete)"
+              )
+            ],
+            kind: :write,
+            planes: [:external],
+            permission: :execute
+          )
+        ],
         description: "Manage recurring WASM component execution schedules",
-        annotations: %{
-          readOnlyHint: false,
-          destructiveHint: true,
-          actions: %{
-            # create/update also require the registration's consent binding —
-            # a conditional Authz check that stays in the handler.
-            "create" => %{kind: :write, planes: [:external], permission: :execute},
-            "list" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
-            "get" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
-            "update" => %{kind: :write, planes: [:external], permission: :execute},
-            "pause" => %{kind: :write, planes: [:external], permission: :execute},
-            "resume" => %{kind: :write, planes: [:external], permission: :execute},
-            "delete" => %{kind: :destructive, planes: [:external], permission: :execute},
-            "re_resolve" => %{kind: :write, planes: [:external], permission: :execute}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "concurrency" => %{
-              "type" => "string",
-              "enum" => ["forbid", "allow"],
-              "description" =>
-                "Whether a due occurrence runs while another of this schedule is still open (default forbid)"
-            },
-            "action" => %{
-              "type" => "string",
-              "enum" => [
-                "create",
-                "list",
-                "get",
-                "update",
-                "pause",
-                "resume",
-                "delete",
-                "re_resolve"
-              ],
-              "description" => "Action to perform"
-            },
-            "name" => %{
-              "type" => "string",
-              "description" =>
-                "Human-readable schedule name, unique within the athanor (create/update)"
-            },
-            "cron_expression" => %{
-              "type" => "string",
-              "description" =>
-                "Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval."
-            },
-            "reference" => %{
-              "type" => "string",
-              "description" => "Component reference string (create/update)"
-            },
-            "profile_id" => %{
-              "type" => "string",
-              "description" =>
-                "Profile the schedule fires under; its consent authorizes the binding (create, required; update). re_resolve re-authorizes the schedule's existing profile and ignores this argument."
-            },
-            "input" => %{
-              "type" => "object",
-              "description" => "Input data to pass to the component (create/update)"
-            },
-            "metadata" => %{
-              "type" => "object",
-              "description" =>
-                "Optional metadata (create/update). `keep_outcome: true` files every " <>
-                  "completed run's output as a note in the schedule's estate, named by " <>
-                  "`note_name` or, when unset, by the schedule's id; each run replaces " <>
-                  "the note before it."
-            },
-            "schedule_id" => %{
-              "type" => "string",
-              "description" => "Schedule ID or name (get/update/pause/resume/delete)"
-            },
-            "limit" => %{
-              "type" => "integer",
-              "default" => 25,
-              "description" => "Maximum results to return (list)"
-            }
-          },
-          "required" => ["action"]
-        }
-      }
+        title: "Cron Schedule"
+      )
     ]
   end
 

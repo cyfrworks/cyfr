@@ -251,110 +251,170 @@ defmodule Cyfr.Execution.MCP do
   # ============================================================================
 
   def tools do
+    alias Cyfr.Ops.{Arg, Operation}
+    # External-plane only, and `host: :intercepted`: a running
+    # component's execution request never reaches the catalog — the
+    # formula host intercepts it and runs it as a CHILD of the
+    # chain's authority (`Cyfr.Execution.run_child/5`), and an approved
+    # card's is run the same way by the assistant. The annotation
+    # says so, and every surface that offers actions to a chain
+    # reads it from here.
+    # Semaphore diagnostics are tenant-operational: global counters
+    # with no chain grain to scope them to. Classify it out of the
+    # in-chain plane rather than serve a number that means nothing
+    # to the caller.
+    # Releasing every athanor's slots is the operator's lever
+    # alone. Until the in-flight executions it released drain, the
+    # node runs OVER-admitted by that many slots — the recovery
+    # trades a wedged semaphore for a temporary over-cap.
+    # run action params
+    # list action params
+    # logs/cancel action params
+    # verify block (optional signer validation)
     [
-      %{
-        name: "execution",
-        title: "Execution",
+      Operation.tool(
+        [
+          Operation.new(
+            "execution",
+            "run",
+            "Run execution",
+            [
+              Arg.new("reference", :string,
+                required: true,
+                description: "Component reference string (e.g., 'catalyst:local.claude:0.2.0')"
+              ),
+              Arg.new("input", {:map, Arg.new(nil, :json)},
+                description: "Input data to pass to the component (run action)"
+              ),
+              Arg.new("type", :string,
+                description:
+                  "Asserted component type — must match the registry's type, which is authoritative (run action)",
+                enum: Cyfr.ComponentRef.executable_types()
+              ),
+              Arg.new(
+                "verify",
+                {:record,
+                 [
+                   Arg.new("identity", :string,
+                     description: "Required signer identity (e.g., 'alice@example.com')"
+                   ),
+                   Arg.new("issuer", :string,
+                     description: "Required OIDC issuer (e.g., 'https://github.com/login/oauth')"
+                   )
+                 ]},
+                description: "Optional signature verification requirements (run action)"
+              ),
+              Arg.new("profile", :string,
+                description:
+                  "The owner profile ID or label; omitted selects the default owner profile"
+              )
+            ],
+            host: :intercepted,
+            kind: :execute,
+            planes: [:external],
+            permission: :execute
+          ),
+          Operation.new(
+            "execution",
+            "run_stream",
+            "Run stream execution",
+            [
+              Arg.new("reference", :string,
+                required: true,
+                description: "Component reference string (e.g., 'catalyst:local.claude:0.2.0')"
+              ),
+              Arg.new("input", {:map, Arg.new(nil, :json)},
+                description: "Input data to pass to the component (run action)"
+              ),
+              Arg.new("type", :string,
+                description:
+                  "Asserted component type — must match the registry's type, which is authoritative (run action)",
+                enum: Cyfr.ComponentRef.executable_types()
+              ),
+              Arg.new(
+                "verify",
+                {:record,
+                 [
+                   Arg.new("identity", :string,
+                     description: "Required signer identity (e.g., 'alice@example.com')"
+                   ),
+                   Arg.new("issuer", :string,
+                     description: "Required OIDC issuer (e.g., 'https://github.com/login/oauth')"
+                   )
+                 ]},
+                description: "Optional signature verification requirements (run action)"
+              ),
+              Arg.new("profile", :string,
+                description:
+                  "The owner profile ID or label; omitted selects the default owner profile"
+              )
+            ],
+            host: :intercepted,
+            kind: :execute,
+            planes: [:external],
+            permission: :execute
+          ),
+          Operation.new(
+            "execution",
+            "list",
+            "List execution",
+            [
+              Arg.new("limit", :integer,
+                description: "Maximum results to return (list action)",
+                default: 20
+              ),
+              Arg.new("status", :string,
+                description: "Filter by status (list action)",
+                enum: ["running", "completed", "failed", "cancelled", "all"],
+                default: "all"
+              )
+            ],
+            kind: :read,
+            planes: [:external, :in_chain],
+            permission: :execute
+          ),
+          Operation.new(
+            "execution",
+            "logs",
+            "Logs execution",
+            [
+              Arg.new("execution_id", :string,
+                required: true,
+                description: "Execution ID (logs/cancel actions)"
+              )
+            ],
+            kind: :read,
+            planes: [:external, :in_chain],
+            permission: :execute
+          ),
+          Operation.new(
+            "execution",
+            "cancel",
+            "Cancel execution",
+            [
+              Arg.new("execution_id", :string,
+                required: true,
+                description: "Execution ID (logs/cancel actions)"
+              )
+            ],
+            kind: :write,
+            planes: [:external, :in_chain],
+            permission: :execute
+          ),
+          Operation.new("execution", "status", "Status execution", [],
+            kind: :read,
+            planes: [:external],
+            permission: :execute
+          ),
+          Operation.new("execution", "force_release", "Force release execution", [],
+            scope: :platform,
+            kind: :destructive,
+            planes: [:external]
+          )
+        ],
         description: "Execute WASM components and manage execution instances",
-        annotations: %{
-          readOnlyHint: false,
-          destructiveHint: true,
-          actions: %{
-            # External-plane only, and `host: :intercepted`: a running
-            # component's execution request never reaches the catalog — the
-            # formula host intercepts it and runs it as a CHILD of the
-            # chain's authority (`Cyfr.Execution.run_child/5`), and an approved
-            # card's is run the same way by the assistant. The annotation
-            # says so, and every surface that offers actions to a chain
-            # reads it from here.
-            "run" => %{
-              kind: :execute,
-              planes: [:external],
-              host: :intercepted,
-              permission: :execute
-            },
-            "run_stream" => %{
-              kind: :execute,
-              planes: [:external],
-              host: :intercepted,
-              permission: :execute
-            },
-            "list" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
-            "logs" => %{kind: :read, planes: [:external, :in_chain], permission: :execute},
-            "cancel" => %{kind: :write, planes: [:external, :in_chain], permission: :execute},
-            # Semaphore diagnostics are tenant-operational: global counters
-            # with no chain grain to scope them to. Classify it out of the
-            # in-chain plane rather than serve a number that means nothing
-            # to the caller.
-            "status" => %{kind: :read, planes: [:external], permission: :execute},
-            # Releasing every athanor's slots is the operator's lever
-            # alone. Until the in-flight executions it released drain, the
-            # node runs OVER-admitted by that many slots — the recovery
-            # trades a wedged semaphore for a temporary over-cap.
-            "force_release" => %{kind: :destructive, planes: [:external], scope: :platform}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["run", "run_stream", "list", "logs", "cancel", "status", "force_release"],
-              "description" => "Action to perform"
-            },
-            # run action params
-            "reference" => %{
-              "type" => "string",
-              "description" => "Component reference string (e.g., 'catalyst:local.claude:0.2.0')"
-            },
-            "input" => %{
-              "type" => "object",
-              "description" => "Input data to pass to the component (run action)"
-            },
-            "type" => %{
-              "type" => "string",
-              "enum" => Cyfr.ComponentRef.executable_types(),
-              "default" => "reagent",
-              "description" =>
-                "Asserted component type — must match the registry's type, " <>
-                  "which is authoritative (run action)"
-            },
-            # list action params
-            "status" => %{
-              "type" => "string",
-              "enum" => ["running", "completed", "failed", "cancelled", "all"],
-              "default" => "all",
-              "description" => "Filter by status (list action)"
-            },
-            "limit" => %{
-              "type" => "integer",
-              "default" => 20,
-              "description" => "Maximum results to return (list action)"
-            },
-            # logs/cancel action params
-            "execution_id" => %{
-              "type" => "string",
-              "description" => "Execution ID (logs/cancel actions)"
-            },
-            # verify block (optional signer validation)
-            "verify" => %{
-              "type" => "object",
-              "description" => "Optional signature verification requirements (run action)",
-              "properties" => %{
-                "identity" => %{
-                  "type" => "string",
-                  "description" => "Required signer identity (e.g., 'alice@example.com')"
-                },
-                "issuer" => %{
-                  "type" => "string",
-                  "description" => "Required OIDC issuer (e.g., 'https://github.com/login/oauth')"
-                }
-              }
-            }
-          },
-          "required" => ["action"]
-        }
-      }
+        title: "Execution"
+      )
     ]
   end
 
@@ -550,12 +610,6 @@ defmodule Cyfr.Execution.MCP do
     # This execution IS the root — its emit target is itself
     opts = [{:root_execution_id, execution_id} | opts]
 
-    opts =
-      case args["parent_execution_id"] do
-        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-        _ -> opts
-      end
-
     # Spawn execution in background, registering PID for cancellation
     logger_metadata = Cyfr.LoggerContext.capture()
 
@@ -588,28 +642,13 @@ defmodule Cyfr.Execution.MCP do
     end
   end
 
-  # Run the component to completion as a root; an optional
-  # `parent_execution_id` records the formula lineage.
+  # Run the component to completion as a root.
   defp start_root("run", ctx, args) do
     reference = args["reference"] || ""
     input = args["input"] || %{}
 
     # Build options for the root run
     opts = build_run_opts(args)
-
-    # Thread parent_execution_id for formula→component lineage
-    opts =
-      case args["parent_execution_id"] do
-        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-        _ -> opts
-      end
-
-    # Thread root_execution_id so nested emits route to the root stream
-    opts =
-      case args["root_execution_id"] do
-        rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
-        _ -> opts
-      end
 
     case run_root_formatted(ctx, reference, input, opts, args) do
       {:ok, result} ->

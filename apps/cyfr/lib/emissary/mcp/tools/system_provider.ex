@@ -31,82 +31,74 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   @impl true
   def tools do
+    alias Cyfr.Ops.{Arg, Operation}
+    # Anonymous-allowed: the health check a client calls before
+    # logging in.
+    # Authenticated-only, matching the HTTP surface (which has always
+    # 401'd an anonymous tools.list): an uncredentialed caller's
+    # discovery is the anonymous action set, nothing more.
     [
-      %{
-        name: "system",
-        title: "System",
+      Operation.tool(
+        [
+          Operation.new(
+            "system",
+            "status",
+            "Status system",
+            [
+              Arg.new("scope", :string,
+                description: "For status: which service(s) to check. Default: all",
+                enum: scope_enum()
+              )
+            ],
+            auth: :anonymous,
+            kind: :read,
+            planes: [:external, :in_chain]
+          ),
+          Operation.new(
+            "system",
+            "notify",
+            "Notify system",
+            [
+              Arg.new("target", :string,
+                required: true,
+                description: "For notify: webhook URL destination"
+              ),
+              Arg.new("event", :string,
+                required: true,
+                description: "For notify: event type (e.g., 'build.complete')"
+              ),
+              Arg.new("payload", {:map, Arg.new(nil, :json)},
+                description: "For notify: additional data to include"
+              )
+            ],
+            kind: :write,
+            planes: [:external],
+            permission: :admin
+          )
+        ],
         description: "System health checks and notifications",
-        annotations: %{
-          readOnlyHint: false,
-          destructiveHint: false,
-          actions: %{
-            # Anonymous-allowed: the health check a client calls before
-            # logging in.
-            "status" => %{kind: :read, planes: [:external, :in_chain], auth: :anonymous},
-            "notify" => %{kind: :write, planes: [:external], permission: :admin}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["status", "notify"],
-              "description" => "Action to perform"
-            },
-            "scope" => %{
-              "type" => "string",
-              "enum" => scope_enum(),
-              "description" => "For status: which service(s) to check. Default: all"
-            },
-            "event" => %{
-              "type" => "string",
-              "description" => "For notify: event type (e.g., 'build.complete')"
-            },
-            "target" => %{
-              "type" => "string",
-              "description" => "For notify: webhook URL destination"
-            },
-            "payload" => %{
-              "type" => "object",
-              "description" => "For notify: additional data to include"
-            }
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "tools",
-        title: "Tools",
+        title: "System"
+      ),
+      Operation.tool(
+        [
+          Operation.new(
+            "tools",
+            "list",
+            "List tools",
+            [
+              Arg.new("component_ref", :string,
+                description:
+                  "For list: preview available tools as seen by this component (e.g. 'formula:local.my-agent:0.1.0'). A formula sees its in-chain plane; other types see the full list."
+              )
+            ],
+            kind: :read,
+            planes: [:external, :in_chain]
+          )
+        ],
         description:
           "Discover available MCP tools and their schemas. Optionally pass a component_ref to see the filtered view for that component (formulas see their in-chain plane).",
-        annotations: %{
-          readOnlyHint: true,
-          destructiveHint: false,
-          actions: %{
-            # Authenticated-only, matching the HTTP surface (which has always
-            # 401'd an anonymous tools.list): an uncredentialed caller's
-            # discovery is the anonymous action set, nothing more.
-            "list" => %{kind: :read, planes: [:external, :in_chain]}
-          }
-        },
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["list"],
-              "description" => "Action to perform"
-            },
-            "component_ref" => %{
-              "type" => "string",
-              "description" =>
-                "For list: preview available tools as seen by this component (e.g. 'formula:local.my-agent:0.1.0'). A formula sees its in-chain plane; other types see the full list."
-            }
-          },
-          "required" => ["action"]
-        }
-      }
+        title: "Tools"
+      )
     ]
   end
 

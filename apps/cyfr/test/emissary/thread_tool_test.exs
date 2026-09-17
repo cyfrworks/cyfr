@@ -157,7 +157,11 @@ defmodule Emissary.MCP.ThreadToolTest do
       ctx: ctx,
       thread: thread
     } do
-      assert get_in(Tool.definition().input_schema, ["properties", "message", "maxLength"]) ==
+      assert get_in(action_schema(Tool.definition(), "send"), [
+               "properties",
+               "message",
+               "maxLength"
+             ]) ==
                32_768
 
       # Graphemes slip a schema that bytes do not: the runner's check is
@@ -607,5 +611,11 @@ defmodule Emissary.MCP.ThreadToolTest do
 
       assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
     end
+  end
+
+  defp action_schema(tool, action) do
+    Enum.find(tool.input_schema["oneOf"], fn branch ->
+      get_in(branch, ["properties", "action", "const"]) == action
+    end) || flunk("missing schema for #{tool.name}.#{action}")
   end
 end

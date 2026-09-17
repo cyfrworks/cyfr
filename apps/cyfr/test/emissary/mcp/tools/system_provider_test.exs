@@ -58,7 +58,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "input_schema has scope property for status" do
       tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
-      scope_prop = tool.input_schema["properties"]["scope"]
+      scope_prop = action_schema(tool, "status")["properties"]["scope"]
       assert scope_prop["type"] == "string"
       assert "all" in scope_prop["enum"]
       assert "emissary" in scope_prop["enum"]
@@ -71,10 +71,11 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "input_schema has notify parameters" do
       tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
-      props = tool.input_schema["properties"]
+      props = action_schema(tool, "notify")["properties"]
       assert props["event"]["type"] == "string"
       assert props["target"]["type"] == "string"
       assert props["payload"]["type"] == "object"
+      assert Enum.sort(action_schema(tool, "notify")["required"]) == ["action", "event", "target"]
     end
 
     test "action is required" do
@@ -274,7 +275,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "the scope enum is the derived roster" do
       tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
-      assert tool.input_schema["properties"]["scope"]["enum"] ==
+      assert action_schema(tool, "status")["properties"]["scope"]["enum"] ==
                ["all"] ++ Cyfr.Ops.Services.service_names() ++ ["registry"]
     end
 
@@ -450,5 +451,11 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
       assert message =~ "Unknown tool"
     end
+  end
+
+  defp action_schema(tool, action) do
+    Enum.find(tool.input_schema["oneOf"], fn branch ->
+      get_in(branch, ["properties", "action", "const"]) == action
+    end) || flunk("missing schema for #{tool.name}.#{action}")
   end
 end

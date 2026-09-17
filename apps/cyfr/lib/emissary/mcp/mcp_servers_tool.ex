@@ -68,135 +68,210 @@ defmodule Emissary.MCP.McpServersTool do
   @doc "The tool definition: name, annotations (the gate), and input schema."
   @spec definition() :: map()
   def definition do
-    %{
-      name: "mcp_servers",
-      title: "MCP Servers",
+    alias Cyfr.Ops.{Arg, Operation}
+    # The listing (names, transport, status, the vault entries a server
+    # reads) is open to any authenticated caller; a server's connection
+    # config is the operator's. Neither is a chain capability: a
+    # formula uses the connected servers' TOOLS through its authority
+    # grants, it never reads the wiring behind them.
+    config_arg =
+      Arg.new(
+        "config",
+        {:record,
+         [
+           Arg.new(
+             "backends",
+             {:array,
+              Arg.new(
+                nil,
+                {:record,
+                 [
+                   Arg.new("command", :string, required: true),
+                   Arg.new("env", {:map, Arg.new(nil, :string)}),
+                   Arg.new("name", :string, required: true)
+                 ]}
+              )},
+             description:
+               "The stdio backends, at most #{BackendDefinition.max_backends()}: {name, command, env}. A command never names a vault entry; every env value is 'vault:ENTRY' except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, NO_COLOR and DEBUG, which may be literals."
+           ),
+           Arg.new("console", :boolean,
+             description:
+               "Allow this server's tools to be called from the console (external plane). Default false: proxied tools are reachable only from inside a chain."
+           ),
+           Arg.new("headers", {:map, Arg.new(nil, :string)},
+             description:
+               "HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to reference a single-field vault entry."
+           ),
+           Arg.new("timeout_ms", :integer,
+             description: "Request timeout in milliseconds (default: 30000)"
+           ),
+           Arg.new("tool_patterns", {:array, Arg.new(nil, :string)},
+             description: "The tools the server may offer (default: all)"
+           ),
+           Arg.new("transport", :string,
+             description: "http (default): a URL. stdio: backends the MCP bridge runs.",
+             enum: ["http", "stdio"]
+           ),
+           Arg.new("url", :string, description: "MCP server endpoint URL (http)")
+         ]},
+        required: true,
+        description: "Server configuration (required for create; update replaces it whole)"
+      )
+
+    Operation.tool(
+      [
+        Operation.new(
+          "mcp_servers",
+          "create",
+          "Create mcp servers",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Server name (required for every action but list; refresh without one refreshes every enabled server)"
+            ),
+            config_arg
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive,
+          permission: :admin
+        ),
+        Operation.new(
+          "mcp_servers",
+          "update",
+          "Update mcp servers",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Server name (required for every action but list; refresh without one refreshes every enabled server)"
+            ),
+            config_arg,
+            Arg.new("epoch", :integer,
+              required: true,
+              description:
+                "The epoch the caller read with get (required for update; refused when the server has changed since)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive,
+          permission: :admin
+        ),
+        Operation.new(
+          "mcp_servers",
+          "delete",
+          "Delete mcp servers",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Server name (required for every action but list; refresh without one refreshes every enabled server)"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new("mcp_servers", "list", "List mcp servers", [],
+          kind: :read,
+          planes: [:external]
+        ),
+        Operation.new(
+          "mcp_servers",
+          "get",
+          "Get mcp servers",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Server name (required for every action but list; refresh without one refreshes every enabled server)"
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new(
+          "mcp_servers",
+          "test",
+          "Test mcp servers",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Server name (required for every action but list; refresh without one refreshes every enabled server)"
+            )
+          ],
+          kind: :execute,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new(
+          "mcp_servers",
+          "refresh",
+          "Refresh mcp servers",
+          [
+            Arg.new("name", :string,
+              description:
+                "Server name (required for every action but list; refresh without one refreshes every enabled server)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new(
+          "mcp_servers",
+          "enable",
+          "Enable mcp servers",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Server name (required for every action but list; refresh without one refreshes every enabled server)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new(
+          "mcp_servers",
+          "disable",
+          "Disable mcp servers",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Server name (required for every action but list; refresh without one refreshes every enabled server)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        ),
+        Operation.new(
+          "mcp_servers",
+          "restart",
+          "Restart mcp servers",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Server name (required for every action but list; refresh without one refreshes every enabled server)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin
+        )
+      ],
       description:
-        "Manage external MCP server connections: HTTP servers (Notion, GitHub, custom servers) " <>
-          "and stdio servers the MCP bridge runs (npx packages). Create, update, delete, " <>
-          "enable/disable, restart and test them. External server tools appear in tools/list " <>
-          "as server_name:tool_name.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          "create" => %{
-            kind: :write,
-            planes: [:external],
-            permission: :admin,
-            consent: :interactive
-          },
-          "update" => %{
-            kind: :write,
-            planes: [:external],
-            permission: :admin,
-            consent: :interactive
-          },
-          "delete" => %{kind: :destructive, planes: [:external], permission: :admin},
-          # The listing (names, transport, status, the vault entries a server
-          # reads) is open to any authenticated caller; a server's connection
-          # config is the operator's. Neither is a chain capability: a
-          # formula uses the connected servers' TOOLS through its authority
-          # grants, it never reads the wiring behind them.
-          "list" => %{kind: :read, planes: [:external]},
-          "get" => %{kind: :read, planes: [:external], permission: :admin},
-          "test" => %{kind: :execute, planes: [:external], permission: :admin},
-          "refresh" => %{kind: :write, planes: [:external], permission: :admin},
-          "enable" => %{kind: :write, planes: [:external], permission: :admin},
-          "disable" => %{kind: :write, planes: [:external], permission: :admin},
-          "restart" => %{kind: :write, planes: [:external], permission: :admin}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => [
-              "create",
-              "update",
-              "delete",
-              "list",
-              "get",
-              "test",
-              "refresh",
-              "enable",
-              "disable",
-              "restart"
-            ],
-            "description" => "Action to perform"
-          },
-          "name" => %{
-            "type" => "string",
-            "description" =>
-              "Server name (required for every action but list; " <>
-                "refresh without one refreshes every enabled server)"
-          },
-          "epoch" => %{
-            "type" => "integer",
-            "description" =>
-              "The epoch the caller read with get (required for update; refused when " <>
-                "the server has changed since)"
-          },
-          "config" => %{
-            "type" => "object",
-            "properties" => %{
-              "transport" => %{
-                "type" => "string",
-                "enum" => ["http", "stdio"],
-                "description" => "http (default): a URL. stdio: backends the MCP bridge runs."
-              },
-              "url" => %{
-                "type" => "string",
-                "description" => "MCP server endpoint URL (http)"
-              },
-              "headers" => %{
-                "type" => "object",
-                "description" =>
-                  "HTTP headers (http). Use 'vault:ENTRY' or 'Bearer vault:ENTRY' to " <>
-                    "reference a single-field vault entry."
-              },
-              "backends" => %{
-                "type" => "array",
-                "description" =>
-                  "The stdio backends, at most #{BackendDefinition.max_backends()}: " <>
-                    "{name, command, env}. A command never names a vault entry; every env " <>
-                    "value is 'vault:ENTRY' except NODE_ENV, LOG_LEVEL, TZ, LANG, LC_ALL, " <>
-                    "NO_COLOR and DEBUG, which may be literals.",
-                "items" => %{
-                  "type" => "object",
-                  "properties" => %{
-                    "name" => %{"type" => "string"},
-                    "command" => %{"type" => "string"},
-                    "env" => %{"type" => "object"}
-                  },
-                  "required" => ["name", "command"]
-                }
-              },
-              "timeout_ms" => %{
-                "type" => "integer",
-                "description" => "Request timeout in milliseconds (default: 30000)"
-              },
-              "tool_patterns" => %{
-                "type" => "array",
-                "items" => %{"type" => "string"},
-                "description" => "The tools the server may offer (default: all)"
-              },
-              "console" => %{
-                "type" => "boolean",
-                "description" =>
-                  "Allow this server's tools to be called from the console " <>
-                    "(external plane). Default false: proxied tools are " <>
-                    "reachable only from inside a chain."
-              }
-            },
-            "description" =>
-              "Server configuration (required for create; update replaces it whole)"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+        "Manage external MCP server connections: HTTP servers (Notion, GitHub, custom servers) and stdio servers the MCP bridge runs (npx packages). Create, update, delete, enable/disable, restart and test them. External server tools appear in tools/list as server_name:tool_name.",
+      title: "MCP Servers"
+    )
   end
 
   @admin_actions ~w(create update delete test refresh enable disable restart)

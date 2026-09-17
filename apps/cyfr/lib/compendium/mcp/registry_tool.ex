@@ -29,204 +29,376 @@ defmodule Compendium.MCP.RegistryTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Compendium.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "registry",
-      title: "Registry",
+    alias Cyfr.Ops.{Arg, Operation}
+    # Bootstrap/spec reads stay open (they run before a session
+    # exists per the cyfr.run spec); identity mutations mirror
+    # RegistryTool's gate.
+    # A person's own registry standing: served to any live session,
+    # whether or not it has an athanor to work in.
+    # report action params
+    # list_my_reports pagination
+    # legal_page / legal_accept
+    Operation.tool(
+      [
+        Operation.new(
+          "registry",
+          "probe",
+          "Probe registry",
+          [
+            Arg.new("provider", :string,
+              required: true,
+              description: "OAuth provider (for probe / claim_personal)",
+              enum: ["github", "google"]
+            ),
+            Arg.new("access_token", :string,
+              required: true,
+              description:
+                "IdP access token (for probe / claim_personal). Used once to prove provider identity."
+            ),
+            Arg.new("label", :string,
+              description: "Human-readable label for the issued push token"
+            )
+          ],
+          auth: :signed_in,
+          kind: :execute,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "registry",
+          "claim_personal",
+          "Claim personal registry",
+          [
+            Arg.new("username", :string,
+              required: true,
+              description: "Desired personal-namespace slug (for claim_personal)"
+            ),
+            Arg.new("provider", :string,
+              required: true,
+              description: "OAuth provider (for probe / claim_personal)",
+              enum: ["github", "google"]
+            ),
+            Arg.new("access_token", :string,
+              required: true,
+              description:
+                "IdP access token (for probe / claim_personal). Used once to prove provider identity."
+            ),
+            Arg.new("label", :string,
+              description: "Human-readable label for the issued push token"
+            )
+          ],
+          auth: :signed_in,
+          kind: :write,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "registry",
+          "claim_publisher",
+          "Claim publisher registry",
+          [
+            Arg.new("slug", :string,
+              required: true,
+              description: "Namespace slug (publisher or personal)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "registry",
+          "verify_publisher",
+          "Verify publisher registry",
+          [
+            Arg.new("slug", :string,
+              required: true,
+              description: "Namespace slug (publisher or personal)"
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "registry",
+          "tokens_list",
+          "Tokens list registry",
+          [
+            Arg.new("slug", :string,
+              required: true,
+              description: "Namespace slug (publisher or personal)"
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "registry",
+          "tokens_issue",
+          "Tokens issue registry",
+          [
+            Arg.new("slug", :string,
+              required: true,
+              description: "Namespace slug (publisher or personal)"
+            ),
+            Arg.new("label", :string,
+              description: "Human-readable label for the issued push token"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "registry",
+          "tokens_revoke",
+          "Tokens revoke registry",
+          [
+            Arg.new("slug", :string,
+              required: true,
+              description: "Namespace slug (publisher or personal)"
+            ),
+            Arg.new("token_id", :string,
+              required: true,
+              description: "Token id (for tokens_revoke)"
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "registry",
+          "members_list",
+          "Members list registry",
+          [
+            Arg.new("slug", :string,
+              required: true,
+              description: "Namespace slug (publisher or personal)"
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "registry",
+          "members_add",
+          "Members add registry",
+          [
+            Arg.new("slug", :string,
+              required: true,
+              description: "Namespace slug (publisher or personal)"
+            ),
+            Arg.new("target_personal_slug", :string,
+              required: true,
+              description: "Target user's personal namespace slug (for members_*)"
+            ),
+            Arg.new("role", :string,
+              required: true,
+              description: "Member role (for members_add / members_update)",
+              enum: ["admin", "member"]
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "registry",
+          "members_update",
+          "Members update registry",
+          [
+            Arg.new("slug", :string,
+              required: true,
+              description: "Namespace slug (publisher or personal)"
+            ),
+            Arg.new("target_personal_slug", :string,
+              required: true,
+              description: "Target user's personal namespace slug (for members_*)"
+            ),
+            Arg.new("role", :string,
+              required: true,
+              description: "Member role (for members_add / members_update)",
+              enum: ["admin", "member"]
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :component_manage
+        ),
+        Operation.new(
+          "registry",
+          "members_remove",
+          "Members remove registry",
+          [
+            Arg.new("slug", :string,
+              required: true,
+              description: "Namespace slug (publisher or personal)"
+            ),
+            Arg.new("target_personal_slug", :string,
+              required: true,
+              description: "Target user's personal namespace slug (for members_*)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :component_manage
+        ),
+        Operation.new("registry", "whoami", "Whoami registry", [],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "registry",
+          "get_namespace",
+          "Get namespace registry",
+          [
+            Arg.new("slug", :string,
+              required: true,
+              description: "Namespace slug (publisher or personal)"
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "registry",
+          "report",
+          "Report registry",
+          [
+            Arg.new("category", :string,
+              required: true,
+              description: "Abuse category (for report action)",
+              enum: [
+                "impersonation",
+                "malware",
+                "dmca",
+                "spam",
+                "other",
+                "csam",
+                "objectionable",
+                "ip_infringement",
+                "security",
+                "policy_violation",
+                "ncii"
+              ]
+            ),
+            Arg.new("details", :string,
+              required: true,
+              description: "Report details (for report action; max 4096 chars)"
+            ),
+            Arg.new("target_namespace", :string,
+              description:
+                "Namespace being reported (for report action; required if no target_component_ref)"
+            ),
+            Arg.new("target_component_ref", :string,
+              description:
+                "Component reference being reported (for report action; required if no target_namespace)"
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "registry",
+          "list_my_reports",
+          "List my reports registry",
+          [
+            Arg.new("limit", :integer,
+              description: "Max rows to return (list_my_reports; default 50, max 200)"
+            ),
+            Arg.new("offset", :integer,
+              description: "Starting row offset (list_my_reports; default 0)"
+            )
+          ],
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "registry",
+          "legal_page",
+          "Legal page registry",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description:
+                "Policy name (for legal_page action: terms / privacy / aup / content-policy / dmca / cookies / transparency)"
+            )
+          ],
+          auth: :signed_in,
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new("registry", "legal_version", "Legal version registry", [],
+          auth: :signed_in,
+          kind: :read,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "registry",
+          "legal_accept",
+          "Legal accept registry",
+          [
+            Arg.new("provider", :string,
+              required: true,
+              description: "Identity provider",
+              enum: ["github", "google", "oidcc"]
+            ),
+            Arg.new("access_token", :string,
+              description:
+                "IdP access token (for probe / claim_personal). Used once to prove provider identity."
+            ),
+            Arg.new("id_token", :string,
+              description: "OIDC id_token (for legal_accept / appeal when provider=oidcc)"
+            ),
+            Arg.new("policy_version", :string,
+              required: true,
+              description: "Policy version string (for legal_accept; obtained via legal_version)"
+            )
+          ],
+          auth: :signed_in,
+          kind: :write,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "registry",
+          "appeal",
+          "Appeal registry",
+          [
+            Arg.new("provider", :string,
+              required: true,
+              description: "Identity provider",
+              enum: ["github", "google", "oidcc"]
+            ),
+            Arg.new("access_token", :string,
+              description:
+                "IdP access token (for probe / claim_personal). Used once to prove provider identity."
+            ),
+            Arg.new("id_token", :string,
+              description: "OIDC id_token (for legal_accept / appeal when provider=oidcc)"
+            ),
+            Arg.new("action_type", :string,
+              required: true,
+              description: "Appeal action_type (for appeal action)",
+              enum: ["takedown", "ban"]
+            ),
+            Arg.new("action_ref", :string,
+              required: true,
+              description:
+                "Appeal action_ref — component UUID or '<provider>|<subject>' (for appeal action)"
+            ),
+            Arg.new("argument", :string,
+              required: true,
+              description: "Appeal argument, ≤4000 chars (for appeal action)"
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain]
+        )
+      ],
       description:
-        "cyfr.run registry identity and namespace operations: probe for tokens, claim a personal " <>
-          "or publisher namespace, verify DNS ownership, manage additional push tokens and members, " <>
-          "and inspect registry-side identity. Separate from `session` (local cyfr identity).",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: false,
-        actions: %{
-          # Bootstrap/spec reads stay open (they run before a session
-          # exists per the cyfr.run spec); identity mutations mirror
-          # RegistryTool's gate.
-          # A person's own registry standing: served to any live session,
-          # whether or not it has an athanor to work in.
-          "probe" => %{kind: :execute, planes: [:external, :in_chain], auth: :signed_in},
-          "claim_personal" => %{
-            kind: :write,
-            planes: [:external, :in_chain],
-            auth: :signed_in
-          },
-          "claim_publisher" => %{
-            kind: :write,
-            planes: [:external],
-            permission: :component_manage
-          },
-          "verify_publisher" => %{
-            kind: :write,
-            planes: [:external, :in_chain],
-            permission: :component_manage
-          },
-          "tokens_list" => %{kind: :read, planes: [:external, :in_chain]},
-          "tokens_issue" => %{kind: :write, planes: [:external], permission: :component_manage},
-          "tokens_revoke" => %{
-            kind: :write,
-            planes: [:external, :in_chain],
-            permission: :component_manage
-          },
-          "members_list" => %{kind: :read, planes: [:external, :in_chain]},
-          "members_add" => %{kind: :write, planes: [:external], permission: :component_manage},
-          "members_update" => %{
-            kind: :write,
-            planes: [:external],
-            permission: :component_manage
-          },
-          "members_remove" => %{
-            kind: :write,
-            planes: [:external],
-            permission: :component_manage
-          },
-          "whoami" => %{kind: :read, planes: [:external, :in_chain]},
-          "get_namespace" => %{kind: :read, planes: [:external, :in_chain]},
-          "report" => %{kind: :write, planes: [:external, :in_chain]},
-          "list_my_reports" => %{kind: :read, planes: [:external, :in_chain]},
-          "legal_page" => %{kind: :read, planes: [:external, :in_chain], auth: :signed_in},
-          "legal_version" => %{kind: :read, planes: [:external, :in_chain], auth: :signed_in},
-          "legal_accept" => %{kind: :write, planes: [:external, :in_chain], auth: :signed_in},
-          "appeal" => %{kind: :write, planes: [:external, :in_chain]}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => [
-              "probe",
-              "claim_personal",
-              "claim_publisher",
-              "verify_publisher",
-              "tokens_list",
-              "tokens_issue",
-              "tokens_revoke",
-              "members_list",
-              "members_add",
-              "members_update",
-              "members_remove",
-              "whoami",
-              "get_namespace",
-              "report",
-              "list_my_reports",
-              "legal_page",
-              "legal_version",
-              "legal_accept",
-              "appeal"
-            ],
-            "description" => "Registry action to perform"
-          },
-          "provider" => %{
-            "type" => "string",
-            "enum" => ["github", "google"],
-            "description" => "OAuth provider (for probe / claim_personal)"
-          },
-          "access_token" => %{
-            "type" => "string",
-            "description" =>
-              "IdP access token (for probe / claim_personal). Used once to prove provider identity."
-          },
-          "label" => %{
-            "type" => "string",
-            "description" => "Human-readable label for the issued push token"
-          },
-          "username" => %{
-            "type" => "string",
-            "description" => "Desired personal-namespace slug (for claim_personal)"
-          },
-          "slug" => %{
-            "type" => "string",
-            "description" => "Namespace slug (publisher or personal)"
-          },
-          "token_id" => %{
-            "type" => "string",
-            "description" => "Token id (for tokens_revoke)"
-          },
-          "target_personal_slug" => %{
-            "type" => "string",
-            "description" => "Target user's personal namespace slug (for members_*)"
-          },
-          "role" => %{
-            "type" => "string",
-            "enum" => ["admin", "member"],
-            "description" => "Member role (for members_add / members_update)"
-          },
-          # report action params
-          "category" => %{
-            "type" => "string",
-            "enum" => [
-              "impersonation",
-              "malware",
-              "dmca",
-              "spam",
-              "other",
-              "csam",
-              "objectionable",
-              "ip_infringement",
-              "security",
-              "policy_violation",
-              "ncii"
-            ],
-            "description" => "Abuse category (for report action)"
-          },
-          "target_namespace" => %{
-            "type" => "string",
-            "description" =>
-              "Namespace being reported (for report action; required if no target_component_ref)"
-          },
-          "target_component_ref" => %{
-            "type" => "string",
-            "description" =>
-              "Component reference being reported (for report action; required if no target_namespace)"
-          },
-          "details" => %{
-            "type" => "string",
-            "description" => "Report details (for report action; max 4096 chars)"
-          },
-          # list_my_reports pagination
-          "limit" => %{
-            "type" => "integer",
-            "description" => "Max rows to return (list_my_reports; default 50, max 200)"
-          },
-          "offset" => %{
-            "type" => "integer",
-            "description" => "Starting row offset (list_my_reports; default 0)"
-          },
-          # legal_page / legal_accept
-          "name" => %{
-            "type" => "string",
-            "description" =>
-              "Policy name (for legal_page action: terms / privacy / aup / content-policy / dmca / cookies / transparency)"
-          },
-          "policy_version" => %{
-            "type" => "string",
-            "description" =>
-              "Policy version string (for legal_accept; obtained via legal_version)"
-          },
-          "id_token" => %{
-            "type" => "string",
-            "description" => "OIDC id_token (for legal_accept / appeal when provider=oidcc)"
-          },
-          "action_type" => %{
-            "type" => "string",
-            "enum" => ["takedown", "ban"],
-            "description" => "Appeal action_type (for appeal action)"
-          },
-          "action_ref" => %{
-            "type" => "string",
-            "description" =>
-              "Appeal action_ref — component UUID or '<provider>|<subject>' (for appeal action)"
-          },
-          "argument" => %{
-            "type" => "string",
-            "description" => "Appeal argument, ≤4000 chars (for appeal action)"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+        "cyfr.run registry identity and namespace operations: probe for tokens, claim a personal or publisher namespace, verify DNS ownership, manage additional push tokens and members, and inspect registry-side identity. Separate from `session` (local cyfr identity).",
+      title: "Registry"
+    )
   end
 
   def handle(%Context{auth_method: :api_key}, %{"action" => action})

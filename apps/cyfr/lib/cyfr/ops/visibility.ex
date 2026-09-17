@@ -104,7 +104,7 @@ defmodule Cyfr.Ops.Visibility do
         case visible do
           [] -> nil
           ^actions -> tool_def
-          filtered -> put_actions(tool_def, filtered)
+          filtered -> restrict_actions(tool_def, filtered)
         end
     end
   end
@@ -171,9 +171,18 @@ defmodule Cyfr.Ops.Visibility do
     end
   end
 
-  defp put_actions(tool_def, actions) do
-    schema = Map.get(tool_def, "inputSchema", %{})
-    updated_schema = put_in(schema, ["properties", "action", "enum"], actions)
-    Map.put(tool_def, "inputSchema", updated_schema)
+  @doc "Restrict a discovery tool's schema and annotations to the selected actions."
+  @spec restrict_actions(map(), [String.t()]) :: map()
+  def restrict_actions(tool_def, actions) do
+    tool_def =
+      Map.update!(tool_def, "inputSchema", &Cyfr.Ops.Operation.restrict_schema(&1, actions))
+
+    case tool_def["annotations"] do
+      %{actions: declared} = annotations ->
+        Map.put(tool_def, "annotations", %{annotations | actions: Map.take(declared, actions)})
+
+      _ ->
+        tool_def
+    end
   end
 end

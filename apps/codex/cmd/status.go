@@ -31,10 +31,7 @@ var statusCmd = &cobra.Command{
 		scope, _ := cmd.Flags().GetString("scope")
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.System, map[string]any{
-			"action": ops.SystemStatus,
-			"scope":  scope,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.System, ops.SystemStatusArgs{Scope: ops.Value(scope)})
 		if err != nil {
 			return handleToolError(err, "Failed to connect")
 		}
@@ -72,11 +69,8 @@ var notifyCmd = &cobra.Command{
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.System, map[string]any{
-			"action": ops.SystemNotify,
-			"event":  args[0],
-			"target": args[1],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.System, ops.SystemNotifyArgs{Event: args[0],
+			Target: args[1]})
 		if err != nil {
 			return handleToolError(err)
 		}

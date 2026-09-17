@@ -83,19 +83,16 @@ Default scopes per type (applied when --scope is omitted):
 			}
 		}
 
-		toolArgs := map[string]any{
-			"action": "create",
-			"name":   name,
-			"type":   keyType,
-		}
+		toolArgs := ops.KeyCreateArgs{Name: name,
+			Type: ops.Value(keyType)}
 		if len(scope) > 0 {
-			toolArgs["scope"] = scope
+			toolArgs.Scope = ops.Value(scope)
 		}
 		if rateLimit != "" {
-			toolArgs["rate_limit"] = rateLimit
+			toolArgs.RateLimit = ops.Value(rateLimit)
 		}
 		if len(ipAllowlist) > 0 {
-			toolArgs["ip_allowlist"] = ipAllowlist
+			toolArgs.IpAllowlist = ops.Value(ipAllowlist)
 		}
 
 		client := newClient()
@@ -115,10 +112,7 @@ var keyGetCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Key, map[string]any{
-			"action": ops.KeyGet,
-			"name":   args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Key, ops.KeyGetArgs{Name: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -133,9 +127,7 @@ var keyListCmd = &cobra.Command{
 	Example: "  cyfr key list",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Key, map[string]any{
-			"action": ops.KeyList,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Key, ops.KeyListArgs{})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -164,10 +156,7 @@ var keyRevokeCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Key, map[string]any{
-			"action": ops.KeyRevoke,
-			"name":   name,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Key, ops.KeyRevokeArgs{Name: name})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -201,10 +190,7 @@ var keyRotateCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Key, map[string]any{
-			"action": ops.KeyRotate,
-			"name":   name,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Key, ops.KeyRotateArgs{Name: name})
 		if err != nil {
 			return handleToolError(err)
 		}

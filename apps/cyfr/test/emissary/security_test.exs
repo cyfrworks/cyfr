@@ -119,12 +119,14 @@ defmodule Emissary.SecurityTest do
             }
           })
 
-        # Should return valid JSON response, not execute script
-        assert response_conn.status == 200
-
-        # Response should be properly JSON encoded
-        response = json_response(response_conn, 200)
-        assert is_map(response)
+        # `xss_test` is not a declared argument of `system/status`, so the
+        # typed gate refuses the call before any handler runs. The refusal
+        # names the field, never its value, so the payload is not echoed.
+        body = json_response(response_conn, 400)
+        assert body["id"] == 2
+        assert body["error"]["code"] == -32602
+        assert body["error"]["message"] == "Unknown field: xss_test"
+        refute Jason.encode!(body) =~ payload
       end
     end
 
@@ -152,11 +154,13 @@ defmodule Emissary.SecurityTest do
             }
           })
 
-        # Drop the undeclared path argument. The call must succeed and
-        # report server status without accessing the path.
-        body = json_response(response_conn, 200)
+        # `path` is not a declared argument of `system/status`. The typed
+        # gate refuses the call before the handler could touch a path, and
+        # the refusal names the field without echoing its value.
+        body = json_response(response_conn, 400)
         assert body["id"] == 2
-        assert is_map(body["result"]), "the tool refused instead of ignoring #{inspect(payload)}"
+        assert body["error"]["code"] == -32602
+        assert body["error"]["message"] == "Unknown field: path"
 
         refute Jason.encode!(body) =~ payload,
                "the response echoed the traversal payload back"
@@ -188,11 +192,12 @@ defmodule Emissary.SecurityTest do
           })
 
         # Same contract as the traversal payloads above: an undeclared
-        # `cmd` argument is dropped, so there is nothing to interpret and
-        # nothing to echo.
-        body = json_response(response_conn, 200)
+        # `cmd` argument is refused at the gate, so there is nothing to
+        # interpret and nothing to echo.
+        body = json_response(response_conn, 400)
         assert body["id"] == 2
-        assert is_map(body["result"]), "the tool refused instead of ignoring #{inspect(payload)}"
+        assert body["error"]["code"] == -32602
+        assert body["error"]["message"] == "Unknown field: cmd"
 
         refute Jason.encode!(body) =~ payload,
                "the response echoed the injection payload back"

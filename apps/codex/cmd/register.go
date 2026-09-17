@@ -32,10 +32,7 @@ afterwards to consent a component's declared needs before it can run.`,
 		client := newClient()
 		registerID := randomHex(8)
 
-		result, err := client.CallToolWithProgress(cmd.Context(), ops.Component, map[string]any{
-			"action":      ops.ComponentRegister,
-			"register_id": registerID,
-		}, progressPrinter())
+		result, err := client.CallToolWithProgress(cmd.Context(), ops.Component, ops.ComponentRegisterArgs{RegisterId: ops.Value(registerID)}, progressPrinter())
 		if err != nil {
 			return handleToolError(err, "Register failed")
 		}

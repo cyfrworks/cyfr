@@ -29,48 +29,51 @@ defmodule Emissary.MCP.ApprovalTool do
 
   @doc false
   def definition do
-    %{
-      name: "approval",
-      title: "Approvals",
+    alias Cyfr.Ops.{Arg, Operation}
+
+    Operation.tool(
+      [
+        Operation.new(
+          "approval",
+          "resolve",
+          "Resolve approval",
+          [
+            Arg.new("approval", :string, required: true, description: "resolve: the approval id"),
+            Arg.new("decision", :string,
+              required: true,
+              description: "resolve: the decision",
+              enum: ["approve", "decline"]
+            ),
+            Arg.new("scope", :string,
+              description:
+                "resolve: approve once | thread | always; decline once | never. Default once.",
+              enum: ["once", "thread", "always", "never"]
+            ),
+            Arg.new("reason", :string, description: "resolve: why (decline)")
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "approval",
+          "list",
+          "List approval",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "list: the thread whose open cards to show"
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          consent: :interactive
+        )
+      ],
       description:
-        "Decide the approval cards a turn raises, and list a thread's open " <>
-          "cards. Approve once, for this thread, or always (where the action " <>
-          "allows a standing answer); decline once or never. Deciding a card that " <>
-          "was already decided answers the first decision.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: false,
-        actions: %{
-          "resolve" => %{kind: :write, planes: [:external], consent: :interactive},
-          "list" => %{kind: :read, planes: [:external], consent: :interactive}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{"type" => "string", "enum" => ["resolve", "list"]},
-          "approval" => %{"type" => "string", "description" => "resolve: the approval id"},
-          "decision" => %{
-            "type" => "string",
-            "enum" => ["approve", "decline"],
-            "description" => "resolve: the decision"
-          },
-          "scope" => %{
-            "type" => "string",
-            "enum" => ["once", "thread", "always", "never"],
-            "description" =>
-              "resolve: approve once | thread | always; decline once | never. " <>
-                "Default once."
-          },
-          "reason" => %{"type" => "string", "description" => "resolve: why (decline)"},
-          "thread" => %{
-            "type" => "string",
-            "description" => "list: the thread whose open cards to show"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+        "Decide the approval cards a turn raises, and list a thread's open cards. Approve once, for this thread, or always (where the action allows a standing answer); decline once or never. Deciding a card that was already decided answers the first decision.",
+      title: "Approvals"
+    )
   end
 
   @impl true

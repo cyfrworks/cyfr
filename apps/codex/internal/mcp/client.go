@@ -208,7 +208,7 @@ func withMeta(params any, progressToken string) map[string]any {
 }
 
 // CallTool invokes an MCP tool and returns the raw result.
-func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (map[string]any, error) {
+func (c *Client) CallTool(ctx context.Context, name string, args any) (map[string]any, error) {
 	return c.CallToolWithProgress(ctx, name, args, nil)
 }
 
@@ -217,17 +217,28 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 // Progress travels on this request's own response stream. There is no separate
 // stream to open and no id to correlate by hand: passing a handler is what opts
 // in, and every notification on the stream belongs to this call.
-func (c *Client) CallToolWithProgress(ctx context.Context, name string, args map[string]any, onProgress ProgressFunc) (map[string]any, error) {
+func (c *Client) CallToolWithProgress(ctx context.Context, name string, args any, onProgress ProgressFunc) (map[string]any, error) {
 	if args == nil {
 		args = map[string]any{}
 	}
+	if values, ok := args.(map[string]any); ok && values == nil {
+		args = map[string]any{}
+	}
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("encode tool arguments: %w", err)
+	}
+	if len(encoded) == 0 || encoded[0] != '{' {
+		return nil, fmt.Errorf("tool arguments must be a JSON object")
+	}
+
 	req := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      int(c.nextID.Add(1)),
 		Method:  "tools/call",
 		Params: ToolCallParams{
 			Name:      name,
-			Arguments: args,
+			Arguments: json.RawMessage(encoded),
 		},
 	}
 

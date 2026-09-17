@@ -573,10 +573,13 @@ defmodule EmissaryWeb.MCPControllerTest do
           }
         })
 
-      # Nested data remains an unknown argument ignored by system/status.
-      # The request must succeed even at 50 levels of nesting.
-      assert conn.status == 200
-      assert json_response(conn, 200)["id"] == 4
+      # `nested` is not a declared argument of `system/status`, so the typed
+      # gate refuses it by name. The refusal must still be a well-formed
+      # JSON-RPC error at 50 levels of nesting, not a decoder crash.
+      body = json_response(conn, 400)
+      assert body["id"] == 4
+      assert body["error"]["code"] == -32602
+      assert body["error"]["message"] == "Unknown field: nested"
     end
 
     test "handles very long method name", %{conn: conn} do
@@ -717,8 +720,13 @@ defmodule EmissaryWeb.MCPControllerTest do
           }
         })
 
-      # Should handle unicode without issues
-      assert json_response(conn, 200)
+      # The undeclared `unicode` argument is refused by name; the multibyte
+      # value must neither break decoding nor appear in the refusal.
+      body = json_response(conn, 400)
+      assert body["id"] == 8
+      assert body["error"]["code"] == -32602
+      assert body["error"]["message"] == "Unknown field: unicode"
+      refute Jason.encode!(body) =~ "日本語"
     end
   end
 
@@ -915,12 +923,14 @@ defmodule EmissaryWeb.MCPControllerTest do
           }
         })
 
-      # 100KB is under the body limit, so it is served rather than
-      # refused — the argument is unknown to `system/status` and dropped.
-      # Admitting 400 and 413 too meant the test passed whether the limit
-      # sat above this size or below it.
-      assert conn.status == 200
-      assert json_response(conn, 200)["id"] == 2
+      # 100KB is under the body limit, so the request is decoded and reaches
+      # the typed gate, which refuses the undeclared `extra` argument by
+      # name. A 413 here would mean the body limit sat below this size; a
+      # 200 would mean the gate silently dropped an unknown field.
+      body = json_response(conn, 400)
+      assert body["id"] == 2
+      assert body["error"]["code"] == -32602
+      assert body["error"]["message"] == "Unknown field: extra"
     end
 
     test "handles large response from tool", %{conn: conn} do

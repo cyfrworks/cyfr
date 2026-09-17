@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/cyfr/codex/internal/mcp"
+	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/ref"
 )
 
@@ -119,7 +120,7 @@ func validateInputTemplateJSON(s string) error {
 
 // FetchWebhooks calls webhook list and returns options for selection.
 func FetchWebhooks(ctx context.Context, client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool(ctx, "webhook", map[string]any{"action": "list"})
+	result, err := client.CallTool(ctx, "webhook", ops.WebhookListArgs{})
 	if err != nil {
 		return nil, err
 	}

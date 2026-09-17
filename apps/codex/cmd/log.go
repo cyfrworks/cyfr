@@ -41,24 +41,22 @@ var logListCmd = &cobra.Command{
   cyfr log list --request req_01H...   # every call in one request's chain`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		toolArgs := map[string]any{
-			"action": "list",
-		}
+		toolArgs := ops.McpLogListArgs{}
 
 		if v, _ := cmd.Flags().GetString("tool"); v != "" {
-			toolArgs["tool"] = v
+			toolArgs.Tool = ops.Value(v)
 		}
 		if v, _ := cmd.Flags().GetString("status"); v != "" {
-			toolArgs["status"] = v
+			toolArgs.Status = ops.Value(v)
 		}
 		if v, _ := cmd.Flags().GetInt("limit"); v != 20 {
-			toolArgs["limit"] = v
+			toolArgs.Limit = ops.Value(v)
 		}
 		if v, _ := cmd.Flags().GetString("since"); v != "" {
-			toolArgs["since"] = v
+			toolArgs.Since = ops.Value(v)
 		}
 		if v, _ := cmd.Flags().GetString("request"); v != "" {
-			toolArgs["request_id"] = v
+			toolArgs.RequestId = ops.Value(v)
 		}
 
 		result, err := client.CallTool(cmd.Context(), ops.McpLog, toolArgs)
@@ -97,10 +95,7 @@ var logGetCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpLog, map[string]any{
-			"action": ops.McpLogGet,
-			"id":     args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpLog, ops.McpLogGetArgs{Id: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -116,10 +111,7 @@ var logCorrelateCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.McpLog, map[string]any{
-			"action":     ops.McpLogCorrelate,
-			"request_id": args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.McpLog, ops.McpLogCorrelateArgs{RequestId: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}

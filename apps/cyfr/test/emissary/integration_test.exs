@@ -283,11 +283,11 @@ defmodule Emissary.IntegrationTest do
           }
         })
 
-      # Input validation rejects invalid enum values at the router level
-      # before reaching the tool handler — returns protocol error, not tool error
+      # An undeclared action is refused at the router level before any tool
+      # handler runs — a protocol error naming the action, not a tool error.
       response = json_response(error_conn, 400)
       assert response["error"]["code"] == -32602
-      assert response["error"]["message"] =~ "must be one of"
+      assert response["error"]["message"] == "Unknown action: system.invalid_action"
     end
 
     test "unknown tool returns protocol error", %{conn: conn} do
@@ -380,10 +380,11 @@ defmodule Emissary.IntegrationTest do
           }
         })
 
-      response = json_response(notify_conn, 200)
-      assert response["result"]["isError"] == true
-      [content] = response["result"]["content"]
-      assert content["text"] =~ "target"
+      # `target` is declared required for `system/notify`, so the typed gate
+      # refuses before the handler runs, on every ingress alike.
+      response = json_response(notify_conn, 400)
+      assert response["error"]["code"] == -32602
+      assert response["error"]["message"] == "Missing required field: target"
     end
 
     test "system notify fails gracefully with missing event", %{conn: conn} do
@@ -405,10 +406,9 @@ defmodule Emissary.IntegrationTest do
           }
         })
 
-      response = json_response(notify_conn, 200)
-      assert response["result"]["isError"] == true
-      [content] = response["result"]["content"]
-      assert content["text"] =~ "event"
+      response = json_response(notify_conn, 400)
+      assert response["error"]["code"] == -32602
+      assert response["error"]["message"] == "Missing required field: event"
     end
   end
 

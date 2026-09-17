@@ -59,13 +59,10 @@ The type can be given as a prefix (c:, r:, f:, t:) or as a separate first argume
 
 		fmt.Fprintf(os.Stderr, "Compiling %s...\n", normalized)
 
-		callArgs := map[string]any{
-			"action":    ops.BuildCompile,
-			"reference": normalized,
-			"build_id":  buildID,
-		}
-		if resolve, _ := cmd.Flags().GetBool("resolve"); resolve {
-			callArgs["resolve"] = true
+		callArgs := ops.BuildCompileArgs{Reference: normalized,
+			BuildId: ops.Value(buildID)}
+		if resolve, _ := cmd.Flags().GetBool("resolve"); cmd.Flags().Changed("resolve") {
+			callArgs.Resolve = ops.Value(resolve)
 		}
 
 		result, err := client.CallToolWithProgress(cmd.Context(), ops.Build, callArgs, progressPrinter())
@@ -101,9 +98,7 @@ var buildToolchainsCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Build, map[string]any{
-			"action": ops.BuildToolchains,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Build, ops.BuildToolchainsArgs{})
 		if err != nil {
 			return handleToolError(err, "Toolchains query failed")
 		}
@@ -144,10 +139,7 @@ var buildValidateCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Build, map[string]any{
-			"action":      ops.BuildValidate,
-			"wasm_base64": args[0],
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Build, ops.BuildValidateArgs{WasmBase64: args[0]})
 		if err != nil {
 			return handleToolError(err, "Validate failed")
 		}

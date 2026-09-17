@@ -29,54 +29,88 @@ defmodule Sanctum.MCP.DoorTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    %{
-      name: "door",
-      title: "Server Allowlist",
+    alias Cyfr.Ops.{Arg, Operation}
+
+    Operation.tool(
+      [
+        Operation.new("door", "list", "List door", [],
+          scope: :platform,
+          kind: :read,
+          planes: [:external]
+        ),
+        Operation.new("door", "requests", "Requests door", [],
+          scope: :platform,
+          kind: :read,
+          planes: [:external]
+        ),
+        Operation.new(
+          "door",
+          "allow",
+          "Allow door",
+          [
+            Arg.new("value", :string,
+              required: true,
+              description: "An email, an IdP subject, or * (allow, deny)"
+            ),
+            Arg.new("kind", :string,
+              description: "How to read value; inferred from its shape when absent",
+              enum: ["email", "user_id"]
+            ),
+            Arg.new("note", :string, nullable: true, description: "Why (allow, deny)")
+          ],
+          scope: :platform,
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "door",
+          "deny",
+          "Deny door",
+          [
+            Arg.new("value", :string,
+              required: true,
+              description: "An email, an IdP subject, or * (allow, deny)"
+            ),
+            Arg.new("kind", :string,
+              description: "How to read value; inferred from its shape when absent",
+              enum: ["email", "user_id"]
+            ),
+            Arg.new("note", :string, nullable: true, description: "Why (allow, deny)")
+          ],
+          scope: :platform,
+          kind: :destructive,
+          planes: [:external]
+        ),
+        Operation.new(
+          "door",
+          "remove",
+          "Remove door",
+          [Arg.new("id", :string, required: true, description: "Entry id (remove, resolve)")],
+          scope: :platform,
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "door",
+          "resolve",
+          "Resolve door",
+          [
+            Arg.new("id", :string, required: true, description: "Entry id (remove, resolve)"),
+            Arg.new("decision", :string,
+              required: true,
+              description: "For resolve",
+              enum: ["allow", "reject"]
+            )
+          ],
+          scope: :platform,
+          kind: :write,
+          planes: [:external]
+        )
+      ],
       description:
-        "Who may sign in to this server — platform admins only. Entries name an email, " <>
-          "an IdP subject (user id), or `*` for anyone the configured provider " <>
-          "authenticates. A deny is sticky and ejects the person; requests are invites " <>
-          "members made for addresses the door does not know.",
-      annotations: %{
-        readOnlyHint: false,
-        destructiveHint: true,
-        actions: %{
-          "list" => %{kind: :read, planes: [:external], scope: :platform},
-          "requests" => %{kind: :read, planes: [:external], scope: :platform},
-          "allow" => %{kind: :write, planes: [:external], scope: :platform},
-          "deny" => %{kind: :destructive, planes: [:external], scope: :platform},
-          "remove" => %{kind: :write, planes: [:external], scope: :platform},
-          "resolve" => %{kind: :write, planes: [:external], scope: :platform}
-        }
-      },
-      input_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "action" => %{
-            "type" => "string",
-            "enum" => ["list", "requests", "allow", "deny", "remove", "resolve"],
-            "description" => "Action to perform"
-          },
-          "value" => %{
-            "type" => "string",
-            "description" => "An email, an IdP subject, or * (allow, deny)"
-          },
-          "kind" => %{
-            "type" => "string",
-            "enum" => ["email", "user_id"],
-            "description" => "How to read value; inferred from its shape when absent"
-          },
-          "note" => %{"type" => "string", "description" => "Why (allow, deny)"},
-          "id" => %{"type" => "string", "description" => "Entry id (remove, resolve)"},
-          "decision" => %{
-            "type" => "string",
-            "enum" => ["allow", "reject"],
-            "description" => "For resolve"
-          }
-        },
-        "required" => ["action"]
-      }
-    }
+        "Who may sign in to this server — platform admins only. Entries name an email, an IdP subject (user id), or `*` for anyone the configured provider authenticates. A deny is sticky and ejects the person; requests are invites members made for addresses the door does not know.",
+      title: "Server Allowlist"
+    )
   end
 
   def handle(%Context{}, %{"action" => "list"}) do

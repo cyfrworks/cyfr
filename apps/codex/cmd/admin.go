@@ -42,7 +42,7 @@ var adminListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Show the door",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{"action": ops.DoorList})
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, ops.DoorListArgs{})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -71,7 +71,7 @@ var adminRequestsCmd = &cobra.Command{
 	Use:   "requests",
 	Short: "Pending invites for addresses the door does not know",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{"action": ops.DoorRequests})
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, ops.DoorRequestsArgs{})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -101,9 +101,8 @@ var adminAllowCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")
-		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{
-			"action": ops.DoorAllow, "value": args[0], "note": note,
-		})
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, ops.DoorAllowArgs{Value: args[0],
+			Note: ops.Nullable(note)})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -122,9 +121,8 @@ var adminDenyCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")
-		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{
-			"action": ops.DoorDeny, "value": args[0], "note": note,
-		})
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, ops.DoorDenyArgs{Value: args[0],
+			Note: ops.Nullable(note)})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -142,7 +140,7 @@ var adminRemoveCmd = &cobra.Command{
 	Short: "Delete an entry",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{"action": ops.DoorRemove, "id": args[0]})
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, ops.DoorRemoveArgs{Id: args[0]})
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -169,9 +167,8 @@ var adminResolveCmd = &cobra.Command{
 		if allow {
 			decision = "allow"
 		}
-		result, err := newClient().CallTool(cmd.Context(), ops.Door, map[string]any{
-			"action": ops.DoorResolve, "id": args[0], "decision": decision,
-		})
+		result, err := newClient().CallTool(cmd.Context(), ops.Door, ops.DoorResolveArgs{Id: args[0],
+			Decision: decision})
 		if err != nil {
 			return handleToolError(err)
 		}

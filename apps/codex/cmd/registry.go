@@ -66,7 +66,7 @@ Alias for the registry half of ` + "`cyfr whoami`" + ` — use this form when
 you only want the registry state.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{"action": ops.RegistryWhoami})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryWhoamiArgs{})
 		if err != nil {
 			return handleToolError(err, "Registry whoami failed")
 		}
@@ -137,10 +137,7 @@ it. Works without a push token.`,
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-			"action": ops.RegistryGetNamespace,
-			"slug":   slug,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryGetNamespaceArgs{Slug: slug})
 		if err != nil {
 			return handleToolError(err, "get-namespace failed")
 		}
@@ -176,10 +173,7 @@ the record is live.`,
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-			"action": ops.RegistryClaimPublisher,
-			"slug":   slug,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryClaimPublisherArgs{Slug: slug})
 		if err != nil {
 			return handleToolError(err, "Publisher claim failed")
 		}
@@ -206,10 +200,7 @@ user's CredentialStore so ` + "`cyfr push`" + ` can use it immediately.`,
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-			"action": ops.RegistryVerifyPublisher,
-			"slug":   slug,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryVerifyPublisherArgs{Slug: slug})
 		if err != nil {
 			return handleToolError(err, "Publisher verify failed")
 		}
@@ -241,10 +232,7 @@ var registryTokensListCmd = &cobra.Command{
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-			"action": ops.RegistryTokensList,
-			"slug":   slug,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryTokensListArgs{Slug: slug})
 		if err != nil {
 			return handleToolError(err, "tokens list failed")
 		}
@@ -268,12 +256,9 @@ per-device or per-CI tokens — each token can be revoked independently via
 	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 
-		args2 := map[string]any{
-			"action": "tokens_issue",
-			"slug":   slug,
-		}
+		args2 := ops.RegistryTokensIssueArgs{Slug: slug}
 		if flagTokenLabel != "" {
-			args2["label"] = flagTokenLabel
+			args2.Label = ops.Value(flagTokenLabel)
 		}
 
 		client := newClient()
@@ -303,11 +288,8 @@ members of the namespace.`,
 		tokenID := args[1]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-			"action":   ops.RegistryTokensRevoke,
-			"slug":     slug,
-			"token_id": tokenID,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryTokensRevokeArgs{Slug: slug,
+			TokenId: tokenID})
 		if err != nil {
 			return handleToolError(err, "tokens revoke failed")
 		}
@@ -345,10 +327,7 @@ var registryMembersListCmd = &cobra.Command{
 		slug := args[0]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-			"action": ops.RegistryMembersList,
-			"slug":   slug,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryMembersListArgs{Slug: slug})
 		if err != nil {
 			return handleToolError(err, "members list failed")
 		}
@@ -378,12 +357,9 @@ var registryMembersAddCmd = &cobra.Command{
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-			"action":               ops.RegistryMembersAdd,
-			"slug":                 slug,
-			"target_personal_slug": target,
-			"role":                 role,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryMembersAddArgs{Slug: slug,
+			TargetPersonalSlug: target,
+			Role:               role})
 		if err != nil {
 			return handleToolError(err, "members add failed")
 		}
@@ -416,12 +392,9 @@ member first.`,
 		}
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-			"action":               ops.RegistryMembersUpdate,
-			"slug":                 slug,
-			"target_personal_slug": target,
-			"role":                 role,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryMembersUpdateArgs{Slug: slug,
+			TargetPersonalSlug: target,
+			Role:               role})
 		if err != nil {
 			return handleToolError(err, "members update failed")
 		}
@@ -447,11 +420,8 @@ the last admin returns 409 ` + "`sole_admin`" + `.`,
 		target := args[1]
 
 		client := newClient()
-		result, err := client.CallTool(cmd.Context(), ops.Registry, map[string]any{
-			"action":               ops.RegistryMembersRemove,
-			"slug":                 slug,
-			"target_personal_slug": target,
-		})
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryMembersRemoveArgs{Slug: slug,
+			TargetPersonalSlug: target})
 		if err != nil {
 			return handleToolError(err, "members remove failed")
 		}

@@ -6,6 +6,8 @@ defmodule PrismWeb.SchedulesLive do
 
   require Logger
 
+  @empty_form %{"name" => "", "reference" => "", "profile_id" => "", "input" => ""}
+
   @cron_presets [
     {"Every minute", "* * * * *"},
     {"Every 5 minutes", "*/5 * * * *"},
@@ -41,7 +43,7 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:show_create, false)
       |> assign(:cron_preset, "")
       |> assign(:cron_custom, "")
-      |> assign(:form, to_form(%{"name" => "", "reference" => "", "input" => ""}))
+      |> assign(:form, to_form(@empty_form))
       |> assign(:focused_id, nil)
 
     {:ok, socket}
@@ -73,40 +75,35 @@ defmodule PrismWeb.SchedulesLive do
         preset -> preset
       end
 
-    if cron == "" do
-      {:noreply, put_flash(socket, :error, "Please select a schedule frequency")}
+    socket =
+      socket
+      |> assign(:form, to_form(Map.merge(@empty_form, Map.take(params, Map.keys(@empty_form)))))
+      |> assign(:cron_custom, params["cron_custom"] || socket.assigns.cron_custom)
+
+    with {:ok, input_args} <- create_input(params, cron),
+         {:ok, _} <-
+           call_tool(
+             socket,
+             "schedule",
+             Map.merge(input_args, %{
+               "action" => "create",
+               "name" => name,
+               "cron_expression" => cron,
+               "reference" => ref,
+               "profile_id" => params["profile_id"]
+             })
+           ) do
+      {:noreply,
+       socket
+       |> assign(:show_create, false)
+       |> assign(:cron_preset, "")
+       |> assign(:cron_custom, "")
+       |> assign(:form, to_form(@empty_form))
+       |> fetch_schedules()
+       |> put_flash(:info, "Schedule created")}
     else
-      args = %{
-        "action" => "create",
-        "name" => name,
-        "cron_expression" => cron,
-        "reference" => ref
-      }
-
-      args =
-        if params["input"] && params["input"] != "" do
-          case Jason.decode(params["input"]) do
-            {:ok, input} -> Map.put(args, "input", input)
-            _ -> args
-          end
-        else
-          args
-        end
-
-      case call_tool(socket, "schedule", args) do
-        {:ok, _} ->
-          {:noreply,
-           socket
-           |> assign(:show_create, false)
-           |> assign(:cron_preset, "")
-           |> assign(:cron_custom, "")
-           |> assign(:form, to_form(%{"name" => "", "reference" => "", "input" => ""}))
-           |> fetch_schedules()
-           |> put_flash(:info, "Schedule created")}
-
-        {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
-      end
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
     end
   end
 
@@ -189,6 +186,30 @@ defmodule PrismWeb.SchedulesLive do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
+
+  defp create_input(params, cron) do
+    cond do
+      cron == "" ->
+        {:error, "Please select a schedule frequency"}
+
+      not is_binary(params["profile_id"]) or String.trim(params["profile_id"]) == "" ->
+        {:error, "Please enter the profile that authorizes this schedule"}
+
+      true ->
+        decode_input(params["input"])
+    end
+  end
+
+  defp decode_input(input) when input in [nil, ""], do: {:ok, %{}}
+
+  defp decode_input(input) when is_binary(input) do
+    case Jason.decode(input) do
+      {:ok, value} when is_map(value) -> {:ok, %{"input" => value}}
+      _ -> {:error, "Input must be a valid JSON object"}
+    end
+  end
+
+  defp decode_input(_input), do: {:error, "Input must be a valid JSON object"}
 
   defp fetch_schedules(socket) do
     schedules =
@@ -328,6 +349,18 @@ defmodule PrismWeb.SchedulesLive do
                     No registered components found. Enter a reference manually.
                   </p>
                 <% end %>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-400 mb-1">Profile</label>
+                <.input
+                  name="profile_id"
+                  value={@form[:profile_id].value}
+                  required
+                  placeholder="profile id"
+                />
+                <p class="mt-1 text-xs text-gray-500">
+                  Enter a consented profile for this component. Its consent authorizes each run.
+                </p>
               </div>
               <div>
                 <label class="block text-xs font-medium text-gray-400 mb-1">

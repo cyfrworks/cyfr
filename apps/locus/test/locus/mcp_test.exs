@@ -34,9 +34,13 @@ defmodule Locus.MCPTest do
                "status"
              ]
 
-      assert schema["properties"]["reference"]["type"] == "string"
-      assert schema["properties"]["wasm_base64"]["type"] == "string"
+      compile = Enum.find(schema["oneOf"], &(&1["properties"]["action"]["const"] == "compile"))
+      assert compile["properties"]["reference"]["type"] == "string"
+      validate = Enum.find(schema["oneOf"], &(&1["properties"]["action"]["const"] == "validate"))
+      assert validate["properties"]["wasm_base64"]["type"] == "string"
       assert schema["required"] == ["action"]
+      assert "reference" in compile["required"]
+      assert "wasm_base64" in validate["required"]
     end
   end
 

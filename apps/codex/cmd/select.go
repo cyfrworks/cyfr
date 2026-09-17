@@ -86,3 +86,19 @@ func pickTarget(ctx context.Context, args []string, sel selector) (string, error
 		return "", errors.New(sel.Usage)
 	}
 }
+
+// requireExecutionProfile collects the explicit consent binding for unattended
+// invocations; the server verifies that it authorizes the selected component.
+func requireExecutionProfile(profileID string) (string, error) {
+	if profileID == "" && prompt.IsInteractive(flagNoInteractive) {
+		var err error
+		profileID, err = prompt.InputText("Consented execution profile ID (cyfr profile list)", "")
+		if err != nil {
+			return "", err
+		}
+	}
+	if profileID == "" {
+		return "", errors.New("--profile is required: pass a consented execution profile ID")
+	}
+	return profileID, nil
+}
