@@ -26,10 +26,10 @@ defmodule PrismWeb.SignInTraceTest do
 
   @moduletag timeout: 240_000
 
+  alias Cyfr.Test.SeedBundle
   alias Sanctum.Tenancy.{Athanors, Users}
 
   @repo_root Path.expand("../../../..", __DIR__)
-  @providers ~w(claude openai gemini grok openrouter)
 
   setup do
     test_dir = Path.join(System.tmp_dir!(), "cyfr_trace_#{System.unique_integer([:positive])}")
@@ -146,10 +146,10 @@ defmodule PrismWeb.SignInTraceTest do
     # What the fill laid down: the shipped bundle, from the seed alone.
     reader = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
 
-    for name <- @providers do
+    for unit <- SeedBundle.model_chat_units() do
       assert {:ok, %{publisher: "local"}} =
-               Compendium.Registry.get_latest(reader, name, "local", "catalyst"),
-             "catalyst:local.#{name} is not registered after the fill"
+               Compendium.Registry.get_latest(reader, unit.name, "local", "catalyst"),
+             "#{unit.ref} is not registered after the fill"
     end
 
     assert {:ok, [_profile]} = Sanctum.Consent.Source.DB.profiles(reader, "agent:local.aqua")

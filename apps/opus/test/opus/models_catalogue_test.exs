@@ -12,10 +12,10 @@ defmodule Opus.ModelsCatalogueTest do
 
   use ExUnit.Case, async: false
 
+  alias Cyfr.Test.SeedBundle
   alias Sanctum.Consent.{Bootstrap, Source}
 
   @seed_root Path.expand("../../../../seed", __DIR__)
-  @models ~w(claude gemini)
 
   setup do
     Arca.Cache.init()
@@ -45,15 +45,17 @@ defmodule Opus.ModelsCatalogueTest do
   test "every contract catalyst is listed; one without a key is an error, not a provider", %{
     ctx: ctx
   } do
-    for name <- @models ++ ["files"] do
-      [version_dir] = Path.wildcard(Path.join(@seed_root, "components/catalysts/local/#{name}/*"))
-      unit = ["components", "catalysts", "local", name, Path.basename(version_dir)]
-      :ok = Arca.Overlay.pull_shipped(ctx, unit)
-      {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
+    models = SeedBundle.model_chat_units(@seed_root)
+    files = SeedBundle.local_unit!(@seed_root, "catalysts", "files")
+
+    for unit <- models ++ [files] do
+      segments = ["components" | String.split(unit.rel, "/")]
+      :ok = Arca.Overlay.pull_shipped(ctx, segments)
+      {:ok, _} = Compendium.Registry.register_from_arca(ctx, segments)
     end
 
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
-    assert "catalyst:local.claude" in minted
+    for unit <- models, do: assert(unit.ref in minted, "#{unit.ref} not minted")
 
     # The estate is filled by hand above; marked so, a listing starts no
     # fill of its own behind this test.
@@ -62,17 +64,20 @@ defmodule Opus.ModelsCatalogueTest do
 
     assert {:ok, catalogue} = Cyfr.Models.catalogue(ctx)
 
-    assert catalogue["refs"] == %{
-             "claude" => "catalyst:local.claude",
-             "gemini" => "catalyst:local.gemini"
-           }
+    expected_refs = Map.new(models, &{&1.name, &1.ref})
+    assert catalogue["refs"] == expected_refs
 
-    # No key is bound on either: the key read is refused before anything
-    # is dialled, and that refusal is the provider's row.
+    # No key is bound: the key read is refused before anything is dialled,
+    # and that refusal is the provider's row.
     assert catalogue["models"] == %{}
-    assert Map.keys(catalogue["errors"]) |> Enum.sort() == ["claude", "gemini"]
-    assert catalogue["errors"]["claude"] =~ "ANTHROPIC_API_KEY not granted"
-    assert catalogue["errors"]["gemini"] =~ "GEMINI_API_KEY not granted"
+
+    assert Map.keys(catalogue["errors"]) |> Enum.sort() ==
+             expected_refs |> Map.keys() |> Enum.sort()
+
+    for {_name, message} <- catalogue["errors"] do
+      assert message =~ "not granted"
+    end
+
     refute Map.has_key?(catalogue["refs"], "files")
 
     # The console's reading of it: nothing to pick from, nothing dropped.

@@ -4,23 +4,23 @@
 defmodule Sanctum.ProvisioningClosureTest do
   @moduledoc """
   Provisioning against the real tracked bundle. Everything the bundle
-  depends on ships in the seed — the two hands and the five model
-  catalysts — so an athanor fills with no registry at all, AQUA is
-  consented with its whole closure present, and each model catalyst waits
-  only for a key. Both registry endpoints are pinned, because they are
-  separate settings and a pull dials the OCI one: `:registry_url` decides
-  whether a registry is configured at all, `:oci_registry_url` is what a
-  blob fetch resolves against.
+  depends on ships in the seed — the two hands and every shipped
+  `model/chat@1` catalyst — so an athanor fills with no registry at all,
+  AQUA is consented with its whole closure present, and each model
+  catalyst waits only for a key. Both registry endpoints are pinned,
+  because they are separate settings and a pull dials the OCI one:
+  `:registry_url` decides whether a registry is configured at all,
+  `:oci_registry_url` is what a blob fetch resolves against.
   """
   use ExUnit.Case, async: false
 
+  alias Cyfr.Test.SeedBundle
   alias Sanctum.Consent.Source
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
   @repo_root Path.expand("../../../..", __DIR__)
   @bundle Path.join(@repo_root, "seed/components")
-  @providers ~w(claude openai gemini grok openrouter)
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -81,10 +81,10 @@ defmodule Sanctum.ProvisioningClosureTest do
       refute Athanors.provisioning_failure(group)
 
       # Every model catalyst is a row of the estate: shipped, never pulled.
-      for name <- @providers do
+      for unit <- SeedBundle.model_chat_units() do
         assert {:ok, %{publisher: "local"}} =
-                 Compendium.Registry.get_latest(in_group, name, "local", "catalyst"),
-               "catalyst:local.#{name} is not registered"
+                 Compendium.Registry.get_latest(in_group, unit.name, "local", "catalyst"),
+               "#{unit.ref} is not registered"
       end
 
       # The soul is consented and loads: its whole closure is the local seed.

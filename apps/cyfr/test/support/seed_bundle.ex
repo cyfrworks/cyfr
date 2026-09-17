@@ -49,6 +49,77 @@ defmodule Cyfr.Test.SeedBundle do
     dir
   end
 
+  @type unit :: %{
+          name: String.t(),
+          version: String.t(),
+          type: String.t(),
+          rel: String.t(),
+          ref: String.t(),
+          manifest: map()
+        }
+
+  @doc """
+  Shipped local catalysts that declare `model/chat@1`, newest version
+  each. The tree is the roster: a new provider is a new unit, not a
+  test-list edit. Raises when none speak the contract.
+  """
+  @spec model_chat_units(String.t()) :: [unit()]
+  def model_chat_units(seed \\ @repo_seed) when is_binary(seed) do
+    units =
+      seed
+      |> shipped_units("catalysts")
+      |> Enum.filter(&Cyfr.Models.speaks_chat?(&1.manifest))
+      |> newest_by_name()
+      |> Enum.sort_by(& &1.name)
+
+    if units == [],
+      do: raise("no model/chat@1 catalyst under #{seed}"),
+      else: units
+  end
+
+  @doc """
+  The newest shipped local unit of `kind`/`name` (`catalysts` or
+  `formulas`). Raises when that name is absent.
+  """
+  @spec local_unit!(String.t(), String.t(), String.t()) :: unit()
+  def local_unit!(seed \\ @repo_seed, kind, name)
+      when is_binary(seed) and is_binary(kind) and is_binary(name) do
+    case seed |> shipped_units(kind) |> Enum.filter(&(&1.name == name)) |> newest_by_name() do
+      [unit] -> unit
+      [] -> raise("no #{kind}/local/#{name} under #{seed}")
+    end
+  end
+
+  defp shipped_units(seed, kind) do
+    glob = Path.join([seed, "components", kind, "local", "*", "*", "cyfr-manifest.json"])
+
+    for path <- Cyfr.Test.SourceTree.files!(glob) do
+      version_dir = Path.dirname(path)
+      components = Path.join(seed, "components")
+      manifest = Jason.decode!(File.read!(path))
+      type = manifest["type"]
+      name = Path.basename(Path.dirname(version_dir))
+      version = Path.basename(version_dir)
+
+      %{
+        name: name,
+        version: version,
+        type: type,
+        rel: Path.relative_to(version_dir, components),
+        ref: "#{type}:local.#{name}",
+        manifest: manifest
+      }
+    end
+  end
+
+  defp newest_by_name(units) do
+    units
+    |> Enum.group_by(& &1.name)
+    |> Enum.map(fn {_name, versions} ->
+      hd(Compendium.Semver.sort_desc_by(versions, & &1.version))
+    end)
+  end
+
   @doc "Lay the tree, set `:seed_path` to it, and answer its path."
   @spec lay!([String.t()]) :: String.t()
   def lay!(catalysts) when is_list(catalysts) do

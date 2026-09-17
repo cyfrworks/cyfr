@@ -8,23 +8,21 @@ defmodule Opus.BootstrapFirstRunTest do
   their consents from the caps blocks, and a needs-declaring component
   reads not-ready until a vault entry is bound through the walk.
 
-  The five model catalysts ship in the seed, so AQUA and list-models
-  bootstrap with their whole closure present, and a catalyst's need reads
-  not-ready until a key is bound through the walk. The full first run over
-  the bundle is `Sanctum.Provisioning`'s closure test.
+  Shipped `model/chat@1` catalysts come from the seed tree, so AQUA and
+  list-models bootstrap with their whole closure present, and a
+  catalyst's need reads not-ready until a key is bound through the walk.
+  The full first run over the bundle is `Sanctum.Provisioning`'s closure
+  test.
   """
 
   use ExUnit.Case, async: false
 
+  alias Cyfr.Test.SeedBundle
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Source
 
   @seed_root Path.expand("../../../../seed", __DIR__)
-  @models ~w(claude openai gemini grok openrouter)
-  @bundled ["catalysts/local/files/0.5.2", "catalysts/local/http/1.1.2"] ++
-             Enum.map(@models, &"catalysts/local/#{&1}/1.3.1")
-  @formulas ["formulas/local/list-models/0.6.2"]
 
   setup do
     Arca.Cache.init()
@@ -71,32 +69,37 @@ defmodule Opus.BootstrapFirstRunTest do
   end
 
   test "the tracked bundle registers, bootstraps and loads from its caps blocks", %{ctx: ctx} do
-    for rel <- @bundled do
-      assert {:ok, _} = stage_and_register(ctx, rel), rel
+    models = SeedBundle.model_chat_units(@seed_root)
+    files = SeedBundle.local_unit!(@seed_root, "catalysts", "files")
+    http = SeedBundle.local_unit!(@seed_root, "catalysts", "http")
+    list_models = SeedBundle.local_unit!(@seed_root, "formulas", "list-models")
+
+    for unit <- models ++ [files, http, list_models] do
+      assert {:ok, _} = stage_and_register(ctx, unit.rel), unit.rel
     end
 
-    # The formula names the model catalysts as optional dependencies, and
-    # every one ships: its activation covers the whole bundle, and a
-    # server with no registry boots with all of it consented.
-    for rel <- @formulas do
-      assert {:ok, _} = stage_and_register(ctx, rel), rel
-    end
-
-    model_refs = Enum.map(@models, &"catalyst:local.#{&1}")
+    model_refs = Enum.map(models, & &1.ref)
 
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
-    assert "catalyst:local.files" in minted
-    assert "catalyst:local.http" in minted
-    assert "formula:local.list-models" in minted
+    assert files.ref in minted
+    assert http.ref in minted
+    assert list_models.ref in minted
     for ref <- model_refs, do: assert(ref in minted, "#{ref} not minted")
 
-    # list-models invokes its providers as children and asks for nothing
-    # else, so its activation is itself and the five providers.
-    {:ok, [list_models_profile]} = Source.DB.profiles(ctx, "formula:local.list-models")
+    # list-models invokes the providers its manifest names, and those
+    # units ship: its activation is itself plus those declared refs.
+    {:ok, [list_models_profile]} = Source.DB.profiles(ctx, list_models.ref)
     {:ok, list_models_consent} = Source.DB.head_consent(ctx, list_models_profile.id)
 
+    declared =
+      list_models.manifest
+      |> get_in(["dependencies", "static"])
+      |> List.wrap()
+      |> Enum.map(& &1["ref"])
+      |> Enum.reject(&is_nil/1)
+
     assert Map.keys(list_models_consent.activation) |> Enum.sort() ==
-             Enum.sort(["formula:local.list-models" | model_refs])
+             Enum.sort([list_models.ref | declared])
 
     # Each minted consent loads through the production source, and the
     # blob's ingress edge carries the manifest's declared ask.
