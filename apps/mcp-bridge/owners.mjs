@@ -21,7 +21,8 @@
 //
 // Every backend the bridge runs, or will run once a retirement finishes,
 // holds a slot of the uid pool: a sync or the start of an idle backend that
-// would hold more slots than the pool has is refused.
+// would hold more slots than the pool has is refused. Slots are claimed and
+// freed at one accounting site (the Slots section below).
 //
 // A backend's stdout carries MCP JSON-RPC frames and nothing of it is
 // logged; its stderr is kept in memory (the last 64 KiB) and never logged.
@@ -259,8 +260,9 @@ export class Owners {
    * The same version with the same definition extends the lease and sets
    * the idle period. A higher version retires the one it replaces, then —
    * refused as `capacity` when the pool cannot hold its backends beside
-   * every other owner's — is admitted as starting: its backends spawn once
-   * the replaced version is retired, and become ready on their own time.
+   * every other owner's, or `unavailable` when the spawner does not answer
+   * for its pool — is admitted as starting: its backends spawn once the
+   * replaced version is retired, and become ready on their own time.
    */
   async sync({ athanor, server, g, e, leaseMs, idleMs, backends, openEnv }) {
     const key = ownerKey(athanor, server);
@@ -287,15 +289,7 @@ export class Owners {
       this.#drain(existing);
     }
 
-    let pool;
-    try {
-      pool = await this.pool();
-    } catch {
-      throw new Refusal("capacity");
-    }
-    const replacing = existing ? slotsHeld(existing) : 0;
-    if (this.#slotsHeld() - replacing + backends.length > capacity(pool)) throw new Refusal("capacity");
-
+    const pool = await this.#readPool();
     const owner = {
       athanor,
       server,
@@ -317,6 +311,10 @@ export class Owners {
     for (const { name, command } of backends) {
       owner.backends.set(name, this.#newBackend(owner, name, command, env[name]));
     }
+    // The replaced version's slots are freed by its retirement, which the
+    // new version's spawns wait on, so they are not counted against it.
+    const replacing = existing ? slotsHeld(existing) : 0;
+    if (!this.#claim(pool, [...owner.backends.values()], replacing)) throw new Refusal("capacity");
     this.#owners.set(key, owner);
 
     owner.retiredBefore.then(() => this.#start(owner));
@@ -512,11 +510,60 @@ export class Owners {
     owner.rev += 1;
   }
 
+  // ==========================================================================
+  // Slots
+  // ==========================================================================
+  //
+  // The one accounting of the uid pool. Invariant: every backend the bridge
+  // runs, or will run once a retirement finishes, holds one slot
+  // (`backend.slot`), and the slots held never exceed the pool's capacity —
+  // its configured size less its quarantined uids, as the spawner last
+  // answered — beyond what the retirement of a replaced version is about
+  // to free. The spawner's `free` count is not consulted: it lags a
+  // retirement and knows nothing of a spawn promised but not yet made.
+  //
+  // `#claim` is the only place a slot is taken. A claimant reads the pool
+  // first (`#readPool`), then checks and claims in one synchronous step, so
+  // of two claimants that each awaited the pool the second is decided
+  // after the first's slots are held; nothing may await between a
+  // claimant's last eligibility check and its claim. `#free` is the only
+  // place a slot is given back, at the transition that ends the backend's
+  // tenure of its uid — its owner's drain settling, its idle retirement
+  // settling, or the release of its fifth crash settling — never before,
+  // so a slot an unexpected exit ends up freeing is free exactly when the
+  // spawner can reuse the uid. A backend's slot is a boolean, so a
+  // retirement that settles twice frees nothing twice.
+
   // The slots of the uid pool the bridge's backends hold or are promised.
   #slotsHeld() {
     let held = 0;
     for (const owner of new Set([...this.#owners.values(), ...this.#retiring])) held += slotsHeld(owner);
     return held;
+  }
+
+  // Claims a slot for each of `backends` if they fit beside every slot
+  // held, less `replacing` — the slots of a version whose retirement the
+  // claimant's spawns wait on — and answers whether they did. Synchronous:
+  // the check and the claim are one step.
+  #claim(pool, backends, replacing = 0) {
+    if (this.#slotsHeld() - replacing + backends.length > capacity(pool)) return false;
+    for (const backend of backends) backend.slot = true;
+    return true;
+  }
+
+  // Gives the backend's slot back; nothing happens when it holds none.
+  #free(backend) {
+    backend.slot = false;
+  }
+
+  // The pool a claim is decided against; a spawner that does not answer is
+  // `unavailable`, which is not `capacity`.
+  async #readPool() {
+    try {
+      return await this.pool();
+    } catch {
+      throw new Refusal("unavailable", 503);
+    }
   }
 
   /** The spawner's `{size, free, quarantined}`; rejects when it does not answer within its bound. */
@@ -567,7 +614,7 @@ export class Owners {
     owner.state = "draining";
     this.#retiring.add(owner);
     owner.drained = Promise.allSettled([...owner.backends.values()].map((b) => this.#stopBackend(b))).then(() => {
-      for (const backend of owner.backends.values()) backend.slot = false;
+      for (const backend of owner.backends.values()) this.#free(backend);
       this.#retiring.delete(owner);
     });
     return owner.drained;
@@ -600,8 +647,9 @@ export class Owners {
       buffer: "",
       stderr: [],
       stderrBytes: 0,
-      // Whether the backend holds a slot of the pool.
-      slot: true,
+      // Whether the backend holds a slot of the pool: `#claim` sets it,
+      // `#free` clears it.
+      slot: false,
       lastUsed: 0,
       // The retirement of an idle backend's processes, and the start that
       // wakes it again.
@@ -716,7 +764,7 @@ export class Owners {
       backend.settle();
       this.#touch(backend.owner);
       released.then(() => {
-        if (backend.status === "failed") backend.slot = false;
+        if (backend.status === "failed") this.#free(backend);
       });
       return;
     }
@@ -742,7 +790,7 @@ export class Owners {
     this.#log.log(`[owner ${backend.label}] idle for ${backend.owner.idleMs} ms; retiring until its next call`);
     const { stopGraceMs, releaseTimeoutMs } = this.#options;
     backend.retired = withTimeout(proc.release(stopGraceMs), stopGraceMs + releaseTimeoutMs).then(() => {
-      if (backend.status === "idle") backend.slot = false;
+      if (backend.status === "idle") this.#free(backend);
     });
   }
 
@@ -754,20 +802,21 @@ export class Owners {
     return backend.waking;
   }
 
+  // A start that cannot get a slot is refused at once — bounded by the
+  // retirement it waits on and one pool read — never queued for one.
   async #startIdle(backend) {
     const { name, owner } = backend;
     await backend.retired;
     let pool;
     try {
-      pool = await this.pool();
+      pool = await this.#readPool();
     } catch {
       throw new RpcRefusal(`backend '${name}' is idle and the MCP bridge cannot start it now`);
     }
     if (backend.stopped || backend.status !== "idle") return;
-    if (this.#slotsHeld() + 1 > capacity(pool)) {
+    if (!this.#claim(pool, [backend])) {
       throw new RpcRefusal(`backend '${name}' is idle and the MCP bridge has no free slot to start it`);
     }
-    backend.slot = true;
     const ready = new Promise((resolve, reject) => backend.readyWaiters.push({ resolve, reject }));
     this.#log.log(`[owner ${backend.label}] starting for a call`);
     this.#spawn(backend);
