@@ -1,20 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-Code.require_file("support/opus_service_helper.exs", __DIR__)
-
 defmodule Opus.AuthorityPlumbingTest do
   # Verify the authority a run's assignment carries survives the
   # runtime-option allowlist, and that authority_required fails closed in
   # both admission and runtime.
   use ExUnit.Case, async: false
-
-  @moduletag :requires_opus
-
-  setup_all do
-    Cyfr.Test.Integration.Opus.ensure_started!()
-    :ok
-  end
 
   alias Sanctum.Context
 

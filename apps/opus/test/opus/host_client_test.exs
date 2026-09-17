@@ -43,7 +43,10 @@ defmodule Opus.HostClientTest do
     assert {:ok, until} = renewals[client.attempt]
     assert is_integer(until)
     assert {:ok, [_reply]} = HostClient.push_deltas(client, [~s({"type":"note"})])
-    assert {:error, {:guest_error, "vault_denied", "no vault"}} = HostClient.oauth_token(client, "google")
+
+    assert {:error, {:guest_error, "vault_denied", "no vault"}} =
+             HostClient.oauth_token(client, "google")
+
     assert :ok = HostClient.take_rate(client, "http:" <> attempt.component_ref)
 
     assert {:error, {:guest_error, "action_denied", _}} =
@@ -76,10 +79,11 @@ defmodule Opus.HostClientTest do
     end
   end
 
-  test "a lost answer to an idempotent call is asked once more, under a fresh header, as the same body", %{
-    host: host,
-    client: client
-  } do
+  test "a lost answer to an idempotent call is asked once more, under a fresh header, as the same body",
+       %{
+         host: host,
+         client: client
+       } do
     ScriptedHost.script(host, "renew", [:drop, {:ok, %{client.attempt => %{"lease_until" => 5}}}])
 
     assert {:ok, %{}} = HostClient.renew(client, [client.attempt])
@@ -90,7 +94,10 @@ defmodule Opus.HostClientTest do
     assert first.header != second.header
   end
 
-  test "a lost push_deltas answer sends the same batch again, in order", %{host: host, client: client} do
+  test "a lost push_deltas answer sends the same batch again, in order", %{
+    host: host,
+    client: client
+  } do
     ScriptedHost.script(host, "push_deltas", [:drop, {:ok, ["a", "b"]}])
     events = [~s({"n":1}), ~s({"n":2})]
 
@@ -101,8 +108,14 @@ defmodule Opus.HostClientTest do
     assert Enum.map(second.args["deltas"], & &1["event"]) == events
   end
 
-  test "a lost admit_child answer is asked again under the same child key", %{host: host, client: client} do
-    ScriptedHost.script(host, "admit_child", [:drop, {:error, {:guest_error, "dispatch_error", "no"}}])
+  test "a lost admit_child answer is asked again under the same child key", %{
+    host: host,
+    client: client
+  } do
+    ScriptedHost.script(host, "admit_child", [
+      :drop,
+      {:error, {:guest_error, "dispatch_error", "no"}}
+    ])
 
     assert {:error, {:guest_error, "dispatch_error", "no"}} =
              HostClient.admit_child(client, "reagent:local.x:0.1.0", "need", %{"a" => 1}, :spawn)
@@ -156,7 +169,12 @@ defmodule Opus.HostClientTest do
   end
 
   test "an answer past the answer bound, or not an answer, is lost", %{host: host, client: client} do
-    ScriptedHost.script(host, "renew", {:raw, 200, String.duplicate("x", Cyfr.HostAPI.max_answer_bytes() + 1)})
+    ScriptedHost.script(
+      host,
+      "renew",
+      {:raw, 200, String.duplicate("x", Cyfr.HostAPI.max_answer_bytes() + 1)}
+    )
+
     assert {:error, :lost} = HostClient.renew(client, [client.attempt])
 
     ScriptedHost.script(host, "renew", {:raw, 200, "not json"})
@@ -194,12 +212,18 @@ defmodule Opus.HostClientTest do
            ] = ScriptedHost.requests(host)
   end
 
-  test "a child CYFR admits is opened under this attempt's seal key and runs as the same runner", %{
-    host: host,
-    attempt: attempt,
-    client: client
-  } do
-    child = ScriptedHost.attempt!(host, boot: client.boot, runner: client.runner, input: %{"child" => 1})
+  test "a child CYFR admits is opened under this attempt's seal key and runs as the same runner",
+       %{
+         host: host,
+         attempt: attempt,
+         client: client
+       } do
+    child =
+      ScriptedHost.attempt!(host,
+        boot: client.boot,
+        runner: client.runner,
+        input: %{"child" => 1}
+      )
 
     ScriptedHost.script(host, "admit_child", fn _args, _caller ->
       {:ok,

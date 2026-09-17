@@ -211,6 +211,41 @@ jobs:
       - name: Run tests
         run: mix test
 
+  opus-independence:
+    name: Opus compiles and tests from its declared apps alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '29'
+          elixir-version: '1.20.3'
+      - name: Cache deps
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-opus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-opus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Install dependencies
+        run: mix deps.get
+      # The worker service releases without the control plane: a checkout
+      # holding only the lock, the contracts, Opus, the fetched deps and the
+      # WIT tree (`Compendium.WITSource` embeds it; `Opus.Runtime` reads the
+      # same tree) compiles it with warnings as errors and runs its suite,
+      # against a scripted host and no database.
+      - name: Compile and test Opus from its declared apps alone
+        run: |
+          set -euo pipefail
+          island="$RUNNER_TEMP/opus-island"
+          mkdir -p "$island/apps"
+          cp mix.lock "$island/"
+          cp -R apps/cyfr_contracts apps/opus "$island/apps/"
+          cp -R deps wit "$island/"
+          cd "$island/apps/opus"
+          mix compile --warnings-as-errors
+          mix test
+
   s3-minio:
     name: S3 adapter vs MinIO
     runs-on: ubuntu-latest

@@ -850,7 +850,6 @@ defmodule EmissaryWeb.MCPControllerTest do
       @tool tool
       @expected_service expected_service
 
-      @tag :requires_opus
       test "routes #{tool} tool to #{expected_service}", %{conn: conn} do
         tool_conn =
           conn

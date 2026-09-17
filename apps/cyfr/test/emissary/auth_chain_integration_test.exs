@@ -74,7 +74,6 @@ defmodule Emissary.AuthChainIntegrationTest do
   end
 
   describe "public tool actions succeed without storage permissions" do
-    @tag :requires_opus
     test "system status works with limited key", %{conn: conn, limited_key: key} do
       resp = conn |> mcp_call(key, "system", %{"action" => "status"}) |> json_response(200)
 

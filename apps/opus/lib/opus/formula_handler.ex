@@ -207,7 +207,7 @@ defmodule Opus.FormulaHandler do
           {:fn,
            fn json_event ->
              guarded(parent_execution_id, "emit", fn ->
-               Opus.Runtime.emit(host, json_event)
+               Opus.Runtime.emit(host, limits, json_event)
              end)
            end}
       }

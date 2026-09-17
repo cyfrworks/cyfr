@@ -8,11 +8,8 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
   # Unknown and inaccessible ids return the same 404. This fixture uses the
   # shared test user and exercises an unknown execution id.
   describe "GET /api/executions/:id/events" do
-    # The controller returns 503 when no execution engine is available.
-    # cyfr's per-app test runs (`mix cmd --app cyfr`)
-    # don't load Opus, so this assertion is only meaningful in umbrella-root
-    # test runs where `:requires_opus` is included.
-    @describetag :requires_opus
+    # The controller returns 503 when no worker service answers; the test
+    # boot's Opus service does (`Cyfr.Test.OpusService`).
 
     # Sandbox is set up by ConnCase.
 
@@ -52,8 +49,6 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
 
   # This HTTP endpoint must render plain API errors.
   describe "it does not answer in a protocol it does not speak" do
-    @describetag :requires_opus
-
     test "a bad credential is a plain HTTP error, not a JSON-RPC envelope", %{conn: conn} do
       conn =
         conn

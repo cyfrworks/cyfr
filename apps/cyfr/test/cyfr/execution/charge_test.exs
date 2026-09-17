@@ -66,7 +66,6 @@ defmodule Cyfr.Execution.ChargeTest do
              Charge.identify(attempt: attempt, guest_fn: :call)
   end
 
-  @tag :requires_opus_modules
   test "a full reservation refuses an unnamed spawn before anything runs", %{
     ctx: ctx,
     auth: auth,

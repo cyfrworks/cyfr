@@ -105,7 +105,9 @@ COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 ARG CYFR_PORT=4000
-EXPOSE ${CYFR_PORT}
+ARG CYFR_HOST_API_PORT=4300
+# The endpoint, and the host API the execution workers reach.
+EXPOSE ${CYFR_PORT} ${CYFR_HOST_API_PORT}
 
 # Readiness, not liveness: /api/health/ready answers 503 until the DB,
 # cache and registries are actually up; start-period covers boot

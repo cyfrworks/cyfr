@@ -1,17 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# Include :requires_opus tests when the Opus application is loaded.
-# :requires_opus_modules needs only loadable Opus code.
 # :s3_integration requires MinIO and runs only when explicitly selected.
-excludes =
-  [:s3_integration] ++
-    Enum.concat(
-      if(is_nil(Application.spec(:opus)), do: [:requires_opus], else: []),
-      if(Code.ensure_loaded?(Opus.Runtime), do: [], else: [:requires_opus_modules])
-    )
+ExUnit.configure(exclude: [:s3_integration])
 
-ExUnit.configure(exclude: excludes)
+# The suite runs from the umbrella root, where the Opus worker service is
+# up beside CYFR: its listener and CYFR's host API listener each bound a
+# port of the system's choosing, and here each is pointed at the other,
+# so every run the suite dispatches crosses the wire as a deployment's
+# does (`Cyfr.Test.OpusService`).
+Cyfr.Test.OpusService.wire!()
 
 # Owned by the test-runner process so it outlives every test and no two
 # tests race to create it. `Cyfr.Test.SourceTree` fills it lazily; see that

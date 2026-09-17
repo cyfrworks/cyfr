@@ -25,7 +25,9 @@ defmodule Opus.StorageHandlerTest do
 
   defp call(client, request, limits \\ nil) do
     {:fn, call} =
-      StorageHandler.build_storage_imports(limits, client, @ref)["cyfr:storage/files@0.1.0"]["call"]
+      StorageHandler.build_storage_imports(limits, client, @ref)["cyfr:storage/files@0.1.0"][
+        "call"
+      ]
 
     request |> encode() |> call.() |> Jason.decode!()
   end
@@ -97,7 +99,10 @@ defmodule Opus.StorageHandlerTest do
              call(client, %{"action" => "append", "path" => "data/a.txt", "content" => "eA=="})
   end
 
-  test "a request that does not parse is refused without a host call", %{host: host, client: client} do
+  test "a request that does not parse is refused without a host call", %{
+    host: host,
+    client: client
+  } do
     for {request, type, fragment} <- [
           {"not json", "invalid_json", "Invalid JSON"},
           {~s({"path": "data/test.txt"}), "invalid_request", "'action'"},
@@ -148,7 +153,10 @@ defmodule Opus.StorageHandlerTest do
     assert uncertain =~ "lost"
   end
 
-  test "every call fires its telemetry with the action and its outcome", %{host: host, client: client} do
+  test "every call fires its telemetry with the action and its outcome", %{
+    host: host,
+    client: client
+  } do
     test = self()
     handler = "storage-handler-test-#{System.unique_integer([:positive])}"
 

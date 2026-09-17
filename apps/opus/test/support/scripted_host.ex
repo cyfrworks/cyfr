@@ -82,7 +82,8 @@ defmodule Opus.Test.ScriptedHost do
     server =
       ExUnit.Callbacks.start_supervised!(
         Supervisor.child_spec(
-          {Bandit, plug: {__MODULE__.Plug, agent}, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
+          {Bandit,
+           plug: {__MODULE__.Plug, agent}, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
           id: {__MODULE__.Server, unique}
         )
       )
@@ -255,7 +256,8 @@ defmodule Opus.Test.ScriptedHost do
   def default("fetch_artifact", _args, _caller), do: {:error, :not_found}
 
   def default(_op, _args, _caller),
-    do: {:error, {:guest_error, "dispatch_error", "The scripted host has no answer for this call."}}
+    do:
+      {:error, {:guest_error, "dispatch_error", "The scripted host has no answer for this call."}}
 
   @doc false
   # The wire answer for a scripted answer.

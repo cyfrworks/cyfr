@@ -233,7 +233,6 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
       assert Map.keys(result.services) == [:arca]
     end
 
-    @tag :requires_opus
     test "scope opus returns only opus status" do
       ctx = Sanctum.TestContext.local()
 

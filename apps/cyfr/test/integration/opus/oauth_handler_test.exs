@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-Code.require_file("support/opus_service_helper.exs", __DIR__)
-
 defmodule Opus.OAuthHandlerTest do
   @moduledoc """
   The `cyfr:oauth/token` host boundary.
@@ -15,13 +13,6 @@ defmodule Opus.OAuthHandlerTest do
   shape of the failure, never the material involved.
   """
   use ExUnit.Case, async: false
-
-  @moduletag :requires_opus
-
-  setup_all do
-    Cyfr.Test.Integration.Opus.ensure_started!()
-    :ok
-  end
 
   import Ecto.Query, only: [from: 2]
 
@@ -39,7 +30,15 @@ defmodule Opus.OAuthHandlerTest do
   # (`Cyfr.Test.AttemptFixtures.attached!/1`), and that attempt.
   defp token_fn(opts) do
     attempt = AttemptFixtures.attached!(opts)
-    {fun_of(Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot, Cyfr.Test.Integration.Opus.host_url())), attempt}
+
+    {fun_of(
+       Opus.HostClient.new(
+         attempt.keys,
+         attempt.runner,
+         attempt.boot,
+         Cyfr.Test.OpusService.host_url()
+       )
+     ), attempt}
   end
 
   defp fun_of(host) do

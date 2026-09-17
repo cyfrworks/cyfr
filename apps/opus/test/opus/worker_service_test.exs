@@ -99,10 +99,11 @@ defmodule Opus.WorkerServiceTest do
     end
   end
 
-  test "a runner that exits leaving its attempt open is reported at once, signed by the service", %{
-    host: host,
-    boot: boot
-  } do
+  test "a runner that exits leaving its attempt open is reported at once, signed by the service",
+       %{
+         host: host,
+         boot: boot
+       } do
     ScriptedHost.script(host, "attach", {:error, :lost})
     attempt = ScriptedHost.attempt!(host, boot: boot)
 

@@ -59,12 +59,13 @@ defmodule Opus.WorkerListener do
          {:ok, request, body_hash} <- verify_header(credentials, header, now),
          :ok <- addressed(request, credentials),
          :ok <- fresh(request, now),
-         {:ok, body, conn} <- read(conn),
+         {:ok, body, read} <- read(conn),
          :ok <- verify_body(body_hash, body),
          {:ok, args} <- decode(body, callback) do
-      answer(conn, callback, args)
+      answer(read, callback, args)
     else
-      {:refused, conn, status, reason} -> refuse(conn, status, reason)
+      # A refusal after the body was read answers on the conn that read it.
+      {:refused, read, status, reason} -> refuse(read, status, reason)
       {:refused, status, reason} -> refuse(conn, status, reason)
     end
   end
@@ -140,11 +141,20 @@ defmodule Opus.WorkerListener do
 
   defp answer(conn, callback, args) do
     case run(callback, args) do
-      {:ok, value} -> send_answer(conn, 200, WorkerWire.ok(value))
-      {:error, :malformed} when callback == :start -> send_answer(conn, 200, WorkerWire.error(:malformed))
-      {:error, :not_found} when callback == :kill -> send_answer(conn, 200, WorkerWire.error(:not_found))
-      {:error, :malformed} -> refuse(conn, 400, :malformed)
-      {:error, :unavailable} -> refuse(conn, 503, :unavailable)
+      {:ok, value} ->
+        send_answer(conn, 200, WorkerWire.ok(value))
+
+      {:error, :malformed} when callback == :start ->
+        send_answer(conn, 200, WorkerWire.error(:malformed))
+
+      {:error, :not_found} when callback == :kill ->
+        send_answer(conn, 200, WorkerWire.error(:not_found))
+
+      {:error, :malformed} ->
+        refuse(conn, 400, :malformed)
+
+      {:error, :unavailable} ->
+        refuse(conn, 503, :unavailable)
     end
   end
 

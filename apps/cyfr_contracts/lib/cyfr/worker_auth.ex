@@ -29,7 +29,8 @@ defmodule Cyfr.WorkerAuth do
   input:
 
     * the **service** id — a worker service's stable, configured identity
-      (`CYFR_WORKER_ID`), which `worker_key/2` derives its keys over and
+      (`OPUS_SERVICE_ID` on the service, the same id in CYFR's
+      `CYFR_WORKERS`), which `worker_key/2` derives its keys over and
       which an attempt's keys are bound to; two worker services never share
       one;
     * the **boot** id — the incarnation a worker service mints on every

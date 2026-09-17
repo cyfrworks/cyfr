@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-Code.require_file("support/opus_service_helper.exs", __DIR__)
 Code.require_file("support/nested_execution_helper.exs", __DIR__)
 
 defmodule Opus.ExecutionProvenanceTest do
@@ -10,13 +9,6 @@ defmodule Opus.ExecutionProvenanceTest do
   # hop that drops the retention class is caught here and not only in a
   # record built by hand.
   use ExUnit.Case, async: false
-
-  @moduletag :requires_opus
-
-  setup_all do
-    Cyfr.Test.Integration.Opus.ensure_started!()
-    :ok
-  end
 
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.Bootstrap

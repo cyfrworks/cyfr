@@ -4,9 +4,9 @@
 defmodule Cyfr.StackShapeTest do
   @moduledoc """
   The shipped stack is one origin: every request Caddy takes reaches cyfr's
-  one endpoint, and compose runs cyfr, the bridge and (optionally) caddy —
-  nothing else. Read the files, assert the shape; the same style as the
-  ingress inventory.
+  one endpoint, and compose runs cyfr, the execution worker, the bridge and
+  (optionally) caddy and the builder — nothing else. Read the files, assert
+  the shape; the same style as the ingress inventory.
   """
   use ExUnit.Case, async: true
 
@@ -29,7 +29,7 @@ defmodule Cyfr.StackShapeTest do
     refute caddy =~ ~r/porta|4001/
   end
 
-  test "compose runs cyfr, mcp-bridge and caddy — one web origin" do
+  test "compose runs cyfr, opus, mcp-bridge and caddy — one web origin" do
     compose = read!("docker-compose.yml")
 
     # Only the keys under `services:` — the file also has `volumes:` and
@@ -42,8 +42,25 @@ defmodule Cyfr.StackShapeTest do
       |> List.flatten()
       |> Enum.sort()
 
-    assert services == ["builder", "caddy", "cyfr", "mcp-bridge"]
+    assert services == ["builder", "caddy", "cyfr", "mcp-bridge", "opus"]
     refute compose =~ ~r/porta|4001|8080/
+
+    # The execution worker is attached to the worker network and no other,
+    # which cyfr joins: cyfr reaches it there, it reaches cyfr's host API
+    # there, and the bridge and caddy never see either port.
+    [_, opus_block | _] = Regex.split(~r/^  opus:\s*$/m, services_block)
+    [opus_block | _] = Regex.split(~r/^  [a-z]/m, opus_block)
+    [_, opus_networks | _] = Regex.split(~r/^    networks:\s*$/m, opus_block)
+    [opus_networks | _] = Regex.split(~r/^    [a-z]/m, opus_networks)
+    assert Regex.scan(~r/^      - (\S+)/m, opus_networks, capture: :all_but_first) == [["worker"]]
+    assert opus_block =~ ~r/^\s*- OPUS_SERVICE_KEY=\$\{OPUS_SERVICE_KEY:-\}$/m
+    assert opus_block =~ ~r/^\s*- OPUS_HOST_URL=\$\{OPUS_HOST_URL:-http:\/\/cyfr:/m
+
+    [_, cyfr_block | _] = Regex.split(~r/^  cyfr:\s*$/m, services_block)
+    [cyfr_block | _] = Regex.split(~r/^  [a-z]/m, cyfr_block)
+    assert cyfr_block =~ ~r/^\s*- CYFR_WORKERS=\$\{CYFR_WORKERS:-wrk_opus=http:\/\/opus:4200\}$/m
+    assert cyfr_block =~ ~r/^\s*- CYFR_HOST_API_BIND=0\.0\.0\.0$/m
+    assert cyfr_block =~ ~r/^\s*- worker$/m
 
     # The builder is attached to its own network and no other: what it
     # listens on is that network, which is its isolation.
@@ -132,10 +149,23 @@ defmodule Cyfr.StackShapeTest do
     refute runner =~ ~r/^COPY wit\/ wit\/$/m
   end
 
-  test "the env template names no retired knobs" do
+  test "the env template names no retired knobs, and every worker knob" do
     env = read!(".env.example")
     # Spelled with the underscore split so the vocabulary gate itself does
     # not trip on this file.
-    refute env =~ ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|CYFR_COMPONENT[S]_PATH|4001/
+    refute env =~ ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|CYFR_COMPONENT[S]_PATH|4001|CYFR_WORKER_I[D]/
+
+    for knob <-
+          ~w(CYFR_WORKER_KEY OPUS_SERVICE_KEY CYFR_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT) do
+      assert env =~ ~r/^#? ?#{knob}=/m, "#{knob} is missing from .env.example"
+    end
+
+    opus = read!(".env.opus.example")
+
+    for knob <- ~w(OPUS_SERVICE_ID OPUS_SERVICE_KEY OPUS_HOST_URL OPUS_BIND OPUS_PORT) do
+      assert opus =~ ~r/^#? ?#{knob}=/m, "#{knob} is missing from .env.opus.example"
+    end
+
+    refute opus =~ ~r/CYFR_WORKER_KE[Y]|CYFR_DATABASE_UR[L]|CYFR_CRYPTO_KEYRIN[G]=/
   end
 end

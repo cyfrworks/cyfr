@@ -121,7 +121,8 @@ defmodule Opus.HostSurfaceTest do
   test "the control-plane namespaces are not named at all" do
     named =
       for {path, line} <- opus_code(),
-          line =~ ~r/\b(Arca|Sanctum|Aqua|Compendium|Emissary|Prism|Locus|Cyfr\.Execution|Cyfr\.Ops\.Error|Cyfr\.Network)\b/,
+          line =~
+            ~r/\b(Arca|Sanctum|Aqua|Compendium|Emissary|Prism|Locus|Cyfr\.Execution|Cyfr\.Ops\.Error|Cyfr\.Network)\b/,
           do: "#{path}: #{String.trim(line)}"
 
     assert named == []

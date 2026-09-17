@@ -26,6 +26,14 @@ defmodule Cyfr.RuntimeConfig do
 
   @type getenv :: (String.t() -> String.t() | nil)
 
+  # The worker vocabulary `CYFR_WORKERS` and the host API listener take
+  # their defaults from: a local Opus service, reached and reaching back
+  # over loopback.
+  @default_workers "wrk_local=http://127.0.0.1:4200"
+  @default_host_api_bind {127, 0, 0, 1}
+  @default_host_api_port 4300
+  @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
+
   @doc """
   Read an on/off switch from the environment.
 
@@ -453,6 +461,99 @@ defmodule Cyfr.RuntimeConfig do
         end
     end
   end
+
+  @doc """
+  Resolve the worker services runs are dispatched to from `CYFR_WORKERS`:
+  comma-separated `<service_id>=<url>` entries, default
+  `wrk_local=http://127.0.0.1:4200`. A service id is `wrk_` followed by 1
+  to 64 letters, digits, `_` or `-`, the id its key derives over
+  (`Cyfr.WorkerAuth.worker_key/2`), and a URL is the base URL of its
+  listener (`Cyfr.WorkerWire.base_url/1`). Answers the
+  `t:Cyfr.WorkerAPI.endpoint/0` entries in order, each running any
+  component; a malformed entry or a repeated id is an error naming it.
+  """
+  @spec resolve_workers(getenv) :: {:ok, [Cyfr.WorkerAPI.endpoint()]} | {:error, String.t()}
+  def resolve_workers(getenv) when is_function(getenv, 1) do
+    entries =
+      (blank_to_nil(getenv.("CYFR_WORKERS")) || @default_workers)
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
+      case worker_entry(entry) do
+        {:ok, %{id: id} = endpoint} ->
+          if Enum.any?(acc, &(&1.id == id)),
+            do: {:halt, {:error, "CYFR_WORKERS names the service #{inspect(id)} twice."}},
+            else: {:cont, {:ok, acc ++ [endpoint]}}
+
+        :error ->
+          {:halt,
+           {:error,
+            "CYFR_WORKERS entry #{inspect(entry)} is not <service_id>=<url>: a service id " <>
+              "is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, and a URL is " <>
+              "http or https with a host and no path."}}
+      end
+    end)
+  end
+
+  defp worker_entry(entry) do
+    with [id, url] <- String.split(entry, "=", parts: 2),
+         id = String.trim(id),
+         true <- Regex.match?(@service_id, id),
+         {:ok, base} <- Cyfr.WorkerWire.base_url(String.trim(url)) do
+      {:ok, %{id: id, url: base, components: nil}}
+    else
+      _ -> :error
+    end
+  end
+
+  @doc """
+  Resolve where CYFR's host API listener binds (`Cyfr.Execution.HostListener`):
+  `CYFR_HOST_API_BIND`, an IPv4 or IPv6 address (default `127.0.0.1`), and
+  `CYFR_HOST_API_PORT`, a port from 1 to 65535 (default 4300). Set-or-default:
+  a set value that is neither is an error naming it.
+  """
+  @spec resolve_host_api(getenv) ::
+          {:ok, %{bind: :inet.ip_address(), port: :inet.port_number()}} | {:error, String.t()}
+  def resolve_host_api(getenv) when is_function(getenv, 1) do
+    with {:ok, bind} <- host_api_bind(blank_to_nil(getenv.("CYFR_HOST_API_BIND"))),
+         {:ok, port} <- host_api_port(blank_to_nil(getenv.("CYFR_HOST_API_PORT"))) do
+      {:ok, %{bind: bind, port: port}}
+    end
+  end
+
+  defp host_api_bind(nil), do: {:ok, @default_host_api_bind}
+
+  defp host_api_bind(text) do
+    case :inet.parse_address(String.to_charlist(text)) do
+      {:ok, ip} ->
+        {:ok, ip}
+
+      {:error, _} ->
+        {:error, "CYFR_HOST_API_BIND=#{inspect(text)} is not an IPv4 or IPv6 address."}
+    end
+  end
+
+  defp host_api_port(nil), do: {:ok, @default_host_api_port}
+
+  defp host_api_port(text) do
+    case Integer.parse(text) do
+      {port, ""} when port in 1..65_535 -> {:ok, port}
+      _ -> {:error, "CYFR_HOST_API_PORT=#{inspect(text)} is not a port from 1 to 65535."}
+    end
+  end
+
+  @doc "The address the host API listener binds (`CYFR_HOST_API_BIND`, default loopback)."
+  @spec host_api_bind() :: :inet.ip_address()
+  def host_api_bind, do: Application.get_env(:cyfr, :host_api_bind, @default_host_api_bind)
+
+  @doc """
+  The port the host API listener binds (`CYFR_HOST_API_PORT`, default 4300).
+  The suite binds 0 and asks the listener which port it was given.
+  """
+  @spec host_api_port() :: :inet.port_number()
+  def host_api_port, do: Application.get_env(:cyfr, :host_api_port, @default_host_api_port)
 
   # ── helpers ────────────────────────────────────────────────────────────────
 

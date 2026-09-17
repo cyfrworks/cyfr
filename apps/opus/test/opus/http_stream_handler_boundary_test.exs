@@ -14,7 +14,8 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
   alias Opus.Test.ScriptedHost
 
   defp imports do
-    attempt = ScriptedHost.attempt!(ScriptedHost.start!(), component_ref: "catalyst:local.streamer:0.1.0")
+    attempt =
+      ScriptedHost.attempt!(ScriptedHost.start!(), component_ref: "catalyst:local.streamer:0.1.0")
 
     {imports, exec_ref} =
       HttpStreamHandler.build_stream_imports(

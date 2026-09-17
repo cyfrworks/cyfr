@@ -57,7 +57,8 @@ defmodule Opus.ComponentCache do
   defp verified(bytes, digest) when is_binary(bytes) do
     if Cyfr.Digest.sha256(bytes) == digest,
       do: :ok,
-      else: {:error, {:artifact, "Execution error: the component's bytes do not match its digest"}}
+      else:
+        {:error, {:artifact, "Execution error: the component's bytes do not match its digest"}}
   end
 
   defp verified(_bytes, _digest),

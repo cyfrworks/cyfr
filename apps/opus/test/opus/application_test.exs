@@ -38,7 +38,10 @@ defmodule Opus.ApplicationTest do
 
   test "the listener serves the worker routes on the address the credentials name" do
     %Opus.Credentials{bind: bind, port: 0} = Opus.Credentials.current()
-    {_, pid, _, _} = List.keyfind(Supervisor.which_children(Opus.Supervisor), Opus.WorkerListener, 0)
+
+    {_, pid, _, _} =
+      List.keyfind(Supervisor.which_children(Opus.Supervisor), Opus.WorkerListener, 0)
+
     assert {:ok, {^bind, port}} = ThousandIsland.listener_info(pid)
     assert port > 0
 
@@ -52,14 +55,18 @@ defmodule Opus.ApplicationTest do
     assert Jason.decode!(body) == %{"error" => "malformed"}
   end
 
-  test "no control-plane process runs beside the engine" do
-    for name <- [Arca.Repo, Cyfr.Execution.Semaphore, Cyfr.Execution.Tree, Cyfr.Supervisor] do
-      refute Process.whereis(name), "#{inspect(name)} is running in the opus suite"
+  test "the engine depends on and supervises nothing of the control plane" do
+    for app <- [:cyfr, :phoenix, :ecto, :locus] do
+      refute app in Application.spec(:opus, :applications),
+             "#{app} is an application Opus starts"
     end
 
-    for app <- [:cyfr, :phoenix, :locus] do
-      refute List.keymember?(Application.started_applications(), app, 0),
-             "#{app} is started in the opus suite"
+    for {_id, pid, _type, modules} <- Supervisor.which_children(Opus.Supervisor),
+        module <- modules,
+        is_atom(module) do
+      assert String.starts_with?(Atom.to_string(module), "Elixir.Opus.") or
+               module in [Bandit, DynamicSupervisor, Supervisor, Task.Supervisor],
+             "#{inspect(module)} (#{inspect(pid)}) runs under Opus.Supervisor"
     end
   end
 end

@@ -67,6 +67,11 @@ defmodule Cyfr.Test.StepBench do
       do: raise(ArgumentError, "steps must be positive and warmup non-negative")
 
     prepare_database!()
+    Cyfr.Test.OpusService.wire!()
+
+    unless Cyfr.Execution.available?(),
+      do:
+        raise("the Opus worker service of this boot does not answer; run from the umbrella root")
 
     with_sandbox(fn ->
       with_estate_env(fn ->

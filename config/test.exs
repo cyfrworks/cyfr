@@ -179,13 +179,17 @@ config :cyfr,
 test_worker_root = :crypto.hash(:sha256, "cyfr-test-worker-root")
 config :cyfr, :worker_key, test_worker_root
 
-# The Opus service of a test boot listens on a port of the system's choosing.
+# The Opus service of a test boot listens on a port of the system's choosing,
+# and so does CYFR's host API listener; `Cyfr.Test.OpusService` points each
+# at the other's once both are up.
 config :opus,
   service_key:
     :hmac
     |> :crypto.mac(:sha256, test_worker_root, "cyfr-worker/v1/worker\nwrk_local")
     |> Base.encode16(case: :lower),
   port: 0
+
+config :cyfr, :host_api_port, 0
 
 # Print only warnings and errors during test
 config :logger, level: :warning

@@ -1,18 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-Code.require_file("support/opus_service_helper.exs", __DIR__)
-
 defmodule Opus.RestartRequiredTest do
   # Runtime consent ends the current execution with restart_required; only a new root uses the revision.
   use ExUnit.Case, async: false
-
-  @moduletag :requires_opus
-
-  setup_all do
-    Cyfr.Test.Integration.Opus.ensure_started!()
-    :ok
-  end
 
   alias Cyfr.Execution.Record
 

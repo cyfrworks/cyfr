@@ -19,8 +19,6 @@ defmodule Aqua.ApprovalsTest do
   alias Sanctum.Consent.{Bootstrap, Source}
   alias Sanctum.Tenancy.{Members, Users}
 
-  @moduletag :requires_opus_modules
-
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
 

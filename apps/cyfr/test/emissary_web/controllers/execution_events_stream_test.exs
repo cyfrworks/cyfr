@@ -4,8 +4,6 @@
 defmodule EmissaryWeb.ExecutionEventsStreamTest do
   use EmissaryWeb.ConnCase, async: false
 
-  @moduletag :requires_opus
-
   alias EmissaryWeb.ExecutionEventsController
   alias Cyfr.Execution.Events
 

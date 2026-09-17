@@ -1,19 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-Code.require_file("support/opus_service_helper.exs", __DIR__)
 Code.require_file("support/nested_execution_helper.exs", __DIR__)
 
 defmodule Opus.ActivationStampingTest do
   # Activation recording is dark: nothing reads these columns yet, and an
   # activation that cannot be resolved must never affect an execution.
   use ExUnit.Case, async: false
-
-  @moduletag :requires_opus
-
-  setup_all do
-    Cyfr.Test.Integration.Opus.ensure_started!()
-    :ok
-  end
 
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.Bootstrap

@@ -45,7 +45,6 @@ defmodule Cyfr.Execution.AgentAuthorityTest do
     {:ok, ctx: ctx}
   end
 
-  @tag :requires_opus
   test "the soul runs its model with the key bound on the model's own profile", %{ctx: ctx} do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted and "catalyst:local.claude" in minted

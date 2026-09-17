@@ -1,6 +1,7 @@
 # CYFR self-hosted stack:
 #   cyfr        — the one endpoint (:4000): Prism (chat + console), API, MCP,
-#                 tinctures
+#                 tinctures; its host API (:4300, the worker network only)
+#                 takes the execution worker's host calls
 #   mcp-bridge  — runs the stdio/npx MCP servers CYFR registers with
 #                 transport `stdio`, one owner per server row, each backend
 #                 under a uid of its own. Every request between cyfr and the
@@ -16,7 +17,7 @@
 #
 # `cyfr init` writes this file (and Caddyfile + .env) into a fresh project dir;
 # from a source checkout, `cp .env.example .env` instead. Then:
-#   docker compose up -d                        # direct mode: cyfr + mcp-bridge
+#   docker compose up -d                        # direct mode: cyfr + mcp-bridge + opus
 #   docker compose --profile tls up -d          # also start Caddy for TLS
 # `cyfr init` writes CYFR_BEHIND_PROXY=true into .env when you answer "yes" to
 # the TLS prompt, and `cyfr up` adds `--profile tls` automatically when that
@@ -28,6 +29,9 @@ services:
     image: ghcr.io/cyfrworks/cyfr:latest
     expose:
       - "${CYFR_PORT:-4000}"
+      # The host API, reached by opus over the worker network; never
+      # published.
+      - "${CYFR_HOST_API_PORT:-4300}"
     ports:
       # Loopback-only: the Codex CLI and the browser talk to
       # http://127.0.0.1:${CYFR_PORT:-4000}; a hostname deploy fronts it
@@ -54,6 +58,13 @@ services:
       # Where cyfr reaches the mcp-bridge service. Stdio MCP servers need this
       # and CYFR_MCP_BRIDGE_KEY, which cyfr reads from .env (env_file above).
       - CYFR_MCP_BRIDGE_URL=${CYFR_MCP_BRIDGE_URL:-http://mcp-bridge:8001}
+      # The execution worker cyfr dispatches runs to, and where it listens
+      # for the worker's host calls: every interface, since the container is
+      # reached over the worker network alone. CYFR_WORKER_KEY, the root
+      # the worker's key derives from, comes from .env.
+      - CYFR_WORKERS=${CYFR_WORKERS:-wrk_opus=http://opus:4200}
+      - CYFR_HOST_API_BIND=0.0.0.0
+      - CYFR_HOST_API_PORT=${CYFR_HOST_API_PORT:-4300}
     networks:
       - default
       - builder
@@ -173,7 +184,7 @@ services:
     environment:
       - OPUS_SERVICE_ID=${OPUS_SERVICE_ID:-wrk_opus}
       - OPUS_SERVICE_KEY=${OPUS_SERVICE_KEY:-}
-      - OPUS_HOST_URL=${OPUS_HOST_URL:-http://cyfr:4300}
+      - OPUS_HOST_URL=${OPUS_HOST_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}
       - OPUS_BIND=0.0.0.0
       - OPUS_PORT=4200
     networks:

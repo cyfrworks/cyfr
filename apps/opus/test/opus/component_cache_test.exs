@@ -19,7 +19,13 @@ defmodule Opus.ComponentCacheTest do
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
   defp store do
-    limits = %Wasmex.StoreLimits{memory_size: 64 * 1024 * 1024, instances: 10, tables: 100, memories: 10}
+    limits = %Wasmex.StoreLimits{
+      memory_size: 64 * 1024 * 1024,
+      instances: 10,
+      tables: 100,
+      memories: 10
+    }
+
     {:ok, store} = Wasmex.Components.Store.new(limits, Opus.SharedEngine.get())
     store
   end
@@ -81,7 +87,11 @@ defmodule Opus.ComponentCacheTest do
       digest = Cyfr.Digest.sha256("unfetchable")
 
       assert {:error, {:artifact, "no"}} =
-               ComponentCache.get_or_compile(digest, fn -> {:error, {:artifact, "no"}} end, store())
+               ComponentCache.get_or_compile(
+                 digest,
+                 fn -> {:error, {:artifact, "no"}} end,
+                 store()
+               )
     end
   end
 end

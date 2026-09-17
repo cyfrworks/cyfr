@@ -36,7 +36,6 @@ defmodule Cyfr.Execution.StepSpansTest do
     :ok
   end
 
-  @tag :requires_opus
   test "a model step emits each span once, with the call's identifiers and no payload" do
     Mix.Tasks.Cyfr.Bench.Step.run(["--steps", "1", "--warmup", "0"])
 
@@ -105,7 +104,6 @@ defmodule Cyfr.Execution.StepSpansTest do
     assert drain() == []
   end
 
-  @tag :requires_opus
   test "mix cyfr.bench.step prints each measure's percentiles and the adapters in use" do
     Mix.Tasks.Cyfr.Bench.Step.run(["--steps", "3", "--warmup", "1"])
 

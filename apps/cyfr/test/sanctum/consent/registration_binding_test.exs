@@ -195,7 +195,6 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       assert {:ok, _} = Sanctum.Webhook.update(ctx, "plain-hook", %{profile_id: "prof-bind"})
     end
 
-    @tag :requires_opus
     test "schedule create with a profile binding requires the consent class", %{ctx: ctx} do
       key_ctx = %{ctx | auth_method: :api_key}
 

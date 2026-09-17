@@ -239,7 +239,8 @@ defmodule Opus.HttpRequestValidationTest do
         {:error, {:guest_error, "rate_limited", "Rate limit exceeded for http:" <> ref}}
       ])
 
-      assert {:ok, _} = HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
+      assert {:ok, _} =
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
 
       assert {:error, :rate_limited, message} =
                HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)

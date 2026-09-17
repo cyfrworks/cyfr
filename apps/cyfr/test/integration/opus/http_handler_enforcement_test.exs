@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-Code.require_file("support/opus_service_helper.exs", __DIR__)
-
 defmodule Opus.HttpHandlerEnforcementTest do
   @moduledoc """
   A runner reports each refusal of its egress checks through its attempt's
@@ -13,13 +11,6 @@ defmodule Opus.HttpHandlerEnforcementTest do
   """
 
   use ExUnit.Case, async: false
-
-  @moduletag :requires_opus
-
-  setup_all do
-    Cyfr.Test.Integration.Opus.ensure_started!()
-    :ok
-  end
 
   alias Cyfr.Test.AttemptFixtures
   alias Opus.HttpHandler
@@ -34,7 +25,14 @@ defmodule Opus.HttpHandlerEnforcementTest do
   # A real attached attempt for `component_ref` and its host client.
   defp attached(component_ref) do
     attempt = AttemptFixtures.attached!(component_ref: component_ref)
-    {attempt, Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot, Cyfr.Test.Integration.Opus.host_url())}
+
+    {attempt,
+     Opus.HostClient.new(
+       attempt.keys,
+       attempt.runner,
+       attempt.boot,
+       Cyfr.Test.OpusService.host_url()
+     )}
   end
 
   defp rows_for(attempt) do

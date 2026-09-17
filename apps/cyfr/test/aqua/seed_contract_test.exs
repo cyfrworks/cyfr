@@ -31,7 +31,6 @@ defmodule Aqua.SeedContractTest do
 
   # The `build.*` entries come from Locus's provider; an app-scoped run has
   # no sibling app's modules and cannot expand them.
-  @moduletag :requires_opus_modules
 
   test "every action the seed may call is granted by the manifest and reachable in-chain" do
     granted = MapSet.new(granted())

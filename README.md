@@ -88,7 +88,7 @@ cyfr -h
 open http://localhost:4000
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` and `CYFR_MCP_BRIDGE_KEY` are generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures) and `mcp-bridge`; `cyfr up` brings both up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` and `CYFR_MCP_BRIDGE_KEY` are generated and you're prompted for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `opus` (the execution worker that runs components) and `mcp-bridge`; `cyfr up` brings all three up. A third service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
@@ -316,12 +316,13 @@ CYFR is self-hosted as a small `docker compose` stack:
 
 | service | what it is |
 |---|---|
-| `cyfr` | the one endpoint on `:4000`: Prism (chat + console, a PWA), API, MCP, tinctures |
+| `cyfr` | the one endpoint on `:4000`: Prism (chat + console, a PWA), API, MCP, tinctures; its host API on `:4300` (the worker network only) takes the execution worker's host calls |
+| `opus` | the execution worker: runs WASM components as cyfr assigns them, on the internal `worker` network, holding one derived key and no tenant state. Built from `Dockerfile.opus`; see [Execution workers](#execution-workers) |
 | `mcp-bridge` | runs the stdio/`npx` MCP servers (filesystem, github, …) an athanor adds, each backend under a uid of its own, and serves their tools to cyfr. Built locally from `Dockerfile.node`; it keeps no state |
 | `caddy` *(profile: `tls`)* | TLS terminator + reverse proxy in front of `cyfr:4000`. Started only when `CYFR_BEHIND_PROXY=true` in `.env` |
 
 Two modes:
-- **Direct** (local): cyfr + mcp-bridge. Prism at `http://localhost:4000/`.
+- **Direct** (local): cyfr + opus + mcp-bridge. Prism at `http://localhost:4000/`.
 - **TLS** (VPS with a hostname): also runs caddy (`--profile tls`). Prism at `https://<CYFR_HOST>/`.
 
 `cyfr init` prompts which mode you want and writes the right value into `.env` (`CYFR_BEHIND_PROXY`). `cyfr up` reads `.env` and toggles the `tls` profile automatically.
@@ -345,8 +346,10 @@ curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install
 
 mkdir my-cyfr && cd my-cyfr
 cyfr init        # downloads compose + Caddyfile, writes .env, asks the TLS y/n question
-cyfr up          # starts cyfr + mcp-bridge (and caddy if TLS mode)
+cyfr up          # starts cyfr + opus + mcp-bridge (and caddy if TLS mode)
 ```
+
+`.env` also needs the two worker keys of the [execution worker](#execution-workers): `CYFR_WORKER_KEY` (`openssl rand -hex 32`) and `OPUS_SERVICE_KEY`, derived from it for the `wrk_opus` service.
 
 <details><summary>Prefer a source checkout?</summary>
 
@@ -359,6 +362,9 @@ cp .env.example .env
 #   CYFR_PLATFORM_ADMIN_EMAILS — your email (platform admin; required to access the instance)
 #   CYFR_BEHIND_PROXY    — true for TLS (caddy) mode, false for direct
 #   CADDY_ACME_EMAIL     — your email (only needed for TLS mode)
+#   CYFR_WORKER_KEY      — `openssl rand -hex 32`
+#   OPUS_SERVICE_KEY     — `CYFR_WORKER_KEY=… mix cyfr.worker.key wrk_opus`
+#                          (see "Execution workers" for the openssl equivalent)
 
 # Direct:
 docker compose up -d
@@ -393,6 +399,14 @@ How it holds together:
 - **Isolation.** Each backend runs under a pooled uid of its own with a private home, an environment built only from its server's env, and no capability. One athanor's backends hold at most a quarter of the pool, and so do the backends of every server one person created, across all their athanors. A server's requests reach only its own backends, and every result is masked with that server's credentials. Backends share the network, CPU and memory, and can see each other's command lines.
 - **Changes take effect at once.** Updating, disabling, deleting or restarting a server, or rotating, revoking or renaming a vault entry its env names, stops its backends before anything else can reach them; the next use starts them again with the new definition. `mcp_servers.get` shows each backend's status, restarts and a masked stderr tail; **Restart** on the expanded row starts a stdio server's backends afresh.
 - Stdio servers are not available when `CYFR_CLUSTER` is on.
+
+### Execution workers
+
+Components run on a worker service, not in `cyfr`: the `opus` container runs the WASM engine, and `cyfr` reaches it over HTTP to start and kill runs while its runners reach `cyfr`'s host API for everything a run needs (its attempt, its credentials, its stream, its children). Every request and host call is authenticated with keys derived from one root, which only `cyfr` holds.
+
+- **Two keys.** `CYFR_WORKER_KEY` (32 random bytes as 64 hex digits, `openssl rand -hex 32`) is the root, in `.env` and read by `cyfr` alone. `OPUS_SERVICE_KEY` is the key derived from it for the worker's service id — `CYFR_WORKER_KEY=… mix cyfr.worker.key wrk_opus` prints it from a source checkout, and `printf 'cyfr-worker/v1/worker\nwrk_opus' | openssl dgst -sha256 -mac HMAC -macopt hexkey:$CYFR_WORKER_KEY` is the same HMAC without one — and compose hands it to `opus` alone. The worker never sees the root, the keyring or the database; it refuses to start with any of them in its environment. Changing the root ends every run in flight and needs every service key derived again.
+- **Who is where.** `CYFR_WORKERS` lists the worker services `cyfr` dispatches to as `<service_id>=<url>` entries, tried in order; compose sets `wrk_opus=http://opus:4200`. `cyfr`'s host API listens at `CYFR_HOST_API_BIND:CYFR_HOST_API_PORT` (default `127.0.0.1:4300`; compose binds every interface, since it is reached over the internal `worker` network alone) and `OPUS_HOST_URL` tells the worker where that is. The worker's own settings are in `.env.opus` (copy `.env.opus.example`).
+- **Nothing on disk.** The worker keeps no state. A run's identity, budget, credentials and output live in `cyfr`; the worker holds only what it was assigned, sealed for its key, and reports a runner that exits. A worker restart ends its runs, which `cyfr` closes as lapsed.
 
 ### Operator notes for shared and open-door servers
 

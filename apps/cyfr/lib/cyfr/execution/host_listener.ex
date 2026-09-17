@@ -105,15 +105,16 @@ defmodule Cyfr.Execution.HostListener do
          {:ok, header} <- auth_header(conn),
          {:ok, fields, body_hash} <- verify_header(callback, header, now),
          :ok <- fresh_nonce(conn, callback, fields, now),
-         {:ok, body, conn} <- bounded_body(conn),
+         {:ok, body, read} <- bounded_body(conn),
          :ok <- verify_body(body_hash, body),
          {:ok, call} <- open(callback, fields, header, body),
          :ok <- names_route(callback, call.json) do
-      conn
+      read
       |> put_resp_content_type("application/json")
       |> send_resp(200, answer(callback, fields, call))
     else
-      {:refused, conn, status, name} -> refuse(conn, status, name)
+      # A refusal after the body was read answers on the conn that read it.
+      {:refused, read, status, name} -> refuse(read, status, name)
       {:refused, status, name} -> refuse(conn, status, name)
     end
   end
@@ -288,16 +289,19 @@ defmodule Cyfr.Execution.HostListener do
   # The route and the body name the same callback, so a body cannot be
   # posted at another route.
   defp names_route(callback, body) do
-    with {:ok, decoded} <- Jason.decode(body),
-         {:ok, ^callback, _args} <- WorkerWire.read_request_body(HostAPI, decoded) do
+    named =
+      with {:ok, decoded} <- Jason.decode(body),
+           {:ok, named, _args} <- WorkerWire.read_request_body(HostAPI, decoded),
+           do: named
+
+    if named == callback do
       :ok
     else
-      _ ->
-        Logger.warning(
-          "[Cyfr.Execution.HostListener] #{callback} refused: the body does not name it"
-        )
+      Logger.warning(
+        "[Cyfr.Execution.HostListener] #{callback} refused: the body does not name it"
+      )
 
-        {:refused, 400, :malformed}
+      {:refused, 400, :malformed}
     end
   end
 

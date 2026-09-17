@@ -9,7 +9,7 @@ defmodule Sanctum.S5ExecutionAuthzTest do
   permission gate + per-record `verify_tenant` (athanor equality). There is
   no owner gate — athanor members are interchangeable, so any same-tenant member
   with :storage_read may read the record; cross-tenant access is still rejected.
-  Opus-free (the HTTP route itself is :requires_opus).
+  Opus-free (the HTTP route is exercised by the controller suite).
   """
   use ExUnit.Case, async: false
 

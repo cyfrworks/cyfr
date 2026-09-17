@@ -252,7 +252,6 @@ defmodule Aqua.LoopTest do
   end
 
   # The files hand is not scripted: it runs on the opus worker service.
-  @tag :requires_opus
   test "hands run as children in workers, reads beside each other, and the response is persisted before they run",
        %{
          ctx: ctx,
@@ -315,7 +314,6 @@ defmodule Aqua.LoopTest do
   end
 
   # The files hand is not scripted: it runs on the opus worker service.
-  @tag :requires_opus
   test "a call that asks pauses the turn after the auto steps close, and a decision resumes it",
        %{
          ctx: ctx,

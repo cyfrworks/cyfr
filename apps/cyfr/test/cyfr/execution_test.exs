@@ -135,7 +135,9 @@ defmodule Cyfr.ExecutionTest do
 
   test "the test boot's worker services are endpoints, and Opus holds the key CYFR derives for its id",
        %{configured: configured} do
-    assert [%{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}] = configured
+    assert [%{id: "wrk_local", url: url, components: nil}] = configured
+    assert url == Cyfr.Test.OpusService.url()
+    assert {:ok, %{service: "wrk_local"}} = Dispatch.worker()
     assert Application.get_env(:opus, :service_id) == "wrk_local"
     assert Application.get_env(:cyfr, :worker_key) == Keys.root()
 

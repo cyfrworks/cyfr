@@ -8,7 +8,6 @@ defmodule Cyfr.Execution.MCPCutoverTest do
   use ExUnit.Case, async: false
 
   # A rooted run runs on the opus worker service.
-  @moduletag :requires_opus
 
   alias Sanctum.Consent.Source
   alias Sanctum.Context

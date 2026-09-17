@@ -96,7 +96,10 @@ defmodule Opus.Credentials do
   """
   @spec load!() :: t()
   def load! do
-    refused = if System.get_env("RELEASE_NAME") == "opus", do: refused_environment(System.get_env()), else: []
+    refused =
+      if System.get_env("RELEASE_NAME") == "opus",
+        do: refused_environment(System.get_env()),
+        else: []
 
     if refused != [] do
       raise ArgumentError,
@@ -148,19 +151,12 @@ defmodule Opus.Credentials do
 
   defp host_url(nil), do: {:error, {:missing, :host_url}}
 
-  defp host_url(url) when is_binary(url) do
-    case URI.parse(url) do
-      %URI{scheme: scheme, host: host, path: path, query: nil, fragment: nil}
-      when scheme in ["http", "https"] and is_binary(host) and host != "" and
-             path in [nil, "", "/"] ->
-        {:ok, String.trim_trailing(url, "/")}
-
-      _ ->
-        {:error, {:malformed, :host_url}}
+  defp host_url(url) do
+    case Cyfr.WorkerWire.base_url(url) do
+      {:ok, base} -> {:ok, base}
+      :error -> {:error, {:malformed, :host_url}}
     end
   end
-
-  defp host_url(_url), do: {:error, {:malformed, :host_url}}
 
   defp bind(nil), do: {:error, {:missing, :bind}}
 
@@ -177,9 +173,11 @@ defmodule Opus.Credentials do
   defp port(port) when is_integer(port) and port in 0..65_535, do: {:ok, port}
   defp port(_port), do: {:error, {:malformed, :port}}
 
-  defp expected(:service_id), do: "`wrk_` followed by 1 to 64 letters, digits, `_` or `-`"
-  defp expected(:service_key), do: "exactly 64 hexadecimal digits (the derived worker key)"
-  defp expected(:host_url), do: "an http or https URL with a host and no path"
-  defp expected(:bind), do: "an IPv4 or IPv6 address"
-  defp expected(:port), do: "an integer from 0 to 65535"
+  @doc "What a well-formed value of `key` is, for the message that refuses one."
+  @spec expected(:service_id | :service_key | :host_url | :bind | :port) :: String.t()
+  def expected(:service_id), do: "`wrk_` followed by 1 to 64 letters, digits, `_` or `-`"
+  def expected(:service_key), do: "exactly 64 hexadecimal digits (the derived worker key)"
+  def expected(:host_url), do: "an http or https URL with a host and no path"
+  def expected(:bind), do: "an IPv4 or IPv6 address"
+  def expected(:port), do: "an integer from 0 to 65535"
 end

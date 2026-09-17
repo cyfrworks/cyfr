@@ -187,4 +187,142 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       end)
     end
   end
+
+  describe "the worker wire" do
+    test "the cyfr release takes the local worker and loopback host API by default" do
+      with_env(
+        %{"CYFR_WORKERS" => nil, "CYFR_HOST_API_BIND" => nil, "CYFR_HOST_API_PORT" => nil},
+        fn ->
+          cyfr = read_prod_config!()[:cyfr]
+
+          assert cyfr[:workers] == [
+                   %{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}
+                 ]
+
+          assert cyfr[:host_api_bind] == {127, 0, 0, 1}
+          assert cyfr[:host_api_port] == 4300
+          refute Keyword.has_key?(read_prod_config!(), :opus)
+        end
+      )
+    end
+
+    test "CYFR_WORKERS, CYFR_HOST_API_BIND and CYFR_HOST_API_PORT are taken as set" do
+      with_env(
+        %{
+          "CYFR_WORKERS" => "wrk_opus=http://opus:4200, wrk_b=https://b.internal/",
+          "CYFR_HOST_API_BIND" => "0.0.0.0",
+          "CYFR_HOST_API_PORT" => "4301"
+        },
+        fn ->
+          cyfr = read_prod_config!()[:cyfr]
+
+          assert cyfr[:workers] == [
+                   %{id: "wrk_opus", url: "http://opus:4200", components: nil},
+                   %{id: "wrk_b", url: "https://b.internal", components: nil}
+                 ]
+
+          assert cyfr[:host_api_bind] == {0, 0, 0, 0}
+          assert cyfr[:host_api_port] == 4301
+        end
+      )
+    end
+
+    test "a malformed worker entry, address or port refuses the boot by name" do
+      for {var, value} <- [
+            {"CYFR_WORKERS", "opus=http://opus:4200"},
+            {"CYFR_WORKERS", "wrk_opus=opus:4200"},
+            {"CYFR_HOST_API_BIND", "cyfr"},
+            {"CYFR_HOST_API_PORT", "65536"}
+          ] do
+        with_env(%{var => value}, fn ->
+          error = assert_raise RuntimeError, fn -> read_prod_config!() end
+          assert Exception.message(error) =~ "[Cyfr] FATAL: #{var}"
+        end)
+      end
+    end
+
+    test "the opus release configures the worker service from OPUS_* alone" do
+      key = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
+
+      with_env(
+        %{
+          "RELEASE_NAME" => "opus",
+          "CYFR_SECRET_KEY_BASE" => nil,
+          "OPUS_SERVICE_ID" => "wrk_opus",
+          "OPUS_SERVICE_KEY" => key,
+          "OPUS_HOST_URL" => "http://cyfr:4300/",
+          "OPUS_BIND" => "0.0.0.0",
+          "OPUS_PORT" => "4200"
+        },
+        fn ->
+          config = read_prod_config!()
+
+          assert config[:opus] == [
+                   service_id: "wrk_opus",
+                   service_key: key,
+                   host_url: "http://cyfr:4300/",
+                   bind: "0.0.0.0",
+                   port: 4200
+                 ]
+
+          refute Keyword.has_key?(config, :cyfr)
+        end
+      )
+    end
+
+    test "the opus release refuses a missing key or host URL, and a malformed value, by name" do
+      base = %{
+        "RELEASE_NAME" => "opus",
+        "CYFR_SECRET_KEY_BASE" => nil,
+        "OPUS_SERVICE_KEY" => String.duplicate("ab", 32),
+        "OPUS_HOST_URL" => "http://cyfr:4300"
+      }
+
+      for {overrides, message} <- [
+            {%{"OPUS_SERVICE_KEY" => nil}, "OPUS_SERVICE_KEY is not set"},
+            {%{"OPUS_HOST_URL" => nil}, "OPUS_HOST_URL is not set"},
+            {%{"OPUS_SERVICE_KEY" => "abc"}, "OPUS_SERVICE_KEY must be"},
+            {%{"OPUS_SERVICE_ID" => "opus"}, "OPUS_SERVICE_ID must be"},
+            {%{"OPUS_HOST_URL" => "cyfr:4300"}, "OPUS_HOST_URL must be"},
+            {%{"OPUS_BIND" => "cyfr"}, "OPUS_BIND must be"}
+          ] do
+        with_env(Map.merge(base, overrides), fn ->
+          error = assert_raise RuntimeError, fn -> read_prod_config!() end
+          assert Exception.message(error) =~ "[Cyfr] FATAL: " <> message
+        end)
+      end
+    end
+
+    test "a boot that runs Opus beside CYFR derives the service key from the root, minting one if unset" do
+      root = :crypto.strong_rand_bytes(32)
+      {:ok, derived} = Cyfr.WorkerAuth.worker_key(root, "wrk_local")
+
+      with_env(
+        %{
+          "RELEASE_NAME" => nil,
+          "CYFR_WORKER_KEY" => Base.encode16(root),
+          "OPUS_SERVICE_KEY" => nil
+        },
+        fn ->
+          config = read_prod_config!()
+          assert config[:cyfr][:worker_key] == root
+          assert config[:opus][:service_id] == "wrk_local"
+          assert config[:opus][:service_key] == Base.encode16(derived, case: :lower)
+          assert config[:opus][:host_url] == "http://127.0.0.1:4300"
+          assert config[:opus][:port] == 4200
+        end
+      )
+
+      with_env(
+        %{"RELEASE_NAME" => nil, "CYFR_WORKER_KEY" => nil, "OPUS_SERVICE_KEY" => nil},
+        fn ->
+          config = read_prod_config!()
+          minted = config[:cyfr][:worker_key]
+          assert byte_size(minted) == 32
+          {:ok, key} = Cyfr.WorkerAuth.worker_key(minted, "wrk_local")
+          assert config[:opus][:service_key] == Base.encode16(key, case: :lower)
+        end
+      )
+    end
+  end
 end

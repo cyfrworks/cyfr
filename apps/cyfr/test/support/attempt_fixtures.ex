@@ -45,8 +45,8 @@ defmodule Cyfr.Test.AttemptFixtures do
     assignment's, which every host call presents (default this boot's id);
   - `:timeout_ms` — the run's timeout, from which its subtree deadline is
     set (default 60 s);
-  - `:worker` — the `Cyfr.WorkerAPI` module the attempt kills its runner
-    through (default none);
+  - `:worker` — the worker service's endpoint (`t:Cyfr.WorkerAPI.endpoint/0`)
+    the attempt kills its runner through (default none);
   - `:digest` — the digest of the component's artifact, in the assignment
     and the attempt (default the digest of the reference's own bytes);
   - `:input` — the input the row is admitted with (default

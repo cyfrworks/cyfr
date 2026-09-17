@@ -5,7 +5,6 @@ defmodule Cyfr.Execution.MCPTest do
   use ExUnit.Case, async: false
 
   # Runs and cancels run on the opus worker service.
-  @moduletag :requires_opus
 
   alias Cyfr.Execution.MCP
   alias Sanctum.Context

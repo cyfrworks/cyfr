@@ -1260,6 +1260,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `timeout` | Exceeded `batch_timeout` |
 | `tool_denied` | MCP tool not covered by the granted tool patterns |
 | `encoding_error` | A tool's result could not be encoded as JSON |
+| `uncertain` | The host call's answer was lost after the call may have taken effect, so its outcome is unknown |
 | `unknown` | The host produced a result in an unexpected shape |
 
 `setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan` and a `cyfr profile grant <ref>` command). Formulas can surface this to users via `emit`.

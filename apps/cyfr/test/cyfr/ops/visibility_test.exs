@@ -79,7 +79,6 @@ defmodule Cyfr.Ops.VisibilityTest do
   # ============================================================================
 
   describe "execute-only context" do
-    @tag :requires_opus_modules
     test "sees execution actions minus the admin-gated force_release" do
       actions = visible_actions("execution", ctx_with([:execute]))
       assert "run" in actions
@@ -87,7 +86,6 @@ defmodule Cyfr.Ops.VisibilityTest do
       refute "force_release" in actions
     end
 
-    @tag :requires_opus_modules
     test "sees all schedule actions and the build tool whole" do
       assert length(visible_actions("schedule", ctx_with([:execute]))) == 8
 
@@ -241,7 +239,6 @@ defmodule Cyfr.Ops.VisibilityTest do
   # ============================================================================
 
   describe "classification completeness" do
-    @tag :requires_opus_modules
     test "every registered action carries a complete access declaration" do
       assert Catalog.audit_action_kinds() == :ok
     end

@@ -220,6 +220,27 @@ defmodule Opus.EdgeGuard do
     end
   end
 
+  @doc """
+  Check an event a guest emits against the node's `max_request_size`: the
+  encoded event's bytes, which is what the host call carries. Returns
+  `:ok`, also for a node without limits, or
+  `{:error, :request_too_large, message}`.
+  """
+  @spec check_event_size(Limits.t() | nil, binary()) ::
+          :ok | {:error, :request_too_large, String.t()}
+  def check_event_size(%Limits{} = limits, json_event) when is_binary(json_event) do
+    case refuse_over(limits, byte_size(json_event), "Emitted event") do
+      :ok ->
+        :ok
+
+      {:error, :request_too_large, _message} ->
+        {:error, :request_too_large,
+         "Event exceeds the consented max_request_size for this component."}
+    end
+  end
+
+  def check_event_size(_limits, json_event) when is_binary(json_event), do: :ok
+
   # Exact-IP entries compare against the canonical ntoa string; CIDR entries
   # delegate to the Cyfr.Cidr SSOT (IPv4 + IPv6).
   defp ip_entry_matches?(entry, ip_tuple, ip_string) do

@@ -91,8 +91,9 @@ config :cyfr, :workers, [%{id: "wrk_local", url: "http://127.0.0.1:4200", compon
 # name, where it reaches CYFR's host API, and where its listener binds (the
 # `wrk_local` entry above). Its service key is the worker key CYFR derives
 # for that id (`Cyfr.WorkerAuth.worker_key/2`, 64 hex): the test
-# configuration derives it from the test worker root, and a dev or prod
-# boot receives it from `OPUS_SERVICE_KEY`.
+# configuration derives it from the test worker root, a development boot
+# derives it from its root in `config/runtime.exs`, and the `opus` release
+# receives it from `OPUS_SERVICE_KEY`.
 config :opus,
   service_id: "wrk_local",
   host_url: "http://127.0.0.1:4300",

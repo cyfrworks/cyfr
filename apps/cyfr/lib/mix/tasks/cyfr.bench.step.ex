@@ -61,8 +61,11 @@ defmodule Mix.Tasks.Cyfr.Bench.Step do
 
     Mix.Task.run("app.start")
 
-    if not (Code.ensure_loaded?(Cyfr.Test.StepBench) and Cyfr.Execution.available?()),
-      do: Mix.raise("mix cyfr.bench.step runs from the umbrella root, where the engine is loaded")
+    if not Code.ensure_loaded?(Cyfr.Test.StepBench),
+      do:
+        Mix.raise(
+          "mix cyfr.bench.step runs from the umbrella root, where its harness is compiled"
+        )
 
     report = Cyfr.Test.StepBench.run(steps: steps, warmup: warmup)
     Mix.shell().info(Cyfr.Test.StepBench.render(report))

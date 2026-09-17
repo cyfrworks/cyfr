@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-Code.require_file("support/opus_service_helper.exs", __DIR__)
 Code.require_file("support/nested_execution_helper.exs", __DIR__)
 Code.require_file("support/formula_host_helper.exs", __DIR__)
 
@@ -25,13 +24,6 @@ defmodule Opus.OrphanChildrenTest do
   """
 
   use ExUnit.Case, async: false
-
-  @moduletag :requires_opus
-
-  setup_all do
-    Cyfr.Test.Integration.Opus.ensure_started!()
-    :ok
-  end
 
   import Cyfr.Test.Wait
   import Ecto.Query, only: [from: 2]

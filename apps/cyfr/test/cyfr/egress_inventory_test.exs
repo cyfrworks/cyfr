@@ -37,6 +37,14 @@ defmodule Cyfr.EgressInventoryTest do
     "apps/opus/lib/opus/http_handler.ex" => :guest_fetch,
     # Guest streaming HTTP — `into: :self` with an append-time byte budget.
     "apps/opus/lib/opus/http_stream_handler.ex" => :guest_stream,
+    # The worker wire, CYFR's side: `Cyfr.WorkerAPI` requests to the
+    # operator-configured worker services (CYFR_WORKERS), signed with each
+    # service's dispatch key, bounded answers (`Cyfr.WorkerWire`).
+    "apps/cyfr/lib/cyfr/execution/worker_client.ex" => :worker_client,
+    # The worker wire, Opus's side: a runner's host calls and the service's
+    # exit reports to CYFR's host API (OPUS_HOST_URL), sealed and signed
+    # with the attempt's keys, bounded answers.
+    "apps/opus/lib/opus/host_client.ex" => :host_client,
     # The build-isolation seam's client: POSTs source maps to the
     # operator-configured builder container (CYFR_BUILDER_URL), bearer
     # token both ends, bounded response.

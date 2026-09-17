@@ -23,11 +23,14 @@ defmodule Opus.WorkerListenerTest do
     boot = ScriptedHost.serve!(host)
 
     server =
-      start_supervised!({Bandit, plug: Opus.WorkerListener, ip: {127, 0, 0, 1}, port: 0, startup_log: false})
+      start_supervised!(
+        {Bandit, plug: Opus.WorkerListener, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+      )
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 
-    {:ok, host: host, boot: boot, url: "http://127.0.0.1:#{port}", key: ScriptedHost.dispatch_key(host)}
+    {:ok,
+     host: host, boot: boot, url: "http://127.0.0.1:#{port}", key: ScriptedHost.dispatch_key(host)}
   end
 
   # Post `body` to `callback`'s route with a request header signed by `key`
@@ -43,7 +46,9 @@ defmodule Opus.WorkerListenerTest do
           nonce: Keyword.get_lazy(opts, :nonce, &nonce/0)
         }
 
-        {:ok, header} = WorkerAuth.request_header(Keyword.get(opts, :key, context.key), request, body)
+        {:ok, header} =
+          WorkerAuth.request_header(Keyword.get(opts, :key, context.key), request, body)
+
         header
       end)
 
@@ -51,7 +56,12 @@ defmodule Opus.WorkerListenerTest do
     path = Keyword.get(opts, :path, WorkerWire.worker_route(callback))
 
     {:ok, %Req.Response{status: status, body: answer}} =
-      Req.post(context.url <> path, headers: headers, body: body, retry: false, decode_body: false)
+      Req.post(context.url <> path,
+        headers: headers,
+        body: body,
+        retry: false,
+        decode_body: false
+      )
 
     {status, Jason.decode!(answer)}
   end
@@ -80,7 +90,8 @@ defmodule Opus.WorkerListenerTest do
   end
 
   test "a missing, malformed or stale header is refused", context do
-    assert {401, %{"error" => "malformed"}} = post(context, :status, request(:status), header: nil)
+    assert {401, %{"error" => "malformed"}} =
+             post(context, :status, request(:status), header: nil)
 
     assert {401, %{"error" => "malformed"}} =
              post(context, :status, request(:status), header: "v1 kind=request mac=x")
@@ -94,7 +105,9 @@ defmodule Opus.WorkerListenerTest do
   test "a nonce presented before is refused", context do
     nonce = nonce()
     assert {200, %{"ok" => _}} = post(context, :status, request(:status), nonce: nonce)
-    assert {401, %{"error" => "replayed"}} = post(context, :status, request(:status), nonce: nonce)
+
+    assert {401, %{"error" => "replayed"}} =
+             post(context, :status, request(:status), nonce: nonce)
   end
 
   test "a request addressed to another service is refused", context do
@@ -106,7 +119,12 @@ defmodule Opus.WorkerListenerTest do
     {:ok, header} =
       WorkerAuth.request_header(
         context.key,
-        %{service: "wrk_local", boot: context.boot, ts: System.system_time(:millisecond), nonce: nonce()},
+        %{
+          service: "wrk_local",
+          boot: context.boot,
+          ts: System.system_time(:millisecond),
+          nonce: nonce()
+        },
         request(:status)
       )
 
@@ -123,13 +141,18 @@ defmodule Opus.WorkerListenerTest do
     assert {400, %{"error" => "malformed"}} =
              post(context, :status, request(:kill, %{"execution_id" => "exec_x"}))
 
-    assert {400, %{"error" => "malformed"}} = post(context, :status, ~s({"op": "attach", "args": {}}))
+    assert {400, %{"error" => "malformed"}} =
+             post(context, :status, ~s({"op": "attach", "args": {}}))
+
     assert {400, %{"error" => "malformed"}} = post(context, :status, "not json")
   end
 
   test "a route that is no worker route is refused", context do
-    assert {404, %{"error" => "not_found"}} = post(context, :status, request(:status), path: "/worker/v1/attach")
-    assert {404, %{"error" => "not_found"}} = post(context, :status, request(:status), path: "/host/v1/status")
+    assert {404, %{"error" => "not_found"}} =
+             post(context, :status, request(:status), path: "/worker/v1/attach")
+
+    assert {404, %{"error" => "not_found"}} =
+             post(context, :status, request(:status), path: "/host/v1/status")
   end
 
   test "a kill of an execution no runner runs answers not_found", context do
@@ -137,7 +160,8 @@ defmodule Opus.WorkerListenerTest do
              post(context, :kill, request(:kill, %{"execution_id" => "exec_none"}))
   end
 
-  test "a start for another boot of this service is refused malformed, and starts nothing", context do
+  test "a start for another boot of this service is refused malformed, and starts nothing",
+       context do
     attempt = ScriptedHost.attempt!(context.host, boot: "boot_other")
 
     args = %{

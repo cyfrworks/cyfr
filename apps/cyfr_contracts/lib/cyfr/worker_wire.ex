@@ -31,6 +31,10 @@ defmodule Cyfr.WorkerWire do
       with `payload`, or `failed` with `message`. A host call's answer is
       sealed as `Cyfr.WorkerAuth.seal_call/5` seals an answer; a worker
       service's answer is plain. `ok/1` and `error/2` build them.
+    * Either side is reached at a base URL a route is appended to: an
+      `http` or `https` URL with a host and nothing after it
+      (`base_url/1`), as CYFR's worker list and a worker service's host
+      URL name each other.
   """
 
   @auth_header "x-cyfr-auth"
@@ -49,6 +53,26 @@ defmodule Cyfr.WorkerWire do
   @doc "The HTTP header a `Cyfr.WorkerAuth` header travels in, lowercase."
   @spec auth_header() :: String.t()
   def auth_header, do: @auth_header
+
+  @doc """
+  The base URL `text` spells, with no trailing slash, or `:error`: an
+  `http` or `https` URL with a host, and no path, query or fragment, since
+  a route is appended to it as it is.
+  """
+  @spec base_url(term()) :: {:ok, String.t()} | :error
+  def base_url(text) when is_binary(text) do
+    case URI.parse(text) do
+      %URI{scheme: scheme, host: host, path: path, query: nil, fragment: nil, userinfo: nil}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" and
+             path in [nil, "", "/"] ->
+        {:ok, String.trim_trailing(text, "/")}
+
+      _ ->
+        :error
+    end
+  end
+
+  def base_url(_text), do: :error
 
   @doc "The route a host call of `callback` is posted to on CYFR."
   @spec host_route(callback()) :: String.t()

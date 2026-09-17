@@ -270,7 +270,7 @@ defmodule Opus.Runtime do
 
     emit_imports =
       if component_type == :catalyst && host && authority_info.authority do
-        build_emit_imports(host)
+        build_emit_imports(host, limits)
       else
         %{}
       end
@@ -306,21 +306,33 @@ defmodule Opus.Runtime do
   # A catalyst's `cyfr:emit/events` import: each event is a `push_deltas`
   # host call, and CYFR checks, masks and pushes it on the stream the
   # attempt was opened on.
-  defp build_emit_imports(host) do
+  defp build_emit_imports(host, limits) do
     %{
       "cyfr:emit/events@0.1.0" => %{
-        "emit" => {:fn, fn json_event -> emit(host, json_event) end}
+        "emit" => {:fn, fn json_event -> emit(host, limits, json_event) end}
       }
     }
   end
 
   @doc """
   Deliver one guest event through the attempt's host client, answering the
-  JSON the guest's `emit` returns. A refused host call answers a
-  `dispatch_error`.
+  JSON the guest's `emit` returns. An event over the node's
+  `max_request_size` (`limits`, when the node has them) is refused here as
+  a `resource_limit`, before it crosses the wire that would refuse its
+  body; a refused host call answers a `dispatch_error`.
   """
-  @spec emit(Opus.HostClient.t(), String.t()) :: String.t()
-  def emit(%Opus.HostClient{} = host, json_event) when is_binary(json_event) do
+  @spec emit(Opus.HostClient.t(), Cyfr.Limits.t() | nil, String.t()) :: String.t()
+  def emit(%Opus.HostClient{} = host, limits, json_event) when is_binary(json_event) do
+    case Opus.EdgeGuard.check_event_size(limits, json_event) do
+      :ok ->
+        push_event(host, json_event)
+
+      {:error, :request_too_large, message} ->
+        Cyfr.WitResponse.encode_error(:resource_limit, message)
+    end
+  end
+
+  defp push_event(host, json_event) do
     case Opus.HostClient.push_deltas(host, [json_event]) do
       {:ok, [reply]} ->
         reply

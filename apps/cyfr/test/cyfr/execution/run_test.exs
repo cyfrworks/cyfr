@@ -9,7 +9,6 @@ defmodule Cyfr.Execution.RunTest do
   """
 
   use ExUnit.Case, async: false
-  @moduletag :requires_opus
 
   alias Sanctum.Consent.Source
   alias Sanctum.Context

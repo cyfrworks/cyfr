@@ -20,8 +20,6 @@ defmodule Cyfr.Ops.LiteralDriftTest do
   """
   use ExUnit.Case, async: false
 
-  @moduletag :requires_opus_modules
-
   @root Path.expand("../../../../..", __DIR__)
 
   # `CallTool(<ctx>, "<tool>", map[string]any{ "action": "<x>"`, the map

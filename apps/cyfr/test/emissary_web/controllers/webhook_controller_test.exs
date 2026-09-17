@@ -204,7 +204,6 @@ defmodule EmissaryWeb.WebhookControllerTest do
       assert conn.status == 401
     end
 
-    @tag :requires_opus
     test "passes signature check with custom header configured", %{conn: conn, ctx: ctx} do
       %{slug: slug, secret: secret} =
         create_hook!(ctx, "github-style", %{signature_header: "X-Hub-Signature-256"})
@@ -231,7 +230,6 @@ defmodule EmissaryWeb.WebhookControllerTest do
   end
 
   describe "POST /hooks/:slug — async dispatch on valid signature" do
-    @tag :requires_opus
     test "returns 200 accepted with request_id immediately; missing component surfaces via :invoke, :stop telemetry",
          %{
            conn: conn,
@@ -274,7 +272,6 @@ defmodule EmissaryWeb.WebhookControllerTest do
       assert message =~ ~r/not.?null/i
     end
 
-    @tag :requires_opus
     test "valid signature with input_template merges into invoke envelope", %{
       conn: conn,
       ctx: ctx
@@ -301,7 +298,6 @@ defmodule EmissaryWeb.WebhookControllerTest do
   end
 
   describe "POST /hooks/:slug — body integrity" do
-    @tag :requires_opus
     test "raw body preservation across Plug.Parsers (signature verifies because body_reader cached the bytes)",
          %{
            conn: conn,

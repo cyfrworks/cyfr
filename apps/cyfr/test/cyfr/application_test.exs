@@ -127,6 +127,38 @@ defmodule Cyfr.ApplicationTest do
       end
     end
 
+    test "the host API listener starts under the infra tier after the attempts it serves" do
+      started = Cyfr.InfraSupervisor |> started_ids()
+      at = fn id -> Enum.find_index(started, &(&1 == id)) end
+
+      # Shutdown is reverse start order: the listener stops taking host
+      # calls before the attempt tree and the roots that wait on them go.
+      assert is_integer(at.(Cyfr.Execution.HostListener))
+      assert at.(Cyfr.Execution.HostListener) > at.(Cyfr.Execution.Tree)
+      assert at.(Cyfr.Execution.HostListener) > at.(Cyfr.Execution.TaskSupervisor)
+
+      # Bound where the configuration says, on the port the suite asked for
+      # (0: one of the system's choosing), and answering as the host API.
+      {_, listener, :supervisor, _} =
+        Cyfr.InfraSupervisor
+        |> Supervisor.which_children()
+        |> List.keyfind(Cyfr.Execution.HostListener, 0)
+
+      assert Cyfr.RuntimeConfig.host_api_port() == 0
+      port = Cyfr.Execution.HostListener.port(listener)
+      assert port > 0
+      assert Cyfr.Test.OpusService.host_url() == "http://127.0.0.1:#{port}"
+
+      {:ok, %Req.Response{status: 401, body: body}} =
+        Req.post("http://127.0.0.1:#{port}" <> Cyfr.WorkerWire.host_route(:attach),
+          body: "{}",
+          retry: false,
+          decode_body: false
+        )
+
+      assert Jason.decode!(body) == %{"error" => "lost"}
+    end
+
     test "the endpoint lives under the web tier" do
       ids =
         Cyfr.WebSupervisor

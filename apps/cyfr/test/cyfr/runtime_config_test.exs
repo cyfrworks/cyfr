@@ -302,6 +302,88 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
+  describe "resolve_workers/1 — the worker services, in order" do
+    test "unset => the local Opus service" do
+      assert {:ok, [%{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}]} =
+               RuntimeConfig.resolve_workers(env(%{}))
+
+      assert {:ok, [%{id: "wrk_local"}]} =
+               RuntimeConfig.resolve_workers(env(%{"CYFR_WORKERS" => " "}))
+    end
+
+    test "entries are <service_id>=<url>, comma-separated, in order, each running any component" do
+      assert {:ok,
+              [
+                %{id: "wrk_opus", url: "http://opus:4200", components: nil},
+                %{id: "wrk_b-2", url: "https://b.internal", components: nil}
+              ]} =
+               RuntimeConfig.resolve_workers(
+                 env(%{
+                   "CYFR_WORKERS" =>
+                     " wrk_opus = http://opus:4200/ ,, wrk_b-2=https://b.internal "
+                 })
+               )
+    end
+
+    test "a malformed id or URL, or an entry that is not a pair, refuses the boot naming the entry" do
+      for bad <- [
+            "opus=http://opus:4200",
+            "wrk_=http://opus:4200",
+            "wrk_#{String.duplicate("a", 65)}=http://opus:4200",
+            "wrk_opus",
+            "wrk_opus=",
+            "wrk_opus=opus:4200",
+            "wrk_opus=http://opus:4200/worker",
+            "wrk_opus=ftp://opus:4200"
+          ] do
+        assert {:error, message} = RuntimeConfig.resolve_workers(env(%{"CYFR_WORKERS" => bad}))
+        assert message =~ "CYFR_WORKERS"
+        assert message =~ String.trim(bad)
+      end
+    end
+
+    test "two entries of one service id refuse the boot" do
+      assert {:error, message} =
+               RuntimeConfig.resolve_workers(
+                 env(%{"CYFR_WORKERS" => "wrk_a=http://a:4200,wrk_a=http://b:4200"})
+               )
+
+      assert message =~ ~s("wrk_a")
+    end
+  end
+
+  describe "resolve_host_api/1 — where the host API listens" do
+    test "unset => loopback, 4300" do
+      assert {:ok, %{bind: {127, 0, 0, 1}, port: 4300}} = RuntimeConfig.resolve_host_api(env(%{}))
+    end
+
+    test "an IPv4 or IPv6 address and a port from 1 to 65535" do
+      assert {:ok, %{bind: {0, 0, 0, 0}, port: 4301}} =
+               RuntimeConfig.resolve_host_api(
+                 env(%{"CYFR_HOST_API_BIND" => "0.0.0.0", "CYFR_HOST_API_PORT" => "4301"})
+               )
+
+      assert {:ok, %{bind: {0, 0, 0, 0, 0, 0, 0, 1}}} =
+               RuntimeConfig.resolve_host_api(env(%{"CYFR_HOST_API_BIND" => "::1"}))
+    end
+
+    test "a value that is not an address, or not a port, refuses the boot naming it" do
+      for bad <- ["cyfr", "127.0.0.1:4300", "256.1.1.1"] do
+        assert {:error, message} =
+                 RuntimeConfig.resolve_host_api(env(%{"CYFR_HOST_API_BIND" => bad}))
+
+        assert message =~ "CYFR_HOST_API_BIND"
+      end
+
+      for bad <- ["0", "65536", "-1", "4300x", "port"] do
+        assert {:error, message} =
+                 RuntimeConfig.resolve_host_api(env(%{"CYFR_HOST_API_PORT" => bad}))
+
+        assert message =~ "CYFR_HOST_API_PORT"
+      end
+    end
+  end
+
   describe "resolve_postgres/1" do
     test "url present => opts with defaults" do
       assert {:ok, opts} =

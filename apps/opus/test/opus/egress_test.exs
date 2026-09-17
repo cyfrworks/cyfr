@@ -16,7 +16,11 @@ defmodule Opus.EgressTest do
   alias Opus.Egress
 
   test "a public address pins with the hostname kept and the transport policy closed" do
-    assert {:ok, pinned} = Egress.pin("https://localhost:8443/path?q=1", private_policy: {:fun, fn _ -> true end})
+    assert {:ok, pinned} =
+             Egress.pin("https://localhost:8443/path?q=1",
+               private_policy: {:fun, fn _ -> true end}
+             )
+
     assert pinned.ip == "127.0.0.1"
     assert pinned.ip_tuple == {127, 0, 0, 1}
     assert pinned.uri.host == "localhost"
@@ -52,7 +56,9 @@ defmodule Opus.EgressTest do
              Egress.pin("http://127.0.0.1/", private_policy: {:fun, fn _ -> false end})
 
     assert {:ok, %{ip: "127.0.0.1"}} =
-             Egress.pin("http://127.0.0.1/", private_policy: {:fun, fn ip -> ip == {127, 0, 0, 1} end})
+             Egress.pin("http://127.0.0.1/",
+               private_policy: {:fun, fn ip -> ip == {127, 0, 0, 1} end}
+             )
   end
 
   test "a metadata address is refused whatever the policy" do

@@ -55,8 +55,10 @@ defmodule Opus.MixProject do
   defp aliases, do: [test: ["test --no-start"]]
 
   # The WASM engine and its worker service: the shared contracts, the
-  # runtime, its own listener and its client of CYFR's host API. Nothing of
-  # the control plane: `Opus.HostSurfaceTest` keeps it so.
+  # runtime, its own listener and its client of CYFR's host API, and the
+  # `.env` reader the `opus` release's `config/runtime.exs` takes its
+  # `OPUS_*` settings through. Nothing of the control plane:
+  # `Opus.HostSurfaceTest` keeps it so.
   defp deps do
     [
       {:wasmex, "~> 0.13.0"},
@@ -64,6 +66,7 @@ defmodule Opus.MixProject do
       {:req, "~> 0.5"},
       {:plug, "~> 1.16"},
       {:bandit, "~> 1.5"},
+      {:dotenvy, "~> 0.9"},
       {:cyfr_contracts, in_umbrella: true}
     ]
   end

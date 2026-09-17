@@ -1124,6 +1124,21 @@ not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 | `CYFR_S3_ENDPOINT` / `CYFR_S3_PREFIX` / `CYFR_S3_PATH_STYLE` | — | Optional (MinIO etc.) |
 | `CYFR_DATABASE_URL` | — | Required for a Postgres build (adapter is chosen at build time via `CYFR_DATABASE=postgres`; the published image is SQLite) |
 
+### Execution workers
+
+Components run on worker services CYFR reaches over HTTP (the `opus`
+compose service). `.env.opus.example` documents the worker's side.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYFR_WORKER_KEY` | — | The root every worker key derives from, 32 random bytes as 64 hex digits (`openssl rand -hex 32`). Only CYFR holds it; without it no worker service can authenticate, so no component runs |
+| `CYFR_WORKERS` | `wrk_local=http://127.0.0.1:4200` | The worker services runs are dispatched to: comma-separated `<service_id>=<url>` entries, tried in order. A service id is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`; the URL is the base URL of the service's listener |
+| `CYFR_HOST_API_BIND` / `CYFR_HOST_API_PORT` | `127.0.0.1` / `4300` | Where CYFR's host API listens for the workers' host calls and exit reports |
+| `OPUS_SERVICE_ID` | `wrk_local` | The worker's service id, the one CYFR lists it under in `CYFR_WORKERS` |
+| `OPUS_SERVICE_KEY` | — | The worker's key, derived from the root for its id: `CYFR_WORKER_KEY=… mix cyfr.worker.key <service_id>` prints it. Required by the `opus` release |
+| `OPUS_HOST_URL` | — | The base URL of CYFR's host API as the worker reaches it (compose: `http://cyfr:4300`). Required by the `opus` release |
+| `OPUS_BIND` / `OPUS_PORT` | `127.0.0.1` / `4200` | Where the worker's listener binds |
+
 ### Registry and signing
 
 | Variable | Default | Description |

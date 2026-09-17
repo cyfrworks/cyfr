@@ -18,6 +18,12 @@ Application.put_env(:opus, :host_url, "http://127.0.0.1:9")
 Application.put_env(:opus, :bind, "127.0.0.1")
 Application.put_env(:opus, :port, 0)
 
-{:ok, _} = Application.ensure_all_started(:opus)
+# The umbrella starts the application before this helper runs (and another
+# suite in this VM may have given the service other credentials): the
+# service is restarted so it holds these.
+case Application.ensure_all_started(:opus) do
+  {:ok, []} -> Opus.Test.ScriptedHost.restart_service!()
+  {:ok, _started} -> :ok
+end
 
 ExUnit.start()

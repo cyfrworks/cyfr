@@ -21,7 +21,10 @@ defmodule Cyfr.Test.Sandbox do
   (whose loops die with them), then the tasks that wait on runs, then the
   runs' attempts and runners, then the event buffers they wrote to. Each
   child is stopped synchronously, so the sweep returns only once every
-  child is gone.
+  child is gone. Then the connections open on the two listeners of the
+  worker wire (`Cyfr.Test.OpusService.listeners/0`) are closed: a host
+  call a stopped runner had in flight runs on one of them, and it must
+  not reach the database after the owner is gone.
 
   `on_exit` callbacks run last-registered first. A test that restores
   configuration a background process reads (a base path, a seed path, the
@@ -93,6 +96,26 @@ defmodule Cyfr.Test.Sandbox do
         DynamicSupervisor.terminate_child(supervisor, child)
       end
 
+    close_connections()
+
     if stopped == [], do: :ok, else: stop_work(passes - 1)
+  end
+
+  # A connection process carries one request; killed, its caller sees a
+  # lost answer, which a stopped runner no longer reads. Each kill is
+  # awaited, so the sweep returns only once the request is gone.
+  defp close_connections do
+    for server <- Cyfr.Test.OpusService.listeners(),
+        {:ok, connections} <- [ThousandIsland.connection_pids(server)],
+        connection <- connections do
+      ref = Process.monitor(connection)
+      Process.exit(connection, :kill)
+
+      receive do
+        {:DOWN, ^ref, :process, ^connection, _reason} -> :ok
+      end
+    end
+
+    :ok
   end
 end

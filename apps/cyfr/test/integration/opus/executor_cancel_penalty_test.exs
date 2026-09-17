@@ -1,20 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-Code.require_file("support/opus_service_helper.exs", __DIR__)
-
 defmodule Opus.ExecutorCancelPenaltyTest do
   # N cancels of a registered holder spinning in native code, through the
   # cancel path, charge the tenant by execution before each kill until the
   # penalty box refuses the tenant's next root.
   use ExUnit.Case, async: false
-
-  @moduletag :requires_opus
-
-  setup_all do
-    Cyfr.Test.Integration.Opus.ensure_started!()
-    :ok
-  end
 
   alias Arca.Execution
   alias Cyfr.Execution.{Dispatch, Semaphore}

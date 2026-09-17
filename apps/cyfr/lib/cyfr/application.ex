@@ -167,6 +167,12 @@ defmodule Cyfr.Application do
       # Periodic sweep that fails running executions whose lease lapsed;
       # started only when `:execution_sweeper_enabled`.
       Cyfr.Execution.Sweeper,
+      # The host API: where the worker services' runners post their host
+      # calls and the services their exit reports (`CYFR_HOST_API_BIND`,
+      # `CYFR_HOST_API_PORT`). After the attempt tree it serves, so a
+      # shutdown stops taking calls before the attempts they reach go.
+      {Cyfr.Execution.HostListener,
+       bind: Cyfr.RuntimeConfig.host_api_bind(), port: Cyfr.RuntimeConfig.host_api_port()},
       # subscriptions/listen stream slots — duplicate keys, one entry per open
       # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
       # process, so a vanished client frees its slot without bookkeeping.
