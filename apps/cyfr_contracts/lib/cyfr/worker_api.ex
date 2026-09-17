@@ -6,8 +6,9 @@ defmodule Cyfr.WorkerAPI do
   What CYFR asks of a worker service. A worker service implements this
   behaviour; CYFR is its client.
 
-  A worker service runs no guest code: it starts runners, kills them and
-  reports on them. Every request is addressed to one worker service and
+  A worker service runs no guest code: it starts runners (OS processes it
+  talks to over `Cyfr.RunnerControl`), kills them and reports on them.
+  Every request is addressed to one worker service and
   signed with that worker service's dispatch key
   (`Cyfr.WorkerAuth.request_header/3`); the worker service verifies it
   (`Cyfr.WorkerAuth.verify_request/4`), refuses a request addressed to
@@ -57,8 +58,17 @@ defmodule Cyfr.WorkerAPI do
 
   @typedoc """
   A worker service's state: its configured service id; its boot id, which
-  changes on every start; its runners, by whether they are fresh, idle or
-  busy; and the attempts its runners have claimed.
+  changes on every start; its runners, counted by state
+  (`runner_states/0`); and the attempts its runners have claimed. A
+  runner is in exactly one state:
+
+    * `fresh` — started and not yet assigned, so it belongs to no
+      athanor;
+    * `idle` — belongs to one athanor, whose subtrees it has run, and can
+      take another assignment for that athanor only;
+    * `busy` — running an assignment;
+    * `tainted` — terminated or being terminated, after a kill or an
+      unclean completion; it is never assigned again.
   """
   @type status :: %{
           service: String.t(),
@@ -66,10 +76,35 @@ defmodule Cyfr.WorkerAPI do
           runners: %{
             fresh: non_neg_integer(),
             idle: non_neg_integer(),
-            busy: non_neg_integer()
+            busy: non_neg_integer(),
+            tainted: non_neg_integer()
           },
           attempts: [String.t()]
         }
+
+  @runner_states [:fresh, :idle, :busy, :tainted]
+
+  @doc "The runner states a status counts, each runner in exactly one."
+  @spec runner_states() :: [atom()]
+  def runner_states, do: @runner_states
+
+  @doc """
+  Whether `status` has the shape of `t:status/0`: its four members and no
+  other, a string service and boot, a count for every runner state and
+  no other, and a list of attempt id strings.
+  """
+  @spec valid_status?(term()) :: boolean()
+  def valid_status?(
+        %{service: service, boot: boot, runners: %{} = runners, attempts: attempts} = status
+      )
+      when map_size(status) == 4 and is_binary(service) and is_binary(boot) and
+             is_list(attempts) and map_size(runners) == length(@runner_states) do
+    Enum.all?(@runner_states, fn state ->
+      match?(count when is_integer(count) and count >= 0, Map.get(runners, state))
+    end) and Enum.all?(attempts, &is_binary/1)
+  end
+
+  def valid_status?(_status), do: false
 
   @doc """
   Start an assignment on a runner. `input` is the execution's input bytes,
@@ -85,10 +120,19 @@ defmodule Cyfr.WorkerAPI do
               :ok | {:error, :malformed}
 
   @doc """
-  Stop an execution. For a subtree root, the worker service releases the
-  runner; for a child, it sends the runner a cancel and taints it. The
-  execution's durable cancel request remains the fence. `:not_found` means
-  no runner of this worker service runs it.
+  Stop an execution a runner of this worker service runs. For a subtree
+  root, the kill ends the runner: the worker service terminates the
+  runner's process and reports its exit
+  (`c:Cyfr.HostAPI.runner_exited/3`). For a child, the kill ends the
+  child's process inside the runner (`Cyfr.RunnerControl`'s
+  `cancel_child`), and the runner keeps running the rest of its subtree.
+  Either kill taints the runner: it is never assigned again, and is
+  terminated once its subtree completes if not before. The execution's
+  durable cancel request remains the fence.
+
+  A kill is idempotent: `:ok` again for an execution a runner of this
+  boot already ended, whether by a kill or on its own. `:not_found` means
+  no runner of this boot of the worker service ever ran it.
   """
   @callback kill(execution_id :: String.t()) :: :ok | {:error, :not_found}
 
