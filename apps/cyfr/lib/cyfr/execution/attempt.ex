@@ -34,8 +34,9 @@ defmodule Cyfr.Execution.Attempt do
     declared needs and activation digest the resolver gave its component,
     and the delegation roster its admitted input carries
     (`Cyfr.Execution.Delegation`);
-  - the worker service the run is dispatched to (its `Cyfr.WorkerAPI`
-    module and boot id) and the digest of the component its runner runs;
+  - the worker service the run is dispatched to (its
+    `t:Cyfr.WorkerAPI.endpoint/0` and boot id) and the digest of the
+    component its runner runs;
   - what the run holds while it is open: its execution slot
     (`take_slot/3`), and, for a spawned child, the invoke-budget slot its
     waiter charged (taken over from the waiter) and its charge row.
@@ -46,7 +47,9 @@ defmodule Cyfr.Execution.Attempt do
   `Cyfr.Execution.Close` in this process with the full set, gives back what
   the run held, tells the waiter the result, answers the runner and stops.
 
-  A run whose runner was not started is closed failed (`refuse/2`).
+  A run whose runner was not started is closed failed (`refuse/2`); one
+  whose runner attached is never refused, since the start it answers for
+  happened.
 
   It stops without closing the run, sending nothing it held and giving
   back what the run held, when a call finds the attempt no longer holds its
@@ -175,7 +178,7 @@ defmodule Cyfr.Execution.Attempt do
   context its guest's calls run in, the run's authority, its component's
   reference, its root, the declared needs and activation digest the
   resolver gave its component, the delegation roster its admitted input
-  carries and the `Cyfr.WorkerAPI` module of the worker service it runs on.
+  carries and the endpoint of the worker service it runs on.
   """
   @type chain :: %{
           ctx: Context.t(),
@@ -185,7 +188,7 @@ defmodule Cyfr.Execution.Attempt do
           declared_needs: [String.t()],
           activation_digest: String.t() | nil,
           roster: [map()],
-          worker: module() | nil,
+          worker: Cyfr.WorkerAPI.endpoint() | nil,
           deadline: non_neg_integer() | nil
         }
 
@@ -204,8 +207,8 @@ defmodule Cyfr.Execution.Attempt do
   `:declared_needs` (default `[]`) and `:activation_digest` (the
   resolver's, for its guest's children), `:roster` (the delegation roster
   of its admitted input, default `[]`), `:step_spans`, `:worker`,
-  `:service_id` and `:boot_id` (the `Cyfr.WorkerAPI` module, the id and the
-  boot of the worker service the run is dispatched to), `:deadline` (the
+  `:service_id` and `:boot_id` (the `t:Cyfr.WorkerAPI.endpoint/0`, the id
+  and the boot of the worker service the run is dispatched to), `:deadline` (the
   run's subtree deadline in Unix ms, which caps its children's), `:digest` (the digest of the
   component's artifact, which the runner fetches), `:held_invoke` (true
   when the waiter holds a charged invoke-budget slot of the authority's
@@ -261,9 +264,10 @@ defmodule Cyfr.Execution.Attempt do
   @doc """
   Close the run of the attempt `pid` failed with `sentence`, for a run
   whose runner was not started, and stop; the waiter hears the result.
-  Answers `:closed`.
+  Answers `:closed`, or `:attached` when a runner has attached: the run
+  was started, and it is left to that runner.
   """
-  @spec refuse(pid(), String.t()) :: :closed
+  @spec refuse(pid(), String.t()) :: :closed | :attached
   def refuse(pid, sentence) when is_pid(pid) and is_binary(sentence) do
     GenServer.call(pid, {:refuse, sentence}, :infinity)
   catch
@@ -465,12 +469,18 @@ defmodule Cyfr.Execution.Attempt do
     end
   end
 
+  # A runner that attached was started: the answer its waiter lost, not the
+  # start, and the run stays the runner's.
+  def handle_call({:refuse, _sentence}, _from, %__MODULE__{claimed_by: runner} = state)
+      when is_binary(runner),
+      do: {:reply, :attached, state}
+
   def handle_call({:refuse, sentence}, _from, state), do: refuse_run(state, sentence)
 
   # Only the waiter hands the attempt over, once a runner has attached, and
   # only to a worker service that can stop the run.
   def handle_call(:hand_over, {from, _tag}, %__MODULE__{waiter: from} = state)
-      when is_binary(state.claimed_by) and is_atom(state.worker) and not is_nil(state.worker) do
+      when is_binary(state.claimed_by) and is_map(state.worker) do
     case Registry.register(
            Cyfr.Execution.Registry,
            state.execution_id,
@@ -652,12 +662,7 @@ defmodule Cyfr.Execution.Attempt do
   defp kill_runner(%__MODULE__{worker: nil}), do: :ok
 
   defp kill_runner(state) do
-    killed =
-      try do
-        state.worker.kill(state.execution_id)
-      catch
-        :exit, reason -> {:error, reason}
-      end
+    killed = Cyfr.Execution.WorkerClient.kill(state.worker, state.execution_id)
 
     if killed == :ok and is_binary(state.claimed_by),
       do: note_unreaped(state)
