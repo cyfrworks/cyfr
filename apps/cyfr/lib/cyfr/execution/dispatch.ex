@@ -6,9 +6,10 @@ defmodule Cyfr.Execution.Dispatch do
   Runs an execution on a worker service, and stops one.
 
   `run/4` dispatches to the first worker service in
-  `config :cyfr, :workers` (each a `Cyfr.WorkerAPI` module), whose boot id
-  (`c:Cyfr.WorkerAPI.status/0`) is the attempt row's runner and the
-  assignment's audience. In order:
+  `config :cyfr, :workers` (each a `t:Cyfr.WorkerAPI.endpoint/0`, reached
+  through `Cyfr.Execution.WorkerClient`) whose status answers its
+  configured id; the boot that status names is the attempt row's runner
+  and the assignment's audience. In order:
 
     1. the run is admitted (`Cyfr.Execution.Admission.admit/4`): its row
        and its `Cyfr.Execution.Attempt`;
@@ -21,8 +22,13 @@ defmodule Cyfr.Execution.Dispatch do
     4. the assignment is signed (`Cyfr.Execution.Assignments.issue/1`), its
        attempt's keys are sealed with the worker service's dispatch seal key
        (`Cyfr.WorkerAuth.seal_attempt_keys/3`), and it is started on the
-       worker service (`c:Cyfr.WorkerAPI.start/3`) with the input's JSON; a
-       run that is not started is closed failed;
+       worker service (`Cyfr.Execution.WorkerClient.start/4`) with the
+       input's JSON; a run that is not started is closed failed. A start
+       whose answer was lost after the worker service may have acted is
+       reconciled against the attempt, never dispatched again: a runner
+       that attached keeps the run, and a run no runner attached to is
+       closed failed (a runner attaching after that finds no attempt and
+       stops);
     5. the waiter waits for the attempt to close the run (`await/2`) and
        answers what the close recorded.
 
@@ -30,8 +36,8 @@ defmodule Cyfr.Execution.Dispatch do
   to kill the runner. An attempt that stops without closing the run — its
   runner exited, its row lapsed or was lost — has the run closed lost
   (`Cyfr.Execution.Close.lost/1`), and then the worker service is asked to
-  kill its runner. The waiter's registration names the worker service, so
-  `stop/2` reaches the runner without killing the waiter.
+  kill its runner. The waiter's registration names the worker service's
+  endpoint, so `stop/2` reaches the runner without killing the waiter.
 
   `claim/4` admits a run for a runner that already runs instead of
   starting one: a formula's child, run in its parent's runner. The run's
@@ -52,7 +58,8 @@ defmodule Cyfr.Execution.Dispatch do
   require Logger
 
   alias Cyfr.Execution.{Admission, Assignments, Attempt, Cascade, Charge, Close, Keys, Record}
-  alias Cyfr.WorkerAuth
+  alias Cyfr.Execution.WorkerClient
+  alias Cyfr.{WorkerAPI, WorkerAuth}
   alias Sanctum.Context
 
   @slot_wait_ms 30_000
@@ -83,17 +90,17 @@ defmodule Cyfr.Execution.Dispatch do
           Keyword.merge(opts,
             service_id: worker.service,
             boot_id: worker.boot,
-            worker: worker.module
+            worker: worker.endpoint
           )
 
         with {:ok, admitted} <- Admission.admit(ctx, reference, input, opts) do
-          {:ok, admitted, worker.module}
+          {:ok, admitted, worker.endpoint}
         end
       end
 
     case admitted do
-      {:ok, admitted, worker} ->
-        dispatch(admitted, worker, input, opts)
+      {:ok, admitted, endpoint} ->
+        dispatch(admitted, endpoint, input, opts)
 
       {:error, _reason} = refused ->
         give_back_invoke(ctx, opts)
@@ -106,7 +113,7 @@ defmodule Cyfr.Execution.Dispatch do
   on a worker service, and hand it the run. `opts` are
   `Cyfr.Execution.Admission.admit/4`'s, with `:service_id`, `:boot_id` and
   `:worker` naming the worker service the runner belongs to (its id, its
-  boot and its `Cyfr.WorkerAPI` module), and `:runner` the runner.
+  boot and its `t:Cyfr.WorkerAPI.endpoint/0`), and `:runner` the runner.
 
   In order: the run is admitted with the calling process as its waiter;
   its attempt takes a `:child` execution slot, waiting as `run/4` does; its
@@ -186,7 +193,7 @@ defmodule Cyfr.Execution.Dispatch do
   `Cyfr.Execution.Registry`, for a caller that already ended its row. A
   dispatched run's runner, or the run a claimed attempt was handed to
   (`claim/4`), is killed through its worker service
-  (`c:Cyfr.WorkerAPI.kill/1`) and the kill is counted against `tenant` as
+  (`Cyfr.Execution.WorkerClient.kill/2`) and the kill is counted against `tenant` as
   one whose native work may still run; the worker service's exit report
   then stops its attempt, and its waiter, if any, answers the row as it
   stands. Any other holder (a turn root's, a task that has not dispatched
@@ -195,8 +202,8 @@ defmodule Cyfr.Execution.Dispatch do
   @spec stop(String.t(), String.t() | nil) :: :ok
   def stop(execution_id, tenant) when is_binary(execution_id) do
     case Registry.lookup(Cyfr.Execution.Registry, execution_id) do
-      [{_waiter, {:dispatched, worker}}] ->
-        kill_runner(worker, execution_id, tenant)
+      [{_waiter, {:dispatched, endpoint}}] ->
+        kill_runner(endpoint, execution_id, tenant)
 
       [{pid, _value}] ->
         note_unreaped(tenant, execution_id)
@@ -211,16 +218,17 @@ defmodule Cyfr.Execution.Dispatch do
 
   @typedoc """
   A worker service a run can be dispatched to: its configured service id,
-  the boot its status answered, and its `Cyfr.WorkerAPI` module.
+  the boot its status answered, and its endpoint.
   """
-  @type worker :: %{service: String.t(), boot: String.t(), module: module()}
+  @type worker :: %{service: String.t(), boot: String.t(), endpoint: WorkerAPI.endpoint()}
 
   @doc """
   The worker service runs are dispatched to: the first entry of
-  `config :cyfr, :workers` (`%{id, module}`, with an optional `components`
-  list of the name-level references it alone runs) whose module is loaded
-  and whose status answers its configured id, with the boot that status
-  names. `worker/1` also requires the entry to run `reference`.
+  `config :cyfr, :workers` (a `t:Cyfr.WorkerAPI.endpoint/0`, whose
+  `components` list names the name-level references it alone runs, or is
+  nil) whose status answers its configured id, with the boot that status
+  names; an entry that does not answer, or answers as another service, is
+  skipped. `worker/1` also requires the entry to run `reference`.
   `{:error, :execution_unavailable}` when no entry qualifies or answers.
   """
   @spec worker() :: {:ok, worker()} | {:error, :execution_unavailable}
@@ -239,23 +247,25 @@ defmodule Cyfr.Execution.Dispatch do
   end
 
   defp select(runs?) do
-    entry =
-      Enum.find(Application.get_env(:cyfr, :workers, []), fn
-        %{id: id, module: module} = entry when is_binary(id) and is_atom(module) ->
-          runs?.(entry) and Code.ensure_loaded?(module)
+    :cyfr
+    |> Application.get_env(:workers, [])
+    |> Enum.find_value({:error, :execution_unavailable}, fn
+      %{id: id, url: url} = entry when is_binary(id) and is_binary(url) ->
+        if runs?.(entry), do: answering(entry)
 
-        _ ->
-          false
-      end)
+      _ ->
+        nil
+    end)
+  end
 
-    with %{id: id, module: module} <- entry,
-         {:ok, %{service: ^id, boot: boot}} when is_binary(boot) <- module.status() do
-      {:ok, %{service: id, boot: boot, module: module}}
-    else
-      _ -> {:error, :execution_unavailable}
+  defp answering(%{id: id} = entry) do
+    case WorkerClient.status(entry) do
+      {:ok, %{service: ^id, boot: boot}} when is_binary(boot) ->
+        {:ok, %{service: id, boot: boot, endpoint: Map.put_new(entry, :components, nil)}}
+
+      _ ->
+        nil
     end
-  catch
-    :exit, _reason -> {:error, :execution_unavailable}
   end
 
   defp name_of(reference) do
@@ -269,14 +279,14 @@ defmodule Cyfr.Execution.Dispatch do
   # Dispatch
   # ---------------------------------------------------------------------------
 
-  defp dispatch(admitted, worker, input, opts) do
-    registered? = register_waiter(admitted.execution_id, worker)
+  defp dispatch(admitted, endpoint, input, opts) do
+    registered? = register_waiter(admitted.execution_id, endpoint)
 
     try do
       slot_wait = min(admitted.timeout_ms, @slot_wait_ms)
 
       case Attempt.take_slot(admitted.attempt, class(opts), slot_wait) do
-        :ok -> start(admitted, worker, input)
+        :ok -> start(admitted, endpoint, input)
         :closed -> :ok
       end
 
@@ -285,7 +295,7 @@ defmodule Cyfr.Execution.Dispatch do
           result
 
         {:lost, result} ->
-          kill_runner(worker, admitted.execution_id, admitted.close.ctx.athanor_id)
+          kill_runner(endpoint, admitted.execution_id, admitted.close.ctx.athanor_id)
           result
       end
     after
@@ -295,8 +305,10 @@ defmodule Cyfr.Execution.Dispatch do
 
   # The assignment is signed once the attempt holds its slot, so its claim
   # window is not spent waiting for one. A run that is not started is closed
-  # failed by its attempt.
-  defp start(admitted, worker, input) do
+  # failed by its attempt; one whose start's answer was lost is closed only
+  # if no runner attached (`Cyfr.Execution.Attempt.refuse/2`), since the
+  # worker service may have started it.
+  defp start(admitted, endpoint, input) do
     with {:signed, {:ok, issued}} <- {:signed, Assignments.issue(admitted.assignment)},
          {:ok, worker_key} <- Keys.worker_key(admitted.assignment.service),
          {:ok, sealed} <-
@@ -304,17 +316,30 @@ defmodule Cyfr.Execution.Dispatch do
              WorkerAuth.dispatch_seal_key(worker_key),
              issued.attempt_keys
            ),
-         :ok <- worker.start(issued.assignment, Jason.encode!(input), sealed) do
+         :ok <- WorkerClient.start(endpoint, issued.assignment, Jason.encode!(input), sealed) do
       :ok
     else
       {:signed, {:error, reason}} ->
         refuse(admitted, "the execution assignment could not be signed", reason)
 
+      {:error, :lost} ->
+        case Attempt.refuse(admitted.attempt, "the execution worker did not answer the start") do
+          :attached ->
+            Logger.warning(
+              "[Cyfr.Execution.Dispatch] #{admitted.execution_id}: the start's answer was " <>
+                "lost, and its runner attached"
+            )
+
+          :closed ->
+            Logger.error(
+              "[Cyfr.Execution.Dispatch] #{admitted.execution_id} was not started: the " <>
+                "start's answer was lost, and no runner attached"
+            )
+        end
+
       {:error, reason} ->
         refuse(admitted, "the execution worker did not start the run", reason)
     end
-  catch
-    :exit, reason -> refuse(admitted, "the execution worker did not start the run", reason)
   end
 
   # The attempt of a run claimed for a runner already running. Every
@@ -368,20 +393,21 @@ defmodule Cyfr.Execution.Dispatch do
       "[Cyfr.Execution.Dispatch] #{admitted.execution_id} was not started: #{inspect(reason)}"
     )
 
-    Attempt.refuse(admitted.attempt, sentence)
+    _closed = Attempt.refuse(admitted.attempt, sentence)
+    :ok
   end
 
   # A process that registered the id itself (a background task, before it
   # runs what it registered) keeps its entry; its value marks the run as
   # dispatched either way.
-  defp register_waiter(execution_id, worker) do
-    case Registry.register(Cyfr.Execution.Registry, execution_id, {:dispatched, worker}) do
+  defp register_waiter(execution_id, endpoint) do
+    case Registry.register(Cyfr.Execution.Registry, execution_id, {:dispatched, endpoint}) do
       {:ok, _owner} ->
         true
 
       {:error, {:already_registered, owner}} when owner == self() ->
         Registry.update_value(Cyfr.Execution.Registry, execution_id, fn _ ->
-          {:dispatched, worker}
+          {:dispatched, endpoint}
         end)
 
         false
@@ -412,18 +438,14 @@ defmodule Cyfr.Execution.Dispatch do
     end
   end
 
-  # A kill that found a runner is counted; a waiter kills its lost run's
+  # A kill that found a runner is counted; one that found none
+  # (`:not_found`) has nothing to reap. A waiter kills its lost run's
   # runner only after closing the run, so the runner's exit report finds
   # nothing left to lapse.
-  defp kill_runner(worker, execution_id, tenant) do
-    killed =
-      try do
-        worker.kill(execution_id)
-      catch
-        :exit, reason -> {:error, reason}
-      end
+  defp kill_runner(endpoint, execution_id, tenant) do
+    if WorkerClient.kill(endpoint, execution_id) == :ok,
+      do: note_unreaped(tenant, execution_id)
 
-    if killed == :ok, do: note_unreaped(tenant, execution_id)
     :ok
   end
 

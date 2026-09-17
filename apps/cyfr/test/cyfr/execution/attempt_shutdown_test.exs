@@ -5,9 +5,9 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
   @moduledoc """
   An attempt stopped by its supervisor finishes its reaction to a waiter
   that is gone, even when the waiter's exit arrived and was not yet
-  handled: its runner is killed through its worker service and its row
-  lapses. An attempt stopped while its waiter lives leaves the run to the
-  waiter.
+  handled: its runner is killed through its worker service, over the
+  wire, and its row lapses. An attempt stopped while its waiter lives
+  leaves the run to the waiter.
   """
 
   use ExUnit.Case, async: false
@@ -15,11 +15,13 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
   import Cyfr.Test.Wait
 
   alias Cyfr.Execution.Attempt
-  alias Cyfr.Test.AttemptFixtures
+  alias Cyfr.Test.{AttemptFixtures, ScriptedWorkerListener}
 
   @service "wrk_shutdown_test"
   @lapsed "Execution terminated: runner stopped without cleanup"
 
+  # A worker service that records the kills it is asked for, served over
+  # HTTP by the scripted listener as any worker service is.
   defmodule KillRecorder do
     @moduledoc false
     @behaviour Cyfr.WorkerAPI
@@ -37,7 +39,12 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
     def status,
       do:
         {:ok,
-         %{boot: "worker_shutdown_test", runners: %{fresh: 0, idle: 0, busy: 0}, attempts: []}}
+         %{
+           service: "wrk_shutdown_test",
+           boot: "worker_shutdown_test",
+           runners: %{fresh: 0, idle: 0, busy: 0},
+           attempts: []
+         }}
   end
 
   setup do
@@ -49,17 +56,20 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
       Cyfr.Execution.Semaphore.forgive_unreaped(Sanctum.TestContext.local().athanor_id)
     end)
 
-    :ok
+    listener =
+      start_supervised!({ScriptedWorkerListener, worker: KillRecorder, service: @service})
+
+    {:ok, endpoint: ScriptedWorkerListener.endpoint(listener, @service)}
   end
 
   # An attached attempt opened by a process of its own, which exits when
   # told to.
-  defp opened_by_waiter! do
+  defp opened_by_waiter!(endpoint) do
     test = self()
 
     waiter =
       spawn(fn ->
-        fixture = AttemptFixtures.attached!(service_id: @service, worker: KillRecorder)
+        fixture = AttemptFixtures.attached!(service_id: @service, worker: endpoint)
         send(test, {:opened, fixture})
         receive do: (:exit -> :ok)
       end)
@@ -70,8 +80,9 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
 
   defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
 
-  test "a stop after the waiter exited, before its exit was handled, kills the runner and lapses the row" do
-    {waiter, fixture} = opened_by_waiter!()
+  test "a stop after the waiter exited, before its exit was handled, kills the runner and lapses the row",
+       %{endpoint: endpoint} do
+    {waiter, fixture} = opened_by_waiter!(endpoint)
 
     # The waiter's exit reaches the attempt while it handles nothing.
     :ok = :sys.suspend(fixture.pid)
@@ -90,8 +101,10 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
              Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
   end
 
-  test "a stop while the waiter lives kills nothing and leaves the row to the waiter" do
-    {waiter, fixture} = opened_by_waiter!()
+  test "a stop while the waiter lives kills nothing and leaves the row to the waiter", %{
+    endpoint: endpoint
+  } do
+    {waiter, fixture} = opened_by_waiter!(endpoint)
 
     :ok = DynamicSupervisor.terminate_child(Attempt.Supervisor, fixture.pid)
 

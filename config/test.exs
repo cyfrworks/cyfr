@@ -169,6 +169,24 @@ config :cyfr,
   # CredentialStore via the session-resolution path.
   default_test_namespace: "testns"
 
+# The worker root every key CYFR issues derives from (`Cyfr.WorkerAuth`),
+# fixed for the suite so the Opus worker service of a test boot holds the
+# key CYFR derives for its id: `worker_key(root, "wrk_local")`, spelled
+# here as the HMAC it is (`Cyfr.MacEnvelope.derive/4`: the label, then the
+# service id, one per line) because the contracts are not compiled when
+# this file is read. `Cyfr.ExecutionTest` pins the two spellings to each
+# other.
+test_worker_root = :crypto.hash(:sha256, "cyfr-test-worker-root")
+config :cyfr, :worker_key, test_worker_root
+
+# The Opus service of a test boot listens on a port of the system's choosing.
+config :opus,
+  service_key:
+    :hmac
+    |> :crypto.mac(:sha256, test_worker_root, "cyfr-worker/v1/worker\nwrk_local")
+    |> Base.encode16(case: :lower),
+  port: 0
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

@@ -80,17 +80,12 @@ defmodule PrismWeb.ConnCase do
 
   @doc """
   Dispatch this test's runs to the scripted worker service, scripting the
-  bundled Claude catalyst; the configured worker services are restored on
-  exit. Answers the scripted worker service's pid.
+  bundled Claude catalyst: starting it puts its endpoint ahead of the
+  configured worker services, which are restored on exit. Answers the
+  scripted worker service's pid.
   """
   def script_model!(items \\ []) do
     previous = Application.get_env(:cyfr, :workers)
-
-    Application.put_env(
-      :cyfr,
-      :workers,
-      Cyfr.Test.ScriptedWorker.workers("catalyst:local.claude", previous)
-    )
 
     ExUnit.Callbacks.on_exit(fn ->
       Application.put_env(:cyfr, :workers, previous)

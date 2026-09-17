@@ -5,13 +5,15 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   @moduledoc """
   The scripted worker service runs a child's whole lifecycle for real but
   its component. CYFR steps the chain and charges the invoke budget, admits
-  the run with its hold barrier and dispatches it; the runner attaches with
-  its signed assignment under the attempt's keys and claims the row; the
-  attempt holds the slot, the charge and the masking set and closes the
-  run. Only the answer is scripted. A waiter that dies kills its runner
+  the run with its hold barrier and dispatches it over the wire, to the
+  endpoint the worker service's listener answers on; the runner attaches
+  with its signed assignment under the attempt's keys and claims the row;
+  the attempt holds the slot, the charge and the masking set and closes
+  the run. Only the answer is scripted. A waiter that dies kills its runner
   through the worker service, a cancel's kill is reported back under the
-  worker service's own key, and a reference it does not script runs on
-  the real worker service.
+  worker service's own key, a start whose answer was lost after the runner
+  attached is left to that runner, and the listener refuses what its
+  service's key did not sign before it reads a body.
   """
 
   use ExUnit.Case, async: false
@@ -19,11 +21,11 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   import Cyfr.Test.Wait
 
   alias Cyfr.Authority
-  alias Cyfr.Execution.{Attempt, Dispatch}
+  alias Cyfr.Execution.{Attempt, Dispatch, WorkerClient}
   alias Cyfr.Test.{AttemptFixtures, AuthorityFixtures, ScriptedWorker}
+  alias Cyfr.{WorkerAuth, WorkerWire}
 
   @scripted "reagent:local.ta"
-  @unscripted "reagent:local.scripted-worker-unscripted"
   @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
 
   setup do
@@ -46,16 +48,12 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
       for {key, value} <- previous, do: Application.put_env(:cyfr, key, value)
     end)
 
-    wasm = File.read!(@math_wasm_path)
-
-    for name <- ["ta", "scripted-worker-unscripted"] do
-      {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, wasm, %{
-          name: name,
-          version: "1.0.0",
-          type: "reagent"
-        })
-    end
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+        name: "ta",
+        version: "1.0.0",
+        type: "reagent"
+      })
 
     auth = AuthorityFixtures.root!()
     root_id = "exec_scripted_root_#{System.unique_integer([:positive])}"
@@ -307,15 +305,125 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert %{status: "completed"} = Arca.Repo.get(Arca.Execution, id)
   end
 
-  @tag :requires_opus
-  test "a reference it does not script runs on the real worker service", %{ctx: ctx} do
+  test "dispatch reaches the worker service at the endpoint its listener answers on" do
     start_supervised!({ScriptedWorker, ref: @scripted, script: []})
 
-    assert {:error, message} =
-             Dispatch.run(ctx, "#{@unscripted}:1.0.0", %{}, authority: Authority.zero())
+    assert [%{id: "wrk_scripted", url: url, components: [@scripted]} | _rest] =
+             Application.get_env(:cyfr, :workers)
 
-    # math.wasm is a core module: the real runtime refuses it.
-    assert message =~ "Component Model"
-    assert ScriptedWorker.calls() == []
+    assert url == ScriptedWorker.url()
+    assert "http://127.0.0.1:" <> port = url
+    assert String.to_integer(port) > 0
+
+    assert {:ok, %{service: "wrk_scripted", boot: boot, endpoint: %{url: ^url}}} =
+             Dispatch.worker("#{@scripted}:1.0.0")
+
+    assert boot == boot()
+    assert {:ok, %{boot: ^boot, attempts: []}} = WorkerClient.status(ScriptedWorker.endpoint())
+
+    # A kill of a run no runner runs finds nothing, and is no failure.
+    assert {:error, :not_found} = WorkerClient.kill(ScriptedWorker.endpoint(), "exec_none")
+    assert :ok = Dispatch.stop("exec_none", "ath_test")
+    assert ScriptedWorker.kills() == ["exec_none"]
+  end
+
+  test "a start whose answer was lost after the runner attached is left to that runner, never dispatched again",
+       %{ctx: ctx} do
+    start_supervised!(
+      {ScriptedWorker, ref: @scripted, script: [%{"content" => "once"}], lose_start_answer: true}
+    )
+
+    id = Cyfr.UUID7.execution_id()
+
+    assert {:ok, %{status: :completed, output: %{"data" => %{"content" => "once"}}}} =
+             Dispatch.run(ctx, "#{@scripted}:1.0.0", %{},
+               authority: Authority.zero(),
+               execution_id: id
+             )
+
+    assert [%{execution_id: ^id}] = ScriptedWorker.calls()
+
+    assert %{state: "completed", outcome: "ok"} =
+             Arca.ExecutionAttempts.current(ctx.athanor_id, id)
+
+    assert Attempt.whereis(id) == nil
+  end
+
+  defp post(route, headers, body) do
+    {:ok, response} =
+      Req.request(
+        method: :post,
+        url: ScriptedWorker.url() <> route,
+        headers: headers,
+        body: body,
+        retry: false,
+        decode_body: false
+      )
+
+    {response.status, Jason.decode!(response.body)}
+  end
+
+  defp signed(key, body) do
+    request = %{
+      service: ScriptedWorker.service(),
+      boot: "boot_test",
+      ts: System.system_time(:millisecond),
+      nonce: Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
+    }
+
+    {:ok, header} = WorkerAuth.request_header(key, request, body)
+    [{WorkerWire.auth_header(), header}]
+  end
+
+  defp dispatch_key do
+    {:ok, worker_key} = Cyfr.Execution.Keys.worker_key(ScriptedWorker.service())
+    WorkerAuth.dispatch_key(worker_key)
+  end
+
+  describe "the listener" do
+    setup do
+      start_supervised!({ScriptedWorker, ref: @scripted, script: []})
+      :ok
+    end
+
+    test "refuses a request its service's key did not sign before reading the body" do
+      body = Jason.encode!(WorkerWire.request_body(:status, %{}))
+      route = WorkerWire.worker_route(:status)
+
+      assert {401, %{"error" => "malformed"}} = post(route, [], body)
+
+      other = WorkerAuth.dispatch_key(:crypto.strong_rand_bytes(32))
+      assert {401, %{"error" => "bad_mac"}} = post(route, signed(other, body), body)
+
+      assert {200, %{"ok" => %{"service" => "wrk_scripted"}}} =
+               post(route, signed(dispatch_key(), body), body)
+    end
+
+    test "refuses a body that is not the one the header named, and one that is not its route's" do
+      body = Jason.encode!(WorkerWire.request_body(:status, %{}))
+      headers = signed(dispatch_key(), body)
+
+      assert {400, %{"error" => "bad_mac"}} =
+               post(WorkerWire.worker_route(:status), headers, body <> " ")
+
+      assert {400, %{"error" => "malformed"}} =
+               post(WorkerWire.worker_route(:kill), headers, body)
+
+      kill = Jason.encode!(WorkerWire.request_body(:kill, %{"runner" => "r1"}))
+
+      assert {400, %{"error" => "malformed"}} =
+               post(WorkerWire.worker_route(:kill), signed(dispatch_key(), kill), kill)
+
+      assert {404, %{"error" => "not_found"}} = post("/worker/v1/other", headers, body)
+    end
+
+    test "refuses a body past the host API's bound without serving it" do
+      body = String.duplicate("x", Cyfr.HostAPI.max_body_bytes() + 1)
+
+      assert {413, %{"error" => "malformed"}} =
+               post(WorkerWire.worker_route(:kill), signed(dispatch_key(), body), body)
+
+      assert ScriptedWorker.kills() == []
+    end
   end
 end

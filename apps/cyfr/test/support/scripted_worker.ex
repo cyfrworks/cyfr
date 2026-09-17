@@ -9,15 +9,19 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   Everything but the component is real. This worker service has an id of
   its own (`service/0`) and a boot of its own, and its keys are its own: it
-  never answers as the real worker service. A run of a scripted reference
-  is admitted by CYFR and dispatched here; `start/3` checks the assignment
-  is addressed to this worker service and this boot, its input matches its
-  digest and its sealed keys open as its attempt, then starts a runner.
-  The runner reaches its attempt only through `Cyfr.Execution.Host`,
-  signing each call with the attempt's call key: it attaches with the
-  signed assignment (the claim, and the unseal of the run's vault edge),
-  records the call with the authority its assignment carries, pushes the
-  script's events (`push_deltas`, masked by the attempt) and closes the run
+  never answers as the real worker service. It is served over HTTP by
+  `Cyfr.Test.ScriptedWorkerListener` on a loopback port of its own, so
+  `Cyfr.Execution.Dispatch` reaches it through
+  `Cyfr.Execution.WorkerClient` exactly as it reaches Opus: `endpoint/0`
+  is where. A run of a scripted reference is admitted by CYFR and
+  dispatched here; `start/3` checks the assignment is addressed to this
+  worker service and this boot, its input matches its digest and its
+  sealed keys open as its attempt, then starts a runner. The runner
+  reaches its attempt through `Cyfr.Execution.Host`, in this BEAM, signing
+  each call with the attempt's call key: it attaches with the signed
+  assignment (the claim, and the unseal of the run's vault edge), records
+  the call with the authority its assignment carries, pushes the script's
+  events (`push_deltas`, masked by the attempt) and closes the run
   (`complete` or `fail`). A runner that exits leaving its attempt open is
   reported (`Cyfr.Execution.Host.runner_exited/2`), signed with this
   worker service's dispatch key.
@@ -25,11 +29,11 @@ defmodule Cyfr.Test.ScriptedWorker do
   A reference it does not script never reaches it: starting it puts an
   entry for its scripted references alone ahead of the configured worker
   services in `config :cyfr, :workers` (`workers/2`), so
-  `Cyfr.Execution.Dispatch` routes every other reference to the real
-  worker service when one is configured, and stopping it removes that
-  entry. Tests that change `:workers` themselves restore it on exit as they
-  do today. Started for a reference the routing did not name, it refuses
-  the assignment `:malformed`.
+  `Cyfr.Execution.Dispatch` routes every other reference to the worker
+  services configured after it, and stopping it removes that entry. Tests
+  that change `:workers` themselves restore it on exit as they do today.
+  Started for a reference the routing did not name, it refuses the
+  assignment `:malformed`.
 
   A script is a list consumed in order across runs. A run takes items
   until it reaches an answer:
@@ -52,9 +56,18 @@ defmodule Cyfr.Test.ScriptedWorker do
     the next answer is written, before that process can return it.
   - `:hang` — never answer.
 
+  The process waiting on a run is the one registered under its execution
+  id in `Cyfr.Execution.Registry` when the run is started, as dispatch
+  registers its waiter before it starts a run.
+
   The catalyst's answers about itself are not the script's: a run's input
   `%{"operation" => "describe"}` is answered with its description, and
   `%{"operation" => "models"}` with no models.
+
+  Started with `lose_start_answer: true`, `start/3` starts the runner,
+  waits for it to attach, and then answers `{:error, :lost}` in place of
+  `:ok`: what CYFR sees of a start whose answer a transport lost after the
+  worker service acted.
   """
 
   @behaviour Cyfr.WorkerAPI
@@ -65,10 +78,15 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   alias Cyfr.{Assignment, WorkerAuth}
   alias Cyfr.Execution.{Host, Keys}
+  alias Cyfr.Test.ScriptedWorkerListener
 
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
   @probe_wait_ms 5_000
+  @attach_wait_ms 5_000
   @service "wrk_scripted"
+  # A loopback port nothing listens on (as `config/test.exs` names the
+  # registry): the endpoint of this worker service while it is not started.
+  @unserved "http://127.0.0.1:19"
 
   @doc false
   def child_spec(opts) do
@@ -80,30 +98,53 @@ defmodule Cyfr.Test.ScriptedWorker do
   def service, do: @service
 
   @doc """
+  The base URL this worker service's listener answers on while it runs,
+  and a loopback URL nothing answers on otherwise.
+  """
+  @spec url() :: String.t()
+  def url do
+    case Process.whereis(__MODULE__) do
+      nil -> @unserved
+      pid -> GenServer.call(pid, :url)
+    end
+  end
+
+  @doc """
+  This worker service's endpoint (`t:Cyfr.WorkerAPI.endpoint/0`), running
+  any reference: what a test hands an attempt as its `:worker`.
+  """
+  @spec endpoint() :: Cyfr.WorkerAPI.endpoint()
+  def endpoint, do: %{id: @service, url: url(), components: nil}
+
+  @doc """
   The `config :cyfr, :workers` list that routes the scripted `refs` (any
   form `Cyfr.ComponentRef.to_name_ref/1` reads) to this worker service and
   every other reference to the worker services in `configured` (the list
   being replaced, with any earlier entry of this worker service dropped).
   """
   @spec workers([String.t()] | String.t(), [map()] | nil) :: [map()]
-  def workers(refs, configured) do
-    names =
-      refs
-      |> List.wrap()
-      |> Enum.map(fn ref ->
-        {:ok, name} = Cyfr.ComponentRef.to_name_ref(ref)
-        name
-      end)
+  def workers(refs, configured), do: entries(names(refs), configured, url())
 
-    others = Enum.reject(configured || [], &(is_map(&1) and &1[:module] == __MODULE__))
-    [%{id: @service, module: __MODULE__, components: names} | others]
+  defp entries(names, configured, url) do
+    others = Enum.reject(configured || [], &(is_map(&1) and &1[:id] == @service))
+    [%{id: @service, url: url, components: names} | others]
+  end
+
+  defp names(refs) do
+    refs
+    |> List.wrap()
+    |> Enum.map(fn ref ->
+      {:ok, name} = Cyfr.ComponentRef.to_name_ref(ref)
+      name
+    end)
   end
 
   @doc """
   Start the worker service: `ref:` the scripted reference (or a list),
   `script:` its items, `window:` the context window a description answers
   for any model (default 200_000), `describe:` `{:refuse, error}` to have
-  a described model refused instead.
+  a described model refused instead, `lose_start_answer:` true to answer
+  every start `{:error, :lost}` once its runner attached.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -139,12 +180,11 @@ defmodule Cyfr.Test.ScriptedWorker do
   @impl Cyfr.WorkerAPI
   def start(token, input, sealed_keys)
       when is_binary(token) and is_binary(input) and is_binary(sealed_keys) do
-    caller = %{
-      callers: [self() | Process.get(:"$callers", [])],
-      logger: Cyfr.LoggerContext.capture()
-    }
-
-    GenServer.call(__MODULE__, {:start, token, input, sealed_keys, caller})
+    case GenServer.call(__MODULE__, {:start, token, input, sealed_keys}) do
+      {:ok, :answered} -> :ok
+      {:ok, {:lose_once_attached, execution_id}} -> lose_once_attached(execution_id)
+      {:error, :malformed} -> {:error, :malformed}
+    end
   end
 
   @impl Cyfr.WorkerAPI
@@ -153,6 +193,18 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   @impl Cyfr.WorkerAPI
   def status, do: {:ok, GenServer.call(__MODULE__, :status)}
+
+  # The lost answer of a start the worker service acted on: answered once
+  # the runner attached, so a test sees the reconciliation and not a race.
+  defp lose_once_attached(execution_id) do
+    Cyfr.Test.Wait.wait_until(
+      fn -> Enum.any?(calls(), &(&1.execution_id == execution_id)) end,
+      @attach_wait_ms,
+      "the runner of #{execution_id} attached"
+    )
+
+    {:error, :lost}
+  end
 
   # ---------------------------------------------------------------------------
   # Server
@@ -164,26 +216,28 @@ defmodule Cyfr.Test.ScriptedWorker do
     # with this process.
     Process.flag(:trap_exit, true)
 
-    refs =
-      opts
-      |> Keyword.fetch!(:ref)
-      |> List.wrap()
-      |> Enum.map(fn ref ->
-        {:ok, name} = Cyfr.ComponentRef.to_name_ref(ref)
-        name
-      end)
+    refs = names(Keyword.fetch!(opts, :ref))
+    {:ok, listener} = ScriptedWorkerListener.start_link(worker: __MODULE__, service: @service)
+    url = ScriptedWorkerListener.url(listener)
 
     # Route the scripted references here and everything else to the worker
     # services configured before; `terminate/2` takes the entry out again.
-    Application.put_env(:cyfr, :workers, workers(refs, Application.get_env(:cyfr, :workers)))
+    Application.put_env(
+      :cyfr,
+      :workers,
+      entries(refs, Application.get_env(:cyfr, :workers), url)
+    )
 
     {:ok,
      %{
        boot: "#{node()}#" <> Cyfr.UUID7.generate_id("boot"),
+       listener: listener,
+       url: url,
        refs: refs,
        script: Keyword.get(opts, :script, []),
        window: Keyword.get(opts, :window, 200_000),
        describe: Keyword.get(opts, :describe, :answer),
+       lose_start_answer: Keyword.get(opts, :lose_start_answer, false) == true,
        calls: [],
        kills: [],
        runners: %{}
@@ -191,7 +245,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   end
 
   @impl true
-  def handle_call({:start, token, input, sealed_keys, caller}, _from, state) do
+  def handle_call({:start, token, input, sealed_keys}, _from, state) do
     with {:ok, assignment} <- Assignment.read(token),
          true <- scripted?(state, assignment.component.ref),
          true <- assignment.service == @service and assignment.boot == state.boot,
@@ -201,6 +255,8 @@ defmodule Cyfr.Test.ScriptedWorker do
            WorkerAuth.open_attempt_keys(WorkerAuth.dispatch_seal_key(worker_key), sealed_keys),
          true <- attempt == assignment |> Map.take(@attempt_fields) |> Map.put(:service, @service),
          {:ok, %{} = decoded} <- Jason.decode(input) do
+      waiter = waiter_of(assignment.execution_id)
+
       runner = %{
         token: token,
         assignment: assignment,
@@ -208,9 +264,8 @@ defmodule Cyfr.Test.ScriptedWorker do
         keys: keys,
         boot: state.boot,
         runner: Cyfr.UUID7.generate_id("runner"),
-        waiter: hd(caller.callers),
-        callers: caller.callers,
-        logger: caller.logger
+        waiter: waiter,
+        callers: List.wrap(waiter)
       }
 
       pid = spawn_link(fn -> run(runner) end)
@@ -221,11 +276,15 @@ defmodule Cyfr.Test.ScriptedWorker do
           attempt: assignment.attempt,
           boot: state.boot,
           runner: runner.runner,
-          callers: caller.callers,
-          logger: caller.logger
+          callers: runner.callers
         })
 
-      {:reply, :ok, %{state | runners: runners}}
+      answer =
+        if state.lose_start_answer,
+          do: {:lose_once_attached, assignment.execution_id},
+          else: :answered
+
+      {:reply, {:ok, answer}, %{state | runners: runners}}
     else
       _refused -> {:reply, {:error, :malformed}, state}
     end
@@ -256,6 +315,7 @@ defmodule Cyfr.Test.ScriptedWorker do
      }, state}
   end
 
+  def handle_call(:url, _from, state), do: {:reply, state.url, state}
   def handle_call({:script, items}, _from, state), do: {:reply, :ok, %{state | script: items}}
   def handle_call(:calls, _from, state), do: {:reply, Enum.reverse(state.calls), state}
   def handle_call(:kills, _from, state), do: {:reply, Enum.reverse(state.kills), state}
@@ -272,6 +332,9 @@ defmodule Cyfr.Test.ScriptedWorker do
     do: {:reply, :ok, %{state | calls: [call | state.calls]}}
 
   @impl true
+  def handle_info({:EXIT, listener, reason}, %{listener: listener} = state),
+    do: {:stop, {:listener_exited, reason}, state}
+
   def handle_info({:EXIT, pid, reason}, state) do
     case Map.pop(state.runners, pid) do
       {nil, _runners} ->
@@ -292,8 +355,9 @@ defmodule Cyfr.Test.ScriptedWorker do
   def terminate(_reason, state) do
     for {pid, _runner} <- state.runners, do: Process.exit(pid, :kill)
 
+    # The listener, linked, goes with this process.
     configured = Application.get_env(:cyfr, :workers, [])
-    Application.put_env(:cyfr, :workers, Enum.reject(configured, &(&1[:module] == __MODULE__)))
+    Application.put_env(:cyfr, :workers, Enum.reject(configured, &(&1[:id] == @service)))
     :ok
   end
 
@@ -304,12 +368,20 @@ defmodule Cyfr.Test.ScriptedWorker do
     end
   end
 
-  # A runner's exit is reported from a process of its own, as the caller
-  # that started it, so its writes run under that caller's sandbox.
+  # The process waiting on the run: dispatch registers it under the
+  # execution's id before it starts the run.
+  defp waiter_of(execution_id) do
+    case Registry.lookup(Cyfr.Execution.Registry, execution_id) do
+      [{waiter, _value}] -> waiter
+      [] -> nil
+    end
+  end
+
+  # A runner's exit is reported from a process of its own, as the process
+  # that waited on the run, so its writes run under that process's sandbox.
   defp report(runner) do
     spawn(fn ->
       Process.put(:"$callers", runner.callers)
-      Cyfr.LoggerContext.restore(runner.logger)
 
       body =
         Jason.encode!(%{
@@ -347,7 +419,6 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   defp run(runner) do
     Process.put(:"$callers", runner.callers)
-    Cyfr.LoggerContext.restore(runner.logger)
     Cyfr.LoggerContext.set_execution_id(runner.assignment.execution_id)
 
     case attached(runner) do
@@ -422,7 +493,7 @@ defmodule Cyfr.Test.ScriptedWorker do
         next(runner, crash_after?)
 
       {:crash, :before_response} ->
-        Process.exit(runner.waiter, :kill)
+        kill_waiter(runner)
         Process.sleep(:infinity)
 
       {:crash, :after_persist} ->
@@ -439,15 +510,18 @@ defmodule Cyfr.Test.ScriptedWorker do
 
       %{} = data when crash_after? ->
         # Suspended, the waiter cannot return the answer the close sends it.
-        :erlang.suspend_process(runner.waiter)
+        if is_pid(runner.waiter), do: :erlang.suspend_process(runner.waiter)
         closed = complete(runner, %{"status" => 200, "data" => data})
-        Process.exit(runner.waiter, :kill)
+        kill_waiter(runner)
         closed
 
       %{} = data ->
         complete(runner, %{"status" => 200, "data" => data})
     end
   end
+
+  defp kill_waiter(%{waiter: waiter}) when is_pid(waiter), do: Process.exit(waiter, :kill)
+  defp kill_waiter(_runner), do: :ok
 
   defp description(params, window) do
     model =
