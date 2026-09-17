@@ -12,8 +12,36 @@ defmodule Cyfr.WorkerAPI do
   (`Cyfr.WorkerAuth.request_header/3`); the worker service verifies it
   (`Cyfr.WorkerAuth.verify_request/4`), refuses a request addressed to
   another worker service and refuses a nonce it has already seen. It reports each runner's exit to CYFR itself
-  (`c:Cyfr.HostAPI.runner_exited/2`).
+  (`c:Cyfr.HostAPI.runner_exited/3`).
+
+  A request whose answer is lost is retried as `retry/1` says: `kill` and
+  `status` again, `start` never — its assignment's claim window bounds it,
+  and CYFR reconciles against the attempt's claim. `request_timeout_ms/1`
+  bounds each wait.
   """
+
+  @typedoc "What CYFR may do when a request's answer is lost (`Cyfr.HostAPI.retry/0`)."
+  @type retry :: :idempotent | :never
+
+  @retries %{start: :never, kill: :idempotent, status: :idempotent}
+  @timeouts %{start: Cyfr.Assignment.claim_window_ms(), kill: 5_000, status: 5_000}
+
+  @doc "The callbacks, as `retry/1` and `request_timeout_ms/1` name them."
+  @spec callbacks() :: [atom()]
+  def callbacks, do: Map.keys(@retries)
+
+  @doc "What CYFR may do when `callback`'s answer is lost."
+  @spec retry(atom()) :: retry()
+  def retry(callback) when is_map_key(@retries, callback), do: Map.fetch!(@retries, callback)
+
+  @doc """
+  How long CYFR waits for `callback`'s answer, in milliseconds: the
+  assignment's claim window for `start`, five seconds for `kill` and
+  `status`.
+  """
+  @spec request_timeout_ms(atom()) :: pos_integer()
+  def request_timeout_ms(callback) when is_map_key(@timeouts, callback),
+    do: Map.fetch!(@timeouts, callback)
 
   @typedoc """
   A worker service's state: its configured service id; its boot id, which

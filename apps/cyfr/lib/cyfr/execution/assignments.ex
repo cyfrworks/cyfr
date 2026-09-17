@@ -12,18 +12,17 @@ defmodule Cyfr.Execution.Assignments do
   it names the attempt its header does and claims the attempt.
 
   An assignment is issued under the current generation
-  (`Cyfr.Execution.Keys.generation/0`), to the worker service it is
-  dispatched to as its audience, and may be claimed for 30 seconds after
-  it is issued. Its deadline is its timeout from issue, and its lease runs
-  one lease period from issue. Its attempt's keys are bound to that worker
+  (`Cyfr.Execution.Keys.generation/0`), to the worker service and the boot
+  of it the run is dispatched to, and may be claimed within the claim
+  window (`Cyfr.Assignment.claim_window_ms/0`). Its deadline is the
+  subtree deadline admission settled, and its lease runs one lease period
+  from issue. Its attempt's keys are bound to that worker
   service as well as to the attempt, its fence and its generation.
   """
 
   alias Cyfr.{Actor, Assignment, Authority}
   alias Cyfr.Execution.{Keys, Record}
   alias Sanctum.Context
-
-  @claim_window_ms 30_000
 
   @typedoc """
   What an assignment is built from: the admission context, the admitted
@@ -82,7 +81,7 @@ defmodule Cyfr.Execution.Assignments do
       service: admitted.service,
       boot: admitted.boot,
       issued_at: now,
-      claim_by: now + @claim_window_ms,
+      claim_by: now + Assignment.claim_window_ms(),
       execution_id: record.id,
       attempt: record.attempt,
       fence: attempt.fence,

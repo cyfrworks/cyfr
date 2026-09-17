@@ -9,7 +9,7 @@ defmodule Cyfr.HostAPI do
 
   ## A runner's calls
 
-  Every callback but `c:runner_exited/2` answers a runner, for one attempt
+  Every callback but `c:runner_exited/3` answers a runner, for one attempt
   it runs. The call is signed with that attempt's call key
   (`Cyfr.WorkerAuth.host_call_header/3`), and its body and answer are
   sealed with the attempt's seal key (`Cyfr.WorkerAuth.seal_call/5`).
@@ -27,11 +27,96 @@ defmodule Cyfr.HostAPI do
 
   ## The worker service's report
 
-  `c:runner_exited/2` answers a worker service. The report is signed with
+  `c:runner_exited/3` answers a worker service. The report is signed with
   that worker service's own dispatch key (`Cyfr.WorkerAuth.report_header/3`)
   and verified with `Cyfr.WorkerAuth.verify_report/4`, so it speaks only
   for the runners of the worker service it names.
+
+  ## Retrying a lost answer
+
+  A transport may lose an answer after CYFR acted. `retry/1` says what a
+  client may do then, per callback (`t:retry/0`); `request_timeout_ms/1`
+  bounds how long it waits for each answer, and `max_body_bytes/0` and
+  `max_answer_bytes/0` bound what crosses in either direction. A retried
+  call is a new call with a fresh nonce; only its effect is repeatable.
   """
+
+  @typedoc """
+  What a client may do when a call's answer is lost:
+
+    * `:idempotent` — call again; the effect is the same.
+    * `:outcome` — call again; a duplicate returns the outcome CYFR already
+      recorded, never a second one.
+    * `:batch` — one batch is in flight at a time; send the same batch
+      again, and acknowledgements name what was already accepted.
+    * `:never` — do not call again: the effect may have happened, and a
+      repeat could act twice. The work ends `uncertain` unless the catalog
+      declares the operation replay-safe.
+  """
+  @type retry :: :idempotent | :outcome | :batch | :never
+
+  @callbacks [
+    :attach,
+    :renew,
+    :complete,
+    :fail,
+    :push_deltas,
+    :oauth_token,
+    :take_rate,
+    :fetch_artifact,
+    :storage,
+    :admit_child,
+    :tool_call,
+    :record_denial,
+    :release_child,
+    :runner_exited
+  ]
+
+  @retries %{
+    attach: :idempotent,
+    renew: :idempotent,
+    complete: :outcome,
+    fail: :outcome,
+    push_deltas: :batch,
+    oauth_token: :never,
+    take_rate: :never,
+    fetch_artifact: :idempotent,
+    storage: :never,
+    admit_child: :never,
+    tool_call: :never,
+    record_denial: :never,
+    release_child: :idempotent,
+    runner_exited: :idempotent
+  }
+
+  @doc "The callbacks, as `retry/1` and `request_timeout_ms/1` name them."
+  @spec callbacks() :: [atom()]
+  def callbacks, do: @callbacks
+
+  @doc """
+  What a client may do when `callback`'s answer is lost (`t:retry/0`).
+  `admit_child` is `:never` until the wire carries a caller-chosen child
+  key CYFR can answer an existing admission for.
+  """
+  @spec retry(atom()) :: retry()
+  def retry(callback) when is_map_key(@retries, callback), do: Map.fetch!(@retries, callback)
+
+  @doc """
+  How long a client waits for `callback`'s answer, in milliseconds, before
+  it treats the answer as lost: the host-call header window for every
+  call, so a late answer never verifies as fresh.
+  """
+  @spec request_timeout_ms(atom()) :: pos_integer()
+  def request_timeout_ms(callback) when is_map_key(@retries, callback),
+    do: Cyfr.WorkerAuth.window_ms()
+
+  @doc "The most bytes a host call's body may carry."
+  @spec max_body_bytes() :: pos_integer()
+  def max_body_bytes, do: Cyfr.Limits.default_max_request_size()
+
+  @doc "The most bytes a host call's answer may carry."
+  @spec max_answer_bytes() :: pos_integer()
+  def max_answer_bytes, do: Cyfr.Limits.default_max_response_size()
 
   alias Cyfr.Assignment
   alias Cyfr.Delta
@@ -91,7 +176,7 @@ defmodule Cyfr.HostAPI do
 
   CYFR verifies the token (`Cyfr.Assignment.verify/3`), checks that it names
   the caller's attempt and generation and is addressed to the caller's
-  worker service, and claims the attempt row: running, at the assignment's
+  worker service and boot, and claims the attempt row: running, at the assignment's
   fence and unclaimed. An attach from the runner that
   already holds the claim answers as the first did; one from any other
   runner is `:replayed`. A vault edge that cannot produce its material is

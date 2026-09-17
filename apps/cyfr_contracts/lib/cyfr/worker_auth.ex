@@ -185,6 +185,14 @@ defmodule Cyfr.WorkerAuth do
   @spec decode_root(term()) :: {:ok, binary()} | :error
   defdelegate decode_root(text), to: MacEnvelope
 
+  @doc """
+  How far a header's `ts` may be from the verifier's clock, in
+  milliseconds, on either side. A call answered later than this is treated
+  as lost by its client (`Cyfr.HostAPI.request_timeout_ms/1`).
+  """
+  @spec window_ms() :: pos_integer()
+  def window_ms, do: @window_ms
+
   @doc "The key assignments are MAC'd with. Only CYFR holds it."
   @spec assign_key(binary()) :: binary()
   def assign_key(root) when byte_size(root) == 32,

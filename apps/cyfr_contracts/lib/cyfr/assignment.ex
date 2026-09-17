@@ -177,6 +177,17 @@ defmodule Cyfr.Assignment do
   @need ~r/\A[a-z][a-z0-9_-]{0,31}\z/
   @max_list 256
 
+  @claim_window_ms 30_000
+
+  @doc """
+  How long after issue a runner may claim an assignment, in milliseconds:
+  `claim_by` is `issued_at` plus this, and a `start` request that has not
+  been answered within it is not retried but reconciled against the
+  attempt's claim.
+  """
+  @spec claim_window_ms() :: pos_integer()
+  def claim_window_ms, do: @claim_window_ms
+
   @doc "The token for `assignment`, MAC'd with the assign key."
   @spec sign(t(), binary()) :: {:ok, token()} | {:error, :invalid_assignment | Cyfr.JCS.error()}
   def sign(%__MODULE__{} = assignment, assign_key) when is_binary(assign_key) do
