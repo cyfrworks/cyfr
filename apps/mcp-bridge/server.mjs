@@ -16,7 +16,10 @@
 //                  and each is answered without waiting on a backend: a
 //                  sync is answered once its version is admitted, and the
 //                  owner's state and rev (owners.mjs) in every later renew
-//                  and status say when its backends are ready.
+//                  and status say when its backends are ready. A status
+//                  names a bounded set of owners and its answer is bounded
+//                  in bytes; past either bound it is refused whole, never
+//                  cut.
 //   POST /mcp      One owner's MCP requests (server/discover, tools/list,
 //                  tools/call), signed with that owner's key for the
 //                  generation and epoch it runs at. It reaches that owner's
@@ -89,6 +92,15 @@ const TIMESTAMP_WINDOW_MS = 30_000;
 export const CONTROL_BODY_LIMIT = 1024 * 1024;
 export const MCP_BODY_LIMIT = 10 * 1024 * 1024 + 64 * 1024;
 
+// A status names at most this many owners, and its answer — each named
+// owner's backends with their stderr tails — is at most the control limit,
+// which is also the most CYFR reads of any control answer. A status past
+// the owner bound is refused as `too_many_owners`, and one whose answer
+// would pass the byte bound as `status_too_large`; neither is truncated.
+// CYFR mirrors the owner bound (Emissary.MCP.Bridge) and never sends more.
+export const MAX_STATUS_OWNERS = 64;
+export const STATUS_ANSWER_LIMIT = CONTROL_BODY_LIMIT;
+
 // A tool catalogue changes only when an owner is synced or a backend
 // restarts. `private`: each owner's catalogue is its own.
 const TOOLS_TTL_MS = 60_000;
@@ -113,8 +125,11 @@ function ownerRef(value, { epoch }) {
   return epoch ? { athanor, server, e } : { athanor, server };
 }
 
-function ownerRefs(value, options) {
+// The owner references a message lists; a list past `max` is refused as
+// `too_many_owners` before any entry is read.
+function ownerRefs(value, options, { max = Infinity } = {}) {
   if (!Array.isArray(value)) throw new Refusal("bad_request", 400);
+  if (value.length > max) throw new Refusal("too_many_owners", 400);
   return value.map((entry) => ownerRef(entry, options));
 }
 
@@ -165,7 +180,8 @@ function readBody(req, limit) {
  * block; the spawner adds only HOME, USER, LOGNAME, TMPDIR and PATH.
  *
  * Returns the express `app`, this lifetime's `boot` id, the `owners` table
- * and `close()`, which releases every owner.
+ * and `close()`, which releases every owner. `statusAnswerLimit` is the
+ * most bytes a status answer may be (the control limit unless set).
  */
 export function createBridge({
   spawner,
@@ -175,6 +191,7 @@ export function createBridge({
   rpcTimeoutMs = RPC_TIMEOUT_MS,
   initTimeoutMs = INIT_TIMEOUT_MS,
   maxInFlight = MAX_IN_FLIGHT,
+  statusAnswerLimit = STATUS_ANSWER_LIMIT,
   ...ownerOptions
 }) {
   const rootKey = Buffer.from(root);
@@ -343,8 +360,13 @@ export function createBridge({
         return owners.renew(ownerRefs(message.owners, { epoch: true }), g, milliseconds(message.lease_ms, MAX_LEASE_MS));
       case "release":
         return owners.release(ownerRefs(message.owners, { epoch: true }), g);
-      case "status":
-        return owners.status(ownerRefs(message.owners, { epoch: false }));
+      case "status": {
+        const answer = owners.status(ownerRefs(message.owners, { epoch: false }, { max: MAX_STATUS_OWNERS }));
+        // Measured as `res.json` will send it; an answer past the bound is
+        // refused whole rather than sent or cut.
+        if (Buffer.byteLength(JSON.stringify(answer)) > statusAnswerLimit) throw new Refusal("status_too_large");
+        return answer;
+      }
       default:
         throw new Refusal("bad_request", 400);
     }

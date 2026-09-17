@@ -7,9 +7,12 @@
 // messages are applied in order and answered without waiting on a backend;
 // an owner runs exactly the backends its sync defined, at exactly its
 // version, while its lease lives, and reports when they are ready; each
-// owner sees only its own backends; an idle backend is retired and started
-// again by its next call; what leaves the bridge is masked; and stdio
-// framing, crashes and release behave through the spawner.
+// owner sees only its own backends; a status names a bounded set of owners
+// and its answer is bounded in bytes, refused whole past either; the uid
+// pool's slots are claimed once and freed once, so no two admissions share
+// a slot; an idle backend is retired and started again by its next call, or
+// refused at once when no slot is free; what leaves the bridge is masked;
+// and stdio framing, crashes and release behave through the spawner.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -19,7 +22,8 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as auth from "../auth.mjs";
-import { CONTROL_BODY_LIMIT, MCP_BODY_LIMIT, createBridge } from "../server.mjs";
+import { STDERR_TAIL_BYTES } from "../owners.mjs";
+import { CONTROL_BODY_LIMIT, MAX_STATUS_OWNERS, MCP_BODY_LIMIT, STATUS_ANSWER_LIMIT, createBridge } from "../server.mjs";
 import { Controller } from "../../../tests/bridge-image/controller.mjs";
 import { FakeSpawner } from "./fake-spawner.mjs";
 
@@ -43,6 +47,7 @@ async function eventually(check, what, timeoutMs = 10_000) {
   }
 }
 
+// The controller signs with the bridge's clock when the test sets one.
 async function startBridge(options = {}) {
   const spawner = options.spawner || new FakeSpawner();
   const instance = createBridge({ root: ROOT, ...TIMEOUTS, ...options, spawner });
@@ -50,7 +55,7 @@ async function startBridge(options = {}) {
     const s = instance.app.listen(0, "127.0.0.1", () => resolve(s));
   });
   const base = `http://127.0.0.1:${server.address().port}`;
-  const controller = new Controller({ base, root: ROOT });
+  const controller = new Controller({ base, root: ROOT, now: options.now });
   assert.equal((await controller.hello()).status, 200);
   return { instance, server, base, spawner, controller };
 }
@@ -659,6 +664,203 @@ test("release retires an owner at or below the version named; reconcile retires 
 });
 
 // ============================================================================
+// Status bounds
+// ============================================================================
+
+test("a status names at most MAX_STATUS_OWNERS owners: at the bound it is answered, one over is refused whole as too_many_owners", async () => {
+  const refs = Array.from({ length: MAX_STATUS_OWNERS + 1 }, () => newOwner());
+  const atBound = await c.status(refs.slice(0, MAX_STATUS_OWNERS));
+  assert.deepEqual([atBound.status, atBound.body], [200, { owners: [] }]);
+
+  const over = await c.status(refs);
+  assert.deepEqual([over.status, over.body], [400, { error: "too_many_owners" }]);
+
+  // The count is refused before any entry is read.
+  const overWithBad = await c.status([...refs, { athanor: "a b", server: "s" }]);
+  assert.deepEqual([overWithBad.status, overWithBad.body], [400, { error: "too_many_owners" }]);
+});
+
+test("a status answer at the byte limit is sent, and one byte over is refused whole as status_too_large", async () => {
+  // A frozen clock keeps lease_ms_left, and so the answer's size, the same
+  // on both bridges; an owner one byte longer in name answers one byte more.
+  const now = () => 1_800_000_000_000;
+  const owner = { athanor: "ath_size", server: "mcp_size", e: 1 };
+  const longer = { ...owner, server: `${owner.server}x` };
+  const definition = [backend("well-behaved")];
+
+  const measured = await startBridge({ now });
+  let size;
+  try {
+    const entry = await synced(owner, definition, { controller: measured.controller });
+    size = Buffer.byteLength(JSON.stringify({ owners: [entry] }));
+  } finally {
+    await stopBridge(measured);
+  }
+
+  const bounded = await startBridge({ now, statusAnswerLimit: size });
+  const { controller, spawner } = bounded;
+  try {
+    assert.equal((await controller.sync({ ...owner, backends: definition })).status, 200);
+    await controller.running(owner);
+    const atLimit = await controller.status([owner]);
+    assert.equal(atLimit.status, 200, JSON.stringify(atLimit.body));
+    assert.equal(Buffer.byteLength(JSON.stringify(atLimit.body)), size);
+
+    await controller.release([owner]);
+    await eventually(() => spawner.live() === 0, "the owner's spawn to be released");
+    assert.equal((await controller.sync({ ...longer, backends: definition })).status, 200);
+    await controller.running(longer);
+    const over = await controller.status([longer]);
+    assert.deepEqual([over.status, over.body], [409, { error: "status_too_large" }]);
+
+    // Refused whole: the owner runs on, and a renew still reports it.
+    assert.equal((await controller.renew([longer])).body.renewed.length, 1);
+    assert.equal(await ping(controller, longer), "pong");
+    await controller.release([longer]);
+  } finally {
+    await stopBridge(bounded);
+  }
+});
+
+test("status answers are bounded in aggregate under the shipped limit: two owners whose stderr tails together pass it are refused, each alone is answered", async () => {
+  const started = await startBridge();
+  const { controller } = started;
+  try {
+    // A backend that fills its stderr tail and then waits to be initialized:
+    // eight hold half the limit, and two such owners more than all of it.
+    const flooding = (name) => ({ name, command: `head -c ${STDERR_TAIL_BYTES + 4096} /dev/zero | tr '\\000' x >&2; exec sleep 60`, env: {} });
+    const names = (prefix) => Array.from({ length: 8 }, (_, i) => `${prefix}${i}`);
+    const one = newOwner();
+    const two = newOwner();
+    assert.equal((await controller.sync({ ...one, backends: names("a").map(flooding) })).status, 200);
+    assert.equal((await controller.sync({ ...two, backends: names("b").map(flooding) })).status, 200);
+
+    for (const owner of [one, two]) {
+      const entry = await eventually(async () => {
+        const answer = await controller.status([owner]);
+        assert.equal(answer.status, 200, JSON.stringify(answer.body).slice(0, 200));
+        const [found] = answer.body.owners;
+        return found.backends.every((b) => b.stderr_tail.length === STDERR_TAIL_BYTES) ? found : null;
+      }, `every backend of ${owner.athanor} to have filled its stderr tail`);
+      assert.ok(Buffer.byteLength(JSON.stringify({ owners: [entry] })) > STATUS_ANSWER_LIMIT / 2);
+    }
+
+    const both = await controller.status([one, two]);
+    assert.deepEqual([both.status, both.body], [409, { error: "status_too_large" }]);
+    assert.equal((await controller.status([two])).status, 200);
+    await controller.release([one, two]);
+  } finally {
+    await stopBridge(started);
+  }
+});
+
+// ============================================================================
+// Slots
+// ============================================================================
+
+// Syncs `owner` with one backend and waits until it is idle and its spawn
+// released, so its slot is free.
+async function idled(controller, spawner, owner) {
+  await synced(owner, [backend("well-behaved")], { controller, idleMs: 200 });
+  const { proc } = spawner.spawns.at(-1);
+  await eventually(async () => {
+    const [entry] = (await controller.status([owner])).body.owners;
+    return entry.backends[0].status === "idle" && proc.released;
+  }, `${owner.athanor}'s backend to be retired as idle`);
+}
+
+test("of two admissions racing for the last slot, exactly one is granted", async () => {
+  const spawner = new FakeSpawner({ capacity: 1 });
+  const { instance, server, controller } = await startBridge({ spawner, leaseCheckMs: 20 });
+  try {
+    const sleeper = newOwner();
+    await idled(controller, spawner, sleeper);
+
+    // A call that starts the idle backend and a sync of another owner each
+    // read the pool, then ask for the last slot.
+    const taker = newOwner();
+    const [woken, admitted] = await Promise.all([
+      ping(controller, sleeper),
+      controller.sync({ ...taker, backends: [backend("well-behaved")] }),
+    ]);
+    const granted = [woken === "pong", admitted.status === 200];
+    assert.equal(granted.filter(Boolean).length, 1, JSON.stringify({ woken, admitted: admitted.body }));
+    if (admitted.status === 200) assert.match(woken, /no free slot/);
+    else assert.deepEqual(admitted.body, { error: "capacity" });
+    assert.equal(spawner.spawns.length, 2, "the loser spawned something");
+    await controller.release([sleeper, taker]);
+  } finally {
+    await stopBridge({ instance, server });
+  }
+});
+
+test("a retirement that settles twice — an idle backend's, then its owner's — frees its slot once, and the pool stays exactly usable", async () => {
+  const spawner = new FakeSpawner({ capacity: 2 });
+  const { instance, server, controller } = await startBridge({ spawner, leaseCheckMs: 20 });
+  try {
+    const owner = newOwner();
+    await idled(controller, spawner, owner);
+    assert.equal((await controller.release([owner])).body.released.length, 1);
+
+    const three = ["a", "b", "c"].map((name) => backend("well-behaved", {}, name));
+    const over = await controller.sync({ ...newOwner(), backends: three });
+    assert.deepEqual([over.status, over.body], [409, { error: "capacity" }]);
+    const exact = newOwner();
+    assert.equal((await controller.sync({ ...exact, backends: three.slice(0, 2) })).status, 200);
+    await controller.running(exact);
+    assert.equal(spawner.live(), 2);
+    await controller.release([exact]);
+  } finally {
+    await stopBridge({ instance, server });
+  }
+});
+
+test("an unexpected exit keeps the backend's slot while it restarts, and frees it once it has failed, before the next admission", async () => {
+  const spawner = new FakeSpawner({ capacity: 1 });
+  const { instance, server, controller } = await startBridge({ spawner, restartBackoffMs: [50, 50, 50, 50, 50] });
+  try {
+    const dying = newOwner();
+    assert.equal((await controller.sync({ ...dying, backends: [backend("exit-at-start")] })).status, 200);
+    const waiting = newOwner();
+    const held = await controller.sync({ ...waiting, backends: [backend("well-behaved")] });
+    assert.deepEqual([held.status, held.body], [409, { error: "capacity" }]);
+
+    await eventually(async () => {
+      const [entry] = (await controller.status([dying])).body.owners;
+      return entry.backends[0].status === "failed";
+    }, "the backend to fail");
+    assert.equal((await controller.sync({ ...waiting, backends: [backend("well-behaved")] })).status, 200);
+    await controller.running(waiting);
+    assert.equal(await ping(controller, waiting), "pong");
+    await controller.release([dying, waiting]);
+  } finally {
+    await stopBridge({ instance, server });
+  }
+});
+
+test("while the spawner does not answer for its pool a sync is refused as unavailable, not capacity, and an idle backend's call as unable to start", async () => {
+  const spawner = new FakeSpawner();
+  const { instance, server, controller } = await startBridge({ spawner, leaseCheckMs: 20, poolTimeoutMs: 100 });
+  try {
+    const sleeper = newOwner();
+    await idled(controller, spawner, sleeper);
+    const spawned = spawner.spawns.length;
+
+    spawner.pool = () => new Promise(() => {});
+    const refused = await controller.sync({ ...newOwner(), backends: [backend("well-behaved")] });
+    assert.deepEqual([refused.status, refused.body], [503, { error: "unavailable" }]);
+    assert.match(await ping(controller, sleeper), /cannot start it now/);
+    assert.equal(spawner.spawns.length, spawned, "a refused admission spawned something");
+
+    delete spawner.pool;
+    assert.equal(await ping(controller, sleeper), "pong");
+    await controller.release([sleeper]);
+  } finally {
+    await stopBridge({ instance, server });
+  }
+});
+
+// ============================================================================
 // Idle backends
 // ============================================================================
 
@@ -710,7 +912,10 @@ test("an idle backend's slot is free for other owners, and its next call is refu
     const taker = newOwner();
     await synced(taker, [backend("well-behaved")], { controller });
 
+    // Refused at once, not queued for a slot.
+    const asked = Date.now();
     const refused = await controller.invoke(sleeper, "tools/call", { name: "b__ping", arguments: {} });
+    assert.ok(Date.now() - asked < 2_000, `the refusal took ${Date.now() - asked} ms`);
     assert.equal(refused.body.result.isError, true);
     assert.match(refused.body.result.content[0].text, /no free slot/);
 

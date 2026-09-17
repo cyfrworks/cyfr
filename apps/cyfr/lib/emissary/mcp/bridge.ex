@@ -46,7 +46,14 @@ defmodule Emissary.MCP.Bridge do
     * `release` on every stop path — a server process that stops or exits,
       a failed fence, `release_referencing/2` — retried on every tick until
       the bridge acknowledges it or a later sync of the owner supersedes it;
-    * `status` for `mcp_servers.get`.
+    * `status` for `mcp_servers.get`, naming one owner. The bridge bounds a
+      status to `MAX_STATUS_OWNERS` owners and its answer to the control
+      limit, refusing past either as `too_many_owners` or
+      `status_too_large`; this controller mirrors the owner bound and reads
+      no more of any answer than the limit, so a status it cannot have is
+      the typed refusal `{:error, :too_many_owners}` or
+      `{:error, :status_too_large}`, never a cut answer, an empty one, or an
+      unavailable bridge.
 
   Every sync asks the bridge to retire a backend that has had no call for
   the idle period (`:mcp_bridge_idle_ms`, `CYFR_MCP_BRIDGE_IDLE_MS`: 15
@@ -73,7 +80,9 @@ defmodule Emissary.MCP.Bridge do
   Every live owner of one athanor together, and every live owner whose row
   one person created (`mcp_servers.created_by`) together, run at most a
   quarter of the bridge's pool of backends; a sync past either share is
-  refused.
+  refused. The server's synthetic principal (`"system"`, the creator of a
+  row made under `Sanctum.Context.internal/1`) is one person for the share,
+  across every athanor, exactly as a real person is.
   """
 
   use GenServer
@@ -94,9 +103,15 @@ defmodule Emissary.MCP.Bridge do
   @poll_waiting_ms 250
   @poll_starting_ms 1_000
   @release_wait_ms 3_000
+  # The most of a control answer this controller reads: the bridge's
+  # STATUS_ANSWER_LIMIT (apps/mcp-bridge/server.mjs), which bounds the one
+  # answer that can grow — a status — before it is sent.
   @max_response_bytes 1_048_576
   # The bridge reads at most this much of a control message's body.
   @max_control_bytes 1_048_576
+  # The most owners one status may name: the bridge's MAX_STATUS_OWNERS
+  # (apps/mcp-bridge/server.mjs), past which it refuses `too_many_owners`.
+  @max_status_owners 64
 
   @typedoc "One stdio server of one athanor at one epoch."
   @type owner :: %{athanor_id: String.t(), server_id: String.t(), epoch: pos_integer()}
@@ -198,10 +213,22 @@ defmodule Emissary.MCP.Bridge do
     :ok
   end
 
-  @doc "The bridge's status of one owner — version, lease and backends — or nil when it runs none."
+  @doc """
+  The bridge's status of one owner — version, lease and backends — or nil
+  when it runs none. Refused as `{:error, :too_many_owners}` or
+  `{:error, :status_too_large}` when the bridge will not answer within its
+  bounds, `{:error, :bridge_unavailable}` when it cannot be reached, and
+  `{:error, :control_plane_lost}` while this boot does not own the plane.
+  """
   @spec status(String.t(), String.t()) :: {:ok, map() | nil} | {:error, term()}
   def status(athanor_id, server_id),
     do: call({:status, {athanor_id, server_id}}, 2 * @control_timeout_ms)
+
+  @doc false
+  # The bounds a status is asked and read within, for the test that binds
+  # them to the bridge's literals.
+  @spec status_bounds() :: %{owners: pos_integer(), bytes: pos_integer()}
+  def status_bounds, do: %{owners: @max_status_owners, bytes: @max_response_bytes}
 
   @doc """
   Release, at once and without reading the store, every live owner of the
@@ -836,10 +863,23 @@ defmodule Emissary.MCP.Bridge do
     {:send, spec}
   end
 
-  defp prepare({:status, {athanor, server}, _from}, state) do
-    body = %{"type" => "status", "owners" => [%{"athanor" => athanor, "server" => server}]}
-    {:send, state |> base_spec(:status) |> Map.put(:body, body)}
+  defp prepare({:status, {athanor, server}, from}, state) do
+    case status_body([%{"athanor" => athanor, "server" => server}]) do
+      {:ok, body} ->
+        {:send, state |> base_spec(:status) |> Map.put(:body, body)}
+
+      {:error, reason} ->
+        GenServer.reply(from, {:error, reason})
+        :skip
+    end
   end
+
+  # A status names no more owners than the bridge answers for; one that
+  # would is refused here, as the bridge would refuse it, and never sent.
+  defp status_body(owners) when length(owners) > @max_status_owners,
+    do: {:error, :too_many_owners}
+
+  defp status_body(owners), do: {:ok, %{"type" => "status", "owners" => owners}}
 
   # The most backends one athanor's owners, or one person's, may run.
   defp share(%State{pool_size: size}) when is_integer(size), do: max(div(size, 4), 1)
@@ -1046,6 +1086,12 @@ defmodule Emissary.MCP.Bridge do
       case Cyfr.Network.pinned_request(:post, spec.url <> "/control", headers, body, opts) do
         {:ok, status, resp_headers, resp_body} ->
           {:http, status, boot_header(resp_headers), decode(resp_body)}
+
+        # An answer past the limit was stopped mid-read: the bridge answered,
+        # so this is a refusal of the answer, not a bridge that could not be
+        # reached.
+        {:error, {:response_too_large, _read, _limit} = reason} ->
+          {:error, reason}
 
         {:error, reason} ->
           {:error, {:transport, reason}}
@@ -1306,6 +1352,8 @@ defmodule Emissary.MCP.Bridge do
     "conflict" => :conflict,
     "bad_request" => :bad_request,
     "too_large" => :too_large,
+    "too_many_owners" => :too_many_owners,
+    "status_too_large" => :status_too_large,
     "unavailable" => :bridge_unavailable
   }
 
@@ -1320,6 +1368,9 @@ defmodule Emissary.MCP.Bridge do
   defp refusal({:http, status, _boot, _body}), do: {:bridge_status, status}
   defp refusal({:error, {:transport, _}}), do: :bridge_unavailable
   defp refusal({:error, {:crashed, _}}), do: :bridge_unavailable
+  # The one answer that can grow is a status; one the bridge sent past the
+  # limit is the refusal the bridge itself gives for it.
+  defp refusal({:error, {:response_too_large, _read, _limit}}), do: :status_too_large
   defp refusal({:error, reason}), do: reason
   defp refusal(other), do: {:unexpected, other}
 

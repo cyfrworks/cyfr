@@ -13,9 +13,12 @@ defmodule Emissary.MCP.BridgeTest do
   the owner; renewal fences each owner against its row; a restarted bridge
   and a new generation are greeted and live owners synced again; nothing
   is sent without the control plane; refusals of a call are answered as
-  their kind requires; an athanor, and the person who created the rows,
-  each hold at most a quarter of the pool; no key reaches a status or a
-  crash report.
+  their kind requires; a status names no more owners than the bridge
+  answers for and is read no further than the control limit, each refusal
+  of it its own typed result; an athanor, and the person who created the
+  rows — the server's synthetic principal being one such person — each
+  hold at most a quarter of the pool; no key reaches a status or a crash
+  report.
   """
   use ExUnit.Case, async: false
 
@@ -29,6 +32,7 @@ defmodule Emissary.MCP.BridgeTest do
   @root :crypto.strong_rand_bytes(32)
   @secret "ghp_bridge-test-secret-0123456789"
   @generation_key {Cyfr.ControlPlane, :generation}
+  @project_root Path.expand("../../../../..", __DIR__)
 
   defmodule FakeBridge do
     @moduledoc false
@@ -37,7 +41,9 @@ defmodule Emissary.MCP.BridgeTest do
     # an invoke's owner key and version — and reports every accepted
     # message to the test process. Each owner runs and lists the tools the
     # test sets for its server (running, rev 1 and `github__search` unless
-    # set).
+    # set), and reports `stderr_bytes` of stderr tail per backend in a
+    # status (none unless set): the fake does not bound its answers, so a
+    # test can see what the controller makes of an unbounded one.
 
     import Plug.Conn
 
@@ -62,6 +68,7 @@ defmodule Emissary.MCP.BridgeTest do
                tools: %{},
                hold: MapSet.new(),
                pool: 32,
+               stderr_bytes: 0,
                refuse: %{}
              }
            end},
@@ -85,8 +92,9 @@ defmodule Emissary.MCP.BridgeTest do
     def restart(%{agent: agent}, boot),
       do: Agent.update(agent, &%{&1 | boot: boot, hwm: {0, 0}, owners: %{}})
 
-    def refuse_once(%{agent: agent}, what, code),
-      do: Agent.update(agent, &put_in(&1, [:refuse, what], code))
+    @doc "Refuse the next message of `what` (or invoke of that method) with `code` under `status`."
+    def refuse_once(%{agent: agent}, what, code, status \\ 409),
+      do: Agent.update(agent, &put_in(&1, [:refuse, what], {code, status}))
 
     def set(%{agent: agent}, key, value), do: Agent.update(agent, &Map.put(&1, key, value))
     def get(%{agent: agent}, key), do: Agent.get(agent, &Map.fetch!(&1, key))
@@ -127,7 +135,7 @@ defmodule Emissary.MCP.BridgeTest do
 
           case pop_refusal(agent, message["type"]) do
             nil -> handle(conn, agent, message, fields)
-            code -> answer(conn, st, 409, %{"error" => code})
+            {code, status} -> answer(conn, st, status, %{"error" => code})
           end
       end
     end
@@ -222,22 +230,24 @@ defmodule Emissary.MCP.BridgeTest do
       answer(conn, Agent.get(agent, & &1), 200, %{"released" => released})
     end
 
-    defp handle(conn, agent, %{"type" => "status", "owners" => [owner]}, _fields) do
+    defp handle(conn, agent, %{"type" => "status", "owners" => named}, _fields) do
       st = Agent.get(agent, & &1)
 
       owners =
-        case Map.get(st.owners, {owner["athanor"], owner["server"]}) do
-          nil ->
-            []
-
-          {g, e} ->
-            [
-              Map.merge(owner, %{
-                "g" => g,
-                "e" => e,
-                "backends" => [%{"name" => "github", "status" => "ready", "restarts" => 0}]
-              })
+        for owner <- named,
+            {g, e} <- List.wrap(Map.get(st.owners, {owner["athanor"], owner["server"]})) do
+          Map.merge(owner, %{
+            "g" => g,
+            "e" => e,
+            "backends" => [
+              %{
+                "name" => "github",
+                "status" => "ready",
+                "restarts" => 0,
+                "stderr_tail" => String.duplicate("x", st.stderr_bytes)
+              }
             ]
+          })
         end
 
       answer(conn, st, 200, %{"owners" => owners})
@@ -272,9 +282,10 @@ defmodule Emissary.MCP.BridgeTest do
         version > running ->
           answer(conn, st, 409, %{"error" => "epoch_ahead"})
 
-        code = pop_refusal(agent, message["method"]) ->
+        refusal = pop_refusal(agent, message["method"]) ->
+          {code, status} = refusal
           send(st.test, {:invoke, message["method"], fields})
-          answer(conn, st, 409, %{"error" => code})
+          answer(conn, st, status, %{"error" => code})
 
         true ->
           send(st.test, {:invoke, message["method"], fields})
@@ -856,6 +867,36 @@ defmodule Emissary.MCP.BridgeTest do
     assert_receive {:control, "sync", _sync, _fields}, 2_000
   end
 
+  test "rows the server's synthetic principal created hold one person's share across every athanor",
+       %{ctx: ctx, fake: fake} do
+    FakeBridge.set(fake, :pool, 8)
+    start_bridge(fake)
+    literal = %{"NODE_ENV" => "production"}
+    system = &Sanctum.Context.internal(athanor_id: &1, scope: :athanor)
+
+    for athanor <- ["ath_test", "ath_a"] do
+      as_system = system.(athanor)
+      assert as_system.user_id == "system"
+      row = stdio_row(as_system, "unattributed", literal)
+      assert row.created_by == "system"
+      connect(as_system, row)
+      assert_receive {:control, "sync", _sync, _fields}, 2_000
+    end
+
+    third = stdio_row(system.("ath_b"), "unattributed", literal)
+
+    assert {:error, {:person_share, 2}} =
+             Bridge.sync(%{athanor_id: "ath_b", server_id: third.id, epoch: 1})
+
+    refute_receive {:control, "sync", _sync, _fields}, 200
+
+    # A person's row in that athanor fits: the synthetic principal's share is
+    # its own, not the athanor's.
+    person = %{ctx | athanor_id: "ath_b"}
+    connect(person, stdio_row(person, "theirs", literal))
+    assert_receive {:control, "sync", _sync, _fields}, 2_000
+  end
+
   test "an env template that does not resolve refuses the sync and sends nothing", %{
     ctx: ctx,
     fake: fake
@@ -884,6 +925,75 @@ defmodule Emissary.MCP.BridgeTest do
 
     assert_receive {:control, "status", %{"owners" => [%{"server" => server}]}, _fields}, 2_000
     assert server == row.id
+  end
+
+  describe "status" do
+    test "is nil for an owner the bridge runs nothing for, its entry for one it runs, and names no more owners than the bridge's bound",
+         %{ctx: ctx, fake: fake} do
+      start_bridge(fake)
+      assert {:ok, nil} = Bridge.status(ctx.athanor_id, "mcp_nothing")
+      assert_receive {:control, "status", %{"owners" => [%{"server" => "mcp_nothing"}]}, _}, 2_000
+
+      row = stdio_row(ctx, "running", %{"NODE_ENV" => "production"})
+      connect(ctx, row)
+
+      assert {:ok, %{"e" => 1, "backends" => [%{"status" => "ready"}]}} =
+               Bridge.status(ctx.athanor_id, row.id)
+
+      assert_receive {:control, "status", %{"owners" => owners}, _fields}, 2_000
+      assert length(owners) <= Bridge.status_bounds().owners
+    end
+
+    test "each refusal of the bridge is its typed result, and a bridge that cannot be reached is unavailable",
+         %{ctx: ctx, fake: fake} do
+      start_bridge(fake)
+      row = stdio_row(ctx, "bounded", %{"NODE_ENV" => "production"})
+      connect(ctx, row)
+
+      FakeBridge.refuse_once(fake, "status", "too_many_owners", 400)
+      assert {:error, :too_many_owners} = Bridge.status(ctx.athanor_id, row.id)
+
+      FakeBridge.refuse_once(fake, "status", "status_too_large")
+      assert {:error, :status_too_large} = Bridge.status(ctx.athanor_id, row.id)
+
+      Bypass.down(fake.bypass)
+      assert {:error, :bridge_unavailable} = Bridge.status(ctx.athanor_id, row.id)
+
+      Bypass.up(fake.bypass)
+      assert {:ok, %{"e" => 1}} = Bridge.status(ctx.athanor_id, row.id)
+    end
+
+    test "an answer the bridge did not bound is stopped at the control limit and is status_too_large as well: neither read whole, emptied nor unavailable",
+         %{ctx: ctx, fake: fake} do
+      start_bridge(fake)
+      row = stdio_row(ctx, "verbose", %{"NODE_ENV" => "production"})
+      connect(ctx, row)
+      FakeBridge.set(fake, :stderr_bytes, Bridge.status_bounds().bytes + 1)
+      assert {:error, :status_too_large} = Bridge.status(ctx.athanor_id, row.id)
+
+      FakeBridge.set(fake, :stderr_bytes, 0)
+      assert {:ok, %{"e" => 1}} = Bridge.status(ctx.athanor_id, row.id)
+    end
+
+    test "the bounds the controller keeps are the bridge's literals" do
+      source = File.read!(Path.join(@project_root, "apps/mcp-bridge/server.mjs"))
+      %{owners: owners, bytes: bytes} = Bridge.status_bounds()
+
+      assert [declared] =
+               Regex.run(~r/export const MAX_STATUS_OWNERS = (\d+);/, source,
+                 capture: :all_but_first
+               )
+
+      assert String.to_integer(declared) == owners
+
+      assert [factor, times] =
+               Regex.run(~r/export const CONTROL_BODY_LIMIT = (\d+) \* (\d+);/, source,
+                 capture: :all_but_first
+               )
+
+      assert String.to_integer(factor) * String.to_integer(times) == bytes
+      assert source =~ "export const STATUS_ANSWER_LIMIT = CONTROL_BODY_LIMIT;"
+    end
   end
 
   describe "no key reaches a status or a crash report" do
