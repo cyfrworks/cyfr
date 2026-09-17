@@ -14,11 +14,12 @@ defmodule Cyfr.RunnerControl do
   `complete` and `exit`. Guest data never travels on it: deltas, results,
   host-call bodies and vault fields go between the runner and CYFR over
   the host API (`Cyfr.HostAPI`), under the attempt's keys. What crosses
-  here is what `c:Cyfr.WorkerAPI.start/3` was given and what the service
-  reports (`c:Cyfr.HostAPI.runner_exited/3`). The channel carries no MAC:
-  the keeper's process isolation is its boundary, and nothing on it
-  authorizes anything — CYFR verifies the assignment when the runner
-  attaches, and the sealed keys open only as the attempt they name.
+  here is what `c:Cyfr.WorkerAPI.start/3` was given, its sealed keys
+  opened, and what the service reports (`c:Cyfr.HostAPI.runner_exited/3`).
+  The channel carries no MAC: the keeper's process isolation is its
+  boundary, and nothing on it authorizes anything — CYFR verifies the
+  assignment when the runner attaches, and an attempt's keys sign and
+  open for that attempt on this worker service only.
 
   ## Frames
 
@@ -37,8 +38,13 @@ defmodule Cyfr.RunnerControl do
       with `Cyfr.Assignment.read/1`), the `input` (the execution's input
       bytes, which the assignment's `input_digest` binds; standard base64
       with padding on the wire, at most `max_input_bytes/0` decoded) and
-      the `sealed_keys` (the attempt's keys sealed for this worker
-      service, `Cyfr.WorkerAuth.seal_attempt_keys/3`). A runner takes one
+      the `keys`: the attempt's keys as the service opened them
+      (`Cyfr.WorkerAuth.open_attempt_keys/2`), an object of the `attempt`
+      they are bound to (its six fields, `t:Cyfr.WorkerAuth.attempt/0`)
+      and the `call` and `seal` keys, each 32 bytes as 64 lowercase hex
+      digits. The service opens them because the dispatch seal key never
+      leaves the service: a runner holding it could open the keys of
+      every attempt sealed for this worker service. A runner takes one
       assignment at a time; the next `assign` follows its `complete`.
     * `cancel_child` — end the child `execution_id` of the runner's
       subtree: the runner kills the child's process and closes its
@@ -79,15 +85,21 @@ defmodule Cyfr.RunnerControl do
        `{:wrong_type, name}` for a member of another JSON type;
        `{:invalid_field, name}` for one of the right type outside its
        shape (a string with a byte outside printable ASCII, an id longer
-       than 256 bytes, text that is not base64, a list holding a
-       non-id); `{:oversize, name}` for `input` above `max_input_bytes/0`
-       or `open` longer than `max_open/0`.
+       than 256 bytes, text that is not base64, a key that is not 64
+       lowercase hex digits, an integer outside 0 to 2^53 − 1, a list
+       holding a non-id); `{:oversize, name}` for `input` above
+       `max_input_bytes/0` or `open` longer than `max_open/0`.
 
-  Identifiers (`execution_id`, `runner`, each of `open`) are 1 to 256
-  bytes of printable ASCII without spaces, as every identifier on the
-  worker protocol (`Cyfr.Assignment`, `Cyfr.MacEnvelope`). The
-  assignment token and the sealed keys are printable ASCII without spaces
-  of any length the line allows.
+  An object member is checked the same way, once its object is reached:
+  its unknown members first, then each of its members in order. It is
+  named by its path, `keys.call` or `keys.attempt.fence`.
+
+  Identifiers (`execution_id`, `runner`, each of `open`, the strings of
+  `keys.attempt`) are 1 to 256 bytes of printable ASCII without spaces,
+  as every identifier on the worker protocol (`Cyfr.Assignment`,
+  `Cyfr.MacEnvelope`), and the integers of `keys.attempt` are 0 to
+  2^53 − 1, as `Cyfr.MacEnvelope` reads an integer field. The assignment
+  token is printable ASCII without spaces of any length the line allows.
   """
 
   @version 1
@@ -97,8 +109,8 @@ defmodule Cyfr.RunnerControl do
   @max_input_bytes Cyfr.Limits.Ceiling.lowered(%{}).max_request_size
 
   # A line holds the largest input in base64 with room to spare for the
-  # assignment token and the sealed keys, whose own bounds keep them far
-  # below the margin.
+  # assignment token and the keys, whose own bounds keep them far below
+  # the margin.
   @max_line_bytes 16 * 1024 * 1024
 
   # An `exit` forwarded as a `runner_exited` report must fit that report's
@@ -106,13 +118,30 @@ defmodule Cyfr.RunnerControl do
   # quoted and separated, is about a quarter of it.
   @max_open 1024
 
+  # 2^53 − 1: `Cyfr.MacEnvelope`'s integer field domain.
+  @max_integer 9_007_199_254_740_991
+
   @id ~r/\A[\x21-\x7E]{1,256}\z/
   @text ~r/\A[\x21-\x7E]+\z/
+  @hex_key ~r/\A[0-9a-f]{64}\z/
+
+  # The attempt an attempt's keys are bound to, in `Cyfr.WorkerAuth`'s
+  # field order, and the opened keys themselves.
+  @attempt_fields [
+    athanor_id: :id,
+    execution_id: :id,
+    attempt: :id,
+    fence: :integer,
+    generation: :integer,
+    service: :id
+  ]
+  @keys_fields [attempt: {:object, @attempt_fields}, call: :key, seal: :key]
 
   # Every message type, its wire name, who sends it and its fields in wire
   # order. The order is the encoding's and the decoder's refusal order.
   @messages [
-    {:assign, "assign", :service, [assignment: :text, input: :bytes, sealed_keys: :text]},
+    {:assign, "assign", :service,
+     [assignment: :text, input: :bytes, keys: {:object, @keys_fields}]},
     {:cancel_child, "cancel_child", :service, [execution_id: :id]},
     {:complete, "complete", :runner, [execution_id: :id, clean: :boolean]},
     {:exit, "exit", :runner, [runner: :id, open: :ids]}
@@ -130,12 +159,12 @@ defmodule Cyfr.RunnerControl do
   """
   @type runner_id :: String.t()
 
-  @typedoc "Run a subtree: its signed assignment, its input bytes and its sealed attempt keys."
+  @typedoc "Run a subtree: its signed assignment, its input bytes and its attempt's opened keys."
   @type assign :: %{
           type: :assign,
           assignment: Cyfr.Assignment.token(),
           input: binary(),
-          sealed_keys: String.t()
+          keys: Cyfr.WorkerAuth.attempt_keys()
         }
 
   @typedoc "End the child `execution_id` of the runner's subtree."
@@ -158,7 +187,10 @@ defmodule Cyfr.RunnerControl do
   @typedoc "Which side sends a message."
   @type sender :: :service | :runner
 
-  @typedoc "Why a line is not a frame (see the module's decoding order)."
+  @typedoc """
+  Why a line is not a frame (see the module's decoding order). A name is
+  a member's path: `clean`, `keys.call`, `keys.attempt.fence`.
+  """
   @type reason ::
           :oversize_line
           | :malformed
@@ -207,21 +239,9 @@ defmodule Cyfr.RunnerControl do
   @spec encode(message()) :: iodata()
   def encode(%{type: type} = message) when is_map_key(@by_type, type) do
     {name, _sender, fields} = Map.fetch!(@by_type, type)
-
-    case Map.keys(message) -- [:type | Keyword.keys(fields)] do
-      [] -> :ok
-      [extra | _rest] -> raise ArgumentError, "#{type} carries no #{inspect(extra)}"
-    end
-
-    members =
-      Enum.map(fields, fn {field, field_type} ->
-        case Map.fetch(message, field) do
-          {:ok, value} -> {field, write(field_type, field, value)}
-          :error -> raise ArgumentError, "#{type} lacks #{inspect(field)}"
-        end
-      end)
-
-    [Jason.encode_to_iodata!(Jason.OrderedObject.new([v: @version, type: name] ++ members)), ?\n]
+    %Jason.OrderedObject{values: members} = write_object(fields, Map.delete(message, :type), "")
+    object = Jason.OrderedObject.new([v: @version, type: name] ++ members)
+    [Jason.encode_to_iodata!(object), ?\n]
   end
 
   def encode(message), do: raise(ArgumentError, "not a message: #{inspect(message)}")
@@ -238,8 +258,8 @@ defmodule Cyfr.RunnerControl do
          {:ok, object} <- json_object(line),
          :ok <- known_version(object),
          {:ok, type, fields} <- known_type(object),
-         :ok <- no_unknown_field(object, fields) do
-      read_fields(type, fields, object)
+         {:ok, message} <- read_object(fields, Map.drop(object, ["v", "type"]), "") do
+      {:ok, Map.put(message, :type, type)}
     end
   end
 
@@ -275,34 +295,55 @@ defmodule Cyfr.RunnerControl do
 
   defp known_type(_object), do: {:error, :unknown_type}
 
-  defp no_unknown_field(object, fields) do
-    known = ["v", "type" | Enum.map(fields, fn {field, _type} -> Atom.to_string(field) end)]
+  # An object's members as `fields` declares them: no other member, and
+  # each present and of its type, in order. `path` prefixes each member's
+  # name in a refusal.
+  defp read_object(fields, object, path) do
+    with :ok <- no_unknown_field(fields, object, path) do
+      Enum.reduce_while(fields, {:ok, %{}}, fn {field, field_type}, {:ok, read} ->
+        name = path <> Atom.to_string(field)
 
-    case Enum.sort(Map.keys(object) -- known) do
-      [] -> :ok
-      [unknown | _rest] -> {:error, {:unknown_field, unknown}}
+        with {:ok, value} <- member(object, field, name),
+             {:ok, value} <- read(field_type, name, value) do
+          {:cont, {:ok, Map.put(read, field, value)}}
+        else
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
     end
   end
 
-  defp read_fields(type, fields, object) do
-    Enum.reduce_while(fields, {:ok, %{type: type}}, fn {field, field_type}, {:ok, message} ->
-      name = Atom.to_string(field)
+  defp no_unknown_field(fields, object, path) do
+    known = Enum.map(fields, fn {field, _type} -> Atom.to_string(field) end)
 
-      case Map.fetch(object, name) do
-        :error ->
-          {:halt, {:error, {:missing_field, name}}}
-
-        {:ok, value} ->
-          case read(field_type, name, value) do
-            {:ok, value} -> {:cont, {:ok, Map.put(message, field, value)}}
-            {:error, reason} -> {:halt, {:error, reason}}
-          end
-      end
-    end)
+    case Enum.sort(Map.keys(object) -- known) do
+      [] -> :ok
+      [unknown | _rest] -> {:error, {:unknown_field, path <> unknown}}
+    end
   end
 
+  defp member(object, field, name) do
+    case Map.fetch(object, Atom.to_string(field)) do
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, {:missing_field, name}}
+    end
+  end
+
+  defp read({:object, fields}, name, %{} = value), do: read_object(fields, value, name <> ".")
   defp read(:text, name, value) when is_binary(value), do: matching(@text, name, value)
   defp read(:id, name, value) when is_binary(value), do: matching(@id, name, value)
+
+  defp read(:key, name, value) when is_binary(value) do
+    if Regex.match?(@hex_key, value),
+      do: {:ok, Base.decode16!(value, case: :lower)},
+      else: {:error, {:invalid_field, name}}
+  end
+
+  defp read(:integer, _name, value)
+       when is_integer(value) and value >= 0 and value <= @max_integer,
+       do: {:ok, value}
+
+  defp read(:integer, name, value) when is_integer(value), do: {:error, {:invalid_field, name}}
 
   defp read(:bytes, name, value) when is_binary(value) do
     # Base64 grows bytes by a third, so a text longer than the largest
@@ -338,28 +379,58 @@ defmodule Cyfr.RunnerControl do
   # Writing
   # ============================================================================
 
-  # The wire value of a field, checked as `read/3` checks it back.
-  defp write(:text, field, value) when is_binary(value) do
-    if Regex.match?(@text, value), do: value, else: invalid(field)
+  # An object's members in `fields`' order, each checked as `read/3`
+  # checks it back; a member the object lacks or does not declare raises.
+  defp write_object(fields, map, path) when is_map(map) and not is_struct(map) do
+    case Map.keys(map) -- Keyword.keys(fields) do
+      [] -> :ok
+      [extra | _rest] -> raise ArgumentError, "#{path}#{extra} is not a member"
+    end
+
+    fields
+    |> Enum.map(fn {field, field_type} ->
+      name = path <> Atom.to_string(field)
+
+      case Map.fetch(map, field) do
+        {:ok, value} -> {field, write(field_type, name, value)}
+        :error -> raise ArgumentError, "#{name} is missing"
+      end
+    end)
+    |> Jason.OrderedObject.new()
   end
 
-  defp write(:id, field, value) when is_binary(value) do
-    if Regex.match?(@id, value), do: value, else: invalid(field)
+  defp write_object(_fields, _map, path), do: invalid(String.trim_trailing(path, "."))
+
+  defp write({:object, fields}, name, value), do: write_object(fields, value, name <> ".")
+
+  defp write(:text, name, value) when is_binary(value) do
+    if Regex.match?(@text, value), do: value, else: invalid(name)
   end
 
-  defp write(:bytes, field, value) when is_binary(value) do
-    if byte_size(value) <= @max_input_bytes, do: Base.encode64(value), else: invalid(field)
+  defp write(:id, name, value) when is_binary(value) do
+    if Regex.match?(@id, value), do: value, else: invalid(name)
   end
 
-  defp write(:boolean, _field, value) when is_boolean(value), do: value
+  defp write(:key, _name, value) when is_binary(value) and byte_size(value) == 32,
+    do: Base.encode16(value, case: :lower)
 
-  defp write(:ids, field, value) when is_list(value) do
+  defp write(:integer, _name, value)
+       when is_integer(value) and value >= 0 and value <= @max_integer,
+       do: value
+
+  defp write(:bytes, name, value) when is_binary(value) do
+    if byte_size(value) <= @max_input_bytes, do: Base.encode64(value), else: invalid(name)
+  end
+
+  defp write(:boolean, _name, value) when is_boolean(value), do: value
+
+  defp write(:ids, name, value) when is_list(value) do
     if length(value) <= @max_open and Enum.all?(value, &(is_binary(&1) and Regex.match?(@id, &1))),
       do: value,
-      else: invalid(field)
+      else: invalid(name)
   end
 
-  defp write(_type, field, _value), do: invalid(field)
+  defp write(_type, name, _value), do: invalid(name)
 
-  defp invalid(field), do: raise(ArgumentError, "#{inspect(field)} is not of its type or bound")
+  defp invalid(name), do: raise(ArgumentError, "#{name} is not of its type or bound")
 end
