@@ -23,8 +23,9 @@ defmodule Cyfr.Models do
       `contracts`, `provider`, `tools`, `provider_tools`, `media_types`,
       `streaming`, `defaults`. With `{"model": id}` it adds that model's
       `context_window` and `max_output_tokens` (from the provider's models
-      API where it reports them, which may take the key), or refuses a
-      model the catalyst does not know as `unknown_model`.
+      API where it reports them, which may take the key), and
+      `max_input_tokens` where the provider bounds the input on its own,
+      or refuses a model the catalyst does not know as `unknown_model`.
     * `models` — what the bound key can reach: `models` as `{id, name,
       context_window?, max_output_tokens?}`.
 
@@ -55,13 +56,21 @@ defmodule Cyfr.Models do
   @capabilities_ttl_ms :timer.hours(24)
 
   @typedoc """
-  What a planner needs to size a request: the model's context window and
-  output ceiling, the provider tools and media types the catalyst
+  What a planner needs to size a request: the model's context window,
+  its output ceiling and its input ceiling where the provider bounds the
+  input on its own, the provider tools and media types the catalyst
   offers, whether it streams, and its default `max_tokens`.
+
+  Every limit is a positive integer or `nil`; a limit `describe` leaves
+  out or answers as zero, negative or not an integer reads as `nil`,
+  never as zero, so a malformed ceiling loosens nothing and tightens
+  nothing. Only `context_window` is required: an input ceiling never
+  stands in for the window.
   """
   @type capabilities :: %{
           context_window: pos_integer(),
           max_output_tokens: pos_integer() | nil,
+          max_input_tokens: pos_integer() | nil,
           provider_tools: [String.t()],
           media_types: [String.t()],
           streaming: boolean(),
@@ -110,6 +119,7 @@ defmodule Cyfr.Models do
        %{
          context_window: window,
          max_output_tokens: positive(described["max_output_tokens"]),
+         max_input_tokens: positive(described["max_input_tokens"]),
          provider_tools: list_of_strings(described["provider_tools"]),
          media_types: list_of_strings(described["media_types"]),
          streaming: described["streaming"] == true,
@@ -128,6 +138,9 @@ defmodule Cyfr.Models do
 
   defp described({:error, error}, _model), do: {:error, {:model_refused, error}}
 
+  # The window is the one limit a planner cannot do without: an answer
+  # that bounds the input but names no window is refused, not sized from
+  # the ceiling, because the ceiling says nothing about the output's share.
   defp window(described, model) do
     case positive(described["context_window"]) do
       nil -> {:error, {:no_context_window, model}}

@@ -4,9 +4,11 @@
 defmodule Cyfr.ModelsCapabilitiesTest do
   @moduledoc """
   A model's capabilities are its catalyst's `describe` of that model: the
-  window and output ceiling come from the answer, a model the catalyst
-  does not know and a describe that fails are errors, and only a reading
-  that succeeded is cached, under the key it ran with.
+  window, the output ceiling and the input ceiling come from the answer,
+  a malformed ceiling reads as absent, a model the catalyst does not know
+  and a describe that fails are errors, an answer with no window is an
+  error whatever else it carries, and only a reading that succeeded is
+  cached, under the key it ran with.
   """
 
   use ExUnit.Case, async: false
@@ -46,7 +48,8 @@ defmodule Cyfr.ModelsCapabilitiesTest do
            "defaults" => %{"max_tokens" => 8192},
            "model" => "claude-x",
            "context_window" => 500_000,
-           "max_output_tokens" => 32_000
+           "max_output_tokens" => 32_000,
+           "max_input_tokens" => 400_000
          })}
       end)
 
@@ -54,6 +57,7 @@ defmodule Cyfr.ModelsCapabilitiesTest do
             %{
               context_window: 500_000,
               max_output_tokens: 32_000,
+              max_input_tokens: 400_000,
               provider_tools: ["web_search"],
               media_types: ["image/png"],
               streaming: true,
@@ -100,5 +104,43 @@ defmodule Cyfr.ModelsCapabilitiesTest do
 
     assert {:error, {:describe_failed, :boom}} =
              Models.capabilities(ctx, @ref, "m", "sha256:f", run: fn _ -> {:error, :boom} end)
+  end
+
+  test "an input ceiling is read only as a positive integer; anything else is absent, not zero",
+       %{ctx: ctx} do
+    # Each reading runs under its own key so no case reads another's cache.
+    for {reported, expected, digest} <- [
+          {:absent, nil, "sha256:absent"},
+          {400_000, 400_000, "sha256:present"},
+          {0, nil, "sha256:zero"},
+          {-1, nil, "sha256:negative"},
+          {"400000", nil, "sha256:string"},
+          {400_000.0, nil, "sha256:float"},
+          {nil, nil, "sha256:null"}
+        ] do
+      data = %{"model" => "m", "context_window" => 500_000}
+      data = if reported == :absent, do: data, else: Map.put(data, "max_input_tokens", reported)
+      run = fn _ -> {:ok, envelope(data)} end
+
+      assert {:ok, %{context_window: 500_000, max_input_tokens: ^expected}} =
+               Models.capabilities(ctx, @ref, "m", digest, run: run)
+    end
+  end
+
+  test "an input ceiling never stands in for the window: a model with one and no window refuses",
+       %{ctx: ctx} do
+    {ceiling_only, runs} =
+      counted(fn _ ->
+        {:ok, envelope(%{"model" => "m", "max_input_tokens" => 400_000, "streaming" => true})}
+      end)
+
+    assert {:error, {:no_context_window, "m"}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:c", run: ceiling_only)
+
+    # The refusal is not cached: the next reading runs the catalyst again.
+    assert {:error, {:no_context_window, "m"}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:c", run: ceiling_only)
+
+    assert runs.() == 2
   end
 end

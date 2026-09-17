@@ -8,7 +8,8 @@ defmodule Aqua.Loop.Planner do
   (`usage.input_tokens`).
 
   A request fits while the observed size stays under most of the usable
-  window — the context window less the output ceiling and a margin — and
+  window — the context window less the output ceiling and a margin, or
+  the model's own input ceiling where that is lower — and
   its bytes stay under the consented request cap (`Cyfr.Limits`
   `max_request_size`); past either the planner names the compaction
   boundary: the oldest row the model keeps reading (`first_kept_seq`,
@@ -36,11 +37,30 @@ defmodule Aqua.Loop.Planner do
 
   @type boundary :: %{first_kept_seq: pos_integer(), summarized_through_seq: non_neg_integer()}
 
-  @doc "The tokens a request may hold: the window less the output ceiling and the margin."
+  @doc """
+  The tokens a request may hold: the window less the output ceiling and
+  the margin, and never past the model's input ceiling
+  (`max_input_tokens`) where the capabilities carry one. `max_tokens` is
+  the request's output ceiling, already bounded by the model's
+  (`Aqua.Loop.Request.max_tokens/2`). Never less than one: a window too
+  small for its own output allowance still plans, it just compacts to the
+  newest step.
+  """
   @spec usable(map(), pos_integer()) :: pos_integer()
-  def usable(%{context_window: window}, max_tokens)
+  def usable(%{context_window: window} = caps, max_tokens)
       when is_integer(window) and is_integer(max_tokens) do
-    max(window - max_tokens - @margin_tokens, 1)
+    combined = window - max_tokens - @margin_tokens
+
+    # The capability map carries a positive integer or nil; anything else
+    # is read the same way as nil so a malformed ceiling never tightens
+    # the budget to zero.
+    budget =
+      case Map.get(caps, :max_input_tokens) do
+        ceiling when is_integer(ceiling) and ceiling > 0 -> min(ceiling, combined)
+        _ -> combined
+      end
+
+    max(budget, 1)
   end
 
   @doc """

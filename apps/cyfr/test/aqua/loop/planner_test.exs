@@ -4,10 +4,10 @@
 defmodule Aqua.Loop.PlannerTest do
   @moduledoc """
   The planner fits or names a boundary: the window less the output
-  ceiling and a margin is what a request may hold; the boundary is the
-  start of the oldest step group that still fits, so a tool call is
-  never parted from its results; pruning bounds old results in the
-  projection alone.
+  ceiling and a margin, or the model's input ceiling where that is
+  lower, is what a request may hold; the boundary is the start of the
+  oldest step group that still fits, so a tool call is never parted from
+  its results; pruning bounds old results in the projection alone.
   """
 
   use ExUnit.Case, async: true
@@ -93,8 +93,51 @@ defmodule Aqua.Loop.PlannerTest do
     assert Planner.readable(rows) == [second, row(5, "text", "c")]
   end
 
-  test "usable is the window less the output ceiling and the margin" do
-    assert Planner.usable(@caps, 16_384) == 100_000 - 16_384 - 8_000
+  test "usable is the window less the output ceiling and the margin, never past the input ceiling" do
+    combined = 100_000 - 16_384 - 8_000
+    assert Planner.usable(@caps, 16_384) == combined
+
+    # No ceiling, or one the capabilities read as absent, leaves the
+    # combined budget alone; the planner never reads a malformed value as
+    # a budget of zero.
+    assert Planner.usable(Map.put(@caps, :max_input_tokens, nil), 16_384) == combined
+    assert Planner.usable(Map.put(@caps, :max_input_tokens, 0), 16_384) == combined
+
+    # A ceiling below the combined budget is the budget, as reported: the
+    # margin is taken from the window, not from the provider's own bound.
+    assert Planner.usable(Map.put(@caps, :max_input_tokens, 50_000), 16_384) == 50_000
+
+    # A ceiling above it changes nothing.
+    assert Planner.usable(Map.put(@caps, :max_input_tokens, 200_000), 16_384) == combined
+
+    # The floor at one holds whichever limit is the tighter.
+    assert Planner.usable(%{context_window: 10_000}, 16_384) == 1
+    assert Planner.usable(%{context_window: 10_000, max_input_tokens: 500}, 16_384) == 1
+    assert Planner.usable(%{context_window: 1_000_000, max_input_tokens: 1}, 16_384) == 1
+  end
+
+  test "an input ceiling below the window compacts a transcript the window alone would fit" do
+    rows = [row(1, "text", "hi"), row(2, "text", "hello")]
+
+    # 45k observed is well under 85% of the 75,616 the window leaves, and
+    # past 85% of a 50k ceiling.
+    assert :fit =
+             Planner.plan(rows, capabilities: @caps, max_tokens: 16_384, observed_tokens: 45_000)
+
+    assert {:compact, %{first_kept_seq: 1, summarized_through_seq: 0}} =
+             Planner.plan(rows,
+               capabilities: Map.put(@caps, :max_input_tokens, 50_000),
+               max_tokens: 16_384,
+               observed_tokens: 45_000
+             )
+
+    # A ceiling above the window's budget changes nothing.
+    assert :fit =
+             Planner.plan(rows,
+               capabilities: Map.put(@caps, :max_input_tokens, 200_000),
+               max_tokens: 16_384,
+               observed_tokens: 45_000
+             )
   end
 
   test "a small transcript fits, an observed size past the fill compacts, and bytes past the cap compact" do
