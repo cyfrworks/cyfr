@@ -9,12 +9,15 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
   An admitted child is claimed for the calling runner and handed to it: its
   keys cross sealed under the calling attempt's seal key, its input is the
   one CYFR admitted, and it holds its execution slot, its invoke-budget slot
-  and its charge row until its terminal write. Nothing the runner sends
-  stands in for the authority, the roster or the lineage: a widened
-  authority in a body grants nothing, a tampered assignment does not
-  attach, a roster the runner claims is never read, and a tool call's
-  lineage is the header's. A formula whose attempt has a cancel asked of it,
-  or has ended, admits no child and makes no tool call.
+  and its charge row until its terminal write. A child is admitted under
+  the key its runner minted, and its row decides a repeat: the same key
+  answers the same child again and admits nothing more, a different key
+  admits another child, and a key whose child ended is lost. Nothing the
+  runner sends stands in for the authority, the roster or the lineage: a
+  widened authority in a body grants nothing, a tampered assignment does
+  not attach, a roster the runner claims is never read, and a tool call's
+  lineage is the header's. A formula whose attempt has a cancel asked of
+  it, or has ended, admits no child and makes no tool call.
   """
 
   use ExUnit.Case, async: false
@@ -112,19 +115,25 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
     authority
   end
 
+  # An `admit_child` call under `:child_key` (a fresh key unless given;
+  # `:none` sends no key), with `:extra` members beside the usual ones.
   defp admit(fixture, reference, input, opts \\ []) do
     args =
-      Map.merge(
-        %{
-          "reference" => reference,
-          "input" => input,
-          "guest_fn" => Keyword.get(opts, :guest_fn, "spawn")
-        },
-        Keyword.get(opts, :extra, %{})
-      )
+      %{
+        "reference" => reference,
+        "input" => input,
+        "guest_fn" => Keyword.get(opts, :guest_fn, "spawn")
+      }
+      |> with_key(Keyword.get_lazy(opts, :child_key, &child_key/0))
+      |> Map.merge(Keyword.get(opts, :extra, %{}))
 
     AttemptFixtures.call(fixture, "admit_child", args)
   end
+
+  defp with_key(args, :none), do: args
+  defp with_key(args, key), do: Map.put(args, "child_key", key)
+
+  defp child_key, do: "ck_#{System.unique_integer([:positive])}"
 
   defp tool(fixture, name, args, extra \\ %{}) do
     AttemptFixtures.call(
@@ -329,6 +338,114 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       assert message =~ missing
       assert remediation["setup_command"] =~ "profile grant"
       assert children_of(fixture) == []
+    end
+  end
+
+  describe "admit_child under a key" do
+    test "a repeat with the same key answers the child already admitted, and admits nothing more",
+         %{ctx: ctx} do
+      authority = authority(edges: %{@target => %{}})
+      fixture = formula!(ctx, authority)
+      key = child_key()
+
+      assert %{"ok" => first} = admit(fixture, "#{@target}:1.0.0", %{"a" => 1}, child_key: key)
+      child = child!(fixture, first)
+
+      # The retry carries another input, as a runner never should; the
+      # admission recorded under the key is what it is answered.
+      assert %{"ok" => again} = admit(fixture, "#{@target}:1.0.0", %{"a" => 2}, child_key: key)
+      repeat = child!(fixture, again)
+
+      assert repeat.execution_id == child.execution_id
+      assert repeat.attempt == child.attempt
+      assert repeat.keys == child.keys
+      assert repeat.input == %{"a" => 1}
+      assert repeat.assignment.input_digest == child.assignment.input_digest
+      assert repeat.assignment.attempt == child.assignment.attempt
+      assert repeat.assignment.service == fixture.service
+      assert repeat.assignment.boot == fixture.boot
+
+      assert children_of(fixture) == [child.execution_id]
+      assert %{child_key: ^key} = Arca.Repo.get!(Arca.Execution, child.execution_id)
+      assert Sanctum.Authority.budget(authority).in_flight == 1
+      assert [_charge] = charges(ctx, authority)
+
+      assert %{"ok" => _} = fail!(child, "done")
+      wait_until(fn -> Attempt.whereis(child.execution_id) == nil end)
+      assert Sanctum.Authority.budget(authority).in_flight == 0
+    end
+
+    test "a different key admits another child", %{ctx: ctx} do
+      fixture = formula!(ctx, authority(edges: %{@target => %{}}))
+
+      assert %{"ok" => first} = admit(fixture, "#{@target}:1.0.0", %{}, guest_fn: "call")
+      assert %{"ok" => second} = admit(fixture, "#{@target}:1.0.0", %{}, guest_fn: "call")
+      one = child!(fixture, first)
+      two = child!(fixture, second)
+
+      assert one.execution_id != two.execution_id
+      assert Enum.sort(children_of(fixture)) == Enum.sort([one.execution_id, two.execution_id])
+      assert %{"ok" => _} = fail!(one, "done")
+      assert %{"ok" => _} = fail!(two, "done")
+    end
+
+    test "a key whose child ended is lost", %{ctx: ctx} do
+      fixture = formula!(ctx, authority(edges: %{@target => %{}}))
+      key = child_key()
+
+      assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{}, child_key: key)
+      child = child!(fixture, answer)
+      assert %{"ok" => _} = fail!(child, "done")
+      wait_until(fn -> Attempt.whereis(child.execution_id) == nil end)
+
+      assert %{"error" => "lost"} = admit(fixture, "#{@target}:1.0.0", %{}, child_key: key)
+      assert children_of(fixture) == [child.execution_id]
+      assert Process.alive?(fixture.pid)
+    end
+
+    test "a missing or malformed key is a guest error, and admits nothing", %{ctx: ctx} do
+      authority = authority(edges: %{@target => %{}})
+      fixture = formula!(ctx, authority)
+
+      for key <- [:none, "", "not a key", String.duplicate("k", 129), 7] do
+        assert %{"error" => "guest_error", "type" => "invalid_request", "message" => message} =
+                 admit(fixture, "#{@target}:1.0.0", %{}, child_key: key)
+
+        assert message =~ "child_key"
+      end
+
+      assert children_of(fixture) == []
+      assert Sanctum.Authority.budget(authority).in_flight == 0
+      assert charges(ctx, authority) == []
+    end
+
+    test "two admissions racing under one key admit one child, and the loser charges nothing",
+         %{ctx: ctx} do
+      authority = authority(edges: %{@target => %{}})
+      fixture = formula!(ctx, authority)
+      key = child_key()
+
+      answers =
+        1..2
+        |> Task.async_stream(
+          fn _ -> admit(fixture, "#{@target}:1.0.0", %{"race" => true}, child_key: key) end,
+          ordered: false,
+          timeout: 30_000
+        )
+        |> Enum.map(fn {:ok, answer} -> answer end)
+
+      admitted = for %{"ok" => answer} <- answers, do: child!(fixture, answer)
+      assert [child | _] = admitted
+      assert Enum.all?(admitted, &(&1.execution_id == child.execution_id))
+
+      # A loser that found the winner not yet handed to its runner is
+      # lost; it admitted nothing either way.
+      for %{"error" => refusal} <- answers, do: assert(refusal == "lost")
+
+      assert children_of(fixture) == [child.execution_id]
+      assert Sanctum.Authority.budget(authority).in_flight == 1
+      assert [_charge] = charges(ctx, authority)
+      assert %{"ok" => _} = fail!(child, "done")
     end
   end
 

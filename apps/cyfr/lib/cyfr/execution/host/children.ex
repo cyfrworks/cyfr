@@ -20,20 +20,30 @@ defmodule Cyfr.Execution.Host.Children do
 
   ## admit_child
 
-  The child's input is checked against the formula's roster
+  The body names the child's `child_key`, the key the runner minted for
+  it (`t:Cyfr.HostAPI.child_key/0`); a body without one, or with a
+  malformed one, is refused as a guest error before anything is read. The
+  child's input is checked against the formula's roster
   (`Cyfr.Execution.Delegation.input/4`), then the child is admitted for the
-  calling runner (`Cyfr.Execution.admit_child/5`): the formula's authority
-  is stepped, a spawn's charge is taken, the child's limits, rates, policy
-  and attestation are applied, its row is admitted under the formula
-  attempt's barrier, and its attempt is claimed for the calling runner, its
-  vault edge unsealed and handed to that runner. The answer carries the
-  child's signed assignment, its attempt's keys sealed with the calling
-  attempt's seal key (`Cyfr.WorkerAuth.seal_attempt_keys/3`), the JSON of
-  the input it was admitted with, which its assignment's `input_digest`
-  binds, and its vault fields. The child runs in the calling runner, which
-  closes its attempt;
-  its execution slot, invoke-budget slot and charge row go back at its
-  terminal write.
+  calling runner under that key (`Cyfr.Execution.admit_child/5`): the
+  formula's authority is stepped, a spawn's charge is taken, the child's
+  limits, rates, policy and attestation are applied, its row is admitted
+  under the formula attempt's barrier carrying the key, and its attempt is
+  claimed for the calling runner, its vault edge unsealed and handed to
+  that runner. The answer carries the child's signed assignment, its
+  attempt's keys sealed with the calling attempt's seal key
+  (`Cyfr.WorkerAuth.seal_attempt_keys/3`), the JSON of the input it was
+  admitted with, which its assignment's `input_digest` binds, and its
+  vault fields. The child runs in the calling runner, which closes its
+  attempt; its execution slot, invoke-budget slot and charge row go back
+  at its terminal write.
+
+  A repeat with the same key — a runner retrying a lost answer
+  (`Cyfr.HostAPI.retry/1`, `:keyed`) — admits nothing and answers the child
+  already admitted under it, decided by its row: the same child, its
+  assignment signed afresh, its keys and the input it was admitted with. A
+  key whose child has ended is `lost`; a different key admits another
+  child.
 
   ## tool_call
 
@@ -73,21 +83,38 @@ defmodule Cyfr.Execution.Host.Children do
   @not_started "Execution refused: its runner could not start"
   @not_sealed "Execution refused: its keys could not be sealed for its runner"
 
-  @typedoc "A decoded `admit_child` or `tool_call` body."
+  @typedoc "A decoded `admit_child`, `tool_call` or `release_child` body."
   @type op ::
           {:admit_child,
-           %{reference: String.t(), need: term(), input: map(), guest_fn: :call | :spawn}}
+           %{
+             reference: String.t(),
+             need: term(),
+             input: map(),
+             guest_fn: :call | :spawn,
+             child_key: Cyfr.HostAPI.child_key()
+           }}
           | {:tool_call, %{name: String.t(), args: map(), guest_fn: :call | :spawn}}
           | {:release_child, String.t()}
 
-  @doc "The operation a host call body's `op` and `args` name, or `{:error, :lost}`."
-  @spec operation(String.t(), map()) :: {:ok, op()} | {:error, :lost}
+  @doc """
+  The operation a host call body's `op` and `args` name, `{:error, :lost}`
+  for one that is not an operation, or the guest error an `admit_child`
+  without a well-formed `child_key` is refused with.
+  """
+  @spec operation(String.t(), map()) :: {:ok, op()} | {:error, :lost | Cyfr.HostAPI.guest_error()}
   def operation("admit_child", %{"reference" => reference, "input" => %{} = input} = args)
       when is_binary(reference) do
-    with {:ok, guest_fn} <- guest_fn(args) do
+    with {:ok, guest_fn} <- guest_fn(args),
+         {:ok, child_key} <- child_key(args) do
       {:ok,
        {:admit_child,
-        %{reference: reference, need: Map.get(args, "need"), input: input, guest_fn: guest_fn}}}
+        %{
+          reference: reference,
+          need: Map.get(args, "need"),
+          input: input,
+          guest_fn: guest_fn,
+          child_key: child_key
+        }}}
     end
   end
 
@@ -108,6 +135,17 @@ defmodule Cyfr.Execution.Host.Children do
 
   defp guest_fn(_args), do: {:error, :lost}
 
+  # The key is the runner's, so a runner that sends none, or one outside
+  # the contract's shape, is told so rather than losing its attempt.
+  defp child_key(%{"child_key" => key}) do
+    if Cyfr.HostAPI.valid_child_key?(key),
+      do: {:ok, key},
+      else: {:error, guest_error(:invalid_request, "Invalid child_key: not a child key")}
+  end
+
+  defp child_key(_args),
+    do: {:error, guest_error(:invalid_request, "Invalid child_key: a child needs one")}
+
   @doc """
   Run a decoded operation for `caller`, the verified header of a host call
   from the formula's runner. Answers `{:ok, value}` for the host call's
@@ -118,6 +156,7 @@ defmodule Cyfr.Execution.Host.Children do
     with {:ok, chain} <- Attempt.call(caller.execution_id, caller, :chain) do
       case admit(caller, chain, child) do
         {:ok, claimed} -> answer_child(caller, claimed)
+        {:error, reason} when reason in [:lost, :unavailable] -> {:error, reason}
         {:error, reason} -> {:error, child_refusal(reason)}
       end
     end
@@ -190,25 +229,26 @@ defmodule Cyfr.Execution.Host.Children do
   # admit_child
   # ---------------------------------------------------------------------------
 
+  # The answer's input is the one CYFR admitted the child with: on a
+  # repeat under the key, the one recorded, not what the retry carries.
   defp admit(caller, chain, child) do
     with {:ok, input} <-
-           Delegation.input(child.reference, child.input, chain.component_ref, chain.roster),
-         {:ok, claimed} <-
-           Cyfr.Execution.admit_child(chain.authority, child.reference, child.need, input,
-             ctx: chain.ctx,
-             parent_execution_id: caller.execution_id,
-             root_execution_id: chain.root_execution_id,
-             attempt: caller.attempt,
-             guest_fn: child.guest_fn,
-             declared_needs: chain.declared_needs,
-             activation_digest: chain.activation_digest,
-             runner: caller.runner,
-             service_id: caller.service,
-             boot_id: caller.boot,
-             worker: chain.worker,
-             parent_deadline: chain.deadline
-           ) do
-      {:ok, Map.put(claimed, :input, input)}
+           Delegation.input(child.reference, child.input, chain.component_ref, chain.roster) do
+      Cyfr.Execution.admit_child(chain.authority, child.reference, child.need, input,
+        ctx: chain.ctx,
+        parent_execution_id: caller.execution_id,
+        root_execution_id: chain.root_execution_id,
+        attempt: caller.attempt,
+        guest_fn: child.guest_fn,
+        child_key: child.child_key,
+        declared_needs: chain.declared_needs,
+        activation_digest: chain.activation_digest,
+        runner: caller.runner,
+        service_id: caller.service,
+        boot_id: caller.boot,
+        worker: chain.worker,
+        parent_deadline: chain.deadline
+      )
     end
   end
 

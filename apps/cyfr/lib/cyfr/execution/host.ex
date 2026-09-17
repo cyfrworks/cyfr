@@ -13,7 +13,9 @@ defmodule Cyfr.Execution.Host do
   `{"op": name, "args": {...}}`, and answers JSON. The operation is named
   inside the body, so the header's MAC covers it. The tenant, execution,
   attempt and runner a call acts for come from the verified header, never
-  from the body.
+  from the body. Over HTTP, `Cyfr.Execution.HostListener` carries the
+  header and body here and the answer back; `call/2` verifies the whole
+  call itself either way.
 
   ## Checks, in order
 
@@ -28,13 +30,15 @@ defmodule Cyfr.Execution.Host do
        known operation with well-formed arguments.
     2. `attach`: the assignment verifies (`Cyfr.Assignment.verify/3`), it
        names the header's athanor, execution, attempt, fence and
-       generation, its audience is the header's worker service, and the
-       attempt row is claimed for the header's runner
+       generation, it is addressed to the header's worker service and
+       boot, and the attempt row is claimed for the header's runner
        (`Arca.ExecutionAttempts.claim/4`). The attempt then unseals the
        run's vault edge (`Cyfr.Execution.Attempt.attach/2`).
-    3. `renew`: each named attempt is the header's own and is held by its
-       runner (`Arca.ExecutionAttempts.held?/4`) before its lease is
-       renewed.
+    3. `renew`: each named attempt's lease is renewed by one update
+       predicated on the header's runner holding it on the header's
+       service and boot (`Arca.ExecutionAttempts.renew_held/3`), the
+       runner's own attempt and the children it runs alike; one it does
+       not hold renews as `lost`.
     4. Every other operation: the header's nonce has not been presented to
        the attempt before, and the attempt row is held by the header's
        runner, before the attempt runs it (`Cyfr.Execution.Attempt.call/3`).
@@ -72,13 +76,14 @@ defmodule Cyfr.Execution.Host do
   | `storage` | `action`, `path`, optional `content` | the answer's members |
   | `fetch_artifact` | `digest` | the artifact's bytes, base64 |
   | `record_denial` | `type`, `message` | `true` |
-  | `admit_child` | `reference`, optional `need`, `input` (object), `guest_fn` (`call` or `spawn`) | `assignment`, `attempt_keys` (sealed), `input` (JSON text), `secrets` |
+  | `admit_child` | `reference`, optional `need`, `input` (object), `guest_fn` (`call` or `spawn`), `child_key` | `assignment`, `attempt_keys` (sealed), `input` (JSON text), `secrets` |
   | `tool_call` | `name`, `args` (object), `guest_fn` (`call` or `spawn`) | the tool's result |
 
   An outcome names its `execution_id`, `attempt` and `fence`. `storage`,
   `fetch_artifact` and `record_denial` are `Cyfr.Execution.Host.Storage`'s;
   `admit_child`, `tool_call` and `release_child` are
-  `Cyfr.Execution.Host.Children`'s.
+  `Cyfr.Execution.Host.Children`'s. `admit_child` is keyed: a repeat with
+  the same `child_key` answers the child already admitted under it.
 
   ## A worker service's report
 

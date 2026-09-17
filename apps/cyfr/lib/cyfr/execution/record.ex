@@ -73,6 +73,7 @@ defmodule Cyfr.Execution.Record do
           error: String.t() | nil,
           host_policy: json(),
           parent_execution_id: String.t() | nil,
+          child_key: String.t() | nil,
           root_execution_id: String.t() | nil,
           resolver_digest: String.t() | nil,
           activation_digest: String.t() | nil,
@@ -105,6 +106,9 @@ defmodule Cyfr.Execution.Record do
     :error,
     :host_policy,
     :parent_execution_id,
+    # The key the parent's runner minted for this child (`Cyfr.HostAPI`
+    # `t:child_key/0`), unique under the parent; nil for a root.
+    :child_key,
     :root_execution_id,
     :resolver_digest,
     :activation_digest,
@@ -138,6 +142,8 @@ defmodule Cyfr.Execution.Record do
   - `:component_digest` - The SHA256 digest of the WASM component.
   - `:host_policy` - Snapshot of the host policy applied to this execution.
   - `:parent_execution_id` - Parent formula execution ID for sub-invocations.
+  - `:child_key` - The key the parent's runner minted for this child, which
+    the row carries so a repeated admission under it answers this child.
   - `:root_execution_id` - The chain's root execution ID. A root stamps
     itself, so every row in a chain carries the same value.
   - `:retained_input` - The map kept as the input payload in place of
@@ -175,6 +181,7 @@ defmodule Cyfr.Execution.Record do
       error: nil,
       host_policy: host_policy,
       parent_execution_id: parent_execution_id,
+      child_key: Keyword.get(opts, :child_key),
       root_execution_id: root_execution_id,
       # Which consent rooted this run. The root's admission resolves the
       # profile before anything executes and passes its id here, so the row
@@ -349,6 +356,7 @@ defmodule Cyfr.Execution.Record do
              input: encode_json(input_envelope(record)),
              host_policy: encode_json(record.host_policy),
              parent_execution_id: record.parent_execution_id,
+             child_key: record.child_key,
              root_execution_id: record.root_execution_id,
              resolver_digest: record.resolver_digest,
              activation_digest: record.activation_digest,
@@ -663,6 +671,7 @@ defmodule Cyfr.Execution.Record do
       error: result.error_message,
       host_policy: parse_json_or_nil(result.host_policy),
       parent_execution_id: result[:parent_execution_id],
+      child_key: result[:child_key],
       root_execution_id: result[:root_execution_id],
       resolver_digest: result[:resolver_digest],
       activation_digest: result[:activation_digest],

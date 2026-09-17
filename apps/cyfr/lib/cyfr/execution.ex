@@ -30,7 +30,19 @@ defmodule Cyfr.Execution do
 
   alias Cyfr.Authority
   alias Cyfr.Authority.RootSelect
-  alias Cyfr.Execution.{Admission, Charge, Dispatch, Events, Record, StepSpans, TurnRoot}
+
+  alias Cyfr.Execution.{
+    Admission,
+    Assignments,
+    Attempt,
+    Charge,
+    Dispatch,
+    Events,
+    Record,
+    StepSpans,
+    TurnRoot
+  }
+
   alias Sanctum.Context
 
   @typedoc """
@@ -172,6 +184,18 @@ defmodule Cyfr.Execution do
     end
   end
 
+  @typedoc """
+  A child admitted for the runner that runs its parent: what
+  `Cyfr.Execution.Dispatch.claim/4` answers, with `:input`, the input the
+  child was admitted with, which its assignment's `input_digest` binds.
+  """
+  @type admitted_child :: %{
+          assignment: Cyfr.Assignment.token(),
+          attempt_keys: Cyfr.WorkerAuth.attempt_keys(),
+          secrets: %{optional(String.t()) => String.t()},
+          input: map()
+        }
+
   @doc """
   Advance a formula's `authority` through one invocation of `reference`
   its guest asked for, and admit the child for the runner that runs the
@@ -182,22 +206,94 @@ defmodule Cyfr.Execution do
   child's attempt until its terminal write; a synchronous one charges
   nothing. A refusal charges nothing and admits nothing.
 
-  Options as `run_child/5`'s host-threaded ones (`:ctx`,
+  `:child_key` (required) is the key the runner minted for this child
+  (`t:Cyfr.HostAPI.child_key/0`), which the child's row carries under its
+  parent. The row decides a repeat, never anything held in a process: a
+  key already carried by a child of `:parent_execution_id`
+  (`Arca.Execution.child_by_key/3`) admits nothing and answers that child
+  again — its assignment signed afresh from what it was admitted with, its
+  attempt's keys, its secrets and its input — for the runner that holds
+  its claim on the caller's service and boot; a key whose child has ended
+  is refused `:lost`, as is one another runner holds. Two admissions
+  racing under one key are decided by the row's unique index: the loser
+  admits nothing, gives back what it charged and answers the winner's
+  child.
+
+  Other options as `run_child/5`'s host-threaded ones (`:ctx`,
   `:parent_execution_id`, `:root_execution_id`, `:attempt`, `:guest_fn`,
   `:declared_needs`, `:activation_digest`), and the runner the child is
   claimed for: `:runner`, with `:service_id`, `:boot_id` and `:worker`
   naming its worker service, that service's boot and its `Cyfr.WorkerAPI`
   module, and `:parent_deadline` (Unix ms), which caps the child's
-  timeout at what remains of its parent's. Answers `{:ok, claimed}`
-  (`t:Cyfr.Execution.Dispatch.claimed/0`) or `{:error, reason}`.
+  timeout at what remains of its parent's. Answers `{:ok, child}`
+  (`t:admitted_child/0`) or `{:error, reason}`.
   """
   @spec admit_child(Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
-          {:ok, Dispatch.claimed()} | {:error, term()}
+          {:ok, admitted_child()} | {:error, term()}
   def admit_child(%Authority{} = authority, reference, need, input, opts) when is_list(opts) do
+    case child_under_key(opts) do
+      :none -> admit_keyed_child(authority, reference, need, input, opts)
+      {:ok, child} -> admitted_child(child, opts)
+      {:error, :unavailable} = refused -> refused
+    end
+  end
+
+  # The child of `:parent_execution_id` already carrying `:child_key`, by
+  # its row alone.
+  defp child_under_key(opts) do
+    case Arca.Execution.child_by_key(
+           Keyword.fetch!(opts, :ctx),
+           Keyword.fetch!(opts, :parent_execution_id),
+           Keyword.fetch!(opts, :child_key)
+         ) do
+      {:error, :database_error} -> {:error, :unavailable}
+      answer -> answer
+    end
+  end
+
+  # A fresh admission under the key. One that loses the row's unique index
+  # to an identical admission charged nothing that was not given back
+  # (`Cyfr.Execution.Dispatch.claim/4`), and answers the winner's child.
+  defp admit_keyed_child(authority, reference, need, input, opts) do
     opts = Charge.identify(opts)
 
-    with {:ok, decision} <- Admission.step_invoke(authority, reference, need, opts) do
-      dispatch_child(decision, input, opts, &Dispatch.claim/4)
+    with {:ok, decision} <- Admission.step_invoke(authority, reference, need, opts),
+         {:ok, claimed} <- dispatch_child(decision, input, opts, &Dispatch.claim/4) do
+      {:ok, Map.put(claimed, :input, input)}
+    else
+      {:error, :duplicate_child_key} ->
+        case child_under_key(opts) do
+          {:ok, child} -> admitted_child(child, opts)
+          :none -> {:error, :lost}
+          {:error, :unavailable} = refused -> refused
+        end
+
+      {:error, _reason} = refused ->
+        refused
+    end
+  end
+
+  # The child already admitted under the key, handed to its runner again:
+  # its attempt answers what its assignment is signed from and its secrets
+  # while the calling runner holds its claim and the row is live
+  # (`Cyfr.Execution.Attempt.admitted/2`), and the assignment is signed
+  # afresh from that; its keys derive from the same attempt.
+  defp admitted_child(%Arca.Execution{id: child_id}, opts) do
+    holder = %{
+      service_id: Keyword.fetch!(opts, :service_id),
+      boot_id: Keyword.fetch!(opts, :boot_id),
+      runner: Keyword.fetch!(opts, :runner)
+    }
+
+    with {:ok, %{assignment: admitted, secrets: secrets}} <- Attempt.admitted(child_id, holder),
+         {:ok, issued} <- Assignments.issue(admitted) do
+      {:ok,
+       %{
+         assignment: issued.assignment,
+         attempt_keys: issued.attempt_keys,
+         secrets: secrets,
+         input: admitted.input
+       }}
     end
   end
 
@@ -247,6 +343,7 @@ defmodule Cyfr.Execution do
     |> put(:parent_execution_id, Keyword.get(opts, :parent_execution_id))
     |> put(:root_execution_id, Keyword.get(opts, :root_execution_id))
     |> put(:parent_attempt, parent_attempt(opts))
+    |> put(:child_key, Keyword.get(opts, :child_key))
     |> put(:activation_digest, Keyword.get(opts, :activation_digest))
     |> put(:activation_stamp, Keyword.get(opts, :activation_stamp))
     |> put(:client_ip, Keyword.get(opts, :client_ip))

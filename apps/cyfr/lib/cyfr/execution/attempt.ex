@@ -34,6 +34,8 @@ defmodule Cyfr.Execution.Attempt do
     declared needs and activation digest the resolver gave its component,
     and the delegation roster its admitted input carries
     (`Cyfr.Execution.Delegation`);
+  - what its assignment is signed from, so a child admitted under a key
+    its runner minted is handed to that runner again (`admitted/2`);
   - the worker service the run is dispatched to (its `Cyfr.WorkerAPI`
     module and boot id) and the digest of the component its runner runs;
   - what the run holds while it is open: its execution slot
@@ -149,6 +151,7 @@ defmodule Cyfr.Execution.Attempt do
                 :digest,
                 :slot,
                 :charge,
+                :assignment,
                 declared_needs: [],
                 roster: [],
                 held_invoke: false,
@@ -209,8 +212,10 @@ defmodule Cyfr.Execution.Attempt do
   run's subtree deadline in Unix ms, which caps its children's), `:digest` (the digest of the
   component's artifact, which the runner fetches), `:held_invoke` (true
   when the waiter holds a charged invoke-budget slot of the authority's
-  budget, which the attempt takes over) and `:charge` (the charge row that
-  slot holds, `%{id: charge_id}`).
+  budget, which the attempt takes over), `:charge` (the charge row that
+  slot holds, `%{id: charge_id}`) and `:assignment` (what the run's
+  assignment is signed from, `t:Cyfr.Execution.Assignments.admitted/0`,
+  which `admitted/2` answers to the runner holding the claim).
 
   Answers `{:error, {:already_started, pid}}` when the execution already
   has an open attempt.
@@ -364,6 +369,25 @@ defmodule Cyfr.Execution.Attempt do
   @type holder :: %{service_id: String.t() | nil, boot_id: String.t(), runner: String.t() | nil}
 
   @doc """
+  What the attempt of `execution_id` was admitted with, for the runner
+  that holds its claim to be handed it again: what its assignment is
+  signed from (`t:Cyfr.Execution.Assignments.admitted/0`, the `:assignment`
+  it was opened with) and the secrets its attach unsealed. `holder` must
+  name the runner that attached on the service and boot the attempt was
+  dispatched to, and the row must still be live under it
+  (`Arca.ExecutionAttempts.live?/4`): a child that ended, or one another
+  runner holds, is `{:error, :lost}`; a store that cannot answer is
+  `{:error, :unavailable}`.
+  """
+  @spec admitted(String.t(), holder()) ::
+          {:ok, %{assignment: Cyfr.Execution.Assignments.admitted(), secrets: map()}}
+          | {:error, :lost | :unavailable}
+  def admitted(execution_id, %{runner: runner} = holder)
+      when is_binary(execution_id) and is_binary(runner) do
+    call(execution_id, {:admitted, holder})
+  end
+
+  @doc """
   Stop the open attempt `attempt` held by `holder`, without closing its
   run: its runner exited, or its row lapsed. An attempt held by another
   service, boot or runner, or none open, is left alone.
@@ -440,6 +464,7 @@ defmodule Cyfr.Execution.Attempt do
       deadline: Keyword.get(opts, :deadline),
       digest: Keyword.get(opts, :digest),
       charge: Keyword.get(opts, :charge),
+      assignment: Keyword.get(opts, :assignment),
       held_invoke: take_over_invoke(Keyword.get(opts, :held_invoke, false), authority, owner)
     }
 
@@ -490,6 +515,26 @@ defmodule Cyfr.Execution.Attempt do
   def handle_call({:attach, _caller} = message, _from, state), do: owned(message, state)
 
   def handle_call({:call, _caller, _op} = message, _from, state), do: owned(message, state)
+
+  def handle_call({:admitted, holder}, _from, state) do
+    held? =
+      is_map(state.assignment) and state.claimed_by == holder.runner and
+        state.service_id == holder.service_id and state.boot_id == holder.boot_id
+
+    with true <- held?,
+         true <-
+           Arca.ExecutionAttempts.live?(
+             state.ctx.athanor_id,
+             state.attempt,
+             state.fence,
+             holder.runner
+           ) do
+      {:reply, {:ok, %{assignment: state.assignment, secrets: state.secrets}}, state}
+    else
+      {:error, _reason} -> {:reply, {:error, :unavailable}, state}
+      false -> {:reply, {:error, :lost}, state}
+    end
+  end
 
   def handle_call({:stop_unclosed, attempt, holder}, _from, state) do
     held? =

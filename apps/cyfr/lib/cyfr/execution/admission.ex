@@ -229,8 +229,9 @@ defmodule Cyfr.Execution.Admission do
 
   Options: `:authority` (required — admitting without one raises, and the
   raise closes the row failed), `:type`, `:verify`, `:execution_id`,
-  `:parent_execution_id`, `:root_execution_id`, `:profile_id`,
-  `:retention_class`, `:retained_input`, `:schedule_id`,
+  `:parent_execution_id`, `:child_key` (the key the parent's runner minted
+  for this child, which the row carries), `:root_execution_id`,
+  `:profile_id`, `:retention_class`, `:retained_input`, `:schedule_id`,
   `:activation_stamp`, `:activation_digest`, `:dep_ref`, `:need`,
   `:client_ip`, the barriers `:charge`, `:step`, `:occurrence_id` and
   `:parent_attempt` (the attempt of `:parent_execution_id` a child is
@@ -252,7 +253,10 @@ defmodule Cyfr.Execution.Admission do
   superseded step, an occurrence not claimed, or a child whose parent
   attempt no longer owns its running parent — is not written, and the
   refusal is answered (`Cyfr.Execution.Close.barred/1`) with no lifecycle
-  telemetry: nothing may run, or be recorded, past a barrier. Any other
+  telemetry: nothing may run, or be recorded, past a barrier. A child
+  whose `child_key` another child of the same parent already carries is
+  refused the same way, `{:error, :duplicate_child_key}`, for the caller
+  to answer with that child (`Arca.Execution.child_by_key/3`). Any other
   later refusal closes the row failed first and answers what
   `Cyfr.Execution.Close.fail/3` answers.
   """
@@ -312,7 +316,7 @@ defmodule Cyfr.Execution.Admission do
         {:ok, admitted}
       else
         {:error, run, reason} ->
-          if Arca.Execution.barrier_refusal?(reason),
+          if reason == :duplicate_child_key or Arca.Execution.barrier_refusal?(reason),
             do: Close.barred(reason),
             else: Close.fail(run.close, [], reason)
       end
@@ -390,6 +394,7 @@ defmodule Cyfr.Execution.Admission do
       [
         component_type: component_type,
         parent_execution_id: opts[:parent_execution_id],
+        child_key: opts[:child_key],
         root_execution_id: opts[:root_execution_id],
         # A child walks its parent's authority and roots no profile of its
         # own, so it records none.
@@ -781,7 +786,10 @@ defmodule Cyfr.Execution.Admission do
         deadline: run.deadline,
         digest: run.component["digest"],
         held_invoke: run.opts[:held_invoke] == true,
-        charge: if(run.opts[:held_invoke] == true, do: run.opts[:charge])
+        charge: if(run.opts[:held_invoke] == true, do: run.opts[:charge]),
+        # What the attempt's assignment is signed from, kept so a child
+        # admitted under a key can be handed to its runner again.
+        assignment: assignment(run, input)
       )
 
     case opened do
