@@ -449,7 +449,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :state, :string, null: false
       # ok | error | result_lost | cancelled | uncertain
       add :outcome, :string
-      add :cancel_requested_at, :utc_datetime_usec
       add :started_at, :utc_datetime_usec, null: false
       add :running_since, :utc_datetime_usec
       add :ended_at, :utc_datetime_usec

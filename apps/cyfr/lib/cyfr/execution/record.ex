@@ -415,25 +415,19 @@ defmodule Cyfr.Execution.Record do
   @doc """
   Renew the lease this attempt holds on its running execution.
 
-  `{:ok, until}` is the new expiry the attempt now carries;
-  `{:cancel_requested, until}` the same with a cancel asked of it, which
-  the runner honours at once. `:lost` means the store answered and the
-  attempt no longer owns its execution — it finished, paused, lapsed, or
-  a successor took the row — and the runner stops authorized work at
-  once. `:unavailable` means the store could not answer; the runner keeps
-  working only while the lease it last held still holds.
+  `{:ok, until}` is the new expiry the attempt now carries. `:lost` means
+  the store answered and the attempt no longer owns its execution — it
+  finished, was cancelled, paused, lapsed, or a successor took the row —
+  and the runner stops authorized work at once. `:unavailable` means the
+  store could not answer; the runner keeps working only while the lease it
+  last held still holds.
   """
   @spec renew_lease(String.t(), String.t() | nil) ::
-          {:ok, DateTime.t()} | {:cancel_requested, DateTime.t()} | :lost | :unavailable
+          {:ok, DateTime.t()} | :lost | :unavailable
   def renew_lease(_execution_id, nil), do: :lost
 
   def renew_lease(execution_id, attempt) when is_binary(execution_id) and is_binary(attempt) do
-    case Arca.ExecutionAttempts.renew(attempt, lease_until()) do
-      {:ok, until, false} -> {:ok, until}
-      {:ok, until, true} -> {:cancel_requested, until}
-      :lost -> :lost
-      :unavailable -> :unavailable
-    end
+    Arca.ExecutionAttempts.renew(attempt, lease_until())
   rescue
     e ->
       Logger.warning(

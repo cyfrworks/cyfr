@@ -173,8 +173,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     refute_received :ran
   end
 
-  test "a held attempt is live until a cancel is asked of it or its execution ends", %{ctx: ctx} do
-    {execution, attempt} = admit!(ctx)
+  test "a held attempt is live until it is cancelled or its execution ends", %{ctx: ctx} do
+    {_execution, attempt} = admit!(ctx)
 
     refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
     assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
@@ -184,10 +184,12 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 2, "runner_a")
     refute ExecutionAttempts.live?("ath_gamma", attempt.attempt, 1, "runner_a")
 
-    assert {:ok, 1} = ExecutionAttempts.request_cancel(ctx.athanor_id, execution.id)
+    # A cancel is a terminal write: nothing is held or live after it.
+    assert {:ok, _ran} =
+             ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "cancelled", "cancelled")
 
     refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
-    assert ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
 
     {other, other_attempt} = admit!(ctx)
     assert :ok = ExecutionAttempts.claim(ctx.athanor_id, other_attempt.attempt, 1, "runner_a")

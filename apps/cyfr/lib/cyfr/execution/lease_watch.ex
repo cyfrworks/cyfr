@@ -10,11 +10,11 @@ defmodule Cyfr.Execution.LeaseWatch do
 
   A caller blocked in a call cannot service a timer of its own, so the
   keeper is a linked sibling with the rule the engine's watch applies
-  (`Cyfr.Execution.Record.renew_lease/2`): a renewal the store refuses
-  stops the holder at once (`{:lease_lost, execution_id}`); a cancel asked
-  of the attempt stops it at once (`{:cancel_requested, execution_id}`); a
-  store that cannot answer, a renewal that raises included, is tolerated
-  only inside the lease the attempt last held.
+  (`Cyfr.Execution.Record.renew_lease/2`): a renewal the store refuses,
+  a cancelled row's included, stops the holder at once
+  (`{:lease_lost, execution_id}`); a store that cannot answer, a renewal
+  that raises included, is tolerated only inside the lease the attempt
+  last held.
 
   A holder that moves the attempt out of `running` suspends its keeper
   first (`suspend/1`), so no renewal races the move, and then stops it
@@ -101,9 +101,6 @@ defmodule Cyfr.Execution.LeaseWatch do
     case Record.renew_lease(execution_id, watch.attempt) do
       {:ok, renewed} ->
         loop(watch, renewed)
-
-      {:cancel_requested, _renewed} ->
-        Process.exit(holder, {:cancel_requested, execution_id})
 
       :lost ->
         Process.exit(holder, {:lease_lost, execution_id})

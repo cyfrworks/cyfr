@@ -278,10 +278,6 @@ defmodule Cyfr.Execution.HostTest do
       assert %{"lease_until" => until} = renewals[fixture.attempt]
       assert until > now()
       assert renewals["att_other"] == "lost"
-
-      {:ok, 1} = Arca.ExecutionAttempts.request_cancel(fixture.athanor_id, fixture.execution_id)
-      assert %{"ok" => %{} = renewals} = renew(fixture)
-      assert renewals[fixture.attempt] == "cancel"
     end
   end
 

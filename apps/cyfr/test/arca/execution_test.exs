@@ -411,7 +411,7 @@ defmodule Arca.ExecutionTest do
       assert observed.attempt == live
 
       renewed_until = DateTime.add(DateTime.utc_now(), 180, :second)
-      assert {:ok, ^renewed_until, false} = Arca.ExecutionAttempts.renew(live, renewed_until)
+      assert {:ok, ^renewed_until} = Arca.ExecutionAttempts.renew(live, renewed_until)
 
       assert {0, _} =
                Execution.mark_failed_if_running(
@@ -449,7 +449,7 @@ defmodule Arca.ExecutionTest do
     test "a renewed lease takes an execution out of the sweep" do
       {id, attempt} = running!(DateTime.add(DateTime.utc_now(), -60, :second))
 
-      assert {:ok, _, false} =
+      assert {:ok, _} =
                Arca.ExecutionAttempts.renew(
                  attempt,
                  DateTime.add(DateTime.utc_now(), 180, :second)

@@ -43,11 +43,6 @@ defmodule Opus.LeaseWatchTest do
     assert :lapsed = Runner.renew_watch(watch(client, far()))
   end
 
-  test "a cancel asked of the attempt reaches the watch at its next tick", %{client: client} do
-    {:ok, 1} = Arca.ExecutionAttempts.request_cancel(client.athanor_id, client.execution_id)
-    assert :cancelled = Runner.renew_watch(watch(client, far()))
-  end
-
   test "a renewal presented by a runner that does not hold the attempt is refused, not tolerated",
        %{client: client} do
     assert :lapsed = Runner.renew_watch(watch(%{client | runner: "runner_other"}, far()))

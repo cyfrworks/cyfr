@@ -31,7 +31,6 @@ defmodule Arca.Schemas.ExecutionAttempt do
     field :lease_until, :utc_datetime_usec
     field :state, :string
     field :outcome, :string
-    field :cancel_requested_at, :utc_datetime_usec
     field :started_at, :utc_datetime_usec
     field :running_since, :utc_datetime_usec
     field :ended_at, :utc_datetime_usec

@@ -403,6 +403,5 @@ defmodule Opus.HostClient do
   defp guest_error(_refusal, type, message), do: {:error, {:guest_error, type, message}}
 
   defp renewal(%{"lease_until" => until}) when is_integer(until), do: {:ok, until}
-  defp renewal("cancel"), do: :cancel
   defp renewal(_lost), do: :lost
 end

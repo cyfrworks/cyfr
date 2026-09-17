@@ -63,7 +63,7 @@ defmodule Cyfr.Execution.Host do
   | Operation | `args` | `ok` |
   |---|---|---|
   | `attach` | `assignment` (token) | the run's vault fields, name to value |
-  | `renew` | `attempts` (ids) | attempt id to `{"lease_until": ms}`, `"cancel"` or `"lost"` |
+  | `renew` | `attempts` (ids) | attempt id to `{"lease_until": ms}` or `"lost"` |
   | `complete` | `outcome` (`status` `completed`, `output`) | `output`, masked |
   | `fail` | `outcome` (`status` `failed`, `error`, optional `abandoned`) | the failure as recorded, masked |
   | `push_deltas` | `deltas` (each `execution_id`, `attempt`, `fence`, `event` text) | one emit reply per delta |
@@ -270,8 +270,7 @@ defmodule Cyfr.Execution.Host do
     holder = %{service_id: caller.service, boot_id: caller.boot, runner: caller.runner}
 
     case Arca.ExecutionAttempts.renew_held(caller.athanor_id, attempt, holder) do
-      {:ok, until, false} -> {:ok, {:ok, DateTime.to_unix(until, :millisecond)}}
-      {:ok, _until, true} -> {:ok, :cancel}
+      {:ok, until} -> {:ok, {:ok, DateTime.to_unix(until, :millisecond)}}
       :lost -> {:ok, :lost}
       {:error, _reason} -> :unavailable
     end
@@ -363,7 +362,7 @@ defmodule Cyfr.Execution.Host do
   defp delta(_wire), do: :error
 
   defp renewal_wire({:ok, until}), do: %{"lease_until" => until}
-  defp renewal_wire(renewal) when renewal in [:cancel, :lost], do: Atom.to_string(renewal)
+  defp renewal_wire(:lost), do: "lost"
 
   defp encode(:ok), do: Jason.encode!(%{"ok" => true})
   defp encode({:ok, value}), do: Jason.encode!(%{"ok" => value})

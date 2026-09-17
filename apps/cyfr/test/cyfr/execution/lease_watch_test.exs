@@ -47,12 +47,6 @@ defmodule Cyfr.Execution.LeaseWatchTest do
     {pid, ref, watch}
   end
 
-  test "a cancel asked of the attempt exits the holder", %{ctx: ctx, id: id, attempt: attempt} do
-    {_pid, ref, _watch} = holder!(id, attempt)
-    assert {:ok, 1} = Arca.ExecutionAttempts.request_cancel(ctx.athanor_id, id)
-    assert_receive {:DOWN, ^ref, :process, _, {:cancel_requested, ^id}}, 2_000
-  end
-
   test "a lease the attempt no longer holds exits the holder", %{
     ctx: ctx,
     id: id,

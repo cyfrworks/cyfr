@@ -57,14 +57,11 @@ defmodule Arca.ExecutionAttemptsTest do
     assert a == attempt.attempt
   end
 
-  test "renewal answers only the owner, and carries a cancel request", %{ctx: ctx} do
-    {execution, attempt} = admit!(ctx)
+  test "renewal answers only the owner", %{ctx: ctx} do
+    {_execution, attempt} = admit!(ctx)
     until = DateTime.add(DateTime.utc_now(), 300, :second)
 
-    assert {:ok, ^until, false} = ExecutionAttempts.renew(attempt.attempt, until)
-
-    assert {:ok, 1} = ExecutionAttempts.request_cancel(ctx.athanor_id, execution.id)
-    assert {:ok, _, true} = ExecutionAttempts.renew(attempt.attempt, until)
+    assert {:ok, ^until} = ExecutionAttempts.renew(attempt.attempt, until)
 
     assert {:ok, _ran} =
              ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "completed", "ok")
@@ -157,7 +154,7 @@ defmodule Arca.ExecutionAttemptsTest do
     assert successor.state == "running"
     assert reload(execution.id).current_attempt == successor.attempt
     assert :lost = ExecutionAttempts.renew(attempt.attempt, later)
-    assert {:ok, _, false} = ExecutionAttempts.renew(successor.attempt, later)
+    assert {:ok, _} = ExecutionAttempts.renew(successor.attempt, later)
 
     # A second takeover retires the successor and takes fence 3.
     assert {:ok, %{attempt: third}} =
@@ -303,8 +300,9 @@ defmodule Arca.ExecutionAttemptsTest do
               event: "execution.lapsed"
             )
         end,
-        fn parent, _attempt ->
-          {:ok, 1} = ExecutionAttempts.request_cancel(ctx.athanor_id, parent.id)
+        fn _parent, attempt ->
+          {:ok, _} =
+            ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "cancelled", "cancelled")
         end,
         fn parent, _attempt ->
           {:ok, _} =

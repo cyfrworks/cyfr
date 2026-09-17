@@ -75,47 +75,25 @@ defmodule Arca.ExecutionAttempts do
   end
 
   @doc """
-  Renew the lease `attempt` holds. `{:ok, until, cancel_requested?}` when
-  the attempt still owns its running execution; `:lost` when the store
-  answered and it does not (it ended, paused, lapsed, or a successor
-  took the row); `:unavailable` when the store could not answer.
+  Renew the lease `attempt` holds. `{:ok, until}` when the attempt still
+  owns its running execution; `:lost` when the store answered and it does
+  not (it ended, paused, lapsed, or a successor took the row);
+  `:unavailable` when the store could not answer.
   """
-  @spec renew(String.t(), DateTime.t()) ::
-          {:ok, DateTime.t(), boolean()} | :lost | :unavailable
+  @spec renew(String.t(), DateTime.t()) :: {:ok, DateTime.t()} | :lost | :unavailable
   def renew(attempt, %DateTime{} = until) when is_binary(attempt) do
-    result =
-      Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.renew", :unavailable, fn ->
-        # arca:unscoped-ok the runner renews the attempt it holds; the id
-        # comes from trusted runtime state, never from a request.
-        Arca.Repo.transaction(fn ->
-          {count, _} =
-            from(a in ExecutionAttempt,
-              where: a.attempt == ^attempt and a.state == "running",
-              where: a.attempt in subquery(owner(attempt))
-            )
-            |> Arca.Repo.update_all(set: [lease_until: until])
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.renew", :unavailable, fn ->
+      # arca:unscoped-ok the runner renews the attempt it holds; the id
+      # comes from trusted runtime state, never from a request.
+      {count, _} =
+        from(a in ExecutionAttempt,
+          where: a.attempt == ^attempt and a.state == "running",
+          where: a.attempt in subquery(owner(attempt))
+        )
+        |> Arca.Repo.update_all(set: [lease_until: until])
 
-          if count == 1 do
-            cancel? =
-              Arca.Repo.one(
-                from(a in ExecutionAttempt,
-                  where: a.attempt == ^attempt,
-                  select: not is_nil(a.cancel_requested_at)
-                )
-              )
-
-            {:ok, until, cancel? == true}
-          else
-            :lost
-          end
-        end)
-      end)
-
-    case result do
-      {:ok, answer} -> answer
-      :unavailable -> :unavailable
-      {:error, _} -> :unavailable
-    end
+      if count == 1, do: {:ok, until}, else: :lost
+    end)
   end
 
   @doc """
@@ -164,58 +142,38 @@ defmodule Arca.ExecutionAttempts do
   Renew the lease of `attempt` while `holder` holds it: one update,
   predicated on the row owning its execution, being `running`, dispatched
   to the holder's `service_id` on its `boot_id` and claimed by its
-  `runner`. `{:ok, until, cancel_requested?}` when it did; `:lost` when no
-  such row holds; `{:error, :database_error}` when the store cannot answer.
-  A header's own attempt and the children its runner runs renew alike.
+  `runner`. `{:ok, until}` when it did; `:lost` when no such row holds;
+  `{:error, :database_error}` when the store cannot answer. A header's own
+  attempt and the children its runner runs renew alike.
   """
   @spec renew_held(String.t(), String.t(), %{
           service_id: String.t() | nil,
           boot_id: String.t(),
           runner: String.t()
         }) ::
-          {:ok, DateTime.t(), boolean()} | :lost | {:error, :database_error}
+          {:ok, DateTime.t()} | :lost | {:error, :database_error}
   def renew_held(athanor_id, attempt, %{boot_id: boot_id, runner: runner} = holder)
       when is_binary(athanor_id) and is_binary(attempt) and is_binary(boot_id) and
              is_binary(runner) do
     until = lease_until()
 
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.renew_held", fn ->
-      Arca.Repo.transaction(fn ->
-        held =
-          from(a in ExecutionAttempt,
-            where: a.athanor_id == ^athanor_id and a.attempt == ^attempt,
-            where: a.state == "running" and a.claimed_by == ^runner and a.boot_id == ^boot_id,
-            where: a.attempt in subquery(owner(attempt))
-          )
+      held =
+        from(a in ExecutionAttempt,
+          where: a.athanor_id == ^athanor_id and a.attempt == ^attempt,
+          where: a.state == "running" and a.claimed_by == ^runner and a.boot_id == ^boot_id,
+          where: a.attempt in subquery(owner(attempt))
+        )
 
-        held =
-          case holder.service_id do
-            nil -> from(a in held, where: is_nil(a.service_id))
-            service_id -> from(a in held, where: a.service_id == ^service_id)
-          end
-
-        {count, _} = Arca.Repo.update_all(held, set: [lease_until: until])
-
-        if count == 1 do
-          cancel? =
-            Arca.Repo.one(
-              from(a in ExecutionAttempt,
-                where: a.attempt == ^attempt,
-                select: not is_nil(a.cancel_requested_at)
-              )
-            )
-
-          {:ok, until, cancel? == true}
-        else
-          :lost
+      held =
+        case holder.service_id do
+          nil -> from(a in held, where: is_nil(a.service_id))
+          service_id -> from(a in held, where: a.service_id == ^service_id)
         end
-      end)
+
+      {count, _} = Arca.Repo.update_all(held, set: [lease_until: until])
+      if count == 1, do: {:ok, until}, else: :lost
     end)
-    |> case do
-      {:ok, answer} -> answer
-      {:error, :database_error} -> {:error, :database_error}
-      {:error, _rolled_back} -> {:error, :database_error}
-    end
   end
 
   @doc """
@@ -265,8 +223,9 @@ defmodule Arca.ExecutionAttempts do
   end
 
   @doc """
-  Whether `runner` holds the attempt (`held?/4`) and it is live: no cancel
-  has been asked of it and its execution is `running`. One read. Answers
+  Whether `runner` holds the attempt (`held?/4`) and it is live: its
+  execution is `running` and still points at it. A cancel is a terminal
+  write, so a cancelled execution is no longer live. One read. Answers
   `{:error, :database_error}` when the store cannot answer.
   """
   @spec live?(String.t(), String.t(), pos_integer(), String.t()) ::
@@ -281,7 +240,6 @@ defmodule Arca.ExecutionAttempts do
           on: e.id == a.execution_id and e.athanor_id == a.athanor_id,
           where: a.athanor_id == ^athanor_id and a.attempt == ^attempt and a.fence == ^fence,
           where: a.state == "running" and a.claimed_by == ^runner,
-          where: is_nil(a.cancel_requested_at),
           where: e.status == "running" and e.current_attempt == a.attempt
         )
       )
@@ -290,12 +248,12 @@ defmodule Arca.ExecutionAttempts do
 
   @doc """
   Hold the attempt a child is admitted under, inside the caller's admission
-  transaction: `attempt` must own `execution_id`, be `running` with no
-  cancel asked of it, and the execution must be `running`. Answers 1 when
-  it is, 0 when it is not (the caller rolls back). The write takes the
-  attempt row's lock, so a close, cancel or lapse of the attempt either
-  commits first, and the child is refused, or waits for the admission to
-  commit, and finds the child to fail.
+  transaction: `attempt` must own `execution_id` and be `running`, and the
+  execution must be `running`. Answers 1 when it is, 0 when it is not (the
+  caller rolls back). The write takes the attempt row's lock, so a close,
+  cancel or lapse of the attempt either commits first, and the child is
+  refused, or waits for the admission to commit, and finds the child to
+  fail.
   """
   @spec hold_for_child!(String.t(), String.t(), String.t()) :: non_neg_integer()
   # arca:db-raise-ok inside the caller's transaction
@@ -310,28 +268,12 @@ defmodule Arca.ExecutionAttempts do
     {count, _} =
       from(a in ExecutionAttempt,
         where: a.athanor_id == ^athanor_id and a.execution_id == ^execution_id,
-        where: a.attempt == ^attempt and a.state == "running" and is_nil(a.cancel_requested_at),
+        where: a.attempt == ^attempt and a.state == "running",
         where: a.attempt in subquery(running_execution)
       )
       |> Arca.Repo.update_all(inc: [fence: 0])
 
     count
-  end
-
-  @doc "Ask the execution's current attempt to stop at its next tick."
-  @spec request_cancel(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def request_cancel(athanor_id, execution_id) when is_binary(athanor_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.request_cancel", fn ->
-      {count, _} =
-        from(a in ExecutionAttempt,
-          where: a.athanor_id == ^athanor_id and a.execution_id == ^execution_id,
-          where: a.state in ^@open_states and is_nil(a.cancel_requested_at),
-          where: a.attempt in subquery(current_of(execution_id))
-        )
-        |> Arca.Repo.update_all(set: [cancel_requested_at: DateTime.utc_now()])
-
-      {:ok, count}
-    end)
   end
 
   @doc """

@@ -408,21 +408,6 @@ defmodule Cyfr.Execution.TurnRootTest do
     wait_until(fn -> Semaphore.status().active == active end)
   end
 
-  test "a cancel asked of the attempt exits the holder at the next tick", %{ctx: ctx, turn: turn} do
-    test_pid = self()
-
-    {holder, ref} =
-      spawn_monitor(fn ->
-        {claim, _} = claim!(ctx, turn, tick_ms: 50)
-        send(test_pid, {:claimed, claim})
-        Process.sleep(:infinity)
-      end)
-
-    assert_receive {:claimed, claim}, 10_000
-    {:ok, 1} = ExecutionAttempts.request_cancel(ctx.athanor_id, claim.execution_id)
-    assert_receive {:DOWN, ^ref, :process, ^holder, {:cancel_requested, _}}, 5_000
-  end
-
   test "a takeover's successor is adopted with a slot and a keeper of its own", %{
     ctx: ctx,
     turn: turn

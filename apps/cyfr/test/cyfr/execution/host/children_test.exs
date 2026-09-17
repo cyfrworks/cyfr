@@ -333,32 +333,6 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
   end
 
   describe "a formula that is ending" do
-    test "with a cancel asked of it, admits no child and makes no tool call, and still closes",
-         %{ctx: ctx} do
-      authority = authority(edges: %{@target => %{}}, tools: ["tools.list"])
-      fixture = formula!(ctx, authority)
-
-      assert %{"ok" => %{"tools" => _}} = tool(fixture, "tools", %{"action" => "list"})
-
-      assert {:ok, 1} =
-               Arca.ExecutionAttempts.request_cancel(ctx.athanor_id, fixture.execution_id)
-
-      assert %{"error" => "lost"} = tool(fixture, "tools", %{"action" => "list"})
-      assert %{"error" => "lost"} = admit(fixture, "#{@target}:1.0.0", %{})
-
-      assert children_of(fixture) == []
-      assert Sanctum.Authority.budget(authority).in_flight == 0
-      assert charges(ctx, authority) == []
-
-      # Still its runner's to close.
-      assert Process.alive?(fixture.pid)
-
-      assert %{"ok" => _} =
-               AttemptFixtures.call(fixture, "complete", %{
-                 "outcome" => AttemptFixtures.outcome(fixture, "completed", %{"output" => %{}})
-               })
-    end
-
     test "once cancelled, refuses a synchronous tool call and stops its attempt", %{ctx: ctx} do
       fixture = formula!(ctx, authority(tools: ["tools.list"]))
 

@@ -352,23 +352,17 @@ defmodule Opus.Runner do
     {:abandoned, "Execution lease lost: the row is no longer this attempt's to finish"}
   end
 
-  defp renewed(_ref, pid, refs, _remaining_ms, _timeout_ms, :cancelled) do
-    kill(pid, refs)
-    {:abandoned, "Execution cancelled"}
-  end
-
   @doc false
   # A renewal CYFR answers `lost` stops the runner at once: the row is
   # another's (cancelled, swept, finished, taken over). A renewal CYFR
   # cannot answer keeps the runner working only while the lease it last
   # held is still good.
-  @spec renew_watch(map(), DateTime.t()) :: {:ok, map()} | :lapsed | :cancelled
+  @spec renew_watch(map(), DateTime.t()) :: {:ok, map()} | :lapsed
   def renew_watch(%{client: client} = watch, now \\ DateTime.utc_now()) do
     case HostClient.renew(client, [client.attempt]) do
       {:ok, renewals} ->
         case Map.get(renewals, client.attempt, :lost) do
           {:ok, until} -> {:ok, %{watch | until: DateTime.from_unix!(until, :millisecond)}}
-          :cancel -> :cancelled
           :lost -> :lapsed
         end
 

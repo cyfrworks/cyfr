@@ -62,8 +62,12 @@ defmodule Cyfr.HostAPI do
   @typedoc "Vault field values by field name."
   @type secrets :: %{optional(String.t()) => String.t()}
 
-  @typedoc "One attempt's lease renewal: its new expiry in Unix ms, a cancel asked of it, or its loss."
-  @type renewal :: {:ok, lease_until :: non_neg_integer()} | :cancel | :lost
+  @typedoc """
+  One attempt's lease renewal: its new expiry in Unix ms, or its loss. A
+  cancel is a terminal write on the row, so a cancelled attempt renews as
+  lost.
+  """
+  @type renewal :: {:ok, lease_until :: non_neg_integer()} | :lost
 
   @typedoc """
   An admitted child: its assignment, already claimed for the calling
