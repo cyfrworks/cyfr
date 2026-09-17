@@ -145,7 +145,7 @@ defmodule Cyfr.Ops.Catalog do
           case Enum.filter(listed, &(&1 in reachable)) do
             [] -> nil
             ^listed -> tool_def
-            pruned -> Cyfr.Ops.Visibility.restrict_actions(tool_def, pruned)
+            pruned -> restrict_tool(tool_def, pruned)
           end
 
         {_, _} ->
@@ -213,6 +213,24 @@ defmodule Cyfr.Ops.Catalog do
       :miss ->
         {:error, :not_found}
     end
+  end
+
+  @doc """
+  Restrict a wire tool definition to the selected actions.
+
+  A registered tool's schema is rebuilt from its declarations, so the
+  properties of hidden actions leave with them; a definition the catalog
+  does not own (a remote server's tool) narrows only its action enum.
+  """
+  @spec restrict_tool(map(), [String.t()]) :: map()
+  def restrict_tool(%{"name" => name} = tool_def, actions) when is_list(actions) do
+    operations =
+      case lookup(name) do
+        {:ok, {_module, %{operations: operations}}} when is_list(operations) -> operations
+        _ -> nil
+      end
+
+    Cyfr.Ops.Visibility.restrict_actions(tool_def, actions, operations)
   end
 
   @doc """

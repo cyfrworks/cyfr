@@ -34,13 +34,19 @@ defmodule Locus.MCPTest do
                "status"
              ]
 
-      compile = Enum.find(schema["oneOf"], &(&1["properties"]["action"]["const"] == "compile"))
-      assert compile["properties"]["reference"]["type"] == "string"
-      validate = Enum.find(schema["oneOf"], &(&1["properties"]["action"]["const"] == "validate"))
-      assert validate["properties"]["wasm_base64"]["type"] == "string"
+      # One flat object: every action's arguments are properties, and an
+      # argument only some actions declare says which.
+      assert schema["properties"]["reference"]["type"] == "string"
+      assert schema["properties"]["reference"]["description"] =~ "Actions: compile"
+      assert schema["properties"]["wasm_base64"]["type"] == "string"
       assert schema["required"] == ["action"]
-      assert "reference" in compile["required"]
-      assert "wasm_base64" in validate["required"]
+      refute Map.has_key?(schema, "oneOf")
+
+      # Each action's own requirement lives on its declaration.
+      compile = Enum.find(tool.operations, &(&1.action == "compile"))
+      validate = Enum.find(tool.operations, &(&1.action == "validate"))
+      assert Enum.any?(compile.args, &(&1.name == "reference" and &1.required))
+      assert Enum.any?(validate.args, &(&1.name == "wasm_base64" and &1.required))
     end
   end
 

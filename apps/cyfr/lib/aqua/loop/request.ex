@@ -333,7 +333,7 @@ defmodule Aqua.Loop.Request do
           %{
             "name" => tool,
             "description" => (definition["description"] || "") <> asks(tool, kept, policy),
-            "parameters" => Cyfr.Ops.Operation.restrict_schema(schema, kept)
+            "parameters" => Cyfr.Ops.Catalog.restrict_tool(definition, kept)["inputSchema"]
           }
         end
 

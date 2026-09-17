@@ -171,11 +171,25 @@ defmodule Cyfr.Ops.Visibility do
     end
   end
 
-  @doc "Restrict a discovery tool's schema and annotations to the selected actions."
-  @spec restrict_actions(map(), [String.t()]) :: map()
-  def restrict_actions(tool_def, actions) do
+  @doc """
+  Restrict a discovery tool's schema and annotations to the selected actions.
+
+  Given the tool's operations, the schema is rebuilt from the kept
+  declarations, so a property only hidden actions declare disappears with
+  them; without them only the action enum narrows. A definition with no
+  `inputSchema` keeps its shape.
+  """
+  @spec restrict_actions(map(), [String.t()], [Cyfr.Ops.Operation.t()] | nil) :: map()
+  def restrict_actions(tool_def, actions, operations \\ nil)
+      when is_map(tool_def) and is_list(actions) do
     tool_def =
-      Map.update!(tool_def, "inputSchema", &Cyfr.Ops.Operation.restrict_schema(&1, actions))
+      case tool_def do
+        %{"inputSchema" => schema} ->
+          Map.put(tool_def, "inputSchema", restrict_schema(schema, actions, operations))
+
+        _ ->
+          tool_def
+      end
 
     case tool_def["annotations"] do
       %{actions: declared} = annotations ->
@@ -185,4 +199,12 @@ defmodule Cyfr.Ops.Visibility do
         tool_def
     end
   end
+
+  defp restrict_schema(schema, actions, operations) when is_list(operations) do
+    kept = Enum.filter(operations, &(&1.action in actions))
+    Map.merge(schema, Cyfr.Ops.Operation.schema(kept))
+  end
+
+  defp restrict_schema(schema, actions, nil),
+    do: Cyfr.Ops.Operation.restrict_schema(schema, actions)
 end

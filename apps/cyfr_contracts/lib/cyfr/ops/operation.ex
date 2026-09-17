@@ -142,58 +142,144 @@ defmodule Cyfr.Ops.Operation do
   def annotations(%__MODULE__{} = op),
     do: op |> Map.take(@annotation_fields) |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
-  @doc "An action-discriminated object schema; each branch owns its required arguments."
+  # Per-declaration constraints that a merged property may loosen or drop.
+  # Everything else in a value schema is its shape, which every action
+  # declaring the name must share.
+  @bounds [
+    {"minimum", "maximum"},
+    {"minLength", "maxLength"},
+    {"minItems", "maxItems"},
+    {"minProperties", "maxProperties"}
+  ]
+  @agreed ["pattern", "default"]
+  @loose ["description", "enum" | @agreed] ++ Enum.flat_map(@bounds, &Tuple.to_list/1)
+
+  @doc """
+  One flat object schema for a tool: the action discriminator plus one
+  property per argument name, merged across the actions that declare it.
+
+  Model APIs refuse `oneOf`, `anyOf` and `allOf` at the top level of a tool
+  schema, so discovery is a single object and `cast/2` remains the place
+  where each call meets its own action's declaration. A merged property is
+  the loosest of its declarations: nullable when any action accepts null,
+  the union of their enums, the widest of their bounds, and a pattern or
+  default only when every declaration agrees. An argument declared by a
+  subset of the actions names them in its description. `required` lists
+  the arguments every action requires. One name declared with different
+  shapes across a tool's actions is a declaration error.
+  """
   @spec schema([t()]) :: map()
   def schema(operations) do
     Enum.each(operations, &validate!/1)
+    actions = Enum.map(operations, & &1.action)
+
+    declared =
+      operations
+      |> Enum.flat_map(fn op -> Enum.map(op.args, &{&1.name, {op.action, &1}}) end)
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+    properties =
+      Map.new(declared, fn {name, entries} -> {name, merge_property(name, entries, actions)} end)
+
+    required =
+      for {name, entries} <- declared,
+          length(entries) == length(actions),
+          Enum.all?(entries, fn {_action, arg} -> arg.required end),
+          do: name
 
     %{
       "type" => "object",
-      "properties" => %{
-        "action" => %{"type" => "string", "enum" => Enum.map(operations, & &1.action)}
-      },
-      "required" => ["action"],
-      "oneOf" =>
-        Enum.map(operations, fn op ->
-          schema = Arg.schema(op.args)
-
-          schema
-          |> Map.put("description", op.description)
-          |> Map.update!(
-            "properties",
-            &Map.put(&1, "action", %{"type" => "string", "const" => op.action})
-          )
-          |> Map.update!("required", &["action" | &1])
-        end)
+      "properties" => Map.put(properties, "action", %{"type" => "string", "enum" => actions}),
+      "required" => ["action" | Enum.sort(required)],
+      "additionalProperties" => false
     }
   end
 
-  @doc """
-  Restrict an action-discriminated wire schema to existing selected actions.
+  defp merge_property(name, entries, actions) do
+    schemas = Enum.map(entries, fn {_action, arg} -> Arg.value_schema(arg) end)
 
-  Preserve metadata and property definitions while filtering the action
-  enum and its `oneOf` branches together. Schemas without action branches
-  retain their other constraints. An empty selection describes no action.
+    case schemas |> Enum.map(&shape/1) |> Enum.uniq() do
+      [shape] ->
+        shape
+        |> merge_nullable(schemas)
+        |> merge_enum(schemas)
+        |> merge_bounds(schemas)
+        |> merge_agreed(schemas)
+        |> merge_description(schemas, Enum.map(entries, &elem(&1, 0)), actions)
+
+      _ ->
+        raise ArgumentError, "argument #{name} declares different types across actions"
+    end
+  end
+
+  defp shape(schema) do
+    case Map.drop(schema, @loose) do
+      %{"type" => [type, "null"]} = shape -> Map.put(shape, "type", type)
+      shape -> shape
+    end
+  end
+
+  defp merge_nullable(shape, schemas) do
+    if Enum.any?(schemas, &match?(%{"type" => [_, "null"]}, &1)),
+      do: Map.update!(shape, "type", &[&1, "null"]),
+      else: shape
+  end
+
+  defp merge_enum(shape, schemas) do
+    if Enum.all?(schemas, &Map.has_key?(&1, "enum")),
+      do: Map.put(shape, "enum", schemas |> Enum.flat_map(& &1["enum"]) |> Enum.uniq()),
+      else: shape
+  end
+
+  defp merge_bounds(shape, schemas) do
+    Enum.reduce(@bounds, shape, fn {low, high}, shape ->
+      shape
+      |> merge_bound(schemas, low, &Enum.min/1)
+      |> merge_bound(schemas, high, &Enum.max/1)
+    end)
+  end
+
+  defp merge_bound(shape, schemas, key, pick) do
+    if Enum.all?(schemas, &Map.has_key?(&1, key)),
+      do: Map.put(shape, key, pick.(Enum.map(schemas, & &1[key]))),
+      else: shape
+  end
+
+  defp merge_agreed(shape, schemas) do
+    Enum.reduce(@agreed, shape, fn key, shape ->
+      case schemas |> Enum.map(&Map.fetch(&1, key)) |> Enum.uniq() do
+        [{:ok, value}] -> Map.put(shape, key, value)
+        _ -> shape
+      end
+    end)
+  end
+
+  defp merge_description(shape, schemas, declared_by, actions) do
+    description = Enum.find_value(schemas, & &1["description"])
+
+    scope =
+      if length(declared_by) < length(actions),
+        do: "Actions: #{Enum.join(declared_by, ", ")}.",
+        else: nil
+
+    case Enum.reject([description, scope], &is_nil/1) do
+      [] -> shape
+      parts -> Map.put(shape, "description", Enum.join(parts, " "))
+    end
+  end
+
+  @doc """
+  Restrict a wire schema's action enum to existing selected actions.
+
+  A bare schema carries no record of which action declared which property,
+  so only the enum narrows here; `restrict/2` rebuilds the whole view from
+  the declarations. Schemas without an action enum retain their other
+  constraints. An empty selection describes no action.
   """
   @spec restrict_schema(map(), [String.t()]) :: map()
   def restrict_schema(%{"properties" => %{"action" => %{"enum" => existing}}} = schema, actions)
       when is_list(existing) and is_list(actions) do
-    kept = Enum.filter(existing, &(&1 in actions))
-    schema = put_in(schema, ["properties", "action", "enum"], kept)
-
-    case schema do
-      %{"oneOf" => branches} when is_list(branches) ->
-        Map.put(
-          schema,
-          "oneOf",
-          Enum.filter(branches, fn branch ->
-            get_in(branch, ["properties", "action", "const"]) in kept
-          end)
-        )
-
-      _ ->
-        schema
-    end
+    put_in(schema, ["properties", "action", "enum"], Enum.filter(existing, &(&1 in actions)))
   end
 
   def restrict_schema(schema, actions) when is_map(schema) and is_list(actions), do: schema

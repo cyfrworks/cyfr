@@ -2223,9 +2223,18 @@ defmodule Compendium.MCPTest do
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 
+  # One action's own declaration, as `Cyfr.Ops.Operation.cast/2` applies it;
+  # the tool's discovery schema merges every action into one flat object.
   defp action_schema(tool, action) do
-    Enum.find(tool.input_schema["oneOf"], fn branch ->
-      get_in(branch, ["properties", "action", "const"]) == action
-    end) || flunk("missing schema for #{tool.name}.#{action}")
+    case Enum.find(tool.operations, &(&1.action == action)) do
+      nil ->
+        flunk("missing schema for #{tool.name}.#{action}")
+
+      operation ->
+        operation.args
+        |> Cyfr.Ops.Arg.schema()
+        |> put_in(["properties", "action"], %{"type" => "string", "const" => action})
+        |> Map.update!("required", &["action" | &1])
+    end
   end
 end

@@ -368,17 +368,11 @@ defmodule Opus.SecurityTest do
       tools = MCP.tools()
       tool = Enum.find(tools, &(&1.name == "execution"))
 
-      # The schema is action-discriminated: each `oneOf` branch pins its
-      # action and owns that action's arguments, so `verify` lives on the
-      # `run` branch rather than at the top level.
-      run =
-        Enum.find(tool.input_schema["oneOf"], fn branch ->
-          get_in(branch, ["properties", "action", "const"]) == "run"
-        end)
-
-      assert run != nil
-      verify = run["properties"]["verify"]
+      # The discovery schema is one flat object, so `verify` is a top-level
+      # property that names the actions declaring it.
+      verify = tool.input_schema["properties"]["verify"]
       assert verify["type"] == "object"
+      assert verify["description"] =~ "Actions: run"
       assert verify["properties"]["identity"] != nil
       assert verify["properties"]["issuer"] != nil
     end

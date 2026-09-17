@@ -51,16 +51,77 @@ defmodule Cyfr.Ops.OperationTest do
     definition = tool()
     assert definition.name == "sample"
     assert definition.title == "Samples"
-    assert definition.input_schema["properties"]["action"]["enum"] == ["create", "list"]
-    [create, list] = definition.input_schema["oneOf"]
-    assert create["properties"]["action"]["const"] == "create"
-    assert create["required"] == ["action", "name"]
-    assert list["required"] == ["action"]
+    schema = definition.input_schema
+    assert schema["properties"]["action"]["enum"] == ["create", "list"]
+
+    # One flat object: a model API refuses oneOf/anyOf/allOf at the top
+    # level of a tool schema. `name` is required by `create` alone, so the
+    # shared schema requires only the discriminator and says who uses it.
+    refute Map.has_key?(schema, "oneOf")
+    assert schema["additionalProperties"] == false
+    assert Map.has_key?(schema["properties"], "name")
+    assert Map.has_key?(schema["properties"], "limit")
+    assert schema["required"] == ["action"]
+    assert schema["properties"]["name"]["description"] =~ "Actions: create."
+    assert schema["properties"]["limit"]["minimum"] == 0
     assert definition.annotations.actions["create"].permission == :execute
     assert definition.annotations.actions["list"].recovery == :replay_safe
     assert definition.annotations.readOnlyHint == false
-    assert [filtered] = Operation.restrict(definition, ["list"]).input_schema["oneOf"]
-    assert filtered["properties"]["action"]["const"] == "list"
+
+    restricted = Operation.restrict(definition, ["list"]).input_schema
+    assert restricted["properties"]["action"]["enum"] == ["list"]
+    refute Map.has_key?(restricted["properties"], "name")
+    assert Map.has_key?(restricted["properties"], "limit")
+  end
+
+  test "a shared argument merges to its loosest declaration and refuses a shape conflict" do
+    approve =
+      Operation.new(
+        "card",
+        "approve",
+        "Approve",
+        [
+          Arg.new("scope", :string,
+            enum: ["once", "thread"],
+            required: true,
+            min: 1,
+            max: 8,
+            pattern: "^[a-z]+$",
+            description: "How far the decision reaches"
+          )
+        ],
+        kind: :write,
+        planes: [:external]
+      )
+
+    decline =
+      Operation.new(
+        "card",
+        "decline",
+        "Decline",
+        [Arg.new("scope", :string, enum: ["never"], nullable: true, min: 2, max: 9)],
+        kind: :write,
+        planes: [:external]
+      )
+
+    schema = Operation.schema([approve, decline])
+    scope = schema["properties"]["scope"]
+    assert scope["type"] == ["string", "null"]
+    assert scope["enum"] == ["once", "thread", "never", nil]
+    assert {scope["minLength"], scope["maxLength"]} == {1, 9}
+    refute Map.has_key?(scope, "pattern")
+    assert scope["description"] == "How far the decision reaches"
+    assert schema["required"] == ["action"]
+
+    conflict =
+      Operation.new("card", "count", "Count", [Arg.new("scope", :integer)],
+        kind: :read,
+        planes: [:external]
+      )
+
+    assert_raise ArgumentError, ~r/different types/, fn ->
+      Operation.schema([approve, conflict])
+    end
   end
 
   test "duplicates, an action argument and undeclared policy fields refuse at declaration time" do
@@ -111,19 +172,13 @@ defmodule Cyfr.Ops.OperationTest do
     assert_raise ArgumentError, fn -> Operation.tool([%{op | description: ""}]) end
   end
 
-  test "wire restriction preserves metadata and filters enum and branches together" do
+  test "wire restriction narrows the action enum and keeps everything else" do
     original = Map.put(tool().input_schema, "description", "Unchanged")
     restricted = Operation.restrict_schema(original, ["list", "unknown"])
     assert restricted["description"] == "Unchanged"
     assert restricted["properties"]["action"]["enum"] == ["list"]
-    assert [list] = restricted["oneOf"]
-    assert list == List.last(original["oneOf"])
-    assert Operation.restrict_schema(original, [])["oneOf"] == []
-    external = Map.delete(original, "oneOf")
-
-    assert Operation.restrict_schema(external, ["list"]) ==
-             put_in(external, ["properties", "action", "enum"], ["list"])
-
+    assert restricted["properties"]["name"] == original["properties"]["name"]
+    assert Operation.restrict_schema(original, [])["properties"]["action"]["enum"] == []
     assert Operation.restrict_schema(%{"type" => "object"}, ["list"]) == %{"type" => "object"}
     assert Operation.valid_planes() == [:external, :in_chain]
   end

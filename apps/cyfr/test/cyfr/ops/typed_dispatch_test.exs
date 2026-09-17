@@ -220,14 +220,20 @@ defmodule Cyfr.Ops.TypedDispatchTest do
     assert {:error, {:invalid_argument, _}} = Catalog.call_external("typed_probe", ctx, args)
   end
 
-  test "discovery filters remove hidden branches and registration derives fresh views" do
+  test "discovery filters drop hidden actions' properties and registration derives fresh views" do
     {:ok, wire} = Catalog.get_tool("typed_probe")
-    filtered = Visibility.restrict_actions(wire, ["empty"])
+    filtered = Catalog.restrict_tool(wire, ["empty"])
 
-    assert [%{"properties" => %{"action" => %{"const" => "empty"}}}] =
-             filtered["inputSchema"]["oneOf"]
-
+    # Rebuilt from the declarations: the arguments of hidden actions leave.
+    assert filtered["inputSchema"]["properties"]["action"]["enum"] == ["empty"]
+    assert Map.keys(filtered["inputSchema"]["properties"]) == ["action"]
+    refute Map.has_key?(filtered["inputSchema"], "oneOf")
     assert Map.keys(filtered["annotations"].actions) == ["empty"]
+
+    # Without the declarations only the enum narrows.
+    bare = Visibility.restrict_actions(wire, ["empty"])
+    assert bare["inputSchema"]["properties"]["action"]["enum"] == ["empty"]
+    assert Map.has_key?(bare["inputSchema"]["properties"], "label")
 
     [echo, empty | _] = definition().operations
     changed = %{empty | args: [Arg.new("id", :string, required: true)]}
@@ -237,14 +243,11 @@ defmodule Cyfr.Ops.TypedDispatchTest do
              Catalog.validate_arguments("typed_probe", %{"action" => "empty"})
 
     {:ok, changed_wire} = Catalog.get_tool("typed_probe")
-
-    branch =
-      Enum.find(
-        changed_wire["inputSchema"]["oneOf"],
-        &(&1["properties"]["action"]["const"] == "empty")
-      )
-
-    assert "id" in branch["required"]
+    id = changed_wire["inputSchema"]["properties"]["id"]
+    assert id["type"] == "string"
+    assert id["description"] == "Actions: empty."
+    # Required by one action only, so the shared schema does not require it.
+    refute "id" in changed_wire["inputSchema"]["required"]
   end
 
   test "every cached provider retains its canonical operations after refresh" do
