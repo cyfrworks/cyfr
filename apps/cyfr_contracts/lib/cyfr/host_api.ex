@@ -17,9 +17,9 @@ defmodule Cyfr.HostAPI do
   (`Cyfr.WorkerAuth.verify_host_call/5`), refuses a nonce already seen for
   the attempt on a call that is not idempotent, and, for every call but
   `c:attach/2`, checks that the attempt row is current, running, at the
-  header's fence and claimed by the header's runner. A call that fails any
-  of those checks is answered `:lost`, and the runner stops the attempt's
-  work.
+  header's fence, on the header's boot and claimed by the header's runner.
+  A call that fails any of those checks is answered `:lost`, and the
+  runner stops the attempt's work.
 
   A callback receives the verified header as its `t:caller/0`. The tenant,
   execution, attempt and runner a call acts for come from the caller, never
@@ -199,11 +199,17 @@ defmodule Cyfr.HostAPI do
   @callback record_denial(caller(), attrs :: map()) :: :ok | {:error, refusal()}
 
   @doc """
-  Report that a runner of the reporting worker service exited, with the
-  attempts it was started with and had not closed. CYFR lapses each of
-  them that was dispatched to that worker service and is still running,
-  and stops what it holds for each.
+  Report that the runner `runner` of the reporting worker service exited,
+  with the attempts it was started with and had not closed. CYFR lapses
+  each of them that was dispatched to the reporting service and boot, is
+  claimed by that runner and is still running, and stops what it holds
+  for each. A report speaks for its own boot only: another boot of the
+  same service lapses nothing.
   """
-  @callback runner_exited(report :: WorkerAuth.dispatch(), attempts :: [String.t()]) ::
+  @callback runner_exited(
+              report :: WorkerAuth.dispatch(),
+              runner :: String.t(),
+              attempts :: [String.t()]
+            ) ::
               :ok | {:error, :unavailable}
 end

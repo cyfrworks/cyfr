@@ -239,22 +239,40 @@ defmodule Opus.WorkerServiceTest do
 
   describe "start/3" do
     setup do
-      {:ok, %{boot: boot}} = Opus.WorkerService.status()
-      {:ok, boot: boot}
+      {:ok, %{service: service, boot: boot}} = Opus.WorkerService.status()
+      {:ok, service: service, boot: boot}
     end
 
-    test "refuses an assignment addressed to another worker service", %{boot: boot} do
-      assert boot != "worker_other"
-      fixture = AttemptFixtures.attached!(runner_id: "worker_other", attach: false)
+    test "refuses an assignment addressed to another worker service, or another boot of this one",
+         %{service: service, boot: boot} do
+      assert service != "wrk_other"
+
+      other_service =
+        AttemptFixtures.attached!(service_id: "wrk_other", boot_id: boot, attach: false)
 
       assert {:error, :malformed} =
-               Opus.WorkerService.start(fixture.assignment, input(fixture), sealed(fixture))
+               Opus.WorkerService.start(
+                 other_service.assignment,
+                 input(other_service),
+                 sealed(other_service)
+               )
 
-      Attempt.refuse(fixture.pid, "not started")
+      other_boot =
+        AttemptFixtures.attached!(service_id: service, boot_id: "boot_other", attach: false)
+
+      assert {:error, :malformed} =
+               Opus.WorkerService.start(
+                 other_boot.assignment,
+                 input(other_boot),
+                 sealed(other_boot)
+               )
+
+      Attempt.refuse(other_service.pid, "not started")
+      Attempt.refuse(other_boot.pid, "not started")
     end
 
-    test "refuses input its assignment's digest does not bind", %{boot: boot} do
-      fixture = AttemptFixtures.attached!(runner_id: boot, attach: false)
+    test "refuses input its assignment's digest does not bind", %{service: service, boot: boot} do
+      fixture = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
 
       assert {:error, :malformed} =
                Opus.WorkerService.start(
@@ -267,12 +285,13 @@ defmodule Opus.WorkerServiceTest do
     end
 
     test "refuses keys that do not open as the assignment's attempt on this worker service", %{
+      service: service,
       boot: boot
     } do
-      fixture = AttemptFixtures.attached!(runner_id: boot, attach: false)
-      other = AttemptFixtures.attached!(runner_id: boot, attach: false)
-      elsewhere = Cyfr.WorkerAuth.dispatch_seal_key(worker_key!("worker_other"))
-      signing = Cyfr.WorkerAuth.dispatch_key(worker_key!(boot))
+      fixture = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
+      other = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
+      elsewhere = Cyfr.WorkerAuth.dispatch_seal_key(worker_key!("wrk_other"))
+      signing = Cyfr.WorkerAuth.dispatch_key(worker_key!(service))
 
       for sealed <- [
             sealed(other),
@@ -351,7 +370,7 @@ defmodule Opus.WorkerServiceTest do
   # The fixture's attempt keys, sealed with `key` (default the dispatch seal
   # key of the worker service the attempt is dispatched to).
   defp sealed(fixture, key \\ nil) do
-    key = key || Cyfr.WorkerAuth.dispatch_seal_key(worker_key!(fixture.worker))
+    key = key || Cyfr.WorkerAuth.dispatch_seal_key(worker_key!(fixture.service))
     {:ok, sealed} = Cyfr.WorkerAuth.seal_attempt_keys(key, fixture.keys)
     sealed
   end

@@ -360,7 +360,7 @@ defmodule Emissary.MCP.ExternalProvider do
     }
 
     admission =
-      [runner_id: Cyfr.Boot.id()]
+      [boot_id: Cyfr.Boot.id()]
       |> Arca.QueryHelpers.maybe_put(:charge, Keyword.get(opts, :hold))
       |> Arca.QueryHelpers.maybe_put(:step, Keyword.get(opts, :step))
 

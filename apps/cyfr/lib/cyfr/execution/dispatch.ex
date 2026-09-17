@@ -69,8 +69,8 @@ defmodule Cyfr.Execution.Dispatch do
 
   @doc """
   Run `reference` with `input` in `ctx` on a worker service. `opts` are
-  `Cyfr.Execution.Admission.admit/4`'s (without `:runner_id` and
-  `:worker`, which dispatch sets) and `:class`. Answers the run's result
+  `Cyfr.Execution.Admission.admit/4`'s (without `:service_id`, `:boot_id`
+  and `:worker`, which dispatch sets) and `:class`. Answers the run's result
   as its close recorded it, or `{:error, :execution_unavailable}` when no
   configured worker service answers.
   """
@@ -78,11 +78,16 @@ defmodule Cyfr.Execution.Dispatch do
   def run(%Context{} = ctx, reference, input, opts \\ [])
       when is_binary(reference) and is_map(input) and is_list(opts) do
     admitted =
-      with {:ok, worker, boot} <- worker() do
-        opts = Keyword.merge(opts, runner_id: boot, worker: worker)
+      with {:ok, worker} <- worker(reference) do
+        opts =
+          Keyword.merge(opts,
+            service_id: worker.service,
+            boot_id: worker.boot,
+            worker: worker.module
+          )
 
         with {:ok, admitted} <- Admission.admit(ctx, reference, input, opts) do
-          {:ok, admitted, worker}
+          {:ok, admitted, worker.module}
         end
       end
 
@@ -99,9 +104,9 @@ defmodule Cyfr.Execution.Dispatch do
   @doc """
   Admit `reference` with `input` in `ctx` for a runner that already runs
   on a worker service, and hand it the run. `opts` are
-  `Cyfr.Execution.Admission.admit/4`'s, with `:runner_id` and `:worker`
-  naming the worker service the runner belongs to (its boot id and its
-  `Cyfr.WorkerAPI` module), and `:runner` the runner.
+  `Cyfr.Execution.Admission.admit/4`'s, with `:service_id`, `:boot_id` and
+  `:worker` naming the worker service the runner belongs to (its id, its
+  boot and its `Cyfr.WorkerAPI` module), and `:runner` the runner.
 
   In order: the run is admitted with the calling process as its waiter;
   its attempt takes a `:child` execution slot, waiting as `run/4` does; its
@@ -119,7 +124,7 @@ defmodule Cyfr.Execution.Dispatch do
       when is_binary(reference) and is_map(input) and is_list(opts) do
     case Admission.admit(ctx, reference, input, opts) do
       {:ok, admitted} ->
-        hand_over(admitted, Keyword.fetch!(opts, :runner))
+        hand_over(admitted, Keyword.fetch!(opts, :runner), Keyword.fetch!(opts, :boot_id))
 
       {:error, _reason} = refused ->
         give_back_invoke(ctx, opts)
@@ -204,26 +209,60 @@ defmodule Cyfr.Execution.Dispatch do
     :ok
   end
 
-  @doc """
-  The worker service a run is dispatched to: the first module in
-  `config :cyfr, :workers` that is loaded, with the boot id its status
-  answers. `{:error, :execution_unavailable}` when none is configured or it
-  does not answer.
+  @typedoc """
+  A worker service a run can be dispatched to: its configured service id,
+  the boot its status answered, and its `Cyfr.WorkerAPI` module.
   """
-  @spec worker() :: {:ok, module(), String.t()} | {:error, :execution_unavailable}
-  def worker do
-    case Enum.find(Application.get_env(:cyfr, :workers, []), &Code.ensure_loaded?/1) do
-      nil ->
-        {:error, :execution_unavailable}
+  @type worker :: %{service: String.t(), boot: String.t(), module: module()}
 
-      worker ->
-        case worker.status() do
-          {:ok, %{boot: boot}} when is_binary(boot) -> {:ok, worker, boot}
-          _ -> {:error, :execution_unavailable}
-        end
+  @doc """
+  The worker service runs are dispatched to: the first entry of
+  `config :cyfr, :workers` (`%{id, module}`, with an optional `components`
+  list of the name-level references it alone runs) whose module is loaded
+  and whose status answers its configured id, with the boot that status
+  names. `worker/1` also requires the entry to run `reference`.
+  `{:error, :execution_unavailable}` when no entry qualifies or answers.
+  """
+  @spec worker() :: {:ok, worker()} | {:error, :execution_unavailable}
+  def worker, do: select(fn _entry -> true end)
+
+  @spec worker(String.t()) :: {:ok, worker()} | {:error, :execution_unavailable}
+  def worker(reference) when is_binary(reference) do
+    name = name_of(reference)
+
+    select(fn entry ->
+      case entry do
+        %{components: names} when is_list(names) -> name != nil and name in names
+        _ -> true
+      end
+    end)
+  end
+
+  defp select(runs?) do
+    entry =
+      Enum.find(Application.get_env(:cyfr, :workers, []), fn
+        %{id: id, module: module} = entry when is_binary(id) and is_atom(module) ->
+          runs?.(entry) and Code.ensure_loaded?(module)
+
+        _ ->
+          false
+      end)
+
+    with %{id: id, module: module} <- entry,
+         {:ok, %{service: ^id, boot: boot}} when is_binary(boot) <- module.status() do
+      {:ok, %{service: id, boot: boot, module: module}}
+    else
+      _ -> {:error, :execution_unavailable}
     end
   catch
     :exit, _reason -> {:error, :execution_unavailable}
+  end
+
+  defp name_of(reference) do
+    case Cyfr.ComponentRef.to_name_ref(reference) do
+      {:ok, name} -> name
+      {:error, _reason} -> nil
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -259,7 +298,7 @@ defmodule Cyfr.Execution.Dispatch do
   # failed by its attempt.
   defp start(admitted, worker, input) do
     with {:signed, {:ok, issued}} <- {:signed, Assignments.issue(admitted.assignment)},
-         {:ok, worker_key} <- Keys.worker_key(admitted.assignment.audience),
+         {:ok, worker_key} <- Keys.worker_key(admitted.assignment.service),
          {:ok, sealed} <-
            WorkerAuth.seal_attempt_keys(
              WorkerAuth.dispatch_seal_key(worker_key),
@@ -281,12 +320,12 @@ defmodule Cyfr.Execution.Dispatch do
   # The attempt of a run claimed for a runner already running. Every
   # refusal closes the run, which answers its waiter, this process, what the
   # close recorded.
-  defp hand_over(admitted, runner) do
+  defp hand_over(admitted, runner, boot) do
     slot_wait = min(admitted.timeout_ms, @slot_wait_ms)
 
     with :ok <- Attempt.take_slot(admitted.attempt, :child, slot_wait),
          {:ok, issued} <- sign(admitted),
-         claimant = Map.put(issued.attempt_keys.attempt, :runner, runner),
+         claimant = Map.merge(issued.attempt_keys.attempt, %{runner: runner, boot: boot}),
          :ok <- claim_row(admitted, claimant),
          {:ok, secrets} <- Attempt.attach(admitted.execution_id, claimant),
          :ok <- Attempt.hand_over(admitted.attempt) do

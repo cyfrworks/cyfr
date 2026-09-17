@@ -28,7 +28,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     test_path = Path.join(System.tmp_dir!(), "archive_#{System.unique_integer([:positive])}")
     keys = [:workers, :base_path]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :workers, [ScriptedWorker])
+    Application.put_env(:cyfr, :workers, ScriptedWorker.workers(@reference, prev[:workers]))
     Application.put_env(:cyfr, :base_path, test_path)
 
     on_exit(fn ->

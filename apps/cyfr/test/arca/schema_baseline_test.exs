@@ -121,7 +121,8 @@ defmodule Arca.SchemaBaselineTest do
 
     assert columns["fence"].not_null?
     refute columns["claimed_by"].not_null?
-    assert columns["runner_id"].not_null?
+    assert columns["boot_id"].not_null?
+    refute columns["service_id"].not_null?
   end
 
   test "a turn is fenced and pins its catalyst release" do

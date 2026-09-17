@@ -57,7 +57,7 @@ defmodule Cyfr.Execution.Host.Children do
   alias Cyfr.Execution.{Attempt, Delegation, Events, Keys}
   alias Cyfr.WorkerAuth
 
-  @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :worker]
+  @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :service]
   @guest_fns %{"call" => :call, "spawn" => :spawn}
 
   @typedoc "A decoded `admit_child` or `tool_call` body."
@@ -141,7 +141,8 @@ defmodule Cyfr.Execution.Host.Children do
              declared_needs: chain.declared_needs,
              activation_digest: chain.activation_digest,
              runner: caller.runner,
-             runner_id: caller.worker,
+             service_id: caller.service,
+             boot_id: caller.boot,
              worker: chain.worker
            ) do
       {:ok, Map.put(claimed, :input, input)}

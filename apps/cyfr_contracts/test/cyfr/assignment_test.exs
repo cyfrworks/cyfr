@@ -37,7 +37,8 @@ defmodule Cyfr.AssignmentTest do
       Map.merge(
         %{
           generation: 7,
-          audience: "wrk_1",
+          service: "wrk_1",
+          boot: "boot_1",
           issued_at: @now,
           claim_by: @now + 30_000,
           execution_id: "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
@@ -152,7 +153,8 @@ defmodule Cyfr.AssignmentTest do
         %{v: 2},
         %{fence: 0},
         %{generation: nil},
-        %{audience: ""},
+        %{service: ""},
+        %{boot: ""},
         %{attempt: "att 1"},
         %{input_digest: "sha256:ABC"},
         %{step: %{id: "stp_1"}},

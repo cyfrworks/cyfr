@@ -195,8 +195,10 @@ defmodule Arca.Execution do
   budget reservation, in one transaction. `attrs` are the start
   changeset's; `opts`:
 
-  - `:attempt` — the attempt id (minted when absent); `:runner_id`,
-    `:lease_until` (defaults from `Arca.ExecutionAttempts`).
+  - `:attempt` — the attempt id (minted when absent); `:service_id` (the
+    worker service the attempt is dispatched to; nil, the default, when the
+    control plane holds it), `:boot_id` (the boot holding it; this boot's
+    when absent), `:lease_until` (defaults from `Arca.ExecutionAttempts`).
   - `:reservation` — `%{budget_id, cap}` to mint the root's reservation.
   - `:charge` — `%{reservation_id, id}` of the hold this child was
     charged under; the hold barrier stamps it admitted while it stands,
@@ -229,7 +231,7 @@ defmodule Arca.Execution do
     Arca.Repo.Errors.with_db_rescue("Execution.admit", fn ->
       athanor_id = Map.fetch!(attrs, :athanor_id)
       attempt_id = Keyword.get(opts, :attempt) || Arca.ExecutionAttempts.generate_id()
-      runner_id = Keyword.get(opts, :runner_id) || Cyfr.Boot.id()
+      boot_id = Keyword.get(opts, :boot_id) || Cyfr.Boot.id()
       lease_until = Keyword.get(opts, :lease_until) || Arca.ExecutionAttempts.lease_until()
       started_at = Map.get(attrs, :started_at) || DateTime.utc_now()
 
@@ -249,7 +251,8 @@ defmodule Arca.Execution do
         attempt =
           Arca.ExecutionAttempts.open!(athanor_id, execution.id,
             attempt: attempt_id,
-            runner_id: runner_id,
+            service_id: Keyword.get(opts, :service_id),
+            boot_id: boot_id,
             lease_until: lease_until,
             started_at: started_at
           )
@@ -880,7 +883,7 @@ defmodule Arca.Execution do
   @doc """
   Executions whose current attempt is running with a lease lapsed before
   `now` (the sweep), each as the row's map with the attempt's `attempt`,
-  `runner_id` and `lease_until` beside it.
+  `service_id`, `boot_id`, `claimed_by` and `lease_until` beside it.
 
   Intentionally spans all tenants: the `Cyfr.Execution.Sweeper` GC must reap
   orphaned rows left by a crashed runner — this node's or another
@@ -908,25 +911,38 @@ defmodule Arca.Execution do
 
   @doc """
   The running executions whose current attempt is one of `attempts`,
-  running and dispatched to the worker service boot `runner_id`, in the
+  running, dispatched to the worker service `service_id` on its boot
+  `boot_id` and, when `runner` is given, claimed by that runner, in the
   shape `list_stale_running/2` answers. Spans every tenant: the ids come
   from a verified worker service report or from an attempt's own state,
   never from a request. `{:error, :database_error}` when the store cannot
   answer.
   """
-  @spec list_running_dispatched([String.t()], String.t()) :: [map()] | {:error, :database_error}
-  def list_running_dispatched(attempts, runner_id)
-      when is_list(attempts) and is_binary(runner_id) do
+  @spec list_running_dispatched([String.t()], String.t() | nil, String.t(), String.t() | nil) ::
+          [map()] | {:error, :database_error}
+  def list_running_dispatched(attempts, service_id, boot_id, runner)
+      when is_list(attempts) and (is_binary(service_id) or is_nil(service_id)) and
+             is_binary(boot_id) and (is_binary(runner) or is_nil(runner)) do
     Arca.Repo.Errors.with_db_rescue("Execution.list_running_dispatched", fn ->
       # arca:unscoped-ok a runner's attempts are lapsed across tenants when
       # its worker service reports its exit; the ids are the report's.
-      from(a in Arca.Schemas.ExecutionAttempt,
-        join: e in __MODULE__,
-        on: e.id == a.execution_id and e.current_attempt == a.attempt,
-        where: a.attempt in ^attempts and a.runner_id == ^runner_id,
-        where: a.state == "running" and e.status == "running",
-        select: {e, a}
-      )
+      query =
+        from(a in Arca.Schemas.ExecutionAttempt,
+          join: e in __MODULE__,
+          on: e.id == a.execution_id and e.current_attempt == a.attempt,
+          where: a.attempt in ^attempts and a.boot_id == ^boot_id,
+          where: a.state == "running" and e.status == "running",
+          select: {e, a}
+        )
+
+      query =
+        if is_nil(service_id),
+          do: where(query, [a], is_nil(a.service_id)),
+          else: where(query, [a], a.service_id == ^service_id)
+
+      query = if is_nil(runner), do: query, else: where(query, [a], a.claimed_by == ^runner)
+
+      query
       |> Arca.Repo.all()
       |> Enum.map(&attempt_row/1)
     end)
@@ -938,7 +954,9 @@ defmodule Arca.Execution do
     |> Map.delete(:__meta__)
     |> Map.merge(%{
       attempt: attempt.attempt,
-      runner_id: attempt.runner_id,
+      service_id: attempt.service_id,
+      boot_id: attempt.boot_id,
+      claimed_by: attempt.claimed_by,
       lease_until: attempt.lease_until
     })
   end

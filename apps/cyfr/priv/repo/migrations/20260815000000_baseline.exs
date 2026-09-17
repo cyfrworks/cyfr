@@ -433,7 +433,14 @@ defmodule Arca.Repo.Migrations.Baseline do
           null: false
 
       add :fence, :integer, null: false
-      add :runner_id, :string, null: false
+      # The worker service the attempt was dispatched to (its configured
+      # service id, `Cyfr.WorkerAuth`); null for an attempt the control
+      # plane holds itself, such as a turn root.
+      add :service_id, :string
+      # The boot holding the attempt: the worker service's incarnation, or
+      # this control plane's own boot for one it holds itself. A call or
+      # report from another boot never touches the row.
+      add :boot_id, :string, null: false
       # The runner that attached to the attempt; null until attach, and
       # always null for a turn root.
       add :claimed_by, :string
@@ -451,7 +458,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:execution_attempts, [:execution_id, :fence])
     create index(:execution_attempts, [:athanor_id, :state, :lease_until])
     create index(:execution_attempts, [:claimed_by], where: "state = 'running'")
-    create index(:execution_attempts, [:runner_id], where: "state = 'running'")
+    create index(:execution_attempts, [:service_id, :boot_id], where: "state = 'running'")
 
     # Lifecycle and step outcomes, numbered from `executions.event_seq`.
     create table(:execution_events, primary_key: false) do

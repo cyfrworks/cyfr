@@ -25,7 +25,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
     keys = [:cron_scheduler_enabled, :workers, :base_path]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :cron_scheduler_enabled, true)
-    Application.put_env(:cyfr, :workers, [ScriptedWorker])
+    Application.put_env(:cyfr, :workers, ScriptedWorker.workers(@reference, prev[:workers]))
     Application.put_env(:cyfr, :base_path, test_path)
     ctx = Sanctum.TestContext.local()
 

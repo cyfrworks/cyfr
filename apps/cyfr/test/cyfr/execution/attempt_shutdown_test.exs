@@ -17,7 +17,7 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
   alias Cyfr.Execution.Attempt
   alias Cyfr.Test.AttemptFixtures
 
-  @worker "worker_shutdown_test"
+  @service "wrk_shutdown_test"
   @lapsed "Execution terminated: runner stopped without cleanup"
 
   defmodule KillRecorder do
@@ -59,7 +59,7 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
 
     waiter =
       spawn(fn ->
-        fixture = AttemptFixtures.attached!(runner_id: @worker, worker: KillRecorder)
+        fixture = AttemptFixtures.attached!(service_id: @service, worker: KillRecorder)
         send(test, {:opened, fixture})
         receive do: (:exit -> :ok)
       end)

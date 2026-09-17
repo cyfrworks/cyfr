@@ -95,7 +95,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
 
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(ctx.athanor_id, execution.id,
-        runner_id: Cyfr.Boot.id(),
+        boot_id: Cyfr.Boot.id(),
         lease_until: ExecutionAttempts.lease_until()
       )
 
@@ -209,7 +209,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
 
     assert claimed_by(attempt.attempt) == nil
     refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, Cyfr.Boot.id())
-    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, attempt.runner_id)
+    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, attempt.boot_id)
   end
 
   @tag :capture_log

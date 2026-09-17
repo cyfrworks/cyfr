@@ -16,11 +16,12 @@ defmodule Cyfr.WorkerAPI do
   """
 
   @typedoc """
-  A worker service's state: its boot id, which changes on every start; its
-  runners, by whether they are fresh, idle or busy; and the attempts its
-  runners have claimed.
+  A worker service's state: its configured service id; its boot id, which
+  changes on every start; its runners, by whether they are fresh, idle or
+  busy; and the attempts its runners have claimed.
   """
   @type status :: %{
+          service: String.t(),
           boot: String.t(),
           runners: %{
             fresh: non_neg_integer(),
@@ -36,9 +37,9 @@ defmodule Cyfr.WorkerAPI do
   attempt's keys sealed with the worker service's dispatch seal key
   (`Cyfr.WorkerAuth.seal_attempt_keys/3`). The runner attaches
   (`c:Cyfr.HostAPI.attach/2`) before it runs anything. `:malformed` means
-  the assignment cannot be read or is addressed to another worker service,
-  the input does not match its digest or the keys do not open as its
-  attempt on this worker service.
+  the assignment cannot be read or is addressed to another worker service
+  or another boot of this one, the input does not match its digest or the
+  keys do not open as its attempt on this worker service.
   """
   @callback start(Cyfr.Assignment.token(), input :: binary(), sealed_keys :: String.t()) ::
               :ok | {:error, :malformed}

@@ -456,7 +456,7 @@ defmodule Arca.TurnStorage do
 
         %{attempt: successor, ran_ms: ran} =
           Arca.ExecutionAttempts.takeover!(athanor_id, turn.root_execution_id,
-            runner_id: Cyfr.Boot.id(),
+            boot_id: Cyfr.Boot.id(),
             lease_until: Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until()
           )
 
@@ -621,7 +621,7 @@ defmodule Arca.TurnStorage do
 
           %{attempt: successor, ran_ms: ran} =
             Arca.ExecutionAttempts.takeover!(athanor_id, turn.root_execution_id,
-              runner_id: Cyfr.Boot.id(),
+              boot_id: Cyfr.Boot.id(),
               lease_until: Arca.ExecutionAttempts.lease_until()
             )
 

@@ -138,6 +138,21 @@ if config_env() != :test do
                 end
             end)
 
+    # The worker service's stable id (`Cyfr.WorkerAuth`): `wrk_` followed by
+    # 1 to 64 letters, digits, `_` or `-`. It names the worker service inside
+    # this server on the assignments it accepts and is what its keys derive
+    # over; two worker services never share one. Default `wrk_local`; a
+    # malformed value refuses the boot.
+    worker_id = env_str.("CYFR_WORKER_ID", "wrk_local")
+
+    unless Regex.match?(~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/, worker_id) do
+      raise "[Cyfr] FATAL: CYFR_WORKER_ID must be `wrk_` followed by 1 to 64 letters, " <>
+              "digits, `_` or `-`"
+    end
+
+    config :cyfr, :workers, [%{id: worker_id, module: Opus.WorkerService}]
+    config :opus, :service_id, worker_id
+
     # How long the bridge runs a stdio server's backends without hearing from
     # this server, in milliseconds: 1000 to 60000, default 30000. Every sync
     # and renewal asks for this lease and renewals go out every third of it,

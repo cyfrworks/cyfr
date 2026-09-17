@@ -25,7 +25,7 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
       HttpStreamHandler.build_stream_imports(
         nil,
         Cyfr.Limits.defaults(:catalyst),
-        Opus.HostClient.new(attempt.keys, attempt.runner),
+        Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot),
         "catalyst:local.streamer:0.1.0"
       )
 

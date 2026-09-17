@@ -301,8 +301,9 @@ defmodule Cyfr.Execution.Record do
   (`Arca.Execution.admit/2`). `opts` carry the admission barriers a child
   passes through (`:charge`, `:step`, and `:parent_attempt`, the attempt of
   its parent it is admitted under), a scheduled run's `:occurrence_id`, and
-  `:runner_id`, the boot id of the worker service the attempt is dispatched
-  to (`runner_id/0` when absent).
+  the worker side holding the attempt: `:service_id`, the worker service it
+  is dispatched to (absent when this control plane holds it), and
+  `:boot_id`, the boot holding it (`boot_id/0` when absent).
 
   The row keeps an input envelope — the reference, digest, sizes,
   top-level keys and attachment digests — and the input itself is the
@@ -360,11 +361,18 @@ defmodule Cyfr.Execution.Record do
            Keyword.merge(
              [
                attempt: record.attempt,
-               runner_id: runner_id(),
+               boot_id: boot_id(),
                reservation: record.reservation,
                payloads: payloads
              ],
-             Keyword.take(opts, [:charge, :step, :parent_attempt, :occurrence_id, :runner_id])
+             Keyword.take(opts, [
+               :charge,
+               :step,
+               :parent_attempt,
+               :occurrence_id,
+               :service_id,
+               :boot_id
+             ])
            )
          ) do
       {:ok, %{execution: execution}} ->
@@ -394,12 +402,12 @@ defmodule Cyfr.Execution.Record do
   def lease_seconds, do: Arca.ExecutionAttempts.lease_seconds()
 
   @doc """
-  This boot's id, the runner id of an attempt this boot holds itself (a
-  turn root's) and of a row admitted with no `:runner_id`. Each restart
-  has a different id.
+  This boot's id: the `boot_id` of an attempt this control plane holds
+  itself (a turn root's) and of a row admitted with no `:boot_id`. Each
+  restart has a different id.
   """
-  @spec runner_id() :: String.t()
-  def runner_id, do: Cyfr.Boot.id()
+  @spec boot_id() :: String.t()
+  def boot_id, do: Cyfr.Boot.id()
 
   @doc "A fresh lease expiry from now."
   def lease_until, do: Arca.ExecutionAttempts.lease_until()

@@ -44,7 +44,10 @@ defmodule Opus.ApplicationTest do
 
   describe "readiness" do
     test "CYFR can run once the configured worker service answers" do
-      assert Application.get_env(:cyfr, :workers) == [Opus.WorkerService]
+      assert Application.get_env(:cyfr, :workers) == [
+               %{id: "wrk_local", module: Opus.WorkerService}
+             ]
+
       assert Cyfr.Execution.available?()
     end
   end

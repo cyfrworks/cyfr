@@ -124,7 +124,7 @@ defmodule Arca.BudgetReservationsTest do
 
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(ctx.athanor_id, root.id,
-        runner_id: "b2",
+        boot_id: "b2",
         lease_until: ExecutionAttempts.lease_until()
       )
 

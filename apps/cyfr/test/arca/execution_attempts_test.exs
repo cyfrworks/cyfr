@@ -148,7 +148,7 @@ defmodule Arca.ExecutionAttemptsTest do
 
     assert {:ok, %{previous: %{attempt: prev}, attempt: successor}} =
              ExecutionAttempts.takeover(ctx.athanor_id, execution.id,
-               runner_id: "boot-2",
+               boot_id: "boot-2",
                lease_until: later
              )
 
@@ -162,7 +162,7 @@ defmodule Arca.ExecutionAttemptsTest do
     # A second takeover retires the successor and takes fence 3.
     assert {:ok, %{attempt: third}} =
              ExecutionAttempts.takeover(ctx.athanor_id, execution.id,
-               runner_id: "boot-3",
+               boot_id: "boot-3",
                lease_until: later
              )
 
@@ -309,7 +309,7 @@ defmodule Arca.ExecutionAttemptsTest do
         fn parent, _attempt ->
           {:ok, _} =
             ExecutionAttempts.takeover(ctx.athanor_id, parent.id,
-              runner_id: Cyfr.Boot.id(),
+              boot_id: Cyfr.Boot.id(),
               lease_until: ExecutionAttempts.lease_until()
             )
         end

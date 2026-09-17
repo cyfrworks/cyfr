@@ -53,11 +53,12 @@ defmodule Cyfr.Execution.Keys do
   def assign_key, do: WorkerAuth.assign_key(root())
 
   @doc """
-  The key of the worker service `worker`, from which its dispatch and
-  dispatch seal keys derive (`Cyfr.WorkerAuth.worker_key/2`).
+  The key of the worker service `service` (its configured id, never its
+  boot), from which its dispatch and dispatch seal keys derive
+  (`Cyfr.WorkerAuth.worker_key/2`).
   """
   @spec worker_key(String.t()) :: {:ok, binary()} | {:error, Cyfr.MacEnvelope.invalid_field()}
-  def worker_key(worker) when is_binary(worker), do: WorkerAuth.worker_key(root(), worker)
+  def worker_key(service) when is_binary(service), do: WorkerAuth.worker_key(root(), service)
 
   @doc """
   The keys of one attempt at one fence and generation on one worker

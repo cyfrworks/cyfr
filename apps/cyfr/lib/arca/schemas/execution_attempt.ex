@@ -25,7 +25,8 @@ defmodule Arca.Schemas.ExecutionAttempt do
     field :athanor_id, :string
     field :execution_id, :string
     field :fence, :integer
-    field :runner_id, :string
+    field :service_id, :string
+    field :boot_id, :string
     field :claimed_by, :string
     field :lease_until, :utc_datetime_usec
     field :state, :string

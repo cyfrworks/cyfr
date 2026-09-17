@@ -18,7 +18,9 @@ defmodule Cyfr.Assignment do
 
     * `v` — `1`.
     * `generation` — the control-plane generation it was issued under.
-    * `audience` — the id of the worker service it is dispatched to.
+    * `service` — the id of the worker service it is dispatched to;
+      `boot` — the boot of that worker service dispatch selected, which
+      another boot of it refuses.
     * `issued_at`, `claim_by` — when it was issued, and the latest time a
       runner may claim it.
     * `execution_id`, `attempt`, `fence` — the attempt it runs.
@@ -64,9 +66,9 @@ defmodule Cyfr.Assignment do
        refused, never defaulted;
     5. `:claim_expired` — `now` is past `claim_by`.
 
-  The rest of a claim is the caller's: that the audience is the presenting
-  worker, that the generation is current, and that the attempt row is
-  running at this fence and unclaimed.
+  The rest of a claim is the caller's: that the service and boot are the
+  presenting worker service's, that the generation is current, and that
+  the attempt row is running at this fence and unclaimed.
 
   ## Reading
 
@@ -81,7 +83,8 @@ defmodule Cyfr.Assignment do
 
   @enforce_keys [
     :generation,
-    :audience,
+    :service,
+    :boot,
     :issued_at,
     :claim_by,
     :execution_id,
@@ -116,7 +119,8 @@ defmodule Cyfr.Assignment do
   @type t :: %__MODULE__{
           v: 1,
           generation: pos_integer(),
-          audience: String.t(),
+          service: String.t(),
+          boot: String.t(),
           issued_at: time(),
           claim_by: time(),
           execution_id: String.t(),
@@ -144,7 +148,8 @@ defmodule Cyfr.Assignment do
   @fields [
     v: :version,
     generation: :pos_integer,
-    audience: :id,
+    service: :id,
+    boot: :id,
     issued_at: :time,
     claim_by: :time,
     execution_id: :id,

@@ -382,7 +382,7 @@ defmodule Arca.ExecutionTest do
             component_type: "catalyst"
           },
           attempt: Keyword.get(opts, :attempt),
-          runner_id: "node@test",
+          boot_id: "node@test",
           lease_until: lease_until
         )
 
@@ -393,7 +393,7 @@ defmodule Arca.ExecutionTest do
       {id, attempt} = running!(DateTime.add(DateTime.utc_now(), -60, :second))
       [stale] = Enum.filter(Execution.list_stale_running(DateTime.utc_now()), &(&1.id == id))
       assert stale.attempt == attempt
-      assert stale.runner_id == "node@test"
+      assert stale.boot_id == "node@test"
       assert %DateTime{} = stale.lease_until
     end
 

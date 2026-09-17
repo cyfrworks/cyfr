@@ -4,28 +4,32 @@
 defmodule Cyfr.Test.ScriptedWorker do
   @moduledoc """
   A worker service (`Cyfr.WorkerAPI`) whose runners answer from a script
-  instead of running a component. Name it in `config :cyfr, :workers`
-  inside the test; users are `async: false`, since the script is one named
-  process.
+  instead of running a component. Configure it with `workers/2` inside the
+  test; users are `async: false`, since the script is one named process.
 
-  Everything but the component is real. A run of a scripted reference is
-  admitted by CYFR and dispatched here; `start/3` checks the assignment is
-  addressed to this worker service, its input matches its digest and its
-  sealed keys open as its attempt, then starts a runner. The runner
-  reaches its attempt only through `Cyfr.Execution.Host`, signing each
-  call with the attempt's call key: it attaches with the signed
-  assignment (the claim, and the unseal of the run's vault edge), records
-  the call with the authority its assignment carries, pushes the script's
-  events (`push_deltas`, masked by the attempt) and closes
-  the run (`complete` or `fail`). A runner that exits leaving its attempt
-  open is reported (`Cyfr.Execution.Host.runner_exited/2`), signed with
-  this worker service's dispatch key.
+  Everything but the component is real. This worker service has an id of
+  its own (`service/0`) and a boot of its own, and its keys are its own: it
+  never answers as the real worker service. A run of a scripted reference
+  is admitted by CYFR and dispatched here; `start/3` checks the assignment
+  is addressed to this worker service and this boot, its input matches its
+  digest and its sealed keys open as its attempt, then starts a runner.
+  The runner reaches its attempt only through `Cyfr.Execution.Host`,
+  signing each call with the attempt's call key: it attaches with the
+  signed assignment (the claim, and the unseal of the run's vault edge),
+  records the call with the authority its assignment carries, pushes the
+  script's events (`push_deltas`, masked by the attempt) and closes the run
+  (`complete` or `fail`). A runner that exits leaving its attempt open is
+  reported (`Cyfr.Execution.Host.runner_exited/2`), signed with this
+  worker service's dispatch key.
 
-  A reference it does not script is started on the real worker service
-  (`Opus.WorkerService`) when that is running; this worker service then
-  answers the real one's boot id, so the assignment it dispatches is
-  addressed to both. Without it, its boot id is its own and an unscripted
-  reference is refused `:malformed`.
+  A reference it does not script never reaches it: starting it puts an
+  entry for its scripted references alone ahead of the configured worker
+  services in `config :cyfr, :workers` (`workers/2`), so
+  `Cyfr.Execution.Dispatch` routes every other reference to the real
+  worker service when one is configured, and stopping it removes that
+  entry. Tests that change `:workers` themselves restore it on exit as they
+  do today. Started for a reference the routing did not name, it refuses
+  the assignment `:malformed`.
 
   A script is a list consumed in order across runs. A run takes items
   until it reaches an answer:
@@ -64,10 +68,35 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
   @probe_wait_ms 5_000
+  @service "wrk_scripted"
 
   @doc false
   def child_spec(opts) do
     %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}, restart: :temporary}
+  end
+
+  @doc "This worker service's configured id."
+  @spec service() :: String.t()
+  def service, do: @service
+
+  @doc """
+  The `config :cyfr, :workers` list that routes the scripted `refs` (any
+  form `Cyfr.ComponentRef.to_name_ref/1` reads) to this worker service and
+  every other reference to the worker services in `configured` (the list
+  being replaced, with any earlier entry of this worker service dropped).
+  """
+  @spec workers([String.t()] | String.t(), [map()] | nil) :: [map()]
+  def workers(refs, configured) do
+    names =
+      refs
+      |> List.wrap()
+      |> Enum.map(fn ref ->
+        {:ok, name} = Cyfr.ComponentRef.to_name_ref(ref)
+        name
+      end)
+
+    others = Enum.reject(configured || [], &(is_map(&1) and &1[:module] == __MODULE__))
+    [%{id: @service, module: __MODULE__, components: names} | others]
   end
 
   @doc """
@@ -115,37 +144,15 @@ defmodule Cyfr.Test.ScriptedWorker do
       logger: Cyfr.LoggerContext.capture()
     }
 
-    case GenServer.call(__MODULE__, {:start, token, input, sealed_keys, caller}) do
-      :forward -> forward(:start, [token, input, sealed_keys], {:error, :malformed})
-      answer -> answer
-    end
+    GenServer.call(__MODULE__, {:start, token, input, sealed_keys, caller})
   end
 
   @impl Cyfr.WorkerAPI
-  def kill(execution_id) when is_binary(execution_id) do
-    case GenServer.call(__MODULE__, {:kill, execution_id}) do
-      :forward -> forward(:kill, [execution_id], {:error, :not_found})
-      answer -> answer
-    end
-  end
+  def kill(execution_id) when is_binary(execution_id),
+    do: GenServer.call(__MODULE__, {:kill, execution_id})
 
   @impl Cyfr.WorkerAPI
-  def status do
-    own = GenServer.call(__MODULE__, :status)
-
-    case real_status() do
-      {:ok, real} ->
-        {:ok,
-         %{
-           real
-           | runners: %{real.runners | busy: real.runners.busy + own.runners.busy},
-             attempts: real.attempts ++ own.attempts
-         }}
-
-      :none ->
-        {:ok, own}
-    end
-  end
+  def status, do: {:ok, GenServer.call(__MODULE__, :status)}
 
   # ---------------------------------------------------------------------------
   # Server
@@ -166,9 +173,13 @@ defmodule Cyfr.Test.ScriptedWorker do
         name
       end)
 
+    # Route the scripted references here and everything else to the worker
+    # services configured before; `terminate/2` takes the entry out again.
+    Application.put_env(:cyfr, :workers, workers(refs, Application.get_env(:cyfr, :workers)))
+
     {:ok,
      %{
-       boot: "#{node()}#" <> Cyfr.UUID7.generate_id("scripted"),
+       boot: "#{node()}#" <> Cyfr.UUID7.generate_id("boot"),
        refs: refs,
        script: Keyword.get(opts, :script, []),
        window: Keyword.get(opts, :window, 200_000),
@@ -182,21 +193,20 @@ defmodule Cyfr.Test.ScriptedWorker do
   @impl true
   def handle_call({:start, token, input, sealed_keys, caller}, _from, state) do
     with {:ok, assignment} <- Assignment.read(token),
-         true <- scripted?(state, assignment.component.ref) || :forward,
-         true <- assignment.audience in [state.boot | real_boots()],
+         true <- scripted?(state, assignment.component.ref),
+         true <- assignment.service == @service and assignment.boot == state.boot,
          true <- Cyfr.Digest.sha256(input) == assignment.input_digest,
-         {:ok, worker_key} <- Keys.worker_key(assignment.audience),
+         {:ok, worker_key} <- Keys.worker_key(@service),
          {:ok, %{attempt: attempt} = keys} <-
            WorkerAuth.open_attempt_keys(WorkerAuth.dispatch_seal_key(worker_key), sealed_keys),
-         true <-
-           attempt ==
-             assignment |> Map.take(@attempt_fields) |> Map.put(:worker, assignment.audience),
+         true <- attempt == assignment |> Map.take(@attempt_fields) |> Map.put(:service, @service),
          {:ok, %{} = decoded} <- Jason.decode(input) do
       runner = %{
         token: token,
         assignment: assignment,
         input: decoded,
         keys: keys,
+        boot: state.boot,
         runner: Cyfr.UUID7.generate_id("runner"),
         waiter: hd(caller.callers),
         callers: caller.callers,
@@ -209,14 +219,14 @@ defmodule Cyfr.Test.ScriptedWorker do
         Map.put(state.runners, pid, %{
           execution_id: assignment.execution_id,
           attempt: assignment.attempt,
-          worker: assignment.audience,
+          boot: state.boot,
+          runner: runner.runner,
           callers: caller.callers,
           logger: caller.logger
         })
 
       {:reply, :ok, %{state | runners: runners}}
     else
-      :forward -> {:reply, :forward, state}
       _refused -> {:reply, {:error, :malformed}, state}
     end
   end
@@ -230,7 +240,7 @@ defmodule Cyfr.Test.ScriptedWorker do
         {:reply, :ok, state}
 
       nil ->
-        {:reply, :forward, state}
+        {:reply, {:error, :not_found}, state}
     end
   end
 
@@ -239,6 +249,7 @@ defmodule Cyfr.Test.ScriptedWorker do
 
     {:reply,
      %{
+       service: @service,
        boot: state.boot,
        runners: %{fresh: 0, idle: 0, busy: map_size(state.runners)},
        attempts: attempts
@@ -280,6 +291,9 @@ defmodule Cyfr.Test.ScriptedWorker do
   @impl true
   def terminate(_reason, state) do
     for {pid, _runner} <- state.runners, do: Process.exit(pid, :kill)
+
+    configured = Application.get_env(:cyfr, :workers, [])
+    Application.put_env(:cyfr, :workers, Enum.reject(configured, &(&1[:module] == __MODULE__)))
     :ok
   end
 
@@ -298,11 +312,19 @@ defmodule Cyfr.Test.ScriptedWorker do
       Cyfr.LoggerContext.restore(runner.logger)
 
       body =
-        Jason.encode!(%{"op" => "runner_exited", "args" => %{"attempts" => [runner.attempt]}})
+        Jason.encode!(%{
+          "op" => "runner_exited",
+          "args" => %{"runner" => runner.runner, "attempts" => [runner.attempt]}
+        })
 
-      fields = %{worker: runner.worker, ts: System.system_time(:millisecond), nonce: nonce()}
+      fields = %{
+        service: @service,
+        boot: runner.boot,
+        ts: System.system_time(:millisecond),
+        nonce: nonce()
+      }
 
-      with {:ok, worker_key} <- Keys.worker_key(runner.worker),
+      with {:ok, worker_key} <- Keys.worker_key(@service),
            {:ok, header} <-
              WorkerAuth.report_header(WorkerAuth.dispatch_key(worker_key), fields, body),
            %{"ok" => true} <- header |> Host.runner_exited(body) |> Jason.decode!() do
@@ -317,39 +339,6 @@ defmodule Cyfr.Test.ScriptedWorker do
     end)
 
     :ok
-  end
-
-  # ---------------------------------------------------------------------------
-  # The real worker service
-  # ---------------------------------------------------------------------------
-
-  # Named at runtime: cyfr does not depend on opus.
-  defp real_worker do
-    real = Module.concat([:Opus, :WorkerService])
-    if Code.ensure_loaded?(real) and is_pid(Process.whereis(real)), do: real
-  end
-
-  defp real_status do
-    case real_worker() do
-      nil -> :none
-      real -> real.status()
-    end
-  end
-
-  defp real_boots do
-    case real_status() do
-      {:ok, %{boot: boot}} -> [boot]
-      :none -> []
-    end
-  catch
-    :exit, _reason -> []
-  end
-
-  defp forward(fun, args, otherwise) do
-    case real_worker() do
-      nil -> otherwise
-      real -> apply(real, fun, args)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -529,6 +518,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   defp header(runner, body) do
     fields =
       Map.merge(runner.keys.attempt, %{
+        boot: runner.boot,
         runner: runner.runner,
         ts: System.system_time(:millisecond),
         nonce: nonce()

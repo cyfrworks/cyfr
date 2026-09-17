@@ -32,7 +32,7 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
       Arca.Repo.update_all(
         from(a in Arca.Schemas.ExecutionAttempt, where: a.attempt == ^record.attempt),
         set: [
-          runner_id: "boot-that-died",
+          boot_id: "boot-that-died",
           lease_until: DateTime.add(DateTime.utc_now(), -5, :second)
         ]
       )
@@ -52,7 +52,7 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
 
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(ctx.athanor_id, record.id,
-        runner_id: Record.runner_id(),
+        boot_id: Record.boot_id(),
         lease_until: Record.lease_until()
       )
 
@@ -72,7 +72,7 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
       Arca.Repo.update_all(
         from(a in Arca.Schemas.ExecutionAttempt, where: a.attempt == ^record.attempt),
         set: [
-          runner_id: "boot-that-died",
+          boot_id: "boot-that-died",
           lease_until: DateTime.add(DateTime.utc_now(), -5, :second)
         ]
       )

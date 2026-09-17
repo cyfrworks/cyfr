@@ -15,7 +15,7 @@ defmodule Opus.LeaseWatchTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     attempt = AttemptFixtures.attached!()
-    {:ok, attempt: attempt, client: HostClient.new(attempt.keys, attempt.runner)}
+    {:ok, attempt: attempt, client: HostClient.new(attempt.keys, attempt.runner, attempt.boot)}
   end
 
   defp watch(client, until), do: %{client: client, until: until}

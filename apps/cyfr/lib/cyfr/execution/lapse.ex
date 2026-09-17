@@ -79,13 +79,17 @@ defmodule Cyfr.Execution.Lapse do
   end
 
   @doc """
-  Lapse each of `attempts` that was dispatched to the worker service boot
-  `runner_id` and still owns its running execution. `{:error, :unavailable}`
-  when the store cannot list them.
+  Lapse each of `attempts` that was dispatched to the worker service
+  `service_id` (nil for one the control plane holds itself) on its boot
+  `boot_id`, is claimed by `runner` when one is given, and still owns its
+  running execution. `{:error, :unavailable}` when the store cannot list
+  them.
   """
-  @spec dispatched(String.t(), [String.t()]) :: :ok | {:error, :unavailable}
-  def dispatched(runner_id, attempts) when is_binary(runner_id) and is_list(attempts) do
-    case Arca.Execution.list_running_dispatched(attempts, runner_id) do
+  @spec dispatched(String.t() | nil, String.t(), String.t() | nil, [String.t()]) ::
+          :ok | {:error, :unavailable}
+  def dispatched(service_id, boot_id, runner, attempts)
+      when is_binary(boot_id) and is_list(attempts) do
+    case Arca.Execution.list_running_dispatched(attempts, service_id, boot_id, runner) do
       records when is_list(records) ->
         Enum.each(records, &lapse/1)
 
@@ -94,9 +98,7 @@ defmodule Cyfr.Execution.Lapse do
     end
   catch
     :exit, reason ->
-      Logger.error(
-        "[Cyfr.Execution.Lapse] attempts of #{runner_id} not listed: #{inspect(reason)}"
-      )
+      Logger.error("[Cyfr.Execution.Lapse] attempts of #{boot_id} not listed: #{inspect(reason)}")
 
       {:error, :unavailable}
   end

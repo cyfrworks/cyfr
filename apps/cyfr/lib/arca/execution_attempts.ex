@@ -47,7 +47,9 @@ defmodule Arca.ExecutionAttempts do
   Open the first attempt of `execution_id` inside the caller's admission
   transaction: fence 1, `running`, and the execution's `current_attempt`
   pointed at it. `opts`: `:attempt` (the id, minted when absent),
-  `:runner_id`, `:lease_until`, `:started_at`.
+  `:service_id` (the worker service it is dispatched to; nil when the
+  control plane holds it), `:boot_id` (the boot holding it), `:lease_until`,
+  `:started_at`.
   """
   @spec open!(String.t(), String.t(), keyword()) :: ExecutionAttempt.t()
   # arca:db-raise-ok inside the caller's transaction
@@ -60,7 +62,8 @@ defmodule Arca.ExecutionAttempts do
         athanor_id: athanor_id,
         execution_id: execution_id,
         fence: 1,
-        runner_id: Keyword.fetch!(opts, :runner_id),
+        service_id: Keyword.get(opts, :service_id),
+        boot_id: Keyword.fetch!(opts, :boot_id),
         lease_until: Keyword.fetch!(opts, :lease_until),
         state: "running",
         started_at: now,
@@ -154,6 +157,64 @@ defmodule Arca.ExecutionAttempts do
     |> case do
       {:ok, :ok} -> :ok
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Renew the lease of `attempt` while `holder` holds it: one update,
+  predicated on the row owning its execution, being `running`, dispatched
+  to the holder's `service_id` on its `boot_id` and claimed by its
+  `runner`. `{:ok, until, cancel_requested?}` when it did; `:lost` when no
+  such row holds; `{:error, :database_error}` when the store cannot answer.
+  A header's own attempt and the children its runner runs renew alike.
+  """
+  @spec renew_held(String.t(), String.t(), %{
+          service_id: String.t() | nil,
+          boot_id: String.t(),
+          runner: String.t()
+        }) ::
+          {:ok, DateTime.t(), boolean()} | :lost | {:error, :database_error}
+  def renew_held(athanor_id, attempt, %{boot_id: boot_id, runner: runner} = holder)
+      when is_binary(athanor_id) and is_binary(attempt) and is_binary(boot_id) and
+             is_binary(runner) do
+    until = lease_until()
+
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.renew_held", fn ->
+      Arca.Repo.transaction(fn ->
+        held =
+          from(a in ExecutionAttempt,
+            where: a.athanor_id == ^athanor_id and a.attempt == ^attempt,
+            where: a.state == "running" and a.claimed_by == ^runner and a.boot_id == ^boot_id,
+            where: a.attempt in subquery(owner(attempt))
+          )
+
+        held =
+          case holder.service_id do
+            nil -> from(a in held, where: is_nil(a.service_id))
+            service_id -> from(a in held, where: a.service_id == ^service_id)
+          end
+
+        {count, _} = Arca.Repo.update_all(held, set: [lease_until: until])
+
+        if count == 1 do
+          cancel? =
+            Arca.Repo.one(
+              from(a in ExecutionAttempt,
+                where: a.attempt == ^attempt,
+                select: not is_nil(a.cancel_requested_at)
+              )
+            )
+
+          {:ok, until, cancel? == true}
+        else
+          :lost
+        end
+      end)
+    end)
+    |> case do
+      {:ok, answer} -> answer
+      {:error, :database_error} -> {:error, :database_error}
+      {:error, _rolled_back} -> {:error, :database_error}
     end
   end
 
@@ -443,7 +504,8 @@ defmodule Arca.ExecutionAttempts do
         athanor_id: athanor_id,
         execution_id: execution_id,
         fence: fence,
-        runner_id: Keyword.fetch!(opts, :runner_id),
+        service_id: Keyword.get(opts, :service_id),
+        boot_id: Keyword.fetch!(opts, :boot_id),
         lease_until: Keyword.fetch!(opts, :lease_until),
         state: "running",
         started_at: now,

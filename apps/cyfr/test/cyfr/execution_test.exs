@@ -43,14 +43,14 @@ defmodule Cyfr.ExecutionTest do
   test "a configured worker service that does not answer leaves execution unavailable", %{
     ctx: ctx
   } do
-    Application.put_env(:cyfr, :workers, [ScriptedWorker])
+    Application.put_env(:cyfr, :workers, ScriptedWorker.workers("reagent:local.ta", []))
 
     refute Cyfr.Execution.available?()
     assert {:error, :execution_unavailable} = run(ctx)
   end
 
   test "a configured worker service that answers makes execution available" do
-    Application.put_env(:cyfr, :workers, [ScriptedWorker])
+    Application.put_env(:cyfr, :workers, ScriptedWorker.workers("reagent:local.ta", []))
     start_supervised!({ScriptedWorker, ref: "reagent:local.ta", script: []})
 
     assert Cyfr.Execution.available?()
@@ -58,7 +58,10 @@ defmodule Cyfr.ExecutionTest do
 
   @tag :requires_opus
   test "the opus worker service is the one configured, and it answers" do
-    assert Application.get_env(:cyfr, :workers) == [Opus.WorkerService]
+    assert Application.get_env(:cyfr, :workers) == [
+             %{id: "wrk_local", module: Opus.WorkerService}
+           ]
+
     assert Cyfr.Execution.available?()
   end
 end

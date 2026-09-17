@@ -44,7 +44,7 @@ defmodule Opus.StorageHandlerTest do
 
     attempt = AttemptFixtures.attached!(authority: %{Cyfr.Authority.zero() | resources: edge})
 
-    {:ok, attempt: attempt, host: HostClient.new(attempt.keys, attempt.runner)}
+    {:ok, attempt: attempt, host: HostClient.new(attempt.keys, attempt.runner, attempt.boot)}
   end
 
   defp call(host, request, limits \\ nil) do
@@ -123,7 +123,7 @@ defmodule Opus.StorageHandlerTest do
         limits: limits
       )
 
-    host = HostClient.new(attempt.keys, attempt.runner)
+    host = HostClient.new(attempt.keys, attempt.runner, attempt.boot)
 
     huge =
       ~s({"action": "write", "path": "data/x.txt", "content": "#{String.duplicate("A", 200_000)}"})

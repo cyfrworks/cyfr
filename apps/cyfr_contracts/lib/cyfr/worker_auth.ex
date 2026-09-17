@@ -23,6 +23,22 @@ defmodule Cyfr.WorkerAuth do
   A key derived over fields is HMAC-SHA256 over its label followed by the
   field values, one per line (`Cyfr.MacEnvelope.derive/4`).
 
+  ## Identities
+
+  Three identities name the worker side, and only the first is a key
+  input:
+
+    * the **service** id — a worker service's stable, configured identity
+      (`CYFR_WORKER_ID`), which `worker_key/2` derives its keys over and
+      which an attempt's keys are bound to; two worker services never share
+      one;
+    * the **boot** id — the incarnation a worker service mints on every
+      start, carried on every header beside the service id so CYFR can
+      refuse a delayed call or report from an incarnation that no longer
+      holds the attempt; it is compared, never derived over;
+    * the **runner** id — the runner presenting a host call, which claimed
+      the attempt; a formula's children present their parent's.
+
   A worker service's keys are its own: holding them signs nothing another
   worker service would accept, reports no other worker service's runners
   and opens no attempt started on another worker service. An attempt is its
@@ -54,12 +70,12 @@ defmodule Cyfr.WorkerAuth do
   ## Headers
 
   A host call's header (`host_call_header/3`) is signed with the attempt's
-  call key over the attempt's fields, the runner presenting it, the
-  timestamp (Unix milliseconds), a nonce and the body. A WorkerAPI
+  call key over the attempt's fields, the boot and the runner presenting
+  it, the timestamp (Unix milliseconds), a nonce and the body. A WorkerAPI
   request's header (`request_header/3`) and a worker service's report
   header (`report_header/3`) are signed with that worker service's
-  dispatch key over its id, the timestamp, a nonce and the body; the two
-  kinds never verify as each other.
+  dispatch key over its service id, its boot, the timestamp, a nonce and
+  the body; the two kinds never verify as each other.
 
   ## Verifying
 
@@ -83,8 +99,8 @@ defmodule Cyfr.WorkerAuth do
   module does not hold: a nonce seen before for the same attempt (or, for
   the dispatch kinds, the same worker service) within the window is
   refused on every call that is not idempotent, and a host call's attempt
-  row must be current, running, at the header's fence and claimed by the
-  header's runner.
+  row must be current, running, at the header's fence, on the header's
+  boot and claimed by the header's runner.
   """
 
   alias Cyfr.MacEnvelope
@@ -97,7 +113,7 @@ defmodule Cyfr.WorkerAuth do
     attempt: :string,
     fence: :integer,
     generation: :integer,
-    worker: :string
+    service: :string
   ]
 
   @attempt_names Enum.map(@attempt_fields, fn {name, _type} -> Atom.to_string(name) end)
@@ -105,10 +121,10 @@ defmodule Cyfr.WorkerAuth do
   @call %MacEnvelope{
     prefix: "cyfr-worker/v1",
     kind: "call",
-    fields: @attempt_fields ++ [runner: :string, ts: :integer, nonce: :string]
+    fields: @attempt_fields ++ [boot: :string, runner: :string, ts: :integer, nonce: :string]
   }
 
-  @dispatch_fields [worker: :string, ts: :integer, nonce: :string]
+  @dispatch_fields [service: :string, boot: :string, ts: :integer, nonce: :string]
   @request %MacEnvelope{prefix: "cyfr-worker/v1", kind: "request", fields: @dispatch_fields}
   @report %MacEnvelope{prefix: "cyfr-worker/v1", kind: "report", fields: @dispatch_fields}
 
@@ -121,7 +137,7 @@ defmodule Cyfr.WorkerAuth do
           required(:attempt) => String.t(),
           required(:fence) => pos_integer(),
           required(:generation) => pos_integer(),
-          required(:worker) => String.t(),
+          required(:service) => String.t(),
           optional(atom()) => term()
         }
 
@@ -129,8 +145,8 @@ defmodule Cyfr.WorkerAuth do
   @type attempt_keys :: %{attempt: attempt(), call: binary(), seal: binary()}
 
   @typedoc """
-  A host call's header fields: the attempt's, the presenting runner, `ts`
-  in Unix ms and a nonce.
+  A host call's header fields: the attempt's, the boot and the runner
+  presenting it, `ts` in Unix ms and a nonce.
   """
   @type host_call :: %{
           athanor_id: String.t(),
@@ -138,14 +154,23 @@ defmodule Cyfr.WorkerAuth do
           attempt: String.t(),
           fence: pos_integer(),
           generation: pos_integer(),
-          worker: String.t(),
+          service: String.t(),
+          boot: String.t(),
           runner: String.t(),
           ts: non_neg_integer(),
           nonce: String.t()
         }
 
-  @typedoc "A WorkerAPI request's or report's header fields: the worker service, `ts` in Unix ms and a nonce."
-  @type dispatch :: %{worker: String.t(), ts: non_neg_integer(), nonce: String.t()}
+  @typedoc """
+  A WorkerAPI request's or report's header fields: the worker service's id
+  and boot, `ts` in Unix ms and a nonce.
+  """
+  @type dispatch :: %{
+          service: String.t(),
+          boot: String.t(),
+          ts: non_neg_integer(),
+          nonce: String.t()
+        }
 
   @typedoc "Which half of a host call a sealed value is: the runner's body or CYFR's answer."
   @type direction :: :body | :answer
@@ -166,13 +191,14 @@ defmodule Cyfr.WorkerAuth do
     do: MacEnvelope.derive(root, "cyfr-worker/v1/assign")
 
   @doc """
-  The key of the worker service `worker`: the one secret that worker
-  service holds, from which its dispatch and dispatch seal keys derive.
+  The key of the worker service `service`: the one secret that worker
+  service holds, from which its dispatch and dispatch seal keys derive. It
+  is derived over the service's stable id, never its boot.
   """
   @spec worker_key(binary(), String.t()) ::
           {:ok, binary()} | {:error, MacEnvelope.invalid_field()}
-  def worker_key(root, worker) when byte_size(root) == 32,
-    do: MacEnvelope.derive(root, "cyfr-worker/v1/worker", [worker: :string], %{worker: worker})
+  def worker_key(root, service) when byte_size(root) == 32,
+    do: MacEnvelope.derive(root, "cyfr-worker/v1/worker", [service: :string], %{service: service})
 
   @doc "The key WorkerAPI requests to a worker service and its reports are signed with."
   @spec dispatch_key(binary()) :: binary()
@@ -356,7 +382,7 @@ defmodule Cyfr.WorkerAuth do
           {:ok, dispatch()} | {:error, dispatch_refusal()}
   def verify_report(root, header, body, now) when byte_size(root) == 32 do
     with {:ok, fields, mac} <- dispatch_fields(@report, header, now),
-         worker_key = derived(&worker_key(root, &1.worker), fields),
+         worker_key = derived(&worker_key(root, &1.service), fields),
          :ok <- authentic(@report, dispatch_key(worker_key), fields, mac, body) do
       {:ok, fields}
     end

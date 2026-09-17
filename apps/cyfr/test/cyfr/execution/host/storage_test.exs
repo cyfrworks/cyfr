@@ -165,7 +165,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
 
       {:ok, _successor} =
         Arca.ExecutionAttempts.takeover(taken.athanor_id, taken.execution_id,
-          runner_id: Cyfr.Boot.id(),
+          boot_id: Cyfr.Boot.id(),
           lease_until: Arca.ExecutionAttempts.lease_until()
         )
 

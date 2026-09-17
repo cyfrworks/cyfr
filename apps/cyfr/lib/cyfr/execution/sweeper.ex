@@ -75,7 +75,13 @@ defmodule Cyfr.Execution.Sweeper do
       end
 
     for record <- stale do
-      if Lapse.lapse(record), do: Attempt.stop_unclosed(record.attempt, record.runner_id)
+      if Lapse.lapse(record),
+        do:
+          Attempt.stop_unclosed(record.attempt, %{
+            service_id: record.service_id,
+            boot_id: record.boot_id,
+            runner: nil
+          })
     end
 
     :ok

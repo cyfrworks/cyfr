@@ -25,7 +25,7 @@ defmodule Opus.HttpHandlerEnforcementTest do
   # A real attached attempt for `component_ref` and its host client.
   defp attached(component_ref) do
     attempt = AttemptFixtures.attached!(component_ref: component_ref)
-    {attempt, Opus.HostClient.new(attempt.keys, attempt.runner)}
+    {attempt, Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot)}
   end
 
   defp rows_for(attempt) do

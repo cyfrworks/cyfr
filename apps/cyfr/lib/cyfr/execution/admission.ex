@@ -238,10 +238,11 @@ defmodule Cyfr.Execution.Admission do
   the component's answer as its catalyst envelope, whose error is a refusal
   the run completes with: `Cyfr.Execution.Close.complete/4`), and what the
   attempt is opened with
-  (`Cyfr.Execution.Attempt.open/1`): `:runner_id` (the boot id of the
-  worker service the run is dispatched to, which is also the row's runner
-  and the assignment's audience), `:worker` (that worker service's
-  `Cyfr.WorkerAPI` module) and `:held_invoke` (true when the calling
+  (`Cyfr.Execution.Attempt.open/1`): `:service_id` and `:boot_id` (the
+  worker service the run is dispatched to and the boot of it dispatch
+  selected, which are also the row's and the assignment's), `:worker`
+  (that worker service's `Cyfr.WorkerAPI` module) and `:held_invoke` (true
+  when the calling
   process holds the charged invoke-budget slot of a spawned child, with
   `:charge` naming its row).
 
@@ -293,7 +294,14 @@ defmodule Cyfr.Execution.Admission do
           signature_verified: component["signature_verified"] || false,
           envelope: opts[:envelope] == true,
           admission:
-            Keyword.take(opts, [:charge, :step, :parent_attempt, :occurrence_id, :runner_id])
+            Keyword.take(opts, [
+              :charge,
+              :step,
+              :parent_attempt,
+              :occurrence_id,
+              :service_id,
+              :boot_id
+            ])
         }
       }
 
@@ -747,7 +755,8 @@ defmodule Cyfr.Execution.Admission do
         roster: if(run.component_type == :formula, do: Delegation.roster(input), else: []),
         step_spans: run.opts[:step_spans],
         worker: run.opts[:worker],
-        runner_id: run.opts[:runner_id],
+        service_id: run.opts[:service_id],
+        boot_id: run.opts[:boot_id] || Record.boot_id(),
         digest: run.component["digest"],
         held_invoke: run.opts[:held_invoke] == true,
         charge: if(run.opts[:held_invoke] == true, do: run.opts[:charge])
@@ -791,7 +800,8 @@ defmodule Cyfr.Execution.Admission do
       input: input,
       timeout_ms: run.timeout_ms,
       step: run.opts[:step],
-      audience: run.opts[:runner_id] || Record.runner_id()
+      service: run.opts[:service_id],
+      boot: run.opts[:boot_id] || Record.boot_id()
     }
   end
 

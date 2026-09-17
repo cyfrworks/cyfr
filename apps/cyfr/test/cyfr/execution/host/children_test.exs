@@ -143,7 +143,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
     assert Cyfr.Digest.sha256(input) == assignment.input_digest
 
     keys.attempt
-    |> Map.merge(%{runner: fixture.runner, keys: keys, call_key: keys.call})
+    |> Map.merge(%{boot: fixture.boot, runner: fixture.runner, keys: keys, call_key: keys.call})
     |> Map.merge(%{assignment: assignment, input: Jason.decode!(input)})
   end
 
@@ -180,15 +180,18 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       child = child!(fixture, answer)
 
       assert child.input == %{"a" => 1}
-      assert child.worker == fixture.worker
+      assert child.service == fixture.service
+      assert child.assignment.service == fixture.service
+      assert child.assignment.boot == fixture.boot
       assert child.assignment.parent_execution_id == fixture.execution_id
       assert child.assignment.root_execution_id == fixture.execution_id
 
-      assert %{state: "running", claimed_by: claimed_by, runner_id: runner_id} =
+      assert %{state: "running", claimed_by: claimed_by, service_id: service_id, boot_id: boot_id} =
                Arca.ExecutionAttempts.current(ctx.athanor_id, child.execution_id)
 
       assert claimed_by == fixture.runner
-      assert runner_id == fixture.worker
+      assert service_id == fixture.service
+      assert boot_id == fixture.boot
 
       # Handed to its runner: nothing on CYFR waits for it, and a stop
       # reaches it through its worker service.

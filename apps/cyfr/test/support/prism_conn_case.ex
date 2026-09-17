@@ -85,7 +85,12 @@ defmodule PrismWeb.ConnCase do
   """
   def script_model!(items \\ []) do
     previous = Application.get_env(:cyfr, :workers)
-    Application.put_env(:cyfr, :workers, [Cyfr.Test.ScriptedWorker])
+
+    Application.put_env(
+      :cyfr,
+      :workers,
+      Cyfr.Test.ScriptedWorker.workers("catalyst:local.claude", previous)
+    )
 
     ExUnit.Callbacks.on_exit(fn ->
       Application.put_env(:cyfr, :workers, previous)

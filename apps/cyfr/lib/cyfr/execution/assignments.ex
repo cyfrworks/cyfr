@@ -29,8 +29,8 @@ defmodule Cyfr.Execution.Assignments do
   What an assignment is built from: the admission context, the admitted
   row, the run's authority, its component (`ref`, `type`, `digest`,
   `declared_needs`, `activation_digest`), its input, its consented timeout,
-  the boot id of the worker service it is dispatched to and the turn step
-  that dispatched it (nil when none did).
+  the worker service it is dispatched to and the boot of it dispatch
+  selected, and the turn step that dispatched it (nil when none did).
   """
   @type admitted :: %{
           required(:ctx) => Context.t(),
@@ -39,7 +39,8 @@ defmodule Cyfr.Execution.Assignments do
           required(:component) => Assignment.component(),
           required(:input) => map(),
           required(:timeout_ms) => pos_integer(),
-          required(:audience) => String.t(),
+          required(:service) => String.t(),
+          required(:boot) => String.t(),
           optional(:step) => Assignment.step() | nil
         }
 
@@ -71,12 +72,13 @@ defmodule Cyfr.Execution.Assignments do
       attempt: record.attempt,
       fence: 1,
       generation: generation,
-      worker: admitted.audience
+      service: admitted.service
     }
 
     assignment = %Assignment{
       generation: attempt.generation,
-      audience: admitted.audience,
+      service: admitted.service,
+      boot: admitted.boot,
       issued_at: now,
       claim_by: now + @claim_window_ms,
       execution_id: record.id,

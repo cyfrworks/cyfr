@@ -26,7 +26,8 @@ defmodule Cyfr.WorkerAuthTest do
   @root :binary.list_to_bin(Enum.to_list(0..31))
   @now 1_789_305_249_602
   @body ~s({"attempts":["att_1"]})
-  @worker "wrk_4f3c2a1e9d8b7c6a"
+  @service "wrk_4f3c2a1e9d8b7c6a"
+  @boot "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"
 
   @attempt %{
     athanor_id: "ath_01a09fee-045b-770b-b745-a62792bb8798",
@@ -34,7 +35,7 @@ defmodule Cyfr.WorkerAuthTest do
     attempt: "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
     fence: 2,
     generation: 7,
-    worker: @worker
+    service: @service
   }
 
   defp hex(bytes), do: Base.encode16(bytes, case: :lower)
@@ -42,7 +43,7 @@ defmodule Cyfr.WorkerAuthTest do
 
   defp call(overrides \\ %{}) do
     @attempt
-    |> Map.merge(%{runner: "run_4f3c2a1e", ts: @now, nonce: "n_7d3e9a"})
+    |> Map.merge(%{boot: @boot, runner: "run_4f3c2a1e", ts: @now, nonce: "n_7d3e9a"})
     |> Map.merge(overrides)
   end
 
@@ -51,7 +52,7 @@ defmodule Cyfr.WorkerAuthTest do
     keys
   end
 
-  defp worker_key!(worker \\ @worker) do
+  defp worker_key!(worker \\ @service) do
     {:ok, key} = WorkerAuth.worker_key(@root, worker)
     key
   end
@@ -64,7 +65,7 @@ defmodule Cyfr.WorkerAuthTest do
   @iv :binary.copy(<<9>>, 12)
 
   defp sealed!(attempt \\ @attempt, iv \\ @iv) do
-    seal_key = WorkerAuth.dispatch_seal_key(worker_key!(attempt.worker))
+    seal_key = WorkerAuth.dispatch_seal_key(worker_key!(attempt.service))
     {:ok, sealed} = WorkerAuth.seal_attempt_keys(seal_key, keys!(attempt), iv)
     sealed
   end
@@ -88,7 +89,7 @@ defmodule Cyfr.WorkerAuthTest do
 
     test "every key derives as the vectors say", %{v: v, root: root, attempt: attempt} do
       keys = v["keys"]
-      {:ok, worker_key} = WorkerAuth.worker_key(root, v["worker"])
+      {:ok, worker_key} = WorkerAuth.worker_key(root, v["service"])
 
       assert hex(WorkerAuth.assign_key(root)) == keys["assign_hex"]
       assert hex(worker_key) == keys["worker_hex"]
@@ -106,7 +107,10 @@ defmodule Cyfr.WorkerAuthTest do
 
     test "a host call's canonical string, header and MAC match", %{v: v, attempt: attempt} do
       c = v["call"]
-      call = Map.merge(attempt, %{runner: c["runner"], ts: c["ts"], nonce: c["nonce"]})
+
+      call =
+        Map.merge(attempt, %{boot: v["boot"], runner: c["runner"], ts: c["ts"], nonce: c["nonce"]})
+
       call_key = unhex(v["keys"]["attempt_call_hex"])
 
       assert {:ok, c["header"]} == WorkerAuth.host_call_header(call_key, call, c["body"])
@@ -132,7 +136,7 @@ defmodule Cyfr.WorkerAuthTest do
             {"request", &WorkerAuth.request_header/3}
           ] do
         d = v[kind]
-        fields = %{worker: v["worker"], ts: d["ts"], nonce: d["nonce"]}
+        fields = %{service: v["service"], boot: v["boot"], ts: d["ts"], nonce: d["nonce"]}
 
         assert {:ok, d["header"]} == header_fun.(dispatch_key, fields, d["body"])
         assert_mac(dispatch_key, d["canonical"], d["header"])
@@ -159,7 +163,10 @@ defmodule Cyfr.WorkerAuthTest do
       assert {:ok, ^keys} = WorkerAuth.open_attempt_keys(dseal, s["sealed"])
 
       c = v["call"]
-      call = Map.merge(attempt, %{runner: c["runner"], ts: c["ts"], nonce: c["nonce"]})
+
+      call =
+        Map.merge(attempt, %{boot: v["boot"], runner: c["runner"], ts: c["ts"], nonce: c["nonce"]})
+
       sc = v["sealed_call"]
 
       assert {:ok, sc["body_sealed"]} ==
@@ -234,7 +241,7 @@ defmodule Cyfr.WorkerAuthTest do
     end
 
     test "a worker service's keys are distinct per worker service" do
-      [mine, theirs] = for worker <- [@worker, "wrk_other"], do: worker_key!(worker)
+      [mine, theirs] = for worker <- [@service, "wrk_other"], do: worker_key!(worker)
 
       refute mine == theirs
       refute WorkerAuth.dispatch_key(mine) == WorkerAuth.dispatch_key(theirs)
@@ -250,7 +257,7 @@ defmodule Cyfr.WorkerAuthTest do
         attempt: "att_other",
         fence: 3,
         generation: 8,
-        worker: "wrk_other"
+        service: "wrk_other"
       ]
 
       others = for {field, value} <- variants, do: keys!(Map.put(@attempt, field, value))
@@ -270,10 +277,10 @@ defmodule Cyfr.WorkerAuthTest do
       assert {:error, {:invalid_field, :athanor_id}} =
                WorkerAuth.attempt_call_key(@root, %{@attempt | athanor_id: "ath 1"})
 
-      assert {:error, {:invalid_field, :worker}} =
-               WorkerAuth.attempt_seal_key(@root, Map.delete(@attempt, :worker))
+      assert {:error, {:invalid_field, :service}} =
+               WorkerAuth.attempt_seal_key(@root, Map.delete(@attempt, :service))
 
-      assert {:error, {:invalid_field, :worker}} = WorkerAuth.worker_key(@root, "wrk 1")
+      assert {:error, {:invalid_field, :service}} = WorkerAuth.worker_key(@root, "wrk 1")
     end
   end
 
@@ -283,7 +290,7 @@ defmodule Cyfr.WorkerAuthTest do
       header = call_header!(call)
 
       assert header =~
-               ~r/\Av1 kind=call athanor_id=ath_\S+ execution_id=\S+ attempt=\S+ fence=2 generation=7 worker=wrk_4f3c2a1e9d8b7c6a runner=run_4f3c2a1e ts=1789305249602 nonce=n_7d3e9a mac=\S+\z/
+               ~r/\Av1 kind=call athanor_id=ath_\S+ execution_id=\S+ attempt=\S+ fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_4f3c2a1e ts=1789305249602 nonce=n_7d3e9a mac=\S+\z/
 
       assert {:ok, ^call} = verify(header)
     end
@@ -311,7 +318,7 @@ defmodule Cyfr.WorkerAuthTest do
                verify(String.replace(header, "runner=run_4f3c2a1e", "runner=run_x"))
 
       assert {:error, :bad_mac} =
-               verify(String.replace(header, "worker=#{@worker}", "worker=wrk_other"))
+               verify(String.replace(header, "service=#{@service}", "service=wrk_other"))
 
       assert {:error, :bad_mac} = verify(String.replace(header, "nonce=n_7d3e9a", "nonce=n_x"))
 
@@ -323,7 +330,7 @@ defmodule Cyfr.WorkerAuthTest do
       for other <- [
             %{@attempt | attempt: "att_other"},
             %{@attempt | fence: 3},
-            %{@attempt | worker: "wrk_other"}
+            %{@attempt | service: "wrk_other"}
           ] do
         assert {:error, :bad_mac} = verify(call_header!(call(), keys!(other).call))
       end
@@ -366,7 +373,7 @@ defmodule Cyfr.WorkerAuthTest do
       assert {:error, :malformed} = verify(String.replace(header, "kind=call", "kind=request"))
       assert {:error, :malformed} = verify(String.replace(header, "fence=2", "fence=02"))
       assert {:error, :malformed} = verify(String.replace(header, " runner=run_4f3c2a1e", ""))
-      assert {:error, :malformed} = verify(String.replace(header, " worker=#{@worker}", ""))
+      assert {:error, :malformed} = verify(String.replace(header, " service=#{@service}", ""))
       assert {:error, :malformed} = verify(header <> " nonce=n_again")
     end
   end
@@ -389,7 +396,7 @@ defmodule Cyfr.WorkerAuthTest do
       other_root = :binary.list_to_bin(Enum.to_list(1..32))
       mine = worker_key!()
       theirs = worker_key!("wrk_other")
-      {:ok, elsewhere} = WorkerAuth.worker_key(other_root, @worker)
+      {:ok, elsewhere} = WorkerAuth.worker_key(other_root, @service)
 
       for key <- [
             WorkerAuth.dispatch_seal_key(theirs),
@@ -420,7 +427,7 @@ defmodule Cyfr.WorkerAuthTest do
 
       for sealed <- [
             renamed.("fence", 3) <> "." <> box,
-            renamed.("worker", "wrk_other") <> "." <> box,
+            renamed.("service", "wrk_other") <> "." <> box,
             named <> "." <> flipped,
             named <> "." <> box <> "." <> box,
             box,
@@ -469,7 +476,7 @@ defmodule Cyfr.WorkerAuthTest do
   end
 
   describe "WorkerAPI requests and reports" do
-    @dispatch %{worker: @worker, ts: @now, nonce: "n_1"}
+    @dispatch %{service: @service, boot: @boot, ts: @now, nonce: "n_1"}
 
     test "verify under the worker service's dispatch key as their own kind only" do
       key = WorkerAuth.dispatch_key(worker_key!())
@@ -491,10 +498,10 @@ defmodule Cyfr.WorkerAuthTest do
       {:ok, as_mine} = WorkerAuth.report_header(theirs, @dispatch, @body)
       assert {:error, :bad_mac} = WorkerAuth.verify_report(@root, as_mine, @body, @now)
 
-      {:ok, own} = WorkerAuth.report_header(theirs, %{@dispatch | worker: "wrk_other"}, @body)
-      readdressed = String.replace(own, "worker=wrk_other", "worker=#{@worker}")
+      {:ok, own} = WorkerAuth.report_header(theirs, %{@dispatch | service: "wrk_other"}, @body)
+      readdressed = String.replace(own, "service=wrk_other", "service=#{@service}")
       assert {:error, :bad_mac} = WorkerAuth.verify_report(@root, readdressed, @body, @now)
-      assert {:ok, %{worker: "wrk_other"}} = WorkerAuth.verify_report(@root, own, @body, @now)
+      assert {:ok, %{service: "wrk_other"}} = WorkerAuth.verify_report(@root, own, @body, @now)
     end
 
     test "are refused outside the window, over another body or under another key" do
@@ -521,7 +528,7 @@ defmodule Cyfr.WorkerAuthTest do
       {:ok, by_attempt} = WorkerAuth.request_header(keys!(@attempt).call, @dispatch, @body)
       assert {:error, :bad_mac} = WorkerAuth.verify_request(key, by_attempt, @body, @now)
 
-      readdressed = String.replace(request, "worker=#{@worker}", "worker=wrk_2")
+      readdressed = String.replace(request, "service=#{@service}", "service=wrk_2")
       assert {:error, :bad_mac} = WorkerAuth.verify_request(key, readdressed, @body, @now)
     end
   end

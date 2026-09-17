@@ -37,7 +37,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     keys = [:base_path, :workers]
     previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :workers, [ScriptedWorker])
+    Application.put_env(:cyfr, :workers, ScriptedWorker.workers(@scripted, previous[:workers]))
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
@@ -136,11 +136,18 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert charge_row.admitted_at != nil
     assert charge_row.holder_execution_id == child_id
 
-    # Claimed at attach by the runner, on the worker service it was sent to.
-    assert %{state: "running", claimed_by: "runner" <> _, runner_id: runner_id} =
+    # Claimed at attach by the runner, on the worker service and boot it was
+    # sent to.
+    assert %{
+             state: "running",
+             claimed_by: "runner" <> _,
+             service_id: service_id,
+             boot_id: boot_id
+           } =
              Arca.ExecutionAttempts.current(athanor_id, child_id)
 
-    assert runner_id == boot()
+    assert service_id == ScriptedWorker.service()
+    assert boot_id == boot()
 
     status = Cyfr.Execution.Semaphore.status()
     attempt = Attempt.whereis(child_id)

@@ -28,7 +28,7 @@ defmodule Cyfr.Execution.HostTest do
   alias Cyfr.Execution.{Close, Dispatch, Keys}
   alias Cyfr.Test.AttemptFixtures
 
-  @worker "worker_host_test"
+  @service "wrk_host_test"
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -54,8 +54,14 @@ defmodule Cyfr.Execution.HostTest do
     })
   end
 
-  defp renew(fixture, attempts \\ nil),
-    do: AttemptFixtures.call(fixture, "renew", %{"attempts" => attempts || [fixture.attempt]})
+  defp renew(fixture, attempts \\ nil, opts \\ []) do
+    AttemptFixtures.call(
+      fixture,
+      "renew",
+      %{"attempts" => attempts || [fixture.attempt]},
+      opts
+    )
+  end
 
   defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
 
@@ -120,23 +126,39 @@ defmodule Cyfr.Execution.HostTest do
 
     @tag :capture_log
     test "an assignment addressed to another worker service is lost and claims nothing" do
-      fixture = AttemptFixtures.attached!(attach: false, runner_id: @worker)
+      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
 
       # The attempt as the other worker service would present it, with the
       # keys CYFR would derive for it there.
-      {:ok, keys} = Keys.attempt_keys(%{fixture.keys.attempt | worker: "worker_other"})
+      {:ok, keys} = Keys.attempt_keys(%{fixture.keys.attempt | service: "wrk_other"})
 
       assert %{"error" => "lost"} =
-               attach(fixture, worker: "worker_other", call_key: keys.call)
+               attach(fixture, service: "wrk_other", call_key: keys.call)
 
       assert Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, fixture.attempt).claimed_by == nil
       assert %{"ok" => _} = attach(fixture)
     end
 
     @tag :capture_log
+    test "an attach or a call from another boot of the same worker service is lost" do
+      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+
+      # The boot is signed beside the service but is no key input: the
+      # header verifies, and the row's boot is what refuses it.
+      assert %{"error" => "lost"} = attach(fixture, boot: "boot_other")
+      assert Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, fixture.attempt).claimed_by == nil
+
+      assert %{"ok" => _} = attach(fixture)
+      assert %{"ok" => %{} = renewals} = renew(fixture, nil, boot: "boot_other")
+      assert renewals[fixture.attempt] == "lost"
+      assert %{"error" => "lost"} = push(fixture, %{"type" => "note"}, boot: "boot_other")
+      assert %{"ok" => _} = renew(fixture)
+    end
+
+    @tag :capture_log
     test "a header signed with the attempt's seal key, or another worker service's call key, is lost" do
-      fixture = AttemptFixtures.attached!(attach: false, runner_id: @worker)
-      {:ok, other} = Keys.attempt_keys(%{fixture.keys.attempt | worker: "worker_other"})
+      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      {:ok, other} = Keys.attempt_keys(%{fixture.keys.attempt | service: "wrk_other"})
 
       assert capture_log(fn ->
                assert %{"error" => "lost"} = attach(fixture, call_key: fixture.keys.seal)
@@ -319,7 +341,7 @@ defmodule Cyfr.Execution.HostTest do
 
       {:ok, %{attempt: successor}} =
         Arca.ExecutionAttempts.takeover(fixture.athanor_id, fixture.execution_id,
-          runner_id: Cyfr.Boot.id(),
+          boot_id: Cyfr.Boot.id(),
           lease_until: Arca.ExecutionAttempts.lease_until()
         )
 
@@ -374,9 +396,13 @@ defmodule Cyfr.Execution.HostTest do
 
       assert attempt.claimed_by == nil
 
+      # Held by the control plane: dispatched to no worker service.
+      assert attempt.service_id == nil
+      assert attempt.boot_id == Cyfr.Boot.id()
+
       fixture =
         Map.merge(AttemptFixtures.current!(ctx.athanor_id, execution.id), %{
-          runner: attempt.runner_id
+          runner: attempt.boot_id
         })
 
       assert %{"ok" => %{} = renewals} = renew(fixture)
@@ -529,10 +555,10 @@ defmodule Cyfr.Execution.HostTest do
 
     @tag :capture_log
     test "a runner exit report lapses nothing" do
-      fixture = AttemptFixtures.attached!(runner_id: @worker)
+      fixture = AttemptFixtures.attached!(service_id: @service)
       Cyfr.ControlPlane.mark(:lost)
 
-      assert %{"error" => "unavailable"} = report(@worker, [fixture.attempt])
+      assert %{"error" => "unavailable"} = report(fixture)
 
       assert %{status: "running"} = row(fixture)
       assert %{state: "running"} = Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
@@ -540,26 +566,42 @@ defmodule Cyfr.Execution.HostTest do
   end
 
   describe "a runner exit report" do
-    # A report naming `worker`, signed with the dispatch key of `signer`
-    # (default the worker it names).
-    defp report(worker, attempts, opts \\ []) do
-      body = AttemptFixtures.body("runner_exited", %{"attempts" => attempts})
-      fields = %{worker: worker, ts: now(), nonce: "n_#{System.unique_integer([:positive])}"}
-      key = Keyword.get_lazy(opts, :key, fn -> dispatch_key(opts[:signer] || worker) end)
+    # A report of the exit of `fixture`'s runner, naming the fixture's
+    # service, boot and runner unless `:service`, `:boot` or `:runner`
+    # override them, signed with the dispatch key of `:signer` (default the
+    # service it names) or with `:key`.
+    defp report(fixture, opts \\ []) do
+      service = Keyword.get(opts, :service, fixture.service)
+      runner = Keyword.get(opts, :runner, fixture.runner)
+
+      body =
+        AttemptFixtures.body("runner_exited", %{
+          "runner" => runner,
+          "attempts" => [fixture.attempt]
+        })
+
+      fields = %{
+        service: service,
+        boot: Keyword.get(opts, :boot, fixture.boot),
+        ts: now(),
+        nonce: "n_#{System.unique_integer([:positive])}"
+      }
+
+      key = Keyword.get_lazy(opts, :key, fn -> dispatch_key(opts[:signer] || service) end)
       {:ok, header} = Cyfr.WorkerAuth.report_header(key, fields, body)
       header |> Cyfr.Execution.Host.runner_exited(body) |> Jason.decode!()
     end
 
-    defp dispatch_key(worker) do
-      {:ok, worker_key} = Keys.worker_key(worker)
+    defp dispatch_key(service) do
+      {:ok, worker_key} = Keys.worker_key(service)
       Cyfr.WorkerAuth.dispatch_key(worker_key)
     end
 
     test "lapses the reporting worker's running attempts at once and stops their attempts" do
-      fixture = AttemptFixtures.attached!(runner_id: @worker, component_type: :formula)
+      fixture = AttemptFixtures.attached!(service_id: @service, component_type: :formula)
       child = child_of!(fixture)
 
-      assert %{"ok" => true} = report(@worker, [fixture.attempt])
+      assert %{"ok" => true} = report(fixture)
 
       assert {:error, "Execution terminated: runner stopped without cleanup"} =
                Dispatch.await(fixture.pid, fixture.close)
@@ -580,9 +622,9 @@ defmodule Cyfr.Execution.HostTest do
 
     test "a waiter admitted on the guest plane answers the lapsed row's error" do
       guest = Sanctum.Context.enter_guest(Sanctum.TestContext.local())
-      fixture = AttemptFixtures.attached!(ctx: guest, runner_id: @worker)
+      fixture = AttemptFixtures.attached!(ctx: guest, service_id: @service)
 
-      assert %{"ok" => true} = report(@worker, [fixture.attempt])
+      assert %{"ok" => true} = report(fixture)
 
       assert {:error, "Execution terminated: runner stopped without cleanup"} =
                Dispatch.await(fixture.pid, fixture.close)
@@ -591,15 +633,20 @@ defmodule Cyfr.Execution.HostTest do
     end
 
     @tag :capture_log
-    test "lapses nothing dispatched to another worker, and a forged report nothing at all" do
-      fixture = AttemptFixtures.attached!(runner_id: @worker)
+    test "lapses nothing dispatched to another worker, boot or runner, and a forged report nothing at all" do
+      fixture = AttemptFixtures.attached!(service_id: @service)
 
-      assert %{"ok" => true} = report("worker_other", [fixture.attempt])
-      assert %{"error" => "lost"} = report(@worker, [fixture.attempt], key: Keys.assign_key())
+      # Verified reports that speak for another worker service, another
+      # boot of this one, or another runner name an attempt that is not
+      # theirs to lapse.
+      assert %{"ok" => true} = report(fixture, service: "wrk_other")
+      assert %{"ok" => true} = report(fixture, boot: "boot_other")
+      assert %{"ok" => true} = report(fixture, runner: "run_other")
+      assert %{"error" => "lost"} = report(fixture, key: Keys.assign_key())
 
       forged_body = AttemptFixtures.body("renew", %{"attempts" => [fixture.attempt]})
-      fields = %{worker: @worker, ts: now(), nonce: "n_forged"}
-      {:ok, header} = Cyfr.WorkerAuth.report_header(dispatch_key(@worker), fields, forged_body)
+      fields = %{service: @service, boot: fixture.boot, ts: now(), nonce: "n_forged"}
+      {:ok, header} = Cyfr.WorkerAuth.report_header(dispatch_key(@service), fields, forged_body)
 
       assert %{"error" => "lost"} =
                header |> Cyfr.Execution.Host.runner_exited(forged_body) |> Jason.decode!()
@@ -612,10 +659,9 @@ defmodule Cyfr.Execution.HostTest do
 
     @tag :capture_log
     test "signed by another worker service for this one, lapses nothing" do
-      fixture = AttemptFixtures.attached!(runner_id: @worker)
+      fixture = AttemptFixtures.attached!(service_id: @service)
 
-      assert %{"error" => "lost"} =
-               report(@worker, [fixture.attempt], signer: "worker_other")
+      assert %{"error" => "lost"} = report(fixture, signer: "wrk_other")
 
       assert row(fixture).status == "running"
       assert %{state: "running"} = Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
@@ -625,12 +671,12 @@ defmodule Cyfr.Execution.HostTest do
     end
 
     test "leaves a closed attempt's row as it closed, and is idempotent" do
-      fixture = AttemptFixtures.attached!(runner_id: @worker)
+      fixture = AttemptFixtures.attached!(service_id: @service)
       assert %{"ok" => _} = complete(fixture, %{"done" => true})
       assert {:ok, _} = Dispatch.await(fixture.pid, fixture.close)
 
-      assert %{"ok" => true} = report(@worker, [fixture.attempt])
-      assert %{"ok" => true} = report(@worker, [fixture.attempt])
+      assert %{"ok" => true} = report(fixture)
+      assert %{"ok" => true} = report(fixture)
       assert row(fixture).status == "completed"
     end
   end

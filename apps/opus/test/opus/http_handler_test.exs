@@ -15,7 +15,7 @@ defmodule Opus.HttpHandlerTest do
          do: Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     attempt = AttemptFixtures.attached!(component_ref: component_ref, limits: limits)
-    Opus.HostClient.new(attempt.keys, attempt.runner)
+    Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot)
   end
 
   # ============================================================================

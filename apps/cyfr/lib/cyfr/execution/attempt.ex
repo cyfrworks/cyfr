@@ -114,7 +114,15 @@ defmodule Cyfr.Execution.Attempt do
   @redacted "[REDACTED]"
 
   @derive {Inspect,
-           only: [:execution_id, :attempt, :fence, :component_ref, :claimed_by, :runner_id]}
+           only: [
+             :execution_id,
+             :attempt,
+             :fence,
+             :component_ref,
+             :claimed_by,
+             :service_id,
+             :boot_id
+           ]}
   @enforce_keys [
     :execution_id,
     :attempt,
@@ -135,7 +143,8 @@ defmodule Cyfr.Execution.Attempt do
                 :activation_digest,
                 :claimed_by,
                 :worker,
-                :runner_id,
+                :service_id,
+                :boot_id,
                 :digest,
                 :slot,
                 :charge,
@@ -192,9 +201,9 @@ defmodule Cyfr.Execution.Attempt do
   default the execution's), `:root_execution_id` (default the execution's),
   `:declared_needs` (default `[]`) and `:activation_digest` (the
   resolver's, for its guest's children), `:roster` (the delegation roster
-  of its admitted input, default `[]`), `:step_spans`, `:worker` and
-  `:runner_id` (the `Cyfr.WorkerAPI` module and the boot id of the worker
-  service the run is dispatched to), `:digest` (the digest of the
+  of its admitted input, default `[]`), `:step_spans`, `:worker`,
+  `:service_id` and `:boot_id` (the `Cyfr.WorkerAPI` module, the id and the
+  boot of the worker service the run is dispatched to), `:digest` (the digest of the
   component's artifact, which the runner fetches), `:held_invoke` (true
   when the waiter holds a charged invoke-budget slot of the authority's
   budget, which the attempt takes over) and `:charge` (the charge row that
@@ -344,16 +353,24 @@ defmodule Cyfr.Execution.Attempt do
     call(execution_id, {:call, caller, op})
   end
 
-  @doc """
-  Stop the open attempt `attempt`, dispatched to the worker service boot
-  `runner_id`, without closing its run: its runner exited, or its row
-  lapsed. An attempt dispatched elsewhere, or none open, is left alone.
+  @typedoc """
+  Who holds an attempt: the worker service it was dispatched to (nil when
+  the control plane holds it), that service's boot, and the runner that
+  claimed it (nil to match any).
   """
-  @spec stop_unclosed(String.t(), String.t()) :: :ok
-  def stop_unclosed(attempt, runner_id) when is_binary(attempt) and is_binary(runner_id) do
+  @type holder :: %{service_id: String.t() | nil, boot_id: String.t(), runner: String.t() | nil}
+
+  @doc """
+  Stop the open attempt `attempt` held by `holder`, without closing its
+  run: its runner exited, or its row lapsed. An attempt held by another
+  service, boot or runner, or none open, is left alone.
+  """
+  @spec stop_unclosed(String.t(), holder()) :: :ok
+  def stop_unclosed(attempt, %{boot_id: boot_id} = holder)
+      when is_binary(attempt) and is_binary(boot_id) do
     for pid <- Registry.select(@registry, [{{:_, :"$1", attempt}, [], [:"$1"]}]) do
       try do
-        GenServer.call(pid, {:stop_unclosed, attempt, runner_id}, :infinity)
+        GenServer.call(pid, {:stop_unclosed, attempt, holder}, :infinity)
       catch
         :exit, _reason -> :ok
       end
@@ -415,7 +432,8 @@ defmodule Cyfr.Execution.Attempt do
       activation_digest: Keyword.get(opts, :activation_digest),
       roster: Keyword.get(opts, :roster, []),
       worker: Keyword.get(opts, :worker),
-      runner_id: Keyword.get(opts, :runner_id),
+      service_id: Keyword.get(opts, :service_id),
+      boot_id: Keyword.get(opts, :boot_id),
       digest: Keyword.get(opts, :digest),
       charge: Keyword.get(opts, :charge),
       held_invoke: take_over_invoke(Keyword.get(opts, :held_invoke, false), authority, owner)
@@ -469,8 +487,13 @@ defmodule Cyfr.Execution.Attempt do
 
   def handle_call({:call, _caller, _op} = message, _from, state), do: owned(message, state)
 
-  def handle_call({:stop_unclosed, attempt, runner_id}, _from, state) do
-    if state.attempt == attempt and state.runner_id == runner_id,
+  def handle_call({:stop_unclosed, attempt, holder}, _from, state) do
+    held? =
+      state.attempt == attempt and state.service_id == holder.service_id and
+        state.boot_id == holder.boot_id and
+        (is_nil(holder.runner) or state.claimed_by == holder.runner)
+
+    if held?,
       do: {:stop, :normal, :ok, release_holds(state)},
       else: {:reply, :ok, state}
   end
@@ -640,7 +663,7 @@ defmodule Cyfr.Execution.Attempt do
 
   # A run dispatched to no worker service has no runner whose attempt lapses.
   defp lapse(%__MODULE__{worker: nil}), do: :ok
-  defp lapse(state), do: Lapse.dispatched(state.runner_id, [state.attempt])
+  defp lapse(state), do: Lapse.dispatched(state.service_id, state.boot_id, nil, [state.attempt])
 
   defp note_unreaped(state) do
     tenant = state.ctx.athanor_id
@@ -722,9 +745,13 @@ defmodule Cyfr.Execution.Attempt do
       else: :lost
   end
 
+  # The header names this attempt at this fence, on the worker service and
+  # the boot the row was dispatched to: a delayed call from an earlier boot
+  # of the same service is lost.
   defp names_attempt?(state, caller) do
     caller.execution_id == state.execution_id and caller.attempt == state.attempt and
-      caller.fence == state.fence and caller.worker == state.runner_id
+      caller.fence == state.fence and caller.service == state.service_id and
+      caller.boot == state.boot_id
   end
 
   defp fresh_nonce(state, %{nonce: nonce, ts: ts}) do

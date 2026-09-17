@@ -44,7 +44,7 @@ defmodule Cyfr.Execution do
   @doc "Whether a worker service is configured and answers, and the execution slots are up."
   @spec available?() :: boolean()
   def available? do
-    is_pid(Process.whereis(Cyfr.Execution.Semaphore)) and match?({:ok, _, _}, Dispatch.worker())
+    is_pid(Process.whereis(Cyfr.Execution.Semaphore)) and match?({:ok, _}, Dispatch.worker())
   end
 
   @doc """
@@ -182,8 +182,9 @@ defmodule Cyfr.Execution do
   Options as `run_child/5`'s host-threaded ones (`:ctx`,
   `:parent_execution_id`, `:root_execution_id`, `:attempt`, `:guest_fn`,
   `:declared_needs`, `:activation_digest`), and the runner the child is
-  claimed for: `:runner`, with `:runner_id` and `:worker` naming its
-  worker service. Answers `{:ok, claimed}`
+  claimed for: `:runner`, with `:service_id`, `:boot_id` and `:worker`
+  naming its worker service, that service's boot and its `Cyfr.WorkerAPI`
+  module. Answers `{:ok, claimed}`
   (`t:Cyfr.Execution.Dispatch.claimed/0`) or `{:error, reason}`.
   """
   @spec admit_child(Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
@@ -261,7 +262,8 @@ defmodule Cyfr.Execution do
     |> put(:envelope, Keyword.get(opts, :envelope) == true || nil)
     |> put(:held_invoke, spawned? || nil)
     |> put(:runner, Keyword.get(opts, :runner))
-    |> put(:runner_id, Keyword.get(opts, :runner_id))
+    |> put(:service_id, Keyword.get(opts, :service_id))
+    |> put(:boot_id, Keyword.get(opts, :boot_id))
     |> put(:worker, Keyword.get(opts, :worker))
   end
 

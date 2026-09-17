@@ -61,7 +61,7 @@ defmodule Opus.HostClientTest do
 
   test "every host call crosses the transport as a header, a JSON body and a JSON answer" do
     attempt = AttemptFixtures.attached!(attach: false)
-    client = HostClient.new(attempt.keys)
+    client = HostClient.new(attempt.keys, nil, attempt.boot)
 
     crossed =
       crossings(fn ->
@@ -105,7 +105,7 @@ defmodule Opus.HostClientTest do
 
   test "a client's inspection names its attempt and not its keys" do
     attempt = AttemptFixtures.attached!(attach: false)
-    client = HostClient.new(attempt.keys)
+    client = HostClient.new(attempt.keys, nil, attempt.boot)
     shown = inspect(client, limit: :infinity)
 
     assert shown =~ attempt.attempt
@@ -119,7 +119,13 @@ defmodule Opus.HostClientTest do
 
   test "a client whose key is not its attempt's is answered lost" do
     attempt = AttemptFixtures.attached!()
-    client = HostClient.new(%{attempt.keys | call: :crypto.strong_rand_bytes(32)}, attempt.runner)
+
+    client =
+      HostClient.new(
+        %{attempt.keys | call: :crypto.strong_rand_bytes(32)},
+        attempt.runner,
+        attempt.boot
+      )
 
     assert {:error, :lost} = HostClient.push_deltas(client, [~s({"type":"note"})])
     assert {:error, :lost} = HostClient.renew(client, [client.attempt])

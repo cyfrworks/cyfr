@@ -77,10 +77,16 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# The worker services runs are dispatched to (`Cyfr.Execution.Dispatch`),
-# each a `Cyfr.WorkerAPI` module; a run goes to the first one loaded. With
-# none loaded, a run is refused as :execution_unavailable.
-config :cyfr, :workers, [Opus.WorkerService]
+# The worker services runs are dispatched to (`Cyfr.Execution.Dispatch`):
+# each entry names a worker service's configured id (`CYFR_WORKER_ID`, the
+# id `Cyfr.WorkerAuth` derives its keys over) and its `Cyfr.WorkerAPI`
+# module; a run goes to the first one loaded whose status answers its id.
+# With none, a run is refused as :execution_unavailable. The runtime
+# configuration replaces the id with the configured one.
+config :cyfr, :workers, [%{id: "wrk_local", module: Opus.WorkerService}]
+
+# The worker service's own id, which every assignment it accepts must name.
+config :opus, :service_id, "wrk_local"
 
 # The byte store behind retained execution payloads
 # (`Arca.ExecutionPayloads.Store`): the athanor's own tree by default.

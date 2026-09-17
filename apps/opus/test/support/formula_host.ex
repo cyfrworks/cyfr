@@ -24,7 +24,7 @@ defmodule Opus.Test.FormulaHost do
   """
   @spec attached!(keyword()) :: map()
   def attached!(opts \\ []) do
-    {:ok, %{boot: boot}} = Opus.WorkerService.status()
+    {:ok, %{service: service, boot: boot}} = Opus.WorkerService.status()
 
     fixture =
       AttemptFixtures.attached!(
@@ -32,14 +32,15 @@ defmodule Opus.Test.FormulaHost do
           [
             component_type: :formula,
             worker: Opus.WorkerService,
-            runner_id: boot,
+            service_id: service,
+            boot_id: boot,
             reservation: true
           ],
           opts
         )
       )
 
-    Map.put(fixture, :host, Opus.HostClient.new(fixture.keys, fixture.runner))
+    Map.put(fixture, :host, Opus.HostClient.new(fixture.keys, fixture.runner, fixture.boot))
   end
 
   @doc """
@@ -49,7 +50,7 @@ defmodule Opus.Test.FormulaHost do
   @spec current!(String.t(), String.t()) :: Opus.HostClient.t()
   def current!(athanor_id, execution_id) do
     attempt = AttemptFixtures.current!(athanor_id, execution_id)
-    Opus.HostClient.new(attempt.keys, attempt.runner)
+    Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot)
   end
 
   @doc "The actions an assignment names as a formula's host's to run."

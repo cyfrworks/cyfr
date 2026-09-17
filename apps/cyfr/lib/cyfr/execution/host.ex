@@ -82,14 +82,17 @@ defmodule Cyfr.Execution.Host do
   ## A worker service's report
 
   `runner_exited/2` takes a report's header (`Cyfr.WorkerAuth.report_header/3`)
-  and its JSON body, `{"op": "runner_exited", "args": {"attempts": [ids]}}`,
-  and answers JSON. The header must verify under the dispatch key of the
+  and its JSON body,
+  `{"op": "runner_exited", "args": {"runner": id, "attempts": [ids]}}`, and
+  answers JSON. The header must verify under the dispatch key of the
   worker service it names (`Cyfr.WorkerAuth.verify_report/4`), which only
   that worker service holds; a report is idempotent, so its nonce is not
-  checked. Each named attempt dispatched to the reporting worker service
-  that still owns its running execution is lapsed
-  (`Cyfr.Execution.Lapse`), and the attempt process open for each is
-  stopped without closing its run (`Cyfr.Execution.Attempt.stop_unclosed/2`).
+  checked. Each named attempt dispatched to the reporting service on the
+  reporting boot, claimed by the named runner, that still owns its running
+  execution is lapsed (`Cyfr.Execution.Lapse`), and the attempt process
+  open for each is stopped without closing its run
+  (`Cyfr.Execution.Attempt.stop_unclosed/2`). A report from another boot
+  of the same service lapses nothing.
   It answers `{"ok": true}`, `{"error": "lost"}` for a report that does not
   verify, and `{"error": "unavailable"}` when this boot does not hold the
   control plane (nothing is lapsed) or the store cannot list the attempts.
@@ -98,7 +101,7 @@ defmodule Cyfr.Execution.Host do
   require Logger
 
   alias Cyfr.{Assignment, Delta, WorkerAuth}
-  alias Cyfr.Execution.{Attempt, Keys, Lapse, Outcome, Record}
+  alias Cyfr.Execution.{Attempt, Keys, Lapse, Outcome}
   alias Cyfr.Execution.Host.Children
 
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
@@ -144,9 +147,10 @@ defmodule Cyfr.Execution.Host do
     answer =
       with :ok <- owner(:unavailable),
            {:ok, report} <- verify_report(header, body, now),
-           {:ok, attempts} <- reported_attempts(body),
-           :ok <- Lapse.dispatched(report.worker, attempts) do
-        Enum.each(attempts, &Attempt.stop_unclosed(&1, report.worker))
+           {:ok, runner, attempts} <- reported_attempts(body),
+           :ok <- Lapse.dispatched(report.service, report.boot, runner, attempts) do
+        holder = %{service_id: report.service, boot_id: report.boot, runner: runner}
+        Enum.each(attempts, &Attempt.stop_unclosed(&1, holder))
       end
 
     encode(answer)
@@ -181,10 +185,11 @@ defmodule Cyfr.Execution.Host do
   end
 
   defp reported_attempts(body) do
-    with {:ok, %{"op" => "runner_exited", "args" => %{"attempts" => attempts}}}
-         when is_list(attempts) <- Jason.decode(body),
+    with {:ok,
+          %{"op" => "runner_exited", "args" => %{"runner" => runner, "attempts" => attempts}}}
+         when is_binary(runner) and runner != "" and is_list(attempts) <- Jason.decode(body),
          true <- Enum.all?(attempts, &(is_binary(&1) and &1 != "")) do
-      {:ok, Enum.uniq(attempts)}
+      {:ok, runner, Enum.uniq(attempts)}
     else
       _ -> {:error, :lost}
     end
@@ -232,10 +237,10 @@ defmodule Cyfr.Execution.Host do
       not Enum.all?(@assignment_fields, &(Map.fetch!(assignment, &1) == Map.fetch!(caller, &1))) ->
         {:error, :lost}
 
-      assignment.audience != caller.worker ->
+      assignment.service != caller.service or assignment.boot != caller.boot ->
         Logger.warning(
           "[Cyfr.Execution.Host] attach of #{caller.execution_id} refused: the assignment " <>
-            "is addressed to another worker service"
+            "is addressed to another worker service or another boot of it"
         )
 
         {:error, :lost}
@@ -258,24 +263,17 @@ defmodule Cyfr.Execution.Host do
     end
   end
 
-  # A runner renews only the attempt its header names; a lease is renewed
-  # only while that runner still holds the row.
-  defp renew(%{attempt: attempt} = caller, attempt) do
-    case Arca.ExecutionAttempts.held?(caller.athanor_id, attempt, caller.fence, caller.runner) do
-      true -> renew_lease(caller.execution_id, attempt)
-      false -> {:ok, :lost}
-      {:error, _reason} -> :unavailable
-    end
-  end
+  # A runner renews every attempt it holds on its worker service and boot:
+  # its own and the children it runs. Each renewal is one update predicated
+  # on that hold, so a stale runner, boot or service renews nothing.
+  defp renew(caller, attempt) do
+    holder = %{service_id: caller.service, boot_id: caller.boot, runner: caller.runner}
 
-  defp renew(_caller, _attempt), do: {:ok, :lost}
-
-  defp renew_lease(execution_id, attempt) do
-    case Record.renew_lease(execution_id, attempt) do
-      {:ok, until} -> {:ok, {:ok, DateTime.to_unix(until, :millisecond)}}
-      {:cancel_requested, _until} -> {:ok, :cancel}
+    case Arca.ExecutionAttempts.renew_held(caller.athanor_id, attempt, holder) do
+      {:ok, until, false} -> {:ok, {:ok, DateTime.to_unix(until, :millisecond)}}
+      {:ok, _until, true} -> {:ok, :cancel}
       :lost -> {:ok, :lost}
-      :unavailable -> :unavailable
+      {:error, _reason} -> :unavailable
     end
   end
 
