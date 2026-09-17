@@ -43,6 +43,8 @@ defmodule Cyfr.Test.AttemptFixtures do
     `"wrk_fixture"`);
   - `:boot_id` — the boot of that worker service: the row's and the
     assignment's, which every host call presents (default this boot's id);
+  - `:timeout_ms` — the run's timeout, from which its subtree deadline is
+    set (default 60 s);
   - `:worker` — the `Cyfr.WorkerAPI` module the attempt kills its runner
     through (default none);
   - `:digest` — the digest of the component's artifact, in the assignment
@@ -80,6 +82,8 @@ defmodule Cyfr.Test.AttemptFixtures do
 
     service_id = Keyword.get(opts, :service_id, "wrk_fixture")
     boot_id = Keyword.get_lazy(opts, :boot_id, &Record.boot_id/0)
+    timeout_ms = Keyword.get(opts, :timeout_ms, 60_000)
+    deadline = System.system_time(:millisecond) + timeout_ms
     :ok = Record.write_started(record, service_id: service_id, boot_id: boot_id)
     close = %Close{ctx: ctx, record: record, limits: limits, started: true}
 
@@ -98,6 +102,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         roster: if(component_type == :formula, do: Delegation.roster(input), else: []),
         service_id: service_id,
         boot_id: boot_id,
+        deadline: deadline,
         worker: Keyword.get(opts, :worker),
         digest: digest
       )
@@ -115,7 +120,8 @@ defmodule Cyfr.Test.AttemptFixtures do
           activation_digest: Keyword.get(opts, :activation_digest)
         },
         input: input,
-        timeout_ms: 60_000,
+        timeout_ms: timeout_ms,
+        deadline: deadline,
         service: service_id,
         boot: boot_id
       })
@@ -123,6 +129,7 @@ defmodule Cyfr.Test.AttemptFixtures do
     fixture =
       Map.merge(issued.attempt_keys.attempt, %{
         boot: boot_id,
+        deadline: deadline,
         runner: Keyword.get_lazy(opts, :runner, fn -> Cyfr.UUID7.generate_id("runner") end),
         keys: issued.attempt_keys,
         call_key: issued.attempt_keys.call,

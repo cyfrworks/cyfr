@@ -332,6 +332,77 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
     end
   end
 
+  describe "release_child" do
+    test "a child the runner could not start is closed failed with its holds released, once",
+         %{ctx: ctx} do
+      authority = authority(edges: %{@target => %{}})
+      fixture = formula!(ctx, authority)
+      children_before = Cyfr.Execution.Semaphore.status().child_active
+
+      assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{"a" => 1})
+      child = child!(fixture, answer)
+      assert Sanctum.Authority.budget(authority).in_flight == 1
+      assert [_charge] = charges(ctx, authority)
+      pid = Attempt.whereis(child.execution_id)
+
+      assert %{"ok" => true} =
+               AttemptFixtures.call(fixture, "release_child", %{
+                 "execution_id" => child.execution_id
+               })
+
+      assert %{status: "failed", error_message: "Execution refused: its runner could not start"} =
+               Arca.Repo.get!(Arca.Execution, child.execution_id)
+
+      assert %{state: "failed", outcome: "error"} =
+               Arca.ExecutionAttempts.current(ctx.athanor_id, child.execution_id)
+
+      refute Process.alive?(pid)
+      assert Sanctum.Authority.budget(authority).in_flight == 0
+      assert charges(ctx, authority) == []
+      assert Cyfr.Execution.Semaphore.status().child_active == children_before
+
+      # A repeat finds it ended and is harmless; the child's own host calls
+      # are lost.
+      assert %{"ok" => true} =
+               AttemptFixtures.call(fixture, "release_child", %{
+                 "execution_id" => child.execution_id
+               })
+
+      assert %{"error" => "lost"} = fail!(child, "late")
+    end
+
+    test "another parent's child, or an execution that is no child, is lost", %{ctx: ctx} do
+      authority = authority(edges: %{@target => %{}})
+      fixture = formula!(ctx, authority)
+      other = formula!(ctx, authority(edges: %{@target => %{}}))
+
+      assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{"a" => 1})
+      child = child!(fixture, answer)
+
+      for id <- [child.execution_id, fixture.execution_id, "exec_none"] do
+        assert %{"error" => "lost"} =
+                 AttemptFixtures.call(other, "release_child", %{"execution_id" => id})
+      end
+
+      assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, child.execution_id)
+      assert Process.alive?(Attempt.whereis(child.execution_id))
+      assert %{"ok" => _} = fail!(child, "done")
+    end
+
+    test "a child's timeout and deadline never exceed what remains of its parent's", %{ctx: ctx} do
+      authority = authority(edges: %{@target => %{}})
+      fixture = formula!(ctx, authority, timeout_ms: 5_000)
+
+      assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{"a" => 1})
+      child = child!(fixture, answer)
+
+      assert child.assignment.timeout_ms <= 5_000
+      assert child.assignment.deadline <= fixture.deadline
+      assert child.assignment.deadline > System.system_time(:millisecond)
+      assert %{"ok" => _} = fail!(child, "done")
+    end
+  end
+
   describe "a formula that is ending" do
     test "once cancelled, refuses a synchronous tool call and stops its attempt", %{ctx: ctx} do
       fixture = formula!(ctx, authority(tools: ["tools.list"]))

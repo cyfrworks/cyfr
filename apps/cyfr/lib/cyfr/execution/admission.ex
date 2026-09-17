@@ -476,6 +476,7 @@ defmodule Cyfr.Execution.Admission do
     # An unparseable consented timeout refuses the run: a default would run
     # the node under a ceiling nobody consented to.
     with {:ok, timeout_ms} <- node_timeout_ms(limits, run.component_ref),
+         {:ok, timeout_ms, deadline} <- within_parent_deadline(run, timeout_ms),
          :ok <- check_input_size(run, input, limits),
          :ok <- check_rate(run.ctx, run.component_ref, limits),
          :ok <- check_public_rate_buckets(run, authority, limits) do
@@ -496,7 +497,7 @@ defmodule Cyfr.Execution.Admission do
 
       {:ok,
        run
-       |> Map.merge(%{limits: limits, edge: edge, timeout_ms: timeout_ms})
+       |> Map.merge(%{limits: limits, edge: edge, timeout_ms: timeout_ms, deadline: deadline})
        |> put_in([:close, Access.key!(:limits)], limits)}
     end
   end
@@ -505,6 +506,26 @@ defmodule Cyfr.Execution.Admission do
     case Cyfr.Limits.timeout_ms(limits) do
       {:ok, ms} -> {:ok, ms}
       {:error, reason} -> {:error, "invalid consented timeout for #{component_ref}: #{reason}"}
+    end
+  end
+
+  # A child's timeout is the smaller of its own consented timeout and what
+  # remains of its parent's subtree deadline, and its deadline is the
+  # parent's at most, so no descendant outlives the subtree; a parent whose
+  # deadline has passed admits nothing. One clock read decides both.
+  defp within_parent_deadline(run, timeout_ms) do
+    now = System.system_time(:millisecond)
+
+    case run.opts[:parent_deadline] do
+      nil ->
+        {:ok, timeout_ms, now + timeout_ms}
+
+      parent_deadline when is_integer(parent_deadline) ->
+        remaining = parent_deadline - now
+
+        if remaining > 0,
+          do: {:ok, min(timeout_ms, remaining), min(now + timeout_ms, parent_deadline)},
+          else: {:error, "the parent execution's deadline has passed"}
     end
   end
 
@@ -757,6 +778,7 @@ defmodule Cyfr.Execution.Admission do
         worker: run.opts[:worker],
         service_id: run.opts[:service_id],
         boot_id: run.opts[:boot_id] || Record.boot_id(),
+        deadline: run.deadline,
         digest: run.component["digest"],
         held_invoke: run.opts[:held_invoke] == true,
         charge: if(run.opts[:held_invoke] == true, do: run.opts[:charge])
@@ -799,6 +821,7 @@ defmodule Cyfr.Execution.Admission do
       },
       input: input,
       timeout_ms: run.timeout_ms,
+      deadline: run.deadline,
       step: run.opts[:step],
       service: run.opts[:service_id],
       boot: run.opts[:boot_id] || Record.boot_id()

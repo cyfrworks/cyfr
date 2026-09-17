@@ -260,24 +260,45 @@ defmodule Opus.HostClient do
             "secrets" => %{} = secrets
           }}
          when is_binary(input_json) <- request(client, "admit_child", args),
-         {:ok, keys} <- WorkerAuth.open_attempt_keys(client.seal_key, sealed),
-         {:ok, assignment} <- Assignment.read(token),
-         true <- names_attempt?(assignment, keys.attempt, client),
-         true <- Cyfr.Digest.sha256(input_json) == assignment.input_digest,
-         {:ok, %{} = admitted_input} <- Jason.decode(input_json) do
-      {:ok,
-       %{
-         token: token,
-         assignment: assignment,
-         input: admitted_input,
-         client: new(keys, client.runner, client.boot),
-         secrets: secrets
-       }}
+         {:ok, assignment} <- Assignment.read(token) do
+      with {:ok, keys} <- WorkerAuth.open_attempt_keys(client.seal_key, sealed),
+           true <- names_attempt?(assignment, keys.attempt, client),
+           true <- Cyfr.Digest.sha256(input_json) == assignment.input_digest,
+           {:ok, %{} = admitted_input} <- Jason.decode(input_json) do
+        {:ok,
+         %{
+           token: token,
+           assignment: assignment,
+           input: admitted_input,
+           client: new(keys, client.runner, client.boot),
+           secrets: secrets
+         }}
+      else
+        # Admitted for this runner but not startable by it: give it back at
+        # once rather than leaving it to its lease.
+        _unopenable ->
+          _ = release_child(client, assignment.execution_id)
+          {:error, :lost}
+      end
     else
       {:error, {:guest_error, _type, _message} = refusal} -> {:error, refusal}
       {:error, {:guest_error, _type, _message, _remediation} = refusal} -> {:error, refusal}
       {:error, :unavailable} -> {:error, :unavailable}
       _unreadable -> {:error, :lost}
+    end
+  end
+
+  @doc """
+  Give back the child `execution_id` this client's runner was handed but
+  could not start, so CYFR closes it failed and releases what it held.
+  Answers `:ok`, or `{:error, :lost | :unavailable}`.
+  """
+  @spec release_child(t(), String.t()) :: :ok | {:error, term()}
+  def release_child(%__MODULE__{} = client, execution_id) when is_binary(execution_id) do
+    case request(client, "release_child", %{"execution_id" => execution_id}) do
+      {:ok, true} -> :ok
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :lost}
     end
   end
 

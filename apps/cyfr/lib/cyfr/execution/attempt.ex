@@ -145,6 +145,7 @@ defmodule Cyfr.Execution.Attempt do
                 :worker,
                 :service_id,
                 :boot_id,
+                :deadline,
                 :digest,
                 :slot,
                 :charge,
@@ -184,7 +185,8 @@ defmodule Cyfr.Execution.Attempt do
           declared_needs: [String.t()],
           activation_digest: String.t() | nil,
           roster: [map()],
-          worker: module() | nil
+          worker: module() | nil,
+          deadline: non_neg_integer() | nil
         }
 
   @doc """
@@ -203,7 +205,8 @@ defmodule Cyfr.Execution.Attempt do
   resolver's, for its guest's children), `:roster` (the delegation roster
   of its admitted input, default `[]`), `:step_spans`, `:worker`,
   `:service_id` and `:boot_id` (the `Cyfr.WorkerAPI` module, the id and the
-  boot of the worker service the run is dispatched to), `:digest` (the digest of the
+  boot of the worker service the run is dispatched to), `:deadline` (the
+  run's subtree deadline in Unix ms, which caps its children's), `:digest` (the digest of the
   component's artifact, which the runner fetches), `:held_invoke` (true
   when the waiter holds a charged invoke-budget slot of the authority's
   budget, which the attempt takes over) and `:charge` (the charge row that
@@ -434,6 +437,7 @@ defmodule Cyfr.Execution.Attempt do
       worker: Keyword.get(opts, :worker),
       service_id: Keyword.get(opts, :service_id),
       boot_id: Keyword.get(opts, :boot_id),
+      deadline: Keyword.get(opts, :deadline),
       digest: Keyword.get(opts, :digest),
       charge: Keyword.get(opts, :charge),
       held_invoke: take_over_invoke(Keyword.get(opts, :held_invoke, false), authority, owner)
@@ -801,7 +805,8 @@ defmodule Cyfr.Execution.Attempt do
       declared_needs: state.declared_needs,
       activation_digest: state.activation_digest,
       roster: state.roster,
-      worker: state.worker
+      worker: state.worker,
+      deadline: state.deadline
     }
 
     {:reply, {:ok, chain}, state}

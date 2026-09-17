@@ -3,12 +3,14 @@
 
 defmodule Opus.OrphanChildrenTest do
   @moduledoc """
-  A formula's children end with it and never outlive their own deadline.
+  A formula's children end with it and never outlive their deadline, which
+  is their parent's at most.
 
   Every child — called, spawned or streamed — runs in a runner of its
-  formula's group, bounded by the timeout of its own node: held at its
-  guest's entry past that timeout, its component process is killed and its
-  row fails with the timeout, whatever its parent does. A formula whose run
+  formula's group, bounded by the smaller of its own node's timeout and
+  what remained of its parent's subtree deadline when it was admitted:
+  held at its guest's entry past that, its component process is killed and
+  its row fails with the timeout. A formula whose run
   was cancelled or has closed admits no new child through `execution.run`,
   `execution.run_stream` or a spawn: no row, no charge row and no invoke
   slot is left behind. A `run_stream` child takes a charge row, as a spawned
@@ -111,7 +113,7 @@ defmodule Opus.OrphanChildrenTest do
     assert_receive {:root, {:ok, _}}, 30_000
   end
 
-  test "every child is killed at its own deadline, held past it", %{ctx: ctx} do
+  test "every child is killed at its deadline, within its parent's, held past it", %{ctx: ctx} do
     {:ok, consented} = Cyfr.Execution.authority_for(ctx, :default, @probe_node)
     short = with_timeout(consented, "1s")
 
@@ -155,22 +157,27 @@ defmodule Opus.OrphanChildrenTest do
 
     assert System.monotonic_time(:millisecond) - started < 10_000
 
+    # Each child's timeout is its own consented second capped by what was
+    # left of the parent's, so it ends at or before the parent's deadline.
+    timeout = ~r/^Execution timeout after (\d+)ms$/
+
     for {id, component} <- held do
-      assert %{error_message: "Execution timeout after 1000ms"} =
-               Arca.Repo.get!(Arca.Execution, id)
+      assert %{error_message: message} = Arca.Repo.get!(Arca.Execution, id)
+      assert [_, ms] = Regex.run(timeout, message)
+      assert String.to_integer(ms) in 1..1000
 
       wait_until(fn -> not Process.alive?(component) end)
       wait_until(fn -> Cyfr.Execution.Attempt.whereis(id) == nil end)
     end
 
     assert_receive {:called, called_answer}, 5_000
-    assert called_answer =~ "Execution timeout after 1000ms"
+    assert called_answer =~ ~r/Execution timeout after \d+ms/
     refute Process.alive?(called)
 
     assert %{"status" => "error", "error" => %{"message" => spawned_answer}} =
              Jason.decode!(await_fn.(task_id))
 
-    assert spawned_answer =~ "Execution timeout after 1000ms"
+    assert spawned_answer =~ ~r/Execution timeout after \d+ms/
 
     wait_until(fn -> Sanctum.Authority.budget(short).in_flight == 0 end)
     assert charges(ctx, short) == []

@@ -77,7 +77,8 @@ defmodule Cyfr.Execution.Host do
 
   An outcome names its `execution_id`, `attempt` and `fence`. `storage`,
   `fetch_artifact` and `record_denial` are `Cyfr.Execution.Host.Storage`'s;
-  `admit_child` and `tool_call` are `Cyfr.Execution.Host.Children`'s.
+  `admit_child`, `tool_call` and `release_child` are
+  `Cyfr.Execution.Host.Children`'s.
 
   ## A worker service's report
 
@@ -325,7 +326,7 @@ defmodule Cyfr.Execution.Host do
   defp operation(op, args) when op in ["storage", "fetch_artifact", "record_denial"],
     do: Cyfr.Execution.Host.Storage.operation(op, args)
 
-  defp operation(op, args) when op in ["admit_child", "tool_call"] do
+  defp operation(op, args) when op in ["admit_child", "tool_call", "release_child"] do
     with {:ok, call} <- Children.operation(op, args), do: {:ok, {Children, call}}
   end
 

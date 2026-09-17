@@ -203,6 +203,17 @@ defmodule Cyfr.HostAPI do
   @callback record_denial(caller(), attrs :: map()) :: :ok | {:error, refusal()}
 
   @doc """
+  Give back a child the caller's runner was handed but could not start:
+  its keys did not open, its assignment did not read, or its runner did
+  not come up. CYFR closes it failed and releases what it held, once, for
+  a child of the caller's execution that the caller's runner claims on its
+  boot and that is still running; a child that already ended answers `:ok`
+  as well, so a repeat is harmless. Any other child is `:lost`.
+  """
+  @callback release_child(caller(), child_execution_id :: String.t()) ::
+              :ok | {:error, refusal()}
+
+  @doc """
   Report that the runner `runner` of the reporting worker service exited,
   with the attempts it was started with and had not closed. CYFR lapses
   each of them that was dispatched to the reporting service and boot, is

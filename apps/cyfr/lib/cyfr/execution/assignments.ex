@@ -28,9 +28,10 @@ defmodule Cyfr.Execution.Assignments do
   @typedoc """
   What an assignment is built from: the admission context, the admitted
   row, the run's authority, its component (`ref`, `type`, `digest`,
-  `declared_needs`, `activation_digest`), its input, its consented timeout,
-  the worker service it is dispatched to and the boot of it dispatch
-  selected, and the turn step that dispatched it (nil when none did).
+  `declared_needs`, `activation_digest`), its input, its consented timeout
+  and the subtree deadline admission settled from it, the worker service it
+  is dispatched to and the boot of it dispatch selected, and the turn step
+  that dispatched it (nil when none did).
   """
   @type admitted :: %{
           required(:ctx) => Context.t(),
@@ -41,6 +42,7 @@ defmodule Cyfr.Execution.Assignments do
           required(:timeout_ms) => pos_integer(),
           required(:service) => String.t(),
           required(:boot) => String.t(),
+          optional(:deadline) => non_neg_integer(),
           optional(:step) => Assignment.step() | nil
         }
 
@@ -93,7 +95,9 @@ defmodule Cyfr.Execution.Assignments do
       component: admitted.component,
       input_digest: Cyfr.Digest.sha256(Jason.encode!(admitted.input)),
       timeout_ms: admitted.timeout_ms,
-      deadline: now + admitted.timeout_ms,
+      # The subtree deadline admission settled, already capped by the
+      # parent's; a run admitted with none has its own timeout from now.
+      deadline: Map.get(admitted, :deadline) || now + admitted.timeout_ms,
       lease_until: now + Arca.ExecutionAttempts.lease_seconds() * 1000,
       intercepted: Cyfr.Ops.Catalog.host_intercepted_actions()
     }

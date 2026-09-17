@@ -148,7 +148,7 @@ defmodule Opus.Runner do
 
       outcome =
         try do
-          execute(artifact, start.input, runtime_opts, assignment.timeout_ms, watch)
+          execute(artifact, start.input, runtime_opts, budget_ms(assignment), watch)
         rescue
           e -> {:error, exception_message(e, __STACKTRACE__)}
         end
@@ -251,6 +251,15 @@ defmodule Opus.Runner do
     )
 
     "Execution error: the engine raised an internal error"
+  end
+
+  # The run's budget from receipt: its timeout, and no more than what is
+  # left of the absolute subtree deadline its assignment carries, so a
+  # queued or retried start cannot extend the subtree. Clock skew is bounded
+  # by the header window CYFR verifies every call within.
+  defp budget_ms(assignment) do
+    remaining = assignment.deadline - System.system_time(:millisecond)
+    max(min(assignment.timeout_ms, remaining), 0)
   end
 
   # ---------------------------------------------------------------------------

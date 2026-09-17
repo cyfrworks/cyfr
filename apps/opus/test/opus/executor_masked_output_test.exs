@@ -126,14 +126,16 @@ defmodule Opus.ExecutorMaskedOutputTest do
   end
 
   test "a timed-out run's error is masked in the row, its event and the result", %{ctx: ctx} do
-    secrets = arm!(ctx, @brief, key: "timeout after", token: "1000ms")
+    # The budget is what remains of the absolute deadline at receipt, so the
+    # milliseconds vary; the words around them are the planted secrets.
+    secrets = arm!(ctx, @brief, key: "Execution timeout", token: "after")
     id = Cyfr.UUID7.execution_id()
     hold_guest!(id)
 
     assert {:error, message} =
              Cyfr.Execution.run_root(ctx, :default, @brief, chat(), execution_id: id)
 
-    assert message == "Execution #{@redacted} #{@redacted}"
+    assert message =~ ~r/^#{Regex.escape(@redacted)} #{Regex.escape(@redacted)} \d+ms$/
 
     row = Arca.Repo.get!(Arca.Execution, id)
     assert row.status == "failed" and row.error_message == message

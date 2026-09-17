@@ -59,7 +59,10 @@ defmodule Cyfr.Execution do
   @spec run_root(Context.t(), RootSelect.selector(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def run_root(%Context{} = ctx, profile_selector, reference, input, opts \\ []) do
-    with {:ok, %{authority: authority, stamp: stamp, profile: profile}} <-
+    # An unavailable executor refuses before any consent is resolved or any
+    # row is written; dispatch checks the worker again when it runs.
+    with {:ok, _worker} <- Dispatch.worker(reference),
+         {:ok, %{authority: authority, stamp: stamp, profile: profile}} <-
            Admission.authority_and_stamp_for(ctx, profile_selector, reference, opts) do
       exec_opts =
         opts
@@ -184,7 +187,8 @@ defmodule Cyfr.Execution do
   `:declared_needs`, `:activation_digest`), and the runner the child is
   claimed for: `:runner`, with `:service_id`, `:boot_id` and `:worker`
   naming its worker service, that service's boot and its `Cyfr.WorkerAPI`
-  module. Answers `{:ok, claimed}`
+  module, and `:parent_deadline` (Unix ms), which caps the child's
+  timeout at what remains of its parent's. Answers `{:ok, claimed}`
   (`t:Cyfr.Execution.Dispatch.claimed/0`) or `{:error, reason}`.
   """
   @spec admit_child(Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
@@ -262,6 +266,7 @@ defmodule Cyfr.Execution do
     |> put(:envelope, Keyword.get(opts, :envelope) == true || nil)
     |> put(:held_invoke, spawned? || nil)
     |> put(:runner, Keyword.get(opts, :runner))
+    |> put(:parent_deadline, Keyword.get(opts, :parent_deadline))
     |> put(:service_id, Keyword.get(opts, :service_id))
     |> put(:boot_id, Keyword.get(opts, :boot_id))
     |> put(:worker, Keyword.get(opts, :worker))

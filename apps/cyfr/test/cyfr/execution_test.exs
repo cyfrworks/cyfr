@@ -40,6 +40,17 @@ defmodule Cyfr.ExecutionTest do
     assert Cyfr.Execution.events_since("exec_1", {0, 0}, ctx.athanor_id) == []
   end
 
+  test "with no worker service, a root run is refused before any consent is resolved or row written",
+       %{ctx: ctx} do
+    Application.put_env(:cyfr, :workers, [])
+
+    assert {:error, :execution_unavailable} =
+             Cyfr.Execution.run_root(ctx, :default, "reagent:local.off-graph:1.0.0", %{})
+
+    assert Arca.Repo.all(Arca.Execution) == []
+    assert Arca.Repo.all(Arca.PolicyLog) == []
+  end
+
   test "a configured worker service that does not answer leaves execution unavailable", %{
     ctx: ctx
   } do

@@ -43,6 +43,17 @@ defmodule Cyfr.Execution.Host.Children do
   and the header's attempt as its lineage. A setup refusal is announced on
   the root's event stream. The answer is the tool's result.
 
+  ## release_child
+
+  A child the runner was handed but could not start (its keys did not open,
+  its assignment did not read) is given back by its parent: for a child of
+  the calling execution that the calling runner claims on its boot and that
+  still runs, CYFR closes it failed and releases what it held, once. A
+  child that already ended answers `:ok` too, so a repeat is harmless; any
+  other execution is `lost`. A child whose keys CYFR itself could not seal
+  is closed the same way before the refusal is answered, so no admitted
+  child waits for its lease.
+
   ## Refusals
 
   A refusal of the child or of the tool is answered as the error a
@@ -59,12 +70,15 @@ defmodule Cyfr.Execution.Host.Children do
 
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :service]
   @guest_fns %{"call" => :call, "spawn" => :spawn}
+  @not_started "Execution refused: its runner could not start"
+  @not_sealed "Execution refused: its keys could not be sealed for its runner"
 
   @typedoc "A decoded `admit_child` or `tool_call` body."
   @type op ::
           {:admit_child,
            %{reference: String.t(), need: term(), input: map(), guest_fn: :call | :spawn}}
           | {:tool_call, %{name: String.t(), args: map(), guest_fn: :call | :spawn}}
+          | {:release_child, String.t()}
 
   @doc "The operation a host call body's `op` and `args` name, or `{:error, :lost}`."
   @spec operation(String.t(), map()) :: {:ok, op()} | {:error, :lost}
@@ -83,6 +97,9 @@ defmodule Cyfr.Execution.Host.Children do
       {:ok, {:tool_call, %{name: name, args: tool_args, guest_fn: guest_fn}}}
     end
   end
+
+  def operation("release_child", %{"execution_id" => id}) when is_binary(id) and id != "",
+    do: {:ok, {:release_child, id}}
 
   def operation(_op, _args), do: {:error, :lost}
 
@@ -124,6 +141,51 @@ defmodule Cyfr.Execution.Host.Children do
     end
   end
 
+  def call(caller, {:release_child, child_id}) do
+    with {:ok, chain} <- Attempt.call(caller.execution_id, caller, :chain) do
+      release(caller, chain, child_id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # release_child
+  # ---------------------------------------------------------------------------
+
+  # The child is the caller's to give back only while it is the caller's:
+  # admitted under this execution, claimed by this runner on this service
+  # and boot, and still running. Its attempt closes it failed, releasing
+  # its slot, invoke slot and charge, and the waiter hears the refusal.
+  defp release(caller, chain, child_id) do
+    with %Arca.Execution{parent_execution_id: parent} <-
+           Arca.Execution.get_tenant(chain.ctx, child_id),
+         true <- parent == caller.execution_id do
+      case Arca.ExecutionAttempts.current(chain.ctx.athanor_id, child_id) do
+        %{state: "running", claimed_by: runner, service_id: service, boot_id: boot}
+        when runner == caller.runner and service == caller.service and boot == caller.boot ->
+          refuse_child(child_id, @not_started)
+
+        %{state: state} when state in ["completed", "failed", "cancelled", "lapsed"] ->
+          {:ok, true}
+
+        _ ->
+          {:error, :lost}
+      end
+    else
+      _ -> {:error, :lost}
+    end
+  end
+
+  defp refuse_child(child_id, sentence) do
+    case Attempt.whereis(child_id) do
+      nil ->
+        {:error, :lost}
+
+      pid ->
+        :closed = Attempt.refuse(pid, sentence)
+        {:ok, true}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # admit_child
   # ---------------------------------------------------------------------------
@@ -143,7 +205,8 @@ defmodule Cyfr.Execution.Host.Children do
              runner: caller.runner,
              service_id: caller.service,
              boot_id: caller.boot,
-             worker: chain.worker
+             worker: chain.worker,
+             parent_deadline: chain.deadline
            ) do
       {:ok, Map.put(claimed, :input, input)}
     end
@@ -169,6 +232,9 @@ defmodule Cyfr.Execution.Host.Children do
             "its keys could not be sealed: #{inspect(reason)}"
         )
 
+        # The child never reaches its runner: close it now rather than
+        # leaving its slot, invoke slot and charge to the lease.
+        _ = refuse_child(claimed.attempt_keys.attempt.execution_id, @not_sealed)
         {:error, :lost}
     end
   end
