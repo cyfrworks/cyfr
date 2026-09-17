@@ -13,8 +13,8 @@ defmodule Opus.HttpRequestValidation do
       parse → method → scheme → domain → body decode → request size →
       egress rate limit → DNS resolve + private-IP validation → method atom
 
-  The resolve→validate→pin sequence itself lives in `Cyfr.Network.pin/2` —
-  neither the range table nor the DNS ladder nor the pinned transport
+  The resolve→validate→pin sequence itself lives in `Opus.Egress.pin/2` —
+  neither the address classes nor the DNS ladder nor the pinned transport
   policy is duplicated here or in the handlers; this module contributes
   only the consent policy (`egress.private_ips` via `Opus.EdgeGuard`).
 
@@ -101,10 +101,10 @@ defmodule Opus.HttpRequestValidation do
     end
   end
 
-  # Resolve, validate and pin through Cyfr.Network with the guest consent
+  # Resolve, validate and pin through Opus.Egress with the guest consent
   # policy. Use its Req options, including explicit retry and decode behavior.
   defp pin_url(url, edge) do
-    case Cyfr.Network.pin(url,
+    case Opus.Egress.pin(url,
            private_policy: {:fun, &EdgeGuard.allows_private_ip?(edge, &1)},
            protocols: [:http1]
          ) do
@@ -130,6 +130,9 @@ defmodule Opus.HttpRequestValidation do
       {:error, :unavailable} ->
         {:error, :rate_limited, "HTTP egress refused: rate limiter unavailable"}
 
+      {:error, {:uncertain, sentence}} ->
+        {:error, :rate_limited, "HTTP egress refused: " <> sentence}
+
       {:error, _refusal} ->
         {:error, :rate_limited, "HTTP egress refused: the execution attempt is not current"}
     end
@@ -138,7 +141,7 @@ defmodule Opus.HttpRequestValidation do
   @doc """
   Resolve a hostname to a validated IP under the edge's consent policy.
 
-  A thin wrapper over `Cyfr.Network.pin/2` kept for callers that want the
+  A thin wrapper over `Opus.Egress.pin/2` kept for callers that want the
   IP alone; `validate/6` pins the whole request. Private IPs listed in the
   edge's `egress.private_ips` are permitted (except `169.254.0.0/16`,
   always blocked); a nil edge denies every private IP.

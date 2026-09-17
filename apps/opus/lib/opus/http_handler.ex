@@ -276,7 +276,7 @@ defmodule Opus.HttpHandler do
   end
 
   defp build_req_opts(request, limits) do
-    # Preserve the pinned URL and transport options from Cyfr.Network.pin/2,
+    # Preserve the pinned URL and transport options from Opus.Egress.pin/2,
     # including disabled automatic retries and response decoding.
     base_opts =
       request.pin_req_opts

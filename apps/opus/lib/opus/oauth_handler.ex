@@ -48,6 +48,7 @@ defmodule Opus.OAuthHandler do
     case HostClient.oauth_token(host, provider) do
       {:ok, token} -> {:ok, token}
       {:error, {:guest_error, _type, message}} -> {:error, message}
+      {:error, {:uncertain, sentence}} -> {:error, sentence}
       {:error, _refusal} -> {:error, "the credential store is unavailable"}
     end
   end

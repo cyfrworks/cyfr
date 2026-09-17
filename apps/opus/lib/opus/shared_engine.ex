@@ -28,8 +28,8 @@ defmodule Opus.SharedEngine do
   so the wall-clock timeout kill in `Opus.Runner` cannot preempt a
   component that never yields (e.g. a tight compute loop). Killing the
   waiting BEAM process frees the execution slot, but the native thread
-  keeps spinning one CPU core until node restart. Mitigations: the
-  per-tenant cap in `Cyfr.Execution.Semaphore` bounds how many such loops
+  keeps spinning one CPU core until the worker service restarts.
+  Mitigations: CYFR's per-tenant execution slots bound how many such loops
   one tenant can start, and the container CPU quota (docker-compose
   `cpus:`) bounds aggregate damage. A real fix needs epoch interruption
   support in wasmex.

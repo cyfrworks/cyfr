@@ -21,8 +21,8 @@ defmodule Opus.StorageHandler do
   (`Opus.EdgeGuard.check_envelope_size/2`), parses it, and asks CYFR to run
   the operation (`Opus.HostClient.storage/3`). What the operation may reach
   — the consented actions and paths, the guest scopes, the size limits and
-  the quotas — is decided by CYFR (`Cyfr.Execution.GuestStorage`), which
-  runs it only while the attempt still holds its row.
+  the quotas — is decided by CYFR (`c:Cyfr.HostAPI.storage/3`), which runs
+  it only while the attempt still holds its row.
 
   ## Answers
 
@@ -167,6 +167,9 @@ defmodule Opus.StorageHandler do
 
       {:error, :unavailable} ->
         {:error, :storage_error, "Storage refused: the execution store is unavailable."}
+
+      {:error, {:uncertain, sentence}} ->
+        {:error, :storage_error, "Storage refused: " <> sentence <> "."}
 
       {:error, _lost} ->
         {:error, :storage_error, "Storage refused: the execution attempt is not current."}

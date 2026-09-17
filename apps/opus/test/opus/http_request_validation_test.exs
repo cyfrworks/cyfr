@@ -2,33 +2,28 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.HttpRequestValidationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
 
-  alias Cyfr.Test.AttemptFixtures
   alias Opus.HttpRequestValidation
   alias Opus.Test.EdgeFixtures
+  alias Opus.Test.ScriptedHost
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    :ok
-  end
-
-  # A real attached attempt's host client, which takes each request from the
-  # attempt's consented rate, and the component reference its bucket keys on.
+  # A scripted host, the client of an attempt on it — which takes each
+  # request from the attempt's rate through a `take_rate` host call — and
+  # the component reference its bucket keys on.
   defp attached_host(opts \\ []) do
-    attempt = AttemptFixtures.attached!(opts)
-    {Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot), attempt.component_ref}
+    host = ScriptedHost.start!()
+    attempt = ScriptedHost.attempt!(host, opts)
+    {host, attempt.client, attempt.component_ref}
   end
 
   # Every call goes through the full production entry with the host client a
-  # real caller supplies; the default limits' budget never trips in a test's
-  # handful of calls.
+  # real caller supplies; the scripted host admits every request to the rate.
   defp validate(json, edge, limits, opts \\ []) do
-    {host, ref} = attached_host()
-    HttpRequestValidation.validate(json, edge, limits, host, ref, opts)
+    {_host, client, ref} = attached_host()
+    HttpRequestValidation.validate(json, edge, limits, client, ref, opts)
   end
 
   defp encode(overrides) do
@@ -235,49 +230,54 @@ defmodule Opus.HttpRequestValidationTest do
   end
 
   describe "egress rate limiting" do
-    test "the attempt's consented rate limit denies the wire-bound path itself" do
-      limits = EdgeFixtures.limits(rate_limit: %{requests: 1, window: "1m"})
-      {host, ref} = attached_host(limits: limits)
+    test "the rate is taken from CYFR, per component, before DNS, and its refusal denies the request" do
+      {host, client, ref} = attached_host()
+      limits = EdgeFixtures.limits()
 
-      assert {:ok, _} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, host, ref)
+      ScriptedHost.script(host, "take_rate", [
+        {:ok, true},
+        {:error, {:guest_error, "rate_limited", "Rate limit exceeded for http:" <> ref}}
+      ])
+
+      assert {:ok, _} = HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
 
       assert {:error, :rate_limited, message} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, host, ref)
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
 
-      assert message =~ "rate limit"
+      assert message =~ "Rate limit"
+
+      assert [%{args: %{"bucket" => bucket}}, %{args: %{"bucket" => bucket}}] =
+               ScriptedHost.requests(host, "take_rate")
+
+      assert bucket == "http:" <> ref
     end
 
-    test "the rate is the attempt's: a wider limit passed by the runner grants nothing" do
-      {host, ref} =
-        attached_host(limits: EdgeFixtures.limits(rate_limit: %{requests: 1, window: "1m"}))
-
+    test "the rate is the attempt's: the limits the runner passes grant nothing" do
+      {host, client, ref} = attached_host()
+      ScriptedHost.script(host, "take_rate", {:error, {:guest_error, "rate_limited", "denied"}})
       wide = EdgeFixtures.limits(rate_limit: %{requests: 1000, window: "1m"})
 
-      assert {:ok, _} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), wide, host, ref)
-
-      assert {:error, :rate_limited, _message} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), wide, host, ref)
+      assert {:error, :rate_limited, "denied"} =
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), wide, client, ref)
     end
 
-    test "a request is refused once its attempt is no longer open" do
-      attempt = AttemptFixtures.attached!()
-      host = Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot)
-      ref = Process.monitor(attempt.pid)
-      Process.exit(attempt.pid, :kill)
-      assert_receive {:DOWN, ^ref, :process, _, :killed}
+    test "a request is refused once its attempt is no longer current, or the answer is lost" do
+      {host, client, ref} = attached_host()
+      ScriptedHost.script(host, "take_rate", [{:error, :lost}, {:error, :unavailable}, :drop])
+      limits = EdgeFixtures.limits()
 
       assert {:error, :rate_limited, message} =
-               HttpRequestValidation.validate(
-                 encode(%{}),
-                 localhost_edge(),
-                 EdgeFixtures.limits(),
-                 host,
-                 attempt.component_ref
-               )
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
 
       assert message =~ "not current"
+
+      assert {:error, :rate_limited, "HTTP egress refused: rate limiter unavailable"} =
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
+
+      assert {:error, :rate_limited, message} =
+               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
+
+      assert message =~ "lost"
     end
   end
 end

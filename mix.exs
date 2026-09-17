@@ -57,11 +57,22 @@ defmodule Cyfr.MixProject do
 
   defp releases do
     [
+      # The control plane. Execution workers run in the `opus` release and
+      # are reached over the wire; the control plane starts none.
       cyfr: [
         applications: [
           cyfr_contracts: :permanent,
           cyfr: :permanent,
-          locus: :permanent,
+          locus: :permanent
+        ]
+      ],
+      # The execution worker: the WASM engine and its worker service on the
+      # shared contracts, and nothing of the control plane
+      # (`Opus.HostSurfaceTest`). It holds one derived worker key and
+      # reaches CYFR's host API over HTTP.
+      opus: [
+        applications: [
+          cyfr_contracts: :permanent,
           opus: :permanent
         ]
       ],

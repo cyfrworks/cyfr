@@ -2,20 +2,16 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.HttpHandlerTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias Cyfr.Test.AttemptFixtures
   alias Opus.HttpHandler
   alias Opus.Test.EdgeFixtures
+  alias Opus.Test.ScriptedHost
 
-  # A real attached attempt's host client for `component_ref`, taking each
-  # request from `limits`' consented rate.
-  defp attached_host(component_ref, limits) do
-    with :ok <- Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo),
-         do: Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-
-    attempt = AttemptFixtures.attached!(component_ref: component_ref, limits: limits)
-    Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot)
+  # The host client of an attempt on a scripted host for `component_ref`,
+  # which takes every request from the rate and records every refusal.
+  defp attached_host(component_ref, _limits) do
+    ScriptedHost.attempt!(ScriptedHost.start!(), component_ref: component_ref).client
   end
 
   # ============================================================================
@@ -275,12 +271,6 @@ defmodule Opus.HttpHandlerTest do
 
   describe "execute/5 edge enforcement" do
     setup do
-      # Start the rate limiter for this test.
-      case GenServer.whereis(Cyfr.Execution.Rates) do
-        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
-        _pid -> :ok
-      end
-
       edge =
         EdgeFixtures.edge(domains: ["api.stripe.com", "*.example.com"], methods: ["GET", "POST"])
 
@@ -515,11 +505,6 @@ defmodule Opus.HttpHandlerTest do
 
   describe "execute/5 base64 body encoding" do
     setup do
-      case GenServer.whereis(Cyfr.Execution.Rates) do
-        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
-        _pid -> :ok
-      end
-
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
@@ -587,11 +572,6 @@ defmodule Opus.HttpHandlerTest do
 
   describe "execute/5 multipart" do
     setup do
-      case GenServer.whereis(Cyfr.Execution.Rates) do
-        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
-        _pid -> :ok
-      end
-
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])
 
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
@@ -867,11 +847,6 @@ defmodule Opus.HttpHandlerTest do
 
   describe "execute/5 SSRF URL edge cases" do
     setup do
-      case GenServer.whereis(Cyfr.Execution.Rates) do
-        nil -> {:ok, _} = Cyfr.Execution.Rates.start_link([])
-        _pid -> :ok
-      end
-
       # Edge that allows all domains (so we test IP-level blocking)
       edge = EdgeFixtures.edge(domains: ["*"], methods: ["GET"])
 

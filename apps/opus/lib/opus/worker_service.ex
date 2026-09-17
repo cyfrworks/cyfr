@@ -8,20 +8,26 @@ defmodule Opus.WorkerService do
   runners, and reports each runner that exits leaving its attempt open. It
   implements `Cyfr.WorkerAPI` and runs no guest code.
 
-  Its service id is configured (`config :opus, :service_id`,
-  `CYFR_WORKER_ID`) and is what its keys derive over; its boot id, minted
-  when it starts, is carried on every header beside it. Every assignment
-  it accepts must name both: one addressed to another boot of this service
-  was dispatched to an incarnation that no longer runs, and is refused.
-  Starting without a valid service id refuses the boot.
+  Its service id, its worker key and where CYFR is are its credentials
+  (`Opus.Credentials`, from `config :opus`), loaded when it starts; a
+  missing or malformed one refuses the boot. Its boot id, minted when it
+  starts, is carried on every header beside its service id. Every
+  assignment it accepts must name both: one addressed to another boot of
+  this service was dispatched to an incarnation that no longer runs, and
+  is refused. A restarted service holds none of its predecessor's
+  attempts: their runners are gone with it, and CYFR lapses them through
+  the lease.
 
-  `start/3` reads the assignment (`Cyfr.Assignment.read/1`), refuses it as
-  `:malformed` unless it names this service and boot, its input matches
-  its `input_digest`, and the sealed keys open under this worker service's
-  dispatch seal key as the attempt it names, on this worker service
+  CYFR reaches `start/3`, `kill/1` and `status/0` through
+  `Opus.WorkerListener`. `start/3` reads the assignment
+  (`Cyfr.Assignment.read/1`), refuses it as `:malformed` unless it names
+  this service and boot, its input matches its `input_digest`, and the
+  sealed keys open under this worker service's dispatch seal key as the
+  attempt it names, on this worker service
   (`Cyfr.WorkerAuth.open_attempt_keys/2`), and then starts an
   `Opus.Runner` under `Opus.WorkerService.Runners` with a host client of
-  its own runner id, presenting this boot, and monitors it.
+  its own runner id, presenting this boot to the host API its credentials
+  name, and monitors it.
 
   `start_child/2` starts a runner, the same way, for a child CYFR admitted
   and claimed for a formula's runner (`Opus.HostClient.admit_child/5`): it
@@ -37,12 +43,7 @@ defmodule Opus.WorkerService do
   streaming requests are stopped; a runner that exits other than `:normal`
   left its attempt open, and a process of its own reports the exit to CYFR
   at once, naming the runner and signed with its dispatch key
-  (`Opus.HostClient.runner_exited/5`).
-
-  Its dispatch and dispatch seal keys derive from its worker key
-  (`Cyfr.WorkerAuth.worker_key/2`), which in this BEAM is CYFR's to derive
-  for its service id (`Cyfr.Execution.Keys.worker_key/1`); it keeps no key
-  in its state.
+  (`Opus.HostClient.runner_exited/4`).
   """
 
   @behaviour Cyfr.WorkerAPI
@@ -56,7 +57,6 @@ defmodule Opus.WorkerService do
 
   @runners __MODULE__.Runners
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
-  @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
 
   @doc false
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -116,16 +116,20 @@ defmodule Opus.WorkerService do
     # Trapped, so a shutdown runs `terminate/2`, which stops the component
     # processes a runner's exit does not.
     Process.flag(:trap_exit, true)
-    service = Application.get_env(:opus, :service_id)
-
-    unless is_binary(service) and Regex.match?(@service_id, service) do
-      raise ArgumentError,
-            "[Opus.WorkerService] config :opus, :service_id must be `wrk_` followed by 1 to " <>
-              "64 letters, digits, `_` or `-`; got #{inspect(service)}"
-    end
+    credentials = Opus.Credentials.load!()
+    :ok = Opus.Credentials.install(credentials)
 
     boot = "#{node()}#" <> Cyfr.UUID7.generate_id("boot")
-    {:ok, %{service: service, boot: boot, runners: %{}, executions: %{}, waiters: %{}}}
+
+    {:ok,
+     %{
+       credentials: credentials,
+       service: credentials.service_id,
+       boot: boot,
+       runners: %{},
+       executions: %{},
+       waiters: %{}
+     }}
   end
 
   @impl true
@@ -133,9 +137,8 @@ defmodule Opus.WorkerService do
     with {:ok, assignment} <- Assignment.read(token),
          true <- assignment.service == state.service and assignment.boot == state.boot,
          true <- Cyfr.Digest.sha256(input) == assignment.input_digest,
-         {:ok, worker_key} <- Cyfr.Execution.Keys.worker_key(state.service),
          {:ok, %{attempt: attempt} = keys} <-
-           WorkerAuth.open_attempt_keys(WorkerAuth.dispatch_seal_key(worker_key), sealed_keys),
+           WorkerAuth.open_attempt_keys(state.credentials.dispatch_seal_key, sealed_keys),
          true <-
            attempt ==
              assignment |> Map.take(@attempt_fields) |> Map.put(:service, state.service),
@@ -144,7 +147,13 @@ defmodule Opus.WorkerService do
         token: token,
         assignment: assignment,
         input: decoded,
-        client: HostClient.new(keys, Cyfr.UUID7.generate_id("runner"), state.boot)
+        client:
+          HostClient.new(
+            keys,
+            Cyfr.UUID7.generate_id("runner"),
+            state.boot,
+            state.credentials.host_url
+          )
       }
 
       case start_runner(start, caller, nil, state) do
@@ -256,6 +265,11 @@ defmodule Opus.WorkerService do
     {:noreply, state}
   end
 
+  # The credentials hold this service's keys, which no status or crash
+  # report shows.
+  @impl true
+  def format_status(status), do: Map.update(status, :state, nil, &Map.delete(&1, :credentials))
+
   @impl true
   def terminate(_reason, state) do
     for {_ref, runner} <- state.runners do
@@ -347,22 +361,15 @@ defmodule Opus.WorkerService do
     :ok
   end
 
-  defp report(%{service: service, boot: boot}, runner) do
+  defp report(%{credentials: credentials, boot: boot}, runner) do
     spawn(fn ->
       Process.put(:"$callers", runner.callers)
       Cyfr.LoggerContext.restore(runner.logger)
 
-      with {:ok, worker_key} <- Cyfr.Execution.Keys.worker_key(service),
-           :ok <-
-             HostClient.runner_exited(
-               WorkerAuth.dispatch_key(worker_key),
-               service,
-               boot,
-               runner.runner,
-               [runner.attempt]
-             ) do
-        :ok
-      else
+      case HostClient.runner_exited(credentials, boot, runner.runner, [runner.attempt]) do
+        :ok ->
+          :ok
+
         {:error, reason} ->
           Logger.error(
             "[Opus.WorkerService] the exit of #{runner.execution_id}'s runner was not " <>

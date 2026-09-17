@@ -119,11 +119,11 @@ defmodule Opus.HttpStreamHandler do
   """
   @spec cleanup_registry(String.t()) :: :ok
   def cleanup_registry(exec_ref) do
-    streams = Arca.Cache.match({:http_stream, exec_ref, :_})
+    streams = Opus.Cache.match({:http_stream, exec_ref, :_})
 
     for {{:http_stream, ^exec_ref, _handle_id} = key, stream_state} <- streams do
       cleanup_stream(stream_state)
-      Arca.Cache.invalidate(key)
+      Opus.Cache.invalidate(key)
     end
 
     :ok
@@ -170,7 +170,7 @@ defmodule Opus.HttpStreamHandler do
   defp stream_request(json_request, edge, limits, host, component_ref, exec_ref) do
     # Check concurrent stream limit
     stream_count =
-      Arca.Cache.match({:http_stream, exec_ref, :_})
+      Opus.Cache.match({:http_stream, exec_ref, :_})
       |> length()
 
     if stream_count >= @max_concurrent_streams do
@@ -193,14 +193,14 @@ defmodule Opus.HttpStreamHandler do
   end
 
   defp stream_read(handle_id, exec_ref, limits) do
-    case Arca.Cache.get({:http_stream, exec_ref, handle_id}) do
+    case Opus.Cache.get({:http_stream, exec_ref, handle_id}) do
       {:ok, stream_state} ->
         # Check timeout
         elapsed = System.monotonic_time(:millisecond) - stream_state.started_at
 
         if elapsed > stream_state.timeout_ms do
           cleanup_stream(stream_state)
-          Arca.Cache.invalidate({:http_stream, exec_ref, handle_id})
+          Opus.Cache.invalidate({:http_stream, exec_ref, handle_id})
           encode_error(:timeout, "Stream timed out after #{div(stream_state.timeout_ms, 1000)}s")
         else
           read_from_stream(handle_id, stream_state, exec_ref, limits)
@@ -212,10 +212,10 @@ defmodule Opus.HttpStreamHandler do
   end
 
   defp stream_close(handle_id, exec_ref) do
-    case Arca.Cache.get({:http_stream, exec_ref, handle_id}) do
+    case Opus.Cache.get({:http_stream, exec_ref, handle_id}) do
       {:ok, stream_state} ->
         cleanup_stream(stream_state)
-        Arca.Cache.invalidate({:http_stream, exec_ref, handle_id})
+        Opus.Cache.invalidate({:http_stream, exec_ref, handle_id})
         safe_encode(%{"ok" => true})
 
       :miss ->
@@ -300,7 +300,7 @@ defmodule Opus.HttpStreamHandler do
       timeout_ms: timeout_ms
     }
 
-    Arca.Cache.put(
+    Opus.Cache.put(
       {:http_stream, exec_ref, handle_id},
       stream_state,
       timeout_ms + @stream_ttl_grace_ms
@@ -310,7 +310,7 @@ defmodule Opus.HttpStreamHandler do
   end
 
   defp perform_streaming_request(request, buffer, component_ref, timeout_ms, max_response_size) do
-    # The pinned URL and transport policy come from `Cyfr.Network.pin/2`
+    # The pinned URL and transport policy come from `Opus.Egress.pin/2`
     # via validation — same seam as the buffered fetch path.
     req_opts =
       request.pin_req_opts
@@ -454,7 +454,7 @@ defmodule Opus.HttpStreamHandler do
     case next_chunk(stream_state.buffer, deadline) do
       {:empty, _done, {type, message}, _status} ->
         cleanup_stream(stream_state)
-        Arca.Cache.invalidate({:http_stream, exec_ref, handle_id})
+        Opus.Cache.invalidate({:http_stream, exec_ref, handle_id})
         encode_error(type, message)
 
       {:empty, done, nil, status} ->
@@ -466,7 +466,7 @@ defmodule Opus.HttpStreamHandler do
 
         if new_cumulative > limits.max_response_size do
           cleanup_stream(stream_state)
-          Arca.Cache.invalidate({:http_stream, exec_ref, handle_id})
+          Opus.Cache.invalidate({:http_stream, exec_ref, handle_id})
 
           encode_error(
             :response_too_large,
@@ -476,7 +476,7 @@ defmodule Opus.HttpStreamHandler do
           # Update cumulative size in cache
           updated_state = %{stream_state | cumulative_size: new_cumulative}
 
-          Arca.Cache.put(
+          Opus.Cache.put(
             {:http_stream, exec_ref, handle_id},
             updated_state,
             stream_state.timeout_ms + @stream_ttl_grace_ms

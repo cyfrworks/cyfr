@@ -10,8 +10,9 @@ defmodule Opus.EdgeGuard do
   under plus the node's `%Cyfr.Limits{}`. This module is the runner's home
   for matching a concrete request against that edge's egress — domains,
   schemes, methods and private IPs — and for the envelope, request and
-  response size checks against the limits. Storage grants are checked on
-  CYFR (`Cyfr.Execution.GuestStorage`).
+  response size checks against the limits. Storage grants are checked by
+  CYFR when the attempt asks for a storage operation
+  (`c:Cyfr.HostAPI.storage/3`).
 
   ## Semantics
 
