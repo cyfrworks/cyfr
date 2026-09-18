@@ -8,7 +8,7 @@ defmodule Opus.LeaseWatchTest do
   # inside the lease the attempt last held.
   use ExUnit.Case, async: true
 
-  alias Opus.Runner
+  alias Opus.Attempt
   alias Opus.Test.ScriptedHost
 
   setup do
@@ -24,7 +24,7 @@ defmodule Opus.LeaseWatchTest do
     until = System.system_time(:millisecond) + 120_000
     ScriptedHost.script(host, "renew", {:ok, %{client.attempt => %{"lease_until" => until}}})
 
-    assert {:ok, %{until: renewed}} = Runner.renew_watch(watch(client, far()))
+    assert {:ok, %{until: renewed}} = Attempt.renew_watch(watch(client, far()))
     assert DateTime.to_unix(renewed, :millisecond) == until
     assert [%{args: %{"attempts" => [attempt]}}] = ScriptedHost.requests(host, "renew")
     assert attempt == client.attempt
@@ -35,14 +35,14 @@ defmodule Opus.LeaseWatchTest do
     client: client
   } do
     ScriptedHost.script(host, "renew", {:ok, %{client.attempt => "lost"}})
-    assert :lapsed = Runner.renew_watch(watch(client, far()))
+    assert :lapsed = Attempt.renew_watch(watch(client, far()))
 
     ScriptedHost.script(host, "renew", {:error, :lost})
-    assert :lapsed = Runner.renew_watch(watch(client, far()))
+    assert :lapsed = Attempt.renew_watch(watch(client, far()))
 
     # An answer naming no lease for this attempt is a refusal too.
     ScriptedHost.script(host, "renew", {:ok, %{}})
-    assert :lapsed = Runner.renew_watch(watch(client, far()))
+    assert :lapsed = Attempt.renew_watch(watch(client, far()))
   end
 
   test "a store that cannot answer is tolerated only while the lease last held holds", %{
@@ -53,10 +53,10 @@ defmodule Opus.LeaseWatchTest do
 
     now = DateTime.utc_now()
     inside = watch(client, DateTime.add(now, 60, :second))
-    assert {:ok, ^inside} = Runner.renew_watch(inside, now)
+    assert {:ok, ^inside} = Attempt.renew_watch(inside, now)
 
     past = watch(client, DateTime.add(now, -1, :second))
-    assert :lapsed = Runner.renew_watch(past, now)
+    assert :lapsed = Attempt.renew_watch(past, now)
   end
 
   test "a host that does not answer lapses the watch, whatever the lease last held", %{
@@ -64,7 +64,7 @@ defmodule Opus.LeaseWatchTest do
     client: client
   } do
     ScriptedHost.script(host, "renew", :drop)
-    assert :lapsed = Runner.renew_watch(watch(client, far()))
+    assert :lapsed = Attempt.renew_watch(watch(client, far()))
     assert length(ScriptedHost.requests(host, "renew")) == 2
   end
 end
