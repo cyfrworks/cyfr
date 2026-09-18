@@ -2814,6 +2814,8 @@ type RetentionSetArgsSettings struct {
 	PolicyLogDays Field[int] `json:"policy_log_days,omitzero"`
 	// Days of records kept per athanor
 	MessagesDays Field[int] `json:"messages_days,omitzero"`
+	// Days of records kept per athanor
+	StagingDays Field[int] `json:"staging_days,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
