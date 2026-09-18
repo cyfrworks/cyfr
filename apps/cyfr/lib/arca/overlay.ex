@@ -26,20 +26,41 @@ defmodule Arca.Overlay do
   exists — so nothing here ever probes the tree to learn what kind of
   unit a path belongs to.
 
-  ## The sentinel — crash-safe unit commits
+  ## Publication — the row, never the objects
 
-  "Completed" is a fact the tree itself records: every valid directory
-  unit carries its sentinel file, and `commit_unit/4` — the one way a
-  unit lands, for scaffold, fork, publish, OCI pull and the shipped copy
-  alike — writes it LAST. A crash or failure
-  mid-commit leaves the unit without its sentinel, so it keeps reading
-  as incomplete, and an error return rolls the partial back; the next
-  commit replaces whatever remains wholesale. No hidden marker file: the
-  sentinel is an ordinary, digest-counted member of the unit. A file
-  unit is atomic by construction — a single put — and counts as
-  completed when the tenant file exists. A build's output replaces one
-  subtree of a completed unit (`replace_subtree/5`) and never touches its
-  sentinel; readers see the previous subtree until the new one is whole.
+  A unit is published by its `Arca.StorageUnits` row, and `commit_unit/4`
+  — the one way a unit lands, for scaffold, fork, publish, OCI pull and
+  the shipped copy alike — runs the write protocol over it:
+
+    1. register the unit's draft under a fresh writer token, and create
+       the in-progress marker of a revision-unique staging prefix
+       (`Arca.Storage.UnitLocator.revision_prefix/2`) before any upload;
+    2. stage the revision's objects under that prefix and validate them —
+       every object listed, every object read back against its digest —
+       outside any transaction;
+    3. commit: one short transaction compares the pointer and the writer
+       token, moves the pointer and appends one journal row;
+    4. finish: move the staged objects to the served location — the
+       unit's own path, where every reader reads — the sentinel last, and
+       remove the prefix.
+
+  A crash before step 3 publishes nothing: readers keep the previous
+  revision, or no unit. A failure in step 4 is never a lost commit: the
+  row stands, the staged objects stay under their prefix, the answer is
+  `{:error, {:finish_failed, reason}}` and `repair_unit/2` finishes the
+  move. Repair reads only the prefix of the revision the row names, so a
+  losing writer's objects are never promoted. Where the tenant adapter can
+  swap a tree (`c:Arca.Storage.replace_tree/3`) readers of the served
+  location see the previous revision whole and then the new one; on an
+  adapter that cannot, the move is object by object.
+
+  A reader resolves the row once per operation. A unit reads complete
+  when its row is committed AND its served completion object — a
+  directory unit's sentinel, a file unit's file — is there: a complete
+  object set no row names is at most a partial, and a row whose served
+  objects were cleared points at nothing a reader could read. There is no
+  lock: a write into a unit is an edit of its served objects, last writer
+  wins per object, and a commit replaces the unit whole.
 
   ## Whose unit it is
 
@@ -55,7 +76,8 @@ defmodule Arca.Overlay do
   A shipped copy is restored, never deleted: `delete/2` and
   `delete_tree/2` at a shipped unit refuse as `{:error, :bundled}`, and
   `drop_unit/2` says the same. A delete inside a shipped copy is an
-  edit. The athanor's own units delete plainly.
+  edit. The athanor's own units delete plainly, and a delete AT a unit
+  retires its row first.
 
   ## The internal-write scope
 
@@ -73,6 +95,8 @@ defmodule Arca.Overlay do
 
   require Logger
 
+  alias Arca.Storage.UnitLocator
+  alias Arca.StorageUnits
   alias Sanctum.Context
 
   @internal_writes_key {__MODULE__, :internal_writes}
@@ -113,8 +137,7 @@ defmodule Arca.Overlay do
   def internal_writes?, do: Process.get(@internal_writes_key, false)
 
   # ---------------------------------------------------------------------------
-  # Arca.Storage callbacks — reads answer from the athanor's tree alone;
-  # writes ride the unit lock.
+  # Arca.Storage callbacks — reads answer from the athanor's tree alone.
   # ---------------------------------------------------------------------------
 
   @impl true
@@ -122,43 +145,74 @@ defmodule Arca.Overlay do
 
   @impl true
   def put(%Context{} = ctx, path, content) do
-    with_unit_lock(ctx, path, fn ->
-      with :ok <- writable(path) do
-        tenant().put(ctx, path, content)
-      end
-    end)
+    with :ok <- writable(path), do: tenant().put(ctx, path, content)
   end
 
   @impl true
   def append(%Context{} = ctx, path, content) do
-    with_unit_lock(ctx, path, fn ->
-      with :ok <- writable(path) do
-        tenant().append(ctx, path, content)
-      end
-    end)
+    with :ok <- writable(path), do: tenant().append(ctx, path, content)
   end
 
   @impl true
   def delete(%Context{} = ctx, path) do
-    with_unit_lock(ctx, path, fn ->
-      with :ok <- deletable(path), do: tenant().delete(ctx, path)
-    end)
+    with :ok <- deletable(path),
+         :ok <- retire_at_unit(ctx, path),
+         :ok <- tenant().delete(ctx, path) do
+      clear_staging_at_unit(ctx, path)
+    end
   end
 
   @impl true
   def delete_tree(%Context{} = ctx, path) do
-    with_unit_lock(ctx, path, fn ->
-      with :ok <- tree_deletable(ctx, path),
-           :ok <- deletable(path) do
-        tenant().delete_tree(ctx, path)
-      end
-    end)
+    with :ok <- tree_deletable(ctx, path),
+         :ok <- deletable(path),
+         :ok <- retire_at_unit(ctx, path),
+         :ok <- tenant().delete_tree(ctx, path) do
+      clear_staging_at_unit(ctx, path)
+    end
+  end
+
+  # A delete AT a unit is the unit's removal, so its row goes first: a
+  # reader never finds a committed pointer over a tree being cleared. A
+  # unit with no row, or one already retired, deletes as plain bytes.
+  defp retire_at_unit(ctx, path) do
+    case at_unit(path) do
+      nil ->
+        :ok
+
+      unit ->
+        {root, key} = UnitLocator.unit_key(unit)
+
+        case StorageUnits.retire(Context.actor(ctx), root, key) do
+          :ok -> :ok
+          {:error, :not_found} -> :ok
+          {:error, _} = error -> error
+        end
+    end
+  end
+
+  # What the unit staged goes with it. The facade's accounting for the
+  # delete has already dropped the cached usage.
+  defp clear_staging_at_unit(ctx, path) do
+    case at_unit(path) do
+      nil -> :ok
+      unit -> tenant().delete_tree(ctx, UnitLocator.staging_prefix(unit))
+    end
+  end
+
+  defp at_unit(path) do
+    case Arca.Storage.locate(path) do
+      {:file, ^path} -> path
+      {:dir, ^path, _sentinel} -> path
+      _inside_above_or_outside -> nil
+    end
   end
 
   # Tree deletion above units is allowed only when no tenant units exist
-  # beneath the path; otherwise it returns `{:error, :above_unit}`.
-  # Clear populated subtrees one unit at a time under each unit's lock.
-  # The empty-tree check and deletion are not atomic with a new unit commit.
+  # beneath the path; otherwise it returns `{:error, :above_unit}`: a
+  # populated subtree is cleared one unit at a time, so each unit's row is
+  # retired with it. The empty-tree check and deletion are not atomic with
+  # a new unit commit.
   defp tree_deletable(%Context{} = ctx, path) do
     if not internal_writes?() and Arca.Storage.locate(path) == :above_unit do
       case tenant().list_recursive(ctx, path) do
@@ -176,19 +230,17 @@ defmodule Arca.Overlay do
   @impl true
   def exists?(%Context{} = ctx, path), do: tenant().exists?(ctx, path)
 
-  # Under the containing unit's lock, inside a directory unit or outside
-  # the units; the tenant adapter decides whether it can swap at all.
+  # Inside a directory unit or outside the units; the tenant adapter
+  # decides whether it can swap at all.
   @impl true
   def replace_tree(%Context{} = ctx, path, files) do
-    with_unit_lock(ctx, path, fn ->
-      with :ok <- replaceable(path) do
-        adapter = tenant()
+    with :ok <- replaceable(path) do
+      adapter = tenant()
 
-        if Code.ensure_loaded?(adapter) and function_exported?(adapter, :replace_tree, 3),
-          do: adapter.replace_tree(ctx, path, files),
-          else: {:error, :atomic_replace_unsupported}
-      end
-    end)
+      if Code.ensure_loaded?(adapter) and function_exported?(adapter, :replace_tree, 3),
+        do: adapter.replace_tree(ctx, path, files),
+        else: {:error, :atomic_replace_unsupported}
+    end
   end
 
   @impl true
@@ -201,11 +253,26 @@ defmodule Arca.Overlay do
   def serve_to_conn(conn, %Context{} = ctx, path, opts),
     do: tenant().serve_to_conn(conn, ctx, path, opts)
 
+  # A root's staging area is this module's bookkeeping, never the
+  # athanor's content: a listing made from above it does not show it. A
+  # listing of the area itself answers plainly — that is how a staged
+  # revision is validated and repaired. `usage/2` still counts it: staged
+  # bytes are bytes the athanor holds.
   @impl true
-  def list_typed(%Context{} = ctx, path), do: tenant().list_typed(ctx, path)
+  def list_typed(%Context{} = ctx, path) do
+    with {:ok, entries} <- tenant().list_typed(ctx, path) do
+      {:ok, Enum.reject(entries, fn {name, _kind} -> UnitLocator.staging?(path ++ [name]) end)}
+    end
+  end
 
   @impl true
-  def list_recursive(%Context{} = ctx, path), do: tenant().list_recursive(ctx, path)
+  def list_recursive(%Context{} = ctx, path) do
+    with {:ok, leaves} <- tenant().list_recursive(ctx, path) do
+      if UnitLocator.staging?(path),
+        do: {:ok, leaves},
+        else: {:ok, Enum.reject(leaves, &UnitLocator.staging?/1)}
+    end
+  end
 
   # No read_subtree here: the facade's shared algorithm
   # (`Arca.Storage.read_subtree_via/4`) runs over this module's
@@ -219,7 +286,9 @@ defmodule Arca.Overlay do
   @doc """
   What one shadow unit holds — see `t:unit_status/0`. A path below a unit
   is answered for its unit; a path above any unit (or outside the seeded
-  roots) is `{:ok, :absent}`. A tenant-adapter outage answers
+  roots) is `{:ok, :absent}`. The unit's row is resolved once: a copy is
+  complete only when the row is committed and the served completion
+  object is there. A tenant-adapter or row-store outage answers
   `{:error, term}` — a status surface must not misreport the athanor's
   own units as shipped.
   """
@@ -234,25 +303,28 @@ defmodule Arca.Overlay do
         # The same classification the batch form applies over its walked
         # leaf sets — the parity test in overlay_test pins the two
         # together.
-        with {:ok, state} <- tenant_unit_state(ctx, loc) do
-          {:ok, classify(state, seed_unit_present?(loc))}
+        with {:ok, published?} <- published?(ctx, unit_of(loc)),
+             {:ok, held} <- tenant_unit_state(ctx, loc) do
+          {:ok, classify(unit_state(held, published?), seed_unit_present?(loc))}
         end
     end
   end
 
   @doc """
   Every unit under a seeded root, mapped to its status — the batch form
-  of `unit_status/2`: two listings total (tenant and seed), no per-unit
-  probes — classifying a leaf is a pure locator call. `:absent` units
-  are, by definition, not in the map; `:available` ones are, so a caller
-  can see what the seed ships that the athanor lacks. A tenant listing
-  outage answers `{:error, term}`, never a seed-only map.
+  of `unit_status/2`: one row query and two listings (tenant and seed), no
+  per-unit probes — classifying a leaf is a pure locator call. `:absent`
+  units are, by definition, not in the map; `:available` ones are, so a
+  caller can see what the seed ships that the athanor lacks. A tenant
+  listing or row-store outage answers `{:error, term}`, never a seed-only
+  map.
   """
   @spec unit_statuses(Context.t(), String.t()) ::
           {:ok, %{Arca.Storage.path() => unit_status()}} | {:error, term()}
   def unit_statuses(%Context{} = ctx, root) when is_binary(root) do
     if root in Arca.Storage.overlay_roots() do
-      with {:ok, tenant_leaves} <- tenant().list_recursive(ctx, [root]),
+      with {:ok, pointers} <- StorageUnits.current_under(Context.actor(ctx), root),
+           {:ok, tenant_leaves} <- tenant().list_recursive(ctx, [root]),
            {:ok, seed_leaves} <- seed_list_recursive([root]) do
         seed_locs = MapSet.new(for leaf <- seed_leaves, loc = leaf_loc(leaf), do: loc)
 
@@ -266,14 +338,16 @@ defmodule Arca.Overlay do
         statuses =
           Map.new(all_locs, fn loc ->
             leaves = Map.get(tenant_by_loc, loc, [])
+            {_root, key} = UnitLocator.unit_key(unit_of(loc))
 
-            state =
+            held =
               cond do
                 completed_in_leaves?(loc, leaves) -> :complete
                 leaves != [] -> :partial
                 true -> :empty
               end
 
+            state = unit_state(held, Map.has_key?(pointers, key))
             {unit_of(loc), classify(state, MapSet.member?(seed_locs, loc))}
           end)
 
@@ -281,6 +355,21 @@ defmodule Arca.Overlay do
       end
     else
       {:ok, %{}}
+    end
+  end
+
+  # The row is what publishes: served objects no committed row names are
+  # at most a partial, however whole they look.
+  defp unit_state(:complete, false), do: :partial
+  defp unit_state(held, _published?), do: held
+
+  defp published?(ctx, unit) do
+    {root, key} = UnitLocator.unit_key(unit)
+
+    case StorageUnits.current(Context.actor(ctx), root, key) do
+      {:ok, _pointer} -> {:ok, true}
+      {:error, :not_found} -> {:ok, false}
+      {:error, _} = error -> error
     end
   end
 
@@ -369,11 +458,11 @@ defmodule Arca.Overlay do
 
   @doc """
   Copy one shipped unit into the athanor, whole — the seed's bytes,
-  droppings excluded, the sentinel last — replacing whatever stands at
-  the path. What provisioning does for every shipped unit, what a pull of
-  a shipped version does for one, and what a restore does over an edited
-  copy. Shipped media is not capped: an estate must always be able to
-  hold what the server ships.
+  droppings excluded, committed as any unit is (`commit_unit/4`) —
+  replacing whatever stands at the path. What provisioning does for every
+  shipped unit, what a pull of a shipped version does for one, and what a
+  restore does over an edited copy. Shipped media is not capped: an estate
+  must always be able to hold what the server ships.
 
   A unit the seed does not ship refuses as `{:error, :not_shipped}`; a
   path that is not a unit as `{:error, :not_a_unit}`.
@@ -399,25 +488,15 @@ defmodule Arca.Overlay do
 
     with :ok <- seed_sentinel_present(seed_dir, sentinel),
          {:ok, _written} <-
-           with_unit_lock_at(ctx, unit, fn ->
-             do_commit_dir_unit(
-               ctx,
-               unit,
-               sentinel,
-               {:tree, seed_dir, exclude: &excluded?/1},
-               :exempt,
-               nil
-             )
-           end) do
+           commit_unit(ctx, unit, {:tree, seed_dir, exclude: &excluded?/1}, cap: :exempt) do
       Logger.info("[Arca.Overlay] copied shipped #{Enum.join(unit, "/")} for #{ctx.athanor_id}")
       :ok
     end
   end
 
-  # A file unit lands as one put — atomic by construction.
   defp do_pull_shipped(ctx, {:file, unit}) do
     with {:ok, bytes} <- seed_get(unit),
-         :ok <- Arca.put(ctx, unit, bytes, cap: :exempt) do
+         {:ok, _written} <- commit_unit(ctx, unit, {:files, [{[], bytes}]}, cap: :exempt) do
       Logger.info("[Arca.Overlay] copied shipped #{Enum.join(unit, "/")} for #{ctx.athanor_id}")
       :ok
     end
@@ -457,6 +536,8 @@ defmodule Arca.Overlay do
   edited or not, refuses as `{:error, :bundled}` — it is restored, never
   deleted — and a unit the athanor does not hold as `{:error, :not_found}`.
   The same disposition vocabulary `Compendium.Registry.delete/4` speaks.
+  The unit's row is retired before its objects are removed, and what it
+  staged goes with it.
   """
   @spec drop_unit(Context.t(), Arca.Storage.path()) ::
           {:ok, :deleted} | {:error, :bundled | :not_found | :not_overlaid | term()}
@@ -467,7 +548,7 @@ defmodule Arca.Overlay do
 
       loc ->
         case unit_status(ctx, path) do
-          {:ok, :own} -> with :ok <- delete_unit_locked(ctx, loc), do: {:ok, :deleted}
+          {:ok, :own} -> with :ok <- delete_unit(ctx, loc), do: {:ok, :deleted}
           {:ok, :shipped} -> {:error, :bundled}
           {:ok, _available_or_absent} -> {:error, :not_found}
           {:error, _} = error -> error
@@ -492,106 +573,109 @@ defmodule Arca.Overlay do
           | {:tree, src :: Arca.Storage.path(), [{:exclude, (Arca.Storage.path() -> boolean())}]}
 
   @doc """
-  Land one whole unit: refuse-or-replace, write the non-sentinel files,
-  sentinel LAST — and on any error, delete the partial. Every ingress
-  that lays a unit (scaffold, fork, publish, OCI pull, the shipped copy)
-  commits through here, so sentinel-last,
-  rollback, cap policy and usage accounting are one implementation, not
-  a discipline each caller re-spells.
+  Land one whole unit through the write protocol (the moduledoc's four
+  steps). Every ingress that lays a unit (scaffold, fork, publish, OCI
+  pull, the shipped copy) commits through here, so the draft, the staged
+  revision, its validation, the row commit, cap policy and usage
+  accounting are one implementation, not a discipline each caller
+  re-spells.
 
   Options:
 
     * `cap:` (required) — `:exempt` or `{:checked, bytes}`. Every call
       site states its policy, so the uncapped-by-design set stays
-      explicit (`Sanctum.Tenancy.Caps` documents the roster).
+      explicit (`Sanctum.Tenancy.Caps` documents the roster). Checked
+      before the draft is registered and before any write.
     * `sentinel:` — the sentinel's bytes, overriding any sentinel entry
       the source carries (a fork's re-stamped manifest, a pull's
       authoritative config blob). A dir-unit commit with sentinel bytes
       from neither place refuses as `{:error, :missing_sentinel}` before
       any write.
-    * `if_absent: true` — create, never replace: the athanor's tree is
-      asked for the unit INSIDE its lock, and a complete unit already
-      there refuses as `{:error, :exists}` before any write. A probe
-      outside the lock (`exists?`, then commit) is a check-then-act race:
-      two creators of one name could both pass it, and the second would
-      silently replace the first.
+    * `if_absent: true` — create, never replace: asked while this writer
+      holds the unit's draft, so no other commit can land between the
+      question and this one. A unit whose completion object is already
+      served — its sentinel, or a file unit's file, whatever row names it
+      — refuses as `{:error, :exists}` before any write.
+    * `release_digest:` — the activation identity of a component release,
+      recorded on the unit's row; nil for every other unit.
 
-  A file unit commits as one plain facade put — atomic by construction —
-  and refuses `sentinel:`. A dir-unit commit over existing tenant content
-  replaces it whole (stale files from a prior partial or an overwritten
-  pull do not survive).
+  A file unit commits as `{:files, [{[], bytes}]}` and refuses
+  `sentinel:`. A commit over existing tenant content replaces it whole
+  (stale files from a prior partial or an overwritten pull do not
+  survive).
 
-  Returns the written relatives in write order, sentinel last.
+  Returns the written relatives in write order, sentinel last. Refusals
+  of the row: `{:error, :stale_writer}` when another writer's live draft
+  holds the unit, `{:error, :stale_revision}` when another commit landed
+  first, `{:error, :missing_unit}` when the unit was dropped under this
+  writer, `{:error, :invalid_objects}` when what was staged is not what
+  was written — in each case nothing is published and the staged objects
+  are removed. `{:error, :unavailable}` from the commit leaves the staged
+  objects where they are: the outcome is unknown.
+  `{:error, {:finish_failed, reason}}` is a published unit whose move to
+  the served location did not finish (`repair_unit/2`).
   """
   @spec commit_unit(Context.t(), Arca.Storage.path(), commit_source(), keyword()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
   def commit_unit(%Context{} = ctx, unit, source, opts) do
     cap = Keyword.fetch!(opts, :cap)
     override = Keyword.get(opts, :sentinel)
-    if_absent? = Keyword.get(opts, :if_absent, false)
 
-    case Arca.Storage.locate(unit) do
-      {:file, ^unit} ->
-        commit_file_unit(ctx, unit, source, cap, override, if_absent?)
+    loc =
+      case Arca.Storage.locate(unit) do
+        {:file, ^unit} = loc ->
+          file_unit_source!(unit, source, override)
+          loc
 
-      {:dir, ^unit, sentinel} ->
-        commit_dir_unit(ctx, unit, sentinel, source, cap, override, if_absent?)
+        {:dir, ^unit, _sentinel} = loc ->
+          loc
 
-      other ->
-        raise ArgumentError,
-              "commit_unit needs a unit path; #{inspect(unit)} locates to #{inspect(other)}"
+        other ->
+          raise ArgumentError,
+                "commit_unit needs a unit path; #{inspect(unit)} locates to #{inspect(other)}"
+      end
+
+    internal = internal_ctx(ctx)
+
+    # Resolved before the draft and before any write: a commit that could
+    # never be completed must not move a byte or hold the unit.
+    with {:ok, entries} <- entries(internal, loc, source, override),
+         :ok <- check_commit_cap(ctx, cap) do
+      write(ctx, internal, loc, opts, fn _draft ->
+        if Keyword.get(opts, :if_absent, false) and occupied?(ctx, loc),
+          do: {:error, :exists},
+          else: {:ok, entries}
+      end)
     end
   end
 
-  @doc """
-  One locked read-modify-write at a path inside a unit. `fun` receives
-  the bytes at `path` and answers `{:ok, bytes}` to write them — a plain
-  facade put, so the storage cap applies as for any write — or
-  `{:error, reason}` to write nothing and answer that. The read and the
-  write ride one hold of the unit's lock, so of two concurrent updates
-  the second reads what the first wrote instead of overwriting it.
-  `{:error, :not_found}` when nothing is at `path`,
-  `{:error, :not_overlaid}` for a path no unit covers — there is no lock
-  to hold there, and this must not promise one.
-  """
-  @spec update(
-          Context.t(),
-          Arca.Storage.path(),
-          (binary() -> {:ok, binary()} | {:error, term()})
-        ) :: :ok | {:error, term()}
-  def update(%Context{} = ctx, path, fun) when is_function(fun, 1) do
-    case Arca.Storage.locate(path) do
-      loc when loc in [:not_overlaid, :above_unit] ->
-        {:error, :not_overlaid}
+  defp file_unit_source!(_unit, {:files, [{[], _content}]}, nil), do: :ok
 
-      loc ->
-        with_unit_lock_at(ctx, unit_of(loc), fn ->
-          with {:ok, current} <- Arca.get(ctx, path) do
-            case fun.(current) do
-              {:ok, bytes} when is_binary(bytes) -> Arca.put(ctx, path, bytes)
-              {:error, _reason} = error -> error
-            end
-          end
-        end)
-    end
+  defp file_unit_source!(unit, _source, _override) do
+    raise ArgumentError,
+          "a file unit (#{Enum.join(unit, "/")}) commits as {:files, [{[], bytes}]} " <>
+            "with no sentinel: — the put is the commit"
   end
 
   @doc """
-  Replace one subtree of a complete directory unit with `files`, under one
-  hold of the unit's lock. `subtree` is relative to the unit and `files`
-  relative to the subtree; nothing else in the unit — its sentinel
-  included — is touched, and a concurrent writer to the unit waits for the
-  whole replacement.
+  Replace one subtree of a complete directory unit with `files` — how a
+  tincture build publishes its `dist/`. `subtree` is relative to the unit
+  and `files` relative to the subtree.
 
-  The replacement is `Arca.replace_tree/4`: readers see the previous
-  subtree until the new one is whole, then the new one, and a replacement
-  that fails before the swap leaves the previous subtree whole and
-  readable. On an adapter that cannot swap a tree
-  (`c:Arca.Storage.replace_tree/3`, which an object store does not export)
-  it refuses with `{:error, :atomic_replace_unsupported}`.
+  The replacement is a new revision of the unit through the same write
+  protocol as `commit_unit/4`: what the unit serves outside the subtree —
+  its sentinel included — is carried over as it is, the subtree is
+  `files` and nothing else, and the row commit publishes the two
+  together. It needs nothing of the adapter a commit does not, so it
+  lands on an object store as on a filesystem. A commit that lands on the
+  unit while this one stages refuses this one as
+  `{:error, :stale_revision}`; the other refusals are `commit_unit/4`'s.
 
   `cap:` (required) is `commit_unit/4`'s, checked before any write.
-  `{:error, :not_found}` when the unit is not complete.
+  `{:error, :not_found}` when the unit's sentinel is not served — asked
+  of the served objects, so a unit laid by hand is carried into its first
+  committed revision — and `{:error, :invalid_path}` for an empty relative
+  path.
   """
   @spec replace_subtree(
           Context.t(),
@@ -605,12 +689,19 @@ defmodule Arca.Overlay do
     cap = Keyword.fetch!(opts, :cap)
 
     case Arca.Storage.locate(unit) do
-      {:dir, ^unit, sentinel} when top != sentinel ->
-        with_unit_lock_at(ctx, unit, fn ->
-          with :ok <- complete_unit(internal_ctx(ctx), unit, sentinel) do
-            Arca.replace_tree(ctx, unit ++ subtree, files, cap: cap)
-          end
-        end)
+      {:dir, ^unit, sentinel} = loc when top != sentinel ->
+        internal = internal_ctx(ctx)
+
+        with :ok <- subtree_files(files),
+             :ok <- check_commit_cap(ctx, cap),
+             {:ok, _written} <-
+               write(ctx, internal, loc, opts, fn _draft ->
+                 if occupied?(ctx, loc),
+                   do: carried_entries(internal, loc, subtree, files),
+                   else: {:error, :not_found}
+               end) do
+          :ok
+        end
 
       other ->
         raise ArgumentError,
@@ -619,146 +710,153 @@ defmodule Arca.Overlay do
     end
   end
 
-  defp complete_unit(ctx, unit, sentinel) do
-    if Arca.exists?(ctx, unit ++ [sentinel]), do: :ok, else: {:error, :not_found}
+  defp subtree_files(files) do
+    if Enum.any?(files, &match?({[], _content}, &1)), do: {:error, :invalid_path}, else: :ok
   end
 
-  # A file unit's completing write IS the caller's one atomic put: no
-  # sentinel, no rollback (failure leaves the previous bytes).
-  defp commit_file_unit(ctx, unit, {:files, [{[], content}]}, cap, nil, if_absent?) do
-    # `cap: :exempt` on the put because the commit's own required policy
-    # was just applied above — the caller stated it, and the one check is
-    # this commit's, not the write gate's.
-    with {:ok, bytes} <- resolve_content(content),
-         :ok <- check_commit_cap(ctx, cap),
-         :ok <- put_file_unit(ctx, unit, bytes, if_absent?) do
-      {:ok, [[]]}
+  # The next revision of a unit whose one subtree is replaced: every
+  # served object outside the subtree, streamed from where it is served,
+  # then the new subtree, the sentinel last.
+  defp carried_entries(internal, {:dir, unit, sentinel}, subtree, files) do
+    with {:ok, leaves} <- Arca.list_recursive(internal, unit) do
+      carried =
+        for leaf <- leaves,
+            rel = Enum.drop(leaf, length(unit)),
+            rel != [sentinel],
+            not List.starts_with?(rel, subtree),
+            do: {rel, fn -> Arca.get(internal, leaf) end, :streamed}
+
+      replaced = for {rel, content} <- files, do: {subtree ++ rel, content, :required}
+      kept_sentinel = {[sentinel], fn -> Arca.get(internal, unit ++ [sentinel]) end, :required}
+
+      {:ok, carried ++ replaced ++ [kept_sentinel]}
     end
   end
 
-  defp commit_file_unit(_ctx, unit, _source, _cap, _override, _if_absent?) do
-    raise ArgumentError,
-          "a file unit (#{Enum.join(unit, "/")}) commits as {:files, [{[], bytes}]} " <>
-            "with no sentinel: — the put is the commit"
-  end
+  @doc """
+  Finish the move of a published unit whose commit answered
+  `{:error, {:finish_failed, _}}`, or whose writer died after the row
+  commit: the staged objects of the revision the row names are moved to
+  the served location and their prefix removed. Only that revision's
+  prefix is read — a losing writer's objects are never promoted.
+  `{:ok, :nothing_pending}` when the prefix holds nothing;
+  `{:error, :not_found}` for a unit no committed row names.
+  """
+  @spec repair_unit(Context.t(), Arca.Storage.path()) ::
+          {:ok, :repaired | :nothing_pending} | {:error, term()}
+  def repair_unit(%Context{} = ctx, unit) do
+    case Arca.Storage.locate(unit) do
+      loc when loc in [:not_overlaid, :above_unit] ->
+        {:error, :not_overlaid}
 
-  # The presence probe and the put ride one hold of the unit's lock; the
-  # nested facade put passes through the held-unit register.
-  defp put_file_unit(ctx, unit, bytes, if_absent?) do
-    with_unit_lock_at(ctx, unit, fn ->
-      with :ok <- refuse_present(ctx, {:file, unit}, if_absent?) do
-        Arca.put(ctx, unit, bytes, cap: :exempt)
-      end
-    end)
-  end
-
-  # Under the unit's lock: `clean_slate/2` clears the whole unit, so two of
-  # these interleaving means the second one deletes the first one's files —
-  # including files a caller has already been told were written. Nothing
-  # inside a single commit can detect that; they simply must not overlap.
-  defp commit_dir_unit(ctx, unit, sentinel, source, cap, override, if_absent?) do
-    with_unit_lock_at(ctx, unit, fn ->
-      with :ok <- refuse_present(ctx, {:dir, unit, sentinel}, if_absent?) do
-        do_commit_dir_unit(ctx, unit, sentinel, source, cap, override)
-      end
-    end)
-  end
-
-  # `if_absent:` — a unit is present when the athanor holds a completed
-  # copy. A partial (a crashed commit: no sentinel) is not — the commit
-  # replaces it whole, as any commit would. What the seed ships is not
-  # the athanor's until pulled, so it never counts as present here.
-  defp refuse_present(_ctx, _loc, false), do: :ok
-
-  defp refuse_present(ctx, loc, true) do
-    if completed?(ctx, loc), do: {:error, :exists}, else: :ok
-  end
-
-  # The lock is per athanor and per unit: two athanors publishing the same
-  # component name are different trees and never contend.
-  defp lock_key(%Context{athanor_id: athanor_id}, unit), do: {athanor_id, unit}
-
-  # ---------------------------------------------------------------------------
-  # The unit lock, taken by the mutating callbacks themselves
-  # ---------------------------------------------------------------------------
-
-  # Serialize writes, appends and deletes under the containing unit's lock.
-  #
-  # UnitLock is not reentrant. Track locks held by this process so nested
-  # Arca writes reuse the outer acquisition.
-  #
-  # Deletes above units are allowed only when no units remain beneath them.
-  # To clear a subtree, drop each unit under its own lock first.
-  @held_units_key {__MODULE__, :held_unit_locks}
-
-  defp with_unit_lock(%Context{} = ctx, path, fun) do
-    case Arca.Storage.locate(path) do
-      {:file, unit} -> with_unit_lock_at(ctx, unit, fun)
-      {:dir, unit, _sentinel} -> with_unit_lock_at(ctx, unit, fun)
-      _not_overlaid_or_above_unit -> fun.()
+      loc ->
+        if unit_of(loc) == unit, do: repair(ctx, loc), else: {:error, :not_a_unit}
     end
   end
 
-  defp with_unit_lock_at(%Context{} = ctx, unit, fun) do
-    key = lock_key(ctx, unit)
-    held = Process.get(@held_units_key, MapSet.new())
-
-    if MapSet.member?(held, key) do
-      fun.()
-    else
-      Arca.Overlay.UnitLock.with_lock(key, fn ->
-        Process.put(@held_units_key, MapSet.put(held, key))
-
-        try do
-          fun.()
-        after
-          Process.put(@held_units_key, held)
-        end
-      end)
-    end
-  end
-
-  defp do_commit_dir_unit(ctx, unit, sentinel, source, cap, override) do
+  defp repair(ctx, loc) do
+    unit = unit_of(loc)
+    {root, key} = UnitLocator.unit_key(unit)
     internal = internal_ctx(ctx)
 
-    with {:ok, sentinel_content} <- sentinel_bytes(internal, sentinel, source, override),
-         :ok <- check_commit_cap(ctx, cap) do
-      result =
-        with_internal_writes(fn ->
-          with :ok <- clean_slate(internal, unit),
-               {:ok, written} <- write_source(internal, unit, sentinel, source),
-               # The completion mark: the sentinel lands last, so a crash
-               # anywhere above leaves the unit reading as incomplete and
-               # the rollback (or the next commit) clears the remains.
-               :ok <- Arca.put(internal, unit ++ [sentinel], sentinel_content) do
-            {:ok, written ++ [[sentinel]]}
-          end
-        end)
+    with {:ok, pointer} <- StorageUnits.current(Context.actor(ctx), root, key),
+         {:ok, staged} <- staged_relatives(internal, loc, pointer.current_revision) do
+      case staged do
+        [] ->
+          {:ok, :nothing_pending}
 
-      case result do
-        {:ok, _written} = ok ->
-          ok
-
-        {:error, reason} = error ->
-          with_internal_writes(fn -> rollback(ctx, unit, reason) end)
-          error
+        relatives ->
+          with {:ok, _written} <-
+                 finish(internal, loc, pointer.current_revision, in_write_order(loc, relatives)),
+               do: {:ok, :repaired}
       end
     end
   end
 
-  # Resolved before any write: a commit that could never be completed
-  # must not move a byte.
-  defp sentinel_bytes(_internal, _sentinel, _source, override) when is_binary(override),
-    do: {:ok, override}
+  @doc """
+  One serialized read-modify-write at a path inside a unit. `fun` receives
+  the bytes at `path` and answers `{:ok, bytes}` to write them — a plain
+  facade put, so the storage cap applies as for any write — or
+  `{:error, reason}` to write nothing and answer that. Updates of one
+  unit run one at a time on this node, so of two concurrent updates the
+  second reads what the first wrote instead of overwriting it; a plain
+  write beside an update is last writer wins, as between any two writes.
+  `{:error, :not_found}` when nothing is at `path`,
+  `{:error, :not_overlaid}` for a path no unit covers.
+  """
+  @spec update(
+          Context.t(),
+          Arca.Storage.path(),
+          (binary() -> {:ok, binary()} | {:error, term()})
+        ) :: :ok | {:error, term()}
+  def update(%Context{} = ctx, path, fun) when is_function(fun, 1) do
+    case Arca.Storage.locate(path) do
+      loc when loc in [:not_overlaid, :above_unit] ->
+        {:error, :not_overlaid}
 
-  defp sentinel_bytes(_internal, sentinel, {:files, files}, nil) do
+      loc ->
+        :global.trans(
+          {{__MODULE__, :update, ctx.athanor_id, unit_of(loc)}, self()},
+          fn ->
+            with {:ok, current} <- Arca.get(ctx, path) do
+              case fun.(current) do
+                {:ok, bytes} when is_binary(bytes) -> Arca.put(ctx, path, bytes)
+                {:error, _reason} = error -> error
+              end
+            end
+          end,
+          [node()]
+        )
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The write protocol
+  # ---------------------------------------------------------------------------
+
+  # What the commit will write, in write order with the sentinel last,
+  # each content still unresolved: `{relative, content, :required}`, or
+  # `:streamed` for a tree source's leaf, which may vanish between the
+  # listing and its read (a concurrent delete is not a copy's error).
+  defp entries(_internal, {:file, _unit}, {:files, [{[], content}]}, _override),
+    do: {:ok, [{[], content, :required}]}
+
+  defp entries(_internal, {:dir, _unit, sentinel}, {:files, files}, override) do
+    with {:ok, sentinel_content} <- files_sentinel(files, sentinel, override) do
+      body = for {rel, content} <- files, rel != [sentinel], do: {rel, content, :required}
+      {:ok, body ++ [{[sentinel], sentinel_content, :required}]}
+    end
+  end
+
+  defp entries(internal, {:dir, _unit, sentinel}, {:tree, src, opts}, override) do
+    exclude = Keyword.get(opts, :exclude, fn _relative -> false end)
+
+    with {:ok, sentinel_bytes} <- tree_sentinel(internal, src, sentinel, override),
+         {:ok, leaves} <- Arca.list_recursive(internal, src) do
+      body =
+        for leaf <- leaves,
+            rel = Enum.drop(leaf, length(src)),
+            rel != [sentinel],
+            not exclude.(rel),
+            do: {rel, fn -> Arca.get(internal, leaf) end, :streamed}
+
+      {:ok, body ++ [{[sentinel], sentinel_bytes, :required}]}
+    end
+  end
+
+  defp files_sentinel(_files, _sentinel, override) when is_binary(override), do: {:ok, override}
+
+  defp files_sentinel(files, sentinel, nil) do
     case List.keyfind(files, [sentinel], 0) do
-      {_rel, content} -> resolve_content(content)
+      {_rel, content} -> {:ok, content}
       nil -> {:error, :missing_sentinel}
     end
   end
 
-  defp sentinel_bytes(internal, sentinel, {:tree, src, _opts}, nil) do
+  defp tree_sentinel(_internal, _src, _sentinel, override) when is_binary(override),
+    do: {:ok, override}
+
+  defp tree_sentinel(internal, src, sentinel, nil) do
     case Arca.get(internal, src ++ [sentinel]) do
       {:ok, bytes} -> {:ok, bytes}
       {:error, :not_found} -> {:error, :missing_sentinel}
@@ -774,43 +872,320 @@ defmodule Arca.Overlay do
   defp check_commit_cap(ctx, {:checked, bytes}) when is_integer(bytes) and bytes >= 0,
     do: Sanctum.Tenancy.Caps.check_storage(ctx, bytes)
 
-  # A commit replaces the unit whole: stale files from a prior partial or
-  # an overwritten pull must not survive beside the new content. Probed
-  # first so a fresh-target commit never invalidates the usage counters
-  # for nothing.
-  defp clean_slate(internal, unit) do
-    case tenant().list_typed(internal, unit) do
-      {:ok, [_ | _]} -> Arca.delete_tree(internal, unit)
-      {:ok, []} -> :ok
-      # A file where the unit's tree belongs — replaced like any content.
-      {:error, :enotdir} -> Arca.delete(internal, unit)
+  # Step 1's row half. `gate` is asked while this writer holds the draft,
+  # so no other commit can land between its answer and this commit; it
+  # answers what to write, or the refusal.
+  defp write(ctx, internal, loc, opts, gate) do
+    actor = Context.actor(ctx)
+    {root, key} = UnitLocator.unit_key(unit_of(loc))
+    token = StorageUnits.new_writer_token()
+
+    with {:ok, draft} <- StorageUnits.register_draft(actor, root, key, token) do
+      case gate.(draft) do
+        {:ok, entries} ->
+          with_internal_writes(fn ->
+            publish(actor, internal, loc, draft, token, entries, opts)
+          end)
+
+        {:error, _} = refusal ->
+          StorageUnits.abandon_draft(actor, draft, token)
+          refusal
+      end
+    end
+  end
+
+  # What `if_absent:` and a subtree replacement ask under the draft: is
+  # the unit's completion object served, whatever row names it? A create
+  # must never replace, and hand-laid bytes are still someone's bytes; a
+  # replacement carries over what is served. Only a commit's finish writes
+  # the served location, so nothing served is ever a losing writer's. A
+  # partial (no completion object) is neither: a commit replaces it whole.
+  # What the seed ships is not the athanor's until pulled, so it never
+  # counts.
+  defp occupied?(ctx, loc), do: completed?(ctx, loc)
+
+  # Steps 1–3 on the object side, then the commit. Everything a refusal
+  # leaves behind is this revision's own prefix, which goes with it —
+  # except when the commit's outcome is unknown.
+  defp publish(actor, internal, loc, draft, token, entries, opts) do
+    unit = unit_of(loc)
+    revision = StorageUnits.new_revision()
+
+    staged =
+      with :ok <- mark_in_progress(internal, unit, revision, draft),
+           {:ok, manifest} <- stage(internal, unit, revision, entries),
+           :ok <- validate(internal, loc, revision, manifest) do
+        {:ok, manifest}
+      end
+
+    case staged do
+      {:ok, manifest} ->
+        identity = %{
+          new_revision: revision,
+          content_identity: content_identity(manifest),
+          commit_identity: actor.user_id || "system",
+          release_digest: Keyword.get(opts, :release_digest)
+        }
+
+        case StorageUnits.commit(actor, draft, draft.current_revision, token, identity) do
+          :committed ->
+            finish(internal, loc, revision, Enum.map(manifest, &elem(&1, 0)))
+
+          {:error, :unavailable} = unknown ->
+            unknown
+
+          {:error, _} = refused ->
+            discard(actor, internal, unit, revision, draft, token)
+            refused
+        end
+
+      {:error, _} = error ->
+        discard(actor, internal, unit, revision, draft, token)
+        error
+    end
+  end
+
+  # The prefix is registered before any upload: create-once where the
+  # adapter can make a create conditional, a plain put elsewhere — the
+  # revision name is unique either way, so nothing is ever overwritten.
+  defp mark_in_progress(internal, unit, revision, draft) do
+    path = UnitLocator.marker_path(unit, revision)
+
+    marker =
+      Jason.encode!(%{
+        "revision" => revision,
+        "prior_revision" => draft.current_revision,
+        "started_at" => DateTime.to_iso8601(DateTime.utc_now())
+      })
+
+    case Arca.Storage.put_if_none_match(internal, path, marker) do
+      {:ok, _precondition} ->
+        Arca.Usage.account(internal, path, {:create, byte_size(marker)}, :ok)
+
+      {:error, :unsupported} ->
+        Arca.put(internal, path, marker)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  # One object at a time, so a unit never sits in memory whole. The
+  # manifest is what validation and the content identity read.
+  defp stage(internal, unit, revision, entries) do
+    marker = [UnitLocator.marker_name()]
+
+    entries
+    |> Enum.reduce_while({:ok, []}, fn
+      {^marker, _content, _kind}, _acc ->
+        {:halt, {:error, :reserved_name}}
+
+      {rel, content, kind}, {:ok, acc} ->
+        case stage_object(internal, UnitLocator.staged_object(unit, revision, rel), content) do
+          {:ok, digest, size} -> {:cont, {:ok, [{rel, digest, size} | acc]}}
+          {:error, :not_found} when kind == :streamed -> {:cont, {:ok, acc}}
+          {:error, _} = error -> {:halt, error}
+        end
+    end)
+    |> case do
+      {:ok, manifest} -> {:ok, Enum.reverse(manifest)}
       {:error, _} = error -> error
     end
   end
 
-  defp write_source(internal, unit, sentinel, {:files, files}) do
-    files
-    |> Enum.reject(fn {rel, _content} -> rel == [sentinel] end)
-    |> Enum.reduce_while({:ok, []}, fn {rel, content}, {:ok, acc} ->
-      with {:ok, bytes} <- resolve_content(content),
+  defp stage_object(internal, path, content) do
+    with {:ok, bytes} <- resolve_content(content),
+         :ok <- Arca.put(internal, path, bytes) do
+      {:ok, Cyfr.Digest.sha256(bytes), byte_size(bytes)}
+    end
+  end
+
+  # What was staged must be exactly what was written: every object listed,
+  # none besides, each read back against its digest. A listing or a read
+  # that cannot answer is its own error, never `:invalid_objects`.
+  defp validate(internal, loc, revision, manifest) do
+    with {:ok, staged} <- staged_relatives(internal, loc, revision) do
+      if Enum.sort(staged) == manifest |> Enum.map(&elem(&1, 0)) |> Enum.sort() do
+        verify_objects(internal, unit_of(loc), revision, manifest)
+      else
+        {:error, :invalid_objects}
+      end
+    end
+  end
+
+  defp verify_objects(internal, unit, revision, manifest) do
+    Enum.reduce_while(manifest, :ok, fn {rel, digest, _size}, :ok ->
+      case Arca.get(internal, UnitLocator.staged_object(unit, revision, rel)) do
+        {:ok, bytes} ->
+          if Cyfr.Digest.sha256(bytes) == digest,
+            do: {:cont, :ok},
+            else: {:halt, {:error, :invalid_objects}}
+
+        {:error, :not_found} ->
+          {:halt, {:error, :invalid_objects}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  # The objects under a revision's prefix, as unit-relative paths, the
+  # marker left out. A file unit's one object is `[]`.
+  defp staged_relatives(internal, loc, revision) do
+    prefix = UnitLocator.revision_prefix(unit_of(loc), revision)
+    marker = UnitLocator.marker_name()
+
+    listing =
+      case Arca.Storage.list_prefix(internal, prefix) do
+        {:error, :unsupported} -> Arca.list_recursive(internal, prefix)
+        answer -> answer
+      end
+
+    with {:ok, leaves} <- listing do
+      relatives =
+        for leaf <- leaves, rel = Enum.drop(leaf, length(prefix)), rel != [marker] do
+          case loc do
+            {:file, _unit} -> []
+            {:dir, _unit, _sentinel} -> rel
+          end
+        end
+
+      {:ok, relatives}
+    end
+  end
+
+  defp in_write_order({:file, _unit}, relatives), do: relatives
+
+  defp in_write_order({:dir, _unit, sentinel}, relatives) do
+    {last, body} = Enum.split_with(relatives, &(&1 == [sentinel]))
+    Enum.sort(body) ++ last
+  end
+
+  # The digest of a revision's content: each object in path order, framed
+  # as its path, its digest and its size, NUL-separated.
+  defp content_identity(manifest) do
+    manifest
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.flat_map(fn {rel, digest, size} ->
+      [Enum.join(rel, "/"), <<0>>, digest, <<0>>, Integer.to_string(size), <<0>>]
+    end)
+    |> Cyfr.Digest.sha256_stream()
+  end
+
+  # A refused revision leaves nothing: its prefix goes, and the draft is
+  # given back so the next writer is not held for the draft's lifetime.
+  defp discard(actor, internal, unit, revision, draft, token) do
+    case Arca.delete_tree(internal, UnitLocator.revision_prefix(unit, revision)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[Arca.Overlay] could not remove the refused revision #{revision} of " <>
+            "#{Enum.join(unit, "/")} (#{inspect(reason)}); its objects stay unpublished"
+        )
+    end
+
+    StorageUnits.abandon_draft(actor, draft, token)
+    :ok
+  end
+
+  # Step 4. The commit stands whatever happens here: a failure leaves the
+  # staged objects under their prefix for `repair_unit/2`.
+  defp finish(internal, loc, revision, relatives) do
+    unit = unit_of(loc)
+
+    moved =
+      with_internal_writes(fn ->
+        with :ok <- serve(internal, loc, revision, relatives) do
+          Arca.delete_tree(internal, UnitLocator.revision_prefix(unit, revision))
+        end
+      end)
+
+    case moved do
+      :ok ->
+        {:ok, relatives}
+
+      {:error, reason} ->
+        Logger.error(
+          "[Arca.Overlay] revision #{revision} of #{Enum.join(unit, "/")} is committed but " <>
+            "its move to the served location failed (#{inspect(reason)}); repair_unit/2 finishes it"
+        )
+
+        {:error, {:finish_failed, reason}}
+    end
+  end
+
+  defp serve(internal, {:file, unit}, revision, [[]]) do
+    with {:ok, bytes} <- Arca.get(internal, UnitLocator.staged_object(unit, revision, [])) do
+      Arca.put(internal, UnitLocator.served_path(unit), bytes)
+    end
+  end
+
+  defp serve(internal, {:dir, unit, _sentinel}, revision, relatives) do
+    files =
+      for rel <- relatives do
+        {rel, fn -> Arca.get(internal, UnitLocator.staged_object(unit, revision, rel)) end}
+      end
+
+    case Arca.replace_tree(internal, UnitLocator.served_path(unit), files, cap: :exempt) do
+      {:error, :atomic_replace_unsupported} -> serve_each(internal, unit, files)
+      answer -> answer
+    end
+  end
+
+  # The move on an adapter that cannot swap a tree: every object in write
+  # order, the sentinel last, then whatever the previous content left
+  # beside them.
+  defp serve_each(internal, unit, files) do
+    with :ok <- clear_file_at(internal, unit),
+         :ok <- put_each(internal, unit, files) do
+      prune(internal, unit, MapSet.new(files, &elem(&1, 0)))
+    end
+  end
+
+  # A file where the unit's tree belongs is replaced like any content. It
+  # goes through the tenant adapter: the decorator's delete at a unit
+  # would retire the row this commit just moved.
+  defp clear_file_at(internal, unit) do
+    case tenant().list_typed(internal, unit) do
+      {:error, :enotdir} ->
+        result = tenant().delete(internal, unit)
+        Arca.Usage.account(internal, unit, :delete, result)
+        result
+
+      {:ok, _entries} ->
+        :ok
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp put_each(internal, unit, files) do
+    Enum.reduce_while(files, :ok, fn {rel, read}, :ok ->
+      with {:ok, bytes} <- read.(),
            :ok <- Arca.put(internal, unit ++ rel, bytes) do
-        {:cont, {:ok, [rel | acc]}}
+        {:cont, :ok}
       else
         {:error, _} = error -> {:halt, error}
       end
     end)
-    |> case do
-      {:ok, written} -> {:ok, Enum.reverse(written)}
-      {:error, _} = error -> error
-    end
   end
 
-  defp write_source(internal, unit, sentinel, {:tree, src, opts}) do
-    exclude = Keyword.get(opts, :exclude, fn _relative -> false end)
-
-    Arca.copy_tree(internal, src, unit,
-      exclude: fn relative -> relative == [sentinel] or exclude.(relative) end
-    )
+  defp prune(internal, unit, keep) do
+    with {:ok, leaves} <- Arca.list_recursive(internal, unit) do
+      leaves
+      |> Enum.reject(&MapSet.member?(keep, Enum.drop(&1, length(unit))))
+      |> Enum.reduce_while(:ok, fn leaf, :ok ->
+        case Arca.delete(internal, leaf) do
+          :ok -> {:cont, :ok}
+          {:error, :not_found} -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+    end
   end
 
   # An internal context focused on the caller's athanor, writing back
@@ -827,14 +1202,18 @@ defmodule Arca.Overlay do
 
   # A tree is replaced inside a directory unit or outside the units: at a
   # unit, above units, in place of a sentinel or below a file unit it would
-  # take a unit's shape with it.
+  # take a unit's shape with it. A commit's own move replaces the tree AT
+  # its directory unit, inside the internal-write scope.
   defp replaceable(path) do
     case Arca.Storage.locate(path) do
       :not_overlaid ->
         :ok
 
+      {:dir, ^path, _sentinel} ->
+        if internal_writes?(), do: :ok, else: {:error, :invalid_path}
+
       {:dir, unit, sentinel} ->
-        if path in [unit, unit ++ [sentinel]], do: {:error, :invalid_path}, else: :ok
+        if path == unit ++ [sentinel], do: {:error, :invalid_path}, else: :ok
 
       _above_or_at_a_file_unit ->
         {:error, :invalid_path}
@@ -857,8 +1236,7 @@ defmodule Arca.Overlay do
   # Refuse deleting a shipped unit whole: `{:error, :bundled}` for a
   # delete AT a unit the seed ships. A file inside a directory unit
   # deletes as an edit; the athanor's own unit deletes normally. Only the
-  # internal-write scope is exempt (its rollback and its replace delete
-  # what it lays).
+  # internal-write scope is exempt.
   defp deletable(path) do
     if internal_writes?() do
       :ok
@@ -905,12 +1283,11 @@ defmodule Arca.Overlay do
     end
   end
 
-  # The completeness test: is the athanor's copy of the unit COMPLETE? A
-  # directory copy is complete when it holds its sentinel file; a file
-  # unit when the tenant file exists. `exists?/2` is total by the adapter
-  # contract, so these probes cannot carry an outage: they serve the
-  # write gates, whose failure directions are safe. Status surfaces ask
-  # `tenant_unit_state/2` instead — the error-carrying form.
+  # The served completion object: a directory copy holds its sentinel
+  # file, a file unit its file. `exists?/2` is total by the adapter
+  # contract, so this probe cannot carry an outage: it serves the
+  # `if_absent:` gate, whose failure direction is safe. Status surfaces
+  # ask `tenant_unit_state/2` instead — the error-carrying form.
   defp completed?(ctx, {:file, unit}), do: tenant().exists?(ctx, unit)
 
   defp completed?(ctx, {:dir, unit, sentinel}),
@@ -966,27 +1343,6 @@ defmodule Arca.Overlay do
     end
   end
 
-  # A failed commit must not linger: without its sentinel the partial unit
-  # already reads as incomplete, but its bytes would count against the
-  # cap and confuse direct reads of paths the write never reached. If the
-  # rollback itself fails, the unit is stuck holding a partial — say so
-  # loudly; the next successful commit replaces it wholesale.
-  defp rollback(ctx, unit_dir, reason) do
-    case Arca.delete_tree(internal_ctx(ctx), unit_dir) do
-      :ok ->
-        :ok
-
-      {:error, rollback_reason} ->
-        Logger.error(
-          "[Arca.Overlay] unit commit at #{Enum.join(unit_dir, "/")} failed " <>
-            "(#{inspect(reason)}) AND its rollback failed (#{inspect(rollback_reason)}) — " <>
-            "a partial remains until the next commit replaces it"
-        )
-
-        :ok
-    end
-  end
-
   # A seed unit without its sentinel is broken install media — the copy
   # could never be marked complete, so refuse before moving a byte.
   defp seed_sentinel_present(seed_dir, sentinel) do
@@ -997,14 +1353,10 @@ defmodule Arca.Overlay do
     end
   end
 
-  # Through the facade, so accounting applies as for any caller.
+  # Through the facade, so accounting applies as for any caller; this
+  # module's own delete callbacks retire the row and clear the staging.
   defp delete_unit(ctx, {:file, unit}), do: Arca.delete(ctx, unit)
   defp delete_unit(ctx, {:dir, unit, _sentinel}), do: Arca.delete_tree(ctx, unit)
-
-  # Serialize whole-unit deletion with commits using the same unit lock.
-  defp delete_unit_locked(ctx, loc) do
-    with_unit_lock_at(ctx, unit_of(loc), fn -> delete_unit(ctx, loc) end)
-  end
 
   # ---------------------------------------------------------------------------
   # Diff plumbing and the seed side

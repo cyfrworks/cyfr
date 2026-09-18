@@ -18,6 +18,10 @@ defmodule Compendium.AquaTemplateTest do
   alias Compendium.AquaTemplate
 
   setup do
+    # A unit is published by its row: every fill, reset and status reads one.
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
     base = Path.join(System.tmp_dir!(), "aqua_template_#{System.unique_integer([:positive])}")
     seed = Path.join(base, "seed")
     template = Path.join(seed, "aqua")

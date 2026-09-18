@@ -10,15 +10,11 @@ defmodule Arca.OverlayTest.FailingCopyAdapter do
   def put(ctx, path, content), do: Arca.Adapters.Local.put(ctx, path, content)
 end
 
-defmodule Arca.OverlayTest.GatedCleanSlateAdapter do
+defmodule Arca.OverlayTest.GatedStagingAdapter do
   @moduledoc false
-  # Holds one caller exactly where the lost-update window opens.
-  #
-  # `Arca.Overlay.clean_slate/2` begins by listing the unit, so blocking
-  # `list_typed/2` parks a commit after it has decided to replace the unit
-  # and before it deletes anything. That is the only interleaving that
-  # loses an acknowledged write, and racing two tasks will not produce it
-  # reliably — the window is microseconds wide.
+  # Parks one commit while it stages: the first object written under a
+  # staging prefix (the in-progress marker aside) waits for the test, so
+  # the test can act inside the window between a draft and its commit.
   use Arca.Storage.TestDouble
 
   @gate {__MODULE__, :gate}
@@ -26,24 +22,23 @@ defmodule Arca.OverlayTest.GatedCleanSlateAdapter do
   def arm(test_pid), do: :persistent_term.put(@gate, test_pid)
   def disarm, do: :persistent_term.erase(@gate)
 
-  def list_typed(ctx, path) do
-    case :persistent_term.get(@gate, nil) do
-      nil ->
-        Arca.Adapters.Local.list_typed(ctx, path)
+  def put(ctx, path, content) do
+    test_pid = :persistent_term.get(@gate, nil)
 
-      test_pid ->
-        # One caller only: the first to arrive takes the gate down.
-        disarm()
-        send(test_pid, {:at_clean_slate, self()})
+    if test_pid && Arca.Storage.UnitLocator.staging?(path) &&
+         List.last(path) != Arca.Storage.UnitLocator.marker_name() do
+      # One caller only: the first to arrive takes the gate down.
+      disarm()
+      send(test_pid, {:staging, self()})
 
-        receive do
-          :proceed -> :ok
-        after
-          10_000 -> :ok
-        end
-
-        Arca.Adapters.Local.list_typed(ctx, path)
+      receive do
+        :proceed -> :ok
+      after
+        10_000 -> :ok
+      end
     end
+
+    Arca.Adapters.Local.put(ctx, path, content)
   end
 end
 
@@ -69,31 +64,22 @@ defmodule Arca.OverlayTest do
   The seeded roots on the `components/` and `aqua/` roots: every facade
   reader sees the athanor's own tree and nothing else; the seed tree is
   the shipped default a unit is copied FROM — at provisioning, on a pull
-  of a shipped version, on a restore — whole, droppings excluded, the
-  sentinel copied last so a crash can never half-land it. A unit the seed
-  ships is a shipped copy whatever its bytes; an edit shows in its diff;
-  a shipped copy is restored, never deleted.
+  of a shipped version, on a restore — whole, droppings excluded,
+  published by its row and never by its objects. A unit the seed ships is
+  a shipped copy whatever its bytes; an edit shows in its diff; a shipped
+  copy is restored, never deleted.
   """
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
-
   @version_dir ["components", "catalysts", "local", "bundled", "1.0.0"]
   @sentinel "cyfr-manifest.json"
 
-  # Whether anyone is queued behind the holder of a unit lock. The lock's
-  # state is `key => {holder, monitor_ref, waiters}`, so a non-empty queue
-  # is the observable fact that one commit is being made to wait for
-  # another — the thing the serialization tests need to happen before they
-  # step the interleaving forward.
-  defp queued_on_unit_lock? do
-    Arca.Overlay.UnitLock
-    |> :sys.get_state()
-    |> Enum.any?(fn {_key, {_holder, _ref, waiters}} -> not :queue.is_empty(waiters) end)
-  end
-
   setup do
+    # Shared: a unit's row is read and written by the tasks a test spawns.
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
     base = Path.join(System.tmp_dir!(), "overlay_#{System.unique_integer([:positive])}")
     seed = Path.join(base, "seed")
 
@@ -117,6 +103,45 @@ defmodule Arca.OverlayTest do
     end)
 
     {:ok, ctx: Sanctum.TestContext.local(), seed_dir: seed}
+  end
+
+  # The athanor's own unit, landed the one way a unit lands.
+  defp own_unit!(ctx, unit, completion, files \\ []) do
+    source =
+      case Arca.Storage.locate(unit) do
+        {:file, ^unit} -> {:files, [{[], completion}]}
+        {:dir, ^unit, sentinel} -> {:files, [{[sentinel], completion} | files]}
+      end
+
+    {:ok, _written} = Arca.Overlay.commit_unit(ctx, unit, source, cap: :exempt)
+    :ok
+  end
+
+  defp journal(ctx, unit) do
+    {root, key} = Arca.Storage.UnitLocator.unit_key(unit)
+    {:ok, commits} = Arca.StorageUnits.journal(Sanctum.Context.actor(ctx), root, key)
+    commits
+  end
+
+  # Every registered draft, aged past its lifetime: what a writer that died
+  # mid-staging leaves behind, without the wait.
+  defp expire_drafts! do
+    long_ago =
+      DateTime.add(DateTime.utc_now(), -2 * Arca.StorageUnits.draft_ttl_ms(), :millisecond)
+
+    Arca.Repo.update_all(Arca.Schemas.StorageUnit, set: [updated_at: long_ago])
+  end
+
+  # Park the next commit while it stages (`GatedStagingAdapter`).
+  defp gate_staging! do
+    Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.GatedStagingAdapter)
+
+    on_exit(fn ->
+      Arca.OverlayTest.GatedStagingAdapter.disarm()
+      Application.put_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
+    end)
+
+    Arca.OverlayTest.GatedStagingAdapter.arm(self())
   end
 
   # Lay a shipped role file in the seed tree.
@@ -256,7 +281,7 @@ defmodule Arca.OverlayTest do
       # A complete unit the athanor wrote at a path a release ships is the
       # shipped copy from then on: a pull puts the shipped bytes there.
       mine = ["components", "catalysts", "local", "mine", "1.0.0"]
-      :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"mine":true}))
+      :ok = own_unit!(ctx, mine, ~s({"mine":true}))
       _ = ship_version!(seed, "mine", "1.0.0", "SHIPPED")
       assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :shipped}
       assert :ok = Arca.Overlay.pull_shipped(ctx, mine)
@@ -394,7 +419,7 @@ defmodule Arca.OverlayTest do
       # The athanor's own complete unit at a path a later release ships
       # is a shipped copy from then on.
       mine = ["components", "catalysts", "local", "mine", "1.0.0"]
-      :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"type":"catalyst"}))
+      :ok = own_unit!(ctx, mine, ~s({"type":"catalyst"}))
       assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own}
       _ = ship_version!(seed, "mine", "1.0.0", "SHIPPED")
       assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :shipped}
@@ -517,7 +542,7 @@ defmodule Arca.OverlayTest do
       assert {:error, :bundled} = Arca.Overlay.drop_unit(ctx, @version_dir)
 
       mine = ["components", "catalysts", "local", "mine", "1.0.0"]
-      :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"mine":true}))
+      :ok = own_unit!(ctx, mine, ~s({"mine":true}))
       _ = ship_version!(seed, "mine", "1.0.0", "SHIPPED")
       assert {:error, :bundled} = Arca.Overlay.drop_unit(ctx, mine)
 
@@ -536,13 +561,12 @@ defmodule Arca.OverlayTest do
       seed_dir: seed
     } do
       mine = ["components", "catalysts", "local", "mine", "1.0.0"]
-      :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"type":"catalyst"}))
-      :ok = Arca.put(ctx, mine ++ ["catalyst.wasm"], "MY-WASM")
+      :ok = own_unit!(ctx, mine, ~s({"type":"catalyst"}), [{["catalyst.wasm"], "MY-WASM"}])
       assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own}
       assert :ok = Arca.delete_tree(ctx, mine)
+      assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :absent}
 
-      :ok = Arca.put(ctx, mine ++ [@sentinel], ~s({"type":"catalyst"}))
-      :ok = Arca.put(ctx, mine ++ ["catalyst.wasm"], "MY-WASM")
+      :ok = own_unit!(ctx, mine, ~s({"type":"catalyst"}), [{["catalyst.wasm"], "MY-WASM"}])
 
       # A later release ships the same name and version. The bytes stay
       # until a restore replaces them; the unit reads shipped and edited,
@@ -571,7 +595,7 @@ defmodule Arca.OverlayTest do
       # An agent the athanor wrote first is a shipped copy once a release
       # ships the same name: it no longer deletes, and a restore replaces it.
       mine = ["aqua", "roles", "mine.md"]
-      :ok = Arca.put(ctx, mine, "my body")
+      :ok = own_unit!(ctx, mine, "my body")
       assert Arca.Overlay.unit_status(ctx, mine) == {:ok, :own}
       _ = ship_role!(seed, "mine.md", "shipped later")
 
@@ -582,7 +606,7 @@ defmodule Arca.OverlayTest do
     end
   end
 
-  describe "copies, commits and writes serialise on the unit" do
+  describe "copies, commits and edits, with no lock between them" do
     test "concurrent pulls of two units both land", %{ctx: ctx, seed_dir: seed} do
       v2 = ship_version!(seed, "bundled", "2.0.0", "V2")
 
@@ -600,43 +624,71 @@ defmodule Arca.OverlayTest do
       assert statuses[v2] == :shipped
     end
 
-    # Interleave a pull and a write to the same unit. The adapter pauses
-    # the pull's commit before clearing the unit so the test can verify a
-    # write that returned :ok is never destroyed by the copy.
-    test "a pull cannot clear a unit under a write that already returned :ok", %{ctx: ctx} do
-      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.GatedCleanSlateAdapter)
+    test "while a commit stages, readers keep the previous revision and an edit does not wait",
+         %{ctx: ctx} do
+      :ok = own_unit!(ctx, @version_dir, ~s({"v":1}), [{["old.txt"], "OLD"}])
+      gate_staging!()
 
-      on_exit(fn ->
-        Arca.OverlayTest.GatedCleanSlateAdapter.disarm()
-        Application.put_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
-      end)
+      committer =
+        Task.async(fn ->
+          Arca.Overlay.commit_unit(
+            ctx,
+            @version_dir,
+            {:files, [{[@sentinel], ~s({"v":2})}, {["fresh.txt"], "fresh"}]},
+            cap: :exempt
+          )
+        end)
 
-      Arca.OverlayTest.GatedCleanSlateAdapter.arm(self())
+      assert_receive {:staging, committer_pid}, 10_000
 
-      # The pull reaches clean_slate for the unit and parks there.
-      puller = Task.async(fn -> Arca.Overlay.pull_shipped(ctx, @version_dir) end)
-      assert_receive {:at_clean_slate, puller_pid}, 10_000
+      # Nothing of the staged revision is served, and the unit still reads
+      # as it did: the row has not moved.
+      assert {:ok, ~s({"v":1})} = Arca.get(ctx, @version_dir ++ [@sentinel])
+      assert {:ok, "OLD"} = Arca.get(ctx, @version_dir ++ ["old.txt"])
+      refute Arca.exists?(ctx, @version_dir ++ ["fresh.txt"])
+      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
+      assert [_first] = journal(ctx, @version_dir)
 
-      # A writer into the same unit queues behind it on the unit lock — so
-      # its write lands after the copy, as an edit, and survives.
-      writer = Task.async(fn -> Arca.put(ctx, @version_dir ++ ["from_a.txt"], "a") end)
+      # An edit of the served revision lands at once: nothing holds the unit.
+      assert :ok = Arca.put(ctx, @version_dir ++ ["late.txt"], "late")
 
-      wait_until(
-        fn -> queued_on_unit_lock?() or not Process.alive?(writer.pid) end,
-        5_000,
-        "the writer to queue behind the pull on the unit lock, or finish without taking it"
-      )
+      send(committer_pid, :proceed)
+      assert {:ok, _written} = Task.await(committer, 30_000)
 
-      send(puller_pid, :proceed)
+      # The commit replaced the unit whole: the new revision and nothing of
+      # the one it replaced, the edit of that revision included.
+      assert {:ok, ~s({"v":2})} = Arca.get(ctx, @version_dir ++ [@sentinel])
+      assert {:ok, "fresh"} = Arca.get(ctx, @version_dir ++ ["fresh.txt"])
+      refute Arca.exists?(ctx, @version_dir ++ ["old.txt"])
+      refute Arca.exists?(ctx, @version_dir ++ ["late.txt"])
+      assert [_first, _second] = journal(ctx, @version_dir)
+    end
 
-      assert Task.await(puller, 30_000) == :ok
-      assert Task.await(writer, 30_000) == :ok
+    test "a second writer is refused while a draft is live, and lands once it is given back",
+         %{ctx: ctx} do
+      gate_staging!()
+      unit = ["components", "catalysts", "local", "contended", "1.0.0"]
 
-      assert {:ok, "a"} == Arca.get(ctx, @version_dir ++ ["from_a.txt"]),
-             "from_a.txt was acknowledged and then cleared by a concurrent copy"
+      source = fn body ->
+        {:files, [{[@sentinel], ~s({"type":"catalyst"})}, {["a.txt"], body}]}
+      end
 
-      assert {:ok, "WASM-BYTES"} = Arca.get(ctx, @version_dir ++ ["catalyst.wasm"])
-      assert {:ok, true} = Arca.Overlay.edited?(ctx, @version_dir)
+      first =
+        Task.async(fn -> Arca.Overlay.commit_unit(ctx, unit, source.("A"), cap: :exempt) end)
+
+      assert_receive {:staging, first_pid}, 10_000
+
+      assert {:error, :stale_writer} =
+               Arca.Overlay.commit_unit(ctx, unit, source.("B"), cap: :exempt)
+
+      send(first_pid, :proceed)
+      assert {:ok, _written} = Task.await(first, 30_000)
+      assert {:ok, "A"} = Arca.get(ctx, unit ++ ["a.txt"])
+
+      assert {:ok, _written} = Arca.Overlay.commit_unit(ctx, unit, source.("B"), cap: :exempt)
+      assert {:ok, "B"} = Arca.get(ctx, unit ++ ["a.txt"])
+      assert [%{prior_revision: nil}, %{prior_revision: prior}] = journal(ctx, unit)
+      assert is_binary(prior)
     end
 
     test "concurrent edits of one copy keep every acknowledged write", %{ctx: ctx} do
@@ -664,73 +716,12 @@ defmodule Arca.OverlayTest do
       assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
     end
 
-    test "a commit cannot clear a held unit under a live write", %{ctx: ctx} do
-      :ok = Arca.Overlay.pull_shipped(ctx, @version_dir)
-      assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
-
-      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.GatedCleanSlateAdapter)
-
-      on_exit(fn ->
-        Arca.OverlayTest.GatedCleanSlateAdapter.disarm()
-        Application.put_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
-      end)
-
-      Arca.OverlayTest.GatedCleanSlateAdapter.arm(self())
-
-      # A commit that will replace the whole unit, parked at clean_slate.
-      committer =
-        Task.async(fn ->
-          Arca.Overlay.commit_unit(
-            ctx,
-            @version_dir,
-            {:files, [{[@sentinel], ~s({"type":"catalyst"})}, {["fresh.txt"], "fresh"}]},
-            cap: :exempt
-          )
-        end)
-
-      assert_receive {:at_clean_slate, committer_pid}, 10_000
-
-      # A plain write into the same, held unit.
-      writer = Task.async(fn -> Arca.put(ctx, @version_dir ++ ["late.txt"], "late") end)
-
-      wait_until(
-        fn -> queued_on_unit_lock?() or not Process.alive?(writer.pid) end,
-        5_000,
-        "the writer to queue behind the commit on the unit lock"
-      )
-
-      send(committer_pid, :proceed)
-
-      assert {:ok, _written} = Task.await(committer, 30_000)
-      assert Task.await(writer, 30_000) == :ok
-
-      # Whichever order they serialised in, a write that returned `:ok`
-      # must still be there. Unlocked, the commit's clean_slate deleted it.
-      assert {:ok, "late"} == Arca.get(ctx, @version_dir ++ ["late.txt"]),
-             "late.txt was acknowledged and then cleared by a concurrent commit"
-    end
-
-    test "a delete_tree cannot land inside a commit's window", %{ctx: ctx} do
-      # The third external caller shape: `component.delete` and the publish
-      # rollback both reach `Arca.delete_tree` on a version dir. Unlocked,
-      # one interleaving between a commit's file writes and its sentinel
-      # left a unit that read COMPLETE while holding only its manifest —
-      # and `commit_unit/4` returned `{:ok, written}` naming files that no
-      # longer existed. The unit must end whole or absent, never partial.
-      #
-      # A dir with NO seed behind it, so `unit_status/2` cannot answer
-      # `:seed` and leave "gone" and "partial under a shadow"
-      # indistinguishable.
+    test "a unit dropped inside a commit's window is not published by that commit", %{ctx: ctx} do
+      # `component.delete` and the publish rollback both reach
+      # `Arca.delete_tree` on a version dir. A dir with NO seed behind it,
+      # so "gone" reads `:absent` and nothing else.
       dir = ["components", "catalysts", "local", "race-target", "1.0.0"]
-
-      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.GatedCleanSlateAdapter)
-
-      on_exit(fn ->
-        Arca.OverlayTest.GatedCleanSlateAdapter.disarm()
-        Application.put_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
-      end)
-
-      Arca.OverlayTest.GatedCleanSlateAdapter.arm(self())
+      gate_staging!()
 
       committer =
         Task.async(fn ->
@@ -742,68 +733,18 @@ defmodule Arca.OverlayTest do
           )
         end)
 
-      assert_receive {:at_clean_slate, committer_pid}, 10_000
-
-      deleter = Task.async(fn -> Arca.delete_tree(ctx, dir) end)
-
-      wait_until(
-        fn -> queued_on_unit_lock?() or not Process.alive?(deleter.pid) end,
-        5_000,
-        "the deleter to queue behind the commit on the unit lock"
-      )
-
+      assert_receive {:staging, committer_pid}, 10_000
+      assert :ok = Arca.delete_tree(ctx, dir)
       send(committer_pid, :proceed)
 
-      assert {:ok, _} = Task.await(committer, 30_000)
-      assert :ok = Task.await(deleter, 30_000)
-
-      # Serialised either way the unit is whole or gone, and because this
-      # dir has no seed behind it the two states are unambiguous: `:own`
-      # means a complete tenant unit, `:absent` means the delete won.
-      # A sentinel with no content is the corrupt state PR C prevents — it
-      # reads COMPLETE while holding nothing.
-      case Arca.Overlay.unit_status(ctx, dir) do
-        {:ok, :absent} ->
-          refute Arca.exists?(ctx, dir ++ ["a.txt"])
-          refute Arca.exists?(ctx, dir ++ [@sentinel])
-
-        {:ok, :own} ->
-          assert Arca.exists?(ctx, dir ++ [@sentinel])
-          assert Arca.exists?(ctx, dir ++ ["a.txt"])
-      end
-    end
-
-    test "a nested write inside a held unit passes through instead of self-blocking", %{ctx: ctx} do
-      # `Arca.Overlay.UnitLock` is not reentrant — it logs an error and can
-      # only time out. `commit_unit/4` holds the unit lock and then writes
-      # every file of the unit back through the PUBLIC `Arca.put`, which now
-      # takes that same lock. Without the process-local held-lock register
-      # the first `clean_slate/2` would queue behind its own holder for the
-      # full 30s timeout and fail.
-      unit = ["components", "catalysts", "local", "reentrant", "1.0.0"]
-
-      log =
-        ExUnit.CaptureLog.capture_log(fn ->
-          started = System.monotonic_time(:millisecond)
-
-          assert {:ok, _written} =
-                   Arca.Overlay.commit_unit(
-                     ctx,
-                     unit,
-                     {:files, [{[@sentinel], ~s({"type":"catalyst"})}, {["a.txt"], "A"}]},
-                     cap: :exempt
-                   )
-
-          elapsed = System.monotonic_time(:millisecond) - started
-
-          assert elapsed < 5_000,
-                 "commit took #{elapsed}ms — a self-block waits out the 30s lock timeout"
-        end)
-
-      refute log =~ "not reentrant",
-             "the unit lock was re-acquired by its own holder: #{log}"
-
-      assert {:ok, "A"} = Arca.get(ctx, unit ++ ["a.txt"])
+      # The drop retired the row the commit staged against, so the commit
+      # is refused and leaves nothing: no served object, no staged one.
+      assert {:error, :missing_unit} = Task.await(committer, 30_000)
+      assert Arca.Overlay.unit_status(ctx, dir) == {:ok, :absent}
+      refute Arca.exists?(ctx, dir ++ [@sentinel])
+      refute Arca.exists?(ctx, dir ++ ["a.txt"])
+      assert {:ok, []} = Arca.list_recursive(ctx, Arca.Storage.UnitLocator.staging_prefix(dir))
+      assert journal(ctx, dir) == []
     end
 
     test "a tree delete above units is refused while a unit stands beneath it", %{
@@ -814,10 +755,10 @@ defmodule Arca.OverlayTest do
       :ok = Arca.Overlay.pull_shipped(ctx, role)
       :ok = Arca.put(ctx, role, "edited")
 
-      # The wholesale form rides no unit lock, so it could land inside a
-      # concurrent commit; a populated tree refuses at every level above
-      # the unit, and the unit stands — a caller walks its units and drops
-      # them one at a time under each one's own lock.
+      # The wholesale form would clear units without retiring their rows;
+      # a populated tree refuses at every level above the unit, and the
+      # unit stands — a caller walks its units and drops them one at a
+      # time, each with its row.
       assert {:error, :above_unit} = Arca.delete_tree(ctx, ["aqua"])
       assert {:error, :above_unit} = Arca.delete_tree(ctx, ["aqua", "roles"])
       assert {:ok, "edited"} = Arca.get(ctx, role)
@@ -834,6 +775,43 @@ defmodule Arca.OverlayTest do
       :ok = Arca.put(ctx, ["aqua", "roles", "notes.txt"], "stray")
       assert :ok = Arca.delete_tree(ctx, ["aqua"])
       refute Arca.exists?(ctx, ["aqua", "roles", "notes.txt"])
+    end
+  end
+
+  describe "the staging area is the overlay's own" do
+    test "a listing from above never shows it; the same name elsewhere is content", %{ctx: ctx} do
+      gate_staging!()
+      unit = ["components", "catalysts", "local", "staged", "1.0.0"]
+
+      committer =
+        Task.async(fn ->
+          Arca.Overlay.commit_unit(
+            ctx,
+            unit,
+            {:files, [{[@sentinel], ~s({"type":"catalyst"})}, {["a.txt"], "A"}]},
+            cap: :exempt
+          )
+        end)
+
+      assert_receive {:staging, committer_pid}, 10_000
+
+      # A revision is being staged, and no reader of the tree sees it.
+      staging = Arca.Storage.UnitLocator.staging_prefix(unit)
+      assert {:ok, [_marker]} = Arca.list_recursive(ctx, staging)
+      assert {:ok, []} = Arca.list_typed(ctx, ["components"])
+      assert {:ok, []} = Arca.list_recursive(ctx, ["components"])
+      assert {:ok, []} = Arca.list_recursive(ctx, [])
+      assert {:ok, %{}} = Arca.Overlay.unit_statuses(ctx, "components")
+      # Staged bytes are bytes the athanor holds.
+      assert {:ok, %{files: 1}} = Arca.usage(ctx, ["components"])
+
+      send(committer_pid, :proceed)
+      assert {:ok, _written} = Task.await(committer, 30_000)
+      assert {:ok, [{"catalysts", :dir}]} = Arca.list_typed(ctx, ["components"])
+
+      :ok = Arca.put(ctx, ["data", ".staging", "mine.txt"], "mine")
+      assert {:ok, [{".staging", :dir}]} = Arca.list_typed(ctx, ["data"])
+      assert {:ok, [["data", ".staging", "mine.txt"]]} = Arca.list_recursive(ctx, ["data"])
     end
   end
 
@@ -942,9 +920,10 @@ defmodule Arca.OverlayTest do
     end
 
     test "of concurrent creators of one name, exactly one lands", %{ctx: ctx} do
-      # The probe rides the unit's lock, so the creators serialise and every
-      # one after the first sees the unit present — a probe outside the
-      # lock would let several pass it and each replace the last.
+      # The question is asked under the unit's draft, so a creator either
+      # finds the draft held by another or, holding it, finds the unit
+      # there — a probe outside the draft would let several pass it and
+      # each replace the last.
       role = ["aqua", "roles", "c.md"]
       scroll = ["aqua", "skills", "u"]
 
@@ -957,12 +936,16 @@ defmodule Arca.OverlayTest do
           |> Task.await_many(30_000)
 
         assert Enum.count(results, &match?({:ok, _}, &1)) == 1, inspect(results)
-        assert Enum.count(results, &(&1 == {:error, :exists})) == 7, inspect(results)
+
+        assert Enum.count(results, &(&1 in [{:error, :exists}, {:error, :stale_writer}])) == 7,
+               inspect(results)
+
+        assert [_the_one_commit] = journal(ctx, unit)
       end
     end
   end
 
-  describe "update/3 — one locked read-modify-write" do
+  describe "update/3 — one serialized read-modify-write" do
     @scroll ["aqua", "skills", "u"]
     @manifest @scroll ++ ["SKILL.md"]
 
@@ -987,14 +970,14 @@ defmodule Arca.OverlayTest do
 
       second =
         Task.async(fn ->
-          Arca.Overlay.update(ctx, @manifest, fn current -> {:ok, current <> "+B"} end)
+          Arca.Overlay.update(ctx, @manifest, fn current ->
+            send(test_pid, {:second_read, current})
+            {:ok, current <> "+B"}
+          end)
         end)
 
-      wait_until(
-        fn -> queued_on_unit_lock?() end,
-        5_000,
-        "the second update to queue behind the first on the unit lock"
-      )
+      # The second update does not read while the first holds the unit.
+      refute_receive {:second_read, _}, 200
 
       send(first_pid, :proceed)
       assert :ok = Task.await(first, 30_000)
@@ -1002,6 +985,7 @@ defmodule Arca.OverlayTest do
 
       # Serialised: the second read "v0+A", not the "v0" it would have read
       # beside the first — and nothing was lost.
+      assert_received {:second_read, "v0+A"}
       assert {:ok, "v0+A+B"} = Arca.get(ctx, @manifest)
     end
 
@@ -1047,7 +1031,7 @@ defmodule Arca.OverlayTest do
     end
   end
 
-  describe "replace_subtree/5 — one subtree of a unit, under its lock" do
+  describe "replace_subtree/5 — one subtree of a unit, as its next revision" do
     @built ["components", "tinctures", "local", "built", "1.0.0"]
     @first_build [{["assets", "old.js"], "old"}, {["index.html"], "one"}]
 
@@ -1097,6 +1081,10 @@ defmodule Arca.OverlayTest do
       assert {:ok, "source"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
       assert {:ok, ~s({"type":"tincture"})} = Arca.get(ctx, @built ++ ["cyfr-manifest.json"])
       assert on_disk(ctx) == ["cyfr-manifest.json", "dist", "src"]
+
+      # A publication like any other: the row moved and the journal grew.
+      assert [%{prior_revision: nil, new_revision: first}, %{prior_revision: first}] =
+               journal(ctx, @built)
     end
 
     test "a replacement that fails part-way leaves the previous subtree whole and nothing staged",
@@ -1179,8 +1167,7 @@ defmodule Arca.OverlayTest do
       assert {:ok, "source"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
     end
 
-    test "an adapter that cannot swap a tree refuses and leaves the subtree as it was",
-         %{ctx: ctx} do
+    test "an adapter that cannot swap a tree publishes the subtree all the same", %{ctx: ctx} do
       original = Application.get_env(:cyfr, :storage_adapter)
       Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.NoSwapAdapter)
 
@@ -1190,12 +1177,64 @@ defmodule Arca.OverlayTest do
           else: Application.delete_env(:cyfr, :storage_adapter)
       end)
 
-      assert {:error, :atomic_replace_unsupported} =
+      assert :ok =
                Arca.Overlay.replace_subtree(ctx, @built, ["dist"], [{["index.html"], "two"}],
                  cap: :exempt
                )
 
-      assert dist(ctx) == @first_build
+      assert dist(ctx) == [{["index.html"], "two"}]
+      assert {:ok, "source"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
+      assert {:ok, ~s({"type":"tincture"})} = Arca.get(ctx, @built ++ ["cyfr-manifest.json"])
+      assert Arca.Overlay.unit_status(ctx, @built) == {:ok, :own}
+    end
+
+    test "a commit that lands while a replacement stages refuses the replacement", %{ctx: ctx} do
+      test_pid = self()
+
+      replacing =
+        Task.async(fn ->
+          Arca.Overlay.replace_subtree(
+            ctx,
+            @built,
+            ["dist"],
+            [
+              {["index.html"],
+               fn ->
+                 send(test_pid, {:staging, self()})
+
+                 receive do
+                   :proceed -> {:ok, "two"}
+                 end
+               end}
+            ],
+            cap: :exempt
+          )
+        end)
+
+      assert_receive {:staging, replacer}, 5_000
+
+      # The replacement's draft is live, so another writer is refused; once
+      # the draft has outlived its lifetime another writer takes it, and
+      # the replacement has lost the unit.
+      assert {:error, :stale_writer} =
+               Arca.Overlay.commit_unit(ctx, @built, {:files, [{["cyfr-manifest.json"], "{}"}]},
+                 cap: :exempt
+               )
+
+      expire_drafts!()
+
+      assert {:ok, _written} =
+               Arca.Overlay.commit_unit(ctx, @built, {:files, [{["cyfr-manifest.json"], "{}"}]},
+                 cap: :exempt
+               )
+
+      send(replacer, :proceed)
+      assert {:error, :stale_revision} = Task.await(replacing, 30_000)
+
+      # The loser's objects are gone and were never served.
+      assert {:ok, "{}"} = Arca.get(ctx, @built ++ ["cyfr-manifest.json"])
+      refute Arca.exists?(ctx, @built ++ ["dist", "index.html"])
+      assert {:ok, []} = Arca.list_recursive(ctx, Arca.Storage.UnitLocator.staging_prefix(@built))
     end
 
     test "a tree is replaced only inside a unit, never at one, above one or at its sentinel",
@@ -1243,48 +1282,6 @@ defmodule Arca.OverlayTest do
           cap: :exempt
         )
       end
-    end
-
-    test "a writer to the same unit waits for the whole replacement", %{ctx: ctx} do
-      test_pid = self()
-
-      replacing =
-        Task.async(fn ->
-          Arca.Overlay.replace_subtree(
-            ctx,
-            @built,
-            ["dist"],
-            [
-              {["index.html"],
-               fn ->
-                 send(test_pid, {:writing, self()})
-
-                 receive do
-                   :proceed -> {:ok, "two"}
-                 end
-               end}
-            ],
-            cap: :exempt
-          )
-        end)
-
-      assert_receive {:writing, replacer}, 5_000
-
-      writer = Task.async(fn -> Arca.put(ctx, @built ++ ["src", "main.tsx"], "edited") end)
-
-      wait_until(
-        fn -> queued_on_unit_lock?() end,
-        5_000,
-        "the writer to queue behind the replacement on the unit lock"
-      )
-
-      assert {:ok, "source"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
-
-      send(replacer, :proceed)
-      assert :ok = Task.await(replacing, 30_000)
-      assert :ok = Task.await(writer, 30_000)
-      assert {:ok, "edited"} = Arca.get(ctx, @built ++ ["src", "main.tsx"])
-      assert {:ok, "two"} = Arca.get(ctx, @built ++ ["dist", "index.html"])
     end
   end
 
@@ -1484,42 +1481,6 @@ defmodule Arca.OverlayTest do
       assert {:error, :adapter_down} = Arca.Overlay.unit_statuses(ctx, "components")
       assert {:error, :adapter_down} = Arca.Overlay.pull_shipped(ctx, @version_dir)
       assert {:error, :adapter_down} = Arca.Overlay.materialize_shipped(ctx, "components")
-    end
-  end
-
-  describe "internal-write scope stays in-process" do
-    # `Arca.Overlay.with_internal_writes/1` is Process-dictionary-scoped:
-    # work handed to another process does not inherit it and refuses
-    # loudly. `commit_unit/4`'s {:tree, _} source runs `Arca.copy_tree/4`
-    # in the caller, which holds today only because copy_tree is
-    # sequential — this pins that shape so a future
-    # `Task.async_stream` parallelization fails here instead of turning
-    # every tree commit into a refusal.
-    test "copy_tree spawns no processes (the overlay's tree commits depend on it)" do
-      source =
-        [__DIR__, "../../lib/arca.ex"] |> Path.join() |> Path.expand() |> File.read!()
-
-      [_, copy_tree_body] =
-        Regex.run(~r/def copy_tree\(.*?(?=\n  @doc|\n  defp normalize)/s, source)
-        |> case do
-          nil -> flunk("copy_tree/4 not found in arca.ex")
-          [match] -> [match, match]
-        end
-
-      refute copy_tree_body =~ ~r/Task\.|spawn|async_stream/,
-             "Arca.copy_tree/4 must stay in-process: commit_unit's tree copies " <>
-               "run under with_internal_writes/1, which no child process inherits"
-    end
-  end
-
-  describe "the lock's refusal reaches a caller as something actionable" do
-    # Render :unit_locked as retryable contention on every overlay mutation path.
-    test "unit_locked is a recognised refusal with a retry sentence" do
-      assert Cyfr.Ops.Error.reason?(:unit_locked)
-
-      message = Cyfr.Ops.Error.render(:unit_locked)
-      assert is_binary(message)
-      assert message =~ "retry"
     end
   end
 

@@ -201,13 +201,18 @@ defmodule Compendium.ProvenanceTest do
   test "a user component at a path a LATER release ships becomes the bundled copy", %{ctx: ctx} do
     # The athanor scaffolds mine-first 1.0.0 while no release ships it.
     own_dir = ["components", "reagents", "local", "mine-first", "1.0.0"]
-    :ok = Arca.put(ctx, own_dir ++ ["reagent.wasm"], @valid_wasm)
-
-    :ok =
-      Arca.put(
+    # Landed the one way a unit lands: its row publishes it, so it is a
+    # complete copy once a release ships the same path.
+    {:ok, _written} =
+      Arca.Overlay.commit_unit(
         ctx,
-        own_dir ++ ["cyfr-manifest.json"],
-        Jason.encode!(%{"type" => "reagent", "version" => "1.0.0"})
+        own_dir,
+        {:files,
+         [
+           {["reagent.wasm"], @valid_wasm},
+           {["cyfr-manifest.json"], Jason.encode!(%{"type" => "reagent", "version" => "1.0.0"})}
+         ]},
+        cap: :exempt
       )
 
     {:ok, own} = Registry.register_from_arca(ctx, own_dir)
