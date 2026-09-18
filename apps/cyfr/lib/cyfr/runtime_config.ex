@@ -544,6 +544,44 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
+  @doc """
+  Resolve the worker watch's bounds (`Cyfr.Execution.WorkerWatch`):
+  `CYFR_WORKER_WATCH_POLL_MS`, the interval between its status polls of
+  each worker service, a whole number of milliseconds from 1000 to 60000
+  (default 5000), and `CYFR_WORKER_WATCH_MISSES`, the misses in a row
+  after which the boot last heard from has its running attempts lapsed,
+  from 1 to 100 (default 3). Answers the keyword `config :cyfr,
+  :worker_watch` takes with only the set bounds, so the code's defaults
+  stand for the rest; a set value outside its range, or not a whole
+  number, is an error naming it.
+  """
+  @spec resolve_worker_watch(getenv) :: {:ok, keyword()} | {:error, String.t()}
+  def resolve_worker_watch(getenv) when is_function(getenv, 1) do
+    with {:ok, poll_ms} <- milliseconds(getenv, "CYFR_WORKER_WATCH_POLL_MS", 1_000..60_000),
+         {:ok, misses} <- count(getenv, "CYFR_WORKER_WATCH_MISSES", 1..100) do
+      {:ok,
+       Enum.reject([poll_ms: poll_ms, misses: misses], fn {_key, value} -> is_nil(value) end)}
+    end
+  end
+
+  # An optional whole number within `range`: unset or blank keeps the
+  # reader's default; anything else outside the range refuses naming the key.
+  defp count(getenv, key, first..last//1) do
+    text = getenv.(key) |> to_string() |> String.trim()
+
+    cond do
+      text == "" ->
+        {:ok, nil}
+
+      Regex.match?(~r/\A[0-9]{1,12}\z/, text) and String.to_integer(text) in first..last//1 ->
+        {:ok, String.to_integer(text)}
+
+      true ->
+        {:error,
+         "#{key}=#{inspect(getenv.(key))} must be a whole number from #{first} to #{last}."}
+    end
+  end
+
   @doc "The address the host API listener binds (`CYFR_HOST_API_BIND`, default loopback)."
   @spec host_api_bind() :: :inet.ip_address()
   def host_api_bind, do: Application.get_env(:cyfr, :host_api_bind, @default_host_api_bind)

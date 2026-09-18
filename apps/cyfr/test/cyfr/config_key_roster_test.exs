@@ -46,6 +46,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
     # Boot switches with an in-code default; flipping one is a code change.
     cron_scheduler_enabled: :default,
     execution_sweeper_enabled: :default,
+    worker_watch_enabled: :default,
     external_server_reconciler_enabled: :default,
     provisioning_boot_enabled: :default,
     retention_scheduler_enabled: :default,

@@ -26,7 +26,10 @@ defmodule Cyfr.Test.ScriptedWorker do
   reported (`Cyfr.Execution.Host.runner_exited/2`), signed with this
   worker service's dispatch key.
 
-  A reference it does not script never reaches it: starting it puts an
+  Its status counts its runners as every worker service does: `busy` while
+  a run's process is alive, and `tainted` from a kill until the killed
+  process has gone; it keeps no runner fresh or idle. A reference it does
+  not script never reaches it: starting it puts an
   entry for its scripted references alone ahead of the configured worker
   services in `config :cyfr, :workers` (`workers/2`), so
   `Cyfr.Execution.Dispatch` routes every other reference to the worker
@@ -240,7 +243,8 @@ defmodule Cyfr.Test.ScriptedWorker do
        lose_start_answer: Keyword.get(opts, :lose_start_answer, false) == true,
        calls: [],
        kills: [],
-       runners: %{}
+       runners: %{},
+       tainted: MapSet.new()
      }}
   end
 
@@ -295,8 +299,9 @@ defmodule Cyfr.Test.ScriptedWorker do
 
     case Enum.find(state.runners, fn {_pid, runner} -> runner.execution_id == execution_id end) do
       {pid, _runner} ->
+        # Tainted until its exit arrives: never assigned again, and counted.
         Process.exit(pid, :kill)
-        {:reply, :ok, state}
+        {:reply, :ok, %{state | tainted: MapSet.put(state.tainted, pid)}}
 
       nil ->
         {:reply, {:error, :not_found}, state}
@@ -305,12 +310,18 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   def handle_call(:status, _from, state) do
     attempts = for {_pid, runner} <- state.runners, do: runner.attempt
+    tainted = MapSet.size(state.tainted)
 
     {:reply,
      %{
        service: @service,
        boot: state.boot,
-       runners: %{fresh: 0, idle: 0, busy: map_size(state.runners)},
+       runners: %{
+         fresh: 0,
+         idle: 0,
+         busy: map_size(state.runners) - tainted,
+         tainted: tainted
+       },
        attempts: attempts
      }, state}
   end
@@ -342,7 +353,7 @@ defmodule Cyfr.Test.ScriptedWorker do
 
       {runner, runners} ->
         if reason != :normal, do: report(runner)
-        {:noreply, %{state | runners: runners}}
+        {:noreply, %{state | runners: runners, tainted: MapSet.delete(state.tainted, pid)}}
     end
   end
 
