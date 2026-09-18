@@ -28,113 +28,41 @@ defmodule Cyfr.TwoWorkersTest do
 
   use ExUnit.Case, async: false
 
+  import Cyfr.Test.TwoServices,
+    only: [
+      arm!: 2,
+      await_entry!: 1,
+      hold_children!: 1,
+      lay_seed!: 1,
+      point_opus_at!: 1,
+      scripted_run!: 1
+    ]
+
   import Cyfr.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Cyfr.Execution.{Attempt, Keys, Sweeper, WorkerClient}
   alias Cyfr.Slots
-  alias Cyfr.Test.{AttemptFixtures, AuthorityFixtures, OpusService, ScriptedWorker}
+  alias Cyfr.Test.{AttemptFixtures, OpusService, ScriptedWorker, TwoServices}
+  alias Cyfr.Test.TwoServices.Wire
   alias Cyfr.{WorkerAuth, WorkerWire}
   alias Opus.Test.NestedExecution, as: Probe
-  alias Sanctum.Consent.{Bootstrap, Commit, Plan, Source}
+  alias Sanctum.Consent.{Bootstrap, Source}
 
   @moduletag timeout: 180_000
   @moduletag :capture_log
 
-  @stub_wasm Path.expand("../support/test_wasm/step_stub/step_stub.wasm", __DIR__)
   @math_wasm Path.expand("../support/test_wasm/math.wasm", __DIR__)
-  @stub "catalyst:local.step-stub"
-  @scripted "reagent:local.two-workers"
+  @stub TwoServices.stub()
+  @scripted TwoServices.scripted()
   @soul "agent:local.aqua"
   @slots Cyfr.Execution.Slots
-  @version "0.1.0"
-  @key_field "STUB_API_KEY"
+  @version TwoServices.version()
   @stub_text "The stub answers at once."
   @stub_deltas ["The stub ", "answers ", "at ", "once."]
   @lapsed "Execution terminated: runner stopped without cleanup"
   @local OpusService.service()
   @other ScriptedWorker.service()
-
-  # A wire between a client and a listener that loses what it is told to:
-  # a Plug served on a loopback port that forwards each request, header and
-  # body as they are, to `target` and answers what came back — or, as
-  # planned per route, forwards it and answers 502 in place of the answer
-  # (lost after the listener acted), or answers 502 without forwarding
-  # (lost before it acted). What it did for each route is kept, in order.
-  defmodule Wire do
-    @moduledoc false
-    @behaviour Plug
-
-    import Plug.Conn
-
-    def start!(target) do
-      agent = ExUnit.Callbacks.start_supervised!({Agent, fn -> %{plan: %{}, seen: []} end})
-
-      server =
-        ExUnit.Callbacks.start_supervised!(
-          {Bandit,
-           plug: {__MODULE__, %{agent: agent, target: target}},
-           ip: {127, 0, 0, 1},
-           port: 0,
-           startup_log: false}
-        )
-
-      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
-      %{agent: agent, url: "http://127.0.0.1:#{port}"}
-    end
-
-    def plan(%{agent: agent}, route, actions) when is_list(actions),
-      do: Agent.update(agent, &put_in(&1, [:plan, route], actions))
-
-    def seen(%{agent: agent}, route) do
-      for {^route, action} <- Enum.reverse(Agent.get(agent, & &1.seen)), do: action
-    end
-
-    @impl Plug
-    def init(opts), do: opts
-
-    @impl Plug
-    def call(conn, %{agent: agent, target: target}) do
-      {:ok, body, conn} = read_body(conn, length: 16_000_000)
-      route = conn.request_path
-
-      action =
-        Agent.get_and_update(agent, fn state ->
-          case get_in(state, [:plan, route]) do
-            [action | rest] -> {action, put_in(state, [:plan, route], rest)}
-            _ -> {:forward, state}
-          end
-        end)
-
-      answer =
-        if action == :drop do
-          :dropped
-        else
-          headers =
-            for {name, value} <- conn.req_headers,
-                name in ["x-cyfr-auth", "content-type"],
-                do: {name, value}
-
-          Req.post!(target <> route,
-            headers: headers,
-            body: body,
-            retry: false,
-            decode_body: false,
-            receive_timeout: 60_000
-          )
-        end
-
-      Agent.update(agent, &%{&1 | seen: [{route, action} | &1.seen]})
-
-      case {action, answer} do
-        {:forward, %Req.Response{status: status, body: answer}} ->
-          conn |> put_resp_content_type("application/json") |> send_resp(status, answer)
-
-        _lost ->
-          send_resp(conn, 502, "")
-      end
-    end
-  end
 
   setup tags do
     Arca.Cache.init()
@@ -538,144 +466,8 @@ defmodule Cyfr.TwoWorkersTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The estate
+  # The Opus service
   # ---------------------------------------------------------------------------
-
-  defp lay_seed!(seed) do
-    unit = Path.join([seed, "components", "catalysts", "local", "step-stub", @version])
-    File.mkdir_p!(unit)
-    File.cp!(@stub_wasm, Path.join(unit, "catalyst.wasm"))
-
-    manifest = %{
-      "name" => "step-stub",
-      "type" => "catalyst",
-      "version" => @version,
-      "publisher" => "local",
-      "description" => "A model/chat@1 catalyst the two-service matrix runs",
-      "contracts" => [Cyfr.Models.chat_contract()],
-      "needs" => %{
-        "api_key" => %{
-          "type" => "api_key:step-stub",
-          "reason" => "to read a key as a model catalyst does",
-          "required" => true,
-          "fields" => [@key_field]
-        }
-      },
-      "caps" => %{
-        "limits" => %{
-          "timeout" => "1m",
-          "max_memory_bytes" => 67_108_864,
-          "max_request_size" => 1_048_576,
-          "max_response_size" => 5_242_880,
-          "rate_limit" => %{"requests" => 10_000, "window" => "1m"}
-        }
-      }
-    }
-
-    File.write!(Path.join(unit, "cyfr-manifest.json"), Jason.encode!(manifest))
-    File.mkdir_p!(Path.join(seed, "aqua"))
-
-    File.write!(Path.join([seed, "aqua", "aqua.md"]), """
-    ---
-    title: AQUA
-    catalyst_ref: #{@stub}
-    model: step-stub
-    ---
-
-    You answer the person.
-    """)
-
-    seed
-  end
-
-  # Bind `key` as the stub's vault field, in an entry whose OAuth bundle
-  # holds `token`, and dispense `token` to every run of the stub as its
-  # guest starts. Answers both, the credentials to look for.
-  defp arm!(ctx, key: key, token: token) do
-    {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
-        name: "#{@stub} key",
-        kind: "api_key",
-        fields: %{@key_field => key},
-        oauth: %{"access_token" => token}
-      })
-
-    {:ok, plan} = Plan.plan(ctx, %{ref: @stub})
-    decisions = %{ref: @stub, bindings: [%{need: "api_key", entry_id: entry.id}]}
-    {:ok, preview} = Commit.preview(ctx, decisions)
-
-    {:ok, _} =
-      Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
-
-    handler = "two-workers-dispense-#{System.unique_integer([:positive])}"
-
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:cyfr, :opus, :runtime, :authority_entered],
-        fn _event, _measurements, %{execution_id: id, reference: reference}, _config ->
-          if String.starts_with?(reference, @stub <> ":") do
-            attempt = AttemptFixtures.current!(ctx.athanor_id, id)
-
-            %{"ok" => ^token} =
-              AttemptFixtures.call(attempt, "oauth_token", %{"provider" => "stub"})
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
-    [key, token]
-  end
-
-  # A scripted run: a child of a synthetic root, admitted with the charge
-  # its authority names, as a chain's child is. Answers the result and the
-  # child's id.
-  defp scripted_run!(ctx) do
-    auth = AuthorityFixtures.root!()
-    root_id = "exec_two_workers_root_#{System.unique_integer([:positive])}"
-
-    {:ok, %{attempt: root_attempt}} =
-      Arca.Execution.admit(
-        %{
-          id: root_id,
-          reference: "#{AuthorityFixtures.formula_ref()}:1.0.0",
-          user_id: ctx.user_id,
-          athanor_id: ctx.athanor_id,
-          component_type: "formula"
-        },
-        reservation: %{budget_id: auth.budget.id, cap: 2}
-      )
-
-    child_id = Cyfr.UUID7.execution_id()
-
-    charge = %{
-      id: "call:t:1:c1:g0",
-      attempt: root_attempt.attempt,
-      generation: 0,
-      holder_execution_id: child_id
-    }
-
-    result =
-      Cyfr.Execution.run_child(auth, "#{@scripted}:1.0.0", nil, %{"messages" => []},
-        ctx: ctx,
-        execution_id: child_id,
-        parent_execution_id: root_id,
-        root_execution_id: root_id,
-        declared_needs: [],
-        retention_class: "chat_step",
-        charge: charge,
-        guest_fn: :spawn
-      )
-
-    {result, child_id}
-  end
 
   # An attempt attached on the Opus service's boot, as a runner of its
   # would hold it.
@@ -686,19 +478,6 @@ defmodule Cyfr.TwoWorkersTest do
       boot_id: OpusService.boot(),
       worker: OpusService.endpoint()
     )
-  end
-
-  # Point the Opus service's host calls at `url` for this test, restarting
-  # it (a new boot), and back at the host listener when the test ends.
-  defp point_opus_at!(url) do
-    previous = Application.get_env(:opus, :host_url)
-    Application.put_env(:opus, :host_url, url)
-    OpusService.restart!()
-
-    on_exit(fn ->
-      Application.put_env(:opus, :host_url, previous)
-      OpusService.restart!()
-    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -748,67 +527,6 @@ defmodule Cyfr.TwoWorkersTest do
   end
 
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
-
-  # ---------------------------------------------------------------------------
-  # Holding a guest
-  # ---------------------------------------------------------------------------
-
-  # Hold the guest of `id` at its authority's entry until the test sends
-  # `:continue` to the process it names.
-  defp await_entry!(id) do
-    handler = "two-workers-entry-#{System.unique_integer([:positive])}"
-    test = self()
-
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:cyfr, :opus, :runtime, :authority_entered],
-        fn _event, _measurements, metadata, _config ->
-          if metadata.execution_id == id do
-            send(test, {:entered, id, self()})
-
-            receive do
-              :continue -> :ok
-            after
-              60_000 -> :ok
-            end
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
-  end
-
-  # Children of `root_id` wait at their guest's entry for `:continue`.
-  defp hold_children!(root_id) do
-    handler = "two-workers-children-#{System.unique_integer([:positive])}"
-    test = self()
-
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:cyfr, :opus, :runtime, :authority_entered],
-        fn _event, _measurements, %{execution_id: id}, _config ->
-          case Arca.Repo.get(Arca.Execution, id) do
-            %{parent_execution_id: ^root_id} ->
-              send(test, {:held, self(), id})
-
-              receive do
-                :continue -> :ok
-              after
-                60_000 -> :ok
-              end
-
-            _ ->
-              :ok
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
-  end
 
   # ---------------------------------------------------------------------------
   # Reading what happened
