@@ -19,6 +19,40 @@ defmodule Arca.Adapters.Local do
   moduledoc (the layout table's home) — this module only joins
   `physical_segments/2` under `:base_path`.
 
+  ## Conditional writes
+
+  The precondition this adapter mints is the SHA-256 of the object's bytes
+  (`Cyfr.Digest.sha256_hex/1`, the digest `Arca.Storage.TestDouble` mints
+  too). A create writes the bytes whole at a temporary name and hard-links
+  them to the target: `link(2)` refuses with `EEXIST` when anything is at
+  the target, so the existence check and the publication are one syscall
+  and a reader never opens a partial file. A conditional replace re-reads
+  the object, compares its digest and renames the new bytes over it.
+
+  Every conditional write on one path runs under a lock on this node, so
+  a replace's read and write cannot interleave with another conditional
+  write's. The adapter is single-node by definition — one boot owns the
+  volume — so the node-local lock is the whole serialization. A plain
+  `put/3` or `append/3` is not under it: a key written conditionally is
+  written conditionally by every writer.
+
+  The one result vocabulary, shared with `Arca.Adapters.S3` for the same
+  situations:
+
+  | situation | `put_if_none_match/3` | `put_if_match/4` |
+  |---|---|---|
+  | nothing at the path | `{:ok, precondition}`, created | `{:error, :missing}`, nothing written |
+  | an object there, precondition current | `{:error, :exists}`, untouched | `{:ok, precondition}`, replaced |
+  | an object there, precondition stale | `{:error, :exists}`, untouched | `{:error, :precondition_failed}`, untouched |
+  | the store cannot make the write conditional | `{:error, :unsupported}` | `{:error, :unsupported}` |
+  | the store cannot say whether it applied the write | `{:error, :unknown}` (an object store; a filesystem call always answers) | same |
+  | the store refuses or cannot be reached | `{:error, reason}` | `{:error, reason}` |
+
+  Here `:unsupported` is a filesystem that cannot create a hard link (the
+  create-once step). `list_prefix/2` answers every file under a directory
+  as full segments, `[prefix]` for a prefix that is one file, and `[]` for
+  nothing.
+
   ## Structured Logs (database only)
 
   MCP request logs, execution records, and policy consultation logs are stored
@@ -78,15 +112,17 @@ defmodule Arca.Adapters.Local do
   @impl true
   def put(%Context{} = ctx, path, content) do
     refuse_seed_write!(path)
-    full_path = build_path(ctx, path)
+    write_via_rename(build_path(ctx, path), content)
+  end
 
-    # No symlink guard needed here: the write lands at a temp name and
-    # `File.rename/2` REPLACES a link at the target rather than following it.
+  # Write-then-rename is atomic for readers: they see complete old or new
+  # content. Files and directories are not fsynced, so a power failure can
+  # lose a write that returned success. No symlink guard needed: the write
+  # lands at a temp name and `File.rename/2` REPLACES a link at the target
+  # rather than following it.
+  defp write_via_rename(full_path, content) do
     with :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
-      # Write-then-rename is atomic for readers: they see complete old or new
-      # content. Files and directories are not fsynced, so a power failure can
-      # lose a write that returned success.
-      tmp_path = "#{full_path}.tmp.#{System.unique_integer([:positive])}"
+      tmp_path = tmp_path(full_path)
 
       case File.write(tmp_path, content) do
         :ok ->
@@ -148,6 +184,125 @@ defmodule Arca.Adapters.Local do
     end
   end
 
+  @doc """
+  Create the file at `path` only when nothing is there
+  (`c:Arca.Storage.put_if_none_match/3`); the moduledoc states the
+  mechanism and the result vocabulary.
+  """
+  @impl true
+  def put_if_none_match(%Context{} = ctx, path, content) do
+    refuse_seed_write!(path)
+    full_path = build_path(ctx, path)
+    bytes = IO.iodata_to_binary(content)
+
+    serialized(full_path, fn ->
+      with :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
+        tmp_path = tmp_path(full_path)
+
+        result =
+          with :ok <- File.write(tmp_path, bytes),
+               :ok <- link_once(tmp_path, full_path) do
+            {:ok, precondition(bytes)}
+          end
+
+        # The link, when it landed, holds the bytes; the temporary name is
+        # done either way.
+        File.rm(tmp_path)
+        result
+      end
+    end)
+  end
+
+  # `link(2)`: the target comes to exist in the one syscall that also
+  # refuses when it already does (a file, a directory, even a dangling
+  # symlink). A filesystem without hard links cannot make the create
+  # conditional, and the adapter refuses rather than falling back to a
+  # write that could land second.
+  defp link_once(tmp_path, full_path) do
+    case :file.make_link(tmp_path, full_path) do
+      :ok ->
+        :ok
+
+      {:error, :eexist} ->
+        {:error, :exists}
+
+      {:error, reason} when reason in [:eperm, :enotsup, :eopnotsupp, :emlink] ->
+        {:error, :unsupported}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc """
+  Replace the file at `path` while its bytes still digest to
+  `precondition` (`c:Arca.Storage.put_if_match/4`); the moduledoc states
+  the mechanism and the result vocabulary.
+  """
+  @impl true
+  def put_if_match(%Context{} = ctx, path, content, precondition) do
+    refuse_seed_write!(path)
+    full_path = build_path(ctx, path)
+    bytes = IO.iodata_to_binary(content)
+
+    serialized(full_path, fn ->
+      case current_precondition(full_path) do
+        {:ok, ^precondition} ->
+          with :ok <- write_via_rename(full_path, bytes), do: {:ok, precondition(bytes)}
+
+        {:ok, _changed} ->
+          {:error, :precondition_failed}
+
+        {:error, _} = error ->
+          error
+      end
+    end)
+  end
+
+  # The precondition of what is at `full_path` now. A directory is not an
+  # object (as `get/2` answers) and a symlink is refused as every read is.
+  defp current_precondition(full_path) do
+    case lstat_type(full_path) do
+      :symlink ->
+        Logger.warning("[Arca.Local.put_if_match] refusing symlink at #{full_path}")
+        {:error, :symlink_denied}
+
+      _ ->
+        case File.read(full_path) do
+          {:ok, current} -> {:ok, precondition(current)}
+          {:error, :enoent} -> {:error, :missing}
+          {:error, :eisdir} -> {:error, :missing}
+          {:error, _} = error -> error
+        end
+    end
+  end
+
+  defp precondition(bytes), do: Cyfr.Digest.sha256_hex(bytes)
+
+  # One conditional write (or tree swap) in flight per physical path on
+  # this node: its check and its write cannot interleave with another's.
+  # Node-local by design (the moduledoc says why). `:aborted` only with
+  # `retries` of zero, when the lock is held.
+  defp serialized(full_path, fun, retries \\ :infinity) do
+    :global.trans({{__MODULE__, full_path}, self()}, fun, [node()], retries)
+  end
+
+  @doc """
+  Every file at or below `prefix`, as full segments
+  (`c:Arca.Storage.list_prefix/2`): the walk of a directory, `[prefix]`
+  for a prefix that is one file, `[]` for nothing (or a symlink).
+  """
+  @impl true
+  def list_prefix(%Context{} = ctx, prefix) do
+    full_path = build_path(ctx, prefix)
+
+    case lstat_type(full_path) do
+      :directory -> {:ok, leaves_as_segments(full_path, prefix)}
+      :regular -> {:ok, [prefix]}
+      _ -> {:ok, []}
+    end
+  end
+
   @impl true
   def delete(%Context{} = ctx, path) do
     refuse_seed_write!(path)
@@ -192,10 +347,10 @@ defmodule Arca.Adapters.Local do
 
   defp kind(path), do: if(File.dir?(path), do: :dir, else: :file)
 
-  # A `put/3` in flight, or a `replace_tree/3`'s staged or retired tree (or
-  # a crashed one's): named `<name>.tmp.<n>` next to its target. Never
-  # content — listings, walks and usage skip the pattern, and
-  # `sweep_stale_tmp/1` reclaims orphans.
+  # A `put/3` in flight, or a `replace_tree/3`'s staged or retired tree
+  # and its journal (or a crashed one's): named `<name>.tmp.<n>` next to
+  # its target. Never content — listings, walks and usage skip the
+  # pattern, and `sweep_stale_tmp/1` reclaims orphans.
   defp tmp_name?(name), do: Arca.Storage.tmp_name?(name)
 
   @impl true
@@ -225,18 +380,19 @@ defmodule Arca.Adapters.Local do
     full_path = build_path(ctx, path)
 
     if File.dir?(full_path) do
-      leaves = walk_files(full_path)
-
-      relative_segments =
-        Enum.map(leaves, fn leaf ->
-          rel = Path.relative_to(leaf, full_path)
-          path ++ String.split(rel, "/", trim: true)
-        end)
-
-      {:ok, relative_segments}
+      {:ok, leaves_as_segments(full_path, path)}
     else
       {:ok, []}
     end
+  end
+
+  # Every regular leaf under the directory at `full_path`, as the logical
+  # segments of `path` extended by each leaf's relative path.
+  defp leaves_as_segments(full_path, path) do
+    Enum.map(walk_files(full_path), fn leaf ->
+      rel = Path.relative_to(leaf, full_path)
+      path ++ String.split(rel, "/", trim: true)
+    end)
   end
 
   @impl true
@@ -334,37 +490,61 @@ defmodule Arca.Adapters.Local do
   (`c:Arca.Storage.replace_tree/3`).
 
   Every file is written under a staging directory beside `path`, named
-  `<name>.tmp.<n>` so listings, walks and usage skip it. The tree at `path`
-  is then renamed aside under another such name, the staged tree renamed
-  into its place, and the previous tree removed. A reader opening a file
+  `<name>.staged.tmp.<n>` so listings, walks and usage skip it. The swap
+  then runs under the path's lock (the one the conditional writes hold):
+  a journal `<name>.swap.tmp.<n>` beside the trees records the staged
+  and retired names, the tree at `path` is renamed to
+  `<name>.retired.tmp.<n>`, the staged tree is renamed into its place, and
+  the retired tree and the journal are removed. A reader opening a file
   under `path` reads the previous tree before the second rename and the
   new one after it; between the two renames, which follow one another
   directly, `path` holds nothing, and a reader that lists the tree and
-  then opens its files across that moment can read files of both. If the
-  second rename fails, the previous tree is renamed back.
+  then opens its files across that moment can read files of both.
 
   A failure while staging removes the staging directory and leaves `path`
-  as it was. A crash between the renames leaves `path` empty until the
-  next replacement, with both trees under temporary names that
-  `sweep_stale_tmp/1` reclaims.
+  as it was. A failure during the swap settles through the journal: the
+  staged tree is installed if it can be, else the retired tree is put
+  back, and the error is answered only when the previous tree stands. A
+  crash between the steps leaves either the previous tree or the new one
+  at `path` once `sweep_stale_tmp/1` has read the journal — the sweep
+  installs a staged tree whose swap did not finish, or restores the
+  retired one, then removes what is left — never neither: the trees a
+  journal names are never reclaimed as orphans. Renames and the journal
+  are not fsynced, as `put/3` is not.
   """
   @impl true
   def replace_tree(%Context{} = ctx, path, files) when is_list(files) do
     refuse_seed_write!(path)
-    live = build_path(ctx, path)
-    staged = tmp_path(live)
+    swap = swap_names(build_path(ctx, path))
 
-    with :ok <- stage(ctx, path, staged, files),
-         :ok <- swap(live, staged) do
+    with :ok <- stage(ctx, path, swap.staged, files),
+         :ok <- swap(swap) do
       :ok
     else
       {:error, _} = error ->
-        File.rm_rf(staged)
+        File.rm_rf(swap.staged)
         error
     end
   end
 
   defp tmp_path(path), do: "#{path}.tmp.#{System.unique_integer([:positive])}"
+
+  # The names of one replacement, all beside the live tree under the
+  # `.tmp.<n>` shape with one number.
+  defp swap_names(live) do
+    n = System.unique_integer([:positive])
+
+    %{
+      live: live,
+      staged: "#{live}.staged.tmp.#{n}",
+      retired: "#{live}.retired.tmp.#{n}",
+      journal: "#{live}.swap.tmp.#{n}"
+    }
+  end
+
+  @journal_suffix ~r/\.swap\.tmp\.\d+$/
+
+  defp journal_name?(name), do: name =~ @journal_suffix
 
   # A staged file lands at a fresh name no reader resolves, so it is
   # written in place rather than through `put/3`'s rename.
@@ -389,43 +569,129 @@ defmodule Arca.Adapters.Local do
   defp file_bytes(bytes) when is_binary(bytes), do: {:ok, bytes}
   defp file_bytes(fun) when is_function(fun, 0), do: fun.()
 
-  defp swap(live, staged) do
-    retired = tmp_path(live)
-
+  # The journal is written inside the lock, so a journal on disk with the
+  # lock free belongs to a swap that crashed or whose cleanup failed —
+  # what the sweep may settle without racing a swap in flight.
+  defp swap(%{live: live} = names) do
     with :ok <- File.mkdir_p(Path.dirname(live)) do
-      case File.rename(live, retired) do
-        :ok ->
-          case File.rename(staged, live) do
-            :ok ->
-              remove_retired(retired)
+      serialized(live, fn ->
+        with :ok <- write_journal(names) do
+          renamed =
+            case File.rename(live, names.retired) do
+              :ok -> File.rename(names.staged, live)
+              {:error, :enoent} -> File.rename(names.staged, live)
+              {:error, _} = error -> error
+            end
 
-            {:error, _} = error ->
-              File.rename(retired, live)
-              error
+          case {settle(names), renamed} do
+            {:new, _} -> :ok
+            {_old_or_none, {:error, _} = error} -> error
+            {_old_or_none, :ok} -> {:error, :swap_unsettled}
           end
-
-        {:error, :enoent} ->
-          File.rename(staged, live)
-
-        {:error, _} = error ->
-          error
-      end
+        end
+      end)
     end
   end
 
-  # The replacement has landed; a previous tree that cannot be removed
-  # stays hidden under its temporary name until the sweep reclaims it.
-  defp remove_retired(retired) do
+  defp write_journal(%{live: live, staged: staged, retired: retired, journal: journal}) do
+    File.write(
+      journal,
+      :erlang.term_to_binary(%{
+        version: 1,
+        live: Path.basename(live),
+        staged: Path.basename(staged),
+        retired: Path.basename(retired)
+      })
+    )
+  end
+
+  # The swap a journal records. Its names are siblings of the journal
+  # under the journal's own number, so they are rebuilt from the journal's
+  # file name and the record must agree: a journal that names anything
+  # else directs no rename. One that cannot be read is an orphan the
+  # sweep ages out like any temp file.
+  defp read_journal(journal) do
+    with [_, live, n] <- Regex.run(~r/^(.+)\.swap\.tmp\.(\d+)$/s, Path.basename(journal)),
+         {:ok, bytes} <- File.read(journal),
+         %{version: 1, live: ^live, staged: staged, retired: retired} <- decode_journal(bytes),
+         true <- staged == "#{live}.staged.tmp.#{n}" and retired == "#{live}.retired.tmp.#{n}" do
+      dir = Path.dirname(journal)
+
+      {:ok,
+       %{
+         live: Path.join(dir, live),
+         staged: Path.join(dir, staged),
+         retired: Path.join(dir, retired),
+         journal: journal
+       }}
+    else
+      _ -> {:error, :corrupt_journal}
+    end
+  end
+
+  defp decode_journal(bytes) do
+    :erlang.binary_to_term(bytes, [:safe])
+  rescue
+    ArgumentError -> :corrupt
+  end
+
+  # Bring a journalled swap to rest, whichever step it stopped at, and
+  # answer which tree stands at the live path: `:new` (the staged tree,
+  # installed now or earlier), `:old` (the previous tree, never moved or
+  # put back) or `:none` (nothing could be installed; the journal stays
+  # for the next sweep). The journal goes only once nothing it names is
+  # left to reclaim.
+  defp settle(%{live: live, staged: staged, retired: retired, journal: journal} = names) do
+    cond do
+      File.exists?(live) and File.exists?(staged) ->
+        # The swap never moved the staged tree: the previous tree stands.
+        File.rm_rf(staged)
+        finish_retirement(names, :old)
+
+      File.exists?(live) ->
+        finish_retirement(names, :new)
+
+      File.exists?(staged) ->
+        case File.rename(staged, live) do
+          :ok -> finish_retirement(names, :new)
+          {:error, _} -> restore_retired(names)
+        end
+
+      File.exists?(retired) ->
+        restore_retired(names)
+
+      true ->
+        File.rm(journal)
+        :none
+    end
+  end
+
+  defp restore_retired(%{live: live, staged: staged, retired: retired} = names) do
+    case File.rename(retired, live) do
+      :ok ->
+        File.rm_rf(staged)
+        finish_retirement(names, :old)
+
+      {:error, _} ->
+        :none
+    end
+  end
+
+  # The live tree stands; a retired tree that cannot be removed stays
+  # hidden under its temporary name, journal and all, until the sweep
+  # retries.
+  defp finish_retirement(%{retired: retired, journal: journal}, standing) do
     case File.rm_rf(retired) do
       {:ok, _} ->
-        :ok
+        File.rm(journal)
+        standing
 
       {:error, reason, file} ->
         Logger.warning(
           "[Arca.Local.replace_tree] previous tree not removed (#{inspect(reason)} at #{file})"
         )
 
-        :ok
+        standing
     end
   end
 
@@ -463,10 +729,16 @@ defmodule Arca.Adapters.Local do
   end
 
   @doc """
-  Remove `put/3` temp files older than `max_age_seconds` — orphans of
+  Settle every journalled tree swap and remove `put/3` temp files and
+  staged or retired trees older than `max_age_seconds` — orphans of
   crashed writes. Listings never surface them; this reclaims the bytes.
-  Returns `{:ok, removed_count}`. `Arca.sweep_stale_tmp/0` is the one
-  caller and supplies the age.
+  Returns `{:ok, removed_count}`, a settled journal counting once.
+  `Arca.sweep_stale_tmp/0` is the one caller and supplies the age.
+
+  A journal is settled whatever its age, under its path's lock and only
+  when the lock is free (a swap in flight holds it), before the aged
+  orphans in its directory are reclaimed — so the trees it names are
+  installed or restored, never swept out from under it.
   """
   @impl true
   def sweep_stale_tmp(max_age_seconds) do
@@ -488,7 +760,22 @@ defmodule Arca.Adapters.Local do
   defp sweep_tmp_dir(dir, cutoff) do
     case File.ls(dir) do
       {:ok, entries} ->
-        Enum.reduce(entries, 0, fn entry, acc ->
+        # Journals first: what a journal still standing names is its to
+        # settle on a later sweep, whatever its age, and is kept from the
+        # orphan pass; an unreadable journal protects nothing and ages out
+        # as the orphan it is.
+        {settled, kept} =
+          entries
+          |> Enum.filter(&journal_name?/1)
+          |> Enum.reduce({0, []}, fn entry, {count, kept} ->
+            case settle_journal(Path.join(dir, entry)) do
+              :settled -> {count + 1, kept}
+              {:standing, names} -> {count, [entry | names] ++ kept}
+              :unreadable -> {count, kept}
+            end
+          end)
+
+        Enum.reduce(entries -- kept, settled, fn entry, acc ->
           full = Path.join(dir, entry)
 
           cond do
@@ -530,6 +817,24 @@ defmodule Arca.Adapters.Local do
 
       {:error, _} ->
         0
+    end
+  end
+
+  # One journal, settled if its swap's lock is free (a swap in flight
+  # holds it) and it can be read. `{:standing, names}` when the journal is
+  # still on disk afterwards, with the sibling names it goes on owning.
+  defp settle_journal(journal) do
+    case read_journal(journal) do
+      {:ok, names} ->
+        serialized(names.live, fn -> settle(names) end, 0)
+
+        if File.exists?(journal),
+          do: {:standing, [Path.basename(names.staged), Path.basename(names.retired)]},
+          else: :settled
+
+      {:error, :corrupt_journal} ->
+        Logger.warning("[Arca.Local.sweep] unreadable swap journal: #{journal}")
+        :unreadable
     end
   end
 

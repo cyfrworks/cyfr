@@ -126,6 +126,266 @@ defmodule Arca.Adapters.LocalTest do
     end
   end
 
+  describe "replace_tree/3 crash recovery" do
+    # A swap that died part-way, laid out as the adapter lays it: the
+    # journal beside the trees under one number, recording the staged and
+    # retired names. `present` is the trees the crash left on disk, each
+    # with the bytes of its one file.
+    defp crashed_swap!(ctx, present) do
+      live = Local.build_path(ctx, @tree)
+      names = %{live: live, staged: "#{live}.staged.tmp.7", retired: "#{live}.retired.tmp.7"}
+      File.mkdir_p!(Path.dirname(live))
+
+      for {tree, content} <- present do
+        File.mkdir_p!(names[tree])
+        File.write!(Path.join(names[tree], "index.html"), content)
+      end
+
+      journal = "#{live}.swap.tmp.7"
+
+      File.write!(
+        journal,
+        :erlang.term_to_binary(%{
+          version: 1,
+          live: "site",
+          staged: "site.staged.tmp.7",
+          retired: "site.retired.tmp.7"
+        })
+      )
+
+      Map.put(names, :journal, journal)
+    end
+
+    test "a crash before the first rename keeps the previous tree; the sweep clears the rest",
+         %{ctx: ctx} do
+      crashed_swap!(ctx, live: "old", staged: "new")
+
+      # The previous tree is what a reader sees, before and after the sweep.
+      assert {:ok, "old"} = Local.get(ctx, @tree ++ ["index.html"])
+      assert {:ok, 1} = Local.sweep_stale_tmp(3600)
+      assert {:ok, "old"} = Local.get(ctx, @tree ++ ["index.html"])
+      assert beside(ctx) == ["site"]
+    end
+
+    test "a crash between the renames leaves both trees and the journal; the sweep installs the new one",
+         %{ctx: ctx} do
+      names = crashed_swap!(ctx, staged: "new", retired: "old")
+
+      # Both trees survive under their journalled names, whole.
+      assert File.read!(Path.join(names.staged, "index.html")) == "new"
+      assert File.read!(Path.join(names.retired, "index.html")) == "old"
+      assert File.exists?(names.journal)
+
+      # Everything here is stale by age, and the journal is still read
+      # first: the trees it names are settled, never reclaimed as orphans.
+      assert {:ok, 1} = Local.sweep_stale_tmp(-1)
+      assert {:ok, "new"} = Local.get(ctx, @tree ++ ["index.html"])
+      assert beside(ctx) == ["site"]
+    end
+
+    test "a crash between the renames with the staged tree lost puts the previous tree back",
+         %{ctx: ctx} do
+      crashed_swap!(ctx, retired: "old")
+
+      assert {:ok, 1} = Local.sweep_stale_tmp(3600)
+      assert {:ok, "old"} = Local.get(ctx, @tree ++ ["index.html"])
+      assert beside(ctx) == ["site"]
+    end
+
+    test "a crash after the second rename keeps the new tree; the sweep finishes the retirement",
+         %{ctx: ctx} do
+      names = crashed_swap!(ctx, live: "new", retired: "old")
+
+      assert {:ok, "new"} = Local.get(ctx, @tree ++ ["index.html"])
+      assert File.dir?(names.retired)
+
+      # A fresh journal is settled whatever its age.
+      assert {:ok, 1} = Local.sweep_stale_tmp(3600)
+      assert {:ok, "new"} = Local.get(ctx, @tree ++ ["index.html"])
+      assert beside(ctx) == ["site"]
+    end
+
+    test "a replacement after a crash lands, and the sweep clears the crashed swap's trees",
+         %{ctx: ctx} do
+      crashed_swap!(ctx, staged: "new", retired: "old")
+
+      assert :ok = Local.replace_tree(ctx, @tree, [{["index.html"], "newest"}])
+      assert {:ok, "newest"} = Local.get(ctx, @tree ++ ["index.html"])
+
+      assert {:ok, 1} = Local.sweep_stale_tmp(3600)
+      assert {:ok, "newest"} = Local.get(ctx, @tree ++ ["index.html"])
+      assert beside(ctx) == ["site"]
+    end
+
+    test "a journal that names anything but its own siblings directs no rename", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["data", "keep", "a.txt"], "kept")
+      names = crashed_swap!(ctx, staged: "new")
+
+      File.write!(
+        names.journal,
+        :erlang.term_to_binary(%{
+          version: 1,
+          live: "site",
+          staged: "keep",
+          retired: "site.retired.tmp.7"
+        })
+      )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, 0} = Local.sweep_stale_tmp(3600)
+        end)
+
+      assert log =~ "unreadable swap journal"
+      assert {:ok, "kept"} = Local.get(ctx, ["data", "keep", "a.txt"])
+      refute File.exists?(names.live)
+
+      # Unreadable, it ages out with the orphans beside it.
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, 2} = Local.sweep_stale_tmp(-1)
+      end)
+
+      assert beside(ctx) == ["keep"]
+    end
+
+    test "a successful replacement leaves no journal behind", %{ctx: ctx} do
+      assert :ok = Local.replace_tree(ctx, @tree, [{["index.html"], "one"}])
+      assert :ok = Local.replace_tree(ctx, @tree, [{["index.html"], "two"}])
+      assert beside(ctx) == ["site"]
+      assert {:ok, 0} = Local.sweep_stale_tmp(-1)
+    end
+  end
+
+  describe "conditional writes" do
+    test "a create over an existing key is :exists and leaves the bytes", %{ctx: ctx} do
+      key = ["data", "cond", "unit"]
+
+      assert {:ok, precondition} = Local.put_if_none_match(ctx, key, ["by", "tes"])
+      assert precondition == Cyfr.Digest.sha256_hex("bytes")
+      assert {:error, :exists} = Local.put_if_none_match(ctx, key, "other")
+      assert {:ok, "bytes"} = Local.get(ctx, key)
+
+      # A key a plain put made, and a directory, are as occupied.
+      :ok = Local.put(ctx, ["data", "cond", "plain"], "p")
+      assert {:error, :exists} = Local.put_if_none_match(ctx, ["data", "cond", "plain"], "x")
+      assert {:error, :exists} = Local.put_if_none_match(ctx, ["data", "cond"], "x")
+      assert list_names(ctx, ["data", "cond"]) == ["plain", "unit"]
+    end
+
+    test "a stale precondition is :precondition_failed and writes nothing", %{ctx: ctx} do
+      key = ["data", "cond", "unit"]
+
+      assert {:ok, first} = Local.put_if_none_match(ctx, key, "v1")
+      assert {:ok, second} = Local.put_if_match(ctx, key, "v2", first)
+      assert {:error, :precondition_failed} = Local.put_if_match(ctx, key, "v3", first)
+      assert {:error, :precondition_failed} = Local.put_if_match(ctx, key, "v3", :not_a_digest)
+      assert {:ok, "v2"} = Local.get(ctx, key)
+
+      # The precondition is the bytes' identity, whoever wrote them.
+      :ok = Local.put(ctx, key, "plain")
+      assert {:error, :precondition_failed} = Local.put_if_match(ctx, key, "v3", second)
+      assert {:ok, _} = Local.put_if_match(ctx, key, "v3", Cyfr.Digest.sha256_hex("plain"))
+      assert list_names(ctx, ["data", "cond"]) == ["unit"]
+    end
+
+    test "a missing key is :missing, a directory included, and nothing is created", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["data", "cond", "dir", "child"], "c")
+
+      assert {:error, :missing} = Local.put_if_match(ctx, ["data", "cond", "absent"], "x", "p")
+      assert {:error, :missing} = Local.put_if_match(ctx, ["data", "cond", "dir"], "x", "p")
+      assert {:error, :missing} = Local.put_if_match(ctx, ["data", "nowhere", "absent"], "x", "p")
+
+      assert list_names(ctx, ["data"]) == ["cond"]
+      assert list_names(ctx, ["data", "cond"]) == ["dir"]
+    end
+
+    test "racing creates of one key land exactly one, whole", %{ctx: ctx} do
+      key = ["data", "cond", "raced"]
+
+      answers =
+        1..16
+        |> Task.async_stream(
+          fn n -> Local.put_if_none_match(ctx, key, String.duplicate("writer-#{n};", 5_000)) end,
+          max_concurrency: 16,
+          ordered: false
+        )
+        |> Enum.map(fn {:ok, answer} -> answer end)
+
+      assert [{:ok, winner}] = Enum.filter(answers, &match?({:ok, _}, &1))
+      assert Enum.count(answers, &(&1 == {:error, :exists})) == 15
+
+      assert {:ok, bytes} = Local.get(ctx, key)
+      assert Cyfr.Digest.sha256_hex(bytes) == winner
+      assert list_names(ctx, ["data", "cond"]) == ["raced"]
+      assert ctx |> Local.build_path(["data", "cond"]) |> File.ls!() == ["raced"]
+    end
+
+    test "racing replaces from one precondition land exactly one", %{ctx: ctx} do
+      key = ["data", "cond", "raced"]
+      {:ok, seen} = Local.put_if_none_match(ctx, key, "v0")
+
+      answers =
+        1..16
+        |> Task.async_stream(fn n -> Local.put_if_match(ctx, key, "writer-#{n}", seen) end,
+          max_concurrency: 16,
+          ordered: false
+        )
+        |> Enum.map(fn {:ok, answer} -> answer end)
+
+      assert [{:ok, winner}] = Enum.filter(answers, &match?({:ok, _}, &1))
+      assert Enum.count(answers, &(&1 == {:error, :precondition_failed})) == 15
+      assert {:ok, "writer-" <> _ = bytes} = Local.get(ctx, key)
+      assert Cyfr.Digest.sha256_hex(bytes) == winner
+    end
+
+    test "a symlink is refused, and seed media stays read-only", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["data", "a.txt"], "a")
+
+      outside = Path.join(System.tmp_dir!(), "arca_outside_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(outside)
+      secret = Path.join(outside, "secret.txt")
+      File.write!(secret, "secret")
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      tree_dir = Local.build_path(ctx, ["data", "a.txt"]) |> Path.dirname()
+      File.ln_s!(secret, Path.join(tree_dir, "link.txt"))
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :symlink_denied} =
+                 Local.put_if_match(
+                   ctx,
+                   ["data", "link.txt"],
+                   "injected",
+                   Cyfr.Digest.sha256_hex("secret")
+                 )
+      end)
+
+      assert {:error, :exists} = Local.put_if_none_match(ctx, ["data", "link.txt"], "injected")
+      assert File.read!(secret) == "secret"
+
+      for call <- [
+            fn -> Local.put_if_none_match(ctx, ["seed", "components", "x.txt"], "x") end,
+            fn -> Local.put_if_match(ctx, ["seed", "components", "x.txt"], "x", "p") end
+          ] do
+        assert_raise ArgumentError, ~r/seed media is read-only/, call
+      end
+    end
+
+    test "list_prefix/2 answers keys, never temp names or symlinks", %{ctx: ctx} do
+      {:ok, _} = Local.put_if_none_match(ctx, ["data", "reg", "u1"], "1")
+      {:ok, _} = Local.put_if_none_match(ctx, ["data", "reg", "deep", "u2"], "2")
+      File.write!(Local.build_path(ctx, ["data", "reg", "u1"]) <> ".tmp.5", "partial")
+      File.ln_s!("/etc/hosts", Local.build_path(ctx, ["data", "reg", "link"]))
+
+      assert {:ok, keys} = Local.list_prefix(ctx, ["data", "reg"])
+      assert Enum.sort(keys) == [["data", "reg", "deep", "u2"], ["data", "reg", "u1"]]
+
+      assert {:ok, [["data", "reg", "u1"]]} = Local.list_prefix(ctx, ["data", "reg", "u1"])
+      assert {:ok, []} = Local.list_prefix(ctx, ["data", "reg", "link"])
+      assert {:ok, []} = Local.list_prefix(ctx, ["data", "reg", "absent"])
+    end
+  end
+
   describe "atomic-write hygiene" do
     test "in-flight temp names are invisible to listings, walks and usage", %{ctx: ctx} do
       :ok = Local.put(ctx, ["data", "a.txt"], "a")

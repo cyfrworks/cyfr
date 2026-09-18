@@ -40,12 +40,56 @@ defmodule Arca.Adapters.S3 do
   S3 has no atomic append. `append/3` reads the object, extends it and writes
   it back, so one path stays one object and `get/2`, `exists?/2`, `delete/2`
   and `usage/2` all see what was appended — the same shape the Local adapter
-  has. Two consequences follow from the read-modify-write, and neither applies
-  to Local's `O_APPEND` write: concurrent appends to one path are
-  last-writer-wins, and an append is refused once the object would pass 5 MiB
-  (the DEFAULT node `max_response_size`, above which a guest cannot read the
-  object back anyway — a node whose manifest raises its own response limit
-  does not raise this ceiling; the two deliberately track only the default).
+  has. The write back is conditional: `If-Match` on the ETag the read
+  answered, or `If-None-Match: *` when the read found nothing. An append that
+  lost to a concurrent writer (a definite conflict: the store wrote nothing)
+  reads again and retries, up to five attempts with a doubling, jittered
+  backoff, so concurrent appends to one path serialize into a total order and
+  none is lost, as under Local's `O_APPEND`. An append still losing after the
+  last attempt answers `{:error, :precondition_failed}`, and one whose
+  request may have reached the store when the connection failed answers
+  `{:error, :unknown}`: the bytes may or may not be there, and the caller
+  decides whether appending again is safe. An append is refused once the
+  object would pass 5 MiB (the DEFAULT node `max_response_size`, above which
+  a guest cannot read the object back anyway — a node whose manifest raises
+  its own response limit does not raise this ceiling; the two deliberately
+  track only the default).
+
+  ## Conditional writes
+
+  The precondition this adapter mints is the ETag the store answered, sent
+  back verbatim as `If-Match`; a create sends `If-None-Match: *`. Both
+  headers ride inside the SigV4 signature. The store makes the check and
+  the write one step, across every node that writes the bucket.
+
+  The one result vocabulary, shared with `Arca.Adapters.Local` for the same
+  situations:
+
+  | situation | `put_if_none_match/3` | `put_if_match/4` |
+  |---|---|---|
+  | nothing at the path | `{:ok, precondition}`, created | `{:error, :missing}`, nothing written (`404`) |
+  | an object there, precondition current | `{:error, :exists}`, untouched (`412`) | `{:ok, precondition}`, replaced |
+  | an object there, precondition stale | `{:error, :exists}`, untouched (`412`) | `{:error, :precondition_failed}`, untouched (`412`) |
+  | the store cannot make the write conditional | `{:error, :unsupported}` (`501`) | `{:error, :unsupported}` (`501`) |
+  | the store cannot say whether it applied the write | `{:error, :unknown}` | `{:error, :unknown}` |
+  | the store refuses or cannot be reached | `{:error, reason}` | `{:error, reason}` |
+
+  A `409` (the store's answer to a conditional write racing another on the
+  key) is the same definite conflict as a `412`: nothing was written.
+  `:unknown` is a connection that failed once the request may have been
+  sent (a reset, a close, a timeout) or a `5xx` other than `501` and `503`:
+  distinct from a refusal, where nothing was written, and from a store that
+  could not be reached (`:econnrefused` and its kin), where nothing was
+  sent. A precondition that cannot be an ETag (not a binary, or carrying a
+  control byte) is never sent: the key is probed and the answer is
+  `:missing` or `:precondition_failed`. A store that answers a write with
+  no ETag cannot be written conditionally again, and the adapter answers
+  `{:error, :unsupported}`. A store that ignores the conditional headers
+  and writes anyway cannot be told from one that honoured them, so the
+  bucket must be on a service that implements conditional writes (AWS S3,
+  MinIO, Cloudflare R2). `list_prefix/2` is the ListObjectsV2 prefix
+  listing: every key under `prefix/` as full segments, `[prefix]` for a
+  prefix that is one object, `[]` for nothing.
 
   ## Tree replacement
 
@@ -86,6 +130,11 @@ defmodule Arca.Adapters.S3 do
   # Read at call time like the Local adapter reads it: a compile-time copy
   # here would silently diverge the moment that function turns config-driven.
 
+  # The bound on an append's conditional write: attempts in all, and the
+  # base of the doubling backoff between them.
+  @append_attempts 5
+  @append_backoff_base_ms 20
+
   @impl true
   def get(%Context{} = ctx, segments) do
     case request(:get, build_key(ctx, segments)) do
@@ -110,25 +159,192 @@ defmodule Arca.Adapters.S3 do
   @impl true
   def append(%Context{} = ctx, segments, content) do
     Arca.Storage.refuse_seed_write!(segments)
+    append_attempt(ctx, segments, IO.iodata_to_binary(content), 1)
+  end
 
-    with {:ok, existing} <- read_for_append(ctx, segments) do
-      merged = existing <> content
+  # One read-extend-write, conditional on what the read saw. A definite
+  # conflict (the store wrote nothing: another writer moved the object
+  # first) reads again within the bound; every other answer, the unknown
+  # outcome included, is final — an append that may have landed is not
+  # sent twice.
+  defp append_attempt(ctx, segments, content, attempt) do
+    with {:ok, existing, etag} <- read_for_append(ctx, segments),
+         :ok <- check_append_ceiling(existing, content) do
+      case write_for_append(ctx, segments, existing <> content, etag) do
+        {:ok, _precondition} ->
+          :ok
 
-      if byte_size(merged) > Cyfr.Limits.default_max_response_size() do
-        {:error, :object_too_large}
-      else
-        put(ctx, segments, merged)
+        {:error, conflict} when conflict in [:exists, :precondition_failed, :missing] ->
+          if attempt < @append_attempts do
+            Process.sleep(append_backoff_ms(attempt))
+            append_attempt(ctx, segments, content, attempt + 1)
+          else
+            Logger.warning("[Arca.S3.append] still losing after #{attempt} attempts")
+            {:error, :precondition_failed}
+          end
+
+        {:error, _reason} = error ->
+          error
       end
     end
   end
 
+  defp check_append_ceiling(existing, content) do
+    if byte_size(existing) + byte_size(content) > Cyfr.Limits.default_max_response_size(),
+      do: {:error, :object_too_large},
+      else: :ok
+  end
+
   # A missing object is an empty one: appending to a path that does not exist
-  # yet creates it, matching the local filesystem's `File.write(:append)`.
+  # yet creates it, matching the local filesystem's `File.write(:append)`. An
+  # object read without an ETag cannot be written back conditionally, and an
+  # unconditional write back could drop a concurrent append: refuse.
   defp read_for_append(ctx, segments) do
-    case get(ctx, segments) do
-      {:ok, body} -> {:ok, body}
-      {:error, :not_found} -> {:ok, ""}
-      {:error, _reason} = err -> err
+    case request(:get, build_key(ctx, segments)) do
+      {:ok, %{status: 200, body: body} = response} ->
+        case etag(response) do
+          nil -> {:error, :unsupported}
+          etag -> {:ok, body, etag}
+        end
+
+      {:ok, %{status: 404}} ->
+        {:ok, "", nil}
+
+      {:ok, %{status: status, body: body}} ->
+        log_and_error("append", status, body)
+
+      {:error, reason} ->
+        log_and_error("append", reason)
+    end
+  end
+
+  defp write_for_append(ctx, segments, merged, nil), do: put_if_none_match(ctx, segments, merged)
+
+  defp write_for_append(ctx, segments, merged, etag),
+    do: put_if_match(ctx, segments, merged, etag)
+
+  # Doubling from the base, with jitter so the losers of one round do not
+  # collide again in the next.
+  defp append_backoff_ms(attempt) do
+    ceiling = @append_backoff_base_ms * Integer.pow(2, attempt - 1)
+    div(ceiling, 2) + :rand.uniform(div(ceiling, 2))
+  end
+
+  @doc """
+  Create the object only when the key holds nothing, with
+  `If-None-Match: *` (`c:Arca.Storage.put_if_none_match/3`); the moduledoc
+  states the result vocabulary.
+  """
+  @impl true
+  def put_if_none_match(%Context{} = ctx, segments, content) do
+    Arca.Storage.refuse_seed_write!(segments)
+    key = build_key(ctx, segments)
+
+    conditional_put("put_if_none_match", key, content, {"if-none-match", "*"}, :exists)
+  end
+
+  @doc """
+  Replace the object while its ETag is still `precondition`, with
+  `If-Match` (`c:Arca.Storage.put_if_match/4`); the moduledoc states the
+  result vocabulary.
+  """
+  @impl true
+  def put_if_match(%Context{} = ctx, segments, content, precondition) do
+    Arca.Storage.refuse_seed_write!(segments)
+    key = build_key(ctx, segments)
+
+    if etag_shaped?(precondition) do
+      conditional_put(
+        "put_if_match",
+        key,
+        content,
+        {"if-match", precondition},
+        :precondition_failed
+      )
+    else
+      # Not a value this adapter minted, and not one a header can carry:
+      # it matches no object, so only the key's presence is in question.
+      case request(:head, key) do
+        {:ok, %{status: 200}} -> {:error, :precondition_failed}
+        {:ok, %{status: 404}} -> {:error, :missing}
+        {:ok, %{status: status, body: body}} -> log_and_error("put_if_match", status, body)
+        {:error, reason} -> log_and_error("put_if_match", reason)
+      end
+    end
+  end
+
+  defp etag_shaped?(precondition) do
+    is_binary(precondition) and precondition != "" and String.printable?(precondition) and
+      not String.match?(precondition, ~r/[[:cntrl:]]/)
+  end
+
+  defp conditional_put(op, key, content, condition, conflict) do
+    body = IO.iodata_to_binary(content)
+
+    case signed_request(:put, build_url(key), body, [condition]) do
+      {:ok, %{status: status} = response} when status in 200..299 ->
+        case etag(response) do
+          nil ->
+            Logger.warning("[Arca.S3.#{op}] the store answered a write with no ETag")
+            {:error, :unsupported}
+
+          etag ->
+            {:ok, etag}
+        end
+
+      {:ok, %{status: status}} when status in [409, 412] ->
+        {:error, conflict}
+
+      {:ok, %{status: 404, body: body}} ->
+        # No such key is the conditional replace's `:missing`; no such
+        # bucket is a misconfiguration, reported as the error it is.
+        if conflict == :precondition_failed and not (to_string(body) =~ "NoSuchBucket"),
+          do: {:error, :missing},
+          else: log_and_error(op, 404, body)
+
+      {:ok, %{status: 501}} ->
+        {:error, :unsupported}
+
+      {:ok, %{status: status, body: body}} when status >= 500 and status != 503 ->
+        log_and_error(op, status, body)
+        {:error, :unknown}
+
+      {:ok, %{status: status, body: body}} ->
+        log_and_error(op, status, body)
+
+      {:error, reason} ->
+        log_and_error(op, reason)
+        {:error, write_failure(reason)}
+    end
+  end
+
+  # A failure that proves the request never left (no connection was made)
+  # is the store being unreachable. Any other transport failure may have
+  # followed the store's commit: an unknown outcome, never read as a
+  # refusal.
+  @never_sent [:econnrefused, :nxdomain, :ehostunreach, :enetunreach, :eaddrnotavail]
+
+  defp write_failure(%Req.TransportError{reason: reason} = error) when reason in @never_sent,
+    do: error
+
+  defp write_failure(_may_have_been_sent), do: :unknown
+
+  defp etag(%Req.Response{} = response) do
+    case Req.Response.get_header(response, "etag") do
+      [etag | _] when etag != "" -> etag
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Every object at or below `prefix`, as full segments
+  (`c:Arca.Storage.list_prefix/2`): the ListObjectsV2 listing under
+  `prefix/`, `[prefix]` for a prefix that is one object, `[]` for nothing.
+  """
+  @impl true
+  def list_prefix(%Context{} = ctx, prefix) do
+    with {:ok, []} <- list_recursive(ctx, prefix) do
+      if exists?(ctx, prefix), do: {:ok, [prefix]}, else: {:ok, []}
     end
   end
 

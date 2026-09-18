@@ -16,8 +16,8 @@ defmodule Arca.Adapters.ContractTest do
 
   The conditional writes and the prefix listing (`put_if_none_match/3`,
   `put_if_match/4`, `list_prefix/2`) have their contract rows here too.
-  They run against `Arca.Storage.TestDouble` today; the Local and S3 rows
-  are skipped, with the reason, until the adapters export the callbacks.
+  They run against Local, S3 and `Arca.Storage.TestDouble`; the S3 stub
+  store honours `If-None-Match: *` and `If-Match` as a real one does.
   """
 
   use ExUnit.Case, async: false
@@ -48,10 +48,6 @@ defmodule Arca.Adapters.ContractTest do
     defdelegate ensure_dir(ctx, path), to: Local
     defdelegate serve_to_conn(conn, ctx, path, opts), to: Local
   end
-
-  @conditional_pending "the adapter does not export the conditional callbacks yet; " <>
-                         "un-skip when it implements put_if_none_match/3, put_if_match/4 " <>
-                         "and list_prefix/2"
 
   # ---------------------------------------------------------------------------
   # The shared contract — one body per case, called from both describes.
@@ -354,29 +350,25 @@ defmodule Arca.Adapters.ContractTest do
       do: contract_traversal_refused(Local, ctx)
     )
 
-    @tag skip: @conditional_pending
     test("put_if_none_match/3 creates a key once", %{ctx: ctx},
       do: contract_put_if_none_match_creates_once(Local, ctx)
     )
 
-    @tag skip: @conditional_pending
     test("put_if_match/4 moves the precondition and refuses a stale one", %{ctx: ctx},
       do: contract_put_if_match_moves_the_precondition(Local, ctx)
     )
 
-    @tag skip: @conditional_pending
     test("put_if_match/4 on a missing key writes nothing", %{ctx: ctx},
       do: contract_put_if_match_missing_key(Local, ctx)
     )
 
-    @tag skip: @conditional_pending
     test("list_prefix/2 answers every key below a prefix", %{ctx: ctx},
       do: contract_list_prefix(Local, ctx)
     )
   end
 
   # ---------------------------------------------------------------------------
-  # The test double — the conditional contract, until Local and S3 carry it
+  # The test double — the conditional contract every adapter carries
   # ---------------------------------------------------------------------------
 
   describe "Arca.Storage.TestDouble" do
@@ -642,13 +634,46 @@ defmodule Arca.Adapters.ContractTest do
            end}
         )
 
+      sub_listing = """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <ListBucketResult>
+        <IsTruncated>false</IsTruncated>
+        <Contents><Key>athanors/ath_test/data/sub/c.txt</Key><Size>1</Size></Contents>
+      </ListBucketResult>
+      """
+
+      # An object's ETag as a store answers it: the quoted MD5 of its bytes.
+      etag = fn body -> ~s("#{Base.encode16(:crypto.hash(:md5, body), case: :lower)}") end
+
+      # The store's side of a conditional PUT, the check and the write one
+      # step: `If-None-Match: *` refuses an occupied key with 412, `If-Match`
+      # a changed object with 412 and a missing key with 404.
+      conditional_put = fn conn, body ->
+        if_none_match = Plug.Conn.get_req_header(conn, "if-none-match")
+        if_match = Plug.Conn.get_req_header(conn, "if-match")
+
+        Agent.get_and_update(store, fn objects ->
+          current = Map.get(objects, conn.request_path)
+
+          cond do
+            if_none_match == ["*"] and current != nil -> {412, objects}
+            if_match != [] and current == nil -> {404, objects}
+            if_match != [] and if_match != [etag.(current)] -> {412, objects}
+            true -> {200, Map.put(objects, conn.request_path, body)}
+          end
+        end)
+      end
+
       Req.Test.stub(:s3, fn conn ->
         prefix = Plug.Conn.fetch_query_params(conn).query_params["prefix"]
 
         cond do
-          # A listing under the tree prefix.
+          # A listing under the tree prefix, and under its one subdirectory.
           conn.method == "GET" and prefix == "athanors/ath_test/data/" ->
             Plug.Conn.send_resp(conn, 200, listing)
+
+          conn.method == "GET" and prefix == "athanors/ath_test/data/sub/" ->
+            Plug.Conn.send_resp(conn, 200, sub_listing)
 
           # Any other listing is empty.
           conn.method == "GET" and is_binary(prefix) ->
@@ -656,14 +681,27 @@ defmodule Arca.Adapters.ContractTest do
 
           conn.method == "PUT" ->
             {:ok, body, conn} = Plug.Conn.read_body(conn)
-            Agent.update(store, &Map.put(&1, conn.request_path, body))
-            Plug.Conn.send_resp(conn, 200, "")
+
+            case conditional_put.(conn, body) do
+              200 ->
+                conn
+                |> Plug.Conn.put_resp_header("etag", etag.(body))
+                |> Plug.Conn.send_resp(200, "")
+
+              refused ->
+                Plug.Conn.send_resp(conn, refused, "")
+            end
 
           # The stored objects answer GETs and HEADs; nothing else exists.
           conn.method in ["GET", "HEAD"] ->
             case Agent.get(store, &Map.get(&1, conn.request_path)) do
-              nil -> Plug.Conn.send_resp(conn, 404, "")
-              body -> Plug.Conn.send_resp(conn, 200, body)
+              nil ->
+                Plug.Conn.send_resp(conn, 404, "")
+
+              body ->
+                conn
+                |> Plug.Conn.put_resp_header("etag", etag.(body))
+                |> Plug.Conn.send_resp(200, body)
             end
 
           # Deletes succeed for any key — real S3 does not 404 a DELETE.
@@ -758,22 +796,18 @@ defmodule Arca.Adapters.ContractTest do
       do: contract_traversal_refused(S3, ctx)
     )
 
-    @tag skip: @conditional_pending
     test("put_if_none_match/3 creates a key once", %{ctx: ctx},
       do: contract_put_if_none_match_creates_once(S3, ctx)
     )
 
-    @tag skip: @conditional_pending
     test("put_if_match/4 moves the precondition and refuses a stale one", %{ctx: ctx},
       do: contract_put_if_match_moves_the_precondition(S3, ctx)
     )
 
-    @tag skip: @conditional_pending
     test("put_if_match/4 on a missing key writes nothing", %{ctx: ctx},
       do: contract_put_if_match_missing_key(S3, ctx)
     )
 
-    @tag skip: @conditional_pending
     test("list_prefix/2 answers every key below a prefix", %{ctx: ctx},
       do: contract_list_prefix(S3, ctx)
     )

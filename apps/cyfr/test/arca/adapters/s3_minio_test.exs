@@ -120,6 +120,56 @@ defmodule Arca.Adapters.S3MinioTest do
     refute S3.exists?(ctx, path)
   end
 
+  test "conditional headers ride inside the signature, on keys the signer must encode",
+       %{ctx: ctx} do
+    # If-None-Match and If-Match are signed headers: a signer that leaves
+    # them out of SignedHeaders, or mis-encodes the key beside them, is a
+    # 403 only a real service answers. The parity suite
+    # (`Arca.AppendParityTest`) runs the races against this service.
+    :ok = S3.delete_tree(ctx, ["data", "cond"])
+
+    for name <- ["plain", "with space", "plus+plus", "文件名", "📁unit"] do
+      key = ["data", "cond", name]
+
+      assert {:ok, first} = S3.put_if_none_match(ctx, key, "v1")
+      assert {:error, :exists} = S3.put_if_none_match(ctx, key, "other")
+
+      assert {:ok, second} = S3.put_if_match(ctx, key, "v2", first)
+      assert second != first
+      assert {:error, :precondition_failed} = S3.put_if_match(ctx, key, "v3", first)
+      assert {:ok, "v2"} = S3.get(ctx, key)
+
+      # The precondition is the service's own ETag for the bytes.
+      assert second == ~s("#{Base.encode16(:crypto.hash(:md5, "v2"), case: :lower)}")
+
+      assert :ok = S3.delete(ctx, key)
+      assert {:error, :missing} = S3.put_if_match(ctx, key, "v3", second)
+      refute S3.exists?(ctx, key)
+    end
+  end
+
+  test "list_prefix/2 answers what was written: a tree, one object, nothing", %{ctx: ctx} do
+    # The bucket outlives a run; start from nothing whatever the last one left.
+    :ok = S3.delete_tree(ctx, ["data", "reg"])
+    :ok = S3.delete_tree(ctx, ["data", "reg-other"])
+    {:ok, _} = S3.put_if_none_match(ctx, ["data", "reg", "u1"], "1")
+    {:ok, _} = S3.put_if_none_match(ctx, ["data", "reg", "deep", "u 2"], "2")
+
+    assert {:ok, keys} = S3.list_prefix(ctx, ["data", "reg"])
+    assert Enum.sort(keys) == [["data", "reg", "deep", "u 2"], ["data", "reg", "u1"]]
+
+    assert {:ok, [["data", "reg", "u1"]]} = S3.list_prefix(ctx, ["data", "reg", "u1"])
+    assert {:ok, []} = S3.list_prefix(ctx, ["data", "reg", "absent"])
+
+    # A sibling that only shares the spelling is not under the prefix.
+    {:ok, _} = S3.put_if_none_match(ctx, ["data", "reg-other"], "x")
+    assert {:ok, keys} = S3.list_prefix(ctx, ["data", "reg"])
+    assert length(keys) == 2
+
+    assert :ok = S3.delete_tree(ctx, ["data", "reg"])
+    assert :ok = S3.delete(ctx, ["data", "reg-other"])
+  end
+
   test "a configured key prefix scopes every object", %{ctx: ctx} do
     prev = Application.fetch_env!(:cyfr, :s3)
     Application.put_env(:cyfr, :s3, Keyword.put(prev, :prefix, "tenants/it"))
