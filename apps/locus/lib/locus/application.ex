@@ -3,13 +3,19 @@
 
 defmodule Locus.Application do
   @moduledoc """
-  Locus's own supervision tree: the build-slot limiter, the task pool the
-  build tool's background work runs on, the client of cyfr-spawn when this
-  node was started by it, and the builder service when this node is the
-  builder.
+  Locus's own supervision tree: the build slots, the task pool the build
+  tool's background work runs on, the client of cyfr-spawn when this node
+  was started by it, and the builder service when this node is the builder.
   """
 
   use Application
+
+  # A `cargo component build` or npm bundle occupies a CPU core and hundreds
+  # of MB for minutes, so a node accepts a couple at once, and one per
+  # athanor: the total is small, and a single athanor must not be able to
+  # hold every slot.
+  @default_max_builds 2
+  @default_max_builds_per_tenant 1
 
   @impl true
   def start(_type, _args) do
@@ -18,7 +24,7 @@ defmodule Locus.Application do
 
     children =
       [
-        Locus.BuildLimiter,
+        build_slots(),
         {Task.Supervisor, name: Locus.TaskSupervisor}
       ] ++ spawner(spawner?) ++ builder_endpoint(listen?, spawner?)
 
@@ -27,6 +33,46 @@ defmodule Locus.Application do
 
   defp spawner(true), do: [Locus.Spawner]
   defp spawner(false), do: []
+
+  @doc """
+  The build slots, `Locus.BuildSlots`: one `Cyfr.Slots` instance whose caps
+  are read once at boot, `CYFR_MAX_CONCURRENT_BUILDS` (`:cyfr,
+  :max_concurrent_builds`) in all and `CYFR_MAX_CONCURRENT_BUILDS_PER_TENANT`
+  per athanor. A build past either cap is refused, never queued: a backlog
+  of multi-minute builds behind a synchronous tool call helps nobody. A
+  build holds its slot in the process that runs it, so a holder the tool
+  layer brutal-kills on its deadline, or an SSE disconnect exits, gives the
+  slot back by its monitor.
+  """
+  @spec build_slots() :: {Cyfr.Slots, [Cyfr.Slots.option()]}
+  def build_slots do
+    {Cyfr.Slots,
+     name: Locus.BuildSlots,
+     max: configured_max_builds(),
+     key_max:
+       Application.get_env(
+         :cyfr,
+         :max_concurrent_builds_per_tenant,
+         @default_max_builds_per_tenant
+       ),
+     child_reserve: 0,
+     policy: :reject}
+  end
+
+  @doc """
+  The cap a build refusal names: the running instance's, or the configured
+  one while the instance is down, so the refusal reads the same either way.
+  """
+  @spec max_builds() :: pos_integer()
+  def max_builds do
+    case Cyfr.Slots.status(Locus.BuildSlots) do
+      %{error: :unavailable} -> configured_max_builds()
+      %{max: max} -> max
+    end
+  end
+
+  defp configured_max_builds,
+    do: Application.get_env(:cyfr, :max_concurrent_builds, @default_max_builds)
 
   @doc """
   The builder container's HTTP face, when this node is the builder (the

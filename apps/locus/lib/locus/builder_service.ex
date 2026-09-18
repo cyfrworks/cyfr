@@ -81,23 +81,26 @@ defmodule Locus.BuilderService do
   post "/build" do
     with {:ok, source_files, language, target_type, resolve?} <- decode_request(conn.body_params),
          # The cap is enforced on THIS side of the wire too: the client-side
-         # limiter governs one app node, but two app nodes (or anything else
+         # slots govern one app node, but two app nodes (or anything else
          # holding the token) could otherwise run unbounded concurrent
          # cargo builds in the one container sized for a couple.
-         :ok <- acquire_slot() do
+         {:ok, slot} <- acquire_slot() do
       try do
         run_build(conn, source_files, language, target_type, resolve?)
       after
-        Locus.BuildLimiter.release()
+        Cyfr.Slots.release(Locus.BuildSlots, slot)
       end
     else
       {:error, :unauthorized} ->
         send_json(conn, 401, %{ok: false, error: "unauthorized"})
 
-      {:error, :busy} ->
+      # A slot refusal, whichever: the container's cap, or slots not being
+      # handed out at all. An unaccounted build is worse than a refused one,
+      # and the client retries either the same way.
+      {:error, refusal} when is_atom(refusal) ->
         send_json(conn, 429, %{
           ok: false,
-          error: "builder at capacity (#{Locus.BuildLimiter.max_builds()} concurrent builds)"
+          error: "builder at capacity (#{Locus.Application.max_builds()} concurrent builds)"
         })
 
       {:error, message} when is_binary(message) ->
@@ -190,10 +193,10 @@ defmodule Locus.BuilderService do
   end
 
   # The service has no tenant identity — the client side already applied
-  # the per-athanor cap; this is the container's own global ceiling.
-  defp acquire_slot do
-    Locus.BuildLimiter.acquire(Locus.BuildLimiter, nil)
-  end
+  # the per-athanor cap; this is the container's own global ceiling. A build
+  # never waits for a slot, so a slot server that does not answer refuses
+  # within the call's grace instead of holding the request open.
+  defp acquire_slot, do: Cyfr.Slots.acquire(Locus.BuildSlots, nil, :root, wait_ms: 0)
 
   defp run_build(conn, source_files, language, target_type, resolve?) do
     log = :ets.new(:build_log, [:public])

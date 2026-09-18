@@ -267,18 +267,23 @@ defmodule Locus.MCP do
   defp settle_build_id(_ctx, _other),
     do: {:error, {:invalid_argument, "build_id must be a string"}}
 
+  # The build holds its slot in this process: the tool layer's brutal kill
+  # on its deadline and an SSE disconnect's exit both bypass `after`, and
+  # the slot's monitor gives it back then. A build never waits for a slot.
   defp run_compile(ctx, reference, build_id, resolve?) do
-    case Locus.BuildLimiter.acquire(Locus.BuildLimiter, ctx.athanor_id) do
-      :ok ->
+    case Cyfr.Slots.acquire(Locus.BuildSlots, ctx.athanor_id, :root, wait_ms: 0) do
+      {:ok, slot} ->
         try do
           do_run_compile(ctx, reference, build_id, resolve?)
         after
-          Locus.BuildLimiter.release()
+          Cyfr.Slots.release(Locus.BuildSlots, slot)
         end
 
-      {:error, :busy} ->
+      # The node's cap, the athanor's, or slots not being handed out at all:
+      # each is a refusal to retry, never a queue.
+      {:error, _refusal} ->
         {:error,
-         "Build capacity is full (#{Locus.BuildLimiter.max_builds()} concurrent) — retry shortly"}
+         "Build capacity is full (#{Locus.Application.max_builds()} concurrent) — retry shortly"}
     end
   end
 
