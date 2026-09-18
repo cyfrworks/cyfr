@@ -62,7 +62,7 @@ defmodule Opus.Attempt do
   @ended "Execution attempt ended before it closed"
 
   @typedoc """
-  What a runner starts with: the assignment token and what it carries, the
+  What an attempt process starts with: the assignment token and what it carries, the
   decoded input, the attempt's host client, and the starting caller's
   process callers and log metadata. A child's start also carries the vault
   fields its admission unsealed (`:secrets`) and the process waiting for
@@ -101,7 +101,7 @@ defmodule Opus.Attempt do
     %{id: __MODULE__, start: {__MODULE__, :start_link, [start]}, restart: :temporary}
   end
 
-  @doc "Start a runner for `start` (`t:start/0`), linked to the calling supervisor."
+  @doc "Start an attempt process for `start` (`t:start/0`), linked to the calling supervisor."
   @spec start_link(start()) :: {:ok, pid()}
   def start_link(start) when is_map(start) do
     {:ok, spawn_link(fn -> run(start) end)}
@@ -278,10 +278,10 @@ defmodule Opus.Attempt do
   # The component process
   # ---------------------------------------------------------------------------
 
-  # The component runs in a process of its own, linked to the runner and
+  # The component runs in a process of its own, linked to the attempt process and
   # trapping exits, so a Wasmex crash reaches it as a message. No exit it
   # traps can stop it, so it starts only once its worker service has been
-  # told of it (ahead of any exit of the runner's), and a kill names it.
+  # told of it (ahead of any exit of the attempt process's), and a kill names it.
   # Answers `{:ok, {output, metadata}}`, `{:error, reason}`, or
   # `{:abandoned, reason}` when the component call was killed.
   defp execute(artifact, input, runtime_opts, timeout_ms, watch) do
@@ -383,9 +383,9 @@ defmodule Opus.Attempt do
   end
 
   @doc false
-  # A renewal CYFR answers `lost` stops the runner at once: the row is
+  # A renewal CYFR answers `lost` stops the attempt at once: the row is
   # another's (cancelled, swept, finished, taken over). A renewal CYFR
-  # cannot answer keeps the runner working only while the lease it last
+  # cannot answer keeps the attempt working only while the lease it last
   # held is still good.
   @spec renew_watch(map(), DateTime.t()) :: {:ok, map()} | :lapsed
   def renew_watch(%{client: client} = watch, now \\ DateTime.utc_now()) do
