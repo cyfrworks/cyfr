@@ -89,9 +89,9 @@ defmodule Cyfr.Execution.WorkerClient do
 
   @doc """
   The state of the worker service at `endpoint` (`c:Cyfr.WorkerAPI.status/0`),
-  read as `Cyfr.WorkerAPI.valid_status?/1` requires; an answer of another
-  shape is lost. A worker service that reports no `tainted` count has no
-  tainted runners.
+  read as `Cyfr.WorkerAPI.valid_status?/1` requires: a count for every
+  runner state, `tainted` included, and nothing else. An answer of another
+  shape is lost.
   """
   @spec status(WorkerAPI.endpoint()) ::
           {:ok, WorkerAPI.status()} | {:error, transport_refusal() | atom()}
@@ -115,15 +115,13 @@ defmodule Cyfr.Execution.WorkerClient do
 
   defp read_status(_answer), do: {:error, :lost}
 
-  # A count for each runner state the contract names, as reported; a count
-  # of anything else makes the answer no status.
+  # A count for each runner state the contract names, as reported: one
+  # missing, or a count of anything else, makes the answer no status.
   defp runner_counts(runners) do
     names = Map.new(WorkerAPI.runner_states(), &{Atom.to_string(&1), &1})
 
     if Enum.all?(Map.keys(runners), &is_map_key(names, &1)) do
-      Map.new(names, fn {name, state} ->
-        {state, Map.get(runners, name, if(state == :tainted, do: 0))}
-      end)
+      Map.new(names, fn {name, state} -> {state, Map.get(runners, name)} end)
     else
       %{}
     end

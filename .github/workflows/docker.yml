@@ -19,14 +19,15 @@ jobs:
     if: github.repository == 'cyfrworks/cyfr'
     uses: ./.github/workflows/test.yml
 
-  # The app image, and the builder image a `builder`-profile deploy pulls:
-  # a project `cyfr init` writes carries no sources to build it from.
+  # The app image, the worker image every deploy pulls and the builder
+  # image a `builder`-profile deploy pulls: a project `cyfr init` writes
+  # carries no sources to build them from.
   build:
     needs: verify
     if: github.repository == 'cyfrworks/cyfr'
     strategy:
       matrix:
-        image: [cyfr, cyfr-builder]
+        image: [cyfr, cyfr-opus, cyfr-builder]
         platform: [linux/amd64, linux/arm64]
         include:
           - platform: linux/amd64
@@ -35,6 +36,8 @@ jobs:
             runner: ubuntu-24.04-arm
           - image: cyfr
             file: Dockerfile
+          - image: cyfr-opus
+            file: Dockerfile.opus
           - image: cyfr-builder
             file: Dockerfile.builder
     runs-on: ${{ matrix.runner }}
@@ -99,7 +102,7 @@ jobs:
     needs: build
     strategy:
       matrix:
-        image: [cyfr, cyfr-builder]
+        image: [cyfr, cyfr-opus, cyfr-builder]
     runs-on: ubuntu-latest
     steps:
       - name: Log in to GHCR

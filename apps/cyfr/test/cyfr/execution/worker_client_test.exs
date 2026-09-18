@@ -145,21 +145,28 @@ defmodule Cyfr.Execution.WorkerClientTest do
     assert {:error, :lost} = WorkerClient.status(endpoint)
   end
 
-  test "a status is read as the contract requires, and one reporting no tainted count taints nothing" do
-    reported = %{service: @service, boot: "boot_1", runners: %{fresh: 1, idle: 0, busy: 2}}
+  test "a status is read as the contract requires, a count for every runner state among it" do
+    reported = %{
+      service: @service,
+      boot: "boot_1",
+      runners: %{fresh: 1, idle: 0, busy: 2, tainted: 1}
+    }
 
     endpoint =
       serve!(%{
         WorkerWire.worker_route(:status) => WorkerWire.ok(Map.put(reported, :attempts, ["att_1"]))
       })
 
-    assert {:ok, %{runners: %{fresh: 1, idle: 0, busy: 2, tainted: 0}, attempts: ["att_1"]}} =
+    assert {:ok, %{runners: %{fresh: 1, idle: 0, busy: 2, tainted: 1}, attempts: ["att_1"]}} =
              WorkerClient.status(endpoint)
 
+    # Every worker service counts its tainted runners; a status without the
+    # count is not one.
     for runners <- [
           %{fresh: -1, idle: 0, busy: 0, tainted: 0},
           %{fresh: 0, idle: 0, busy: "2", tainted: 0},
           %{fresh: 0, idle: 0, tainted: 0},
+          %{fresh: 1, idle: 0, busy: 2},
           %{fresh: 0, idle: 0, busy: 0, tainted: 0, other: 0}
         ] do
       endpoint =

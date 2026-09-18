@@ -175,6 +175,38 @@ defmodule Cyfr.DocsDriftTest do
            """
   end
 
+  # The worker vocabulary `config/runtime.exs` reads is documented where an
+  # operator sets it: cyfr's side in `.env.example`, the worker's own in
+  # `.env.opus.example`. `OPUS_ROLE` is the keeper's, not an operator's.
+  test "every worker variable runtime.exs reads is documented in an env example" do
+    read =
+      @repo_root
+      |> Path.join("config/runtime.exs")
+      |> File.read!()
+      |> then(&Regex.scan(~r/"((?:CYFR_WORKER|CYFR_HOST_API|OPUS)_[A-Z0-9_]+)"/, &1))
+      |> Enum.map(fn [_, name] -> name end)
+      |> Enum.uniq()
+      |> Enum.reject(&(&1 == "OPUS_ROLE"))
+
+    assert length(read) >= 12, "the scan found only #{inspect(read)}"
+
+    documented =
+      for example <- ~w(.env.example .env.opus.example),
+          [_, name] <-
+            Regex.scan(
+              ~r/^#?\s*((?:CYFR|OPUS)_[A-Z0-9_]+)=/m,
+              File.read!(Path.join(@repo_root, example))
+            ),
+          into: MapSet.new(),
+          do: name
+
+    undocumented = Enum.reject(read, &MapSet.member?(documented, &1))
+
+    assert undocumented == [],
+           "config/runtime.exs reads these worker variables, and neither .env.example nor " <>
+             ".env.opus.example documents them: #{inspect(undocumented)}"
+  end
+
   test "the guides' tincture-block keys are ones the code actually reads" do
     # Documented tincture keys must match validator and consumer support.
     documented_only = ~w(sandbox)

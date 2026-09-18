@@ -407,10 +407,14 @@ defmodule Opus.Attempt do
   end
 
   # The kill frees the component's BEAM process, not the component call's
-  # native thread; the attempt's `fail` says so (`abandoned`). The tokens
-  # dispensed to the run stay in its attempt's masking set, which masks the
-  # error when the attempt closes the run.
+  # native thread, which may spin on in this VM; the attempt's `fail` says
+  # so (`abandoned`), and the subtree's runner is never reused
+  # (`Opus.Subtree.unclean/1`): its service ends the VM, thread and all,
+  # once the subtree completes. The tokens dispensed to the run stay in
+  # its attempt's masking set, which masks the error when the attempt
+  # closes the run.
   defp kill(pid, refs) do
+    Subtree.unclean(:component_killed)
     Process.unlink(pid)
     Process.exit(pid, :kill)
 
