@@ -1,6 +1,7 @@
 #[allow(warnings)]
 mod bindings;
 mod chat;
+mod headers;
 mod ids;
 mod stream;
 
@@ -69,6 +70,22 @@ fn handle_request(input: &str) -> Result<String, String> {
         _ => None,
     };
 
+    // The attribution headers a chat completion carries (`referer` as
+    // HTTP-Referer, `title` as X-Title) reach the request verbatim, so a
+    // value off its rules is refused before the key is read and before any
+    // request is built. No other operation sends them.
+    let (referer, title) = match operation {
+        "chat.completions.create" | "messages.create" => {
+            match (headers::referer(&params), headers::title(&params)) {
+                (Ok(referer), Ok(title)) => (referer, title),
+                (Err(message), _) | (_, Err(message)) => {
+                    return Ok(format_error(400, "invalid_request", &message))
+                }
+            }
+        }
+        _ => (None, None),
+    };
+
     // Read API key
     let api_key = match read::get(SECRET_NAME) {
         Ok(key) => key,
@@ -80,10 +97,6 @@ fn handle_request(input: &str) -> Result<String, String> {
             ));
         }
     };
-
-    // Extract optional OpenRouter-specific headers
-    let referer = params.get("referer").and_then(|v| v.as_str()).map(String::from);
-    let title = params.get("title").and_then(|v| v.as_str()).map(String::from);
 
     match operation {
         // model/chat@1
@@ -431,5 +444,70 @@ mod tests {
             assert_eq!(chat["status"], 404, "{model:?}");
             assert_eq!(chat["error"]["type"], "unknown_model", "{model:?}");
         }
+    }
+
+    // The key read is a host import too, so each refusal below was given
+    // before the key was read and before any request was built, on both
+    // operations that send the headers and on the streaming path.
+    #[test]
+    fn an_attribution_header_off_its_rules_is_refused_before_the_key_is_read() {
+        let completion = json!({
+            "model": "openai/gpt-6-astra",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let with = |key: &str, value: Value| {
+            let mut params = completion.clone();
+            params[key] = value;
+            params
+        };
+        let cases = [
+            (
+                with("referer", json!("https://example.com\r\nX-Injected: 1")),
+                "'referer' must not contain CR, LF or any other control byte",
+            ),
+            (
+                with("referer", json!("https://example.com/\u{0}")),
+                "'referer' must not contain CR, LF or any other control byte",
+            ),
+            (
+                with("referer", json!("ftp://example.com/file")),
+                "'referer' must be an absolute http:// or https:// URL",
+            ),
+            (
+                with("referer", json!("example.com")),
+                "'referer' must be an absolute http:// or https:// URL",
+            ),
+            (
+                with("referer", json!(format!("https://example.com/{}", "a".repeat(2048)))),
+                "'referer' must be at most 2048 bytes",
+            ),
+            (with("referer", json!(7)), "'referer' must be a string"),
+            (
+                with("title", json!("Mine\nX-Injected: 1")),
+                "'title' must not contain CR, LF or any other control byte",
+            ),
+            (
+                with("title", json!("Mine\tApp")),
+                "'title' must not contain CR, LF or any other control byte",
+            ),
+            (with("title", json!("t".repeat(257))), "'title' must be at most 256 bytes"),
+            (with("title", json!(["Mine"])), "'title' must be a string"),
+        ];
+
+        for (params, rule) in &cases {
+            for operation in ["chat.completions.create", "messages.create"] {
+                let refused = run(operation, params.clone());
+                assert_eq!(refused["status"], 400, "{operation} {params}");
+                assert_eq!(refused["error"]["type"], "invalid_request", "{operation} {params}");
+                assert_eq!(refused["error"]["message"], *rule, "{operation} {params}");
+            }
+        }
+
+        let (params, rule) = &cases[0];
+        let streamed = json!({"operation": "chat.completions.create", "params": params, "stream": true});
+        let refused: Value = serde_json::from_str(&handle_request(&streamed.to_string()).unwrap()).unwrap();
+        assert_eq!(refused["status"], 400);
+        assert_eq!(refused["error"]["type"], "invalid_request");
+        assert_eq!(refused["error"]["message"], *rule);
     }
 }

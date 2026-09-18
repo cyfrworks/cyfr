@@ -9,3 +9,7 @@ The catalyst declares the model contract (`"contracts": ["model/chat@1"]` in its
 ## Credentials
 
 The catalyst declares one need, `api_key`, served from a vault entry the operator binds at consent: on the console's Vault page, or with `cyfr profile grant catalyst:local.openrouter`. The binary reads `OPENROUTER_API_KEY` through `cyfr:vault/read`; it never learns the vault entry's name.
+
+## Attribution headers
+
+`chat.completions.create` (and its alias `messages.create`) forwards two optional params as OpenRouter's attribution headers: `referer` as `HTTP-Referer` and `title` as `X-Title`. Each is checked before the key is read and before any request is built: `referer` is at most 2048 bytes, carries no control byte and is an absolute `http://` or `https://` URL; `title` is at most 256 bytes and carries no control byte. A value off its rule refuses the call with an `invalid_request` error naming the parameter and the rule. The rules live in `src/src/headers.rs`.
