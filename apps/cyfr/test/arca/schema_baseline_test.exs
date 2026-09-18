@@ -228,12 +228,64 @@ defmodule Arca.SchemaBaselineTest do
              insert_row("provisioning_claims", %{claim | id: "pc_other", athanor_id: "ath_other"})
   end
 
-  test "the storage-unit and claim schemas carry exactly their tables' columns",
+  test "a storage write intent names its attempt and fence and belongs to an execution of its estate" do
+    columns = Map.new(columns("storage_write_intents"), &{&1.name, &1})
+
+    for column <- ~w(execution_id attempt fence runner op path state inserted_at),
+        do: assert(columns[column].not_null?)
+
+    for column <- ~w(bytes reason settled_at), do: refute(columns[column].not_null?)
+
+    {:ok, %{execution: execution, attempt: attempt}} =
+      Arca.Execution.admit(%{
+        id: "exec_schema_#{System.unique_integer([:positive])}",
+        reference: "catalyst:local.schema:0.1.0",
+        user_id: "usr_schema",
+        athanor_id: "ath_schema",
+        component_type: "catalyst",
+        input: "{}"
+      })
+
+    intent = %{
+      id: "swi_#{System.unique_integer([:positive])}",
+      athanor_id: "ath_schema",
+      execution_id: execution.id,
+      attempt: attempt.attempt,
+      fence: 1,
+      runner: "runner_schema",
+      op: "put",
+      path: "data/a.txt",
+      state: "pending",
+      inserted_at: NaiveDateTime.utc_now()
+    }
+
+    # One attempt writes one path as often as it likes: each write is a row.
+    assert :ok = insert_row("storage_write_intents", intent)
+    assert :ok = insert_row("storage_write_intents", %{intent | id: "swi_again"})
+
+    # An intent for an execution the estate does not hold is refused.
+    assert :refused =
+             insert_row("storage_write_intents", %{
+               intent
+               | id: "swi_none",
+                 execution_id: "exec_0"
+             })
+
+    assert :refused =
+             insert_row("storage_write_intents", %{
+               intent
+               | id: "swi_theirs",
+                 athanor_id: "ath_theirs"
+             })
+  end
+
+  test "the storage-unit, claim and write-intent schemas carry exactly their tables' columns",
        %{declared: declared} do
     for schema <- [
           Arca.Schemas.StorageUnit,
           Arca.Schemas.StorageCommit,
-          Arca.Schemas.ProvisioningClaim
+          Arca.Schemas.ProvisioningClaim,
+          Arca.Schemas.StorageWriteIntent
         ] do
       table = schema.__schema__(:source)
       fields = schema.__schema__(:fields) |> Enum.map(&Atom.to_string/1) |> Enum.sort()

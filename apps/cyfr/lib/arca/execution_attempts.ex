@@ -23,11 +23,98 @@ defmodule Arca.ExecutionAttempts do
   a store error so the caller's transaction rolls back; the others are
   entry points and answer `{:error, :database_error}` when the store
   cannot answer.
+
+  ## A guest's mutable storage write
+
+  A put, an append and a delete are the mutable storage operations a guest
+  reaches, and each runs through `while_held/5` in three steps. No
+  transaction is open while the store is touched, and the store is never
+  touched on a check alone: the check and the record of what is about to
+  happen commit together.
+
+    1. **Intent.** One short transaction takes the attempt row's lock by
+       writing it, requires the hold — the attempt owns its execution, is
+       `running` at the caller's fence, is claimed by the caller's runner
+       and its lease has not run out — and inserts a `pending`
+       `Arca.Schemas.StorageWriteIntent` naming the attempt, fence, runner,
+       operation and path under a fresh id. Without the hold nothing is
+       recorded and the store is not touched.
+    2. **Store.** The adapter call runs outside any transaction.
+    3. **Settle.** A second short transaction takes the row's lock again,
+       requires the same hold and moves the intent out of `pending` by
+       compare-and-set.
+
+  Every write that ends an attempt's hold (`pause!/2`, `close!/4`,
+  `lapse/2`, `takeover!/3`) settles the attempt's `pending` intents as
+  `uncertain`, in its own transaction and after it wrote the attempt row,
+  with the reason `paused`, the terminal state, `lapsed` or `taken_over`.
+  So an intent is `pending` only while its attempt still holds, a cancel is
+  never made to wait for a store, and the evidence that a write may land
+  commits with the write that ended the hold.
+
+  ### The commit point of each operation
+
+  | Operation | The store's commit point | `confirmed` means |
+  |---|---|---|
+  | put | the adapter's replacement of the object (Local: the rename over the path; S3: the `PUT` the store acknowledged) | the object holds the bytes, and the attempt held its row before and after |
+  | append | the adapter's extension of the object (Local: the `O_APPEND` write; S3: the conditional `PUT` under the ETag it read) | the bytes were appended once, whole, and the attempt held its row before and after |
+  | delete | the adapter's removal of the object | the object is gone, and the attempt held its row before and after |
+
+  The write is the guest's once step 3 commits `confirmed`; until then it
+  is answered to nobody as written.
+
+  ### Against a cancel, a lapse and a takeover
+
+  For a write the store answered `:ok`:
+
+  | The hold ends | The store | The intent | `while_held/5` answers |
+  |---|---|---|---|
+  | before step 1 commits | not touched | none | `{:error, :lost}` |
+  | between steps 1 and 2 | may be written after the hold ended | `uncertain`, settled by the write that ended the hold | `{:ok, {:uncertain, :hold_lost}}` |
+  | between steps 2 and 3 | written while the hold stood | `uncertain`, settled by the write that ended the hold | `{:ok, {:uncertain, :hold_lost}}` |
+  | after step 3 commits | written while the hold stood | `confirmed` | `{:ok, {:confirmed, :ok}}` |
+
+  Steps 1 and 3 and the write that ends a hold all write the attempt row
+  first, so each pair runs in one order. A write whose store call overlaps
+  the end of its attempt's hold cannot be told from one that landed after
+  it, so it is never confirmed and never answered as refused: it is
+  `uncertain`. A process killed between the steps settles nothing itself;
+  its intent is settled by the cancel, lapse or takeover that ends its
+  attempt, which is also what a recovering owner's takeover does with the
+  `pending` intents it finds.
+
+  ### What the store answered
+
+  | The store | The intent | `while_held/5` answers |
+  |---|---|---|
+  | `:ok` | as the table above | as the table above |
+  | `{:error, :unknown}`: it may have applied the write | `uncertain`, `unknown_outcome` | `{:ok, {:uncertain, :unknown_outcome}}` |
+  | it raised, exited or answered no storage result | `uncertain`, `io_crashed` | `{:ok, {:uncertain, :io_crashed}}` |
+  | any other `{:error, reason}`: it wrote nothing | `failed`, with the reason's name | `{:ok, {:failed, {:error, reason}}}` |
+
+  The last three rows are answered whoever holds the row by then. An intent
+  the end of a hold already settled keeps that settlement: an attempt that
+  lost its row overwrites nothing, its own evidence included.
+
+  An append that lost to concurrent writers until the adapter's bound ran
+  out is `{:error, :precondition_failed}`: a definite conflict, nothing
+  appended, the intent `failed`, and appending again is safe. An append the
+  store may have applied is `:unknown` and is never sent twice. Two writes
+  of one attempt to one path are two intents; the adapter orders them (per
+  path on Local, by conditional write on S3), a put is last-writer-wins and
+  appends all land. When the store applied a write and step 3 cannot reach
+  the database, the answer is `{:ok, {:uncertain, :unconfirmed}}` and the
+  intent stays `pending` until the attempt's hold ends.
+
+  Intents are evidence: no path here deletes one, and a row goes only with
+  its execution's row.
   """
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.ExecutionAttempt
+  require Logger
+
+  alias Arca.Schemas.{ExecutionAttempt, StorageWriteIntent}
 
   @open_states ["running", "paused"]
   @terminal_states ["completed", "failed", "cancelled", "lapsed"]
@@ -193,32 +280,59 @@ defmodule Arca.ExecutionAttempts do
     end)
   end
 
-  @doc """
-  Run `fun` while `runner` holds the attempt, as `held?/4` decides it, in
-  one transaction with that decision: the write that finds the attempt
-  takes its row's lock, and `fun` runs before the transaction commits. A
-  close, cancel, lapse or takeover of the attempt writes its row, so it
-  either commits first, and `fun` does not run, or waits until `fun` has
-  returned.
-
-  Answers `{:ok, result}` with what `fun` returned; `{:error, :lost}`
-  when the attempt is not held, and `fun` did not run;
-  `{:error, :database_error}` when the store cannot answer.
+  @typedoc """
+  A mutable storage write: the operation, the athanor-relative path it
+  names, the bytes a put or append carries, and the store call itself,
+  which answers `:ok` or `{:error, reason}` as `Arca.Storage` does.
   """
-  @spec while_held(String.t(), String.t(), pos_integer(), String.t(), (-> result)) ::
-          {:ok, result} | {:error, :lost | :database_error}
-        when result: term()
-  def while_held(athanor_id, attempt, fence, runner, fun)
-      when is_binary(athanor_id) and is_binary(attempt) and is_integer(fence) and
-             is_binary(runner) and is_function(fun, 0) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.while_held", fn ->
-      Arca.Repo.transaction(fn ->
-        {count, _} =
-          from(a in running_owner(athanor_id, attempt, fence), where: a.claimed_by == ^runner)
-          |> Arca.Repo.update_all(inc: [fence: 0])
+  @type write :: %{
+          required(:op) => :put | :append | :delete,
+          required(:path) => [String.t()],
+          required(:io) => (-> :ok | {:error, term()}),
+          optional(:bytes) => non_neg_integer() | nil
+        }
 
-        if count == 1, do: fun.(), else: Arca.Repo.rollback(:lost)
-      end)
+  @typedoc "What became of a write whose intent was recorded (the moduledoc's tables)."
+  @type written ::
+          {:confirmed, :ok}
+          | {:failed, {:error, term()}}
+          | {:uncertain, :hold_lost | :unknown_outcome | :io_crashed | :unconfirmed}
+
+  @doc """
+  Run the storage `write` for the attempt `runner` holds at `fence`: its
+  intent is recorded while the attempt holds its row, the store call runs
+  outside any transaction, and the intent is settled against the same hold
+  (the moduledoc's "A guest's mutable storage write").
+
+  Answers `{:ok, written}` once an intent was recorded; `{:error, :lost}`
+  when the attempt is not held, and `{:error, :database_error}` when the
+  database cannot answer. In both the store call did not run and nothing
+  was recorded.
+  """
+  @spec while_held(String.t(), String.t(), pos_integer(), String.t(), write()) ::
+          {:ok, written()} | {:error, :lost | :database_error}
+  def while_held(athanor_id, attempt, fence, runner, %{op: op, path: path, io: io} = write)
+      when is_binary(athanor_id) and is_binary(attempt) and is_integer(fence) and
+             is_binary(runner) and op in [:put, :append, :delete] and is_list(path) and
+             is_function(io, 0) do
+    holder = %{athanor_id: athanor_id, attempt: attempt, fence: fence, runner: runner}
+
+    with {:ok, intent} <- record_intent(holder, write) do
+      {:ok, settle(holder, intent, effect(io, intent))}
+    end
+  end
+
+  @doc "The write intents of `attempt`, oldest first."
+  @spec write_intents(String.t(), String.t()) ::
+          [StorageWriteIntent.t()] | {:error, :database_error}
+  def write_intents(athanor_id, attempt) when is_binary(athanor_id) and is_binary(attempt) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.write_intents", fn ->
+      Arca.Repo.all(
+        from(i in StorageWriteIntent,
+          where: i.athanor_id == ^athanor_id and i.attempt == ^attempt,
+          order_by: [asc: i.inserted_at, asc: i.id]
+        )
+      )
     end)
   end
 
@@ -376,6 +490,7 @@ defmodule Arca.ExecutionAttempts do
                 ]
               )
 
+            settle_pending!(a.athanor_id, attempt, "lapsed")
             ran
         end
       end)
@@ -426,6 +541,7 @@ defmodule Arca.ExecutionAttempts do
               set: [state: "lapsed", outcome: "uncertain", running_since: nil, ended_at: now]
             )
 
+          settle_pending!(athanor_id, previous.attempt, "taken_over")
           ms
 
         _ ->
@@ -549,8 +665,142 @@ defmodule Arca.ExecutionAttempts do
           )
           |> Arca.Repo.update_all(set: sets)
 
+        settle_pending!(athanor_id, attempt, to)
         ran
     end
+  end
+
+  # The attempt's hold just ended in this transaction: a write whose intent
+  # is still pending may land after it, so it is settled uncertain with
+  # what ended the hold. Runs after the attempt row was written, so it sees
+  # every intent whose transaction held that row's lock before this one.
+  # arca:db-raise-ok inside the caller's transaction
+  defp settle_pending!(athanor_id, attempt, reason) do
+    from(i in StorageWriteIntent,
+      where: i.athanor_id == ^athanor_id and i.attempt == ^attempt and i.state == "pending"
+    )
+    |> Arca.Repo.update_all(
+      set: [state: "uncertain", reason: reason, settled_at: DateTime.utc_now()]
+    )
+
+    :ok
+  end
+
+  # Step 1: the hold and the intent commit together, or neither does.
+  defp record_intent(holder, write) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.record_intent", fn ->
+      Arca.Repo.transaction(fn ->
+        if not lock_held!(holder), do: Arca.Repo.rollback(:lost)
+
+        execution_id =
+          Arca.Repo.one!(
+            from(a in ExecutionAttempt,
+              where: a.athanor_id == ^holder.athanor_id and a.attempt == ^holder.attempt,
+              select: a.execution_id
+            )
+          )
+
+        intent =
+          Arca.Repo.insert!(%StorageWriteIntent{
+            id: Cyfr.UUID7.generate_id("swi"),
+            athanor_id: holder.athanor_id,
+            execution_id: execution_id,
+            attempt: holder.attempt,
+            fence: holder.fence,
+            runner: holder.runner,
+            op: Atom.to_string(write.op),
+            path: Enum.join(write.path, "/"),
+            bytes: Map.get(write, :bytes),
+            state: "pending",
+            inserted_at: DateTime.utc_now()
+          })
+
+        intent.id
+      end)
+    end)
+  end
+
+  # Step 2: the store call, outside any transaction. A call that did not
+  # answer a storage result leaves what the store did unknown.
+  defp effect(io, intent) do
+    case io.() do
+      :ok -> :applied
+      {:error, :unknown} -> {:unknown, :unknown_outcome}
+      {:error, _reason} = refused -> {:refused, refused}
+      other -> crashed(intent, "answered #{inspect(other, limit: 5, printable_limit: 64)}")
+    end
+  rescue
+    exception -> crashed(intent, Exception.format(:error, exception, __STACKTRACE__))
+  catch
+    kind, _payload -> crashed(intent, "ended with a #{kind}")
+  end
+
+  defp crashed(intent, how) do
+    Logger.error("[Arca.ExecutionAttempts] the store call of write intent #{intent} #{how}")
+    {:unknown, :io_crashed}
+  end
+
+  # Step 3: the intent leaves `pending` by compare-and-set, under the
+  # attempt row's lock. A write the store applied is confirmed only while
+  # the hold still stands and the intent is still pending; a refusal and
+  # an unknown outcome are what they are whoever holds the row.
+  defp settle(holder, intent, effect) do
+    settled =
+      Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.settle", fn ->
+        Arca.Repo.transaction(fn ->
+          held? = lock_held!(holder)
+          {state, reason} = settlement(effect, held?)
+
+          {count, _} =
+            from(i in StorageWriteIntent,
+              where: i.athanor_id == ^holder.athanor_id and i.id == ^intent,
+              where: i.state == "pending"
+            )
+            |> Arca.Repo.update_all(
+              set: [state: state, reason: reason, settled_at: DateTime.utc_now()]
+            )
+
+          held? and count == 1
+        end)
+      end)
+
+    case {effect, settled} do
+      {:applied, {:ok, true}} -> {:confirmed, :ok}
+      {:applied, {:ok, false}} -> {:uncertain, :hold_lost}
+      {:applied, {:error, _reason}} -> {:uncertain, :unconfirmed}
+      {{:refused, refused}, _settled} -> {:failed, refused}
+      {{:unknown, reason}, _settled} -> {:uncertain, reason}
+    end
+  end
+
+  defp settlement(:applied, true), do: {"confirmed", nil}
+  defp settlement(:applied, false), do: {"uncertain", "hold_lost"}
+  defp settlement({:refused, {:error, reason}}, _held?), do: {"failed", failure(reason)}
+  defp settlement({:unknown, reason}, _held?), do: {"uncertain", Atom.to_string(reason)}
+
+  # The name of a store's refusal, never its detail: a reason can carry a
+  # backend's words.
+  defp failure(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  defp failure(reason) when is_tuple(reason) and tuple_size(reason) > 0,
+    do: failure(elem(reason, 0))
+
+  defp failure(_reason), do: "error"
+
+  # Whether the holder holds the attempt for a write, decided by a write
+  # of the attempt row, so the decision takes the row's lock and stands
+  # until the caller's transaction ends.
+  # arca:db-raise-ok inside the caller's transaction
+  defp lock_held!(%{athanor_id: athanor_id, attempt: attempt, fence: fence, runner: runner}) do
+    now = DateTime.utc_now()
+
+    {count, _} =
+      from(a in running_owner(athanor_id, attempt, fence),
+        where: a.claimed_by == ^runner and a.lease_until > ^now
+      )
+      |> Arca.Repo.update_all(inc: [fence: 0])
+
+    count == 1
   end
 
   # arca:db-raise-ok inside the caller's transaction
