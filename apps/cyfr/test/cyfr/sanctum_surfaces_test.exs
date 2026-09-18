@@ -72,8 +72,8 @@ defmodule Cyfr.SanctumSurfacesTest do
     "cyfr" => ~w(
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
       Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth
-      Sanctum.Policy Sanctum.Provisioning Sanctum.ProvisioningRegistry
-      Sanctum.ProvisioningSupervisor Sanctum.PubSub Sanctum.Session
+      Sanctum.Policy Sanctum.Provisioning Sanctum.ProvisioningSupervisor
+      Sanctum.PubSub Sanctum.Session
       Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
       Sanctum.UnauthorizedError Sanctum.VaultReader
     ),

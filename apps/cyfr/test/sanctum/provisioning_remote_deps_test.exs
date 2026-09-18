@@ -6,15 +6,19 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   A bundle whose required closure reaches a registry. Required dependency
   work is bounded per attempt: a registry that accepts a connection and
   never answers cannot hold an estate's fill open — the attempt stops
-  within its budget, the claim and the lock are released after it has
+  within its budget, its claim settles failed with the timeout once it has
   stopped, the timeout is recorded on the row, and the next attempt
   resumes from what landed, a dependency below a partially installed
   remote component included. The seed sync heals a dependency an earlier
-  attempt lost. An explicit retry that meets an attempt in progress is
-  told so, typed, without waiting.
+  attempt lost. An explicit retry or an install that meets an attempt in
+  progress is told so, typed, without waiting; an attempt killed where it
+  stands is released by its keeper.
   """
   use ExUnit.Case, async: false
 
+  import Cyfr.Test.Wait
+
+  alias Arca.ProvisioningClaims, as: Claims
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
@@ -159,9 +163,13 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     assert {:error, :not_found} =
              Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
 
-    # The attempt has stopped and let go of both the claim and the lock.
-    assert Registry.lookup(Sanctum.ProvisioningRegistry, group.id) == []
-    assert :ok = Arca.Overlay.UnitLock.with_lock({group.id, :provisioning}, fn -> :ok end, 1_000)
+    # The deadline settled the claim: failed, saying where and why, and no
+    # longer standing — the retry below takes the estate at once.
+    actor = %Cyfr.Actor{athanor_id: group.id}
+    assert {:ok, %{outcome: "failed", outcome_detail: settled} = claim} = Claims.current(actor)
+    assert settled =~ "closure"
+    assert settled =~ "timeout"
+    refute Claims.live?(claim)
 
     # The registry answers again: the explicit retry reads the installed
     # remote component's manifest, finds the dependency below it, and
@@ -193,16 +201,8 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
        %{ctx: ctx, group: group} do
     # Another caller's attempt holds the claim — a background fill in
     # flight. The explicit verb does not queue behind it.
-    parent = self()
-
-    holder =
-      spawn_link(fn ->
-        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
-        send(parent, :held)
-        receive do: (:release -> :ok)
-      end)
-
-    assert_receive :held
+    actor = %Cyfr.Actor{athanor_id: group.id}
+    {:ok, _held} = Claims.claim(actor, "boot_elsewhere/own_held", "first_need", 60_000)
 
     started = System.monotonic_time(:millisecond)
     assert {:error, :provisioning_busy} = Provisioning.provision(group, ctx)
@@ -212,8 +212,120 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     # estate is being prepared — in progress, not a failure.
     assert {:error, :not_provisioned} =
              Sanctum.MCP.AthanorTool.handle(ctx, %{"action" => "provision"})
+  end
 
-    send(holder, :release)
+  describe "a background fill in flight" do
+    # The fill is a task here, as it is in a deployment, and its required
+    # pull stalls on the registry until the attempt's deadline — long enough
+    # to race it.
+    setup %{stall: stall} do
+      Application.put_env(:cyfr, :provisioning_inline, false)
+      Application.put_env(:cyfr, :provisioning_required_pull_budget_ms, 3_000)
+      on_exit(fn -> Application.put_env(:cyfr, :provisioning_inline, true) end)
+
+      # A fill or a pull still running when the paths are restored would
+      # work against the repository's own trees.
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+
+      Agent.update(stall, fn _ -> "someone/catalysts/elsewhere" end)
+      :ok
+    end
+
+    test "an explicit retry and an install are told busy at once; the deadline settles it failed, and readers back off",
+         %{ctx: ctx, group: group} do
+      actor = %Cyfr.Actor{athanor_id: group.id}
+
+      # The reader answers at once and the fill goes on without it.
+      started = System.monotonic_time(:millisecond)
+      assert {:error, :not_provisioned} = Provisioning.ready(ctx)
+      assert System.monotonic_time(:millisecond) - started < 1_000
+
+      wait_until(fn -> Provisioning.status(ctx) == :filling end, 5_000, "the fill to claim")
+      assert {:ok, %{entry_kind: "first_need", fence: 1, outcome: nil}} = Claims.current(actor)
+
+      # Racing it: the explicit retry, the verb over it, and an install —
+      # each refused without waiting, none of them touching the claim.
+      started = System.monotonic_time(:millisecond)
+      assert {:error, :provisioning_busy} = Provisioning.provision(group, ctx)
+
+      assert {:error, :not_provisioned} =
+               Sanctum.MCP.AthanorTool.handle(ctx, %{"action" => "provision"})
+
+      assert {:error, :provisioning_busy} =
+               Provisioning.install_shipped(ctx, "catalyst:local.foo")
+
+      assert System.monotonic_time(:millisecond) - started < 2_000
+
+      # And more readers add nothing.
+      for _ <- 1..5, do: assert({:error, :not_provisioned} = Provisioning.ready(ctx))
+      assert {:ok, %{fence: 1, outcome: nil}} = Claims.current(actor)
+
+      # The deadline expires: the attempt settles its claim failed, with
+      # where and why, and records the same on the row.
+      wait_until(
+        fn -> match?({:ok, %{outcome: "failed"}}, Claims.current(actor)) end,
+        15_000,
+        "the deadline to settle the claim"
+      )
+
+      assert {:ok, %{fence: 1, outcome_detail: detail}} = Claims.current(actor)
+      assert detail =~ "closure"
+      assert detail =~ "timeout"
+
+      wait_until(
+        fn ->
+          {:ok, row} = Athanors.get(group.id)
+          Athanors.provisioning_failure(row) != nil
+        end,
+        5_000,
+        "the failure to reach the row"
+      )
+
+      # The fill's task and its keeper end before this test, which owns their
+      # database connection, does.
+      wait_until(
+        fn -> Task.Supervisor.children(Sanctum.ProvisioningSupervisor) == [] end,
+        5_000,
+        "the fill's task and its keeper to end"
+      )
+
+      # A reader sees the failure and starts nothing for a minute.
+      assert Provisioning.status(ctx) == :failed
+      for _ <- 1..3, do: assert({:error, :not_provisioned} = Provisioning.ready(ctx))
+      assert {:ok, %{fence: 1, outcome: "failed"}} = Claims.current(actor)
+    end
+
+    test "an attempt killed where it stands is released by its keeper, and the next claim succeeds",
+         %{ctx: ctx, group: group} do
+      actor = %Cyfr.Actor{athanor_id: group.id}
+
+      # An explicit attempt, so the process to kill is known: it stalls in
+      # its required pull, holding the claim.
+      attempt = spawn(fn -> Provisioning.provision(group, ctx) end)
+
+      wait_until(fn -> Provisioning.status(ctx) == :filling end, 5_000, "the attempt to claim")
+      assert {:ok, %{entry_kind: "provision", fence: 1} = held} = Claims.current(actor)
+
+      # Killed: no `after` runs, so nothing in the attempt lets go.
+      Process.exit(attempt, :kill)
+
+      wait_until(
+        fn -> match?({:ok, %{outcome: "released"}}, Claims.current(actor)) end,
+        5_000,
+        "the keeper to release the dead attempt's claim"
+      )
+
+      # Nothing was marked or recorded for it, and the estate is free: the
+      # next claim is a new attempt at the next fence, and the dead one's
+      # writes would be stale.
+      {:ok, row} = Athanors.get(group.id)
+      refute row.provisioned_at
+      refute Athanors.provisioning_failure(row)
+      assert Provisioning.status(ctx) == :unfilled
+
+      assert {:ok, %{fence: 2}} = Claims.claim(actor, "boot_elsewhere/next", "provision", 1_000)
+      assert :stale = Claims.settle(actor, held.owner, held.fence, "ready", nil)
+    end
   end
 
   # ---- fixtures ---------------------------------------------------------------
