@@ -8,7 +8,10 @@ defmodule Opus.ExecutorCancelPenaltyTest do
   use ExUnit.Case, async: false
 
   alias Arca.Execution
-  alias Cyfr.Execution.{Dispatch, Semaphore}
+  alias Cyfr.Execution.Dispatch
+  alias Cyfr.Slots
+
+  @slots Cyfr.Execution.Slots
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -18,8 +21,8 @@ defmodule Opus.ExecutorCancelPenaltyTest do
     # The penalty box outlives a force-release: what this suite fills for
     # its tenant, it empties.
     on_exit(fn ->
-      Semaphore.force_release_all()
-      Semaphore.forgive_unreaped(ctx.athanor_id)
+      Slots.force_release_all(@slots)
+      Slots.forgive_unreaped(@slots, ctx.athanor_id)
     end)
 
     {:ok, ctx: ctx}
@@ -59,7 +62,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
   end
 
   test "N cancels trip the tenant's penalty box", %{ctx: ctx} do
-    threshold = max(2, div(Semaphore.status().tenant_max, 2))
+    threshold = Slots.unreaped_threshold(Slots.status(@slots).key_max)
 
     for _ <- 1..threshold do
       id = running!(ctx)
@@ -70,7 +73,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
       assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
     end
 
-    assert {:error, :tenant_unreaped_limit} =
-             Semaphore.acquire(1_000, :root, ctx.athanor_id)
+    assert {:error, :key_unreaped} =
+             Slots.acquire(@slots, ctx.athanor_id, :root, wait_ms: 1_000)
   end
 end

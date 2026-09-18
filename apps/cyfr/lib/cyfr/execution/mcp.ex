@@ -37,6 +37,8 @@ defmodule Cyfr.Execution.MCP do
   alias Cyfr.Execution.Record
   alias Sanctum.Context
 
+  @slots Cyfr.Execution.Slots
+
   # ============================================================================
   # ResourceProvider Protocol
   # ============================================================================
@@ -259,14 +261,14 @@ defmodule Cyfr.Execution.MCP do
     # card's is run the same way by the assistant. The annotation
     # says so, and every surface that offers actions to a chain
     # reads it from here.
-    # Semaphore diagnostics are tenant-operational: global counters
+    # Slot diagnostics are tenant-operational: global counters
     # with no chain grain to scope them to. Classify it out of the
     # in-chain plane rather than serve a number that means nothing
     # to the caller.
     # Releasing every athanor's slots is the operator's lever
     # alone. Until the in-flight executions it released drain, the
     # node runs OVER-admitted by that many slots — the recovery
-    # trades a wedged semaphore for a temporary over-cap.
+    # trades wedged slots for a temporary over-cap.
     # run action params
     # list action params
     # logs/cancel action params
@@ -556,12 +558,12 @@ defmodule Cyfr.Execution.MCP do
     {:error, {:invalid_argument, "Missing required argument: execution_id"}}
   end
 
-  # Status action - execution semaphore diagnostics
+  # Status action - execution slot diagnostics
   def handle("execution", %Context{} = ctx, %{"action" => "status"}) do
-    {:ok, scoped_semaphore_status(ctx, Cyfr.Execution.Semaphore.status())}
+    {:ok, scoped_slot_status(ctx, slot_status())}
   end
 
-  # Force release action - emergency semaphore recovery. Releasing EVERY
+  # Force release action - emergency slot recovery. Releasing EVERY
   # athanor's slots is a server-wide side effect; the `scope: :platform`
   # annotation admits operators alone before this arm is reached.
   def handle("execution", %Context{} = ctx, %{"action" => "force_release"}) do
@@ -573,13 +575,12 @@ defmodule Cyfr.Execution.MCP do
       %{user_id: ctx.user_id, auth_method: ctx.auth_method}
     )
 
-    case Cyfr.Execution.Semaphore.force_release_all() do
-      {:error, :semaphore_unavailable} ->
-        {:error, "Execution semaphore is not running — nothing was released"}
+    case Cyfr.Slots.force_release_all(@slots) do
+      {:error, :unavailable} ->
+        {:error, "Execution slots are not running — nothing was released"}
 
-      _released ->
-        status = scoped_semaphore_status(ctx, Cyfr.Execution.Semaphore.status())
-        {:ok, Map.put(status, :force_released, true)}
+      {:ok, _released} ->
+        {:ok, Map.put(scoped_slot_status(ctx, slot_status()), :force_released, true)}
     end
   end
 
@@ -729,15 +730,24 @@ defmodule Cyfr.Execution.MCP do
 
   defp format_root_result(other), do: other
 
-  # The semaphore map is global: every athanor currently executing,
-  # with live counts and holder pids. The operator (and the server's own
-  # contexts) keep the full diagnostic; a member gets the shared totals plus
-  # their own athanor's count — other athanors' identifiers and activity
-  # levels are not theirs to enumerate.
-  defp scoped_semaphore_status(%Context{scope: :platform}, status), do: status
-  defp scoped_semaphore_status(%Context{platform_admin: true}, status), do: status
+  # The execution slots' status (`Cyfr.Slots.status/1`) in the operator's
+  # vocabulary: its keys are athanors, so the per-key cap and counts are
+  # presented as the per-tenant ones this tool has always shown.
+  defp slot_status do
+    {keys, status} = Map.pop!(Cyfr.Slots.status(@slots), :keys)
+    {key_max, status} = Map.pop!(status, :key_max)
+    Map.merge(status, %{tenant_max: key_max, tenants: keys})
+  end
 
-  defp scoped_semaphore_status(%Context{} = ctx, status) do
+  # The status is global: every athanor currently executing, with live
+  # counts and holder pids. The operator (and the server's own contexts)
+  # keep the full diagnostic; a member gets the shared totals plus their
+  # own athanor's count — other athanors' identifiers and activity levels
+  # are not theirs to enumerate.
+  defp scoped_slot_status(%Context{scope: :platform}, status), do: status
+  defp scoped_slot_status(%Context{platform_admin: true}, status), do: status
+
+  defp scoped_slot_status(%Context{} = ctx, status) do
     status
     |> Map.drop([:holders, :tenants])
     |> Map.put(:tenant_active, Map.get(status.tenants, ctx.athanor_id, 0))

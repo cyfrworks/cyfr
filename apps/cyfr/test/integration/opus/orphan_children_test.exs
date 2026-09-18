@@ -54,7 +54,7 @@ defmodule Opus.OrphanChildrenTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Execution.Semaphore.forgive_unreaped(ctx.athanor_id)
+      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do

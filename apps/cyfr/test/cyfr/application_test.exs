@@ -100,7 +100,7 @@ defmodule Cyfr.ApplicationTest do
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
       pubsub = Enum.find_index(started, &(&1 in [Emissary.PubSub, Phoenix.PubSub.Supervisor]))
 
-      for id <- [Cyfr.Execution.Rates, Cyfr.Execution.Semaphore, Cyfr.Execution.Tree] do
+      for id <- [Cyfr.Execution.Rates, Cyfr.Execution.Slots, Cyfr.Execution.Tree] do
         assert is_integer(at.(id)) and at.(id) > pubsub,
                "#{inspect(id)} must start under the infra tier after PubSub"
       end
