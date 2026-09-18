@@ -150,7 +150,7 @@ defmodule Aqua.LoopTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: text},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     turn
@@ -667,7 +667,7 @@ defmodule Aqua.LoopTest do
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua what did they say?"},
         turn: %{
-          orchestrator: "aqua",
+          agent: "aqua",
           requested_by: ctx.user_id,
           options: %{"room" => %{"athanor_id" => ctx.athanor_id, "thread_id" => room.id}}
         }

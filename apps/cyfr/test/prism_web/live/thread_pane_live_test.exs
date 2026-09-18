@@ -49,7 +49,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua pin it"},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     {:ok, %{execution: execution, attempt: attempt}} =

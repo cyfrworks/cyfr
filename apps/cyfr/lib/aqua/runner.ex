@@ -198,15 +198,15 @@ defmodule Aqua.Runner do
   Send a message: accepted on the tape and shown to every member; a turn
   is opened when it addresses an agent. `opts`: `:id` (a pre-minted
   message id), `:client_id`, `:attachments` (refs), `:model`,
-  `:orchestrator` (a pick; an `@name` in the text wins), `:room` (the
+  `:agent` (a pick; an `@name` in the text wins), `:room` (the
   room the sender had open, `%{"athanor_id", "thread_id", ...}`),
-  `:orchestrators` (the roster, read here when absent).
+  `:agents` (the roster, read here when absent).
   """
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           {:ok, send_result()} | {:error, term()}
   def send_message(%Context{} = ctx, thread_id, text, opts \\ []) do
     with :ok <- Cyfr.ControlPlane.assert_owner() do
-      opts = Keyword.put_new_lazy(opts, :orchestrators, fn -> Aqua.Roster.roster(ctx) end)
+      opts = Keyword.put_new_lazy(opts, :agents, fn -> Aqua.Roster.roster(ctx) end)
       call(ctx, thread_id, {:send, ctx, text, opts})
     end
   end
@@ -298,7 +298,7 @@ defmodule Aqua.Runner do
           # The running turn's streamed answers (`Aqua.Loop.Stream`).
           partials: Aqua.Loop.Stream.new(),
           grants: MapSet.new(),
-          orchestrator: thread.orchestrator,
+          agent: thread.agent,
           idle_ref: nil
         })
 
@@ -323,7 +323,7 @@ defmodule Aqua.Runner do
   end
 
   defp handle_owned_call({:send, ctx, text, opts}, _from, state) do
-    opts = Keyword.put(opts, :last, state.orchestrator)
+    opts = Keyword.put(opts, :last, state.agent)
 
     case Admission.check(ctx, state.athanor_id, text, opts) do
       {:error, reason} ->
@@ -448,11 +448,11 @@ defmodule Aqua.Runner do
   # while it runs, or while it is paused (the row waits on the tape and
   # is drained on resume). A line to another agent, or from another
   # member, is a turn of its own.
-  defp steer?(%{live: %{user_id: user_id, orchestrator: name}}, %Context{user_id: user_id}, name),
+  defp steer?(%{live: %{user_id: user_id, agent: name}}, %Context{user_id: user_id}, name),
     do: true
 
   defp steer?(
-         %{live: nil, paused: %{user_id: user_id, orchestrator: name}},
+         %{live: nil, paused: %{user_id: user_id, agent: name}},
          %Context{user_id: user_id},
          name
        ),
@@ -498,13 +498,13 @@ defmodule Aqua.Runner do
   defp acknowledge(state), do: state
 
   defp entry_of(paused),
-    do: paused |> Map.take([:turn_id, :user_id, :orchestrator]) |> Map.put(:ctx, nil)
+    do: paused |> Map.take([:turn_id, :user_id, :agent]) |> Map.put(:ctx, nil)
 
   defp accept_turn(state, ctx, name, text, opts) do
     attrs = %{
       message: message(ctx, text, opts),
       turn: %{
-        orchestrator: name,
+        agent: name,
         requested_by: ctx.user_id,
         model: Keyword.get(opts, :model),
         options: options(name, opts)
@@ -516,8 +516,8 @@ defmodule Aqua.Runner do
         {:reply, {:ok, result(row, turn && turn.id, true, :turn)}, touch(state)}
 
       {:ok, %{message: row, turn: turn}} ->
-        entry = %{turn_id: turn.id, user_id: ctx.user_id, ctx: ctx, orchestrator: name}
-        state = %{state | orchestrator: name}
+        entry = %{turn_id: turn.id, user_id: ctx.user_id, ctx: ctx, agent: name}
+        state = %{state | agent: name}
 
         state =
           if busy?(state) do
@@ -780,7 +780,7 @@ defmodule Aqua.Runner do
           | paused: %{
               turn_id: live.turn_id,
               user_id: live.user_id,
-              orchestrator: live.orchestrator,
+              agent: live.agent,
               reason: reason,
               expiry: nil
             }
@@ -817,7 +817,7 @@ defmodule Aqua.Runner do
         paused = %{
           turn_id: live.turn_id,
           user_id: live.user_id,
-          orchestrator: live.orchestrator,
+          agent: live.agent,
           reason: pause_reason(turn),
           expiry: nil
         }
@@ -1002,7 +1002,7 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           ctx: nil,
-          orchestrator: turn.orchestrator
+          agent: turn.agent
         }
 
         recovered_start(state, entry)
@@ -1011,7 +1011,7 @@ defmodule Aqua.Runner do
         paused = %{
           turn_id: turn.id,
           user_id: turn.requested_by,
-          orchestrator: turn.orchestrator,
+          agent: turn.agent,
           reason: pause_reason(turn),
           expiry: nil
         }
@@ -1023,7 +1023,7 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           ctx: nil,
-          orchestrator: turn.orchestrator
+          agent: turn.agent
         }
 
         if busy?(state),
@@ -1035,7 +1035,7 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           ctx: nil,
-          orchestrator: turn.orchestrator
+          agent: turn.agent
         }
 
         if busy?(state),
@@ -1139,8 +1139,7 @@ defmodule Aqua.Runner do
       tool_activity: state.tool_activity,
       usage: state.usage,
       grants: state.grants,
-      orchestrator:
-        state.orchestrator && %{"name" => state.orchestrator, "title" => state.orchestrator},
+      agent: state.agent && %{"name" => state.agent, "title" => state.agent},
       turn_user: current && current.user_id,
       queued: length(state.queue),
       solo_human: Members.solo?(state.athanor_id)

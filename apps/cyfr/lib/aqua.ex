@@ -16,7 +16,7 @@ defmodule Aqua do
   - `Aqua.Approvals` — a card decided once, from its own rows;
     `Aqua.Standing` — what may stand for later calls; `Aqua.Launch` — an
     approved launch run as its approver.
-  - `Aqua.Orchestrator` — the agent a turn is addressed to, as the
+  - `Aqua.Agent` — the agent a turn is addressed to, as the
     approvals re-authorise a card against it.
   - `Aqua.Prompt` — the one composer of the system prompt, from the
     resolved agent and the turn's pinned authority.

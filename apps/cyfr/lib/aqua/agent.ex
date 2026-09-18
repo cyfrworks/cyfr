@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Aqua.Orchestrator do
+defmodule Aqua.Agent do
   @moduledoc """
   The agent a turn is addressed to — the estate's soul or one of its roles
   — as the runner carries it from the pick to the running turn.
@@ -10,7 +10,7 @@ defmodule Aqua.Orchestrator do
   picker sent, the previous turn's agent, or the estate's first. The
   agent lives in the estate in focus — a tape runs its own estate's soul
   and roles alone — so the name is the whole identity: the thread
-  row (`orchestrator`), the standing-grant key and the recovery read after
+  row (`agent`), the standing-grant key and the recovery read after
   a restart are written in terms of it.
 
   Between turns the runner keeps the IDENTITY only. Every turn resolves
@@ -25,7 +25,7 @@ defmodule Aqua.Orchestrator do
 
   The word is the code's, not the product's: a person addresses a soul or
   a role; the row, the runner and the tool option call whichever one
-  answers the turn its orchestrator.
+  answers the turn its agent.
   """
 
   alias Sanctum.Context
@@ -55,9 +55,9 @@ defmodule Aqua.Orchestrator do
     do: %__MODULE__{name: name, agent: agent}
 
   @doc "The pick a thread row recorded, or `nil` when no turn has run in it."
-  @spec from_thread(%{:orchestrator => String.t() | nil, optional(atom()) => term()}) ::
+  @spec from_thread(%{:agent => String.t() | nil, optional(atom()) => term()}) ::
           t() | nil
-  def from_thread(%{orchestrator: name}) when is_binary(name), do: by_name(name)
+  def from_thread(%{agent: name}) when is_binary(name), do: by_name(name)
   def from_thread(_row), do: nil
 
   @doc "Whether the run-time detail has been read."
@@ -69,13 +69,13 @@ defmodule Aqua.Orchestrator do
   Read the agent's CURRENT definition from the estate's tree — always,
   even for a pick that was resolved before: a definition edited or
   disabled since the last turn must not run as it was.
-  `{:error, :no_orchestrator}` when the tree holds no such enabled agent
+  `{:error, :no_agent}` when the tree holds no such enabled agent
   — a turn fails here, in its task, so an unknown mention never holds the
   send hostage to a catalog read.
   """
-  @spec resolve(Context.t(), t()) :: {:ok, t()} | {:error, :no_orchestrator}
+  @spec resolve(Context.t(), t()) :: {:ok, t()} | {:error, :no_agent}
   def resolve(%Context{} = ctx, %__MODULE__{} = pick) do
-    with {:ok, orchestrator, _roster} <- resolve_with_roster(ctx, pick), do: {:ok, orchestrator}
+    with {:ok, resolved, _roster} <- resolve_with_roster(ctx, pick), do: {:ok, resolved}
   end
 
   @doc """
@@ -85,7 +85,7 @@ defmodule Aqua.Orchestrator do
   so does not resolve.
   """
   @spec resolve_with_roster(Context.t(), t()) ::
-          {:ok, t(), [agent()]} | {:error, :no_orchestrator}
+          {:ok, t(), [agent()]} | {:error, :no_agent}
   def resolve_with_roster(%Context{} = ctx, %__MODULE__{name: name}) do
     with {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          %{} = detail <- Enum.find(roster, &(&1["name"] == name)) do
@@ -99,7 +99,7 @@ defmodule Aqua.Orchestrator do
 
       {:ok, resolved(agent), roster}
     else
-      _ -> {:error, :no_orchestrator}
+      _ -> {:error, :no_agent}
     end
   end
 
@@ -113,12 +113,12 @@ defmodule Aqua.Orchestrator do
   def tool_policy(%__MODULE__{agent: %{} = agent}),
     do: Aqua.ToolGrants.resolve(agent["tool_policy"] || %{}, [])
 
-  def tool_policy(_orchestrator), do: %{}
+  def tool_policy(_pick), do: %{}
 
   @doc "The authored policy, as the file says it — never handed to a turn."
   @spec authored_policy(t() | nil) :: map()
   def authored_policy(%__MODULE__{agent: %{} = agent}), do: agent["tool_policy"] || %{}
-  def authored_policy(_orchestrator), do: %{}
+  def authored_policy(_pick), do: %{}
 
   @doc """
   The authored policy composed with the standing answers people already
@@ -129,12 +129,12 @@ defmodule Aqua.Orchestrator do
   from the next turn. A pick has to be resolved first.
   """
   @spec with_grants(t(), [Arca.Schemas.ToolGrant.t()]) :: t()
-  def with_grants(%__MODULE__{agent: %{}} = orchestrator, grants) when is_list(grants) do
-    %{orchestrator | policy: Aqua.ToolGrants.resolve(authored_policy(orchestrator), grants)}
+  def with_grants(%__MODULE__{agent: %{}} = pick, grants) when is_list(grants) do
+    %{pick | policy: Aqua.ToolGrants.resolve(authored_policy(pick), grants)}
   end
 
   @doc "The agent as a turn is composed from it: the detail, with the effective policy in place of the authored one."
   @spec for_turn(t()) :: agent()
-  def for_turn(%__MODULE__{agent: %{} = agent} = orchestrator),
-    do: Map.put(agent, "tool_policy", tool_policy(orchestrator))
+  def for_turn(%__MODULE__{agent: %{} = agent} = pick),
+    do: Map.put(agent, "tool_policy", tool_policy(pick))
 end

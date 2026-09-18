@@ -236,7 +236,7 @@ defmodule PrismWeb.ChatLiveTest do
     assert html =~ "AQUA"
     refute html =~ "A.Q.U.A."
     # The chat says which furnace it is, and whether that furnace can think:
-    # a test athanor has an orchestrator but no key behind its model.
+    # a test athanor has an agent but no key behind its model.
     assert html =~ "in Chat"
     assert html =~ "has no model yet"
     assert html =~ "Connect a model"
@@ -708,7 +708,7 @@ defmodule PrismWeb.ChatLiveTest do
     assert has_element?(view, "code", "aqua")
 
     # "Connect a model" is the lite path to a key: the consent sheet for the
-    # orchestrator's catalyst, from this page.
+    # agent's catalyst, from this page.
     render_click(view, "open_consent", %{"ref" => "catalyst:local.http:1.1.2"})
     assert has_element?(view, ".consent-sheet")
     send(view.pid, {:consent_sheet_closed, "catalyst:local.http:1.1.2"})

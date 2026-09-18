@@ -236,7 +236,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:token_usage, live.usage)
     |> assign(:grants, live.grants)
     |> assign(:solo_human, Map.get(live, :solo_human, socket.assigns.solo_human))
-    |> assign(:assistant, live.orchestrator || socket.assigns.assistant)
+    |> assign(:assistant, live.agent || socket.assigns.assistant)
   end
 
   defp apply_live(socket, _), do: socket
@@ -901,7 +901,7 @@ defmodule PrismWeb.ThreadPaneLive do
       :archived ->
         put_flash(socket, :error, "This estate has been archived.")
 
-      :no_orchestrator ->
+      :no_agent ->
         put_flash(socket, :error, "This estate has no assistant — see AQUA.")
 
       :storage_full ->

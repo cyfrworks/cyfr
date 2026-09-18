@@ -51,7 +51,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # The roster is handed in: reading it would itself start the fill.
     assert {:error, :not_provisioned} =
              Aqua.Runner.send_message(ctx, thread.id, "@aqua hello",
-               orchestrators: [%{"name" => "aqua", "title" => "AQUA"}]
+               agents: [%{"name" => "aqua", "title" => "AQUA"}]
              )
 
     assert [] = Arca.ThreadStorage.messages(ctx, thread.id)

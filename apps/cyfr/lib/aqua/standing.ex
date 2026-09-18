@@ -64,7 +64,7 @@ defmodule Aqua.Standing do
              scope: grant_scope,
              effect: effect,
              thread_id: turn.thread_id,
-             agent_name: turn.orchestrator,
+             agent_name: turn.agent,
              tool: tool,
              action: action
            }) do

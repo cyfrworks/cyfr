@@ -962,7 +962,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       # Attribution: the person who opened it. The athanor owns it.
       add :created_by, :string, null: false
       # The agent the last turn addressed.
-      add :orchestrator, :string
+      add :agent, :string
       # `seq` of the last human message a turn has taken up.
       add :turn_seq, :integer, null: false, default: 0
       add :last_message_at, :utc_datetime_usec
@@ -1051,7 +1051,7 @@ defmodule Arca.Repo.Migrations.Baseline do
           ),
           null: false
 
-      add :orchestrator, :string
+      add :agent, :string
       add :requested_by, :string
       add :status, :string, null: false
       add :error, :text

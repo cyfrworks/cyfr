@@ -24,7 +24,6 @@ defmodule Aqua.Approvals do
 
   require Logger
 
-  alias Aqua.Orchestrator
   alias Aqua.Standing
   alias Aqua.Tape
   alias Sanctum.Context
@@ -310,11 +309,11 @@ defmodule Aqua.Approvals do
 
   defp authorize_card(ctx, turn, %{"tool" => tool, "action" => action})
        when is_binary(tool) and is_binary(action) do
-    name = turn.orchestrator
+    name = turn.agent
 
-    with {:ok, orchestrator} <- Orchestrator.resolve(ctx, Orchestrator.by_name(name)),
+    with {:ok, pick} <- Aqua.Agent.resolve(ctx, Aqua.Agent.by_name(name)),
          {:ok, rows} <- Aqua.ToolGrants.for_thread(ctx, turn.thread_id, name) do
-      policy = orchestrator |> Orchestrator.with_grants(rows) |> Orchestrator.tool_policy()
+      policy = pick |> Aqua.Agent.with_grants(rows) |> Aqua.Agent.tool_policy()
 
       case Map.get(policy, "#{tool}.#{action}") do
         mode when mode in ["ask", "auto"] ->
@@ -328,7 +327,7 @@ defmodule Aqua.Approvals do
           {:error, {:stale_card, "#{name} no longer holds #{tool}.#{action} — the card is stale"}}
       end
     else
-      {:error, :no_orchestrator} -> {:error, {:stale_card, "#{name} is no longer on the roster"}}
+      {:error, :no_agent} -> {:error, {:stale_card, "#{name} is no longer on the roster"}}
       {:error, {:unavailable, what}} -> {:error, {:unavailable, what}}
     end
   end
@@ -373,7 +372,7 @@ defmodule Aqua.Approvals do
 
   defp capability_holds(_ctx, %{agent_capability_digest: nil}), do: :ok
 
-  defp capability_holds(ctx, %{orchestrator: name, agent_capability_digest: pinned}) do
+  defp capability_holds(ctx, %{agent: name, agent_capability_digest: pinned}) do
     with {:ok, agent} <- Compendium.AquaAgent.get(ctx, name),
          {:ok, ^pinned} <- Compendium.AquaAgent.capability_digest(agent) do
       :ok
@@ -411,7 +410,7 @@ defmodule Aqua.Approvals do
       turn_id: turn.id,
       user_id: ctx.user_id,
       athanor_id: Context.athanor!(ctx),
-      orchestrator: turn.orchestrator,
+      agent: turn.agent,
       reason: attrs[:reason]
     })
   rescue

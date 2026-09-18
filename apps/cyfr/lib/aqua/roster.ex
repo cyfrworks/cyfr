@@ -19,7 +19,7 @@ defmodule Aqua.Roster do
   itself: an unreadable tree reads as "nobody here" — the chat still
   renders, which beats refusing the whole thread for a catalog
   read. A send with an empty roster and no prior pick is still refused
-  `:no_orchestrator` by the runner.
+  `:no_agent` by the runner.
   """
   @spec roster(Context.t()) :: [map()]
   def roster(%Context{} = ctx) do
@@ -35,18 +35,18 @@ defmodule Aqua.Roster do
   end
 
   @doc """
-  An explicit `@name` in the message names the orchestrator for this turn
+  An explicit `@name` in the message names the agent for this turn
   — the roster entry called `name`. Returns `{message_without_mention,
   entry | nil}`: the whole entry, since the caller carries it into the
   turn. Matching longest-first, so a name that extends another's is
   never read as the shorter one with a suffix.
   """
   @spec parse_mention(String.t(), [map()]) :: {String.t(), map() | nil}
-  def parse_mention(message, orchestrators) do
-    if not String.contains?(message, "@") or orchestrators == [] do
+  def parse_mention(message, agents) do
+    if not String.contains?(message, "@") or agents == [] do
       {message, nil}
     else
-      orchestrators
+      agents
       |> Enum.filter(&is_binary(&1["name"]))
       |> Enum.sort_by(&(-String.length(&1["name"])))
       |> Enum.find_value({message, nil}, fn %{"name" => name} = entry ->

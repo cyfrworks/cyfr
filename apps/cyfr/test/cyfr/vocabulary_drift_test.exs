@@ -4,7 +4,8 @@
 defmodule Cyfr.VocabularyDriftTest do
   @moduledoc """
   Checks assistant, role, scroll and note terminology in code and product
-  copy. Persisted payload keys are explicitly exempted where required.
+  copy. The retired words are spelled split here so the file passes the
+  gate it enforces.
 
   The agent-type values are held the same way: `"soul"` and `"role"` are
   `Compendium.AquaAgent`'s (`soul_type/0`, `role_type/0`, `type_of/1`),
@@ -19,10 +20,15 @@ defmodule Cyfr.VocabularyDriftTest do
   use ExUnit.Case, async: true
 
   @root Path.expand("../../../..", __DIR__)
-  @literals ["\"sub-agent\"", "\"orchestrator\""]
+  @literals ["\"sub-agent\""]
 
-  # Files that keep the literal, by exact count: none.
-  @orchestrator_literal_allowed %{}
+  # The word the runner, the rows and the tool option used to call the
+  # agent a turn is addressed to. It is gone from every code line under
+  # lib and from every column of the baseline: quoted, bare, as an atom
+  # or as a field — by file and exact count, none.
+  @retired_word "orch" <> "estrator"
+  @retired_word_allowed %{}
+  @baseline "apps/cyfr/priv/repo/migrations/*_baseline.exs"
 
   @type_value ~r/"(?:soul|role)"/
   @type_key ~r/\["(?:soul|role)"\]|"(?:soul|role)"\s*=>|Arg\.new\("(?:soul|role)",/
@@ -37,6 +43,10 @@ defmodule Cyfr.VocabularyDriftTest do
     String.replace(line, @type_key, "") =~ @type_value
   end
 
+  defp retired_word_line?(line) do
+    line |> String.downcase() |> String.contains?(@retired_word)
+  end
+
   test "the scan distinguishes argument names from agent type values" do
     refute type_value_line?("Arg.new(\"role\", :string, required: true)")
     assert type_value_line?("agent.type == \"role\"")
@@ -44,11 +54,7 @@ defmodule Cyfr.VocabularyDriftTest do
 
   # One walk of the tree serves every pin.
   setup_all do
-    sources =
-      for path <- Cyfr.Test.SourceTree.files!(Path.join(@root, "apps/cyfr/lib/**/*.ex")) do
-        {Path.relative_to(path, @root),
-         path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines()}
-      end
+    sources = code_lines("apps/cyfr/lib/**/*.ex")
 
     counts =
       for {rel, lines} <- sources,
@@ -66,7 +72,21 @@ defmodule Cyfr.VocabularyDriftTest do
           into: %{},
           do: {rel, n}
 
-    {:ok, counts: counts, type_counts: type_counts}
+    retired_counts =
+      for {rel, lines} <- sources ++ code_lines(@baseline),
+          n = Enum.count(lines, &retired_word_line?/1),
+          n > 0,
+          into: %{},
+          do: {rel, n}
+
+    {:ok, counts: counts, type_counts: type_counts, retired_counts: retired_counts}
+  end
+
+  defp code_lines(glob) do
+    for path <- Cyfr.Test.SourceTree.files!(Path.join(@root, glob)) do
+      {Path.relative_to(path, @root),
+       path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines()}
+    end
   end
 
   test "the agent-type values are spelled in Compendium.AquaAgent and read from there", %{
@@ -87,7 +107,7 @@ defmodule Cyfr.VocabularyDriftTest do
     "tincture-guide.md"
   ]
 
-  @old_words ~r/sub-agent|\bsub_agent\b|orchestrator/i
+  @old_words Regex.compile!("sub-agent|\\bsub_agent\\b|" <> @retired_word, "i")
 
   test "the seed, the CLI, the guides and the manifest speak soul, role and scroll" do
     stale =
@@ -105,9 +125,9 @@ defmodule Cyfr.VocabularyDriftTest do
     assert Map.get(counts, "\"sub-agent\"", %{}) == %{}
   end
 
-  test "the \"orchestrator\" literal survives only as the runner's payload key", %{
-    counts: counts
+  test "no code line under lib and no column of the baseline says \"#{@retired_word}\"", %{
+    retired_counts: retired_counts
   } do
-    assert Map.get(counts, "\"orchestrator\"", %{}) == @orchestrator_literal_allowed
+    assert retired_counts == @retired_word_allowed
   end
 end

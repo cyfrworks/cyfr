@@ -9,7 +9,7 @@ defmodule Aqua.Prompt do
 
   ## Inputs
 
-    * `agent` — the resolved orchestrator: its authored prompt (under
+    * `agent` — the resolved agent: its authored prompt (under
       `"prompt"`, read with the roster the turn already holds; absent, it
       is read from the estate's tree here), its policy.
     * `authority` — what the consent edge grants. The only source for what

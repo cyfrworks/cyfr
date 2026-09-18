@@ -46,7 +46,7 @@ defmodule Aqua.TapeTest do
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
         message: %{author: ctx.user_id, content: text},
-        turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
 
     {execution, attempt} = root!(ctx, turn)
@@ -70,7 +70,7 @@ defmodule Aqua.TapeTest do
     send_attrs = %{
       message: %{author: ctx.user_id, content: "@aqua go", client_id: "c-1"},
       turn: %{
-        orchestrator: "aqua",
+        agent: "aqua",
         requested_by: ctx.user_id,
         model: nil,
         options: %{"room" => nil}
@@ -102,7 +102,7 @@ defmodule Aqua.TapeTest do
 
     attrs = %{
       message: %{author: ctx.user_id, content: "@aqua go", id: id, client_id: "c-id"},
-      turn: %{orchestrator: "aqua", requested_by: ctx.user_id}
+      turn: %{agent: "aqua", requested_by: ctx.user_id}
     }
 
     assert {:ok, %{message: %{id: ^id}, turn: turn, replayed: false}} =

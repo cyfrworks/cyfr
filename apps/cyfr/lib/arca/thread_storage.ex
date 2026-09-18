@@ -120,7 +120,7 @@ defmodule Arca.ThreadStorage do
   defp subscribe_creator(_ctx, _thread), do: :ok
 
   @doc """
-  Update a thread's title, orchestrator, turn cursor or last
+  Update a thread's title, agent, turn cursor or last
   activity.
   """
   @spec update(Context.t(), String.t(), map()) ::
@@ -130,7 +130,7 @@ defmodule Arca.ThreadStorage do
       with {:ok, thread} <- get(ctx, id) do
         attrs =
           attrs
-          |> Map.take([:title, :orchestrator, :turn_seq, :last_message_at])
+          |> Map.take([:title, :agent, :turn_seq, :last_message_at])
 
         thread |> Thread.changeset(attrs) |> Repo.update()
       end

@@ -64,7 +64,7 @@ defmodule Compendium.MCP.AquaTool do
     alias Cyfr.Ops.{Arg, Operation}
     # The soul and the roles are the athanor's own. Reading them is
     # open to any authenticated caller, a running chain included —
-    # a turn resolves its orchestrator through `get`, so the reads
+    # a turn resolves its agent through `get`, so the reads
     # carry no consent class and stay reachable from every surface
     # that can start one. Editing them — the closet, the prompts,
     # the `tool_policy` that decides what a chain may call — is a

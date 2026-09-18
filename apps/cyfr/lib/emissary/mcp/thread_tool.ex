@@ -503,7 +503,7 @@ defmodule Emissary.MCP.ThreadTool do
           [id: message_id, attachments: attachments]
           |> put_opt(:client_id, args["client_id"])
           |> put_opt(:model, args["model"])
-          |> put_opt(:orchestrator, args["agent"])
+          |> put_opt(:agent, args["agent"])
           |> put_opt(:room, args["room"])
 
         case Runner.send_message(ctx, id, text, opts) do
