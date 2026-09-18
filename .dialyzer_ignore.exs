@@ -19,7 +19,6 @@
   {"lib/compendium/registry/client.ex", :pattern_match_cov},
   {"lib/compendium/registry/credential_store.ex", :pattern_match_cov},
   {"lib/cyfr/execution/events/sequence.ex", :missing_range},
-  {"lib/cyfr/execution/rates.ex", :missing_range},
   {"lib/cyfr/execution/record.ex", :extra_range},
   {"lib/cyfr/json_formatter.ex", :unknown_type},
   {"lib/cyfr/network.ex", :pattern_match_cov},
@@ -65,5 +64,11 @@
   # noise from the loose `%__MODULE__{}` schema types, not a defect.
   ~r{lib/arca/adapters/s3\.ex:\d+:\d+:.*opaque},
   ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque},
-  ~r{lib/emissary_web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}
+  ~r{lib/emissary_web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque},
+  # `Sanctum.Provisioning.held/3` answers whatever the closure it holds the
+  # claim for answers, and the seed sync's closure answers `:ok`. Dialyzer
+  # types a private function once, over every caller, so it reads that `:ok`
+  # into the two entry points whose closures cannot answer it. Matched by
+  # function, so any other missing range in the file still reports.
+  ~r{lib/sanctum/provisioning\.ex:\d+:missing_range .*Sanctum\.Provisioning\.(install_shipped|provision)/2}
 ]

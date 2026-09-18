@@ -236,7 +236,7 @@ defmodule Cyfr.RunnerControl do
   holds a value `decode/1` would refuse raises `ArgumentError`, since it
   is the caller's own data.
   """
-  @spec encode(message()) :: iodata()
+  @spec encode(message()) :: iolist()
   def encode(%{type: type} = message) when is_map_key(@by_type, type) do
     {name, _sender, fields} = Map.fetch!(@by_type, type)
     %Jason.OrderedObject{values: members} = write_object(fields, Map.delete(message, :type), "")
@@ -432,5 +432,6 @@ defmodule Cyfr.RunnerControl do
 
   defp write(_type, name, _value), do: invalid(name)
 
+  @spec invalid(String.t()) :: no_return()
   defp invalid(name), do: raise(ArgumentError, "#{name} is not of its type or bound")
 end

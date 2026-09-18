@@ -66,7 +66,12 @@ defmodule Opus.Subtree do
 
   @doc "The process tracking this VM's attempts: the runner, or the worker service running them itself."
   @spec owner() :: pid() | nil
-  def owner, do: Process.whereis(Opus.Runner) || Process.whereis(Opus.WorkerService)
+  def owner do
+    case Process.whereis(Opus.Runner) || Process.whereis(Opus.WorkerService) do
+      pid when is_pid(pid) -> pid
+      _ -> nil
+    end
+  end
 
   @doc """
   Start an attempt process for `child`, a child CYFR admitted and claimed

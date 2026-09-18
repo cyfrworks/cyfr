@@ -385,8 +385,7 @@ defmodule Cyfr.BuilderProtocol do
   def verify_request(request_key, header, body, now)
       when byte_size(request_key) == 32 and is_binary(body) and is_integer(now) do
     with {:ok, fields, mac} <- parsed(header, now),
-         true <-
-           MacEnvelope.verify(@request, request_key, fields, mac, body) || {:error, :bad_mac} do
+         :ok <- authentic(MacEnvelope.verify(@request, request_key, fields, mac, body)) do
       {:ok, Map.delete(fields, :body_hash)}
     end
   end
@@ -403,8 +402,7 @@ defmodule Cyfr.BuilderProtocol do
   def verify_request_header(request_key, header, now)
       when byte_size(request_key) == 32 and is_integer(now) do
     with {:ok, fields, mac} <- parsed(header, now),
-         true <-
-           MacEnvelope.verify_header(@request, request_key, fields, mac) || {:error, :bad_mac} do
+         :ok <- authentic(MacEnvelope.verify_header(@request, request_key, fields, mac)) do
       {:ok, Map.delete(fields, :body_hash), fields.body_hash}
     end
   end
@@ -419,10 +417,16 @@ defmodule Cyfr.BuilderProtocol do
 
   defp parsed(header, now) do
     with {:ok, fields, mac} <- MacEnvelope.parse(@request, header),
-         true <- abs(fields.ts - now) <= @window_ms || {:error, :outside_window} do
+         :ok <- within_window(fields.ts, now) do
       {:ok, fields, mac}
     end
   end
+
+  defp within_window(ts, now) when abs(ts - now) <= @window_ms, do: :ok
+  defp within_window(_ts, _now), do: {:error, :outside_window}
+
+  defp authentic(true), do: :ok
+  defp authentic(false), do: {:error, :bad_mac}
 
   # ————— the request —————
 
