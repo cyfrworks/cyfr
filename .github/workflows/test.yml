@@ -343,6 +343,47 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
 
+  worker-image:
+    name: Worker image (runner kills, settlement, cleanup)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the worker image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.opus
+          load: true
+          tags: cyfr-opus:smoke
+          cache-from: type=gha,scope=opus
+          cache-to: type=gha,scope=opus,mode=max
+      # docker-compose.yml's opus service with its own settings (layered
+      # with tests/worker-image/compose.worker.yml for the image, a loopback
+      # port and a pool of two), reaching a scripted control plane on this
+      # runner: a spinning guest killed at its deadline with its process
+      # gone and CPU flat, a sibling that completes meanwhile, the service's
+      # VM killed and the container restarted as a new boot, the control
+      # plane cut with the attempt settling at its deadline, a child
+      # admitted after its parent's kill that never runs, a stream the
+      # control plane stops answering, a tainted runner never reassigned,
+      # and the queue age of a fresh runner; each case observed as the
+      # service detects it, as the control plane records it and as the
+      # container's processes, uids, homes and CPU show it.
+      - name: Runner kills, settlement and cleanup
+        run: python3 tests/worker-image/runners.py cyfr-opus:smoke
+
+      # The same scan docker.yml runs before publishing the worker image.
+      - name: Scan the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cyfr-opus:smoke
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+
   bridge-e2e:
     name: MCP bridge failures and leaks (cyfr + mcp-bridge images)
     runs-on: ubuntu-latest

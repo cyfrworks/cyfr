@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered over docker-compose.yml by the worker image tests
+# (tests/worker-image/stack.py): the opus service keeps every setting
+# compose gives it — cyfr-spawn's capabilities, the read-only root,
+# `ipc: none`, the homes and /run/opus tmpfs mounts, the limits, the
+# restart policy; this adds only the image under test, a loopback port for
+# the tests to call it on, a container name of the tests' own, the host
+# gateway its host API lives behind (the scripted control plane runs on the
+# host) and the pool settings a test chooses. The tests supply the
+# service's id, key and host URL through the environment compose
+# interpolates, as .env would.
+services:
+  opus:
+    image: ${OPUS_IMAGE:?set OPUS_IMAGE}
+    pull_policy: never
+    container_name: cyfr-opus-image-test
+    ports:
+      - "127.0.0.1::4200"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - OPUS_POOL_SIZE=${OPUS_POOL_SIZE:?set OPUS_POOL_SIZE}
+      - OPUS_IDLE_TTL_MS=${OPUS_IDLE_TTL_MS:?set OPUS_IDLE_TTL_MS}
+      - OPUS_WATCHDOG_GRACE_MS=${OPUS_WATCHDOG_GRACE_MS:?set OPUS_WATCHDOG_GRACE_MS}
+      - OPUS_RELEASE_GRACE_MS=${OPUS_RELEASE_GRACE_MS:?set OPUS_RELEASE_GRACE_MS}

@@ -84,6 +84,15 @@ defmodule Cyfr.Test.SandboxTest do
 
   # The name of every dynamic supervisor in the trees of the started
   # applications whose callback module is this repository's source.
+  defp repository_modules?(modules) when is_list(modules) and modules != [] do
+    Enum.all?(modules, fn module ->
+      source = Code.ensure_loaded?(module) && Keyword.get(module.module_info(:compile), :source)
+      is_list(source) and String.starts_with?(List.to_string(source), @apps_root)
+    end)
+  end
+
+  defp repository_modules?(_modules), do: false
+
   defp repository_dynamic_supervisors do
     for {app, _description, _vsn} <- Application.started_applications(),
         {module, _args} <- [Application.spec(app, :mod)],
@@ -98,15 +107,17 @@ defmodule Cyfr.Test.SandboxTest do
     end
   end
 
-  # The tree the repository builds from `Supervisor.start_link/2` groups is
-  # walked; a library's own supervisor is not descended into, and a dynamic
-  # supervisor's children are the work a sweep stops.
+  # The tree the repository builds is walked: its `Supervisor.start_link/2`
+  # groups, and a supervisor a module of the repository starts from a
+  # function of its own (the Opus service tree). A library's own supervisor
+  # is not descended into, and a dynamic supervisor's children are the work
+  # a sweep stops.
   defp dynamic_supervisors(supervisor) do
     Enum.flat_map(Supervisor.which_children(supervisor), fn
       {_id, pid, :supervisor, modules} when is_pid(pid) ->
         cond do
           dynamic?(pid) -> [pid]
-          modules == [Supervisor] -> dynamic_supervisors(pid)
+          modules == [Supervisor] or repository_modules?(modules) -> dynamic_supervisors(pid)
           true -> []
         end
 

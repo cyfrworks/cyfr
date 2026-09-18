@@ -138,6 +138,11 @@ config :cyfr, provisioning_inline: true
 # exercises sweep logic directly.
 config :cyfr, execution_sweeper_enabled: false
 
+# The worker watch follows the sweeper's flag by default; off by name here,
+# since it polls the worker services on a timer and writes the lapses it
+# finds. Its own suite starts it with the endpoints it serves.
+config :cyfr, worker_watch_enabled: false
+
 # The control-plane claim is the same shape again (a permanent GenServer
 # renewing a DB lease); `Cyfr.ControlPlane.Claim` is exercised directly.
 config :cyfr, control_plane_claim_enabled: false

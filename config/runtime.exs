@@ -78,9 +78,24 @@ if config_env() != :test do
   # same `mix` boot run the Opus worker service; the `builder` release runs
   # neither. The `opus` release never sees the worker root, the keyring or a
   # database URL (`Opus.Credentials`), and nothing of CYFR's is configured
-  # for it here.
+  # for it here. The `opus` release also runs as a runner (`OPUS_ROLE=runner`,
+  # `Opus.Release.role/1`): a process the service started through its keeper,
+  # which reads its settings from its own environment alone
+  # (`Opus.Settings.runner/1`), holds no credential and starts no listener,
+  # so nothing of the service's is configured for it here either.
   cyfr_boot? = release_name not in ["opus", "builder"]
-  opus_boot? = release_name in [nil, "opus"]
+
+  # The `builder` release runs the toolchain half of Locus: it reads the
+  # build settings it shares with CYFR (the listener, the limits, the
+  # deadline) and nothing else of CYFR's.
+  builder_boot? = release_name == "builder"
+
+  opus_role =
+    if release_name in [nil, "opus"],
+      do: Opus.Release.role(%{"OPUS_ROLE" => env_str.("OPUS_ROLE", nil)}),
+      else: nil
+
+  opus_boot? = opus_role == :service
 
   # The root key the execution workers' keys derive from (`Cyfr.WorkerAuth`):
   # 32 random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), the
@@ -169,10 +184,75 @@ if config_env() != :test do
         raise "[Cyfr] FATAL: OPUS_#{String.upcase(Atom.to_string(key))} must be " <>
                 Opus.Credentials.expected(key)
     end
+
+    # The service's runner pool (`Opus.Settings`): how many fresh runners it
+    # keeps spawned ahead (OPUS_POOL_SIZE, default 4), how long an idle
+    # runner is kept for its athanor (OPUS_IDLE_TTL_MS, 30000), how far past
+    # its assignment's deadline a runner may live before it halts itself
+    # (OPUS_WATCHDOG_GRACE_MS, 5000), how long a released runner is given to
+    # report what it holds before its process group is killed
+    # (OPUS_RELEASE_GRACE_MS, 2000), which keeper starts its runners
+    # (OPUS_KEEPER: `spawn`, the cyfr-spawn channel the image inherits, or
+    # `direct`, plain child processes of the service's VM for a machine
+    # without a keeper; unset follows the environment) and where the keeper's
+    # relays attach (OPUS_ATTACH_DIR, /run/opus). Only the set ones are
+    # configured, so the code's defaults stand for the rest; a value that is
+    # not a positive integer, a clean absolute path or one of the two keepers
+    # refuses the boot naming it. The `local` keeper runs subtrees in the
+    # service's own VM, which only the test suite may, and is refused by name.
+    opus_keeper =
+      case env_str.("OPUS_KEEPER", nil) do
+        nil ->
+          nil
+
+        "spawn" ->
+          :spawn
+
+        "direct" ->
+          :direct
+
+        "local" ->
+          raise "[Cyfr] FATAL: OPUS_KEEPER=local runs subtrees in the service's own VM, " <>
+                  "which only the test suite may; use spawn or direct"
+
+        other ->
+          raise "[Cyfr] FATAL: OPUS_KEEPER=#{inspect(other)} names no keeper; use spawn or direct"
+      end
+
+    # A bound is read strictly (`Cyfr.EnvValue`): a set value that is not a
+    # whole number in its range refuses the boot naming it.
+    opus_bound = fn key, range, unit ->
+      case Cyfr.EnvValue.whole_number(getenv, key, range, unit) do
+        {:ok, value} -> value
+        {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+      end
+    end
+
+    opus_pool =
+      Enum.reject(
+        [
+          pool_size: opus_bound.("OPUS_POOL_SIZE", 1..1_024, "runners"),
+          idle_ttl_ms: opus_bound.("OPUS_IDLE_TTL_MS", 1..86_400_000, "milliseconds"),
+          watchdog_grace_ms: opus_bound.("OPUS_WATCHDOG_GRACE_MS", 1..600_000, "milliseconds"),
+          release_grace_ms: opus_bound.("OPUS_RELEASE_GRACE_MS", 1..600_000, "milliseconds"),
+          keeper: opus_keeper,
+          attach_dir: env_str.("OPUS_ATTACH_DIR", nil)
+        ],
+        fn {_key, value} -> is_nil(value) end
+      )
+
+    case Opus.Settings.pool(opus_pool, System.get_env()) do
+      {:ok, _settings} ->
+        config :opus, opus_pool
+
+      {:error, {:malformed, key}} ->
+        raise "[Cyfr] FATAL: OPUS_#{String.upcase(Atom.to_string(key))} must be " <>
+                Opus.Settings.expected(key)
+    end
   end
 
-  if cyfr_boot? do
-    if release_name != "builder" do
+  if cyfr_boot? or builder_boot? do
+    if not builder_boot? do
       # Load the explicit JSON keyring; unset derives a key from CYFR_SECRET_KEY_BASE.
       config :cyfr, :crypto_keyring_json, env_str.("CYFR_CRYPTO_KEYRING", nil)
 
@@ -231,6 +311,18 @@ if config_env() != :test do
       # Where the host API listener binds, resolved above.
       config :cyfr, :host_api_bind, host_api.bind
       config :cyfr, :host_api_port, host_api.port
+
+      # How the worker watch (`Cyfr.Execution.WorkerWatch`) hears from each
+      # worker service: CYFR_WORKER_WATCH_POLL_MS, the interval between its
+      # status polls (1000 to 60000, default 5000), and
+      # CYFR_WORKER_WATCH_MISSES, the misses in a row after which the boot
+      # last heard from has its running attempts lapsed (1 to 100, default
+      # 3). Only the set bounds are configured; a set value outside its range
+      # refuses the boot naming it.
+      case Cyfr.RuntimeConfig.resolve_worker_watch(getenv) do
+        {:ok, worker_watch} -> config :cyfr, :worker_watch, worker_watch
+        {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+      end
 
       # How long the bridge runs a stdio server's backends without hearing from
       # this server, in milliseconds: 1000 to 60000, default 30000. Every sync

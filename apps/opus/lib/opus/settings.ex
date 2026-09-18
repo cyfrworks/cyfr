@@ -21,8 +21,11 @@ defmodule Opus.Settings do
   `/run/opus`). Unset, the keeper follows the environment: `:spawn` when
   `CYFR_SPAWN_CHANNEL` names an inherited channel, `:direct` otherwise; set,
   it is checked against that environment when the pool starts
-  (`Opus.Keeper`). A value that is not a positive integer, or a keeper
-  that is not one of the three, refuses the boot with the key named.
+  (`Opus.Keeper`). The `:local` keeper is compiled in under the test
+  environment alone (`keepers/0`): a release knows two keepers and refuses
+  the third whatever its configuration says. A value that is not a
+  positive integer, or a keeper that is not one of the known ones, refuses
+  the boot with the key named.
 
   The runner role reads its settings from the process environment alone
   (`runner/1`): the service passed exactly these through the keeper's
@@ -39,7 +42,9 @@ defmodule Opus.Settings do
   @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
   @id ~r/\A[\x21-\x7E]{1,256}\z/
 
-  @keepers [:spawn, :direct, :local]
+  # Subtrees in the service's own VM are a test's way of holding a guest;
+  # no release may run one, so the choice exists only where the suite runs.
+  @keepers if Mix.env() == :test, do: [:spawn, :direct, :local], else: [:spawn, :direct]
   @channel_env "CYFR_SPAWN_CHANNEL"
 
   @pool_defaults %{
@@ -70,7 +75,7 @@ defmodule Opus.Settings do
           watchdog_grace_ms: pos_integer()
         }
 
-  @doc "The keeper choices."
+  @doc "The keeper choices this build knows: `:spawn` and `:direct`, and `:local` under the test environment alone."
   @spec keepers() :: [atom()]
   def keepers, do: @keepers
 
