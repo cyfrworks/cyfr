@@ -91,6 +91,38 @@ defmodule Cyfr.RuntimeEnvReadingTest do
            "CYFR_BEHIND_PROXY must not be read as a string"
   end
 
+  # The `opus` release boots as the service or, started by the service's
+  # keeper, as a runner (`OPUS_ROLE=runner`). A runner holds no credential
+  # and starts no listener: the block that reads the service's credentials
+  # and pool must run for the service role alone, or every runner boot
+  # would refuse for the OPUS_SERVICE_KEY it must never see.
+  test "the opus release configures the service's credentials and pool for the service role alone" do
+    src = source()
+
+    assert src =~
+             ~S|Opus.Release.role(%{"OPUS_ROLE" => env_str.("OPUS_ROLE", nil)})|,
+           "the role must be read as Opus.Release reads it"
+
+    assert src =~ ~S|opus_boot? = opus_role == :service|
+    assert src =~ ~S|if opus_boot? do|
+    refute src =~ ~S|opus_boot? = release_name in [nil, "opus"]|
+  end
+
+  # The pool's bounds and the worker watch's are read through the strict
+  # readers, so a set value that does not parse refuses the boot by name.
+  test "the Opus pool bounds and the worker watch bounds are read strictly" do
+    src = source()
+
+    for name <- ~w(OPUS_POOL_SIZE OPUS_IDLE_TTL_MS OPUS_WATCHDOG_GRACE_MS OPUS_RELEASE_GRACE_MS) do
+      assert src =~ ~s|opus_bound.("#{name}", |, "#{name} must go through the strict bound reader"
+      refute src =~ ~s|env_int.("#{name}"|, "#{name} must not be read with env_int"
+    end
+
+    assert src =~ ~S|Opus.Settings.pool(opus_pool, System.get_env())|
+    assert src =~ ~S|Cyfr.RuntimeConfig.resolve_worker_watch(getenv)|
+    assert src =~ ~S|"local" ->|, "OPUS_KEEPER=local must be refused by name"
+  end
+
   # Dotenvy is a dependency; these are the behaviours the helpers above
   # depend on, asserted so an upgrade that changes them fails here rather
   # than silently changing what a blank line means.

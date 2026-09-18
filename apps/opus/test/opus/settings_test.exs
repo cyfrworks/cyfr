@@ -48,6 +48,20 @@ defmodule Opus.SettingsTest do
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: "spawn"], %{})
     end
 
+    # Subtrees in the service's own VM are the suite's way of holding a
+    # guest; a release must not be able to select it, however configured,
+    # so the choice is compiled in under the test environment alone.
+    test "the local keeper is compiled in under the test environment alone" do
+      assert :local in Settings.keepers()
+      assert Settings.keepers() -- [:local] == [:spawn, :direct]
+
+      source = File.read!(Path.expand("../../lib/opus/settings.ex", __DIR__))
+
+      assert source =~
+               ~S|@keepers if Mix.env() == :test, do: [:spawn, :direct, :local], else: [:spawn, :direct]|,
+             "the keeper roster must be decided at compile time from the environment"
+    end
+
     test "a bound that is not a positive integer refuses, naming its key" do
       for key <- [:pool_size, :idle_ttl_ms, :watchdog_grace_ms, :release_grace_ms],
           value <- [0, -1, "4", 4.0, nil] do

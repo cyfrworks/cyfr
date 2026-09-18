@@ -557,28 +557,12 @@ defmodule Cyfr.RuntimeConfig do
   """
   @spec resolve_worker_watch(getenv) :: {:ok, keyword()} | {:error, String.t()}
   def resolve_worker_watch(getenv) when is_function(getenv, 1) do
-    with {:ok, poll_ms} <- milliseconds(getenv, "CYFR_WORKER_WATCH_POLL_MS", 1_000..60_000),
-         {:ok, misses} <- count(getenv, "CYFR_WORKER_WATCH_MISSES", 1..100) do
+    with {:ok, poll_ms} <-
+           Cyfr.EnvValue.milliseconds(getenv, "CYFR_WORKER_WATCH_POLL_MS", 1_000..60_000),
+         {:ok, misses} <-
+           Cyfr.EnvValue.whole_number(getenv, "CYFR_WORKER_WATCH_MISSES", 1..100, "misses") do
       {:ok,
        Enum.reject([poll_ms: poll_ms, misses: misses], fn {_key, value} -> is_nil(value) end)}
-    end
-  end
-
-  # An optional whole number within `range`: unset or blank keeps the
-  # reader's default; anything else outside the range refuses naming the key.
-  defp count(getenv, key, first..last//1) do
-    text = getenv.(key) |> to_string() |> String.trim()
-
-    cond do
-      text == "" ->
-        {:ok, nil}
-
-      Regex.match?(~r/\A[0-9]{1,12}\z/, text) and String.to_integer(text) in first..last//1 ->
-        {:ok, String.to_integer(text)}
-
-      true ->
-        {:error,
-         "#{key}=#{inspect(getenv.(key))} must be a whole number from #{first} to #{last}."}
     end
   end
 

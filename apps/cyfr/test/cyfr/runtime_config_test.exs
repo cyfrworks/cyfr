@@ -384,6 +384,48 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
+  describe "resolve_worker_watch/1 — the watch's bounds, only the set ones" do
+    test "unset => nothing configured, so the code's defaults stand" do
+      assert {:ok, []} = RuntimeConfig.resolve_worker_watch(env(%{}))
+
+      assert {:ok, []} =
+               RuntimeConfig.resolve_worker_watch(
+                 env(%{"CYFR_WORKER_WATCH_POLL_MS" => " ", "CYFR_WORKER_WATCH_MISSES" => ""})
+               )
+    end
+
+    test "a poll interval in milliseconds and a count of misses, each within its range" do
+      assert {:ok, [poll_ms: 2_000, misses: 5]} =
+               RuntimeConfig.resolve_worker_watch(
+                 env(%{"CYFR_WORKER_WATCH_POLL_MS" => "2000", "CYFR_WORKER_WATCH_MISSES" => "5"})
+               )
+
+      assert {:ok, [misses: 1]} =
+               RuntimeConfig.resolve_worker_watch(env(%{"CYFR_WORKER_WATCH_MISSES" => "1"}))
+
+      assert {:ok, [poll_ms: 60_000]} =
+               RuntimeConfig.resolve_worker_watch(env(%{"CYFR_WORKER_WATCH_POLL_MS" => "60000"}))
+    end
+
+    test "a value outside its range, or not a whole number, refuses the boot naming it" do
+      for bad <- ~w(999 60001 5s 1.5 -5000 five) do
+        assert {:error, message} =
+                 RuntimeConfig.resolve_worker_watch(env(%{"CYFR_WORKER_WATCH_POLL_MS" => bad}))
+
+        assert message =~ "CYFR_WORKER_WATCH_POLL_MS"
+        assert message =~ bad
+      end
+
+      for bad <- ~w(0 101 3x -1 many) do
+        assert {:error, message} =
+                 RuntimeConfig.resolve_worker_watch(env(%{"CYFR_WORKER_WATCH_MISSES" => bad}))
+
+        assert message =~ "CYFR_WORKER_WATCH_MISSES"
+        assert message =~ bad
+      end
+    end
+  end
+
   describe "resolve_postgres/1" do
     test "url present => opts with defaults" do
       assert {:ok, opts} =

@@ -189,13 +189,35 @@ services:
       - OPUS_PORT=4200
     networks:
       - worker
-    # The engine holds no tenant state and writes only its release's
-    # temporary files: read-only root, one tmpfs.
-    read_only: true
-    tmpfs:
-      - /run/opus:uid=10002,gid=10002,mode=0700,size=16m
+    # docker-init is PID 1 and forwards stop signals to cyfr-spawn, the
+    # child subreaper of every runner process.
+    init: true
+    # cyfr-spawn refuses to start with any capability other than these: it
+    # starts the opus release and each runner under their own uids and
+    # signals their processes. The release and every runner run with none.
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - KILL
     security_opt:
       - no-new-privileges:true
+    # The engine holds no tenant state: read-only root, and the tmpfs
+    # mounts below are the only writable surfaces; cyfr-spawn refuses to
+    # start if any other location is writable by a runner's uid
+    # (`ipc: none` leaves /dev/shm unmounted). Runner homes: each runner's
+    # uid creates its own 0700 home, where its VM keeps the release's
+    # temporary files; mode 1733 lets it create one without listing the
+    # others, and the runner runs the release from there, so it allows
+    # exec. Its size counts against the memory limit below. /run/opus holds
+    # the service's temporary files and the socket runners' relays attach
+    # to.
+    read_only: true
+    ipc: none
+    tmpfs:
+      - /var/lib/opus/homes:mode=1733,exec,size=256m
+      - /run/opus:uid=10002,gid=10002,mode=0700,size=16m
     restart: unless-stopped
     # Running attempts close or are reported on shutdown; compose's default
     # 10s grace would SIGKILL mid-report.

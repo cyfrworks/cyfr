@@ -234,6 +234,13 @@ defmodule Cyfr.TwoWorkersTest do
 
       assert {200, %{"ok" => %{"service" => @other}}} =
                status_request(ScriptedWorker.url(), @other, other_key)
+
+      # Each status read over the wire has the contract's shape, a count of
+      # tainted runners among it: neither service holds one after its run.
+      for endpoint <- [OpusService.endpoint(), ScriptedWorker.endpoint()] do
+        assert {:ok, %{runners: %{tainted: 0}} = status} = WorkerClient.status(endpoint)
+        assert Cyfr.WorkerAPI.valid_status?(status)
+      end
     end
 
     test "a worker request's lost answer is retried once for kill and status, never for start" do

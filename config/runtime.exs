@@ -214,13 +214,22 @@ if config_env() != :test do
           raise "[Cyfr] FATAL: OPUS_KEEPER=#{inspect(other)} names no keeper; use spawn or direct"
       end
 
+    # A bound is read strictly (`Cyfr.EnvValue`): a set value that is not a
+    # whole number in its range refuses the boot naming it.
+    opus_bound = fn key, range, unit ->
+      case Cyfr.EnvValue.whole_number(getenv, key, range, unit) do
+        {:ok, value} -> value
+        {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+      end
+    end
+
     opus_pool =
       Enum.reject(
         [
-          pool_size: env_int.("OPUS_POOL_SIZE", nil),
-          idle_ttl_ms: env_int.("OPUS_IDLE_TTL_MS", nil),
-          watchdog_grace_ms: env_int.("OPUS_WATCHDOG_GRACE_MS", nil),
-          release_grace_ms: env_int.("OPUS_RELEASE_GRACE_MS", nil),
+          pool_size: opus_bound.("OPUS_POOL_SIZE", 1..1_024, "runners"),
+          idle_ttl_ms: opus_bound.("OPUS_IDLE_TTL_MS", 1..86_400_000, "milliseconds"),
+          watchdog_grace_ms: opus_bound.("OPUS_WATCHDOG_GRACE_MS", 1..600_000, "milliseconds"),
+          release_grace_ms: opus_bound.("OPUS_RELEASE_GRACE_MS", 1..600_000, "milliseconds"),
           keeper: opus_keeper,
           attach_dir: env_str.("OPUS_ATTACH_DIR", nil)
         ],
