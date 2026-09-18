@@ -59,7 +59,8 @@ defmodule Cyfr.Retention do
     Cyfr.Retention.Builds,
     Cyfr.Retention.McpLogs,
     Cyfr.Retention.PolicyLogs,
-    Cyfr.Retention.Threads
+    Cyfr.Retention.Threads,
+    Cyfr.Retention.StagedRevisions
   ]
 
   @doc "The closed roster of retainable kinds — everything else derives from it."
