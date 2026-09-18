@@ -137,6 +137,12 @@ def os_cleanup(stack, runner, label):
     expect(home_scrubbed(stack, runner), f"{label}: its home {runner['home']} is scrubbed", stack.homes())
 
 
+def exit_reports(plane, attempt, timeout):
+    """The exit reports naming the attempt, once the first has arrived."""
+    named = lambda: [r for r in plane.seen("runner_exited") if attempt["attempt"] in r["attempts"]]
+    return plane.wait_for(named, timeout, f"an exit report naming {attempt['attempt']}")
+
+
 def since(stack, plane, execution_id, t):
     return [r for r in plane.seen(None, execution_id) if r["t"] > t]
 
@@ -286,9 +292,12 @@ def test_control_plane_cut(stack, plane):
     before_lease_ms = attempt["lease_until"] - gone * 1000
     expect(after_deadline_ms >= -500 and before_lease_ms > 0,
            f"detection: the runner stopped {after_deadline_ms:.0f} ms after its deadline, {before_lease_ms:.0f} ms before its lease expired", {"gone": gone})
-    logs = stack.logs()
-    expect("was not reported" in logs and runner["runner"] in logs,
-           "detection: the service tried to report the runner's exit and could not reach the control plane", logs[-4000:])
+    # The report is tried twice, and its failure is logged once both were
+    # refused at the socket.
+    unreported = f"the exit of runner {runner['runner']}"
+    wait_until(lambda: any(unreported in line and "was not reported" in line for line in stack.logs().splitlines()),
+               30, "the service to give up reporting the runner's exit", interval=1.0)
+    expect(True, f"detection: the service tried to report the runner's exit and gave up {ms(time.time() - gone)} ms after the runner stopped")
 
     plane.port = port
     plane.serve()
@@ -325,8 +334,7 @@ def test_late_child_refused(stack, plane):
 
     code, answer = stack.kill(parent["execution_id"])
     expect(answer == {"ok": True}, "the parent is killed while its admission is pending", answer)
-    exited = plane.wait_seen("runner_exited", None, 15)
-    exited = [r for r in exited if parent["attempt"] in r["attempts"]]
+    exited = exit_reports(plane, parent, 15)
     gone = wait_gone(stack, runner, stack.release_grace_ms / 1000 + 10, "the parent's runner process to be gone")
     expect(exited and exited[0]["report"]["service"] == SERVICE and exited[0]["args"]["runner"] == runner["runner"],
            "detection: the service reported the parent's runner exited holding the parent's attempt", plane.seen("runner_exited"))
@@ -380,28 +388,43 @@ def test_abandoned_stream(stack, plane):
     return runner
 
 
-def test_tainted_never_reassigned(stack, plane):
-    attempt = plane.mint(stack.boot, "reagent", REFS["spin"], WASM["spin"], {"spin": True}, "ath_taint", 30_000)
+def test_tainted_never_reassigned(stack, plane, tries=3):
+    """A runner is tainted only from its kill to its retirement, which the
+    keeper finishes within tens of milliseconds, so the count is looked for
+    in up to `tries` kills; every other assertion holds in each."""
+    for n in range(1, tries + 1):
+        if tainted_runner_case(stack, plane, f"ath_taint_{n}", last=n == tries):
+            return
+        stack.wait_pool()
+
+
+def tainted_runner_case(stack, plane, athanor, last):
+    attempt = plane.mint(stack.boot, "reagent", REFS["spin"], WASM["spin"], {"spin": True}, athanor, 30_000)
     expect(stack.start(attempt)[1] == {"ok": True}, "a guest starts for an athanor")
     runner = attached_runner(stack, plane, attempt)
     sampler = StatusSampler(stack).start()
     t_kill = time.time()
     code, answer = stack.kill(attempt["execution_id"])
     expect(answer == {"ok": True}, "its root is killed", answer)
-    exited = plane.wait_seen("runner_exited", None, 15)
+    exited = exit_reports(plane, attempt, 15)
     gone = wait_gone(stack, runner, stack.release_grace_ms / 1000 + 10, "the killed runner's process to be gone")
     wait_until(lambda: stack.runners()["tainted"] == 0 and stack.runners()["busy"] == 0, 10, "the tainted runner to leave the pool")
     samples = sampler.stop()
-    exited = [r for r in exited if attempt["attempt"] in r["attempts"]]
-    expect(sampler.max_of("tainted") >= 1,
-           f"detection: the status counted the runner tainted ({len(samples)} samples over {ms(samples[-1][0] - samples[0][0])} ms), gone {ms(gone - t_kill)} ms after the kill",
-           [s[1] for s in samples])
+    time.sleep(0.5)
+    exited = [r for r in plane.seen("runner_exited") if attempt["attempt"] in r["attempts"]]
+    counted = sampler.max_of("tainted") >= 1
+    if counted or last:
+        expect(counted,
+               f"detection: the status counted the runner tainted ({len(samples)} samples over {ms(samples[-1][0] - samples[0][0])} ms), gone {ms(gone - t_kill)} ms after the kill",
+               [s[1] for s in samples])
+    else:
+        print(f"note: the tainted count fell between {len(samples)} status samples; killing another runner", flush=True)
     expect(len(exited) == 1 and exited[0]["args"]["runner"] == runner["runner"] and exited[0]["answered"] == "ok",
            "settlement: the service reported the runner's exit once, holding the attempt", plane.seen("runner_exited"))
     expect(stack.kill(attempt["execution_id"])[1] == {"ok": True} and plane.seen("complete", attempt["execution_id"]) == [],
            "settlement: a second kill is ok again, and the attempt never closed", plane.seen(None, attempt["execution_id"]))
 
-    next_attempt = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"after": "taint"}, "ath_taint", 10_000)
+    next_attempt = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"after": "taint"}, athanor, 10_000)
     expect(stack.start(next_attempt)[1] == {"ok": True}, "the athanor's next subtree starts")
     fresh = attached_runner(stack, plane, next_attempt)
     plane.wait_seen("complete", next_attempt["execution_id"], BOOT_S)
@@ -410,13 +433,32 @@ def test_tainted_never_reassigned(stack, plane):
     expect(all(r["runner"] != runner["runner"] for r in plane.seen("attach")[1:] if r["execution_id"] != attempt["execution_id"]),
            "no later attach presented the tainted runner")
     os_cleanup(stack, runner, "cleanup")
+    return counted
+
+
+def fresh_runners_booted(stack, first_seen, settle_s=4.0):
+    """Whether the pool is full of fresh runners whose VMs have had `settle_s`
+    to boot and nothing idle is left: a runner counts as fresh from its
+    spawn, seconds before its VM reads its first assignment."""
+    now = time.monotonic()
+    live = {r["runner"] for r in stack.runner_processes()}
+    for runner in live:
+        first_seen.setdefault(runner, now)
+    counts = stack.runners()
+    booted = [r for r in live if now - first_seen[r] >= settle_s]
+    return counts["idle"] == 0 and counts["busy"] == 0 and counts["fresh"] >= stack.pool_size and len(booted) >= stack.pool_size
 
 
 def measure_acquisition(stack, plane, count=12):
-    """Queue age: from the start request to the runner's attach, with a fresh runner ready."""
-    fresh_ages, warm_ages = [], []
+    """Queue age: from the start request to the runner's attach, with the
+    pool's fresh runners booted. The service is recreated with a short idle
+    time, so each distinct athanor's runner is retired before the next start
+    and the eight uids are never exhausted."""
+    stack.idle_ttl_ms = 300
+    stack.up()
+    fresh_ages, warm_ages, first_seen = [], [], {}
     for i in range(count):
-        wait_until(lambda: stack.runners()["fresh"] >= 1, BOOT_S, "a fresh runner to be ready", interval=0.1)
+        wait_until(lambda: fresh_runners_booted(stack, first_seen), BOOT_S, "the pool's fresh runners to have booted", interval=0.25)
         attempt = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"n": i}, f"ath_queue_{i}", 10_000)
         t_send = time.time()
         expect(stack.start(attempt)[1] == {"ok": True}, f"queued start {i + 1}")
@@ -425,6 +467,8 @@ def measure_acquisition(stack, plane, count=12):
         plane.wait_seen("complete", attempt["execution_id"], BOOT_S)
     for i in range(count):
         attempt = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"n": i}, "ath_queue_warm", 10_000)
+        if i:
+            wait_until(lambda: stack.runners()["idle"] >= 1, 5, "the athanor's runner to be idle", interval=0.01)
         t_send = time.time()
         expect(stack.start(attempt)[1] == {"ok": True}, f"warm start {i + 1}")
         attach = plane.wait_seen("attach", attempt["execution_id"], BOOT_S)[0]
@@ -453,8 +497,11 @@ def main(image):
         test_abandoned_stream(stack, plane)
         test_late_child_refused(stack, plane)
         test_control_plane_cut(stack, plane)
-        measure_acquisition(stack, plane)
         test_service_death(stack, plane)
+        measure_acquisition(stack, plane)
+        # The runners spawned behind the last starts are VMs still booting.
+        settled = {}
+        wait_until(lambda: fresh_runners_booted(stack, settled, settle_s=6.0), BOOT_S, "the pool to settle", interval=0.5)
         share = stack.cpu_share(2.0)
         expect(share <= 0.25, f"the container's CPU is flat at the end ({share:.2f} of a CPU over 2 s)", share)
     finally:

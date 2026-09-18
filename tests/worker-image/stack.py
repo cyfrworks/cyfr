@@ -176,10 +176,14 @@ class Stack:
             cmd="$(tr '\0\n|' '   ' < "$d/cmdline" 2>/dev/null)"
             printf '%s|%s|%s|%s\n' "${d#/proc/}" "$uids" "$eff" "$cmd"
           done"""
+        # A container that is not running (between the keeper's exit and
+        # compose's restart) holds no process: exec fails and lists none.
         out = []
         for line in self.exec(script).stdout.splitlines():
+            if line.count("|") < 3:
+                continue
             pid, uids, eff, cmd = line.split("|", 3)
-            if uids:
+            if uids and pid.isdigit():
                 out.append({"pid": int(pid), "uids": [int(u) for u in uids.split(",")], "cap_eff": eff, "cmd": cmd.strip()})
         return out
 
@@ -203,8 +207,11 @@ class Stack:
           done""".replace("FIRST", str(POOL_FIRST)).replace("LAST", str(POOL_LAST))
         out = []
         for line in self.exec(script).stdout.splitlines():
+            if line.count("|") < 3:
+                continue
             pid, uid, runner, home = line.split("|", 3)
-            out.append({"pid": int(pid), "uid": int(uid), "runner": runner, "home": home})
+            if pid.isdigit() and uid.isdigit():
+                out.append({"pid": int(pid), "uid": int(uid), "runner": runner, "home": home})
         return out
 
     def runner_process(self, runner_id):
@@ -241,19 +248,20 @@ class Stack:
 
 
 class StatusSampler:
-    """Polls the service's status from a thread of its own, keeping every sample."""
+    """Polls the service's status back to back from a few threads, keeping every sample: a runner is tainted only from its kill to its retirement, some tens of milliseconds."""
 
-    def __init__(self, stack, interval=0.025):
+    def __init__(self, stack, interval=0.0, threads=4):
         import threading
 
         self.stack = stack
         self.interval = interval
         self.samples = []
         self.stopping = threading.Event()
-        self.thread = threading.Thread(target=self.poll, daemon=True)
+        self.threads = [threading.Thread(target=self.poll, daemon=True) for _ in range(threads)]
 
     def start(self):
-        self.thread.start()
+        for thread in self.threads:
+            thread.start()
         return self
 
     def poll(self):
@@ -265,7 +273,9 @@ class StatusSampler:
 
     def stop(self):
         self.stopping.set()
-        self.thread.join(5)
+        for thread in self.threads:
+            thread.join(5)
+        self.samples.sort(key=lambda sample: sample[0])
         return self.samples
 
     def max_of(self, state):

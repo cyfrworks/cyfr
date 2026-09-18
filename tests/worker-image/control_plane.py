@@ -16,8 +16,9 @@ with its dispatch key. `script` sets what an operation answers for one
 execution or for all: a value the runner reads as `{"ok": value}`, a
 refusal, `DROP` (a 500 with no body: an answer that never arrives, which
 the runner's client counts as lost) or a function of the request that
-answers any of those. `stop` closes the listener, so the next call is
-refused at the socket, and `serve` opens it again on the same port.
+answers any of those. `stop` closes the listener and the connections its
+clients keep alive, so the next call is refused at the socket, and `serve`
+opens it again on the same port.
 """
 
 import base64
@@ -65,6 +66,7 @@ class ControlPlane:
         self.scripts = {}
         self.artifacts = {}
         self.secrets = {}
+        self.connections = set()
         self.server = None
         self.thread = None
         self.epoch = time.monotonic()
@@ -82,6 +84,19 @@ class ControlPlane:
             def log_message(self, *args):
                 pass
 
+            def setup(self):
+                super().setup()
+                with plane.lock:
+                    plane.connections.add(self.connection)
+
+            def finish(self):
+                with plane.lock:
+                    plane.connections.discard(self.connection)
+                try:
+                    super().finish()
+                except OSError:
+                    pass
+
             def do_POST(self):
                 plane.handle(self)
 
@@ -96,12 +111,20 @@ class ControlPlane:
         return self
 
     def stop(self):
-        """Close the listener: every later connection is refused at the socket."""
+        """Close the listener and every connection a client keeps alive: every
+        later call is refused at the socket, as when CYFR is gone."""
         server, self.server = self.server, None
         if server:
             server.shutdown()
             server.server_close()
             self.thread.join(5)
+        with self.lock:
+            connections, self.connections = list(self.connections), set()
+        for connection in connections:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     @property
     def container_url(self):
