@@ -26,6 +26,10 @@ defmodule Opus.SpawnKeeperTest do
 
   @spec_env %{"OPUS_ROLE" => "runner", "OPUS_RUNNER_ID" => "runner_1", "OPUS_CONTROL_FD" => "3"}
 
+  # The keeper's vectors, which the repository carries and a checkout of
+  # Opus alone (the independence build) does not.
+  @vectors Path.expand("../../../../tests/fixtures/spawn_protocol.json", __DIR__)
+
   setup do
     unique = System.unique_integer([:positive])
     path = Path.join(System.tmp_dir!(), "opus_spawn_#{unique}.sock")
@@ -247,12 +251,14 @@ defmodule Opus.SpawnKeeperTest do
     assert_receive {:DOWN, ^ref, :process, ^client, {:shutdown, :channel_lost}}, 5_000
   end
 
+  @tag skip:
+         if(File.exists?(@vectors),
+           do: false,
+           else:
+             "the keeper's vectors (tests/fixtures/spawn_protocol.json) are not in this checkout"
+         )
   test "the client's control frames match the keeper's vectors" do
-    %{"control_frames" => [line_frame, end_frame]} =
-      "../../../../tests/fixtures/spawn_protocol.json"
-      |> Path.expand(__DIR__)
-      |> File.read!()
-      |> Jason.decode!()
+    %{"control_frames" => [line_frame, end_frame]} = @vectors |> File.read!() |> Jason.decode!()
 
     payload = Base.decode16!(line_frame["payload_hex"], case: :lower)
     assert {:ok, %{type: :cancel_child}} = RunnerControl.decode(payload)
