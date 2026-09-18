@@ -106,7 +106,9 @@ defmodule Opus.WorkerService do
     settings = Opus.Settings.pool!()
 
     boot = "#{node()}#" <> Cyfr.UUID7.generate_id("boot")
-    mode = if settings.keeper == :local, do: :local, else: :pool
+    # The `:local` keeper exists in the test build alone, so a build without it
+    # knows only the pool's keepers and the comparison names those.
+    mode = if settings.keeper in [:spawn, :direct], do: :pool, else: :local
 
     if mode == :pool do
       :ok =

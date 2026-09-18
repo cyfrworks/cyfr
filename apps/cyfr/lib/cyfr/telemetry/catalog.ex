@@ -123,6 +123,12 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:operator],
       note: "a guest event could not reach its subscribers; the execution itself continues"
     },
+    [:cyfr, :storage_gc, :sweep] => %{
+      consumers: [:operator],
+      note:
+        "one estate's staged-revision sweep: prefixes examined, collected, kept and repaired, " <>
+          "moves still pending and errors, so an operator sees staging that is not draining"
+    },
     [:cyfr, :opus, :execution, :unreaped_kill] => %{
       consumers: [:operator],
       note:
