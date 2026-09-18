@@ -17,6 +17,11 @@ defmodule Opus.Keeper.Direct do
   group when that process ends without releasing it, or when this VM's
   pool goes down with it. A release sends the group a term signal, gives
   the runner the grace to report what it holds, then kills what is left.
+
+  ## arca:bypass-ok=D — entire module
+
+  Every path is a runner's own temporary home, created when the runner is
+  spawned and removed when it is released or its owner ends.
   """
 
   @behaviour Opus.Keeper

@@ -40,6 +40,11 @@ defmodule Opus.Keeper.Spawn do
   When the channel closes, `cyfr-spawn` has already retired every spawn
   and is exiting: every runner's owner hears `{:error, :channel_lost}`
   and this process stops, taking the pool and the service with it.
+
+  ## arca:bypass-ok=D — entire module
+
+  The only paths are the attach directory and the attach socket inside
+  it, the worker's own, which this process checks, creates and removes.
   """
 
   @behaviour Opus.Keeper
