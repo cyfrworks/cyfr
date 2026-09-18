@@ -18,7 +18,10 @@ defmodule Arca.TenantArgumentOrderTest do
 
   The rule that removes the hazard is positional: the tenant comes first,
   always, in every tenant-scoped storage function. Then there is one shape
-  to remember and a swap has to cross a type to happen.
+  to remember and a swap has to cross a type to happen. The tenant is a
+  bare `athanor_id`, or one of the two structs that carry it: a
+  `%Sanctum.Context{}`, or the `%Cyfr.Actor{}` a facade matches its
+  athanor out of.
   """
 
   use ExUnit.Case, async: true
@@ -46,28 +49,37 @@ defmodule Arca.TenantArgumentOrderTest do
     |> Path.join(@storage_glob)
     |> Cyfr.Test.SourceTree.files!()
     |> Enum.flat_map(fn path ->
-      file = Path.basename(path)
-      exempt = Map.get(@exempt, file, [])
-
-      path
-      |> Cyfr.Test.SourceTree.read()
-      |> String.split("\n")
-      |> Enum.with_index(1)
-      |> Enum.filter(fn {line, _n} -> String.match?(line, ~r/^  def [a-z_]+[!?]?\(/) end)
-      |> Enum.filter(fn {line, _n} -> String.contains?(line, "athanor_id") end)
-      |> Enum.reject(fn {line, _n} ->
-        Enum.any?(exempt, &String.contains?(line, "def #{&1}("))
-      end)
-      # A `%Context{}`-first function carries its tenant inside the struct,
-      # which is the shape this rule is protecting in the first place.
-      |> Enum.reject(fn {line, _n} ->
-        String.match?(line, ~r/^  def [a-z_]+[!?]?\(\s*(%Context|%Sanctum\.Context|ctx)/)
-      end)
-      |> Enum.reject(fn {line, _n} ->
-        String.match?(line, ~r/^  def [a-z_]+[!?]?\(athanor_id\b/)
-      end)
-      |> Enum.map(fn {line, n} -> "#{file}:#{n}: #{String.trim(line)}" end)
+      offending(Path.basename(path), Cyfr.Test.SourceTree.read(path))
     end)
+  end
+
+  # The public heads of one file's source that name an athanor_id and do
+  # not take the tenant first.
+  defp offending(file, source) do
+    exempt = Map.get(@exempt, file, [])
+
+    source
+    |> String.split("\n")
+    |> Enum.with_index(1)
+    |> Enum.filter(fn {line, _n} -> String.match?(line, ~r/^  def [a-z_]+[!?]?\(/) end)
+    |> Enum.filter(fn {line, _n} -> String.contains?(line, "athanor_id") end)
+    |> Enum.reject(fn {line, _n} ->
+      Enum.any?(exempt, &String.contains?(line, "def #{&1}("))
+    end)
+    # A `%Context{}`-first or `%Cyfr.Actor{}`-first function carries its
+    # tenant inside the struct, which is the shape this rule is protecting
+    # in the first place. First only: a struct further along leaves a
+    # string ahead of it to be swapped.
+    |> Enum.reject(fn {line, _n} ->
+      String.match?(
+        line,
+        ~r/^  def [a-z_]+[!?]?\(\s*(%Context|%Sanctum\.Context|%Cyfr\.Actor|ctx)/
+      )
+    end)
+    |> Enum.reject(fn {line, _n} ->
+      String.match?(line, ~r/^  def [a-z_]+[!?]?\(athanor_id\b/)
+    end)
+    |> Enum.map(fn {line, n} -> "#{file}:#{n}: #{String.trim(line)}" end)
   end
 
   test "every tenant-scoped storage function takes the athanor first" do
@@ -85,6 +97,27 @@ defmodule Arca.TenantArgumentOrderTest do
            another athanor's rows. Put the tenant first — or take a
            %Sanctum.Context{} and let it carry the tenant.
            """
+  end
+
+  test "a struct carries the tenant only from the first position" do
+    planted = """
+    defmodule Arca.Planted do
+      def by_actor(%Cyfr.Actor{athanor_id: athanor_id}, key), do: {athanor_id, key}
+      def by_context(%Context{athanor_id: athanor_id}, key), do: {athanor_id, key}
+      def by_id(athanor_id, key), do: {athanor_id, key}
+      def actor_second(key, %Cyfr.Actor{athanor_id: athanor_id}), do: {athanor_id, key}
+      def context_second(key, %Context{athanor_id: athanor_id}), do: {athanor_id, key}
+      def id_second(key, athanor_id), do: {athanor_id, key}
+      def actor_in_a_map(%{actor: %Cyfr.Actor{athanor_id: athanor_id}}), do: athanor_id
+    end
+    """
+
+    assert offending("planted.ex", planted) == [
+             "planted.ex:5: def actor_second(key, %Cyfr.Actor{athanor_id: athanor_id}), do: {athanor_id, key}",
+             "planted.ex:6: def context_second(key, %Context{athanor_id: athanor_id}), do: {athanor_id, key}",
+             "planted.ex:7: def id_second(key, athanor_id), do: {athanor_id, key}",
+             "planted.ex:8: def actor_in_a_map(%{actor: %Cyfr.Actor{athanor_id: athanor_id}}), do: athanor_id"
+           ]
   end
 
   test "the two modules that disagreed now agree" do
