@@ -56,11 +56,14 @@ defmodule Cyfr.Execution.WorkerClientTest do
   defp serve!(answers, service \\ @service) do
     pid =
       start_supervised!(
-        {Bandit,
-         plug: {Stub, test: self(), service: service, answers: answers},
-         ip: {127, 0, 0, 1},
-         port: 0,
-         startup_log: false}
+        Supervisor.child_spec(
+          {Bandit,
+           plug: {Stub, test: self(), service: service, answers: answers},
+           ip: {127, 0, 0, 1},
+           port: 0,
+           startup_log: false},
+          id: {Bandit, System.unique_integer([:positive])}
+        )
       )
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
@@ -74,7 +77,7 @@ defmodule Cyfr.Execution.WorkerClientTest do
     status = %{
       service: @service,
       boot: "boot_1",
-      runners: %{fresh: 1, idle: 0, busy: 2},
+      runners: %{fresh: 1, idle: 0, busy: 2, tainted: 1},
       attempts: ["att_1"]
     }
 
@@ -140,6 +143,33 @@ defmodule Cyfr.Execution.WorkerClientTest do
     assert {:error, :lost} = WorkerClient.start(endpoint, "token", "{}", "sealed")
     assert {:error, :lost} = WorkerClient.kill(endpoint, "exec_1")
     assert {:error, :lost} = WorkerClient.status(endpoint)
+  end
+
+  test "a status is read as the contract requires, and one reporting no tainted count taints nothing" do
+    reported = %{service: @service, boot: "boot_1", runners: %{fresh: 1, idle: 0, busy: 2}}
+
+    endpoint =
+      serve!(%{
+        WorkerWire.worker_route(:status) => WorkerWire.ok(Map.put(reported, :attempts, ["att_1"]))
+      })
+
+    assert {:ok, %{runners: %{fresh: 1, idle: 0, busy: 2, tainted: 0}, attempts: ["att_1"]}} =
+             WorkerClient.status(endpoint)
+
+    for runners <- [
+          %{fresh: -1, idle: 0, busy: 0, tainted: 0},
+          %{fresh: 0, idle: 0, busy: "2", tainted: 0},
+          %{fresh: 0, idle: 0, tainted: 0},
+          %{fresh: 0, idle: 0, busy: 0, tainted: 0, other: 0}
+        ] do
+      endpoint =
+        serve!(%{
+          WorkerWire.worker_route(:status) =>
+            WorkerWire.ok(%{reported | runners: runners} |> Map.put(:attempts, []))
+        })
+
+      assert {:error, :lost} = WorkerClient.status(endpoint), inspect(runners)
+    end
   end
 
   test "a refusal the service names at 200 is answered as it; any other status is a lost answer" do

@@ -11,11 +11,13 @@ defmodule Cyfr.Execution.Lapse do
   the failure telemetry, publishes the event, and fails the children a
   formula or a turn root leaves running (`Cyfr.Execution.Cascade`).
 
-  Three things find such an attempt: the sweeper, by its lapsed lease
+  Four things find such an attempt: the sweeper, by its lapsed lease
   (`Cyfr.Execution.Sweeper`); a worker service's report that a runner
   exited, by the attempts it was started with
-  (`Cyfr.Execution.Host.runner_exited/2`); and an attempt whose waiter
-  exited, by its own id (`Cyfr.Execution.Attempt`).
+  (`Cyfr.Execution.Host.runner_exited/2`); the worker watch, by the boot
+  it stopped hearing from or saw replaced
+  (`Cyfr.Execution.WorkerWatch`); and an attempt whose waiter exited, by
+  its own id (`Cyfr.Execution.Attempt`).
 
   A boot that does not hold the control plane (`Cyfr.ControlPlane.owner?/0`)
   lapses nothing: the rows are the holder's to settle.
@@ -89,9 +91,33 @@ defmodule Cyfr.Execution.Lapse do
           :ok | {:error, :unavailable}
   def dispatched(service_id, boot_id, runner, attempts)
       when is_binary(boot_id) and is_list(attempts) do
+    case listed(service_id, boot_id, runner, attempts) do
+      {:ok, _lapsed} -> :ok
+      {:error, :unavailable} = unavailable -> unavailable
+    end
+  end
+
+  @doc """
+  Lapse each of `attempts` that was dispatched to the worker service
+  `service_id` on its boot `boot_id`, whichever runner claimed it, and
+  still owns its running execution: what a boot that is gone means for
+  them (`Cyfr.Execution.WorkerWatch`). Answers the records it lapsed, each
+  as `Arca.Execution.list_running_dispatched/4` lists it, so the caller can
+  stop the attempt process open for each; `{:error, :unavailable}` when the
+  store cannot list them.
+  """
+  @spec boot(String.t(), String.t(), [String.t()]) :: {:ok, [map()]} | {:error, :unavailable}
+  def boot(service_id, boot_id, attempts)
+      when is_binary(service_id) and is_binary(boot_id) and is_list(attempts) do
+    listed(service_id, boot_id, nil, attempts)
+  end
+
+  defp listed(_service_id, _boot_id, _runner, []), do: {:ok, []}
+
+  defp listed(service_id, boot_id, runner, attempts) do
     case Arca.Execution.list_running_dispatched(attempts, service_id, boot_id, runner) do
       records when is_list(records) ->
-        Enum.each(records, &lapse/1)
+        {:ok, Enum.filter(records, &lapse/1)}
 
       {:error, _reason} ->
         {:error, :unavailable}
