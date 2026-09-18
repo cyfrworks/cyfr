@@ -14,7 +14,7 @@ defmodule Cyfr.SlotsTest do
   # ---------------------------------------------------------------------------
 
   describe "configuration" do
-    test "the defaults are the execution semaphore's numbers" do
+    test "the defaults are the execution slots' numbers" do
       assert Slots.default_max() == 128
       assert Slots.default_key_max() == 16
       assert Slots.child_reserve(128) == 32
