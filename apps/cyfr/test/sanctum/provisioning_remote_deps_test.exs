@@ -25,7 +25,8 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   # A registry of two fixture catalysts: `someone/catalysts/elsewhere`,
   # which the bundle requires, and `someone/catalysts/below`, which
   # `elsewhere` requires. While the stall agent names a repository, that
-  # repository's manifest request is accepted and never answered.
+  # repository's manifest request is accepted and never answered, and the
+  # observer is told it arrived.
   defmodule OCIRegistry do
     @behaviour Plug
 
@@ -33,13 +34,16 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     def init(opts), do: opts
 
     @impl true
-    def call(%Plug.Conn{request_path: path} = conn, %{fixtures: fixtures, stall: stall}) do
+    def call(%Plug.Conn{request_path: path} = conn, %{fixtures: fixtures, stall: stall} = opts) do
       case Regex.run(~r{^/v2/(.+)/(tags/list|manifests/[^/]+|blobs/[^/]+)$}, path) do
         [_, repo, "tags/list"] when is_map_key(fixtures, repo) ->
           json(conn, 200, %{"name" => repo, "tags" => ["1.0.0"]})
 
         [_, repo, "manifests/" <> _tag] when is_map_key(fixtures, repo) ->
-          if Agent.get(stall, & &1) == repo, do: Process.sleep(:timer.minutes(2))
+          if Agent.get(stall, & &1) == repo do
+            send(opts.observer, {:stalled, repo})
+            Process.sleep(:timer.minutes(2))
+          end
 
           %{manifest: manifest, manifest_digest: digest} = fixtures[repo]
 
@@ -83,7 +87,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
     {:ok, server} =
       Bandit.start_link(
-        plug: {OCIRegistry, %{fixtures: fixtures(), stall: stall}},
+        plug: {OCIRegistry, %{fixtures: fixtures(), stall: stall, observer: self()}},
         ip: {127, 0, 0, 1},
         port: 0
       )
@@ -305,6 +309,11 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
       wait_until(fn -> Provisioning.status(ctx) == :filling end, 5_000, "the attempt to claim")
       assert {:ok, %{entry_kind: "provision", fence: 1} = held} = Claims.current(actor)
+
+      # Killed once it is parked in the pull, not before: the claim is
+      # visible while the attempt still has queries to run, and a process
+      # killed inside one takes the shared sandbox connection with it.
+      assert_receive {:stalled, "someone/catalysts/elsewhere"}, 5_000
 
       # Killed: no `after` runs, so nothing in the attempt lets go.
       Process.exit(attempt, :kill)
