@@ -195,11 +195,12 @@ defmodule Cyfr.Execution.Dispatch do
   `Cyfr.Execution.Registry`, for a caller that already ended its row. A
   dispatched run's runner, or the run a claimed attempt was handed to
   (`claim/4`), is killed through its worker service
-  (`Cyfr.Execution.WorkerClient.kill/2`) and the kill is counted against `tenant` as
-  one whose native work may still run; the worker service's exit report
-  then stops its attempt, and its waiter, if any, answers the row as it
-  stands. Any other holder (a turn root's, a task that has not dispatched
-  yet) is counted the same way and killed.
+  (`Cyfr.Execution.WorkerClient.kill/2`) and the kill is counted against
+  `tenant` as one whose native work may still run
+  (`Cyfr.Execution.Attempt.note_unreaped/2`); the worker service's exit
+  report then stops its attempt, and its waiter, if any, answers the row
+  as it stands. Any other holder (a turn root's, a task that has not
+  dispatched yet) is counted the same way and killed.
   """
   @spec stop(String.t(), String.t() | nil) :: :ok
   def stop(execution_id, tenant) when is_binary(execution_id) do
@@ -208,7 +209,7 @@ defmodule Cyfr.Execution.Dispatch do
         kill_runner(endpoint, execution_id, tenant)
 
       [{pid, _value}] ->
-        note_unreaped(tenant, execution_id)
+        Attempt.note_unreaped(tenant, execution_id)
         Process.exit(pid, :kill)
 
       [] ->
@@ -456,7 +457,7 @@ defmodule Cyfr.Execution.Dispatch do
   # nothing left to lapse.
   defp kill_runner(endpoint, execution_id, tenant) do
     if WorkerClient.kill(endpoint, execution_id) == :ok,
-      do: note_unreaped(tenant, execution_id)
+      do: Attempt.note_unreaped(tenant, execution_id)
 
     :ok
   end
@@ -469,19 +470,6 @@ defmodule Cyfr.Execution.Dispatch do
     end
 
     :ok
-  end
-
-  defp note_unreaped(tenant, execution_id) do
-    case Cyfr.Execution.Semaphore.note_unreaped(tenant, execution_id) do
-      :ok ->
-        :ok
-
-      {:error, :unavailable} ->
-        Logger.error(
-          "[Cyfr.Execution.Dispatch] unreaped kill of #{inspect(execution_id)} for tenant " <>
-            "#{inspect(tenant)} is uncharged: the semaphore did not answer"
-        )
-    end
   end
 
   defp emit_cancel_telemetry(ctx, execution_id) do

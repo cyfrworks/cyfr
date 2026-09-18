@@ -615,7 +615,7 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, first)
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, second)
     assert %{running: false, queued: 0} = Runner.state(thread.id, ctx.athanor_id)
-    assert Cyfr.Execution.Semaphore.status().root_active == 0
+    assert Cyfr.Slots.status(Cyfr.Execution.Slots).root_active == 0
 
     ScriptedWorker.script([reply("new work")])
     {:ok, %{turn_id: fresh}} = Runner.send_message(ctx, thread.id, "@aqua again")

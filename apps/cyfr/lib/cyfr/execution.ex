@@ -56,7 +56,7 @@ defmodule Cyfr.Execution do
   @doc "Whether a worker service is configured and answers, and the execution slots are up."
   @spec available?() :: boolean()
   def available? do
-    is_pid(Process.whereis(Cyfr.Execution.Semaphore)) and match?({:ok, _}, Dispatch.worker())
+    is_pid(Process.whereis(Cyfr.Execution.Slots)) and match?({:ok, _}, Dispatch.worker())
   end
 
   @doc """

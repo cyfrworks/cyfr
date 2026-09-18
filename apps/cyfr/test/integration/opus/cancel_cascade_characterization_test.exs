@@ -56,7 +56,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Execution.Semaphore.forgive_unreaped(ctx.athanor_id)
+      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do
@@ -78,7 +78,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   test "a cancelled formula leaves one cancelled row, failed children and nothing held", %{
     ctx: ctx
   } do
-    slots_before = Cyfr.Execution.Semaphore.status().active
+    slots_before = Cyfr.Slots.status(Cyfr.Execution.Slots).active
     root_id = Cyfr.UUID7.execution_id()
     hold!(root_id)
 
@@ -134,7 +134,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     end
 
     wait_until(fn -> not Enum.any?(processes, &Process.alive?/1) end, 30_000)
-    wait_until(fn -> Cyfr.Execution.Semaphore.status().active == slots_before end)
+    wait_until(fn -> Cyfr.Slots.status(Cyfr.Execution.Slots).active == slots_before end)
     assert Sanctum.Authority.budget(authority).in_flight == 0
 
     assert {:ok, _reclaimed} = Arca.BudgetReservations.sweep(ctx.athanor_id)

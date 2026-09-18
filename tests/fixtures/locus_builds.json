@@ -1,0 +1,612 @@
+{
+  "comment": "The vectors pinning Cyfr.BuilderProtocol, the wire between CYFR's build client and the builder Locus serves: every consumer derives the request key from the service key over the label, reproduces the request's canonical string, MAC and header, reads every line and refusal here to its fields, refuses every invalid body with the error named, and refuses every header under auth_rejected. File contents under fields are base64 of the bytes. A synthesize entry names a body to build from the valid one: `files` files of `bytes` zero bytes each in place of its files, or a progress message of `message_bytes`.",
+  "version": 1,
+  "domain": "cyfr-locus/v1",
+  "service": "builds",
+  "label": "cyfr-locus/v1/builds",
+  "auth_header": "x-cyfr-auth",
+  "window_ms": 30000,
+  "routes": {
+    "build": "/locus/v1/builds/build",
+    "health": "/locus/v1/builds/health"
+  },
+  "statuses": {
+    "malformed": 400,
+    "unauthorized": 401,
+    "capacity": 429,
+    "timeout": 504,
+    "unavailable": 503,
+    "failed": 422,
+    "protocol_mismatch": 409
+  },
+  "bounds": {
+    "max_source_bytes": 1048576,
+    "max_source_files": 512,
+    "max_request_bytes": 2000000,
+    "max_output_bytes": 67108864,
+    "max_output_files": 500,
+    "max_response_bytes": 100000000,
+    "max_line_bytes": 65536,
+    "max_log_bytes": 2000000
+  },
+  "languages": [
+    "rust",
+    "javascript"
+  ],
+  "language_for": {
+    "catalyst": "rust",
+    "reagent": "rust",
+    "formula": "rust",
+    "tincture": "javascript"
+  },
+  "stages": [
+    "preparing",
+    "compiling",
+    "validating",
+    "output"
+  ],
+  "component_wasm": "component.wasm",
+  "component_lockfile": "Cargo.lock",
+  "key_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+  "request_key_hex": "2cda800d855dedca853262563a53b0c60b860bf31e06cd5d171148f71a369ccf",
+  "backends_key_hex": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+  "backends_request_key_hex": "c8106473403b5d71956e327ec5e1737497728000334eb8ecc00743f28400f1f3",
+  "key_text": {
+    "valid": [
+      "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+      "101112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F"
+    ],
+    "invalid": [
+      "",
+      "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2",
+      "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f0",
+      " 101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+      "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2g",
+      "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8="
+    ]
+  },
+  "request": {
+    "fields": {
+      "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+      "language": "rust",
+      "target_type": "reagent",
+      "resolve": false,
+      "deadline": 1789305519602,
+      "sources": {
+        "Cargo.toml": "W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=",
+        "src/lib.rs": "Ly8gdGhlIHZlY3RvciByZWFnZW50Cg=="
+      }
+    },
+    "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+    "ts": 1789305249602,
+    "nonce": "n_5c3e9a1b",
+    "canonical": "cyfr-locus/v1/builds/request\n1789305249602\nn_5c3e9a1b\nbf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2",
+    "mac": "_sx560dIuonthSgbLExpjDj0lQv-9PvjkGwaHysafxg",
+    "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=_sx560dIuonthSgbLExpjDj0lQv-9PvjkGwaHysafxg"
+  },
+  "health_request": {
+    "body": "{\"version\":1}"
+  },
+  "lines": {
+    "progress": {
+      "stage": "compiling",
+      "message": "Compiling reagent (rust)...",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"type\":\"progress\",\"version\":1}"
+    },
+    "component_result": {
+      "language": "rust",
+      "target_type": "reagent",
+      "outputs": {
+        "Cargo.lock": "IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZ2VuZXJhdGVkIGJ5IENhcmdvLgp2ZXJzaW9uID0gNAo=",
+        "component.wasm": "AGFzbQEAAAA="
+      },
+      "diagnostics": [
+        "compiling: Compiling reagent (rust)...",
+        "output: Finished `release` profile [optimized] target(s) in 4.20s"
+      ],
+      "body": "{\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output: Finished `release` profile [optimized] target(s) in 4.20s\"],\"language\":\"rust\",\"outputs\":[{\"base64\":\"IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZ2VuZXJhdGVkIGJ5IENhcmdvLgp2ZXJzaW9uID0gNAo=\",\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\"},{\"base64\":\"AGFzbQEAAAA=\",\"digest\":\"sha256:93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476\",\"path\":\"component.wasm\"}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":1}"
+    },
+    "tincture_result": {
+      "language": "javascript",
+      "target_type": "tincture",
+      "outputs": {
+        "assets/app.js": "Y29uc29sZS5sb2coInZlY3RvciIpOwo=",
+        "index.html": "PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg=="
+      },
+      "diagnostics": [],
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"},{\"base64\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}"
+    },
+    "health": {
+      "release": "0.5.8",
+      "toolchains": {
+        "javascript": {
+          "available": false,
+          "command": "npm",
+          "description": "JavaScript/React -> static bundle (npm + Vite)"
+        },
+        "rust": {
+          "available": true,
+          "command": "cargo-component",
+          "description": "Rust -> WASM Component Model (cargo-component)"
+        }
+      },
+      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"javascript\":{\"available\":false,\"command\":\"npm\",\"description\":\"JavaScript/React -> static bundle (npm + Vite)\"},\"rust\":{\"available\":true,\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"version\":1}"
+    },
+    "refusals": [
+      {
+        "class": "malformed",
+        "reason": "sources[1].base64 is not of the form this message takes",
+        "diagnostics": [],
+        "sentence": "the builder could not read the request: sources[1].base64 is not of the form this message takes",
+        "body": "{\"class\":\"malformed\",\"diagnostics\":[],\"reason\":\"sources[1].base64 is not of the form this message takes\",\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "unauthorized",
+        "reason": "bad_mac",
+        "diagnostics": [],
+        "sentence": "the builder refused this server's key (bad_mac); check the builds key on both ends",
+        "body": "{\"class\":\"unauthorized\",\"diagnostics\":[],\"reason\":\"bad_mac\",\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "unauthorized",
+        "reason": "replayed",
+        "diagnostics": [],
+        "sentence": "the builder refused this server's key (replayed); check the builds key on both ends",
+        "body": "{\"class\":\"unauthorized\",\"diagnostics\":[],\"reason\":\"replayed\",\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "capacity",
+        "reason": {
+          "max": 2
+        },
+        "diagnostics": [],
+        "sentence": "the builder is at capacity (2 concurrent builds)",
+        "body": "{\"class\":\"capacity\",\"diagnostics\":[],\"reason\":{\"max\":2},\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "timeout",
+        "reason": {
+          "budget_ms": 270000
+        },
+        "diagnostics": [
+          "compiling: Compiling reagent (rust)...",
+          "output:    Compiling vector v0.1.0"
+        ],
+        "sentence": "the build passed its budget of 270000 ms",
+        "body": "{\"class\":\"timeout\",\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output:    Compiling vector v0.1.0\"],\"reason\":{\"budget_ms\":270000},\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "unavailable",
+        "reason": "the rust toolchain is not installed in this image",
+        "diagnostics": [],
+        "sentence": "the builder cannot build this: the rust toolchain is not installed in this image",
+        "body": "{\"class\":\"unavailable\",\"diagnostics\":[],\"reason\":\"the rust toolchain is not installed in this image\",\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "failed",
+        "reason": {
+          "status": 101
+        },
+        "diagnostics": [
+          "output: error[E0425]: cannot find value `x` in this scope"
+        ],
+        "sentence": "the build failed (exit 101)",
+        "body": "{\"class\":\"failed\",\"diagnostics\":[\"output: error[E0425]: cannot find value `x` in this scope\"],\"reason\":{\"status\":101},\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "failed",
+        "reason": {
+          "signal": "KILL"
+        },
+        "diagnostics": [],
+        "sentence": "the build was killed (KILL)",
+        "body": "{\"class\":\"failed\",\"diagnostics\":[],\"reason\":{\"signal\":\"KILL\"},\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "protocol_mismatch",
+        "reason": {
+          "builder": 1,
+          "client": 2
+        },
+        "diagnostics": [],
+        "sentence": "the builder speaks builder protocol 1 and this server speaks builder protocol 2; run the builder image of the same release as this server",
+        "body": "{\"class\":\"protocol_mismatch\",\"diagnostics\":[],\"reason\":{\"builder\":1,\"client\":2},\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "protocol_mismatch",
+        "reason": {
+          "builder": 1,
+          "client": null
+        },
+        "diagnostics": [],
+        "sentence": "the builder speaks builder protocol 1 and this server speaks no builder protocol (a release older than this one); run the builder image of the same release as this server",
+        "body": "{\"class\":\"protocol_mismatch\",\"diagnostics\":[],\"reason\":{\"builder\":1,\"client\":null},\"type\":\"refusal\",\"version\":1}"
+      }
+    ]
+  },
+  "invalid_requests": [
+    {
+      "name": "wrong_version",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":2}",
+      "error": "version"
+    },
+    {
+      "name": "no_version",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\"}",
+      "error": "version"
+    },
+    {
+      "name": "not_json",
+      "body": "[]",
+      "error": "not_json"
+    },
+    {
+      "name": "unknown_field",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"token\":\"abc\",\"version\":1}",
+      "error": "unknown_field"
+    },
+    {
+      "name": "missing_field",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "missing_field"
+    },
+    {
+      "name": "unknown_language",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"go\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "unpaired",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"javascript\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "unpaired"
+    },
+    {
+      "name": "resolve_not_boolean",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":\"yes\",\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "deadline_not_integer",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":\"soon\",\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "athanor_id_empty",
+      "body": "{\"athanor_id\":\"\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "sources_not_a_list",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":{},\"target_type\":\"reagent\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "sources_empty",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "source_unknown_field",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"mode\":420,\"path\":\"Cargo.toml\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "unknown_field"
+    },
+    {
+      "name": "source_not_base64",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"!!\",\"path\":\"Cargo.toml\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "duplicate_path",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "duplicate_path"
+    },
+    {
+      "name": "unsafe_path",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"../lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "unsafe_path"
+    },
+    {
+      "name": "absolute_path",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"/etc/passwd\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "error": "unsafe_path"
+    },
+    {
+      "name": "too_many_sources",
+      "synthesize": {
+        "files": 513,
+        "bytes": 1
+      },
+      "error": "too_many"
+    },
+    {
+      "name": "oversize_sources",
+      "synthesize": {
+        "files": 1,
+        "bytes": 1048577
+      },
+      "error": "too_large"
+    },
+    {
+      "name": "declared_too_large",
+      "declared_bytes": 2000001,
+      "error": "too_large"
+    }
+  ],
+  "invalid_lines": [
+    {
+      "name": "wrong_version",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"type\":\"progress\",\"version\":2}",
+      "error": "version"
+    },
+    {
+      "name": "no_version",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"type\":\"progress\"}",
+      "error": "version"
+    },
+    {
+      "name": "not_json",
+      "body": "\"progress\"",
+      "error": "not_json"
+    },
+    {
+      "name": "no_type",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"version\":1}",
+      "error": "missing_field"
+    },
+    {
+      "name": "unknown_type",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"compiling\",\"type\":\"warning\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "progress_unknown_field",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"pct\":50,\"stage\":\"compiling\",\"type\":\"progress\",\"version\":1}",
+      "error": "unknown_field"
+    },
+    {
+      "name": "progress_unknown_stage",
+      "body": "{\"message\":\"Compiling reagent (rust)...\",\"stage\":\"linking\",\"type\":\"progress\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "progress_message_not_text",
+      "body": "{\"message\":7,\"stage\":\"compiling\",\"type\":\"progress\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "result_missing_diagnostics",
+      "body": "{\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"},{\"base64\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "missing_field"
+    },
+    {
+      "name": "result_unknown_field",
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"},{\"base64\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\"}],\"size\":1,\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "unknown_field"
+    },
+    {
+      "name": "result_unpaired",
+      "body": "{\"diagnostics\":[],\"language\":\"rust\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"},{\"base64\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "unpaired"
+    },
+    {
+      "name": "result_output_without_digest",
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"path\":\"assets/app.js\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "missing_field"
+    },
+    {
+      "name": "result_tampered_bytes",
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPm90aGVyPC90aXRsZT4K\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "digest_mismatch"
+    },
+    {
+      "name": "result_tampered_digest",
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"path\":\"assets/app.js\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "digest_mismatch"
+    },
+    {
+      "name": "result_digest_not_sha256",
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"md5:abc\",\"path\":\"assets/app.js\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "result_duplicate_path",
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"},{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "duplicate_path"
+    },
+    {
+      "name": "result_unsafe_path",
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"a/../b\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "unsafe_path"
+    },
+    {
+      "name": "result_diagnostics_not_lines",
+      "body": "{\"diagnostics\":[1],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"},{\"base64\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "component_without_wasm",
+      "body": "{\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output: Finished `release` profile [optimized] target(s) in 4.20s\"],\"language\":\"rust\",\"outputs\":[{\"base64\":\"IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZ2VuZXJhdGVkIGJ5IENhcmdvLgp2ZXJzaW9uID0gNAo=\",\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\"}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "component_with_extra_output",
+      "body": "{\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output: Finished `release` profile [optimized] target(s) in 4.20s\"],\"language\":\"rust\",\"outputs\":[{\"base64\":\"IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZ2VuZXJhdGVkIGJ5IENhcmdvLgp2ZXJzaW9uID0gNAo=\",\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\"},{\"base64\":\"AGFzbQEAAAA=\",\"digest\":\"sha256:93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476\",\"path\":\"component.wasm\"},{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_unknown_class",
+      "body": "{\"class\":\"busy\",\"diagnostics\":[],\"reason\":\"sources[1].base64 is not of the form this message takes\",\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_reason_shape",
+      "body": "{\"class\":\"malformed\",\"diagnostics\":[],\"reason\":{\"max\":2},\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_capacity_reason_shape",
+      "body": "{\"class\":\"capacity\",\"diagnostics\":[],\"reason\":\"2\",\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_unauthorized_reason_unknown",
+      "body": "{\"class\":\"unauthorized\",\"diagnostics\":[],\"reason\":\"expired\",\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_mismatch_client_zero",
+      "body": "{\"class\":\"protocol_mismatch\",\"diagnostics\":[],\"reason\":{\"builder\":1,\"client\":0},\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_missing_diagnostics",
+      "body": "{\"class\":\"malformed\",\"reason\":\"sources[1].base64 is not of the form this message takes\",\"type\":\"refusal\",\"version\":1}",
+      "error": "missing_field"
+    },
+    {
+      "name": "health_unknown_field",
+      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"javascript\":{\"available\":false,\"command\":\"npm\",\"description\":\"JavaScript/React -> static bundle (npm + Vite)\"},\"rust\":{\"available\":true,\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"uptime\":1,\"version\":1}",
+      "error": "unknown_field"
+    },
+    {
+      "name": "health_missing_toolchain",
+      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"rust\":{\"available\":true,\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"version\":1}",
+      "error": "missing_field"
+    },
+    {
+      "name": "health_toolchain_available_not_boolean",
+      "body": "{\"release\":\"0.5.8\",\"toolchains\":{\"javascript\":{\"available\":false,\"command\":\"npm\",\"description\":\"JavaScript/React -> static bundle (npm + Vite)\"},\"rust\":{\"available\":\"yes\",\"command\":\"cargo-component\",\"description\":\"Rust -> WASM Component Model (cargo-component)\"}},\"type\":\"health\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "too_many_outputs",
+      "synthesize": {
+        "files": 501,
+        "bytes": 1
+      },
+      "error": "too_many"
+    },
+    {
+      "name": "oversize_outputs",
+      "synthesize": {
+        "files": 1,
+        "bytes": 67108865
+      },
+      "error": "too_large"
+    },
+    {
+      "name": "oversize_line",
+      "synthesize": {
+        "message_bytes": 65537
+      },
+      "error": "too_large"
+    }
+  ],
+  "auth_rejected": [
+    {
+      "name": "backends_label",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=6vE5zddKHGyo-R-AqT1oPlGy0VS8DslHH_bB47GoVdM",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "bad_mac"
+    },
+    {
+      "name": "backends_key",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=PfiRkVm6GGCmoSidRQi3MPNAApkE2-lpb3W8H7O8rFU",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "bad_mac"
+    },
+    {
+      "name": "backends_key_builds_label",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=G-RaAtn-bpncwjKLwksDUzUimd6h5VzJKWcuLAUBCzM",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "bad_mac"
+    },
+    {
+      "name": "underived_key",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=zcf4JjBSE_i0sDcJ9pz0xl13jr48pJuPJr6XLzL3M_U",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "bad_mac"
+    },
+    {
+      "name": "wrong_domain",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=9vuYlxVkilx4j6RMNVvPh_Ymv1Q_mtqSVcXvZ1lArmw",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "bad_mac"
+    },
+    {
+      "name": "tampered_body",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=_sx560dIuonthSgbLExpjDj0lQv-9PvjkGwaHysafxg",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1} ",
+      "now": 1789305249602,
+      "refusal": "bad_mac"
+    },
+    {
+      "name": "tampered_mac",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "bad_mac"
+    },
+    {
+      "name": "tampered_nonce",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_other body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=_sx560dIuonthSgbLExpjDj0lQv-9PvjkGwaHysafxg",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "bad_mac"
+    },
+    {
+      "name": "other_body_hash",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=0000000000000000000000000000000000000000000000000000000000000000 mac=_sx560dIuonthSgbLExpjDj0lQv-9PvjkGwaHysafxg",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "bad_mac"
+    },
+    {
+      "name": "outside_window_late",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=_sx560dIuonthSgbLExpjDj0lQv-9PvjkGwaHysafxg",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305279603,
+      "refusal": "outside_window"
+    },
+    {
+      "name": "outside_window_early",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=_sx560dIuonthSgbLExpjDj0lQv-9PvjkGwaHysafxg",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305219601,
+      "refusal": "outside_window"
+    },
+    {
+      "name": "wrong_kind",
+      "header": "v1 kind=report ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=SeR9Vno7mnWKUfSEvtKE4WNVYArcAWYf0LUQhzz3bds",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "malformed"
+    },
+    {
+      "name": "no_body_hash",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b mac=_sx560dIuonthSgbLExpjDj0lQv-9PvjkGwaHysafxg",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "malformed"
+    },
+    {
+      "name": "repeated_field",
+      "header": "v1 kind=request ts=1789305249602 nonce=n_5c3e9a1b body=bf569ce55ec492f0a4e951a2aa0764a79287a5669678d1346aa1e670947e5ae2 mac=_sx560dIuonthSgbLExpjDj0lQv-9PvjkGwaHysafxg nonce=n_again",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "malformed"
+    },
+    {
+      "name": "empty_header",
+      "header": "",
+      "body": "{\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"deadline\":1789305519602,\"language\":\"rust\",\"resolve\":false,\"sources\":[{\"base64\":\"W3BhY2thZ2VdCm5hbWUgPSAidmVjdG9yIgp2ZXJzaW9uID0gIjAuMS4wIgo=\",\"path\":\"Cargo.toml\"},{\"base64\":\"Ly8gdGhlIHZlY3RvciByZWFnZW50Cg==\",\"path\":\"src/lib.rs\"}],\"target_type\":\"reagent\",\"version\":1}",
+      "now": 1789305249602,
+      "refusal": "malformed"
+    }
+  ]
+}

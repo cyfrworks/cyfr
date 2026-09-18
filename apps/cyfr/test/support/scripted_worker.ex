@@ -163,7 +163,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   @doc """
   Start the context's athanor on fresh execution limits: a fresh consented
   rate window (`Cyfr.Execution.Rates`) for the pinned releases of `refs`,
-  and no unreaped-kill penalty (`Cyfr.Execution.Semaphore.forgive_unreaped/1`).
+  and no unreaped-kill penalty (`Cyfr.Slots.forgive_unreaped/2`).
   Scripted runs are admitted, and their runners killed, for real, so every
   test sharing an athanor draws on the same limits.
   """
@@ -173,7 +173,7 @@ defmodule Cyfr.Test.ScriptedWorker do
       :ok = Cyfr.Execution.Rates.reset(ctx.athanor_id, pinned)
     end
 
-    :ok = Cyfr.Execution.Semaphore.forgive_unreaped(ctx.athanor_id)
+    :ok = Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
   end
 
   # ---------------------------------------------------------------------------

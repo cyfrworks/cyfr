@@ -28,7 +28,8 @@ defmodule Opus.WorkerServiceTest do
   import Cyfr.Test.Wait
 
   alias Cyfr.Authority.Budget
-  alias Cyfr.Execution.{Attempt, Keys, Semaphore}
+  alias Cyfr.Execution.{Attempt, Keys}
+  alias Cyfr.Slots
   alias Cyfr.Test.AttemptFixtures
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap, Source}
@@ -36,6 +37,7 @@ defmodule Opus.WorkerServiceTest do
   @moduletag timeout: 120_000
 
   @probe_node "formula:local.nested-probe"
+  @slots Cyfr.Execution.Slots
   @lapsed "Execution terminated: runner stopped without cleanup"
 
   setup tags do
@@ -53,7 +55,7 @@ defmodule Opus.WorkerServiceTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Semaphore.forgive_unreaped(ctx.athanor_id)
+      Slots.forgive_unreaped(@slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do
@@ -94,7 +96,7 @@ defmodule Opus.WorkerServiceTest do
     root_id: root_id,
     attempt: attempt
   } do
-    children_before = Semaphore.status().child_active
+    children_before = Slots.status(@slots).child_active
     hold_children!(root_id)
     test_pid = self()
 
@@ -108,7 +110,7 @@ defmodule Opus.WorkerServiceTest do
     runner = runner_of(id)
 
     assert Sanctum.Authority.budget(authority).in_flight == 1
-    assert Semaphore.status().child_active == children_before + 1
+    assert Slots.status(@slots).child_active == children_before + 1
     assert [%{admitted_at: %DateTime{}}] = charges(ctx, authority)
 
     # The runner's attempt keys are in neither the worker service's status
@@ -129,7 +131,7 @@ defmodule Opus.WorkerServiceTest do
     assert "execution.lapsed" in event_types(ctx, id)
 
     wait_until(fn -> not Enum.any?([attempt_pid, runner.pid, component], &Process.alive?/1) end)
-    wait_until(fn -> Semaphore.status().child_active == children_before end)
+    wait_until(fn -> Slots.status(@slots).child_active == children_before end)
     assert Sanctum.Authority.budget(authority).in_flight == 0
     assert charges(ctx, authority) == []
     refute_received {:ran, _}
@@ -177,8 +179,8 @@ defmodule Opus.WorkerServiceTest do
   test "killing a formula's runner mid-fan-out reclaims every hold its children took", %{
     ctx: ctx
   } do
-    children_before = Semaphore.status().child_active
-    slots_before = Semaphore.status().active
+    children_before = Slots.status(@slots).child_active
+    slots_before = Slots.status(@slots).active
     root_id = Cyfr.UUID7.execution_id()
     hold_children!(root_id)
     test_pid = self()
@@ -216,7 +218,7 @@ defmodule Opus.WorkerServiceTest do
 
     assert Sanctum.Authority.budget(root_authority).in_flight == 3
     assert length(charges(ctx, root_authority)) == 3
-    assert Semaphore.status().child_active == children_before + 3
+    assert Slots.status(@slots).child_active == children_before + 3
 
     Process.exit(root_runner.pid, :kill)
 
@@ -232,8 +234,8 @@ defmodule Opus.WorkerServiceTest do
     for runner <- [root_runner | child_runners],
         do: wait_until(fn -> not Process.alive?(runner.pid) end)
 
-    wait_until(fn -> Semaphore.status().child_active == children_before end)
-    wait_until(fn -> Semaphore.status().active == slots_before end)
+    wait_until(fn -> Slots.status(@slots).child_active == children_before end)
+    wait_until(fn -> Slots.status(@slots).active == slots_before end)
 
     wait_until(fn -> Sanctum.Authority.budget(root_authority).in_flight == 0 end)
     wait_until(fn -> charges(ctx, root_authority) == [] end)

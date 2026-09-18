@@ -46,7 +46,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Execution.Semaphore.forgive_unreaped(ctx.athanor_id)
+      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       if previous,
@@ -183,7 +183,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
          %{ctx: ctx} do
       authority = authority(edges: %{@target => %{}})
       fixture = formula!(ctx, authority)
-      children_before = Cyfr.Execution.Semaphore.status().child_active
+      children_before = Cyfr.Slots.status(Cyfr.Execution.Slots).child_active
 
       assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{"a" => 1})
       child = child!(fixture, answer)
@@ -214,14 +214,14 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       assert Sanctum.Authority.budget(authority).in_flight == 1
       assert [%{holder_execution_id: holder, admitted_at: %DateTime{}}] = charges(ctx, authority)
       assert holder == child.execution_id
-      assert Cyfr.Execution.Semaphore.status().child_active == children_before + 1
+      assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before + 1
 
       assert %{"ok" => "gave up"} = fail!(child, "gave up")
 
       wait_until(fn -> Attempt.whereis(child.execution_id) == nil end)
       assert Sanctum.Authority.budget(authority).in_flight == 0
       assert charges(ctx, authority) == []
-      assert Cyfr.Execution.Semaphore.status().child_active == children_before
+      assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before
       assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, child.execution_id)
     end
 
@@ -456,7 +456,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
          %{ctx: ctx} do
       authority = authority(edges: %{@target => %{}})
       fixture = formula!(ctx, authority)
-      children_before = Cyfr.Execution.Semaphore.status().child_active
+      children_before = Cyfr.Slots.status(Cyfr.Execution.Slots).child_active
 
       assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{"a" => 1})
       child = child!(fixture, answer)
@@ -478,7 +478,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       refute Process.alive?(pid)
       assert Sanctum.Authority.budget(authority).in_flight == 0
       assert charges(ctx, authority) == []
-      assert Cyfr.Execution.Semaphore.status().child_active == children_before
+      assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before
 
       # A repeat finds it ended and is harmless; the child's own host calls
       # are lost.

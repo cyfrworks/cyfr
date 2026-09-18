@@ -15,10 +15,13 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
   import Cyfr.Test.Wait
 
   alias Cyfr.Execution.Attempt
+  alias Cyfr.Slots
   alias Cyfr.Test.{AttemptFixtures, ScriptedWorkerListener}
 
   @service "wrk_shutdown_test"
   @lapsed "Execution terminated: runner stopped without cleanup"
+  @slots Cyfr.Execution.Slots
+  @unreaped_kill [:cyfr, :opus, :execution, :unreaped_kill]
 
   # A worker service that records the kills it is asked for, served over
   # HTTP by the scripted listener as any worker service is.
@@ -52,8 +55,12 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Process.register(self(), __MODULE__)
 
+    handler = "unreaped-kill-#{System.unique_integer([:positive])}"
+    :ok = :telemetry.attach(handler, @unreaped_kill, &__MODULE__.forward_event/4, self())
+
     on_exit(fn ->
-      Cyfr.Execution.Semaphore.forgive_unreaped(Sanctum.TestContext.local().athanor_id)
+      :telemetry.detach(handler)
+      Slots.forgive_unreaped(@slots, Sanctum.TestContext.local().athanor_id)
     end)
 
     listener =
@@ -61,6 +68,10 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
 
     {:ok, endpoint: ScriptedWorkerListener.endpoint(listener, @service)}
   end
+
+  @doc false
+  def forward_event(event, measurements, metadata, test),
+    do: send(test, {:telemetry, event, measurements, metadata})
 
   # An attached attempt opened by a process of its own, which exits when
   # told to.
@@ -99,6 +110,17 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
 
     assert %{state: "lapsed", outcome: "uncertain"} =
              Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+
+    # The kill of a runner that had attached is counted against the
+    # athanor's execution slots, and said with the athanor's live count.
+    tenant = fixture.athanor_id
+
+    assert_receive {:telemetry, @unreaped_kill, %{unreaped_count: count},
+                    %{tenant: ^tenant, execution_id: ^id}},
+                   5_000
+
+    assert count >= 1
+    assert Map.get(Slots.status(@slots).unreaped, tenant, 0) == count
   end
 
   test "a stop while the waiter lives kills nothing and leaves the row to the waiter", %{
@@ -110,6 +132,7 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
 
     refute Process.alive?(fixture.pid)
     refute_received {:killed, _}
+    refute_received {:telemetry, @unreaped_kill, _, _}
     assert %{status: "running"} = row(fixture)
 
     send(waiter, :exit)

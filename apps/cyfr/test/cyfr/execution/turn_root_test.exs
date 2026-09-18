@@ -17,11 +17,13 @@ defmodule Cyfr.Execution.TurnRootTest do
 
   alias Arca.ExecutionAttempts
   alias Arca.TurnStorage
-  alias Cyfr.Execution.{LeaseWatch, Semaphore, TurnRoot}
+  alias Cyfr.Execution.{LeaseWatch, TurnRoot}
+  alias Cyfr.Slots
   alias Sanctum.Consent.{Bootstrap, Source}
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
+  @slots Cyfr.Execution.Slots
 
   setup do
     Arca.Cache.init()
@@ -63,15 +65,38 @@ defmodule Cyfr.Execution.TurnRootTest do
     {:ok, ctx: ctx, turn: turn}
   end
 
-  defp roots, do: Semaphore.status().root_active
+  defp roots, do: Slots.status(@slots).root_active
 
   defp me_holding?,
-    do: Enum.any?(Semaphore.status().holders, &(&1.pid == inspect(self())))
+    do: Enum.any?(Slots.status(@slots).holders, &(&1.pid == inspect(self())))
 
   defp holders(pid),
-    do: Enum.count(Semaphore.status().holders, &(&1.pid == inspect(pid)))
+    do: Enum.count(Slots.status(@slots).holders, &(&1.pid == inspect(pid)))
+
+  defp registered(execution_id), do: Registry.lookup(Cyfr.Execution.Registry, execution_id)
 
   defp execution(id), do: Arca.Repo.get!(Arca.Execution, id)
+
+  # A process holding one `:root` slot for `tenant` on the live instance
+  # until told to release, linked so a failing test takes it down.
+  defp hold_root(tenant) do
+    parent = self()
+
+    pid =
+      spawn_link(fn ->
+        result = Slots.acquire(@slots, tenant, :root, wait_ms: 5_000)
+        send(parent, {:held, self(), result})
+
+        with {:ok, ref} <- result do
+          receive do
+            :release -> Slots.release(@slots, ref)
+          end
+        end
+      end)
+
+    assert_receive {:held, ^pid, result}, 5_000
+    {pid, result}
+  end
 
   defp claim!(ctx, turn, opts \\ []) do
     {:ok, claim} =
@@ -120,6 +145,11 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert Process.alive?(claim.keeper)
     assert started.status == "running"
 
+    # The holder is registered under the execution for a cancel to find
+    # (`Cyfr.Execution.Dispatch.stop/2`), with the slot.
+    me = self()
+    assert [{^me, :running}] = registered(claim.execution_id)
+
     # No guest ran: the row has no output and the turn holds the slot
     # itself, so the children it dispatches from workers class as `:child`.
     assert is_nil(row.output)
@@ -127,8 +157,77 @@ defmodule Cyfr.Execution.TurnRootTest do
     {:ok, _} = TurnStorage.finish(ctx, turn.id, "completed", %{fence: started.fence})
     :ok = TurnRoot.release(ctx, claim.execution_id, claim: claim)
     assert roots() == before
+    assert [] = registered(claim.execution_id)
     refute Process.alive?(claim.keeper)
     assert execution(claim.execution_id).status == "completed"
+  end
+
+  test "a claim refused at the athanor's cap fails its row with the refusal's sentence", %{
+    ctx: ctx,
+    turn: turn
+  } do
+    %{key_max: key_max} = Slots.status(@slots)
+    before = roots()
+
+    # Fill the athanor's roots on the live instance; a holder answered
+    # `:key_cap` found it full already.
+    holders =
+      for _ <- 1..key_max,
+          {pid, result} = hold_root(ctx.athanor_id),
+          match?({:ok, _}, result),
+          do: pid
+
+    assert {:error, :key_cap} = Slots.acquire(@slots, ctx.athanor_id, :root, wait_ms: 0)
+
+    assert {:error, {:slot_refused, sentence}} =
+             TurnRoot.claim(ctx, @soul, turn_id: turn.id, envelope: %{"task" => "go"})
+
+    assert sentence == "Athanor at maximum concurrent executions. Retry later."
+
+    # The row the claim would have held says so, and nothing is held or
+    # registered for it.
+    assert [row] = Arca.Repo.all(from(e in Arca.Execution, where: e.turn_id == ^turn.id))
+    assert row.status == "failed"
+    assert row.error_message == sentence
+    assert [] = registered(row.id)
+    refute me_holding?()
+
+    Enum.each(holders, &send(&1, :release))
+    wait_until(fn -> roots() == before end)
+  end
+
+  test "a resume by a process registered already keeps that process's entry", %{
+    ctx: ctx,
+    turn: turn
+  } do
+    {claim, started} = claim!(ctx, turn)
+
+    {:ok, _} =
+      TurnRoot.pause(ctx, claim.execution_id,
+        claim: claim,
+        turn_id: turn.id,
+        fence: started.fence,
+        reason: "approval"
+      )
+
+    assert [] = registered(claim.execution_id)
+
+    # A background task registers before it runs what it registered
+    # (`execution.run_stream`): the entry is the task's, and the root's
+    # release leaves it.
+    me = self()
+    {:ok, _} = Registry.register(Cyfr.Execution.Registry, claim.execution_id, :running)
+
+    {:ok, resumed} =
+      TurnRoot.resume(ctx, claim.execution_id, turn_id: turn.id, fence: started.fence)
+
+    assert [{^me, :running}] = registered(claim.execution_id)
+    assert me_holding?()
+
+    :ok = TurnRoot.release(ctx, claim.execution_id, claim: resumed)
+    refute me_holding?()
+    assert [{^me, :running}] = registered(claim.execution_id)
+    Registry.unregister(Cyfr.Execution.Registry, claim.execution_id)
   end
 
   test "pause lets the slot go with the rows out of running, and resume takes it back first", %{
@@ -177,7 +276,7 @@ defmodule Cyfr.Execution.TurnRootTest do
             fence: started.fence
           )
 
-        send(test_pid, {:resumed, resumed, Semaphore.status().root_active})
+        send(test_pid, {:resumed, resumed, roots()})
         receive do: (:done -> :ok)
         TurnRoot.release(ctx, claim.execution_id, claim: resumed)
       end)
@@ -275,7 +374,7 @@ defmodule Cyfr.Execution.TurnRootTest do
         do: pid
   end
 
-  test "a lost lease exits the holder, and the semaphore's monitor releases the slot", %{
+  test "a lost lease exits the holder, and the slots' monitor releases the slot", %{
     ctx: ctx,
     turn: turn
   } do
@@ -345,7 +444,7 @@ defmodule Cyfr.Execution.TurnRootTest do
   test "pause and resume, repeated from fresh holders, hold exactly one root slot while running",
        %{ctx: ctx, turn: turn} do
     before = roots()
-    active = Semaphore.status().active
+    active = Slots.status(@slots).active
     {claim, started} = claim!(ctx, turn)
     assert roots() == before + 1
 
@@ -405,7 +504,7 @@ defmodule Cyfr.Execution.TurnRootTest do
     end
 
     assert execution(claim.execution_id).status == "paused"
-    wait_until(fn -> Semaphore.status().active == active end)
+    wait_until(fn -> Slots.status(@slots).active == active end)
   end
 
   test "a takeover's successor is adopted with a slot and a keeper of its own", %{
@@ -414,8 +513,10 @@ defmodule Cyfr.Execution.TurnRootTest do
   } do
     before = roots()
     {claim, started} = claim!(ctx, turn)
-    LeaseWatch.stop(claim.keeper)
-    Cyfr.Execution.Slot.release(claim.token)
+    # The holder lets go without the turn ending: the keeper stops and the
+    # slot goes back, and the row is left to lapse.
+    :ok = TurnRoot.release(ctx, claim.execution_id, claim: claim)
+    assert roots() == before
 
     lapsed = DateTime.add(DateTime.utc_now(), -1, :second)
 

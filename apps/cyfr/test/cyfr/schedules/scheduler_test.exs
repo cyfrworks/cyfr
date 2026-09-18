@@ -30,7 +30,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Execution.Semaphore.forgive_unreaped(ctx.athanor_id)
+      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- prev do
@@ -252,7 +252,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
     assert_receive {:scripted_probe, runner, running_id}, 10_000
 
     assert Enum.any?(
-             Cyfr.Execution.Semaphore.status().holders,
+             Cyfr.Slots.status(Cyfr.Execution.Slots).holders,
              &(&1.pid == inspect(Cyfr.Execution.Attempt.whereis(running_id)) and
                  &1.class == :background)
            )
