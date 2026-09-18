@@ -87,7 +87,12 @@ defmodule Cyfr.Execution.WorkerClient do
     end
   end
 
-  @doc "The state of the worker service at `endpoint` (`c:Cyfr.WorkerAPI.status/0`)."
+  @doc """
+  The state of the worker service at `endpoint` (`c:Cyfr.WorkerAPI.status/0`),
+  read as `Cyfr.WorkerAPI.valid_status?/1` requires; an answer of another
+  shape is lost. A worker service that reports no `tainted` count has no
+  tainted runners.
+  """
   @spec status(WorkerAPI.endpoint()) ::
           {:ok, WorkerAPI.status()} | {:error, transport_refusal() | atom()}
   def status(%{id: id, url: url} = endpoint) when is_binary(id) and is_binary(url) do
@@ -100,25 +105,29 @@ defmodule Cyfr.Execution.WorkerClient do
   defp read_status(%{
          "service" => service,
          "boot" => boot,
-         "runners" => %{"fresh" => fresh, "idle" => idle, "busy" => busy},
+         "runners" => %{} = runners,
          "attempts" => attempts
        })
-       when is_binary(service) and is_binary(boot) and is_integer(fresh) and is_integer(idle) and
-              is_integer(busy) and is_list(attempts) do
-    if Enum.all?(attempts, &is_binary/1) do
-      {:ok,
-       %{
-         service: service,
-         boot: boot,
-         runners: %{fresh: fresh, idle: idle, busy: busy},
-         attempts: attempts
-       }}
-    else
-      {:error, :lost}
-    end
+       when is_binary(service) and is_binary(boot) and is_list(attempts) do
+    status = %{service: service, boot: boot, runners: runner_counts(runners), attempts: attempts}
+    if WorkerAPI.valid_status?(status), do: {:ok, status}, else: {:error, :lost}
   end
 
   defp read_status(_answer), do: {:error, :lost}
+
+  # A count for each runner state the contract names, as reported; a count
+  # of anything else makes the answer no status.
+  defp runner_counts(runners) do
+    names = Map.new(WorkerAPI.runner_states(), &{Atom.to_string(&1), &1})
+
+    if Enum.all?(Map.keys(runners), &is_map_key(names, &1)) do
+      Map.new(names, fn {name, state} ->
+        {state, Map.get(runners, name, if(state == :tainted, do: 0))}
+      end)
+    else
+      %{}
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # One request

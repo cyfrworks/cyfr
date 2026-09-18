@@ -167,6 +167,11 @@ defmodule Cyfr.Application do
       # Periodic sweep that fails running executions whose lease lapsed;
       # started only when `:execution_sweeper_enabled`.
       Cyfr.Execution.Sweeper,
+      # Hears from each configured worker service every poll interval and
+      # lapses what a boot it stopped hearing from, or saw replaced, was
+      # running; started only when `:worker_watch_enabled`, which follows
+      # `:execution_sweeper_enabled`.
+      Cyfr.Execution.WorkerWatch,
       # The host API: where the worker services' runners post their host
       # calls and the services their exit reports (`CYFR_HOST_API_BIND`,
       # `CYFR_HOST_API_PORT`). After the attempt tree it serves, so a

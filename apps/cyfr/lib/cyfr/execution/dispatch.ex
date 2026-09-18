@@ -8,8 +8,10 @@ defmodule Cyfr.Execution.Dispatch do
   `run/4` dispatches to the first worker service in
   `config :cyfr, :workers` (each a `t:Cyfr.WorkerAPI.endpoint/0`, reached
   through `Cyfr.Execution.WorkerClient`) whose status answers its
-  configured id; the boot that status names is the attempt row's runner
-  and the assignment's audience. In order:
+  configured id: the status `Cyfr.Execution.WorkerWatch` heard from it
+  within the last poll interval (`Cyfr.Execution.WorkerWatch.fresh_boot/2`),
+  else one asked for now. The boot that status names is the attempt
+  row's runner and the assignment's audience. In order:
 
     1. the run is admitted (`Cyfr.Execution.Admission.admit/4`): its row
        and its `Cyfr.Execution.Attempt`;
@@ -58,7 +60,7 @@ defmodule Cyfr.Execution.Dispatch do
   require Logger
 
   alias Cyfr.Execution.{Admission, Assignments, Attempt, Cascade, Charge, Close, Keys, Record}
-  alias Cyfr.Execution.WorkerClient
+  alias Cyfr.Execution.{WorkerClient, WorkerWatch}
   alias Cyfr.{WorkerAPI, WorkerAuth}
   alias Sanctum.Context
 
@@ -228,7 +230,9 @@ defmodule Cyfr.Execution.Dispatch do
   `components` list names the name-level references it alone runs, or is
   nil) whose status answers its configured id, with the boot that status
   names; an entry that does not answer, or answers as another service, is
-  skipped. `worker/1` also requires the entry to run `reference`.
+  skipped. The status is the one `Cyfr.Execution.WorkerWatch` heard
+  within the last poll interval, else the entry is asked now. `worker/1`
+  also requires the entry to run `reference`.
   `{:error, :execution_unavailable}` when no entry qualifies or answers.
   """
   @spec worker() :: {:ok, worker()} | {:error, :execution_unavailable}
@@ -259,12 +263,20 @@ defmodule Cyfr.Execution.Dispatch do
   end
 
   defp answering(%{id: id} = entry) do
-    case WorkerClient.status(entry) do
-      {:ok, %{service: ^id, boot: boot}} when is_binary(boot) ->
-        {:ok, %{service: id, boot: boot, endpoint: Map.put_new(entry, :components, nil)}}
+    endpoint = Map.put_new(entry, :components, nil)
 
-      _ ->
-        nil
+    case WorkerWatch.fresh_boot(endpoint) do
+      {:ok, boot} ->
+        {:ok, %{service: id, boot: boot, endpoint: endpoint}}
+
+      :unknown ->
+        case WorkerClient.status(endpoint) do
+          {:ok, %{service: ^id, boot: boot}} when is_binary(boot) ->
+            {:ok, %{service: id, boot: boot, endpoint: endpoint}}
+
+          _ ->
+            nil
+        end
     end
   end
 
