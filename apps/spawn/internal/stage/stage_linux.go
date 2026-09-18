@@ -30,7 +30,15 @@ const (
 	// StatusFD is the write end of the exec-status pipe. It closes on a
 	// successful exec; otherwise the stage writes its reason there first.
 	StatusFD = 4
+	// ControlFD is the backend's end of its control channel, present only
+	// when the spec says so; the stage moves it to fd 3 once the spec is
+	// read, and it is the one descriptor above 2 the command keeps.
+	ControlFD = 5
 )
+
+// CommandControlFD is the descriptor the executed command finds its control
+// channel on.
+const CommandControlFD = 3
 
 // ExitFailed is the stage's exit status when it cannot execute the command.
 const ExitFailed = 127
@@ -43,7 +51,11 @@ func Main() int {
 		return ExitFailed
 	}
 
-	data, err := io.ReadAll(io.LimitReader(os.NewFile(SpecFD, "spec"), 2*protocol.MaxLineBytes))
+	// The spec file is closed by hand: fd 3 is reused for the control
+	// channel below, and a finalizer must not close it later.
+	specFile := os.NewFile(SpecFD, "spec")
+	data, err := io.ReadAll(io.LimitReader(specFile, 2*protocol.MaxLineBytes))
+	_ = specFile.Close()
 	if err != nil {
 		return fail("spec: %v", err)
 	}
@@ -77,7 +89,18 @@ func Main() int {
 	if err != nil {
 		return fail("exec: %v", err)
 	}
-	if err := closeOnExecFrom(SpecFD); err != nil {
+	// Every descriptor above the command's is marked close-on-exec; with a
+	// control channel, its socket is first moved to the command's fd 3
+	// (Dup3 with no flags leaves the new descriptor open across exec) so it
+	// is the one descriptor above 2 the command inherits.
+	keep := SpecFD
+	if spec.Control {
+		if err := unix.Dup3(ControlFD, CommandControlFD, 0); err != nil {
+			return fail("control channel: %v", err)
+		}
+		keep = CommandControlFD + 1
+	}
+	if err := closeOnExecFrom(keep); err != nil {
 		return fail("descriptors: %v", err)
 	}
 	err = syscall.Exec(path, spec.Argv, spec.Environ())

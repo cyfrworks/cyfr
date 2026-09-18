@@ -24,6 +24,12 @@ const (
 	StreamStderr byte = 2
 	// StreamAttach is the relay's first frame; its payload is the attach token.
 	StreamAttach byte = 3
+	// StreamControl carries the bytes of a spawn's control channel, the
+	// socket on the backend's file descriptor 3, in both directions; only a
+	// spawn that asked for the channel has this stream. A zero-length frame
+	// from the relay reports that the backend's end is closed; one from the
+	// client closes the backend's reading side.
+	StreamControl byte = 4
 )
 
 const (
@@ -41,7 +47,7 @@ var (
 )
 
 func validStream(stream byte) bool {
-	return stream <= StreamAttach
+	return stream <= StreamControl
 }
 
 // Append encodes one frame onto dst.

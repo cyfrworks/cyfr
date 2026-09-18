@@ -5,7 +5,8 @@
 // stage` starts already running as the allocated uid and gid with no
 // supplementary groups, in a session of its own. It reads its Spec from
 // fd 3, creates the home, applies the limits, builds the environment from
-// nothing, and executes the command with the backend's pipes on fds 0-2.
+// nothing, and executes the command with the backend's pipes on fds 0-2
+// and, for a spawn with a control channel, that channel's socket on fd 3.
 package stage
 
 import (
@@ -34,6 +35,9 @@ type Spec struct {
 	Argv     []string          `json:"argv"`
 	Env      map[string]string `json:"env"`
 	Limits   protocol.Limits   `json:"limits"`
+	// Control says the spawner handed the control channel's socket on
+	// ControlFD, to become the command's fd 3.
+	Control bool `json:"control"`
 }
 
 // Validate checks the spec independently of the spawner: a non-root uid

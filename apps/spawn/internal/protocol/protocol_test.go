@@ -18,12 +18,15 @@ import (
 	"github.com/cyfr/spawn/internal/frame"
 )
 
+type frameVector struct {
+	Stream     byte   `json:"stream"`
+	PayloadHex string `json:"payload_hex"`
+	EncodedHex string `json:"encoded_hex"`
+}
+
 type vectors struct {
-	Frames []struct {
-		Stream     byte   `json:"stream"`
-		PayloadHex string `json:"payload_hex"`
-		EncodedHex string `json:"encoded_hex"`
-	} `json:"frames"`
+	Frames          []frameVector     `json:"frames"`
+	ControlFrames   []frameVector     `json:"control_frames"`
 	ValidRequests   []json.RawMessage `json:"valid_requests"`
 	InvalidRequests []struct {
 		Why     string          `json:"why"`
@@ -50,7 +53,16 @@ func loadVectors(t *testing.T) vectors {
 
 func TestSharedFrameVectors(t *testing.T) {
 	scratch := make([]byte, frame.MaxPayload)
-	for _, f := range loadVectors(t).Frames {
+	v := loadVectors(t)
+	if len(v.ControlFrames) == 0 {
+		t.Fatal("no control frame vectors")
+	}
+	for _, f := range v.ControlFrames {
+		if f.Stream != frame.StreamControl {
+			t.Fatalf("control frame vector on stream %d, want %d", f.Stream, frame.StreamControl)
+		}
+	}
+	for _, f := range append(v.Frames, v.ControlFrames...) {
 		payload, _ := hex.DecodeString(f.PayloadHex)
 		encoded, err := frame.Append(nil, f.Stream, payload)
 		if err != nil {
@@ -130,6 +142,34 @@ func TestSpawnRequestFieldsAreDecoded(t *testing.T) {
 	}
 	if got := req.Rlimits.Resolve(); got != (Limits{Nofile: 256, Nproc: 32, Core: 0, Fsize: 1 << 20}) {
 		t.Fatalf("limits %+v", got)
+	}
+}
+
+func TestControlIsDecodedAndDefaultsToNone(t *testing.T) {
+	v := loadVectors(t)
+	var withControl, without, plain int
+	for _, raw := range v.ValidRequests {
+		req, err := ParseRequest(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if req.Type != TypeSpawn {
+			continue
+		}
+		switch {
+		case req.Control:
+			withControl++
+			if req.Pool != "runner" || req.Env["OPUS_ROLE"] != "runner" {
+				t.Fatalf("the runner vector decoded to %+v", req)
+			}
+		case bytes.Contains(raw, []byte(`"control"`)):
+			without++
+		default:
+			plain++
+		}
+	}
+	if withControl == 0 || without == 0 || plain == 0 {
+		t.Fatalf("vectors: %d with control, %d with control false, %d without the field", withControl, without, plain)
 	}
 }
 
