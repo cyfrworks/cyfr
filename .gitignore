@@ -74,6 +74,10 @@ apps/*/priv/static/cache_manifest.json
 apps/codex/cyfr
 apps/codex/codex
 
+# Python bytecode (the image suites under tests/ and scripts/)
+__pycache__/
+*.pyc
+
 # goreleaser output (a seed tincture's dist/ is its shipped build, tracked)
 /apps/codex/dist/
 cyfr-scaffold.tar.gz
