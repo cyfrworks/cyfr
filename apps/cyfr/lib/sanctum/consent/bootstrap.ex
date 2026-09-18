@@ -77,9 +77,37 @@ defmodule Sanctum.Consent.Bootstrap do
   `granted_by` names who the mint is attributed to: the person whose
   sign-in provisioned the athanor (`ctx.user_id` when a person), or
   `"system:bootstrap"` for a server-side mint (a seed context).
+
+  `claim` is the provisioning claim the walk runs under
+  (`Arca.ProvisioningClaims`): the walk starts, and each source is minted
+  or revised, only while the estate's claim still reads that owner and
+  fence with no outcome. A walk whose claim a later attempt took answers
+  `{:error, :claim_lost}` — what it minted before the loss stands, since
+  it held the estate then, and nothing is minted after. With no claim
+  (`nil`) the walk is unfenced: an estate nothing else is filling.
   """
-  @spec run(Context.t()) :: {:ok, result()}
-  def run(%Context{} = ctx) do
+  @spec run(Context.t(), %{owner: String.t(), fence: pos_integer()} | nil) ::
+          {:ok, result()} | {:error, :claim_lost}
+  def run(%Context{} = ctx, claim \\ nil) do
+    with :ok <- holding(ctx, claim),
+         {:ok, result} <- walk(ctx, claim) do
+      if Enum.any?(result.skipped, &match?({_ref, :claim_lost}, &1)),
+        do: {:error, :claim_lost},
+        else: {:ok, result}
+    end
+  end
+
+  # Whether the estate's claim is still the one this walk runs under.
+  defp holding(_ctx, nil), do: :ok
+
+  defp holding(%Context{} = ctx, %{owner: owner, fence: fence}) do
+    case Arca.ProvisioningClaims.current(Context.actor(ctx)) do
+      {:ok, %{owner: ^owner, fence: ^fence, outcome: nil}} -> :ok
+      _ -> {:error, :claim_lost}
+    end
+  end
+
+  defp walk(ctx, claim) do
     components =
       (executable_local_components(ctx) ++ agent_rows(ctx))
       |> Enum.sort_by(fn row ->
@@ -90,15 +118,17 @@ defmodule Sanctum.Consent.Bootstrap do
     # the athanor's copy. An edited shipped unit is absent here.
     shipped_nodes = shipped_nodes(ctx, components)
 
-    run_components(ctx, components, shipped_nodes)
+    run_components({ctx, claim}, components, shipped_nodes)
   end
 
-  defp run_components(ctx, components, shipped_nodes) do
+  # `held` is the context and the claim the walk runs under, carried to
+  # the two writes the claim fences.
+  defp run_components(held, components, shipped_nodes) do
     {minted, revised, skipped} =
       Enum.reduce(components, {[], [], []}, fn component, {minted, revised, skipped} ->
         source_ref = Compendium.Activation.node_key(component)
 
-        case bootstrap_component(ctx, component, source_ref, shipped_nodes) do
+        case bootstrap_component(held, component, source_ref, shipped_nodes) do
           {:ok, _profile_id} -> {[source_ref | minted], revised, skipped}
           {:revised, _profile_id} -> {minted, [source_ref | revised], skipped}
           {:skip, reason} -> {minted, revised, [{source_ref, reason} | skipped]}
@@ -158,13 +188,13 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  defp bootstrap_component(ctx, component, source_ref, shipped_nodes) do
+  defp bootstrap_component({ctx, _claim} = held, component, source_ref, shipped_nodes) do
     case claimed(ctx, source_ref) do
       :unclaimed ->
         vouched = %{shipped: shipped_nodes, named: %{}, selected: MapSet.new()}
 
         if vouched?(vouched, source_ref, release_digest(component)) do
-          mint(ctx, component, source_ref, vouched)
+          mint(held, component, source_ref, vouched)
         else
           {:skip, :not_vouched}
         end
@@ -176,7 +206,7 @@ defmodule Sanctum.Consent.Bootstrap do
         case Arca.ConsentStorage.get_head(ctx.athanor_id, profile.id) do
           {:ok, %{granted_via: "bootstrap"} = head, _refs} ->
             vouched = vouched_by(head, shipped_nodes)
-            revise_bootstrap(ctx, component, source_ref, profile, head, vouched)
+            revise_bootstrap(held, component, source_ref, profile, head, vouched)
 
           {:ok, _person_head, _refs} ->
             {:skip, :already_bootstrapped}
@@ -204,7 +234,7 @@ defmodule Sanctum.Consent.Bootstrap do
   # A machine-minted revision binds no entry of its own: a vouched
   # edge selects what its vouched dependency's default profile binds,
   # and every other edge carries no vault resource.
-  defp mint(ctx, component, source_ref, vouched) do
+  defp mint({ctx, claim}, component, source_ref, vouched) do
     with {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, nodes} <-
            BlobBuilder.build(ctx, activation.graph, source_ref, fn _, _, _ -> nil end,
@@ -212,7 +242,8 @@ defmodule Sanctum.Consent.Bootstrap do
            ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          {:ok, digests} <- compute_digests(ctx, source_ref, JCS.hash_binary(blob_json)),
-         {:ok, activation_json} <- JCS.encode(activation.graph) do
+         {:ok, activation_json} <- JCS.encode(activation.graph),
+         :ok <- holding(ctx, claim) do
       insert(ctx, source_ref, blob_json, digests, activation_json, BlobBuilder.vault_refs(nodes))
     end
   end
@@ -347,7 +378,7 @@ defmodule Sanctum.Consent.Bootstrap do
 
   # A bootstrap-only head is re-minted when the seed moved its shape (see
   # `revisable/4`).
-  defp revise_bootstrap(ctx, component, source_ref, profile, head, vouched) do
+  defp revise_bootstrap({ctx, claim}, component, source_ref, profile, head, vouched) do
     with {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, nodes} <-
            BlobBuilder.build(ctx, activation.graph, source_ref, fn _, _, _ -> nil end,
@@ -357,6 +388,7 @@ defmodule Sanctum.Consent.Bootstrap do
          {:ok, digests} <- compute_digests(ctx, source_ref, JCS.hash_binary(blob_json)),
          :ok <- revisable(head, digests, activation.graph, vouched),
          {:ok, activation_json} <- JCS.encode(activation.graph),
+         :ok <- holding(ctx, claim),
          {:ok, _consent} <-
            Arca.ConsentStorage.insert_revision(
              %{
