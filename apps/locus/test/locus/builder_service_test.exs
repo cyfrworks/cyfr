@@ -7,8 +7,11 @@ defmodule Locus.BuilderServiceTest do
   import Plug.Test
   import Plug.Conn
 
+  alias Cyfr.Slots
+
   @opts Locus.BuilderService.init([])
   @token "test-builder-token"
+  @slots Locus.BuildSlots
 
   setup do
     prev = Application.get_env(:cyfr, :builder_token)
@@ -170,5 +173,108 @@ defmodule Locus.BuilderServiceTest do
 
     assert conn.status == 400
     assert Jason.decode!(conn.resp_body)["error"] =~ "base64"
+  end
+
+  describe "the build slot" do
+    # A body that decodes, so the request reaches the slot.
+    @build %{
+      "source_files" => %{"src/lib.rs" => Base.encode64("fn main() {}")},
+      "language" => "rust",
+      "target_type" => "reagent"
+    }
+
+    setup do
+      # Whatever a test did to the instance, the booted one is back for the
+      # next module.
+      on_exit(fn -> replace_build_slots(Locus.Application.build_slots()) end)
+      :ok
+    end
+
+    test "past the cap the build is refused 429 naming the cap, and nothing is queued" do
+      restart_build_slots(max: 1)
+      _holder = hold(1)
+
+      conn = post_build(@build, [{"authorization", "Bearer " <> @token}])
+
+      assert conn.status == 429
+
+      assert %{"ok" => false, "error" => "builder at capacity (1 concurrent builds)"} =
+               Jason.decode!(conn.resp_body)
+
+      assert %{active: 1, queued: 0} = Slots.status(@slots)
+    end
+
+    test "is given back after the build" do
+      restart_build_slots(max: 1)
+
+      # Nothing to compile: the build is admitted, fails at once, and the
+      # slot it held is back.
+      conn =
+        post_build(%{@build | "source_files" => %{}}, [{"authorization", "Bearer " <> @token}])
+
+      assert conn.status == 422
+      assert Jason.decode!(conn.resp_body)["error"] =~ "empty_source"
+      assert %{active: 0, holders: []} = Slots.status(@slots)
+    end
+
+    test "refused the same way when the build slots are down" do
+      :ok = Supervisor.terminate_child(Locus.Supervisor, @slots)
+      assert %{error: :unavailable} = Slots.status(@slots)
+
+      conn = post_build(@build, [{"authorization", "Bearer " <> @token}])
+
+      assert conn.status == 429
+      assert %{"ok" => false, "error" => error} = Jason.decode!(conn.resp_body)
+
+      # The cap named is the configured one, so the answer reads as it does
+      # at capacity, not as a cap of zero.
+      assert [cap] =
+               Regex.run(~r/^builder at capacity \((\d+) concurrent builds\)$/, error,
+                 capture: :all_but_first
+               )
+
+      assert String.to_integer(cap) >= 1
+    end
+  end
+
+  # The build slots restarted with caps of the test's own, so the numbers
+  # asserted here are the test's and not the environment's.
+  defp restart_build_slots(opts) do
+    {Cyfr.Slots, booted} = Locus.Application.build_slots()
+    replace_build_slots({Cyfr.Slots, Keyword.merge(booted, opts)})
+  end
+
+  defp replace_build_slots(spec) do
+    case Supervisor.terminate_child(Locus.Supervisor, @slots) do
+      :ok -> :ok = Supervisor.delete_child(Locus.Supervisor, @slots)
+      {:error, :not_found} -> :ok
+    end
+
+    {:ok, _pid} = Supervisor.start_child(Locus.Supervisor, spec)
+    :ok
+  end
+
+  # A process holding `n` of the service's slots (no tenant identity, as
+  # the service takes them) for as long as the test runs.
+  defp hold(n) do
+    test = self()
+
+    holder =
+      spawn(fn ->
+        Process.monitor(test)
+        results = for _ <- 1..n, do: Slots.acquire(@slots, nil, :root, wait_ms: 0)
+        send(test, {:held, self(), results})
+
+        receive do
+          {:DOWN, _ref, :process, ^test, _reason} -> :ok
+        end
+      end)
+
+    assert_receive {:held, ^holder, results}, 2_000
+
+    assert Enum.all?(results, &match?({:ok, _}, &1)),
+           "could not hold #{n} slot(s): #{inspect(results)}"
+
+    holder
   end
 end
