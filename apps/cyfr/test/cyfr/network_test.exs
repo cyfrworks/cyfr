@@ -5,15 +5,20 @@ defmodule Cyfr.NetworkTest do
   use ExUnit.Case, async: true
 
   alias Cyfr.Network
+  alias Cyfr.Test.Resolver
+
+  # Every name below resolves through the fixture's table, never the
+  # network; an address literal needs no lookup, and `localhost` is the
+  # hosts file's.
+  @resolver [resolver: Resolver]
 
   describe "validate_redirect_url/2" do
-    test "allows public HTTPS URLs" do
-      # Uses a well-known public hostname that resolves to a public IP
-      assert :ok = Network.validate_redirect_url("https://storage.googleapis.com/bucket/blob")
+    test "allows an HTTPS URL whose host resolves to a public address" do
+      assert :ok = Network.validate_redirect_url("https://public.test/bucket/blob", @resolver)
     end
 
-    test "allows public HTTP URLs" do
-      assert :ok = Network.validate_redirect_url("http://storage.googleapis.com/bucket/blob")
+    test "allows an HTTP URL whose host resolves to a public address" do
+      assert :ok = Network.validate_redirect_url("http://public.test/bucket/blob", @resolver)
     end
 
     test "rejects file:// scheme" do
@@ -42,6 +47,11 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "127.0.0.1"
     end
 
+    test "blocks a host that resolves to a private address" do
+      assert {:error, msg} = Network.validate_redirect_url("https://private.test/", @resolver)
+      assert msg == "private IP 10.0.0.5 blocked (resolved from private.test)"
+    end
+
     test "blocks the cloud metadata address 169.254.169.254" do
       assert {:error, msg} =
                Network.validate_redirect_url("http://169.254.169.254/latest/meta-data/")
@@ -59,6 +69,16 @@ defmodule Cyfr.NetworkTest do
       assert msg =~ "metadata IP"
     end
 
+    test "blocks a host that resolves to the metadata address whatever the policy" do
+      assert {:error, msg} =
+               Network.validate_redirect_url("http://metadata.test/latest/meta-data/",
+                 private_policy: :allow_all,
+                 resolver: Resolver
+               )
+
+      assert msg == "metadata IP 169.254.169.254 blocked (resolved from metadata.test)"
+    end
+
     test "private_policy: :allow_all permits 127.0.0.1" do
       assert :ok =
                Network.validate_redirect_url("http://127.0.0.1/v2/", private_policy: :allow_all)
@@ -69,23 +89,28 @@ defmodule Cyfr.NetworkTest do
                Network.validate_redirect_url("http://localhost/v2/", private_policy: :allow_all)
     end
 
-    test "DNS failure returns error" do
+    test "a host that does not resolve is a DNS error" do
       assert {:error, msg} =
-               Network.validate_redirect_url(
-                 "https://this-domain-definitely-does-not-exist-xyz123.invalid/path"
-               )
+               Network.validate_redirect_url("https://nonexistent.test/path", @resolver)
 
-      assert msg =~ "DNS resolution failed"
+      assert msg == "DNS resolution failed for nonexistent.test: :nxdomain"
     end
   end
 
   describe "resolve_and_validate/2" do
     test "returns the validated IP and parsed URI for a public host" do
-      assert {:ok, ip, %URI{host: "storage.googleapis.com"}} =
-               Network.resolve_and_validate("https://storage.googleapis.com/bucket/blob")
+      assert {:ok, {203, 0, 113, 10}, %URI{host: "public.test", path: "/bucket/blob"}} =
+               Network.resolve_and_validate("https://public.test/bucket/blob", @resolver)
+    end
 
-      assert tuple_size(ip) in [4, 8]
-      refute Cyfr.Cidr.private_ip?(ip)
+    test "pins a dual-stack host to its IPv4 address" do
+      assert {:ok, {203, 0, 113, 20}, %URI{host: "dual.test"}} =
+               Network.resolve_and_validate("https://dual.test/", @resolver)
+    end
+
+    test "pins a host with only an IPv6 address to it" do
+      assert {:ok, {0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0x30}, %URI{host: "v6only.test"}} =
+               Network.resolve_and_validate("https://v6only.test/", @resolver)
     end
 
     test "blocks a host that resolves to a private IP" do
@@ -98,6 +123,18 @@ defmodule Cyfr.NetworkTest do
                Network.resolve_and_validate("http://169.254.169.254/", private_policy: :allow_all)
 
       assert msg =~ "metadata IP"
+    end
+  end
+
+  describe "pin/2" do
+    test "pins the validated address, bracketed for IPv6, and keeps the hostname for TLS" do
+      assert {:ok, %{ip: "2001:db8::30", req_opts: opts}} =
+               Network.pin("https://v6only.test:8443/x?q=1", @resolver)
+
+      assert opts[:url] == "https://[2001:db8::30]:8443/x?q=1"
+      assert opts[:connect_options][:hostname] == "v6only.test"
+      assert opts[:redirect] == false
+      assert opts[:retry] == false
     end
   end
 
@@ -126,9 +163,9 @@ defmodule Cyfr.NetworkTest do
 
     test "returns a DNS error for an unresolvable host" do
       assert {:error, msg} =
-               Network.pinned_request(:get, "https://nope-xyz-123-cyfr.invalid/")
+               Network.pinned_request(:get, "https://nonexistent.test/", [], nil, @resolver)
 
-      assert msg =~ "DNS resolution failed"
+      assert msg == "DNS resolution failed for nonexistent.test: :nxdomain"
     end
   end
 

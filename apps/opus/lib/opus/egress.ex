@@ -48,6 +48,10 @@ defmodule Opus.Egress do
     * `:receive_timeout` — ms (default 30_000)
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
     * `:transport_opts` — extra Mint transport opts
+    * `:resolver` — the module the host is resolved through, answering
+      `getaddr/2` as `:inet` does. Defaults to `config :opus, :resolver`,
+      which no deployment sets (`:inet`): the suite's seam for the
+      guest-facing entry points, which take no options of their own.
 
   Answers `{:ok, pinned}` (`t:pinned/0`) or `{:error, type, message}`
   (`t:refusal/0`).
@@ -56,10 +60,11 @@ defmodule Opus.Egress do
   def pin(url, opts \\ []) when is_binary(url) and is_list(opts) do
     uri = URI.parse(url)
     policy = Keyword.get(opts, :private_policy, :deny)
+    resolver = Keyword.get_lazy(opts, :resolver, &default_resolver/0)
 
     with :ok <- check_scheme(uri.scheme),
          :ok <- check_host(uri.host),
-         {:ok, ip_tuple} <- resolve(uri.host),
+         {:ok, ip_tuple} <- resolve(uri.host, resolver),
          :ok <- check_ip(ip_tuple, uri.host, policy) do
       ip = format_ip(ip_tuple)
 
@@ -96,15 +101,15 @@ defmodule Opus.Egress do
   # here, so the unchecked family is also the unused one. A v6-first or
   # happy-eyeballs resolver would have to move the check with the address
   # actually dialed.
-  defp resolve(hostname) do
+  defp resolve(hostname, resolver) do
     charlist = String.to_charlist(hostname)
 
-    case :inet.getaddr(charlist, :inet) do
+    case resolver.getaddr(charlist, :inet) do
       {:ok, ip_tuple} ->
         {:ok, ip_tuple}
 
       {:error, _} ->
-        case :inet.getaddr(charlist, :inet6) do
+        case resolver.getaddr(charlist, :inet6) do
           {:ok, ip_tuple} ->
             {:ok, ip_tuple}
 
@@ -113,6 +118,11 @@ defmodule Opus.Egress do
         end
     end
   end
+
+  # The suite's seam for the guest-facing entry points, which take no
+  # options of their own; no deployment sets it, and the host is resolved
+  # through `:inet`.
+  defp default_resolver, do: Application.get_env(:opus, :resolver, :inet)
 
   # A metadata address is refused before the private classification or
   # any policy is consulted.
