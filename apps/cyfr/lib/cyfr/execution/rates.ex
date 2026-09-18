@@ -37,8 +37,8 @@ defmodule Cyfr.Execution.Rates do
   A call the owner has taken is applied even if the caller stops waiting:
   a claim whose caller dies or times out is still recorded and spends a
   slot, so the failure direction is closed. Rate allowance is distinct from
-  the execution slots `Cyfr.Execution.Semaphore` reserves: nothing here
-  holds, charges or releases a slot.
+  the execution slots `Cyfr.Execution.Slots` holds (`Cyfr.Slots`): nothing
+  here holds, charges or releases a slot.
 
   ## Restart (slice H)
 

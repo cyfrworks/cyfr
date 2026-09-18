@@ -68,7 +68,7 @@ defmodule Cyfr.Ops.Provider do
     applies the coarse class, the domain the exact one.
   - `:scope` — `:platform` admits only the server's operators
     (`Sanctum.Context.platform_admin`): the door verbs, and the one
-    semaphore action that releases every athanor's slots. Everyone else is
+    execution action that releases every athanor's slots. Everyone else is
     refused and does not see the action listed.
   - `:standing` — whether a person may pre-answer this action for calls
     nobody has seen yet. Absent means any standing scope a runner offers;

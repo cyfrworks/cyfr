@@ -102,7 +102,7 @@ defmodule Cyfr.Authority do
   ]
 
   # Chain depth bound. Must sit strictly below the per-tenant execution
-  # semaphore slot count (default 16): a parent holds its slot while
+  # slot count (`Cyfr.Slots`, default 16): a parent holds its slot while
   # blocking on a child, so a deeper chain than there are slots would
   # self-deadlock a tenant. Asserted against live config in the opus suite.
   @depth_cap 8

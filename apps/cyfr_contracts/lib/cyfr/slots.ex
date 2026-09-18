@@ -77,19 +77,18 @@ defmodule Cyfr.Slots do
   `start_link/1` takes a name and the numbers. Every option defaults to what
   the execution slots use, so one implementation serves each use:
 
-  - The execution slots (what `Cyfr.Execution.Semaphore` and
-    `Cyfr.Execution.Slot` were): `max: 128, key_max: 16` and every other
-    option default — a quarter of the slots reserved for children, every
-    class waits, a 30 s sweep with a 10 min hold, a 10 min unreaped decay
-    with a threshold of half the key cap and never below 2. The key is the
-    athanor id. Registering the execution for cancellation stays with the
-    caller, as does emitting the unreaped-kill telemetry from the count
-    `note_unreaped/3` answers.
-  - The build slots (what `Locus.BuildLimiter` was): `max: 2, key_max: 1,
-    child_reserve: 0, policy: :reject`, the sweep and hold default. A caller
-    past the total cap is answered `:capacity` at once and one past its
-    key's cap `:key_cap`; the same holder may take several slots, each
-    released on its own ref, and its death releases them all.
+  - The execution slots (CYFR's instance, `Cyfr.Execution.Slots`):
+    `max: 128, key_max: 16` and every other option default — a quarter of
+    the slots reserved for children, every class waits, a 30 s sweep with a
+    10 min hold, a 10 min unreaped decay with a threshold of half the key
+    cap and never below 2. The key is the athanor id. Registering the
+    execution for cancellation stays with the caller, as does emitting the
+    unreaped-kill telemetry from the count `note_unreaped/3` answers.
+  - The build slots (Locus's instance, `Locus.BuildSlots`): `max: 2,
+    key_max: 1, child_reserve: 0, policy: :reject`, the sweep and hold
+    default. A caller past the total cap is answered `:capacity` at once
+    and one past its key's cap `:key_cap`; the same holder may take several
+    slots, each released on its own ref, and its death releases them all.
 
   One instance is one process on one node: nothing is shared across nodes
   or persisted, and a restart loses every hold and wait. It is not a
