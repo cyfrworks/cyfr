@@ -10,8 +10,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
   owns its execution; a turn root is never claimed and so never held. A
   held attempt is live while no cancel is asked of it and its execution
   runs.
-  Work run while the attempt is held runs only once that decision is taken,
-  in the same transaction.
+  A storage write's store call runs only once its attempt was found held;
+  `Arca.ExecutionAttemptsWriteTest` covers the rest of that protocol.
   """
 
   use ExUnit.Case, async: false
@@ -103,7 +103,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
 
     assert {:error, :lost} =
-             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", &ran/0)
+             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", write())
 
     refute_received :ran
 
@@ -141,8 +141,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     {execution, attempt} = admit!(ctx)
     assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
 
-    assert {:ok, :ran} =
-             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", &ran/0)
+    assert {:ok, {:confirmed, :ok}} =
+             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", write())
 
     assert_received :ran
 
@@ -152,7 +152,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
           {"ath_gamma", 1, "runner_a"}
         ] do
       assert {:error, :lost} =
-               ExecutionAttempts.while_held(athanor, attempt.attempt, fence, runner, &ran/0)
+               ExecutionAttempts.while_held(athanor, attempt.attempt, fence, runner, write())
     end
 
     refute_received :ran
@@ -168,7 +168,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
       )
 
     assert {:error, :lost} =
-             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", &ran/0)
+             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", write())
 
     refute_received :ran
   end
@@ -229,14 +229,17 @@ defmodule Arca.ExecutionAttemptsClaimTest do
              ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
 
     assert {:error, :database_error} =
-             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", &ran/0)
+             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", write())
 
     refute_received :ran
   end
 
+  # A storage write whose store call only reports that it ran.
+  defp write, do: %{op: :put, path: ["data", "claim.txt"], io: &ran/0}
+
   defp ran do
     send(self(), :ran)
-    :ran
+    :ok
   end
 
   # An outage, simulated: the table is gone. Postgres drops the tables that

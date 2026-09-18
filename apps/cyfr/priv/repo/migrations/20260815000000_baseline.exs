@@ -567,6 +567,43 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:execution_attempts, [:claimed_by], where: "state = 'running'")
     create index(:execution_attempts, [:service_id, :boot_id], where: "state = 'running'")
 
+    # The evidence of a guest's mutable storage writes: one row per write,
+    # recorded while its attempt held its row and before the store was
+    # touched, settled once the store answered or the attempt lost its row.
+    create table(:storage_write_intents, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :execution_id,
+          references(:executions,
+            type: :string,
+            on_delete: :delete_all,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      # The attempt that wrote, the fence it held and the runner that
+      # claimed it.
+      add :attempt, :string, null: false
+      add :fence, :integer, null: false
+      add :runner, :string, null: false
+      # put | append | delete
+      add :op, :string, null: false
+      # The athanor-relative path the write names.
+      add :path, :text, null: false
+      # The bytes a put or append carried; null for a delete.
+      add :bytes, :integer
+      # pending | confirmed | failed | uncertain
+      add :state, :string, null: false
+      # Why a failed or uncertain intent settled as it did.
+      add :reason, :string
+      add :inserted_at, :utc_datetime_usec, null: false
+      add :settled_at, :utc_datetime_usec
+    end
+
+    create index(:storage_write_intents, [:athanor_id, :attempt, :state])
+    create index(:storage_write_intents, [:athanor_id, :state, :inserted_at])
+
     # Lifecycle and step outcomes, numbered from `executions.event_seq`.
     create table(:execution_events, primary_key: false) do
       add :id, :string, primary_key: true

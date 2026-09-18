@@ -48,19 +48,33 @@ defmodule Cyfr.Execution.GuestStorage do
 
   ## Holding the attempt
 
-  A write, append or delete runs through the scope's `hold`, which runs it
-  only while the calling attempt holds its row, in one decision with the
-  write (`Arca.ExecutionAttempts.while_held/5`). A hold that is refused
-  answers `{:error, :lost}` and nothing is written.
+  A write, append or delete is handed to the scope's `hold` as a
+  `t:Arca.ExecutionAttempts.write/0`: the operation, the physical path and
+  the store call. The hold records the write's intent while the calling
+  attempt holds its row, runs the store call outside any transaction and
+  settles the intent against the same hold
+  (`Arca.ExecutionAttempts.while_held/5`). This module never calls the
+  store for a mutation itself.
+
+  | The hold answers | The guest is answered |
+  |---|---|
+  | `{:error, :lost}`: the attempt did not hold its row; nothing was recorded or written | `{:error, :lost}` |
+  | `{:error, :unavailable}`: the database could not say; nothing was recorded or written | `{:error, :unavailable}` |
+  | `{:ok, {:confirmed, :ok}}` | the operation's members |
+  | `{:ok, {:failed, {:error, reason}}}`: the store wrote nothing | the refusal of that reason: `not_found`, `storage_quota_exceeded`, `storage_conflict` for an append that kept losing to concurrent writers, else `storage_error` |
+  | `{:ok, {:uncertain, reason}}`: the write may or may not be in the store | `storage_uncertain`, saying whether the attempt lost its row or the store could not say |
 
   ## Answers
 
   `{:ok, members}`, or `{:error, {:guest_error, type, message}}` with the
   refusal the guest is handed: `storage_path_denied`, `action_denied`,
   `request_too_large`, `response_too_large`, `storage_quota_exceeded`,
-  `not_found`, `invalid_request`, `invalid_base64` or `storage_error`. A
-  store fault is logged and answered by the verb that failed; a raise below
-  this module is logged and answered `Internal storage error.`.
+  `not_found`, `invalid_request`, `invalid_base64`, `storage_conflict`,
+  `storage_uncertain` or `storage_error`. Every refusal but
+  `storage_uncertain` wrote nothing; after `storage_uncertain` the guest
+  reads the path back before it writes it again. A store fault is logged
+  and answered by the verb that failed; a raise below this module is logged
+  and answered `Internal storage error.`.
   """
 
   require Logger
@@ -77,11 +91,14 @@ defmodule Cyfr.Execution.GuestStorage do
   @type quota :: %{max_bytes: non_neg_integer(), max_files: non_neg_integer()}
 
   @typedoc """
-  Runs a write while the calling attempt holds its row, answering what the
-  write returned, `{:error, :lost}` when the attempt does not hold it, or
-  `{:error, :unavailable}` when the store cannot say.
+  Runs a write for the calling attempt under its hold on its row, answering
+  what became of it (`t:Arca.ExecutionAttempts.written/0`),
+  `{:error, :lost}` when the attempt does not hold its row, or
+  `{:error, :unavailable}` when the database cannot say.
   """
-  @type hold :: ((-> term()) -> {:ok, term()} | {:error, :lost | :unavailable})
+  @type hold ::
+          (Arca.ExecutionAttempts.write() ->
+             {:ok, Arca.ExecutionAttempts.written()} | {:error, :lost | :unavailable})
 
   @typedoc """
   What an operation runs under: the guest-plane context, the consent edge
@@ -418,10 +435,16 @@ defmodule Cyfr.Execution.GuestStorage do
   defp dispatch(op, path, content, scope) when op in @writing do
     case Base.decode64(content) do
       {:ok, bytes} ->
-        store = if op == :write, do: &Arca.put/3, else: &Arca.append/3
+        {verb, store} = if op == :write, do: {:put, &Arca.put/3}, else: {:append, &Arca.append/3}
+        physical = segments(path)
 
         scope
-        |> held(fn -> store.(scope.ctx, segments(path), bytes) end)
+        |> held(%{
+          op: verb,
+          path: physical,
+          bytes: byte_size(bytes),
+          io: fn -> store.(scope.ctx, physical, bytes) end
+        })
         |> written(op, path, byte_size(bytes))
 
       :error ->
@@ -433,39 +456,89 @@ defmodule Cyfr.Execution.GuestStorage do
   end
 
   defp dispatch(:delete, path, _content, scope) do
-    case held(scope, fn -> Arca.delete(scope.ctx, segments(path)) end) do
-      {:ok, :ok} -> {:ok, %{"path" => path, "deleted" => true}}
-      {:ok, {:error, :not_found}} -> guest_error(:not_found, "File not found: #{path}")
-      {:ok, {:error, reason}} -> store_fault("delete file", reason)
+    physical = segments(path)
+    write = %{op: :delete, path: physical, io: fn -> Arca.delete(scope.ctx, physical) end}
+
+    case held(scope, write) do
+      {:ok, {:confirmed, :ok}} -> {:ok, %{"path" => path, "deleted" => true}}
+      {:ok, {:failed, {:error, :not_found}}} -> guest_error(:not_found, "File not found: #{path}")
+      {:ok, {:failed, {:error, reason}}} -> store_fault("delete file", reason)
+      {:ok, {:uncertain, reason}} -> uncertain("delete", path, reason)
       {:error, refusal} -> {:error, refusal}
     end
   end
 
   defp held(%{hold: hold}, write) do
     case hold.(write) do
-      {:ok, result} -> {:ok, result}
-      {:error, refusal} when refusal in [:lost, :unavailable] -> {:error, refusal}
+      {:ok, {kind, _detail} = written} when kind in [:confirmed, :failed, :uncertain] ->
+        {:ok, written}
+
+      {:error, refusal} when refusal in [:lost, :unavailable] ->
+        {:error, refusal}
     end
   end
 
-  defp written({:ok, :ok}, :write, path, size),
+  defp written({:ok, {:confirmed, :ok}}, :write, path, size),
     do: {:ok, %{"path" => path, "written" => true, "size" => size}}
 
-  defp written({:ok, :ok}, :append, path, size),
+  defp written({:ok, {:confirmed, :ok}}, :append, path, size),
     do: {:ok, %{"path" => path, "appended" => true, "size" => size}}
 
-  defp written({:ok, {:error, {:limit_reached, :athanor_storage_bytes, cap}}}, _op, _path, _size),
+  defp written({:ok, {:failed, {:error, reason}}}, op, path, _size), do: refused(op, path, reason)
+
+  defp written({:ok, {:uncertain, reason}}, op, path, _size),
+    do: uncertain(Atom.to_string(op), path, reason)
+
+  defp written({:error, refusal}, _op, _path, _size), do: {:error, refusal}
+
+  # The store wrote nothing, and said why.
+  defp refused(_op, _path, {:limit_reached, :athanor_storage_bytes, cap}),
     do: guest_error(:storage_quota_exceeded, "Athanor storage quota reached (#{cap} bytes)")
 
-  defp written({:ok, {:error, :storage_unverifiable}}, _op, _path, _size) do
+  defp refused(_op, _path, :storage_unverifiable) do
     guest_error(
       :storage_quota_exceeded,
       "Athanor storage usage cannot be verified right now — try again"
     )
   end
 
-  defp written({:ok, {:error, reason}}, _op, _path, _size), do: store_fault("write file", reason)
-  defp written({:error, refusal}, _op, _path, _size), do: {:error, refusal}
+  defp refused(:append, path, :precondition_failed) do
+    guest_error(
+      :storage_conflict,
+      "Append to '#{path}' kept losing to concurrent writers and appended nothing; " <>
+        "appending again is safe."
+    )
+  end
+
+  defp refused(_op, _path, reason), do: store_fault("write file", reason)
+
+  # The write may or may not be in the store: never answered as written,
+  # never as refused.
+  defp uncertain(verb, path, :hold_lost) do
+    guest_error(
+      :storage_uncertain,
+      "The execution attempt stopped being current while the #{verb} of '#{path}' was in " <>
+        "flight; whether it landed is recorded as uncertain."
+    )
+  end
+
+  defp uncertain(verb, path, :unconfirmed) do
+    guest_error(
+      :storage_uncertain,
+      "The #{verb} of '#{path}' reached the store but could not be confirmed for the " <>
+        "execution attempt; read the path before writing it again."
+    )
+  end
+
+  defp uncertain(verb, path, reason) do
+    Logger.error("[Cyfr.Execution.GuestStorage] a #{verb} is uncertain: #{reason}")
+
+    guest_error(
+      :storage_uncertain,
+      "The store could not say whether the #{verb} of '#{path}' landed; read the path " <>
+        "before writing it again."
+    )
+  end
 
   defp response_size(%Limits{max_response_size: max}, what, size)
        when is_integer(max) and size > max do

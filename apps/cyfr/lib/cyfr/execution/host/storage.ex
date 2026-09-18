@@ -20,8 +20,13 @@ defmodule Cyfr.Execution.Host.Storage do
   | `fetch_artifact` | `digest` | the artifact's bytes, base64 |
   | `record_denial` | `type`, `message` | `true` |
 
-  `storage` refuses with `guest_error`, and a write the attempt no longer
-  holds is `lost`. `fetch_artifact` names only the digest of the attempt's
+  `storage` refuses with `guest_error`. A write, append or delete runs
+  under the attempt's hold as `Arca.ExecutionAttempts.while_held/5`
+  specifies: one the attempt does not hold its row for is `lost` and
+  touches nothing; one whose attempt lost its row while the store call was
+  in flight, or whose store could not say what it did, is the
+  `storage_uncertain` guest error, never `written` and never `lost`.
+  `fetch_artifact` names only the digest of the attempt's
   own component; any other digest, and bytes the store does not hold or
   that do not match it, are `not_found`. `record_denial` records a
   policy-driven egress denial of the attempt's component

@@ -65,10 +65,19 @@ defmodule Cyfr.Execution.GuestStorageTest do
       edge: edge,
       limits: Keyword.get(opts, :limits),
       quota: Keyword.get(opts, :quota),
-      hold: Keyword.get(opts, :hold, fn write -> {:ok, write.()} end)
+      hold: Keyword.get(opts, :hold, &held/1)
     }
 
     GuestStorage.run(scope, String.to_existing_atom(action), Map.delete(request, "action"))
+  end
+
+  # A hold that stands from the intent to its settlement: the store call
+  # runs, and a store that answered is confirmed or failed by its answer.
+  defp held(%{op: op, path: [_ | _], io: io}) when op in [:put, :append, :delete] do
+    case io.() do
+      :ok -> {:ok, {:confirmed, :ok}}
+      {:error, _reason} = refused -> {:ok, {:failed, refused}}
+    end
   end
 
   defp write(path, text),
@@ -628,7 +637,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
     test "a public profile's scope carries the configured quota; any other carries none", %{
       ctx: ctx
     } do
-      hold = fn write -> {:ok, write.()} end
+      hold = &held/1
       public = %{Authority.zero() | profile_kind: :public}
 
       assert %{quota: quota} = GuestStorage.scope(ctx, public, nil, hold)
@@ -690,12 +699,116 @@ defmodule Cyfr.Execution.GuestStorageTest do
       refute_received :held
     end
 
+    test "the hold is handed the operation, the physical path, the size and the store call", %{
+      ctx: ctx
+    } do
+      :ok = Arca.put(ctx, ["data", "log.txt"], "a")
+      test = self()
+
+      hold = fn write ->
+        send(test, {:write, Map.delete(write, :io)})
+        # Nothing moved before the hold ran the store call.
+        assert {:ok, "a"} = Arca.get(ctx, ["data", "log.txt"])
+        held(write)
+      end
+
+      append = %{"action" => "append", "path" => "data/log.txt", "content" => Base.encode64("bc")}
+
+      assert {:ok, %{"written" => true}} =
+               run(ctx, edge(["data/"]), write("data/new.txt", "xyz"), hold: hold)
+
+      assert_received {:write, %{op: :put, path: ["data", "new.txt"], bytes: 3}}
+
+      assert {:ok, %{"appended" => true, "size" => 2}} =
+               run(ctx, edge(["data/"]), append, hold: hold)
+
+      assert_received {:write, %{op: :append, path: ["data", "log.txt"], bytes: 2}}
+
+      Arca.put(ctx, ["data", "log.txt"], "a")
+
+      assert {:ok, %{"deleted" => true}} =
+               run(ctx, edge(["data/"]), %{"action" => "delete", "path" => "data/log.txt"},
+                 hold: fn write ->
+                   send(test, {:write, Map.delete(write, :io)})
+                   held(write)
+                 end
+               )
+
+      assert_received {:write, %{op: :delete, path: ["data", "log.txt"]}}
+    end
+
+    @tag :capture_log
+    test "an uncertain write is storage_uncertain, never written and never lost", %{ctx: ctx} do
+      requests = [
+        write("data/u.txt", "x"),
+        %{"action" => "append", "path" => "data/u.txt", "content" => Base.encode64("x")},
+        %{"action" => "delete", "path" => "data/u.txt"}
+      ]
+
+      for reason <- [:hold_lost, :unknown_outcome, :io_crashed, :unconfirmed],
+          request <- requests do
+        assert {"storage_uncertain", message} =
+                 refused(
+                   run(ctx, edge(["data/"]), request,
+                     hold: fn _write -> {:ok, {:uncertain, reason}} end
+                   )
+                 )
+
+        assert message =~ "data/u.txt"
+      end
+
+      assert {"storage_uncertain", lost} =
+               refused(
+                 run(ctx, edge(["data/"]), write("data/u.txt", "x"),
+                   hold: fn _ -> {:ok, {:uncertain, :hold_lost}} end
+                 )
+               )
+
+      assert lost =~ "stopped being current"
+    end
+
+    @tag :capture_log
+    test "a store that wrote nothing is the refusal of its reason", %{ctx: ctx} do
+      failed = fn reason -> fn _write -> {:ok, {:failed, {:error, reason}}} end end
+      append = %{"action" => "append", "path" => "data/f.txt", "content" => Base.encode64("x")}
+      delete = %{"action" => "delete", "path" => "data/f.txt"}
+
+      assert {"storage_conflict", conflict} =
+               refused(run(ctx, edge(["data/"]), append, hold: failed.(:precondition_failed)))
+
+      assert conflict =~ "appended nothing"
+
+      assert {"storage_quota_exceeded", _} =
+               refused(
+                 run(ctx, edge(["data/"]), append,
+                   hold: failed.({:limit_reached, :athanor_storage_bytes, 10})
+                 )
+               )
+
+      assert {"storage_quota_exceeded", _} =
+               refused(run(ctx, edge(["data/"]), append, hold: failed.(:storage_unverifiable)))
+
+      assert {"not_found", _} =
+               refused(run(ctx, edge(["data/"]), delete, hold: failed.(:not_found)))
+
+      # A backend's words stay in the log: the guest is told the verb.
+      assert {"storage_error", "Failed to write file"} =
+               refused(
+                 run(ctx, edge(["data/"]), write("data/f.txt", "x"),
+                   hold: failed.({:s3_error, 500})
+                 )
+               )
+
+      assert {"storage_error", "Failed to delete file"} =
+               refused(run(ctx, edge(["data/"]), delete, hold: failed.(:eacces)))
+    end
+
     test "a refusal is decided before the hold is asked", %{ctx: ctx} do
       test = self()
 
       hold = fn write ->
         send(test, :held)
-        {:ok, write.()}
+        held(write)
       end
 
       assert {"storage_path_denied", _} =

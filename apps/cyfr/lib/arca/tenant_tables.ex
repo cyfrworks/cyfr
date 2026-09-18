@@ -37,6 +37,7 @@ defmodule Arca.TenantTables do
     "execution_events",
     "budget_charges",
     "budget_reservations",
+    "storage_write_intents",
     "execution_attempts",
     "approvals",
     "turn_steps",

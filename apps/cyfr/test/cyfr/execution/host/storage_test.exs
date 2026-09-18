@@ -32,6 +32,28 @@ defmodule Cyfr.Execution.Host.StorageTest.GatedAdapter do
   end
 end
 
+defmodule Cyfr.Execution.Host.StorageTest.AnsweringAdapter do
+  @moduledoc false
+  use Arca.Storage.TestDouble
+
+  # A store whose answer is chosen by the file's name: it cannot say whether
+  # it wrote `unknown.txt`, keeps losing the append to `contended.txt`, and
+  # refuses `refused.txt` outright.
+  def put(ctx, path, content), do: answer(path) || Arca.Adapters.Local.put(ctx, path, content)
+
+  def append(ctx, path, content),
+    do: answer(path) || Arca.Adapters.Local.append(ctx, path, content)
+
+  defp answer(path) do
+    case List.last(path) do
+      "unknown.txt" -> {:error, :unknown}
+      "contended.txt" -> {:error, :precondition_failed}
+      "refused.txt" -> {:error, :eacces}
+      _ -> nil
+    end
+  end
+end
+
 defmodule Cyfr.Execution.Host.StorageTest do
   @moduledoc """
   A runner's `storage`, `fetch_artifact` and `record_denial` host calls act
@@ -41,16 +63,19 @@ defmodule Cyfr.Execution.Host.StorageTest do
   denial is recorded for the attempt's component in its athanor.
 
   A storage write is accepted only while the attempt holds its row, decided
-  with the write: a cancel or takeover that commits first refuses it and
-  leaves no bytes, and a cancel that comes while a write is in flight writes
-  its terminal row only once the write has landed.
+  with the record of its intent: a cancel or takeover that commits first
+  refuses it and leaves no bytes and no intent. One that commits while the
+  store call is in flight never waits for the store: it settles the intent
+  uncertain with its own row, and the guest is answered `storage_uncertain`,
+  as it is when the store cannot say what it did. A store's refusal and an
+  append's exhausted conflict are failed intents and their own guest errors.
   """
 
   use ExUnit.Case, async: false
 
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Execution.Host.StorageTest.GatedAdapter
+  alias Cyfr.Execution.Host.StorageTest.{AnsweringAdapter, GatedAdapter}
   alias Cyfr.Test.AttemptFixtures
 
   @math_wasm_path Path.expand("../../../support/test_wasm/math.wasm", __DIR__)
@@ -94,6 +119,9 @@ defmodule Cyfr.Execution.Host.StorageTest do
   defp gated_adapter, do: Application.put_env(:cyfr, :storage_adapter, GatedAdapter)
 
   defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
+
+  defp intents(fixture),
+    do: Arca.ExecutionAttempts.write_intents(fixture.athanor_id, fixture.attempt)
 
   describe "storage" do
     test "a validly signed operation outside the consented scope is refused on CYFR and writes nothing" do
@@ -194,7 +222,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
       assert row(fixture).status == "cancelled"
     end
 
-    test "a cancel while a write is in flight writes its terminal row only once the write landed" do
+    test "a cancel while a write is in flight does not wait for the store, and the write is uncertain" do
       fixture = attached(["data/"])
       gated_adapter()
       Process.register(self(), :host_storage_put_gate)
@@ -202,22 +230,83 @@ defmodule Cyfr.Execution.Host.StorageTest do
       writer = Task.async(fn -> storage(fixture, write("data/in-flight.txt", "landed")) end)
       assert_receive {:gated, :host_storage_put_gate, putter}, 5_000
 
-      canceller =
-        Task.async(fn ->
-          cancelled = Cyfr.Execution.cancel(fixture.ctx, fixture.execution_id)
-          {cancelled, Arca.Adapters.Local.exists?(fixture.ctx, ["data", "in-flight.txt"])}
-        end)
+      # The intent stands, no transaction does: the cancel commits at once
+      # and settles the intent with its terminal row.
+      assert [%{state: "pending", op: "put", path: "data/in-flight.txt", bytes: 6}] =
+               intents(fixture)
 
-      assert Task.yield(canceller, 300) == nil
+      assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(fixture.ctx, fixture.execution_id)
+      assert row(fixture).status == "cancelled"
+      assert [%{state: "uncertain", reason: "cancelled"}] = intents(fixture)
+      refute Arca.Adapters.Local.exists?(fixture.ctx, ["data", "in-flight.txt"])
+
       send(putter, {:release, :host_storage_put_gate})
 
-      assert %{"ok" => %{"written" => true}} = Task.await(writer)
-      assert {{:ok, %{cancelled: true}}, true} = Task.await(canceller)
+      assert %{"error" => "guest_error", "type" => "storage_uncertain", "message" => message} =
+               Task.await(writer)
+
+      assert message =~ "data/in-flight.txt"
+      assert [%{state: "uncertain", reason: "cancelled"}] = intents(fixture)
       assert row(fixture).status == "cancelled"
-      assert {:ok, "landed"} = Arca.get(fixture.ctx, ["data", "in-flight.txt"])
+
+      # The attempt no longer holds its row: its next write is lost.
+      assert %{"error" => "lost"} = storage(fixture, write("data/next.txt", "late"))
+      refute Arca.exists?(fixture.ctx, ["data", "next.txt"])
     end
 
-    test "a write racing a cancel either lands before the terminal row or is refused with nothing written" do
+    test "a takeover while a write is in flight leaves it uncertain under the stale fence" do
+      fixture = attached(["data/"])
+      gated_adapter()
+      Process.register(self(), :host_storage_put_gate)
+
+      writer = Task.async(fn -> storage(fixture, write("data/stale.txt", "stale")) end)
+      assert_receive {:gated, :host_storage_put_gate, putter}, 5_000
+
+      {:ok, %{attempt: %{fence: 2}}} =
+        Arca.ExecutionAttempts.takeover(fixture.athanor_id, fixture.execution_id,
+          boot_id: Cyfr.Boot.id(),
+          lease_until: Arca.ExecutionAttempts.lease_until()
+        )
+
+      send(putter, {:release, :host_storage_put_gate})
+
+      assert %{"error" => "guest_error", "type" => "storage_uncertain"} = Task.await(writer)
+      assert [%{state: "uncertain", reason: "taken_over", fence: 1}] = intents(fixture)
+    end
+
+    @tag :capture_log
+    test "a store that cannot say, one that refused and an append that kept losing are told apart" do
+      fixture = attached(["data/"])
+      Application.put_env(:cyfr, :storage_adapter, AnsweringAdapter)
+      append = &%{"action" => "append", "path" => &1, "content" => Base.encode64("x")}
+
+      assert %{"error" => "guest_error", "type" => "storage_uncertain"} =
+               storage(fixture, write("data/unknown.txt", "x"))
+
+      assert %{"error" => "guest_error", "type" => "storage_uncertain"} =
+               storage(fixture, append.("data/unknown.txt"))
+
+      assert %{"error" => "guest_error", "type" => "storage_conflict"} =
+               storage(fixture, append.("data/contended.txt"))
+
+      assert %{"error" => "guest_error", "type" => "storage_error"} =
+               storage(fixture, write("data/refused.txt", "x"))
+
+      assert %{"ok" => %{"written" => true}} = storage(fixture, write("data/fine.txt", "x"))
+
+      assert [
+               {"put", "data/unknown.txt", "uncertain", "unknown_outcome"},
+               {"append", "data/unknown.txt", "uncertain", "unknown_outcome"},
+               {"append", "data/contended.txt", "failed", "precondition_failed"},
+               {"put", "data/refused.txt", "failed", "eacces"},
+               {"put", "data/fine.txt", "confirmed", nil}
+             ] == for(i <- intents(fixture), do: {i.op, i.path, i.state, i.reason})
+
+      # An uncertain write ends nothing: the attempt still holds its row.
+      assert row(fixture).status == "running"
+    end
+
+    test "a write racing a cancel is written before the terminal row, lost with nothing written, or uncertain" do
       outcomes =
         for n <- 1..20 do
           fixture = attached(["data/"])
@@ -229,25 +318,34 @@ defmodule Cyfr.Execution.Host.StorageTest do
             Task.async(fn ->
               Process.sleep(Enum.random(0..3))
               {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(fixture.ctx, fixture.execution_id)
-              Arca.exists?(fixture.ctx, path)
+              {Arca.exists?(fixture.ctx, path), intents(fixture)}
             end)
 
           written = Task.await(writer)
-          existed_at_cancel = Task.await(canceller)
+          {existed_at_cancel, intents_at_cancel} = Task.await(canceller)
+
+          # The terminal row never leaves an intent pending.
+          refute Enum.any?(intents_at_cancel, &(&1.state == "pending"))
 
           case written do
             %{"ok" => %{"written" => true}} ->
               assert existed_at_cancel, "a write answered written landed after the terminal row"
+              assert [%{state: "confirmed"}] = intents(fixture)
               :landed
 
             %{"error" => "lost"} ->
               refute existed_at_cancel
               refute Arca.exists?(fixture.ctx, path)
+              assert [] = intents(fixture)
               :refused
+
+            %{"error" => "guest_error", "type" => "storage_uncertain"} ->
+              assert [%{state: "uncertain", reason: "cancelled"}] = intents(fixture)
+              :uncertain
           end
         end
 
-      assert Enum.all?(outcomes, &(&1 in [:landed, :refused]))
+      assert Enum.all?(outcomes, &(&1 in [:landed, :refused, :uncertain]))
     end
   end
 
