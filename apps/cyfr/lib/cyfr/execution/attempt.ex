@@ -59,9 +59,8 @@ defmodule Cyfr.Execution.Attempt do
   its runner is gone (`stop_unclosed/2`), and when its waiter exits. A
   waiter that exits kills the run: the attempt asks its worker service to
   kill the runner (`c:Cyfr.WorkerAPI.kill/1`), counts a kill of a runner
-  that had attached against the athanor
-  (`Cyfr.Execution.Semaphore.note_unreaped/2`), and lapses its row
-  (`Cyfr.Execution.Lapse`). A waiter whose attempt stops without closing
+  that had attached against the athanor (`note_unreaped/2`), and lapses
+  its row (`Cyfr.Execution.Lapse`). A waiter whose attempt stops without closing
   closes the run lost (`Cyfr.Execution.Close.lost/1`), which writes nothing
   over a row the attempt no longer holds. An attempt handed to its runner
   has no waiter: it is registered under its execution's id in
@@ -100,11 +99,13 @@ defmodule Cyfr.Execution.Attempt do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob.Edge
   alias Cyfr.Delta
-  alias Cyfr.Execution.{Charge, Close, Emit, Host, Lapse, Outcome, Slot, StepSpans}
+  alias Cyfr.Execution.{Charge, Close, Emit, Host, Lapse, Outcome, StepSpans}
+  alias Cyfr.Slots
   alias Sanctum.Context
 
   @registry __MODULE__.Registry
   @supervisor __MODULE__.Supervisor
+  @slots Cyfr.Execution.Slots
 
   # A provider name is guest input that reaches a telemetry tag and a log
   # line; a real one is a short identifier.
@@ -254,12 +255,13 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   @doc """
-  Take the run's execution slot of `class` in this attempt, waiting at
-  most `timeout` ms (`Cyfr.Execution.Slot.acquire/4`). Answers `:ok` when
-  the attempt holds it; a refusal closes the run failed with the refusal's
-  sentence and answers `:closed`.
+  Take the run's execution slot of `class` in this attempt, keyed by its
+  athanor, waiting at most `timeout` ms (`Cyfr.Slots.acquire/4` on
+  `Cyfr.Execution.Slots`). Answers `:ok` when the attempt holds it; a
+  refusal closes the run failed with the refusal's sentence
+  (`Cyfr.Slots.refusal/1`) and answers `:closed`.
   """
-  @spec take_slot(pid(), Cyfr.Execution.Semaphore.class(), timeout()) :: :ok | :closed
+  @spec take_slot(pid(), Slots.class(), timeout()) :: :ok | :closed
   def take_slot(pid, class, timeout) when is_pid(pid) do
     GenServer.call(pid, {:take_slot, class, timeout}, :infinity)
   catch
@@ -349,7 +351,7 @@ defmodule Cyfr.Execution.Attempt do
   - `{:fail, outcome}` closes the run failed with the outcome's error:
     `{:ok, message}`, the failure as the close recorded it, masked. An
     `abandoned` outcome is first counted against the athanor as a kill
-    whose native work may still run (`Cyfr.Execution.Semaphore.note_unreaped/2`).
+    whose native work may still run (`note_unreaped/2`).
   - `{:push_deltas, deltas}` emits each delta's event on the attempt's
     stream, masked with its set: `{:ok, replies}`, one reply per delta, the
     JSON a guest's `emit` returns. A delta naming another attempt is
@@ -418,6 +420,37 @@ defmodule Cyfr.Execution.Attempt do
       catch
         :exit, _reason -> :ok
       end
+    end
+
+    :ok
+  end
+
+  @doc """
+  Count a kill of `execution_id` whose native work may still run against
+  `tenant`'s execution slots (`Cyfr.Slots.note_unreaped/3`), and emit
+  `[:cyfr, :opus, :execution, :unreaped_kill]` with the tenant's live
+  count. From any process: a cancel runs in the canceller's, never the
+  holder's, and the note is acknowledged before the kill it precedes. A
+  nil tenant charges nobody; a kill the slots could not be told of is
+  uncharged, and logged by execution.
+  """
+  @spec note_unreaped(String.t() | nil, String.t()) :: :ok
+  def note_unreaped(nil, _execution_id), do: :ok
+
+  def note_unreaped(tenant, execution_id) when is_binary(tenant) do
+    case Slots.note_unreaped(@slots, tenant, execution_id) do
+      {:ok, count} ->
+        :telemetry.execute(
+          [:cyfr, :opus, :execution, :unreaped_kill],
+          %{system_time: System.system_time(), unreaped_count: count},
+          %{tenant: tenant, execution_id: execution_id}
+        )
+
+      {:error, :unavailable} ->
+        Logger.error(
+          "[Cyfr.Execution.Attempt] unreaped kill of #{inspect(execution_id)} for tenant " <>
+            "#{inspect(tenant)} is uncharged: the execution slots did not answer"
+        )
     end
 
     :ok
@@ -498,12 +531,12 @@ defmodule Cyfr.Execution.Attempt do
 
   @impl true
   def handle_call({:take_slot, class, timeout}, _from, state) do
-    case Slot.acquire(class, state.ctx.athanor_id, timeout, nil) do
-      {:ok, token} ->
-        {:reply, :ok, %{state | slot: token}}
+    case Slots.acquire(@slots, state.ctx.athanor_id, class, wait_ms: timeout) do
+      {:ok, ref} ->
+        {:reply, :ok, %{state | slot: ref}}
 
-      {:error, sentence} ->
-        refuse_run(state, sentence)
+      {:error, reason} ->
+        refuse_run(state, Slots.refusal(reason))
     end
   end
 
@@ -694,7 +727,7 @@ defmodule Cyfr.Execution.Attempt do
   # What the run held while open goes back when the attempt stops: its
   # execution slot, its invoke-budget slot and its charge row.
   defp release_holds(state) do
-    if state.slot, do: Slot.release(state.slot)
+    if state.slot, do: Slots.release(@slots, state.slot)
     if state.held_invoke, do: Sanctum.Authority.release_invoke(state.authority)
     if state.charge, do: give_back_charge(state)
     %{state | slot: nil, held_invoke: false, charge: nil}
@@ -726,7 +759,7 @@ defmodule Cyfr.Execution.Attempt do
     killed = Cyfr.Execution.WorkerClient.kill(state.worker, state.execution_id)
 
     if killed == :ok and is_binary(state.claimed_by),
-      do: note_unreaped(state)
+      do: note_unreaped(state.ctx.athanor_id, state.execution_id)
 
     :ok
   end
@@ -734,21 +767,6 @@ defmodule Cyfr.Execution.Attempt do
   # A run dispatched to no worker service has no runner whose attempt lapses.
   defp lapse(%__MODULE__{worker: nil}), do: :ok
   defp lapse(state), do: Lapse.dispatched(state.service_id, state.boot_id, nil, [state.attempt])
-
-  defp note_unreaped(state) do
-    tenant = state.ctx.athanor_id
-
-    case Cyfr.Execution.Semaphore.note_unreaped(tenant, state.execution_id) do
-      :ok ->
-        :ok
-
-      {:error, :unavailable} ->
-        Logger.error(
-          "[Cyfr.Execution.Attempt] unreaped kill of #{state.execution_id} for tenant " <>
-            "#{inspect(tenant)} is uncharged: the semaphore did not answer"
-        )
-    end
-  end
 
   # ---------------------------------------------------------------------------
   # Attach
@@ -892,7 +910,7 @@ defmodule Cyfr.Execution.Attempt do
 
   defp run({:fail, %Outcome{status: :failed} = outcome}, state) do
     if names_outcome?(state, outcome) do
-      if outcome.abandoned, do: note_unreaped(state)
+      if outcome.abandoned, do: note_unreaped(state.ctx.athanor_id, state.execution_id)
 
       close_run(state, &failed_answer/1, fn ->
         Close.fail(state.close, masking_set(state), outcome.error)

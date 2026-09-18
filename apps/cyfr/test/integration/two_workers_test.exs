@@ -31,7 +31,8 @@ defmodule Cyfr.TwoWorkersTest do
   import Cyfr.Test.Wait
   import Ecto.Query, only: [from: 2]
 
-  alias Cyfr.Execution.{Attempt, Keys, Semaphore, Sweeper, WorkerClient}
+  alias Cyfr.Execution.{Attempt, Keys, Sweeper, WorkerClient}
+  alias Cyfr.Slots
   alias Cyfr.Test.{AttemptFixtures, AuthorityFixtures, OpusService, ScriptedWorker}
   alias Cyfr.{WorkerAuth, WorkerWire}
   alias Opus.Test.NestedExecution, as: Probe
@@ -45,6 +46,7 @@ defmodule Cyfr.TwoWorkersTest do
   @stub "catalyst:local.step-stub"
   @scripted "reagent:local.two-workers"
   @soul "agent:local.aqua"
+  @slots Cyfr.Execution.Slots
   @version "0.1.0"
   @key_field "STUB_API_KEY"
   @stub_text "The stub answers at once."
@@ -147,7 +149,7 @@ defmodule Cyfr.TwoWorkersTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Semaphore.forgive_unreaped(ctx.athanor_id)
+      Slots.forgive_unreaped(@slots, ctx.athanor_id)
 
       for {key, value} <- previous do
         if value,
@@ -446,7 +448,7 @@ defmodule Cyfr.TwoWorkersTest do
     end
 
     test "cancelling a formula over the wire ends its children with it", %{ctx: ctx} do
-      children_before = Semaphore.status().child_active
+      children_before = Slots.status(@slots).child_active
       root_id = Cyfr.UUID7.execution_id()
       hold_children!(root_id)
 
@@ -473,7 +475,7 @@ defmodule Cyfr.TwoWorkersTest do
           {id, component}
         end
 
-      assert Semaphore.status().child_active == children_before + 3
+      assert Slots.status(@slots).child_active == children_before + 3
       assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root_id)
       assert {:error, _cancelled} = Task.await(root, 30_000)
       assert %{status: "cancelled"} = row(root_id)
@@ -485,7 +487,7 @@ defmodule Cyfr.TwoWorkersTest do
       end
 
       wait_until(fn -> match?({:ok, %{attempts: []}}, Opus.WorkerService.status()) end, 10_000)
-      wait_until(fn -> Semaphore.status().child_active == children_before end)
+      wait_until(fn -> Slots.status(@slots).child_active == children_before end)
     end
 
     test "a restarted service holds none of its predecessor's attempts, which lapse through their lease",

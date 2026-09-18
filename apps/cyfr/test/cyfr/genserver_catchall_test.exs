@@ -27,7 +27,7 @@ defmodule Cyfr.GenServerCatchallTest do
     {Cyfr.RecordSink, "RecordSink"},
     {Cyfr.RateLimiter, "RateLimiter"},
     {Cyfr.Execution.Rates, "Rates"},
-    {Cyfr.Execution.Semaphore, "Semaphore"},
+    {Cyfr.Execution.Slots, "Slots"},
     {Cyfr.Execution.Events.Sequence, "Events.Sequence"}
   ]
 

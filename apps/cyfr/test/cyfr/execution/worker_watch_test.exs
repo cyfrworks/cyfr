@@ -21,12 +21,14 @@ defmodule Cyfr.Execution.WorkerWatchTest do
 
   import Cyfr.Test.Wait
 
-  alias Cyfr.Execution.{Attempt, Dispatch, Lapse, Semaphore, WorkerWatch}
+  alias Cyfr.Execution.{Attempt, Dispatch, Lapse, WorkerWatch}
+  alias Cyfr.Slots
   alias Cyfr.Test.{AttemptFixtures, ScriptedWorkerListener}
 
   @moduletag :capture_log
 
   @service "wrk_watch"
+  @slots Cyfr.Execution.Slots
   @lapsed "Execution terminated: runner stopped without cleanup"
   @poll_ms 40
   @watch :worker_watch_under_test
@@ -248,9 +250,9 @@ defmodule Cyfr.Execution.WorkerWatchTest do
     test "leave one terminal row, and give its capacity back once", %{ctx: ctx} do
       for round <- 1..3 do
         fixture = attached!(ctx, "boot_1")
-        before = Semaphore.status().active
+        before = Slots.status(@slots).active
         :ok = Attempt.take_slot(fixture.pid, :root, 1_000)
-        assert Semaphore.status().active == before + 1
+        assert Slots.status(@slots).active == before + 1
 
         outcome =
           AttemptFixtures.outcome(fixture, "completed", %{"output" => %{"round" => round}})
@@ -281,7 +283,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
         # The attempt stops either way and its slot goes back once; a
         # repeated lapse finds nothing, and takes nothing back.
         wait_until(fn -> not Process.alive?(fixture.pid) end)
-        wait_until(fn -> Semaphore.status().active == before end, 2_000, "the slot given back")
+        wait_until(fn -> Slots.status(@slots).active == before end, 2_000, "the slot given back")
         assert {:ok, []} = Lapse.boot(@service, "boot_1", [fixture.attempt])
 
         assert :ok =
@@ -291,7 +293,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
                    runner: nil
                  })
 
-        assert Semaphore.status().active == before
+        assert Slots.status(@slots).active == before
       end
     end
   end

@@ -15,16 +15,30 @@ defmodule Cyfr.Execution.TurnRoot do
   turn, its attempt and its root out of `running` in one transaction
   (`Arca.TurnStorage.pause/3`), and only then stops the keeper and gives
   the slot back, so a crash between leaves a paused row and a slot the
-  semaphore's monitor releases — never a running row with no holder. A
-  pause whose rows did not move resumes the same keeper, so the claim's
+  execution slots' monitor releases — never a running row with no holder.
+  A pause whose rows did not move resumes the same keeper, so the claim's
   keeper is always the one a later pause or release stops. A resume takes
   the slot first and moves the rows only once it holds one.
+
+  The slot is one of the execution slots (`Cyfr.Slots`, the instance
+  `Cyfr.Execution.Slots`), keyed by the athanor. It is taken together with
+  the registry entry that lets a cancel find the holder
+  (`Cyfr.Execution.Dispatch.stop/2`), and both are given back together.
   """
 
   alias Cyfr.Execution.{Admission, LeaseWatch, Record}
+  alias Cyfr.Slots
   alias Sanctum.Context
 
+  @slots Cyfr.Execution.Slots
   @slot_wait_ms 30_000
+
+  @typedoc """
+  What the holder gives back when it lets the root go: its slot, and
+  whether this process registered the execution in
+  `Cyfr.Execution.Registry` (a process registered already keeps its entry).
+  """
+  @type token :: %{slot: reference(), registered: boolean(), execution_id: String.t()}
 
   @type claim :: %{
           execution_id: String.t(),
@@ -33,7 +47,7 @@ defmodule Cyfr.Execution.TurnRoot do
           activation_digest: String.t() | nil,
           lease_until: DateTime.t(),
           budget_id: String.t(),
-          token: Cyfr.Execution.Slot.token(),
+          token: token(),
           keeper: pid()
         }
 
@@ -56,7 +70,7 @@ defmodule Cyfr.Execution.TurnRoot do
            ),
          record = build_record(ctx, agent_ref, authority, stamp, opts),
          :ok <- Record.write_started(record),
-         {:ok, token} <- take_slot(ctx, record) do
+         {:ok, token} <- claim_slot(ctx, record) do
       {:ok, keeper} =
         LeaseWatch.start(self(), record.id, record.attempt, Keyword.take(opts, [:tick_ms]))
 
@@ -112,7 +126,7 @@ defmodule Cyfr.Execution.TurnRoot do
     case moved do
       {:ok, %{turn: turn, aborted: aborted}} ->
         LeaseWatch.stop(claim.keeper)
-        Cyfr.Execution.Slot.release(claim.token)
+        give_back(claim.token)
         {:ok, %{turn: turn, execution_id: turn.root_execution_id, aborted: aborted}}
 
       {:error, _} = error ->
@@ -132,12 +146,7 @@ defmodule Cyfr.Execution.TurnRoot do
   @spec resume(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def resume(%Context{} = ctx, execution_id, opts) do
     with {:ok, token} <-
-           Cyfr.Execution.Slot.acquire(
-             :root,
-             ctx.athanor_id,
-             Keyword.get(opts, :timeout_ms, @slot_wait_ms),
-             execution_id
-           ) do
+           take_slot(ctx, execution_id, Keyword.get(opts, :timeout_ms, @slot_wait_ms)) do
       until = Record.lease_until()
 
       case Arca.TurnStorage.resume(ctx, Keyword.fetch!(opts, :turn_id), %{
@@ -164,7 +173,7 @@ defmodule Cyfr.Execution.TurnRoot do
            }}
 
         {:error, _} = error ->
-          Cyfr.Execution.Slot.release(token)
+          give_back(token)
           error
       end
     end
@@ -181,12 +190,7 @@ defmodule Cyfr.Execution.TurnRoot do
     attempt = Keyword.fetch!(opts, :attempt)
 
     with {:ok, token} <-
-           Cyfr.Execution.Slot.acquire(
-             :root,
-             ctx.athanor_id,
-             Keyword.get(opts, :timeout_ms, @slot_wait_ms),
-             execution_id
-           ) do
+           take_slot(ctx, execution_id, Keyword.get(opts, :timeout_ms, @slot_wait_ms)) do
       {:ok, keeper} =
         LeaseWatch.start(self(), execution_id, attempt, Keyword.take(opts, [:tick_ms]))
 
@@ -219,7 +223,7 @@ defmodule Cyfr.Execution.TurnRoot do
           _ -> :ok
         end
 
-        Cyfr.Execution.Slot.release(token)
+        give_back(token)
 
       _ ->
         :ok
@@ -267,14 +271,44 @@ defmodule Cyfr.Execution.TurnRoot do
 
   # A refused slot fails the row it would have held: the claim is over
   # before it began, and the row says so.
-  defp take_slot(ctx, record) do
-    case Cyfr.Execution.Slot.acquire(:root, ctx.athanor_id, @slot_wait_ms, record.id) do
+  defp claim_slot(ctx, record) do
+    case take_slot(ctx, record.id, @slot_wait_ms) do
       {:ok, token} ->
         {:ok, token}
 
       {:error, sentence} ->
         _ = Record.write_failed(Record.fail(record, sentence))
         {:error, {:slot_refused, sentence}}
+    end
+  end
+
+  # The `:root` slot on the calling process, waiting at most `wait_ms`,
+  # and the registry entry a cancel finds the holder by, taken together;
+  # a refusal is the sentence it means to the caller.
+  defp take_slot(ctx, execution_id, wait_ms) do
+    case Slots.acquire(@slots, ctx.athanor_id, :root, wait_ms: wait_ms) do
+      {:ok, ref} ->
+        {:ok, %{slot: ref, registered: register(execution_id), execution_id: execution_id}}
+
+      {:error, reason} ->
+        {:error, Slots.refusal(reason)}
+    end
+  end
+
+  # Give the slot back and drop the registration, from the holding process.
+  defp give_back(%{slot: ref, registered: registered?, execution_id: execution_id}) do
+    Slots.release(@slots, ref)
+    if registered?, do: Registry.unregister(Cyfr.Execution.Registry, execution_id)
+    :ok
+  end
+
+  # Register the holder for cancellation. An existing registration by the
+  # same process (a background task that registered before it ran) is kept
+  # as that process's, and is not dropped with the slot.
+  defp register(execution_id) do
+    case Registry.register(Cyfr.Execution.Registry, execution_id, :running) do
+      {:ok, _} -> true
+      {:error, {:already_registered, _}} -> false
     end
   end
 end

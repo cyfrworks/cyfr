@@ -130,19 +130,7 @@ defmodule Cyfr.Application do
       # Execution admission: the sliding-window counters consented rate
       # limits are checked against, and the execution slots.
       Cyfr.Execution.Rates,
-      {Cyfr.Execution.Semaphore,
-       max:
-         Application.get_env(
-           :cyfr,
-           :max_concurrent_executions,
-           Cyfr.Execution.Semaphore.default_slots()
-         ),
-       tenant_max:
-         Application.get_env(
-           :cyfr,
-           :max_concurrent_executions_per_tenant,
-           Cyfr.Execution.Semaphore.default_tenant_slots()
-         )},
+      execution_slots(),
       # Execution bookkeeping, after PubSub (the buffers broadcast on it):
       # the execution_id → driving-process registry, the per-execution
       # event-buffer registry, the emit counter, the buffers, and the open
@@ -266,6 +254,59 @@ defmodule Cyfr.Application do
 
     opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
     Supervisor.start_link(children, opts)
+  end
+
+  # The execution slots: one `Cyfr.Slots` instance, keyed by athanor, on
+  # the caps the operator configured (`CYFR_MAX_CONCURRENT_EXECUTIONS`,
+  # `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT`), else the shipped ones.
+  # The ratio warning is said once here, at boot, where an operator can
+  # act on it.
+  defp execution_slots do
+    {max, key_max} = execution_slot_caps()
+
+    case execution_slot_footprint(max, key_max) do
+      :ok -> :ok
+      {:warn, message} -> Logger.warning(message)
+    end
+
+    {Cyfr.Slots, name: Cyfr.Execution.Slots, max: max, key_max: key_max}
+  end
+
+  @doc false
+  # The caps the execution slots boot with: the total, and the roots one
+  # athanor may hold.
+  @spec execution_slot_caps() :: {pos_integer(), pos_integer()}
+  def execution_slot_caps do
+    {Application.get_env(:cyfr, :max_concurrent_executions, Cyfr.Slots.default_max()),
+     Application.get_env(
+       :cyfr,
+       :max_concurrent_executions_per_tenant,
+       Cyfr.Slots.default_key_max()
+     )}
+  end
+
+  @doc false
+  # Pure decision seam (testable without booting). One athanor's roots each
+  # carry a chain down to the authority depth cap, and children are exempt
+  # from the per-athanor cap by design (a chain that cannot get a child
+  # slot waits while holding its root slot, which is a deadlock, not a
+  # limit), so the cap bounds an athanor's roots and not its footprint.
+  # Capping children is not the fix; the lever is the ratio.
+  @spec execution_slot_footprint(pos_integer(), pos_integer()) :: :ok | {:warn, String.t()}
+  def execution_slot_footprint(max, key_max) do
+    footprint = Cyfr.Slots.max_key_footprint(key_max)
+
+    if footprint >= max do
+      {:warn,
+       "[Cyfr.Execution.Slots] one athanor can hold every slot on this node: " <>
+         "#{key_max} roots x depth #{Cyfr.Authority.depth_cap()} = #{footprint} >= " <>
+         "#{max} slots. Children are exempt from the per-athanor cap by design (a chain " <>
+         "must be able to finish), so the cap bounds roots, not footprint. Lower " <>
+         "CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT or raise " <>
+         "CYFR_MAX_CONCURRENT_EXECUTIONS to keep one athanor off the whole pool."}
+    else
+      :ok
+    end
   end
 
   # Off in the test env: suites drive runners directly.

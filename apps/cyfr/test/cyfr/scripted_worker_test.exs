@@ -43,7 +43,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Execution.Semaphore.forgive_unreaped(ctx.athanor_id)
+      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
       for {key, value} <- previous, do: Application.put_env(:cyfr, key, value)
     end)
@@ -147,7 +147,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert service_id == ScriptedWorker.service()
     assert boot_id == boot()
 
-    status = Cyfr.Execution.Semaphore.status()
+    status = Cyfr.Slots.status(Cyfr.Execution.Slots)
     attempt = Attempt.whereis(child_id)
     assert status.child_active == 1
     assert Enum.any?(status.holders, &(&1.pid == inspect(attempt) and &1.class == :child))
@@ -166,7 +166,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
              Arca.ExecutionAttempts.current(athanor_id, child_id)
 
     assert %{status: "completed"} = Arca.Repo.get(Arca.Execution, child_id)
-    assert Cyfr.Execution.Semaphore.status().child_active == 0
+    assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == 0
 
     assert [%{execution_id: ^child_id, input: %{"messages" => []}, authority: %Authority{}}] =
              ScriptedWorker.calls()
@@ -191,7 +191,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert %{status: "failed"} = Arca.Repo.get(Arca.Execution, child_id)
 
     wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
-    wait_until(fn -> Cyfr.Execution.Semaphore.status().child_active == 0 end)
+    wait_until(fn -> Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == 0 end)
     assert {:ok, []} = Arca.BudgetReservations.charges(athanor_id, auth.budget.id)
   end
 

@@ -77,7 +77,7 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
   test "five concurrent spawns under a cap of 2 never hold more than 2, and give everything back",
        %{ctx: ctx, authority: authority, formula: formula} do
     root_id = formula.execution_id
-    children_before = Cyfr.Execution.Semaphore.status().child_active
+    children_before = Cyfr.Slots.status(Cyfr.Execution.Slots).child_active
     hold_children!(root_id)
     sampler = sample(ctx, authority)
 
@@ -130,7 +130,7 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
     assert Sanctum.Authority.budget(authority).in_flight == @cap
     assert length(admitted(ctx, authority)) == @cap
     assert Arca.BudgetReservations.lookup(ctx.athanor_id, authority.budget.id).charged == @cap
-    assert Cyfr.Execution.Semaphore.status().child_active == children_before + @cap
+    assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before + @cap
 
     for {runner, _execution_id} <- held, do: send(runner, :continue)
 
@@ -143,7 +143,7 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
                Arca.Repo.get!(Arca.Execution, execution_id)
     end
 
-    wait_until(fn -> Cyfr.Execution.Semaphore.status().child_active == children_before end)
+    wait_until(fn -> Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before end)
     wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
     assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
     assert Arca.BudgetReservations.lookup(ctx.athanor_id, authority.budget.id).charged == 0

@@ -205,7 +205,7 @@ defmodule Aqua.LoopTest do
     ref
   end
 
-  defp roots, do: Cyfr.Execution.Semaphore.status().root_active
+  defp roots, do: Cyfr.Slots.status(Cyfr.Execution.Slots).root_active
 
   test "a reply lands as rows before the turn ends, and the root is let go", %{
     ctx: ctx,
@@ -221,7 +221,7 @@ defmodule Aqua.LoopTest do
     assert_receive {:scripted_probe, worker, _child}, 10_000
 
     assert roots() == before + 1
-    holders = Cyfr.Execution.Semaphore.status().holders
+    holders = Cyfr.Slots.status(Cyfr.Execution.Slots).holders
     assert Enum.any?(holders, &(&1.pid == inspect(task.pid) and &1.class == :root))
     refute Enum.any?(holders, &(&1.pid == inspect(task.pid) and &1.class == :child))
     assert {:ok, %{status: "running", root_execution_id: root}} = Tape.turn(ctx, turn.id)
