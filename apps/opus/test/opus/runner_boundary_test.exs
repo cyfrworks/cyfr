@@ -10,7 +10,8 @@ defmodule Opus.RunnerBoundaryTest do
   for its athanor, and the next subtree of that athanor reuses it; another
   athanor gets a fresh one. A root kill ends the runner's process and
   reports its exit once; a host answer that is lost taints the runner; a
-  guest that ignores its deadline is halted by the runner's watchdog; the
+  guest that ignores its deadline is halted by the runner's watchdog, and
+  one whose call was killed at its timeout taints its runner; the
   service's handle dying reaps the runner; the keeper dying takes the
   service tree with it and every runner too.
   """
@@ -245,6 +246,27 @@ defmodule Opus.RunnerBoundaryTest do
     wait_until(fn -> match?(%{busy: 0, tainted: 0}, runners()) end, 10_000)
   end
 
+  test "a guest killed at its timeout taints its runner, which is ended with no process left",
+       %{host: host, boot: boot} do
+    attempt = spin!(host, boot, timeout_ms: 500)
+    assert :ok = start(attempt)
+    wait_until(fn -> ScriptedHost.requests(host, "attach") != [] end, @boot_ms)
+    wait_until(fn -> busy_runner() != nil end)
+    os_pid = os_pid(busy_runner())
+
+    # The attempt's own timeout kills the component call and closes the
+    # attempt failed as abandoned; the call's native thread spins on.
+    wait_until(fn -> ScriptedHost.requests(host, "fail") != [] end, 10_000)
+    assert [%{args: %{"outcome" => %{"abandoned" => true}}}] = ScriptedHost.requests(host, "fail")
+
+    # A killed call makes the completion unclean: the runner is never kept
+    # idle for its athanor, and the service ends its VM, thread and all.
+    wait_until(fn -> not alive?(os_pid) end, 10_000, "the runner with the killed call to be gone")
+    wait_until(fn -> match?(%{busy: 0, idle: 0, tainted: 0}, runners()) end, 10_000)
+    assert ScriptedHost.requests(host, "complete") == []
+    assert ScriptedHost.requests(host, "runner_exited") == []
+  end
+
   test "the service's handle dying reaps the runner and reports it", %{host: host, boot: boot} do
     attempt = spin!(host, boot)
     assert :ok = start(attempt)
@@ -279,11 +301,19 @@ defmodule Opus.RunnerBoundaryTest do
     for os_pid <- os_pids,
         do: wait_until(fn -> not alive?(os_pid) end, 10_000, "runner #{os_pid} to be gone")
 
+    # The service tree is restarting: a poll that lands in the gap finds no
+    # service to ask, which is not yet the new boot.
     wait_until(
-      fn -> match?({:ok, %{boot: new}} when new != boot, WorkerService.status()) end,
+      fn -> match?({:ok, %{boot: new}} when new != boot, status_or_restarting()) end,
       10_000
     )
 
     assert {:ok, %{attempts: []}} = WorkerService.status()
+  end
+
+  defp status_or_restarting do
+    WorkerService.status()
+  catch
+    :exit, {:noproc, _call} -> :restarting
   end
 end
