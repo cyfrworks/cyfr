@@ -13,16 +13,41 @@ defmodule Cyfr.Execution.Rates do
   Sliding window over per-request timestamp entries:
   - Table: `:ordered_set` keyed by `{{athanor_id, component_ref}, ts_ms, uniq}`
   - Window: Configurable (default 1 minute)
-  - `check/4` counts in-window entries with `:ets.select_count/2` and inserts
-    one entry per allowed request — callers never serialize through a process.
+  - A bucket is one `{athanor_id, component_ref}` pair; its cap and window
+    come from the consent the caller passes, on every claim.
 
-  The GenServer only owns the table and sweeps expired entries; no request
-  flows through it. Consequences, both acceptable for a rate limiter:
+  ## Atomic claims
 
-  - Counters reset when the owning process restarts. A missing table causes
-    an exit that the executor treats as a rate-limit failure.
-  - Concurrent count-then-insert checks can overshoot the limit by up to the
-    number of simultaneous callers.
+  Every claim is one `GenServer.call` to the owner, and the owner is the
+  table's only writer (the table is `:protected`, so no other process can
+  insert or delete a row). For one claim the owner retires the bucket's
+  rows older than the window, compares the bucket's count with the cap and
+  inserts the row before it answers, so no two claims interleave: the count
+  a claim sees already includes every claim answered before it, and N
+  callers racing a cap of N-1 admit exactly N-1. `reset/2` also goes
+  through the owner, so a reset cannot land between a claim's count and its
+  insert. `status/3` reads the table directly under the caller's clock and
+  never writes.
+
+  The owner keeps each bucket's row count in its state, so a claim costs
+  the rows it retires plus one insert, never a scan of the bucket. The
+  invariant is that a bucket's count equals its rows in the table; claims,
+  resets and the sweep, all in the owner, maintain it.
+
+  A call the owner has taken is applied even if the caller stops waiting:
+  a claim whose caller dies or times out is still recorded and spends a
+  slot, so the failure direction is closed. Rate allowance is distinct from
+  the execution slots `Cyfr.Execution.Semaphore` reserves: nothing here
+  holds, charges or releases a slot.
+
+  ## Restart (slice H)
+
+  The window lives in this boot's table and its owner's state. A restart of
+  the owner or of the boot forgets every bucket, and the next claim starts
+  from an empty window, so a restart under-enforces by at most one window
+  per bucket and never over-refuses. While the owner is down a claim exits
+  and every caller refuses. Slice H moves the authority to a shared row so
+  the window survives a restart and is one across boots.
 
   ## Usage
 
@@ -39,7 +64,7 @@ defmodule Cyfr.Execution.Rates do
 
   ## Limit Source
 
-  The fourth argument is any map carrying a `:rate_limit` key of
+  The third argument is any map carrying a `:rate_limit` key of
   `%{requests: n, window: "1m"}` — callers pass the node's consented
   `Cyfr.Limits.rate_limit` (or a platform-config bucket like the emit
   cap). A nil map or nil `:rate_limit` means unlimited.
@@ -58,7 +83,7 @@ defmodule Cyfr.Execution.Rates do
   # ============================================================================
 
   @doc """
-  Start the rate limiter GenServer (table owner and sweeper).
+  Start the rate limiter GenServer (table owner, claim serializer and sweeper).
   """
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -85,6 +110,19 @@ defmodule Cyfr.Execution.Rates do
           | {:error, :rate_limited, non_neg_integer()}
           | {:error, :missing_tenant}
   def check(athanor_id, component_ref, limit_source) do
+    claim_at(athanor_id, component_ref, limit_source, System.system_time(:millisecond))
+  end
+
+  # `check/3` at an explicit instant, for tests that pin a claim to the
+  # window's edge. The instant stamps the row and bounds the window the
+  # claim retires against; the claim itself is serialized in the owner all
+  # the same.
+  @doc false
+  @spec claim_at(String.t(), String.t(), map() | nil, integer()) ::
+          {:ok, non_neg_integer() | :unlimited}
+          | {:error, :rate_limited, non_neg_integer()}
+          | {:error, :missing_tenant}
+  def claim_at(athanor_id, component_ref, limit_source, now) when is_integer(now) do
     with :ok <- reject_empty_athanor(athanor_id, "check") do
       case get_rate_limit_config(limit_source) do
         nil ->
@@ -99,26 +137,7 @@ defmodule Cyfr.Execution.Rates do
 
         {max_requests, window_ms} ->
           key = make_key(athanor_id, component_ref)
-          now = System.system_time(:millisecond)
-          window_start = now - window_ms
-
-          with_table(:check, fn ->
-            count = count_in_window(key, window_start)
-
-            if count >= max_requests do
-              retry_after =
-                case oldest_in_window(key, window_start) do
-                  nil -> window_ms
-                  oldest -> max(0, oldest + window_ms - now)
-                end
-
-              {:error, :rate_limited, retry_after}
-            else
-              entry = {{key, now, System.unique_integer([:positive])}, now + window_ms * 2}
-              :ets.insert(@table, entry)
-              {:ok, max_requests - count - 1}
-            end
-          end)
+          call_owner(:check, {:claim, key, max_requests, window_ms, now})
       end
     end
   end
@@ -131,12 +150,7 @@ defmodule Cyfr.Execution.Rates do
   @spec reset(String.t(), String.t()) :: :ok | {:error, :missing_tenant}
   def reset(athanor_id, component_ref) do
     with :ok <- reject_empty_athanor(athanor_id, "reset") do
-      key = make_key(athanor_id, component_ref)
-
-      with_table(:reset, fn ->
-        :ets.select_delete(@table, [{{{key, :_, :_}, :_}, [], [true]}])
-        :ok
-      end)
+      call_owner(:reset, {:reset, make_key(athanor_id, component_ref)})
     end
   end
 
@@ -186,32 +200,59 @@ defmodule Cyfr.Execution.Rates do
     # Guarded creation so a second, unnamed instance (used by tests to
     # exercise callbacks) doesn't crash on the existing named table.
     if :ets.whereis(@table) == :undefined do
-      :ets.new(@table, [
-        :ordered_set,
-        :public,
-        :named_table,
-        write_concurrency: true,
-        read_concurrency: true
-      ])
+      # Protected: the owner is the only writer, which is what makes a
+      # claim's count-then-insert one step. Readers (`status/3`) stay direct.
+      :ets.new(@table, [:ordered_set, :protected, :named_table, read_concurrency: true])
     end
 
-    Process.send_after(self(), :sweep, @sweep_interval_ms)
-    {:ok, %{}}
+    {:ok, %{counts: %{}, sweep: schedule_sweep()}}
+  end
+
+  @impl true
+  def handle_call({:claim, key, max_requests, window_ms, now}, _from, state) do
+    window_start = now - window_ms
+
+    {reply, state} =
+      with_owned_table(state, fn ->
+        counts = retire(state.counts, key, window_start)
+        count = Map.get(counts, key, 0)
+
+        if count >= max_requests do
+          {{:error, :rate_limited, retry_after(key, window_ms, now)}, %{state | counts: counts}}
+        else
+          row = {{key, now, System.unique_integer([:positive])}, now + window_ms * 2}
+          :ets.insert(@table, row)
+          {{:ok, max_requests - count - 1}, %{state | counts: Map.put(counts, key, count + 1)}}
+        end
+      end)
+
+    {:reply, reply, state}
+  end
+
+  @impl true
+  def handle_call({:reset, key}, _from, state) do
+    {reply, state} =
+      with_owned_table(state, fn ->
+        :ets.select_delete(@table, [{{{key, :_, :_}, :_}, [], [true]}])
+        {:ok, %{state | counts: Map.delete(state.counts, key)}}
+      end)
+
+    {:reply, reply, state}
   end
 
   @impl true
   def handle_info(:sweep, state) do
+    # One sweep chain: a sweep sent by hand (tests) replaces the pending
+    # timer rather than starting a second chain beside it.
+    Process.cancel_timer(state.sweep)
     now = System.system_time(:millisecond)
 
-    try do
-      :ets.select_delete(@table, [{{:_, :"$1"}, [{:<, :"$1", now}], [true]}])
-    rescue
-      # Table owned by another (dead) instance — nothing to sweep.
-      ArgumentError -> :ok
-    end
+    {_ok, state} =
+      with_owned_table(state, fn ->
+        {:ok, %{state | counts: sweep_expired(state.counts, now)}}
+      end)
 
-    Process.send_after(self(), :sweep, @sweep_interval_ms)
-    {:noreply, state}
+    {:noreply, %{state | sweep: schedule_sweep()}}
   end
 
   @impl true
@@ -224,6 +265,21 @@ defmodule Cyfr.Execution.Rates do
   # Private Helpers
   # ============================================================================
 
+  # A missing owner means a dead (or never started) limiter. The exit keeps
+  # the shape `{reason, {__MODULE__, op}}` that the executor's fail-closed
+  # `catch :exit` branch denies on, and that `status/3` raises for a missing
+  # table. A call the owner took but did not answer in time is applied
+  # anyway; the caller refuses and a slot is spent, never handed out twice.
+  defp call_owner(op, request) do
+    case GenServer.call(__MODULE__, request) do
+      :unavailable -> exit({:noproc, {__MODULE__, op}})
+      reply -> reply
+    end
+  catch
+    :exit, {:noproc, _} -> exit({:noproc, {__MODULE__, op}})
+    :exit, {:timeout, _} -> exit({:timeout, {__MODULE__, op}})
+  end
+
   # A missing table means the owner process is dead (or never started). Raise
   # the same :exit shape a GenServer.call to a dead process produces, so the
   # executor's fail-closed `catch :exit` branch denies — a plain
@@ -234,21 +290,78 @@ defmodule Cyfr.Execution.Rates do
     ArgumentError -> exit({:noproc, {__MODULE__, op}})
   end
 
+  # The owner's table can only be gone when another instance created it and
+  # died; the counts then describe nothing, and the owner answers
+  # `:unavailable` rather than crashing, which would take a table it does
+  # own down with it.
+  defp with_owned_table(state, fun) do
+    fun.()
+  rescue
+    ArgumentError -> {:unavailable, %{state | counts: %{}}}
+  end
+
+  # Delete the bucket's rows older than the window and take them off its
+  # count. Rows under a key iterate in timestamp order, so the expired ones
+  # are a prefix and the walk stops at the first row still inside the
+  # window: a claim pays for the rows it retires, never for the bucket.
+  defp retire(counts, key, window_start) do
+    case retire_prefix(key, window_start, first_row(key), 0) do
+      0 -> counts
+      retired -> decrement(counts, key, retired)
+    end
+  end
+
+  defp retire_prefix(key, window_start, {key, ts, _uniq} = row, retired) when ts < window_start do
+    :ets.delete(@table, row)
+    retire_prefix(key, window_start, :ets.next(@table, row), retired + 1)
+  end
+
+  defp retire_prefix(_key, _window_start, _row, retired), do: retired
+
+  # The bucket's oldest row, or nil: an `:ordered_set` selects in key order
+  # and the bound prefix limits the traversal to the bucket's range.
+  defp first_row(key) do
+    case :ets.select(@table, [{{{key, :_, :_}, :_}, [], [{:element, 1, :"$_"}]}], 1) do
+      {[row], _continuation} -> row
+      :"$end_of_table" -> nil
+    end
+  end
+
+  defp decrement(counts, key, by) do
+    case Map.get(counts, key, 0) - by do
+      n when n <= 0 -> Map.delete(counts, key)
+      n -> Map.put(counts, key, n)
+    end
+  end
+
+  # After a retire, the bucket's first row is its oldest in-window claim.
+  defp retry_after(key, window_ms, now) do
+    case first_row(key) do
+      {^key, oldest, _uniq} -> max(0, oldest + window_ms - now)
+      nil -> window_ms
+    end
+  end
+
+  # Rows past their expiry (twice the window past their stamp) belong to
+  # buckets nobody claims any more; drop them and their counts so a flood
+  # of distinct buckets is reclaimed.
+  defp sweep_expired(counts, now) do
+    Enum.reduce(counts, counts, fn {key, _count}, acc ->
+      spec = [{{{key, :_, :_}, :"$1"}, [{:<, :"$1", now}], [true]}]
+
+      case :ets.select_delete(@table, spec) do
+        0 -> acc
+        deleted -> decrement(acc, key, deleted)
+      end
+    end)
+  end
+
+  defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
+
   defp count_in_window(key, window_start) do
     :ets.select_count(@table, [
       {{{key, :"$1", :_}, :_}, [{:>=, :"$1", window_start}], [true]}
     ])
-  end
-
-  # First in-window match in an :ordered_set is the oldest timestamp for the
-  # key ({key, ts, uniq} entries iterate in ts order within a key).
-  defp oldest_in_window(key, window_start) do
-    spec = [{{{key, :"$1", :_}, :_}, [{:>=, :"$1", window_start}], [:"$1"]}]
-
-    case :ets.select(@table, spec, 1) do
-      {[oldest], _cont} -> oldest
-      _ -> nil
-    end
   end
 
   defp reject_empty_athanor(athanor_id, operation) when athanor_id in [nil, ""] do
