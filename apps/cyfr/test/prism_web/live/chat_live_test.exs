@@ -569,17 +569,13 @@ defmodule PrismWeb.ChatLiveTest do
     ctx = member_ctx(alice, group)
 
     # The fill's claim is held: the estate stays unfilled while the pane sends.
-    parent = self()
-
-    holder =
-      spawn_link(fn ->
-        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
-        send(parent, :claimed)
-        receive do: (:release -> :ok)
-      end)
-
-    assert_receive :claimed
-    on_exit(fn -> if Process.alive?(holder), do: send(holder, :release) end)
+    {:ok, _held} =
+      Arca.ProvisioningClaims.claim(
+        %Cyfr.Actor{athanor_id: group.id},
+        "boot_elsewhere/own_held",
+        "first_need",
+        60_000
+      )
 
     {view, _html} = mount_chat(conn, group)
 
@@ -667,17 +663,13 @@ defmodule PrismWeb.ChatLiveTest do
     # Hold the estate's claim so the mount's attempt returns at once instead
     # of running a fill this test never awaits — one that would reach the
     # database without the sandbox connection the test owns.
-    parent = self()
-
-    holder =
-      spawn_link(fn ->
-        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
-        send(parent, :claimed)
-        receive do: (:release -> :ok)
-      end)
-
-    assert_receive :claimed
-    on_exit(fn -> if Process.alive?(holder), do: send(holder, :release) end)
+    {:ok, _held} =
+      Arca.ProvisioningClaims.claim(
+        %Cyfr.Actor{athanor_id: group.id},
+        "boot_elsewhere/own_held",
+        "first_need",
+        60_000
+      )
 
     started = System.monotonic_time(:millisecond)
     {_view, html} = mount_chat(conn, group)

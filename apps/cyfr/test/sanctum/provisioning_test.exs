@@ -9,8 +9,16 @@ defmodule Sanctum.ProvisioningTest do
   """
   use ExUnit.Case, async: false
 
+  alias Arca.ProvisioningClaims, as: Claims
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.{Athanors, Members, Users}
+
+  # Another attempt — another boot's — holding the estate's claim.
+  defp held_elsewhere!(athanor_id, entry_kind \\ "first_need") do
+    actor = %Cyfr.Actor{athanor_id: athanor_id}
+    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_held", entry_kind, 60_000)
+    claim
+  end
 
   @valid_wasm File.read!(Path.join([File.cwd!(), "test/support/test_wasm/math.wasm"]))
 
@@ -277,7 +285,7 @@ defmodule Sanctum.ProvisioningTest do
              Provisioning.install_shipped(in_group, "catalyst:local.foo")
   end
 
-  test "an install refuses at once while another filler holds the lock, rather than queueing",
+  test "an install refuses at once while another filler holds the claim, rather than queueing",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
@@ -286,29 +294,25 @@ defmodule Sanctum.ProvisioningTest do
     in_group = %{ctx | athanor_id: group.id}
     :ok = Provisioning.start_provisioning(in_group)
 
-    held = self()
+    held = held_elsewhere!(group.id, "seed_sync")
 
-    holder =
-      spawn(fn ->
-        Arca.Overlay.UnitLock.with_lock({group.id, :provisioning}, fn ->
-          send(held, :locked)
-
-          receive do
-            :release -> :ok
-          end
-        end)
-      end)
-
-    assert_receive :locked, 5_000
-
-    # The shared acquisition timeout is 30s. This must answer well inside it.
+    # A boot's sync waits 30s for a held estate. This must answer well inside it.
     {elapsed_us, result} =
       :timer.tc(fn -> Provisioning.install_shipped(in_group, "catalyst:local.foo") end)
 
     assert result == {:error, :provisioning_busy}
     assert elapsed_us < 5_000_000
 
-    send(holder, :release)
+    # The holder's claim is as it was, and once it lets go the install runs
+    # — and gives the claim back with no verdict on readiness.
+    actor = %Cyfr.Actor{athanor_id: group.id}
+    assert {:ok, %{outcome: nil, fence: fence}} = Claims.current(actor)
+    assert fence == held.fence
+    :ok = Claims.release(actor, held.owner, held.fence)
+
+    assert {:ok, _} = Provisioning.install_shipped(in_group, "catalyst:local.foo")
+
+    assert {:ok, %{entry_kind: "install_shipped", outcome: "released"}} = Claims.current(actor)
   end
 
   test "with no registry, a bundle whose OPTIONAL dependency is not installed still provisions",
@@ -409,20 +413,10 @@ defmodule Sanctum.ProvisioningTest do
     in_group = %{ctx | athanor_id: group.id}
 
     # Another caller is already filling this estate — the shape of two
-    # people opening a fresh one at once. Holding the CLAIM, not the lock:
-    # the claim is what a starting fill asks for first, so the attempt this
-    # test starts returns there instead of running a fill it never awaits,
-    # which would reach the database without the connection the test owns.
-    parent = self()
-
-    holder =
-      spawn_link(fn ->
-        {:ok, _} = Registry.register(Sanctum.ProvisioningRegistry, group.id, :filling)
-        send(parent, :held)
-        receive do: (:release -> :ok)
-      end)
-
-    assert_receive :held
+    # people opening a fresh one at once. A reader that finds the claim
+    # held starts nothing, so no fill this test never awaits reaches the
+    # database without the connection the test owns.
+    held_elsewhere!(group.id)
 
     started = System.monotonic_time(:millisecond)
     assert :ok = Provisioning.start_provisioning(in_group)
@@ -435,7 +429,6 @@ defmodule Sanctum.ProvisioningTest do
     # Nothing was provisioned by this caller — the holder never let go.
     {:ok, group} = Athanors.get(group.id)
     refute group.provisioned_at
-    send(holder, :release)
   end
 
   test "an install without a bundle cannot provision" do
@@ -451,6 +444,157 @@ defmodule Sanctum.ProvisioningTest do
 
     assert {:error, {:provisioning_failed, :seed, :bundle_missing}} =
              Provisioning.provision(group, nil)
+  end
+
+  describe "an attempt whose claim a later attempt took" do
+    # An attempt that lost its lease mid-fill, and its successor: the first
+    # claim's lease runs out, the second takes the estate at the next fence.
+    defp overtaken!(athanor_id) do
+      actor = %Cyfr.Actor{athanor_id: athanor_id}
+      {:ok, stale} = Claims.claim(actor, "boot_elsewhere/own_stale", "first_need", 1)
+      Cyfr.Test.Wait.wait_until(fn -> not Claims.live?(stale) end, 2_000, "the lease to run out")
+      {:ok, successor} = Claims.claim(actor, "boot_elsewhere/own_successor", "provision", 60_000)
+      assert successor.fence == stale.fence + 1
+      {actor, stale, successor}
+    end
+
+    test "marks no readiness, mints no consent and replaces no agent index", %{
+      bundle_dir: bundle_dir
+    } do
+      write_bundle!(bundle_dir)
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|stale-#{n}"}
+      {:ok, group} = Athanors.create_group(ctx.user_id, "Stale #{n}")
+      in_group = %{ctx | athanor_id: group.id}
+      {actor, stale, successor} = overtaken!(group.id)
+
+      # The whole fill would succeed — the same bundle fills a group in the
+      # first test of this module. Run under the claim it lost, it is told
+      # the estate is another attempt's, in progress.
+      assert {:error, :provisioning_busy} = Provisioning.fill(stale, group, in_group)
+
+      {:ok, row} = Athanors.get(group.id)
+      refute row.provisioned_at
+      refute Athanors.provisioning_failure(row)
+      assert {:ok, []} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+      assert {:ok, []} = Arca.AgentStorage.list(group.id)
+
+      # The mint refuses the lost claim on its own, whoever calls it.
+      assert {:error, :claim_lost} = Sanctum.Consent.Bootstrap.run(in_group, stale)
+      assert {:ok, []} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+
+      # The successor's claim is as it took it, and its own fill lands.
+      assert {:ok, %{owner: owner, fence: fence, outcome: nil}} = Claims.current(actor)
+      assert {owner, fence} == {successor.owner, successor.fence}
+
+      assert {:ok, %{provisioned_at: %DateTime{}}} = Provisioning.fill(successor, group, in_group)
+      assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
+
+      assert {:ok, [_profile]} =
+               Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+
+      assert {:ok, [_ | _]} = Arca.AgentStorage.list(group.id)
+
+      # Settled, the late one is still stale: it cannot turn ready to failed.
+      assert :stale = Claims.settle(actor, stale.owner, stale.fence, "failed", "late")
+      assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
+    end
+
+    test "records no failure over its successor's" do
+      # No bundle: the attempt fails at the seed step, and would record it.
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|stalefail-#{n}"}
+      {:ok, group} = Athanors.create_group(ctx.user_id, "Stale failure #{n}")
+      in_group = %{ctx | athanor_id: group.id}
+      {actor, stale, successor} = overtaken!(group.id)
+
+      # The successor fails first, and says where.
+      assert {:error, {:provisioning_failed, :seed, :bundle_missing}} =
+               Provisioning.fill(successor, group, in_group)
+
+      {:ok, failed} = Athanors.get(group.id)
+      assert %{step: "seed", at: recorded_at} = Athanors.provisioning_failure(failed)
+
+      # The late attempt fails the same way and writes nothing over it.
+      assert {:error, :provisioning_busy} = Provisioning.fill(stale, group, in_group)
+
+      {:ok, after_late} = Athanors.get(group.id)
+      assert Athanors.provisioning_failure(after_late).at == recorded_at
+
+      assert {:ok, %{owner: owner, fence: fence, outcome: "failed"}} = Claims.current(actor)
+      assert {owner, fence} == {successor.owner, successor.fence}
+    end
+  end
+
+  test "a boot's seed sync waits for a held estate, then heals it once the holder settles",
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|syncwait-#{n}"}
+    {:ok, group} = Athanors.create_group(ctx.user_id, "Sync wait #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    :ok = Provisioning.start_provisioning(in_group)
+    assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(group.id)
+
+    # Something for the sync to heal, and another attempt holding the estate.
+    :ok = Arca.delete_tree(in_group, ["notes"])
+    actor = %Cyfr.Actor{athanor_id: group.id}
+    held = held_elsewhere!(group.id, "install_shipped")
+
+    sync = Task.async(fn -> Provisioning.sync_seeds() end)
+
+    # It waits rather than refusing or walking the estate beside the holder.
+    assert Task.yield(sync, 750) == nil
+    assert {:ok, entries} = Arca.list_typed(in_group, [])
+    refute {"notes", :dir} in entries
+    assert {:ok, %{owner: owner, outcome: nil}} = Claims.current(actor)
+    assert owner == held.owner
+
+    # The holder settles; the sync takes the estate and proceeds.
+    :ok = Claims.release(actor, held.owner, held.fence)
+    assert :ok = Task.await(sync, 30_000)
+
+    assert {:ok, healed} = Arca.list_typed(in_group, [])
+    assert {"notes", :dir} in healed
+
+    assert {:ok, %{entry_kind: "seed_sync", outcome: "released", fence: fence}} =
+             Claims.current(actor)
+
+    assert fence == held.fence + 1
+  end
+
+  test "provisioned_at records the fill and nothing else: no claim's outcome stands in for it",
+       %{bundle_dir: bundle_dir} do
+    write_bundle!(bundle_dir)
+    n = System.unique_integer([:positive])
+    ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|init-#{n}"}
+    {:ok, group} = Athanors.create_group(ctx.user_id, "Init #{n}")
+    in_group = %{ctx | athanor_id: group.id}
+    actor = %Cyfr.Actor{athanor_id: group.id}
+
+    # A claim that reads `ready` on an estate the row does not mark filled
+    # makes nothing ready.
+    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_said_so", "provision", 60_000)
+    :ok = Claims.settle(actor, claim.owner, claim.fence, "ready", nil)
+    refute Provisioning.provisioned?(in_group)
+    assert Provisioning.status(in_group) == :unfilled
+
+    # The fill marks it, once.
+    assert {:error, :not_provisioned} = Provisioning.ready(in_group)
+    assert {:ok, %{provisioned_at: %DateTime{} = at}} = Athanors.get(group.id)
+    assert :ok = Provisioning.ready(in_group)
+    assert Provisioning.status(in_group) == :ready
+
+    # What follows on the claim — an install released, a sync released, a
+    # claim settled failed — moves neither the mark nor the estate's standing.
+    assert {:ok, _} = Provisioning.install_shipped(in_group, "catalyst:local.foo")
+    assert :ok = Provisioning.sync_seeds()
+    {:ok, later} = Claims.claim(actor, "boot_elsewhere/own_later", "provision", 60_000)
+    :ok = Claims.settle(actor, later.owner, later.fence, "failed", "seed: :whatever")
+
+    assert {:ok, %{provisioned_at: ^at}} = Athanors.get(group.id)
+    assert :ok = Provisioning.ready(in_group)
+    assert Provisioning.status(in_group) == :ready
   end
 
   test "Compendium.Pull.oci_reference_for refuses local refs and resolves published ones" do
