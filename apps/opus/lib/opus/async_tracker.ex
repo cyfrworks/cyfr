@@ -10,7 +10,7 @@ defmodule Opus.AsyncTracker do
   termination, all orphaned tasks are killed via Task.Supervisor shutdown.
 
   A spawned child's task waits for the runner the child runs in, in the
-  formula's runner group (`Opus.WorkerService.start_child/2`); a task that
+  formula's runner group (`Opus.Subtree.start_child/2`); a task that
   is cancelled, timed out or killed with the tracker takes that runner with
   it, and the worker service reports the child's attempt to CYFR.
 

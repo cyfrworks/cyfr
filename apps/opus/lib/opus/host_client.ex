@@ -399,25 +399,37 @@ defmodule Opus.HostClient do
   # header, the body and how to read the answer), retried once after a
   # lost answer when its class allows, never on an answer CYFR gave.
   defp call(host_url, op, try) do
-    case post(host_url, op, try) do
-      {:ok, answer} ->
-        answer
+    answer =
+      case post(host_url, op, try) do
+        {:ok, answer} ->
+          answer
 
-      :lost ->
-        case HostAPI.retry(op) do
-          :never ->
-            Logger.warning("[Opus.HostClient] #{op}'s answer was lost; its effect is uncertain")
-            {:error, {:uncertain, @uncertain}}
+        :lost ->
+          case HostAPI.retry(op) do
+            :never ->
+              Logger.warning("[Opus.HostClient] #{op}'s answer was lost; its effect is uncertain")
+              {:error, {:uncertain, @uncertain}}
 
-          _retried ->
-            Logger.warning("[Opus.HostClient] #{op}'s answer was lost; calling once more")
+            _retried ->
+              Logger.warning("[Opus.HostClient] #{op}'s answer was lost; calling once more")
 
-            case post(host_url, op, try) do
-              {:ok, answer} -> answer
-              :lost -> {:error, :lost}
-            end
-        end
+              case post(host_url, op, try) do
+                {:ok, answer} -> answer
+                :lost -> {:error, :lost}
+              end
+          end
+      end
+
+    # A lost answer, whether CYFR's `lost` or one that never arrived,
+    # leaves what the call did unknown: the subtree's runner is never
+    # reused (`Opus.Subtree.unclean/1`).
+    case answer do
+      {:error, :lost} -> Opus.Subtree.unclean({op, :lost})
+      {:error, {:uncertain, _}} -> Opus.Subtree.unclean({op, :uncertain})
+      _ -> :ok
     end
+
+    answer
   end
 
   defp post(host_url, op, try) do

@@ -18,7 +18,7 @@ defmodule Opus.FormulaHandler do
   (`Cyfr.Assignment`'s `intercepted`) is a child the host runs:
   `execution.run` and `execution.run_stream` are admitted by CYFR
   (`Opus.HostClient.admit_child/5`) and run in a runner of the formula's
-  own runner group (`Opus.WorkerService.start_child/2`). Every other action
+  own runner group (`Opus.Subtree.start_child/2`). Every other action
   is a catalog tool call (`Opus.HostClient.tool_call/4`).
 
   ## Concurrency Model — Unbundled Promise Pattern
@@ -82,7 +82,7 @@ defmodule Opus.FormulaHandler do
   require Logger
 
   alias Cyfr.Limits
-  alias Opus.{AsyncTracker, HostClient, WorkerService}
+  alias Opus.{AsyncTracker, HostClient, Subtree}
 
   @ended "Execution attempt ended before it closed"
 
@@ -375,7 +375,7 @@ defmodule Opus.FormulaHandler do
   defp stream_child(host, reference, need, input) do
     case HostClient.admit_child(host, reference, need, input, :spawn) do
       {:ok, child} ->
-        case WorkerService.start_child(child, nil) do
+        case Subtree.start_child(child, nil) do
           {:ok, _runner} ->
             id = child.assignment.execution_id
             {:ok, %{"execution_id" => id, "stream_url" => "/api/executions/#{id}/events"}}
@@ -392,12 +392,12 @@ defmodule Opus.FormulaHandler do
   # The child runs in a runner of the formula's group that answers the
   # calling process, and is killed if the calling process exits first.
   defp await_child(child) do
-    case WorkerService.start_child(child, self()) do
+    case Subtree.start_child(child, self()) do
       {:ok, runner} ->
         ref = Process.monitor(runner)
 
         receive do
-          {Opus.Runner, ^runner, answer} ->
+          {Opus.Attempt, ^runner, answer} ->
             Process.demonitor(ref, [:flush])
             answer
 

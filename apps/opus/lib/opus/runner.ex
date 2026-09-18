@@ -3,399 +3,376 @@
 
 defmodule Opus.Runner do
   @moduledoc """
-  Runs one execution attempt: attaches, runs the component, renews the
-  attempt's lease while it runs and closes the attempt.
+  The runner: the process of the runner role that takes one subtree at a
+  time from its worker service over the control channel
+  (`Cyfr.RunnerControl`) and runs it in this VM.
 
-  `Opus.WorkerService` starts a runner with the assignment it read, the
-  input the assignment's digest binds and a host client
-  (`Opus.HostClient`) holding the attempt's key. A formula's child runs in
-  a runner of its own in the formula's runner group
-  (`Opus.WorkerService.start_child/2`), started from the child CYFR
-  admitted and claimed for the formula's runner
-  (`Opus.HostClient.admit_child/5`), with the vault fields that admission
-  unsealed and the process waiting for its answer, if any. The runner
-  reaches the attempt only through its client. In order it:
+  An `assign` carries the signed assignment, the input its digest binds
+  and the attempt's opened keys. The runner reads the assignment, starts
+  the root's attempt process (`Opus.Attempt`) with a host client of its
+  own runner id, presenting the boot its settings name, and tracks the
+  subtree that grows from it (`Opus.Subtree`): each child a formula's
+  guest starts runs in an attempt process of this VM. The attempt
+  processes renew their leases and enforce the guest's timeout, bounded
+  by the subtree's deadline, as always; the runner adds the watchdog: at
+  the assignment's `deadline` plus the configured grace, a subtree still
+  running has a guest that ignored its bound, and the VM halts
+  (`Opus.Release.halt/1`) so no native thread outlives it, with an `exit`
+  written first naming every attempt still open.
 
-    1. attaches with the assignment (`Opus.HostClient.attach/2`), which
-       answers the run's vault fields; an attach CYFR refuses leaves the
-       attempt to CYFR. A child, claimed at its admission, is already
-       attached;
-    2. reads the authority the assignment carries
-       (`Cyfr.Authority.from_wire/1`) for its own egress checks and its
-       guest's host functions: the edge a guest's HTTP requests are checked
-       against and the node's limits. It grants nothing: CYFR decides every
-       child and catalog tool call under the authority it holds;
-    3. runs the component in a process of its own
-       (`Opus.Runtime.execute_component/3`) under the assignment's
-       timeout, renewing the lease every minute; a timeout, a lost lease
-       and a cancel asked of the attempt each kill that process. The
-       component's bytes are fetched by the assignment's digest
-       (`Opus.HostClient.fetch_artifact/2`) only when no compiled component
-       for that digest is cached, and are run only if they hash to it
-       (`Opus.ComponentCache`);
-    4. closes the attempt: `complete` with the guest's output, or `fail`
-       with a sentence, marked `abandoned` when it killed the component
-       call.
-
-  The runner tells its worker service its component process and what that
-  process started (`Opus.WorkerService.track/1`), so a kill stops them all.
-  A child's runner tells its worker service when CYFR has closed its
-  attempt (`Opus.WorkerService.settled/0`), then answers its waiting
-  process what the close recorded, masked:
-  `{Opus.Runner, runner_pid, {:ok, output}}` or
-  `{Opus.Runner, runner_pid, {:error, message}}`. A runner exits `:normal`
-  once CYFR has closed the attempt, and `{:shutdown, :attempt_open}` when
-  it leaves the attempt open.
+  When every attempt process has ended, the subtree is complete. If each
+  closed its attempt with CYFR and no component call was killed, no host
+  answer lost and no child cancelled, the runner clears what the job
+  left (open streams, tasks) and sends `complete` with `clean: true`,
+  ready for another assignment for the same athanor. A killed component
+  call, a lost answer or a cancelled child makes it `clean: false`: the
+  service ends this runner. An attempt process that ends leaving its
+  attempt open ends the subtree: the rest is killed, and the runner
+  sends `exit` naming every attempt left open, then stops the VM
+  (`Opus.Release.stop/1`). A `cancel_child` kills the named child's
+  process and marks the runner unclean; one naming no child here is
+  ignored. When the channel closes with nothing assigned, the runner
+  stops; with a subtree running, it finishes it, then stops.
   """
+
+  use GenServer
 
   require Logger
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
-  alias Opus.{HostClient, WorkerService}
+  alias Cyfr.{Assignment, RunnerControl}
+  alias Opus.{HostClient, Subtree}
 
-  # A renewal every minute pushes the row's lease out, so the sweeper knows
-  # a slow execution from a dead runner.
-  @lease_tick_ms 60_000
+  # A line past the protocol's bound before its newline is not a frame.
+  @max_line_bytes RunnerControl.max_line_bytes()
 
-  @ended "Execution attempt ended before it closed"
-
-  @typedoc """
-  What a runner starts with: the assignment token and what it carries, the
-  decoded input, the attempt's host client, and the starting caller's
-  process callers and log metadata. A child's start also carries the vault
-  fields its admission unsealed (`:secrets`) and the process waiting for
-  its answer (`:waiter`, nil when none does).
-  """
-  @type start :: %{
-          required(:token) => Cyfr.Assignment.token(),
-          required(:assignment) => Cyfr.Assignment.t(),
-          required(:input) => map(),
-          required(:client) => HostClient.t(),
-          required(:callers) => [pid()],
-          required(:logger) => keyword(),
-          optional(:secrets) => %{optional(String.t()) => String.t()},
-          optional(:waiter) => pid() | nil
-        }
-
-  @typedoc "What a waiting process is answered: the close as CYFR recorded it."
-  @type answer :: {:ok, term()} | {:error, String.t()}
+  @attempts __MODULE__.Attempts
 
   @doc false
-  def child_spec(start) do
-    %{id: __MODULE__, start: {__MODULE__, :start_link, [start]}, restart: :temporary}
+  def child_spec(opts) do
+    %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}, restart: :temporary}
   end
 
-  @doc "Start a runner for `start` (`t:start/0`), linked to the calling supervisor."
-  @spec start_link(start()) :: {:ok, pid()}
-  def start_link(start) when is_map(start) do
-    {:ok, spawn_link(fn -> run(start) end)}
+  @doc """
+  Start the runner. Options: `:settings` (`t:Opus.Settings.runner/0`),
+  `:port` (the control port; default `Opus.Release.open_control/1` on the
+  settings' descriptor), `:supervisor` (the attempt processes' supervisor,
+  default `#{inspect(@attempts)}`), `:halt` and `:stop` (what ends the VM;
+  default `Opus.Release`'s), `:name` (default `#{inspect(__MODULE__)}`).
+  """
+  def start_link(opts),
+    do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+
+  @doc "The supervisor the runner's attempt processes run under."
+  @spec attempts_supervisor() :: atom()
+  def attempts_supervisor, do: @attempts
+
+  @impl true
+  def init(opts) do
+    Process.flag(:trap_exit, true)
+    settings = Keyword.fetch!(opts, :settings)
+    port = Keyword.get_lazy(opts, :port, fn -> Opus.Release.open_control(settings.control_fd) end)
+
+    {:ok,
+     Subtree.new(%{
+       cancel: :abandon,
+       settings: settings,
+       port: port,
+       buffer: "",
+       assignment: nil,
+       cancelled: MapSet.new(),
+       clean: true,
+       open: [],
+       closed: false,
+       watchdog: nil,
+       supervisor: Keyword.get(opts, :supervisor, @attempts),
+       halt: Keyword.get(opts, :halt, &Opus.Release.halt/1),
+       stop: Keyword.get(opts, :stop, &Opus.Release.stop/1)
+     })}
   end
 
-  defp run(start) do
-    # The starting caller's callers, so its database sandbox allowance
-    # covers what this process and the component's calls read and write.
-    Process.put(:"$callers", start.callers)
-    Cyfr.LoggerContext.restore(start.logger)
-    Cyfr.LoggerContext.set_execution_id(start.assignment.execution_id)
+  # ---------------------------------------------------------------------------
+  # The channel
+  # ---------------------------------------------------------------------------
 
-    {reason, answer} = run_attempt(start)
+  @impl true
+  def handle_info({port, {:data, data}}, %{port: port} = state),
+    do: {:noreply, lines(%{state | buffer: state.buffer <> data})}
 
-    case Map.get(start, :waiter) do
-      waiter when is_pid(waiter) ->
-        if reason == :normal, do: WorkerService.settled()
-        send(waiter, {__MODULE__, self(), answer})
+  def handle_info({port, :eof}, %{port: port} = state), do: {:noreply, channel_closed(state)}
 
-      nil ->
-        :ok
+  def handle_info({:EXIT, port, _reason}, %{port: port} = state),
+    do: {:noreply, channel_closed(state)}
+
+  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+    case Subtree.down(state, ref) do
+      {:attempt, entry, state} -> {:noreply, attempt_ended(state, entry, reason)}
+      {:waiter, state} -> {:noreply, state}
+      {:unknown, state} -> {:noreply, state}
+    end
+  end
+
+  def handle_info({:watchdog, execution_id}, %{assignment: %{execution_id: execution_id}} = state) do
+    open = Enum.uniq(state.open ++ Subtree.attempts(state))
+    write(state, %{type: :exit, runner: state.settings.runner_id, open: open})
+    state.halt.({:watchdog, execution_id})
+    {:noreply, state}
+  end
+
+  def handle_info({:watchdog, _execution_id}, state), do: {:noreply, state}
+
+  def handle_info(msg, state) do
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    {:noreply, state}
+  end
+
+  # ---------------------------------------------------------------------------
+  # What the subtree's processes ask
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def handle_call({:start_child, child, waiter, caller}, _from, state) do
+    %{assignment: assignment, client: client} = child
+    settings = state.settings
+
+    if state.assignment != nil and client.service == settings.service_id and
+         client.boot == settings.boot and assignment.service == settings.service_id and
+         assignment.boot == settings.boot and client.execution_id == assignment.execution_id and
+         client.attempt == assignment.attempt do
+      start = %{
+        token: child.token,
+        assignment: assignment,
+        input: child.input,
+        client: client,
+        secrets: child.secrets,
+        waiter: waiter
+      }
+
+      case Subtree.start(state, state.supervisor, start, caller, waiter) do
+        {:ok, pid, state} -> {:reply, {:ok, pid}, state}
+        {:error, :malformed} -> {:reply, {:error, :malformed}, state}
+      end
+    else
+      {:reply, {:error, :malformed}, state}
+    end
+  end
+
+  def handle_call({:settled, pid}, _from, state), do: {:reply, :ok, Subtree.settle(state, pid)}
+
+  @impl true
+  def handle_cast({:track, pid, fields}, state), do: {:noreply, Subtree.track(state, pid, fields)}
+
+  def handle_cast({:unclean, _pid, reason}, state) do
+    Logger.warning("[Opus.Runner] unclean: #{inspect(reason)}")
+    {:noreply, %{state | clean: false}}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    if state.assignment do
+      open = Enum.uniq(state.open ++ Subtree.attempts(state))
+      write(state, %{type: :exit, runner: state.settings.runner_id, open: open})
+      Subtree.kill_all(state)
     end
 
-    if reason != :normal, do: exit(reason)
     :ok
   end
 
-  defp run_attempt(%{secrets: secrets} = start) when is_map(secrets),
-    do: run_attached(start, secrets)
-
-  defp run_attempt(%{client: client, assignment: assignment} = start) do
-    case HostClient.attach(client, start.token) do
-      {:ok, fields} ->
-        run_attached(start, fields)
-
-      {:error, {refusal, _detail}} when refusal in [:setup_required, :failed] ->
-        {:normal, {:error, @ended}}
-
-      {:error, refusal} ->
-        Logger.warning(
-          "[Opus.Runner] attach of #{assignment.execution_id} refused: #{inspect(refusal)}"
-        )
-
-        {{:shutdown, :attempt_open}, {:error, @ended}}
-    end
-  end
-
-  defp run_attached(%{client: client, assignment: assignment} = start, fields) do
-    with {:ok, authority} <- Authority.from_wire(assignment.authority),
-         {:ok, component_type} <- Opus.ComponentType.parse(assignment.component.type) do
-      runtime_opts =
-        runtime_opts(assignment, authority, component_type,
-          preloaded_fields: fields,
-          host: client
-        )
-
-      watch = %{client: client, until: DateTime.from_unix!(assignment.lease_until, :millisecond)}
-
-      artifact = artifact(client, assignment.component.digest)
-
-      outcome =
-        try do
-          execute(artifact, start.input, runtime_opts, budget_ms(assignment), watch)
-        rescue
-          e -> {:error, exception_message(e, __STACKTRACE__)}
-        end
-
-      close(client, outcome)
-    else
-      {:error, reason} ->
-        Logger.error(
-          "[Opus.Runner] #{assignment.execution_id} cannot run its assignment: #{inspect(reason)}"
-        )
-
-        close(client, {:error, "Execution error: the assignment could not be run"})
-    end
-  end
-
-  # The options the runtime runs under: the node's limits, the edge and the
-  # authority as the assignment carries them, the run's identity, its
-  # component and the actions its host intercepts.
-  defp runtime_opts(assignment, authority, component_type, opts) do
-    limits = Authority.limits(authority)
-    component = assignment.component
-
-    [
-      component_type: component_type,
-      max_memory_bytes: limits.max_memory_bytes,
-      edge: edge(authority),
-      limits: limits,
-      component_ref: component.ref,
-      reference: component.ref,
-      digest: component.digest,
-      intercepted: assignment.intercepted,
-      authority: authority,
-      execution_id: assignment.execution_id
-    ] ++ opts
-  end
-
-  defp edge(%Authority{resources: %Edge{} = edge}), do: edge
-  defp edge(%Authority{resources: :none}), do: nil
-
-  # The component's bytes as CYFR answers them for the assignment's digest;
-  # the cache runs them only if they hash to it.
-  defp artifact(client, digest) do
-    fn ->
-      case HostClient.fetch_artifact(client, digest) do
-        {:ok, bytes} ->
-          {:ok, bytes}
-
-        {:error, refusal} ->
-          Logger.warning(
-            "[Opus.Runner] artifact #{digest} of #{client.execution_id} refused: " <>
-              inspect(refusal)
-          )
-
-          {:error, {:artifact, "Execution error: the component's bytes could not be fetched"}}
-      end
-    end
-  end
-
-  defp close(client, {:ok, {output, _metadata}}) do
-    case HostClient.complete(client, output) do
-      {:ok, recorded} -> {:normal, {:ok, recorded}}
-      {:error, {:failed, message}} -> {:normal, {:error, message}}
-      {:error, _refusal} -> {{:shutdown, :attempt_open}, {:error, @ended}}
-    end
-  end
-
-  defp close(client, {:error, reason}), do: fail(client, reason, [])
-  defp close(client, {:abandoned, reason}), do: fail(client, reason, abandoned: true)
-
-  defp fail(client, reason, opts) do
-    case HostClient.fail(client, failure_message(reason), opts) do
-      {:ok, message} -> {:normal, {:error, message}}
-      {:error, _refusal} -> {{:shutdown, :attempt_open}, {:error, @ended}}
-    end
-  end
-
-  defp failure_message(reason) when is_binary(reason), do: reason
-
-  defp failure_message(reason) do
-    Logger.warning("[Opus.Runner] unrenderable failure reason: #{inspect(reason)}")
-    "Execution failed: internal error"
-  end
-
-  # A `RuntimeError` or `ArgumentError` carries a sentence authored where it
-  # was raised; any other exception is logged and reported as an internal
-  # error.
-  defp exception_message(%RuntimeError{message: message}, _stacktrace),
-    do: "Execution error: #{message}"
-
-  defp exception_message(%ArgumentError{message: message}, _stacktrace),
-    do: "Execution error: #{message}"
-
-  defp exception_message(exception, stacktrace) do
-    Logger.error(
-      "[Opus.Runner] execution raised: " <> Exception.format(:error, exception, stacktrace)
-    )
-
-    "Execution error: the engine raised an internal error"
-  end
-
-  # The run's budget from receipt: its timeout, and no more than what is
-  # left of the absolute subtree deadline its assignment carries, so a
-  # queued or retried start cannot extend the subtree. Clock skew is bounded
-  # by the header window CYFR verifies every call within.
-  defp budget_ms(assignment) do
-    remaining = assignment.deadline - System.system_time(:millisecond)
-    max(min(assignment.timeout_ms, remaining), 0)
-  end
-
   # ---------------------------------------------------------------------------
-  # The component process
+  # Frames
   # ---------------------------------------------------------------------------
 
-  # The component runs in a process of its own, linked to the runner and
-  # trapping exits, so a Wasmex crash reaches it as a message. No exit it
-  # traps can stop it, so it starts only once its worker service has been
-  # told of it (ahead of any exit of the runner's), and a kill names it.
-  # Answers `{:ok, {output, metadata}}`, `{:error, reason}`, or
-  # `{:abandoned, reason}` when the component call was killed.
-  defp execute(artifact, input, runtime_opts, timeout_ms, watch) do
-    runner = self()
-    ref = make_ref()
-    start_time = System.monotonic_time(:millisecond)
-    runtime_opts = Keyword.put(runtime_opts, :notify_cleanup_refs, {runner, ref})
-    logger_metadata = Cyfr.LoggerContext.capture()
-    callers = Process.get(:"$callers", [])
+  defp lines(state) do
+    case :binary.split(state.buffer, "\n") do
+      [line, rest] ->
+        state = %{state | buffer: rest}
 
-    pid =
-      spawn_link(fn ->
-        Process.flag(:trap_exit, true)
-        Process.put(:"$callers", [runner | callers])
-        Cyfr.LoggerContext.restore(logger_metadata)
+        state =
+          case RunnerControl.decode(line) do
+            {:ok, %{type: :assign} = message} ->
+              on_assign(state, message)
 
-        receive do
-          {:go, ^ref} -> :ok
-          {:EXIT, ^runner, _reason} -> exit(:normal)
-        end
+            {:ok, %{type: :cancel_child, execution_id: execution_id}} ->
+              on_cancel_child(state, execution_id)
 
-        result =
-          try do
-            Opus.Runtime.execute_component(artifact, input, runtime_opts)
-          rescue
-            e -> {:error, Exception.message(e)}
-          catch
-            :exit, reason -> {:error, "Exit: #{inspect(reason)}"}
-            kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
+            {:ok, %{type: type}} ->
+              Logger.error("[Opus.Runner] the service sent a #{type} frame; ignored")
+              state
+
+            {:error, reason} ->
+              Logger.error(
+                "[Opus.Runner] the service sent a line that is not a frame: #{inspect(reason)}"
+              )
+
+              state
           end
 
-        send(runner, {ref, result})
-      end)
+        lines(state)
 
-    WorkerService.track(%{component: pid})
-    send(pid, {:go, ref})
+      [partial] when byte_size(partial) > @max_line_bytes ->
+        Logger.error("[Opus.Runner] the service sent a line past the protocol's bound; halting")
+        state.halt.(:oversize_line)
+        %{state | buffer: ""}
 
-    # A failure before the runtime sends its cleanup refs (an authority
-    # guard, a bad option) arrives as the final result instead.
-    handshake =
-      receive do
-        {:cleanup_refs, ^ref, refs} -> {:refs, refs}
-        {^ref, {:ok, output, metadata}} -> {:early, {:ok, {output, metadata}}}
-        {^ref, {:error, _} = error} -> {:early, error}
-      after
-        timeout_ms -> nil
+      [_partial] ->
+        state
+    end
+  end
+
+  defp on_assign(%{assignment: current} = state, _message) when current != nil do
+    Logger.error("[Opus.Runner] assigned while running #{current.execution_id}; ignored")
+    state
+  end
+
+  defp on_assign(state, %{assignment: token, input: input, keys: keys}) do
+    settings = state.settings
+
+    with {:ok, assignment} <- Assignment.read(token),
+         true <- assignment.service == settings.service_id and assignment.boot == settings.boot,
+         {:ok, %{} = decoded} <- Jason.decode(input) do
+      client = HostClient.new(keys, settings.runner_id, settings.boot, settings.host_url)
+      start = %{token: token, assignment: assignment, input: decoded, client: client}
+      caller = %{callers: [self()], logger: Cyfr.LoggerContext.capture()}
+
+      case Subtree.start(state, state.supervisor, start, caller, nil) do
+        {:ok, _pid, state} ->
+          watchdog =
+            Process.send_after(
+              self(),
+              {:watchdog, assignment.execution_id},
+              max(
+                assignment.deadline + settings.watchdog_grace_ms -
+                  System.system_time(:millisecond),
+                0
+              )
+            )
+
+          %{
+            state
+            | assignment: %{
+                execution_id: assignment.execution_id,
+                athanor_id: assignment.athanor_id
+              },
+              watchdog: watchdog,
+              clean: true,
+              open: []
+          }
+
+        {:error, :malformed} ->
+          Logger.error(
+            "[Opus.Runner] the assignment names an execution this runner already ran; halting"
+          )
+
+          state.halt.(:malformed_assign)
+          state
       end
-
-    case handshake do
-      {:early, result} ->
-        result
-
-      nil ->
-        kill(pid, nil)
-        {:abandoned, "Execution timeout after #{timeout_ms}ms"}
-
-      {:refs, refs} ->
-        WorkerService.track(%{cleanup: refs})
-        remaining_ms = max(timeout_ms - (System.monotonic_time(:millisecond) - start_time), 0)
-        await_result(ref, pid, refs, remaining_ms, timeout_ms, watch)
+    else
+      _refused ->
+        # The service verified this assignment; one that does not read
+        # here is not the service's. The runner ends, and the service
+        # reports what it assigned.
+        Logger.error("[Opus.Runner] the assignment cannot be read; halting")
+        state.halt.(:malformed_assign)
+        state
     end
   end
 
-  defp await_result(ref, pid, refs, remaining_ms, timeout_ms, watch) do
-    wait_ms = min(remaining_ms, @lease_tick_ms)
+  defp on_cancel_child(state, execution_id) do
+    case state.assignment do
+      %{execution_id: ^execution_id} ->
+        Logger.error(
+          "[Opus.Runner] cancel_child names the subtree's root #{execution_id}; ignored"
+        )
 
-    receive do
-      {^ref, {:ok, output, metadata}} ->
-        {:ok, {output, metadata}}
+        state
 
-      {^ref, {:error, _} = error} ->
-        error
-    after
-      wait_ms ->
-        if remaining_ms <= wait_ms do
-          kill(pid, refs)
-          {:abandoned, "Execution timeout after #{timeout_ms}ms"}
-        else
-          renewed(ref, pid, refs, remaining_ms - wait_ms, timeout_ms, renew_watch(watch))
+      _ ->
+        case Subtree.kill(state, execution_id) do
+          :ok -> %{state | clean: false, cancelled: MapSet.put(state.cancelled, execution_id)}
+          :not_found -> state
         end
     end
   end
 
-  defp renewed(ref, pid, refs, remaining_ms, timeout_ms, {:ok, watch}),
-    do: await_result(ref, pid, refs, remaining_ms, timeout_ms, watch)
+  # ---------------------------------------------------------------------------
+  # The subtree's end
+  # ---------------------------------------------------------------------------
 
-  defp renewed(_ref, pid, refs, _remaining_ms, _timeout_ms, :lapsed) do
-    kill(pid, refs)
-    {:abandoned, "Execution lease lost: the row is no longer this attempt's to finish"}
-  end
+  # An attempt process that ended other than `:normal` left its attempt
+  # open: the subtree cannot be completed, so the rest is killed and the
+  # runner ends once every process is gone. A cancelled child's is CYFR's
+  # already, however its process ended: the cancel is the fence.
+  defp attempt_ended(state, _entry, :normal), do: maybe_finish(state)
 
-  @doc false
-  # A renewal CYFR answers `lost` stops the runner at once: the row is
-  # another's (cancelled, swept, finished, taken over). A renewal CYFR
-  # cannot answer keeps the runner working only while the lease it last
-  # held is still good.
-  @spec renew_watch(map(), DateTime.t()) :: {:ok, map()} | :lapsed
-  def renew_watch(%{client: client} = watch, now \\ DateTime.utc_now()) do
-    case HostClient.renew(client, [client.attempt]) do
-      {:ok, renewals} ->
-        case Map.get(renewals, client.attempt, :lost) do
-          {:ok, until} -> {:ok, %{watch | until: DateTime.from_unix!(until, :millisecond)}}
-          :lost -> :lapsed
-        end
-
-      {:error, :unavailable} ->
-        if DateTime.compare(now, watch.until) == :lt,
-          do: {:ok, watch},
-          else: :lapsed
-
-      {:error, _refusal} ->
-        :lapsed
+  defp attempt_ended(state, entry, _reason) do
+    if MapSet.member?(state.cancelled, entry.execution_id) do
+      maybe_finish(state)
+    else
+      state = %{state | open: [entry.attempt | state.open], clean: false}
+      Subtree.kill_all(state)
+      maybe_finish(state)
     end
   end
 
-  # The kill frees the component's BEAM process, not the component call's
-  # native thread; the attempt's `fail` says so (`abandoned`). The tokens
-  # dispensed to the run stay in its attempt's masking set, which masks the
-  # error when the attempt closes the run.
-  defp kill(pid, refs) do
-    Process.unlink(pid)
-    Process.exit(pid, :kill)
+  defp maybe_finish(%{assignment: nil} = state), do: state
 
-    if refs[:stream_exec_ref],
-      do: Opus.HttpStreamHandler.cleanup_registry(refs.stream_exec_ref)
+  defp maybe_finish(%{runners: runners} = state) when map_size(runners) > 0, do: state
 
-    if refs[:formula_tracker_pid],
-      do: Opus.FormulaHandler.cleanup_registry(refs.formula_tracker_pid)
+  defp maybe_finish(%{open: [_ | _]} = state) do
+    write(state, %{type: :exit, runner: state.settings.runner_id, open: Enum.uniq(state.open)})
+    state.stop.(1)
+    %{state | assignment: nil}
+  end
+
+  defp maybe_finish(state) do
+    if state.watchdog, do: Process.cancel_timer(state.watchdog)
+    clear_job_state()
+
+    write(state, %{
+      type: :complete,
+      execution_id: state.assignment.execution_id,
+      clean: state.clean
+    })
+
+    state = %{
+      state
+      | assignment: nil,
+        watchdog: nil,
+        clean: true,
+        open: [],
+        cancelled: MapSet.new()
+    }
+
+    if state.closed, do: state.stop.(0)
+    state
+  end
+
+  # What a job leaves behind in this VM, so the next job of the same
+  # athanor starts from nothing: every open stream and every task.
+  defp clear_job_state do
+    for {key, _value} <- Opus.Cache.match({:http_stream, :_, :_}), do: Opus.Cache.invalidate(key)
+
+    if Process.whereis(Opus.TaskSupervisor) do
+      for pid <- Task.Supervisor.children(Opus.TaskSupervisor),
+          do: Task.Supervisor.terminate_child(Opus.TaskSupervisor, pid)
+    end
 
     :ok
+  end
+
+  defp channel_closed(%{closed: true} = state), do: state
+
+  defp channel_closed(state) do
+    state = %{state | closed: true}
+    if state.assignment == nil, do: state.stop.(0)
+    state
+  end
+
+  defp write(%{port: port}, message) do
+    Port.command(port, RunnerControl.encode(message))
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 end
