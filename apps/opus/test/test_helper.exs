@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# :public_dns asks the public resolver and runs only when explicitly
+# selected (`mix test --include public_dns`).
+ExUnit.configure(exclude: [:public_dns])
+
 # Opus's own suite runs with the contracts alone: no database and no
 # control plane. Every host call a test makes goes to a scripted host
 # (`Opus.Test.ScriptedHost`) served on a loopback port. The worker service

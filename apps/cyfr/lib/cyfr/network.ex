@@ -87,6 +87,10 @@ defmodule Cyfr.Network do
     * `:receive_timeout` — ms (default 30_000)
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
     * `:transport_opts` — extra Mint transport opts
+    * `:resolver` — the module the host is resolved through, answering
+      `getaddr/2` as `:inet` does (the default). A test's fixed table of
+      answers goes here, so the decision it asserts is the table's and
+      not the public resolver's.
   """
   @spec pin(String.t(), keyword()) ::
           {:ok,
@@ -95,16 +99,17 @@ defmodule Cyfr.Network do
   def pin(url, opts \\ []) do
     uri = URI.parse(url)
     policy = Keyword.get(opts, :private_policy, :deny)
+    resolver = Keyword.get(opts, :resolver, :inet)
 
     with :ok <- check_scheme(uri.scheme),
          :ok <- check_host(uri.host),
-         {:ok, ip_tuple} <- resolve_typed(uri.host),
+         {:ok, ip_tuple} <- resolve_typed(uri.host, resolver),
          :ok <- check_ip(ip_tuple, uri.host, policy) do
       ip = format_ip(ip_tuple)
 
       req_opts =
         [
-          url: URI.to_string(%{uri | host: bracket_ip(ip)}),
+          url: URI.to_string(%{uri | host: ip}),
           compressed: false,
           decode_body: false,
           redirect: false,
@@ -135,6 +140,7 @@ defmodule Cyfr.Network do
   ## Options
 
     * `:private_policy` — see `pin/2` (default `:deny`)
+    * `:resolver` — see `pin/2` (default `:inet`)
     * `:receive_timeout` — ms (default 30_000)
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
     * `:transport_opts` — extra Mint transport opts
@@ -178,17 +184,6 @@ defmodule Cyfr.Network do
   defp response_body(%Req.Response{body: body}, nil), do: {:ok, body}
   defp response_body(resp, max_bytes), do: Cyfr.BoundedBody.read(resp, max_bytes)
 
-  @doc """
-  Format a resolved IP string as a URL authority host, bracketing IPv6 literals.
-
-  Single source of truth for IP-pinning callers that substitute a validated IP
-  for the hostname in a URL (this module plus the Opus host-HTTP handlers).
-  """
-  @spec bracket_ip(String.t()) :: String.t()
-  def bracket_ip(ip) when is_binary(ip) do
-    if String.contains?(ip, ":"), do: "[" <> ip <> "]", else: ip
-  end
-
   # Req returns headers as %{name => [values]}; flatten to the [{name, value}]
   # list shape the Finch-style callers expect.
   defp flatten_headers(headers) when is_map(headers) do
@@ -213,15 +208,15 @@ defmodule Cyfr.Network do
   # pins to the address checked here, so the unchecked family is also the
   # unused one. If v6-first (or happy-eyeballs) ever lands, the policy
   # check must move with the address actually dialed.
-  defp resolve_typed(hostname) do
+  defp resolve_typed(hostname, resolver) do
     charlist = String.to_charlist(hostname)
 
-    case :inet.getaddr(charlist, :inet) do
+    case resolver.getaddr(charlist, :inet) do
       {:ok, ip_tuple} ->
         {:ok, ip_tuple}
 
       {:error, _} ->
-        case :inet.getaddr(charlist, :inet6) do
+        case resolver.getaddr(charlist, :inet6) do
           {:ok, ip_tuple} ->
             {:ok, ip_tuple}
 

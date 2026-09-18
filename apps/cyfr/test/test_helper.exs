@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-# :s3_integration requires MinIO and runs only when explicitly selected.
-ExUnit.configure(exclude: [:s3_integration])
+# :s3_integration requires MinIO, and :public_dns the public resolver;
+# each runs only when explicitly selected.
+ExUnit.configure(exclude: [:s3_integration, :public_dns])
 
 # The suite runs from the umbrella root, where the Opus worker service is
 # up beside CYFR: its listener and CYFR's host API listener each bound a
