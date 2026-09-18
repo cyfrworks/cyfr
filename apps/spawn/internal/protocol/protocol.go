@@ -7,7 +7,7 @@
 //
 // Client to spawner:
 //
-//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"attach":{"path":…,"token":…}}
+//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"control":true,"attach":{"path":…,"token":…}}
 //	{"v":1,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
 //	{"v":1,"type":"release","spawn_id":…,"grace_ms":…}
 //	{"v":1,"type":"pool","id":…,"pool":…}
@@ -23,6 +23,25 @@
 // `exited` is sent once, when a spawn's leader process is reaped. `released`
 // is sent once, when the spawn's uid has been retired, whether retirement
 // followed a `release` or the leader's exit.
+//
+// A spawn's `env` is the whole environment block its command receives
+// beside the variables the stage sets itself (PATH, HOME, USER, LOGNAME and
+// TMPDIR): nothing of the spawner's or the client's environment is
+// inherited, so the request names exactly the variables that reach the
+// command, and a reserved name (ReservedEnv, ReservedEnvPrefixes) is
+// refused.
+//
+// A spawn with `"control": true` also gets a control channel: the spawner
+// makes an AF_UNIX stream socketpair, installs one end as the command's file
+// descriptor 3 and hands the other to the spawn's relay, which carries it
+// over the attach connection as frame.StreamControl in both directions,
+// bytes verbatim in frames of at most frame.MaxPayload; the spawner never
+// reads them. A zero-length control frame from the relay reports that every
+// holder of the command's end has closed it or exited; one from the client
+// closes the command's reading side, so the command reads end of file. A
+// `release` ends the channel with the command's processes. Any pool may
+// serve such a spawn; a long-lived command is ended only by a `release`, by
+// its own exit or by the loss of the client, whichever pool it came from.
 //
 // The client's environment carries ChannelEnv, the name /proc/self/fd/3
 // links to for the channel socket (`socket:[inode]`), so a client whose
@@ -186,6 +205,7 @@ type Request struct {
 	Argv    []string          `json:"argv,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	Rlimits *Rlimits          `json:"rlimits,omitempty"`
+	Control bool              `json:"control,omitempty"`
 	Attach  *Attach           `json:"attach,omitempty"`
 	SpawnID string            `json:"spawn_id,omitempty"`
 	Sig     string            `json:"sig,omitempty"`
@@ -276,8 +296,8 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 }
 
 func validateSpawn(req *Request) error {
-	if !req.only("id", "pool", "argv", "env", "rlimits", "attach") {
-		return errors.New("spawn carries only id, pool, argv, env, rlimits and attach")
+	if !req.only("id", "pool", "argv", "env", "rlimits", "control", "attach") {
+		return errors.New("spawn carries only id, pool, argv, env, rlimits, control and attach")
 	}
 	if !idPattern.MatchString(req.ID) {
 		return errors.New("id must match " + idPattern.String())
@@ -356,6 +376,7 @@ func (r *Request) only(fields ...string) bool {
 		"argv":     r.Argv != nil,
 		"env":      r.Env != nil,
 		"rlimits":  r.Rlimits != nil,
+		"control":  r.Control,
 		"attach":   r.Attach != nil,
 		"spawn_id": r.SpawnID != "",
 		"sig":      r.Sig != "",

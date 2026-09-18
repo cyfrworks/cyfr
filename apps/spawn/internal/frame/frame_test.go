@@ -38,6 +38,23 @@ func TestRoundTripAndEndMarker(t *testing.T) {
 	}
 }
 
+func TestControlIsTheLastStream(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, StreamControl, []byte(`{"v":1}`+"\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := hex.EncodeToString(buf.Bytes()); got != "0400000008"+"7b2276223a317d0a" {
+		t.Fatalf("encoding = %s", got)
+	}
+	stream, payload, err := Read(&buf, make([]byte, MaxPayload))
+	if err != nil || stream != StreamControl || string(payload) != `{"v":1}`+"\n" {
+		t.Fatalf("control frame = %d %q %v", stream, payload, err)
+	}
+	if err := Write(io.Discard, StreamControl+1, nil); !errors.Is(err, ErrUnknownStream) {
+		t.Fatalf("the stream after control was accepted: %v", err)
+	}
+}
+
 func TestRefusesOversizeAndUnknownStreams(t *testing.T) {
 	if err := Write(io.Discard, StreamStdin, make([]byte, MaxPayload+1)); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversize write = %v", err)

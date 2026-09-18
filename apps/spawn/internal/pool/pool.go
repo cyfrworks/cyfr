@@ -6,6 +6,17 @@
 // under it outlived its retirement. Free uids are handed out in the order
 // they became free, so a retired uid is the last to be reused.
 //
+// Pools have no classes: a build, an MCP backend and a runner (the
+// long-lived process a worker service assigns executions to) draw uids
+// from pools that behave alike. Every spawn runs under its uid with a
+// private home, an environment built from nothing but its request, and
+// resource limits, and is retired, its processes killed and its uid
+// returned only once nothing it left remains, on release, on its leader's
+// exit or on the loss of the client; no pool bounds a spawn's lifetime.
+// The one thing a runner needs beyond that, its control channel on file
+// descriptor 3, is asked for per spawn (`control` in package protocol), so
+// a runner pool is whichever pool such spawns are drawn from.
+//
 // A Pool is not safe for concurrent use; its owner serializes access.
 package pool
 

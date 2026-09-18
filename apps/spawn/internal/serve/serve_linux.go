@@ -518,7 +518,10 @@ func (s *server) handleSpawn(req *protocol.Request) {
 
 // launch starts the stage as the spawn's uid, waits until it has executed
 // the command, and starts the relay as the client user holding the other
-// ends of the command's pipes. It returns the error code to reply with.
+// ends of the command's pipes and, when the request asks for a control
+// channel, the relay's end of its socketpair; the command's end goes to
+// the stage, which makes it the command's fd 3. It returns the error code
+// to reply with.
 func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	var opened []*os.File
 	closeAll := func() {
@@ -555,6 +558,19 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
+	// The control channel is one socketpair: commandCtl becomes the
+	// command's fd 3 (stage.ControlFD to the stage), relayCtl the relay's
+	// relay.ControlFD. The spawner keeps neither end.
+	var commandCtl, relayCtl *os.File
+	if req.Control {
+		fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+		if err != nil {
+			return protocol.CodeInternal, err
+		}
+		commandCtl = os.NewFile(uintptr(fds[0]), "control-command")
+		relayCtl = os.NewFile(uintptr(fds[1]), "control-relay")
+		opened = append(opened, commandCtl, relayCtl)
+	}
 
 	spec, err := json.Marshal(stage.Spec{
 		UID:      sp.account.UID,
@@ -565,18 +581,24 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		Argv:     req.Argv,
 		Env:      req.Env,
 		Limits:   req.Rlimits.Resolve(),
+		Control:  req.Control,
 	})
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
-	leader, err := s.start(s.self, []string{"cyfr-spawn", "stage"}, nil,
-		[]uintptr{stdinR.Fd(), stdoutW.Fd(), stderrW.Fd(), specR.Fd(), statusW.Fd()},
+	stageFiles := []uintptr{stdinR.Fd(), stdoutW.Fd(), stderrW.Fd(), specR.Fd(), statusW.Fd()}
+	stageOwned := []*os.File{stdinR, stdoutW, stderrW, specR, statusW}
+	if commandCtl != nil {
+		stageFiles = append(stageFiles, commandCtl.Fd())
+		stageOwned = append(stageOwned, commandCtl)
+	}
+	leader, err := s.start(s.self, []string{"cyfr-spawn", "stage"}, nil, stageFiles,
 		sp.account.UID, sp.account.GID, "/")
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
 	sp.leader = leader
-	for _, f := range []*os.File{stdinR, stdoutW, stderrW, specR, statusW} {
+	for _, f := range stageOwned {
 		_ = f.Close()
 	}
 
@@ -603,12 +625,15 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		return protocol.CodeInternal, err
 	}
 	opened = append(opened, devnull)
-	relaySpec, err := json.Marshal(relay.Spec{Path: req.Attach.Path, Token: req.Attach.Token})
+	relaySpec, err := json.Marshal(relay.Spec{Path: req.Attach.Path, Token: req.Attach.Token, Control: req.Control})
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
-	relayProc, err := s.start(s.self, []string{"cyfr-spawn", "relay"}, helperEnviron(),
-		[]uintptr{devnull.Fd(), devnull.Fd(), 2, relaySpecR.Fd(), stdinW.Fd(), stdoutR.Fd(), stderrR.Fd()},
+	relayFiles := []uintptr{devnull.Fd(), devnull.Fd(), 2, relaySpecR.Fd(), stdinW.Fd(), stdoutR.Fd(), stderrR.Fd()}
+	if relayCtl != nil {
+		relayFiles = append(relayFiles, relayCtl.Fd())
+	}
+	relayProc, err := s.start(s.self, []string{"cyfr-spawn", "relay"}, helperEnviron(), relayFiles,
 		s.client.UID, s.client.GID, "/")
 	if err != nil {
 		return protocol.CodeInternal, err
