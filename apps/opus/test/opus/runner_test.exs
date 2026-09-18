@@ -226,6 +226,8 @@ defmodule Opus.RunnerTest do
 
   test "a lost host answer completes the subtree unclean", %{host: host, service: service} do
     attempt = echo!(host)
+    # Asked for afresh: a compiled component of this VM's cache is not fetched.
+    Opus.Cache.invalidate({:compiled_component, attempt.digest})
     ScriptedHost.script(host, "fetch_artifact", :drop)
     assign(service, attempt)
 
