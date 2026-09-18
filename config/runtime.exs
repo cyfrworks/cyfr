@@ -85,6 +85,11 @@ if config_env() != :test do
   # so nothing of the service's is configured for it here either.
   cyfr_boot? = release_name not in ["opus", "builder"]
 
+  # The `builder` release runs the toolchain half of Locus: it reads the
+  # build settings it shares with CYFR (the listener, the limits, the
+  # deadline) and nothing else of CYFR's.
+  builder_boot? = release_name == "builder"
+
   opus_role =
     if release_name in [nil, "opus"],
       do: Opus.Release.role(%{"OPUS_ROLE" => env_str.("OPUS_ROLE", nil)}),
@@ -246,8 +251,8 @@ if config_env() != :test do
     end
   end
 
-  if cyfr_boot? do
-    if release_name != "builder" do
+  if cyfr_boot? or builder_boot? do
+    if not builder_boot? do
       # Load the explicit JSON keyring; unset derives a key from CYFR_SECRET_KEY_BASE.
       config :cyfr, :crypto_keyring_json, env_str.("CYFR_CRYPTO_KEYRING", nil)
 
