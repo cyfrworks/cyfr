@@ -930,5 +930,101 @@ defmodule Arca.Storage do
   """
   @callback replace_tree(Context.t(), path(), [tree_file()]) :: :ok | error()
 
-  @optional_callbacks sweep_stale_tmp: 1, replace_tree: 3
+  @typedoc """
+  An adapter's proof of the object version a conditional write saw — an
+  ETag on an object store, a content digest or version on a filesystem.
+  Opaque: minted and compared by the one adapter, never parsed by a
+  caller and never carried from one adapter to another.
+  """
+  @type precondition :: term()
+
+  # The conditional writes and the prefix listing are optional until
+  # every adapter honours them: the storage-unit write protocol runs
+  # against the test double first, then Local and S3 implement them, and
+  # they become required once both do.
+
+  @doc """
+  Optional: create the object at `path` only when nothing is there,
+  answering the precondition of what was written. `{:error, :exists}`
+  when an object is already at `path`, which is left as it was.
+
+  Fail closed: the check and the write are one step at the adapter — a
+  create that raced another and lost answers `:exists`, never a
+  last-writer-wins overwrite. An adapter that cannot make the create
+  conditional does not export this; the facade then refuses with
+  `{:error, :unsupported}` and writes nothing.
+  """
+  @callback put_if_none_match(Context.t(), path(), iodata()) ::
+              {:ok, precondition()} | {:error, :exists | term()}
+
+  @doc """
+  Optional: replace the object at `path` only while its version is still
+  `precondition` — the value the caller's last read or write of the
+  object answered — answering the precondition of what was written.
+  `{:error, :precondition_failed}` when the object has changed since
+  and `{:error, :missing}` when nothing is at `path`; in both cases
+  nothing is written.
+
+  Fail closed: an adapter that cannot compare the precondition refuses
+  rather than writing, and one that cannot honour preconditions at all
+  does not export this — the facade then refuses with
+  `{:error, :unsupported}`. Never last-writer-wins.
+  """
+  @callback put_if_match(Context.t(), path(), iodata(), precondition()) ::
+              {:ok, precondition()} | {:error, :precondition_failed | :missing | term()}
+
+  @doc """
+  Optional: every object at or below `prefix`, as full segment lists,
+  order unspecified — a key listing for a staging registry. Unlike
+  `list_typed/2` it answers keys, never kinds, and has no `:enotdir`: a
+  prefix that is itself one object answers that object alone, and a
+  prefix with nothing under it answers `{:ok, []}`.
+  """
+  @callback list_prefix(Context.t(), path()) :: {:ok, [path()]} | {:error, term()}
+
+  @optional_callbacks sweep_stale_tmp: 1,
+                      replace_tree: 3,
+                      put_if_none_match: 3,
+                      put_if_match: 4,
+                      list_prefix: 2
+
+  @doc """
+  `c:put_if_none_match/3` on the configured adapter, or
+  `{:error, :unsupported}` when it does not export the callback. A thin
+  dispatch: the caller owns path authorization, the storage cap and
+  usage accounting, as `Arca.mutating/5` does for a plain write.
+  """
+  @spec put_if_none_match(Context.t(), path(), iodata()) ::
+          {:ok, precondition()} | {:error, :exists | :unsupported | term()}
+  def put_if_none_match(%Context{} = ctx, path, content),
+    do: conditional(:put_if_none_match, [ctx, path, content])
+
+  @doc """
+  `c:put_if_match/4` on the configured adapter, or
+  `{:error, :unsupported}` when it does not export the callback. A thin
+  dispatch, as `put_if_none_match/3`.
+  """
+  @spec put_if_match(Context.t(), path(), iodata(), precondition()) ::
+          {:ok, precondition()}
+          | {:error, :precondition_failed | :missing | :unsupported | term()}
+  def put_if_match(%Context{} = ctx, path, content, precondition),
+    do: conditional(:put_if_match, [ctx, path, content, precondition])
+
+  @doc """
+  `c:list_prefix/2` on the configured adapter, or `{:error, :unsupported}`
+  when it does not export the callback. A thin dispatch, as
+  `put_if_none_match/3`.
+  """
+  @spec list_prefix(Context.t(), path()) :: {:ok, [path()]} | {:error, :unsupported | term()}
+  def list_prefix(%Context{} = ctx, prefix), do: conditional(:list_prefix, [ctx, prefix])
+
+  # An optional callback on the configured adapter, refused — never
+  # approximated with an unconditional write — when it is not exported.
+  defp conditional(callback, args) do
+    adapter = configured_adapter()
+
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, callback, length(args)),
+      do: apply(adapter, callback, args),
+      else: {:error, :unsupported}
+  end
 end

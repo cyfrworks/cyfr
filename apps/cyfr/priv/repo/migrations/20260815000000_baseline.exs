@@ -32,9 +32,11 @@ defmodule Arca.Repo.Migrations.Baseline do
 
   def up do
     tenancy()
+    provisioning()
     identity()
     server()
     components()
+    storage_units()
     agents()
     executions()
     logs()
@@ -188,6 +190,40 @@ defmodule Arca.Repo.Migrations.Baseline do
   end
 
   # ==========================================================================
+  # Provisioning claims
+  # ==========================================================================
+
+  # Who is filling an estate: one row per athanor, taken and settled by
+  # compare-and-set on `(owner, fence)`, so a stale owner — a boot that
+  # lost its lease mid-fill — cannot mark readiness, overwrite a
+  # successor's failure, mint consent or replace the agent index. Every
+  # entry point that fills or heals an estate (`Sanctum.Provisioning`)
+  # takes the same row; the lease is what a successor waits out.
+  defp provisioning do
+    create table(:provisioning_claims, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      # The boot holding the claim; a mark from another boot never lands.
+      add :owner, :string, null: false
+      # The attempt the owner runs under this claim.
+      add :attempt, :string, null: false
+      # sign_in | first_need | provision | install_shipped | seed_sync
+      add :entry_kind, :string, null: false
+      add :lease_until, :utc_datetime_usec, null: false
+      # The fencing token: 1 on the first claim, raised by one on every take.
+      add :fence, :integer, null: false
+      # ready | failed | released; null while the attempt holds the claim.
+      add :outcome, :string
+      add :outcome_detail, :text
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:provisioning_claims, [:athanor_id])
+    create index(:provisioning_claims, [:lease_until])
+  end
+
+  # ==========================================================================
   # Identity: sessions and API keys
   # ==========================================================================
 
@@ -324,6 +360,71 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create index(:build_records, [:athanor_id, :started_at])
+  end
+
+  # ==========================================================================
+  # Storage units
+  # ==========================================================================
+
+  # A unit under a seeded root — a component version directory, an aqua
+  # agent or skill (`Arca.Storage.UnitLocator`) — is published by a row:
+  # the pointer names the committed, immutable revision readers see, and
+  # the journal records every commit. A complete object set under the
+  # unit's prefix is staging until a commit names it, and repair never
+  # promotes what a losing writer staged.
+  defp storage_units do
+    create table(:storage_units, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      # The seeded root the unit lives under (`Arca.Storage.overlay_roots/0`).
+      add :root, :string, null: false
+      # The unit's path inside its root, segments joined with `/`.
+      add :unit_key, :string, null: false
+      # draft | committed | retired
+      add :state, :string, null: false, default: "draft"
+      # The revision the pointer names; null until the first commit.
+      add :current_revision, :string
+      # The activation identity of the committed revision, for a component
+      # release (`Compendium.ReleaseDigest`); null for every other unit.
+      add :release_digest, :string
+      # Held by the one writer staging the next revision; a commit
+      # compares it and clears it.
+      add :draft_writer_token, :string
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:storage_units, [:athanor_id, :root, :unit_key])
+    create unique_index(:storage_units, [:id, :athanor_id])
+    create index(:storage_units, [:athanor_id, :state])
+
+    # The journal: one row per commit, appended in the commit's own
+    # transaction and never updated or deleted. `prior_revision` is null
+    # for a unit's first commit.
+    create table(:storage_commits, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+
+      add :storage_unit_id,
+          references(:storage_units,
+            type: :string,
+            on_delete: :delete_all,
+            with: [athanor_id: :athanor_id]
+          ),
+          null: false
+
+      add :prior_revision, :string
+      add :new_revision, :string, null: false
+      # The digest of the revision's content.
+      add :content_identity, :string, null: false
+      # Who committed: an attempt, an actor or the system, as the writer
+      # spells it.
+      add :commit_identity, :string, null: false
+      add :committed_at, :utc_datetime_usec, null: false
+    end
+
+    create index(:storage_commits, [:storage_unit_id, :committed_at])
+    create index(:storage_commits, [:athanor_id, :committed_at])
   end
 
   # ==========================================================================

@@ -42,6 +42,23 @@ defmodule Opus.HttpHandlerEnforcementTest do
     |> Enum.filter(&(&1.component_ref == attempt.component_ref))
   end
 
+  # The guest-facing entry takes no resolver of its own: the handler's
+  # egress resolves through `config :opus, :resolver`, set here to the
+  # fixture's table for the rest of the test, so a name that does not
+  # resolve is the table's nxdomain and not the public resolver's answer.
+  # The module is sync, so no other test sees the seam set.
+  defp resolve_through(resolver) do
+    previous = Application.fetch_env(:opus, :resolver)
+    Application.put_env(:opus, :resolver, resolver)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:opus, :resolver, value)
+        :error -> Application.delete_env(:opus, :resolver)
+      end
+    end)
+  end
+
   test "blocked egress domain records a domain_blocked enforcement row" do
     edge = EdgeFixtures.edge(domains: ["api.example.com"], methods: ["GET"])
     {attempt, host} = attached("catalyst:local.audited-egress:1.0.0")
@@ -81,14 +98,14 @@ defmodule Opus.HttpHandlerEnforcementTest do
     malformed = HttpHandler.execute("not json", edge, EdgeFixtures.limits(), host, "ref")
     assert %{"error" => %{"type" => "invalid_json"}} = Jason.decode!(malformed)
 
-    request =
-      Jason.encode!(%{"method" => "GET", "url" => "https://nonexistent.invalid/data"})
+    resolve_through(Cyfr.Test.Resolver)
+    request = Jason.encode!(%{"method" => "GET", "url" => "https://nonexistent.test/data"})
 
     result =
       HttpHandler.execute(request, edge, EdgeFixtures.limits(), host, attempt.component_ref)
 
-    assert %{"error" => %{"type" => type}} = Jason.decode!(result)
-    assert type in ["dns_error", "http_error"]
+    assert %{"error" => %{"type" => "dns_error", "message" => message}} = Jason.decode!(result)
+    assert message =~ "nonexistent.test"
     assert rows_for(attempt) == []
   end
 

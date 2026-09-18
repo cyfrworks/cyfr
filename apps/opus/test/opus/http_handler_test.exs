@@ -4,6 +4,11 @@
 defmodule Opus.HttpHandlerTest do
   use ExUnit.Case, async: true
 
+  # A test tagged :public_dns asks the machine's resolver for a public name
+  # and is excluded by default (`test_helper.exs`); `mix test --include
+  # public_dns` runs it. Every other name here resolves without the
+  # network: an address literal, or `localhost` from the hosts file.
+
   alias Opus.HttpHandler
   alias Opus.Test.EdgeFixtures
   alias Opus.Test.ScriptedHost
@@ -178,18 +183,8 @@ defmodule Opus.HttpHandlerTest do
   # ============================================================================
 
   describe "resolve_and_validate_ip/1" do
-    test "resolves public hostname successfully" do
-      # Use a well-known public hostname
-      case HttpHandler.resolve_and_validate_ip("one.one.one.one") do
-        {:ok, ip_string} ->
-          assert is_binary(ip_string)
-          # Should be Cloudflare's IP
-          assert ip_string =~ ~r/^\d+\.\d+\.\d+\.\d+$/
-
-        {:error, :dns_error, _msg} ->
-          # DNS may not be available in CI
-          :ok
-      end
+    test "admits a public address" do
+      assert {:ok, "203.0.113.1"} = HttpHandler.resolve_and_validate_ip("203.0.113.1")
     end
 
     test "blocks localhost resolution" do
@@ -200,6 +195,9 @@ defmodule Opus.HttpHandlerTest do
       assert msg =~ "127.0.0.1"
     end
 
+    # This entry takes no resolver of its own, so the name that does not
+    # exist is the public resolver's answer.
+    @tag :public_dns
     test "returns dns_error for non-existent domain" do
       assert {:error, :dns_error, msg} =
                HttpHandler.resolve_and_validate_ip("this-domain-does-not-exist-cyfr-test.invalid")
@@ -254,14 +252,7 @@ defmodule Opus.HttpHandlerTest do
     test "public IPs are unaffected by the allowlist" do
       edge = EdgeFixtures.edge(private_ips: [])
 
-      case HttpHandler.resolve_and_validate_ip("one.one.one.one", edge) do
-        {:ok, ip_string} ->
-          assert is_binary(ip_string)
-
-        {:error, :dns_error, _msg} ->
-          # DNS may not be available in CI
-          :ok
-      end
+      assert {:ok, "203.0.113.1"} = HttpHandler.resolve_and_validate_ip("203.0.113.1", edge)
     end
   end
 
