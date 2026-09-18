@@ -292,9 +292,10 @@ jobs:
           echo "MinIO did not become healthy" >&2
           docker logs minio || true
           exit 1
+      # From the umbrella root: the CYFR suite's boot wires the Opus worker
+      # service, which a run from apps/cyfr does not load.
       - name: Run the S3 integration suite
-        working-directory: apps/cyfr
-        run: mix test --only s3_integration
+        run: mix test apps/cyfr/test --only s3_integration
       # What the server thought of the requests, when it refused them.
       - name: MinIO logs
         if: failure()
