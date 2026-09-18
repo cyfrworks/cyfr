@@ -159,6 +159,90 @@ defmodule Arca.SchemaBaselineTest do
     end
   end
 
+  test "a storage unit is one pointer per estate, root and key, published only by a commit" do
+    columns = Map.new(columns("storage_units"), &{&1.name, &1})
+
+    for column <- ~w(root unit_key state), do: assert(columns[column].not_null?)
+
+    for column <- ~w(current_revision release_digest draft_writer_token),
+        do: refute(columns[column].not_null?)
+
+    unit = unit_row("components", "reagents/local/hello/1.0.0")
+    assert :ok = insert_row("storage_units", unit)
+
+    # The same key under the same root is the same unit; another root or
+    # another estate is not.
+    assert :refused = insert_row("storage_units", %{unit | id: "su_twice"})
+    assert :ok = insert_row("storage_units", %{unit | id: "su_aqua", root: "aqua"})
+    assert :ok = insert_row("storage_units", %{unit | id: "su_theirs", athanor_id: "ath_theirs"})
+  end
+
+  test "a storage commit is appended per revision and names its unit within the estate" do
+    columns = Map.new(columns("storage_commits"), &{&1.name, &1})
+
+    for column <- ~w(storage_unit_id new_revision content_identity commit_identity committed_at),
+        do: assert(columns[column].not_null?)
+
+    refute columns["prior_revision"].not_null?
+
+    unit = unit_row("aqua", "roles/scribe.md")
+    assert :ok = insert_row("storage_units", unit)
+
+    # Append-only: every commit of the unit is one more row.
+    assert :ok = insert_row("storage_commits", commit_row(unit, nil, "rev_1"))
+    assert :ok = insert_row("storage_commits", commit_row(unit, "rev_1", "rev_2"))
+
+    # A journal row for a unit the estate does not hold is refused: the
+    # composite key ties it to its unit's row, never across estates.
+    assert :refused = insert_row("storage_commits", commit_row(%{unit | id: "su_none"}, nil, "r"))
+
+    assert :refused =
+             insert_row(
+               "storage_commits",
+               commit_row(%{unit | athanor_id: "ath_theirs"}, nil, "r")
+             )
+  end
+
+  test "one provisioning claim per estate, fenced and leased, settled by an outcome" do
+    columns = Map.new(columns("provisioning_claims"), &{&1.name, &1})
+
+    for column <- ~w(owner attempt entry_kind lease_until fence),
+        do: assert(columns[column].not_null?)
+
+    for column <- ~w(outcome outcome_detail), do: refute(columns[column].not_null?)
+
+    claim = claim_row("ath_claimed")
+    assert :ok = insert_row("provisioning_claims", claim)
+
+    # A second claim on the estate is refused whoever takes it: the row is
+    # taken over by compare-and-set, never duplicated.
+    assert :refused =
+             insert_row("provisioning_claims", %{
+               claim
+               | id: "pc_twice",
+                 owner: "boot_2",
+                 fence: 2
+             })
+
+    assert :ok =
+             insert_row("provisioning_claims", %{claim | id: "pc_other", athanor_id: "ath_other"})
+  end
+
+  test "the storage-unit and claim schemas carry exactly their tables' columns",
+       %{declared: declared} do
+    for schema <- [
+          Arca.Schemas.StorageUnit,
+          Arca.Schemas.StorageCommit,
+          Arca.Schemas.ProvisioningClaim
+        ] do
+      table = schema.__schema__(:source)
+      fields = schema.__schema__(:fields) |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+
+      assert fields == Enum.sort(Map.keys(declared[table])),
+             "#{inspect(schema)} drifts from the #{table} table"
+    end
+  end
+
   # --------------------------------------------------------------------------
   # The migration's declarations
 
@@ -248,12 +332,10 @@ defmodule Arca.SchemaBaselineTest do
     end
   end
 
-  # One row inside its own savepoint, so a refused insert leaves the
-  # sandbox's transaction usable on Postgres.
   defp insert_server(transport, url) do
     now = NaiveDateTime.utc_now()
 
-    row = %{
+    insert_row("mcp_servers", %{
       id: "mcp_#{System.unique_integer([:positive])}",
       name: "server-#{System.unique_integer([:positive])}",
       transport: transport,
@@ -264,9 +346,56 @@ defmodule Arca.SchemaBaselineTest do
       athanor_id: "ath_schema",
       inserted_at: now,
       updated_at: now
-    }
+    })
+  end
 
-    Arca.Repo.transaction(fn -> Arca.Repo.insert_all("mcp_servers", [row]) end)
+  defp unit_row(root, unit_key) do
+    now = NaiveDateTime.utc_now()
+
+    %{
+      id: "su_#{System.unique_integer([:positive])}",
+      athanor_id: "ath_schema",
+      root: root,
+      unit_key: unit_key,
+      state: "draft",
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp commit_row(unit, prior_revision, new_revision) do
+    %{
+      id: "sc_#{System.unique_integer([:positive])}",
+      athanor_id: unit.athanor_id,
+      storage_unit_id: unit.id,
+      prior_revision: prior_revision,
+      new_revision: new_revision,
+      content_identity: "sha256:#{new_revision}",
+      commit_identity: "usr_schema",
+      committed_at: NaiveDateTime.utc_now()
+    }
+  end
+
+  defp claim_row(athanor_id) do
+    now = NaiveDateTime.utc_now()
+
+    %{
+      id: "pc_#{System.unique_integer([:positive])}",
+      athanor_id: athanor_id,
+      owner: "boot_1",
+      attempt: "att_1",
+      entry_kind: "first_need",
+      lease_until: NaiveDateTime.add(now, 60, :second),
+      fence: 1,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  # One row inside its own savepoint, so a refused insert leaves the
+  # sandbox's transaction usable on Postgres.
+  defp insert_row(table, row) do
+    Arca.Repo.transaction(fn -> Arca.Repo.insert_all(table, [row]) end)
     :ok
   rescue
     _refused in Arca.Repo.Errors.db_errors() -> :refused

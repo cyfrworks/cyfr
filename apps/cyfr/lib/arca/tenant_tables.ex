@@ -56,6 +56,8 @@ defmodule Arca.TenantTables do
     "webhooks",
     "sessions",
     "api_keys",
+    "storage_commits",
+    "storage_units",
     "components",
     "executions",
     "mcp_logs",
@@ -65,6 +67,7 @@ defmodule Arca.TenantTables do
     "schedule_occurrences",
     "cron_schedules",
     "build_records",
+    "provisioning_claims",
     "memberships"
   ]
 

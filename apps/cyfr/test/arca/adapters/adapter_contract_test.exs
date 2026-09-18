@@ -13,12 +13,45 @@ defmodule Arca.Adapters.ContractTest do
 
   The shared fixture tree under `data/`: `a.txt` = "a", `b.txt` = "b",
   `sub/c.txt` = "c" (and, on S3, a `marker/` directory-marker object).
+
+  The conditional writes and the prefix listing (`put_if_none_match/3`,
+  `put_if_match/4`, `list_prefix/2`) have their contract rows here too.
+  They run against `Arca.Storage.TestDouble` today; the Local and S3 rows
+  are skipped, with the reason, until the adapters export the callbacks.
   """
 
   use ExUnit.Case, async: false
 
   alias Arca.Adapters.Local
   alias Arca.Adapters.S3
+
+  defmodule Double do
+    @moduledoc false
+    use Arca.Storage.TestDouble
+  end
+
+  # An adapter that exports none of the optional callbacks: what the
+  # facade must refuse conditional writes for.
+  defmodule WithoutConditionals do
+    @moduledoc false
+    @behaviour Arca.Storage
+
+    defdelegate get(ctx, path), to: Local
+    defdelegate put(ctx, path, content), to: Local
+    defdelegate append(ctx, path, content), to: Local
+    defdelegate delete(ctx, path), to: Local
+    defdelegate list_typed(ctx, path), to: Local
+    defdelegate exists?(ctx, path), to: Local
+    defdelegate delete_tree(ctx, path), to: Local
+    defdelegate list_recursive(ctx, path), to: Local
+    defdelegate usage(ctx, path), to: Local
+    defdelegate ensure_dir(ctx, path), to: Local
+    defdelegate serve_to_conn(conn, ctx, path, opts), to: Local
+  end
+
+  @conditional_pending "the adapter does not export the conditional callbacks yet; " <>
+                         "un-skip when it implements put_if_none_match/3, put_if_match/4 " <>
+                         "and list_prefix/2"
 
   # ---------------------------------------------------------------------------
   # The shared contract — one body per case, called from both describes.
@@ -160,6 +193,71 @@ defmodule Arca.Adapters.ContractTest do
     end
   end
 
+  # A create lands once: the second create of a key answers `:exists` and
+  # leaves the first bytes, whether the key was made by a create or was
+  # already in the tree. Iodata is accepted.
+  defp contract_put_if_none_match_creates_once(adapter, ctx) do
+    key = ["data", "registry", "unit-1"]
+
+    assert {:ok, precondition} = adapter.put_if_none_match(ctx, key, ["fir", "st"])
+    assert {:ok, "first"} = adapter.get(ctx, key)
+
+    assert {:error, :exists} = adapter.put_if_none_match(ctx, key, "second")
+    assert {:ok, "first"} = adapter.get(ctx, key)
+
+    assert {:error, :exists} = adapter.put_if_none_match(ctx, ["data", "a.txt"], "x")
+    assert {:ok, "a"} = adapter.get(ctx, ["data", "a.txt"])
+
+    # The precondition is what a conditional replace of the same bytes
+    # needs, so a create's answer is usable as-is.
+    assert {:ok, _next} = adapter.put_if_match(ctx, key, "third", precondition)
+    assert {:ok, "third"} = adapter.get(ctx, key)
+  end
+
+  # A conditional replace moves the precondition: the one it answered
+  # stands, the one it replaced is stale and writes nothing.
+  defp contract_put_if_match_moves_the_precondition(adapter, ctx) do
+    key = ["data", "registry", "unit-2"]
+
+    assert {:ok, first} = adapter.put_if_none_match(ctx, key, "v1")
+    assert {:ok, second} = adapter.put_if_match(ctx, key, "v2", first)
+    assert second != first
+    assert {:ok, "v2"} = adapter.get(ctx, key)
+
+    assert {:error, :precondition_failed} = adapter.put_if_match(ctx, key, "v3", first)
+    assert {:ok, "v2"} = adapter.get(ctx, key)
+
+    assert {:ok, _third} = adapter.put_if_match(ctx, key, ["v", "3"], second)
+    assert {:ok, "v3"} = adapter.get(ctx, key)
+  end
+
+  # There is nothing to replace at a missing key: no write, whatever the
+  # precondition claims.
+  defp contract_put_if_match_missing_key(adapter, ctx) do
+    key = ["data", "registry", "absent"]
+
+    assert {:error, :missing} = adapter.put_if_match(ctx, key, "x", "any-precondition")
+    refute adapter.exists?(ctx, key)
+  end
+
+  # A prefix listing answers every key below the prefix, nested ones
+  # included, as full segments; an empty prefix is honestly empty; a
+  # prefix that is one object answers that object.
+  defp contract_list_prefix(adapter, ctx) do
+    assert {:ok, []} = adapter.list_prefix(ctx, ["data", "nothing-here"])
+
+    assert {:ok, keys} = adapter.list_prefix(ctx, ["data"])
+
+    assert Enum.sort(keys) == [
+             ["data", "a.txt"],
+             ["data", "b.txt"],
+             ["data", "sub", "c.txt"]
+           ]
+
+    assert {:ok, [["data", "sub", "c.txt"]]} = adapter.list_prefix(ctx, ["data", "sub"])
+    assert {:ok, [["data", "a.txt"]]} = adapter.list_prefix(ctx, ["data", "a.txt"])
+  end
+
   # ---------------------------------------------------------------------------
   # Local
   # ---------------------------------------------------------------------------
@@ -255,6 +353,136 @@ defmodule Arca.Adapters.ContractTest do
     test("traversal segments refuse before any I/O", %{ctx: ctx},
       do: contract_traversal_refused(Local, ctx)
     )
+
+    @tag skip: @conditional_pending
+    test("put_if_none_match/3 creates a key once", %{ctx: ctx},
+      do: contract_put_if_none_match_creates_once(Local, ctx)
+    )
+
+    @tag skip: @conditional_pending
+    test("put_if_match/4 moves the precondition and refuses a stale one", %{ctx: ctx},
+      do: contract_put_if_match_moves_the_precondition(Local, ctx)
+    )
+
+    @tag skip: @conditional_pending
+    test("put_if_match/4 on a missing key writes nothing", %{ctx: ctx},
+      do: contract_put_if_match_missing_key(Local, ctx)
+    )
+
+    @tag skip: @conditional_pending
+    test("list_prefix/2 answers every key below a prefix", %{ctx: ctx},
+      do: contract_list_prefix(Local, ctx)
+    )
+  end
+
+  # ---------------------------------------------------------------------------
+  # The test double — the conditional contract, until Local and S3 carry it
+  # ---------------------------------------------------------------------------
+
+  describe "Arca.Storage.TestDouble" do
+    setup do
+      {:ok, ctx: local_tree!("contract_double")}
+    end
+
+    test("put_if_none_match/3 creates a key once", %{ctx: ctx},
+      do: contract_put_if_none_match_creates_once(Double, ctx)
+    )
+
+    test("put_if_match/4 moves the precondition and refuses a stale one", %{ctx: ctx},
+      do: contract_put_if_match_moves_the_precondition(Double, ctx)
+    )
+
+    test("put_if_match/4 on a missing key writes nothing", %{ctx: ctx},
+      do: contract_put_if_match_missing_key(Double, ctx)
+    )
+
+    test("list_prefix/2 answers every key below a prefix", %{ctx: ctx},
+      do: contract_list_prefix(Double, ctx)
+    )
+
+    test "racing creates of one key land exactly one", %{ctx: ctx} do
+      key = ["data", "registry", "raced"]
+
+      answers =
+        1..8
+        |> Task.async_stream(fn n -> Double.put_if_none_match(ctx, key, "writer-#{n}") end,
+          max_concurrency: 8,
+          ordered: false
+        )
+        |> Enum.map(fn {:ok, answer} -> answer end)
+
+      assert Enum.count(answers, &match?({:ok, _}, &1)) == 1
+      assert Enum.count(answers, &(&1 == {:error, :exists})) == 7
+      assert {:ok, "writer-" <> _} = Double.get(ctx, key)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The facade's dispatch — the configured adapter, or a refusal
+  # ---------------------------------------------------------------------------
+
+  describe "Arca.Storage conditional dispatch" do
+    setup do
+      ctx = local_tree!("contract_dispatch")
+      original = Application.get_env(:cyfr, :storage_adapter)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :storage_adapter, original),
+          else: Application.delete_env(:cyfr, :storage_adapter)
+      end)
+
+      {:ok, ctx: ctx}
+    end
+
+    test "reaches the configured adapter's callbacks", %{ctx: ctx} do
+      Application.put_env(:cyfr, :storage_adapter, Double)
+      key = ["data", "registry", "dispatched"]
+
+      assert {:ok, precondition} = Arca.Storage.put_if_none_match(ctx, key, "one")
+      assert {:error, :exists} = Arca.Storage.put_if_none_match(ctx, key, "two")
+      assert {:ok, _next} = Arca.Storage.put_if_match(ctx, key, "two", precondition)
+
+      assert {:error, :precondition_failed} =
+               Arca.Storage.put_if_match(ctx, key, "x", precondition)
+
+      assert {:ok, [^key]} = Arca.Storage.list_prefix(ctx, key)
+    end
+
+    test "refuses, writing nothing, when the adapter exports no conditional callbacks",
+         %{ctx: ctx} do
+      Application.put_env(:cyfr, :storage_adapter, WithoutConditionals)
+      key = ["data", "registry", "refused"]
+
+      assert {:error, :unsupported} = Arca.Storage.put_if_none_match(ctx, key, "one")
+      assert {:error, :unsupported} = Arca.Storage.put_if_match(ctx, ["data", "a.txt"], "x", "p")
+      assert {:error, :unsupported} = Arca.Storage.list_prefix(ctx, ["data"])
+
+      refute WithoutConditionals.exists?(ctx, key)
+      assert {:ok, "a"} = WithoutConditionals.get(ctx, ["data", "a.txt"])
+    end
+  end
+
+  # A fresh Local tree under tmp holding the shared fixture, torn down with
+  # the test; the context to read it with.
+  defp local_tree!(tag) do
+    base = Path.join(System.tmp_dir!(), "#{tag}_#{System.unique_integer([:positive])}")
+    original = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, base)
+
+    on_exit(fn ->
+      File.rm_rf(base)
+
+      if original,
+        do: Application.put_env(:cyfr, :base_path, original),
+        else: Application.delete_env(:cyfr, :base_path)
+    end)
+
+    ctx = Sanctum.TestContext.local()
+    :ok = Local.put(ctx, ["data", "a.txt"], "a")
+    :ok = Local.put(ctx, ["data", "b.txt"], "b")
+    :ok = Local.put(ctx, ["data", "sub", "c.txt"], "c")
+    ctx
   end
 
   # ---------------------------------------------------------------------------
@@ -528,6 +756,26 @@ defmodule Arca.Adapters.ContractTest do
 
     test("traversal segments refuse before any I/O", %{ctx: ctx},
       do: contract_traversal_refused(S3, ctx)
+    )
+
+    @tag skip: @conditional_pending
+    test("put_if_none_match/3 creates a key once", %{ctx: ctx},
+      do: contract_put_if_none_match_creates_once(S3, ctx)
+    )
+
+    @tag skip: @conditional_pending
+    test("put_if_match/4 moves the precondition and refuses a stale one", %{ctx: ctx},
+      do: contract_put_if_match_moves_the_precondition(S3, ctx)
+    )
+
+    @tag skip: @conditional_pending
+    test("put_if_match/4 on a missing key writes nothing", %{ctx: ctx},
+      do: contract_put_if_match_missing_key(S3, ctx)
+    )
+
+    @tag skip: @conditional_pending
+    test("list_prefix/2 answers every key below a prefix", %{ctx: ctx},
+      do: contract_list_prefix(S3, ctx)
     )
   end
 end
