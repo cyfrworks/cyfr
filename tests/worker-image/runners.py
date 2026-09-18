@@ -382,7 +382,7 @@ def test_abandoned_stream(stack, plane):
     expect(stack.start(again)[1] == {"ok": True}, "the athanor's next streaming catalyst starts")
     fresh = attached_runner(stack, plane, again)
     complete = plane.wait_seen("complete", again["execution_id"], BOOT_S)[0]
-    pushes = plane.seen("push_deltas", again["execution_id"])
+    pushes = plane.wait_seen("push_deltas", again["execution_id"], 5)
     expect(fresh["runner"] != runner["runner"] and all(p["answered"] == "ok" for p in pushes) and complete["answered"] == "ok",
            f"a fresh runner ran it, its {len(pushes)} deltas each answered once", pushes)
     return runner

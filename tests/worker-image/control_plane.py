@@ -170,11 +170,13 @@ class ControlPlane:
                 self.lock.wait(min(remaining, 0.25))
 
     def wait_seen(self, op, execution_id, timeout, count=1):
-        return self.wait_for(
-            lambda: len(self.seen(op, execution_id)) >= count and self.seen(op, execution_id),
-            timeout,
-            f"{count} {op} of {execution_id}",
-        )
+        """At least `count` requests of `op`, each answered (or held by its script): a request is recorded before its answer is."""
+
+        def settled():
+            seen = self.seen(op, execution_id)
+            return len(seen) >= count and all("answered" in r or "held" in r for r in seen) and seen
+
+        return self.wait_for(settled, timeout, f"{count} {op} of {execution_id}")
 
     def record(self, entry):
         entry["t"] = self.elapsed()
