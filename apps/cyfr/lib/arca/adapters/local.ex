@@ -596,11 +596,11 @@ defmodule Arca.Adapters.Local do
   defp write_journal(%{live: live, staged: staged, retired: retired, journal: journal}) do
     File.write(
       journal,
-      :erlang.term_to_binary(%{
-        version: 1,
-        live: Path.basename(live),
-        staged: Path.basename(staged),
-        retired: Path.basename(retired)
+      Jason.encode!(%{
+        "version" => 1,
+        "live" => Path.basename(live),
+        "staged" => Path.basename(staged),
+        "retired" => Path.basename(retired)
       })
     )
   end
@@ -609,11 +609,13 @@ defmodule Arca.Adapters.Local do
   # under the journal's own number, so they are rebuilt from the journal's
   # file name and the record must agree: a journal that names anything
   # else directs no rename. One that cannot be read is an orphan the
-  # sweep ages out like any temp file.
+  # sweep ages out like any temp file. The record is JSON: the journal
+  # sits in a tenant's tree, so its bytes are never decoded as a term.
   defp read_journal(journal) do
     with [_, live, n] <- Regex.run(~r/^(.+)\.swap\.tmp\.(\d+)$/s, Path.basename(journal)),
          {:ok, bytes} <- File.read(journal),
-         %{version: 1, live: ^live, staged: staged, retired: retired} <- decode_journal(bytes),
+         {:ok, %{"version" => 1, "live" => ^live, "staged" => staged, "retired" => retired}} <-
+           Jason.decode(bytes),
          true <- staged == "#{live}.staged.tmp.#{n}" and retired == "#{live}.retired.tmp.#{n}" do
       dir = Path.dirname(journal)
 
@@ -627,12 +629,6 @@ defmodule Arca.Adapters.Local do
     else
       _ -> {:error, :corrupt_journal}
     end
-  end
-
-  defp decode_journal(bytes) do
-    :erlang.binary_to_term(bytes, [:safe])
-  rescue
-    ArgumentError -> :corrupt
   end
 
   # Bring a journalled swap to rest, whichever step it stopped at, and

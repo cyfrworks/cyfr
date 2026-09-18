@@ -145,11 +145,11 @@ defmodule Arca.Adapters.LocalTest do
 
       File.write!(
         journal,
-        :erlang.term_to_binary(%{
-          version: 1,
-          live: "site",
-          staged: "site.staged.tmp.7",
-          retired: "site.retired.tmp.7"
+        Jason.encode!(%{
+          "version" => 1,
+          "live" => "site",
+          "staged" => "site.staged.tmp.7",
+          "retired" => "site.retired.tmp.7"
         })
       )
 
@@ -223,11 +223,11 @@ defmodule Arca.Adapters.LocalTest do
 
       File.write!(
         names.journal,
-        :erlang.term_to_binary(%{
-          version: 1,
-          live: "site",
-          staged: "keep",
-          retired: "site.retired.tmp.7"
+        Jason.encode!(%{
+          "version" => 1,
+          "live" => "site",
+          "staged" => "keep",
+          "retired" => "site.retired.tmp.7"
         })
       )
 
@@ -246,6 +246,28 @@ defmodule Arca.Adapters.LocalTest do
       end)
 
       assert beside(ctx) == ["keep"]
+    end
+
+    test "a journal that is an Erlang term, not the JSON record, directs no rename", %{ctx: ctx} do
+      names = crashed_swap!(ctx, staged: "new")
+
+      File.write!(
+        names.journal,
+        :erlang.term_to_binary(%{
+          version: 1,
+          live: "site",
+          staged: "site.staged.tmp.7",
+          retired: "site.retired.tmp.7"
+        })
+      )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, 0} = Local.sweep_stale_tmp(3600)
+        end)
+
+      assert log =~ "unreadable swap journal"
+      refute File.exists?(names.live)
     end
 
     test "a successful replacement leaves no journal behind", %{ctx: ctx} do
