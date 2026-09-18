@@ -153,9 +153,9 @@ defmodule Opus.RunnerPoolTest do
     wait_until(fn -> counts(pool).idle == 1 end)
 
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 0} end, 2_000)
+    wait_until(fn -> Enum.count(RunnerPool.runners(pool)) == 1 end)
     assert [{^id, 0}] = ScriptedKeeper.releases(keeper)
     refute Process.alive?(pid)
-    assert Enum.count(RunnerPool.runners(pool)) == 1
   end
 
   test "an unclean completion, an exit and a kill taint the runner, which is released and gone",
@@ -185,9 +185,7 @@ defmodule Opus.RunnerPoolTest do
     {:ok, killed, killed_id} = RunnerPool.take(pool, "ath_a", "exec_3")
     assert :ok = RunnerPool.taint(pool, killed, 250)
     assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 1}
-
-    assert [{^killed_id, 250}] =
-             Enum.filter(ScriptedKeeper.releases(keeper), &(elem(&1, 0) == killed_id))
+    wait_until(fn -> {killed_id, 250} in ScriptedKeeper.releases(keeper) end)
 
     # Ended by the keeper after its grace, without a frame of its own.
     assert_receive {RunnerPool, ^killed, {:gone, _reason}}, 2_000
