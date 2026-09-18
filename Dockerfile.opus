@@ -4,6 +4,25 @@
 # and is reached by CYFR on its own listener; it has no endpoint of the
 # product's, no database and no tenant state, and the release carries only
 # the shared contracts and the engine (`mix release opus`).
+#
+# Process model: cyfr-spawn runs as root holding only SETUID, SETGID and
+# KILL (it refuses to start with any other capability), starts the opus
+# release as opus, the service, and runs every runner — the process that
+# runs one execution subtree at a time (`Opus.Runner`) — under a pooled
+# uid of its own (opus-runner01…opus-runner08) with a 0700 home under
+# /var/lib/opus/homes and its control channel on file descriptor 3. When
+# a runner ends every process of its uid is killed and everything the uid
+# left is removed before another runner gets it; the service loads no
+# component, and refuses to start runners without cyfr-spawn.
+
+# ---- cyfr-spawn, the process helper: a static Go binary, pinned to the Go
+# release apps/spawn/go.mod names ----
+FROM golang:1.26.6-alpine AS spawn
+WORKDIR /src
+COPY apps/spawn/go.mod apps/spawn/go.sum ./
+RUN go mod download
+COPY apps/spawn/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-spawn .
 
 # ---- Stage 1: release build ----
 FROM hexpm/elixir:1.20.3-erlang-29.0.5-debian-bookworm-20260824 AS relbuilder
@@ -52,9 +71,18 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
     && locale-gen
 
-# The engine's user: it writes nothing but the release's temporary files.
+# The service's user and the runner pool: each user is alone in its own
+# group and belongs to no other. /run/opus holds the release's temporary
+# files and the attach socket runners' relays connect to; the home root
+# holds each runner's 0700 home, on a tmpfs mounted with mode=1733.
 RUN groupadd -r -g 10002 opus \
     && useradd -r -u 10002 -g opus -d /app -M -s /usr/sbin/nologin opus \
+    && for i in $(seq 1 8); do \
+         name="$(printf 'opus-runner%02d' "$i")"; uid=$((30100 + i)); \
+         groupadd -r -g "$uid" "$name" \
+         && useradd -r -u "$uid" -g "$name" -d /nonexistent -M -s /usr/sbin/nologin "$name" || exit 1; \
+       done \
+    && install -d -m 1733 -o root -g root /var/lib/opus/homes \
     && install -d -m 0700 -o opus -g opus /run/opus
 
 ENV LANG=en_US.UTF-8
@@ -64,13 +92,15 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 
 WORKDIR /app
 
+COPY --from=spawn /out/cyfr-spawn /usr/local/bin/cyfr-spawn
 COPY --from=relbuilder /app/_build/prod/rel/opus ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
 
 # The release starts no Erlang distribution: a listener any guest could
 # reach, authenticated by a cookie any guest could read. Its temporary
-# files go where only its own user can reach them.
+# files go where only its own user can reach them; a runner's go under
+# the home the keeper gives it (`Opus.Release.runner_command/0`).
 ENV RELEASE_DISTRIBUTION=none \
     RELEASE_TMP=/run/opus
 
@@ -82,7 +112,7 @@ EXPOSE ${OPUS_PORT}
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
     CMD [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:${OPUS_PORT:-4200}/worker/v1/status)" = "401" ] || exit 1
 
-USER opus
-
-ENTRYPOINT ["/app/bin/opus"]
-CMD ["start"]
+# Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
+# `no-new-privileges`, a read-only root, `ipc: none` and the homes and
+# /run/opus tmpfs mounts (docker-compose.yml's opus service).
+ENTRYPOINT ["cyfr-spawn", "serve", "--pool", "runner:30101-30108", "--home-root", "/var/lib/opus/homes", "--client-user", "opus", "--", "/app/bin/opus", "start"]

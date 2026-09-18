@@ -77,7 +77,7 @@ defmodule Opus.WorkerListenerTest do
              status
 
     assert boot == context.boot
-    assert %{"fresh" => 0, "idle" => 0, "busy" => 0} = runners
+    assert %{"fresh" => 0, "idle" => 0, "busy" => 0, "tainted" => 0} = runners
   end
 
   test "a request under another key is refused without the body being read", context do

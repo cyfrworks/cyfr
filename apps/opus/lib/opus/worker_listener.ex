@@ -163,6 +163,7 @@ defmodule Opus.WorkerListener do
     case Opus.WorkerService.start(token, input, sealed) do
       :ok -> {:ok, true}
       {:error, :malformed} -> {:error, :malformed}
+      {:error, :unavailable} -> {:error, :unavailable}
     end
   catch
     :exit, _reason -> {:error, :unavailable}
@@ -187,7 +188,8 @@ defmodule Opus.WorkerListener do
        "runners" => %{
          "fresh" => status.runners.fresh,
          "idle" => status.runners.idle,
-         "busy" => status.runners.busy
+         "busy" => status.runners.busy,
+         "tainted" => status.runners.tainted
        },
        "attempts" => status.attempts
      }}

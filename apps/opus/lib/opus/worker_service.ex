@@ -3,10 +3,9 @@
 
 defmodule Opus.WorkerService do
   @moduledoc """
-  The worker service: it starts a runner for each assignment CYFR
-  dispatches and for each child a formula's runner is admitted, kills
-  runners, and reports each runner that exits leaving its attempt open. It
-  implements `Cyfr.WorkerAPI` and runs no guest code.
+  The worker service: it takes each assignment CYFR dispatches, hands it
+  to a runner, kills runners, and reports each runner that exits leaving
+  attempts open. It implements `Cyfr.WorkerAPI` and runs no guest code.
 
   Its service id, its worker key and where CYFR is are its credentials
   (`Opus.Credentials`, from `config :opus`), loaded when it starts; a
@@ -21,29 +20,43 @@ defmodule Opus.WorkerService do
   CYFR reaches `start/3`, `kill/1` and `status/0` through
   `Opus.WorkerListener`. `start/3` reads the assignment
   (`Cyfr.Assignment.read/1`), refuses it as `:malformed` unless it names
-  this service and boot, its input matches its `input_digest`, and the
-  sealed keys open under this worker service's dispatch seal key as the
-  attempt it names, on this worker service
-  (`Cyfr.WorkerAuth.open_attempt_keys/2`), and then starts an
-  `Opus.Runner` under `Opus.WorkerService.Runners` with a host client of
-  its own runner id, presenting this boot to the host API its credentials
-  name, and monitors it.
+  this service and boot, its input matches its `input_digest` and is a
+  JSON object, and the sealed keys open under this worker service's
+  dispatch seal key as the attempt it names, on this worker service
+  (`Cyfr.WorkerAuth.open_attempt_keys/2`). The dispatch seal key never
+  leaves this process: the runner is handed the opened keys.
 
-  `start_child/2` starts a runner, the same way, for a child CYFR admitted
-  and claimed for a formula's runner (`Opus.HostClient.admit_child/5`): it
-  runs in that runner's group, presenting as the same runner. A child with
-  a waiting process (a formula's synchronous call or spawned task) is
-  killed when that process exits before its runner settles
-  (`settled/0`); a streamed child, with none, runs until it closes.
+  ## Runners
 
-  A runner tells the service its component process and what that process
-  started (`track/1`). `kill/1` kills a runner's component process and the
-  runner by name, a child's as a root's. When a runner exits, its
-  component process (with the formula tracker linked to it) and its
-  streaming requests are stopped; a runner that exits other than `:normal`
-  left its attempt open, and a process of its own reports the exit to CYFR
-  at once, naming the runner and signed with its dispatch key
-  (`Opus.HostClient.runner_exited/4`).
+  Under the pool (`Opus.RunnerPool`, every keeper but `:local`), a runner
+  is an OS process the service never shares a VM with, and the service
+  loads no component. `start/3` takes a runner of the assignment's
+  athanor from the pool and sends it the `assign` over `Cyfr.RunnerControl`;
+  the runner attaches, runs the subtree with its formula children and
+  reports `complete`, clean or not, or `exit` with the attempts still
+  open. A runner that reports `exit`, or whose channel closes or process
+  ends with the subtree still assigned, is reported to CYFR at once,
+  naming the runner and signed with the service's dispatch key
+  (`Opus.HostClient.runner_exited/4`); a runner is reported once. A
+  `start` no runner can be found for (the keeper's pool is full, or a
+  runner cannot be spawned) answers `{:error, :unavailable}`, which the
+  listener refuses `503`, so CYFR reconciles against the claim.
+
+  `kill/1` for the root of a runner's subtree taints the runner and ends
+  it through the keeper, with the grace to report its open attempts. For
+  any other execution, every busy runner is sent a `cancel_child`, since
+  which of them runs a child is the runner's to know, and the one that
+  does kills the child and completes unclean. A kill is `:ok` again for
+  an execution a runner of this boot already ended, and `:not_found` only
+  when no runner of this boot ever ran it; the ids of the last ten
+  thousand subtrees ended are remembered for it.
+
+  Under the `:local` keeper the service runs each subtree in its own VM
+  (`Opus.Subtree`, `Opus.Attempt`), as a test environment does so a test
+  can hold a guest in its own process: every attempt process, a formula's
+  children included (`Opus.Subtree.start_child/2`), is tracked here, a
+  kill ends the named attempt's process, and an attempt process that
+  exits leaving its attempt open is reported as its runner's exit.
   """
 
   @behaviour Cyfr.WorkerAPI
@@ -53,18 +66,23 @@ defmodule Opus.WorkerService do
   require Logger
 
   alias Cyfr.{Assignment, WorkerAuth}
-  alias Opus.{HostClient, Runner}
+  alias Opus.{HostClient, RunnerPool, RunnerProcess, Subtree}
 
   @runners __MODULE__.Runners
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
+  @remembered 10_000
 
   @doc false
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
+  @doc "The supervisor the service's own attempt processes run under, under the `:local` keeper."
+  @spec runners_supervisor() :: atom()
+  def runners_supervisor, do: @runners
+
   @impl Cyfr.WorkerAPI
   def start(token, input, sealed_keys)
       when is_binary(token) and is_binary(input) and is_binary(sealed_keys) do
-    GenServer.call(__MODULE__, {:start, token, input, sealed_keys, caller()})
+    GenServer.call(__MODULE__, {:start, token, input, sealed_keys, Subtree.caller()})
   end
 
   @impl Cyfr.WorkerAPI
@@ -74,62 +92,41 @@ defmodule Opus.WorkerService do
   @impl Cyfr.WorkerAPI
   def status, do: GenServer.call(__MODULE__, :status)
 
-  @doc """
-  Start a runner for `child`, a child CYFR admitted and claimed for a
-  formula's runner (`t:Opus.HostClient.child/0`). `waiter` is the process
-  the runner answers (`Opus.Runner`), whose exit kills the runner until it
-  settles, or nil for a child nothing waits for. Answers
-  `{:ok, runner_pid}`, or `{:error, :malformed}` when the child's client is
-  not for the attempt its assignment names on this worker service, or
-  names an execution this service already runs.
-  """
-  @spec start_child(HostClient.child(), pid() | nil) :: {:ok, pid()} | {:error, :malformed}
-  def start_child(%{assignment: %Assignment{}, client: %HostClient{}} = child, waiter)
-      when is_pid(waiter) or is_nil(waiter),
-      do: GenServer.call(__MODULE__, {:start_child, child, waiter, caller()})
-
-  @doc """
-  Record, for the calling runner, its component process (`:component`) or
-  the cleanup references its runtime answered (`:cleanup`), which a kill or
-  its exit stops.
-  """
-  @spec track(%{optional(:component) => pid(), optional(:cleanup) => map()}) :: :ok
-  def track(fields) when is_map(fields), do: GenServer.cast(__MODULE__, {:track, self(), fields})
-
-  @doc """
-  Record, for the calling runner, that CYFR has closed its attempt: its
-  waiter's exit no longer kills it.
-  """
-  @spec settled() :: :ok
-  def settled, do: GenServer.call(__MODULE__, {:settled, self()})
-
-  defp caller do
-    %{callers: [self() | Process.get(:"$callers", [])], logger: Cyfr.LoggerContext.capture()}
-  end
-
   # ---------------------------------------------------------------------------
   # Server
   # ---------------------------------------------------------------------------
 
   @impl true
   def init(_opts) do
-    # Trapped, so a shutdown runs `terminate/2`, which stops the component
+    # Trapped, so a shutdown runs `terminate/2`, which stops the attempt
     # processes a runner's exit does not.
     Process.flag(:trap_exit, true)
     credentials = Opus.Credentials.load!()
     :ok = Opus.Credentials.install(credentials)
+    settings = Opus.Settings.pool!()
 
     boot = "#{node()}#" <> Cyfr.UUID7.generate_id("boot")
+    mode = if settings.keeper == :local, do: :local, else: :pool
+
+    if mode == :pool do
+      :ok =
+        RunnerPool.serve(
+          RunnerPool,
+          %{service_id: credentials.service_id, boot: boot, host_url: credentials.host_url},
+          self()
+        )
+    end
 
     {:ok,
-     %{
+     Subtree.new(%{
        credentials: credentials,
        service: credentials.service_id,
        boot: boot,
-       runners: %{},
-       executions: %{},
-       waiters: %{}
-     }}
+       mode: mode,
+       settings: settings,
+       assigned: %{},
+       ended: %{ids: MapSet.new(), order: :queue.new()}
+     })}
   end
 
   @impl true
@@ -143,29 +140,16 @@ defmodule Opus.WorkerService do
            attempt ==
              assignment |> Map.take(@attempt_fields) |> Map.put(:service, state.service),
          {:ok, %{} = decoded} <- Jason.decode(input) do
-      start = %{
-        token: token,
-        assignment: assignment,
-        input: decoded,
-        client:
-          HostClient.new(
-            keys,
-            Cyfr.UUID7.generate_id("runner"),
-            state.boot,
-            state.credentials.host_url
-          )
-      }
-
-      case start_runner(start, caller, nil, state) do
-        {:reply, {:ok, _pid}, state} -> {:reply, :ok, state}
-        refused -> refused
+      case state.mode do
+        :local -> start_local(state, token, assignment, decoded, keys, caller)
+        :pool -> start_pooled(state, token, assignment, input, keys, caller)
       end
     else
       _refused -> {:reply, {:error, :malformed}, state}
     end
   end
 
-  def handle_call({:start_child, child, waiter, caller}, _from, state) do
+  def handle_call({:start_child, child, waiter, caller}, _from, %{mode: :local} = state) do
     %{assignment: assignment, client: client} = child
 
     if client.service == state.service and client.boot == state.boot and
@@ -180,85 +164,106 @@ defmodule Opus.WorkerService do
         waiter: waiter
       }
 
-      start_runner(start, caller, waiter, state)
+      case Subtree.start(state, @runners, start, caller, waiter) do
+        {:ok, pid, state} -> {:reply, {:ok, pid}, state}
+        {:error, :malformed} -> {:reply, {:error, :malformed}, state}
+      end
     else
       {:reply, {:error, :malformed}, state}
     end
   end
 
-  def handle_call({:kill, execution_id}, _from, state) do
-    case Map.fetch(state.executions, execution_id) do
-      {:ok, ref} ->
-        runner = Map.fetch!(state.runners, ref)
-        kill_component(runner)
-        Process.exit(runner.pid, :kill)
+  def handle_call({:start_child, _child, _waiter, _caller}, _from, state),
+    do: {:reply, {:error, :malformed}, state}
+
+  def handle_call({:kill, execution_id}, _from, %{mode: :local} = state) do
+    case Subtree.kill(state, execution_id) do
+      :ok ->
         {:reply, :ok, state}
 
-      :error ->
+      :not_found ->
+        {:reply, if(ended?(state, execution_id), do: :ok, else: {:error, :not_found}), state}
+    end
+  end
+
+  def handle_call({:kill, execution_id}, _from, state) do
+    cond do
+      pid = Map.get(state.executions, execution_id) ->
+        :ok = RunnerPool.taint(RunnerPool, pid, state.settings.release_grace_ms)
+        {:reply, :ok, state}
+
+      ended?(state, execution_id) ->
+        {:reply, :ok, state}
+
+      map_size(state.assigned) > 0 ->
+        :ok = RunnerPool.cancel_child(RunnerPool, execution_id)
+        {:reply, :ok, state}
+
+      true ->
         {:reply, {:error, :not_found}, state}
     end
   end
 
-  def handle_call({:settled, pid}, _from, state) do
-    case find_runner(state, pid) do
-      {ref, runner} ->
-        state = forget_waiter_of(state, runner)
-        {:reply, :ok, %{state | runners: Map.put(state.runners, ref, %{runner | waiter: nil})}}
-
-      nil ->
-        {:reply, :ok, state}
-    end
-  end
+  def handle_call({:settled, pid}, _from, state), do: {:reply, :ok, Subtree.settle(state, pid)}
 
   def handle_call(:status, _from, state) do
-    attempts = for {_ref, runner} <- state.runners, do: runner.attempt
+    {runners, attempts} =
+      case state.mode do
+        :local ->
+          {%{fresh: 0, idle: 0, busy: map_size(state.runners), tainted: 0},
+           Subtree.attempts(state)}
+
+        :pool ->
+          {RunnerPool.status(RunnerPool), for({_pid, a} <- state.assigned, do: a.attempt)}
+      end
 
     {:reply,
-     {:ok,
-      %{
-        service: state.service,
-        boot: state.boot,
-        runners: %{fresh: 0, idle: 0, busy: map_size(state.runners)},
-        attempts: attempts
-      }}, state}
+     {:ok, %{service: state.service, boot: state.boot, runners: runners, attempts: attempts}},
+     state}
   end
 
   @impl true
-  def handle_cast({:track, pid, fields}, state) do
-    case find_runner(state, pid) do
-      {ref, runner} ->
-        runner = %{
-          runner
-          | component: Map.get(fields, :component, runner.component),
-            cleanup: Map.get(fields, :cleanup, runner.cleanup)
-        }
+  def handle_cast({:track, pid, fields}, state), do: {:noreply, Subtree.track(state, pid, fields)}
+  def handle_cast({:unclean, _pid, _reason}, state), do: {:noreply, state}
 
-        {:noreply, %{state | runners: Map.put(state.runners, ref, runner)}}
+  @impl true
+  def handle_info({:DOWN, ref, :process, pid, reason}, %{mode: :local} = state) do
+    case Subtree.down(state, ref) do
+      {:attempt, entry, state} ->
+        if reason != :normal, do: report(state, entry.runner, [entry.attempt], entry)
+        {:noreply, %{state | ended: remember(state.ended, entry.execution_id)}}
 
+      {:waiter, state} ->
+        {:noreply, state}
+
+      {:unknown, state} ->
+        {:noreply, gone(state, pid, {:handle_down, reason})}
+    end
+  end
+
+  def handle_info({:DOWN, _ref, :process, pid, reason}, state),
+    do: {:noreply, gone(state, pid, {:handle_down, reason})}
+
+  def handle_info({RunnerPool, pid, {:complete, execution_id, _clean}}, state) do
+    case Map.get(state.assigned, pid) do
+      %{execution_id: ^execution_id} -> {:noreply, forget(state, pid)}
+      _ -> {:noreply, state}
+    end
+  end
+
+  def handle_info({RunnerPool, pid, {:exit, runner, open}}, state) do
+    case Map.get(state.assigned, pid) do
       nil ->
         {:noreply, state}
+
+      assignment ->
+        report(state, runner, Enum.uniq([assignment.attempt | open]), assignment)
+        {:noreply, forget(state, pid)}
     end
   end
 
-  @impl true
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
-    case Map.pop(state.runners, ref) do
-      {nil, _runners} ->
-        {:noreply, waiter_down(ref, state)}
-
-      {runner, runners} ->
-        kill_component(runner)
-        if reason != :normal, do: report(state, runner)
-
-        state = %{
-          state
-          | runners: runners,
-            executions: Map.delete(state.executions, runner.execution_id)
-        }
-
-        {:noreply, forget_waiter_of(state, runner)}
-    end
-  end
+  def handle_info({RunnerPool, pid, {:gone, reason}}, state),
+    do: {:noreply, gone(state, pid, reason)}
 
   def handle_info(msg, state) do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg)
@@ -272,107 +277,148 @@ defmodule Opus.WorkerService do
 
   @impl true
   def terminate(_reason, state) do
-    for {_ref, runner} <- state.runners do
-      kill_component(runner)
-      Process.exit(runner.pid, :kill)
-    end
-
+    Subtree.kill_all(state)
     :ok
   end
 
-  defp start_runner(start, caller, waiter, state) do
-    execution_id = start.assignment.execution_id
+  # ---------------------------------------------------------------------------
+  # Starting
+  # ---------------------------------------------------------------------------
 
-    with false <- Map.has_key?(state.executions, execution_id),
-         {:ok, pid} <-
-           DynamicSupervisor.start_child(
-             @runners,
-             {Runner, Map.merge(start, %{callers: caller.callers, logger: caller.logger})}
-           ) do
-      ref = Process.monitor(pid)
-      waiter_ref = if is_pid(waiter), do: Process.monitor(waiter)
+  defp start_local(state, token, assignment, decoded, keys, caller) do
+    start = %{
+      token: token,
+      assignment: assignment,
+      input: decoded,
+      client:
+        HostClient.new(
+          keys,
+          Cyfr.UUID7.generate_id("runner"),
+          state.boot,
+          state.credentials.host_url
+        )
+    }
 
-      runner = %{
-        pid: pid,
-        execution_id: execution_id,
-        attempt: start.assignment.attempt,
-        runner: start.client.runner,
-        callers: caller.callers,
-        logger: caller.logger,
-        waiter: waiter_ref,
-        component: nil,
-        cleanup: %{}
-      }
-
-      waiters = if waiter_ref, do: Map.put(state.waiters, waiter_ref, ref), else: state.waiters
-
-      {:reply, {:ok, pid},
-       %{
-         state
-         | runners: Map.put(state.runners, ref, runner),
-           executions: Map.put(state.executions, execution_id, ref),
-           waiters: waiters
-       }}
-    else
-      _refused -> {:reply, {:error, :malformed}, state}
+    case Subtree.start(state, @runners, start, caller, nil) do
+      {:ok, _pid, state} -> {:reply, :ok, state}
+      {:error, :malformed} -> {:reply, {:error, :malformed}, state}
     end
   end
 
-  defp find_runner(state, pid), do: Enum.find(state.runners, fn {_ref, r} -> r.pid == pid end)
+  defp start_pooled(state, token, assignment, input, keys, caller) do
+    execution_id = assignment.execution_id
 
-  # A waiting process that exits before its child's runner settles kills
-  # the runner, whose exit is then reported.
-  defp waiter_down(waiter_ref, state) do
-    case Map.pop(state.waiters, waiter_ref) do
-      {nil, _waiters} ->
+    if Map.has_key?(state.executions, execution_id) do
+      {:reply, {:error, :malformed}, state}
+    else
+      case RunnerPool.take(RunnerPool, assignment.athanor_id, execution_id) do
+        {:ok, pid, runner} ->
+          case assign(pid, token, input, keys) do
+            :ok ->
+              Process.monitor(pid)
+
+              assigned = %{
+                runner: runner,
+                execution_id: execution_id,
+                attempt: assignment.attempt,
+                athanor: assignment.athanor_id,
+                callers: caller.callers,
+                logger: caller.logger
+              }
+
+              {:reply, :ok,
+               %{
+                 state
+                 | assigned: Map.put(state.assigned, pid, assigned),
+                   executions: Map.put(state.executions, execution_id, pid)
+               }}
+
+            {:error, :malformed} ->
+              :ok = RunnerPool.taint(RunnerPool, pid, 0)
+              {:reply, {:error, :malformed}, state}
+
+            {:error, reason} ->
+              Logger.error(
+                "[Opus.WorkerService] the assign of #{execution_id} was not sent: #{inspect(reason)}"
+              )
+
+              :ok = RunnerPool.taint(RunnerPool, pid, 0)
+              {:reply, {:error, :unavailable}, state}
+          end
+
+        {:error, reason} ->
+          Logger.error("[Opus.WorkerService] no runner for #{execution_id}: #{inspect(reason)}")
+          {:reply, {:error, :unavailable}, state}
+      end
+    end
+  end
+
+  # The assign as the protocol spells it; a value the protocol refuses
+  # (the input past its bound) is the caller's, and refuses the start.
+  defp assign(pid, token, input, keys) do
+    RunnerProcess.send_message(pid, %{type: :assign, assignment: token, input: input, keys: keys})
+  rescue
+    ArgumentError -> {:error, :malformed}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Runners' ends
+  # ---------------------------------------------------------------------------
+
+  # A runner gone with its subtree assigned is reported holding the
+  # subtree's root, the one attempt the service knows it held.
+  defp gone(state, pid, _reason) do
+    case Map.get(state.assigned, pid) do
+      nil ->
         state
 
-      {ref, waiters} ->
-        case Map.fetch(state.runners, ref) do
-          {:ok, runner} ->
-            kill_component(runner)
-            Process.exit(runner.pid, :kill)
-
-          :error ->
-            :ok
-        end
-
-        %{state | waiters: waiters}
+      assignment ->
+        report(state, assignment.runner, [assignment.attempt], assignment)
+        forget(state, pid)
     end
   end
 
-  defp forget_waiter_of(state, %{waiter: nil}), do: state
+  defp forget(state, pid) do
+    {assignment, assigned} = Map.pop(state.assigned, pid)
 
-  defp forget_waiter_of(state, %{waiter: waiter_ref}) do
-    Process.demonitor(waiter_ref, [:flush])
-    %{state | waiters: Map.delete(state.waiters, waiter_ref)}
+    %{
+      state
+      | assigned: assigned,
+        executions: Map.delete(state.executions, assignment.execution_id),
+        ended: remember(state.ended, assignment.execution_id)
+    }
   end
 
-  # The component process traps exits, so it is killed by name. Its formula
-  # tracker is linked to it and goes with it, taking the spawned tasks; its
-  # streaming requests run under a supervisor of their own and are stopped
-  # here.
-  defp kill_component(runner) do
-    if is_pid(runner.component), do: Process.exit(runner.component, :kill)
+  defp remember(%{ids: ids, order: order}, execution_id) do
+    if MapSet.member?(ids, execution_id) do
+      %{ids: ids, order: order}
+    else
+      ids = MapSet.put(ids, execution_id)
+      order = :queue.in(execution_id, order)
 
-    if runner.cleanup[:stream_exec_ref],
-      do: Opus.HttpStreamHandler.cleanup_registry(runner.cleanup.stream_exec_ref)
-
-    :ok
+      if MapSet.size(ids) > @remembered do
+        {{:value, oldest}, order} = :queue.out(order)
+        %{ids: MapSet.delete(ids, oldest), order: order}
+      else
+        %{ids: ids, order: order}
+      end
+    end
   end
 
-  defp report(%{credentials: credentials, boot: boot}, runner) do
+  defp ended?(state, execution_id), do: MapSet.member?(state.ended.ids, execution_id)
+
+  defp report(%{credentials: credentials, boot: boot}, runner, attempts, context) do
     spawn(fn ->
-      Process.put(:"$callers", runner.callers)
-      Cyfr.LoggerContext.restore(runner.logger)
+      Process.put(:"$callers", context.callers)
+      Cyfr.LoggerContext.restore(context.logger)
 
-      case HostClient.runner_exited(credentials, boot, runner.runner, [runner.attempt]) do
+      case HostClient.runner_exited(credentials, boot, runner, attempts) do
         :ok ->
           :ok
 
         {:error, reason} ->
           Logger.error(
-            "[Opus.WorkerService] the exit of #{runner.execution_id}'s runner was not " <>
+            "[Opus.WorkerService] the exit of runner #{runner} (#{context.execution_id}) was not " <>
               "reported: #{inspect(reason)}"
           )
       end

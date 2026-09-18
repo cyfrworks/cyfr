@@ -150,7 +150,8 @@ defmodule Opus.Test.ScriptedHost do
   fresh id), `:service` (default the host's), `:component_type` (default
   `:catalyst`), `:component_ref`, `:digest`, `:input` (default
   `%{"fixture" => true}`), `:authority` (default `Cyfr.Authority.zero/0`),
-  `:timeout_ms` (default 60 s), `:intercepted` (default `[]`).
+  `:timeout_ms` (default 60 s), `:intercepted` (default `[]`),
+  `:athanor_id` (default `"ath_test"`).
   """
   @spec attempt!(t(), keyword()) :: map()
   def attempt!(host, opts \\ []) do
@@ -172,7 +173,7 @@ defmodule Opus.Test.ScriptedHost do
     execution_id = Cyfr.UUID7.execution_id()
 
     attempt = %{
-      athanor_id: "ath_test",
+      athanor_id: Keyword.get(opts, :athanor_id, "ath_test"),
       execution_id: execution_id,
       attempt: Cyfr.UUID7.generate_id("att"),
       fence: 1,
@@ -344,16 +345,19 @@ defmodule Opus.Test.ScriptedHost do
     end
 
     defp answer(conn, agent, op, args, caller, seal) do
+      # A function answer runs here, in the request's own process, so one
+      # that holds its answer holds nothing else the host is asked.
       scripted =
         Agent.get_and_update(agent, fn state ->
           case Map.get(state.script, op) do
             nil -> {:default, state}
             [] -> {{:error, :lost}, state}
             [next | rest] -> {next, put_in(state, [:script, op], rest)}
-            fun when is_function(fun, 2) -> {fun.(args, caller), state}
             answer -> {answer, state}
           end
         end)
+
+      scripted = if is_function(scripted, 2), do: scripted.(args, caller), else: scripted
 
       case scripted do
         :default ->

@@ -131,7 +131,10 @@ defmodule Opus.WorkerServiceTest do
     assert ScriptedHost.requests(host, "runner_exited") == []
   end
 
-  test "a kill stops the runner, and its exit is reported", %{host: host, boot: boot} do
+  test "a kill stops the runner, its exit is reported, and the kill is idempotent", %{
+    host: host,
+    boot: boot
+  } do
     ScriptedHost.script(host, "attach", fn _args, _caller ->
       Process.sleep(2_000)
       {:ok, %{}}
@@ -143,7 +146,9 @@ defmodule Opus.WorkerServiceTest do
 
     assert :ok = WorkerService.kill(attempt.execution_id)
     wait_until(fn -> attempts() == [] end)
-    assert {:error, :not_found} = WorkerService.kill(attempt.execution_id)
+    # Again for an execution this boot ended; never for one it never ran.
+    assert :ok = WorkerService.kill(attempt.execution_id)
+    assert {:error, :not_found} = WorkerService.kill("exec_never_here")
 
     wait_until(fn -> ScriptedHost.requests(host, "runner_exited") != [] end, 5_000)
     assert [%{args: %{"attempts" => [held]}}] = ScriptedHost.requests(host, "runner_exited")
