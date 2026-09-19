@@ -6,10 +6,14 @@ defmodule Locus.SpawnerTest do
   The client side of cyfr-spawn's protocol. Against a fake spawner
   (`Locus.Test.FakeSpawner`): a run delivers stdin, answers stdout, the log
   line by line and the exit, and returns only after the spawn is reported
-  released; the deadline, a stdout bound and the caller's death release
-  the spawn with no grace; a relay connection that arrives after the
-  release report still delivers its output; a refused spawn and a lost
-  channel answer at once. Against the shared vectors
+  released; every spawn asks for the builder's memory bound, and there is
+  no asking for none; the deadline, a stdout bound, a cancel and the
+  caller's death release the spawn with no grace; a relay connection that
+  arrives after the release report still delivers its output; a refused
+  spawn and a lost channel answer at once; a spawn ended at its bound is
+  the wire's `memory` refusal and a bound that cannot be enforced its
+  `unavailable`, naming the option the deployment lacks. Against the shared
+  vectors
   (`tests/fixtures/spawn_protocol.json`, which the spawner and its other
   clients reproduce): every reply is understood as the vectors say, and
   every frame stream is read as they encode it, the control stream of a
@@ -36,9 +40,11 @@ defmodule Locus.SpawnerTest do
           env: %{"GREETING" => "hello"},
           stdin: Keyword.get(opts, :stdin, "")
         },
-        timeout_ms: Keyword.get(opts, :timeout_ms, 10_000),
-        max_stdout_bytes: Keyword.get(opts, :max_stdout_bytes, 1_000_000),
-        on_output: fn line -> Agent.update(lines, &[line | &1]) end
+        [
+          timeout_ms: Keyword.get(opts, :timeout_ms, 10_000),
+          max_stdout_bytes: Keyword.get(opts, :max_stdout_bytes, 1_000_000),
+          on_output: fn line -> Agent.update(lines, &[line | &1]) end
+        ] ++ Keyword.take(opts, [:memory_bytes])
       )
 
     {result, Agent.get(lines, &Enum.reverse/1)}
@@ -87,15 +93,82 @@ defmodule Locus.SpawnerTest do
           stdin: stdin
         )
 
-      assert {:ok, %{exit: {:status, 3}, stdout: stdout, log: log}} = result
+      assert {:ok, %{exit: {:status, 3}, stdout: stdout}} = result
       assert String.trim(stdout) == "200000"
       assert lines == ["hello", "partial"]
-      assert log == "hello\npartial"
 
       [spawn] = fake |> FakeSpawner.requests() |> Enum.filter(&(&1["type"] == "spawn"))
       assert spawn["pool"] == "build"
       assert spawn["env"] == %{"GREETING" => "hello"}
       assert spawn["attach"]["token"] =~ ~r/^[0-9a-f]{64}$/
+    end
+
+    test "every spawn asks for the builder's memory bound, and none can ask for no bound", %{
+      name: name,
+      fake: fake
+    } do
+      assert {{:ok, _}, _} = run(name, "true")
+      assert {{:ok, _}, _} = run(name, "true", memory_bytes: 33_554_432)
+
+      Application.put_env(:locus, :memory_bytes, 268_435_456)
+      on_exit(fn -> Application.delete_env(:locus, :memory_bytes) end)
+      assert {{:ok, _}, _} = run(name, "true")
+
+      spawns = fake |> FakeSpawner.requests() |> Enum.filter(&(&1["type"] == "spawn"))
+      assert Enum.map(spawns, & &1["memory_bytes"]) == [1_073_741_824, 33_554_432, 268_435_456]
+
+      for none <- [nil, 0, -1, "1G"] do
+        assert_raise ArgumentError, ~r/memory bound/, fn ->
+          run(name, "true", memory_bytes: none)
+        end
+      end
+
+      assert length(Enum.filter(FakeSpawner.requests(fake), &(&1["type"] == "spawn"))) == 3
+    end
+
+    test "a spawn ended at its memory bound answers the wire's memory refusal with the bound", %{
+      name: name,
+      fake: fake
+    } do
+      :ok =
+        FakeSpawner.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: true}})
+
+      assert {{:error, {:memory, 33_554_432}}, ["the command's last words"]} =
+               run(name, "true", memory_bytes: 33_554_432)
+
+      # The same end without the kernel's report is a signal like any other.
+      :ok =
+        FakeSpawner.mode(fake, {:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: false}})
+
+      assert {{:ok, %{exit: {:signal, "SIGKILL"}}}, _} = run(name, "true")
+    end
+
+    test "a spawner that cannot enforce the bound runs nothing: unavailable, naming the option",
+         %{
+           name: name,
+           fake: fake
+         } do
+      :ok = FakeSpawner.mode(fake, :memory_unavailable)
+
+      assert {{:error, {:unavailable, sentence}}, []} = run(name, "true")
+      assert sentence =~ "writable-cgroups=true"
+      assert sentence =~ "Docker Engine 28"
+      assert {:ok, _} = Cyfr.BuilderProtocol.encode_refusal({:unavailable, sentence}, [])
+    end
+
+    test "a cancelled run releases the spawn with no grace and answers cancelled", %{
+      name: name,
+      fake: fake
+    } do
+      test = self()
+      runner = spawn_link(fn -> send(test, {:answer, run(name, "exec sleep 30")}) end)
+      wait_until(fn -> Enum.any?(FakeSpawner.requests(fake), &(&1["type"] == "spawn")) end)
+      Process.sleep(200)
+
+      :ok = Locus.Executor.cancel(runner)
+
+      assert_receive {:answer, {{:error, :cancelled}, _lines}}, 10_000
+      assert [_] = releases(fake, 0)
     end
 
     test "a run past its deadline releases the spawn with no grace", %{name: name, fake: fake} do
@@ -221,6 +294,17 @@ defmodule Locus.SpawnerTest do
       request = next_request(peer)
       assert %{"type" => "spawn", "pool" => "build"} = request
 
+      # The spawn this client writes is the vectors' bounded build spawn,
+      # field for field, its bound within the range the spawner accepts.
+      vector =
+        Enum.find(
+          v["valid_requests"],
+          &(&1["pool"] == "build" and &1["memory_bytes"] == 1_073_741_824)
+        )
+
+      assert Map.keys(request) |> Enum.sort() == Map.keys(vector) |> Enum.sort()
+      assert request["memory_bytes"] == vector["memory_bytes"]
+
       # A pool reply, which this client never asks for, is understood and
       # ignored.
       send_reply(peer, reply(v, "pool"))
@@ -239,8 +323,7 @@ defmodule Locus.SpawnerTest do
       send_reply(peer, exited)
       send_reply(peer, reply(v, "released"))
 
-      assert {{:ok, %{exit: {:status, 1}, stdout: "hello", log: ""}}, []} =
-               Task.await(task, 10_000)
+      assert {{:ok, %{exit: {:status, 1}, stdout: "hello"}}, []} = Task.await(task, 10_000)
     end
 
     test "an exit by signal is answered as the signal", %{
@@ -260,13 +343,10 @@ defmodule Locus.SpawnerTest do
       send_reply(peer, exited)
       send_reply(peer, reply(v, "released"))
 
-      assert {{:ok, %{exit: {:signal, "SIGKILL"}, stdout: "", log: ""}}, []} =
-               Task.await(task, 10_000)
+      assert {{:ok, %{exit: {:signal, "SIGKILL"}, stdout: ""}}, []} = Task.await(task, 10_000)
     end
 
-    # This client asks for no memory bound: the report every `exited`
-    # carries is understood, and the run is answered with the leader's exit.
-    test "an exit reported at a memory bound is understood", %{
+    test "an exit reported at the memory bound answers the run as the wire's memory refusal", %{
       vectors: v,
       peer: peer,
       name: name,
@@ -279,7 +359,7 @@ defmodule Locus.SpawnerTest do
 
       task = Task.async(fn -> run(name, "true") end)
       request = next_request(peer)
-      refute Map.has_key?(request, "memory_bytes")
+      assert request["memory_bytes"] == Locus.Config.memory_bytes()
       send_reply(peer, v |> reply("spawned") |> Map.put("id", request["id"]))
       conn = attach(v, :sys.get_state(client).attach_path, request["attach"]["token"])
       :ok = :gen_tcp.close(conn)
@@ -289,15 +369,16 @@ defmodule Locus.SpawnerTest do
       send_reply(peer, exited)
       send_reply(peer, reply(v, "released"))
 
-      assert {{:ok, %{exit: {:signal, "SIGKILL"}, stdout: "", log: ""}}, []} =
-               Task.await(task, 10_000)
+      assert {{:error, {:memory, limit}}, []} = Task.await(task, 10_000)
+      assert limit == request["memory_bytes"]
     end
 
-    test "the refusal of a bound that cannot be enforced answers the run as not started", %{
-      vectors: v,
-      peer: peer,
-      name: name
-    } do
+    test "the refusal of a bound that cannot be enforced answers the run as the wire's unavailable",
+         %{
+           vectors: v,
+           peer: peer,
+           name: name
+         } do
       task = Task.async(fn -> run(name, "true") end)
       request = next_request(peer)
 
@@ -306,7 +387,8 @@ defmodule Locus.SpawnerTest do
 
       send_reply(peer, refusal)
 
-      assert {{:error, {:spawn_failed, "memory_unavailable"}}, []} = Task.await(task, 10_000)
+      assert {{:error, {:unavailable, sentence}}, []} = Task.await(task, 10_000)
+      assert sentence =~ "writable-cgroups=true"
     end
 
     test "the capacity refusal answers the run as capacity", %{

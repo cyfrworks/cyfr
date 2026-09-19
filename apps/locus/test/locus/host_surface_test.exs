@@ -3,76 +3,53 @@
 
 defmodule Locus.HostSurfaceTest do
   @moduledoc """
-  What locus reaches for in cyfr, written down.
+  Locus names nothing of the control plane. Every module its code names is
+  its own (`Locus.*`), a shared contract (a module defined under
+  `apps/cyfr_contracts/lib`, whatever its namespace), or Elixir, OTP,
+  Jason, Plug, Bandit or ThousandIsland. CYFR reaches the builder over the
+  build wire alone (`Cyfr.BuilderProtocol`, served by
+  `Locus.BuilderService`), and the builder reaches CYFR not at all. A reach
+  into anything else fails here, and the answer is a field of the wire,
+  never a dependency.
 
-  Checks the builder release’s runtime isolation. It loads cyfr with
-  runtime: false; its standalone path reaches no cyfr module, only the
-  shared contracts (`apps/cyfr_contracts`), which are not cyfr and are not
-  counted. Locus.MCP runs in the server and has separate dependencies.
-
-  Opus, Arca and Compendium each have a rostered surface for the same
-  reason.
-
-  Each entry says what it is and, where it matters, whether it needs a
-  *started* cyfr — because that is the distinction the builder release
-  depends on.
+  The roster of control-plane namespaces Locus reaches is empty, and is
+  held to be: a planted name is reported, so the scan cannot pass by
+  seeing nothing.
   """
+
   use ExUnit.Case, async: true
 
-  @surface [
-    # ——— Build plane: nothing ———
-    # Every module but `Locus.MCP` reaches only the contracts, so the
-    # builder release runs no cyfr code.
+  alias Locus.Test.{CodeLines, SourceTree}
 
-    # ——— Product plane: `Locus.MCP` only, and needs a STARTED cyfr ———
-    # These are why the builder release must never route MCP traffic: each
-    # wants a running repo, cache or registry. `mix.exs`'s `runtime: false`
-    # means OTP will not start cyfr for us, so anything below is reachable
-    # only in the full release where cyfr is already up.
-    "Arca",
-    "Arca.Overlay",
-    "Arca.Storage",
-    "Compendium.AutoIndexer",
-    "Compendium.ComponentPath",
-    "Compendium.NamespacePolicy",
-    "Compendium.Resolver",
-    "Cyfr.BuildRecords",
-    # The operation catalog: `Locus.MCP` is a provider, and a compiled
-    # component is registered through it.
-    "Cyfr.Ops",
-    "Cyfr.RateLimiter",
-    # Whether this server builds at all (`CYFR_BUILDS`): an application-env
-    # read, answered by a loaded cyfr as well as a started one.
-    "Cyfr.RuntimeConfig",
-    "Cyfr.Bus",
-    "Emissary.MCP",
-    "Emissary.PubSub",
-    "Sanctum.Context"
-  ]
+  @root Path.expand("../../../..", __DIR__)
 
-  @namespace ~r/\b((?:Arca|Sanctum|Compendium|Emissary|Prism|Cyfr)(?:\.[A-Z]\w+)*)\b/
+  # The control-plane namespaces Locus reaches into.
+  @surface []
 
-  defp root, do: Path.expand("../../../..", __DIR__)
+  # The namespaces Locus may name, beside its own and the contracts.
+  @allowed_roots ~w(
+    Elixir Kernel Access Agent Application Base Bitwise Enum Exception File Function GenServer IO
+    Integer Keyword List Logger Map MapSet Path Port Process Regex String Supervisor System Task
+    Jason Plug Bandit ThousandIsland
+    ArgumentError RuntimeError
+  )
 
-  # The shared contracts are not cyfr: their modules are named where they
-  # are defined, and a reach into them is not a reach into the control plane.
+  @module ~r/\b([A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*)\b/
+
+  @control_plane ~r/\b((?:Arca|Sanctum|Aqua|Compendium|Crucible|Emissary|Grimoire|Prism|Codex|Opus|Cyfr)(?:\.[A-Z]\w*)*)\b/
+
+  # Every `defmodule` in the contracts, a nested one named under the module
+  # enclosing it (`Outer.Inner`): each level indents two spaces.
   defp contracts do
-    modules =
-      for path <-
-            Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr_contracts/lib/**/*.ex")),
-          module <- defined_modules(File.read!(path)),
-          into: MapSet.new(),
-          do: module
-
-    if MapSet.size(modules) == 0, do: raise("no modules found under apps/cyfr_contracts/lib")
-    modules
+    for path <- SourceTree.files!(Path.join(@root, "apps/cyfr_contracts/lib/**/*.ex")),
+        module <- defined_modules(File.read!(path)),
+        into: MapSet.new(),
+        do: module
   end
 
-  # Every `defmodule` in formatted source, a nested one named under the
-  # module enclosing it (`Outer.Inner`): each level indents two spaces.
   defp defined_modules(source) do
     source
-    |> Cyfr.Test.CodeLines.lines()
+    |> CodeLines.lines()
     |> Enum.flat_map(&Regex.scan(~r/^((?:  )*)defmodule ([A-Z][\w.]*) do/, &1))
     |> Enum.map_reduce([], fn [_, indent, name], enclosing ->
       path = Enum.take(enclosing, div(byte_size(indent), 2)) ++ [name]
@@ -81,46 +58,119 @@ defmodule Locus.HostSurfaceTest do
     |> elem(0)
   end
 
-  # A reach counts unless it names a contracts module exactly, so a cyfr
-  # module that shares a contracts module's namespace is still counted.
-  defp reached do
-    contracts = contracts()
+  defp code(glob) do
+    for path <- SourceTree.files!(Path.join(@root, glob)),
+        line <- lines(Path.relative_to(path, @root), File.read!(path)),
+        do: line
+  end
 
-    for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/locus/lib/**/*.ex")),
-        line <- path |> File.read!() |> Cyfr.Test.CodeLines.lines(),
-        [_, module] <- Regex.scan(@namespace, line),
+  defp lines(path, source), do: for(line <- CodeLines.lines(source), do: {path, line})
+
+  defp allowed?(module, contracts) do
+    String.starts_with?(module, "Locus.") or module == "Locus" or
+      MapSet.member?(contracts, module) or
+      (module |> String.split(".") |> hd()) in @allowed_roots
+  end
+
+  # A bare name is an alias, whose `alias` line names the module in full
+  # and is checked itself.
+  defp outside(lines, contracts) do
+    for {path, line} <- lines,
+        [_, module] <- Regex.scan(@module, line),
+        String.contains?(module, "."),
+        not allowed?(module, contracts),
+        uniq: true,
+        do: "#{path}: #{module}"
+  end
+
+  # A reach counts unless it names a contracts module exactly, so a
+  # control-plane module sharing a contracts module's namespace
+  # (`Compendium.Resolver` beside `Compendium.WITSource`) still counts.
+  defp reached(lines, contracts) do
+    for {_path, line} <- lines,
+        [_, module] <- Regex.scan(@control_plane, line),
         not MapSet.member?(contracts, module),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
   end
 
-  test "locus reaches only into the namespaces this surface names" do
-    extra = reached() |> MapSet.difference(MapSet.new(@surface)) |> Enum.sort()
-
-    assert extra == [],
+  test "locus names only its own modules, the contracts, Elixir, OTP, Jason, Plug, Bandit and ThousandIsland" do
+    assert outside(code("apps/locus/lib/**/*.ex"), contracts()) == [],
            """
-           locus reaches into cyfr namespaces this surface does not name:
-
-           #{Enum.map_join(extra, "\n", &"  #{&1}")}
-
-           Add each with a line saying what it is for, and whether it needs a
-           STARTED cyfr — the builder release loads cyfr without starting it
-           (`{:cyfr, runtime: false}`), so a new reach into running state is
-           a reach the builder cannot satisfy.
+           locus names modules outside its surface. A build's sources, its
+           caps and its deadline arrive in the request, and what it made
+           leaves in the answer: nothing else of CYFR's is the builder's.
            """
   end
 
-  test "the surface names nothing locus has stopped reaching for" do
-    stale = MapSet.difference(MapSet.new(@surface), reached()) |> Enum.sort()
+  test "the control-plane namespaces locus reaches are the roster's, and the roster is empty" do
+    assert @surface == []
 
-    assert stale == [],
-           """
-           This surface names namespaces locus no longer reaches:
+    assert reached(code("apps/locus/lib/**/*.ex"), contracts()) == MapSet.new(@surface),
+           "locus reaches into the control plane; the locus release carries the contracts alone"
+  end
 
-           #{Enum.map_join(stale, "\n", &"  #{&1}")}
+  test "locus's suite names nothing of the control plane either" do
+    # This file plants control-plane names on purpose.
+    this = Path.relative_to(__ENV__.file, @root)
+    lines = Enum.reject(code("apps/locus/test/**/*.{ex,exs}"), &(elem(&1, 0) == this))
 
-           Remove them — a roster wider than the code overstates the coupling
-           it exists to describe.
-           """
+    assert lines != []
+    assert reached(lines, contracts()) == MapSet.new()
+  end
+
+  test "a planted control-plane name is reported by both scans" do
+    contracts = contracts()
+
+    planted =
+      lines("planted.ex", ~S"""
+      defmodule Locus.Planted do
+        alias Sanctum.Context
+        alias Emissary.MCP.{Progress, Tools}
+
+        def reach(%Context{} = ctx, path, tool, args) do
+          {:ok, _bytes} = Arca.Storage.get(ctx, path)
+          Progress.report(Tools, Cyfr.Ops.Catalog.call_external(ctx, tool, args))
+          Compendium.Resolver.resolve(ctx, path)
+        end
+      end
+      """)
+
+    assert reached(planted, contracts) ==
+             MapSet.new(
+               ~w(Arca.Storage Sanctum.Context Cyfr.Ops Compendium.Resolver Emissary.MCP)
+             )
+
+    assert outside(planted, contracts) == [
+             "planted.ex: Sanctum.Context",
+             "planted.ex: Emissary.MCP.Progress",
+             "planted.ex: Emissary.MCP.Tools",
+             "planted.ex: Arca.Storage",
+             "planted.ex: Cyfr.Ops.Catalog",
+             "planted.ex: Compendium.Resolver"
+           ]
+
+    # What the contracts define passes, under whatever namespace.
+    shared =
+      lines("shared.ex", ~S"""
+      defmodule Locus.Shared do
+        @spec run(binary()) :: {:ok, map()} | {:error, Cyfr.BuilderProtocol.refusal()}
+        def run(bytes) do
+          {:ok, _slot} = Cyfr.Slots.acquire(Locus.BuildSlots, "ath_1", :root, wait_ms: 0)
+          Compendium.WasmValidator.validate(bytes)
+        end
+      end
+      """)
+
+    assert reached(shared, contracts) == MapSet.new()
+    assert outside(shared, contracts) == []
+  end
+
+  test "locus depends on the contracts alone" do
+    mix = File.read!(Path.join(@root, "apps/locus/mix.exs"))
+    assert mix =~ "{:cyfr_contracts, in_umbrella: true}"
+    refute mix =~ "{:cyfr, in_umbrella: true"
+    refute mix =~ "Arca.Repo"
+    refute mix =~ "ecto"
   end
 end

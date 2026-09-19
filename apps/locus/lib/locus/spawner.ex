@@ -23,19 +23,37 @@ defmodule Locus.Spawner do
 
   ## A run
 
-  `run/2` asks for a spawn in the pool `build`. cyfr-spawn runs the command
-  under a pooled uid with a 0700 home, `TMPDIR` inside it, an environment
-  built from nothing but the command's `env`, and resource limits. The
-  spawn's relay, running as this node's user, connects to the attach
-  socket, presents the spawn's token and then carries stdin, stdout and
-  stderr as frames: a stream byte (0 stdin, 1 stdout, 2 stderr, 3 attach),
-  a 4-byte big-endian length and the payload, a zero-length frame ending
-  its stream. When the command's leader exits, or on `release`, cyfr-spawn
-  kills every process of the uid and removes everything the uid left, then
-  reports `released`; `run/2` answers only after that report, so no
-  process of a build outlives the call. A deadline passed or a stdout
-  bound exceeded releases the spawn with no grace. A caller that dies has
-  its spawn released at once.
+  `run/2` asks for a spawn in the pool `build`, and every spawn it asks for
+  carries `memory_bytes`, the builder's bound (`Locus.Config.memory_bytes/0`):
+  a build is never run without one. cyfr-spawn runs the command under a
+  pooled uid with a 0700 home, `TMPDIR` inside it, an environment built
+  from nothing but the command's `env`, resource limits, and a cgroup of
+  its own holding the bound. The spawn's relay, running as this node's
+  user, connects to the attach socket, presents the spawn's token and then
+  carries stdin, stdout and stderr as frames: a stream byte (0 stdin, 1
+  stdout, 2 stderr, 3 attach), a 4-byte big-endian length and the payload,
+  a zero-length frame ending its stream. When the command's leader exits,
+  or on `release`, cyfr-spawn kills every process of the uid and removes
+  everything the uid left, then reports `released`; `run/2` answers only
+  after that report, so no process of a build outlives the call. A
+  deadline passed, a stdout bound exceeded or a cancel
+  (`Locus.Executor.cancel/1`) releases the spawn with no grace. A caller
+  that dies has its spawn released at once.
+
+  ## The memory bound
+
+  A spawn that cannot stay under its bound loses every process at once,
+  and the leader's `exited` says so (`memory_exceeded`), read by cyfr-spawn
+  from the cgroup's own counters: `run/2` then answers
+  `{:error, {:memory, limit_bytes}}`, the build wire's `memory` refusal,
+  whatever else this side was doing when it heard. An `exited` that does
+  not say so is a status or a signal like any other, a kill for the
+  container's own limit among them. Where cyfr-spawn cannot give a spawn
+  such a cgroup it refuses the request as `memory_unavailable`, and `run/2`
+  answers the wire's `unavailable` refusal naming what the deployment
+  lacks: the builder's container needs the `writable-cgroups=true`
+  security option (Docker Engine 28 or later on a cgroup v2 host). No
+  build runs unbounded instead.
 
   When the channel closes, cyfr-spawn has already retired every spawn and
   is exiting; this server stops, and the builder with it.
@@ -74,6 +92,10 @@ defmodule Locus.Spawner do
   @drain_timeout_ms 5_000
   @channel_send_timeout_ms 30_000
 
+  @memory_unavailable "cyfr-spawn cannot bound a build's memory in this container, so it " <>
+                        "runs none: start the builder with the security option " <>
+                        "writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
+
   @doc false
   def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
 
@@ -104,14 +126,23 @@ defmodule Locus.Spawner do
   @impl Locus.Executor
   def run(command, opts), do: run(__MODULE__, command, opts)
 
-  @doc "`run/2` through the client `server`."
-  @spec run(GenServer.server(), Locus.Executor.command(), Locus.Executor.opts()) ::
+  @doc """
+  `run/2` through the client `server`. Beside the executor's options,
+  `:memory_bytes` names the spawn's bound in place of the builder's
+  setting; there is no way to ask for none.
+  """
+  @spec run(
+          GenServer.server(),
+          Locus.Executor.command(),
+          [{:memory_bytes, pos_integer()} | {atom(), term()}]
+        ) ::
           {:ok, Locus.Executor.outcome()} | {:error, Locus.Executor.error()}
   def run(server, %{argv: argv, env: env, stdin: stdin}, opts) do
+    memory_bytes = memory_bytes!(opts)
     monitor = Process.monitor(server)
 
     try do
-      case GenServer.call(server, {:spawn, argv, env}, @start_timeout_ms) do
+      case GenServer.call(server, {:spawn, argv, env, memory_bytes}, @start_timeout_ms) do
         {:ok, ref} ->
           await(%{
             phase: :running,
@@ -123,6 +154,8 @@ defmodule Locus.Spawner do
             released_by: nil,
             on_output: Keyword.get(opts, :on_output, fn _line -> :ok end),
             max_stdout: Keyword.fetch!(opts, :max_stdout_bytes),
+            memory_bytes: memory_bytes,
+            memory_exceeded: false,
             stdin: stdin,
             conn: nil,
             conn_open: false,
@@ -142,6 +175,18 @@ defmodule Locus.Spawner do
       :exit, reason -> {:error, {:spawn_failed, {:spawner_unavailable, reason}}}
     after
       Process.demonitor(monitor, [:flush])
+    end
+  end
+
+  # The bound is the builder's setting; a caller may name another, never
+  # none, so no spawn leaves here without one.
+  defp memory_bytes!(opts) do
+    case Keyword.get_lazy(opts, :memory_bytes, &Locus.Config.memory_bytes/0) do
+      bytes when is_integer(bytes) and bytes > 0 ->
+        bytes
+
+      other ->
+        raise ArgumentError, "a build's memory bound is a count of bytes, got: #{inspect(other)}"
     end
   end
 
@@ -170,6 +215,9 @@ defmodule Locus.Spawner do
           | phase: :done,
             failure: s.failure || {:spawn_failed, {:spawner_down, reason}}
         })
+
+      {Locus.Executor, :cancel} ->
+        s |> stop(:cancelled) |> advance() |> await()
     after
       wait_ms(s) ->
         s |> on_wait_expired() |> advance() |> await()
@@ -183,12 +231,21 @@ defmodule Locus.Spawner do
     reactivate(%{s | conn: conn, conn_open: true})
   end
 
-  defp on_spawner(s, {:exited, code, signal}),
-    do: %{s | exit: if(signal, do: {:signal, signal}, else: {:status, code})}
+  defp on_spawner(s, {:exited, code, signal, memory_exceeded}) do
+    %{
+      s
+      | exit: if(signal, do: {:signal, signal}, else: {:status, code}),
+        memory_exceeded: memory_exceeded
+    }
+  end
 
   defp on_spawner(s, :released), do: %{s | released: true, released_by: now() + @drain_timeout_ms}
 
   defp on_spawner(s, {:error, "capacity"}), do: %{s | phase: :done, failure: :capacity}
+
+  defp on_spawner(s, {:error, "memory_unavailable"}),
+    do: %{s | phase: :done, failure: {:unavailable, @memory_unavailable}}
+
   defp on_spawner(s, {:error, reason}), do: %{s | phase: :done, failure: {:spawn_failed, reason}}
 
   # Stdin is written from a process of its own, so a command slow to read
@@ -302,12 +359,15 @@ defmodule Locus.Spawner do
   defp finish(s) do
     if s.conn, do: :gen_tcp.close(s.conn)
     GenServer.cast(s.server, {:done, s.ref})
-    log = Log.finish(s.log, s.on_output)
+    :ok = Log.finish(s.log, s.on_output)
 
+    # The kernel's own report of how the build ended comes first: a build
+    # ended at its bound is that, whatever this side was doing when it heard.
     cond do
+      s.memory_exceeded -> {:error, {:memory, s.memory_bytes}}
       s.failure != nil -> {:error, s.failure}
       s.exit == nil -> {:error, {:spawn_failed, :no_exit_reported}}
-      true -> {:ok, %{exit: s.exit, stdout: IO.iodata_to_binary(s.stdout), log: log}}
+      true -> {:ok, %{exit: s.exit, stdout: IO.iodata_to_binary(s.stdout)}}
     end
   end
 
@@ -431,7 +491,7 @@ defmodule Locus.Spawner do
   end
 
   @impl GenServer
-  def handle_call({:spawn, argv, env}, {owner, _tag}, state) do
+  def handle_call({:spawn, argv, env, memory_bytes}, {owner, _tag}, state) do
     id = Integer.to_string(state.next_id + 1)
     token = 32 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower)
 
@@ -442,6 +502,7 @@ defmodule Locus.Spawner do
       pool: @pool,
       argv: argv,
       env: env,
+      memory_bytes: memory_bytes,
       attach: %{path: state.attach_path, token: token}
     }
 
@@ -581,7 +642,7 @@ defmodule Locus.Spawner do
 
   defp on_message(%{"type" => "exited", "spawn_id" => spawn_id} = m, state) do
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
-      notify(entry, ref, {:exited, m["code"], m["signal"]})
+      notify(entry, ref, {:exited, m["code"], m["signal"], m["memory_exceeded"] == true})
       state
     end)
   end

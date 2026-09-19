@@ -14,6 +14,11 @@ defmodule Locus.Test.FakeSpawner do
   Modes, set with `mode/2`:
   - `:normal`
   - `:capacity` — every spawn is refused with `capacity`
+  - `:memory_unavailable` — every spawn is refused with `memory_unavailable`,
+    as a spawner whose cgroup is not writable refuses a bounded spawn
+  - `{:exit, exited}` — the command is never run: the relay writes one log
+    line and the leader is reported ended as `exited` says (`:code`,
+    `:signal`, `:memory_exceeded`), killed at its memory bound among them
   - `:report_first` — `exited` and `released` are sent before the relay dials
   """
 
@@ -109,8 +114,9 @@ defmodule Locus.Test.FakeSpawner do
 
   def handle_info(_message, state), do: {:noreply, state}
 
-  defp handle_request(%{"type" => "spawn", "id" => id}, %{mode: :capacity} = state) do
-    send(self(), {:send, %{type: "error", id: id, code: "capacity"}})
+  defp handle_request(%{"type" => "spawn", "id" => id}, %{mode: mode} = state)
+       when mode in [:capacity, :memory_unavailable] do
+    send(self(), {:send, %{type: "error", id: id, code: Atom.to_string(mode)}})
     state
   end
 
@@ -130,8 +136,14 @@ defmodule Locus.Test.FakeSpawner do
 
   defp handle_request(%{"type" => "release", "spawn_id" => spawn_id}, state) do
     case state.spawns do
-      %{^spawn_id => os_pid} when is_integer(os_pid) -> System.cmd("kill", ["-9", "#{os_pid}"])
-      _ -> :ok
+      # The command leads its own process group; the direct kill covers
+      # one that does not.
+      %{^spawn_id => os_pid} when is_integer(os_pid) ->
+        for target <- ["-#{os_pid}", "#{os_pid}"],
+            do: System.cmd("kill", ["-9", target], stderr_to_stdout: true)
+
+      _ ->
+        :ok
     end
 
     state
@@ -154,6 +166,27 @@ defmodule Locus.Test.FakeSpawner do
     :ok = :gen_tcp.send(conn, frame(@stream_attach, request["attach"]["token"]))
     File.write!(input, read_stdin(conn, []))
 
+    case mode do
+      {:exit, exited} -> report(fake, spawn_id, conn, dir, exited)
+      mode -> run(fake, spawn_id, request, mode, conn, {dir, input, output})
+    end
+  end
+
+  defp report(fake, spawn_id, conn, dir, exited) do
+    :gen_tcp.send(conn, [
+      frames(@stream_stderr, "the command's last words\n"),
+      frame(@stream_stdout, ""),
+      frame(@stream_stderr, "")
+    ])
+
+    :gen_tcp.close(conn)
+    File.rm_rf!(dir)
+
+    send(fake, {:send, Map.merge(%{type: "exited", spawn_id: spawn_id}, exited)})
+    send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+  end
+
+  defp run(fake, spawn_id, request, mode, conn, {dir, input, output}) do
     env = Enum.map(request["env"], fn {k, v} -> "#{k}=#{v}" end)
 
     port =
@@ -171,7 +204,14 @@ defmodule Locus.Test.FakeSpawner do
     send(fake, {:running, spawn_id, os_pid})
     status = pump(port, conn)
     stdout = File.read!(output)
-    exited = %{type: "exited", spawn_id: spawn_id, code: status, signal: nil}
+
+    exited = %{
+      type: "exited",
+      spawn_id: spawn_id,
+      code: status,
+      signal: nil,
+      memory_exceeded: false
+    }
 
     exited =
       if status == 137, do: %{exited | code: nil, signal: "SIGKILL"}, else: exited

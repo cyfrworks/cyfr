@@ -15,6 +15,15 @@ defmodule Locus.BuilderEnvTest do
 
   alias Locus.Builder
 
+  defp tincture(package) do
+    %{
+      language: :javascript,
+      target_type: :tincture,
+      resolve: false,
+      sources: %{"package.json" => Jason.encode!(package)}
+    }
+  end
+
   @tag :requires_node
   test "a build script sees none of the server's environment beyond the toolchain's allowlist" do
     previous = Map.new(~w(CARGO_TARGET_DIR CYFR_DATABASE_URL), &{&1, System.get_env(&1)})
@@ -26,17 +35,14 @@ defmodule Locus.BuilderEnvTest do
           do: if(value, do: System.put_env(key, value), else: System.delete_env(key))
     end)
 
-    source_files = %{
-      "package.json" =>
-        Jason.encode!(%{
-          name: "env-probe",
-          private: true,
-          scripts: %{build: "mkdir -p dist && env > dist/env.txt"}
-        })
-    }
+    request =
+      tincture(%{
+        name: "env-probe",
+        private: true,
+        scripts: %{build: "mkdir -p dist && env > dist/env.txt"}
+      })
 
-    assert {:ok, %{output_files: %{"env.txt" => env}}} =
-             Builder.compile(source_files, :javascript, target_type: :tincture)
+    assert {:ok, %{outputs: %{"env.txt" => env}}} = Builder.build(request)
 
     refute env =~ "CARGO_TARGET_DIR="
     refute env =~ "CYFR_DATABASE_URL="
@@ -45,19 +51,16 @@ defmodule Locus.BuilderEnvTest do
 
   @tag :requires_node
   test "a build's home, Cargo home and npm cache are its own, and go with it" do
-    source_files = %{
-      "package.json" =>
-        Jason.encode!(%{
-          name: "home-probe",
-          private: true,
-          scripts: %{build: "mkdir -p dist && env > dist/env.txt && touch \"$HOME/left-behind\""}
-        })
-    }
+    request =
+      tincture(%{
+        name: "home-probe",
+        private: true,
+        scripts: %{build: "mkdir -p dist && env > dist/env.txt && touch \"$HOME/left-behind\""}
+      })
 
     homes =
       for _build <- 1..2 do
-        assert {:ok, %{output_files: %{"env.txt" => env}}} =
-                 Builder.compile(source_files, :javascript, target_type: :tincture)
+        assert {:ok, %{outputs: %{"env.txt" => env}}} = Builder.build(request)
 
         values =
           for line <- String.split(env, "\n"),
