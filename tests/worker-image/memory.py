@@ -362,17 +362,20 @@ def test_runner_bound(stack, plane):
     print(f"Docker's OOMKilled flag for the container: {flag_before} before the hostile guest ran, "
           f"{oom_killed_flag(stack)} after", flush=True)
 
-    # The sibling kept its process and completes.
+    # The sibling kept its process, and its group, which took nothing of the
+    # hostile guest, and completes. The group is read while the sibling still
+    # holds its runner: once it completes, its runner is idle and retired
+    # after the service's idle time, which may be shorter than the read.
     expect(stack.runner_process(sibling_runner["runner"]) is not None
            and stack.runner_process(sibling_runner["runner"])["pid"] == sibling_runner["pid"],
            "the sibling's runner kept its process through the hostile runner's end", stack.runner_processes())
+    sibling_group = read_group(stack, sibling_runner["uid"])
+    expect(sibling_group is not None and sibling_group["peak"] < bound,
+           f"the sibling's group peaked at {mib(sibling_group and sibling_group['peak'])}, under its bound", sibling_group)
     release_sibling.set()
     complete = terminal(plane, sibling["execution_id"], BOOT_S)
     expect(complete["op"] == "complete" and complete["args"]["outcome"]["output"] == {"sibling": "alive"},
            "the sibling completed", complete)
-    sibling_group = read_group(stack, sibling_runner["uid"])
-    expect(sibling_group is not None and sibling_group["peak"] < bound,
-           f"the sibling's group peaked at {mib(sibling_group and sibling_group['peak'])}, under its bound", sibling_group)
 
     # The uid, next given to a runner, holds nothing of the hostile one.
     reused = reuse_uid(stack, plane, runner)
