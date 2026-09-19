@@ -78,7 +78,9 @@ defmodule Cyfr.Execution.WorkerClientTest do
       service: @service,
       boot: "boot_1",
       runners: %{fresh: 1, idle: 0, busy: 2, tainted: 1},
-      attempts: ["att_1"]
+      attempts: ["att_1"],
+      memory_bytes: 402_653_184,
+      refusal: nil
     }
 
     endpoint =
@@ -149,7 +151,9 @@ defmodule Cyfr.Execution.WorkerClientTest do
     reported = %{
       service: @service,
       boot: "boot_1",
-      runners: %{fresh: 1, idle: 0, busy: 2, tainted: 1}
+      runners: %{fresh: 1, idle: 0, busy: 2, tainted: 1},
+      memory_bytes: nil,
+      refusal: nil
     }
 
     endpoint =
@@ -159,6 +163,31 @@ defmodule Cyfr.Execution.WorkerClientTest do
 
     assert {:ok, %{runners: %{fresh: 1, idle: 0, busy: 2, tainted: 1}, attempts: ["att_1"]}} =
              WorkerClient.status(endpoint)
+
+    # A keeper that refuses runners says so, and the bound it holds them to.
+    refusal = %{reason: "memory_unavailable", message: "writable-cgroups=true is missing"}
+
+    endpoint =
+      serve!(%{
+        WorkerWire.worker_route(:status) =>
+          WorkerWire.ok(
+            %{reported | memory_bytes: 402_653_184, refusal: refusal}
+            |> Map.put(:attempts, [])
+          )
+      })
+
+    assert {:ok, %{memory_bytes: 402_653_184, refusal: ^refusal}} = WorkerClient.status(endpoint)
+
+    # A status without the bound or the refusal is not one.
+    for member <- [:memory_bytes, :refusal] do
+      endpoint =
+        serve!(%{
+          WorkerWire.worker_route(:status) =>
+            WorkerWire.ok(reported |> Map.delete(member) |> Map.put(:attempts, []))
+        })
+
+      assert {:error, :lost} = WorkerClient.status(endpoint), inspect(member)
+    end
 
     # Every worker service counts its tainted runners; a status without the
     # count is not one.

@@ -28,7 +28,8 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   Its status counts its runners as every worker service does: `busy` while
   a run's process is alive, and `tainted` from a kill until the killed
-  process has gone; it keeps no runner fresh or idle. A reference it does
+  process has gone; it keeps no runner fresh or idle, bounds no runner's
+  memory and never refuses one. A reference it does
   not script never reaches it: starting it puts an
   entry for its scripted references alone ahead of the configured worker
   services in `config :cyfr, :workers` (`workers/2`), so
@@ -322,7 +323,9 @@ defmodule Cyfr.Test.ScriptedWorker do
          busy: map_size(state.runners) - tainted,
          tainted: tainted
        },
-       attempts: attempts
+       attempts: attempts,
+       memory_bytes: nil,
+       refusal: nil
      }, state}
   end
 

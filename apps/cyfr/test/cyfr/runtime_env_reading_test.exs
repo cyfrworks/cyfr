@@ -159,7 +159,11 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
     assert src =~ ~S|Opus.Settings.pool(opus_pool, System.get_env())|
     assert src =~ ~S|Cyfr.RuntimeConfig.resolve_worker_watch(getenv)|
-    assert src =~ ~S|"local" ->|, "OPUS_KEEPER=local must be refused by name"
+
+    assert src =~ ~S|names no keeper; use spawn or direct|,
+           "OPUS_KEEPER must name spawn or direct, or refuse the boot"
+
+    refute src =~ ~S|"local" ->|, "OPUS_KEEPER names two keepers, and local is neither"
   end
 
   # Dotenvy is a dependency; these are the behaviours the helpers above

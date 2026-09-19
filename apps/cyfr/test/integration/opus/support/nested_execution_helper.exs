@@ -10,9 +10,11 @@ unless Code.ensure_loaded?(Opus.Test.NestedExecution) do
 
     The probe is input-driven: `op` selects which `cyfr:formula/invoke`
     functions it exercises (`echo` / `call` / `spawn_await` /
-    `spawn_await_all` / `emit` / `chain`), and `chain` self-invokes through
-    `execution.run` for an N-deep nested execution. Raw host responses are
-    echoed back verbatim for characterization.
+    `spawn_await_all` / `emit` / `chain` / `steps`), `chain` self-invokes
+    through `execution.run` for an N-deep nested execution, and `steps`
+    makes several of those calls in order, spawning, awaiting, polling and
+    cancelling tasks as a test lists them. Raw host responses are echoed
+    back verbatim for characterization.
 
     `allowed_tools` matters: the probe's dispatches run under a
     consent-rooted authority, and a tool outside the consented edge is
@@ -28,32 +30,73 @@ unless Code.ensure_loaded?(Opus.Test.NestedExecution) do
 
     def probe_ref, do: @probe_ref
 
+    @doc "The probe's checked-in binary, beside its source, lock and README."
+    def wasm_path, do: @probe_wasm
+
+    @doc """
+    The input of a probe run that asks for one catalog tool
+    (`component.search`, which the probe's consent grants) and answers
+    what the host said: a run a test can hold at its `tool_call` host call,
+    its guest in the middle of its work.
+    """
+    def held_input do
+      %{
+        "op" => "call",
+        "request" => %{
+          "tool" => "component",
+          "action" => "search",
+          "args" => %{"query" => "nested-probe"}
+        }
+      }
+    end
+
     @doc """
     Plant the probe in a private seed tree and register it. Call from a
     setup block that has already pointed `:cyfr, :base_path` at a temp
     dir and checked out the SQL sandbox; run
     `Sanctum.Consent.Bootstrap.run/1` afterwards to mint the consent
-    the probe executes under.
+    the probe executes under. Options: `:allowed_tools` (its `caps.tools`),
+    `:limits` (its `caps.limits`), `:dependencies` (the references its
+    manifest names as static dependencies, each an edge of its consent),
+    `:name` (default `nested-probe`: the same binary under another name)
+    and `:isolate` (default true: point `:seed_path` at a fresh private
+    tree first; false to plant beside what is there).
     """
     def publish_probe!(ctx, opts \\ []) do
       tools = Keyword.get(opts, :allowed_tools, @default_allowed_tools)
-      Cyfr.Test.SeedBundle.isolate!()
+      name = Keyword.get(opts, :name, "nested-probe")
+      if Keyword.get(opts, :isolate, true), do: Cyfr.Test.SeedBundle.isolate!()
+
+      caps =
+        case Keyword.get(opts, :limits) do
+          nil -> %{"tools" => tools}
+          limits -> %{"tools" => tools, "limits" => limits}
+        end
+
+      manifest =
+        %{
+          "name" => name,
+          "version" => "0.1.0",
+          "type" => "formula",
+          "publisher" => "local",
+          "description" => "Nested-execution characterization probe",
+          "caps" => caps
+        }
+        |> then(fn manifest ->
+          case Keyword.get(opts, :dependencies, []) do
+            [] -> manifest
+            refs -> Map.put(manifest, "dependencies", %{"static" => refs})
+          end
+        end)
 
       {:ok, _component} =
         Arca.Test.UnitFixtures.ship_and_register!(
           ctx,
           "formula",
           "local",
-          "nested-probe",
+          name,
           "0.1.0",
-          manifest: %{
-            "name" => "nested-probe",
-            "version" => "0.1.0",
-            "type" => "formula",
-            "publisher" => "local",
-            "description" => "Nested-execution characterization probe",
-            "caps" => %{"tools" => tools}
-          },
+          manifest: manifest,
           wasm: File.read!(@probe_wasm)
         )
 

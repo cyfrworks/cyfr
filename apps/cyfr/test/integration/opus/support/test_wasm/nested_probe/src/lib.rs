@@ -110,8 +110,61 @@ fn handle(input: &str) -> Result<Value, String> {
             }
         }
 
+        // Several invoke calls in order, each answered verbatim. A step that
+        // names a task names it by the index of the step that spawned it,
+        // or by a task id as it is.
+        "steps" => {
+            let steps = parsed
+                .get("steps")
+                .and_then(|v| v.as_array())
+                .ok_or("missing steps")?;
+
+            let mut results: Vec<String> = Vec::new();
+            for step in steps {
+                let raw = if let Some(request) = step.get("call") {
+                    invoke::call(&request.to_string())
+                } else if let Some(request) = step.get("spawn") {
+                    invoke::spawn(&request.to_string())
+                } else if let Some(index) = step.get("await") {
+                    invoke::await_(&task_of(&results, index))
+                } else if let Some(indices) = step.get("await_all") {
+                    let task_ids: Vec<String> = indices
+                        .as_array()
+                        .map(|list| list.iter().map(|i| task_of(&results, i)).collect())
+                        .unwrap_or_default();
+                    invoke::await_all(&json!({ "task_ids": task_ids }).to_string())
+                } else if let Some(index) = step.get("poll") {
+                    invoke::poll(&task_of(&results, index))
+                } else if let Some(index) = step.get("cancel") {
+                    invoke::cancel(&task_of(&results, index))
+                } else if let Some(payload) = step.get("emit") {
+                    invoke::emit(&payload.to_string())
+                } else {
+                    return Err(format!("unknown step: {step}"));
+                };
+                results.push(raw);
+            }
+
+            Ok(json!({ "op": "steps", "results": results }))
+        }
+
         other => Err(format!("unknown op: {other}")),
     }
+}
+
+// The task id `index` names: itself when it is a string, else the one the
+// answer of step `index` names, or "" when it names none.
+fn task_of(results: &[String], index: &Value) -> String {
+    if let Some(task_id) = index.as_str() {
+        return task_id.to_string();
+    }
+
+    index
+        .as_u64()
+        .and_then(|i| results.get(i as usize))
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|answer| answer.get("task_id").and_then(|v| v.as_str()).map(String::from))
+        .unwrap_or_default()
 }
 
 fn spawn_one(request: &Value) -> Result<String, String> {

@@ -128,7 +128,7 @@ defmodule Cyfr.RunnerControlTest do
     test "every message type has a valid vector and every reason an invalid one" do
       valid_types = Enum.map(@vectors["valid"], &String.to_existing_atom(&1["message"]["type"]))
       assert Enum.sort(Enum.uniq(valid_types)) == Enum.sort(RunnerControl.types())
-      assert RunnerControl.types() == [:assign, :cancel_child, :complete, :exit]
+      assert RunnerControl.types() == [:assign, :cancel_child, :child, :complete, :exit]
 
       reasons = @vectors["invalid"] |> Enum.map(& &1["reason"]) |> Enum.uniq() |> Enum.sort()
 

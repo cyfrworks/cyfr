@@ -15,15 +15,19 @@ defmodule Opus.RunnerProcess do
   (`complete` or `exit`; a frame the runner may not send, or a line that
   is not one, is `{:error, {:protocol, reason}}`), `:closed` once the
   runner's end of the channel is closed, `{:exited, how}` once its
-  process ended, `:released` once the keeper has retired it, and
-  `{:error, reason}` for a failure of the keeper's. A message the service
+  process ended, `:released` once the keeper has retired it,
+  `{:refused, reason}` when the keeper refused the spawn, so no process of
+  the runner ever ran and nothing is left to release, and
+  `{:error, reason}` for a later failure of the keeper's. A message the service
   sends (`send_message/2`) is written at once, or held until the channel
   attaches. `release/2` asks the keeper to end the runner; when this
   process itself is stopped, the runner is released with no grace.
 
   Guest data never crosses here: control bytes are frames, and the
   runner's own log lines, which the keeper relays, are logged under the
-  runner's id.
+  runner's id. An `assign` carries the attempt's opened keys, so its
+  status and a crash report show only the size of what it holds for the
+  channel.
   """
 
   use GenServer
@@ -86,7 +90,7 @@ defmodule Opus.RunnerProcess do
         {:noreply, Enum.reduce(events, %{state | channel: channel}, &on_event/2)}
 
       {:error, reason} ->
-        notify(state, {:error, reason})
+        notify(state, {:refused, reason})
         {:noreply, state}
     end
   end
@@ -128,6 +132,27 @@ defmodule Opus.RunnerProcess do
     :ok
   end
 
+  # What is held until the channel attaches is an `assign`, whose line
+  # carries the attempt's opened keys, and so is the call that sent it: no
+  # status or crash report shows more of either than its size, and the
+  # debug log, which holds both, is left out.
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, %{pending: pending} = state} ->
+        {:state, %{state | pending: {:redacted, IO.iodata_length(pending)}}}
+
+      {:message, {:send, line}} ->
+        {:message, {:send, {:redacted, byte_size(line)}}}
+
+      {:log, _log} ->
+        {:log, []}
+
+      other ->
+        other
+    end)
+  end
+
   defp on_event({:spawned, os_pid}, state), do: %{state | os_pid: os_pid}
 
   defp on_event(:attached, state) do
@@ -166,6 +191,11 @@ defmodule Opus.RunnerProcess do
   defp on_event(:released, state) do
     notify(state, :released)
     %{state | released: true}
+  end
+
+  defp on_event({:refused, reason}, state) do
+    notify(state, {:refused, reason})
+    state
   end
 
   defp on_event({:error, reason}, state) do

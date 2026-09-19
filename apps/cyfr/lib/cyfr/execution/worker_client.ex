@@ -89,41 +89,19 @@ defmodule Cyfr.Execution.WorkerClient do
 
   @doc """
   The state of the worker service at `endpoint` (`c:Cyfr.WorkerAPI.status/0`),
-  read as `Cyfr.WorkerAPI.valid_status?/1` requires: a count for every
-  runner state, `tainted` included, and nothing else. An answer of another
+  read as `Cyfr.WorkerAPI.read_status/1` reads it: a count for every
+  runner state, `tainted` included, the memory bound its runners run
+  under and its keeper's refusal, and nothing else. An answer of another
   shape is lost.
   """
   @spec status(WorkerAPI.endpoint()) ::
           {:ok, WorkerAPI.status()} | {:error, transport_refusal() | atom()}
   def status(%{id: id, url: url} = endpoint) when is_binary(id) and is_binary(url) do
-    with {:ok, answer} <- request(endpoint, :status, %{}),
-         {:ok, status} <- read_status(answer) do
-      {:ok, status}
-    end
-  end
-
-  defp read_status(%{
-         "service" => service,
-         "boot" => boot,
-         "runners" => %{} = runners,
-         "attempts" => attempts
-       })
-       when is_binary(service) and is_binary(boot) and is_list(attempts) do
-    status = %{service: service, boot: boot, runners: runner_counts(runners), attempts: attempts}
-    if WorkerAPI.valid_status?(status), do: {:ok, status}, else: {:error, :lost}
-  end
-
-  defp read_status(_answer), do: {:error, :lost}
-
-  # A count for each runner state the contract names, as reported: one
-  # missing, or a count of anything else, makes the answer no status.
-  defp runner_counts(runners) do
-    names = Map.new(WorkerAPI.runner_states(), &{Atom.to_string(&1), &1})
-
-    if Enum.all?(Map.keys(runners), &is_map_key(names, &1)) do
-      Map.new(names, fn {name, state} -> {state, Map.get(runners, name)} end)
-    else
-      %{}
+    with {:ok, answer} <- request(endpoint, :status, %{}) do
+      case WorkerAPI.read_status(answer) do
+        {:ok, status} -> {:ok, status}
+        :error -> {:error, :lost}
+      end
     end
   end
 

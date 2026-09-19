@@ -2,16 +2,38 @@
 # Copyright 2026 CYFR Works Inc.
 
 Code.require_file("support/formula_host_helper.exs", __DIR__)
+Code.require_file("support/nested_execution_helper.exs", __DIR__)
 
 defmodule Opus.FormulaHandlerTest do
+  @moduledoc """
+  What CYFR decides of the host calls a formula's host functions make
+  (`Opus.FormulaHandler`, run here as a formula's runner runs it, over the
+  suite's wire with the keys of an attached formula attempt): parsing,
+  dispatch through the catalog, invoke and in-chain plane containment, the
+  events a formula emits, and setup refusals. A child it admits is handed
+  to the runner the attempt presents, which is no process and starts
+  nothing, so its admission is what is asserted, at the wire.
+
+  A formula's tasks run for real: the `nested-probe` formula, in a runner
+  of its own, spawns children that run in its runner, awaits them, polls
+  them, cancels them or leaves them to end with it, and answers what each
+  host function answered it. What only a runner's VM can see of a
+  formula's host functions (their telemetry, their tasks' processes) is
+  `Opus.FormulaHandlerRunnerTest`'s, in Opus's own suite.
+  """
+
   use ExUnit.Case, async: false
 
   import Cyfr.Test.Wait
+  import Ecto.Query, only: [from: 2]
 
   alias Opus.FormulaHandler
   alias Opus.Test.FormulaHost
+  alias Opus.Test.NestedExecution, as: Probe
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob
+  alias Cyfr.Test.TwoServices
+  alias Sanctum.Consent.{Bootstrap, Source}
 
   @moduletag :capture_log
 
@@ -20,6 +42,7 @@ defmodule Opus.FormulaHandlerTest do
   @test_node "reagent:local.test-math"
   @fh_node "formula:local.fh-root"
   @act_fh Cyfr.Digest.sha256("act-fh")
+  @probe_node "formula:local.nested-probe"
 
   setup tags do
     test_path = Path.join(System.tmp_dir!(), "formula_handler_test_#{:rand.uniform(100_000)}")
@@ -27,6 +50,7 @@ defmodule Opus.FormulaHandlerTest do
     Application.put_env(:cyfr, :base_path, test_path)
 
     Cyfr.Test.Sandbox.setup!(tags)
+    TwoServices.watch!()
 
     ctx = Sanctum.TestContext.local()
 
@@ -138,38 +162,89 @@ defmodule Opus.FormulaHandlerTest do
 
   defp execute(json, host, auth), do: FormulaHandler.execute(json, host, FormulaHost.opts(auth))
 
-  # Children of `parent_id` wait at their guest's entry for `:continue`.
-  defp hold_children!(parent_id) do
-    test_pid = self()
-    handler = "formula-handler-hold-#{System.unique_integer([:positive])}"
-
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:cyfr, :opus, :runtime, :authority_entered],
-        fn _event, _measurements, %{execution_id: id}, _config ->
-          case Arca.Repo.get(Arca.Execution, id) do
-            %{parent_execution_id: ^parent_id} ->
-              send(test_pid, {:held, self(), id})
-
-              receive do
-                :continue -> :ok
-              after
-                60_000 -> :ok
-              end
-
-            _ ->
-              :ok
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
-  end
-
   defp imports(host, auth),
     do: FormulaHandler.build_formula_imports(host, FormulaHost.opts(auth))
+
+  # The one child CYFR admitted for `host`'s attempt, as the answer to its
+  # admission crossed the suite's wire: its execution and the authority
+  # handed to the runner that would start it.
+  defp admitted!(host) do
+    parent_id = host.execution_id
+
+    [token] =
+      for %{
+            callback: :admit_child,
+            fields: %{execution_id: ^parent_id},
+            answer: %{"ok" => %{"assignment" => token}}
+          } <- TwoServices.calls(),
+          do: token
+
+    {:ok, assignment} = Cyfr.Assignment.read(token)
+    {:ok, authority} = Authority.from_wire(assignment.authority)
+    %{execution_id: assignment.execution_id, authority: authority}
+  end
+
+  # The probe run as a root whose guest takes `steps` in order, in a
+  # process of its own that sends `{:root, result}` when it ends.
+  defp start_steps(ctx, root_id, steps) do
+    test_pid = self()
+    input = %{"op" => "steps", "steps" => steps}
+
+    spawn(fn ->
+      send(
+        test_pid,
+        {:root,
+         Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
+      )
+    end)
+  end
+
+  # Run the probe as a root taking `steps`, and answer its execution id and
+  # what the host answered each step. With `hold_children: true`, each
+  # child it spawns is held at the catalog call it makes, on the suite's
+  # wire, until the test ends.
+  defp run_steps!(ctx, steps, opts \\ []) do
+    root_id = Cyfr.UUID7.execution_id()
+    if Keyword.get(opts, :hold_children, false), do: hold_children!(root_id)
+    start_steps(ctx, root_id, steps)
+    {root_id, results!(root_id)}
+  end
+
+  # What the host answered each step of the root `root_id`, once it ended.
+  defp results!(root_id) do
+    assert_receive {:root, {:ok, result}}, 60_000
+    assert result.status == :completed, "root #{root_id}: #{inspect(result)}"
+    assert %{"op" => "steps", "results" => results} = decoded(result.output)
+    results
+  end
+
+  # Each child of `parent_id` is held at the catalog call it makes: the
+  # test receives `{:held, id, conn}` for each.
+  defp hold_children!(parent_id) do
+    TwoServices.hold!(:tool_call, fn row, _call ->
+      row != nil and row.parent_execution_id == parent_id
+    end)
+  end
+
+  defp probe_request(input) do
+    %{
+      "tool" => "execution",
+      "action" => "run",
+      "args" => %{"reference" => Probe.probe_ref(), "input" => input, "type" => "formula"}
+    }
+  end
+
+  defp children(parent_id),
+    do: Arca.Repo.all(from(e in Arca.Execution, where: e.parent_execution_id == ^parent_id))
+
+  defp decoded(output) when is_binary(output) do
+    case Jason.decode(output) do
+      {:ok, decoded} -> decoded
+      _ -> output
+    end
+  end
+
+  defp decoded(output), do: output
 
   # ============================================================================
   # build_formula_imports/2
@@ -265,8 +340,10 @@ defmodule Opus.FormulaHandlerTest do
       parsed =
         Jason.decode!(execute(execution_run_request(ref, %{"a" => 5, "b" => 3}), host, auth))
 
-      # math.wasm is a core module, so the bound child fails at component
-      # compile — after the edge decision, never as a denial.
+      # The edge decision admitted the child, bound to the target's node;
+      # the runner this attempt presents starts nothing, so the call ends
+      # as the dispatch error of a child not started, never as a denial.
+      assert %{authority: %{cursor: {:bound, @test_node}}} = admitted!(host)
       assert parsed["error"]["type"] == "dispatch_error"
       refute parsed["error"]["type"] == "tool_denied"
     end
@@ -327,11 +404,12 @@ defmodule Opus.FormulaHandlerTest do
       ref: ref
     } do
       auth = authority()
+      host = host!(ctx, auth)
 
-      parsed =
-        Jason.decode!(execute(execution_run_request(ref, %{"a" => 1}), host!(ctx, auth), auth))
+      parsed = Jason.decode!(execute(execution_run_request(ref, %{"a" => 1}), host, auth))
 
-      # The zero child carries nothing but is not a refusal.
+      # The zero child carries nothing but is admitted, not refused.
+      assert %{authority: %{cursor: :unbound, policy: :none}} = admitted!(host)
       refute match?(%{"error" => %{"type" => "tool_denied"}}, parsed)
     end
   end
@@ -409,85 +487,10 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # execute/3 - Telemetry
+  # spawn, await-all, poll and cancel: what CYFR decides before any task
   # ============================================================================
 
-  describe "execute/3 - telemetry" do
-    test "emits mcp_tool telemetry event", %{ctx: ctx, ref: ref} do
-      test_pid = self()
-
-      :telemetry.attach(
-        "test-formula-mcp-tool-success",
-        [:cyfr, :opus, :mcp_tool, :call],
-        fn _event, _measurements, metadata, _config ->
-          send(test_pid, {:mcp_tool_call, metadata})
-        end,
-        nil
-      )
-
-      auth = authority(edges: %{@test_node => %{}})
-      host = host!(ctx, auth)
-
-      execute(execution_run_request(ref, %{"a" => 2, "b" => 3}), host, auth)
-
-      assert_receive {:mcp_tool_call, metadata}, 30_000
-      assert metadata.execution_id == host.execution_id
-      assert metadata.tool_action == "execution.run"
-      assert metadata.status in [:ok, :error]
-
-      :telemetry.detach("test-formula-mcp-tool-success")
-    end
-
-    test "emits telemetry with error status for denied invoke", %{ctx: ctx, ref: ref} do
-      test_pid = self()
-
-      :telemetry.attach(
-        "test-formula-mcp-denied",
-        [:cyfr, :opus, :mcp_tool, :call],
-        fn _event, _measurements, metadata, _config ->
-          send(test_pid, {:mcp_tool_status, metadata.status})
-        end,
-        nil
-      )
-
-      auth = authority(invoke_mode: :edge_only)
-      execute(execution_run_request(ref, %{}), host!(ctx, auth), auth)
-
-      assert_receive {:mcp_tool_status, :error}, 5000
-
-      :telemetry.detach("test-formula-mcp-denied")
-    end
-  end
-
-  # ============================================================================
-  # spawn + await integration (MCP format)
-  # ============================================================================
-
-  describe "spawn + await integration" do
-    test "spawn returns task_id, await returns result", %{ctx: ctx, ref: ref} do
-      auth = authority(edges: %{@test_node => %{}})
-      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
-
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-
-      spawn_fn = elem(invoke_ns["spawn"], 1)
-      spawn_result = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
-
-      parsed_spawn = Jason.decode!(spawn_result)
-      assert Map.has_key?(parsed_spawn, "task_id")
-      task_id = parsed_spawn["task_id"]
-
-      await_fn = elem(invoke_ns["await"], 1)
-      parsed_await = Jason.decode!(await_fn.(task_id))
-
-      assert parsed_await["task_id"] == task_id
-      # Could be completed or error (math.wasm is core module)
-      assert parsed_await["status"] in ["completed", "error"]
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
-    end
-
+  describe "spawn, await-all, poll and cancel before any task" do
     test "spawn returns error when request is invalid", %{ctx: ctx} do
       auth = authority()
       {imports, tracker_pid} = imports(host!(ctx, auth), auth)
@@ -532,48 +535,12 @@ defmodule Opus.FormulaHandlerTest do
       assert parsed["error"]["type"] == "resource_limit"
       assert Sanctum.Authority.budget(auth).in_flight == 0
 
-      import Ecto.Query, only: [from: 2]
-
       assert Arca.Repo.all(
                from(e in Arca.Execution,
                  where: e.parent_execution_id == ^host.execution_id,
                  select: e.id
                )
              ) == []
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
-  end
-
-  # ============================================================================
-  # spawn + await-all integration
-  # ============================================================================
-
-  describe "spawn + await-all integration" do
-    test "spawns multiple tasks and awaits all results", %{ctx: ctx, ref: ref} do
-      auth = authority(edges: %{@test_node => %{}})
-      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
-
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      spawn_fn = elem(invoke_ns["spawn"], 1)
-      await_all_fn = elem(invoke_ns["await-all"], 1)
-
-      r1 = spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
-      r2 = spawn_fn.(execution_run_request(ref, %{"a" => 3, "b" => 4}))
-
-      id1 = Jason.decode!(r1)["task_id"]
-      id2 = Jason.decode!(r2)["task_id"]
-
-      parsed = Jason.decode!(await_all_fn.(Jason.encode!(%{"task_ids" => [id1, id2]})))
-
-      assert parsed["count"] == 2
-      assert is_list(parsed["results"])
-      assert length(parsed["results"]) == 2
-
-      for item <- parsed["results"] do
-        assert item["status"] in ["completed", "error"]
-        assert Map.has_key?(item, "task_id")
-      end
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
@@ -589,38 +556,6 @@ defmodule Opus.FormulaHandlerTest do
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
-  end
-
-  # ============================================================================
-  # poll integration
-  # ============================================================================
-
-  describe "poll integration" do
-    test "poll reports the spawned task's own terminal status", %{ctx: ctx, ref: ref} do
-      auth = authority(edges: %{@test_node => %{}})
-      {imports, tracker_pid} = imports(host!(ctx, auth), auth)
-
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      spawn_fn = elem(invoke_ns["spawn"], 1)
-      poll_fn = elem(invoke_ns["poll"], 1)
-
-      task_id = Jason.decode!(spawn_fn.(execution_run_request(ref, %{"a" => 1})))["task_id"]
-
-      # Poll until the named task leaves pending. This fixture may complete
-      # or error; either terminal result verifies task-status progress.
-      wait_until(
-        fn -> Jason.decode!(poll_fn.(task_id))["status"] != "pending" end,
-        30_000,
-        "the spawned task to leave 'pending'"
-      )
-
-      parsed = Jason.decode!(poll_fn.(task_id))
-
-      assert parsed["task_id"] == task_id
-      assert parsed["status"] in ["completed", "error"]
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
 
     test "poll returns error for unknown task_id", %{ctx: ctx} do
       auth = authority()
@@ -633,72 +568,6 @@ defmodule Opus.FormulaHandlerTest do
       assert parsed["error"]["message"] =~ "Unknown"
 
       FormulaHandler.cleanup_registry(tracker_pid)
-    end
-  end
-
-  # ============================================================================
-  # cancel integration
-  # ============================================================================
-
-  describe "cancel integration" do
-    test "cancelling a spawned child's task stops its runner and gives back what it held",
-         %{ctx: ctx, ref: ref} do
-      auth = authority(edges: %{@test_node => %{}})
-      host = host!(ctx, auth)
-      hold_children!(host.execution_id)
-      {imports, tracker_pid} = imports(host, auth)
-
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      spawn_fn = elem(invoke_ns["spawn"], 1)
-      cancel_fn = elem(invoke_ns["cancel"], 1)
-
-      task_id = Jason.decode!(spawn_fn.(execution_run_request(ref, %{"a" => 1})))["task_id"]
-      assert_receive {:held, component, child_id}, 30_000
-      assert Sanctum.Authority.budget(auth).in_flight == 1
-
-      parsed = Jason.decode!(cancel_fn.(task_id))
-
-      assert parsed["cancelled"] == true
-      assert parsed["task_id"] == task_id
-
-      wait_until(fn -> not Process.alive?(component) end)
-      wait_until(fn -> Arca.Repo.get!(Arca.Execution, child_id).status == "failed" end)
-      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
-      wait_until(fn -> Cyfr.Execution.Attempt.whereis(child_id) == nil end)
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
-
-    test "stopping the tracker stops every child its tasks wait for, and CYFR reclaims their holds",
-         %{ctx: ctx, ref: ref} do
-      auth = authority(edges: %{@test_node => %{}})
-      host = host!(ctx, auth)
-      hold_children!(host.execution_id)
-      {imports, tracker_pid} = imports(host, auth)
-
-      spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
-
-      for _ <- 1..2,
-          do:
-            assert(%{"task_id" => _} = Jason.decode!(spawn_fn.(execution_run_request(ref, %{}))))
-
-      held =
-        for _ <- 1..2 do
-          assert_receive {:held, component, child_id}, 30_000
-          {component, child_id}
-        end
-
-      assert Sanctum.Authority.budget(auth).in_flight == 2
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-
-      for {component, child_id} <- held do
-        wait_until(fn -> not Process.alive?(component) end)
-        wait_until(fn -> Arca.Repo.get!(Arca.Execution, child_id).status == "failed" end)
-        wait_until(fn -> Cyfr.Execution.Attempt.whereis(child_id) == nil end)
-      end
-
-      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     end
 
     test "cancel returns error for unknown task_id", %{ctx: ctx} do
@@ -717,75 +586,117 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # ============================================================================
-  # cancel telemetry
+  # A formula's tasks, run in a runner
   # ============================================================================
 
-  describe "cancel telemetry" do
-    test "emits formula cancel telemetry event", %{ctx: ctx, ref: ref} do
-      test_pid = self()
+  describe "a formula's tasks, run in its runner" do
+    setup %{ctx: ctx} do
+      previous = Application.get_env(:cyfr, :consent_source)
+      Application.put_env(:cyfr, :consent_source, Source.DB)
 
-      :telemetry.attach(
-        "test-formula-cancel",
-        [:cyfr, :opus, :formula, :cancel],
-        fn _event, _measurements, metadata, _config ->
-          send(test_pid, {:formula_cancel, metadata})
-        end,
-        nil
-      )
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:cyfr, :consent_source, previous),
+          else: Application.delete_env(:cyfr, :consent_source)
+      end)
 
-      auth = authority(edges: %{@test_node => %{}})
-      host = host!(ctx, auth)
-      hold_children!(host.execution_id)
-      {imports, tracker_pid} = imports(host, auth)
-
-      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      spawn_fn = elem(invoke_ns["spawn"], 1)
-      cancel_fn = elem(invoke_ns["cancel"], 1)
-
-      task_id = Jason.decode!(spawn_fn.(execution_run_request(ref, %{"a" => 1})))["task_id"]
-      assert_receive {:held, _component, _child_id}, 30_000
-
-      cancel_fn.(task_id)
-
-      assert_receive {:formula_cancel, metadata}, 5000
-      assert metadata.parent_execution_id == host.execution_id
-      assert metadata.task_id == task_id
-
-      :telemetry.detach("test-formula-cancel")
-      FormulaHandler.cleanup_registry(tracker_pid)
+      :ok = Probe.publish_probe!(ctx)
+      {:ok, %{minted: minted}} = Bootstrap.run(ctx)
+      assert @probe_node in minted
+      :ok
     end
-  end
 
-  # ============================================================================
-  # spawn telemetry
-  # ============================================================================
+    test "a spawned task is awaited for its child's result, and the hold it took goes back", %{
+      ctx: ctx
+    } do
+      {root_id, [spawned, awaited]} =
+        run_steps!(ctx, [%{"spawn" => probe_request(%{"op" => "echo"})}, %{"await" => 0}])
 
-  describe "spawn telemetry" do
-    test "emits formula spawn telemetry event", %{ctx: ctx, ref: ref} do
-      test_pid = self()
+      %{"task_id" => task_id} = Jason.decode!(spawned)
 
-      :telemetry.attach(
-        "test-formula-spawn",
-        [:cyfr, :opus, :formula, :spawn],
-        fn _event, _measurements, metadata, _config ->
-          send(test_pid, {:formula_spawn, metadata})
-        end,
-        nil
-      )
+      assert %{"task_id" => ^task_id, "status" => "completed", "output" => output} =
+               Jason.decode!(awaited)
 
-      auth = authority(edges: %{@test_node => %{}})
-      host = host!(ctx, auth)
-      {imports, tracker_pid} = imports(host, auth)
+      assert %{"op" => "echo"} = decoded(output)
 
-      spawn_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["spawn"], 1)
-      spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2}))
+      authority = TwoServices.entered(root_id)
+      wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
+      assert [%{status: "completed"}] = children(root_id)
+    end
 
-      assert_receive {:formula_spawn, metadata}, 5000
-      assert metadata.parent_execution_id == host.execution_id
-      assert metadata.task_id == "task_1"
+    test "spawned tasks are awaited all together", %{ctx: ctx} do
+      {root_id, [first, second, awaited]} =
+        run_steps!(ctx, [
+          %{"spawn" => probe_request(%{"op" => "echo", "n" => 1})},
+          %{"spawn" => probe_request(%{"op" => "echo", "n" => 2})},
+          %{"await_all" => [0, 1]}
+        ])
 
-      :telemetry.detach("test-formula-spawn")
-      FormulaHandler.cleanup_registry(tracker_pid)
+      ids = for raw <- [first, second], do: Jason.decode!(raw)["task_id"]
+      assert %{"count" => 2, "results" => results} = Jason.decode!(awaited)
+      assert Enum.sort(for(item <- results, do: item["task_id"])) == Enum.sort(ids)
+      assert Enum.all?(results, &(&1["status"] == "completed"))
+      assert length(children(root_id)) == 2
+    end
+
+    test "poll reports a spawned task pending while its child runs", %{ctx: ctx} do
+      {root_id, [spawned, polled]} =
+        run_steps!(ctx, [%{"spawn" => probe_request(Probe.held_input())}, %{"poll" => 0}],
+          hold_children: true
+        )
+
+      assert %{"task_id" => _} = Jason.decode!(spawned)
+      assert %{"status" => "pending"} = Jason.decode!(polled)
+
+      [child] = children(root_id)
+      wait_until(fn -> Arca.Repo.get!(Arca.Execution, child.id).status == "failed" end)
+    end
+
+    test "cancelling a spawned child's task stops it and gives back what it held", %{ctx: ctx} do
+      {root_id, [spawned, cancelled]} =
+        run_steps!(ctx, [%{"spawn" => probe_request(Probe.held_input())}, %{"cancel" => 0}],
+          hold_children: true
+        )
+
+      task_id = Jason.decode!(spawned)["task_id"]
+      assert %{"cancelled" => true, "task_id" => ^task_id} = Jason.decode!(cancelled)
+
+      authority = TwoServices.entered(root_id)
+      [child] = children(root_id)
+      wait_until(fn -> Arca.Repo.get!(Arca.Execution, child.id).status == "failed" end)
+      wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
+      wait_until(fn -> Cyfr.Execution.Attempt.whereis(child.id) == nil end)
+    end
+
+    test "tasks a formula leaves running end with it, and CYFR reclaims their holds", %{ctx: ctx} do
+      root_id = Cyfr.UUID7.execution_id()
+      hold_children!(root_id)
+      TwoServices.hold!(:tool_call, root_id, once: true)
+
+      # The formula spawns two children and makes a catalog call of its own,
+      # held until both children are held at theirs.
+      start_steps(ctx, root_id, [
+        %{"spawn" => probe_request(Probe.held_input())},
+        %{"spawn" => probe_request(Probe.held_input())},
+        %{"call" => Probe.held_input()["request"]}
+      ])
+
+      held = for _ <- 1..3, do: assert_receive({:held, _id, _conn}, 30_000)
+      [{:held, ^root_id, root_call}] = for {:held, ^root_id, _} = call <- held, do: call
+
+      authority = TwoServices.entered(root_id)
+      assert Sanctum.Authority.budget(authority).in_flight == 2
+      assert length(children(root_id)) == 2
+
+      TwoServices.release!(root_call)
+      assert [_first, _second, _called] = results!(root_id)
+
+      for child <- children(root_id) do
+        wait_until(fn -> Arca.Repo.get!(Arca.Execution, child.id).status == "failed" end)
+        wait_until(fn -> Cyfr.Execution.Attempt.whereis(child.id) == nil end)
+      end
+
+      wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
     end
   end
 
@@ -961,18 +872,24 @@ defmodule Opus.FormulaHandlerTest do
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
+    # CYFR's own telemetry: the host emits it as it pushes the event to the
+    # stream.
     test "emit telemetry fires on each emit", %{ctx: ctx} do
       test_pid = self()
       execution_id = "exec_emit_telem_#{:rand.uniform(100_000)}"
+      handler = "test-formula-emit-#{System.unique_integer([:positive])}"
 
-      :telemetry.attach(
-        "test-formula-emit",
-        [:cyfr, :opus, :emit],
-        fn _event, measurements, metadata, _config ->
-          send(test_pid, {:emitted, metadata, measurements})
-        end,
-        nil
-      )
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :opus, :emit],
+          fn _event, measurements, metadata, _config ->
+            send(test_pid, {:emitted, metadata, measurements})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
 
       host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
@@ -982,11 +899,8 @@ defmodule Opus.FormulaHandlerTest do
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
-      assert_receive {:emitted, metadata, measurements}, 2000
-      assert metadata.execution_id == execution_id
-      assert measurements.sequence == "0.1"
+      assert_receive {:emitted, %{execution_id: ^execution_id}, %{sequence: "0.1"}}, 2000
 
-      :telemetry.detach("test-formula-emit")
       FormulaHandler.cleanup_registry(tracker_pid)
     end
   end

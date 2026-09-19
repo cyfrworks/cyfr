@@ -5,22 +5,26 @@ Code.require_file("support/nested_execution_helper.exs", __DIR__)
 
 defmodule Opus.WorkerServiceTest do
   @moduledoc """
-  A run lives only as long as what waits for it and what runs it. A waiter
-  that is killed kills its run: the runner and its component process stop,
-  the attempt lapses at once, and the in-flight count, the execution slot
-  and the charge row the run held all go back. Neither the worker service
-  nor its runners' supervisor shows a runner's attempt keys. A runner that
-  exits is reported at once: its attempt lapses and its waiter answers,
-  while a sibling run on the same worker service keeps running and
-  completes. A formula's runner killed while its children run in its group
-  takes them with it: every child's runner stops, every row fails, and the
-  invoke slots, charge rows and execution slots they held all go back. The
-  worker service starts only an assignment addressed to it, with the input
-  its digest binds and keys sealed for it that open as its attempt.
+  A run lives only as long as what waits for it and what runs it, across
+  the runner boundary: every run here runs in a runner that is an OS
+  process of its own. A waiter that is killed kills its run: the attempt
+  lapses at once, the worker service is asked to end its runner and
+  reports the runner's exit, and the in-flight count, the execution slot
+  and the charge row the run held all go back. A runner whose process
+  dies is reported at once: its attempt lapses and its waiter answers,
+  while a sibling run in another runner keeps running and completes. A
+  formula's runner that dies while its children run in it takes them
+  with it: the service reports the formula and every child it said it
+  started, every row fails, and the invoke slots, charge rows and
+  execution slots they held all go back. The worker service starts only
+  an assignment addressed to it, with the input its digest binds and keys
+  sealed for it that open as its attempt, as CYFR asks it over the wire.
 
   The runs are the `nested-probe` formula as a child of an admitted root,
-  or as a root fanning out to children, held at the entry to their guest
-  until the test lets them go.
+  or as a root fanning out to children, each child asking for a catalog
+  tool and held at that host call on the suite's wire until the test lets
+  it go. What happened is read at the wire, the status the service
+  answers and the rows.
   """
 
   use ExUnit.Case, async: false
@@ -30,7 +34,7 @@ defmodule Opus.WorkerServiceTest do
   alias Cyfr.Authority.Budget
   alias Cyfr.Execution.{Attempt, Keys}
   alias Cyfr.Slots
-  alias Cyfr.Test.AttemptFixtures
+  alias Cyfr.Test.{AttemptFixtures, OpusService, TwoServices}
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap, Source}
 
@@ -90,12 +94,8 @@ defmodule Opus.WorkerServiceTest do
     {:ok, ctx: ctx, authority: authority, root_id: root_id, attempt: attempt.attempt}
   end
 
-  test "a killed waiter's run stops, its attempt lapses at once and what it held goes back", %{
-    ctx: ctx,
-    authority: authority,
-    root_id: root_id,
-    attempt: attempt
-  } do
+  test "a killed waiter's run stops, its attempt lapses at once, its runner ends and what it held goes back",
+       %{ctx: ctx, authority: authority, root_id: root_id, attempt: attempt} do
     children_before = Slots.status(@slots).child_active
     hold_children!(root_id)
     test_pid = self()
@@ -105,23 +105,12 @@ defmodule Opus.WorkerServiceTest do
         send(test_pid, {:ran, child!(ctx, authority, root_id, attempt, guest_fn: :spawn)})
       end)
 
-    assert_receive {:held, component, id}, 30_000
-    attempt_pid = Attempt.whereis(id)
-    runner = runner_of(id)
+    assert_receive {:held, id, _held}, 30_000
+    runner = runner_of(ctx, id)
 
     assert Sanctum.Authority.budget(authority).in_flight == 1
     assert Slots.status(@slots).child_active == children_before + 1
     assert [%{admitted_at: %DateTime{}}] = charges(ctx, authority)
-
-    # The runner's attempt keys are in neither the worker service's status
-    # nor its runners' supervisor's.
-    %{keys: keys} = AttemptFixtures.current!(ctx.athanor_id, id)
-
-    for process <- [Opus.WorkerService, Opus.WorkerService.Runners],
-        key <- [keys.call, keys.seal] do
-      status = :erlang.term_to_binary(:sys.get_status(process))
-      assert :binary.match(status, key) == :nomatch
-    end
 
     Process.exit(waiter, :kill)
 
@@ -130,19 +119,19 @@ defmodule Opus.WorkerServiceTest do
     assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(ctx, id)
     assert "execution.lapsed" in event_types(ctx, id)
 
-    wait_until(fn -> not Enum.any?([attempt_pid, runner.pid, component], &Process.alive?/1) end)
+    # Its attempt stops, and the service was asked to end its runner,
+    # whose exit it reports: nothing of the run is left running.
+    wait_until(fn -> Attempt.whereis(id) == nil end)
+    wait_until(fn -> reported_exit?(runner) end, 10_000, "the runner's exit report")
+    wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
     wait_until(fn -> Slots.status(@slots).child_active == children_before end)
     assert Sanctum.Authority.budget(authority).in_flight == 0
     assert charges(ctx, authority) == []
     refute_received {:ran, _}
   end
 
-  test "a runner's exit is reported at once: its attempt lapses, and a sibling keeps running", %{
-    ctx: ctx,
-    authority: authority,
-    root_id: root_id,
-    attempt: attempt
-  } do
+  test "a runner whose process dies is reported at once: its attempt lapses, and a sibling in another runner keeps running",
+       %{ctx: ctx, authority: authority, root_id: root_id, attempt: attempt} do
     hold_children!(root_id)
     test_pid = self()
 
@@ -154,31 +143,30 @@ defmodule Opus.WorkerServiceTest do
       end)
     end
 
-    assert_receive {:held, exited_component, exited}, 30_000
-    assert_receive {:held, sibling_component, sibling}, 30_000
-    exited_runner = runner_of(exited)
+    assert_receive {:held, exited, _held}, 30_000
+    assert_receive {:held, sibling, sibling_held}, 30_000
+    exited_runner = runner_of(ctx, exited)
+    refute runner_of(ctx, sibling) == exited_runner
     sibling_attempt = Attempt.whereis(sibling)
 
-    Process.exit(exited_runner.pid, :kill)
+    kill_runner_process!(exited_runner)
 
-    assert_receive {:ran, ^exited, {:error, @lapsed}}, 5_000
+    assert_receive {:ran, ^exited, {:error, @lapsed}}, 10_000
     assert %{status: "failed", error_message: @lapsed} = row(exited)
     assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(ctx, exited)
-    wait_until(fn -> not Process.alive?(exited_component) end)
-    assert Attempt.whereis(exited) == nil
+    wait_until(fn -> reported_exit?(exited_runner) end, 10_000, "the runner's exit report")
+    wait_until(fn -> Attempt.whereis(exited) == nil end)
 
-    assert Process.alive?(sibling_component)
     assert Attempt.whereis(sibling) == sibling_attempt
     assert row(sibling).status == "running"
 
-    send(sibling_component, :continue)
+    TwoServices.release!(sibling_held)
     assert_receive {:ran, ^sibling, {:ok, %{status: :completed}}}, 30_000
     assert row(sibling).status == "completed"
   end
 
-  test "killing a formula's runner mid-fan-out reclaims every hold its children took", %{
-    ctx: ctx
-  } do
+  test "a formula's runner dying mid-fan-out takes its children with it and reclaims every hold they took",
+       %{ctx: ctx} do
     children_before = Slots.status(@slots).child_active
     slots_before = Slots.status(@slots).active
     root_id = Cyfr.UUID7.execution_id()
@@ -188,7 +176,7 @@ defmodule Opus.WorkerServiceTest do
     request = %{
       "tool" => "execution",
       "action" => "run",
-      "args" => %{"reference" => Probe.probe_ref(), "input" => %{"op" => "echo"}}
+      "args" => %{"reference" => Probe.probe_ref(), "input" => Probe.held_input()}
     }
 
     spawn(fn ->
@@ -205,34 +193,45 @@ defmodule Opus.WorkerServiceTest do
       )
     end)
 
-    held =
+    ids =
       for _ <- 1..3 do
-        assert_receive {:held, component, id}, 30_000
-        {id, component}
+        assert_receive {:held, id, _held}, 30_000
+        id
       end
 
-    ids = Enum.map(held, &elem(&1, 0))
-    root_runner = runner_of(root_id)
-    child_runners = Enum.map(ids, &runner_of/1)
+    # The children run in their formula's runner.
+    runner = runner_of(ctx, root_id)
+    assert Enum.all?(ids, &(runner_of(ctx, &1) == runner))
     root_authority = reserved_authority(ctx, root_id)
 
     assert Sanctum.Authority.budget(root_authority).in_flight == 3
     assert length(charges(ctx, root_authority)) == 3
     assert Slots.status(@slots).child_active == children_before + 3
 
-    Process.exit(root_runner.pid, :kill)
+    # The service has heard of every child its runner started.
+    held_attempts = for id <- [root_id | ids], do: row(id).current_attempt
+    wait_until(fn -> Enum.all?(held_attempts, &(&1 in OpusService.status().attempts)) end)
+
+    kill_runner_process!(runner)
 
     assert_receive {:root, {:error, @lapsed}}, 10_000
     assert %{status: "failed", error_message: @lapsed} = row(root_id)
 
-    for {id, component} <- held do
+    # The service reported the formula and every child it said it started.
+    wait_until(fn -> reported_exit?(runner) end, 10_000, "the runner's exit report")
+
+    reported =
+      for %{callback: :runner_exited, args: %{"runner" => ^runner, "attempts" => held}} <-
+            TwoServices.calls(),
+          attempt <- held,
+          do: attempt
+
+    assert Enum.sort(Enum.uniq(reported)) == Enum.sort(held_attempts)
+
+    for id <- ids do
       wait_until(fn -> row(id).status == "failed" end, 10_000)
-      wait_until(fn -> not Process.alive?(component) end)
       wait_until(fn -> Attempt.whereis(id) == nil end)
     end
-
-    for runner <- [root_runner | child_runners],
-        do: wait_until(fn -> not Process.alive?(runner.pid) end)
 
     wait_until(fn -> Slots.status(@slots).child_active == children_before end)
     wait_until(fn -> Slots.status(@slots).active == slots_before end)
@@ -241,9 +240,9 @@ defmodule Opus.WorkerServiceTest do
     wait_until(fn -> charges(ctx, root_authority) == [] end)
   end
 
-  describe "start/3" do
+  describe "start, over the wire" do
     setup do
-      {:ok, %{service: service, boot: boot}} = Opus.WorkerService.status()
+      %{service: service, boot: boot} = OpusService.status()
       {:ok, service: service, boot: boot}
     end
 
@@ -255,7 +254,7 @@ defmodule Opus.WorkerServiceTest do
         AttemptFixtures.attached!(service_id: "wrk_other", boot_id: boot, attach: false)
 
       assert {:error, :malformed} =
-               Opus.WorkerService.start(
+               OpusService.start!(
                  other_service.assignment,
                  input(other_service),
                  sealed(other_service)
@@ -265,7 +264,7 @@ defmodule Opus.WorkerServiceTest do
         AttemptFixtures.attached!(service_id: service, boot_id: "boot_other", attach: false)
 
       assert {:error, :malformed} =
-               Opus.WorkerService.start(
+               OpusService.start!(
                  other_boot.assignment,
                  input(other_boot),
                  sealed(other_boot)
@@ -279,11 +278,7 @@ defmodule Opus.WorkerServiceTest do
       fixture = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
 
       assert {:error, :malformed} =
-               Opus.WorkerService.start(
-                 fixture.assignment,
-                 ~s({"fixture":false}),
-                 sealed(fixture)
-               )
+               OpusService.start!(fixture.assignment, ~s({"fixture":false}), sealed(fixture))
 
       Attempt.refuse(fixture.pid, "not started")
     end
@@ -304,22 +299,22 @@ defmodule Opus.WorkerServiceTest do
             "not sealed"
           ] do
         assert {:error, :malformed} =
-                 Opus.WorkerService.start(fixture.assignment, input(fixture), sealed)
+                 OpusService.start!(fixture.assignment, input(fixture), sealed)
       end
 
-      assert %{busy: 0} = elem(Opus.WorkerService.status(), 1).runners
+      assert %{runners: %{busy: 0}, attempts: []} = OpusService.status()
       Attempt.refuse(fixture.pid, "not started")
       Attempt.refuse(other.pid, "not started")
     end
   end
 
-  # A child of the root: the probe echoing, held at its guest's entry.
+  # A child of the root: the probe asking for a catalog tool, held there.
   defp child!(ctx, authority, root_id, attempt, opts) do
     Cyfr.Execution.run_child(
       authority,
       Probe.probe_ref(),
       nil,
-      %{"op" => "echo"},
+      Probe.held_input(),
       Keyword.merge(
         [
           ctx: Sanctum.Context.enter_guest(ctx),
@@ -333,40 +328,35 @@ defmodule Opus.WorkerServiceTest do
     )
   end
 
-  # Children of `root_id` wait at their guest's entry for `:continue`.
+  # Children of `root_id` are held at their catalog tool call: the test
+  # receives `{:held, id, held}` for each and lets the call go with
+  # `Cyfr.Test.TwoServices.release!/1`.
   defp hold_children!(root_id) do
-    test_pid = self()
-    handler = "worker-service-hold-#{System.unique_integer([:positive])}"
-
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:cyfr, :opus, :runtime, :authority_entered],
-        fn _event, _measurements, %{execution_id: id}, _config ->
-          case Arca.Repo.get(Arca.Execution, id) do
-            %{parent_execution_id: ^root_id} ->
-              send(test_pid, {:held, self(), id})
-
-              receive do
-                :continue -> :ok
-              after
-                60_000 -> :ok
-              end
-
-            _ ->
-              :ok
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
+    TwoServices.hold!(
+      :tool_call,
+      fn row, _call -> row != nil and row.parent_execution_id == root_id end,
+      []
+    )
   end
 
-  defp runner_of(id) do
-    :sys.get_state(Opus.WorkerService).runners
-    |> Map.values()
-    |> Enum.find(&(&1.execution_id == id))
+  # The runner that claimed the run's attempt, as its host calls present it.
+  defp runner_of(ctx, id), do: attempt_row(ctx, id).claimed_by
+
+  # Whether the Opus service reported `runner`'s exit over the wire.
+  defp reported_exit?(runner) do
+    Enum.any?(
+      TwoServices.calls(),
+      &match?(%{callback: :runner_exited, args: %{"runner" => ^runner}}, &1)
+    )
+  end
+
+  # The runner's process dies as a crashed or OOM-killed one does: killed
+  # outright, with nothing written on its channel.
+  defp kill_runner_process!(runner) do
+    %{pid: handle} = Enum.find(Opus.RunnerPool.runners(Opus.RunnerPool), &(&1.id == runner))
+    %{os_pid: os_pid} = Opus.RunnerProcess.info(handle)
+    {_, 0} = System.cmd("kill", ["-KILL", Integer.to_string(os_pid)])
+    :ok
   end
 
   defp input(fixture), do: Jason.encode!(fixture.input)

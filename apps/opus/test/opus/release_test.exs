@@ -38,7 +38,12 @@ defmodule Opus.ReleaseTest do
     }
 
     assert %{argv: ["/bin/sh", "-c", script, "/app/bin/opus"], env: runner_env} =
-             Release.runner_command(env)
+             Release.runner_command(
+               env: env,
+               log_level: :debug,
+               resolver: Opus.Test.Resolver,
+               schedulers: {2, 2, 2, 2, 2}
+             )
 
     assert script =~ ~s(RELEASE_TMP="${TMPDIR:-/tmp}")
     assert script =~ ~s(exec "$0" start)
@@ -51,15 +56,45 @@ defmodule Opus.ReleaseTest do
   end
 
   test "outside a release, a runner is a fresh erl of this runtime on Opus's code paths, with no input" do
-    assert %{argv: [erl, "-noinput", "+fnu", "-pa" | rest], env: env} =
-             Release.runner_command(%{"LC_ALL" => "C.UTF-8", "OPUS_SERVICE_KEY" => "0"})
+    assert %{argv: [erl, "-noinput", "+fnu" | rest], env: env} =
+             Release.runner_command(
+               env: %{"LC_ALL" => "C.UTF-8", "OPUS_SERVICE_KEY" => "0"},
+               log_level: :warning,
+               resolver: nil,
+               schedulers: {8, 4, 8, 3, 10}
+             )
 
     assert erl == Path.join([to_string(:code.root_dir()), "bin", "erl"])
     assert File.exists?(erl)
     assert env == %{"LC_ALL" => "C.UTF-8"}
 
-    {paths, ["-run", "Elixir.Opus.Release", "runner"]} = Enum.split(rest, -3)
+    # What a plain VM has no sys.config to read travels as its arguments:
+    # the scheduler counts, the log level, and no resolver when none is set.
+    assert ["+S", "8:4", "+SDcpu", "8:3", "+SDio", "10", "-pa" | rest] = rest
+
+    {paths, ["-logger", "level", "warning", "-run", "Elixir.Opus.Release", "runner"]} =
+      Enum.split(rest, -6)
+
     assert paths == Release.code_paths()
+
+    %{argv: argv} =
+      Release.runner_command(
+        env: %{},
+        log_level: :error,
+        resolver: Opus.Test.Resolver,
+        schedulers: {1, 1, 1, 1, 1}
+      )
+
+    assert ["-logger", "level", "error", "-opus", "resolver", "'Elixir.Opus.Test.Resolver'"] =
+             Enum.slice(argv, -9, 6)
+  end
+
+  test "this boot's runner command carries this VM's log level, resolver and scheduler counts" do
+    %{argv: argv} = Release.runner_command()
+    online = Integer.to_string(:erlang.system_info(:schedulers_online))
+    assert Enum.any?(argv, &String.ends_with?(&1, ":" <> online))
+    level = Atom.to_string(Logger.level())
+    assert ["-logger", "level", ^level | _] = Enum.drop_while(argv, &(&1 != "-logger"))
   end
 
   test "the code paths are the ebin of Opus and every application it depends on, outside the runtime's own" do

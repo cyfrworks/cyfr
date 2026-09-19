@@ -21,19 +21,36 @@ defmodule Opus.RunnerPool do
   spawning one when none is ready, and refills the fresh ones behind it;
   the assign the caller then sends is held by the handle until the
   channel attaches. What a busy runner reports reaches the assignee as
-  `{Opus.RunnerPool, pid, event}`: `{:complete, execution_id, clean}`,
+  `{Opus.RunnerPool, pid, event}`: `{:child, execution_id, attempt}` for
+  each child it starts, `{:complete, execution_id, clean}`,
   `{:exit, runner_id, open}` or `{:gone, reason}` (its channel closed, its
   process exited or its keeper failed with the subtree still assigned).
   The pool moves the runner itself: a clean completion to idle, anything
   else to tainted, released through the keeper at once; `taint/3` does
   the same for a kill, with the grace the runner is given to report.
-  `cancel_child/2` sends every busy runner a `cancel_child`, since which
-  runs the child is the runner's to know; one that does not ignores it.
+  `cancel_child/3` sends one busy runner a `cancel_child`, and
+  `cancel_child/2` every busy runner; one that does not run the child
+  ignores it.
 
   A tainted runner leaves the pool once the keeper reports it retired;
-  its handle is stopped then. A keeper that fails takes the pool with it
+  its handle is stopped then. `retire_busy/2` taints every busy runner
+  with no grace and answers once none is left being ended, keeping the
+  fresh and idle ones pooled. A keeper that fails takes the pool with it
   through their common supervisor, and every busy runner's assignee
   hears `{:gone, _}` first.
+
+  ## A keeper that refuses runners
+
+  A runner the keeper refuses to start (`{:refused, reason}` from its
+  handle: no process of it ever ran, so there is nothing to retire) leaves
+  the pool at once, and its assignee, if it had one, hears
+  `{:gone, {:refused, reason}}`. The pool then refuses until a runner
+  starts again: it spawns one runner at a time, after a wait that doubles
+  from one second to half a minute, never hands out a runner still
+  spawning, and answers a `take/3` no fresh or idle runner can serve
+  `{:error, {:refused, refusal}}`, the keeper's own account of why
+  (`c:Opus.Keeper.refusal/1`), which `status/1` reports too. The first
+  runner that attaches ends the refusal and the pool fills again.
   """
 
   use GenServer
@@ -43,6 +60,7 @@ defmodule Opus.RunnerPool do
   alias Opus.RunnerProcess
 
   @refill_backoff_ms 1_000
+  @max_backoff_ms 30_000
 
   @typedoc "One runner as the pool sees it."
   @type runner :: %{
@@ -58,7 +76,8 @@ defmodule Opus.RunnerPool do
 
   @doc """
   Start the pool. Options: `:settings` (`t:Opus.Settings.pool/0`),
-  `:keeper` (the keeper module), `:supervisor` (the `DynamicSupervisor`
+  `:keeper` (the keeper module), `:keeper_opts` (the options the keeper
+  was started with, default none), `:supervisor` (the `DynamicSupervisor`
   the handles run under), `:command` (`t:Opus.Release.command/0`, default
   this boot's), `:name` (default `#{inspect(__MODULE__)}`).
   """
@@ -71,9 +90,15 @@ defmodule Opus.RunnerPool do
       when is_pid(assignee),
       do: GenServer.call(pool, {:serve, service, assignee})
 
-  @doc "Take a runner for a subtree of `athanor` running `execution_id`: its handle and its id."
+  @doc """
+  Take a runner for a subtree of `athanor` running `execution_id`: its
+  handle and its id, or `{:error, {:refused, refusal}}` while the keeper
+  refuses runners and none is fresh or idle for it.
+  """
   @spec take(GenServer.server(), String.t(), String.t()) ::
-          {:ok, pid(), String.t()} | {:error, term()}
+          {:ok, pid(), String.t()}
+          | {:error,
+             {:refused, Cyfr.WorkerAPI.refusal()} | :not_serving | {:spawn_failed, term()}}
   def take(pool, athanor, execution_id) when is_binary(athanor) and is_binary(execution_id),
     do: GenServer.call(pool, {:take, athanor, execution_id})
 
@@ -82,17 +107,42 @@ defmodule Opus.RunnerPool do
   def taint(pool, pid, grace_ms) when is_pid(pid) and is_integer(grace_ms) and grace_ms >= 0,
     do: GenServer.call(pool, {:taint, pid, grace_ms})
 
+  @doc """
+  Taint every busy runner and end it at once, with no grace, and answer
+  once every runner being ended has been retired by the keeper; fresh and
+  idle runners stay pooled. For a caller that must know no runner of the
+  work it started is left, as a test's end does: a runner still running
+  a subtree could otherwise make its next host call after the caller
+  moved on. Exits if that takes longer than `timeout_ms`.
+  """
+  @spec retire_busy(GenServer.server(), timeout()) :: :ok
+  def retire_busy(pool, timeout_ms \\ 30_000),
+    do: GenServer.call(pool, :retire_busy, timeout_ms)
+
   @doc "Send every busy runner a `cancel_child` for `execution_id`."
   @spec cancel_child(GenServer.server(), String.t()) :: :ok
   def cancel_child(pool, execution_id) when is_binary(execution_id),
-    do: GenServer.call(pool, {:cancel_child, execution_id})
+    do: GenServer.call(pool, {:cancel_child, :busy, execution_id})
 
-  @doc "The runners counted by state, as `t:Cyfr.WorkerAPI.status/0` counts them."
+  @doc "Send the runner `pid`, if it is busy, a `cancel_child` for `execution_id`."
+  @spec cancel_child(GenServer.server(), pid(), String.t()) :: :ok
+  def cancel_child(pool, pid, execution_id) when is_pid(pid) and is_binary(execution_id),
+    do: GenServer.call(pool, {:cancel_child, pid, execution_id})
+
+  @doc """
+  The pool's part of `t:Cyfr.WorkerAPI.status/0`: its runners counted by
+  state, the memory bound its keeper holds every runner to, and the
+  keeper's refusal while it refuses runners.
+  """
   @spec status(GenServer.server()) :: %{
-          fresh: non_neg_integer(),
-          idle: non_neg_integer(),
-          busy: non_neg_integer(),
-          tainted: non_neg_integer()
+          runners: %{
+            fresh: non_neg_integer(),
+            idle: non_neg_integer(),
+            busy: non_neg_integer(),
+            tainted: non_neg_integer()
+          },
+          memory_bytes: pos_integer() | nil,
+          refusal: Cyfr.WorkerAPI.refusal() | nil
         }
   def status(pool), do: GenServer.call(pool, :status)
 
@@ -104,16 +154,22 @@ defmodule Opus.RunnerPool do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
+    keeper = Keyword.fetch!(opts, :keeper)
+
     {:ok,
      %{
        settings: Keyword.fetch!(opts, :settings),
-       keeper: Keyword.fetch!(opts, :keeper),
+       keeper: keeper,
+       memory_bytes: keeper.memory_bytes(Keyword.get(opts, :keeper_opts, [])),
        supervisor: Keyword.fetch!(opts, :supervisor),
        command: Keyword.get_lazy(opts, :command, &Opus.Release.runner_command/0),
        service: nil,
        assignee: nil,
        runners: %{},
-       refill_scheduled: false
+       refill_scheduled: false,
+       refusal: nil,
+       backoff_ms: @refill_backoff_ms,
+       retirees: []
      }}
   end
 
@@ -139,6 +195,9 @@ defmodule Opus.RunnerPool do
         state = put_runner(state, pid, entry)
         {:reply, {:ok, pid, entry.id}, refill(state)}
 
+      :none when state.refusal != nil ->
+        {:reply, {:error, {:refused, state.refusal}}, state}
+
       :none ->
         case spawn_runner(state) do
           {:ok, pid, entry} ->
@@ -158,8 +217,18 @@ defmodule Opus.RunnerPool do
     end
   end
 
-  def handle_call({:cancel_child, execution_id}, _from, state) do
-    for {pid, %{state: :busy}} <- state.runners do
+  def handle_call(:retire_busy, from, state) do
+    state =
+      Enum.reduce(state.runners, state, fn
+        {pid, %{state: :busy} = entry}, state -> taint(state, pid, entry, 0)
+        _runner, state -> state
+      end)
+
+    {:noreply, retired(%{state | retirees: [from | state.retirees]})}
+  end
+
+  def handle_call({:cancel_child, to, execution_id}, _from, state) do
+    for {pid, %{state: :busy}} <- state.runners, to == :busy or to == pid do
       _ = RunnerProcess.send_message(pid, %{type: :cancel_child, execution_id: execution_id})
     end
 
@@ -179,7 +248,7 @@ defmodule Opus.RunnerPool do
         end
       end)
 
-    {:reply, counts, state}
+    {:reply, %{runners: counts, memory_bytes: state.memory_bytes, refusal: state.refusal}, state}
   end
 
   def handle_call(:runners, _from, state) do
@@ -200,7 +269,7 @@ defmodule Opus.RunnerPool do
   def handle_info({RunnerProcess, pid, event}, state) do
     case state.runners[pid] do
       nil -> {:noreply, state}
-      entry -> {:noreply, on_event(event, pid, entry, state)}
+      entry -> {:noreply, retired(on_event(event, pid, entry, state))}
     end
   end
 
@@ -224,7 +293,7 @@ defmodule Opus.RunnerPool do
 
       {entry, runners} ->
         if entry.execution_id, do: tell(state, pid, {:gone, {:handle_down, reason}})
-        {:noreply, refill_later(%{state | runners: runners})}
+        {:noreply, retired(refill_later(%{state | runners: runners}))}
     end
   end
 
@@ -240,9 +309,26 @@ defmodule Opus.RunnerPool do
   # ---------------------------------------------------------------------------
 
   defp on_event(:ready, pid, %{state: :spawning} = entry, state),
-    do: put_runner(state, pid, %{entry | state: :fresh})
+    do: state |> put_runner(pid, %{entry | state: :fresh}) |> started()
 
-  defp on_event(:ready, _pid, _entry, state), do: state
+  defp on_event(:ready, _pid, _entry, state), do: started(state)
+
+  # No process of the runner ran: it leaves the pool at once, with nothing
+  # for the keeper to retire, and the pool refuses until one starts.
+  defp on_event({:refused, reason}, pid, entry, state) do
+    state = told(state, pid, entry, {:gone, {:refused, reason}})
+    _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
+    refusal = state.keeper.refusal(reason)
+
+    if state.refusal == nil,
+      do:
+        Logger.error(
+          "[Opus.RunnerPool] the keeper refuses runners (#{refusal.reason}); " <>
+            "trying one again from #{state.backoff_ms} ms, backing off"
+        )
+
+    back_off(%{state | runners: Map.delete(state.runners, pid), refusal: refusal})
+  end
 
   # A complete from a runner already tainted (killed while it finished)
   # is heard, since its attempts are closed, but the runner stays tainted.
@@ -262,6 +348,14 @@ defmodule Opus.RunnerPool do
       true ->
         taint(state, pid, entry, 0)
     end
+  end
+
+  # A child the runner started for the subtree it runs: its assignee
+  # learns which runner holds it. One heard after the subtree was told of
+  # (the runner killed as it started the child) is the runner's end's.
+  defp on_event({:message, %{type: :child} = message}, pid, entry, state) do
+    if entry.execution_id, do: tell(state, pid, {:child, message.execution_id, message.attempt})
+    state
   end
 
   defp on_event({:message, %{type: :exit} = message}, pid, entry, state) do
@@ -321,6 +415,19 @@ defmodule Opus.RunnerPool do
     refill_later(put_runner(state, pid, %{entry | state: :tainted, idle_timer: nil}))
   end
 
+  # Whoever waits for the busy runners' ends is answered once no runner is
+  # being ended.
+  defp retired(%{retirees: []} = state), do: state
+
+  defp retired(state) do
+    if Enum.any?(state.runners, fn {_pid, e} -> e.state in [:tainted, :retiring] end) do
+      state
+    else
+      for from <- state.retirees, do: GenServer.reply(from, :ok)
+      %{state | retirees: []}
+    end
+  end
+
   defp tell(%{assignee: assignee}, pid, event) when is_pid(assignee),
     do: send(assignee, {__MODULE__, pid, event})
 
@@ -331,18 +438,20 @@ defmodule Opus.RunnerPool do
   # ---------------------------------------------------------------------------
 
   # An idle runner of the athanor, then a fresh one (attached or still
-  # spawning, since an assign waits for the channel).
+  # spawning, since an assign waits for the channel, unless the keeper
+  # refuses runners and the one spawning is likely refused too).
   defp pick(state, athanor) do
     idle = Enum.find(state.runners, fn {_pid, e} -> e.state == :idle and e.athanor == athanor end)
 
     fresh =
       idle ||
         Enum.find(state.runners, fn {_pid, e} -> e.state == :fresh end) ||
-        Enum.find(state.runners, fn {_pid, e} -> e.state == :spawning end)
+        (state.refusal == nil &&
+           Enum.find(state.runners, fn {_pid, e} -> e.state == :spawning end))
 
     case fresh do
       {pid, entry} -> {:ok, pid, entry}
-      nil -> :none
+      _none -> :none
     end
   end
 
@@ -379,10 +488,16 @@ defmodule Opus.RunnerPool do
 
   defp refill(%{service: nil} = state), do: state
 
+  # While the keeper refuses runners, one is spawned at a time, when the
+  # wait since the last refusal is over, to learn whether it starts them
+  # again.
+  defp refill(%{refusal: refusal, refill_scheduled: true} = state) when refusal != nil,
+    do: state
+
   defp refill(state) do
     ahead = Enum.count(state.runners, fn {_pid, e} -> e.state in [:fresh, :spawning] end)
 
-    Enum.reduce_while(1..max(state.settings.pool_size - ahead, 0)//1, state, fn _n, state ->
+    Enum.reduce_while(1..max(target(state) - ahead, 0)//1, state, fn _n, state ->
       case spawn_runner(state) do
         {:ok, pid, entry} -> {:cont, put_runner(state, pid, entry)}
         {:error, _reason} -> {:halt, refill_later(state)}
@@ -390,11 +505,35 @@ defmodule Opus.RunnerPool do
     end)
   end
 
-  defp refill_later(%{refill_scheduled: true} = state), do: state
+  defp target(%{refusal: nil, settings: settings}), do: settings.pool_size
+  defp target(_refusing), do: 1
 
-  defp refill_later(state) do
-    Process.send_after(self(), :refill, @refill_backoff_ms)
+  defp refill_later(state, delay_ms \\ @refill_backoff_ms)
+
+  defp refill_later(%{refill_scheduled: true} = state, _delay_ms), do: state
+
+  defp refill_later(state, delay_ms) do
+    Process.send_after(self(), :refill, delay_ms)
     %{state | refill_scheduled: true}
+  end
+
+  # The next try after a refusal waits twice as long as the last, up to
+  # the most; a refusal that arrives while one is already scheduled (the
+  # rest of a fill) waits for it.
+  defp back_off(%{refill_scheduled: true} = state), do: state
+
+  defp back_off(state) do
+    state
+    |> refill_later(state.backoff_ms)
+    |> Map.put(:backoff_ms, min(state.backoff_ms * 2, @max_backoff_ms))
+  end
+
+  # A runner attached: the keeper starts runners, and the pool fills.
+  defp started(%{refusal: nil} = state), do: state
+
+  defp started(state) do
+    Logger.info("[Opus.RunnerPool] the keeper starts runners again")
+    refill(%{state | refusal: nil, backoff_ms: @refill_backoff_ms})
   end
 
   defp put_runner(state, pid, entry), do: %{state | runners: Map.put(state.runners, pid, entry)}

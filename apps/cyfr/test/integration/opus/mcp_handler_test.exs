@@ -11,7 +11,8 @@ defmodule Opus.FormulaHandlerMcpTest do
   under the authority it holds for that attempt: a catalog tool goes
   through `Cyfr.Ops.Catalog.call_in_chain/5`, where the grant is the
   consented edge's tool list — exact `tool.action` entries,
-  deny-by-default.
+  deny-by-default. The telemetry a call emits in its runner's VM is
+  `Opus.FormulaHandlerRunnerTest`'s, in Opus's suite.
   """
   use ExUnit.Case, async: false
 
@@ -168,67 +169,6 @@ defmodule Opus.FormulaHandlerMcpTest do
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "completed"
-    end
-  end
-
-  # ============================================================================
-  # Telemetry
-  # ============================================================================
-
-  describe "execute/3 - telemetry" do
-    test "emits telemetry event on tool call", %{ctx: ctx} do
-      # Attach a telemetry handler to capture the event
-      ref = make_ref()
-      test_pid = self()
-
-      :telemetry.attach(
-        "test-mcp-tool-#{inspect(ref)}",
-        [:cyfr, :opus, :mcp_tool, :call],
-        fn event_name, measurements, metadata, _config ->
-          send(test_pid, {:telemetry_event, event_name, measurements, metadata})
-        end,
-        nil
-      )
-
-      request =
-        Jason.encode!(%{
-          "tool" => "component",
-          "action" => "search",
-          "args" => %{"query" => "test"}
-        })
-
-      auth = authority(tools: ["component.search"])
-      host = host!(ctx, auth)
-      _result = execute(request, host, auth)
-
-      assert_receive {:telemetry_event, [:cyfr, :opus, :mcp_tool, :call], measurements, metadata}
-      assert is_integer(measurements.duration_ms)
-      assert metadata.execution_id == host.execution_id
-      assert metadata.tool_action == "component.search"
-      assert metadata.status in [:ok, :error]
-
-      :telemetry.detach("test-mcp-tool-#{inspect(ref)}")
-    end
-
-    test "emits telemetry with error status for denied tool", %{ctx: ctx} do
-      ref = make_ref()
-      test_pid = self()
-
-      :telemetry.attach(
-        "test-mcp-denied-#{inspect(ref)}",
-        [:cyfr, :opus, :mcp_tool, :call],
-        fn _event_name, _measurements, metadata, _config ->
-          send(test_pid, {:telemetry_status, metadata.status})
-        end,
-        nil
-      )
-
-      request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{}})
-      _result = execute!(request, ctx, authority(tools: []))
-
-      assert_receive {:telemetry_status, :error}
-
-      :telemetry.detach("test-mcp-denied-#{inspect(ref)}")
     end
   end
 

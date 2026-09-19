@@ -184,6 +184,38 @@ defmodule Opus.SpawnKeeperTest do
     :gen_tcp.close(relay)
   end
 
+  test "an assign held for a relay that has not attached shows no key in either status", %{
+    spawner: spawner,
+    name: name
+  } do
+    keys = %{
+      attempt: attempt(),
+      call: :crypto.strong_rand_bytes(32),
+      seal: :crypto.strong_rand_bytes(32)
+    }
+
+    assign = %{type: :assign, assignment: "token", input: "{}", keys: keys}
+
+    # The handle holds the assign until its channel attaches.
+    handle = start_handle!(name)
+    %{"id" => id} = request(spawner)
+    reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: String.duplicate("aa", 16), pid: 1})
+    assert :ok = RunnerProcess.send_message(handle, assign)
+    refute_received {RunnerProcess, ^handle, :ready}
+
+    # The client holds bytes sent before the relay attached.
+    spec = %{runner: "runner_2", argv: ["/app/bin/opus", "start"], env: @spec_env, server: name}
+    {:ok, channel, []} = Spawn.spawn(spec)
+    _ = request(spawner)
+    assert :ok = Spawn.send(channel, RunnerControl.encode(assign))
+
+    for process <- [handle, name], key <- [keys.call, keys.seal] do
+      status = :erlang.term_to_binary(:sys.get_status(process))
+      assert :binary.match(status, key) == :nomatch
+      assert :binary.match(status, Base.encode16(key, case: :lower)) == :nomatch
+    end
+  end
+
   test "a release carries its grace, and a signal-ended runner is reported so", %{
     spawner: spawner,
     name: name,
@@ -219,11 +251,14 @@ defmodule Opus.SpawnKeeperTest do
     assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 0} = request(spawner)
   end
 
-  test "a spawn the keeper refuses is a failure of the handle's", %{spawner: spawner, name: name} do
+  test "a spawn the keeper refuses reaches the handle as a refusal: no process of it ran", %{
+    spawner: spawner,
+    name: name
+  } do
     handle = start_handle!(name)
     %{"id" => id} = request(spawner)
     reply(spawner, %{v: 1, type: "error", id: id, code: "capacity"})
-    assert_receive {RunnerProcess, ^handle, {:error, "capacity"}}, 5_000
+    assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
   end
 
   test "the pool's stats are asked of the keeper and answered", %{spawner: spawner, name: name} do

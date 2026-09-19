@@ -199,9 +199,7 @@ if config_env() != :test do
     # relays attach (OPUS_ATTACH_DIR, /run/opus). Only the set ones are
     # configured, so the code's defaults stand for the rest; a value that is
     # not a positive integer, a byte count in its range, a clean absolute path
-    # or one of the two keepers refuses the boot naming it. The `local`
-    # keeper runs subtrees in the service's own VM, which only the test suite
-    # may, and is refused by name.
+    # or one of the two keepers refuses the boot naming it.
     opus_keeper =
       case env_str.("OPUS_KEEPER", nil) do
         nil ->
@@ -212,10 +210,6 @@ if config_env() != :test do
 
         "direct" ->
           :direct
-
-        "local" ->
-          raise "[Cyfr] FATAL: OPUS_KEEPER=local runs subtrees in the service's own VM, " <>
-                  "which only the test suite may; use spawn or direct"
 
         other ->
           raise "[Cyfr] FATAL: OPUS_KEEPER=#{inspect(other)} names no keeper; use spawn or direct"

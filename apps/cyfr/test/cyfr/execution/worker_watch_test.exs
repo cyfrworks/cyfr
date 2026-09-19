@@ -94,7 +94,9 @@ defmodule Cyfr.Execution.WorkerWatchTest do
         service: @service,
         boot: boot,
         runners: %{fresh: 0, idle: 0, busy: length(attempts), tainted: 0},
-        attempts: attempts
+        attempts: attempts,
+        memory_bytes: nil,
+        refusal: nil
       },
       overrides
     )

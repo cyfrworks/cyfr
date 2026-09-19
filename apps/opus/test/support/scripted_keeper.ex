@@ -19,7 +19,11 @@ defmodule Opus.Test.ScriptedKeeper do
   reports as `exited` and then `released`. A release from the service
   ends the runner as `exit/2` does, after its grace, and is listed by
   `releases/1`. `kill!/1` ends the keeper as a lost channel would: every
-  runner's owner hears `{:error, :channel_lost}`.
+  runner's owner hears `{:error, :channel_lost}`. `refuse/2` makes it
+  refuse every spawn after the request, as `cyfr-spawn` refuses one it
+  cannot bound, until it is told to start runners again, and `refused/1`
+  counts the spawns it refused. It holds a runner to the `:memory_bytes`
+  of the pool's keeper options, or to none.
   """
 
   @behaviour Opus.Keeper
@@ -48,9 +52,33 @@ defmodule Opus.Test.ScriptedKeeper do
   @impl Opus.Keeper
   def spawn(%{env: %{"KEEPER" => name}} = spec) do
     keeper = String.to_existing_atom(name)
-    {:ok, ref, runner} = GenServer.call(keeper, {:spawn, spec, self()})
-    {:ok, %{ref: ref, keeper: keeper, runner: runner}, [{:spawned, nil}, :attached]}
+
+    case GenServer.call(keeper, {:spawn, spec, self()}) do
+      {:ok, ref, runner} ->
+        {:ok, %{ref: ref, keeper: keeper, runner: runner}, [{:spawned, nil}, :attached]}
+
+      # Refused after the request, as cyfr-spawn answers one it cannot
+      # bound: the handle hears it as the keeper's message.
+      {:refused, ref, reason} ->
+        Kernel.send(self(), {__MODULE__, ref, {:refused, reason}})
+        {:ok, %{ref: ref, keeper: keeper, runner: nil}, []}
+    end
   end
+
+  @impl Opus.Keeper
+  def memory_bytes(opts), do: Keyword.get(opts, :memory_bytes)
+
+  @impl Opus.Keeper
+  def refusal(reason),
+    do: %{reason: to_string(reason), message: "the scripted keeper refuses (#{reason})"}
+
+  @doc "Refuse every spawn from now on with `reason`, or start runners again with nil."
+  @spec refuse(atom(), atom() | nil) :: :ok
+  def refuse(keeper, reason), do: GenServer.call(keeper, {:refuse, reason})
+
+  @doc "How many spawns `keeper` refused."
+  @spec refused(atom()) :: non_neg_integer()
+  def refused(keeper), do: GenServer.call(keeper, :refused)
 
   @impl Opus.Keeper
   def handle_message(%{ref: ref} = channel, {__MODULE__, ref, event}),
@@ -102,15 +130,22 @@ defmodule Opus.Test.ScriptedKeeper do
   # ---------------------------------------------------------------------------
 
   @impl GenServer
-  def init(_opts), do: {:ok, %{spawns: [], releases: []}}
+  def init(_opts), do: {:ok, %{spawns: [], releases: [], refusing: nil, refused: 0}}
 
   @impl GenServer
+  def handle_call({:spawn, _spec, _owner}, _from, %{refusing: reason} = state)
+      when reason != nil,
+      do: {:reply, {:refused, make_ref(), reason}, %{state | refused: state.refused + 1}}
+
   def handle_call({:spawn, spec, owner}, _from, state) do
     ref = make_ref()
     {:ok, runner} = GenServer.start_link(__MODULE__.Runner, %{owner: owner, ref: ref})
     entry = %{ref: ref, spec: spec, runner: runner, owner: owner}
     {:reply, {:ok, ref, runner}, %{state | spawns: [entry | state.spawns]}}
   end
+
+  def handle_call({:refuse, reason}, _from, state), do: {:reply, :ok, %{state | refusing: reason}}
+  def handle_call(:refused, _from, state), do: {:reply, state.refused, state}
 
   def handle_call(:spawns, _from, state), do: {:reply, state.spawns, state}
   def handle_call(:releases, _from, state), do: {:reply, Enum.reverse(state.releases), state}

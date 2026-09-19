@@ -57,10 +57,13 @@ defmodule Opus.Keeper.Spawn do
   is retired and scrubbed before another runner gets it. Where
   `cyfr-spawn` cannot give a runner such a group it refuses the spawn as
   `memory_unavailable`, which the owner hears as
-  `{:error, :memory_unavailable}`, and this client logs what the
-  deployment lacks: the container needs the `writable-cgroups=true`
-  security option (Docker Engine 28 or later on a cgroup v2 host). No
-  runner is started without its bound instead.
+  `{:refused, :memory_unavailable}` (a spawn's refusal, as `refusal/1`
+  reads it; any other code the keeper refuses one with is heard as it
+  was sent), and this client logs what the deployment lacks:
+  the container needs the `writable-cgroups=true` security option (Docker
+  Engine 28 or later on a cgroup v2 host). No runner is started without
+  its bound instead; the pool keeps none of the runners it was refused
+  and backs off (`Opus.RunnerPool`).
 
   ## arca:bypass-ok=D — entire module
 
@@ -158,6 +161,28 @@ defmodule Opus.Keeper.Spawn do
     do: GenServer.cast(server, {:release, ref, grace_ms})
 
   @impl Opus.Keeper
+  def memory_bytes(opts) when is_list(opts) do
+    case bound(opts) do
+      {:ok, bytes} -> bytes
+      {:error, _malformed} -> nil
+    end
+  end
+
+  # The keeper's refusals of a spawn: its code, and what an operator makes
+  # of it. `memory_unavailable` names what the deployment lacks.
+  @impl Opus.Keeper
+  def refusal(:memory_unavailable),
+    do: %{reason: "memory_unavailable", message: @memory_unavailable}
+
+  def refusal(code) when is_binary(code) do
+    reason = if Regex.match?(~r/\A[a-z][a-z0-9_]{0,63}\z/, code), do: code, else: "refused"
+    %{reason: reason, message: "cyfr-spawn refused to start a runner (#{reason})"}
+  end
+
+  def refusal(_reason),
+    do: %{reason: "refused", message: "cyfr-spawn refused to start a runner"}
+
+  @impl Opus.Keeper
   def stats, do: stats(__MODULE__)
 
   @doc "`stats/0` through the client `server`."
@@ -183,7 +208,7 @@ defmodule Opus.Keeper.Spawn do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
-    with {:ok, memory_bytes} <- memory_bytes(opts),
+    with {:ok, memory_bytes} <- bound(opts),
          {:ok, channel} <- open_channel(opts),
          {:ok, listener, path} <- listen(Keyword.fetch!(opts, :attach_dir)) do
       server = self()
@@ -214,7 +239,7 @@ defmodule Opus.Keeper.Spawn do
   # The bound every spawn carries: the one the client was started with, or
   # the pool's setting; a malformed one stops the client, and the pool and
   # service with it, rather than start a runner without it.
-  defp memory_bytes(opts) do
+  defp bound(opts) do
     env =
       case Keyword.fetch(opts, :memory_bytes) do
         {:ok, bytes} -> [runner_memory_bytes: bytes]
@@ -485,6 +510,39 @@ defmodule Opus.Keeper.Spawn do
     :ok
   end
 
+  # Control bytes held for a relay that has not attached are an `assign`,
+  # which carries an attempt's opened keys, and so is the call that sent
+  # them; an attach token admits a relay as its runner. No status or crash
+  # report shows more of them than their size, and the debug log, which
+  # holds them, is left out.
+  @impl GenServer
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, %{requests: requests} = state} ->
+        {:state,
+         %{
+           state
+           | requests: Map.new(requests, fn {ref, entry} -> {ref, redact(entry)} end),
+             tokens: map_size(state.tokens)
+         }}
+
+      {:message, {:send, ref, data}} ->
+        {:message, {:send, ref, {:redacted, byte_size(data)}}}
+
+      {:message, {:attach, _token, conn}} ->
+        {:message, {:attach, :redacted, conn}}
+
+      {:log, _log} ->
+        {:log, []}
+
+      other ->
+        other
+    end)
+  end
+
+  defp redact(entry),
+    do: %{entry | token: :redacted, pending: {:redacted, IO.iodata_length(entry.pending)}}
+
   # ————— the keeper's lines —————
 
   defp on_line("", state), do: state
@@ -514,7 +572,7 @@ defmodule Opus.Keeper.Spawn do
       {nil, _stats} ->
         with_request(state, state.ids[id], fn ref, entry ->
           state = refused(state, entry, code)
-          notify(entry, ref, {:error, refusal(code)})
+          notify(entry, ref, {:refused, typed(code)})
           drop(state, ref)
         end)
 
@@ -575,8 +633,8 @@ defmodule Opus.Keeper.Spawn do
 
   # A spawn refused because its bound cannot be enforced here is typed;
   # every other refusal is the keeper's code as it sent it.
-  defp refusal("memory_unavailable"), do: :memory_unavailable
-  defp refusal(code), do: code
+  defp typed("memory_unavailable"), do: :memory_unavailable
+  defp typed(code), do: code
 
   # What the deployment lacks is logged once for each run of refusals; a
   # runner spawned again under its bound ends the run.

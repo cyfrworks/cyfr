@@ -7,10 +7,10 @@ defmodule Opus.Attempt do
   component, renews the attempt's lease while it runs and closes the
   attempt.
 
-  Its owner (`Opus.Subtree`: the runner the subtree was assigned to, or a
-  worker service running subtrees in its own VM) starts it with the
-  assignment it read, the input the assignment's digest binds and a host
-  client (`Opus.HostClient`) holding the attempt's key. A formula's child
+  Its owner (`Opus.Subtree`: the runner the subtree was assigned to)
+  starts it with the assignment it read, the input the assignment's
+  digest binds and a host client (`Opus.HostClient`) holding the
+  attempt's key. A formula's child
   runs in an attempt process of its own in the same subtree
   (`Opus.Subtree.start_child/2`), started from the child CYFR admitted and
   claimed for the formula's runner (`Opus.HostClient.admit_child/5`), with
@@ -86,7 +86,7 @@ defmodule Opus.Attempt do
 
   @doc """
   Tell the attempt process `pid` to stop its component call and close its
-  attempt as abandoned (`Opus.Subtree`'s `:abandon` cancel mode). One
+  attempt as abandoned, as `Opus.Subtree` ends one. One
   still attaching does so once attached; one already closing has nothing
   left to stop.
   """
@@ -249,8 +249,10 @@ defmodule Opus.Attempt do
   end
 
   # A `RuntimeError` or `ArgumentError` carries a sentence authored where it
-  # was raised; any other exception is logged and reported as an internal
-  # error.
+  # was raised; any other exception is reported as an internal error and
+  # logged by its module and the functions it passed through, never by its
+  # message or a frame's arguments, which can hold the terms it was raised
+  # over, a guest's input among them.
   defp exception_message(%RuntimeError{message: message}, _stacktrace),
     do: "Execution error: #{message}"
 
@@ -258,12 +260,43 @@ defmodule Opus.Attempt do
     do: "Execution error: #{message}"
 
   defp exception_message(exception, stacktrace) do
+    frames =
+      Enum.map(stacktrace, fn
+        {module, function, args, location} when is_list(args) ->
+          {module, function, length(args), location}
+
+        frame ->
+          frame
+      end)
+
     Logger.error(
-      "[Opus.Attempt] execution raised: " <> Exception.format(:error, exception, stacktrace)
+      "[Opus.Attempt] execution raised #{inspect(exception.__struct__)}\n" <>
+        Exception.format_stacktrace(frames)
     )
 
     "Execution error: the engine raised an internal error"
   end
+
+  @doc false
+  # An exit or a throw out of the component call, as the run's error: by its
+  # kind alone. An exit carries the call it ended, and a call carries what
+  # it was asked with, a guest's input among it, so neither the reason nor
+  # anything in it is rendered or logged; only an atom, which code wrote,
+  # names what ended.
+  @spec caught(:exit | :throw, term()) :: String.t()
+  def caught(:exit, reason) do
+    Logger.error("[Opus.Attempt] the component call exited (#{ended(reason)})")
+    "Execution error: the component call ended (#{ended(reason)})"
+  end
+
+  def caught(:throw, _value) do
+    Logger.error("[Opus.Attempt] the component call threw")
+    "Execution error: the component call threw"
+  end
+
+  defp ended(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp ended({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
+  defp ended(_reason), do: "exit"
 
   # The run's budget from receipt: its timeout, and no more than what is
   # left of the absolute subtree deadline its assignment carries, so a
@@ -307,10 +340,9 @@ defmodule Opus.Attempt do
           try do
             Opus.Runtime.execute_component(artifact, input, runtime_opts)
           rescue
-            e -> {:error, Exception.message(e)}
+            e -> {:error, exception_message(e, __STACKTRACE__)}
           catch
-            :exit, reason -> {:error, "Exit: #{inspect(reason)}"}
-            kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
+            kind, reason -> {:error, caught(kind, reason)}
           end
 
         send(runner, {ref, result})

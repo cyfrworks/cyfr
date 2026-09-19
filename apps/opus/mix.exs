@@ -32,11 +32,10 @@ defmodule Opus.MixProject do
   # test environment carries bootable defaults: a worker service on this
   # machine, listening on a port a test asks for, with a key the suites
   # replace (`test/test_helper.exs`, the cyfr integration suite), running
-  # subtrees in its own VM (the `:local` keeper), so a test can hold a
-  # guest in its own process; a test of the runner boundary switches the
-  # keeper and restarts the service. Every other environment configures
-  # the credentials or refuses to boot (`Opus.Credentials`), and takes the
-  # pool's defaults from `Opus.Settings`.
+  # its runners as OS processes of their own (the `:direct` keeper). Every
+  # other environment configures the credentials or refuses to boot
+  # (`Opus.Credentials`), and takes the pool's defaults from
+  # `Opus.Settings`.
   defp env(:test) do
     [
       service_id: "wrk_local",
@@ -44,7 +43,7 @@ defmodule Opus.MixProject do
       host_url: "http://127.0.0.1:4300",
       bind: "127.0.0.1",
       port: 0,
-      keeper: :local
+      keeper: :direct
     ]
   end
 

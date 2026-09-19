@@ -5,21 +5,25 @@ Code.require_file("support/nested_execution_helper.exs", __DIR__)
 
 defmodule Opus.AuthorityExecutionCharacterizationTest do
   # Execute a real probe under bootstrap consent loaded from the database.
+  # What each run's guest entered with is the authority its runner was
+  # handed, at its attach or at its admission, read on the suite's wire.
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
+  alias Cyfr.Test.TwoServices
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Source
 
   @moduletag timeout: 120_000
 
-  @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]
   @probe_node "formula:local.nested-probe"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
+    TwoServices.watch!()
 
     test_path = Path.join(System.tmp_dir!(), "authority_char_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
@@ -43,31 +47,9 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     {:ok, ctx: ctx}
-  end
-
-  defp attach_witness do
-    handler_id = "char-witness-#{System.unique_integer([:positive])}"
-    test_pid = self()
-
-    :telemetry.attach(
-      handler_id,
-      @telemetry_event,
-      fn _event, _measurements, metadata, _config ->
-        send(test_pid, {:authority_entered, metadata})
-      end,
-      nil
-    )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
-  end
-
-  defp collect_witnesses(acc) do
-    receive do
-      {:authority_entered, metadata} -> collect_witnesses([metadata | acc])
-    after
-      500 -> Enum.reverse(acc)
-    end
   end
 
   test "a pinned profile id from another estate is not found, not rooted", %{ctx: ctx} do
@@ -91,8 +73,6 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
   end
 
   test "a self-invoking chain keeps the consented authority at every level", %{ctx: ctx} do
-    attach_witness()
-
     {:ok, run_result} =
       Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "chain",
@@ -102,26 +82,29 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
     assert run_result.status == :completed
 
-    witnesses = collect_witnesses([])
+    root_id = run_result.metadata.execution_id
+
+    run =
+      Arca.Repo.all(
+        from(e in Arca.Execution, where: e.root_execution_id == ^root_id, select: e.id)
+      )
+
     # Root plus two self-invoked descendants, all bound to the same node
     # under the same profile — a component is not a boundary against
     # itself, and unlike the legacy suite nothing here ran on ambient
     # permissions.
-    chain_events = Enum.filter(witnesses, &(&1.authority.cursor == {:bound, @probe_node}))
-    assert length(chain_events) >= 3
+    authorities = Enum.map(run, &TwoServices.entered/1)
+    assert length(authorities) == 3
+    assert Enum.all?(authorities, &(&1.cursor == {:bound, @probe_node}))
+    assert authorities |> Enum.map(& &1.depth) |> Enum.sort() == [0, 1, 2]
 
-    depths = chain_events |> Enum.map(& &1.authority.depth) |> Enum.sort()
-    assert [0, 1, 2] = Enum.take(depths, 3)
-
-    for event <- chain_events do
-      assert event.authority.profile_id
-      assert event.authority.resources != :none
+    for authority <- authorities do
+      assert authority.profile_id
+      assert authority.resources != :none
     end
 
     # Every descendant row carries the root's activation digest; only the
     # root row carries the graph.
-    import Ecto.Query
-
     root_row = Arca.Repo.get(Arca.Execution, run_result.metadata.execution_id)
     assert root_row.activation_digest
     assert root_row.activation_graph

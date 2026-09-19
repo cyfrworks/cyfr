@@ -11,9 +11,9 @@ defmodule Cyfr.RunnerControl do
   every encoder and decoder of it must reproduce.
 
   The service sends `assign` and `cancel_child`; the runner sends
-  `complete` and `exit`. Guest data never travels on it: deltas, results,
-  host-call bodies and vault fields go between the runner and CYFR over
-  the host API (`Cyfr.HostAPI`), under the attempt's keys. What crosses
+  `child`, `complete` and `exit`. Guest data never travels on it: deltas,
+  results, host-call bodies and vault fields go between the runner and
+  CYFR over the host API (`Cyfr.HostAPI`), under the attempt's keys. What crosses
   here is what `c:Cyfr.WorkerAPI.start/3` was given, its sealed keys
   opened, and what the service reports (`c:Cyfr.HostAPI.runner_exited/3`).
   The channel carries no MAC: the keeper's process isolation is its
@@ -54,6 +54,12 @@ defmodule Cyfr.RunnerControl do
 
   Runner to service:
 
+    * `child` — the runner started the child `execution_id` of its
+      subtree, whose attempt is `attempt`, in a process of its own: a
+      formula's guest asked for it and CYFR admitted it for this runner.
+      It is how the service knows which runner holds a child, so that a
+      kill of it reaches that runner (`c:Cyfr.WorkerAPI.kill/1`) and a
+      runner that ends without an `exit` is reported holding it.
     * `complete` — the subtree the assignment named, whose root is
       `execution_id`, is closed: every attempt the runner ran has its
       terminal write with CYFR. `clean` is true when every component call
@@ -78,7 +84,7 @@ defmodule Cyfr.RunnerControl do
     1. `:oversize_line` — the line is longer than `max_line_bytes/0`;
     2. `:malformed` — the line is not exactly one JSON object;
     3. `:bad_version` — `v` is absent or is not `1`;
-    4. `:unknown_type` — `type` is absent or is not one of the four;
+    4. `:unknown_type` — `type` is absent or is not one of the five;
     5. `{:unknown_field, name}` — a member the message type does not
        carry (the first, by name);
     6. per field, in the order listed above: `{:missing_field, name}`;
@@ -94,10 +100,10 @@ defmodule Cyfr.RunnerControl do
   its unknown members first, then each of its members in order. It is
   named by its path, `keys.call` or `keys.attempt.fence`.
 
-  Identifiers (`execution_id`, `runner`, each of `open`, the strings of
-  `keys.attempt`) are 1 to 256 bytes of printable ASCII without spaces,
-  as every identifier on the worker protocol (`Cyfr.Assignment`,
-  `Cyfr.MacEnvelope`), and the integers of `keys.attempt` are 0 to
+  Identifiers (`execution_id`, `attempt`, `runner`, each of `open`, the
+  strings of `keys.attempt`) are 1 to 256 bytes of printable ASCII
+  without spaces, as every identifier on the worker protocol
+  (`Cyfr.Assignment`, `Cyfr.MacEnvelope`), and the integers of `keys.attempt` are 0 to
   2^53 − 1, as `Cyfr.MacEnvelope` reads an integer field. The assignment
   token is printable ASCII without spaces of any length the line allows.
   """
@@ -143,6 +149,7 @@ defmodule Cyfr.RunnerControl do
     {:assign, "assign", :service,
      [assignment: :text, input: :bytes, keys: {:object, @keys_fields}]},
     {:cancel_child, "cancel_child", :service, [execution_id: :id]},
+    {:child, "child", :runner, [execution_id: :id, attempt: :id]},
     {:complete, "complete", :runner, [execution_id: :id, clean: :boolean]},
     {:exit, "exit", :runner, [runner: :id, open: :ids]}
   ]
@@ -170,6 +177,9 @@ defmodule Cyfr.RunnerControl do
   @typedoc "End the child `execution_id` of the runner's subtree."
   @type cancel_child :: %{type: :cancel_child, execution_id: String.t()}
 
+  @typedoc "The runner started the child `execution_id` of its subtree, whose attempt is `attempt`."
+  @type child :: %{type: :child, execution_id: String.t(), attempt: String.t()}
+
   @typedoc """
   The subtree rooted at `execution_id` is closed with CYFR; `clean` says
   every component call returned on its own, so the runner may be reused.
@@ -179,10 +189,10 @@ defmodule Cyfr.RunnerControl do
   @typedoc "The runner ends, still holding the attempts in `open`."
   @type exit :: %{type: :exit, runner: runner_id(), open: [String.t()]}
 
-  @type message :: assign() | cancel_child() | complete() | exit()
+  @type message :: assign() | cancel_child() | child() | complete() | exit()
 
   @typedoc "A message type."
-  @type type :: :assign | :cancel_child | :complete | :exit
+  @type type :: :assign | :cancel_child | :child | :complete | :exit
 
   @typedoc "Which side sends a message."
   @type sender :: :service | :runner
@@ -232,7 +242,7 @@ defmodule Cyfr.RunnerControl do
 
   @doc """
   The line for `message`, as iodata ending in a newline. A message that is
-  not one of the four, carries a member its type does not, lacks one, or
+  not one of the five, carries a member its type does not, lacks one, or
   holds a value `decode/1` would refuse raises `ArgumentError`, since it
   is the caller's own data.
   """

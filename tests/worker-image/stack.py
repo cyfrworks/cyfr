@@ -25,7 +25,9 @@ import time
 import urllib.error
 import urllib.request
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+import worker_auth as auth
+
+HERE =os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 # Prefixed to every compose project of a run, and so to its container and
 # network, for a host that tells one run's Docker objects from another's by
@@ -154,7 +156,11 @@ class Stack:
     # ------------------------------------------------------------------
 
     def status(self):
-        return self.plane.status(self.base)
+        """The service's status request: its HTTP status and answer; a 200 whose answer `Cyfr.WorkerAPI.read_status/1` refuses raises."""
+        code, answer = self.plane.status(self.base)
+        if code == 200 and auth.read_status(answer.get("ok")) is None:
+            raise AssertionError(f"the service answered a status the contract refuses\n{json.dumps(answer, indent=2)}")
+        return code, answer
 
     def runners(self):
         code, answer = self.status()
@@ -268,6 +274,7 @@ class StatusSampler:
         self.stack = stack
         self.interval = interval
         self.samples = []
+        self.error = None
         self.stopping = threading.Event()
         self.threads = [threading.Thread(target=self.poll, daemon=True) for _ in range(threads)]
 
@@ -278,15 +285,22 @@ class StatusSampler:
 
     def poll(self):
         while not self.stopping.is_set():
-            code, answer = self.stack.status()
+            try:
+                code, answer = self.stack.status()
+            except AssertionError as error:
+                self.error = error
+                return
             if code == 200:
                 self.samples.append((time.monotonic(), answer["ok"]["runners"], answer["ok"]["attempts"]))
             self.stopping.wait(self.interval)
 
     def stop(self):
+        """Every sample, oldest first; a status the contract refused, heard while sampling, fails the run."""
         self.stopping.set()
         for thread in self.threads:
             thread.join(5)
+        if self.error:
+            sys.exit(f"FAIL: {self.error}")
         self.samples.sort(key=lambda sample: sample[0])
         return self.samples
 

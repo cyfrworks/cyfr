@@ -72,5 +72,777 @@
     "body_iv_hex": "b0b1b2b3b4b5b6b7b8b9babb",
     "body_sealed": "sLGys7S1tre4ubq7d28tZ-1hf1_avnsPpdRzQN11cJlkolI23TMt4aNHQmq2y_KZI-wk6yQFKy4FetboceKKpkJ7_Y3J"
   },
-  "service": "wrk_4f3c2a1e9d8b7c6a"
+  "service": "wrk_4f3c2a1e9d8b7c6a",
+  "status": {
+    "comment": "The answer of Cyfr.WorkerAPI's status as its listener writes it: the contracts suite reads every valid wire to its status and writes that status back to exactly the same wire, and refuses every invalid one; the worker image tests' control plane (tests/worker-image/worker_auth.py) reads the same. memory_bytes is the bound every runner runs under, null where the keeper applies none; refusal is why the keeper refuses runners, null while it starts them.",
+    "invalid": [
+      {
+        "why": "not an object",
+        "wire": [
+          {
+            "attempts": [
+              "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+            ],
+            "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+            "memory_bytes": 402653184,
+            "refusal": null,
+            "runners": {
+              "busy": 3,
+              "fresh": 2,
+              "idle": 1,
+              "tainted": 1
+            },
+            "service": "wrk_4f3c2a1e9d8b7c6a"
+          }
+        ]
+      },
+      {
+        "why": "null",
+        "wire": null
+      },
+      {
+        "why": "no memory bound member",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "no refusal member",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "no attempts member",
+        "wire": {
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a member the contract does not name",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "extra": true,
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "runners without a tainted count",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a runner state the contract does not name",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": 0,
+            "fresh": 0,
+            "idle": 0,
+            "tainted": 0,
+            "zombie": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a negative count",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": -1,
+            "fresh": 0,
+            "idle": 0,
+            "tainted": 0
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a count as text",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": 0,
+            "fresh": 0,
+            "idle": "1",
+            "tainted": 0
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a count as a boolean",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": 0,
+            "fresh": true,
+            "idle": 0,
+            "tainted": 0
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "runners as a list",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": [],
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "an attempt id that is not a string",
+        "wire": {
+          "attempts": [
+            7
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a service that is not a string",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": null
+        }
+      },
+      {
+        "why": "a boot that is not a string",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": 7,
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a bound of zero bytes",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 0,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a negative bound",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": -1,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a bound as text",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": "402653184",
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a bound as a boolean",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": true,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a bound with a fraction",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 1.5,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a bound above 2^53 - 1",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 9007199254740992,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a refusal as text",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": "memory_unavailable",
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a refusal without its message",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "reason": "memory_unavailable"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a refusal without its reason",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a refusal with a member the contract does not name",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "reason": "memory_unavailable",
+            "since": 1
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a reason in uppercase",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "reason": "Memory_unavailable"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "an empty reason",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "reason": ""
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a reason with a space",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "reason": "memory unavailable"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a reason of 65 characters",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "reason": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a reason that is not a string",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "reason": 5
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "an empty message",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "",
+            "reason": "memory_unavailable"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a message of 1025 bytes",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "reason": "memory_unavailable"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a message of 1025 bytes counted in UTF-8, not characters",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééx",
+            "reason": "memory_unavailable"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a message with a newline",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "line one\nline two",
+            "reason": "memory_unavailable"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a message with a delete character",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "rubout",
+            "reason": "memory_unavailable"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a message that is not a string",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": [
+              "a"
+            ],
+            "reason": "memory_unavailable"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      }
+    ],
+    "valid": [
+      {
+        "why": "a service under cyfr-spawn: every runner bounded at 384 MiB, nothing refused",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": null,
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "the Direct keeper applies no bound, and a service holding nothing",
+        "wire": {
+          "attempts": [],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": null,
+          "refusal": null,
+          "runners": {
+            "busy": 0,
+            "fresh": 4,
+            "idle": 0,
+            "tainted": 0
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a keeper that cannot bound a runner refuses every runner, and the status says why and what the deployment lacks",
+        "wire": {
+          "attempts": [],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "reason": "memory_unavailable"
+          },
+          "runners": {
+            "busy": 0,
+            "fresh": 0,
+            "idle": 0,
+            "tainted": 0
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a refusal of another code, its sentence in UTF-8 beyond ASCII",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 402653184,
+          "refusal": {
+            "message": "cyfr-spawn has no runner uid free — every one is in use",
+            "reason": "capacity"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      },
+      {
+        "why": "a sentence of exactly 1024 bytes, and the largest bound a JSON reader holds exactly",
+        "wire": {
+          "attempts": [
+            "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
+          ],
+          "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "memory_bytes": 9007199254740991,
+          "refusal": {
+            "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "reason": "exec_failed"
+          },
+          "runners": {
+            "busy": 3,
+            "fresh": 2,
+            "idle": 1,
+            "tainted": 1
+          },
+          "service": "wrk_4f3c2a1e9d8b7c6a"
+        }
+      }
+    ]
+  }
 }

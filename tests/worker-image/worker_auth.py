@@ -405,6 +405,46 @@ def read_assignment(token):
     return json.loads(unb64url(payload64))
 
 
+# ---------------------------------------------------------------------------
+# A worker service's status (`Cyfr.WorkerAPI.read_status/1`)
+# ---------------------------------------------------------------------------
+
+STATUS_MEMBERS = {"service", "boot", "runners", "attempts", "memory_bytes", "refusal"}
+RUNNER_STATES = {"fresh", "idle", "busy", "tainted"}
+REASON = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+CONTROL = re.compile(r"[\x00-\x1F\x7F]")
+MAX_MESSAGE_BYTES = 1024
+MAX_INTEGER = 2**53 - 1
+
+
+def _count(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def read_status(wire):
+    """The status a JSON answer spells, or None: exactly its six members, a count for every runner state and no other, attempt id strings, a memory bound of 1 to 2^53 - 1 or null, and a refusal of a reason code and a sentence of 1 to 1024 bytes without a control character, or null."""
+    if not isinstance(wire, dict) or set(wire) != STATUS_MEMBERS:
+        return None
+    runners, refusal, bound = wire["runners"], wire["refusal"], wire["memory_bytes"]
+    if not isinstance(wire["service"], str) or not isinstance(wire["boot"], str):
+        return None
+    if not isinstance(runners, dict) or set(runners) != RUNNER_STATES or not all(_count(c) for c in runners.values()):
+        return None
+    if not isinstance(wire["attempts"], list) or not all(isinstance(a, str) for a in wire["attempts"]):
+        return None
+    if bound is not None and not (_count(bound) and 0 < bound <= MAX_INTEGER):
+        return None
+    if refusal is not None:
+        if not isinstance(refusal, dict) or set(refusal) != {"reason", "message"}:
+            return None
+        reason, message = refusal["reason"], refusal["message"]
+        if not isinstance(reason, str) or not REASON.match(reason):
+            return None
+        if not isinstance(message, str) or not 1 <= len(message.encode()) <= MAX_MESSAGE_BYTES or CONTROL.search(message):
+            return None
+    return wire
+
+
 def nonce():
     return b64url(secrets.token_bytes(18))
 
@@ -481,6 +521,11 @@ def check_vectors(path):
     assert jcs(wire) == a["payload"], "assignment JCS"
     assert sign_assignment(wire, assign_key(root)) == a["token"], "assignment token"
     assert read_assignment(a["token"]) == wire, "assignment reads"
+
+    for vec in v["status"]["valid"]:
+        assert read_status(vec["wire"]) == vec["wire"], f"status reads: {vec['why']}"
+    for vec in v["status"]["invalid"]:
+        assert read_status(vec["wire"]) is None, f"status refused: {vec['why']}"
     return True
 
 

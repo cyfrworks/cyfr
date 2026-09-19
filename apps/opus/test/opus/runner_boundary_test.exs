@@ -45,7 +45,7 @@ defmodule Opus.RunnerBoundaryTest do
     boot = ScriptedHost.serve!(host)
 
     # Registered after `serve!/1`'s, so it runs first: the service the
-    # host's restart brings back runs subtrees in this VM again.
+    # host's restart brings back runs under the suite's settings again.
     on_exit(fn ->
       for {key, value} <- previous do
         if value,
@@ -107,9 +107,6 @@ defmodule Opus.RunnerBoundaryTest do
     assert Opus.Cache in runner
     assert Enum.any?(service, &match?(%{id: Opus.WorkerListener}, &1))
     refute Enum.any?(runner, &match?(%{id: Opus.WorkerListener}, &1))
-
-    {:ok, local} = Opus.Settings.pool([keeper: :local], %{})
-    assert Opus.SharedEngine in Opus.Application.children(:service, local)
 
     tree = Opus.Application.service_tree(settings)
     assert Enum.any?(tree, &match?(%{id: Opus.Keeper.Direct}, &1))
@@ -195,8 +192,9 @@ defmodule Opus.RunnerBoundaryTest do
     attempt = spin!(host, boot)
     assert :ok = start(attempt)
     wait_until(fn -> busy_runner() != nil end)
-    # A child the service cannot place is offered to every busy runner.
-    assert :ok = WorkerService.kill("exec_child_of_someone")
+    # No runner said it holds such a child: the kill reached nothing,
+    # however busy the runners are.
+    assert {:error, :not_found} = WorkerService.kill("exec_child_of_someone")
   end
 
   test "a host answer that is lost taints the runner, which is never reused", %{

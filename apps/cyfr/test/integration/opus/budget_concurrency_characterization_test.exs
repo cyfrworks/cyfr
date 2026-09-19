@@ -7,17 +7,19 @@ Code.require_file("support/formula_host_helper.exs", __DIR__)
 defmodule Opus.BudgetConcurrencyCharacterizationTest do
   @moduledoc """
   A root's invoke budget bounds a formula's spawned children however they
-  race: under a cap of 2, five concurrent spawns of a real child through the
-  formula's `spawn` host function never hold more than 2 in flight or 2
-  admitted charges, the rest are refused, and once the admitted children
-  finish every hold is given back — the in-flight count, the charge rows,
-  the reservation's count and the child slots. CYFR decides each spawn
-  under the authority it holds for the formula's attempt, and the children
-  run in runners of the formula's group.
+  race: under a cap of 2, five concurrent admissions of a child, asked
+  over the wire as a formula's runner asks for a spawn (`admit_child`,
+  spawn-shaped), never hold more than 2 in flight or 2 admitted charges,
+  the rest are refused `resource_limit`, and once the admitted children
+  close every hold is given back — the in-flight count, the charge rows,
+  the reservation's count and the child slots. CYFR decides each
+  admission under the authority it holds for the formula's attempt.
 
-  The children are the `nested-probe` formula, held at the entry to their
-  guest until the test lets them go, so the two admitted runs overlap the
-  three refused ones.
+  A guest spawns one child at a time, so the race is the host's: five
+  runners' worth of admissions at once, each made by the test with the
+  client of the formula's attempt (`Opus.Test.FormulaHost`), and each
+  admitted child closed by the test as the runner it was handed to does,
+  its outcome sent with the keys its admission handed over.
   """
 
   use ExUnit.Case, async: false
@@ -78,72 +80,59 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
        %{ctx: ctx, authority: authority, formula: formula} do
     root_id = formula.execution_id
     children_before = Cyfr.Slots.status(Cyfr.Execution.Slots).child_active
-    hold_children!(root_id)
     sampler = sample(ctx, authority)
-
-    {imports, tracker} =
-      Opus.FormulaHandler.build_formula_imports(formula.host, FormulaHost.opts(authority))
-
-    %{"spawn" => {:fn, spawn_fn}, "await" => {:fn, await_fn}} =
-      imports["cyfr:formula/invoke@0.1.0"]
-
-    request =
-      Jason.encode!(%{
-        "tool" => "execution",
-        "action" => "run",
-        "args" => %{"reference" => Probe.probe_ref(), "input" => %{"op" => "echo"}}
-      })
-
     test_pid = self()
 
-    for _ <- 1..@spawns do
-      spawn_link(fn -> send(test_pid, {:spawned, Jason.decode!(spawn_fn.(request))}) end)
+    for n <- 1..@spawns do
+      spawn_link(fn ->
+        admitted =
+          Opus.HostClient.admit_child(
+            formula.host,
+            Probe.probe_ref(),
+            nil,
+            %{"op" => "echo", "n" => n},
+            :spawn
+          )
+
+        send(test_pid, {:admitted, admitted})
+      end)
     end
 
-    spawned =
+    answers =
       for _ <- 1..@spawns do
-        assert_receive {:spawned, answer}, 30_000
+        assert_receive {:admitted, answer}, 30_000
         answer
       end
 
-    held =
-      for _ <- 1..@cap do
-        assert_receive {:held, runner, execution_id}, 30_000
-        {runner, execution_id}
-      end
+    children = for {:ok, child} <- answers, do: child
+    refused = for {:error, refusal} <- answers, do: refusal
 
-    task_ids = for %{"task_id" => task_id} <- spawned, do: task_id
-    refused = for %{"error" => error} <- spawned, do: error
-
-    assert length(task_ids) == @cap
+    assert length(children) == @cap
 
     assert refused ==
              List.duplicate(
-               %{
-                 "type" => "resource_limit",
-                 "message" => "Invocation denied: invoke_budget_exhausted"
-               },
+               {:guest_error, "resource_limit", "Invocation denied: invoke_budget_exhausted"},
                @spawns - @cap
              )
 
-    refute_received {:held, _, _}
     assert Sanctum.Authority.budget(authority).in_flight == @cap
     assert length(admitted(ctx, authority)) == @cap
     assert Arca.BudgetReservations.lookup(ctx.athanor_id, authority.budget.id).charged == @cap
     assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before + @cap
 
-    for {runner, _execution_id} <- held, do: send(runner, :continue)
+    # Each admitted child closes as the runner it was handed to closes it.
+    for child <- children do
+      assert {:ok, _recorded} = Opus.HostClient.complete(child.client, %{"echoed" => true})
+      id = child.assignment.execution_id
 
-    for task_id <- task_ids do
-      assert %{"status" => "completed"} = Jason.decode!(await_fn.(task_id))
-    end
-
-    for {_runner, execution_id} <- held do
       assert %{status: "completed", parent_execution_id: ^root_id} =
-               Arca.Repo.get!(Arca.Execution, execution_id)
+               Arca.Repo.get!(Arca.Execution, id)
     end
 
-    wait_until(fn -> Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before end)
+    wait_until(fn ->
+      Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before
+    end)
+
     wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
     assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
     assert Arca.BudgetReservations.lookup(ctx.athanor_id, authority.budget.id).charged == 0
@@ -151,38 +140,6 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
     assert %{in_flight: in_flight, admitted: admitted} = stop_sampling(sampler)
     assert in_flight <= @cap
     assert admitted <= @cap
-
-    Opus.FormulaHandler.cleanup_registry(tracker)
-  end
-
-  # Children of `root_id` wait at their guest's entry for `:continue`.
-  defp hold_children!(root_id) do
-    test_pid = self()
-    handler = "budget-concurrency-hold-#{System.unique_integer([:positive])}"
-
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:cyfr, :opus, :runtime, :authority_entered],
-        fn _event, _measurements, %{execution_id: id}, _config ->
-          case Arca.Repo.get(Arca.Execution, id) do
-            %{parent_execution_id: ^root_id} ->
-              send(test_pid, {:held, self(), id})
-
-              receive do
-                :continue -> :ok
-              after
-                60_000 -> :ok
-              end
-
-            _ ->
-              :ok
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
   end
 
   defp admitted(ctx, authority) do

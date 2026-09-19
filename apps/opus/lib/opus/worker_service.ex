@@ -28,35 +28,38 @@ defmodule Opus.WorkerService do
 
   ## Runners
 
-  Under the pool (`Opus.RunnerPool`, every keeper but `:local`), a runner
-  is an OS process the service never shares a VM with, and the service
-  loads no component. `start/3` takes a runner of the assignment's
-  athanor from the pool and sends it the `assign` over `Cyfr.RunnerControl`;
-  the runner attaches, runs the subtree with its formula children and
-  reports `complete`, clean or not, or `exit` with the attempts still
-  open. A runner that reports `exit`, or whose channel closes or process
-  ends with the subtree still assigned, is reported to CYFR at once,
-  naming the runner and signed with the service's dispatch key
-  (`Opus.HostClient.runner_exited/4`); a runner is reported once. A
-  `start` no runner can be found for (the keeper's pool is full, or a
-  runner cannot be spawned) answers `{:error, :unavailable}`, which the
-  listener refuses `503`, so CYFR reconciles against the claim.
+  A runner is an OS process of the pool (`Opus.RunnerPool`) the service
+  never shares a VM with, and the service loads no component. `start/3`
+  takes a runner of the assignment's athanor from the pool and sends it
+  the `assign` over `Cyfr.RunnerControl`; the runner attaches, runs the
+  subtree with its formula children and reports `complete`, clean or
+  not, or `exit` with the attempts still open. A runner that reports
+  `exit`, or whose channel closes or process ends with the subtree still
+  assigned, is reported to CYFR at once, naming the runner and signed
+  with the service's dispatch key (`Opus.HostClient.runner_exited/4`); a
+  runner is reported once. A report runs beside the service, which never
+  waits on CYFR, and `await_reports/1` answers once none is in flight. A
+  `start` no runner can be found for answers `{:error, :unavailable}`,
+  and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
+  with the keeper's account of why; the listener refuses either `503`,
+  naming the sentence, so CYFR reconciles against the claim. Its status
+  counts the pool's runners and carries the bound its keeper holds each
+  to and the keeper's refusal (`Opus.RunnerPool.status/1`).
 
-  `kill/1` for the root of a runner's subtree taints the runner and ends
-  it through the keeper, with the grace to report its open attempts. For
-  any other execution, every busy runner is sent a `cancel_child`, since
-  which of them runs a child is the runner's to know, and the one that
-  does kills the child and completes unclean. A kill is `:ok` again for
-  an execution a runner of this boot already ended, and `:not_found` only
-  when no runner of this boot ever ran it; the ids of the last ten
-  thousand subtrees ended are remembered for it.
-
-  Under the `:local` keeper the service runs each subtree in its own VM
-  (`Opus.Subtree`, `Opus.Attempt`), as a test environment does so a test
-  can hold a guest in its own process: every attempt process, a formula's
-  children included (`Opus.Subtree.start_child/2`), is tracked here, a
-  kill ends the named attempt's process, and an attempt process that
-  exits leaving its attempt open is reported as its runner's exit.
+  A runner tells the service each child it starts (`child`), so the
+  service knows which runner holds which child. `kill/1` for the root of
+  a runner's subtree taints the runner and ends it through the keeper,
+  with the grace to report its open attempts; for a child a runner said
+  it holds, that runner is sent a `cancel_child`, kills the child and
+  completes unclean. Either kill is `:ok`, and `:ok` again for an
+  execution a runner of this boot already ended; the ids of the last ten
+  thousand roots and children ended are remembered for it. A kill of an
+  execution no runner of this boot holds or held is `:not_found`, however
+  busy the runners are, so CYFR counts no kill that reached nothing; it
+  is still offered to every busy runner, in case one started it too
+  recently for its word to have arrived. A runner that ends without an
+  `exit` is reported holding its subtree's root and every child it said
+  it started.
   """
 
   @behaviour Cyfr.WorkerAPI
@@ -68,16 +71,11 @@ defmodule Opus.WorkerService do
   alias Cyfr.{Assignment, WorkerAuth}
   alias Opus.{HostClient, RunnerPool, RunnerProcess, Subtree}
 
-  @runners __MODULE__.Runners
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
   @remembered 10_000
 
   @doc false
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-
-  @doc "The supervisor the service's own attempt processes run under, under the `:local` keeper."
-  @spec runners_supervisor() :: atom()
-  def runners_supervisor, do: @runners
 
   @impl Cyfr.WorkerAPI
   def start(token, input, sealed_keys)
@@ -92,43 +90,47 @@ defmodule Opus.WorkerService do
   @impl Cyfr.WorkerAPI
   def status, do: GenServer.call(__MODULE__, :status)
 
+  @doc """
+  Answer once every runner exit this service is reporting has been
+  answered by CYFR or given up on (`Opus.HostClient.runner_exited/4`
+  bounds each); at once when none is in flight. For a caller that must
+  know no report of the runners it ended still lands after it moved on,
+  as a test's end does. Exits if that takes longer than `timeout_ms`.
+  """
+  @spec await_reports(timeout()) :: :ok
+  def await_reports(timeout_ms \\ 70_000),
+    do: GenServer.call(__MODULE__, :await_reports, timeout_ms)
+
   # ---------------------------------------------------------------------------
   # Server
   # ---------------------------------------------------------------------------
 
   @impl true
   def init(_opts) do
-    # Trapped, so a shutdown runs `terminate/2`, which stops the attempt
-    # processes a runner's exit does not.
-    Process.flag(:trap_exit, true)
     credentials = Opus.Credentials.load!()
     :ok = Opus.Credentials.install(credentials)
     settings = Opus.Settings.pool!()
-
     boot = "#{node()}#" <> Cyfr.UUID7.generate_id("boot")
-    # The `:local` keeper exists in the test build alone, so a build without it
-    # knows only the pool's keepers and the comparison names those.
-    mode = if settings.keeper in [:spawn, :direct], do: :pool, else: :local
 
-    if mode == :pool do
-      :ok =
-        RunnerPool.serve(
-          RunnerPool,
-          %{service_id: credentials.service_id, boot: boot, host_url: credentials.host_url},
-          self()
-        )
-    end
+    :ok =
+      RunnerPool.serve(
+        RunnerPool,
+        %{service_id: credentials.service_id, boot: boot, host_url: credentials.host_url},
+        self()
+      )
 
     {:ok,
-     Subtree.new(%{
+     %{
        credentials: credentials,
        service: credentials.service_id,
        boot: boot,
-       mode: mode,
        settings: settings,
        assigned: %{},
-       ended: %{ids: MapSet.new(), order: :queue.new()}
-     })}
+       executions: %{},
+       ended: %{ids: MapSet.new(), order: :queue.new()},
+       reports: %{},
+       report_waiters: []
+     }}
   end
 
   @impl true
@@ -141,50 +143,10 @@ defmodule Opus.WorkerService do
          true <-
            attempt ==
              assignment |> Map.take(@attempt_fields) |> Map.put(:service, state.service),
-         {:ok, %{} = decoded} <- Jason.decode(input) do
-      case state.mode do
-        :local -> start_local(state, token, assignment, decoded, keys, caller)
-        :pool -> start_pooled(state, token, assignment, input, keys, caller)
-      end
+         {:ok, %{} = _decoded} <- Jason.decode(input) do
+      start_pooled(state, token, assignment, input, keys, caller)
     else
       _refused -> {:reply, {:error, :malformed}, state}
-    end
-  end
-
-  def handle_call({:start_child, child, waiter, caller}, _from, %{mode: :local} = state) do
-    %{assignment: assignment, client: client} = child
-
-    if client.service == state.service and client.boot == state.boot and
-         assignment.service == state.service and assignment.boot == state.boot and
-         client.execution_id == assignment.execution_id and client.attempt == assignment.attempt do
-      start = %{
-        token: child.token,
-        assignment: assignment,
-        input: child.input,
-        client: client,
-        secrets: child.secrets,
-        waiter: waiter
-      }
-
-      case Subtree.start(state, @runners, start, caller, waiter) do
-        {:ok, pid, state} -> {:reply, {:ok, pid}, state}
-        {:error, :malformed} -> {:reply, {:error, :malformed}, state}
-      end
-    else
-      {:reply, {:error, :malformed}, state}
-    end
-  end
-
-  def handle_call({:start_child, _child, _waiter, _caller}, _from, state),
-    do: {:reply, {:error, :malformed}, state}
-
-  def handle_call({:kill, execution_id}, _from, %{mode: :local} = state) do
-    case Subtree.kill(state, execution_id) do
-      :ok ->
-        {:reply, :ok, state}
-
-      :not_found ->
-        {:reply, if(ended?(state, execution_id), do: :ok, else: {:error, :not_found}), state}
     end
   end
 
@@ -194,53 +156,42 @@ defmodule Opus.WorkerService do
         :ok = RunnerPool.taint(RunnerPool, pid, state.settings.release_grace_ms)
         {:reply, :ok, state}
 
+      pid = holder(state, execution_id) ->
+        :ok = RunnerPool.cancel_child(RunnerPool, pid, execution_id)
+        {:reply, :ok, state}
+
       ended?(state, execution_id) ->
         {:reply, :ok, state}
 
-      map_size(state.assigned) > 0 ->
-        :ok = RunnerPool.cancel_child(RunnerPool, execution_id)
-        {:reply, :ok, state}
-
       true ->
+        # A child a runner started so recently that its word has not
+        # arrived is still reached; the kill found no runner holding it.
+        if map_size(state.assigned) > 0,
+          do: :ok = RunnerPool.cancel_child(RunnerPool, execution_id)
+
         {:reply, {:error, :not_found}, state}
     end
   end
 
-  def handle_call({:settled, pid}, _from, state), do: {:reply, :ok, Subtree.settle(state, pid)}
+  def handle_call(:await_reports, from, state),
+    do: {:noreply, reported(%{state | report_waiters: [from | state.report_waiters]})}
 
   def handle_call(:status, _from, state) do
-    {runners, attempts} =
-      case state.mode do
-        :local ->
-          {%{fresh: 0, idle: 0, busy: map_size(state.runners), tainted: 0},
-           Subtree.attempts(state)}
+    status =
+      Map.merge(RunnerPool.status(RunnerPool), %{
+        service: state.service,
+        boot: state.boot,
+        attempts: held(state)
+      })
 
-        :pool ->
-          {RunnerPool.status(RunnerPool), for({_pid, a} <- state.assigned, do: a.attempt)}
-      end
-
-    {:reply,
-     {:ok, %{service: state.service, boot: state.boot, runners: runners, attempts: attempts}},
-     state}
+    {:reply, {:ok, status}, state}
   end
 
+  # A report in flight has been answered, or given up on.
   @impl true
-  def handle_cast({:track, pid, fields}, state), do: {:noreply, Subtree.track(state, pid, fields)}
-  def handle_cast({:unclean, _pid, _reason}, state), do: {:noreply, state}
-
-  @impl true
-  def handle_info({:DOWN, ref, :process, pid, reason}, %{mode: :local} = state) do
-    case Subtree.down(state, ref) do
-      {:attempt, entry, state} ->
-        if reason != :normal, do: report(state, entry.runner, [entry.attempt], entry)
-        {:noreply, %{state | ended: remember(state.ended, entry.execution_id)}}
-
-      {:waiter, state} ->
-        {:noreply, state}
-
-      {:unknown, state} ->
-        {:noreply, gone(state, pid, {:handle_down, reason})}
-    end
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
+      when is_map_key(state.reports, ref) do
+    {:noreply, reported(%{state | reports: Map.delete(state.reports, ref)})}
   end
 
   def handle_info({:DOWN, _ref, :process, pid, reason}, state),
@@ -259,8 +210,21 @@ defmodule Opus.WorkerService do
         {:noreply, state}
 
       assignment ->
-        report(state, runner, Enum.uniq([assignment.attempt | open]), assignment)
+        state = report(state, runner, Enum.uniq([assignment.attempt | open]), assignment)
         {:noreply, forget(state, pid)}
+    end
+  end
+
+  def handle_info({RunnerPool, pid, {:child, execution_id, attempt}}, state) do
+    case Map.get(state.assigned, pid) do
+      nil ->
+        {:noreply, state}
+
+      assignment ->
+        children = Map.put(assignment.children, execution_id, attempt)
+
+        {:noreply,
+         %{state | assigned: Map.put(state.assigned, pid, %{assignment | children: children})}}
     end
   end
 
@@ -277,35 +241,9 @@ defmodule Opus.WorkerService do
   @impl true
   def format_status(status), do: Map.update(status, :state, nil, &Map.delete(&1, :credentials))
 
-  @impl true
-  def terminate(_reason, state) do
-    Subtree.kill_all(state)
-    :ok
-  end
-
   # ---------------------------------------------------------------------------
   # Starting
   # ---------------------------------------------------------------------------
-
-  defp start_local(state, token, assignment, decoded, keys, caller) do
-    start = %{
-      token: token,
-      assignment: assignment,
-      input: decoded,
-      client:
-        HostClient.new(
-          keys,
-          Cyfr.UUID7.generate_id("runner"),
-          state.boot,
-          state.credentials.host_url
-        )
-    }
-
-    case Subtree.start(state, @runners, start, caller, nil) do
-      {:ok, _pid, state} -> {:reply, :ok, state}
-      {:error, :malformed} -> {:reply, {:error, :malformed}, state}
-    end
-  end
 
   defp start_pooled(state, token, assignment, input, keys, caller) do
     execution_id = assignment.execution_id
@@ -324,6 +262,7 @@ defmodule Opus.WorkerService do
                 execution_id: execution_id,
                 attempt: assignment.attempt,
                 athanor: assignment.athanor_id,
+                children: %{},
                 callers: caller.callers,
                 logger: caller.logger
               }
@@ -348,6 +287,9 @@ defmodule Opus.WorkerService do
               {:reply, {:error, :unavailable}, state}
           end
 
+        {:error, {:refused, refusal}} ->
+          {:reply, {:error, {:unavailable, refusal.message}}, state}
+
         {:error, reason} ->
           Logger.error("[Opus.WorkerService] no runner for #{execution_id}: #{inspect(reason)}")
           {:reply, {:error, :unavailable}, state}
@@ -368,27 +310,57 @@ defmodule Opus.WorkerService do
   # ---------------------------------------------------------------------------
 
   # A runner gone with its subtree assigned is reported holding the
-  # subtree's root, the one attempt the service knows it held.
+  # subtree's root and every child it said it started: the attempts the
+  # service knows it held. CYFR lapses the ones still running.
   defp gone(state, pid, _reason) do
     case Map.get(state.assigned, pid) do
       nil ->
         state
 
       assignment ->
-        report(state, assignment.runner, [assignment.attempt], assignment)
-        forget(state, pid)
+        state
+        |> report(
+          assignment.runner,
+          Enum.uniq([assignment.attempt | Map.values(assignment.children)]),
+          assignment
+        )
+        |> forget(pid)
     end
   end
 
+  # The subtree's root and its children are ended for this boot: a kill of
+  # any of them is `:ok` from now on.
   defp forget(state, pid) do
     {assignment, assigned} = Map.pop(state.assigned, pid)
+
+    ended =
+      Enum.reduce(
+        [assignment.execution_id | Map.keys(assignment.children)],
+        state.ended,
+        &remember(&2, &1)
+      )
 
     %{
       state
       | assigned: assigned,
         executions: Map.delete(state.executions, assignment.execution_id),
-        ended: remember(state.ended, assignment.execution_id)
+        ended: ended
     }
+  end
+
+  # The runner that said it started the child `execution_id`.
+  defp holder(state, execution_id) do
+    Enum.find_value(state.assigned, fn {pid, assignment} ->
+      if is_map_key(assignment.children, execution_id), do: pid
+    end)
+  end
+
+  # Every attempt a runner of this boot holds: each subtree's root and the
+  # children its runner said it started.
+  defp held(state) do
+    for {_pid, assignment} <- state.assigned,
+        attempt <- Enum.uniq([assignment.attempt | Map.values(assignment.children)]),
+        do: attempt
   end
 
   defp remember(%{ids: ids, order: order}, execution_id) do
@@ -409,23 +381,34 @@ defmodule Opus.WorkerService do
 
   defp ended?(state, execution_id), do: MapSet.member?(state.ended.ids, execution_id)
 
-  defp report(%{credentials: credentials, boot: boot}, runner, attempts, context) do
-    spawn(fn ->
-      Process.put(:"$callers", context.callers)
-      Cyfr.LoggerContext.restore(context.logger)
+  # A report runs beside the service, which never waits on CYFR, and is
+  # watched until it is answered, so `await_reports/1` can wait for it.
+  defp report(%{credentials: credentials, boot: boot} = state, runner, attempts, context) do
+    {_pid, ref} =
+      spawn_monitor(fn ->
+        Process.put(:"$callers", context.callers)
+        Cyfr.LoggerContext.restore(context.logger)
 
-      case HostClient.runner_exited(credentials, boot, runner, attempts) do
-        :ok ->
-          :ok
+        case HostClient.runner_exited(credentials, boot, runner, attempts) do
+          :ok ->
+            :ok
 
-        {:error, reason} ->
-          Logger.error(
-            "[Opus.WorkerService] the exit of runner #{runner} (#{context.execution_id}) was not " <>
-              "reported: #{inspect(reason)}"
-          )
-      end
-    end)
+          {:error, reason} ->
+            Logger.error(
+              "[Opus.WorkerService] the exit of runner #{runner} (#{context.execution_id}) was " <>
+                "not reported: #{inspect(reason)}"
+            )
+        end
+      end)
 
-    :ok
+    %{state | reports: Map.put(state.reports, ref, true)}
+  end
+
+  # Whoever waits for the reports in flight is answered once none is.
+  defp reported(%{reports: reports} = state) when map_size(reports) > 0, do: state
+
+  defp reported(state) do
+    for from <- state.report_waiters, do: GenServer.reply(from, :ok)
+    %{state | report_waiters: []}
   end
 end

@@ -9,8 +9,11 @@ defmodule Opus.RunnerPoolTest do
   a fresh one for another; an idle runner retired at its TTL; a clean
   completion to idle, an unclean one, an exit, a closed channel and a
   kill to tainted, released and gone; every busy runner offered a
-  `cancel_child`; a frame from a runner already ended ignored; and the
-  keeper's loss ending every runner.
+  `cancel_child`; a frame from a runner already ended ignored; a keeper
+  that refuses runners leaving none in the pool, tainted or otherwise,
+  with the pool backing off, refusing a take with the keeper's account
+  and filling again once a runner starts; and the keeper's loss ending
+  every runner.
   """
 
   use ExUnit.Case, async: true
@@ -37,6 +40,7 @@ defmodule Opus.RunnerPoolTest do
 
   defp start_pool!(keeper, overrides) do
     {:ok, defaults} = Opus.Settings.pool([], %{})
+    {keeper_opts, overrides} = Keyword.pop(overrides, :keeper_opts, [])
     settings = Map.merge(defaults, Map.new(overrides))
     unique = System.unique_integer([:positive])
     supervisor = :"pool_runners_#{unique}"
@@ -48,6 +52,7 @@ defmodule Opus.RunnerPoolTest do
        name: :"pool_#{unique}",
        settings: settings,
        keeper: ScriptedKeeper,
+       keeper_opts: keeper_opts,
        supervisor: supervisor,
        command: %{argv: ["runner"], env: %{"KEEPER" => Atom.to_string(keeper)}}}
     )
@@ -57,7 +62,7 @@ defmodule Opus.RunnerPoolTest do
 
   defp spawns(keeper), do: ScriptedKeeper.spawns(keeper)
 
-  defp counts(pool), do: RunnerPool.status(pool)
+  defp counts(pool), do: RunnerPool.status(pool).runners
 
   defp assign(pid, execution_id) do
     keys = put_in(@keys, [:attempt, :execution_id], execution_id)
@@ -289,6 +294,86 @@ defmodule Opus.RunnerPoolTest do
     {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
     ScriptedKeeper.write(spawn_of(keeper, pid), "not json\n")
     assert_receive {RunnerPool, ^pid, {:gone, {:protocol, :malformed}}}
+  end
+
+  test "retiring the busy runners ends each at once and answers once they are gone, keeping the fresh and idle",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 1)
+    serve!(pool)
+    wait_until(fn -> counts(pool).fresh == 1 end)
+
+    {:ok, idle, _} = RunnerPool.take(pool, "ath_a", "exec_idle")
+    complete(spawn_of(keeper, idle), "exec_idle", true)
+    assert_receive {RunnerPool, ^idle, {:complete, "exec_idle", true}}
+    {:ok, a, a_id} = RunnerPool.take(pool, "ath_b", "exec_1")
+    {:ok, b, b_id} = RunnerPool.take(pool, "ath_c", "exec_2")
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 2, tainted: 0} end)
+
+    assert :ok = RunnerPool.retire_busy(pool)
+
+    assert counts(pool) == %{fresh: 1, idle: 1, busy: 0, tainted: 0}
+    assert {a_id, 0} in ScriptedKeeper.releases(keeper)
+    assert {b_id, 0} in ScriptedKeeper.releases(keeper)
+    refute Enum.any?(RunnerPool.runners(pool), &(&1.pid in [a, b]))
+    assert_received {RunnerPool, ^a, {:gone, _}}
+    assert_received {RunnerPool, ^b, {:gone, _}}
+
+    # Nothing busy: answered at once.
+    assert :ok = RunnerPool.retire_busy(pool)
+  end
+
+  describe "a keeper that refuses runners" do
+    test "leaves no runner in the pool, which backs off, refuses a take with the keeper's account and says so",
+         %{keeper: keeper} do
+      :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
+      pool = start_pool!(keeper, pool_size: 3, keeper_opts: [memory_bytes: 402_653_184])
+      serve!(pool)
+      started = System.monotonic_time(:millisecond)
+
+      wait_until(fn -> ScriptedKeeper.refused(keeper) == 3 end)
+
+      assert %{
+               runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0},
+               memory_bytes: 402_653_184,
+               refusal: %{reason: "memory_unavailable", message: message}
+             } = RunnerPool.status(pool)
+
+      assert message =~ "refuses"
+
+      assert {:error, {:refused, %{reason: "memory_unavailable"}}} =
+               RunnerPool.take(pool, "ath_a", "exec_1")
+
+      # One runner is tried again at a time, the wait doubling from a second.
+      wait_until(fn -> ScriptedKeeper.refused(keeper) == 4 end, 3_000)
+      first_retry = System.monotonic_time(:millisecond)
+      assert first_retry - started >= 900
+
+      wait_until(fn -> ScriptedKeeper.refused(keeper) == 5 end, 4_000)
+      assert System.monotonic_time(:millisecond) - first_retry >= 1_800
+      assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
+
+      # The keeper starts runners again: the next one tried ends the refusal
+      # and the pool fills.
+      :ok = ScriptedKeeper.refuse(keeper, nil)
+      wait_until(fn -> counts(pool).fresh == 3 end, 6_000)
+      assert %{refusal: nil} = RunnerPool.status(pool)
+      assert {:ok, _pid, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
+    end
+
+    test "a runner taken while spawning and then refused is gone for its assignee, never tainted",
+         %{keeper: keeper} do
+      :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
+      pool = start_pool!(keeper, pool_size: 0)
+      serve!(pool)
+
+      {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
+      assert_receive {RunnerPool, ^pid, {:gone, {:refused, :memory_unavailable}}}
+      assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
+      assert RunnerPool.runners(pool) == []
+
+      assert {:error, {:refused, %{reason: "memory_unavailable"}}} =
+               RunnerPool.take(pool, "ath_a", "exec_2")
+    end
   end
 
   test "the keeper's loss ends every runner, the busy ones reported gone", %{keeper: keeper} do

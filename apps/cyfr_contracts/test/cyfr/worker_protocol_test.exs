@@ -65,19 +65,25 @@ defmodule Cyfr.WorkerProtocolTest do
     assert WorkerAPI.request_timeout_ms(:status) == 5_000
   end
 
-  test "a status counts runners as fresh, idle, busy or tainted, and nothing else" do
+  test "a status counts runners as fresh, idle, busy or tainted, and says what bounds and refuses them" do
     assert WorkerAPI.runner_states() == [:fresh, :idle, :busy, :tainted]
 
     status = %{
       service: "wrk_4f3c2a1e9d8b7c6a",
       boot: "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
       runners: %{fresh: 2, idle: 1, busy: 3, tainted: 1},
-      attempts: ["att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"]
+      attempts: ["att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"],
+      memory_bytes: 402_653_184,
+      refusal: nil
     }
+
+    refusal = %{reason: "memory_unavailable", message: "writable-cgroups=true is missing"}
 
     assert WorkerAPI.valid_status?(status)
     assert WorkerAPI.valid_status?(%{status | runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0}})
     assert WorkerAPI.valid_status?(%{status | attempts: []})
+    assert WorkerAPI.valid_status?(%{status | memory_bytes: nil})
+    assert WorkerAPI.valid_status?(%{status | refusal: refusal})
 
     for bad <- [
           %{status | runners: Map.delete(status.runners, :tainted)},
@@ -88,18 +94,60 @@ defmodule Cyfr.WorkerProtocolTest do
           %{status | attempts: [:att]},
           %{status | service: nil},
           %{status | boot: 7},
+          %{status | memory_bytes: 0},
+          %{status | refusal: %{refusal | reason: :memory_unavailable}},
+          %{status | refusal: Map.put(refusal, :since, 1)},
+          %{status | refusal: "memory_unavailable"},
           Map.delete(status, :attempts),
+          Map.delete(status, :memory_bytes),
+          Map.delete(status, :refusal),
           Map.put(status, :extra, true),
           nil
         ] do
       refute WorkerAPI.valid_status?(bad), inspect(bad)
     end
 
+    assert_raise ArgumentError, fn -> WorkerAPI.status_to_wire(%{status | memory_bytes: -1}) end
+
     # A kill and a status are repeatable on a lost answer, within five seconds.
     assert WorkerAPI.retry(:kill) == :idempotent
     assert WorkerAPI.retry(:status) == :idempotent
     assert WorkerAPI.request_timeout_ms(:kill) == 5_000
     assert WorkerAPI.request_timeout_ms(:status) == 5_000
+  end
+
+  describe "the status vectors" do
+    @status_vectors Path.expand("../../../../tests/fixtures/worker_auth.json", __DIR__)
+                    |> File.read!()
+                    |> Jason.decode!()
+                    |> Map.fetch!("status")
+
+    test "every valid wire reads to a status that writes back to exactly that wire" do
+      for %{"why" => why, "wire" => wire} <- @status_vectors["valid"] do
+        assert {:ok, status} = WorkerAPI.read_status(wire), why
+        assert WorkerAPI.valid_status?(status), why
+        assert WorkerAPI.status_to_wire(status) == wire, why
+      end
+    end
+
+    test "every invalid wire is refused" do
+      for %{"why" => why, "wire" => wire} <- @status_vectors["invalid"] do
+        assert WorkerAPI.read_status(wire) == :error, why
+      end
+    end
+
+    test "the vectors cover a refusal, a bound and none" do
+      statuses =
+        for %{"wire" => wire} <- @status_vectors["valid"] do
+          {:ok, status} = WorkerAPI.read_status(wire)
+          status
+        end
+
+      assert Enum.any?(statuses, &(&1.memory_bytes == nil))
+      assert Enum.any?(statuses, &is_integer(&1.memory_bytes))
+      assert Enum.any?(statuses, &match?(%{refusal: %{reason: "memory_unavailable"}}, &1))
+      assert Enum.any?(statuses, &(&1.refusal == nil))
+    end
   end
 
   test "the wire's bounds are the shared limits" do

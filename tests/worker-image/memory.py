@@ -25,9 +25,12 @@ that asks for a bound, and the service starts no runner.
   is not touched; and when the uid is next given to a runner, that runner
   has a home and a group of its own, which the hostile one left nothing in.
 - `unavailable`: under the shipped service without `writable-cgroups=true`,
-  no runner process ever starts: every spawn is refused, the service logs
-  once what the deployment lacks, stays up on the same boot, and reports the
-  attempt it was given as its runner's exit without anything of it running.
+  no runner process ever starts: every spawn is refused, the pool keeps none
+  of the runners it was refused and backs off, its status reports the
+  refusal naming the option beside the bound every runner would run under,
+  a start is refused 503 `unavailable` naming it with nothing of the attempt
+  run, and the service logs once what the deployment lacks and stays up on
+  the same boot.
 
 `--measure` runs the seed components through the scripted control plane,
 each subtree in a fresh runner of a fresh container, and prints each
@@ -359,17 +362,20 @@ def test_runner_bound(stack, plane):
     print(f"Docker's OOMKilled flag for the container: {flag_before} before the hostile guest ran, "
           f"{oom_killed_flag(stack)} after", flush=True)
 
-    # The sibling kept its process and completes.
+    # The sibling kept its process, and its group, which took nothing of the
+    # hostile guest, and completes. The group is read while the sibling still
+    # holds its runner: once it completes, its runner is idle and retired
+    # after the service's idle time, which may be shorter than the read.
     expect(stack.runner_process(sibling_runner["runner"]) is not None
            and stack.runner_process(sibling_runner["runner"])["pid"] == sibling_runner["pid"],
            "the sibling's runner kept its process through the hostile runner's end", stack.runner_processes())
+    sibling_group = read_group(stack, sibling_runner["uid"])
+    expect(sibling_group is not None and sibling_group["peak"] < bound,
+           f"the sibling's group peaked at {mib(sibling_group and sibling_group['peak'])}, under its bound", sibling_group)
     release_sibling.set()
     complete = terminal(plane, sibling["execution_id"], BOOT_S)
     expect(complete["op"] == "complete" and complete["args"]["outcome"]["output"] == {"sibling": "alive"},
            "the sibling completed", complete)
-    sibling_group = read_group(stack, sibling_runner["uid"])
-    expect(sibling_group is not None and sibling_group["peak"] < bound,
-           f"the sibling's group peaked at {mib(sibling_group and sibling_group['peak'])}, under its bound", sibling_group)
 
     # The uid, next given to a runner, holds nothing of the hostile one.
     reused = reuse_uid(stack, plane, runner)
@@ -412,7 +418,7 @@ def reuse_uid(stack, plane, hostile, tries=12):
 
 
 def test_bound_unavailable(image, plane, window_s=5.0):
-    """Without writable-cgroups=true, no runner process ever starts, and the service says what it lacks."""
+    """Without writable-cgroups=true, no runner process ever starts, the pool keeps none, and the service says what it lacks."""
     stack = Stack("cyfr-opus-unbounded", image, plane, writable_cgroups=False)
     try:
         stack.up(wait_pool=False)
@@ -420,6 +426,11 @@ def test_bound_unavailable(image, plane, window_s=5.0):
         expect(probe.returncode != 0 and "Read-only" in probe.stderr,
                f"the service's cgroup is mounted read-only without the option ({probe.stderr.strip()})", probe.stderr)
         boot = stack.boot
+        refused = wait_until(lambda: (lambda s: s if s[0] == 200 and s[1]["ok"]["refusal"] else None)(stack.status()),
+                             10, "the status to report the keeper's refusal")[1]["ok"]
+        expect(refused["refusal"]["reason"] == "memory_unavailable" and "writable-cgroups=true" in refused["refusal"]["message"]
+               and refused["memory_bytes"] == 402653184,
+               "the status reports the refusal, naming writable-cgroups=true, and the bound every runner would run under", refused)
         sampler = StatusSampler(stack, interval=0.1, threads=1).start()
         seen = set()
         deadline = time.monotonic() + window_s
@@ -432,21 +443,24 @@ def test_bound_unavailable(image, plane, window_s=5.0):
         logs = stack.logs().splitlines()
         refusals = [line for line in logs if "was not started" in line and "writable-cgroups=true" in line]
         counts = [s[1] for s in samples]
-        print(f"status without the option, over {window_s:.0f} s: first {counts[0] if counts else None}, "
+        print(f"status without the option, over {window_s:.0f} s: {len(samples)} samples, first {counts[0] if counts else None}, "
               f"last {counts[-1] if counts else None}; the start answered {code} {answer}", flush=True)
         expect(seen == set() and stack.homes() == [], "no runner process ever ran under a pooled uid, and no home was made",
                {"pids": sorted(seen), "homes": stack.homes()})
         expect(len(refusals) == 1, "the service logged once that cyfr-spawn cannot bound a runner, naming writable-cgroups=true",
                [line for line in logs if "memory" in line or "Keeper" in line][-10:])
-        expect(max((c["busy"] for c in counts), default=0) <= 1 and counts and counts[-1]["idle"] == 0,
-               "no runner ever became idle: none completed anything", counts[-3:])
-        expect(plane.seen(None, attempt["execution_id"]) == [],
-               "the attempt it was given made no host call: nothing of it ran", plane.seen(None, attempt["execution_id"]))
+        expect(counts and all(c == {"fresh": 0, "idle": 0, "busy": 0, "tainted": 0} for c in counts),
+               f"the pool kept no runner it was refused, tainted or otherwise, in any of {len(counts)} samples",
+               [c for c in counts if c != {"fresh": 0, "idle": 0, "busy": 0, "tainted": 0}][:5])
+        expect(code == 503 and answer.get("error") == "unavailable" and "writable-cgroups=true" in answer.get("message", ""),
+               "the start was refused 503 unavailable, naming writable-cgroups=true", answer)
         exits = [r for r in plane.seen("runner_exited") if attempt["attempt"] in r["attempts"]]
-        expect(code == 200 and len(exits) == 1,
-               "the service reported the attempt as its runner's exit, so it is settled rather than left running", exits)
+        expect(plane.seen(None, attempt["execution_id"]) == [] and exits == [],
+               "the attempt it was refused made no host call and no runner exit was reported for it: nothing of it ran",
+               {"calls": plane.seen(None, attempt["execution_id"]), "exits": exits})
         code, status = stack.status()
-        expect(code == 200 and status["ok"]["boot"] == boot, "the service stayed up on the same boot", status)
+        expect(code == 200 and status["ok"]["boot"] == boot and status["ok"]["refusal"] == refused["refusal"],
+               "the service stayed up on the same boot, still reporting the refusal", status)
     finally:
         stack.down()
 

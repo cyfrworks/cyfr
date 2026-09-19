@@ -67,7 +67,13 @@ defmodule Cyfr.Test.StepBench do
       do: raise(ArgumentError, "steps must be positive and warmup non-negative")
 
     prepare_database!()
-    Cyfr.Test.OpusService.wire!()
+
+    # Run alone (`mix cyfr.bench.step`), the service's runners reach CYFR
+    # directly, so no proxy's hop is measured. Inside the suite they reach
+    # it through the suite's wire for the whole run, which the bench keeps:
+    # pointing them past it would restart the service and leave every later
+    # test's holds and reads on a wire no call crosses.
+    Cyfr.Test.OpusService.wire!(proxy: Cyfr.Test.TwoServices.wire() != nil)
 
     unless Cyfr.Execution.available?(),
       do:

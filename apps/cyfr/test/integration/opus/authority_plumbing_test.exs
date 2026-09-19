@@ -2,21 +2,23 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Opus.AuthorityPlumbingTest do
-  # Verify the authority a run's assignment carries survives the
-  # runtime-option allowlist, and that authority_required fails closed in
-  # both admission and runtime.
+  # Verify the authority a run is dispatched with is the one its runner is
+  # handed at its attach, read on the suite's wire, and that
+  # authority_required fails closed at admission, with nothing attached.
+  # The runtime's own re-check of authority_required is
+  # `Opus.RuntimeTest`'s, in Opus's suite.
   use ExUnit.Case, async: false
 
+  alias Cyfr.Test.TwoServices
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.authority-plumb:0.1.0"
-  @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
+    TwoServices.watch!()
 
     test_path = Path.join(System.tmp_dir!(), "opus_auth_plumb_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
@@ -48,23 +50,14 @@ defmodule Opus.AuthorityPlumbingTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     {:ok, ctx: ctx}
   end
 
-  defp attach_witness do
-    handler_id = "authority-witness-#{System.unique_integer([:positive])}"
-    test_pid = self()
-
-    :telemetry.attach(
-      handler_id,
-      @telemetry_event,
-      fn _event, _measurements, metadata, _config ->
-        send(test_pid, {:authority_entered, metadata})
-      end,
-      nil
-    )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
+  # Whether any run attached while the test watched the suite's wire.
+  defp attached? do
+    Enum.any?(TwoServices.calls(), &match?(%{callback: :attach}, &1))
   end
 
   # The authority as an assignment carries it to its runner: every member
@@ -75,12 +68,11 @@ defmodule Opus.AuthorityPlumbingTest do
   end
 
   # math.wasm is a core module, not a Component Model binary, so every run
-  # here fails at component compile. That is irrelevant: the witness fires
-  # and the required-check runs before compilation is attempted.
+  # here fails at component compile. That is irrelevant: its runner attaches,
+  # and the required-check runs, before compilation is attempted.
 
-  test "an :authority passed to a dispatched run reaches the runtime as its assignment carries it",
+  test "an :authority passed to a dispatched run reaches its runner as its assignment carries it",
        %{ctx: ctx} do
-    attach_witness()
     authority = Cyfr.Authority.zero()
     execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
 
@@ -91,26 +83,20 @@ defmodule Opus.AuthorityPlumbingTest do
         authority: authority
       )
 
-    assert_receive {:authority_entered, metadata}, 30_000
-    assert metadata.authority == as_assigned(authority)
-    assert metadata.execution_id == execution_id
+    assert TwoServices.entered(execution_id) == as_assigned(authority)
   end
 
   test "a run without an authority fails closed, executing nothing", %{ctx: ctx} do
-    attach_witness()
-
     # Admission raises for a missing authority, and the raise closes the
     # run failed before it reaches the runtime.
     assert {:error, message} =
              Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
 
     assert message =~ "without an authority is not a thing"
-    refute_receive {:authority_entered, _}, 500
+    refute attached?()
   end
 
   test "authority_required without an authority fails closed, executing nothing", %{ctx: ctx} do
-    attach_witness()
-
     assert {:error, message} =
              Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
                type: :reagent,
@@ -118,39 +104,21 @@ defmodule Opus.AuthorityPlumbingTest do
              )
 
     assert message =~ "without an authority"
-    refute_receive {:authority_entered, _}, 100
+    refute attached?()
   end
 
-  test "authority_required with an authority proceeds to the runtime", %{ctx: ctx} do
-    attach_witness()
+  test "authority_required with an authority proceeds to its runner", %{ctx: ctx} do
     authority = Cyfr.Authority.zero()
+    execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
 
     _result =
       Cyfr.Execution.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: :reagent,
+        execution_id: execution_id,
         authority: authority,
         authority_required: true
       )
 
-    assert_receive {:authority_entered, metadata}, 30_000
-    assert metadata.authority == as_assigned(authority)
-  end
-
-  test "the runtime itself re-checks authority_required" do
-    assert_raise ArgumentError, ~r/an opts filter dropped it/, fn ->
-      Opus.Runtime.execute_component(<<0, 1, 2, 3>>, %{}, authority_required: true)
-    end
-  end
-
-  test "the runtime accepts authority_required when the authority is present" do
-    # Garbage bytes fail at compile, not at the authority check — proving the
-    # check passed and execution was attempted.
-    result =
-      Opus.Runtime.execute_component(<<0, 1, 2, 3>>, %{},
-        authority: Cyfr.Authority.zero(),
-        authority_required: true
-      )
-
-    assert {:error, _} = result
+    assert TwoServices.entered(execution_id) == as_assigned(authority)
   end
 end

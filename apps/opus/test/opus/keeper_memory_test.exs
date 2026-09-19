@@ -268,12 +268,12 @@ defmodule Opus.KeeperMemoryTest do
       spawn_id = spawn_id(1)
       reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
       relay = attach!(ctx.dir, token)
-      wait_until(fn -> RunnerPool.status(pool).fresh == 1 end)
+      wait_until(fn -> RunnerPool.status(pool).runners.fresh == 1 end)
 
       {:ok, pid, runner} = RunnerPool.take(pool, "ath_memory", "exec_memory")
       # The pool refills behind the take: a second runner, under the same bound.
       assert %{"memory_bytes" => 268_435_456, "id" => refill_id} = next_request(spawner)
-      assert RunnerPool.status(pool).busy == 1
+      assert RunnerPool.status(pool).runners.busy == 1
 
       capture_log(fn ->
         reply(spawner, %{
@@ -292,10 +292,10 @@ defmodule Opus.KeeperMemoryTest do
       assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 0} =
                next_request(spawner)
 
-      assert RunnerPool.status(pool).tainted == 1
+      assert RunnerPool.status(pool).runners.tainted == 1
       :gen_tcp.close(relay)
       reply(spawner, %{v: 1, type: "released", spawn_id: spawn_id})
-      wait_until(fn -> RunnerPool.status(pool).tainted == 0 end)
+      wait_until(fn -> RunnerPool.status(pool).runners.tainted == 0 end)
       refute Enum.any?(RunnerPool.runners(pool), &(&1.id == runner))
 
       # The athanor's next subtree gets another runner, never this one.
@@ -329,12 +329,12 @@ defmodule Opus.KeeperMemoryTest do
           first = start_handle!(name, "runner_1")
           %{"id" => id} = next_request(spawner)
           reply(spawner, %{v: 1, type: "error", id: id, code: "memory_unavailable"})
-          assert_receive {RunnerProcess, ^first, {:error, :memory_unavailable}}, 5_000
+          assert_receive {RunnerProcess, ^first, {:refused, :memory_unavailable}}, 5_000
 
           second = start_handle!(name, "runner_2")
           %{"id" => id, "memory_bytes" => @default} = next_request(spawner)
           reply(spawner, %{v: 1, type: "error", id: id, code: "memory_unavailable"})
-          assert_receive {RunnerProcess, ^second, {:error, :memory_unavailable}}, 5_000
+          assert_receive {RunnerProcess, ^second, {:refused, :memory_unavailable}}, 5_000
         end)
 
       assert [_once] = Regex.scan(~r/writable-cgroups=true/, log)
@@ -354,7 +354,7 @@ defmodule Opus.KeeperMemoryTest do
           fourth = start_handle!(name, "runner_4")
           %{"id" => id} = next_request(spawner)
           reply(spawner, %{v: 1, type: "error", id: id, code: "memory_unavailable"})
-          assert_receive {RunnerProcess, ^fourth, {:error, :memory_unavailable}}, 5_000
+          assert_receive {RunnerProcess, ^fourth, {:refused, :memory_unavailable}}, 5_000
         end)
 
       assert log =~ "runner runner_4 was not started"
@@ -368,7 +368,7 @@ defmodule Opus.KeeperMemoryTest do
       log =
         capture_log(fn ->
           reply(spawner, %{v: 1, type: "error", id: id, code: "capacity"})
-          assert_receive {RunnerProcess, ^handle, {:error, "capacity"}}, 5_000
+          assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
         end)
 
       refute log =~ "writable-cgroups"
