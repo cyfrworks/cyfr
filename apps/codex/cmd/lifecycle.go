@@ -59,6 +59,7 @@ const (
 	serviceKeyVar    = "OPUS_SERVICE_KEY"
 	buildsURLVar     = "CYFR_LOCUS_BUILDS_URL"
 	buildsKeyVar     = "CYFR_LOCUS_BUILDS_KEY"
+	corsOriginsVar   = "CYFR_CORS_ALLOWED_ORIGINS"
 
 	// The opus service's id when .env names none: docker-compose.yml's
 	// default for both OPUS_SERVICE_ID and the entry of CYFR_WORKERS.
@@ -72,7 +73,8 @@ const (
 // read from exactly one assignment, so what init reads is what compose and
 // cyfr read.
 var stackVars = []string{
-	secretKeyBaseVar, bridgeKeyVar, workerRootVar, serviceIDVar, serviceKeyVar, buildsURLVar, buildsKeyVar,
+	secretKeyBaseVar, bridgeKeyVar, workerRootVar, serviceIDVar, serviceKeyVar, buildsURLVar,
+	buildsKeyVar, corsOriginsVar,
 }
 
 // serviceIDPattern is the service id grammar Opus.Credentials accepts.
@@ -253,6 +255,18 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 		}
 	}
 
+	// The browser CORS allowlist: assigned, whatever it says stands.
+	// Unassigned, config.exs's wildcard stands, and a release with sign-in
+	// configured refuses to boot rather than let any origin make
+	// credentialed cross-origin requests, so init assigns the empty
+	// allowlist — cyfr serves Prism, the API, /mcp and the tinctures from
+	// its own origin, and behind Caddy they are still that one origin, so
+	// no browser client of this stack is cross-origin. Never a wildcard.
+	if _, assigned := f.value(corsOriginsVar); !assigned {
+		f.set(corsOriginsVar, "")
+		changes = append(changes, envChange{corsOriginsVar, "empty: no cross-origin browser client"})
+	}
+
 	buildsURL, urlAssigned := f.value(buildsURLVar)
 	buildsKey, _ := f.value(buildsKeyVar)
 	switch {
@@ -351,7 +365,7 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, .env.example, the services' own env examples and the bundled scaffold (component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example, prompting for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email; and pulls the images the stack starts. Run with --no-interactive to take the defaults silently.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_MCP_BRIDGE_KEY, the worker root CYFR_WORKER_KEY with the OPUS_SERVICE_KEY derived from it for OPUS_SERVICE_ID (wrk_opus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_MCP_BRIDGE_KEY, the worker root CYFR_WORKER_KEY with the OPUS_SERVICE_KEY derived from it for OPUS_SERVICE_ID (wrk_opus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin — a release with sign-in configured refuses to boot on the wildcard default, which init never writes.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. A builds URL set empty with no key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml.`,
 	Example: `  cyfr init

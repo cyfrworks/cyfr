@@ -164,6 +164,12 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	}
 	assertStackPairs(t, got, defaultServiceID)
 
+	// The template assigns the empty allowlist itself, so `cp .env.example
+	// .env` boots a release too; init has nothing to add and leaves it.
+	if cors, assigned := parseEnvFile(got).value(corsOriginsVar); !assigned || cors != "" {
+		t.Errorf("the shipped template's %s is %q (assigned: %v)", corsOriginsVar, cors, assigned)
+	}
+
 	env := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(env, []byte(got), 0600); err != nil {
 		t.Fatal(err)
@@ -199,6 +205,16 @@ func assertStackPairs(t *testing.T, text, serviceID string) {
 	if url, _ := f.value(buildsURLVar); url != defaultBuildsURL {
 		t.Errorf("%s is %q", buildsURLVar, url)
 	}
+	// Unassigned, config.exs's wildcard stands and a release with sign-in
+	// configured refuses to boot; a wildcard here would be that refusal
+	// turned into an open door instead.
+	cors, assigned := f.value(corsOriginsVar)
+	if !assigned {
+		t.Errorf("%s is not assigned, so the wildcard default stands", corsOriginsVar)
+	}
+	if strings.Contains(cors, "*") {
+		t.Errorf("%s is %q", corsOriginsVar, cors)
+	}
 }
 
 // Each state of an existing .env, as the plan names them: init adds only the
@@ -224,34 +240,34 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 		{
 			name:    "no root and no service key: both are minted, builds turned on",
 			body:    base + "CYFR_WORKER_KEY=\nOPUS_SERVICE_KEY=\n",
-			added:   []string{workerRootVar, serviceKeyVar, buildsURLVar, buildsKeyVar},
+			added:   []string{workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			service: "wrk_opus",
 		},
 		{
 			name:    "a root and no service key: the key is derived from that root",
 			body:    base + "CYFR_WORKER_KEY=" + root + "\n# OPUS_SERVICE_KEY=\n",
-			added:   []string{serviceKeyVar, buildsURLVar, buildsKeyVar},
+			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: root},
 			service: "wrk_opus",
 		},
 		{
 			name:    "a root spelled in capitals derives the same key",
 			body:    base + "CYFR_WORKER_KEY=\"" + strings.ToUpper(root) + "\"\n",
-			added:   []string{serviceKeyVar, buildsURLVar, buildsKeyVar},
+			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: strings.ToUpper(root)},
 			service: "wrk_opus",
 		},
 		{
 			name:    "a service id .env names is the one the key derives for",
 			body:    base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_ID=wrk_other\n",
-			added:   []string{serviceKeyVar, buildsURLVar, buildsKeyVar},
+			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{serviceKeyVar: otherKey},
 			service: "wrk_other",
 		},
 		{
 			name:    "a consistent pair is kept as it is",
 			body:    base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\n",
-			added:   []string{buildsURLVar, buildsKeyVar},
+			added:   []string{corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: root, serviceKeyVar: opusKey},
 			service: "wrk_opus",
 		},
@@ -293,26 +309,32 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 		{
 			name:    "a builds key without a URL gets the URL",
 			body:    base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_KEY=" + buildsKey + "\n",
-			added:   []string{buildsURLVar},
+			added:   []string{corsOriginsVar, buildsURLVar},
 			kept:    map[string]string{buildsKeyVar: buildsKey},
 			service: "wrk_opus",
 		},
 		{
 			name:    "a builds URL without a key gets a minted key",
 			body:    base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_LOCUS_BUILDS_KEY=\n",
-			added:   []string{buildsKeyVar},
+			added:   []string{corsOriginsVar, buildsKeyVar},
 			service: "wrk_opus",
 		},
 		{
 			name:  "a builds URL set empty with no key is builds turned off, and left so",
 			body:  base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\n",
-			added: nil,
+			added: []string{corsOriginsVar},
 			kept:  map[string]string{buildsURLVar: "", buildsKeyVar: ""},
+		},
+		{
+			name:  "an allowlist .env assigns is kept, empty or not",
+			body:  base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=https://app.example.com\n",
+			added: nil,
+			kept:  map[string]string{corsOriginsVar: "https://app.example.com"},
 		},
 		{
 			name:    "no line for any key: each is appended",
 			body:    "CYFR_HOST=localhost",
-			added:   []string{secretKeyBaseVar, bridgeKeyVar, workerRootVar, serviceKeyVar, buildsURLVar, buildsKeyVar},
+			added:   []string{secretKeyBaseVar, bridgeKeyVar, workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{"CYFR_HOST": "localhost"},
 			service: "wrk_opus",
 		},

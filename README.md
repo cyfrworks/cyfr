@@ -356,7 +356,7 @@ cyfr init        # downloads compose + Caddyfile, writes .env and its keys, asks
 cyfr up          # starts cyfr + opus + locus-builds + mcp-bridge (and caddy if TLS mode)
 ```
 
-`cyfr init` mints every key the stack needs into `.env`: `CYFR_SECRET_KEY_BASE`, `CYFR_MCP_BRIDGE_KEY`, the [execution worker](#execution-workers)'s root `CYFR_WORKER_KEY` with the `OPUS_SERVICE_KEY` derived from it for the worker's service id (`wrk_opus` unless `.env` names another `OPUS_SERVICE_ID`), and the [builds](#builds) key beside `CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100`. Run in a project whose `.env` already exists, it adds only the keys `.env` lacks and never rewrites one: with no root and no service key it mints both, with a root alone it derives the service key from it, a builds URL gets a minted key and a builds key gets the URL. A service key with no root beside it, or one the root beside it does not derive, is refused with a sentence naming the fix, and nothing is written.
+`cyfr init` mints every key the stack needs into `.env`: `CYFR_SECRET_KEY_BASE`, `CYFR_MCP_BRIDGE_KEY`, the [execution worker](#execution-workers)'s root `CYFR_WORKER_KEY` with the `OPUS_SERVICE_KEY` derived from it for the worker's service id (`wrk_opus` unless `.env` names another `OPUS_SERVICE_ID`), and the [builds](#builds) key beside `CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100`. It also assigns [`CYFR_CORS_ALLOWED_ORIGINS`](#cors-allowlist-required-for-server-deployments) the empty allowlist, which a release with sign-in configured needs to boot and the shipped stack's same-origin clients never notice. Run in a project whose `.env` already exists, it adds only the keys `.env` lacks and never rewrites one: with no root and no service key it mints both, with a root alone it derives the service key from it, a builds URL gets a minted key and a builds key gets the URL. A service key with no root beside it, or one the root beside it does not derive, is refused with a sentence naming the fix, and nothing is written.
 
 <details><summary>Prefer a source checkout?</summary>
 
@@ -455,8 +455,9 @@ served there is not this server).
 
 Everything below is optional — the defaults (GitHub/Google sign-in, SQLite,
 local `./data` storage) run a full instance with zero extra configuration —
-with one exception: a server (release) deployment must set the CORS
-allowlist, because sign-in is enabled by default. Each option is set in
+with one exception: a server (release) deployment must assign the CORS
+allowlist, because sign-in is enabled by default, and `.env.example` and
+`cyfr init` assign it empty for you. Each option is set in
 `.env` (see the matching blocks in `.env.example`) and fails loud: if an
 option is enabled but incompletely configured, the server refuses to start
 rather than silently falling back.
@@ -465,17 +466,26 @@ rather than silently falling back.
 
 A release refuses to boot when authentication is configured (it is by
 default) while CORS still allows every origin — that combination would let
-any website make credentialed cross-origin requests. Set the allowlist to
-the origin(s) your browser clients are served from:
+any website make credentialed cross-origin requests. `.env.example` and
+`cyfr init` therefore assign the allowlist empty:
+
+```bash
+CYFR_CORS_ALLOWED_ORIGINS=
+```
+
+Empty allows no cross-origin caller at all, which is what the shipped
+stack needs: cyfr serves Prism, the API, `/mcp` and the tinctures from its
+own origin, and behind Caddy they are still that one origin, so
+same-origin traffic never needs CORS. Set it to the origin(s) of a
+frontend you serve elsewhere, comma-separated:
 
 ```bash
 CYFR_CORS_ALLOWED_ORIGINS=https://app.example.com
 ```
 
-Comma-separate multiple origins. An empty value allows no cross-origin
-callers at all; same-origin traffic (Prism on the same host) never needs
-CORS. Local `mix phx.server` runs only warn, so development is
-unaffected.
+Assigning it is what matters: with the line removed the wildcard default
+stands and the release refuses to boot. Local `mix phx.server` runs only
+warn, so development is unaffected.
 
 ### Prometheus metrics
 
