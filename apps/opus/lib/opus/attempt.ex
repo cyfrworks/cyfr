@@ -249,8 +249,10 @@ defmodule Opus.Attempt do
   end
 
   # A `RuntimeError` or `ArgumentError` carries a sentence authored where it
-  # was raised; any other exception is logged and reported as an internal
-  # error.
+  # was raised; any other exception is reported as an internal error and
+  # logged by its module and the functions it passed through, never by its
+  # message or a frame's arguments, which can hold the terms it was raised
+  # over, a guest's input among them.
   defp exception_message(%RuntimeError{message: message}, _stacktrace),
     do: "Execution error: #{message}"
 
@@ -258,12 +260,43 @@ defmodule Opus.Attempt do
     do: "Execution error: #{message}"
 
   defp exception_message(exception, stacktrace) do
+    frames =
+      Enum.map(stacktrace, fn
+        {module, function, args, location} when is_list(args) ->
+          {module, function, length(args), location}
+
+        frame ->
+          frame
+      end)
+
     Logger.error(
-      "[Opus.Attempt] execution raised: " <> Exception.format(:error, exception, stacktrace)
+      "[Opus.Attempt] execution raised #{inspect(exception.__struct__)}\n" <>
+        Exception.format_stacktrace(frames)
     )
 
     "Execution error: the engine raised an internal error"
   end
+
+  @doc false
+  # An exit or a throw out of the component call, as the run's error: by its
+  # kind alone. An exit carries the call it ended, and a call carries what
+  # it was asked with, a guest's input among it, so neither the reason nor
+  # anything in it is rendered or logged; only an atom, which code wrote,
+  # names what ended.
+  @spec caught(:exit | :throw, term()) :: String.t()
+  def caught(:exit, reason) do
+    Logger.error("[Opus.Attempt] the component call exited (#{ended(reason)})")
+    "Execution error: the component call ended (#{ended(reason)})"
+  end
+
+  def caught(:throw, _value) do
+    Logger.error("[Opus.Attempt] the component call threw")
+    "Execution error: the component call threw"
+  end
+
+  defp ended(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp ended({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
+  defp ended(_reason), do: "exit"
 
   # The run's budget from receipt: its timeout, and no more than what is
   # left of the absolute subtree deadline its assignment carries, so a
@@ -307,10 +340,9 @@ defmodule Opus.Attempt do
           try do
             Opus.Runtime.execute_component(artifact, input, runtime_opts)
           rescue
-            e -> {:error, Exception.message(e)}
+            e -> {:error, exception_message(e, __STACKTRACE__)}
           catch
-            :exit, reason -> {:error, "Exit: #{inspect(reason)}"}
-            kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
+            kind, reason -> {:error, caught(kind, reason)}
           end
 
         send(runner, {ref, result})
