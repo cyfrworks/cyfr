@@ -287,7 +287,7 @@ defmodule Opus.Runtime do
        ) do
     vault_imports =
       if component_type == :catalyst do
-        build_vault_imports(preloaded_fields, component_ref)
+        build_vault_imports(preloaded_fields, component_ref, host)
       else
         %{}
       end
@@ -410,10 +410,14 @@ defmodule Opus.Runtime do
   defp artifact(bytes) when is_binary(bytes), do: {:ok, bytes}
   defp artifact(fetch) when is_function(fetch, 0), do: fetch.()
 
-  # Build secrets host functions for WASI import from pre-resolved secrets map.
-  # The map is unsealed once per execution, at attach, so each get() is a
-  # simple Map.get with no file I/O or PBKDF2 derivation.
-  defp build_vault_imports(preloaded, component_ref) when is_map(preloaded) do
+  # A catalyst's `cyfr:vault/read` import, answered from the fields its
+  # attach was handed (the consented projection, which CYFR audited as it
+  # dispensed them). A read outside them is refused, and reported to CYFR
+  # through the attempt's host client (`record_denial`, `secret_denied`),
+  # which audits it for the attempt the call key names. The name is the
+  # guest's: one the contract bounds out (`Cyfr.HostAPI.valid_field_name?/1`)
+  # is refused unreported, and logged without the name.
+  defp build_vault_imports(preloaded, component_ref, host) when is_map(preloaded) do
     %{
       "cyfr:vault/read@0.1.0" => %{
         "get" =>
@@ -421,32 +425,33 @@ defmodule Opus.Runtime do
            fn name ->
              case Map.fetch(preloaded, name) do
                {:ok, value} ->
-                 :telemetry.execute(
-                   [:cyfr, :opus, :secret, :accessed],
-                   %{system_time: System.system_time()},
-                   %{secret_name: name, component_ref: component_ref}
-                 )
-
                  {:ok, value}
 
                :error ->
-                 :telemetry.execute(
-                   [:cyfr, :opus, :secret, :denied],
-                   %{system_time: System.system_time()},
-                   %{secret_name: name, component_ref: component_ref}
-                 )
-
-                 Logger.warning(
-                   "[Opus.Runtime] Field '#{name}' is outside the consent's projection for " <>
-                     "'#{component_ref}'. Re-grant via the consent walk: " <>
-                     "cyfr profile grant #{component_ref}"
-                 )
-
+                 report_denied(host, name, component_ref)
                  {:error, "access-denied: #{name} not granted to #{component_ref}"}
              end
            end}
       }
     }
+  end
+
+  defp report_denied(host, name, component_ref) do
+    if Cyfr.HostAPI.valid_field_name?(name) do
+      Logger.warning(
+        "[Opus.Runtime] Field '#{name}' is outside the consent's projection for " <>
+          "'#{component_ref}'. Re-grant via the consent walk: " <>
+          "cyfr profile grant #{component_ref}"
+      )
+
+      if host, do: _ = Opus.HostClient.record_denial(host, "secret_denied", name)
+    else
+      Logger.warning(
+        "[Opus.Runtime] '#{component_ref}' asked its vault for a name that is no field name"
+      )
+    end
+
+    :ok
   end
 
   # ===========================================================================

@@ -32,7 +32,7 @@ defmodule Opus.StoreLimitsTest do
   test "each guest and its source are the ones the README records" do
     readme = File.read!(Path.join(@dir, "README.md"))
 
-    for name <- ["extra_memory", "wide_table", "grower"], ext <- ["wat", "wasm"] do
+    for name <- ["extra_memory", "wide_table", "grower", "vault_probe"], ext <- ["wat", "wasm"] do
       file = "#{name}.#{ext}"
 
       assert [_, recorded] =

@@ -83,8 +83,18 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:audit],
       note: "a component asked the host to dispense an OAuth token"
     },
-    [:cyfr, :opus, :secret, :accessed] => %{consumers: [:audit]},
-    [:cyfr, :opus, :secret, :denied] => %{consumers: [:audit]},
+    [:cyfr, :opus, :secret, :dispensed] => %{
+      consumers: [:audit],
+      note:
+        "a vault field of the consented projection handed to a runner at the attach that " <>
+          "claimed its attempt, by name, once per field and attempt"
+    },
+    [:cyfr, :opus, :secret, :denied] => %{
+      consumers: [:audit],
+      note:
+        "a runner reported its guest refused a vault field outside its projection, by the " <>
+          "name the guest asked for, attributed to the attempt whose call key signed the report"
+    },
 
     # ——— key rotation ———
     [:cyfr, :sanctum, :crypto_rotation, :run] => %{

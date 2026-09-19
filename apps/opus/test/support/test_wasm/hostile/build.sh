@@ -19,7 +19,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 # Each guest and the world it is a component of.
-guests="extra_memory:reagent wide_table:reagent grower:reagent"
+guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst"
 
 digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
