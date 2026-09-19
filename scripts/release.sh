@@ -94,14 +94,34 @@ if [ -n "$(git status --porcelain)" ]; then
   fi
 fi
 
-# A release tag must never point at a red commit: run the full suite and
-# credo before touching versions. Skip with SKIP_TESTS=1 only when the same
-# tree already passed locally moments ago.
+# A release tag must never point at a red commit: run the full suite on BOTH
+# database adapters and credo before touching versions. The adapter is chosen
+# at compile time, so Postgres is a build of its own (MIX_BUILD_PATH) against
+# its own database: a tag that ran SQLite alone said nothing about the half of
+# the shipped product that runs on Postgres. Point CYFR_POSTGRES_TEST_URL at a
+# database this may create, migrate and write to; without one the Postgres leg
+# is refused, not skipped. Skip both with SKIP_TESTS=1 only when the same tree
+# already passed locally moments ago.
 if [ "${SKIP_TESTS:-}" != "1" ]; then
-  echo "Running full test suite (set SKIP_TESTS=1 to skip)..."
-  mix test
+  echo "Running the full test suite on SQLite (set SKIP_TESTS=1 to skip)..."
+  CYFR_DATABASE=sqlite mix test
+
+  if [ -z "${CYFR_POSTGRES_TEST_URL:-}" ]; then
+    echo "Error: CYFR_POSTGRES_TEST_URL is not set, so the Postgres suite cannot run."
+    echo "Set it to a disposable Postgres database (e.g."
+    echo "  postgres://cyfr:cyfr@localhost:5432/cyfr_test)"
+    echo "or set SKIP_TESTS=1 if this tree just passed on both adapters."
+    exit 1
+  fi
+
+  echo "Running the full test suite on Postgres..."
+  CYFR_DATABASE=postgres \
+    MIX_BUILD_PATH="$REPO_ROOT/_build/test_pg" \
+    CYFR_DATABASE_URL="$CYFR_POSTGRES_TEST_URL" \
+    mix test
+
   mix credo --only=warning
-  echo "Suite green."
+  echo "Suite green on both adapters."
 fi
 
 # Portable in-place sed (macOS requires -i '', Linux requires -i)
