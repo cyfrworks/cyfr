@@ -104,8 +104,8 @@ fn chat(params: Value) -> String {
     ok(Value::Object(data))
 }
 
-// The step this call plays: the script is the fenced block of the last user
-// message that carries one, and the step is chosen by how many assistant
+// The step this call plays: the script is the last fenced block of the last
+// user message that carries one, and the step is chosen by how many assistant
 // messages follow that message, so every `chat` of a turn plays the next
 // step with nothing kept between calls. A request with no script plays the
 // greeting.
@@ -174,8 +174,11 @@ fn text_of(content: Option<&Value>) -> String {
     }
 }
 
+// The last fenced script of a message's text: a turn that left the model
+// nothing to read is followed by the person's next line in the same `user`
+// message, and the newer script is the one to play.
 fn fenced(text: &str) -> Option<String> {
-    let open = text.find(FENCE_OPEN)? + FENCE_OPEN.len();
+    let open = text.rfind(FENCE_OPEN)? + FENCE_OPEN.len();
     let close = text[open..].find(FENCE_CLOSE)? + open;
     Some(text[open..close].to_string())
 }

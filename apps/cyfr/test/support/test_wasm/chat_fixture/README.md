@@ -25,10 +25,12 @@ an `api_key` need whose field is `FIXTURE_API_KEY`.
 The script is a JSON object in a fenced block, opened by
 `` ```chat-fixture `` and closed by `` ``` ``, in the text of a `user`
 message of the request: a person's own line, which is what a turn sends a
-catalyst. The last `user` message that carries one is the script, and the
-step played is `steps[n]` where `n` is how many `assistant` messages follow
-that message, so each `chat` of a turn plays the next step with nothing
-kept between calls. A request with no script plays a greeting: two
+catalyst. The last block of the last `user` message that carries one is the
+script (a turn that left the model nothing to read is followed by the
+person's next line in the same `user` message), and the step played is
+`steps[n]` where `n` is how many `assistant` messages follow that message,
+so each `chat` of a turn plays the next step with nothing kept between
+calls. A request with no script plays a greeting: two
 `text.delta`, `usage`, `stop`, and one text block. A script that is not
 JSON, or that has no step `n`, is refused as `invalid_request`.
 
@@ -107,7 +109,7 @@ It reads crates.io for the crates `Cargo.lock` names.
 ## Digests
 
 ```
-src/lib.rs        sha256:4e2426afc2352cfd4bf34858992e0b20faf601f8a1f79d2780a07fd0f472685f
+src/lib.rs        sha256:622c46c9fd609bf92f633bfe6f02d1b783a6808a8d2f5b63962717c9e2da06ea
 Cargo.lock        sha256:695ceaa15daafe0e307ee5bb4497e044c8bcae806665f8923f015b8b86c6a1b2
-chat_fixture.wasm sha256:8b156bccf45f3ca41b780c7e7dc05836528962eee7d00352178cf7b7a29a1bcb
+chat_fixture.wasm sha256:e1dcc9000352beae42ab6600f32628760eb95e5fa472ed8352b6b3553e9a471c
 ```
