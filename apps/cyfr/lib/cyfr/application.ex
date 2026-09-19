@@ -385,8 +385,10 @@ defmodule Cyfr.Application do
     if Application.get_env(:cyfr, :auto_migrate, true) do
       config = Application.get_env(:cyfr, Arca.Repo, [])
       verify_db_writable!(config[:database])
-      # Start a temporary repo with pool_size=1 just for migrations
-      {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 1))
+      # A temporary repo just for migrations, of two connections: on
+      # Postgres the migrator holds its lock on one and migrates on the
+      # other, and refuses a pool of one.
+      {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 2))
       Ecto.Migrator.run(Arca.Repo, migrations_path(), :up, all: true)
       configure_database()
       # Stop the temporary repo so the supervisor can start the real one
