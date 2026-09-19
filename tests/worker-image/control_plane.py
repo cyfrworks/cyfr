@@ -306,8 +306,8 @@ class ControlPlane:
     # Minting
     # ------------------------------------------------------------------
 
-    def mint(self, boot, component_type, ref, wasm, input_, athanor_id, timeout_ms, intercepted=(), secrets=None, parent=None, lease_ms=LEASE_MS):
-        """An attempt on this control plane, as CYFR mints one for the worker service on `boot`."""
+    def mint(self, boot, component_type, ref, wasm, input_, athanor_id, timeout_ms, intercepted=(), secrets=None, parent=None, lease_ms=LEASE_MS, authority=None):
+        """An attempt on this control plane, as CYFR mints one for the worker service on `boot`, under `authority` (the zero authority when None)."""
         now = auth.now_ms()
         execution_id = auth.new_id("exec")
         attempt_id = auth.new_id("att")
@@ -334,7 +334,7 @@ class ControlPlane:
             "root_execution_id": parent["root_execution_id"] if parent else execution_id,
             "athanor_id": athanor_id,
             "actor": ACTOR,
-            "authority": ZERO_AUTHORITY,
+            "authority": authority or ZERO_AUTHORITY,
             "component": {"ref": ref, "type": component_type, "digest": artifact_digest, "declared_needs": []},
             "input_digest": auth.digest(input_json.encode()),
             "timeout_ms": timeout_ms,

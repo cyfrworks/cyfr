@@ -6,10 +6,13 @@ A Stack runs docker-compose.yml's `opus` service layered with
 compose.worker.yml, which adds only the image under test, a loopback port,
 the host gateway the scripted control plane (control_plane.py, on this
 machine) is reached through and the pool settings a test chooses.
-Everything else — cyfr-spawn's capabilities, the read-only root,
-`ipc: none`, the tmpfs mounts, the limits, the restart policy — is the
-shipped service. What the container's processes, home root and CPU
-accounting show is read as root inside it.
+Everything else — cyfr-spawn's capabilities, the security options, the
+read-only root, `ipc: none`, the tmpfs mounts, the limits, the restart
+policy — is the shipped service. A Stack made with
+`writable_cgroups=False` also layers compose.no-writable-cgroups.yml, as a
+deployment without that security option runs it. What the container's
+processes, home root, cgroups and CPU accounting show is read as root
+inside it.
 """
 
 import json
@@ -24,6 +27,10 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+# Prefixed to every compose project of a run, and so to its container and
+# network, for a host that tells one run's Docker objects from another's by
+# name.
+PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
 SERVICE = "wrk_image"
 POOL_FIRST, POOL_LAST = 30101, 30108
 SERVICE_UID = 10002
@@ -58,15 +65,17 @@ def wait_until(predicate, timeout, what, interval=0.05):
 
 
 class Stack:
-    def __init__(self, project, image, plane, pool_size=2, idle_ttl_ms=30_000, watchdog_grace_ms=1_000, release_grace_ms=1_500):
-        self.project = project
+    def __init__(self, project, image, plane, pool_size=2, idle_ttl_ms=30_000, watchdog_grace_ms=1_000, release_grace_ms=1_500,
+                 writable_cgroups=True):
+        self.project = PROJECT_PREFIX + project
+        self.writable_cgroups = writable_cgroups
         self.image = image
         self.plane = plane
         self.pool_size = pool_size
         self.idle_ttl_ms = idle_ttl_ms
         self.watchdog_grace_ms = watchdog_grace_ms
         self.release_grace_ms = release_grace_ms
-        self.project_dir = tempfile.mkdtemp(prefix=f"{project}-")
+        self.project_dir = tempfile.mkdtemp(prefix=f"{self.project}-")
         # The rest of the stack's definition names a project .env.
         open(os.path.join(self.project_dir, ".env"), "w").close()
         self.container = None
@@ -87,20 +96,23 @@ class Stack:
         }
 
     def compose(self, *args, check=True):
+        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(HERE, "compose.worker.yml")]
+        if not self.writable_cgroups:
+            files.append(os.path.join(HERE, "compose.no-writable-cgroups.yml"))
         return run(
             "docker", "compose", "--project-name", self.project, "--project-directory", self.project_dir,
-            "-f", os.path.join(ROOT, "docker-compose.yml"),
-            "-f", os.path.join(HERE, "compose.worker.yml"),
+            *[arg for path in files for arg in ("-f", path)],
             *args,
             env=self.env(), check=check,
         )
 
-    def up(self):
-        """(Re)creates the service, waits for its listener and for its pool to fill."""
+    def up(self, wait_pool=True):
+        """(Re)creates the service, waits for its listener and, unless told not to, for its pool to fill."""
         self.compose("up", "--detach", "--no-build", "--force-recreate", "opus")
         self.container = self.compose("ps", "--quiet", "opus").stdout.strip()
         self.wait_listener()
-        self.wait_pool()
+        if wait_pool:
+            self.wait_pool()
 
     def wait_listener(self, timeout=90):
         """The listener answers an unsigned status 401 (the image's liveness), then a signed one 200."""
