@@ -10,6 +10,10 @@
 //
 // `serve` is the only subcommand an operator runs. It needs exactly the
 // capabilities SETUID, SETGID and KILL and refuses to start with any other.
+// It bounds the memory of a spawn that asks for a bound only where its own
+// cgroup is the root of a cgroup namespace mounted writable (Docker's
+// `writable-cgroups=true` security option, which adds no capability), and
+// refuses such a spawn anywhere else (package cgroup).
 // `stage`, `relay` and `retire` are the helpers `serve` executes under the
 // uid each one acts for; they read their instructions from a pipe on fd 3.
 package main
