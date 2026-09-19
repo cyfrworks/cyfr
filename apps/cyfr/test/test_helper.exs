@@ -21,7 +21,8 @@ Cyfr.Test.OpusService.wire!()
 # the seed tree with an empty bundle plus a copy of the shipped AQUA
 # template (template reads stay real without the suite touching the repo's
 # own seed/).
-File.mkdir_p!(Application.fetch_env!(:cyfr, :base_path))
+base_path = Application.fetch_env!(:cyfr, :base_path)
+File.mkdir_p!(base_path)
 
 seed_path = Application.fetch_env!(:cyfr, :seed_path)
 File.mkdir_p!(Path.join(seed_path, "components"))
@@ -64,9 +65,13 @@ ExUnit.after_suite(fn _ ->
     end
   end
 
-  # The run's tmp roots do not accumulate across runs.
-  File.rm_rf(Application.fetch_env!(:cyfr, :base_path))
-  File.rm_rf(Application.fetch_env!(:cyfr, :seed_path))
+  # The run's tmp roots do not accumulate across runs. Only the two this
+  # helper made are removed, as they were named at the start: tests point
+  # both keys elsewhere while they run, the repository's own seed/ among
+  # those places, and a run stopped mid-test would remove whatever the key
+  # named at that moment.
+  File.rm_rf(base_path)
+  File.rm_rf(seed_path)
 end)
 
 ExUnit.start()
