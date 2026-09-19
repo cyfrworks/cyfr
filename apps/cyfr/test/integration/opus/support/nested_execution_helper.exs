@@ -28,6 +28,9 @@ unless Code.ensure_loaded?(Opus.Test.NestedExecution) do
 
     def probe_ref, do: @probe_ref
 
+    @doc "The probe's checked-in binary, beside its source, lock and README."
+    def wasm_path, do: @probe_wasm
+
     @doc """
     Plant the probe in a private seed tree and register it. Call from a
     setup block that has already pointed `:cyfr, :base_path` at a temp
