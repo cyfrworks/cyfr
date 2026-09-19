@@ -1004,6 +1004,8 @@ The window comes from the provider's models API where it reports one (claude, ge
 
 Request fields: `model` (required); `system`; `messages` (required, non-empty — `content` is a string or a list of blocks: `text` in any turn; `image` and `document` (`media_type`, base64 `data`, optional `filename`) in a user turn; `tool_call` (`id`, `name`, `arguments`, and `provider_data` when a response carried it — send it back unchanged) in an assistant turn; `tool_result` (`tool_call_id`, `name`, `content` as a string or text blocks, `is_error`) in a tool turn); `tools` (`name`, `description`, `parameters` as JSON Schema); `provider_tools` (names from `describe`, run inside the provider with no approval round trip); `max_tokens`; `temperature`.
 
+**Tool schemas.** A catalyst receives each tool's `parameters` as full JSON Schema, exactly as the platform derives it: a platform tool's schema with its `action` enum narrowed to the actions the turn offers, an external MCP server's `inputSchema` as that server declares it. The platform promises no subset — any JSON Schema keyword can arrive (`anyOf`, `oneOf`, `$ref`, `additionalProperties`, `format`, nested objects and arrays). Adapting a schema to what its provider accepts is the catalyst's work, done in its request mapping beside the rest of the provider's shape.
+
 Response:
 
 ```json
@@ -1099,6 +1101,8 @@ Patterns are `"*"`, exact (`"execution.run"`), or prefix globs (`"component.*"`)
 ### Limits (`caps.limits`)
 
 `timeout`, `batch_timeout` (durations like `"30s"`, `"3m"`), `max_memory_bytes`, `max_request_size`, `max_response_size`, `max_concurrent_tasks` (integers), and `rate_limit` (`{"requests": N, "window": "1m"}`). These are *suggestions under the platform ceiling* — the operator can adjust them at commit, and nothing can exceed the ceiling. Default timeouts when unasked: reagent=1m, catalyst=3m, formula=5m.
+
+**Memory and tables.** The engine gives a run one linear memory, which grows no further than the consented `max_memory_bytes` (64 MiB when unasked, at most the platform ceiling's 256 MiB), and at most ten tables of 20,000 elements each, in at most ten instances. A component that declares a second memory, more tables, or a memory or table larger than that is refused when it is instantiated, as `resource_limit`. A `memory.grow` (or `table.grow`) past the bound is refused as WebAssembly specifies: the instruction answers the guest `-1` and the run goes on, so an allocator that cannot grow fails the way its language reports an allocation failure — usually a trap — rather than with `resource_limit`.
 
 ### Versionless by default
 

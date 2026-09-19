@@ -12,7 +12,9 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
   Blank environment values must use configured defaults. Optional
   Dotenvy types return nil for blanks; env_str, env_int, and env_bool
-  apply the corresponding default.
+  apply the corresponding default. The one exception is the setting whose
+  blank value is a value — the CORS allowlist, pinned below — which is
+  read by its assignment through `env_assigned`.
 
   Boolean settings must be parsed as booleans; the string "false"
   is truthy in Elixir.
@@ -78,6 +80,36 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     assert offenders == [],
            "switches read by string comparison instead of the strict parser:\n" <>
              Enum.join(offenders, "\n")
+  end
+
+  # The allowlist's empty value is its meaning: no cross-origin caller at
+  # all, which is what `.env.example` promises and what the shipped stack
+  # assigns, while its configured default is the wildcard
+  # (`config/config.exs`) that `Cyfr.Application.cors_enforcement/3`
+  # refuses for an authenticated release. Read as blank-is-unset, an
+  # operator who assigned the empty allowlist got the wildcard and a
+  # release that would not boot. It is the only read that may take the
+  # assignment for the value, so the exception cannot spread unnoticed.
+  test "CYFR_CORS_ALLOWED_ORIGINS is the one read whose assigned empty value is a value" do
+    src = source()
+
+    assert src =~ ~S|env_assigned = fn key -> env!(key, :string, nil) end|
+    assert src =~ ~S|if env_assigned.("CYFR_CORS_ALLOWED_ORIGINS") do|
+    assert src =~ ~S|config :cyfr, :cors_allowed_origins, env_list.("CYFR_CORS_ALLOWED_ORIGINS")|
+
+    refute src =~ ~S|env_str.("CYFR_CORS_ALLOWED_ORIGINS"|,
+           "CYFR_CORS_ALLOWED_ORIGINS must not be read as blank-is-unset: an assigned " <>
+             "empty allowlist would read as no answer and leave the wildcard standing"
+
+    read_by_assignment =
+      ~r/env_assigned\.\("([A-Z0-9_]+)"\)/
+      |> Regex.scan(src, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.uniq()
+
+    assert read_by_assignment == ["CYFR_CORS_ALLOWED_ORIGINS"],
+           "these settings read their assignment rather than their value: " <>
+             inspect(read_by_assignment)
   end
 
   test "CYFR_BEHIND_PROXY is read as a boolean, once" do
