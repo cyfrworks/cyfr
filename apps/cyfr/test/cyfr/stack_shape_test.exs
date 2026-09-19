@@ -289,15 +289,36 @@ defmodule Cyfr.StackShapeTest do
     refute env =~ ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|CYFR_COMPONENT[S]_PATH|4001|CYFR_WORKER_I[D]/
 
     for knob <-
-          ~w(CYFR_WORKER_KEY OPUS_SERVICE_KEY CYFR_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT) do
+          ~w(CYFR_WORKER_KEY OPUS_SERVICE_ID OPUS_SERVICE_KEY OPUS_HOST_URL CYFR_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT) do
       assert env =~ ~r/^#? ?#{knob}=/m, "#{knob} is missing from .env.example"
     end
 
+    # Compose sets five variables in the opus service's environment, over
+    # anything .env.opus sets: the three it interpolates from the project
+    # .env are documented in .env.example above, and the two it fixes in
+    # integration-guide.md's section on running a worker outside Compose.
+    # .env.opus.example documents none of them, and says where they are.
+    environment = list_entries(service_block(read!("docker-compose.yml"), "opus"), "environment")
+
+    assert environment == [
+             "OPUS_SERVICE_ID=${OPUS_SERVICE_ID:-wrk_opus}",
+             "OPUS_SERVICE_KEY=${OPUS_SERVICE_KEY:-}",
+             "OPUS_HOST_URL=${OPUS_HOST_URL:-http://cyfr:${CYFR_HOST_API_PORT:-4300}}",
+             "OPUS_BIND=0.0.0.0",
+             "OPUS_PORT=4200"
+           ]
+
+    set = for entry <- environment, do: entry |> String.split("=", parts: 2) |> hd()
     opus = read!(".env.opus.example")
 
-    for knob <- ~w(OPUS_SERVICE_ID OPUS_SERVICE_KEY OPUS_HOST_URL OPUS_BIND OPUS_PORT) do
-      assert opus =~ ~r/^#? ?#{knob}=/m, "#{knob} is missing from .env.opus.example"
+    for knob <- set do
+      refute opus =~ ~r/^#? ?#{knob}=/m, "#{knob} is documented in .env.opus.example"
     end
+
+    assert opus =~ "project .env"
+
+    guide = read!("integration-guide.md")
+    assert guide =~ ~r/^\| `OPUS_BIND` \|/m and guide =~ ~r/^\| `OPUS_PORT` \|/m
 
     refute opus =~ ~r/CYFR_WORKER_KE[Y]|CYFR_DATABASE_UR[L]|CYFR_CRYPTO_KEYRIN[G]=/
   end

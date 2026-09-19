@@ -1127,17 +1127,20 @@ not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 ### Execution workers
 
 Components run on worker services CYFR reaches over HTTP (the `opus`
-compose service). `.env.opus.example` documents the worker's side.
+compose service). `cyfr init` mints the root into `.env` and derives the
+`opus` service's key from it. Compose hands the worker its id, its key and
+the host API's URL from `.env`; `.env.opus.example` documents the worker's
+own settings, and [Running a worker outside
+Compose](#running-a-worker-outside-compose) what compose sets for it.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CYFR_WORKER_KEY` | — | The root every worker key derives from, 32 random bytes as 64 hex digits (`openssl rand -hex 32`). Only CYFR holds it; without it no worker service can authenticate, so no component runs |
-| `CYFR_WORKERS` | `wrk_local=http://127.0.0.1:4200` | The worker services runs are dispatched to: comma-separated `<service_id>=<url>` entries, tried in order. A service id is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`; the URL is the base URL of the service's listener |
+| `CYFR_WORKER_KEY` | — | The root every worker key derives from, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`). Only CYFR holds it; without it no worker service can authenticate, so no component runs |
+| `CYFR_WORKERS` | `wrk_local=http://127.0.0.1:4200` | The worker services runs are dispatched to: comma-separated `<service_id>=<url>` entries, tried in order. A service id is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`; the URL is the base URL of the service's listener. Compose sets `wrk_opus=http://opus:4200` |
 | `CYFR_HOST_API_BIND` / `CYFR_HOST_API_PORT` | `127.0.0.1` / `4300` | Where CYFR's host API listens for the workers' host calls and exit reports |
-| `OPUS_SERVICE_ID` | `wrk_local` | The worker's service id, the one CYFR lists it under in `CYFR_WORKERS` |
-| `OPUS_SERVICE_KEY` | — | The worker's key, derived from the root for its id: `CYFR_WORKER_KEY=… mix cyfr.worker.key <service_id>` prints it. Required by the `opus` release |
+| `OPUS_SERVICE_ID` | `wrk_local` (compose: `wrk_opus`) | The worker's service id, the one CYFR lists it under in `CYFR_WORKERS` |
+| `OPUS_SERVICE_KEY` | — | The worker's key, derived from the root for its id: `cyfr init` derives it, and `CYFR_WORKER_KEY=… mix cyfr.worker.key <service_id>` prints it. Required by the `opus` release |
 | `OPUS_HOST_URL` | — | The base URL of CYFR's host API as the worker reaches it (compose: `http://cyfr:4300`). Required by the `opus` release |
-| `OPUS_BIND` / `OPUS_PORT` | `127.0.0.1` / `4200` | Where the worker's listener binds |
 | `OPUS_RUNNER_MEMORY_BYTES` | `402653184` (384 MiB) | The memory bound of every runner, 16 MiB to 1 TiB: its VM, every guest's linear memory, its home and the kernel memory charged to it. A runner that reaches it is ended whole and never reused |
 | `OPUS_MEMORY_LIMIT` / `OPUS_CPU_LIMIT` | `4G` / `4` | The `opus` container's limits, read by compose from `.env`: the memory limit holds all eight runner uids at their bound and the service (8 × 384 MiB + 1 GiB) |
 
@@ -1145,15 +1148,46 @@ compose service). `.env.opus.example` documents the worker's side.
 
 Components and tinctures are built on the Locus builds service (the
 `locus-builds` compose service), which CYFR reaches over a signed wire.
-Set both variables or neither: with neither, CYFR builds nothing and
-refuses every build; with one, or a malformed value, it refuses to boot.
-`.env.locus.example` documents the builder's own `LOCUS_BUILDS_*` side.
+Builds are on after `cyfr init`, which writes the compose service's URL and
+mints the key into `.env`. Set both variables or neither: with neither,
+CYFR builds nothing and refuses every build; with one, or a malformed
+value, it refuses to boot. `.env.locus.example` documents the builder's own
+`LOCUS_BUILDS_*` side.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CYFR_LOCUS_BUILDS_URL` | — | The base URL of the builds service's listener (compose: `http://locus-builds:4100`). Naming the compose service makes `cyfr up` start it |
-| `CYFR_LOCUS_BUILDS_KEY` | — | The builds key, 32 random bytes as 64 hex digits (`openssl rand -hex 32`); compose hands the same value to the builder as `LOCUS_BUILDS_KEY` |
+| `CYFR_LOCUS_BUILDS_URL` | — | The base URL of the builds service's listener (compose: `http://locus-builds:4100`, which `cyfr init` writes). Naming the compose service makes `cyfr up` start it |
+| `CYFR_LOCUS_BUILDS_KEY` | — | The builds key, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`); compose hands the same value to the builder as `LOCUS_BUILDS_KEY` |
 | `LOCUS_BUILDS_MEMORY_LIMIT` / `LOCUS_BUILDS_CPU_LIMIT` | `4G` / `2` | The `locus-builds` container's limits, read by compose from `.env`: the memory limit holds `LOCUS_BUILDS_MAX_CONCURRENT` builds at their bound and the service (2 × (1 GiB + 1 GiB)) |
+
+### Running a worker outside Compose
+
+The `cyfr-opus` and `cyfr-locus` images also run without the shipped
+`docker-compose.yml`: on another container platform, or on a host of their own.
+Each release reads its settings from its own environment alone, so it is
+given what compose's `environment:` gives its service besides the settings
+of its own env example (`.env.opus.example`, `.env.locus.example`), and the
+hardening the compose file gives the service: `cap_drop`, `cap_add`,
+`security_opt`, `init`, the read-only root and its tmpfs mounts.
+
+The execution worker takes `OPUS_SERVICE_ID`, `OPUS_SERVICE_KEY` and
+`OPUS_HOST_URL` as `.env.example` documents them, and the two below, which
+compose fixes for its container. CYFR lists the worker in `CYFR_WORKERS`
+under its service id at the URL of this listener, and binds
+`CYFR_HOST_API_BIND` to an address the worker reaches at `OPUS_HOST_URL`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPUS_BIND` | `127.0.0.1` | The address the worker's listener binds, one CYFR reaches. Compose binds every interface, since the container is attached to the worker network alone |
+| `OPUS_PORT` | `4200` | The port the worker's listener binds (compose: `4200`) |
+
+The builds service takes the key compose passes it from `.env`'s
+`CYFR_LOCUS_BUILDS_KEY`; CYFR's `CYFR_LOCUS_BUILDS_URL` names the service's
+listener.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOCUS_BUILDS_KEY` | — | The builds key, 64 hex digits: the same value as `CYFR_LOCUS_BUILDS_KEY`. Required: the builder refuses to start without it |
 
 ### Docker requirement
 
