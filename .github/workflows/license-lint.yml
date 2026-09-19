@@ -1,7 +1,9 @@
 name: License Lint
 
 # Check directory-based licensing: lib/sanctum and test/sanctum use
-# FSL-1.1-Apache-2.0; all other source uses Apache-2.0.
+# FSL-1.1-Apache-2.0; all other source uses Apache-2.0. The builder and
+# worker images are Apache-2.0 alone, so the apps they release reach no FSL
+# file.
 
 on:
   pull_request:
@@ -15,6 +17,9 @@ on:
       - 'tests/fixtures/*.go'
       - 'wit/**'
       - 'LICENSES/**'
+      - 'mix.exs'
+      - 'Dockerfile.locus'
+      - 'Dockerfile.opus'
       - '.github/workflows/license-lint.yml'
   push:
     branches: [main]
@@ -28,6 +33,9 @@ on:
       - 'tests/fixtures/*.go'
       - 'wit/**'
       - 'LICENSES/**'
+      - 'mix.exs'
+      - 'Dockerfile.locus'
+      - 'Dockerfile.opus'
 
 jobs:
   spdx-headers:
@@ -85,3 +93,39 @@ jobs:
             echo "License boundary check failed. Fix the headers above."
             exit 1
           fi
+
+      # The `locus` and `opus` images are labelled Apache-2.0 alone, so what
+      # each releases must be: its release names the contracts and its own
+      # app and nothing else (root mix.exs), its app depends in the umbrella
+      # on the contracts alone, and no file of either app carries the FSL
+      # header. A reach into the control plane is a compile error in the
+      # island's own build (test.yml's independence jobs); this is the same
+      # boundary read as a licence.
+      - name: Assert the Apache-2.0 images release no FSL code
+        run: |
+          set -uo pipefail
+          fail=0
+          for app in locus opus; do
+            file="Dockerfile.$app"
+            if ! grep -qxF 'LABEL org.opencontainers.image.licenses="Apache-2.0"' "$file"; then
+              echo "::error file=$file::the $app image must be labelled Apache-2.0 alone"
+              fail=1
+            fi
+            roster="$(awk -v app="$app" '$0 ~ "^      " app ": \\[$" { inblk = 1; next } inblk && /applications: \[/ { inapps = 1; next } inapps && /\]/ { exit } inapps { sub(/^ +/, ""); sub(/:.*/, ""); print }' mix.exs | sort | tr '\n' ' ')"
+            if [ "$roster" != "cyfr_contracts $app " ]; then
+              echo "::error file=mix.exs::the $app release must hold cyfr_contracts and $app alone, found: ${roster:-nothing}"
+              fail=1
+            fi
+            deps="$(grep -oE '\{:[a-z_]+, in_umbrella: true' "apps/$app/mix.exs" | sed -E 's/^\{:([a-z_]+).*/\1/' | sort -u | tr '\n' ' ')"
+            if [ "$deps" != "cyfr_contracts " ]; then
+              echo "::error file=apps/$app/mix.exs::$app may depend in the umbrella on cyfr_contracts alone, found: ${deps:-nothing}"
+              fail=1
+            fi
+            fsl="$(grep -rlF 'SPDX-License-Identifier: FSL-1.1-Apache-2.0' "apps/$app" apps/cyfr_contracts || true)"
+            if [ -n "$fsl" ]; then
+              echo "::error::FSL-licensed files in what the $app image releases:"
+              echo "$fsl"
+              fail=1
+            fi
+          done
+          exit "$fail"

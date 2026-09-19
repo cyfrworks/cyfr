@@ -15,7 +15,8 @@ on:
       # to any of them must run the Go tests.
       - '.env.example'
       # TestShippedComposePullsTheBuilderWhenBuildsUseIt reads the shipped
-      # compose file's profiles.
+      # compose file's locus-builds profile, with the builds URL
+      # .env.example offers.
       - 'docker-compose.yml'
       - 'tests/fixtures/**'
       - 'seed/aqua/**'

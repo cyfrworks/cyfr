@@ -106,6 +106,33 @@ jobs:
       - name: go test
         run: go test ./... -race
 
+      # The keeper's real-kernel tests start processes under pooled uids and
+      # hold each spawn to a memory bound in a cgroup v2 group of its own, so
+      # they need root and a cgroup namespace whose root is mounted writable:
+      # what the shipped services get from `writable-cgroups=true` (Docker
+      # Engine 28 or later on a cgroup v2 host). As the runner's user above
+      # they skip; here they run as root in a Go container started with the
+      # option, and a skip for want of root or of a bound fails the step.
+      - name: go test as root with writable-cgroups=true (the real kernel)
+        run: |
+          set -euo pipefail
+          version="$(docker version --format '{{.Server.Version}}')"
+          cgroup="$(docker info --format '{{.CgroupVersion}}')"
+          if [ "${version%%.*}" -lt 28 ] || [ "$cgroup" != "2" ]; then
+            echo "::error::Docker Engine $version on cgroup v$cgroup: writable-cgroups=true needs Docker Engine 28 or later on a cgroup v2 host"
+            exit 1
+          fi
+          go_version="$(sed -n 's/^go //p' go.mod)"
+          docker run --rm --security-opt writable-cgroups=true \
+            -v "$GITHUB_WORKSPACE:/src:ro" -w /src/apps/spawn \
+            -e GOFLAGS=-buildvcs=false \
+            "golang:$go_version" \
+            go test ./... -race -count=1 -v 2>&1 | tee "$RUNNER_TEMP/spawn-kernel.log"
+          if grep -E 'needs root|no memory bound can be enforced here' "$RUNNER_TEMP/spawn-kernel.log"; then
+            echo "::error::a real-kernel test skipped for want of root or of a memory bound"
+            exit 1
+          fi
+
       - name: Static build
         run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-spawn" .
 

@@ -20,14 +20,14 @@ jobs:
     uses: ./.github/workflows/test.yml
 
   # The app image, the worker image every deploy pulls and the builder
-  # image a `builder`-profile deploy pulls: a project `cyfr init` writes
-  # carries no sources to build them from.
+  # image a `locus-builds`-profile deploy pulls: a project `cyfr init`
+  # writes carries no sources to build them from.
   build:
     needs: verify
     if: github.repository == 'cyfrworks/cyfr'
     strategy:
       matrix:
-        image: [cyfr, cyfr-opus, cyfr-builder]
+        image: [cyfr, cyfr-opus, cyfr-locus]
         platform: [linux/amd64, linux/arm64]
         include:
           - platform: linux/amd64
@@ -38,8 +38,8 @@ jobs:
             file: Dockerfile
           - image: cyfr-opus
             file: Dockerfile.opus
-          - image: cyfr-builder
-            file: Dockerfile.builder
+          - image: cyfr-locus
+            file: Dockerfile.locus
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -102,7 +102,7 @@ jobs:
     needs: build
     strategy:
       matrix:
-        image: [cyfr, cyfr-opus, cyfr-builder]
+        image: [cyfr, cyfr-opus, cyfr-locus]
     runs-on: ubuntu-latest
     steps:
       - name: Log in to GHCR

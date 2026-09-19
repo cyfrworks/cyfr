@@ -21,6 +21,9 @@ on:
       - 'Caddyfile'
       - 'docker-entrypoint.sh'
       - '.env.example'
+      # The services' env examples: the stack shape test reads them and the
+      # scaffold tarball ships them.
+      - '.env.*.example'
       - 'wit/**'
       - 'seed/**'
       # Surfaces the vocabulary gate scans: it cannot turn red on a change it
@@ -51,6 +54,9 @@ on:
       - 'Caddyfile'
       - 'docker-entrypoint.sh'
       - '.env.example'
+      # The services' env examples: the stack shape test reads them and the
+      # scaffold tarball ships them.
+      - '.env.*.example'
       - 'wit/**'
       - 'seed/**'
       # Surfaces the vocabulary gate scans: it cannot turn red on a change it
@@ -122,9 +128,11 @@ jobs:
         with:
           path: ~/.cargo/bin/cargo-component
           key: ${{ runner.os }}-cargo-component-0.21.1
-      # Locus's compile-path tests are tagged :requires_cargo_component and
-      # excluded when the binary is absent — install it so they actually run.
-      # The runner ships rustup; only the wasm targets and the tool are added.
+      # The compile-path tests — Locus's own and the control plane's build
+      # over the wire to the real builds service (test/integration/locus) —
+      # are tagged :requires_cargo_component and excluded when the binary is
+      # absent; install it so they actually run. The runner ships rustup;
+      # only the wasm targets and the tool are added.
       - name: Install cargo-component
         run: |
           rustup target add wasm32-wasip1 wasm32-wasip2
@@ -246,6 +254,46 @@ jobs:
           mix compile --warnings-as-errors
           mix test
 
+  locus-independence:
+    name: Locus compiles and tests from its declared apps alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '29'
+          elixir-version: '1.20.3'
+      - name: Cache deps
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-locus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-locus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Install dependencies
+        run: mix deps.get
+      # The builder releases without the control plane: a checkout holding
+      # only the lock, the contracts, Locus, the fetched deps, the WIT tree
+      # (`Compendium.WITSource` embeds it), the vector files its wire and
+      # spawner tests read (tests/fixtures) and the locus release's runtime
+      # configuration (config/locus_runtime.exs, which its config test
+      # evaluates) compiles it with warnings as errors and runs its suite,
+      # against no database. Unlike Opus's, Locus's vector tests fail
+      # rather than skip without the vector file.
+      - name: Compile and test Locus from its declared apps alone
+        run: |
+          set -euo pipefail
+          island="$RUNNER_TEMP/locus-island"
+          mkdir -p "$island/apps" "$island/config" "$island/tests"
+          cp mix.lock "$island/"
+          cp -R apps/cyfr_contracts apps/locus "$island/apps/"
+          cp -R deps wit "$island/"
+          cp -R tests/fixtures "$island/tests/"
+          cp config/locus_runtime.exs "$island/config/"
+          cd "$island/apps/locus"
+          mix compile --warnings-as-errors
+          mix test
+
   s3-minio:
     name: S3 adapter vs MinIO
     runs-on: ubuntu-latest
@@ -302,42 +350,81 @@ jobs:
         run: docker logs minio
 
   builder-image:
-    name: Builder image (lock lifecycle, diagnostics, tincture, build isolation)
+    name: Builder image (lock lifecycle, isolation, memory bound, headroom)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # The service bounds every build with a cgroup of its own, which needs
+      # the security option writable-cgroups=true: Docker Engine 28 or later
+      # on a cgroup v2 host. Without either every case below fails for a
+      # reason the suite does not name, so this names it first.
+      - name: Docker Engine 28 or later on cgroup v2
+        run: |
+          set -euo pipefail
+          version="$(docker version --format '{{.Server.Version}}')"
+          cgroup="$(docker info --format '{{.CgroupVersion}}')"
+          echo "Docker Engine $version on cgroup v$cgroup"
+          fail=0
+          if [ "${version%%.*}" -lt 28 ]; then
+            echo "::error::Docker Engine $version is older than 28: writable-cgroups=true, which bounds every build, needs Docker Engine 28 or later"
+            fail=1
+          fi
+          if [ "$cgroup" != "2" ]; then
+            echo "::error::this runner's Docker Engine runs on cgroup v$cgroup: writable-cgroups=true, which bounds every build, needs a cgroup v2 host"
+            fail=1
+          fi
+          exit "$fail"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build the builder image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          file: Dockerfile.builder
+          file: Dockerfile.locus
           load: true
-          tags: cyfr-builder:smoke
-          cache-from: type=gha,scope=builder
-          cache-to: type=gha,scope=builder,mode=max
-      # docker-compose.yml's builder service with its own settings (layered
-      # with tests/builder-image/compose.builder.yml for the image and a
-      # loopback port). Builds fetch from crates.io and the npm registry.
+          tags: cyfr-locus:smoke
+          cache-from: type=gha,scope=locus
+          cache-to: type=gha,scope=locus,mode=max
+      # docker-compose.yml's locus-builds service with its own settings
+      # (layered with tests/builder-image/compose.locus-builds.yml for the
+      # image and a loopback port), every request signed on the build wire
+      # under a key of the run's own. Builds fetch from crates.io and the
+      # npm registry.
       - name: Build a component through its lock lifecycle, and a tincture
-        run: python3 scripts/builder-smoke.py cyfr-builder:smoke
+        run: python3 scripts/builder-smoke.py cyfr-locus:smoke
 
       # Under the same settings: cyfr-spawn holds exactly SETUID|SETGID|KILL
       # and the release none, with no distribution listener, and the release
       # refuses to serve without cyfr-spawn; a build runs under a pooled uid
       # in a 0700 home, cannot read or signal the release (whose environ
-      # holds the token), list the home root or read a concurrent build's
-      # tree; a daemon a build.rs starts is gone, with the home, when the
-      # response arrives; and with a pool of one uid nothing a build leaves
-      # outside its home (tests/fixtures/residue-canary.go) reaches the next.
-      - name: Build isolation and uid reuse
-        run: python3 tests/builder-image/isolation.py cyfr-builder:smoke
+      # holds the builds key), list the home root or read a concurrent
+      # build's tree; a daemon a build.rs starts is gone, with the home, when
+      # the response arrives; with a pool of one uid nothing a build leaves
+      # outside its home (tests/fixtures/residue-canary.go) reaches the next;
+      # and without writable-cgroups=true every build is answered
+      # `unavailable`, naming the option, and no build's uid ever runs.
+      - name: Build isolation, uid reuse, and the refusal without the option
+        run: python3 tests/builder-image/isolation.py cyfr-locus:smoke
+
+      # Every case: the keeper's own bound in the running service, and a
+      # hostile JavaScript, Rust build.rs, process-tree and home-filling
+      # build each ended at its 1 GiB bound as the wire's `memory` class
+      # with no process or home of its uid left, a sibling build completing,
+      # and the release untouched.
+      - name: Every build's memory bound
+        run: python3 tests/builder-image/memory.py cyfr-locus:smoke
+
+      # The service's own memory, idle, answering a largest result, and
+      # answering two beside two builds at their bounds, fits in what the
+      # container's limit (LOCUS_BUILDS_MEMORY_LIMIT) leaves beside the
+      # concurrent builds' bounds.
+      - name: The container's limit holds the builds and the service
+        run: python3 tests/builder-image/headroom.py cyfr-locus:smoke
 
       # The same scan docker.yml runs before publishing the builder image.
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: cyfr-builder:smoke
+          image-ref: cyfr-locus:smoke
           format: table
           exit-code: '1'
           severity: CRITICAL,HIGH
@@ -345,10 +432,30 @@ jobs:
           trivyignores: .trivyignore.yaml
 
   worker-image:
-    name: Worker image (runner kills, settlement, cleanup)
+    name: Worker image (runner kills, memory bound, settlement, cleanup)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # The service bounds every runner with a cgroup of its own, which needs
+      # the security option writable-cgroups=true: Docker Engine 28 or later
+      # on a cgroup v2 host. Without either every case below fails for a
+      # reason the suite does not name, so this names it first.
+      - name: Docker Engine 28 or later on cgroup v2
+        run: |
+          set -euo pipefail
+          version="$(docker version --format '{{.Server.Version}}')"
+          cgroup="$(docker info --format '{{.CgroupVersion}}')"
+          echo "Docker Engine $version on cgroup v$cgroup"
+          fail=0
+          if [ "${version%%.*}" -lt 28 ]; then
+            echo "::error::Docker Engine $version is older than 28: writable-cgroups=true, which bounds every runner, needs Docker Engine 28 or later"
+            fail=1
+          fi
+          if [ "$cgroup" != "2" ]; then
+            echo "::error::this runner's Docker Engine runs on cgroup v$cgroup: writable-cgroups=true, which bounds every runner, needs a cgroup v2 host"
+            fail=1
+          fi
+          exit "$fail"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build the worker image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -368,10 +475,16 @@ jobs:
       # plane cut with the attempt settling at its deadline, a child
       # admitted after its parent's kill that never runs, a stream the
       # control plane stops answering, a tainted runner never reassigned,
-      # and the queue age of a fresh runner; each case observed as the
-      # service detects it, as the control plane records it and as the
-      # container's processes, uids, homes and CPU show it.
-      - name: Runner kills, settlement and cleanup
+      # and the queue age of a fresh runner; and memory (memory.py's cases):
+      # every runner in a cgroup of its own at the service's bound, a guest
+      # holding ten 64 MiB memories ended with its runner at exactly that
+      # bound while the container's limit is untouched, the exit reported,
+      # the uid emptied and scrubbed before its reuse and the sibling
+      # completing, and without writable-cgroups=true no runner process ever
+      # starting. Each case observed as the service detects it, as the
+      # control plane records it and as the container's processes, uids,
+      # homes, groups, memory and CPU show it.
+      - name: Runner kills, memory bound, settlement and cleanup
         run: python3 tests/worker-image/runners.py cyfr-opus:smoke
 
       # The same scan docker.yml runs before publishing the worker image.
@@ -668,7 +781,7 @@ jobs:
       - name: Tier A/B fossil patterns must be absent
         run: |
           set -uo pipefail
-          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.node Dockerfile.builder docker-entrypoint.sh .env.example .gitignore .dockerignore README.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
+          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.node Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.bridge.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
           excl=':(exclude)docs/** :(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
           fail=0
           for p in \
