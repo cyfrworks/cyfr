@@ -226,12 +226,15 @@ defmodule Opus.Keeper.Direct do
 
   # A port's child leads its own process group, so the group signal
   # reaches what the runner started; the direct one covers a child that
-  # does not.
+  # does not. The group is named after `--`: procps-ng's kill, Linux's,
+  # reads a negative number after the signal as nothing it can signal and
+  # still exits 0, and only past `--` as a process group, which BSD's
+  # kill reads the same way.
   defp signal(nil, _signal), do: :ok
 
   defp signal(os_pid, signal) do
-    for target <- ["-#{os_pid}", "#{os_pid}"] do
-      System.cmd("kill", ["-#{signal}", target], stderr_to_stdout: true)
+    for target <- [["--", "-#{os_pid}"], ["#{os_pid}"]] do
+      System.cmd("kill", ["-#{signal}" | target], stderr_to_stdout: true)
     end
 
     :ok
