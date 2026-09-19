@@ -23,7 +23,9 @@ defmodule Opus.RunnerProcess do
 
   Guest data never crosses here: control bytes are frames, and the
   runner's own log lines, which the keeper relays, are logged under the
-  runner's id.
+  runner's id. An `assign` carries the attempt's opened keys, so its
+  status and a crash report show only the size of what it holds for the
+  channel.
   """
 
   use GenServer
@@ -126,6 +128,27 @@ defmodule Opus.RunnerProcess do
   def terminate(_reason, state) do
     _ = release_runner(state, 0)
     :ok
+  end
+
+  # What is held until the channel attaches is an `assign`, whose line
+  # carries the attempt's opened keys, and so is the call that sent it: no
+  # status or crash report shows more of either than its size, and the
+  # debug log, which holds both, is left out.
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, %{pending: pending} = state} ->
+        {:state, %{state | pending: {:redacted, IO.iodata_length(pending)}}}
+
+      {:message, {:send, line}} ->
+        {:message, {:send, {:redacted, byte_size(line)}}}
+
+      {:log, _log} ->
+        {:log, []}
+
+      other ->
+        other
+    end)
   end
 
   defp on_event({:spawned, os_pid}, state), do: %{state | os_pid: os_pid}

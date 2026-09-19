@@ -485,6 +485,39 @@ defmodule Opus.Keeper.Spawn do
     :ok
   end
 
+  # Control bytes held for a relay that has not attached are an `assign`,
+  # which carries an attempt's opened keys, and so is the call that sent
+  # them; an attach token admits a relay as its runner. No status or crash
+  # report shows more of them than their size, and the debug log, which
+  # holds them, is left out.
+  @impl GenServer
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, %{requests: requests} = state} ->
+        {:state,
+         %{
+           state
+           | requests: Map.new(requests, fn {ref, entry} -> {ref, redact(entry)} end),
+             tokens: map_size(state.tokens)
+         }}
+
+      {:message, {:send, ref, data}} ->
+        {:message, {:send, ref, {:redacted, byte_size(data)}}}
+
+      {:message, {:attach, _token, conn}} ->
+        {:message, {:attach, :redacted, conn}}
+
+      {:log, _log} ->
+        {:log, []}
+
+      other ->
+        other
+    end)
+  end
+
+  defp redact(entry),
+    do: %{entry | token: :redacted, pending: {:redacted, IO.iodata_length(entry.pending)}}
+
   # ————— the keeper's lines —————
 
   defp on_line("", state), do: state

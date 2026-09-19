@@ -184,6 +184,38 @@ defmodule Opus.SpawnKeeperTest do
     :gen_tcp.close(relay)
   end
 
+  test "an assign held for a relay that has not attached shows no key in either status", %{
+    spawner: spawner,
+    name: name
+  } do
+    keys = %{
+      attempt: attempt(),
+      call: :crypto.strong_rand_bytes(32),
+      seal: :crypto.strong_rand_bytes(32)
+    }
+
+    assign = %{type: :assign, assignment: "token", input: "{}", keys: keys}
+
+    # The handle holds the assign until its channel attaches.
+    handle = start_handle!(name)
+    %{"id" => id} = request(spawner)
+    reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: String.duplicate("aa", 16), pid: 1})
+    assert :ok = RunnerProcess.send_message(handle, assign)
+    refute_received {RunnerProcess, ^handle, :ready}
+
+    # The client holds bytes sent before the relay attached.
+    spec = %{runner: "runner_2", argv: ["/app/bin/opus", "start"], env: @spec_env, server: name}
+    {:ok, channel, []} = Spawn.spawn(spec)
+    _ = request(spawner)
+    assert :ok = Spawn.send(channel, RunnerControl.encode(assign))
+
+    for process <- [handle, name], key <- [keys.call, keys.seal] do
+      status = :erlang.term_to_binary(:sys.get_status(process))
+      assert :binary.match(status, key) == :nomatch
+      assert :binary.match(status, Base.encode16(key, case: :lower)) == :nomatch
+    end
+  end
+
   test "a release carries its grace, and a signal-ended runner is reported so", %{
     spawner: spawner,
     name: name,
