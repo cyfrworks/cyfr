@@ -49,6 +49,31 @@ defmodule Cyfr.Execution.Attempt do
   `Cyfr.Execution.Close` in this process with the full set, gives back what
   the run held, tells the waiter the result, answers the runner and stops.
 
+  ## The execution slot
+
+  `Cyfr.Slots.acquire/4` blocks its caller for as long as the run is
+  queued, so the attempt does not call it: a slot holder, a process linked
+  to the attempt, waits for the slot and then holds it for the attempt,
+  and the attempt answers `take_slot/3` when the holder reports. While its
+  run is queued the attempt therefore hears everything it hears at any
+  other time: its waiter's exit, a row that ended (`stop_ended/1`,
+  `stop_unclosed/2`), its owner check and its supervisor's stop. Whatever
+  stops the attempt ends the holder, and `Cyfr.Slots` takes a dead process
+  out of its queue or takes its slot back, whichever it had, so the slot
+  goes back once on every path and a run that leaves its wait never takes
+  one.
+
+  A slot is waited for, and a granted one kept, only by a run that is
+  still live. The attempt reads its row before it waits, so a row that
+  ended before the attempt was registered is seen, and again when the
+  holder reports the grant, where one whose row ended while it waited
+  stops: `take_slot/3` answers `:ok` only for a run whose start may
+  follow. A row that ends after that answer is told to the attempt by
+  whoever ended it (`stop_ended/1`), and the claim its runner's attach
+  needs (`Arca.ExecutionAttempts.claim/4`) is refused by the row itself.
+
+  ## Stopping
+
   A run whose runner was not started is closed failed (`refuse/2`); one
   whose runner attached is never refused, since the start it answers for
   happened.
@@ -56,9 +81,11 @@ defmodule Cyfr.Execution.Attempt do
   It stops without closing the run, sending nothing it held and giving
   back what the run held, when a call finds the attempt no longer holds its
   row (another attempt took it over, it was cancelled or it lapsed), when
+  its row was ended before a runner attached (`stop_ended/1`), when
   its runner is gone (`stop_unclosed/2`), and when its waiter exits. A
   waiter that exits kills the run: the attempt asks its worker service to
-  kill the runner (`c:Cyfr.WorkerAPI.kill/1`), counts a kill of a runner
+  kill the runner (`c:Cyfr.WorkerAPI.kill/1`), unless the run is still
+  waiting for its slot and so has none, counts a kill of a runner
   that had attached against the athanor (`note_unreaped/2`), and lapses
   its row (`Cyfr.Execution.Lapse`). A waiter whose attempt stops without closing
   closes the run lost (`Cyfr.Execution.Close.lost/1`), which writes nothing
@@ -71,9 +98,10 @@ defmodule Cyfr.Execution.Attempt do
 
   A stop by its supervisor runs to the end: a waiter already gone is
   reacted to as above, whether or not its exit was handled yet, and what
-  the run held goes back. A process killed outright gives back its slots
-  through their monitors, and its charge row through the reservation
-  sweep.
+  the run held goes back. An attempt killed outright takes its slot holder
+  with it, so its execution slot or its place in the queue goes back
+  through the slots' monitor, its invoke-budget slot through its guard's,
+  and its charge row through the reservation sweep.
 
   ## A boot that does not hold the control plane
 
@@ -255,11 +283,17 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   @doc """
-  Take the run's execution slot of `class` in this attempt, keyed by its
+  Take the run's execution slot of `class` for this attempt, keyed by its
   athanor, waiting at most `timeout` ms (`Cyfr.Slots.acquire/4` on
-  `Cyfr.Execution.Slots`). Answers `:ok` when the attempt holds it; a
-  refusal closes the run failed with the refusal's sentence
-  (`Cyfr.Slots.refusal/1`) and answers `:closed`.
+  `Cyfr.Execution.Slots`, in the attempt's slot holder). Answers `:ok`
+  when the attempt holds the slot and its row, read once the slot was
+  granted, is still its to run: the caller may start the run. A refusal
+  closes the run failed with the refusal's sentence
+  (`Cyfr.Slots.refusal/1`) and answers `:closed`, as does a row that
+  cannot be read. An attempt whose row had ended when it was asked, that
+  stops while the run is queued, or whose row ended by the time the slot
+  was granted, answers `:closed` without closing the run, and holds no
+  slot.
   """
   @spec take_slot(pid(), Slots.class(), timeout()) :: :ok | :closed
   def take_slot(pid, class, timeout) when is_pid(pid) do
@@ -267,6 +301,25 @@ defmodule Cyfr.Execution.Attempt do
   catch
     :exit, _reason -> :closed
   end
+
+  @doc """
+  Tell the open attempt of `execution_id`, if there is one, that its row
+  was ended by the caller (a cancel, a parent's cascade). Nothing is
+  waited for: whoever ends a row is never held up by what its attempt is
+  doing.
+
+  The row decides, not the caller. An attempt no runner has attached to
+  re-reads its row and, when the run is no longer its to run, stops
+  without closing it and gives back what the run held: one still queued
+  for its slot leaves the queue, and one that holds its slot gives it
+  back, leaving a runner its start may have reached to its waiter's kill.
+  An attempt whose runner attached is left to that runner's exit report
+  (`stop_unclosed/2`). One whose row is still live, or cannot be read, is
+  left as it is; a queued one re-reads its row when its slot is granted.
+  """
+  @spec stop_ended(String.t()) :: :ok
+  def stop_ended(execution_id) when is_binary(execution_id),
+    do: GenServer.cast(via(execution_id), :stop_ended)
 
   @doc """
   Close the run of the attempt `pid` failed with `sentence`, for a run
@@ -529,14 +582,22 @@ defmodule Cyfr.Execution.Attempt do
 
   defp take_over_invoke(false, _authority, _owner), do: false
 
+  # A row can end before its attempt is registered, where no `stop_ended/1`
+  # finds it: a parent's cascade waits on the lock its child's admission
+  # holds, and lands as that admission commits. So the row is read before
+  # the wait as well as at the grant, and every row that ends later finds a
+  # registered attempt to tell. A row that cannot be read here is read at
+  # the grant.
+  #
+  # The call is answered when the slot holder reports (`handle_info/2`), or
+  # by whatever stops the attempt first (`release_holds/1`).
   @impl true
-  def handle_call({:take_slot, class, timeout}, _from, state) do
-    case Slots.acquire(@slots, state.ctx.athanor_id, class, wait_ms: timeout) do
-      {:ok, ref} ->
-        {:reply, :ok, %{state | slot: ref}}
-
-      {:error, reason} ->
-        refuse_run(state, Slots.refusal(reason))
+  def handle_call({:take_slot, class, timeout}, from, %__MODULE__{slot: nil} = state) do
+    if row_live(state) == false do
+      {:stop, :normal, :closed, release_holds(state)}
+    else
+      holder = hold_slot(state.ctx.athanor_id, class, timeout)
+      {:noreply, %{state | slot: {:waiting, holder, from}}}
     end
   end
 
@@ -653,6 +714,38 @@ defmodule Cyfr.Execution.Attempt do
     end
   end
 
+  # A runner that attached was started: its exit report stops the attempt.
+  @impl true
+  def handle_cast(:stop_ended, %__MODULE__{claimed_by: runner} = state) when is_binary(runner),
+    do: {:noreply, state}
+
+  def handle_cast(:stop_ended, state) do
+    case row_live(state) do
+      true ->
+        {:noreply, state}
+
+      false ->
+        {:stop, :normal, release_holds(state)}
+
+      :unavailable ->
+        Logger.error(
+          "[Cyfr.Execution.Attempt] #{state.execution_id} was told its row ended, and could " <>
+            "not read it"
+        )
+
+        {:noreply, state}
+    end
+  end
+
+  def handle_cast(message, state) do
+    Logger.error(
+      "[Cyfr.Execution.Attempt] #{state.execution_id} dropped an unknown cast " <>
+        inspect(message_shape(message))
+    )
+
+    {:noreply, state}
+  end
+
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %__MODULE__{owner: ref} = state) do
     waiter_gone(state)
@@ -666,6 +759,30 @@ defmodule Cyfr.Execution.Attempt do
     else
       {:stop, :normal, release_holds(state)}
     end
+  end
+
+  def handle_info({:slot, holder, {:ok, _ref}}, %__MODULE__{slot: {:waiting, holder, _}} = state),
+    do: granted(state)
+
+  def handle_info(
+        {:slot, holder, {:error, reason}},
+        %__MODULE__{slot: {:waiting, holder, _}} = state
+      ),
+      do: refuse_slot(state, Slots.refusal(reason))
+
+  # The holder reports before it ends, and the attempt ends it before it
+  # stops, so an exit seen here is a holder that died of something else:
+  # the slots took back whatever it had.
+  def handle_info({:EXIT, holder, _reason}, %__MODULE__{slot: {:waiting, holder, _}} = state),
+    do: refuse_slot(state, Slots.refusal(:unavailable))
+
+  def handle_info({:EXIT, holder, reason}, %__MODULE__{slot: {:held, holder}} = state) do
+    Logger.error(
+      "[Cyfr.Execution.Attempt] #{state.execution_id}'s slot holder ended (" <>
+        "#{inspect(reason_shape(reason))}): the run goes on without its execution slot"
+    )
+
+    {:noreply, %{state | slot: nil}}
   end
 
   def handle_info(msg, state) do
@@ -725,12 +842,94 @@ defmodule Cyfr.Execution.Attempt do
   # ---------------------------------------------------------------------------
 
   # What the run held while open goes back when the attempt stops: its
-  # execution slot, its invoke-budget slot and its charge row.
+  # execution slot or its place in the queue for one, its invoke-budget
+  # slot and its charge row. The attempt stops right after, so each goes
+  # back once.
   defp release_holds(state) do
-    if state.slot, do: Slots.release(@slots, state.slot)
+    give_back_slot(state.slot)
     if state.held_invoke, do: Sanctum.Authority.release_invoke(state.authority)
     if state.charge, do: give_back_charge(state)
     %{state | slot: nil, held_invoke: false, charge: nil}
+  end
+
+  # The process that waits for the run's execution slot and then holds it
+  # (the moduledoc's "The execution slot"). It is linked, so it ends with an
+  # attempt that is killed, and it watches the attempt, so it ends with one
+  # that stopped any other way; it reports once, before it holds or ends.
+  defp hold_slot(key, class, timeout) do
+    attempt = self()
+
+    spawn_link(fn ->
+      answer = Slots.acquire(@slots, key, class, wait_ms: timeout)
+      send(attempt, {:slot, self(), answer})
+
+      with {:ok, _ref} <- answer do
+        watch = Process.monitor(attempt)
+
+        receive do
+          {:DOWN, ^watch, :process, ^attempt, _reason} -> :ok
+        end
+      end
+    end)
+  end
+
+  # Ending the holder gives back whichever it had: `Cyfr.Slots` takes a dead
+  # process out of its queue, and takes back the slot it held or was handed
+  # meanwhile. A call still waiting for the slot is answered.
+  defp give_back_slot(nil), do: :ok
+  defp give_back_slot({:held, holder}), do: end_holder(holder)
+
+  defp give_back_slot({:waiting, holder, from}) do
+    end_holder(holder)
+    GenServer.reply(from, :closed)
+  end
+
+  defp end_holder(holder) do
+    Process.unlink(holder)
+    Process.exit(holder, :kill)
+    :ok
+  end
+
+  # A granted slot is kept only by a run that may still start: a boot that
+  # lost the control plane starts nothing, and a row that ended while the
+  # run was queued (a cancel, its parent's cascade, a lapse) is read here,
+  # before `take_slot/3` is answered `:ok`.
+  defp granted(%__MODULE__{slot: {:waiting, holder, from}} = state) do
+    case Cyfr.ControlPlane.owner?() and row_live(state) do
+      true ->
+        GenServer.reply(from, :ok)
+        {:noreply, %{state | slot: {:held, holder}}}
+
+      false ->
+        {:stop, :normal, release_holds(state)}
+
+      :unavailable ->
+        refuse_slot(state, "the execution could not be read before its start")
+    end
+  end
+
+  # A run refused its slot was not started: it is closed failed, which
+  # answers the `take_slot/3` call with what else the run held.
+  defp refuse_slot(state, sentence) do
+    {:stop, :normal, :closed, state} = refuse_run(state, sentence)
+    {:stop, :normal, state}
+  end
+
+  # Whether the run is still this attempt's to start: its execution points
+  # at this attempt, running at its fence. Every write that ends a run ends
+  # its attempt row in the same transaction, so one read decides.
+  defp row_live(state) do
+    case Arca.ExecutionAttempts.current(state.ctx.athanor_id, state.execution_id) do
+      %Arca.Schemas.ExecutionAttempt{attempt: attempt, fence: fence, state: "running"}
+      when attempt == state.attempt and fence == state.fence ->
+        true
+
+      {:error, _reason} ->
+        :unavailable
+
+      _ended ->
+        false
+    end
   end
 
   # A charge row the store cannot give back now is reclaimed by the
@@ -754,6 +953,9 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   defp kill_runner(%__MODULE__{worker: nil}), do: :ok
+
+  # A run still waiting for its slot was never started: it has no runner.
+  defp kill_runner(%__MODULE__{slot: {:waiting, _holder, _from}}), do: :ok
 
   defp kill_runner(state) do
     killed = Cyfr.Execution.WorkerClient.kill(state.worker, state.execution_id)
