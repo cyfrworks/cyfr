@@ -113,9 +113,9 @@ func TestImagesFromCompose(t *testing.T) {
   caddy:
     image: caddy:2-alpine
     profiles: ["tls"]
-  builder:
-    image: ghcr.io/cyfrworks/cyfr-builder:latest
-    profiles: ["builder"]
+  locus-builds:
+    image: ghcr.io/cyfrworks/cyfr-locus:latest
+    profiles: ["locus-builds"]
   mcp-bridge:
     build:
       context: .
@@ -129,8 +129,8 @@ func TestImagesFromCompose(t *testing.T) {
 		want     []string
 	}{
 		{nil, []string{"ghcr.io/cyfrworks/cyfr:latest"}},
-		{[]string{"builder"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-builder:latest"}},
-		{[]string{"tls", "builder"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-builder:latest"}},
+		{[]string{"locus-builds"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
+		{[]string{"tls", "locus-builds"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 		{[]string{"other"}, []string{"ghcr.io/cyfrworks/cyfr:latest"}},
 	} {
 		got := imagesFromCompose(path, tc.profiles)
@@ -153,11 +153,15 @@ func TestComposeProfilesFollowTheProjectEnv(t *testing.T) {
 	}{
 		{"", nil},
 		{"CYFR_BEHIND_PROXY=true\n", []string{"tls"}},
-		{"CYFR_BUILDER_URL=http://builder:4100\n", []string{"builder"}},
-		{"CYFR_BEHIND_PROXY=yes\nCYFR_BUILDER_URL=\"http://builder:4100\"\n", []string{"tls", "builder"}},
-		{"# CYFR_BUILDER_URL=http://builder:4100\n", nil},
-		{"CYFR_BUILDER_URL=\n", nil},
-		{"CYFR_BUILDER_URL=https://builds.example.com\n", nil},
+		{"CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n", []string{"locus-builds"}},
+		{"CYFR_BEHIND_PROXY=yes\nCYFR_LOCUS_BUILDS_URL=\"http://locus-builds:4100\"\n", []string{"tls", "locus-builds"}},
+		{"# CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n", nil},
+		{"CYFR_LOCUS_BUILDS_URL=\n", nil},
+		{"CYFR_LOCUS_BUILDS_URL=https://builds.example.com\n", nil},
+		// The retired variable and host start nothing: a project still
+		// carrying them builds nothing until it names the builds service.
+		{"CYFR_" + "BUILDER_URL=http://builder:4100\n", nil},
+		{"CYFR_LOCUS_BUILDS_URL=http://builder:4100\n", nil},
 	}
 	for _, tc := range cases {
 		if err := os.WriteFile(path, []byte(tc.body), 0644); err != nil {
@@ -171,24 +175,41 @@ func TestComposeProfilesFollowTheProjectEnv(t *testing.T) {
 		t.Errorf("a missing .env selects %v", got)
 	}
 
-	if got := profileArgs([]string{"tls", "builder"}); strings.Join(got, " ") != "--profile tls --profile builder" {
+	if got := profileArgs([]string{"tls", "locus-builds"}); strings.Join(got, " ") != "--profile tls --profile locus-builds" {
 		t.Errorf("profileArgs = %v", got)
 	}
 }
 
 // The shipped compose file and .env.example: a project that points builds at
-// the builder service pulls and starts the builder image.
+// the locus-builds service pulls and starts the cyfr-locus image, and the
+// value .env.example offers is the one that does.
 func TestShippedComposePullsTheBuilderWhenBuildsUseIt(t *testing.T) {
+	const image = "ghcr.io/cyfrworks/cyfr-locus:latest"
 	compose := filepath.Join("..", "..", "..", "docker-compose.yml")
-	if got := imagesFromCompose(compose, nil); slices.Contains(got, "ghcr.io/cyfrworks/cyfr-builder:latest") {
-		t.Errorf("the builder image is pulled without its profile: %v", got)
+	if got := imagesFromCompose(compose, nil); slices.Contains(got, image) {
+		t.Errorf("the builds image is pulled without its profile: %v", got)
 	}
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
+	if err != nil {
+		t.Fatalf("read shipped .env.example: %v", err)
+	}
+	var offered string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "# CYFR_LOCUS_BUILDS_URL=") {
+			offered = strings.TrimPrefix(line, "# ")
+		}
+	}
+	if offered == "" {
+		t.Fatal(".env.example offers no CYFR_LOCUS_BUILDS_URL")
+	}
+
 	env := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(env, []byte("CYFR_BUILDER_URL=http://builder:4100\n"), 0644); err != nil {
+	if err := os.WriteFile(env, []byte(offered+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got := imagesFromCompose(compose, composeProfiles(env)); !slices.Contains(got, "ghcr.io/cyfrworks/cyfr-builder:latest") {
-		t.Errorf("a project using the builder service does not pull its image: %v", got)
+	if got := imagesFromCompose(compose, composeProfiles(env)); !slices.Contains(got, image) {
+		t.Errorf("a project using the builds service (%s) does not pull its image: %v", offered, got)
 	}
 }
 

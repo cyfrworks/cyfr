@@ -22,10 +22,10 @@ defmodule Cyfr.Test.ScriptedBuilder do
   the vector's own, not one derived here, so a client that derived another
   is refused.
 
-  `start!/1`, from a test's `setup`, starts it for the test, points this
-  server's builds service at it (`config :cyfr, :locus_builds_url` and
-  `:locus_builds_key`, restored when the test ends) and starts
-  `Compendium.Builds.TaskSupervisor` where the application has not.
+  `start!/1`, from a test's `setup`, starts it for the test and points
+  this server's builds service at it (`config :cyfr, :locus_builds_url`
+  and `:locus_builds_key`, restored when the test ends); the builds run
+  under the application's `Compendium.Builds.TaskSupervisor`.
   `client_key:` configures this server with another key than the
   service's.
 
@@ -82,9 +82,6 @@ defmodule Cyfr.Test.ScriptedBuilder do
   @doc "Start the builder for the calling test and point this server's builds at it."
   @spec start!(keyword()) :: pid()
   def start!(opts \\ []) do
-    if Process.whereis(@supervisor) == nil,
-      do: ExUnit.Callbacks.start_supervised!({Task.Supervisor, name: @supervisor})
-
     pid = ExUnit.Callbacks.start_supervised!({__MODULE__, opts})
     configure!(url(), Keyword.get(opts, :client_key, key()))
     pid

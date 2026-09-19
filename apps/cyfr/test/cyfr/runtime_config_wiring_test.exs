@@ -142,6 +142,115 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
+  describe "the Locus builds service" do
+    @builds_key :binary.copy(<<0xB1>>, 32)
+
+    test "neither variable set: this server builds nothing" do
+      with_env(%{"CYFR_LOCUS_BUILDS_URL" => nil, "CYFR_LOCUS_BUILDS_KEY" => nil}, fn ->
+        cyfr = read_prod_config!()[:cyfr]
+        assert cyfr[:locus_builds_url] == nil
+        assert cyfr[:locus_builds_key] == nil
+      end)
+    end
+
+    test "both set: the URL without its trailing slash, and the key's 32 bytes" do
+      with_env(
+        %{
+          "CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100/",
+          "CYFR_LOCUS_BUILDS_KEY" => Base.encode16(@builds_key)
+        },
+        fn ->
+          cyfr = read_prod_config!()[:cyfr]
+          assert cyfr[:locus_builds_url] == "http://locus-builds:4100"
+          assert cyfr[:locus_builds_key] == @builds_key
+        end
+      )
+    end
+
+    test "one without the other, or a malformed value, refuses the boot by name and never echoes the key" do
+      hex = Base.encode16(@builds_key, case: :lower)
+
+      for {env, named} <- [
+            {%{"CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100"}, "CYFR_LOCUS_BUILDS_KEY"},
+            {%{"CYFR_LOCUS_BUILDS_KEY" => hex}, "CYFR_LOCUS_BUILDS_URL"},
+            {%{"CYFR_LOCUS_BUILDS_URL" => "locus-builds:4100", "CYFR_LOCUS_BUILDS_KEY" => hex},
+             "CYFR_LOCUS_BUILDS_URL"},
+            {%{
+               "CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100",
+               "CYFR_LOCUS_BUILDS_KEY" => String.slice(hex, 0..62)
+             }, "CYFR_LOCUS_BUILDS_KEY"}
+          ] do
+        with_env(
+          Map.merge(%{"CYFR_LOCUS_BUILDS_URL" => nil, "CYFR_LOCUS_BUILDS_KEY" => nil}, env),
+          fn ->
+            error = assert_raise RuntimeError, fn -> read_prod_config!() end
+            message = Exception.message(error)
+            assert message =~ "[Cyfr] FATAL: "
+            assert message =~ named
+            refute message =~ String.slice(hex, 0..62)
+          end
+        )
+      end
+    end
+  end
+
+  describe "OPUS_RUNNER_MEMORY_BYTES" do
+    defp opus_env(overrides) do
+      Map.merge(
+        %{
+          "RELEASE_NAME" => "opus",
+          "CYFR_SECRET_KEY_BASE" => nil,
+          "OPUS_SERVICE_KEY" => String.duplicate("ab", 32),
+          "OPUS_HOST_URL" => "http://cyfr:4300",
+          "OPUS_RUNNER_MEMORY_BYTES" => nil
+        },
+        overrides
+      )
+    end
+
+    test "unset leaves the setting's default; set, the whole of the keeper's range is taken" do
+      with_env(opus_env(%{}), fn ->
+        refute Keyword.has_key?(read_prod_config!()[:opus], :runner_memory_bytes)
+      end)
+
+      for bytes <- ["16777216", "402653184", "1099511627776"] do
+        with_env(opus_env(%{"OPUS_RUNNER_MEMORY_BYTES" => bytes}), fn ->
+          assert read_prod_config!()[:opus][:runner_memory_bytes] == String.to_integer(bytes)
+        end)
+      end
+    end
+
+    test "a value outside the keeper's range, a unit or a fraction refuses the boot by name" do
+      for bad <- ["16777215", "1099511627777", "384M", "402653184.5", "-1", "none"] do
+        with_env(opus_env(%{"OPUS_RUNNER_MEMORY_BYTES" => bad}), fn ->
+          error = assert_raise RuntimeError, fn -> read_prod_config!() end
+          assert Exception.message(error) =~ "[Cyfr] FATAL: OPUS_RUNNER_MEMORY_BYTES"
+          assert Exception.message(error) =~ "bytes from 16777216 to 1099511627776"
+        end)
+      end
+    end
+  end
+
+  describe "the releases this file configures" do
+    test "the opus release configures nothing of CYFR's, and any other release is CYFR" do
+      with_env(
+        %{
+          "RELEASE_NAME" => "opus",
+          "CYFR_SECRET_KEY_BASE" => nil,
+          "OPUS_SERVICE_KEY" => String.duplicate("ab", 32),
+          "OPUS_HOST_URL" => "http://cyfr:4300"
+        },
+        fn -> refute Keyword.has_key?(read_prod_config!(), :cyfr) end
+      )
+
+      with_env(%{"RELEASE_NAME" => "cyfr"}, fn ->
+        config = read_prod_config!()
+        assert Keyword.has_key?(config[:cyfr], :workers)
+        refute Keyword.has_key?(config, :opus)
+      end)
+    end
+  end
+
   describe "CYFR_DATABASE — the one setting `.env` cannot decide" do
     # Verify .env selection agrees with the compile-time adapter; Ecto cannot switch adapters at runtime.
 

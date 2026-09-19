@@ -88,7 +88,7 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 		}
 
 		// Warm-pull the images docker-compose.yml starts with this project's
-		// profiles (cyfr, plus caddy and the builder when .env already turns
+		// profiles (cyfr, plus caddy and locus-builds when .env already turns
 		// them on — mcp-bridge is `build:`-only). Plain `docker pull` doesn't
 		// need .env to exist. Falls back to the published cyfr image on a dev
 		// build (no compose).
@@ -313,19 +313,24 @@ func startsWith(svc *yaml.Node, profiles []string) bool {
 	return false
 }
 
+// buildsProfile is the compose profile, and the host, of the Locus builds
+// service (docker-compose.yml's `locus-builds`).
+const buildsProfile = "locus-builds"
+
 // composeProfiles returns the Docker Compose profiles the project in the
 // current directory runs with, read from the dotenv file at envPath: `tls`
-// when CYFR_BEHIND_PROXY is true (Caddy fronts cyfr), and `builder` when
-// CYFR_BUILDER_URL names the compose builder service (host `builder`). Every
-// command that starts, stops or pulls the stack passes them.
+// when CYFR_BEHIND_PROXY is true (Caddy fronts cyfr), and `locus-builds`
+// when CYFR_LOCUS_BUILDS_URL names the compose builds service (host
+// `locus-builds`). Every command that starts, stops or pulls the stack
+// passes them.
 func composeProfiles(envPath string) []string {
 	var profiles []string
 	if envFlagTrue(envPath, "CYFR_BEHIND_PROXY") {
 		profiles = append(profiles, "tls")
 	}
-	if raw, ok := envValue(envPath, "CYFR_BUILDER_URL"); ok {
-		if u, err := url.Parse(raw); err == nil && u.Hostname() == "builder" {
-			profiles = append(profiles, "builder")
+	if raw, ok := envValue(envPath, "CYFR_LOCUS_BUILDS_URL"); ok {
+		if u, err := url.Parse(raw); err == nil && u.Hostname() == buildsProfile {
+			profiles = append(profiles, buildsProfile)
 		}
 	}
 	return profiles
@@ -401,7 +406,7 @@ Always brings up cyfr (the one endpoint: Prism, API, MCP, tinctures) and mcp-bri
 
 When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fronts cyfr on :80/:443. Otherwise cyfr is reachable directly at http://localhost:4000.
 
-When CYFR_BUILDER_URL in .env names the builder service (http://builder:4100), the builder container is also started (builder profile).`,
+When CYFR_LOCUS_BUILDS_URL in .env names the builds service (http://locus-builds:4100), the locus-builds container is also started (--profile locus-builds).`,
 	Example: `  cyfr up`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Registry auth is per-user: `cyfr login` (device flow) after
@@ -409,7 +414,7 @@ When CYFR_BUILDER_URL in .env names the builder service (http://builder:4100), t
 		// probe. There are no static registry credentials to configure.
 
 		// `cyfr init` writes CYFR_BEHIND_PROXY=true into .env on TLS-yes;
-		// .env's settings select the caddy and builder profiles here.
+		// .env's settings select the caddy and locus-builds profiles here.
 		profiles := composeProfiles(".env")
 		tls := slices.Contains(profiles, "tls")
 		composeArgs := append(append([]string{"compose"}, profileArgs(profiles)...), "up", "-d")
@@ -470,12 +475,12 @@ var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR server container",
 	GroupID: "server",
-	Long:    "Stop the CYFR server and remove its containers via Docker Compose. Includes the tls-profile caddy service and the builder-profile builder service, so a stack started with `cyfr up` with either is fully torn down.",
+	Long:    "Stop the CYFR server and remove its containers via Docker Compose. Includes the tls-profile caddy service and the locus-builds service (--profile locus-builds), so a stack started with `cyfr up` with either is fully torn down.",
 	Example: "  cyfr down",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Every profile, so down considers the opt-in services too; harmless
 		// for one that isn't running.
-		c := exec.Command("docker", "compose", "--profile", "tls", "--profile", "builder", "down")
+		c := exec.Command("docker", "compose", "--profile", "tls", "--profile", buildsProfile, "down")
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {

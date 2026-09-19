@@ -65,7 +65,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
     assert src =~ "env_str = fn key, default -> env!(key, :string?, nil) || default end"
     assert src =~ "env_int = fn key, default -> env!(key, :integer?, nil) || default end"
-    assert src =~ "case Cyfr.RuntimeConfig.switch(getenv, key, default) do"
+    assert src =~ "case Cyfr.EnvValue.switch(getenv, key, default) do"
   end
 
   test "no switch is read by comparing its string" do
@@ -108,22 +108,36 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     refute src =~ ~S|opus_boot? = release_name in [nil, "opus"]|
   end
 
-  # The `builder` release runs neither side of the worker wire, and still
-  # reads the build settings it shares with CYFR: a gate that skipped them
-  # left the builder with no listener, since CYFR_BUILDER_LISTEN was never
-  # read there.
-  test "the builder release reads the build settings, and nothing else of CYFR's" do
+  # Three releases, two runtime files: the `locus` release is configured by
+  # `config/locus_runtime.exs` alone, so this file skips its CYFR half for
+  # the `opus` release and for nothing else, and names no other release.
+  test "the CYFR half is skipped for the opus release alone" do
     src = source()
 
-    assert src =~ ~S|builder_boot? = release_name == "builder"|
-    assert src =~ ~S|if cyfr_boot? or builder_boot? do|
+    assert src =~ ~S|cyfr_boot? = release_name != "opus"|
+    assert src =~ ~S|if cyfr_boot? do|
 
-    [_, shared] = String.split(src, "if cyfr_boot? or builder_boot? do", parts: 2)
-    [cyfr_only, rest] = String.split(shared, ~S|config :cyfr, :builder_url|, parts: 2)
+    named =
+      ~r/release_name\s*(?:==|!=|in|not in)\s*(\[[^\]]*\]|"[^"]*")/
+      |> Regex.scan(src, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.flat_map(&Regex.scan(~r/"([^"]*)"/, &1, capture: :all_but_first))
+      |> List.flatten()
+      |> Enum.uniq()
 
-    assert cyfr_only =~ "if not builder_boot? do"
-    assert cyfr_only =~ "CYFR_CRYPTO_KEYRING"
-    assert rest =~ ~S|env_bool.("CYFR_BUILDER_LISTEN", false)|
+    assert named == ["opus"], "runtime.exs names releases other than opus: #{inspect(named)}"
+    refute src =~ ~r/builder_boot\?|"builder"/
+  end
+
+  # The builds service is two variables read by one resolver, both or
+  # neither, written as the two keys `Compendium.Builds.Client` reads.
+  test "the builds service is read through resolve_locus_builds and written as its two keys" do
+    src = source()
+
+    assert src =~ ~S|Cyfr.RuntimeConfig.resolve_locus_builds(getenv)|
+    assert src =~ ~S|config :cyfr, :locus_builds_url, locus_builds && locus_builds.url|
+    assert src =~ ~S|config :cyfr, :locus_builds_key, locus_builds && locus_builds.key|
+    refute src =~ ~S|env_str.("CYFR_LOCUS_BUILDS|
   end
 
   # The pool's bounds and the worker watch's are read through the strict
@@ -135,6 +149,13 @@ defmodule Cyfr.RuntimeEnvReadingTest do
       assert src =~ ~s|opus_bound.("#{name}", |, "#{name} must go through the strict bound reader"
       refute src =~ ~s|env_int.("#{name}"|, "#{name} must not be read with env_int"
     end
+
+    # The runner's memory bound is a byte count, whose range the bound
+    # reader cannot hold: it is read by the byte reader, in the keeper's range.
+    assert src =~ ~S|runner_memory_bytes: opus_bytes.("OPUS_RUNNER_MEMORY_BYTES")|
+    assert src =~ ~S|Cyfr.EnvValue.bytes(getenv, key, Opus.Settings.runner_memory_range())|
+    refute src =~ ~S|env_int.("OPUS_RUNNER_MEMORY_BYTES"|
+    refute src =~ ~S|opus_bound.("OPUS_RUNNER_MEMORY_BYTES"|
 
     assert src =~ ~S|Opus.Settings.pool(opus_pool, System.get_env())|
     assert src =~ ~S|Cyfr.RuntimeConfig.resolve_worker_watch(getenv)|

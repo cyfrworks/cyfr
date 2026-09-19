@@ -34,34 +34,6 @@ defmodule Cyfr.ApplicationTest do
     end
   end
 
-  # A hosted server (auth configured) must not compile members' sources as
-  # its own service user. builder_enforcement/5 is the pure decision seam
-  # the boot guard uses: auth?, builds?, builder?, accepted?, real release?
-  describe "builder_enforcement/5" do
-    test "auth + builds on + no builder + not accepted + real release => raise" do
-      assert {:raise, msg} = Cyfr.Application.builder_enforcement(true, true, false, false, true)
-      assert msg =~ "FATAL"
-      assert msg =~ "CYFR_BUILDER_URL"
-      assert msg =~ "CYFR_BUILDS=false"
-      assert msg =~ "CYFR_ALLOW_IN_PROCESS_BUILDS"
-    end
-
-    test "the same outside a release => warn (dev/test not blocked)" do
-      assert {:warn, msg} = Cyfr.Application.builder_enforcement(true, true, false, false, false)
-      assert msg =~ "suppressed outside a release"
-    end
-
-    test "a builder, builds off, or an explicit acceptance each satisfy the guard" do
-      assert :ok = Cyfr.Application.builder_enforcement(true, true, true, false, true)
-      assert :ok = Cyfr.Application.builder_enforcement(true, false, false, false, true)
-      assert :ok = Cyfr.Application.builder_enforcement(true, true, false, true, true)
-    end
-
-    test "no auth configured is never blocked" do
-      assert :ok = Cyfr.Application.builder_enforcement(false, true, false, false, true)
-    end
-  end
-
   describe "supervision tiers" do
     test "root supervises exactly the infra and web tier supervisors" do
       children = Supervisor.which_children(Cyfr.Supervisor)
@@ -125,6 +97,28 @@ defmodule Cyfr.ApplicationTest do
         assert is_integer(at.(id)) and at.(id) > at.(Cyfr.Execution.Tree),
                "#{inspect(id)} must start under the infra tier after Cyfr.Execution.Tree"
       end
+    end
+
+    # Builds run on the control plane's own task supervisor and nowhere
+    # else: this server starts no builder, and a build's request, watcher and
+    # registration stop before the catalog and the bookkeeping they write
+    # through.
+    test "the builds' task supervisor starts under the infra tier after the catalog, and no builder does" do
+      started = Cyfr.InfraSupervisor |> started_ids()
+      at = fn id -> Enum.find_index(started, &(&1 == id)) end
+
+      builds = at.(Compendium.Builds.TaskSupervisor)
+      assert is_integer(builds)
+
+      pubsub = Enum.find_index(started, &(&1 in [Emissary.PubSub, Phoenix.PubSub.Supervisor]))
+      assert builds > pubsub
+
+      for id <- [Arca.Cache.TreeSupervisor, Cyfr.RecordSink] do
+        assert builds > at.(id), "#{inspect(id)} must start before the builds' supervisor"
+      end
+
+      assert is_pid(Process.whereis(Compendium.Builds.TaskSupervisor))
+      refute Enum.any?(started, &(inspect(&1) =~ "Locus"))
     end
 
     test "the host API listener starts under the infra tier after the attempts it serves" do

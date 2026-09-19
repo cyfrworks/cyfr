@@ -57,9 +57,6 @@ defmodule Cyfr.Application do
     # than the operator can make credentialed cross-origin requests).
     enforce_cors_not_wildcard_with_auth()
 
-    # Hosted builds run in the builder container, or not at all.
-    enforce_builder_when_hosting()
-
     # OIDC issuer reserved-host check — only when OIDC is the configured
     # auth provider. A misconfigured generic-OIDC issuer would otherwise
     # only surface as a 500 at the user's login callback.
@@ -182,6 +179,12 @@ defmodule Cyfr.Application do
       ]),
       Emissary.MCP.Progress,
       {Task.Supervisor, name: Emissary.TaskSupervisor},
+      # Builds (`Compendium.Builds`): a started build, the process watching
+      # it, each request to the Locus builds service and the registration
+      # after it. After the catalog, the bus and the bookkeeping they write
+      # through, so a shutdown ends the builds before them; a build it ends
+      # publishes nothing.
+      {Task.Supervisor, name: Compendium.Builds.TaskSupervisor},
       Emissary.MCP.RunningTasks,
       # Sanctum auth sliver — its own Finch pool for IdP OAuth Device-Flow
       # HTTP calls (GitHub / Google). Compendium's registry and OCI traffic
@@ -570,55 +573,6 @@ defmodule Cyfr.Application do
           "cross-origin requests. Set CYFR_CORS_ALLOWED_ORIGINS (comma-separated " <>
           "origins) — or :cyfr, :cors_allowed_origins in config — to an " <>
           "explicit origin allowlist."
-
-      if real_release? do
-        {:raise, message}
-      else
-        {:warn, message <> " (boot-raise suppressed outside a release)"}
-      end
-    else
-      :ok
-    end
-  end
-
-  # A build with no builder runs cargo/npm as this service user inside the
-  # app container — `Locus.Builder`'s honest threat model, fine for one
-  # person's own sources. With authentication configured, strangers can
-  # register sources, so that posture is refused at boot: the operator
-  # points at the builder container, turns builds off, or accepts it in
-  # writing. Same release/warn gate as the CORS guard.
-  defp enforce_builder_when_hosting do
-    decision =
-      builder_enforcement(
-        Sanctum.auth_configured?(),
-        Cyfr.RuntimeConfig.builds_enabled?(),
-        Cyfr.RuntimeConfig.builder_url() != nil,
-        Cyfr.RuntimeConfig.allow_in_process_builds?(),
-        Cyfr.RuntimeConfig.release?()
-      )
-
-    case decision do
-      :ok -> :ok
-      {:raise, message} -> raise message
-      {:warn, message} -> Logger.warning(message)
-    end
-  end
-
-  @doc false
-  # Pure decision seam (testable without booting), in the order the
-  # arguments are named: auth configured?, builds enabled?, a builder
-  # configured?, in-process builds accepted?, a real release?
-  @spec builder_enforcement(boolean(), boolean(), boolean(), boolean(), boolean()) ::
-          :ok | {:raise, String.t()} | {:warn, String.t()}
-  def builder_enforcement(auth_configured?, builds_enabled?, builder?, accepted?, real_release?) do
-    if auth_configured? and builds_enabled? and not builder? and not accepted? do
-      message =
-        "[Cyfr] FATAL: authentication is configured and builds are on, but no " <>
-          "builder is configured. `build.compile` would run cargo/npm as this " <>
-          "service user inside the app container, on any member's sources. Set " <>
-          "CYFR_BUILDER_URL (docker compose --profile builder up -d), or " <>
-          "CYFR_BUILDS=false, or CYFR_ALLOW_IN_PROCESS_BUILDS=true to accept " <>
-          "in-process builds."
 
       if real_release? do
         {:raise, message}

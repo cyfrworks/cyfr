@@ -35,32 +35,6 @@ defmodule Cyfr.RuntimeConfig do
   @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
 
   @doc """
-  Read a duration in whole milliseconds from the environment, within `range`.
-
-  Unset or blank values answer `{:ok, nil}`, so the setting keeps its
-  default. Anything but a decimal integer inside `range` — a unit suffix,
-  a fraction, a sign — returns `{:error, message}`.
-  """
-  @spec milliseconds(getenv, String.t(), Range.t()) ::
-          {:ok, pos_integer() | nil} | {:error, String.t()}
-  def milliseconds(getenv, key, first..last//1 = range) when is_function(getenv, 1) do
-    text = getenv.(key) |> to_string() |> String.trim()
-
-    cond do
-      text == "" ->
-        {:ok, nil}
-
-      Regex.match?(~r/\A[0-9]{1,12}\z/, text) and String.to_integer(text) in range ->
-        {:ok, String.to_integer(text)}
-
-      true ->
-        {:error,
-         "#{key}=#{inspect(getenv.(key))} must be a whole number of milliseconds " <>
-           "from #{first} to #{last}."}
-    end
-  end
-
-  @doc """
   Resolve the auth provider module from the environment.
 
   - unset `CYFR_AUTH_PROVIDER` → auto-detect: GitHub/Google client present ⇒
@@ -205,21 +179,6 @@ defmodule Cyfr.RuntimeConfig do
       _ -> nil
     end
   end
-
-  @doc """
-  The `CYFR_BUILDER_URL` value. Read by the boot guard in
-  `Cyfr.Application` only: no build is sent to it (`locus_builds_url/0`).
-  """
-  @spec builder_url() :: String.t() | nil
-  def builder_url, do: Application.get_env(:cyfr, :builder_url)
-
-  @doc """
-  Whether the operator accepted in-process builds on a hosted server
-  (`CYFR_ALLOW_IN_PROCESS_BUILDS`). Read by the boot guard only.
-  """
-  @spec allow_in_process_builds?() :: boolean()
-  def allow_in_process_builds?,
-    do: Application.get_env(:cyfr, :allow_in_process_builds, false) == true
 
   @doc "The consent-proof store module (default: the DB store)."
   @spec consent_proof_store() :: module()

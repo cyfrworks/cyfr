@@ -41,7 +41,7 @@ defmodule Cyfr.Test.Sandbox do
     Sanctum.OAuth.RefreshTaskSupervisor,
     Cyfr.Execution.TaskSupervisor,
     Opus.TaskSupervisor,
-    Locus.TaskSupervisor,
+    Compendium.Builds.TaskSupervisor,
     Emissary.MCP.ExternalServerSupervisor,
     Cyfr.Execution.Attempt.Supervisor,
     Opus.WorkerService.Runners,
