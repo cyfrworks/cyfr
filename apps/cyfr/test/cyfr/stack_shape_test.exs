@@ -88,6 +88,32 @@ defmodule Cyfr.StackShapeTest do
     refute compose =~ ~r/^\s*- \.\/components:/m
   end
 
+  # cyfr reaches the builder over the builds network, which only the two of
+  # them join, and a build reaches crates.io and the npm registry over the
+  # same network: it is not `internal`, so the isolation is who is attached.
+  # The worker network is the same shape for a guest's consented egress.
+  test "the builds and worker networks carry cyfr to its worker and the worker out" do
+    compose = read!("docker-compose.yml")
+    [_, networks] = Regex.split(~r/^networks:\s*$/m, compose)
+    [networks | _] = Regex.split(~r/^[a-z]/m, networks)
+
+    for network <- ["locus-builds", "worker"] do
+      assert networks =~ ~r/^  #{network}: \{\}$/m, "#{network} must be declared plain"
+
+      attached =
+        for service <- ["caddy", "cyfr", "locus-builds", "mcp-bridge", "opus"],
+            block = service_block(compose, service),
+            block =~ ~r/^    networks:\s*$/m,
+            network in list_entries(block, "networks"),
+            do: service
+
+      expected = if network == "worker", do: ["cyfr", "opus"], else: ["cyfr", "locus-builds"]
+      assert attached == expected, "#{network} joins #{inspect(attached)}"
+    end
+
+    refute networks =~ ~r/internal:\s*true/
+  end
+
   test "the builds service is the locus image under the shipped names, holding only its own settings" do
     compose = read!("docker-compose.yml")
     builds = service_block(compose, "locus-builds")

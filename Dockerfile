@@ -43,7 +43,7 @@ RUN mix compile && mix assets.deploy && mix release cyfr
 
 # ---- Stage 2: Runner ----
 # Runtime libraries, locales and service user. Build toolchains are provided
-# by Dockerfile.builder.
+# by Dockerfile.locus.
 FROM debian:bookworm-slim AS runner
 
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \

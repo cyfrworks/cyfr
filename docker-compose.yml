@@ -262,7 +262,14 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          # Every runner has a memory bound of its own
+          # (OPUS_RUNNER_MEMORY_BYTES, 384 MiB): its VM, every guest's
+          # linear memory, its home's tmpfs pages and the kernel memory
+          # charged to it, together, and a runner that reaches it is ended
+          # there alone. This limit holds every runner uid the image has (8)
+          # at that bound and the service beside them: 8 x 384 MiB + 1 GiB.
+          # Raise it with the bound (.env.example has the arithmetic).
+          memory: ${OPUS_MEMORY_LIMIT:-4G}
           # Caps aggregate damage from WASM components that never yield
           # (a killed tight-loop leaks a spinning native thread).
           cpus: "${OPUS_CPU_LIMIT:-4}"

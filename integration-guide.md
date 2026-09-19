@@ -1138,6 +1138,38 @@ compose service). `.env.opus.example` documents the worker's side.
 | `OPUS_SERVICE_KEY` | — | The worker's key, derived from the root for its id: `CYFR_WORKER_KEY=… mix cyfr.worker.key <service_id>` prints it. Required by the `opus` release |
 | `OPUS_HOST_URL` | — | The base URL of CYFR's host API as the worker reaches it (compose: `http://cyfr:4300`). Required by the `opus` release |
 | `OPUS_BIND` / `OPUS_PORT` | `127.0.0.1` / `4200` | Where the worker's listener binds |
+| `OPUS_RUNNER_MEMORY_BYTES` | `402653184` (384 MiB) | The memory bound of every runner, 16 MiB to 1 TiB: its VM, every guest's linear memory, its home and the kernel memory charged to it. A runner that reaches it is ended whole and never reused |
+| `OPUS_MEMORY_LIMIT` / `OPUS_CPU_LIMIT` | `4G` / `4` | The `opus` container's limits, read by compose from `.env`: the memory limit holds all eight runner uids at their bound and the service (8 × 384 MiB + 1 GiB) |
+
+### Builds
+
+Components and tinctures are built on the Locus builds service (the
+`locus-builds` compose service), which CYFR reaches over a signed wire.
+Set both variables or neither: with neither, CYFR builds nothing and
+refuses every build; with one, or a malformed value, it refuses to boot.
+`.env.locus.example` documents the builder's own `LOCUS_BUILDS_*` side.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYFR_LOCUS_BUILDS_URL` | — | The base URL of the builds service's listener (compose: `http://locus-builds:4100`). Naming the compose service makes `cyfr up` start it |
+| `CYFR_LOCUS_BUILDS_KEY` | — | The builds key, 32 random bytes as 64 hex digits (`openssl rand -hex 32`); compose hands the same value to the builder as `LOCUS_BUILDS_KEY` |
+| `LOCUS_BUILDS_MEMORY_LIMIT` / `LOCUS_BUILDS_CPU_LIMIT` | `4G` / `2` | The `locus-builds` container's limits, read by compose from `.env`: the memory limit holds `LOCUS_BUILDS_MAX_CONCURRENT` builds at their bound and the service (2 × (1 GiB + 1 GiB)) |
+
+### Docker requirement
+
+The `opus` and `locus-builds` containers hold every runner and every build
+to a memory bound of its own, a cgroup `cyfr-spawn` makes for it. That
+needs **Docker Engine 28 or later on a cgroup v2 host** and the containers'
+`security_opt: writable-cgroups=true`, which the shipped
+`docker-compose.yml` sets and which adds no capability. Without it nothing
+runs unbounded and nothing runs: `opus` starts no runner and logs, naming
+`writable-cgroups=true`, that it cannot bound one, so no component runs;
+and every build is refused as `unavailable`, naming the option.
+
+Docker marks either container `OOMKilled` whenever a runner or a build is
+ended at its own bound, though neither the container nor its release was
+touched. Read it as a runner or a build that passed its bound (the
+service's log says which), not as the container running out of memory.
 
 ### Registry and signing
 

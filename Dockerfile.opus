@@ -13,7 +13,16 @@
 # /var/lib/opus/homes and its control channel on file descriptor 3. When
 # a runner ends every process of its uid is killed and everything the uid
 # left is removed before another runner gets it; the service loads no
-# component, and refuses to start runners without cyfr-spawn.
+# component, and refuses to start runners without cyfr-spawn. Every runner
+# runs inside a memory bound of its own (OPUS_RUNNER_MEMORY_BYTES, 384 MiB
+# unless set), and one that reaches it is ended whole and never reused.
+#
+# The memory bound is a cgroup v2 group cyfr-spawn makes for each runner, so
+# the container must be started with the security option
+# `writable-cgroups=true` (Docker Engine 28 or later on a cgroup v2 host).
+# It adds no capability. Without it cyfr-spawn cannot bound a runner and
+# starts none: the service logs, naming the option, that it cannot, no
+# component runs, and none runs unbounded.
 
 # ---- cyfr-spawn, the process helper: a static Go binary, pinned to the Go
 # release apps/spawn/go.mod names ----

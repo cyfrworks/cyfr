@@ -207,6 +207,116 @@ defmodule Cyfr.DocsDriftTest do
              ".env.opus.example documents them: #{inspect(undocumented)}"
   end
 
+  # Compose reads the variables it interpolates from the project .env, so
+  # each is documented in an env example an operator copies: the service
+  # settings where they are read, and the containers' own limits, which no
+  # release reads, in `.env.example` beside the settings they hold.
+  test "every variable docker-compose.yml interpolates is documented in an env example" do
+    compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
+
+    interpolated =
+      ~r/\$\{([A-Z][A-Z0-9_]*)(?::?-[^}]*)?\}/
+      |> Regex.scan(compose, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.uniq()
+
+    assert length(interpolated) >= 15, "the scan found only #{inspect(interpolated)}"
+
+    documented =
+      for example <- Path.wildcard(Path.join(@repo_root, ".env*.example"), match_dot: true),
+          [_, name] <- Regex.scan(~r/^#?\s*([A-Z][A-Z0-9_]*)=/m, File.read!(example)),
+          into: MapSet.new(),
+          do: name
+
+    undocumented = Enum.reject(interpolated, &MapSet.member?(documented, &1))
+
+    assert undocumented == [],
+           "docker-compose.yml reads these from the project .env, and no env example " <>
+             "documents them: #{inspect(undocumented)}"
+
+    # The containers' limits are compose's alone: documented where compose
+    # reads them, and read by no release.
+    project = File.read!(Path.join(@repo_root, ".env.example"))
+    runtime = File.read!(Path.join(@repo_root, "config/runtime.exs"))
+    locus_runtime = File.read!(Path.join(@repo_root, "apps/locus/lib/locus/config.ex"))
+
+    for limit <- Enum.filter(interpolated, &String.ends_with?(&1, "_LIMIT")) do
+      assert project =~ ~r/^# #{limit}=/m, "#{limit} is not documented in .env.example"
+      refute runtime =~ limit, "config/runtime.exs reads the compose-only #{limit}"
+      refute locus_runtime =~ limit, "Locus.Config reads the compose-only #{limit}"
+    end
+  end
+
+  # The builds service is two variables, read by one resolver
+  # (`Cyfr.RuntimeConfig.resolve_locus_builds/1`), documented where an
+  # operator sets them.
+  test "the builds service's variables are documented in .env.example and the integration guide" do
+    read =
+      @repo_root
+      |> Path.join("apps/cyfr/lib/cyfr/runtime_config.ex")
+      |> File.read!()
+      |> then(&Regex.scan(~r/"(CYFR_LOCUS_BUILDS_[A-Z0-9_]+)"/, &1, capture: :all_but_first))
+      |> List.flatten()
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    assert read == ["CYFR_LOCUS_BUILDS_KEY", "CYFR_LOCUS_BUILDS_URL"]
+
+    project = File.read!(Path.join(@repo_root, ".env.example"))
+    guide = File.read!(Path.join(@repo_root, "integration-guide.md"))
+
+    for name <- read do
+      assert project =~ ~r/^# #{name}=/m, "#{name} is not documented in .env.example"
+      assert guide =~ "`#{name}`", "#{name} is not in integration-guide.md's reference"
+    end
+
+    assert project =~ "# CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100"
+  end
+
+  # Every build and every runner is bounded by a cgroup of its own, which
+  # the host provides only with Docker Engine 28 or later on cgroup v2 and
+  # the containers' option: the guides an operator deploys from say so, and
+  # say what they see without it and what `OOMKilled` means.
+  test "the deployment guides state the Docker requirement, what fails without it, and OOMKilled" do
+    for guide <- ~w(README.md integration-guide.md) do
+      text = File.read!(Path.join(@repo_root, guide))
+
+      for needle <- [
+            "Docker Engine 28 or later",
+            "cgroup v2",
+            "writable-cgroups=true",
+            "refused as `unavailable`",
+            "OOMKilled"
+          ] do
+        assert text =~ needle, "#{guide} does not say #{inspect(needle)}"
+      end
+    end
+
+    readme = File.read!(@readme)
+    assert readme =~ ~r/^\| `locus-builds` \*\(profile: `locus-builds`\)\* \|/m
+  end
+
+  # What `describe` may answer, as `Cyfr.Models` reads it, is what the
+  # guide documents for a catalyst author.
+  test "every field Cyfr.Models reads from describe is in the component guide" do
+    read =
+      @repo_root
+      |> Path.join("apps/cyfr/lib/cyfr/models.ex")
+      |> File.read!()
+      |> then(&Regex.scan(~r/described\["([a-z_]+)"\]/, &1, capture: :all_but_first))
+      |> List.flatten()
+      |> Enum.uniq()
+
+    assert "max_input_tokens" in read and "context_window" in read
+
+    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+
+    for field <- read do
+      assert guide =~ "`#{field}`" or guide =~ ~s("#{field}"),
+             "component-guide.md does not document describe's #{field}"
+    end
+  end
+
   test "the guides' tincture-block keys are ones the code actually reads" do
     # Documented tincture keys must match validator and consumer support.
     documented_only = ~w(sandbox)

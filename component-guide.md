@@ -948,7 +948,7 @@ The contract is three operations of the ordinary catalyst envelope (`{"operation
 }}
 ```
 
-With a `model`, the same answer carries that model's `context_window` and, where known, `max_output_tokens`:
+With a `model`, the same answer carries that model's `context_window` and, where known, `max_output_tokens`, and — optional — `max_input_tokens` where the provider bounds a request's input on its own, below what the window leaves once the output is reserved; the assistant never sends a request past it:
 
 ```json
 {"operation": "describe", "params": {"model": "claude-sonnet-4-6"}}
@@ -1020,6 +1020,8 @@ Response:
 
 `stop_reason` is one of `end_turn`, `tool_call`, `max_tokens`, `content_filter`, `other`. `input_tokens` counts the whole prompt; the cache counts are the part of it the provider served from its cache or wrote to it.
 
+A response's calls are the assistant's to run, and it runs the read calls of one response beside each other. Their results reach the transcript, and the `tool` turn of the next `chat`, in the order the calls completed, which need not be the order the response listed them: a `tool_result` names its call by `tool_call_id`, and that is what pairs the two, never the position.
+
 A refusal is typed, with the provider's own body beside it when the refusal is the provider's:
 
 ```json
@@ -1040,7 +1042,7 @@ A refusal is typed, with the provider's own body beside it when the refusal is t
 | `stop` | `stop_reason` — as in the response |
 | `error` | `error` — `type` and `message`, as the refusal answered |
 
-Deltas are batched: a batch goes out when it reaches 256 bytes, when it has been held 50 ms, when a read of the provider's stream finds nothing new, and before any other event. The host masks every credential the execution was handed out of each event, holding back the tail of streamed text so a credential split across two deltas is masked whole, and counts every event against the execution's emit budget (3000 a minute); a refused event never stops the run. The assistant shows a chat step's `text.delta` events as the answer arrives and keeps the whole response as the step's rows; tool-call fragments are not shown.
+Deltas are batched: a batch goes out when it reaches 256 bytes, when it has been held 50 ms, when a read of the provider's stream finds nothing new, and before any other event. The host masks every credential the execution was handed out of each event, holding back the tail of streamed text so a credential split across two deltas is masked whole, and counts every event against the execution's emit budget (3000 a minute); a refused event never stops the run. A held tail goes out when its stream ends — a call's arguments ahead of that call's `tool_call.end`, the answer's text ahead of `stop` or `error` — so other events can pass it: a subscriber may see `usage`, or a `tool_call.start`, before the last few characters of text that were emitted ahead of it. The text is complete by `stop`, or by the run's end when the catalyst sends none. The assistant shows a chat step's `text.delta` events as the answer arrives and keeps the whole response as the step's rows; tool-call fragments are not shown.
 
 To ship a model catalyst of your own: declare the contract, answer the three operations, and cover the mapping with host-target unit tests (`cargo test` in `src/`, as the bundled ones do). A request that does not parse is refused as `invalid_request` before any key is read; `describe` answers without a key; `chat` and `models` never answer provider-shaped data.
 

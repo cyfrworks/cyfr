@@ -18,7 +18,7 @@ RUN go mod download
 COPY apps/spawn/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-spawn .
 
-# Pinned to the same Node LTS the builder image ships (Dockerfile.builder
+# Pinned to the same Node LTS the builder image ships (Dockerfile.locus
 # NODE_VERSION) — `24-alpine` floated with every upstream release.
 FROM node:24.21.0-alpine AS base
 
