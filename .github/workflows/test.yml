@@ -216,8 +216,11 @@ jobs:
         run: mix credo --only=warning
       - name: Check formatting
         run: mix format --check-formatted
+      # --warnings-as-errors covers the .exs files `mix test` loads, which a
+      # forced compile never reads: a warning in a test fails the build as
+      # one in the application does.
       - name: Run tests
-        run: mix test
+        run: mix test --warnings-as-errors
 
   opus-independence:
     name: Opus compiles and tests from its declared apps alone
