@@ -390,6 +390,23 @@ defmodule Opus.RunnerPoolTest do
       assert {:error, {:refused, %{reason: "memory_unavailable"}}} =
                RunnerPool.take(pool, "ath_a", "exec_1")
 
+      # The runner the pool tries again is no runner it holds: held at the
+      # keeper while it spawns, it is counted nowhere, as a take is given
+      # none.
+      :ok = :sys.suspend(keeper)
+
+      wait_until(
+        fn -> Enum.any?(RunnerPool.runners(pool), &(&1.state == :spawning)) end,
+        3_000,
+        "the pool to try a runner again"
+      )
+
+      assert %{runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0}, refusal: %{}} =
+               RunnerPool.status(pool)
+
+      assert {:error, {:refused, _refusal}} = RunnerPool.take(pool, "ath_a", "exec_1b")
+      :ok = :sys.resume(keeper)
+
       # One runner is tried again at a time, the wait doubling from a
       # second. A wait starts once the pool has heard of the refusal
       # before it, after the keeper counted that refusal, so each is
