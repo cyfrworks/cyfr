@@ -70,13 +70,13 @@ jobs:
 
       - name: Check retired packages
         # Suppress the same decimal advisory aliases as deps.audit below, and
-        # the three cowlib advisories, which have no fixed release: 2.20.0 is
+        # the two cowlib advisories, which have no fixed release: 2.20.0 is
         # the newest and still carries them. cowlib is test-only here — it
         # arrives through `bypass` (`only: :test`) and the server speaks HTTP
         # through Bandit, so no cowboy code ships. Remove each when cowlib
         # publishes a fix, or when `bypass` no longer pulls it.
         env:
-          HEX_IGNORE_ADVISORIES: "CVE-2026-32686,CVE-2026-43971,CVE-2026-43966,CVE-2026-43969"
+          HEX_IGNORE_ADVISORIES: "CVE-2026-32686,CVE-2026-43966,CVE-2026-43969"
         run: mix hex.audit
 
       - name: Check vulnerable dependencies
