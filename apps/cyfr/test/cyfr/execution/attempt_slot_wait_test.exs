@@ -49,15 +49,20 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
   @lapsed "Execution terminated: runner stopped without cleanup"
 
   # The scripted worker service behind a gate: each `start` and `kill` it
-  # is asked for is told to the test first, and a `start` waits at the gate
-  # while it is closed. Served under the scripted service's id, so its
-  # requests are signed and its runners attach as that service's.
+  # is asked for is told to the test first, a `start` waits at the gate
+  # while it is closed, and a kill the test holds is answered only once the
+  # test lets it go, the runner killed meanwhile. Served under the scripted
+  # service's id, so its requests are signed and its runners attach as that
+  # service's.
   defmodule Gate do
     @moduledoc false
     @behaviour Cyfr.WorkerAPI
 
     def start_link(test),
-      do: Agent.start_link(fn -> %{test: test, closed: false} end, name: __MODULE__)
+      do:
+        Agent.start_link(fn -> %{test: test, closed: false, held_kills: MapSet.new()} end,
+          name: __MODULE__
+        )
 
     def close, do: Agent.update(__MODULE__, &%{&1 | closed: true})
 
@@ -65,6 +70,12 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
       Agent.update(__MODULE__, &%{&1 | closed: false})
       send(handler, :open)
     end
+
+    # The kill of `execution_id` kills its runner and then waits, telling
+    # the test `{:killed, execution_id, handler}`, until the test sends the
+    # handler `:proceed`: whoever asked for the kill is held after it.
+    def hold_kill(execution_id),
+      do: Agent.update(__MODULE__, &%{&1 | held_kills: MapSet.put(&1.held_kills, execution_id)})
 
     @impl true
     def start(token, input, sealed_keys) do
@@ -85,8 +96,21 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
 
     @impl true
     def kill(execution_id) do
-      send(Agent.get(__MODULE__, & &1.test), {:kill, execution_id})
-      ScriptedWorker.kill(execution_id)
+      %{test: test, held_kills: held} = Agent.get(__MODULE__, & &1)
+      send(test, {:kill, execution_id})
+      answer = ScriptedWorker.kill(execution_id)
+
+      if MapSet.member?(held, execution_id) do
+        send(test, {:killed, execution_id, self()})
+
+        receive do
+          :proceed -> :ok
+        after
+          30_000 -> :ok
+        end
+      end
+
+      answer
     end
 
     @impl true
@@ -325,21 +349,31 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
       assert_slots(%{available: 1, queued: 0})
     end
 
-    test "whose parent is cancelled leaves the queue with the cascade, as its sibling's runner is killed",
+    test "whose parent is cancelled leaves the queue with the cascade, and takes no slot the kill of its sibling's runner frees",
          %{ctx: ctx, held: held, root: root, sibling: sibling, queued: queued, waiter: waiter} do
       ended = "Parent execution (#{root.id}) terminated"
-      assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root.id)
 
-      # With every slot still held: the queued task was granted none.
-      assert {{:error, ^ended}, ^queued} = Task.await(waiter, 10_000)
-      wait_until(fn -> Attempt.whereis(queued) == nil end, 10_000, "the queued attempt stopped")
+      # The cascade is held right after it kills the sibling's runner, until
+      # the slot that kill frees has been offered to the queued task: in
+      # whichever order the cascade reaches the two, the queued task is
+      # offered a slot while the cascade is still under way.
+      Gate.hold_kill(sibling)
+      canceller = Task.async(fn -> Cyfr.Execution.cancel(ctx, root.id) end)
+      assert_receive {:killed, ^sibling, handler}, 10_000
 
       wait_until(
-        fn -> Attempt.whereis(sibling) == nil end,
+        fn -> Attempt.whereis(sibling) == nil and Slots.status(@slots).queued == 0 end,
         10_000,
-        "the sibling's attempt stopped"
+        "the slot the sibling's kill freed offered to the queued task"
       )
 
+      send(handler, :proceed)
+      assert {:ok, %{cancelled: true}} = Task.await(canceller, 10_000)
+
+      # Its row had ended by then: the slot went back, and no runner was
+      # started for it.
+      assert {{:error, ^ended}, ^queued} = Task.await(waiter, 10_000)
+      wait_until(fn -> Attempt.whereis(queued) == nil end, 10_000, "the queued attempt stopped")
       assert %{state: "failed", claimed_by: nil} = attempt(ctx, queued)
       assert_accounting(held, [], 0)
       assert_slots(%{available: 1, queued: 0})

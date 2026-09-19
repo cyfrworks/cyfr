@@ -10,9 +10,11 @@ defmodule Cyfr.Execution.Cascade do
   is not linked to its parent. Each such child is failed with
   `"Parent execution (<parent id>) terminated"`, fenced on the attempt that
   owns it, and gets `[:cyfr, :opus, :execute, :exception]` and an
-  `execution.failed` event; then what runs it is stopped
-  (`Cyfr.Execution.Dispatch.stop/2`), so neither its waiter nor its runner
-  outlives the parent. A child that closed first is left as it closed.
+  `execution.failed` event; once every such child is failed, what runs
+  each is stopped (`Cyfr.Execution.Dispatch.stop/2`), so neither its waiter
+  nor its runner outlives the parent, and no child starts on the execution
+  slot a stopped sibling gives back. A child that closed first is left as
+  it closed.
 
   A parent that completes normally leaves its children to finish on their
   own; an abandoned one is reaped when its lease lapses
@@ -41,7 +43,12 @@ defmodule Cyfr.Execution.Cascade do
   def fail_children_of(execution_id) do
     case Arca.Execution.list_running_children(execution_id) do
       children when is_list(children) ->
-        Enum.each(children, &fail_child(execution_id, &1))
+        # Every child's row ends before any child is stopped: a child
+        # stopped gives back its execution slot, and a sibling queued for
+        # one that is granted it starts a runner unless its row has ended.
+        children
+        |> Enum.filter(&fail_child(execution_id, &1))
+        |> Enum.each(&Dispatch.stop(&1.id, &1.athanor_id))
 
       {:error, reason} = error ->
         # Nothing is failed: the children run on, and end on their own.
@@ -54,6 +61,8 @@ defmodule Cyfr.Execution.Cascade do
     end
   end
 
+  # Fails `child`'s row if it is still running, answering whether this
+  # call did: a child that closed first has nothing of it to stop.
   defp fail_child(parent_id, child) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, child.started_at, :millisecond)
@@ -74,7 +83,9 @@ defmodule Cyfr.Execution.Cascade do
         "error" => error_msg
       })
 
-      Dispatch.stop(child.id, child.athanor_id)
+      true
+    else
+      false
     end
   end
 end
