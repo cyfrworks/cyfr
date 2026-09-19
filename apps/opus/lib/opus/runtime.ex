@@ -26,7 +26,16 @@ defmodule Opus.Runtime do
 
   ## Resource Limits
 
-  Configure via options:
+  The node's consented `max_memory_bytes` bounds a run's linear memory in
+  total (`store_limits/1`): its store holds one linear memory, which grows
+  no further than that, and a bounded number of tables of a bounded number
+  of elements. An instantiation the store refuses (a second memory, more
+  tables or instances than it holds, or one declared larger than its
+  bound) ends the run as a `resource_limit` sentence; a `memory.grow` or
+  `table.grow` past the bound answers the guest `-1`, as WebAssembly
+  specifies a refused growth, and the guest goes on or traps as it
+  chooses. Either way the engine refuses before the runner's own memory
+  bound is reached.
 
       Opus.Runtime.execute_component(wasm, input,
         max_memory_bytes: 32 * 1024 * 1024  # 32MB
@@ -40,6 +49,23 @@ defmodule Opus.Runtime do
   # Default memory ceiling for sandboxed execution — the shared 64 MiB
   # bound, read from its owner rather than re-spelled here.
   @default_max_memory_bytes Cyfr.Limits.default_max_memory_bytes()
+
+  # What a run's store holds besides its one linear memory. Every shipped
+  # component instantiates three core modules with two funcref tables, the
+  # larger of 159 elements; these bounds leave room for other toolchains
+  # while every table a run can make holds at most 200,000 eight-byte
+  # elements in all. The per-table element bound is wasmtime's own default
+  # for a pooled instance.
+  @max_instances 10
+  @max_tables 10
+  @max_table_elements 20_000
+
+  # wasmtime's words for an instantiation its store limits refused: a count
+  # past its bound, or a memory or table declared larger than its bound.
+  @limit_refusals [
+    ~r/\Aresource limit exceeded: (?<what>[a-z]+ count too high at \d+)\z/,
+    ~r/\A(?<what>(memory|table) minimum size of \d+ (pages|elements) exceeds (memory|table) limits)\z/
+  ]
 
   @doc """
   Execute a WASM component with JSON input, returning JSON output.
@@ -153,12 +179,7 @@ defmodule Opus.Runtime do
 
     try do
       # Build store explicitly with our shared engine (fixes fuel bug)
-      store_limits = %Wasmex.StoreLimits{
-        memory_size: max_memory,
-        instances: 10,
-        tables: 100,
-        memories: 10
-      }
+      store_limits = store_limits(max_memory)
 
       store_result =
         case wasi_opts do
@@ -191,7 +212,7 @@ defmodule Opus.Runtime do
                   end
 
                 {:error, reason} ->
-                  {:error, "Component instantiation failed: #{inspect(reason)}"}
+                  {:error, instantiation_failure(reason)}
               end
 
             {:error, {:artifact, sentence}} ->
@@ -214,6 +235,39 @@ defmodule Opus.Runtime do
         do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
     end
   end
+
+  @doc """
+  The limits of a run's store under the node's consented
+  `max_memory_bytes`: one linear memory of at most that many bytes, so the
+  run's linear memory in total is bounded by it, at most #{@max_tables}
+  tables of at most #{@max_table_elements} elements each, and at most
+  #{@max_instances} instances.
+  """
+  @spec store_limits(pos_integer()) :: Wasmex.StoreLimits.t()
+  def store_limits(max_memory_bytes) when is_integer(max_memory_bytes) and max_memory_bytes > 0 do
+    %Wasmex.StoreLimits{
+      memory_size: max_memory_bytes,
+      memories: 1,
+      tables: @max_tables,
+      table_elements: @max_table_elements,
+      instances: @max_instances
+    }
+  end
+
+  # An instantiation the store limits refused is the run's `resource_limit`,
+  # in the engine's own words, which name counts and sizes and nothing of
+  # the guest's; any other failure is reported as it was.
+  defp instantiation_failure(reason) when is_binary(reason) do
+    case Enum.find_value(@limit_refusals, &Regex.named_captures(&1, reason)) do
+      %{"what" => what} ->
+        "resource_limit: the engine refused the component's memory or tables (#{what})"
+
+      nil ->
+        "Component instantiation failed: #{inspect(reason)}"
+    end
+  end
+
+  defp instantiation_failure(reason), do: "Component instantiation failed: #{inspect(reason)}"
 
   # Build all host function imports and collect cleanup refs. The node's
   # limits and the attempt's host client are the presence signal for
