@@ -17,7 +17,8 @@ defmodule Cyfr.SharedLimitsTest do
   (`Arca.BudgetReservations`), and the execution slot is
   `Cyfr.Execution.Slots`'. A worker service counts nothing that admits.
   What a task held goes back once, and only what it held: when it is
-  cancelled while it waits for a slot, when the service running it dies,
+  cancelled, or its waiter is killed, while it waits for a slot, each at
+  that moment and with no slot taken; when the service running it dies;
   and when its completion, its cancel and its runner's exit report are each
   delivered twice. After each, the tasks the consent still admits are
   counted: neither one short nor one over.
@@ -193,7 +194,79 @@ defmodule Cyfr.SharedLimitsTest do
   # Giving back
   # ---------------------------------------------------------------------------
 
-  test "a task cancelled while it waits for a slot gives back what it held, and nobody else's slot",
+  test "a task cancelled while it waits for a slot leaves the wait: it gives back at the cancel, takes no slot and is never started",
+       %{ctx: ctx, authority: authority} do
+    start_supervised!({ScriptedWorker, ref: @stub, script: [:hang]})
+    wire = Wire.start!(ScriptedWorker.url())
+    before = Slots.status(@slots).child_active
+    root = root!(ctx, authority)
+
+    on_opus = hold_on_opus!(ctx, authority, root)
+    filler = fill_slots!()
+
+    # Admitted, charged and waiting: no slot is free for its attempt. What
+    # CYFR asks of the scripted service crosses the wire, which keeps it.
+    route!(@other)
+    through!(wire)
+    queued = Cyfr.UUID7.execution_id()
+    waiter = Task.async(fn -> spawn!(ctx, authority, root, queued) end)
+
+    wait_until(
+      fn -> Slots.status(@slots).queued_by_class.child == 1 end,
+      10_000,
+      "a queued child"
+    )
+
+    assert %{state: "running", service_id: @other, claimed_by: nil} = attempt(ctx, queued)
+    assert %{in_flight: 2, charged: 2} = accounting(ctx, authority)
+
+    # Cancelled as any run is. At the cancel, with every slot still held,
+    # its waiter has the row's answer and the task holds nothing.
+    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, queued)
+    assert {{:error, "Execution cancelled"}, ^queued} = Task.await(waiter, 10_000)
+    wait_until(fn -> Attempt.whereis(queued) == nil end, 10_000, "the queued attempt stopped")
+    assert %{state: "cancelled", claimed_by: nil} = attempt(ctx, queued)
+    assert_held(ctx, authority, [on_opus], before + filler.held)
+    assert_slots(%{available: 0, queued: 0})
+
+    # The cancel again gives nothing back again, and the next slot freed
+    # is nobody's: the other task's slot, and every slot the filler still
+    # holds, is held.
+    assert {:error, :not_cancellable} = Cyfr.Execution.cancel(ctx, queued)
+    release_slots!(filler, 1)
+
+    wait_until(
+      fn -> Slots.status(@slots).available == 1 end,
+      10_000,
+      "the freed slot stayed free"
+    )
+
+    assert_held(ctx, authority, [on_opus], before + filler.held - 1)
+    assert_slots(%{available: 1, queued: 0})
+
+    # The scripted service was asked neither to start the task nor to kill
+    # a runner it never had.
+    assert Wire.seen(wire, WorkerWire.worker_route(:start)) == []
+    assert Wire.seen(wire, WorkerWire.worker_route(:kill)) == []
+    assert ScriptedWorker.calls() == []
+
+    release_slots!(filler, filler.held - 1)
+    assert_held(ctx, authority, [on_opus], before)
+
+    # One more fits, and only one.
+    on_scripted = hold_on_scripted!(ctx, authority, root)
+
+    assert {{:error, {:invoke_denied, :invoke_budget_exhausted}}, _refused} =
+             spawn!(ctx, authority, root)
+
+    assert_held(ctx, authority, [on_opus, on_scripted], before)
+
+    finish!(on_opus)
+    cancel!(ctx, on_scripted)
+    assert_held(ctx, authority, [], before)
+  end
+
+  test "a task whose waiter is killed while it waits for a slot gives back at the kill, and nobody else's slot",
        %{ctx: ctx, authority: authority} do
     start_supervised!({ScriptedWorker, ref: @stub, script: [:hang]})
     before = Slots.status(@slots).child_active
@@ -216,18 +289,28 @@ defmodule Cyfr.SharedLimitsTest do
     assert %{state: "running", service_id: @other, claimed_by: nil} = attempt(ctx, queued)
     assert %{in_flight: 2, charged: 2} = accounting(ctx, authority)
 
-    # Cancelled as a turn cancels a task: its waiter is killed. The next
-    # slot freed is handed to the wait it left, and comes straight back
-    # with everything else the task held.
+    # Cancelled as a turn cancels a task: its waiter is killed. The task
+    # gives back what it held at the kill, with every slot still held.
     assert Task.shutdown(waiter, :brutal_kill) == nil
-    release_slots!(filler, 1)
     wait_until(fn -> Attempt.whereis(queued) == nil end, 10_000, "the queued attempt stopped")
     assert %{state: "lapsed", claimed_by: nil} = attempt(ctx, queued)
+    assert_held(ctx, authority, [on_opus], before + filler.held)
+    assert_slots(%{available: 0, queued: 0})
 
-    # The other task's slot, and every slot the filler still holds, is held.
+    # The next slot freed is nobody's: the other task's slot, and every
+    # slot the filler still holds, is held.
+    release_slots!(filler, 1)
+
+    wait_until(
+      fn -> Slots.status(@slots).available == 1 end,
+      10_000,
+      "the freed slot stayed free"
+    )
+
     assert_held(ctx, authority, [on_opus], before + filler.held - 1)
-    assert %{available: 1, queued: 0} = Slots.status(@slots)
+    assert_slots(%{available: 1, queued: 0})
     assert ScriptedWorker.calls() == []
+    assert ScriptedWorker.kills() == []
 
     release_slots!(filler, filler.held - 1)
     assert_held(ctx, authority, [on_opus], before)
@@ -354,6 +437,19 @@ defmodule Cyfr.SharedLimitsTest do
   defp route!(@local), do: route!(:opus, @stub)
   defp route!(@other), do: route!(:scripted, @stub)
 
+  # Reach the scripted service through `wire` until the runs are routed
+  # again.
+  defp through!(wire) do
+    Application.put_env(
+      :cyfr,
+      :workers,
+      Enum.map(Application.get_env(:cyfr, :workers), fn
+        %{id: @other} = entry -> %{entry | url: wire.url}
+        entry -> entry
+      end)
+    )
+  end
+
   # A task the Opus service runs, held at its guest's entry.
   defp hold_on_opus!(ctx, authority, root) do
     id = Cyfr.UUID7.execution_id()
@@ -439,6 +535,20 @@ defmodule Cyfr.SharedLimitsTest do
       charges: charges |> Enum.map(& &1.holder_execution_id) |> Enum.sort(),
       child_slots: Slots.status(@slots).child_active
     }
+  end
+
+  # The slots hear of a holder's end after its attempt has stopped, so their
+  # counts are polled too.
+  defp assert_slots(expected) do
+    counts = fn -> Map.take(Slots.status(@slots), Map.keys(expected)) end
+
+    try do
+      wait_until(fn -> counts.() == expected end, 10_000)
+    rescue
+      ExUnit.AssertionError -> :ok
+    end
+
+    assert counts.() == expected
   end
 
   defp attempt(ctx, id), do: Arca.ExecutionAttempts.current(ctx.athanor_id, id)

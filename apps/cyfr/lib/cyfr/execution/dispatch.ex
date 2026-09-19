@@ -16,12 +16,17 @@ defmodule Cyfr.Execution.Dispatch do
     1. the run is admitted (`Cyfr.Execution.Admission.admit/4`): its row
        and its `Cyfr.Execution.Attempt`;
     2. the calling process, the run's waiter, is registered under the
-       execution's id in `Cyfr.Execution.Registry`;
+       execution's id in `Cyfr.Execution.Registry` as `:admitted`: it has
+       started nothing yet;
     3. the attempt takes the run's execution slot — `:child` for a run
        with a parent, `:background` when `opts[:class]` says so, `:root`
        otherwise — waiting at most the run's timeout or 30 seconds; a
-       refusal closes the run failed;
-    4. the assignment is signed (`Cyfr.Execution.Assignments.issue/1`), its
+       refusal closes the run failed, and a run whose row ended while it
+       was queued (a cancel, its parent's cascade) leaves the queue when
+       its row ends and is not started
+       (`Cyfr.Execution.Attempt.take_slot/3`);
+    4. the waiter's registration becomes `{:dispatched, endpoint}`, the
+       assignment is signed (`Cyfr.Execution.Assignments.issue/1`), its
        attempt's keys are sealed with the worker service's dispatch seal key
        (`Cyfr.WorkerAuth.seal_attempt_keys/3`), and it is started on the
        worker service (`Cyfr.Execution.WorkerClient.start/4`) with the
@@ -36,10 +41,12 @@ defmodule Cyfr.Execution.Dispatch do
 
   A waiter that exits kills its run: its attempt asks the worker service
   to kill the runner. An attempt that stops without closing the run — its
-  runner exited, its row lapsed or was lost — has the run closed lost
-  (`Cyfr.Execution.Close.lost/1`), and then the worker service is asked to
-  kill its runner. The waiter's registration names the worker service's
-  endpoint, so `stop/2` reaches the runner without killing the waiter.
+  runner exited, its row lapsed, was lost or was ended by another writer —
+  has the run closed lost (`Cyfr.Execution.Close.lost/1`), which answers
+  the row as it stands, and then the worker service is asked to kill its
+  runner, unless the run was never started. Once the run is dispatched
+  the waiter's registration names the worker service's endpoint, so
+  `stop/2` reaches the runner without killing the waiter.
 
   `claim/4` admits a run for a runner that already runs instead of
   starting one: a formula's child, run in its parent's runner. The run's
@@ -156,9 +163,12 @@ defmodule Cyfr.Execution.Dispatch do
   @doc """
   Cancel a running execution: the tenant-scoped record cancel
   (`Cyfr.Execution.Record.cancel/3`, with `opts[:restart_required]`)
-  first, which decides whether this caller may cancel it; then its running
-  children are failed (`Cyfr.Execution.Cascade`), what runs it is stopped
-  (`stop/2`) and the cancel telemetry fires.
+  first, which decides whether this caller may cancel it and is the only
+  thing that decides the cancel; then its running children are failed
+  (`Cyfr.Execution.Cascade`), what runs it is stopped (`stop/2`) and the
+  cancel telemetry fires. A run cancelled while it is queued for its
+  execution slot gives back its invoke-budget slot and its charge row
+  here, and never takes the slot.
   """
   @spec cancel(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def cancel(%Context{} = ctx, execution_id, opts \\ []) do
@@ -191,20 +201,36 @@ defmodule Cyfr.Execution.Dispatch do
   end
 
   @doc """
-  Stop what runs `execution_id`, found under its id in
-  `Cyfr.Execution.Registry`, for a caller that already ended its row. A
-  dispatched run's runner, or the run a claimed attempt was handed to
-  (`claim/4`), is killed through its worker service
+  Stop what runs `execution_id`, for a caller that already ended its row:
+  the row's terminal write decided, and nothing here does more than
+  release.
+
+  The run's attempt is told first, without waiting for it
+  (`Cyfr.Execution.Attempt.stop_ended/1`): one no runner has attached to
+  stops and gives back what the run held, and one still queued for its
+  execution slot leaves the queue. Then what runs it is found under its
+  id in `Cyfr.Execution.Registry`. A run whose waiter has not started it
+  (`:admitted`) has no runner, so no worker service is asked anything; a
+  start that set off meanwhile is the waiter's to kill, once its attempt
+  has stopped. A dispatched run's runner, or the run a claimed attempt was
+  handed to (`claim/4`), is killed through its worker service
   (`Cyfr.Execution.WorkerClient.kill/2`) and the kill is counted against
   `tenant` as one whose native work may still run
   (`Cyfr.Execution.Attempt.note_unreaped/2`); the worker service's exit
-  report then stops its attempt, and its waiter, if any, answers the row
-  as it stands. Any other holder (a turn root's, a task that has not
-  dispatched yet) is counted the same way and killed.
+  report then stops an attempt its runner attached to, and its waiter, if
+  any, answers the row as it stands. Any other holder (a turn root's, a
+  task that has not dispatched yet) is counted the same way and killed.
+
+  A repeat finds no attempt to stop and gives nothing back again.
   """
   @spec stop(String.t(), String.t() | nil) :: :ok
   def stop(execution_id, tenant) when is_binary(execution_id) do
+    Attempt.stop_ended(execution_id)
+
     case Registry.lookup(Cyfr.Execution.Registry, execution_id) do
+      [{_waiter, :admitted}] ->
+        :ok
+
       [{_waiter, {:dispatched, endpoint}}] ->
         kill_runner(endpoint, execution_id, tenant)
 
@@ -293,22 +319,33 @@ defmodule Cyfr.Execution.Dispatch do
   # ---------------------------------------------------------------------------
 
   defp dispatch(admitted, endpoint, input, opts) do
-    registered? = register_waiter(admitted.execution_id, endpoint)
+    registered? = register_waiter(admitted.execution_id)
 
     try do
       slot_wait = min(admitted.timeout_ms, @slot_wait_ms)
 
-      case Attempt.take_slot(admitted.attempt, class(opts), slot_wait) do
-        :ok -> start(admitted, endpoint, input)
-        :closed -> :ok
-      end
+      # Only a run whose attempt holds its slot, its row still live, is
+      # started, and its registration says so before the start sets off:
+      # a run that was not started has no runner to kill.
+      started? =
+        case Attempt.take_slot(admitted.attempt, class(opts), slot_wait) do
+          :ok ->
+            mark_dispatched(admitted.execution_id, endpoint)
+            start(admitted, endpoint, input)
+            true
+
+          :closed ->
+            false
+        end
 
       case wait(admitted.attempt, admitted.close) do
         {:closed, result} ->
           result
 
         {:lost, result} ->
-          kill_runner(endpoint, admitted.execution_id, admitted.close.ctx.athanor_id)
+          if started?,
+            do: kill_runner(endpoint, admitted.execution_id, admitted.close.ctx.athanor_id)
+
           result
       end
     after
@@ -410,24 +447,32 @@ defmodule Cyfr.Execution.Dispatch do
     :ok
   end
 
-  # A process that registered the id itself (a background task, before it
-  # runs what it registered) keeps its entry; its value marks the run as
-  # dispatched either way.
-  defp register_waiter(execution_id, endpoint) do
-    case Registry.register(Cyfr.Execution.Registry, execution_id, {:dispatched, endpoint}) do
+  # The waiter's entry says how far the run has come, which is what
+  # `stop/2` reads: `:admitted` until its attempt holds its slot, and then
+  # `{:dispatched, endpoint}`, set before the start sets off. A process
+  # that registered the id itself (a background task, before it runs what
+  # it registered) keeps its entry, with the same values.
+  defp register_waiter(execution_id) do
+    case Registry.register(Cyfr.Execution.Registry, execution_id, :admitted) do
       {:ok, _owner} ->
         true
 
       {:error, {:already_registered, owner}} when owner == self() ->
-        Registry.update_value(Cyfr.Execution.Registry, execution_id, fn _ ->
-          {:dispatched, endpoint}
-        end)
-
+        Registry.update_value(Cyfr.Execution.Registry, execution_id, fn _ -> :admitted end)
         false
 
       {:error, {:already_registered, _other}} ->
         false
     end
+  end
+
+  # An entry another process holds is not the waiter's to change.
+  defp mark_dispatched(execution_id, endpoint) do
+    Registry.update_value(Cyfr.Execution.Registry, execution_id, fn _ ->
+      {:dispatched, endpoint}
+    end)
+
+    :ok
   end
 
   defp class(opts) do

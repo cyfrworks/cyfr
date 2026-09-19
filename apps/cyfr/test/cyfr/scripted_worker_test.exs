@@ -147,10 +147,13 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert service_id == ScriptedWorker.service()
     assert boot_id == boot()
 
+    # The slot is held for the attempt by its slot holder, a process linked
+    # to it.
     status = Cyfr.Slots.status(Cyfr.Execution.Slots)
-    attempt = Attempt.whereis(child_id)
+    {:links, linked} = Process.info(Attempt.whereis(child_id), :links)
+    held_for = Enum.map(linked, &inspect/1)
     assert status.child_active == 1
-    assert Enum.any?(status.holders, &(&1.pid == inspect(attempt) and &1.class == :child))
+    assert Enum.any?(status.holders, &(&1.pid in held_for and &1.class == :child))
 
     send(runner, :continue)
 
