@@ -113,8 +113,8 @@ defmodule Cyfr.WorkerAPI do
   Whether `status` has the shape of `t:status/0`: its six members and no
   other, a string service and boot, a count for every runner state and
   no other, a list of attempt id strings, a memory bound of 1 to 2^53 − 1
-  bytes or `nil`, and a `t:refusal/0` whose message is one to 1024 bytes
-  of UTF-8 without a control character, or `nil`.
+  bytes or `nil`, and a `t:refusal/0` whose message
+  `valid_refusal_message?/1` accepts, or `nil`.
   """
   @spec valid_status?(term()) :: boolean()
   def valid_status?(
@@ -143,15 +143,24 @@ defmodule Cyfr.WorkerAPI do
   defp refusal?(nil), do: true
 
   defp refusal?(%{reason: reason, message: message} = refusal) when map_size(refusal) == 2,
-    do: is_binary(reason) and Regex.match?(@reason, reason) and message?(message)
+    do: is_binary(reason) and Regex.match?(@reason, reason) and valid_refusal_message?(message)
 
   defp refusal?(_refusal), do: false
 
-  # A sentence an operator's terminal shows as it reads.
-  defp message?(message) do
-    is_binary(message) and byte_size(message) in 1..@max_message_bytes and
-      String.valid?(message) and not String.match?(message, ~r/[\x00-\x1F\x7F]/)
+  @doc """
+  Whether `message` is a sentence a `t:refusal/0` may carry: 1 to
+  #{@max_message_bytes} bytes of UTF-8 without a control character, which
+  an operator's terminal shows as it reads. A worker service's status
+  carries no other, and CYFR reads no other as the sentence of a start the
+  worker service refused (`c:start/3`).
+  """
+  @spec valid_refusal_message?(term()) :: boolean()
+  def valid_refusal_message?(message) when is_binary(message) do
+    byte_size(message) in 1..@max_message_bytes and String.valid?(message) and
+      not String.match?(message, ~r/[\x00-\x1F\x7F]/)
   end
+
+  def valid_refusal_message?(_message), do: false
 
   @doc """
   The status a JSON answer spells, as `status_to_wire/1` writes it, or
@@ -235,8 +244,13 @@ defmodule Cyfr.WorkerAPI do
   means no runner could be given the assignment: none could be started,
   and with a sentence when the worker service knows why (its keeper
   refuses runners, `t:refusal/0`). Its listener refuses an unavailable
-  start `503`, naming the sentence, and CYFR reads that as a lost answer
-  and reconciles against the attempt's claim.
+  start `503`, naming the sentence when there is one. CYFR reads a `503`
+  naming a refusal's sentence (`valid_refusal_message?/1`) as this
+  refusal, a definite one: the worker service started nothing, and the
+  run is closed failed with the sentence. A `503` without one is a lost
+  answer, reconciled against the attempt's claim, since the listener
+  answers one too when its call into the worker service timed out, after
+  which the run may still start.
   """
   @callback start(Cyfr.Assignment.token(), input :: binary(), sealed_keys :: String.t()) ::
               :ok | {:error, :malformed | :unavailable | {:unavailable, String.t()}}

@@ -47,10 +47,11 @@ defmodule Opus.RunnerPool do
   `{:gone, {:refused, reason}}`. The pool then refuses until a runner
   starts again: it spawns one runner at a time, after a wait that doubles
   from one second to half a minute, never hands out a runner still
-  spawning, and answers a `take/3` no fresh or idle runner can serve
-  `{:error, {:refused, refusal}}`, the keeper's own account of why
-  (`c:Opus.Keeper.refusal/1`), which `status/1` reports too. The first
-  runner that attaches ends the refusal and the pool fills again.
+  spawning nor counts it in `status/1`, and answers a `take/3` no fresh or
+  idle runner can serve `{:error, {:refused, refusal}}`, the keeper's own
+  account of why (`c:Opus.Keeper.refusal/1`), which `status/1` reports
+  too. The first runner that attaches ends the refusal and the pool fills
+  again.
   """
 
   use GenServer
@@ -240,7 +241,12 @@ defmodule Opus.RunnerPool do
       Enum.reduce(state.runners, %{fresh: 0, idle: 0, busy: 0, tainted: 0}, fn {_pid, entry},
                                                                                counts ->
         case entry.state do
-          s when s in [:fresh, :spawning] -> Map.update!(counts, :fresh, &(&1 + 1))
+          :fresh -> Map.update!(counts, :fresh, &(&1 + 1))
+          # A runner still spawning is counted fresh when a take could be
+          # given it (`pick/2`): not while the keeper refuses runners, when
+          # it is the pool's next try and no runner the pool holds.
+          :spawning when state.refusal == nil -> Map.update!(counts, :fresh, &(&1 + 1))
+          :spawning -> counts
           :idle -> Map.update!(counts, :idle, &(&1 + 1))
           :busy -> Map.update!(counts, :busy, &(&1 + 1))
           :tainted -> Map.update!(counts, :tainted, &(&1 + 1))

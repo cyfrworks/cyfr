@@ -34,10 +34,11 @@ scrubbed, the container's CPU flat).
 - Taking a fresh runner from the pool is quick: its queue age, from the
   start request to the runner's attach, has a p95 of at most one second.
 - Every runner runs in a memory group of its own at the service's runner
-  bound, and a guest holding more than the bound ends with its runner
-  there, the sibling, the release and the container untouched; without the
-  `writable-cgroups=true` security option no runner starts at all
-  (memory.py, whose cases these are).
+  bound, and a formula whose children, each within the memory the engine
+  lets it have, hold more than the bound together in its runner ends with
+  that runner there, the sibling, the release and the container
+  untouched; without the `writable-cgroups=true` security option no runner
+  starts at all (memory.py, whose cases these are).
 
 Usage: tests/worker-image/runners.py IMAGE
 """
@@ -95,6 +96,7 @@ def prerequisites(image):
             sys.exit(f"FAIL: prerequisite missing: the {name} guest {path}")
         with open(path, "rb") as f:
             WASM[name] = f.read()
+    memory.prerequisites()
     vectors = os.path.join(ROOT, "tests", "fixtures", "worker_auth.json")
     if not os.path.isfile(vectors):
         sys.exit(f"FAIL: prerequisite missing: {vectors}")

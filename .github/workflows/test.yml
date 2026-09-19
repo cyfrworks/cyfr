@@ -476,12 +476,13 @@ jobs:
       # admitted after its parent's kill that never runs, a stream the
       # control plane stops answering, a tainted runner never reassigned,
       # and the queue age of a fresh runner; and memory (memory.py's cases):
-      # every runner in a cgroup of its own at the service's bound, a guest
-      # holding ten 64 MiB memories ended with its runner at exactly that
-      # bound while the container's limit is untouched, the exit reported,
-      # the uid emptied and scrubbed before its reuse and the sibling
-      # completing, and without writable-cgroups=true no runner process ever
-      # starting. Each case observed as the service detects it, as the
+      # every runner in a cgroup of its own at the service's bound, a
+      # formula's six children each holding the 64 MiB the engine lets it
+      # have, together past the bound in their runner, ended with it at
+      # exactly that bound while the container's limit is untouched, the
+      # exit reported with every child's attempt, the uid emptied and
+      # scrubbed before its reuse and the sibling completing, and without
+      # writable-cgroups=true no runner process ever starting. Each case observed as the service detects it, as the
       # control plane records it and as the container's processes, uids,
       # homes, groups, memory and CPU show it.
       - name: Runner kills, memory bound, settlement and cleanup

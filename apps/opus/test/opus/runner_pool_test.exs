@@ -84,6 +84,51 @@ defmodule Opus.RunnerPoolTest do
 
   defp spawn_of(keeper, pid), do: Enum.find(spawns(keeper), &(&1.owner == pid))
 
+  # The pool's status read once the keeper has refused `refused` spawns
+  # and the pool has heard of every one: it holds no runner, fresh, idle,
+  # busy or tainted, until its next try. Flunks if that never holds.
+  defp emptied!(pool, keeper, refused) do
+    none = %{fresh: 0, idle: 0, busy: 0, tainted: 0}
+    parent = self()
+
+    wait_until(
+      fn ->
+        if ScriptedKeeper.refused(keeper) == refused do
+          status = RunnerPool.status(pool)
+          if status.runners == none, do: send(parent, {:emptied, status})
+        end
+      end,
+      5_000,
+      "the pool to hear of #{refused} refusals and hold no runner"
+    )
+
+    assert_received {:emptied, status}
+    status
+  end
+
+  # When the keeper's refusal count reached `count`, in monotonic
+  # milliseconds: a time before it did (the start of the last reading
+  # below it, or `since` when the first reading was not below it) and the
+  # end of the first reading at or past it.
+  defp refused_at(keeper, count, since, timeout_ms),
+    do: poll_refused(keeper, count, since, System.monotonic_time(:millisecond) + timeout_ms)
+
+  defp poll_refused(keeper, count, before, deadline) do
+    now = System.monotonic_time(:millisecond)
+
+    cond do
+      ScriptedKeeper.refused(keeper) >= count ->
+        {before, System.monotonic_time(:millisecond)}
+
+      now > deadline ->
+        flunk("the keeper never refused #{count} spawns")
+
+      true ->
+        Process.sleep(10)
+        poll_refused(keeper, count, now, deadline)
+    end
+  end
+
   setup do
     keeper = ScriptedKeeper.start!()
     {:ok, keeper: keeper}
@@ -327,35 +372,59 @@ defmodule Opus.RunnerPoolTest do
          %{keeper: keeper} do
       :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
       pool = start_pool!(keeper, pool_size: 3, keeper_opts: [memory_bytes: 402_653_184])
-      serve!(pool)
       started = System.monotonic_time(:millisecond)
+      serve!(pool)
 
-      wait_until(fn -> ScriptedKeeper.refused(keeper) == 3 end)
-
+      # The keeper counts a refusal as it answers a spawn, and the pool
+      # hears of it through the runner's handle after that, so the pool is
+      # read once it has heard of all three: then, and until the wait it
+      # starts has run out, it holds no runner.
       assert %{
                runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0},
                memory_bytes: 402_653_184,
                refusal: %{reason: "memory_unavailable", message: message}
-             } = RunnerPool.status(pool)
+             } = emptied!(pool, keeper, 3)
 
       assert message =~ "refuses"
 
       assert {:error, {:refused, %{reason: "memory_unavailable"}}} =
                RunnerPool.take(pool, "ath_a", "exec_1")
 
-      # One runner is tried again at a time, the wait doubling from a second.
-      wait_until(fn -> ScriptedKeeper.refused(keeper) == 4 end, 3_000)
-      first_retry = System.monotonic_time(:millisecond)
+      # The runner the pool tries again is no runner it holds: held at the
+      # keeper while it spawns, it is counted nowhere, as a take is given
+      # none.
+      :ok = :sys.suspend(keeper)
+
+      wait_until(
+        fn -> Enum.any?(RunnerPool.runners(pool), &(&1.state == :spawning)) end,
+        3_000,
+        "the pool to try a runner again"
+      )
+
+      assert %{runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0}, refusal: %{}} =
+               RunnerPool.status(pool)
+
+      assert {:error, {:refused, _refusal}} = RunnerPool.take(pool, "ath_a", "exec_1b")
+      :ok = :sys.resume(keeper)
+
+      # One runner is tried again at a time, the wait doubling from a
+      # second. A wait starts once the pool has heard of the refusal
+      # before it, after the keeper counted that refusal, so each is
+      # measured from a reading taken before the count it follows moved
+      # to one taken after the count it ends moved: never shorter than
+      # the wait, and a second or so if the wait did not double.
+      {before_first, first_retry} = refused_at(keeper, 4, started, 3_000)
       assert first_retry - started >= 900
 
-      wait_until(fn -> ScriptedKeeper.refused(keeper) == 5 end, 4_000)
-      assert System.monotonic_time(:millisecond) - first_retry >= 1_800
-      assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
+      {_before_second, second_retry} = refused_at(keeper, 5, first_retry, 4_000)
+      assert second_retry - before_first >= 1_900
+
+      assert %{runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0}} = emptied!(pool, keeper, 5)
 
       # The keeper starts runners again: the next one tried ends the refusal
       # and the pool fills.
       :ok = ScriptedKeeper.refuse(keeper, nil)
-      wait_until(fn -> counts(pool).fresh == 3 end, 6_000)
+      wait_until(fn -> counts(pool).fresh == 3 end, 10_000)
       assert %{refusal: nil} = RunnerPool.status(pool)
       assert {:ok, _pid, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
     end
