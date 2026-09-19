@@ -16,10 +16,8 @@ defmodule Emissary.MCP.ActionCoverageTest do
   # config:compile-runtime-ok — cases require the live registry’s roster at compile time.
   @all_providers Application.compile_env(:cyfr, :tool_providers, [])
 
-  # Filter to only providers available in this app's compilation context.
-  # Locus.MCP is a cross-app module that isn't
-  # available when running `apps/cyfr` tests standalone.
-  @providers Enum.filter(@all_providers, &Code.ensure_loaded?/1)
+  # Every provider in the roster is this app's own.
+  @providers @all_providers
 
   for provider <- @providers do
     describe "#{inspect(provider)} action coverage" do

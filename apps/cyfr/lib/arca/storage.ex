@@ -11,10 +11,13 @@ defmodule Arca.Storage do
   ## Single seam policy
 
   All file/blob/cache I/O in CYFR flows through this behaviour. Adding a new
-  `File.*` / `Path.wildcard` call elsewhere in `apps/cyfr/lib`, `apps/opus/lib`,
-  or `apps/locus/lib` is a regression — it means the same code no longer
-  behaves identically on the local filesystem and on a configured object-store
-  adapter.
+  `File.*` / `Path.wildcard` call elsewhere in `apps/cyfr/lib` is a
+  regression — it means the same code no longer behaves identically on the
+  local filesystem and on a configured object-store adapter. The execution
+  and build workers (`apps/opus/lib`, `apps/locus/lib`) hold no tenant state
+  and reach storage only through the control plane; the files they touch are
+  a runner's or a build's own sandbox (group D), and the same scan holds
+  them to their tags.
 
   The `arca-seam` CI job (`.github/workflows/test.yml`) greps for direct
   filesystem calls and fails when a file makes one without carrying an
@@ -26,7 +29,7 @@ defmodule Arca.Storage do
   | A | Inside the adapter itself | The adapter IS the layer that translates segments to bytes. | `Arca.Adapters.Local`, any configured object-store adapter |
   | B | Pre-Arca bootstrap | Code runs before `Arca.Repo` / config is up; chicken-and-egg. | `Cyfr.Application.ensure_db_directory!`, `verify_db_writable!` |
   | C | Compile-time embedded resources | Module attribute `@external_resource` — not runtime I/O. | `@sdk_source`, `@component_guide`, `@wit_files_*` |
-  | D | Local-only sandbox / OS toolchain / user-import boundary | Tar extraction tmp dirs, cargo build sandbox, user-supplied filesystem paths during publish. After validation, content rejoins Arca. | `Compendium.Registry.extract_and_store_tincture`, `Locus.Builder` |
+  | D | Local-only sandbox / OS toolchain / user-import boundary | Tar extraction tmp dirs, cargo build sandbox, user-supplied filesystem paths during publish. After validation, content rejoins Arca. | `Compendium.Registry.extract_and_store_tincture`, `Locus.Builder`, `Opus.Keeper.Spawn` |
   | E | Repo-local code generation | The output is a source file under version control, never an athanor's tree; there is no tenant, adapter or context in reach. | `Mix.Tasks.Ops.Gen.Cli` |
 
   Any code that doesn't fit one of these groups must use `Arca` (which dispatches

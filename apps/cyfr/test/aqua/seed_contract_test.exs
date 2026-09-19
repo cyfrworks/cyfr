@@ -29,9 +29,6 @@ defmodule Aqua.SeedContractTest do
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
 
-  # The `build.*` entries come from Locus's provider; an app-scoped run has
-  # no sibling app's modules and cannot expand them.
-
   test "every action the seed may call is granted by the manifest and reachable in-chain" do
     granted = MapSet.new(granted())
 

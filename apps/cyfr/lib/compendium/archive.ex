@@ -71,8 +71,8 @@ defmodule Compendium.Archive do
     # world-writable directory, and `:erl_tar.create/3` follows a symlink
     # already sitting at the path it is told to write. `:rand.uniform/1` is
     # a seeded per-process PRNG over a million values — cheap to predict and
-    # cheap to collide. `Locus.Builder.create_temp_dir/0` already does this
-    # correctly; same primitive here.
+    # cheap to collide. `scratch_id/0` is 64 bits from the CSPRNG
+    # (`Cyfr.Hex.short/0`), which is neither.
     tmp = Path.join(System.tmp_dir!(), "cyfr_tar_#{scratch_id()}.tar")
 
     try do

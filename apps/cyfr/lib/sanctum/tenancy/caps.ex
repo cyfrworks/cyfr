@@ -132,10 +132,11 @@ defmodule Sanctum.Tenancy.Caps do
   default (`Arca.put/4`'s `cap:` option), and `Arca.Overlay.commit_unit/4`
   checks whole units up front with the policy as a required argument.
   The uncapped-by-design set is whatever states `cap: :exempt` — grep it:
-  today the build-artifact saves (`Locus.MCP`), the shipped copy
-  (`Arca.Overlay.pull_shipped/2`), plus scaffold and fork's `commit_unit`
-  calls, which move shipped or build-derived bytes where failing half-way
-  is worse than any over-cap state. Exempt
+  today the shipped copy (`Arca.Overlay.pull_shipped/2`), the serving of a
+  committed revision, scaffold and fork's `commit_unit` calls and the
+  storage collector's pins, which move shipped or already-committed bytes
+  where failing half-way is worse than any over-cap state. A build's
+  published output is checked like any other tenant write. Exempt
   bytes still count — usage accounting in `Arca` sees every tenant write.
 
   The count is one walk of the athanor's whole tree — components, guest

@@ -297,8 +297,8 @@ defmodule Cyfr.RetentionTest do
 
     test "a build orphaned at 'started' is collected once it cannot be running", %{ctx: ctx} do
       # Build records have no sweeper and no lease — nothing ever moves an
-      # abandoned row off "started" (a node restart mid-build, or the
-      # dropped async task Locus.MCP documents). Excluding the status
+      # abandoned row off "started" (a node restart mid-build, or a build
+      # task that ended with its watcher). Excluding the status
       # outright made those rows immortal and `keep` stopped being a cap.
       :ok = Cyfr.BuildRecords.record_started(ctx, "build_orphan", "reagent:local.test:0.1.0")
 

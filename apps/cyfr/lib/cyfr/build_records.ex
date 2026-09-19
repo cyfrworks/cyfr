@@ -3,9 +3,9 @@
 
 defmodule Cyfr.BuildRecords do
   @moduledoc """
-  The build-record surface: one `build_records` row per build. `Locus.MCP`
-  writes them and `Cyfr.Retention` prunes them — two apps, one owner of
-  the shape both rely on.
+  The build-record surface: one `build_records` row per build.
+  `Compendium.Builds` writes them and `Cyfr.Retention` prunes them — two
+  writers, one owner of the shape both rely on.
 
   Build status is stored in database rows. WASM and tincture artifacts
   remain blobs under the athanor’s `components/` tree.
@@ -20,20 +20,18 @@ defmodule Cyfr.BuildRecords do
   alias Sanctum.Context
 
   # How long a row may read "started" before retention treats it as
-  # orphaned rather than in flight. Far beyond any live build: the
-  # compile deadline is 270 s under the MCP layer's 5-minute brutal kill,
-  # so an hour can only mean the writer went away (node restart, dropped
-  # task) and no `record_finished/4` is coming. Spelled here rather than
-  # taken from `Locus.Builder` because locus depends on cyfr, not the
-  # other way around.
+  # orphaned rather than in flight. Far beyond any live build: a build's
+  # budget is 270 s (`Compendium.Builds`) under the MCP layer's 5-minute
+  # brutal kill, so an hour can only mean the writer went away (node
+  # restart, dropped task) and no `record_finished/4` is coming.
   @started_grace_ms :timer.hours(1)
 
   @doc """
   Record a build as started. Overwrites the caller's own stale row with the
   same id; a row belonging to another athanor is `{:error, :not_found}`.
 
-  `build_id` is caller-supplied (`Locus.MCP` reads `args["build_id"]` off the
-  request), so this is a tenant-scoped update-then-insert rather than an
+  `build_id` is caller-supplied (`Compendium.Builds` takes it from the
+  request's `build_id`), so this is a tenant-scoped update-then-insert rather than an
   upsert on the id: keying the conflict on the id alone let anyone who knew a
   build id reset another athanor's row to "started" and blank its result.
   """
