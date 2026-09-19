@@ -528,35 +528,57 @@ defmodule Cyfr.Application do
     :ok
   end
 
-  # Two knobs answer "which origins may talk to this server": CORS (browser
-  # cross-origin, default "*", guarded above) and MCP Origin (DNS-rebinding
-  # guard, default localhost-only). An operator who opens one but not the
-  # other gets a half-closed deployment that fails confusingly at request
-  # time — say so at boot instead.
   defp warn_if_origin_allowlists_diverge do
-    cors = Cyfr.RuntimeConfig.cors_allowed_origins()
-
-    # "Customized" asks whether the operator SET the key, not what it
-    # resolves to — so the MCP side reads key presence. Asking that as a
-    # presence check rather than a second default keeps
-    # `Cyfr.RuntimeConfig.mcp_allowed_origins/0` the only place the localhost
-    # default is spelled, and stops an explicit empty list reading as unset.
-    cors_customized? = "*" not in cors
-
-    mcp_customized? =
-      Application.get_env(:cyfr, :mcp_allowed_origins) != nil or
-        Application.get_env(:cyfr, :mcp_extra_origins, []) != []
-
-    if cors_customized? and not mcp_customized? do
-      Logger.warning(
-        "[Cyfr] CYFR_CORS_ALLOWED_ORIGINS is set but CYFR_MCP_ALLOWED_ORIGINS is not — " <>
-          "browser MCP requests from #{inspect(cors)} will pass CORS and then be " <>
-          "refused by the MCP Origin check (localhost-only default). Set " <>
-          "CYFR_MCP_ALLOWED_ORIGINS to match."
+    decision =
+      origin_allowlist_divergence(
+        Cyfr.RuntimeConfig.cors_allowed_origins(),
+        Application.get_env(:cyfr, :mcp_allowed_origins),
+        Application.get_env(:cyfr, :mcp_extra_origins, [])
       )
+
+    case decision do
+      :ok -> :ok
+      {:warn, message} -> Logger.warning(message)
     end
 
     :ok
+  end
+
+  @doc false
+  # Pure decision seam (testable without booting). Two knobs answer "which
+  # origins may talk to this server": CORS (browser cross-origin, default
+  # "*", guarded above) and MCP Origin (DNS-rebinding guard, default
+  # localhost-only). An operator who opens one but not the other gets a
+  # half-closed deployment that fails confusingly at request time — say so
+  # at boot instead.
+  #
+  # The warning names cross-origin callers CORS admits and the MCP Origin
+  # check then refuses, so it reads what the CORS allowlist admits, not
+  # whether its key was set. An empty allowlist admits no cross-origin
+  # caller at all, and it is what the shipped stack assigns (`cyfr init`,
+  # whose cyfr serves Prism, the API, /mcp and the tinctures from one
+  # origin), so a boot of that stack has no divergence and nothing to act
+  # on. The wildcard is the other non-case: it is the default, and
+  # `cors_enforcement/3` above owns it.
+  #
+  # The MCP side stays a presence check rather than a second default, which
+  # keeps `Cyfr.RuntimeConfig.mcp_allowed_origins/0` the only place the
+  # localhost default is spelled.
+  @spec origin_allowlist_divergence(term(), term(), term()) :: :ok | {:warn, String.t()}
+  def origin_allowlist_divergence(cors_origins, mcp_allowed, mcp_extra) do
+    cors = List.wrap(cors_origins)
+    cors_admits_origins? = cors != [] and "*" not in cors
+    mcp_customized? = mcp_allowed != nil or List.wrap(mcp_extra) != []
+
+    if cors_admits_origins? and not mcp_customized? do
+      {:warn,
+       "[Cyfr] CYFR_CORS_ALLOWED_ORIGINS is set but CYFR_MCP_ALLOWED_ORIGINS is not — " <>
+         "browser MCP requests from #{inspect(cors)} will pass CORS and then be " <>
+         "refused by the MCP Origin check (localhost-only default). Set " <>
+         "CYFR_MCP_ALLOWED_ORIGINS to match."}
+    else
+      :ok
+    end
   end
 
   @doc false
