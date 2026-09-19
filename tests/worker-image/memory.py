@@ -12,18 +12,25 @@ can do so only where the service mounts the container's cgroup writable
 (`security_opt: writable-cgroups=true`); anywhere else it refuses a spawn
 that asks for a bound, and the service starts no runner.
 
-- `bound`: every runner runs in such a group. A guest that holds more than
-  the bound (hog.wasm: ten linear memories of 64 MiB, each within the
-  engine's own per-memory limit, every page touched) is ended with its
-  runner by the kernel at the bound: the keeper reports the end at the
-  bound (the service logs it), the guest neither completed nor trapped, the
-  container's own limit was not reached, and the group never held more than
-  the bound. The service reports the runner's exit holding the attempt; the
-  runner is tainted and never assigned again; its uid holds no process, its
-  home is scrubbed and its group is gone; the container's memory returns; a
-  sibling runner busy meanwhile keeps its process and completes; the release
-  is not touched; and when the uid is next given to a runner, that runner
-  has a home and a group of its own, which the hostile one left nothing in.
+- `bound`: every runner runs in such a group. A formula whose children run
+  in its runner (the nested probe spawning six children and awaiting them
+  all) holds more than the bound although no run passes what the engine
+  lets it have: each child (hog.wasm, a catalyst) first proves the engine
+  refuses it more than its consented 64 MiB of linear memory, then touches
+  every page of the 64 MiB and keeps it, and six of them alone hold the
+  bound, so the runner's VM is the margin by which they pass it. The
+  children take their memory one at a time, the group read after each, and
+  the kernel ends the runner at the bound while a child's pages are
+  charged: the keeper reports the end at the bound (the service logs it),
+  no child and not the formula completed or trapped, the container's own
+  limit was not reached, and the group never held more than the bound. The
+  service reports the runner's exit holding the formula's attempt and
+  every child's; the runner is tainted and never assigned again; its uid
+  holds no process, its home is scrubbed and its group is gone; the
+  container's memory returns; a sibling runner busy meanwhile keeps its
+  process and completes; the release is not touched; and when the uid is
+  next given to a runner, that runner has a home and a group of its own,
+  which the ended one left nothing in.
 - `unavailable`: under the shipped service without `writable-cgroups=true`,
   no runner process ever starts: every spawn is refused, the pool keeps none
   of the runners it was refused and backs off, its status reports the
@@ -47,6 +54,7 @@ Usage: tests/worker-image/memory.py IMAGE [--measure [ROUNDS]] [bound|unavailabl
 """
 
 import base64
+import hashlib
 import json
 import os
 import secrets
@@ -64,10 +72,27 @@ from stack import HERE, POOL_FIRST, POOL_LAST, ROOT, SERVICE, Stack, StatusSampl
 MIB = 1 << 20
 # A runner is a VM booting from nothing: its first attach takes seconds.
 BOOT_S = 60
+# The formula whose children run in its runner: the nested probe, which
+# spawns every request it is given and awaits them all.
+PROBE = os.path.join(ROOT, "apps", "cyfr", "test", "integration", "opus", "support", "test_wasm", "nested_probe",
+                     "nested_probe.wasm")
+PROBE_REF = "formula:local.nested-probe:0.1.0"
+# Its children: hog.wasm, built from hog.wat by build.sh, whose digests
+# these are, so a hog.wat changed without a rebuild fails the suite.
 HOG = os.path.join(HERE, "hog.wasm")
-HOG_REF = "reagent:local.hog:0.1.0"
-# What hog.wasm holds once every page is touched: ten memories of 64 MiB.
-HOG_BYTES = 10 * 64 * MIB
+HOG_REF = "catalyst:local.hog:0.1.0"
+HOG_DIGESTS = {
+    "hog.wat": "sha256:1af81d703f18bd07015878c26c3bba533f131444c8b37f0a6e15dc083c687bc7",
+    "hog.wasm": "sha256:85b110c704645ecdec34ad4d6a443756e2ff2aa6918c8292637b75d9c49f6ad8",
+}
+# What one child holds once every page is touched: all the linear memory
+# the engine lets one run have under the zero authority it runs under.
+CHILD_BYTES = 64 * MIB
+# The children the formula spawns: six hold 384 MiB, the runner's bound,
+# before its VM holds a byte, so whatever else the runner holds (its VM
+# alone measured 143-208 MiB) is the margin by which they pass it, however
+# small a VM another architecture gives.
+CHILDREN = 6
 ECHO = os.path.join(ROOT, "apps", "opus", "test", "support", "test_wasm", "echo.wasm")
 ECHO_REF = "reagent:local.echo:0.1.0"
 SEED = os.path.join(ROOT, "seed", "components")
@@ -254,13 +279,84 @@ def held(plane, op, execution_id):
 # ---------------------------------------------------------------------------
 
 
+def prerequisites():
+    """The bound case's guests are where it reads them, and hog.wasm is the build of hog.wat that HOG_DIGESTS records."""
+    for name, path in (("formula", PROBE), ("hog.wat", os.path.join(HERE, "hog.wat")), ("hog.wasm", HOG)):
+        if not os.path.isfile(path):
+            sys.exit(f"FAIL: prerequisite missing: the {name} {path}")
+    for name, recorded in HOG_DIGESTS.items():
+        actual = "sha256:" + hashlib.sha256(wasm(os.path.join(HERE, name))).hexdigest()
+        if actual != recorded:
+            sys.exit(f"FAIL: {name} is {actual}, not the {recorded} build.sh printed for it: rebuild it with "
+                     "tests/worker-image/build.sh and record what it prints in HOG_DIGESTS")
+
+
 def fresh_groups(stack):
     """Every live runner's group, by uid."""
     return {r["uid"]: read_group(stack, r["uid"]) for r in stack.runner_processes()}
 
 
+class HogChildren:
+    """The formula's children, as the control plane admits them for its runner.
+
+    Each `admit_child` of the formula is answered with a hog minted for the
+    reference it names, under the zero authority, as `admit_child` answers
+    a child it claimed for the formula's runner. A child's first emit
+    (`hog.ready`) is held until `let` lets that child take its memory; its
+    second (`hog.holding`) and any later push are held until `finish`, so a
+    child that holds its memory keeps it until its runner ends."""
+
+    def __init__(self, plane, stack, parent):
+        self.plane = plane
+        self.stack = stack
+        self.parent = parent
+        self.minted = []
+        self.lock = threading.Lock()
+        self.finished = threading.Event()
+        plane.script("admit_child", self.admit, parent["execution_id"])
+
+    def admit(self, args, caller, entry):
+        if args.get("reference") != HOG_REF.rsplit(":", 1)[0]:
+            return {"error": "guest_error", "type": "not_found", "message": "No such component."}
+        child = self.plane.mint(self.stack.boot, "catalyst", HOG_REF, wasm(HOG), args.get("input") or {},
+                                self.parent["athanor_id"], 120_000, parent=self.parent)
+        child["let"] = threading.Event()
+        child["let_at"] = None
+        self.plane.script("push_deltas", self.pushed(child), child["execution_id"])
+        with self.lock:
+            self.minted.append(child)
+        return self.plane.child_answer(child)(args, caller, entry)
+
+    def pushed(self, child):
+        def answer(args, caller, entry):
+            entry["held"] = True
+            entry["events"] = [json.loads(delta["event"]) for delta in args.get("deltas", [])]
+            ready = [event.get("type") for event in entry["events"]] == ["hog.ready"]
+            (child["let"] if ready else self.finished).wait(120)
+            return self.plane.default("push_deltas", args, caller)
+        return answer
+
+    def children(self):
+        with self.lock:
+            return list(self.minted)
+
+    def events(self, child, kind):
+        """The pushes of `child` carrying `kind`, oldest first."""
+        return [r for r in self.plane.seen("push_deltas", child["execution_id"])
+                if [event.get("type") for event in r.get("events", [])] == [kind]]
+
+    def let(self, child):
+        child["let_at"] = time.time()
+        child["let"].set()
+
+    def finish(self):
+        self.finished.set()
+        for child in self.children():
+            child["let"].set()
+
+
 def test_runner_bound(stack, plane):
-    """A guest holding more than a runner's bound ends with its runner, at the bound, and nothing else is touched."""
+    """A formula whose children each hold what the engine lets them, together more than the runner's bound, ends with its runner at the bound, and nothing else is touched."""
     groups = wait_until(lambda: (lambda g: g if g and all(g.values()) else None)(fresh_groups(stack)), 20,
                         "every runner's group to be readable")
     bounds = {g["max"] for g in groups.values()}
@@ -268,81 +364,150 @@ def test_runner_bound(stack, plane):
            f"each of the {len(groups)} runners runs in a group of its own with one bound, no swap and the group killed whole",
            groups)
     bound = int(next(iter(groups.values()))["max"])
-    print(f"the runner bound is {bound} bytes ({mib(bound)}); the hostile guest holds {mib(HOG_BYTES)} of linear memory", flush=True)
-    expect(bound < HOG_BYTES, f"the hostile guest holds more than the bound ({mib(HOG_BYTES)} > {mib(bound)})")
+    print(f"the runner bound is {bound} bytes ({mib(bound)}); the formula's {CHILDREN} children each hold {mib(CHILD_BYTES)} "
+          f"of linear memory, {mib(CHILDREN * CHILD_BYTES)} between them", flush=True)
+    expect(CHILDREN * CHILD_BYTES >= bound,
+           f"the children alone hold the bound ({CHILDREN} x {mib(CHILD_BYTES)} >= {mib(bound)}), so what else their runner "
+           "holds is the margin by which they pass it")
 
-    # A sibling in another runner, held at its attach while the hostile
-    # guest runs, then let complete.
+    # A sibling in another runner, held at its attach while the formula's
+    # children take their memory, then let complete.
     sibling = plane.mint(stack.boot, "reagent", ECHO_REF, wasm(ECHO), {"sibling": "alive"}, "ath_mem_sibling", 30_000)
     release_sibling = held(plane, "attach", sibling["execution_id"])
     expect(stack.start(sibling)[1] == {"ok": True}, "a sibling subtree starts and is held at its attach")
     sibling_runner = attached_runner(stack, plane, sibling)
 
-    # The hostile guest's artifact is held until its group is watched.
-    hog = plane.mint(stack.boot, "reagent", HOG_REF, wasm(HOG), {"hog": True}, "ath_mem_hog", 30_000)
-    release_hog = held(plane, "fetch_artifact", hog["execution_id"])
-    expect(stack.start(hog)[1] == {"ok": True}, "a guest that holds ten memories of 64 MiB starts")
-    runner = attached_runner(stack, plane, hog)
-    plane.wait_seen("fetch_artifact", hog["execution_id"], 30)
-    expect(runner["uid"] != sibling_runner["uid"], "the two subtrees run under different uids", [runner, sibling_runner])
-    settled = {}
-    wait_until(lambda: fresh_runners_booted(stack, settled, busy=2), BOOT_S, "the pool's fresh runners to have booted",
-               interval=0.25)
+    # The formula spawns its children, each admitted for its runner, and
+    # each waits at its first emit until it is let take its memory.
+    requests = [{"tool": "execution", "action": "run", "args": {"reference": HOG_REF.rsplit(":", 1)[0], "input": {"child": n}}}
+                for n in range(1, CHILDREN + 1)]
+    formula = plane.mint(stack.boot, "formula", PROBE_REF, wasm(PROBE), {"op": "spawn_await_all", "requests": requests},
+                         "ath_mem_formula", 120_000, intercepted=("execution.run", "execution.run_stream"),
+                         authority=bound_authority(PROBE_REF, CHILDREN))
+    children = HogChildren(plane, stack, formula)
+    try:
+        bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, formula, children)
+    finally:
+        children.finish()
+        release_sibling.set()
+
+
+def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, formula, children):
+    # The formula's artifact is held until the pool has booted the runner
+    # it spawns behind the formula's, so its children wait at their first
+    # emit for seconds, not for a runner's boot.
+    release_formula = held(plane, "fetch_artifact", formula["execution_id"])
+    try:
+        expect(stack.start(formula)[1] == {"ok": True}, f"a formula that spawns {CHILDREN} children and awaits them all starts")
+        runner = attached_runner(stack, plane, formula)
+        plane.wait_seen("fetch_artifact", formula["execution_id"], 30)
+        expect(runner["uid"] != sibling_runner["uid"], "the formula and the sibling run under different uids",
+               [runner, sibling_runner])
+        settled = {}
+        wait_until(lambda: fresh_runners_booted(stack, settled, busy=2), BOOT_S, "the pool's fresh runners to have booted",
+                   interval=0.25)
+    finally:
+        release_formula.set()
+    kids = plane.wait_for(lambda: (lambda c: c if len(c) == CHILDREN and all(children.events(k, "hog.ready") for k in c) else None)(
+        children.children()), BOOT_S, f"the formula's {CHILDREN} children to wait at their first emit")
+    attempts = {formula["attempt"]} | {k["attempt"] for k in kids}
+    wait_until(lambda: attempts <= set(stack.attempts()), 10, "the service to hold the formula's and every child's attempt")
+    expect(all(r["runner"] == runner["runner"] for k in kids for r in plane.seen(None, k["execution_id"])),
+           f"the control plane admitted {CHILDREN} children for the formula's runner, each running in it: every host "
+           f"call of theirs came from runner {runner['runner']}, and the service holds the formula's attempt and all of theirs",
+           {"attempts": stack.attempts(), "children": [plane.seen(None, k["execution_id"]) for k in kids]})
     before = container_memory(stack)
     release_before = release_identity(stack)
     state_before = stack.container_state()
     flag_before = oom_killed_flag(stack)
-    hostile_before = read_group(stack, runner["uid"])
+    ready = read_group(stack, runner["uid"])
     sampler = GroupSampler(stack.container, runner["uid"])
     sampler.start()
     time.sleep(0.3)
 
-    t_run = time.time()
-    release_hog.set()
+    # One child at a time takes its memory, until the runner is gone.
+    holding, last = [], None
+    for n, kid in enumerate(kids, start=1):
+        children.let(kid)
+        step = wait_until(
+            lambda: ("holding" if children.events(kid, "hog.holding") else None)
+            or ("gone" if stack.uid_processes(runner["uid"]) == [] else None),
+            30, f"child {n} to hold its memory, or its runner to be gone", interval=0.02)
+        if step == "gone":
+            last = (n, kid, time.time())
+            break
+        group_ = read_group(stack, runner["uid"])
+        if group_ is None:
+            last = (n, kid, time.time())
+            break
+        holding.append((n, kid, group_))
+        print(f"child {n} holds its {mib(CHILD_BYTES)}: the runner's group holds {mib(group_['current'])} of {mib(bound)}",
+              flush=True)
+    expect(last is not None, f"the runner was ended before its {CHILDREN} children all held their memory",
+           [(n, g) for n, _, g in holding])
+    n_last, ending, _seen = last
     gone = wait_until(lambda: stack.uid_processes(runner["uid"]) == [] and time.time(), 30,
-                      "the hostile runner's process to be gone")
-    exits = plane.wait_for(lambda: [r for r in plane.seen("runner_exited") if hog["attempt"] in r["attempts"]], 15,
-                           "the service's report of the hostile runner's exit")
-    wait_until(lambda: read_group(stack, runner["uid"]) is None, 15, "the hostile runner's group to be removed")
+                      "the formula's runner's process to be gone")
+    exits = plane.wait_for(lambda: [r for r in plane.seen("runner_exited") if formula["attempt"] in r["attempts"]], 15,
+                           "the service's report of the formula's runner's exit")
+    wait_until(lambda: read_group(stack, runner["uid"]) is None, 15, "the formula's runner's group to be removed")
     time.sleep(0.5)
     sampler.stop()
     logs = stack.logs()
     ended_line = f"runner {runner['runner']} was ended at its memory bound of {bound} bytes"
 
     # Detection: which layer ended it.
-    print(f"hostile runner {runner['runner']} (uid {runner['uid']}): group at {mib(hostile_before['current'])} before its guest ran; "
-          f"group peak sampled {mib(sampler.group_peak())} of {mib(bound)} over {len(sampler.samples)} samples; "
-          f"its last counters read {sampler.last_events()}; process gone {gone - t_run:.2f} s after the guest was let run; "
-          f"container peak {mib(sampler.container_peak())} of {before['max']} bytes", flush=True)
+    print(f"formula's runner {runner['runner']} (uid {runner['uid']}): group at {mib(ready['current'])} with its "
+          f"{CHILDREN} children waiting; {len(holding)} held {mib(CHILD_BYTES)} each "
+          f"({', '.join(mib(g['current']) for _, _, g in holding)} after each); child {n_last} was taking its memory "
+          f"when its runner ended, its process gone {gone - ending['let_at']:.2f} s after the child was let; group peak "
+          f"sampled {mib(sampler.group_peak())} ({sampler.group_peak()} bytes) of {bound} over {len(sampler.samples)} "
+          f"samples; its last counters read {sampler.last_events()}; container peak {mib(sampler.container_peak())} of "
+          f"{before['max']} bytes", flush=True)
     expect(any(ended_line in line for line in logs.splitlines()),
            "detection: the keeper reported the runner ended at its own bound (memory_exceeded, from the group's own "
            "counters), and the service logged it", [line for line in logs.splitlines() if "memory" in line][-10:])
-    expect(plane.seen("complete", hog["execution_id"]) == [] and plane.seen("fail", hog["execution_id"]) == [],
-           "detection: the guest neither completed nor trapped: the engine refused it nothing, so the engine did not end it",
-           plane.seen(None, hog["execution_id"]))
+    expect(all(ready["current"] < g["current"] < bound for _, _, g in holding)
+           and all(a["current"] < b["current"] for (_, _, a), (_, _, b) in zip(holding, holding[1:])),
+           f"detection: each child's pages were charged to the runner's own group, which grew with each child that held "
+           f"its memory and stayed under the bound until child {n_last} took its own", [ready] + [g for _, _, g in holding])
+    expect(all(children.events(k, "hog.holding")[0]["at"] > k["let_at"] for _, k, _ in holding)
+           and all(plane.seen("push_deltas", k["execution_id"]) == children.events(k, "hog.ready") for k in kids[n_last:]),
+           f"detection: each child took its memory only once it was let, and the {CHILDREN - n_last} after child {n_last} "
+           "never took any", {k["execution_id"]: plane.seen("push_deltas", k["execution_id"]) for k in kids})
+    closes = [r for k in [formula] + kids for r in plane.seen(None, k["execution_id"]) if r["op"] in ("complete", "fail")]
+    expect(closes == [],
+           "detection: neither the formula nor any child completed or trapped: the engine refused none of them anything, so "
+           "the engine did not end them", closes)
     after = container_memory(stack)
     expect(after["events_local"].get("oom_kill", 0) == before["events_local"].get("oom_kill", 0)
            and after["events_local"].get("oom", 0) == before["events_local"].get("oom", 0),
            f"detection: the container's own limit was not what ended it (its local oom events {before['events_local']} -> {after['events_local']})",
            [before, after])
-    # The group reaches its bound and is killed within a fraction of a
-    # second, so the sampler may miss its last pages; that it reached the
-    # bound is the kernel's own count, which the keeper reported. What was
-    # sampled holds what the guest touched and never passed the bound.
+    # The keeper reads the group's counters once the runner is reaped and
+    # removes the group only after retiring the uid, so the sampler, which
+    # reads the group many times a millisecond, reads it after the kill: its
+    # peak, a high-water mark, at the bound (within a 2 MiB huge page whose
+    # charge the bound refused) and never past it, and its kill counted.
     peak = sampler.group_peak()
-    expect(peak is not None and hostile_before["current"] < peak <= bound,
-           f"detection: the guest's pages were charged to the runner's own group, whose sampled peak {mib(peak)} "
-           f"({peak} bytes{', the bound exactly' if peak == bound else ''}) never passed the bound",
-           sampler.samples[-5:])
+    events = sampler.last_events()
+    expect(peak is not None and bound - 2 * MIB <= peak <= bound,
+           f"detection: the group's peak {mib(peak)} ({peak} bytes{', the bound exactly' if peak == bound else ''}) reached "
+           "the bound and never passed it", sampler.samples[-5:])
+    expect(events.get("oom", 0) >= 1 and events.get("oom_kill", 0) >= 1,
+           f"detection: the group's own counters count the kill ({events})", sampler.samples[-5:])
 
-    # Durable settlement: the service reported the runner's exit holding the attempt.
+    # Durable settlement: the service reported the runner's exit holding the
+    # formula's attempt and every child's.
     expect(len(exits) == 1 and exits[0]["args"]["runner"] == runner["runner"] and exits[0]["report"]["service"] == SERVICE
-           and exits[0]["answered"] == "ok",
-           f"settlement: the service reported runner {runner['runner']}'s exit once, holding the attempt, "
-           f"{exits[0]['at'] - t_run:.2f} s after the guest was let run", exits)
+           and exits[0]["answered"] == "ok" and set(exits[0]["attempts"]) == attempts
+           and len(exits[0]["attempts"]) == len(attempts),
+           f"settlement: the service reported runner {runner['runner']}'s exit once, {exits[0]['at'] - ending['let_at']:.2f} s "
+           f"after child {n_last} was let, holding the formula's attempt and its {CHILDREN} children's",
+           {"exits": exits, "attempts": sorted(attempts)})
     wait_until(lambda: stack.runners()["busy"] == 1 and stack.runners()["tainted"] == 0, 10,
-               "the hostile runner to leave the pool, the sibling alone busy")
-    expect(hog["attempt"] not in stack.attempts(), "settlement: the service holds nothing of the hostile attempt", stack.attempts())
+               "the formula's runner to leave the pool, the sibling alone busy")
+    expect(not attempts & set(stack.attempts()), "settlement: the service holds none of the formula's attempts", stack.attempts())
 
     # OS cleanup.
     expect(stack.uid_processes(runner["uid"]) == [], f"cleanup: no process of uid {runner['uid']} remains", stack.processes())
@@ -359,16 +524,17 @@ def test_runner_bound(stack, plane):
     # Docker reads the flag from the container's memory.events, which counts
     # a kill in any group below it: a runner ended at its own bound sets it
     # though the container's limit and its release were never touched.
-    print(f"Docker's OOMKilled flag for the container: {flag_before} before the hostile guest ran, "
+    print(f"Docker's OOMKilled flag for the container: {flag_before} before the children took their memory, "
           f"{oom_killed_flag(stack)} after", flush=True)
 
     # The sibling kept its process, and its group, which took nothing of the
-    # hostile guest, and completes. The group is read while the sibling still
-    # holds its runner: once it completes, its runner is idle and retired
-    # after the service's idle time, which may be shorter than the read.
+    # formula's children, and completes. The group is read while the sibling
+    # still holds its runner: once it completes, its runner is idle and
+    # retired after the service's idle time, which may be shorter than the
+    # read.
     expect(stack.runner_process(sibling_runner["runner"]) is not None
            and stack.runner_process(sibling_runner["runner"])["pid"] == sibling_runner["pid"],
-           "the sibling's runner kept its process through the hostile runner's end", stack.runner_processes())
+           "the sibling's runner kept its process through the formula's runner's end", stack.runner_processes())
     sibling_group = read_group(stack, sibling_runner["uid"])
     expect(sibling_group is not None and sibling_group["peak"] < bound,
            f"the sibling's group peaked at {mib(sibling_group and sibling_group['peak'])}, under its bound", sibling_group)
@@ -377,15 +543,16 @@ def test_runner_bound(stack, plane):
     expect(complete["op"] == "complete" and complete["args"]["outcome"]["output"] == {"sibling": "alive"},
            "the sibling completed", complete)
 
-    # The uid, next given to a runner, holds nothing of the hostile one.
+    # The uid, next given to a runner, holds nothing of the ended one.
     reused = reuse_uid(stack, plane, runner)
     expect(reused["runner"] != runner["runner"] and reused["home"] != runner["home"],
            f"the uid {runner['uid']} was given to a new runner ({reused['runner']}) with a home of its own", [runner, reused])
     expect(reused["group"]["max"] == str(bound) and reused["group"]["peak"] < bound // 2 and not reused["group"]["events"].get("oom_kill"),
            f"its group is its own: bound {reused['group']['max']}, peak {mib(reused['group']['peak'])}, no kill counted",
            reused["group"])
-    expect(all(r["runner"] != runner["runner"] for r in plane.seen("attach") if r["execution_id"] != hog["execution_id"]),
-           "no later attach presented the hostile runner")
+    expect([r for r in plane.seen() if r.get("runner") == runner["runner"] and r["at"] > gone] == []
+           and all(r["runner"] != runner["runner"] for r in plane.seen("attach") if r["execution_id"] != formula["execution_id"]),
+           "the ended runner made no host call after its end, and no later attach presented it")
 
 
 def fresh_runners_booted(stack, first_seen, settle_s=4.0, busy=0):
@@ -625,6 +792,7 @@ def main(image, cases, rounds):
     if rounds:
         measure(image, rounds)
         return
+    prerequisites()
     plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()
     try:
         for case in cases:
