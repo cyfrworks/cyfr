@@ -4,8 +4,9 @@
 defmodule Opus.SettingsTest do
   @moduledoc """
   The service's pool settings come from `config :opus` with defaults in
-  code, each validated, the keeper following the environment when unset;
-  a runner's settings come from its process environment alone, and a
+  code, each validated, the keeper following the environment when unset,
+  a runner's memory bound in the keeper's own range and never none; a
+  runner's settings come from its process environment alone, and a
   runner that can see the service's key refuses to start.
   """
 
@@ -22,7 +23,7 @@ defmodule Opus.SettingsTest do
   }
 
   describe "pool/2" do
-    test "defaults: four fresh runners, a 30 s idle TTL, a 5 s watchdog grace, a 2 s release grace" do
+    test "defaults: four fresh runners, a 30 s idle TTL, a 5 s watchdog grace, a 2 s release grace, a 384 MiB runner bound" do
       assert {:ok,
               %{
                 pool_size: 4,
@@ -30,8 +31,11 @@ defmodule Opus.SettingsTest do
                 watchdog_grace_ms: 5_000,
                 release_grace_ms: 2_000,
                 keeper: :direct,
-                attach_dir: "/run/opus"
+                attach_dir: "/run/opus",
+                runner_memory_bytes: 402_653_184
               }} = Settings.pool([], %{})
+
+      assert {:ok, 402_653_184} = Settings.runner_memory_bytes([])
     end
 
     test "the keeper follows the environment when unset, and is what the configuration names when set" do
@@ -73,6 +77,44 @@ defmodule Opus.SettingsTest do
                  [pool_size: 2, idle_ttl_ms: 1, watchdog_grace_ms: 7, release_grace_ms: 9],
                  %{}
                )
+    end
+
+    test "a runner's memory bound is a whole number of bytes in the keeper's range, never none" do
+      assert Settings.runner_memory_range() == 16_777_216..1_099_511_627_776
+
+      for bytes <- [16_777_216, 536_870_912, 1_099_511_627_776] do
+        assert {:ok, %{runner_memory_bytes: ^bytes}} =
+                 Settings.pool([runner_memory_bytes: bytes], %{})
+
+        assert {:ok, ^bytes} = Settings.runner_memory_bytes(runner_memory_bytes: bytes)
+      end
+
+      for bytes <- [nil, 0, -1, 16_777_215, 1_099_511_627_777, 5.0e8, "512M", :none] do
+        assert {:error, {:malformed, :runner_memory_bytes}} =
+                 Settings.pool([runner_memory_bytes: bytes], %{})
+
+        assert {:error, {:malformed, :runner_memory_bytes}} =
+                 Settings.runner_memory_bytes(runner_memory_bytes: bytes)
+      end
+
+      assert Settings.expected(:runner_memory_bytes) ==
+               "a whole number of bytes from 16777216 (16 MiB) to 1099511627776 (1 TiB)"
+    end
+
+    test "pool!/0 refuses the boot on a malformed memory bound, naming it" do
+      previous = Application.fetch_env(:opus, :runner_memory_bytes)
+      Application.put_env(:opus, :runner_memory_bytes, 1_099_511_627_777)
+
+      try do
+        assert_raise ArgumentError, ~r/:runner_memory_bytes is malformed: a whole number/, fn ->
+          Settings.pool!()
+        end
+      after
+        case previous do
+          {:ok, value} -> Application.put_env(:opus, :runner_memory_bytes, value)
+          :error -> Application.delete_env(:opus, :runner_memory_bytes)
+        end
+      end
     end
 
     test "the attach directory is a clean absolute path" do

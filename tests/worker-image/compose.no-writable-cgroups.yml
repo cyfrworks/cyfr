@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered last by the worker image tests (tests/worker-image/stack.py,
+# `Stack(writable_cgroups=False)`): the opus service as a deployment
+# without the `writable-cgroups=true` security option runs it, on a Docker
+# Engine before 28 or from a compose file that predates the option. The
+# list replaces the shipped one instead of joining it; every other setting
+# stays the shipped service's.
+services:
+  opus:
+    security_opt: !override
+      - no-new-privileges:true

@@ -33,6 +33,11 @@ scrubbed, the container's CPU flat).
   before the next assignment for its athanor takes a fresh one.
 - Taking a fresh runner from the pool is quick: its queue age, from the
   start request to the runner's attach, has a p95 of at most one second.
+- Every runner runs in a memory group of its own at the service's runner
+  bound, and a guest holding more than the bound ends with its runner
+  there, the sibling, the release and the container untouched; without the
+  `writable-cgroups=true` security option no runner starts at all
+  (memory.py, whose cases these are).
 
 Usage: tests/worker-image/runners.py IMAGE
 """
@@ -49,6 +54,7 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import memory  # noqa: E402
 import worker_auth as auth  # noqa: E402
 from control_plane import DROP, ControlPlane  # noqa: E402
 from stack import (  # noqa: E402
@@ -499,6 +505,7 @@ def main(image):
         test_control_plane_cut(stack, plane)
         test_service_death(stack, plane)
         measure_acquisition(stack, plane)
+        memory.test_runner_bound(stack, plane)
         # The runners spawned behind the last starts are VMs still booting.
         settled = {}
         wait_until(lambda: fresh_runners_booted(stack, settled, settle_s=6.0), BOOT_S, "the pool to settle", interval=0.5)
@@ -506,6 +513,9 @@ def main(image):
         expect(share <= 0.25, f"the container's CPU is flat at the end ({share:.2f} of a CPU over 2 s)", share)
     finally:
         stack.down()
+    try:
+        memory.test_bound_unavailable(image, plane)
+    finally:
         plane.stop()
 
 

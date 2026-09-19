@@ -3,19 +3,22 @@
 #
 # Layered over docker-compose.yml by the worker image tests
 # (tests/worker-image/stack.py): the opus service keeps every setting
-# compose gives it — cyfr-spawn's capabilities, the read-only root,
-# `ipc: none`, the homes and /run/opus tmpfs mounts, the limits, the
-# restart policy; this adds only the image under test, a loopback port for
-# the tests to call it on, a container name of the tests' own, the host
-# gateway its host API lives behind (the scripted control plane runs on the
-# host) and the pool settings a test chooses. The tests supply the
-# service's id, key and host URL through the environment compose
-# interpolates, as .env would.
+# compose gives it — cyfr-spawn's capabilities, its security options
+# (`writable-cgroups=true` among them: compose appends a `security_opt`
+# list and refuses an entry named twice, so none is named here), the
+# read-only root, `ipc: none`, the homes and /run/opus tmpfs mounts, the
+# limits, the restart policy; this adds only the image under test, a
+# loopback port for the tests to call it on, the host gateway its host API
+# lives behind (the scripted control plane runs on the host) and the pool
+# settings a test chooses, and lets compose name the container after the
+# project, so a run does not meet a deployed cyfr-opus on the same host.
+# The tests supply the service's id, key and host URL through the
+# environment compose interpolates, as .env would.
 services:
   opus:
     image: ${OPUS_IMAGE:?set OPUS_IMAGE}
     pull_policy: never
-    container_name: cyfr-opus-image-test
+    container_name: !reset null
     ports:
       - "127.0.0.1::4200"
     extra_hosts:
