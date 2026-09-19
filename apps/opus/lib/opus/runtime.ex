@@ -182,11 +182,11 @@ defmodule Opus.Runtime do
                 {:ok, pid} ->
                   try do
                     result = execute_with_convention(pid, input, component_type: component_type)
-                    GenServer.stop(pid, :normal)
+                    stop_instance(pid)
                     add_execution_metadata(result, %{})
                   rescue
                     e ->
-                      GenServer.stop(pid, :normal)
+                      stop_instance(pid)
                       {:error, Exception.message(e)}
                   end
 
@@ -426,10 +426,17 @@ defmodule Opus.Runtime do
         {:error, "Failed to encode input as JSON: #{inspect(err)}"}
 
       {:ok, json_input} ->
-        # Components (especially Catalysts) can make HTTP calls that take much longer
-        # than the default 5s GenServer.call timeout. The runner enforces its own
-        # wall-clock timeout, so we use :infinity here to avoid double-timeout races.
-        case Wasmex.Components.call_function(pid, call_name, [json_input], :infinity) do
+        case call_function(pid, call_name, json_input) do
+          {:trapped, message} ->
+            Logger.warning("[Opus.Runtime] the call of #{inspect(call_name)} trapped: #{message}")
+            {:error, "Component call failed for #{inspect(call_name)}: #{message}"}
+
+          :instance_ended ->
+            Logger.warning("[Opus.Runtime] the instance ended under #{inspect(call_name)}")
+
+            {:error,
+             "Component call failed for #{inspect(call_name)}: the component's instance ended"}
+
           {:ok, json_output} when is_binary(json_output) ->
             # Parse JSON output
             case Jason.decode(json_output) do
@@ -458,6 +465,32 @@ defmodule Opus.Runtime do
                "Ensure the component exports the correct WIT interface (cyfr:reagent/compute@0.1.0, cyfr:catalyst/run@0.1.0, or cyfr:formula/run@0.1.0)."}
         end
     end
+  end
+
+  # A guest's trap ends the instance's server with the trap as its exception,
+  # and the exit of the call waiting on it carries that call beside the
+  # reason: `{reason, {GenServer, :call, [pid, {:call_function, name,
+  # [json_input]}, timeout]}}`. The guest's input is never part of the run's
+  # error, so only the trap's own message leaves here, and an exit of any
+  # other shape leaves as the fact that the instance ended.
+  defp call_function(pid, call_name, json_input) do
+    # Components (especially Catalysts) can make HTTP calls that take much longer
+    # than the default 5s GenServer.call timeout. The runner enforces its own
+    # wall-clock timeout, so we use :infinity here to avoid double-timeout races.
+    Wasmex.Components.call_function(pid, call_name, [json_input], :infinity)
+  catch
+    :exit, {{%RuntimeError{message: message}, _stacktrace}, _call} when is_binary(message) ->
+      {:trapped, message}
+
+    :exit, _reason ->
+      :instance_ended
+  end
+
+  # The instance's server is gone already when the call it ran trapped.
+  defp stop_instance(pid) do
+    GenServer.stop(pid, :normal)
+  catch
+    :exit, _reason -> :ok
   end
 
   # ===========================================================================
