@@ -96,8 +96,13 @@ defmodule Compendium.ProvenanceTest do
       assert Provenance.label(provenance) == Atom.to_string(provenance)
     end
 
-    assert_raise FunctionClauseError, fn -> Provenance.label(:shipped) end
-    assert_raise FunctionClauseError, fn -> Provenance.of_status(:hidden) end
+    # Each function is closed over its own vocabulary: a word from the
+    # other's, or from none, raises rather than minting a label or a
+    # provenance. (A literal call the compiler refuses at the call site;
+    # what these guard is a word that reaches them at runtime.)
+    for {closed, word} <- [{&Provenance.label/1, :shipped}, {&Provenance.of_status/1, :hidden}] do
+      assert_raise FunctionClauseError, fn -> closed.(word) end
+    end
   end
 
   test "shipped_versions/2 reads the release catalog from the seed", %{ctx: _ctx} do

@@ -47,7 +47,7 @@ defmodule Aqua.ToolGrantsTest do
 
       for reason <- reasons do
         sentence = ToolGrants.refusal_message({:scope_not_permitted, reason})
-        assert is_binary(sentence) and String.ends_with?(sentence, ".")
+        assert String.ends_with?(sentence, ".")
         refute sentence =~ ~r/never_standing|thread_only|unknown_kind|foreign_agent/
       end
 

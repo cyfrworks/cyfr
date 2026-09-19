@@ -53,10 +53,11 @@ defmodule Emissary.MCP.ActionCoverageTest do
                 :handled_raised ->
                   :ok
 
-                {:error, message} when is_binary(message) ->
-                  refute message =~ ~r/Invalid .* action/,
+                {:error, refusal} ->
+                  refute catch_all?(refusal),
                          "Action #{unquote(action)} for tool #{unquote(tool.name)} " <>
-                           "in #{unquote(inspect(provider))} fell through to catch-all: #{message}"
+                           "in #{unquote(inspect(provider))} fell through to catch-all: " <>
+                           inspect(refusal)
 
                 _ ->
                   :ok
@@ -67,4 +68,14 @@ defmodule Emissary.MCP.ActionCoverageTest do
       end
     end
   end
+
+  # A provider's catch-all clause answers "Invalid <tool> action", as a
+  # sentence (`Cyfr.Schedules.Provider`) or inside a typed invalid-argument
+  # refusal (every other provider); an action that reached a clause of its
+  # own is refused in some other way, or not at all.
+  defp catch_all?({:invalid_argument, message}), do: catch_all?(message)
+
+  defp catch_all?(message) when is_binary(message), do: message =~ ~r/Invalid .* action/
+
+  defp catch_all?(_refusal), do: false
 end

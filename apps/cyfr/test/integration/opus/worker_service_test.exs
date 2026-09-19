@@ -3,8 +3,13 @@
 
 Code.require_file("support/nested_execution_helper.exs", __DIR__)
 
-defmodule Opus.WorkerServiceTest do
+defmodule Opus.WorkerServiceWireTest do
   @moduledoc """
+  The worker service as CYFR drives it, over the wire and with real
+  runners; `Opus.WorkerServiceTest` in `apps/opus` is the service's own
+  suite, against a scripted host, and the umbrella runs both in one VM,
+  so the two carry different module names.
+
   A run lives only as long as what waits for it and what runs it, across
   the runner boundary: every run here runs in a runner that is an OS
   process of its own. A waiter that is killed kills its run: the attempt

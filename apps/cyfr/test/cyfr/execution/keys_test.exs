@@ -50,7 +50,7 @@ defmodule Cyfr.Execution.KeysTest do
     end
 
     assert {:ok, generation} = Keys.generation()
-    assert is_integer(generation) and generation > 0
+    assert generation > 0
   end
 
   test "without one, each boot mints a root of its own" do

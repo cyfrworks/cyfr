@@ -4,8 +4,6 @@
 defmodule Arca.CronScheduleTest do
   use ExUnit.Case, async: false
 
-  import Ecto.Query, only: [from: 2]
-
   alias Arca.CronSchedule
   alias Sanctum.Context
 

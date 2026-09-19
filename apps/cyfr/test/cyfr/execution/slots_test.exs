@@ -104,7 +104,7 @@ defmodule Cyfr.Execution.SlotsTest do
     release(holders)
   end
 
-  defp fill_foreground(budget, per_key, holders) when length(holders) >= budget, do: holders
+  defp fill_foreground(budget, _per_key, holders) when length(holders) >= budget, do: holders
 
   defp fill_foreground(budget, per_key, holders) do
     case try_hold("ath_fill_#{div(length(holders), per_key)}", :root) do

@@ -192,10 +192,20 @@ defmodule Cyfr.AuthorityTest do
     end
 
     test "a bound Authority without a blob is unrepresentable in limits/1" do
-      # Fail-closed: only the constructors build Authorities; a hand-forged
-      # bound cursor with no blob has no limits clause.
-      forged = %{Authority.zero() | cursor: {:bound, @formula}}
-      assert_raise FunctionClauseError, fn -> Authority.limits(forged) end
+      # Fail-closed: the constructors never pair a bound cursor with no
+      # blob, and a literal one the compiler refuses at the call site. The
+      # wire is where such a pairing can still arrive: `from_wire/1` reads
+      # a bound cursor beside a null policy, and `limits/1` has no clause
+      # for what it hands back.
+      wire =
+        Authority.zero()
+        |> Authority.to_wire()
+        |> Map.put("cursor", %{"bound" => @formula})
+
+      assert {:ok, decoded} = Authority.from_wire(wire)
+      assert_raise FunctionClauseError, fn -> Authority.limits(decoded) end
+      assert decoded.policy == :none
+      assert decoded.cursor == {:bound, @formula}
     end
   end
 

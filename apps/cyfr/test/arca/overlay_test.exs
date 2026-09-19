@@ -57,6 +57,10 @@ defmodule Arca.OverlayTest.DownAdapter do
 
   def list_typed(_ctx, _path), do: {:error, :adapter_down}
   def list_recursive(_ctx, _path), do: {:error, :adapter_down}
+
+  # A listing that never answers empty leaves the double's prefix listing
+  # nothing to probe: it is down too.
+  def list_prefix(ctx, path), do: list_recursive(ctx, path)
 end
 
 defmodule Arca.OverlayTest do

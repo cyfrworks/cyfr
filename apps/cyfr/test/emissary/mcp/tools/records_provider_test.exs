@@ -913,11 +913,17 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   # An outage, simulated: the table is gone. Postgres holds the tables that
   # reference `executions` to it and drops them along; SQLite has no such
   # clause and no such need.
-  defp drop_executions! do
-    if Arca.Repo.__adapter__() == Ecto.Adapters.Postgres,
-      do: Arca.Repo.query!("DROP TABLE executions CASCADE"),
-      else: Arca.Repo.query!("DROP TABLE executions")
-  end
+  #
+  # config:compile-runtime-ok — must match what `Arca.Repo` compiled
+  # against, as `Arca.TenantTables` does: the adapter is bound at compile
+  # time, so a runtime branch on `__adapter__/0` is one the compiler
+  # proves dead.
+  @drop_executions (case Application.compile_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3) do
+                      Ecto.Adapters.Postgres -> "DROP TABLE executions CASCADE"
+                      _sqlite -> "DROP TABLE executions"
+                    end)
+
+  defp drop_executions!, do: Arca.Repo.query!(@drop_executions)
 
   # One action's own declaration, as `Cyfr.Ops.Operation.cast/2` applies it;
   # the tool's discovery schema merges every action into one flat object.
