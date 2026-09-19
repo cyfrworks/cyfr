@@ -191,21 +191,28 @@ defmodule Cyfr.AuthorityTest do
       assert Authority.depth_cap() == 8
     end
 
-    test "a bound Authority without a blob is unrepresentable in limits/1" do
-      # Fail-closed: the constructors never pair a bound cursor with no
-      # blob, and a literal one the compiler refuses at the call site. The
-      # wire is where such a pairing can still arrive: `from_wire/1` reads
-      # a bound cursor beside a null policy, and `limits/1` has no clause
-      # for what it hands back.
-      wire =
-        Authority.zero()
-        |> Authority.to_wire()
-        |> Map.put("cursor", %{"bound" => @formula})
+    test "a bound Authority without limits of its own is unrepresentable, on the wire too" do
+      # Fail-closed: the constructors never pair a bound cursor with a
+      # policy that has no limits for it, and a literal one the compiler
+      # refuses at the call site. The wire is where such a pairing can
+      # still arrive, and `limits/1` — which the boundary promises a
+      # refusal from, never a raise — has no clause for it, so the decoder
+      # refuses both shapes: no policy at all, and one without the node.
+      bound = fn wire, ref -> Map.put(wire, "cursor", %{"bound" => ref}) end
+      zero = Authority.to_wire(Authority.zero())
 
-      assert {:ok, decoded} = Authority.from_wire(wire)
-      assert_raise FunctionClauseError, fn -> Authority.limits(decoded) end
-      assert decoded.policy == :none
-      assert decoded.cursor == {:bound, @formula}
+      assert {:error, {:invalid_wire_cursor, {:bound_without_policy, @formula}}} =
+               Authority.from_wire(bound.(zero, @formula))
+
+      {:ok, root} = Authority.root(profile(), blob(), ceiling: @ceiling)
+      rooted = Authority.to_wire(root)
+
+      assert {:error, {:invalid_wire_cursor, {:unknown_node, "formula:evil.corp.tool"}}} =
+               Authority.from_wire(bound.(rooted, "formula:evil.corp.tool"))
+
+      # What the constructors do build reads back, and answers its limits.
+      assert {:ok, back} = Authority.from_wire(rooted)
+      assert Authority.limits(back) == Authority.limits(root)
     end
   end
 

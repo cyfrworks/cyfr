@@ -298,7 +298,10 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     task =
       Task.async(fn ->
-        Dispatch.run(ctx, "#{@scripted}:1.0.0", %{}, authority: Authority.zero(), execution_id: id)
+        Dispatch.run(ctx, "#{@scripted}:1.0.0", %{},
+          authority: Authority.zero(),
+          execution_id: id
+        )
       end)
 
     assert_receive {:scripted_probe, runner, ^id}, 10_000
@@ -334,7 +337,10 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     task =
       Task.async(fn ->
-        Dispatch.run(ctx, "#{@scripted}:1.0.0", %{}, authority: Authority.zero(), execution_id: id)
+        Dispatch.run(ctx, "#{@scripted}:1.0.0", %{},
+          authority: Authority.zero(),
+          execution_id: id
+        )
       end)
 
     assert_receive {:scripted_probe, _runner, ^id}, 10_000
