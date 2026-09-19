@@ -27,7 +27,7 @@ defmodule Cyfr.Execution.EventsTest do
     execution
   end
 
-  defp durable!(record, type, data \\ %{}) do
+  defp durable!(record, type, data) do
     {:ok, row} = Arca.ExecutionEvents.append(record.athanor_id, record.id, type, data: data)
     :ok = Events.publish(record.id, record, type, row.seq, data)
     row.seq
@@ -85,7 +85,8 @@ defmodule Cyfr.Execution.EventsTest do
     exec_id = "exec_evt_nil_#{System.unique_integer([:positive])}"
 
     assert_raise ArgumentError, fn -> Events.since(exec_id, {0, 0}, nil) end
-    assert_raise ArgumentError, fn -> Events.topic(exec_id, %{}) end
+    # A context whose athanor is unresolved: the platform's own.
+    assert_raise ArgumentError, fn -> Events.topic(exec_id, Sanctum.Context.internal()) end
   end
 
   describe "numbering — durable rows and the deltas under them" do

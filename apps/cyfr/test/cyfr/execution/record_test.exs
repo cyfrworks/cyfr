@@ -275,16 +275,22 @@ defmodule Cyfr.Execution.RecordTest do
 
       :ok = Record.write_started(child)
 
+      # A `model/chat@1` answer, as its catalyst completes it: the usage is
+      # the answer's data's.
       reply = %{
-        "content" => [%{"type" => "text", "text" => "the reply"}],
-        "usage" => %{"input_tokens" => 9}
+        "status" => 200,
+        "data" => %{
+          "content" => [%{"type" => "text", "text" => "the reply"}],
+          "stop_reason" => "end_turn",
+          "usage" => %{"input_tokens" => 9, "output_tokens" => 2}
+        }
       }
 
       :ok = Record.write_completed(Record.complete(child, reply))
       {:ok, output} = Jason.decode(Arca.Repo.get(Arca.Execution, child.id).output)
 
       assert output["envelope"] == "v1"
-      assert output["usage"] == %{"input_tokens" => 9}
+      assert output["usage"] == %{"input_tokens" => 9, "output_tokens" => 2}
       assert output["output_hash"] == Cyfr.Digest.sha256(Jason.encode!(reply))
       refute String.contains?(Jason.encode!(output), "the reply")
 
@@ -304,6 +310,31 @@ defmodule Cyfr.Execution.RecordTest do
       {2, _} = Arca.Repo.update_all(Arca.Schemas.ExecutionPayload, set: [inserted_at: old])
       {:ok, 2} = Arca.ExecutionPayloads.delete_older_than_days(ctx, 1, ["chat_step"])
       assert {:ok, %{output: %{"envelope" => "v1"}}} = Record.get(ctx, child.id)
+    end
+
+    test "usage is what a model answer's data carries: a field another output names so is its own",
+         %{ctx: ctx} do
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      :ok = Record.write_started(record)
+      :ok = Record.write_completed(Record.complete(record, %{"usage" => %{"input_tokens" => 9}}))
+
+      assert {:ok, %{"envelope" => "v1", "usage" => nil}} =
+               Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
+    end
+
+    test "a refused model answer carries no usage", %{ctx: ctx} do
+      record = Record.new(ctx, "catalyst:moonmoon69.claude:1.0.0", %{"messages" => []})
+      :ok = Record.write_started(record)
+
+      refused = %{
+        "status" => 429,
+        "error" => %{"type" => "rate_limited", "message" => "slow down"}
+      }
+
+      :ok = Record.write_completed(Record.complete(record, refused))
+
+      assert {:ok, %{"envelope" => "v1", "usage" => nil}} =
+               Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
     end
 
     test "any other component's output is the same shape, under its own class", %{ctx: ctx} do

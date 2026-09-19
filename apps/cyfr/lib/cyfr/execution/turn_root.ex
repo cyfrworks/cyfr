@@ -23,7 +23,12 @@ defmodule Cyfr.Execution.TurnRoot do
   The slot is one of the execution slots (`Cyfr.Slots`, the instance
   `Cyfr.Execution.Slots`), keyed by the athanor. It is taken together with
   the registry entry that lets a cancel find the holder
-  (`Cyfr.Execution.Dispatch.stop/2`), and both are given back together.
+  (`Cyfr.Execution.Dispatch.stop/2`), and both are given back together. A
+  claim or an adoption reads its row once it holds both: a root whose row
+  ended while it waited for the slot, when a cancel found no holder to
+  stop, gives them straight back and is refused. A cancel that finds the
+  holder kills it; nothing native runs in it, so the kill is not counted
+  against the athanor as an unreaped one.
   """
 
   alias Cyfr.Execution.{Admission, LeaseWatch, Record}
@@ -57,7 +62,11 @@ defmodule Cyfr.Execution.TurnRoot do
   with its attempt and reservation, take the `:root` slot on the calling
   process, start the keeper. `opts` also: `:turn_id`, `:thread_id`,
   `:envelope` (the input the row's envelope describes), `:timeout_ms`
-  (the slot wait), `:tick_ms` (the keeper's period).
+  (the slot wait), `:tick_ms` (the keeper's period). A refused slot
+  answers `{:error, {:slot_refused, sentence}}` and fails the row; a row
+  that ended while the claim waited for its slot answers
+  `{:error, :not_running}`, and one that could not be read then
+  `{:error, :unavailable}`, the slot given back.
   """
   @spec claim(Context.t(), String.t(), keyword()) :: {:ok, claim()} | {:error, term()}
   def claim(%Context{} = ctx, agent_ref, opts \\ []) do
@@ -183,14 +192,17 @@ defmodule Cyfr.Execution.TurnRoot do
   Adopt a root whose successor attempt a takeover already opened
   (`Arca.TurnStorage.takeover/3`): the slot and a keeper for
   `opts[:attempt]`, nothing else. `opts`: `:attempt`, `:timeout_ms`,
-  `:tick_ms`.
+  `:tick_ms`. A row no longer running at that attempt once the slot is
+  held answers `{:error, :not_running}` (`{:error, :unavailable}` when it
+  could not be read), the slot given back.
   """
   @spec adopt(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def adopt(%Context{} = ctx, execution_id, opts) do
     attempt = Keyword.fetch!(opts, :attempt)
 
     with {:ok, token} <-
-           take_slot(ctx, execution_id, Keyword.get(opts, :timeout_ms, @slot_wait_ms)) do
+           take_slot(ctx, execution_id, Keyword.get(opts, :timeout_ms, @slot_wait_ms)),
+         {:ok, token} <- hold_live(ctx, execution_id, attempt, token) do
       {:ok, keeper} =
         LeaseWatch.start(self(), execution_id, attempt, Keyword.take(opts, [:tick_ms]))
 
@@ -274,11 +286,32 @@ defmodule Cyfr.Execution.TurnRoot do
   defp claim_slot(ctx, record) do
     case take_slot(ctx, record.id, @slot_wait_ms) do
       {:ok, token} ->
-        {:ok, token}
+        hold_live(ctx, record.id, record.attempt, token)
 
       {:error, sentence} ->
         _ = Record.write_failed(Record.fail(record, sentence))
         {:error, {:slot_refused, sentence}}
+    end
+  end
+
+  # A root whose row ended while its holder waited for the slot (a cancel
+  # then finds no holder registered to stop) gives the slot straight back
+  # and is refused `:not_running`. The row is read once the slot and the
+  # registration are held, so a row that ends after the read finds the
+  # holder registered, and one that ended before is seen here. A row that
+  # cannot be read is refused `:unavailable`, the slot given back.
+  defp hold_live(ctx, execution_id, attempt, token) do
+    case Arca.ExecutionAttempts.current(ctx.athanor_id, execution_id) do
+      %Arca.Schemas.ExecutionAttempt{attempt: ^attempt, state: "running"} ->
+        {:ok, token}
+
+      {:error, _reason} ->
+        give_back(token)
+        {:error, :unavailable}
+
+      _ended ->
+        give_back(token)
+        {:error, :not_running}
     end
   end
 
