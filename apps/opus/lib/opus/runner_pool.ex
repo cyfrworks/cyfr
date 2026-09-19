@@ -33,7 +33,9 @@ defmodule Opus.RunnerPool do
   ignores it.
 
   A tainted runner leaves the pool once the keeper reports it retired;
-  its handle is stopped then. A keeper that fails takes the pool with it
+  its handle is stopped then. `retire_busy/2` taints every busy runner
+  with no grace and answers once none is left being ended, keeping the
+  fresh and idle ones pooled. A keeper that fails takes the pool with it
   through their common supervisor, and every busy runner's assignee
   hears `{:gone, _}` first.
 
@@ -105,6 +107,18 @@ defmodule Opus.RunnerPool do
   def taint(pool, pid, grace_ms) when is_pid(pid) and is_integer(grace_ms) and grace_ms >= 0,
     do: GenServer.call(pool, {:taint, pid, grace_ms})
 
+  @doc """
+  Taint every busy runner and end it at once, with no grace, and answer
+  once every runner being ended has been retired by the keeper; fresh and
+  idle runners stay pooled. For a caller that must know no runner of the
+  work it started is left, as a test's end does: a runner still running
+  a subtree could otherwise make its next host call after the caller
+  moved on. Exits if that takes longer than `timeout_ms`.
+  """
+  @spec retire_busy(GenServer.server(), timeout()) :: :ok
+  def retire_busy(pool, timeout_ms \\ 30_000),
+    do: GenServer.call(pool, :retire_busy, timeout_ms)
+
   @doc "Send every busy runner a `cancel_child` for `execution_id`."
   @spec cancel_child(GenServer.server(), String.t()) :: :ok
   def cancel_child(pool, execution_id) when is_binary(execution_id),
@@ -154,7 +168,8 @@ defmodule Opus.RunnerPool do
        runners: %{},
        refill_scheduled: false,
        refusal: nil,
-       backoff_ms: @refill_backoff_ms
+       backoff_ms: @refill_backoff_ms,
+       retirees: []
      }}
   end
 
@@ -202,6 +217,16 @@ defmodule Opus.RunnerPool do
     end
   end
 
+  def handle_call(:retire_busy, from, state) do
+    state =
+      Enum.reduce(state.runners, state, fn
+        {pid, %{state: :busy} = entry}, state -> taint(state, pid, entry, 0)
+        _runner, state -> state
+      end)
+
+    {:noreply, retired(%{state | retirees: [from | state.retirees]})}
+  end
+
   def handle_call({:cancel_child, to, execution_id}, _from, state) do
     for {pid, %{state: :busy}} <- state.runners, to == :busy or to == pid do
       _ = RunnerProcess.send_message(pid, %{type: :cancel_child, execution_id: execution_id})
@@ -244,7 +269,7 @@ defmodule Opus.RunnerPool do
   def handle_info({RunnerProcess, pid, event}, state) do
     case state.runners[pid] do
       nil -> {:noreply, state}
-      entry -> {:noreply, on_event(event, pid, entry, state)}
+      entry -> {:noreply, retired(on_event(event, pid, entry, state))}
     end
   end
 
@@ -268,7 +293,7 @@ defmodule Opus.RunnerPool do
 
       {entry, runners} ->
         if entry.execution_id, do: tell(state, pid, {:gone, {:handle_down, reason}})
-        {:noreply, refill_later(%{state | runners: runners})}
+        {:noreply, retired(refill_later(%{state | runners: runners}))}
     end
   end
 
@@ -388,6 +413,19 @@ defmodule Opus.RunnerPool do
   defp taint(state, pid, entry, grace_ms) do
     RunnerProcess.release(pid, grace_ms)
     refill_later(put_runner(state, pid, %{entry | state: :tainted, idle_timer: nil}))
+  end
+
+  # Whoever waits for the busy runners' ends is answered once no runner is
+  # being ended.
+  defp retired(%{retirees: []} = state), do: state
+
+  defp retired(state) do
+    if Enum.any?(state.runners, fn {_pid, e} -> e.state in [:tainted, :retiring] end) do
+      state
+    else
+      for from <- state.retirees, do: GenServer.reply(from, :ok)
+      %{state | retirees: []}
+    end
   end
 
   defp tell(%{assignee: assignee}, pid, event) when is_pid(assignee),

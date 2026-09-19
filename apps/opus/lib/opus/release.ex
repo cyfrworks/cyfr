@@ -19,9 +19,11 @@ defmodule Opus.Release do
   directory (`RELEASE_TMP` follows the `TMPDIR` the keeper sets, since a
   runner's uid can write nowhere else); otherwise a fresh `erl` of this
   runtime on the code paths of Opus and its applications, with no input
-  of its own, running `runner/0`, which starts the application in the
-  runner role and returns, leaving the VM up until the runner ends it
-  (`stop/1`) or its watchdog halts it (`halt/1`).
+  of its own and no `sys.config`, told explicitly what it takes from this
+  VM (its log level, its guests' resolver, its scheduler counts), running
+  `runner/0`, which starts the application in the runner role and
+  returns, leaving the VM up until the runner ends it (`stop/1`) or its
+  watchdog halts it (`halt/1`).
   """
 
   require Logger
@@ -71,13 +73,38 @@ defmodule Opus.Release do
     end
   end
 
-  @doc "How a keeper starts a runner of this boot (`t:command/0`)."
+  @doc """
+  How a keeper starts a runner of this boot (`t:command/0`), told what a
+  plain VM has no `sys.config` to read from this VM itself: its log level,
+  the resolver its guests' egress resolves through when one is configured
+  (`config :opus, :resolver`), and its scheduler counts.
+  """
   @spec runner_command() :: command()
-  def runner_command, do: runner_command(System.get_env())
+  def runner_command do
+    runner_command(
+      env: System.get_env(),
+      log_level: Logger.level(),
+      resolver: Application.get_env(:opus, :resolver),
+      schedulers:
+        {:erlang.system_info(:schedulers), :erlang.system_info(:schedulers_online),
+         :erlang.system_info(:dirty_cpu_schedulers),
+         :erlang.system_info(:dirty_cpu_schedulers_online),
+         :erlang.system_info(:dirty_io_schedulers)}
+    )
+  end
 
-  @doc false
-  @spec runner_command(%{optional(String.t()) => String.t()}) :: command()
-  def runner_command(env) when is_map(env) do
+  @doc """
+  How a keeper starts a runner, from `opts`: `:env`, the service's process
+  environment, and, for a runner outside a release, `:log_level`,
+  `:resolver` (a module, or nil for the runtime's own) and `:schedulers`
+  (`{schedulers, online, dirty_cpu, dirty_cpu_online, dirty_io}`), which
+  become its emulator flags and application environment. A release's
+  runner reads the release's own `vm.args` and `sys.config`, so a release
+  passes none of them.
+  """
+  @spec runner_command(keyword()) :: command()
+  def runner_command(opts) when is_list(opts) do
+    env = Keyword.fetch!(opts, :env)
     shared = Map.take(env, @shared_environment)
 
     case {Map.get(env, "RELEASE_ROOT"), Map.get(env, "RELEASE_NAME")} do
@@ -96,10 +123,34 @@ defmodule Opus.Release do
       _not_a_release ->
         %{
           argv:
-            [erl(), "-noinput", "+fnu", "-pa"] ++
-              code_paths() ++ ["-run", "Elixir.Opus.Release", "runner"],
+            [erl(), "-noinput", "+fnu"] ++
+              emulator_flags(Keyword.fetch!(opts, :schedulers)) ++
+              ["-pa"] ++
+              code_paths() ++
+              application_flags(opts) ++ ["-run", "Elixir.Opus.Release", "runner"],
           env: shared
         }
+    end
+  end
+
+  defp emulator_flags({schedulers, online, dirty_cpu, dirty_cpu_online, dirty_io}),
+    do: [
+      "+S",
+      "#{schedulers}:#{online}",
+      "+SDcpu",
+      "#{dirty_cpu}:#{dirty_cpu_online}",
+      "+SDio",
+      "#{dirty_io}"
+    ]
+
+  # `-App Key Value`, the value read as an Erlang term: a module as a quoted
+  # atom.
+  defp application_flags(opts) do
+    level = ["-logger", "level", Atom.to_string(Keyword.fetch!(opts, :log_level))]
+
+    case Keyword.fetch!(opts, :resolver) do
+      nil -> level
+      resolver when is_atom(resolver) -> level ++ ["-opus", "resolver", "'#{resolver}'"]
     end
   end
 

@@ -296,6 +296,32 @@ defmodule Opus.RunnerPoolTest do
     assert_receive {RunnerPool, ^pid, {:gone, {:protocol, :malformed}}}
   end
 
+  test "retiring the busy runners ends each at once and answers once they are gone, keeping the fresh and idle",
+       %{keeper: keeper} do
+    pool = start_pool!(keeper, pool_size: 1)
+    serve!(pool)
+    wait_until(fn -> counts(pool).fresh == 1 end)
+
+    {:ok, idle, _} = RunnerPool.take(pool, "ath_a", "exec_idle")
+    complete(spawn_of(keeper, idle), "exec_idle", true)
+    assert_receive {RunnerPool, ^idle, {:complete, "exec_idle", true}}
+    {:ok, a, a_id} = RunnerPool.take(pool, "ath_b", "exec_1")
+    {:ok, b, b_id} = RunnerPool.take(pool, "ath_c", "exec_2")
+    wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 2, tainted: 0} end)
+
+    assert :ok = RunnerPool.retire_busy(pool)
+
+    assert counts(pool) == %{fresh: 1, idle: 1, busy: 0, tainted: 0}
+    assert {a_id, 0} in ScriptedKeeper.releases(keeper)
+    assert {b_id, 0} in ScriptedKeeper.releases(keeper)
+    refute Enum.any?(RunnerPool.runners(pool), &(&1.pid in [a, b]))
+    assert_received {RunnerPool, ^a, {:gone, _}}
+    assert_received {RunnerPool, ^b, {:gone, _}}
+
+    # Nothing busy: answered at once.
+    assert :ok = RunnerPool.retire_busy(pool)
+  end
+
   describe "a keeper that refuses runners" do
     test "leaves no runner in the pool, which backs off, refuses a take with the keeper's account and says so",
          %{keeper: keeper} do

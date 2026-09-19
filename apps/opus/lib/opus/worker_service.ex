@@ -38,6 +38,8 @@ defmodule Opus.WorkerService do
   ends with the subtree still assigned, is reported to CYFR at once,
   naming the runner and signed with the service's dispatch key
   (`Opus.HostClient.runner_exited/4`); a runner is reported once. A
+  report runs beside the service, which never waits on CYFR, and
+  `await_reports/1` answers once none is in flight. A
   `start` no runner can be found for answers `{:error, :unavailable}`,
   and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
   with the keeper's account of why; the listener refuses either `503`,
@@ -101,6 +103,17 @@ defmodule Opus.WorkerService do
   @impl Cyfr.WorkerAPI
   def status, do: GenServer.call(__MODULE__, :status)
 
+  @doc """
+  Answer once every runner exit this service is reporting has been
+  answered by CYFR or given up on (`Opus.HostClient.runner_exited/4`
+  bounds each); at once when none is in flight. For a caller that must
+  know no report of the runners it ended still lands after it moved on,
+  as a test's end does. Exits if that takes longer than `timeout_ms`.
+  """
+  @spec await_reports(timeout()) :: :ok
+  def await_reports(timeout_ms \\ 70_000),
+    do: GenServer.call(__MODULE__, :await_reports, timeout_ms)
+
   # ---------------------------------------------------------------------------
   # Server
   # ---------------------------------------------------------------------------
@@ -136,7 +149,9 @@ defmodule Opus.WorkerService do
        mode: mode,
        settings: settings,
        assigned: %{},
-       ended: %{ids: MapSet.new(), order: :queue.new()}
+       ended: %{ids: MapSet.new(), order: :queue.new()},
+       reports: %{},
+       report_waiters: []
      })}
   end
 
@@ -222,6 +237,9 @@ defmodule Opus.WorkerService do
 
   def handle_call({:settled, pid}, _from, state), do: {:reply, :ok, Subtree.settle(state, pid)}
 
+  def handle_call(:await_reports, from, state),
+    do: {:noreply, reported(%{state | report_waiters: [from | state.report_waiters]})}
+
   def handle_call(:status, _from, state) do
     {pool, attempts} =
       case state.mode do
@@ -245,11 +263,21 @@ defmodule Opus.WorkerService do
   def handle_cast({:track, pid, fields}, state), do: {:noreply, Subtree.track(state, pid, fields)}
   def handle_cast({:unclean, _pid, _reason}, state), do: {:noreply, state}
 
+  # A report in flight has been answered, or given up on.
   @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
+      when is_map_key(state.reports, ref) do
+    {:noreply, reported(%{state | reports: Map.delete(state.reports, ref)})}
+  end
+
   def handle_info({:DOWN, ref, :process, pid, reason}, %{mode: :local} = state) do
     case Subtree.down(state, ref) do
       {:attempt, entry, state} ->
-        if reason != :normal, do: report(state, entry.runner, [entry.attempt], entry)
+        state =
+          if reason != :normal,
+            do: report(state, entry.runner, [entry.attempt], entry),
+            else: state
+
         {:noreply, %{state | ended: remember(state.ended, entry.execution_id)}}
 
       {:waiter, state} ->
@@ -276,7 +304,7 @@ defmodule Opus.WorkerService do
         {:noreply, state}
 
       assignment ->
-        report(state, runner, Enum.uniq([assignment.attempt | open]), assignment)
+        state = report(state, runner, Enum.uniq([assignment.attempt | open]), assignment)
         {:noreply, forget(state, pid)}
     end
   end
@@ -410,14 +438,13 @@ defmodule Opus.WorkerService do
         state
 
       assignment ->
-        report(
-          state,
+        state
+        |> report(
           assignment.runner,
           Enum.uniq([assignment.attempt | Map.values(assignment.children)]),
           assignment
         )
-
-        forget(state, pid)
+        |> forget(pid)
     end
   end
 
@@ -474,23 +501,34 @@ defmodule Opus.WorkerService do
 
   defp ended?(state, execution_id), do: MapSet.member?(state.ended.ids, execution_id)
 
-  defp report(%{credentials: credentials, boot: boot}, runner, attempts, context) do
-    spawn(fn ->
-      Process.put(:"$callers", context.callers)
-      Cyfr.LoggerContext.restore(context.logger)
+  # A report runs beside the service, which never waits on CYFR, and is
+  # watched until it is answered, so `await_reports/1` can wait for it.
+  defp report(%{credentials: credentials, boot: boot} = state, runner, attempts, context) do
+    {_pid, ref} =
+      spawn_monitor(fn ->
+        Process.put(:"$callers", context.callers)
+        Cyfr.LoggerContext.restore(context.logger)
 
-      case HostClient.runner_exited(credentials, boot, runner, attempts) do
-        :ok ->
-          :ok
+        case HostClient.runner_exited(credentials, boot, runner, attempts) do
+          :ok ->
+            :ok
 
-        {:error, reason} ->
-          Logger.error(
-            "[Opus.WorkerService] the exit of runner #{runner} (#{context.execution_id}) was not " <>
-              "reported: #{inspect(reason)}"
-          )
-      end
-    end)
+          {:error, reason} ->
+            Logger.error(
+              "[Opus.WorkerService] the exit of runner #{runner} (#{context.execution_id}) was " <>
+                "not reported: #{inspect(reason)}"
+            )
+        end
+      end)
 
-    :ok
+    %{state | reports: Map.put(state.reports, ref, true)}
+  end
+
+  # Whoever waits for the reports in flight is answered once none is.
+  defp reported(%{reports: reports} = state) when map_size(reports) > 0, do: state
+
+  defp reported(state) do
+    for from <- state.report_waiters, do: GenServer.reply(from, :ok)
+    %{state | report_waiters: []}
   end
 end

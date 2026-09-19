@@ -4,30 +4,38 @@
 defmodule Cyfr.Test.OpusService do
   @moduledoc """
   The Opus worker service of the test boot, reached as CYFR reaches it and
-  reaching CYFR as it does: over HTTP, through the two listeners the boot
-  starts on ports of the system's choosing.
+  reaching CYFR as it does: over HTTP, through the listeners the boot
+  starts on ports of the system's choosing. Its runners are OS processes
+  of their own (the `Direct` keeper, `config/test.exs`), pooled and reused
+  across tests.
 
   The umbrella starts CYFR's host API listener (`Cyfr.Execution.HostListener`,
   port 0 under `config/test.exs`) and the Opus application, whose listener
   (`Opus.WorkerListener`) also binds port 0. Neither knows the other's port
-  until both are up, so `wire!/0`, run once by `test_helper.exs` and by the
+  until both are up, so `wire!/1`, run once by `test_helper.exs` and by the
   step bench, gives the service `wrk_local` its credentials — the key CYFR
-  derives for it and the host listener's URL — restarting it when they are
-  not the ones it holds, and puts the service's endpoint in
-  `config :cyfr, :workers`, where `Cyfr.Execution.Dispatch` finds it. A
-  test that replaces `:workers` restores what it found.
+  derives for it and where its runners reach CYFR — restarting it when they
+  are not the ones it holds, and puts the service's endpoint in
+  `config :cyfr, :workers`, where `Cyfr.Execution.Dispatch` finds it. For
+  the suite, the runners reach the host listener through the suite's wire
+  (`Cyfr.Test.TwoServices.Wire`), which a test watches, holds a call on or
+  loses a call on without restarting the service; the bench run alone
+  (`mix cyfr.bench.step`) reaches it directly. A test that replaces `:workers` restores what it found.
 
-  `request!/3` and `start!/3` post a `Cyfr.WorkerAPI` request to the
-  service's listener signed as CYFR signs it; `restart!/0` restarts the
-  service, a new boot holding no attempt, as an operator's restart does.
+  `status/0` and `boot/0` ask the service over the wire, `request!/3` and
+  `start!/3` post a `Cyfr.WorkerAPI` request to the service's listener
+  signed as CYFR signs it, and `restart!/0` restarts the service, a new boot
+  holding no attempt and a pool refilled from nothing, as an operator's
+  restart does.
   """
 
-  alias Cyfr.Execution.{HostListener, Keys}
-  alias Cyfr.{WorkerAuth, WorkerWire}
+  alias Cyfr.Execution.{HostListener, Keys, WorkerClient}
+  alias Cyfr.Test.TwoServices
+  alias Cyfr.{WorkerAPI, WorkerAuth, WorkerWire}
 
   # The service is a sibling application, not a dependency: CYFR names it
   # here as the suite's, never in its own code.
-  @compile {:no_warn_undefined, [Opus.WorkerService, Opus.Credentials]}
+  @compile {:no_warn_undefined, [Opus.Credentials]}
 
   @service "wrk_local"
 
@@ -36,15 +44,21 @@ defmodule Cyfr.Test.OpusService do
   def service, do: @service
 
   @doc """
-  Point Opus at the running host listener and CYFR at Opus's listener.
-  Answers the service's endpoint (`t:Cyfr.WorkerAPI.endpoint/0`).
+  Point Opus at the running host listener — through the suite's wire
+  unless `proxy: false` — and CYFR at Opus's listener. Answers the
+  service's endpoint (`t:Cyfr.WorkerAPI.endpoint/0`).
   """
-  @spec wire!() :: Cyfr.WorkerAPI.endpoint()
-  def wire! do
+  @spec wire!(keyword()) :: Cyfr.WorkerAPI.endpoint()
+  def wire!(opts \\ []) do
     unless Process.whereis(Opus.Supervisor),
       do: raise("the Opus worker service is not running: run the suite from the umbrella root")
 
     {:ok, worker_key} = Keys.worker_key(@service)
+
+    reached =
+      if Keyword.get(opts, :proxy, true),
+        do: TwoServices.serve_wire!(host_url()).url,
+        else: host_url()
 
     # Everything the service's credentials are read from, spelled here so
     # the suite does not depend on what another suite in this VM (Opus's
@@ -52,7 +66,7 @@ defmodule Cyfr.Test.OpusService do
     env = [
       service_id: @service,
       service_key: Base.encode16(worker_key, case: :lower),
-      host_url: host_url(),
+      host_url: reached,
       bind: "127.0.0.1",
       port: 0
     ]
@@ -68,7 +82,7 @@ defmodule Cyfr.Test.OpusService do
     endpoint
   end
 
-  @doc "The base URL of CYFR's host API listener: where Opus posts its host calls."
+  @doc "The base URL of CYFR's host API listener, where the suite's wire forwards."
   @spec host_url() :: String.t()
   def host_url do
     {_id, listener, _type, _modules} =
@@ -91,17 +105,21 @@ defmodule Cyfr.Test.OpusService do
   @spec endpoint() :: Cyfr.WorkerAPI.endpoint()
   def endpoint, do: %{id: @service, url: url(), components: nil}
 
+  @doc "The service's status, asked over the wire by CYFR's own client."
+  @spec status() :: WorkerAPI.status()
+  def status do
+    {:ok, status} = WorkerClient.status(endpoint())
+    status
+  end
+
   @doc "The boot id the running service answers."
   @spec boot() :: String.t()
-  def boot do
-    {:ok, %{boot: boot}} = Opus.WorkerService.status()
-    boot
-  end
+  def boot, do: status().boot
 
   @doc """
   Restart the worker service and its runners: a new boot that holds no
-  attempt and reloads its credentials. Answers the new boot id. For a sync
-  test only: the service is one.
+  attempt, reloads its credentials and fills its pool from nothing.
+  Answers the new boot id. For a sync test only: the service is one.
   """
   @spec restart!() :: String.t()
   def restart! do
@@ -154,8 +172,9 @@ defmodule Cyfr.Test.OpusService do
   end
 
   @doc """
-  The Bandit servers of the two listeners of the wire, CYFR's host API
-  and Opus's, whose connection processes carry the calls in flight.
+  The Bandit servers of the wire between CYFR and Opus — CYFR's host API
+  listener, Opus's listener and the suite's wire — whose connection
+  processes carry the calls in flight.
   """
   @spec listeners() :: [pid()]
   def listeners do
@@ -178,6 +197,12 @@ defmodule Cyfr.Test.OpusService do
         _ -> []
       end
 
-    host ++ opus
+    wire =
+      case TwoServices.wire() do
+        %{server: server} -> [server]
+        nil -> []
+      end
+
+    host ++ opus ++ wire
   end
 end

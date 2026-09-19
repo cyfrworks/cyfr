@@ -19,18 +19,28 @@ defmodule Cyfr.Test.Sandbox do
   repository start (`supervisors/0`, pinned by `Cyfr.Test.SandboxTest`),
   stopped in order: what starts work before the work it started — runners
   (whose loops die with them), then the tasks that wait on runs, then the
-  runs' attempts and runners, then the event buffers they wrote to. Each
-  child is stopped synchronously, so the sweep returns only once every
-  child is gone. Then the connections open on the two listeners of the
-  worker wire (`Cyfr.Test.OpusService.listeners/0`) are closed: a host
-  call a stopped runner had in flight runs on one of them, and it must
-  not reach the database after the owner is gone.
+  runs' attempts, then the Opus service's runners, then the event buffers
+  they wrote to. Each child is stopped synchronously, so the sweep returns
+  only once every child is gone. The Opus service's runners are OS
+  processes, and their handles' supervisor (`Opus.RunnerPool.Runners`) is
+  swept through the pool instead (`pooled/0`): every busy runner is ended
+  at once and awaited (`Opus.RunnerPool.retire_busy/2`), fresh and idle
+  ones stay pooled for the next test, and every report of a runner's exit
+  the service has in flight is awaited (`Opus.WorkerService.await_reports/1`),
+  so no runner's host call and no report lands after the owner is gone.
+  Then the connections open on the listeners of the worker wire
+  (`Cyfr.Test.OpusService.listeners/0`) are closed: a host call a stopped
+  runner had in flight runs on one of them, and it must not reach the
+  database after the owner is gone.
 
   `on_exit` callbacks run last-registered first. A test that restores
   configuration a background process reads (a base path, a seed path, the
   execution engine) calls `stop_work_on_exit/0` after registering those
   restores, so the work stops before the configuration it runs under moves.
   """
+
+  # The Opus service is a sibling application, not a dependency.
+  @compile {:no_warn_undefined, [Opus.RunnerPool, Opus.WorkerService]}
 
   @supervisors [
     Aqua.RunnerSupervisor,
@@ -40,17 +50,24 @@ defmodule Cyfr.Test.Sandbox do
     Cyfr.Schedules.TaskSupervisor,
     Sanctum.OAuth.RefreshTaskSupervisor,
     Cyfr.Execution.TaskSupervisor,
-    Opus.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
     Emissary.MCP.ExternalServerSupervisor,
     Cyfr.Execution.Attempt.Supervisor,
-    Opus.WorkerService.Runners,
+    Opus.RunnerPool.Runners,
     Cyfr.Execution.Events.Supervisor
   ]
+
+  # Swept through the pool whose runners' handles it supervises, never by
+  # stopping its children: a handle stopped kills its runner with no report.
+  @pooled [Opus.RunnerPool.Runners]
 
   @doc "The supervisors a sync test's work is swept from, in the order they are stopped."
   @spec supervisors() :: [atom()]
   def supervisors, do: @supervisors
+
+  @doc "The supervisors of `supervisors/0` swept through their pool rather than stopped."
+  @spec pooled() :: [atom()]
+  def pooled, do: @pooled
 
   @doc """
   Start this test's sandbox owner (shared unless the test is async), let
@@ -88,17 +105,36 @@ defmodule Cyfr.Test.Sandbox do
 
   defp stop_work(passes) do
     stopped =
-      for name <- @supervisors,
-          supervisor = Process.whereis(name),
-          is_pid(supervisor),
-          {_, child, _, _} <- DynamicSupervisor.which_children(supervisor),
-          is_pid(child) do
-        DynamicSupervisor.terminate_child(supervisor, child)
-      end
+      Enum.flat_map(@supervisors, fn name ->
+        case Process.whereis(name) do
+          nil -> []
+          _supervisor when name in @pooled -> retire_runners()
+          supervisor -> stop_children(supervisor)
+        end
+      end)
 
     close_connections()
 
     if stopped == [], do: :ok, else: stop_work(passes - 1)
+  end
+
+  defp stop_children(supervisor) do
+    for {_, child, _, _} <- DynamicSupervisor.which_children(supervisor),
+        is_pid(child),
+        do: DynamicSupervisor.terminate_child(supervisor, child)
+  end
+
+  # The Opus service's busy runners are ended and awaited, then the reports
+  # of their exits: answered as stopped work when there was any. A service
+  # a test is restarting has no pool to ask, and its runners went with the
+  # old one.
+  defp retire_runners do
+    busy = Opus.RunnerPool.status(Opus.RunnerPool).runners.busy
+    :ok = Opus.RunnerPool.retire_busy(Opus.RunnerPool)
+    :ok = Opus.WorkerService.await_reports()
+    List.duplicate(:retired, busy)
+  catch
+    :exit, {:noproc, _call} -> []
   end
 
   # A connection process carries one request; killed, its caller sees a

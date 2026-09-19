@@ -5,36 +5,41 @@ unless Code.ensure_loaded?(Opus.Test.FormulaHost) do
   defmodule Opus.Test.FormulaHost do
     @moduledoc """
     A formula's attempt as its runner holds it, for tests that drive a
-    formula's host functions without running the formula's guest.
+    formula's host functions (`Opus.FormulaHandler`) in this VM without
+    running the formula's guest: what CYFR decides of each host call they
+    make, under the authority the attempt holds.
 
     `attached!/1` admits a formula's row under an authority, opens its
-    attempt dispatched to the running `Opus.WorkerService` and attaches a
-    runner of that worker service's group (`Cyfr.Test.AttemptFixtures`), so
-    the children its host functions admit run in runners of that group. Its
-    client reaches CYFR over the wire, through the test boot's host API
-    listener (`Cyfr.Test.OpusService.host_url/0`). `current!/2` is the
+    attempt dispatched to the running Opus service and attaches a runner
+    of that service's boot (`Cyfr.Test.AttemptFixtures`). Its client
+    reaches CYFR as a runner does, over the suite's wire
+    (`Cyfr.Test.TwoServices.wire/0`) to the host API listener, so what it
+    asks and what it is answered can be read there. The runner it presents
+    is no process: a child CYFR admits and claims for it is started by no
+    runner, and the formula's host function closes it failed as a runner
+    that cannot start a child does. A child's own run is a real formula's
+    in a real runner (`Opus.Test.NestedExecution`). `current!/2` is the
     client of a formula a real run has attached.
     """
 
-    alias Cyfr.Test.AttemptFixtures
+    alias Cyfr.Test.{AttemptFixtures, OpusService, TwoServices}
 
     @doc """
     An attached formula attempt: the fixture (`Cyfr.Test.AttemptFixtures.attached!/1`)
     with its `host` client. Options are the fixture's; the component type
-    defaults to `:formula`, the worker service to the running
-    `Opus.WorkerService`, and the row is admitted with its authority's
-    reservation.
+    defaults to `:formula`, the worker service to the running Opus
+    service, and the row is admitted with its authority's reservation.
     """
     @spec attached!(keyword()) :: map()
     def attached!(opts \\ []) do
-      {:ok, %{service: service, boot: boot}} = Opus.WorkerService.status()
+      %{service: service, boot: boot} = OpusService.status()
 
       fixture =
         AttemptFixtures.attached!(
           Keyword.merge(
             [
               component_type: :formula,
-              worker: Cyfr.Test.OpusService.endpoint(),
+              worker: OpusService.endpoint(),
               service_id: service,
               boot_id: boot,
               reservation: true
@@ -46,12 +51,7 @@ unless Code.ensure_loaded?(Opus.Test.FormulaHost) do
       Map.put(
         fixture,
         :host,
-        Opus.HostClient.new(
-          fixture.keys,
-          fixture.runner,
-          fixture.boot,
-          Cyfr.Test.OpusService.host_url()
-        )
+        Opus.HostClient.new(fixture.keys, fixture.runner, fixture.boot, TwoServices.wire().url)
       )
     end
 
@@ -67,7 +67,7 @@ unless Code.ensure_loaded?(Opus.Test.FormulaHost) do
         attempt.keys,
         attempt.runner,
         attempt.boot,
-        Cyfr.Test.OpusService.host_url()
+        TwoServices.wire().url
       )
     end
 

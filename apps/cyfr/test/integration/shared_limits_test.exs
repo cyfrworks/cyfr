@@ -140,7 +140,7 @@ defmodule Cyfr.SharedLimitsTest do
     # Neither service was asked to run a refused invocation.
     assert length(ScriptedWorker.calls()) == 5
     assert {:ok, %{attempts: []}} = ScriptedWorker.status()
-    wait_until(fn -> match?({:ok, %{attempts: []}}, Opus.WorkerService.status()) end, 10_000)
+    wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
 
     assert {:ok, 10, 0, _window_ms} =
              Rates.status(ctx.athanor_id, @stub_ref, %{rate_limit: @rate})
@@ -161,7 +161,7 @@ defmodule Cyfr.SharedLimitsTest do
     assert_held(ctx, authority, [on_opus, on_scripted], before)
 
     # Each service holds one of the two.
-    assert {:ok, %{attempts: [_one]}} = Opus.WorkerService.status()
+    assert %{attempts: [_one]} = OpusService.status()
     assert {:ok, %{attempts: [_one]}} = ScriptedWorker.status()
 
     for service <- [@local, @other] do
@@ -373,8 +373,6 @@ defmodule Cyfr.SharedLimitsTest do
   test "a completion, a cancel and an exit report delivered twice each give back once",
        %{ctx: ctx, authority: authority} do
     start_supervised!({ScriptedWorker, ref: @stub, script: [:hang, :hang]})
-    wire = Wire.start!(OpusService.host_url())
-    point_opus_at!(wire.url)
     before = Slots.status(@slots).child_active
     root = root!(ctx, authority)
 
@@ -383,11 +381,10 @@ defmodule Cyfr.SharedLimitsTest do
     assert_held(ctx, authority, [on_opus, on_scripted], before)
 
     # The completion's answer is lost once CYFR has recorded it, so the
-    # Opus service sends it again.
-    complete = WorkerWire.host_route(:complete)
-    Wire.plan(wire, complete, [:forward_then_drop])
+    # Opus service's runner sends it again.
+    plan!(:complete, [:forward_then_drop])
     finish!(on_opus)
-    wait_until(fn -> Wire.seen(wire, complete) == [:forward_then_drop, :forward] end)
+    wait_until(fn -> seen(:complete) == [:forward_then_drop, :forward] end)
     assert_held(ctx, authority, [on_scripted], before)
 
     # One more fits, and only one.
@@ -450,13 +447,14 @@ defmodule Cyfr.SharedLimitsTest do
     )
   end
 
-  # A task the Opus service runs, held at its guest's entry.
+  # A task the Opus service runs, held at the first delta its guest
+  # pushes: attached, its guest run, nothing of it written yet.
   defp hold_on_opus!(ctx, authority, root) do
     id = Cyfr.UUID7.execution_id()
-    await_entry!(id)
+    hold!(:push_deltas, id, once: true)
     route!(@local)
     task = Task.async(fn -> spawn!(ctx, authority, root, id) end)
-    assert_receive {:entered, ^id, guest}, 30_000
+    assert_receive {:held, ^id, guest}, 30_000
     assert %{state: "running", service_id: @local} = attempt(ctx, id)
     %{id: id, task: task, guest: guest}
   end
@@ -479,7 +477,7 @@ defmodule Cyfr.SharedLimitsTest do
 
   # Let a task held on the Opus service run to its end.
   defp finish!(%{id: id, task: task, guest: guest}) do
-    send(guest, :continue)
+    release!(guest)
     assert {{:ok, %{status: :completed}}, ^id} = Task.await(task, 60_000)
   end
 

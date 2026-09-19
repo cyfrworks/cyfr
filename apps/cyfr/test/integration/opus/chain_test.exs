@@ -7,17 +7,19 @@ defmodule Opus.ChainTest do
   # cases are `Cyfr.Execution.AdmissionTest`), against the in-memory consent
   # source and a real published component (math.wasm — a core module that
   # fails at component compile, which is irrelevant: every property
-  # asserted here is decided before compilation).
+  # asserted here is decided before compilation). What a run entered with
+  # is the authority its runner was handed, at its attach or at its
+  # admission, read on the suite's wire.
   use ExUnit.Case, async: false
 
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob
+  alias Cyfr.Test.TwoServices
   alias Sanctum.Consent.Source
   alias Sanctum.Context
   alias Cyfr.JCS
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
-  @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]
   # Activation digests as the resolver spells them; an assignment carries
   # nothing else.
   @root_act Cyfr.Digest.sha256("root-act")
@@ -26,6 +28,7 @@ defmodule Opus.ChainTest do
   setup tags do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
+    TwoServices.watch!()
     start_supervised!(Source.Memory)
 
     test_path = Path.join(System.tmp_dir!(), "opus_chain_test_#{:rand.uniform(100_000)}")
@@ -83,20 +86,22 @@ defmodule Opus.ChainTest do
   @root_node "reagent:local.chain-root"
   @target_node "reagent:local.chain-target"
 
-  defp attach_witness do
-    handler_id = "chain-witness-#{System.unique_integer([:positive])}"
-    test_pid = self()
+  # The authority the run `execution_id` was handed.
+  defp entered!(execution_id) do
+    assert %Authority{} = authority = TwoServices.entered(execution_id)
+    authority
+  end
 
-    :telemetry.attach(
-      handler_id,
-      @telemetry_event,
-      fn _event, _measurements, metadata, _config ->
-        send(test_pid, {:authority_entered, metadata})
-      end,
-      nil
-    )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
+  # The children admitted for the formula `parent_id`, as the answers to
+  # its admissions crossed the suite's wire, oldest first.
+  defp admitted(parent_id) do
+    for %{
+          callback: :admit_child,
+          fields: %{execution_id: ^parent_id},
+          answer: %{"ok" => %{"assignment" => token}}
+        } <- TwoServices.calls(),
+        {:ok, %{execution_id: id}} <- [Cyfr.Assignment.read(token)],
+        do: id
   end
 
   defp limits_map do
@@ -211,7 +216,6 @@ defmodule Opus.ChainTest do
       ctx: ctx,
       root: root
     } do
-      attach_witness()
       seed(ctx, profile_summary(), consent(root))
       execution_id = "exec_chain_root_#{System.unique_integer([:positive])}"
 
@@ -221,11 +225,10 @@ defmodule Opus.ChainTest do
           type: :reagent
         )
 
-      assert_receive {:authority_entered, metadata}, 30_000
-      assert %Authority{} = metadata.authority
-      assert metadata.authority.profile_id == "prof-chain"
-      assert metadata.authority.consent_id == "consent-chain"
-      assert metadata.authority.cursor == {:bound, @root_node}
+      authority = entered!(execution_id)
+      assert authority.profile_id == "prof-chain"
+      assert authority.consent_id == "consent-chain"
+      assert authority.cursor == {:bound, @root_node}
 
       row = Arca.Repo.get(Arca.Execution, execution_id)
       assert row.activation_digest != nil
@@ -353,7 +356,6 @@ defmodule Opus.ChainTest do
       ctx: ctx,
       target: target
     } do
-      attach_witness()
       auth = authority_with_edges(%{@target_node => %{}})
       execution_id = "exec_chain_child_#{System.unique_integer([:positive])}"
 
@@ -366,10 +368,10 @@ defmodule Opus.ChainTest do
           child_opts(ctx, execution_id: execution_id)
         )
 
-      assert_receive {:authority_entered, metadata}, 30_000
-      assert metadata.authority.cursor == {:bound, @target_node}
-      assert metadata.authority.depth == 1
-      assert metadata.authority.chain == [@root_node, @target_node]
+      authority = entered!(execution_id)
+      assert authority.cursor == {:bound, @target_node}
+      assert authority.depth == 1
+      assert authority.chain == [@root_node, @target_node]
       assert Map.get(target, :release_digest) != nil
 
       row = Arca.Repo.get(Arca.Execution, execution_id)
@@ -380,7 +382,6 @@ defmodule Opus.ChainTest do
     end
 
     test "an off-graph target runs as a zero child, not the caller's authority", %{ctx: ctx} do
-      attach_witness()
       auth = authority_with_edges(%{})
       execution_id = "exec_chain_zero_#{System.unique_integer([:positive])}"
 
@@ -393,10 +394,10 @@ defmodule Opus.ChainTest do
           child_opts(ctx, execution_id: execution_id)
         )
 
-      assert_receive {:authority_entered, metadata}, 30_000
-      assert metadata.authority.cursor == :unbound
-      assert metadata.authority.profile_id == nil
-      assert metadata.authority.policy == :none
+      authority = entered!(execution_id)
+      assert authority.cursor == :unbound
+      assert authority.profile_id == nil
+      assert authority.policy == :none
     end
 
     test "a bound edge whose target no longer resolves is setup_required", %{ctx: ctx} do
@@ -520,20 +521,18 @@ defmodule Opus.ChainTest do
 
       assert no_authority_error =~ "without an authority is not a thing"
 
-      attach_witness()
+      execution_id = "exec_chain_cat_#{System.unique_integer([:positive])}"
 
       _result =
         Cyfr.Execution.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
           type: :catalyst,
-          execution_id: "exec_chain_cat_#{System.unique_integer([:positive])}"
+          execution_id: execution_id
         )
 
-      assert_receive {:authority_entered, metadata}, 30_000
-      assert metadata.authority.profile_id == "prof-cat"
+      assert entered!(execution_id).profile_id == "prof-cat"
     end
 
     test "the formula closures intercept execution dispatch under an authority", %{ctx: ctx} do
-      attach_witness()
       auth = authority_with_edges(%{@target_node => %{}})
 
       {host, imports, tracker} = fork_imports(ctx, auth)
@@ -561,12 +560,14 @@ defmodule Opus.ChainTest do
 
       response = call_fn.(request)
 
-      assert_receive {:authority_entered, metadata}, 30_000
-      assert metadata.authority.cursor == {:bound, @target_node}
-      assert metadata.authority.depth == 1
+      assert [child_id] = admitted(parent_id)
+      authority = entered!(child_id)
+      assert authority.cursor == {:bound, @target_node}
+      assert authority.depth == 1
 
-      # The dispatch failed only at component compile (math.wasm), after
-      # every property under test was decided.
+      # The child is admitted for a runner this fixture's attempt presents,
+      # which is no process: it is closed failed unstarted, after every
+      # property under test was decided.
       assert %{"error" => %{"type" => "dispatch_error"}} = Jason.decode!(response)
 
       import Ecto.Query
@@ -603,10 +604,9 @@ defmodule Opus.ChainTest do
     end
 
     test "the spawn closure charges the budget and releases it on completion", %{ctx: ctx} do
-      attach_witness()
       auth = authority_with_edges(%{@target_node => %{}})
 
-      {_host, imports, tracker} = fork_imports(ctx, auth)
+      {host, imports, tracker} = fork_imports(ctx, auth)
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -622,15 +622,16 @@ defmodule Opus.ChainTest do
         })
 
       assert %{"task_id" => _} = Jason.decode!(spawn_fn.(request))
-      assert_receive {:authority_entered, _}, 30_000
+      assert [_child_id] = admitted(host.execution_id)
       wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     end
 
-    test "an in-chain run_stream is spawn-shaped and returns stream info", %{ctx: ctx} do
-      attach_witness()
+    test "an in-chain run_stream is admitted spawn-shaped under the edge's authority", %{
+      ctx: ctx
+    } do
       auth = authority_with_edges(%{@target_node => %{}})
 
-      {_host, imports, tracker} = fork_imports(ctx, auth)
+      {host, imports, tracker} = fork_imports(ctx, auth)
 
       on_exit(fn ->
         if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
@@ -645,15 +646,22 @@ defmodule Opus.ChainTest do
           "args" => %{"reference" => "#{@target_node}:0.1.0", "input" => %{}}
         })
 
-      # Same success envelope the legacy dispatch wraps results in.
-      assert %{
-               "status" => "completed",
-               "output" => %{"execution_id" => execution_id, "stream_url" => stream_url}
-             } = Jason.decode!(call_fn.(request))
+      # The runner this fixture's attempt presents starts nothing, so the
+      # stream info a started child is answered with is
+      # `Opus.FormulaHandlerRunnerTest`'s; what CYFR decides is here.
+      _response = call_fn.(request)
 
-      assert stream_url == "/api/executions/#{execution_id}/events"
-      assert_receive {:authority_entered, metadata}, 30_000
-      assert metadata.execution_id == execution_id
+      parent_id = host.execution_id
+
+      assert [%{args: %{"guest_fn" => "spawn"}}] =
+               for(
+                 %{callback: :admit_child, fields: %{execution_id: ^parent_id}} = call <-
+                   TwoServices.calls(),
+                 do: call
+               )
+
+      assert [child_id] = admitted(parent_id)
+      assert entered!(child_id).cursor == {:bound, @target_node}
       wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     end
 

@@ -18,9 +18,10 @@ defmodule Cyfr.TwoWorkersTest do
   the same child key (`admit_child`), as it was (`renew`), or not at all
   (`record_denial`, which ends uncertain) — and a run whose stream and
   completion crossed a lossy wire keeps every delta once, in order, before
-  its terminal event. Cancelling a formula ends its children with it; a
-  restarted service holds none of its predecessor's attempts, which lapse
-  through their lease; an exit report signed with another service's key,
+  its terminal event. Cancelling a formula ends its children with it and
+  the runner they ran in; a restarted service holds none of its
+  predecessor's attempts, which the worker watch lapses when it hears the
+  new boot; an exit report signed with another service's key,
   naming a boot that no longer runs or a runner that holds nothing lapses
   nothing; and a run cancelled mid-flight releases nothing its masking set
   covers.
@@ -31,17 +32,18 @@ defmodule Cyfr.TwoWorkersTest do
   import Cyfr.Test.TwoServices,
     only: [
       arm!: 2,
-      await_entry!: 1,
-      hold_children!: 1,
+      hold!: 3,
       lay_seed!: 1,
-      point_opus_at!: 1,
-      scripted_run!: 1
+      plan!: 2,
+      release!: 2,
+      scripted_run!: 1,
+      seen: 1
     ]
 
   import Cyfr.Test.Wait
   import Ecto.Query, only: [from: 2]
 
-  alias Cyfr.Execution.{Attempt, Keys, Sweeper, WorkerClient}
+  alias Cyfr.Execution.{Attempt, Keys, WorkerClient}
   alias Cyfr.Slots
   alias Cyfr.Test.{AttemptFixtures, OpusService, ScriptedWorker, TwoServices}
   alias Cyfr.Test.TwoServices.Wire
@@ -213,13 +215,10 @@ defmodule Cyfr.TwoWorkersTest do
     test "a host call's lost answer is retried by its class, and a lossy stream stays whole and ordered",
          %{ctx: ctx} do
       secrets = arm!(ctx, key: "k-#{System.unique_integer([:positive])}", token: "t-unused")
-      wire = Wire.start!(OpusService.host_url())
-      point_opus_at!(wire.url)
-
-      push = WorkerWire.host_route(:push_deltas)
-      complete = WorkerWire.host_route(:complete)
-      Wire.plan(wire, push, [:drop])
-      Wire.plan(wire, complete, [:forward_then_drop])
+      # The runners reach the host listener through the suite's wire.
+      wire = TwoServices.wire()
+      plan!(:push_deltas, [:drop])
+      plan!(:complete, [:forward_then_drop])
 
       id = Cyfr.UUID7.execution_id()
       :ok = Cyfr.Execution.subscribe_events(id, ctx)
@@ -234,8 +233,8 @@ defmodule Cyfr.TwoWorkersTest do
       # CYFR had recorded, was asked for again and answered as recorded. The
       # wire notes a call once its answer is back, which the waiter's answer
       # can precede.
-      wait_until(fn -> match?([:drop, :forward | _], Wire.seen(wire, push)) end)
-      wait_until(fn -> Wire.seen(wire, complete) == [:forward_then_drop, :forward] end)
+      wait_until(fn -> match?([:drop, :forward | _], seen(:push_deltas)) end)
+      wait_until(fn -> seen(:complete) == [:forward_then_drop, :forward] end)
 
       live = live_events()
       assert delta_texts(live) == @stub_deltas
@@ -344,18 +343,19 @@ defmodule Cyfr.TwoWorkersTest do
       secrets = arm!(ctx, key: "stub answers", token: "at once")
       id = Cyfr.UUID7.execution_id()
       :ok = Cyfr.Execution.subscribe_events(id, ctx)
-      await_entry!(id)
+      hold!(:push_deltas, id, once: true)
 
       run =
         Task.async(fn ->
           Cyfr.Execution.run_root(ctx, :default, @stub, chat(), execution_id: id)
         end)
 
-      # Held at its entry: the key is unsealed and the token dispensed — both
-      # in the masking set — and nothing has been written yet.
-      assert_receive {:entered, ^id, guest}, 30_000
+      # Held at its first delta: the key is unsealed and the token dispensed
+      # — both in the masking set — and its guest wrote both, but nothing of
+      # it has reached the host yet.
+      assert_receive {:held, ^id, guest}, 30_000
       assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, id)
-      send(guest, :continue)
+      release!(guest, :forward)
 
       assert {:error, message} = Task.await(run, 60_000)
       refute_unmasked(message, secrets)
@@ -366,7 +366,7 @@ defmodule Cyfr.TwoWorkersTest do
       refute_unmasked(event_rows(ctx, id), secrets)
       assert {:error, :not_found} = Arca.ExecutionPayloads.get(ctx, id, "result")
 
-      wait_until(fn -> match?({:ok, %{attempts: []}}, Opus.WorkerService.status()) end, 10_000)
+      wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
     end
   end
 
@@ -385,12 +385,14 @@ defmodule Cyfr.TwoWorkersTest do
     test "cancelling a formula over the wire ends its children with it", %{ctx: ctx} do
       children_before = Slots.status(@slots).child_active
       root_id = Cyfr.UUID7.execution_id()
-      hold_children!(root_id)
+
+      # Each child asks for a catalog tool, and is held at that call.
+      hold!(:tool_call, fn row, _call -> row && row.parent_execution_id == root_id end, [])
 
       request = %{
         "tool" => "execution",
         "action" => "run",
-        "args" => %{"reference" => Probe.probe_ref(), "input" => %{"op" => "echo"}}
+        "args" => %{"reference" => Probe.probe_ref(), "input" => Probe.held_input()}
       }
 
       root =
@@ -406,29 +408,40 @@ defmodule Cyfr.TwoWorkersTest do
 
       held =
         for _ <- 1..3 do
-          assert_receive {:held, component, id}, 30_000
-          {id, component}
+          assert_receive {:held, id, _conn}, 30_000
+          id
         end
 
+      runner = runner_of(ctx, root_id)
+      assert Enum.all?(held, &(runner_of(ctx, &1) == runner))
       assert Slots.status(@slots).child_active == children_before + 3
       assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root_id)
       assert {:error, _cancelled} = Task.await(root, 30_000)
       assert %{status: "cancelled"} = row(root_id)
 
-      for {id, component} <- held do
+      for id <- held do
         wait_until(fn -> row(id).status == "failed" end, 10_000)
-        wait_until(fn -> not Process.alive?(component) end)
         wait_until(fn -> Attempt.whereis(id) == nil end)
       end
 
-      wait_until(fn -> match?({:ok, %{attempts: []}}, Opus.WorkerService.status()) end, 10_000)
+      # The kill ended the runner the formula and its children ran in: the
+      # service reported it gone, and holds nothing.
+      wait_until(fn -> reported_exit?(runner) end, 10_000, "the runner's exit report")
+      wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
       wait_until(fn -> Slots.status(@slots).child_active == children_before end)
     end
 
-    test "a restarted service holds none of its predecessor's attempts, which lapse through their lease",
+    test "a restarted service holds none of its predecessor's attempts, which its watch lapses",
          %{ctx: ctx} do
+      # The worker watch is off in the test boot; this case runs one of its
+      # own over the Opus service, polling fast.
+      start_supervised!(
+        {Cyfr.Execution.WorkerWatch,
+         workers: [OpusService.endpoint()], poll_ms: 50, misses: 3, name: :two_workers_watch}
+      )
+
       root_id = Cyfr.UUID7.execution_id()
-      await_entry!(root_id)
+      hold!(:complete, root_id, once: true)
 
       root =
         Task.async(fn ->
@@ -437,23 +450,31 @@ defmodule Cyfr.TwoWorkersTest do
           )
         end)
 
-      assert_receive {:entered, ^root_id, _guest}, 30_000
+      # Its guest ran; its close is held on the wire.
+      assert_receive {:held, ^root_id, close}, 30_000
 
       assert %{attempt: attempt, boot_id: old_boot, state: "running"} =
                Arca.ExecutionAttempts.current(ctx.athanor_id, root_id)
 
       assert old_boot == OpusService.boot()
 
+      wait_until(
+        fn ->
+          Cyfr.Execution.WorkerWatch.fresh_boot(OpusService.endpoint(), :two_workers_watch) ==
+            {:ok, old_boot}
+        end,
+        10_000,
+        "the watch to hear the old boot"
+      )
+
       new_boot = OpusService.restart!()
       refute new_boot == old_boot
-      assert {:ok, %{boot: ^new_boot, attempts: []}} = Opus.WorkerService.status()
+      assert %{boot: ^new_boot, attempts: []} = OpusService.status()
 
-      # Nothing reported the runner: the row is still running, on a lease
-      # nothing renews. When it lapses, the sweep ends the run.
-      assert %{status: "running"} = row(root_id)
-      past = DateTime.add(DateTime.utc_now(), -1, :second)
-      assert {:ok, ^past} = Arca.ExecutionAttempts.renew(attempt, past)
-      :ok = Sweeper.sweep()
+      # The old boot's runner went with it, and its close is lost. Nothing
+      # reported the runner: the watch hears a new boot, and lapses the old
+      # boot's attempts.
+      release!(close, :drop)
 
       assert {:error, @lapsed} = Task.await(root, 30_000)
       assert %{status: "failed", error_message: @lapsed} = row(root_id)
@@ -535,6 +556,17 @@ defmodule Cyfr.TwoWorkersTest do
   defp chat, do: %{"operation" => "chat", "params" => %{}}
 
   defp row(id), do: Arca.Repo.get!(Arca.Execution, id)
+
+  # The runner that claimed the run's attempt, as its host calls present it.
+  defp runner_of(ctx, id), do: Arca.ExecutionAttempts.current(ctx.athanor_id, id).claimed_by
+
+  # Whether the Opus service reported `runner`'s exit over the wire.
+  defp reported_exit?(runner) do
+    Enum.any?(
+      TwoServices.calls(),
+      &match?(%{callback: :runner_exited, args: %{"runner" => ^runner}}, &1)
+    )
+  end
 
   defp children_of(parent_id),
     do: from(e in Arca.Execution, where: e.parent_execution_id == ^parent_id)

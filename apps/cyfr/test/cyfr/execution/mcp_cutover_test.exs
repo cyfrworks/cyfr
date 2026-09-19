@@ -4,16 +4,18 @@
 defmodule Cyfr.Execution.MCPCutoverTest do
   # The CLI/MCP ingress is data-driven: a profile roots the execution
   # under its consent, no profile refuses with consent guidance (nothing
-  # runs), and selection never guesses.
+  # runs), and selection never guesses. A rooted run runs on the Opus
+  # service, and the authority it roots under is the one its runner's
+  # attach was handed, read on the suite's wire.
   use ExUnit.Case, async: false
 
-  # A rooted run runs on the opus worker service.
+  import Cyfr.Test.Wait
 
+  alias Cyfr.Test.TwoServices
   alias Sanctum.Consent.Source
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
-  @telemetry_event [:cyfr, :opus, :runtime, :authority_entered]
   @node "reagent:local.cutover-math"
 
   setup do
@@ -57,20 +59,11 @@ defmodule Cyfr.Execution.MCPCutoverTest do
     {:ok, ctx: ctx, component: component}
   end
 
-  defp attach_witness do
-    handler_id = "cutover-witness-#{System.unique_integer([:positive])}"
-    test_pid = self()
-
-    :telemetry.attach(
-      handler_id,
-      @telemetry_event,
-      fn _event, _measurements, metadata, _config ->
-        send(test_pid, {:authority_entered, metadata})
-      end,
-      nil
-    )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
+  # The authorities the runs attached since the test began watching the
+  # suite's wire entered with, oldest first.
+  defp entered do
+    for %{callback: :attach, fields: %{execution_id: id}} <- TwoServices.calls(),
+        do: TwoServices.entered(id)
   end
 
   defp limits_map do
@@ -130,34 +123,33 @@ defmodule Cyfr.Execution.MCPCutoverTest do
   end
 
   test "no profile refuses with consent guidance — nothing runs", %{ctx: ctx} do
-    attach_witness()
+    TwoServices.watch!()
     assert {:error, {:consent_required, payload}} = run(ctx, %{})
     assert %{"detail" => detail} = payload
     assert detail =~ "profile.plan"
-    refute_receive {:authority_entered, _}, 200
+    assert entered() == []
   end
 
   test "a profile roots the execution under its consent", %{ctx: ctx, component: component} do
-    attach_witness()
+    TwoServices.watch!()
     seed_profile(ctx, component)
 
     assert {:error, message} = run(ctx, %{})
     assert message =~ "Component compilation failed"
 
-    assert_receive {:authority_entered, metadata}, 30_000
-    assert metadata.authority.profile_id == "prof-cutover"
+    assert [%{profile_id: "prof-cutover"}] = entered()
   end
 
   test "an explicit selector that matches nothing surfaces, never falls back", %{
     ctx: ctx,
     component: component
   } do
-    attach_witness()
+    TwoServices.watch!()
     seed_profile(ctx, component)
 
     assert {:error, message} = run(ctx, %{"profile" => "nope"})
     assert message =~ "profile_not_found: nope"
-    refute_receive {:authority_entered, _}, 200
+    assert entered() == []
   end
 
   test "two active owner profiles are ambiguous, never guessed", %{
@@ -171,10 +163,9 @@ defmodule Cyfr.Execution.MCPCutoverTest do
     assert message =~ "profile_ambiguous"
     assert message =~ "prof-cutover"
 
-    attach_witness()
+    TwoServices.watch!()
     assert {:error, _} = run(ctx, %{"profile" => "work"})
-    assert_receive {:authority_entered, metadata}, 30_000
-    assert metadata.authority.profile_id == "prof-cutover-2"
+    assert [%{profile_id: "prof-cutover-2"}] = entered()
   end
 
   test "consent drift surfaces the consent_required payload", %{ctx: ctx, component: component} do
@@ -185,17 +176,17 @@ defmodule Cyfr.Execution.MCPCutoverTest do
   end
 
   test "run_stream roots under the profile too", %{ctx: ctx, component: component} do
-    attach_witness()
+    TwoServices.watch!()
     seed_profile(ctx, component)
 
-    assert {:ok, %{execution_id: _, stream_url: _}} =
+    assert {:ok, %{execution_id: id, stream_url: _}} =
              Cyfr.Execution.MCP.handle("execution", ctx, %{
                "action" => "run_stream",
                "reference" => "#{@node}:0.1.0",
                "input" => %{}
              })
 
-    assert_receive {:authority_entered, metadata}, 30_000
-    assert metadata.authority.profile_id == "prof-cutover"
+    wait_until(fn -> TwoServices.entered(id) != nil end, 30_000, "the run's attach")
+    assert %{profile_id: "prof-cutover"} = TwoServices.entered(id)
   end
 end

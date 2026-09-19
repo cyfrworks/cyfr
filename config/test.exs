@@ -186,13 +186,18 @@ config :cyfr, :worker_key, test_worker_root
 
 # The Opus service of a test boot listens on a port of the system's choosing,
 # and so does CYFR's host API listener; `Cyfr.Test.OpusService` points each
-# at the other's once both are up.
+# at the other's once both are up. Its runners are OS processes of their
+# own, started by the `Direct` keeper and pooled across tests; a runner
+# holds no sys.config, so what it takes from this configuration (the log
+# level, the scheduler counts) the service passes it explicitly
+# (`Opus.Release.runner_command/0`).
 config :opus,
   service_key:
     :hmac
     |> :crypto.mac(:sha256, test_worker_root, "cyfr-worker/v1/worker\nwrk_local")
     |> Base.encode16(case: :lower),
-  port: 0
+  port: 0,
+  keeper: :direct
 
 config :cyfr, :host_api_port, 0
 

@@ -13,7 +13,8 @@ defmodule Opus.WorkerServicePoolTest do
   is `:not_found` however busy the runners are, and an execution a runner
   of this boot ended, root or child, is `:ok` again. A runner that ends
   without an `exit` is reported holding its root and every child it said
-  it started.
+  it started, and a caller that awaits the reports is answered once every
+  one in flight is.
 
   A keeper that refuses every runner makes the status report the
   refusal, with the keeper's reason and the sentence naming what the
@@ -183,6 +184,31 @@ defmodule Opus.WorkerServicePoolTest do
 
       assert Enum.sort(held) == Enum.sort([root.attempt, "att_child"])
     end
+  end
+
+  test "awaiting the reports answers once every report in flight is answered", context do
+    test = self()
+
+    ScriptedHost.script(context.host, "runner_exited", fn _args, _caller ->
+      send(test, {:report_held, self()})
+
+      receive do
+        :go -> {:ok, true}
+      after
+        10_000 -> {:ok, true}
+      end
+    end)
+
+    assert :ok = WorkerService.await_reports()
+
+    {_root, runner} = started!(context)
+    ScriptedKeeper.exit(runner, 137)
+    assert_receive {:report_held, held}, 5_000
+
+    waiting = Task.async(fn -> WorkerService.await_reports() end)
+    assert Task.yield(waiting, 200) == nil
+    send(held, :go)
+    assert Task.await(waiting, 5_000) == :ok
   end
 
   @tag :refusing

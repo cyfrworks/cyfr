@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-Code.require_file("support/formula_host_helper.exs", __DIR__)
+Code.require_file("support/nested_execution_helper.exs", __DIR__)
 
 defmodule Opus.ExecutorMaskedOutputTest do
   @moduledoc """
@@ -13,19 +13,28 @@ defmodule Opus.ExecutorMaskedOutputTest do
   before it closes the run records none of them.
 
   The guest is the step-stub catalyst (`test_wasm/step_stub/` in the cyfr
-  suite). Its `chat` reads its key, streams "The stub ", "answers ", "at ",
-  "once." and answers their concatenation; an operation it does not know
-  is refused with "the stub answers describe, models and chat". Each
-  credential is text the stub writes, so what it writes is what must come
-  out masked — the key spans two deltas, and so does the token. The key's
-  vault entry also holds an OAuth bundle whose access token is the token,
-  and the token is dispensed by an `oauth_token` host call on the run's
-  attempt as the guest starts, as a guest's `cyfr:oauth` call dispenses one.
+  suite), run in a runner of its own. Its `chat` reads its key, streams
+  "The stub ", "answers ", "at ", "once." and answers their
+  concatenation; an operation it does not know is refused with "the stub
+  answers describe, models and chat". Each credential is text the stub
+  writes, so what it writes is what must come out masked — the key spans
+  two deltas, and so does the token. The key's vault entry also holds an
+  OAuth bundle whose access token is the token, and the token is
+  dispensed by an `oauth_token` host call on the run's attempt once its
+  runner has attached, before its guest starts, as a guest's `cyfr:oauth`
+  call dispenses one (`Cyfr.Test.TwoServices.arm!/3`). A run is held on
+  the suite's wire where a case needs it at a known point. The parent is
+  the `nested-probe` formula, whose consent's edge to the stub selects the
+  stub's profile, as a shipped formula runs a shipped catalyst.
   """
 
   use ExUnit.Case, async: false
 
-  alias Sanctum.Consent.{Bootstrap, Commit, Plan, Source}
+  import Cyfr.Test.Wait
+
+  alias Cyfr.Test.TwoServices
+  alias Opus.Test.NestedExecution, as: Probe
+  alias Sanctum.Consent.{Bootstrap, Source}
 
   @moduletag timeout: 120_000
 
@@ -33,6 +42,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
   @stub "catalyst:local.step-stub"
   @brief "catalyst:local.step-stub-brief"
   @soul "agent:local.aqua"
+  @probe_node "formula:local.nested-probe"
   @version "0.1.0"
   @key_field "STUB_API_KEY"
   @redacted "[REDACTED]"
@@ -67,8 +77,10 @@ defmodule Opus.ExecutorMaskedOutputTest do
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    :ok = Probe.publish_probe!(ctx, isolate: false, dependencies: ["#{@stub}:#{@version}"])
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted and @stub in minted and @brief in minted
+    assert @probe_node in minted
 
     {:ok, ctx: ctx}
   end
@@ -132,7 +144,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     # milliseconds vary; the words around them are the planted secrets.
     secrets = arm!(ctx, @brief, key: "Execution timeout", token: "after")
     id = Cyfr.UUID7.execution_id()
-    hold_guest!(id)
+    hold_attach_past_deadline!(id)
 
     assert {:error, message} =
              Cyfr.Execution.run_root(ctx, :default, @brief, chat(), execution_id: id)
@@ -150,31 +162,31 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   test "what a parent is handed of its child is masked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    parent_id = Cyfr.UUID7.execution_id()
 
-    parent =
-      Opus.Test.FormulaHost.attached!(
-        ctx: ctx,
-        authority: authority,
-        component_ref: "formula:local.masked-parent:0.1.0"
-      )
+    request = %{
+      "tool" => "execution",
+      "action" => "run",
+      "args" => %{"reference" => "#{@stub}:#{@version}", "input" => chat()}
+    }
 
-    parent_id = parent.execution_id
+    # The formula calls the stub and answers what its host function handed
+    # it, verbatim.
+    assert {:ok, %{output: output}} =
+             Cyfr.Execution.run_root(
+               ctx,
+               :default,
+               Probe.probe_ref(),
+               %{"op" => "call", "request" => request},
+               execution_id: parent_id
+             )
 
-    request =
-      Jason.encode!(%{
-        "tool" => "execution",
-        "action" => "run",
-        "args" => %{"reference" => "#{@stub}:#{@version}", "input" => chat()}
-      })
-
-    handed =
-      Opus.FormulaHandler.execute(request, parent.host, Opus.Test.FormulaHost.opts(authority))
-
+    handed = decoded(output)["result_raw"]
     assert %{"status" => "completed", "output" => envelope} = Jason.decode!(handed)
     assert %{"data" => %{"content" => [%{"text" => text}]}} = envelope
     assert text == "The #{@redacted} #{@redacted}."
     refute_unmasked(handed, secrets)
+    refute_unmasked(Arca.Repo.get!(Arca.Execution, parent_id), secrets)
 
     assert [child] = Arca.Repo.all(children_of(parent_id))
     refute_unmasked(child, secrets)
@@ -189,20 +201,22 @@ defmodule Opus.ExecutorMaskedOutputTest do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
     id = Cyfr.UUID7.execution_id()
     :ok = Cyfr.Execution.subscribe_events(id, ctx)
-    await_entry!(id)
+    TwoServices.hold!(:push_deltas, id, once: true)
 
     run =
       Task.async(fn ->
         Cyfr.Execution.run_root(ctx, :default, @stub, chat(), execution_id: id)
       end)
 
-    assert_receive {:entered, ^id, guest}, 30_000
+    # Held at its first delta: its guest wrote both credentials, and
+    # nothing of it has reached the host yet.
+    assert_receive {:held, ^id, held}, 30_000
 
     attempt = Cyfr.Execution.Attempt.whereis(id)
     ref = Process.monitor(attempt)
     Process.exit(attempt, :kill)
     assert_receive {:DOWN, ^ref, :process, ^attempt, :killed}
-    send(guest, :continue)
+    TwoServices.release!(held)
 
     assert {:error, message} = Task.await(run, 60_000)
     assert message == "Execution attempt ended before it closed"
@@ -272,97 +286,47 @@ defmodule Opus.ExecutorMaskedOutputTest do
     File.write!(Path.join(unit, "cyfr-manifest.json"), Jason.encode!(manifest))
   end
 
-  # Bind `key` as the component's vault field, in an entry whose OAuth bundle
-  # holds `token`, and dispense `token` to every run of it as its guest
-  # starts. Answers both, the credentials to look for.
-  defp arm!(ctx, ref, key: key, token: token) do
-    {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
-        name: "#{ref} key",
-        kind: "api_key",
-        fields: %{@key_field => key},
-        oauth: %{"access_token" => token}
-      })
+  # Bind `key` as `ref`'s vault field, in an entry whose OAuth bundle holds
+  # `token`, and dispense `token` to every run of it once its runner has
+  # attached. Answers both, the credentials to look for.
+  defp arm!(ctx, ref, key: key, token: token),
+    do: TwoServices.arm!(ctx, ref, key: key, token: token)
 
-    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
-    decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id}]}
-    {:ok, preview} = Commit.preview(ctx, decisions)
+  # Hold the attach of `id`'s runner on the suite's wire until its
+  # assignment's deadline has passed: the run then has no time left, and
+  # its guest's call is killed as it starts.
+  defp hold_attach_past_deadline!(id) do
+    relay =
+      spawn_link(fn ->
+        receive do
+          {:attach_held, %{args: %{"assignment" => token}}, conn} ->
+            {:ok, assignment} = Cyfr.Assignment.read(token)
 
-    {:ok, _} =
-      Commit.commit(ctx, %{
-        decisions: decisions,
-        plan_token: plan.plan_token,
-        proof: preview.proof,
-        commit_digest: preview.commit_digest,
-        expected_consent_revision: plan.expected_consent_revision
-      })
+            wait_until(
+              fn -> System.system_time(:millisecond) > assignment.deadline end,
+              10_000,
+              "the run's deadline to pass"
+            )
 
-    handler = "masked-output-dispense-#{System.unique_integer([:positive])}"
+            TwoServices.release!(conn)
+        end
+      end)
 
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:cyfr, :opus, :runtime, :authority_entered],
-        fn _event, _measurements, %{execution_id: id, reference: reference}, _config ->
-          if String.starts_with?(reference, ref <> ":") do
-            attempt = Cyfr.Test.AttemptFixtures.current!(ctx.athanor_id, id)
+    TwoServices.Wire.hold(
+      TwoServices.watch!(),
+      &match?(%{callback: :attach, fields: %{execution_id: ^id}}, &1),
+      once: true,
+      holder: relay,
+      notify: fn call, conn -> {:attach_held, call, conn} end
+    )
 
-            %{"ok" => ^token} =
-              Cyfr.Test.AttemptFixtures.call(attempt, "oauth_token", %{"provider" => "stub"})
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
-    [key, token]
-  end
-
-  # Hold the guest of `id` at its authority's entry, past any timeout.
-  defp hold_guest!(id) do
-    handler = "masked-output-hold-#{System.unique_integer([:positive])}"
-
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:cyfr, :opus, :runtime, :authority_entered],
-        fn _event, _measurements, metadata, _config ->
-          if metadata.execution_id == id, do: Process.sleep(5_000)
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
-  end
-
-  # Hold the guest of `id` at its authority's entry until the test sends
-  # `:continue` to the process it names.
-  defp await_entry!(id) do
-    handler = "masked-output-entry-#{System.unique_integer([:positive])}"
-    test = self()
-
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:cyfr, :opus, :runtime, :authority_entered],
-        fn _event, _measurements, metadata, _config ->
-          if metadata.execution_id == id do
-            send(test, {:entered, id, self()})
-
-            receive do
-              :continue -> :ok
-            after
-              30_000 -> :ok
-            end
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
+    :ok
   end
 
   defp chat, do: %{"operation" => "chat", "params" => %{}}
+
+  defp decoded(output) when is_binary(output), do: Jason.decode!(output)
+  defp decoded(output) when is_map(output), do: output
 
   defp live_events do
     receive do

@@ -8,9 +8,11 @@ defmodule Opus.Keeper.Direct do
   the pool gives it and nothing inherited (`env -i`), as this VM's own
   user, in a temporary home of its own. Its control channel is its
   standard input and output (`OPUS_CONTROL_FD=0`), since a plain port
-  hands a child no other descriptor; its standard error is this VM's,
-  where its log lines go. It isolates nothing: a runner can read and
-  signal this VM. A deployment runs the image, whose keeper isolates.
+  hands a child no other descriptor; its standard error is a fifo in its
+  home that a reader of its own relays to the process that spawned it, as
+  `cyfr-spawn` relays a runner's, so its log lines are this VM's log's. It
+  isolates nothing: a runner can read and signal this VM. A deployment
+  runs the image, whose keeper isolates.
 
   This process is the janitor: it holds every runner's OS pid and home,
   monitors the process that spawned each, and kills the runner's process
@@ -53,12 +55,16 @@ defmodule Opus.Keeper.Direct do
   @impl Opus.Keeper
   def spawn(%{runner: runner, argv: argv, env: env}) do
     home = Path.join(System.tmp_dir!(), "opus_runner_#{Cyfr.Hex.short()}")
+    log = Path.join(home, "log")
 
     with :ok <- File.mkdir_p(Path.join(home, "tmp")),
-         :ok <- File.chmod(home, 0o700) do
+         :ok <- File.chmod(home, 0o700),
+         :ok <- mkfifo(log) do
       environment =
         home |> base_environment() |> Map.merge(env) |> Map.put("OPUS_CONTROL_FD", @stdio_fd)
 
+      # The runner's standard error goes to the fifo, which its own reader
+      # relays: the shell opens the fifo, then becomes the runner.
       port =
         Port.open({:spawn_executable, "/usr/bin/env"}, [
           :binary,
@@ -67,8 +73,13 @@ defmodule Opus.Keeper.Direct do
           :exit_status,
           :use_stdio,
           cd: home,
-          args: ["-i"] ++ Enum.map(environment, fn {k, v} -> "#{k}=#{v}" end) ++ argv
+          args:
+            ["-i"] ++
+              Enum.map(environment, fn {k, v} -> "#{k}=#{v}" end) ++
+              ["/bin/sh", "-c", ~s(exec "$@" 2>"$0"), log] ++ argv
         ])
+
+      relay = Port.open({:spawn_executable, "/bin/cat"}, [:binary, :stream, :eof, args: [log]])
 
       os_pid =
         case Port.info(port, :os_pid) do
@@ -78,7 +89,7 @@ defmodule Opus.Keeper.Direct do
 
       case watch(os_pid, home, runner) do
         :ok ->
-          {:ok, %{port: port, os_pid: os_pid, home: home, runner: runner},
+          {:ok, %{port: port, log: relay, os_pid: os_pid, home: home, runner: runner},
            [{:spawned, os_pid}, :attached]}
 
         {:error, reason} ->
@@ -93,6 +104,15 @@ defmodule Opus.Keeper.Direct do
         File.rm_rf(home)
         {:error, {:spawn_failed, reason}}
     end
+  end
+
+  defp mkfifo(path) do
+    case System.cmd("mkfifo", ["-m", "600", path], stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+      {output, _status} -> {:error, {:mkfifo, String.trim(output)}}
+    end
+  rescue
+    e in ErlangError -> {:error, {:mkfifo, Exception.message(e)}}
   end
 
   defp watch(os_pid, home, runner) do
@@ -112,6 +132,15 @@ defmodule Opus.Keeper.Direct do
     GenServer.cast(janitor(), {:gone, channel.os_pid})
     File.rm_rf(channel.home)
     {:events, [{:exited, ended(status)}, :released], channel}
+  end
+
+  # What the runner wrote to its standard error, as it wrote it.
+  def handle_message(%{log: log} = channel, {log, {:data, data}}),
+    do: {:events, [{:log, data}], channel}
+
+  def handle_message(%{log: log} = channel, {log, :eof}) do
+    Port.close(log)
+    {:events, [], channel}
   end
 
   def handle_message(_channel, _message), do: :unknown
