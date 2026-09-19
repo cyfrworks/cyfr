@@ -137,10 +137,11 @@ defmodule Locus.Test.FakeSpawner do
   defp handle_request(%{"type" => "release", "spawn_id" => spawn_id}, state) do
     case state.spawns do
       # The command leads its own process group; the direct kill covers
-      # one that does not.
+      # one that does not. The group's negative id follows `--`, which a
+      # Linux host's procps `kill` needs to read it as a group.
       %{^spawn_id => os_pid} when is_integer(os_pid) ->
-        for target <- ["-#{os_pid}", "#{os_pid}"],
-            do: System.cmd("kill", ["-9", target], stderr_to_stdout: true)
+        for target <- [["--", "-#{os_pid}"], ["#{os_pid}"]],
+            do: System.cmd("kill", ["-9" | target], stderr_to_stdout: true)
 
       _ ->
         :ok

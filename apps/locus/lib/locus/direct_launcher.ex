@@ -191,11 +191,13 @@ defmodule Locus.DirectLauncher do
 
   # A port's child leads its own process group, so the group kill reaches
   # what the build started; the direct kill covers a child that does not.
+  # The group's negative id follows `--`: without it the procps `kill` of
+  # a Linux host reads it as an option, kills nothing and exits 0.
   defp kill(nil), do: :ok
 
   defp kill(os_pid) do
-    for target <- ["-#{os_pid}", "#{os_pid}"] do
-      System.cmd("kill", ["-9", target], stderr_to_stdout: true)
+    for target <- [["--", "-#{os_pid}"], ["#{os_pid}"]] do
+      System.cmd("kill", ["-9" | target], stderr_to_stdout: true)
     end
 
     :ok
