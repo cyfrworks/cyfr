@@ -507,6 +507,201 @@ defmodule Cyfr.Execution.TurnRootTest do
     wait_until(fn -> Slots.status(@slots).active == active end)
   end
 
+  # ---------------------------------------------------------------------------
+  # A cancelled root
+  # ---------------------------------------------------------------------------
+
+  describe "a root whose claim is queued for its slot" do
+    setup %{ctx: ctx, turn: turn} do
+      watch_unreaped!()
+      filler = fill_foreground!()
+      claimer = claiming!(ctx, turn)
+
+      wait_until(
+        fn -> Slots.status(@slots).queued_by_class.root == 1 end,
+        10_000,
+        "the claim queued for its slot"
+      )
+
+      # Admitted before it queued: its row runs, and nothing holds a slot
+      # for it or is registered under it.
+      assert [%{status: "running"} = root] =
+               Arca.Repo.all(from(e in Arca.Execution, where: e.turn_id == ^turn.id))
+
+      assert [] = registered(root.id)
+      {:ok, filler: filler, claimer: claimer, root: root}
+    end
+
+    test "cancelled, is refused at its grant: the slot goes straight back, and the cancel is not noted",
+         %{ctx: ctx, filler: filler, claimer: claimer, root: %{id: id} = root} do
+      assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, id)
+      refute_received {:unreaped_kill, _count, _tenant, ^id}
+
+      # The slot freed next reaches the claim, which reads its row before it
+      # answers.
+      release_slots!(filler, 1)
+      assert_receive {:claimed, ^claimer, {:error, :not_running}}, 10_000
+      assert_given_back(filler, claimer)
+      assert [] = registered(root.id)
+      assert Process.alive?(claimer)
+      assert %{status: "cancelled"} = execution(root.id)
+      refute_received {:unreaped_kill, _count, _tenant, ^id}
+    end
+
+    test "whose row ends before the grant and whose stop comes after it is not noted",
+         %{ctx: ctx, filler: filler, claimer: claimer, root: %{id: id} = root} do
+      # The cancel, held between its terminal write and its stop: the row is
+      # cancelled while the claim waits, and nobody has stopped anything.
+      assert {:ok, %{status: :cancelled}} = Cyfr.Execution.Record.cancel(ctx, root.id)
+
+      release_slots!(filler, 1)
+      assert_receive {:claimed, ^claimer, {:error, :not_running}}, 10_000
+
+      # The rest of the cancel finds nothing of the root's to stop.
+      assert :ok = Cyfr.Execution.Dispatch.stop(root.id, ctx.athanor_id)
+      assert Process.alive?(claimer)
+      assert_given_back(filler, claimer)
+      assert [] = registered(root.id)
+      refute_received {:unreaped_kill, _count, _tenant, ^id}
+    end
+  end
+
+  test "a takeover's successor cancelled while its adoption waits for a slot is refused at the grant",
+       %{ctx: ctx, turn: turn} do
+    watch_unreaped!()
+    {claim, started} = claim!(ctx, turn)
+    :ok = TurnRoot.release(ctx, claim.execution_id, claim: claim)
+    id = claim.execution_id
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(a in Arca.Schemas.ExecutionAttempt, where: a.attempt == ^claim.attempt),
+        set: [lease_until: DateTime.add(DateTime.utc_now(), -1, :second)]
+      )
+
+    :ok = Cyfr.Execution.Sweeper.sweep()
+    {:ok, taken} = TurnStorage.takeover(ctx, turn.id, %{fence: started.fence})
+    assert execution(id).status == "running"
+
+    filler = fill_foreground!()
+    test_pid = self()
+
+    adopter =
+      spawn(fn ->
+        send(test_pid, {:adopted, self(), TurnRoot.adopt(ctx, id, attempt: taken.attempt)})
+        Process.sleep(:infinity)
+      end)
+
+    on_exit(fn -> Process.exit(adopter, :kill) end)
+    wait_until(fn -> Slots.status(@slots).queued_by_class.root == 1 end, 10_000)
+
+    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, id)
+    release_slots!(filler, 1)
+    assert_receive {:adopted, ^adopter, {:error, :not_running}}, 10_000
+    assert_given_back(filler, adopter)
+    assert [] = registered(id)
+    refute_received {:unreaped_kill, _count, _tenant, ^id}
+  end
+
+  test "a running root's cancel kills its holder, and is not noted: nothing native runs in it",
+       %{ctx: ctx, turn: turn} do
+    watch_unreaped!()
+    before = roots()
+    test_pid = self()
+
+    {holder, ref} =
+      spawn_monitor(fn ->
+        {claim, _started} = claim!(ctx, turn)
+        send(test_pid, {:claimed, claim})
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:claimed, %{execution_id: id} = claim}, 10_000
+    assert [{^holder, :running}] = registered(id)
+
+    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, id)
+    assert_receive {:DOWN, ^ref, :process, ^holder, :killed}, 5_000
+    refute_received {:unreaped_kill, _count, _tenant, ^id}
+
+    wait_until(fn -> roots() == before end, 5_000, "the killed holder's slot came back")
+    assert execution(claim.execution_id).status == "cancelled"
+  end
+
+  # Every unreaped kill noted from here on, forwarded to this process.
+  defp watch_unreaped! do
+    handler = "turn-root-unreaped-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :opus, :execution, :unreaped_kill],
+        &__MODULE__.forward_unreaped/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  @doc false
+  def forward_unreaped(_event, %{unreaped_count: count}, metadata, test),
+    do: send(test, {:unreaped_kill, count, metadata.tenant, metadata.execution_id})
+
+  # Every execution slot a root may take (all but the children's reserve),
+  # held by one process under no athanor until `release_slots!/2` gives
+  # some back or the test ends: a root claimed now queues, and the next
+  # slot given back is the first queued root's.
+  defp fill_foreground! do
+    %{max: max, child_reserve: reserve, active: active} = Slots.status(@slots)
+
+    {:ok, holder} =
+      Agent.start_link(fn ->
+        for _ <- 1..(max - reserve - active)//1 do
+          {:ok, ref} = Slots.acquire(@slots, nil, :root, wait_ms: 0)
+          ref
+        end
+      end)
+
+    on_exit(fn -> if Process.alive?(holder), do: Agent.stop(holder) end)
+    assert {:error, :capacity} = Slots.acquire(@slots, nil, :root, wait_ms: 0)
+    %{holder: holder, full: Slots.status(@slots).active}
+  end
+
+  defp release_slots!(%{holder: holder}, count) do
+    Agent.update(holder, fn refs ->
+      {released, kept} = Enum.split(refs, count)
+      Enum.each(released, &Slots.release(@slots, &1))
+      kept
+    end)
+  end
+
+  # The slot the filler gave back is free again: the claim holds none, and
+  # nothing waits for one.
+  defp assert_given_back(%{full: full}, claimer) do
+    counts = fn ->
+      %{active: active, queued: queued} = Slots.status(@slots)
+      {active, queued, holders(claimer)}
+    end
+
+    wait_until(fn -> counts.() == {full - 1, 0, 0} end, 10_000, "the granted slot came back")
+  end
+
+  # A process that claims the turn's root, tells the test what the claim
+  # answered, and lives on holding whatever it was given until the test
+  # ends.
+  defp claiming!(ctx, turn) do
+    test_pid = self()
+
+    pid =
+      spawn(fn ->
+        result = TurnRoot.claim(ctx, @soul, turn_id: turn.id, envelope: %{"task" => "go"})
+        send(test_pid, {:claimed, self(), result})
+        Process.sleep(:infinity)
+      end)
+
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    pid
+  end
+
   test "a takeover's successor is adopted with a slot and a keeper of its own", %{
     ctx: ctx,
     turn: turn

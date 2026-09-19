@@ -47,9 +47,11 @@ defmodule Cyfr.Execution.Dispatch do
   runner exited, its row lapsed, was lost or was ended by another writer —
   has the run closed lost (`Cyfr.Execution.Close.lost/1`), which answers
   the row as it stands, and then the worker service is asked to kill its
-  runner, unless the run was never started. Once the run is dispatched
-  the waiter's registration names the worker service's endpoint, so
-  `stop/2` reaches the runner without killing the waiter.
+  runner, unless the run was never started; that kill is the one the run
+  is counted by as an unreaped kill, whoever killed it first (`stop/2`).
+  Once the run is dispatched the waiter's registration names the worker
+  service's endpoint, so `stop/2` reaches the runner without killing the
+  waiter.
 
   `claim/4` admits a run for a runner that already runs instead of
   starting one: a formula's child, run in its parent's runner. The run's
@@ -217,12 +219,22 @@ defmodule Cyfr.Execution.Dispatch do
   start that set off meanwhile is the waiter's to kill, once its attempt
   has stopped. A dispatched run's runner, or the run a claimed attempt was
   handed to (`claim/4`), is killed through its worker service
-  (`Cyfr.Execution.WorkerClient.kill/2`) and the kill is counted against
-  `tenant` as one whose native work may still run
-  (`Cyfr.Execution.Attempt.note_unreaped/2`); the worker service's exit
-  report then stops an attempt its runner attached to, and its waiter, if
-  any, answers the row as it stands. Any other holder (a turn root's, a
-  task that has not dispatched yet) is counted the same way and killed.
+  (`Cyfr.Execution.WorkerClient.kill/2`); the worker service's exit report
+  then stops an attempt its runner attached to, and its waiter, if any,
+  answers the row as it stands. Any other holder is a process of this
+  node (a turn root's, a task that has not dispatched yet), and is
+  killed.
+
+  A kill is counted against `tenant` as one whose native work may still
+  run (`Cyfr.Execution.Attempt.note_unreaped/2`) once for each run, and
+  only for a run a runner ran. A run with a waiter is counted where its
+  end is seen, never here: by its waiter, which kills its lost run's
+  runner once its attempt has stopped and counts that kill (the worker
+  service answers `:ok` again for a runner already ended), or by its
+  attempt, which kills and counts it when the waiter is gone. A run
+  handed to its runner has neither, and its kill is counted here. The
+  kill of a process of this node reaches nothing native, and is counted
+  as nothing.
 
   A repeat finds no attempt to stop and gives nothing back again.
   """
@@ -234,11 +246,16 @@ defmodule Cyfr.Execution.Dispatch do
       [{_waiter, :admitted}] ->
         :ok
 
-      [{_waiter, {:dispatched, endpoint}}] ->
-        kill_runner(endpoint, execution_id, tenant)
+      [{holder, {:dispatched, endpoint}}] ->
+        # The entry of a run handed to its runner is its attempt's own; any
+        # other is a waiter's, whose run is counted where its end is seen.
+        if holder == Attempt.whereis(execution_id) do
+          kill_runner(endpoint, execution_id, tenant)
+        else
+          WorkerClient.kill(endpoint, execution_id)
+        end
 
       [{pid, _value}] ->
-        Attempt.note_unreaped(tenant, execution_id)
         Process.exit(pid, :kill)
 
       [] ->
@@ -507,7 +524,8 @@ defmodule Cyfr.Execution.Dispatch do
   # A kill that found a runner is counted; one that found none
   # (`:not_found`) has nothing to reap. A waiter kills its lost run's
   # runner only after closing the run, so the runner's exit report finds
-  # nothing left to lapse.
+  # nothing left to lapse; that kill is the one that counts its run, a
+  # cancel's before it included (`stop/2`).
   defp kill_runner(endpoint, execution_id, tenant) do
     if WorkerClient.kill(endpoint, execution_id) == :ok,
       do: Attempt.note_unreaped(tenant, execution_id)
