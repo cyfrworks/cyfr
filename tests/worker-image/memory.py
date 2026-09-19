@@ -32,7 +32,7 @@ that asks for a bound, and the service starts no runner.
 `--measure` runs the seed components through the scripted control plane,
 each subtree in a fresh runner of a fresh container, and prints each
 runner's group memory.peak as the kernel accounts it: a runner that booted
-and ran nothing; each model catalyst's `chat` with a long conversation and
+and ran nothing; each model catalyst's `chat` with a long thread and
 an image (its egress denied, as the scripted plane's authority grants none);
 the chat fixture's `chat` streaming a long answer; the http and files
 catalysts; the list-models formula spawning its five catalyst children in
@@ -468,7 +468,7 @@ def seed(kind, name):
 
 
 def chat_request(model):
-    """A model turn with a long conversation, a tool result and an image: some 600 KB of input."""
+    """A model turn with a long thread, a tool result and an image: some 600 KB of input."""
     notes = ("The estate's notes, read back in full so the model sees every line of them. " * 64)[:4_000]
     image = base64.b64encode(os.urandom(150_000)).decode()
     messages = []
