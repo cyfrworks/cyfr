@@ -61,8 +61,8 @@ defmodule Cyfr.Execution.TurnRoot do
   selects (`:default` when absent): load the authority, admit the row
   with its attempt and reservation, take the `:root` slot on the calling
   process, start the keeper. `opts` also: `:turn_id`, `:thread_id`,
-  `:envelope` (the input the row's envelope describes), `:timeout_ms`
-  (the slot wait), `:tick_ms` (the keeper's period). A refused slot
+  `:envelope` (the input the row's envelope describes) and
+  `:tick_ms` (the keeper's period). A refused slot
   answers `{:error, {:slot_refused, sentence}}` and fails the row; a row
   that ended while the claim waited for its slot answers
   `{:error, :not_running}`, and one that could not be read then

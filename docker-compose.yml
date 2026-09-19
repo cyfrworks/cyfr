@@ -15,18 +15,22 @@
 #   locus-builds — the builder: compiles components and tinctures, each
 #                 build under a uid and a memory bound of its own. Every
 #                 build request is signed under CYFR_LOCUS_BUILDS_KEY; the
-#                 builder holds no tenant state. Opt-in via the
-#                 `locus-builds` profile.          [profile: locus-builds]
+#                 builder holds no tenant state. On after `cyfr init`, which
+#                 writes CYFR_LOCUS_BUILDS_URL and mints its key; selected
+#                 by its profile.                  [profile: locus-builds]
 #   caddy      — TLS + reverse proxy in front of cyfr. Opt-in via the `tls`
 #                 profile.                                   [profile: tls]
 #
 # `cyfr init` writes this file (and Caddyfile + .env) into a fresh project dir;
 # from a source checkout, `cp .env.example .env` instead. Then:
-#   docker compose up -d                        # direct mode: cyfr + mcp-bridge + opus
-#   docker compose --profile tls up -d          # also start Caddy for TLS
-# `cyfr init` writes CYFR_BEHIND_PROXY=true into .env when you answer "yes" to
-# the TLS prompt, and `cyfr up` adds `--profile tls` automatically when that
-# flag is set. See the "Deploy to a Server" section of README.md.
+#   docker compose --profile locus-builds up -d   # cyfr + mcp-bridge + opus + locus-builds
+#   docker compose --profile locus-builds --profile tls up -d   # also Caddy for TLS
+# `cyfr up` selects each profile from .env: `locus-builds` when
+# CYFR_LOCUS_BUILDS_URL names that service, and `tls` when
+# CYFR_BEHIND_PROXY=true, which `cyfr init` writes when you answer "yes" to
+# the TLS prompt. To build nothing, set CYFR_LOCUS_BUILDS_URL and
+# CYFR_LOCUS_BUILDS_KEY empty and leave the profile off. See the "Deploy to
+# a Server" section of README.md.
 
 services:
   cyfr:
