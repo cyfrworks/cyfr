@@ -571,9 +571,15 @@ defmodule Opus.ModelContractTest do
     second_stream = emitted(Map.fetch!(played.seen.streams, second.child_execution_id))
     assert streamed_text(second_stream) == "Said #{@redacted}."
 
-    # The fixture held the key: it was told so, and what it sent was masked.
+    # The next chat is given the masked text and the masked call, as the rows
+    # hold them.
     assert %{"received" => %{"messages" => messages}} = report(ctx, second.child_execution_id)
-    assert inspect(messages) =~ @redacted
+
+    assert [_person, %{"role" => "assistant", "content" => [said, called]}, %{"role" => "tool"}] =
+             messages
+
+    assert said == text_block("The key is #{@redacted}, whole.")
+    assert %{"type" => "tool_call", "id" => "m1", "arguments" => ^masked_query} = called
 
     assert [] = key_leaks(ctx, played)
   end
