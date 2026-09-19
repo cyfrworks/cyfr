@@ -24,6 +24,14 @@ if config_env() != :test do
   env_str = fn key, default -> env!(key, :string?, nil) || default end
   env_int = fn key, default -> env!(key, :integer?, nil) || default end
 
+  # Whether the variable is assigned at all, blank or not: `nil` only when
+  # nothing assigns it. Blank-is-unset above is the rule, because for every
+  # other setting a blank line is an operator who left it alone; this reader
+  # is for the one setting whose blank value is a value, an allowlist whose
+  # emptiness is the decision to allow nothing (CYFR_CORS_ALLOWED_ORIGINS
+  # below), and whose configured default is not the empty list.
+  env_assigned = fn key -> env!(key, :string, nil) end
+
   # Comma-separated lists: origins, CIDRs, egress targets, operator emails.
   # The split-trim-reject-empty was written out five times; a list that reads
   # one way in four places and another in the fifth is the shape of a
@@ -696,9 +704,16 @@ if config_env() != :test do
         end
     end
 
-    # Browser CORS allowlist. Authenticated releases require an explicit value.
-    # Empty denies cross-origin requests; unset retains the wildcard default.
-    if env_str.("CYFR_CORS_ALLOWED_ORIGINS", nil) do
+    # Browser CORS allowlist. Authenticated releases require an explicit
+    # value: assigned, it is the allowlist it spells, and assigned empty it
+    # is the empty allowlist — no cross-origin caller at all, which is what
+    # a same-origin deployment sets and what `.env.example` promises.
+    # Unassigned, `config/config.exs`'s wildcard stands, which
+    # `Cyfr.Application.cors_enforcement/3` refuses for a release that has
+    # authentication configured. So the read is the assignment, not the
+    # value: `env_str` would read an empty allowlist as no answer and leave
+    # the wildcard standing, which is the boot a `cyfr init` project had.
+    if env_assigned.("CYFR_CORS_ALLOWED_ORIGINS") do
       config :cyfr, :cors_allowed_origins, env_list.("CYFR_CORS_ALLOWED_ORIGINS")
     end
 
