@@ -80,8 +80,12 @@ defmodule Emissary.MCP.BridgeTest do
       %{bypass: bypass, agent: agent, url: "http://127.0.0.1:#{bypass.port}"}
     end
 
-    # A request still in flight when its test ends — its client gone, the
-    # fake's state stopped — is answered 503 rather than failing the test.
+    # Once the fake runs a request it traps exits, so a request whose client
+    # goes away mid-way (a controller that crashes while the fake holds its
+    # sync) still runs to its answer, 503 if the fake's state is gone. A
+    # request cut off before that, or while its body is read, ends with its
+    # connection and Bypass fails the test for it, so no test ends with a
+    # message of the controller's in flight (`supervise_bridge/1`).
     defp serve(conn, handler) do
       Process.flag(:trap_exit, true)
       handler.(conn)
@@ -324,9 +328,28 @@ defmodule Emissary.MCP.BridgeTest do
     end
   end
 
+  defmodule Teardown do
+    @moduledoc false
+    # Runs `stop` as the test's supervisor stops it: before every child
+    # started ahead of it, while they all still run.
+    use GenServer
+
+    def start_link(stop), do: GenServer.start_link(__MODULE__, stop)
+
+    @impl true
+    def init(stop) do
+      Process.flag(:trap_exit, true)
+      {:ok, stop}
+    end
+
+    @impl true
+    def terminate(_reason, stop), do: stop.()
+  end
+
+  # The sandbox owner is not the test process: the controller, which reads
+  # the store, still has it while it is stopped after the test.
   setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!()
     Arca.Cache.init()
 
     ctx = Sanctum.TestContext.local()
@@ -335,11 +358,6 @@ defmodule Emissary.MCP.BridgeTest do
     on_exit(fn ->
       :persistent_term.erase(@generation_key)
       Cyfr.ControlPlane.mark(:unclaimed)
-
-      for {_name, pid, _type, _modules} <-
-            DynamicSupervisor.which_children(Emissary.MCP.ExternalServerSupervisor) do
-        DynamicSupervisor.terminate_child(Emissary.MCP.ExternalServerSupervisor, pid)
-      end
     end)
 
     {:ok, ctx: ctx, fake: fake}
@@ -347,9 +365,7 @@ defmodule Emissary.MCP.BridgeTest do
 
   defp start_bridge(fake, opts \\ []) do
     bridge =
-      start_supervised!(
-        {Bridge, Keyword.merge([url: fake.url, root: @root, tick_ms: 3_600_000], opts)}
-      )
+      supervise_bridge(Keyword.merge([url: fake.url, root: @root, tick_ms: 3_600_000], opts))
 
     assert_receive {:control, "hello", %{"g" => 1}, %{boot: "-"}}, 2_000
     assert_receive {:control, "reconcile", %{"keep" => []}, _fields}, 2_000
@@ -357,17 +373,45 @@ defmodule Emissary.MCP.BridgeTest do
     bridge
   end
 
+  # The controller, stopped when the test ends as the application stops it:
+  # after the server processes, which release their owners through it as
+  # they stop, and only once it has nothing left to send. Stopped with a
+  # message in flight, it would cut off the request the fake is serving.
+  defp supervise_bridge(opts) do
+    bridge = start_supervised!({Bridge, opts})
+    start_supervised!({Teardown, &quiesce/0}, shutdown: 10_000)
+    bridge
+  end
+
+  defp quiesce do
+    for {_id, pid, _type, _modules} <-
+          DynamicSupervisor.which_children(Emissary.MCP.ExternalServerSupervisor) do
+      DynamicSupervisor.terminate_child(Emissary.MCP.ExternalServerSupervisor, pid)
+    end
+
+    eventually(
+      fn ->
+        state = :sys.get_state(Bridge)
+        state.owners == %{} and state.releases == %{} and idle?(state)
+      end,
+      "the controller to run no owner and have nothing left to send"
+    )
+  end
+
   defp tick(bridge) do
     send(bridge, :tick)
     await_idle(bridge)
   end
+
+  defp idle?(state),
+    do: state.inflight == nil and :queue.is_empty(state.urgent) and :queue.is_empty(state.queue)
 
   # Until the controller has no message in flight and none queued.
   defp await_idle(bridge, deadline \\ System.monotonic_time(:millisecond) + 3_000) do
     state = :sys.get_state(bridge)
 
     cond do
-      state.inflight == nil and :queue.is_empty(state.urgent) and :queue.is_empty(state.queue) ->
+      idle?(state) ->
         state
 
       System.monotonic_time(:millisecond) > deadline ->
@@ -701,7 +745,7 @@ defmodule Emissary.MCP.BridgeTest do
       Application.delete_env(:cyfr, :mcp_bridge_idle_ms)
     end)
 
-    bridge = start_supervised!({Bridge, url: fake.url, root: @root})
+    bridge = supervise_bridge(url: fake.url, root: @root)
     assert %{lease_ms: 6_000, idle_ms: 120_000, tick_ms: 2_000} = :sys.get_state(bridge)
     assert_receive {:control, "hello", _hello, _fields}, 2_000
 
