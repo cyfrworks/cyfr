@@ -77,11 +77,14 @@ defmodule Opus.Application do
       ]
   end
 
-  # What runs guest code: the shared Wasmex engine for
-  # compile-once/instantiate-many, its disposable state (compiled
-  # components and open streams), and the supervised fire-and-forget tasks
-  # (a guest's streaming HTTP request).
-  defp engine do
+  @doc """
+  What runs guest code: the shared Wasmex engine for
+  compile-once/instantiate-many, its disposable state
+  (compiled components and open streams), and the supervised
+  fire-and-forget tasks (a guest's streaming HTTP request).
+  """
+  @spec engine() :: [Supervisor.child_spec() | module()]
+  def engine do
     [
       Opus.SharedEngine,
       Opus.Cache,
