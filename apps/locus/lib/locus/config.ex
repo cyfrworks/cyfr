@@ -16,6 +16,7 @@ defmodule Locus.Config do
   | `LOCUS_BUILDS_TIMEOUT_MS` | `:timeout_ms` | 1000..600000 | 270000 |
   | `LOCUS_BUILDS_MAX_CONCURRENT` | `:max_concurrent` | 1..1024 | 2 |
   | `LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT` | `:max_concurrent_per_tenant` | 1..1024 | 1 |
+  | `LOCUS_BUILDS_MEMORY_BYTES` | `:memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 1073741824 (1 GiB) |
   | `LOCUS_BUILDS_CARGO_SEED` | `:cargo_seed` | a directory | none |
   | `LOCUS_BUILDS_LOG_LEVEL` | `:log_level` | a Logger level | `info` |
   | `LOCUS_BUILDS_LOG_FORMAT` | `:log_format` | `text` or `json` | `text` |
@@ -29,9 +30,18 @@ defmodule Locus.Config do
   the worker root and the bridge key are CYFR's, and a builder that can
   see them was given more than a builder holds.
 
+  `:memory_bytes` is the bound every build's spawn asks cyfr-spawn for
+  (`Locus.Spawner`): the memory of the build's processes, what it writes
+  to its home and the kernel memory charged to it, together. Its range is
+  the keeper's own for a spawn's `memory_bytes`, so a value accepted here
+  is one the keeper accepts. There is no value that means "no bound".
+  `:log_level` and `:log_format` become the logger's when a node that
+  serves builds starts (`Locus.Application`).
+
   Where the environment was never read — a development node, the test
   suite — every accessor answers its default and `request_key/0` is nil,
-  so no build request verifies.
+  so no build request verifies and the node serves none
+  (`Locus.Application`).
   """
 
   alias Cyfr.EnvValue
@@ -49,10 +59,15 @@ defmodule Locus.Config do
     timeout_ms: @default_timeout_ms,
     max_concurrent: 2,
     max_concurrent_per_tenant: 1,
+    memory_bytes: 1_073_741_824,
     cargo_seed: nil,
     log_level: :info,
     log_format: :text
   ]
+
+  # cyfr-spawn's range for a spawn's `memory_bytes` (`apps/spawn`'s
+  # protocol, MinMemoryBytes to MaxMemoryBytes).
+  @memory_range 16_777_216..1_099_511_627_776
 
   @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_WORKER_KEY CYFR_MCP_BRIDGE_KEY)
 
@@ -64,6 +79,7 @@ defmodule Locus.Config do
           timeout_ms: pos_integer(),
           max_concurrent: pos_integer(),
           max_concurrent_per_tenant: pos_integer(),
+          memory_bytes: pos_integer(),
           cargo_seed: String.t() | nil,
           log_level: Logger.level(),
           log_format: :text | :json
@@ -91,6 +107,7 @@ defmodule Locus.Config do
              1..1024,
              "builds"
            ),
+         {:ok, memory_bytes} <- memory_bytes(getenv),
          {:ok, cargo_seed} <- EnvValue.text(getenv, "LOCUS_BUILDS_CARGO_SEED"),
          {:ok, log_level} <- log_level(getenv),
          {:ok, log_format} <- log_format(getenv) do
@@ -102,6 +119,7 @@ defmodule Locus.Config do
          timeout_ms: timeout_ms || @defaults[:timeout_ms],
          max_concurrent: max || @defaults[:max_concurrent],
          max_concurrent_per_tenant: per_tenant || @defaults[:max_concurrent_per_tenant],
+         memory_bytes: memory_bytes || @defaults[:memory_bytes],
          cargo_seed: cargo_seed,
          log_level: log_level,
          log_format: log_format
@@ -135,6 +153,26 @@ defmodule Locus.Config do
 
       other ->
         other
+    end
+  end
+
+  # `Cyfr.EnvValue.whole_number/4` reads at most twelve digits, one short
+  # of this range's upper end, so the bound is read here, in its form.
+  defp memory_bytes(getenv) do
+    {:ok, text} = EnvValue.text(getenv, "LOCUS_BUILDS_MEMORY_BYTES")
+    first..last//1 = @memory_range
+
+    cond do
+      text == nil ->
+        {:ok, nil}
+
+      Regex.match?(~r/\A[0-9]{1,13}\z/, text) and String.to_integer(text) in @memory_range ->
+        {:ok, String.to_integer(text)}
+
+      true ->
+        {:error,
+         "LOCUS_BUILDS_MEMORY_BYTES=#{inspect(text)} must be a whole number of bytes " <>
+           "from #{first} to #{last}."}
     end
   end
 
@@ -196,6 +234,10 @@ defmodule Locus.Config do
   @doc "Concurrent builds this builder runs for one athanor."
   @spec max_concurrent_per_tenant() :: pos_integer()
   def max_concurrent_per_tenant, do: get(:max_concurrent_per_tenant)
+
+  @doc "The memory bound every build's spawn asks cyfr-spawn for, in bytes."
+  @spec memory_bytes() :: pos_integer()
+  def memory_bytes, do: get(:memory_bytes)
 
   @doc "The Cargo home whose registry cache a Rust build starts from, or nil."
   @spec cargo_seed() :: String.t() | nil

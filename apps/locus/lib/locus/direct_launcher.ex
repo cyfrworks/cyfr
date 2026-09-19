@@ -3,13 +3,16 @@
 
 defmodule Locus.DirectLauncher do
   @moduledoc """
-  The executor for a node without cyfr-spawn: a build runs as this node's
-  own user, in a temporary home removed after it. It isolates nothing — a
-  build can read and signal this node and every other build, and reach
-  this node's environment through `/proc` — so the builder service never
-  uses it (`Locus.Application` refuses to serve builds without the
-  spawner). It is how a development machine builds, and how an app server
-  builds when its operator accepts in-process builds.
+  The executor of the test environment, and of nothing else: a build runs
+  as this node's own user, in a temporary home removed after it. It
+  isolates nothing — a build can read and signal this node and every other
+  build, and reach this node's environment through `/proc` — and it
+  applies no memory bound: a build here may take whatever memory the
+  machine gives it. `Locus.Executor` knows it under the test environment
+  alone, so the suites can run a real toolchain on a machine without
+  cyfr-spawn; no release and no development node builds through it, and
+  the builds service refuses to serve without cyfr-spawn anywhere else
+  (`Locus.Application`).
 
   ## arca:bypass-ok=D — entire module
 
@@ -20,8 +23,12 @@ defmodule Locus.DirectLauncher do
   `HOME`, `TMPDIR`, `USER`, `LOGNAME` and `PATH` (this node's search path,
   where a development machine's toolchains are); `env -i` clears the rest.
   Its stdin is read from a file and its stdout written to one, since a
-  port carries one stream each way; its stderr is the port's output. A run
-  past its deadline, or whose caller dies, has its process group killed.
+  port carries one stream each way; its stderr is the port's output.
+
+  A run past its deadline, or cancelled (`Locus.Executor.cancel/1`), has
+  its process group killed before `run/2` answers. A run whose caller dies
+  is ended by a janitor that outlives the caller: it kills the process
+  group and removes the run's directory.
   """
 
   @behaviour Locus.Executor
@@ -98,20 +105,13 @@ defmodule Locus.DirectLauncher do
 
     result =
       case collect(port, Log.new(), on_output, deadline) do
-        {:exit, status, log} ->
-          read_output(status, log, paths.output, Keyword.fetch!(opts, :max_stdout_bytes))
+        {:exit, status} ->
+          read_output(status, paths.output, Keyword.fetch!(opts, :max_stdout_bytes))
 
-        :timeout ->
+        ended when ended in [:timeout, :cancelled] ->
           kill(os_pid)
-          Port.close(port)
-
-          receive do
-            {^port, _message} -> :ok
-          after
-            0 -> :ok
-          end
-
-          {:error, :timeout}
+          close(port)
+          {:error, ended}
       end
 
     send(janitor, :done)
@@ -125,20 +125,45 @@ defmodule Locus.DirectLauncher do
         collect(port, Log.add(log, data, on_output), on_output, deadline)
 
       {^port, {:exit_status, status}} ->
-        {:exit, status, Log.finish(log, on_output)}
+        :ok = Log.finish(log, on_output)
+        {:exit, status}
+
+      {Locus.Executor, :cancel} ->
+        :cancelled
     after
       max(deadline - System.monotonic_time(:millisecond), 0) -> :timeout
     end
   end
 
-  defp read_output(status, log, output, max_bytes) do
+  # The kill ends the command, whose exit closes the port: by now it may be
+  # closed already, which `Port.close/1` raises on. What the port sent
+  # before it closed is of no use to anyone.
+  defp close(port) do
+    try do
+      Port.close(port)
+    rescue
+      ArgumentError -> :ok
+    end
+
+    drain(port)
+  end
+
+  defp drain(port) do
+    receive do
+      {^port, _message} -> drain(port)
+    after
+      0 -> :ok
+    end
+  end
+
+  defp read_output(status, output, max_bytes) do
     case File.stat(output) do
       {:ok, %File.Stat{size: size}} when size > max_bytes ->
         {:error, {:output_too_large, max_bytes}}
 
       {:ok, _} ->
         case File.read(output) do
-          {:ok, stdout} -> {:ok, %{exit: {:status, status}, stdout: stdout, log: log}}
+          {:ok, stdout} -> {:ok, %{exit: {:status, status}, stdout: stdout}}
           {:error, reason} -> {:error, {:spawn_failed, reason}}
         end
 

@@ -1,16 +1,28 @@
 # syntax=docker/dockerfile:1.7-labs
-# The builder container: the toolchain half of Locus and nothing else.
+# The Locus container: the builder and its toolchains, and nothing else.
 # The app image (Dockerfile) carries no compilers; this one carries no
-# endpoint, no database and no tenant state — sources arrive in the
-# request, artifacts leave in the response.
+# endpoint of the product's, no database and no tenant state, and the
+# release holds only the shared contracts and Locus (`mix release locus`).
+# It holds one builds key (LOCUS_BUILDS_KEY) and is reached by CYFR over
+# the build wire (Cyfr.BuilderProtocol): sources arrive in a signed
+# request, artifacts leave in its answer.
 #
 # Process model: cyfr-spawn runs as root holding only SETUID, SETGID and
-# KILL (it refuses to start with any other capability), starts the builder
+# KILL (it refuses to start with any other capability), starts the locus
 # release as cyfr-builder, and runs every build under a pooled uid of its
 # own (cyfr-build01…cyfr-build16) with a 0700 home under
-# /var/lib/cyfr-builder/homes. When a build ends every process of its uid
-# is killed and everything the uid left is removed before another build
-# gets it; the builder release refuses to serve builds without cyfr-spawn.
+# /var/lib/cyfr-builder/homes, inside a memory bound of its own
+# (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB unless set). When a build ends every
+# process of its uid is killed and everything the uid left is removed
+# before another build gets it; the locus release refuses to serve builds
+# without cyfr-spawn.
+#
+# The memory bound is a cgroup v2 group cyfr-spawn makes for each build, so
+# the container must be started with the security option
+# `writable-cgroups=true` (Docker Engine 28 or later on a cgroup v2 host).
+# It adds no capability. Without it cyfr-spawn cannot bound a build and
+# refuses every one: the service answers each build `unavailable`, naming
+# the option, and none runs unbounded.
 
 # ---- cyfr-spawn, the process helper: a static Go binary, pinned to the Go
 # release apps/spawn/go.mod names ----
@@ -37,25 +49,34 @@ WORKDIR /app
 
 RUN mix local.hex --force && mix local.rebar --force
 
+# The release is built from the two apps it holds: the umbrella here is
+# the contracts and Locus alone, so nothing of the control plane is
+# fetched, compiled or present in this stage. The umbrella's manifest
+# names a Mix listener of the control plane's (Phoenix's code reloader),
+# which does not exist here and which a release build has no use for:
+# the compile runs without listeners, and the release is assembled from
+# what it compiled.
 COPY mix.exs mix.lock ./
-COPY --parents apps/*/mix.exs ./
+COPY apps/cyfr_contracts/mix.exs apps/cyfr_contracts/mix.exs
+COPY apps/locus/mix.exs apps/locus/mix.exs
 
 RUN mix deps.get --only prod && mix deps.compile
 
 COPY config/ config/
-COPY apps/ apps/
-COPY component-guide.md tincture-guide.md integration-guide.md ./
+COPY apps/cyfr_contracts/ apps/cyfr_contracts/
+COPY apps/locus/ apps/locus/
+# Compendium.WITSource embeds the whole WIT tree at COMPILE time, and the
+# runtime never reads it from disk: a release without its ABI fails the
+# build here instead.
 COPY wit/ wit/
 
-RUN mix compile && mix release builder
+RUN mix do compile --no-listeners + release locus --no-compile
 
 # ---- Stage 2: toolchain runtime ----
 FROM debian:bookworm-slim
 
 LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
-# The release loads (never starts) the cyfr app, which carries lib/sanctum's
-# FSL-licensed modules.
-LABEL org.opencontainers.image.licenses="Apache-2.0 AND FSL-1.1-Apache-2.0"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 # Debian publishes a fixed package before the base image is rebuilt around
 # it, so take what the archive has at build time: the image scan in
@@ -123,7 +144,7 @@ RUN ARCH=$(dpkg --print-architecture) \
 # linked into /usr/local/bin.
 RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 
-# The builder release's user and the build pool: each user is alone in its
+# The locus release's user and the build pool: each user is alone in its
 # own group and belongs to no other. /run/cyfr-builder holds the release's
 # temporary files and the attach socket builds' relays connect to.
 RUN groupadd -r -g 10001 cyfr-builder \
@@ -144,16 +165,19 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 WORKDIR /app
 
 COPY --from=spawn /out/cyfr-spawn /usr/local/bin/cyfr-spawn
-COPY --from=relbuilder /app/_build/prod/rel/builder ./
+COPY --from=relbuilder /app/_build/prod/rel/locus ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
 
 # The crates every scaffolded Rust component depends on, fetched once into
 # a root-owned Cargo home; each build copies its registry cache into the
-# build's own Cargo home (`CYFR_BUILD_CARGO_SEED`). The manifests are the
-# release's own templates, so the seed follows the scaffold.
-ENV CYFR_BUILD_CARGO_SEED=/opt/cyfr/cargo-seed
-RUN /app/bin/builder eval ' \
+# build's own Cargo home (`LOCUS_BUILDS_CARGO_SEED`). The manifests are the
+# release's own templates, so the seed follows the scaffold. The release
+# boots nothing without a builds key, this one-off command included, so it
+# is given one made here and kept nowhere.
+ENV LOCUS_BUILDS_CARGO_SEED=/opt/cyfr/cargo-seed
+RUN LOCUS_BUILDS_KEY="$(head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n')" \
+    /app/bin/locus eval ' \
       for type <- [:reagent, :catalyst, :formula] do \
         dir = Path.join("/tmp/cargo-seed", Atom.to_string(type)); \
         File.mkdir_p!(Path.join(dir, "src")); \
@@ -161,13 +185,9 @@ RUN /app/bin/builder eval ' \
         File.write!(Path.join(dir, "Cargo.toml"), Locus.Builder.cargo_toml_for(type)) \
       end' \
     && for manifest in /tmp/cargo-seed/*/Cargo.toml; do \
-         CARGO_HOME="$CYFR_BUILD_CARGO_SEED" cargo fetch --manifest-path "$manifest" || exit 1; \
+         CARGO_HOME="$LOCUS_BUILDS_CARGO_SEED" cargo fetch --manifest-path "$manifest" || exit 1; \
        done \
     && rm -rf /tmp/cargo-seed
-
-# No `COPY wit/` here: Compendium.WITSource embeds the whole WIT tree at
-# COMPILE time (stage 1 copies it for that), and the runtime never reads
-# it from disk — a release without its ABI fails the build instead.
 
 # The release starts no Erlang distribution: a listener any build could
 # reach, authenticated by a cookie any build could read. Its temporary
@@ -175,13 +195,17 @@ RUN /app/bin/builder eval ' \
 ENV RELEASE_DISTRIBUTION=none \
     RELEASE_TMP=/run/cyfr-builder
 
-ARG CYFR_BUILDER_PORT=4100
-EXPOSE ${CYFR_BUILDER_PORT}
+ARG LOCUS_BUILDS_PORT=4100
+EXPOSE ${LOCUS_BUILDS_PORT}
 
+# The wire's health operation: a POST of the versioned body, answered
+# without a key (Cyfr.BuilderProtocol).
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
-    CMD curl -f http://localhost:${CYFR_BUILDER_PORT:-4100}/health || exit 1
+    CMD curl -fsS -X POST -H 'content-type: application/json' -d '{"version":1}' \
+        "http://localhost:${LOCUS_BUILDS_PORT:-4100}/locus/v1/builds/health" || exit 1
 
 # Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
-# `no-new-privileges`, a read-only root, `ipc: none` and the homes and
-# /run/cyfr-builder tmpfs mounts (docker-compose.yml's builder service).
-ENTRYPOINT ["cyfr-spawn", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/cyfr-builder/homes", "--client-user", "cyfr-builder", "--", "/app/bin/builder", "start"]
+# `security_opt: [no-new-privileges, writable-cgroups=true]`, a read-only
+# root, `ipc: none` and the homes and /run/cyfr-builder tmpfs mounts
+# (docker-compose.yml's locus-builds service).
+ENTRYPOINT ["cyfr-spawn", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/cyfr-builder/homes", "--client-user", "cyfr-builder", "--", "/app/bin/locus", "start"]

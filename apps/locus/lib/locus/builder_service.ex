@@ -2,293 +2,444 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Locus.BuilderService do
+  @max_health_bytes 4096
+  @watch_ms 1_000
+  @cancel_ms 15_000
+
   @moduledoc """
-  The builder container's HTTP face: one authenticated endpoint that runs
-  `Locus.Builder.compile/3` and returns the artifact.
+  The builds service: the listener side of `Cyfr.BuilderProtocol`, and the
+  only thing that reaches `Locus.Builder`. It speaks that protocol and
+  nothing else: two `POST` routes, versioned bodies, and answers that are
+  lines, each at the status the protocol gives its class. Whatever is not
+  one of its operations is refused as `malformed`.
 
-  Served only when `:cyfr, :builder_listen` is true — the `builder`
-  release sets `CYFR_BUILDER_LISTEN=true`; the app image never listens —
-  and only on a node cyfr-spawn started, so every build it serves runs
-  under a pooled uid of its own (`Locus.Spawner`, `Locus.Application`).
-  The client half is `Locus.BuilderClient`, selected by
-  `CYFR_BUILDER_URL` on the server node.
+  ## Health
 
-  The contract is deliberately small (`Locus.BuilderProtocol`): `POST
-  /build` carries the source map (base64 values), the language and the
-  target type; the response carries the compiled bytes (or a tincture's
-  output files), the digest, and the build log lines. Progress cannot
-  stream over one POST — the client replays the returned log lines to its
-  own progress sink at completion. Auth is one static bearer
-  (`CYFR_BUILDER_TOKEN`), compared constant-time; the compose network is
-  internal-only on top. A request at another protocol is refused with 409
-  before its body is read, and every answer names this builder's protocol
-  and release.
+  `POST /locus/v1/builds/health` answers without authentication, as the
+  protocol says: the release and the toolchains, from a body read within
+  #{@max_health_bytes} bytes.
+
+  ## A build, in order
+
+  1. **The header, before any of the body.** The `x-cyfr-auth` header is
+     verified under this service's request key
+     (`Cyfr.BuilderProtocol.verify_request_header/3`) and refused as
+     `unauthorized`, in the protocol's order: `malformed`,
+     `outside_window`, `bad_mac`. A service holding no key verifies
+     nothing.
+  2. **Replay.** A verified header's nonce is kept for as long as the
+     header could verify again, and one seen in that time is refused
+     `replayed`. Only a verified header's nonce is kept, so nobody without
+     the key grows the table.
+  3. **The bound.** A declared length past
+     `Cyfr.BuilderProtocol.max_request_bytes/0` is refused `malformed`
+     without reading; the body is then read up to that bound, and one that
+     runs past it is refused the same way.
+  4. **The body's hash.** The bytes read must be the ones the header named
+     (`verify_body/2`), or the request is `unauthorized` (`bad_mac`).
+  5. **The request.** Read strictly (`read_request/1`): another version is
+     `protocol_mismatch`, anything else that does not read is `malformed`.
+  6. **The deadline.** The build's budget is the time to the request's
+     deadline or `Locus.Config.timeout_ms/0`, whichever is less; a
+     deadline already passed is refused `timeout` with nothing run.
+  7. **The build itself** is checked and packed (`Locus.Builder.prepare/1`):
+     `malformed` for sources that make no build, `unavailable` for a
+     missing toolchain or spawner.
+  8. **The slot.** One of `Locus.BuildSlots` is taken for the request's
+     `athanor_id`, never waited for: `capacity` names the total cap or the
+     athanor's, whichever refused.
+
+  Every refusal so far is the one line of the answer, at its class's
+  status, and nothing was spawned for it. With the slot held the answer
+  opens as a `200` stream of lines: each progress line as the build makes
+  it, then one terminal line, the result or the refusal the build ended
+  with (`timeout`, `memory`, `failed`, `unavailable`, `capacity`), carrying
+  the lines streamed as its diagnostics (`Locus.Diagnostics`).
+
+  ## How a build ends, and what is given back
+
+  The build runs in a process of its own, linked to the connection's, which
+  holds the slot. The slot goes back only once that process has ended, and
+  it ends only once its executor has retired everything the build started:
+
+  - **Its own end, its deadline, its memory bound**: the executor answers
+    after the build's processes are gone, the terminal line is written and
+    the slot released.
+  - **The client gone**: the connection is asked every #{@watch_ms} ms
+    whether its peer closed (Bandit leaves a request's socket passive, so a
+    close is seen only by asking), and a line that cannot be written says
+    the same. The build is cancelled (`Locus.Executor.cancel/1`), which
+    ends its processes with no grace; the service waits up to
+    #{@cancel_ms} ms for that, kills the build process if it has not
+    ended, and releases the slot. Nothing more is written.
+  - **The connection's process killed** (the listener stopping, a crash):
+    the link ends the build process, whose executor's own watch ends the
+    build (the spawner releases a dead caller's spawn, the direct launcher's
+    janitor kills the group), and the slots' monitor gives the slot back.
+  - **cyfr-spawn lost**: the spawner answers every run in flight and stops;
+    each build's terminal line is `unavailable`, its slot is released, and
+    the listener, which depends on the spawner, stops with it
+    (`Locus.Application`).
+
+  Nothing a request carries is logged: a refusal is logged by its class.
   """
 
-  use Plug.Router
+  use Plug.Router, copy_opts_to_assign: :service_opts
 
-  # Allow a 1 MiB source map with base64 overhead and envelope headroom.
-  # Locus.Builder also validates and bounds decoded sources.
-  @max_body_bytes 8_000_000
+  require Logger
+
+  alias Cyfr.BuilderProtocol
+  alias Locus.Diagnostics
+
+  @nonces __MODULE__.Nonces
+  @slots Locus.BuildSlots
+  @content_type "application/x-ndjson"
 
   plug(:match)
-  # BEFORE the parser: the token rides a header, so an unauthenticated caller
-  # is refused without the container reading — let alone JSON-parsing — up to
-  # @max_body_bytes on their say-so. The build slot is taken later still, so
-  # until this ran first the concurrency cap bounded toolchain processes but
-  # not memory, on a port that binds 0.0.0.0.
-  plug(:authenticate)
-  plug(:handshake)
-  plug(Plug.Parsers, parsers: [:json], json_decoder: Jason, length: @max_body_bytes)
   plug(:dispatch)
 
-  get "/health" do
-    send_json(conn, 200, %{ok: true, toolchains: Locus.Builder.available_toolchains()})
-  end
+  @doc "Create the table of nonces seen, owned by the calling process."
+  @spec init_nonces() :: :ok
+  def init_nonces do
+    if :ets.whereis(@nonces) == :undefined,
+      do: :ets.new(@nonces, [:set, :public, :named_table, write_concurrency: true])
 
-  # `/health` is the one route that answers without a token — it names the
-  # toolchains and nothing else. Everything else must present one.
-  defp authenticate(%Plug.Conn{request_path: "/health"} = conn, _opts), do: conn
-
-  defp authenticate(conn, _opts) do
-    case check_token(conn) do
-      :ok ->
-        conn
-
-      {:error, :unauthorized} ->
-        conn
-        |> send_json(401, %{ok: false, error: "unauthorized"})
-        |> halt()
-    end
-  end
-
-  defp handshake(%Plug.Conn{request_path: "/build"} = conn, _opts) do
-    protocol = List.first(get_req_header(conn, Locus.BuilderProtocol.protocol_header()))
-
-    if protocol == Integer.to_string(Locus.BuilderProtocol.version()) do
-      conn
-    else
-      release = List.first(get_req_header(conn, Locus.BuilderProtocol.release_header()))
-
-      conn
-      |> send_json(409, %{ok: false, error: Locus.BuilderProtocol.refusal(protocol, release)})
-      |> halt()
-    end
-  end
-
-  defp handshake(conn, _opts), do: conn
-
-  post "/build" do
-    with {:ok, source_files, language, target_type, resolve?} <- decode_request(conn.body_params),
-         # The cap is enforced on THIS side of the wire too: the client-side
-         # slots govern one app node, but two app nodes (or anything else
-         # holding the token) could otherwise run unbounded concurrent
-         # cargo builds in the one container sized for a couple.
-         {:ok, slot} <- acquire_slot() do
-      try do
-        run_build(conn, source_files, language, target_type, resolve?)
-      after
-        Cyfr.Slots.release(Locus.BuildSlots, slot)
-      end
-    else
-      {:error, :unauthorized} ->
-        send_json(conn, 401, %{ok: false, error: "unauthorized"})
-
-      # A slot refusal, whichever: the container's cap, or slots not being
-      # handed out at all. An unaccounted build is worse than a refused one,
-      # and the client retries either the same way.
-      {:error, refusal} when is_atom(refusal) ->
-        send_json(conn, 429, %{
-          ok: false,
-          error: "builder at capacity (#{Locus.Application.max_builds()} concurrent builds)"
-        })
-
-      {:error, message} when is_binary(message) ->
-        send_json(conn, 400, %{ok: false, error: message})
-    end
+    :ok
   end
 
   match _ do
-    send_json(conn, 404, %{ok: false, error: "not found"})
+    case {conn.method, BuilderProtocol.operation(conn.request_path)} do
+      {"POST", {:ok, :build}} ->
+        build(conn, now(conn))
+
+      {"POST", {:ok, :health}} ->
+        health(conn)
+
+      _ ->
+        refuse(
+          conn,
+          {:malformed, "#{conn.method} on this path is no operation of the builds service"}
+        )
+    end
   end
 
-  defp check_token(conn) do
-    expected = Application.get_env(:cyfr, :builder_token)
+  # The clock a header's window and a request's deadline are read against:
+  # the system's, or the `:now` this plug was given (a test presenting the
+  # shared vectors' headers at the vectors' instant).
+  defp now(%Plug.Conn{assigns: %{service_opts: opts}}) do
+    case Keyword.fetch(opts, :now) do
+      {:ok, now} when is_function(now, 0) -> now.()
+      :error -> System.system_time(:millisecond)
+    end
+  end
 
-    with [<<"Bearer ", presented::binary>>] <- get_req_header(conn, "authorization"),
-         true <- is_binary(expected) and expected != "",
-         true <- Plug.Crypto.secure_compare(presented, expected) do
-      :ok
+  # ————— health —————
+
+  defp health(conn) do
+    with {:ok, body, conn} <- read(conn, @max_health_bytes),
+         :ok <- readable(BuilderProtocol.read_health_request(body), conn) do
+      {:ok, line} =
+        BuilderProtocol.encode_health(%{
+          release: BuilderProtocol.release(),
+          toolchains: Locus.Builder.available_toolchains()
+        })
+
+      answer(conn, 200, line)
     else
-      # No token configured is a refusal too: an unauthenticated builder
-      # is a remote code executor.
-      _ -> {:error, :unauthorized}
+      {:refused, conn, refusal} -> refuse(conn, refusal)
     end
   end
 
-  defp decode_request(
-         %{
-           "source_files" => sources,
-           "language" => language,
-           "target_type" => target_type
-         } = request
-       )
-       when is_map(sources) and is_binary(language) and is_binary(target_type) do
-    with {:ok, resolve?} <- resolve_flag(request),
-         {:ok, language} <-
-           known(language, Enum.map(Locus.Builder.languages(), &Atom.to_string/1), "language"),
-         # The roster, not a copy of it: `Compendium.Scaffold.validate_type/1`
-         # reads the same source, and a hand-written list here would silently
-         # refuse a fifth component kind the rest of the system had accepted.
-         {:ok, target_type} <-
-           known(target_type, Cyfr.ComponentRef.valid_types(), "target_type"),
-         language = String.to_existing_atom(language),
-         target_type = String.to_existing_atom(target_type),
-         :ok <- paired(language, target_type),
-         {:ok, decoded} <- decode_sources(sources) do
-      {:ok, decoded, language, target_type, resolve?}
+  # ————— a build, up to its slot —————
+
+  defp build(conn, now) do
+    with {:ok, key} <- request_key(conn),
+         {:ok, header} <- header(conn),
+         {:ok, auth, body_hash} <- verify_header(conn, key, header, now),
+         :ok <- fresh(conn, auth, now),
+         {:ok, body, conn} <- read(conn, BuilderProtocol.max_request_bytes()),
+         :ok <- verify_body(conn, body_hash, body),
+         {:ok, request} <- readable(BuilderProtocol.read_request(body), conn),
+         {:ok, budget_ms} <- budget(conn, request, now),
+         {:ok, plan} <- prepared(conn, request),
+         {:ok, slot} <- slot(conn, request) do
+      try do
+        stream(conn, plan, budget_ms)
+      after
+        Cyfr.Slots.release(@slots, slot)
+      end
+    else
+      {:refused, conn, refusal} -> refuse(conn, refusal)
     end
   end
 
-  defp decode_request(_), do: {:error, "source_files, language and target_type are required"}
+  defp request_key(conn) do
+    case Locus.Config.request_key() do
+      key when is_binary(key) -> {:ok, key}
+      nil -> {:refused, conn, {:unauthorized, :bad_mac}}
+    end
+  end
 
-  defp resolve_flag(%{"resolve" => resolve}) when is_boolean(resolve), do: {:ok, resolve}
-  defp resolve_flag(%{"resolve" => _}), do: {:error, "resolve must be a boolean"}
-  defp resolve_flag(_request), do: {:ok, false}
+  defp header(conn) do
+    case get_req_header(conn, BuilderProtocol.auth_header()) do
+      [header] -> {:ok, header}
+      _ -> {:refused, conn, {:unauthorized, :malformed}}
+    end
+  end
 
-  defp paired(language, target_type) do
-    if Locus.Builder.language_for(target_type) == language,
+  defp verify_header(conn, key, header, now) do
+    case BuilderProtocol.verify_request_header(key, header, now) do
+      {:ok, auth, body_hash} -> {:ok, auth, body_hash}
+      {:error, reason} -> {:refused, conn, {:unauthorized, reason}}
+    end
+  end
+
+  # A header verifies while its `ts` is within the window of this clock, so
+  # from the moment it is seen it can verify for two windows at most; its
+  # nonce is refused for that long.
+  defp fresh(conn, %{nonce: nonce}, now) do
+    :ets.select_delete(@nonces, [{{:_, :"$1"}, [{:<, :"$1", now}], [true]}])
+
+    if :ets.insert_new(@nonces, {nonce, now + 2 * BuilderProtocol.window_ms()}),
       do: :ok,
-      else: {:error, "a #{target_type} is not built from #{language}"}
+      else: {:refused, conn, {:unauthorized, :replayed}}
   end
 
-  defp known(value, roster, field) do
-    if value in roster, do: {:ok, value}, else: {:error, "unknown #{field}: #{value}"}
-  end
-
-  defp decode_sources(sources) do
-    # The ceiling runs on ENCODED sizes, before any byte is decoded —
-    # decode-then-check materialized the whole oversized map first.
-    # Encoded base64 is 4/3 the decoded size; checking 4/3 × the ceiling
-    # here admits everything the compile's exact decoded check will.
-    encoded_total = sources |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
-    ceiling = div(Locus.Builder.max_source_bytes() * 4, 3) + 1024
-
-    if encoded_total > ceiling do
-      {:error,
-       "sources exceed the #{Locus.Builder.max_source_bytes()} byte total ceiling " <>
-         "(#{encoded_total} bytes encoded)"}
-    else
-      Enum.reduce_while(sources, {:ok, %{}}, fn
-        {path, b64}, {:ok, acc} when is_binary(path) and is_binary(b64) ->
-          case Base.decode64(b64) do
-            {:ok, content} -> {:cont, {:ok, Map.put(acc, path, content)}}
-            :error -> {:halt, {:error, "source #{path} is not valid base64"}}
-          end
-
-        {path, _}, _acc ->
-          {:halt, {:error, "source #{inspect(path)} is malformed"}}
-      end)
+  # The declared length first, so a body past the bound is refused without
+  # a byte of it read; then the read itself, bounded for a body that
+  # declares none.
+  defp read(conn, max) do
+    with :ok <- declared(conn, max) do
+      case read_body(conn, length: max, read_length: max) do
+        {:ok, body, conn} -> {:ok, body, conn}
+        {:more, _head, conn} -> {:refused, closing(conn), runs_past(max)}
+        {:error, _reason} -> {:refused, conn, {:malformed, "the body could not be read"}}
+      end
     end
   end
 
-  # The service has no tenant identity — the client side already applied
-  # the per-athanor cap; this is the container's own global ceiling. A build
-  # never waits for a slot, so a slot server that does not answer refuses
-  # within the call's grace instead of holding the request open.
-  defp acquire_slot, do: Cyfr.Slots.acquire(Locus.BuildSlots, nil, :root, wait_ms: 0)
+  defp declared(conn, max) do
+    with [text] <- get_req_header(conn, "content-length"),
+         {bytes, ""} when bytes > max <- Integer.parse(text) do
+      {:refused, closing(conn),
+       {:malformed, BuilderProtocol.describe({:too_large, :request, bytes, max})}}
+    else
+      _ -> :ok
+    end
+  end
 
-  defp run_build(conn, source_files, language, target_type, resolve?) do
-    log = :ets.new(:build_log, [:public])
-    # [line_seq, bytes_retained] — the byte budget mirrors the executor's
-    # own retained-log cap, so a chatty build cannot grow this table
-    # without bound while its lines wait to be replayed.
-    counter = :counters.new(2, [])
-    max_log_bytes = Locus.Executor.max_log_bytes()
+  defp runs_past(max),
+    do: {:malformed, "the request runs past #{max} bytes; at most #{max} are read"}
+
+  # What is left of a body past the bound is never drained: the answer
+  # closes the connection. Every other refusal leaves the connection open,
+  # so Bandit reads off the little that was sent and the client reads its
+  # answer instead of a reset.
+  defp closing(conn), do: put_resp_header(conn, "connection", "close")
+
+  defp verify_body(conn, body_hash, body) do
+    case BuilderProtocol.verify_body(body_hash, body) do
+      :ok -> :ok
+      {:error, reason} -> {:refused, conn, {:unauthorized, reason}}
+    end
+  end
+
+  defp readable({:error, error}, conn), do: {:refused, conn, BuilderProtocol.refusal_for(error)}
+  defp readable(read, _conn), do: read
+
+  defp budget(conn, %{deadline: deadline}, now) do
+    case min(deadline - now, Locus.Config.timeout_ms()) do
+      budget_ms when budget_ms > 0 -> {:ok, budget_ms}
+      _passed -> {:refused, conn, {:timeout, 0}}
+    end
+  end
+
+  defp prepared(conn, request) do
+    case Locus.Builder.prepare(request) do
+      {:ok, plan} -> {:ok, plan}
+      {:error, refusal} -> {:refused, conn, refusal}
+    end
+  end
+
+  # A build never waits for a slot, so a slot server that does not answer
+  # refuses within the call's grace instead of holding the request open.
+  defp slot(conn, %{athanor_id: athanor_id}) do
+    case Cyfr.Slots.acquire(@slots, athanor_id, :root, wait_ms: 0) do
+      {:ok, slot} -> {:ok, slot}
+      {:error, refusal} -> {:refused, conn, slot_refusal(refusal, Cyfr.Slots.status(@slots))}
+    end
+  end
+
+  # The cap named is the running instance's, the one that refused.
+  defp slot_refusal(:capacity, %{max: max}) when max > 0, do: {:capacity, max}
+  defp slot_refusal(:key_cap, %{key_max: key_max}) when key_max > 0, do: {:capacity, key_max}
+
+  defp slot_refusal(_refusal, _status),
+    do: {:unavailable, "the builder's build slots are not answering"}
+
+  # ————— the stream —————
+
+  defp stream(conn, plan, budget_ms) do
+    conn =
+      conn
+      |> put_resp_content_type(@content_type)
+      # One request a connection: the peer's close is then the client's
+      # leaving and nothing else, and what `peer_closed?/1` reads is nothing
+      # this service owed an answer.
+      |> put_resp_header("connection", "close")
+      |> send_chunked(200)
+
+    service = self()
+    ref = make_ref()
+    budget = Diagnostics.budget()
 
     on_progress = fn stage, message ->
-      line = "#{stage}: #{message}"
-
-      if :counters.get(counter, 2) < max_log_bytes do
-        :counters.add(counter, 1, 1)
-        :counters.add(counter, 2, byte_size(line))
-        :ets.insert(log, {:counters.get(counter, 1), line})
-      end
+      for {stage, message} <- Diagnostics.admit(budget, stage, message),
+          do: send(service, {ref, :progress, stage, message})
 
       :ok
     end
 
-    result =
-      Locus.Builder.compile(source_files, language,
-        target_type: target_type,
-        on_progress: on_progress,
-        resolve: resolve?
-      )
+    build =
+      spawn_link(fn ->
+        send(
+          service,
+          {ref, :done, Locus.Builder.run(plan, timeout_ms: budget_ms, on_progress: on_progress)}
+        )
+      end)
 
-    logs =
-      log
-      |> :ets.tab2list()
-      |> Enum.sort()
-      |> Enum.map(fn {_i, line} -> line end)
+    follow(conn, %{ref: ref, build: build, monitor: Process.monitor(build), lines: []})
+  end
 
-    :ets.delete(log)
+  defp follow(conn, %{ref: ref, monitor: monitor} = s) do
+    receive do
+      {^ref, :progress, stage, message} ->
+        {:ok, line} = BuilderProtocol.encode_progress(stage, message)
 
-    case result do
-      {:ok, %{wasm_bytes: wasm_bytes} = built} ->
-        send_json(conn, 200, %{
-          ok: true,
-          wasm_base64: Base.encode64(wasm_bytes),
-          digest: built.digest,
-          size: built.size,
-          exports: built.exports,
-          language: built.language,
-          target_type: built.target_type,
-          lockfile: built.lockfile,
-          logs: logs
-        })
+        case chunk(conn, [line, ?\n]) do
+          {:ok, conn} -> follow(conn, %{s | lines: [Diagnostics.line(stage, message) | s.lines]})
+          {:error, _closed} -> abandon(conn, s)
+        end
 
-      {:ok, %{output_files: files} = built} ->
-        send_json(conn, 200, %{
-          ok: true,
-          output_files: Map.new(files, fn {path, content} -> {path, Base.encode64(content)} end),
-          digest: built.digest,
-          size: built.size,
-          exports: built.exports,
-          language: built.language,
-          target_type: built.target_type,
-          logs: logs
-        })
+      {^ref, :done, result} ->
+        settle(s)
+        finish(conn, s, result)
 
-      {:error, :builder_at_capacity} ->
-        send_json(conn, 429, %{ok: false, error: render_reason(:builder_at_capacity), logs: logs})
+      # The build process ended without its answer: a fault of this
+      # builder's, not a refusal of the wire's. The stream ends without a
+      # terminal line, which the client reads as an answer it never got.
+      {:DOWN, ^monitor, :process, _build, reason} ->
+        Logger.error(
+          "[Locus.BuilderService] a build's process ended without an answer: #{inspect(reason)}"
+        )
 
-      {:error, reason} ->
-        send_json(conn, 422, %{ok: false, error: render_reason(reason), logs: logs})
+        settle(s)
+        conn
+    after
+      @watch_ms ->
+        if peer_closed?(conn), do: abandon(conn, s), else: follow(conn, s)
     end
   end
 
-  defp render_reason({:compilation_failed, exit_code, output}),
-    do: "Compilation failed (exit #{exit_code}): #{output}"
+  defp finish(conn, _s, {:error, :cancelled}), do: conn
 
-  defp render_reason(:compilation_timeout), do: "Compilation timed out"
+  # The builder held its outputs to the wire's bounds and the lines were
+  # admitted within the log's, so the result encodes.
+  defp finish(conn, s, {:ok, built}) do
+    {:ok, line} =
+      BuilderProtocol.encode_result(Map.put(built, :diagnostics, Enum.reverse(s.lines)))
 
-  defp render_reason(:builder_at_capacity),
-    do: "builder at capacity (no build uid is free)"
-
-  defp render_reason({:toolchain_not_found, lang}),
-    do: "Toolchain not found in the builder image: #{lang}"
-
-  defp render_reason(reason), do: "Compilation error: #{inspect(reason)}"
-
-  defp send_json(conn, status, payload) do
-    payload =
-      Map.merge(payload, %{
-        protocol: Locus.BuilderProtocol.version(),
-        version: Locus.BuilderProtocol.release()
-      })
-
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(payload))
+    terminal(conn, line)
   end
+
+  defp finish(conn, s, {:error, refusal}), do: refusal_line(conn, refusal, Enum.reverse(s.lines))
+
+  defp refusal_line(conn, refusal, diagnostics) do
+    Logger.warning("[Locus.BuilderService] a build ended refused: #{elem(refusal, 0)}")
+    {:ok, line} = BuilderProtocol.encode_refusal(bounded(refusal), diagnostics)
+    terminal(conn, line)
+  end
+
+  defp terminal(conn, line) do
+    case chunk(conn, [line, ?\n]) do
+      {:ok, conn} -> conn
+      {:error, _closed} -> conn
+    end
+  end
+
+  # The client is gone: end the build, and return only once it has ended,
+  # so the slot this process holds goes back after the build's processes.
+  defp abandon(conn, %{build: build, monitor: monitor} = s) do
+    Logger.warning("[Locus.BuilderService] the client left; its build is cancelled")
+    Locus.Executor.cancel(build)
+
+    receive do
+      {:DOWN, ^monitor, :process, _build, _reason} -> :ok
+    after
+      @cancel_ms ->
+        Process.unlink(build)
+        Process.exit(build, :kill)
+
+        receive do
+          {:DOWN, ^monitor, :process, _build, _reason} -> :ok
+        end
+    end
+
+    settle(s)
+    conn
+  end
+
+  # The build process is over: nothing of it stays in this process's
+  # mailbox, which serves the connection's next request.
+  defp settle(%{ref: ref, build: build, monitor: monitor}) do
+    Process.demonitor(monitor, [:flush])
+    Process.unlink(build)
+    flush(ref, build)
+  end
+
+  defp flush(ref, build) do
+    receive do
+      {^ref, _kind, _stage, _message} -> flush(ref, build)
+      {^ref, _kind, _result} -> flush(ref, build)
+      {:EXIT, ^build, _reason} -> flush(ref, build)
+    after
+      0 -> :ok
+    end
+  end
+
+  # Bandit keeps a request's socket passive, so a peer that closed is seen
+  # only by asking it. The request's body was read whole and the answer
+  # closes the connection, so nothing read here is a request.
+  defp peer_closed?(%Plug.Conn{
+         adapter: {Bandit.Adapter, %{transport: %{socket: %ThousandIsland.Socket{} = socket}}}
+       }) do
+    case ThousandIsland.Socket.recv(socket, 0, 0) do
+      {:error, :timeout} -> false
+      {:error, _closed} -> true
+      {:ok, _bytes} -> false
+    end
+  end
+
+  defp peer_closed?(_conn), do: false
+
+  # ————— answers —————
+
+  defp refuse(conn, refusal) do
+    Logger.warning("[Locus.BuilderService] #{conn.method} refused: #{elem(refusal, 0)}")
+    {:ok, line} = BuilderProtocol.encode_refusal(bounded(refusal), [])
+    answer(conn, BuilderProtocol.status(refusal), line)
+  end
+
+  defp answer(conn, status, line) do
+    conn
+    |> put_resp_content_type(@content_type)
+    |> send_resp(status, [line, ?\n])
+  end
+
+  # A sentence may quote what the request named, a path among it; the wire
+  # bounds a sentence, so it is cut to fit rather than failing to encode.
+  defp bounded({class, sentence}) when class in [:malformed, :unavailable],
+    do: {class, Diagnostics.sentence(sentence)}
+
+  defp bounded(refusal), do: refusal
 end

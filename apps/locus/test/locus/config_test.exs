@@ -27,6 +27,7 @@ defmodule Locus.ConfigTest do
       "LOCUS_BUILDS_TIMEOUT_MS" => "60000",
       "LOCUS_BUILDS_MAX_CONCURRENT" => "4",
       "LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT" => "2",
+      "LOCUS_BUILDS_MEMORY_BYTES" => "2147483648",
       "LOCUS_BUILDS_CARGO_SEED" => "/opt/cyfr/cargo-seed",
       "LOCUS_BUILDS_LOG_LEVEL" => "debug",
       "LOCUS_BUILDS_LOG_FORMAT" => "json"
@@ -43,6 +44,7 @@ defmodule Locus.ConfigTest do
              timeout_ms: 60_000,
              max_concurrent: 4,
              max_concurrent_per_tenant: 2,
+             memory_bytes: 2_147_483_648,
              cargo_seed: "/opt/cyfr/cargo-seed",
              log_level: :debug,
              log_format: :json
@@ -62,6 +64,7 @@ defmodule Locus.ConfigTest do
              timeout_ms: 270_000,
              max_concurrent: 2,
              max_concurrent_per_tenant: 1,
+             memory_bytes: 1_073_741_824,
              cargo_seed: nil,
              log_level: :info,
              log_format: :text
@@ -87,6 +90,13 @@ defmodule Locus.ConfigTest do
           {"LOCUS_BUILDS_TIMEOUT_MS", "5m", "milliseconds from 1000 to 600000"},
           {"LOCUS_BUILDS_MAX_CONCURRENT", "0", "builds from 1 to 1024"},
           {"LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT", "1025", "builds from 1 to 1024"},
+          {"LOCUS_BUILDS_MEMORY_BYTES", "0", "bytes from 16777216 to 1099511627776"},
+          {"LOCUS_BUILDS_MEMORY_BYTES", "16777215", "bytes from 16777216 to 1099511627776"},
+          {"LOCUS_BUILDS_MEMORY_BYTES", "1099511627777", "bytes from 16777216 to 1099511627776"},
+          {"LOCUS_BUILDS_MEMORY_BYTES", "1G", "bytes from 16777216 to 1099511627776"},
+          {"LOCUS_BUILDS_MEMORY_BYTES", "1073741824.5", "bytes from 16777216 to 1099511627776"},
+          {"LOCUS_BUILDS_MEMORY_BYTES", "-1073741824", "bytes from 16777216 to 1099511627776"},
+          {"LOCUS_BUILDS_MEMORY_BYTES", "unlimited", "bytes from 16777216 to 1099511627776"},
           {"LOCUS_BUILDS_LOG_LEVEL", "verbose", "Logger level"},
           {"LOCUS_BUILDS_LOG_FORMAT", "xml", "text or json"}
         ] do
@@ -99,6 +109,43 @@ defmodule Locus.ConfigTest do
              Config.from_env(env(Map.put(full(), "LOCUS_BUILDS_KEY", "not-a-key")))
 
     refute message =~ "not-a-key"
+  end
+
+  test "the memory bound takes the whole of the keeper's range, both ends, and nothing outside it" do
+    vectors =
+      Path.expand("../../../../tests/fixtures/spawn_protocol.json", __DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    # A spawn's own bound: a whole number refused for what it is, not for
+    # the request it rides on.
+    bounds = fn requests ->
+      for %{"request" => %{"type" => "spawn", "memory_bytes" => bytes}} <- requests,
+          is_integer(bytes),
+          do: bytes
+    end
+
+    accepted =
+      for %{"memory_bytes" => bytes} <- vectors["valid_requests"], do: bytes
+
+    assert 16_777_216 in accepted and 1_099_511_627_776 in accepted
+
+    # What the keeper accepts as a spawn's bound, this setting accepts.
+    for bytes <- accepted do
+      env = env(Map.put(full(), "LOCUS_BUILDS_MEMORY_BYTES", Integer.to_string(bytes)))
+      assert {:ok, settings} = Config.from_env(env)
+      assert settings[:memory_bytes] == bytes
+    end
+
+    # And what the keeper refuses, this setting refuses at the boot.
+    refused = bounds.(vectors["invalid_requests"])
+    assert refused != []
+
+    for bytes <- refused do
+      env = env(Map.put(full(), "LOCUS_BUILDS_MEMORY_BYTES", Integer.to_string(bytes)))
+      assert {:error, message} = Config.from_env(env)
+      assert message =~ "LOCUS_BUILDS_MEMORY_BYTES"
+    end
   end
 
   test "a control-plane variable in the environment refuses the boot before anything else is read" do
@@ -128,6 +175,7 @@ defmodule Locus.ConfigTest do
     assert Config.timeout_ms() == 270_000
     assert Config.max_concurrent() == 2
     assert Config.max_concurrent_per_tenant() == 1
+    assert Config.memory_bytes() == 1_073_741_824
     assert Config.cargo_seed() == nil
     assert Config.log_level() == :info
     assert Config.log_format() == :text
@@ -151,7 +199,7 @@ defmodule Locus.RuntimeConfigFileTest do
   @cleared ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_WORKER_KEY CYFR_MCP_BRIDGE_KEY
               LOCUS_BUILDS_KEY LOCUS_BUILDS_BIND LOCUS_BUILDS_PORT LOCUS_BUILDS_TIMEOUT_MS
               LOCUS_BUILDS_MAX_CONCURRENT LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT
-              LOCUS_BUILDS_CARGO_SEED LOCUS_BUILDS_LOG_LEVEL LOCUS_BUILDS_LOG_FORMAT)
+              LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CARGO_SEED LOCUS_BUILDS_LOG_LEVEL LOCUS_BUILDS_LOG_FORMAT)
 
   defp with_env(set, fun) do
     previous = Map.new(@cleared, &{&1, System.get_env(&1)})
@@ -169,7 +217,11 @@ defmodule Locus.RuntimeConfigFileTest do
   end
 
   test "writes the settings under :locus and nothing else" do
-    set = %{"LOCUS_BUILDS_KEY" => @key_hex, "LOCUS_BUILDS_PORT" => "4102"}
+    set = %{
+      "LOCUS_BUILDS_KEY" => @key_hex,
+      "LOCUS_BUILDS_PORT" => "4102",
+      "LOCUS_BUILDS_MEMORY_BYTES" => "536870912"
+    }
 
     with_env(set, fn ->
       config = Config.Reader.read!(@config_file, env: :prod, imports: :disabled)
@@ -178,6 +230,9 @@ defmodule Locus.RuntimeConfigFileTest do
       assert Keyword.keys(config) == [:locus]
       assert Enum.sort(config[:locus]) == Enum.sort(expected)
       assert config[:locus][:port] == 4102
+      # The bound reaches `:locus` through the file as it stands: it writes
+      # whatever `from_env/1` answers.
+      assert config[:locus][:memory_bytes] == 536_870_912
     end)
   end
 

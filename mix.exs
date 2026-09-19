@@ -58,12 +58,12 @@ defmodule Cyfr.MixProject do
   defp releases do
     [
       # The control plane. Execution workers run in the `opus` release and
-      # are reached over the wire; the control plane starts none.
+      # builds in the `locus` release, each reached over its wire; the
+      # control plane starts neither.
       cyfr: [
         applications: [
           cyfr_contracts: :permanent,
-          cyfr: :permanent,
-          locus: :permanent
+          cyfr: :permanent
         ]
       ],
       # The execution worker: the WASM engine and its worker service on the
@@ -76,16 +76,16 @@ defmodule Cyfr.MixProject do
           opus: :permanent
         ]
       ],
-      # The builder container: the toolchain half of Locus and nothing
-      # else. The contracts are started; the cyfr app is LOADED but never
-      # STARTED: no endpoint, no repo, no tenant state. The build path
-      # reaches only the contracts (`Locus.HostSurfaceTest`).
-      builder: [
+      # The builder: Locus on the shared contracts, and nothing of the
+      # control plane (`Locus.HostSurfaceTest`). It holds one builds key,
+      # reads `LOCUS_BUILDS_*` through its own runtime configuration, and is
+      # reached by CYFR over the build wire (`Cyfr.BuilderProtocol`).
+      locus: [
         applications: [
           cyfr_contracts: :permanent,
-          locus: :permanent,
-          cyfr: :load
-        ]
+          locus: :permanent
+        ],
+        runtime_config_path: "config/locus_runtime.exs"
       ]
     ]
   end

@@ -3,9 +3,11 @@
 
 defmodule Locus.Builder do
   @moduledoc """
-  Compiles a component from its sources: Rust to a WASM component with
+  Builds a component from its sources: Rust to a WASM component with
   `cargo-component`, a tincture's JavaScript to a static bundle with npm
-  and Vite.
+  and Vite. It takes a build request as the build wire reads it
+  (`Cyfr.BuilderProtocol`) and answers output files, or the wire's refusal
+  for why there are none.
 
   ## arca:bypass-ok=D — entire module
 
@@ -14,6 +16,11 @@ defmodule Locus.Builder do
   seed exists.
 
   ## How a build runs
+
+  `prepare/1` checks the request and packs it, running nothing: the
+  sources a language needs, their total size and every path
+  (`Cyfr.PathSafety`), the toolchain, an executor to run under, the Cargo
+  seed. `run/2` runs what it prepared.
 
   A build is one POSIX shell script run by an executor
   (`Locus.Executor.executor/0`). Its sources — with the generated
@@ -24,60 +31,61 @@ defmodule Locus.Builder do
   (names of at most 255 bytes, no extended headers) on stdout: the
   component and the `Cargo.lock` it used, or a tincture's
   `dist/`. That archive is untrusted: only its regular files are read, each
-  name must be a safe relative path, and its files and bytes are bounded.
+  name must be a safe relative path, and its files and bytes are held to
+  the wire's output bounds; output past a bound is refused as `failed`,
+  never truncated.
 
-  Where cyfr-spawn runs this node (the builder image), each build runs
-  under a pooled uid of its own (`Locus.Spawner`): a 0700 home neither
-  another build nor this node's user can enter, an environment built from
-  nothing, resource limits, and at its end every process of the uid killed
-  and everything it left removed before the uid serves another build.
-  Without cyfr-spawn a build runs as this node's user
-  (`Locus.DirectLauncher`), which isolates nothing.
+  Each build runs through cyfr-spawn under a pooled uid of its own
+  (`Locus.Spawner`): a 0700 home neither another build nor this node's user
+  can enter, an environment built from nothing, resource limits, a memory
+  bound, and at its end every process of the uid killed and everything it
+  left removed before the uid serves another build. A node without
+  cyfr-spawn builds nothing, the test environment excepted
+  (`Locus.Executor`).
 
   ## What a build sees
 
   - the executor's `HOME`, `TMPDIR`, `USER`, `LOGNAME` and `PATH`, and of
     this node's environment only the toolchain settings `RUSTUP_HOME`,
     `LANG`, `LC_ALL`, `LC_CTYPE` and the proxy variables
-  - the Cargo seed (`:build_cargo_seed`): a read-only Cargo home whose
-    registry cache is copied into the build's own
+  - the Cargo seed (`Locus.Config.cargo_seed/0`): a read-only Cargo home
+    whose registry cache is copied into the build's own
   - the network: crates.io and the npm registry are how builds resolve
     dependencies
 
-  A Rust build carrying a `Cargo.lock` builds `--locked` to it. npm runs
-  with `--ignore-scripts`, so a dependency's lifecycle script never
-  executes. Sources are bounded and held to `Cyfr.PathSafety` before a
-  build starts, and the compiled WASM is validated
-  (`Compendium.WasmValidator`) before it is returned; it executes only
-  inside the Opus sandbox.
+  A Rust build carrying a `Cargo.lock` builds `--locked` to it — a
+  dependency the lock does not cover fails with cargo's own message — and
+  one carrying none, or asked to `resolve`, resolves one. npm runs with
+  `--ignore-scripts`, so a dependency's lifecycle script never executes.
+  The compiled WASM is validated (`Compendium.WasmValidator`) before it is
+  answered; it executes only inside the Opus sandbox.
 
-  ## Usage
+  ## What a build answers
 
-      {:ok, result} = Locus.Builder.compile(%{"src/lib.rs" => source}, :rust, target_type: :reagent)
-      # => {:ok, %{wasm_bytes: <<...>>, digest: "sha256:...", size: 1234,
-      #           exports: [...], language: "rust", target_type: "reagent",
-      #           lockfile: "..."}}
+  `{:ok, %{language, target_type, outputs}}`, where a component's outputs
+  are `Cyfr.BuilderProtocol.component_wasm/0` and, when the build left
+  one, `component_lockfile/0`, and a tincture's are the files of its
+  `dist/`; or `{:error, refusal}`, a `t:Cyfr.BuilderProtocol.refusal/0`:
 
-      {:ok, result} = Locus.Builder.compile(%{"package.json" => pkg}, :javascript, target_type: :tincture)
-      # => {:ok, %{output_files: %{"index.html" => ..., "assets/..." => ...},
-      #           digest: "sha256:...", size: 5678, exports: [],
-      #           language: "javascript", target_type: "tincture"}}
+  | Refusal | When |
+  |---|---|
+  | `malformed` | the sources do not make a build of that language |
+  | `unavailable` | the toolchain, the Cargo seed or cyfr-spawn is missing, or cyfr-spawn cannot bound the build's memory |
+  | `capacity` | no pooled uid is free |
+  | `timeout` | the build passed `:timeout_ms` and was ended |
+  | `memory` | the build reached its memory bound and was ended there |
+  | `failed` | the build exited non-zero or by a signal, or its output was refused |
+
+  Why an output was refused is said on the progress callback before the
+  refusal is answered, so it is among the answer's diagnostics.
   """
 
   require Logger
 
-  @max_source_size 1_024 * 1_024
-  # 30 s under the MCP tool layer's five-minute brutal kill, so a build that
-  # exhausts its budget ends here as {:error, :compilation_timeout} with its
-  # slot released. The margin covers the work outside the build: collecting
-  # sources from Arca, validating the WASM and storing the artifact.
-  @default_timeout_ms 270_000
+  alias Cyfr.BuilderProtocol
 
-  @max_output_files 500
-  # The shared 64 MiB ceiling, the same bound the base64 ingress uses.
-  @max_output_bytes Cyfr.Limits.default_max_memory_bytes()
   # The output archive adds headers, padding and a Cargo.lock to its files.
-  @max_output_archive_bytes @max_output_bytes + 4 * 1024 * 1024
+  @max_output_archive_bytes BuilderProtocol.max_output_bytes() + 4 * 1024 * 1024
 
   # The toolchain settings a build takes from this node's environment.
   @toolchain_env ~w(RUSTUP_HOME LANG LC_ALL LC_CTYPE HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy)
@@ -111,97 +119,84 @@ defmodule Locus.Builder do
   if [ -d dist ]; then exec tar --format=ustar -cf - dist; fi
   """
 
-  @doc """
-  The toolchain languages this builder speaks — the roster, where the
-  implementation lives. `Locus.BuilderService` validates request input
-  against it rather than hand-copying the list.
-  """
-  @spec languages() :: [atom()]
-  def languages, do: [:rust, :javascript]
+  @typedoc "What a build is asked for: the fields of a wire request the builder builds from."
+  @type request :: %{
+          required(:language) => BuilderProtocol.language(),
+          required(:target_type) => BuilderProtocol.target_type(),
+          required(:resolve) => boolean(),
+          required(:sources) => %{String.t() => binary()},
+          optional(atom()) => term()
+        }
+
+  @typedoc "A checked and packed build, ready to run."
+  @opaque plan :: %{
+            language: BuilderProtocol.language(),
+            target_type: BuilderProtocol.target_type(),
+            argv: [String.t(), ...],
+            archive: binary(),
+            wasm: String.t() | nil,
+            announce: String.t()
+          }
+
+  @typedoc "A finished build: its output files by path."
+  @type built :: %{
+          language: BuilderProtocol.language(),
+          target_type: BuilderProtocol.target_type(),
+          outputs: %{String.t() => binary()}
+        }
+
+  @typedoc "Called with each stage the build enters and each line of its log (`:output`)."
+  @type on_progress :: (BuilderProtocol.stage(), String.t() -> any())
 
   @doc """
-  The language a component type is built from: Rust for a reagent, a
-  catalyst or a formula, JavaScript for a tincture. A compile that pairs
-  them otherwise is refused as `{:language_mismatch, language, type}`.
+  Check `request` and pack it, running nothing: `{:ok, plan}` for `run/2`,
+  or the refusal a request that cannot be built is answered with.
   """
-  @spec language_for(atom()) :: :rust | :javascript
-  def language_for(:tincture), do: :javascript
-  def language_for(type) when type in [:reagent, :catalyst, :formula], do: :rust
-
-  @doc """
-  The total-source ceiling one compile may carry — the one bound the
-  service's pre-decode check and the client's pre-ship check both derive
-  from, so neither can admit what the compile itself will refuse.
-  """
-  @spec max_source_bytes() :: pos_integer()
-  def max_source_bytes, do: @max_source_size
-
-  @doc """
-  Compile source code using the appropriate toolchain.
-
-  ## Parameters
-
-  - `source_files` - A map of `%{relative_path => content}` for the project.
-    For `:rust`: must contain `"src/lib.rs"`. Optional `"Cargo.toml"` is merged.
-    For `:javascript`: must contain `"package.json"`.
-  - `language` - `:rust` or `:javascript`
-  - `opts` - Keyword options:
-    - `:target_type` - Component type (`:reagent`, `:catalyst`, `:formula`, `:tincture`)
-    - `:timeout_ms` - The build's deadline, in milliseconds. Defaults to
-      `:cyfr, :build_timeout_ms` (`CYFR_BUILD_TIMEOUT_MS`), or else
-      `#{@default_timeout_ms}`, 30 s under the MCP tool layer's five-minute
-      brutal kill, so an over-budget build ends here as
-      `{:error, :compilation_timeout}` with its slot released rather than
-      losing the race to the caller's kill. Past it every process the build
-      started is killed.
-    - `:on_progress` - `fun(phase, message)`, called as the build proceeds
-      and with each log line as `(:output, line)`
-    - `:resolve` - Rust only. `true` resolves the crate graph afresh,
-      ignoring a `"Cargo.lock"` among the sources. Otherwise a build that
-      carries a `"Cargo.lock"` builds `--locked` to it — a dependency the
-      lock does not cover fails with cargo's own message — and a build
-      that carries none resolves one.
-
-  ## Returns
-
-  For `:rust`: `{:ok, %{wasm_bytes, digest, size, exports, language, target_type, lockfile}}`,
-  where `lockfile` is the `Cargo.lock` the build used, or nil when it left none.
-  For `:javascript`: `{:ok, %{output_files, digest, size, exports, language, target_type}}`.
-  On failure: `{:error, reason}`, among them `{:compilation_failed, exit, log}`,
-  `{:output_not_found, log}`, `:compilation_timeout` and `:builder_at_capacity`.
-  """
-  @spec compile(map(), atom(), keyword()) :: {:ok, map()} | {:error, term()}
-  def compile(source_files, language, opts \\ [])
-
-  def compile(source_files, _language, _opts) when source_files == %{},
-    do: {:error, :empty_source}
-
-  def compile(%{} = source_files, language, opts) when is_atom(language) do
-    target_type = Keyword.get(opts, :target_type, :reagent)
-
+  @spec prepare(request()) :: {:ok, plan()} | {:error, BuilderProtocol.refusal()}
+  def prepare(%{language: language, target_type: target_type, resolve: resolve, sources: sources})
+      when is_atom(language) and is_atom(target_type) and is_boolean(resolve) and is_map(sources) do
     with :ok <- paired(language, target_type),
-         :ok <- validate_source_files(source_files, language),
-         :ok <- check_toolchain(language) do
-      settings = %{
-        timeout_ms:
-          Keyword.get_lazy(opts, :timeout_ms, fn ->
-            Application.get_env(:cyfr, :build_timeout_ms, @default_timeout_ms)
-          end),
-        on_progress: Keyword.get(opts, :on_progress, fn _phase, _message -> :ok end),
-        resolve?: Keyword.get(opts, :resolve, false) == true
-      }
-
-      settings.on_progress.(:preparing, "Preparing source files...")
-
-      case do_compile(source_files, language, target_type, settings) do
-        {:ok, _result} = ok ->
-          ok
-
-        error ->
-          settings.on_progress.(:error, "Build failed")
-          error
-      end
+         :ok <- validate_sources(sources, language),
+         :ok <- check_toolchain(language),
+         {:ok, _executor} <- executor() do
+      plan(language, target_type, resolve, sources)
     end
+  end
+
+  @doc """
+  Run a prepared build.
+
+  ## Options
+
+  - `:timeout_ms` — the build's budget, `Locus.Config.timeout_ms/0` unless
+    given. Past it every process the build started is killed and the
+    answer is the `timeout` refusal naming it.
+  - `:on_progress` — a `t:on_progress/0`.
+
+  `{:error, :cancelled}` answers a run ended by `Locus.Executor.cancel/1`.
+  """
+  @spec run(plan(), timeout_ms: pos_integer(), on_progress: on_progress()) ::
+          {:ok, built()} | {:error, BuilderProtocol.refusal() | :cancelled}
+  def run(%{language: language, target_type: target_type} = plan, opts \\ []) do
+    timeout_ms = Keyword.get_lazy(opts, :timeout_ms, &Locus.Config.timeout_ms/0)
+    on_progress = Keyword.get(opts, :on_progress, fn _stage, _message -> :ok end)
+
+    on_progress.(:preparing, "Preparing source files...")
+
+    with {:ok, executor} <- executor(),
+         _ = on_progress.(:compiling, plan.announce),
+         {:ok, files} <- execute(executor, plan, timeout_ms, on_progress),
+         {:ok, outputs} <- outputs(plan, files, on_progress),
+         :ok <- within_bounds(outputs, on_progress) do
+      {:ok, %{language: language, target_type: target_type, outputs: outputs}}
+    end
+  end
+
+  @doc "`prepare/1`, then `run/2`."
+  @spec build(request(), timeout_ms: pos_integer(), on_progress: on_progress()) ::
+          {:ok, built()} | {:error, BuilderProtocol.refusal() | :cancelled}
+  def build(request, opts \\ []) do
+    with {:ok, plan} <- prepare(request), do: run(plan, opts)
   end
 
   @doc """
@@ -220,10 +215,8 @@ defmodule Locus.Builder do
 
   def toolchain_available?(_), do: false
 
-  @doc """
-  Return information about all supported toolchains.
-  """
-  @spec available_toolchains() :: map()
+  @doc "What each toolchain of the wire's languages reports on a health answer."
+  @spec available_toolchains() :: %{BuilderProtocol.language() => BuilderProtocol.toolchain()}
   def available_toolchains do
     %{
       rust: %{
@@ -257,69 +250,83 @@ defmodule Locus.Builder do
   end
 
   # ============================================================================
-  # Source validation
+  # The request
   # ============================================================================
 
   # A language this builder does not speak is the toolchain check's to refuse.
   defp paired(language, target_type) do
     expected =
-      if target_type in [:reagent, :catalyst, :formula, :tincture], do: language_for(target_type)
+      if target_type in [:reagent, :catalyst, :formula, :tincture],
+        do: BuilderProtocol.language_for(target_type)
 
-    if language in languages() and expected != language,
-      do: {:error, {:language_mismatch, language, target_type}},
+    if language in BuilderProtocol.languages() and expected != language,
+      do: malformed({:unpaired, language, target_type}),
       else: :ok
   end
 
-  defp validate_source_files(source_files, :rust) do
-    if Map.has_key?(source_files, "src/lib.rs"),
-      do: validate_source_size(source_files),
-      else: {:error, :missing_lib_rs}
-  end
+  defp validate_sources(sources, _language) when sources == %{},
+    do: {:error, {:malformed, "sources name no files"}}
 
-  defp validate_source_files(source_files, :javascript) do
-    if Map.has_key?(source_files, "package.json"),
-      do: validate_source_size(source_files),
-      else: {:error, :missing_package_json}
-  end
-
-  defp validate_source_files(source_files, _language), do: validate_source_size(source_files)
-
-  defp validate_source_size(source_files) do
-    total_size = source_files |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
-
-    if total_size > @max_source_size do
-      {:error, {:source_too_large, total_size, @max_source_size}}
-    else
-      validate_source_paths(source_files)
+  defp validate_sources(sources, language) do
+    with :ok <- required_source(sources, language),
+         :ok <- validate_source_size(sources) do
+      validate_source_paths(sources)
     end
+  end
+
+  defp required_source(sources, :rust) when not is_map_key(sources, "src/lib.rs"),
+    do: {:error, {:malformed, "a rust build needs src/lib.rs among its sources"}}
+
+  defp required_source(sources, :javascript) when not is_map_key(sources, "package.json"),
+    do: {:error, {:malformed, "a javascript build needs package.json among its sources"}}
+
+  defp required_source(_sources, _language), do: :ok
+
+  defp validate_source_size(sources) do
+    total = sources |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
+    max = BuilderProtocol.max_source_bytes()
+    if total > max, do: malformed({:too_large, :sources, total, max}), else: :ok
   end
 
   # Every key becomes a name in the input archive, extracted under the
   # build's source directory, so each is held to PathSafety's relative-path
-  # rules before any build starts.
-  defp validate_source_paths(source_files) do
-    source_files
+  # rules before any build starts, whatever read the request.
+  defp validate_source_paths(sources) do
+    sources
     |> Map.keys()
     |> Enum.reduce_while(:ok, fn path, :ok ->
       case Cyfr.PathSafety.validate_relative_path(path) do
         :ok -> {:cont, :ok}
-        {:error, {_reason, message}} -> {:halt, {:error, {:invalid_source_path, path, message}}}
+        {:error, _reason} -> {:halt, malformed({:unsafe_path, path})}
       end
     end)
   end
 
+  defp malformed(read_error), do: {:error, {:malformed, BuilderProtocol.describe(read_error)}}
+
   defp check_toolchain(language) do
     if toolchain_available?(language),
       do: :ok,
-      else: {:error, {:toolchain_not_found, language}}
+      else: {:error, {:unavailable, "the #{language} toolchain is not installed in this image"}}
+  end
+
+  defp executor do
+    case Locus.Executor.executor() do
+      {:ok, executor} ->
+        {:ok, executor}
+
+      {:error, :no_keeper} ->
+        {:error,
+         {:unavailable, "cyfr-spawn is not running, and the builder runs a build only under it"}}
+    end
   end
 
   # ============================================================================
-  # Compilation
+  # The plan
   # ============================================================================
 
-  defp do_compile(source_files, :rust, target_type, settings) do
-    sources = if settings.resolve?, do: Map.delete(source_files, "Cargo.lock"), else: source_files
+  defp plan(:rust, target_type, resolve?, sources) do
+    sources = if resolve?, do: Map.delete(sources, "Cargo.lock"), else: sources
 
     cargo_toml =
       case Map.get(sources, "Cargo.toml") do
@@ -332,101 +339,102 @@ defmodule Locus.Builder do
 
     with {:ok, wit} <- wit_files(sources, target_type),
          {:ok, seed} <- cargo_seed(),
-         {:ok, archive} <-
-           Locus.Archive.pack(sources |> Map.put("Cargo.toml", cargo_toml) |> Map.merge(wit)),
-         _ = settings.on_progress.(:compiling, "Compiling #{target_type} (rust)..."),
-         {:ok, files, log} <- run_build(@rust_script, [wasm, seed, locked], archive, settings),
-         {:ok, wasm_bytes} <- component(files, wasm, log),
-         _ = settings.on_progress.(:validating, "Validating WASM binary..."),
-         {:ok, validation} <- Compendium.WasmValidator.validate(wasm_bytes) do
-      settings.on_progress.(
-        :complete,
-        "Build complete — #{validation.size} bytes, #{length(validation.exports)} export(s)"
-      )
-
+         {:ok, archive} <- pack(sources |> Map.put("Cargo.toml", cargo_toml) |> Map.merge(wit)) do
       {:ok,
        %{
-         wasm_bytes: wasm_bytes,
-         digest: validation.digest,
-         size: validation.size,
-         exports: validation.exports,
-         language: "rust",
-         target_type: to_string(target_type),
-         lockfile: Map.get(files, "Cargo.lock")
+         language: :rust,
+         target_type: target_type,
+         argv: ["/bin/sh", "-c", @rust_script, "locus-build", wasm, seed, locked],
+         archive: archive,
+         wasm: wasm,
+         announce: "Compiling #{target_type} (rust)..."
        }}
     end
   end
 
-  defp do_compile(source_files, :javascript, target_type, settings) do
-    with {:ok, archive} <- Locus.Archive.pack(source_files),
-         _ =
-           settings.on_progress.(
-             :compiling,
-             "Building tincture (npm install && npm run build)..."
-           ),
-         {:ok, files, _log} <- run_build(@javascript_script, [], archive, settings),
-         {:ok, output_files} <- dist_files(files) do
-      {digest, size} = Cyfr.Digest.file_set(output_files)
-
-      settings.on_progress.(
-        :complete,
-        "Build complete — #{size} bytes, #{map_size(output_files)} file(s)"
-      )
-
+  defp plan(:javascript, target_type, _resolve?, sources) do
+    with {:ok, archive} <- pack(sources) do
       {:ok,
        %{
-         output_files: output_files,
-         digest: digest,
-         size: size,
-         exports: [],
-         language: "javascript",
-         target_type: to_string(target_type)
+         language: :javascript,
+         target_type: target_type,
+         argv: ["/bin/sh", "-c", @javascript_script, "locus-build"],
+         archive: archive,
+         wasm: nil,
+         announce: "Building tincture (npm install && npm run build)..."
        }}
     end
   end
 
-  # Runs a build script and reads its output archive. A build that exits
-  # non-zero fails with its log.
-  defp run_build(script, args, archive, settings) do
-    command = %{
-      argv: ["/bin/sh", "-c", script, "locus-build" | args],
-      env: toolchain_env(),
-      stdin: archive
-    }
+  defp pack(files) do
+    case Locus.Archive.pack(files) do
+      {:ok, archive} ->
+        {:ok, archive}
+
+      {:error, {:pack_failed, path, _reason}} ->
+        {:error, {:malformed, "#{path} cannot be a file of the build's source archive"}}
+
+      {:error, _reason} ->
+        {:error, {:malformed, "the sources do not make a source archive"}}
+    end
+  end
+
+  # ============================================================================
+  # The run
+  # ============================================================================
+
+  # Runs the build's script and reads its output archive.
+  defp execute(executor, plan, timeout_ms, on_progress) do
+    command = %{argv: plan.argv, env: toolchain_env(), stdin: plan.archive}
 
     opts = [
-      timeout_ms: settings.timeout_ms,
+      timeout_ms: timeout_ms,
       max_stdout_bytes: @max_output_archive_bytes,
-      on_output: &settings.on_progress.(:output, &1)
+      on_output: &on_progress.(:output, &1)
     ]
 
-    case Locus.Executor.executor().run(command, opts) do
-      {:ok, %{exit: {:status, 0}, stdout: stdout, log: log}} ->
-        output_archive(stdout, String.trim(log))
+    case executor.run(command, opts) do
+      {:ok, %{exit: {:status, 0}, stdout: stdout}} ->
+        output_archive(stdout, on_progress)
 
-      {:ok, %{exit: {:status, code}, log: log}} ->
-        {:error, {:compilation_failed, code, String.trim(log)}}
-
-      {:ok, %{exit: {:signal, signal}, log: log}} ->
-        {:error, {:compilation_failed, signal, String.trim(log)}}
+      {:ok, %{exit: exit}} ->
+        {:error, {:failed, exit}}
 
       {:error, :timeout} ->
-        {:error, :compilation_timeout}
+        {:error, {:timeout, timeout_ms}}
+
+      {:error, :cancelled} ->
+        {:error, :cancelled}
 
       {:error, :capacity} ->
-        {:error, :builder_at_capacity}
+        {:error, {:capacity, Locus.Config.max_concurrent()}}
 
+      # The spawner's own reading of the wire: a build ended at its bound,
+      # and a bound this deployment cannot enforce.
+      {:error, {:memory, _limit_bytes} = refusal} ->
+        {:error, refusal}
+
+      {:error, {:unavailable, _sentence} = refusal} ->
+        {:error, refusal}
+
+      # The executor ended the build where its stdout passed the bound.
       {:error, {:output_too_large, max}} ->
-        {:error, {:compilation_failed, 0, "Build output exceeds #{max} bytes"}}
+        on_progress.(:compiling, "the build's output passed #{max} bytes and was refused")
+        {:error, {:failed, {:signal, "SIGKILL"}}}
 
       {:error, {:spawn_failed, reason}} ->
         Logger.error("[Locus.Builder] a build could not be run: #{inspect(reason)}")
-        {:error, {:build_not_started, reason}}
+        {:error, {:unavailable, "cyfr-spawn could not run the build (#{spawn_failure(reason)})"}}
     end
   end
 
-  defp output_archive(stdout, log) do
-    case Locus.Archive.unpack(stdout, @max_output_files) do
+  defp spawn_failure(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp spawn_failure(reason) when is_binary(reason), do: reason
+  defp spawn_failure({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
+  defp spawn_failure(_reason), do: "spawn_failed"
+
+  defp output_archive(stdout, on_progress) do
+    case Locus.Archive.unpack(stdout, BuilderProtocol.max_output_files()) do
       {:ok, files, skipped} ->
         if skipped != [],
           do:
@@ -434,14 +442,87 @@ defmodule Locus.Builder do
               "[Locus.Builder] skipped #{length(skipped)} non-regular entries in build output"
             )
 
-        {:ok, files, log}
+        {:ok, files}
 
       {:error, {:too_many_files, max}} ->
-        {:error, {:compilation_failed, 0, "Build produced more than #{max} files"}}
+        refused_output(on_progress, :compiling, "the build produced more than #{max} files")
+
+      {:error, {:unsafe_path, _name}} ->
+        refused_output(on_progress, :compiling, "the build's output names an unsafe path")
+
+      {:error, {:unreadable, _reason}} ->
+        refused_output(on_progress, :compiling, "the build's output archive is unreadable")
+    end
+  end
+
+  # The command believed it succeeded; what it left is not an output this
+  # builder answers. The line is the only evidence of why.
+  defp refused_output(on_progress, stage, message) do
+    on_progress.(stage, message)
+    {:error, {:failed, {:status, 0}}}
+  end
+
+  defp outputs(%{language: :rust, wasm: wasm}, files, on_progress) do
+    with {:ok, wasm_bytes} <- component(files, wasm, on_progress),
+         _ = on_progress.(:validating, "Validating WASM binary..."),
+         :ok <- validate(wasm_bytes, on_progress) do
+      outputs = %{BuilderProtocol.component_wasm() => wasm_bytes}
+
+      {:ok,
+       case Map.fetch(files, "Cargo.lock") do
+         {:ok, lockfile} -> Map.put(outputs, BuilderProtocol.component_lockfile(), lockfile)
+         :error -> outputs
+       end}
+    end
+  end
+
+  defp outputs(%{language: :javascript}, files, on_progress) do
+    outputs = for {"dist/" <> rel, content} <- files, rel != "", into: %{}, do: {rel, content}
+
+    if map_size(outputs) == 0,
+      do: refused_output(on_progress, :compiling, "the build produced no output files in dist/"),
+      else: {:ok, outputs}
+  end
+
+  defp component(files, wasm, on_progress) do
+    case Map.fetch(files, wasm) do
+      {:ok, bytes} ->
+        {:ok, bytes}
+
+      :error ->
+        refused_output(on_progress, :compiling, "cargo exited 0 without producing #{wasm}")
+    end
+  end
+
+  defp validate(wasm_bytes, on_progress) do
+    case Compendium.WasmValidator.validate(wasm_bytes) do
+      {:ok, _validation} ->
+        :ok
 
       {:error, reason} ->
-        {:error, {:compilation_failed, 0, "Build output is unreadable: #{inspect(reason)}"}}
+        refused_output(
+          on_progress,
+          :validating,
+          "the component is not valid WASM (#{validation_failure(reason)})"
+        )
     end
+  end
+
+  defp validation_failure(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp validation_failure(reason) when is_tuple(reason), do: inspect(elem(reason, 0))
+
+  defp within_bounds(outputs, on_progress) do
+    total = outputs |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
+    max = BuilderProtocol.max_output_bytes()
+
+    if total > max,
+      do:
+        refused_output(
+          on_progress,
+          :validating,
+          "the build's outputs total #{total} bytes; at most #{max} are answered"
+        ),
+      else: :ok
   end
 
   defp toolchain_env do
@@ -457,52 +538,21 @@ defmodule Locus.Builder do
     Map.put_new_lazy(env, "RUSTUP_HOME", fn -> Path.join(System.user_home() || "/", ".rustup") end)
   end
 
-  # The command believed it succeeded and left no component; its log is the
-  # only evidence of why.
-  defp component(files, wasm, log) do
-    case Map.fetch(files, wasm) do
-      {:ok, bytes} ->
-        {:ok, bytes}
-
-      :error ->
-        Logger.error(
-          "[Locus.Builder] cargo exited 0 without producing #{wasm}; its output was:\n#{log}"
-        )
-
-        {:error, {:output_not_found, log}}
-    end
-  end
-
-  defp dist_files(files) do
-    output =
-      for {"dist/" <> rel, content} <- files, rel != "", into: %{}, do: {rel, content}
-
-    cond do
-      map_size(output) == 0 ->
-        {:error, {:compilation_failed, 0, "Build produced no output files in dist/"}}
-
-      output |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2)) > @max_output_bytes ->
-        {:error,
-         {:compilation_failed, 0, "Build output exceeds #{@max_output_bytes} bytes in dist/"}}
-
-      true ->
-        {:ok, output}
-    end
-  end
-
-  # The crates baked into the builder image (`:build_cargo_seed`, a Cargo
-  # home holding a registry cache): the build copies its registry into its
-  # own Cargo home, so it starts with them without sharing a cache another
-  # build could write. A seed that is configured and absent is a broken
-  # image.
+  # The crates baked into the builder image (a Cargo home holding a
+  # registry cache): the build copies its registry into its own Cargo home,
+  # so it starts with them without sharing a cache another build could
+  # write. A seed that is configured and absent is a broken image.
   defp cargo_seed do
-    case Application.get_env(:cyfr, :build_cargo_seed) do
-      seed when is_binary(seed) and seed != "" ->
-        registry = Path.join(seed, "registry")
-        if File.dir?(registry), do: {:ok, seed}, else: {:error, {:cargo_seed_missing, registry}}
-
-      _ ->
+    case Locus.Config.cargo_seed() do
+      nil ->
         {:ok, ""}
+
+      seed ->
+        registry = Path.join(seed, "registry")
+
+        if File.dir?(registry),
+          do: {:ok, seed},
+          else: {:error, {:unavailable, "the Cargo seed #{registry} is missing from this image"}}
     end
   end
 
@@ -543,7 +593,7 @@ defmodule Locus.Builder do
     else
       case Compendium.WITSource.files(target_type) do
         [] ->
-          {:error, {:wit_not_found, target_type}}
+          {:error, {:unavailable, "this release embeds no WIT for a #{target_type}"}}
 
         files ->
           {:ok,
