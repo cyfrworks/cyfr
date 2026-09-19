@@ -142,6 +142,18 @@ defmodule Opus.ModelContractTest do
              Enum.take(emitted, -2)
 
     assert usage(tokens(7, 9)) in emitted
+
+    # The guest was answered the number of the last event each emit released:
+    # none for the delta held whole, and the stream's last for `stop`.
+    replies = report(ctx, id)["emitted"]
+    numbers = for %{type: "emit", sequence: sequence} <- stream, do: sequence
+    named = for %{"sequence" => sequence} <- replies, do: sequence
+    assert length(replies) == 6 and Enum.all?(replies, &(&1["ok"] == true))
+    assert Enum.at(replies, 3) == %{"ok" => true}
+    assert named == Enum.filter(numbers, &(&1 in named))
+    assert List.last(named) == List.last(numbers)
+    assert length(numbers) == 6 and numbers == Enum.uniq(numbers)
+    # A subscriber hears the stream in the order it is numbered.
     assert stream == Enum.sort_by(stream, &{&1.durable, &1.delta || 0})
     assert for(%{type: "emit"} = e <- stream, do: e.origin) |> Enum.uniq() == ["guest"]
     assert %{type: "execution.completed"} = List.last(stream)
@@ -504,7 +516,13 @@ defmodule Opus.ModelContractTest do
           )
       },
       %{
-        "emit" => [text("Said " <> key(0, 13)), text(key(13) <> "."), stop("end_turn")],
+        # And across three, the middle one nothing but key.
+        "emit" => [
+          text("Said " <> key(0, 5)),
+          text(key(5, 13)),
+          text(key(13) <> "."),
+          stop("end_turn")
+        ],
         "answer" => answer([text_block("Said " <> key() <> ".")], "end_turn", tokens(8, 3))
       }
     ]

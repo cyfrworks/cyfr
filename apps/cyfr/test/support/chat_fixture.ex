@@ -10,7 +10,7 @@ defmodule Cyfr.Test.ChatFixture do
 
   - The estate: `lay_seed!/2` lays a seed whose only catalyst is the
     fixture and whose soul runs on it with a small tool policy of catalog
-    operations; `estate!/1` fills a fresh group estate from the configured
+    operations; `estate!/0` fills a fresh group estate from the configured
     seed the way a person's is filled (`Sanctum.Provisioning.provision/2`);
     `bind_key!/2` connects a key to the fixture through the consent walk.
   - The script: `message/2` is the line a person sends, the script in a
@@ -21,11 +21,12 @@ defmodule Cyfr.Test.ChatFixture do
   - Watching: `observe!/2` starts a viewer that holds no handle on the
     engine — it keeps what the thread's topic carries and, for every
     execution the estate's execution topic announces, what that
-    execution's event stream carries, caught up from the replay window so
-    nothing emitted before it subscribed is missed. `seen/1` answers both.
+    execution's event stream carries in the order it arrives, caught up
+    from the replay window so nothing emitted before it subscribed is
+    missed. `seen/1` answers both.
   - Reading: `report/2` is what the fixture answered about a chat step
     (the request it received and the host's reply to each emit), read from
-    the step's retained result; `leaks/3` names every place a credential
+    the step's retained result; `leaks/2` names every place a credential
     shows: a column of any table, a file under the base path, or a term
     the caller passes.
   """
@@ -69,10 +70,6 @@ defmodule Cyfr.Test.ChatFixture do
   @doc "The fixture's README, which records its digests."
   @spec readme_path() :: Path.t()
   def readme_path, do: @readme
-
-  @doc "The tool policy the laid soul carries."
-  @spec tool_policy() :: %{String.t() => String.t()}
-  def tool_policy, do: @tool_policy
 
   # ---------------------------------------------------------------------------
   # The estate
@@ -257,9 +254,7 @@ defmodule Cyfr.Test.ChatFixture do
     @impl true
     def handle_call(:seen, _from, state) do
       streams =
-        Map.new(state.streams, fn {id, events} ->
-          {id, events |> Map.values() |> Enum.sort_by(&{&1.durable, &1.delta || 0})}
-        end)
+        Map.new(state.streams, fn {id, {_numbers, events}} -> {id, Enum.reverse(events)} end)
 
       seen = %{
         thread: Enum.reverse(state.thread),
@@ -289,9 +284,17 @@ defmodule Cyfr.Test.ChatFixture do
 
     def handle_info(_other, state), do: {:noreply, state}
 
+    # An event is kept once, by its number, in the order it arrived: what the
+    # replay answered first, then what the topic carried.
     defp keep(state, id, event) do
-      events = Map.get(state.streams, id, %{})
-      %{state | streams: Map.put(state.streams, id, Map.put_new(events, event.sequence, event))}
+      {numbers, events} = Map.get(state.streams, id, {MapSet.new(), []})
+
+      if MapSet.member?(numbers, event.sequence) do
+        state
+      else
+        kept = {MapSet.put(numbers, event.sequence), [event | events]}
+        %{state | streams: Map.put(state.streams, id, kept)}
+      end
     end
   end
 
@@ -306,7 +309,7 @@ defmodule Cyfr.Test.ChatFixture do
   @doc """
   What the viewer has seen: `thread`, the thread topic's events in order;
   `started`, the metadata of each execution announced; `streams`, each
-  execution's events by id, in stream order.
+  execution's events by id, in the order they arrived.
   """
   @spec seen(pid()) :: %{thread: [term()], started: [map()], streams: %{String.t() => [map()]}}
   def seen(observer), do: GenServer.call(observer, :seen, 30_000)

@@ -96,7 +96,7 @@ catalyst `Cargo.toml` (`Cyfr.CargoToml.template(:catalyst)`) and the
 catalyst world's WIT (`wit/catalyst`), builds it `--locked` to `Cargo.lock`
 with `cargo component build --release --target wasm32-wasip2`, and remaps
 the scratch directory and the Cargo home out of the paths rustc embeds, so
-the bytes are the same on every machine with this toolchain:
+the bytes carry nothing of where they were built. The toolchain:
 
 ```
 rustc 1.93.0 (254b59607 2026-01-19)

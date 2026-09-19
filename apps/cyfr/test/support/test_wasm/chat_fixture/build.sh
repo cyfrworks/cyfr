@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Build chat_fixture.wasm from src/lib.rs and Cargo.lock, the same bytes on
-# every machine: the crate is laid out in a scratch directory with the
-# canonical catalyst Cargo.toml (`Cyfr.CargoToml`) and the catalyst world's
-# WIT (`wit/catalyst`), built `--locked`, and the scratch directory and the
-# Cargo home are remapped out of the paths rustc embeds.
+# Build chat_fixture.wasm from src/lib.rs and Cargo.lock: the crate is laid
+# out in a scratch directory with the canonical catalyst Cargo.toml
+# (`Cyfr.CargoToml`) and the catalyst world's WIT (`wit/catalyst`), built
+# `--locked`, and the scratch directory and the Cargo home are remapped out
+# of the paths rustc embeds, so the bytes carry nothing of where they were
+# built.
 #
 # Usage, from anywhere in the repository:
 #   build.sh            build, write chat_fixture.wasm, print the digests
