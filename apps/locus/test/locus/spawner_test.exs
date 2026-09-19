@@ -255,13 +255,58 @@ defmodule Locus.SpawnerTest do
       conn = attach(v, :sys.get_state(client).attach_path, request["attach"]["token"])
       :ok = :gen_tcp.close(conn)
 
-      exited = reply(v, "exited", &(&1["signal"] != nil))
+      exited = reply(v, "exited", &(&1["signal"] != nil and not &1["memory_exceeded"]))
       assert exited["code"] == nil and exited["signal"] == "SIGKILL"
       send_reply(peer, exited)
       send_reply(peer, reply(v, "released"))
 
       assert {{:ok, %{exit: {:signal, "SIGKILL"}, stdout: "", log: ""}}, []} =
                Task.await(task, 10_000)
+    end
+
+    # This client asks for no memory bound: the report every `exited`
+    # carries is understood, and the run is answered with the leader's exit.
+    test "an exit reported at a memory bound is understood", %{
+      vectors: v,
+      peer: peer,
+      name: name,
+      client: client
+    } do
+      assert Enum.all?(
+               v["replies"],
+               &(&1["type"] != "exited" or is_boolean(&1["memory_exceeded"]))
+             )
+
+      task = Task.async(fn -> run(name, "true") end)
+      request = next_request(peer)
+      refute Map.has_key?(request, "memory_bytes")
+      send_reply(peer, v |> reply("spawned") |> Map.put("id", request["id"]))
+      conn = attach(v, :sys.get_state(client).attach_path, request["attach"]["token"])
+      :ok = :gen_tcp.close(conn)
+
+      exited = reply(v, "exited", & &1["memory_exceeded"])
+      assert exited["code"] == nil and exited["signal"] == "SIGKILL"
+      send_reply(peer, exited)
+      send_reply(peer, reply(v, "released"))
+
+      assert {{:ok, %{exit: {:signal, "SIGKILL"}, stdout: "", log: ""}}, []} =
+               Task.await(task, 10_000)
+    end
+
+    test "the refusal of a bound that cannot be enforced answers the run as not started", %{
+      vectors: v,
+      peer: peer,
+      name: name
+    } do
+      task = Task.async(fn -> run(name, "true") end)
+      request = next_request(peer)
+
+      refusal =
+        v |> reply("error", &(&1["code"] == "memory_unavailable")) |> Map.put("id", request["id"])
+
+      send_reply(peer, refusal)
+
+      assert {{:error, {:spawn_failed, "memory_unavailable"}}, []} = Task.await(task, 10_000)
     end
 
     test "the capacity refusal answers the run as capacity", %{

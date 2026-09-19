@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cyfr/spawn/internal/cgroup"
 	"github.com/cyfr/spawn/internal/home"
 	"github.com/cyfr/spawn/internal/protocol"
 )
@@ -38,6 +39,11 @@ type Spec struct {
 	// Control says the spawner handed the control channel's socket on
 	// ControlFD, to become the command's fd 3.
 	Control bool `json:"control"`
+	// Cgroup is the memory-bounded group the spawner moved this process
+	// into before it sent the spec, as /proc/self/cgroup names it; empty
+	// for a spawn without a bound. The stage executes the command only
+	// from inside it.
+	Cgroup string `json:"cgroup"`
 }
 
 // Validate checks the spec independently of the spawner: a non-root uid
@@ -60,6 +66,9 @@ func (s Spec) Validate() error {
 	l := s.Limits
 	if l.Nofile == 0 || l.Nofile > c.Nofile || l.Nproc == 0 || l.Nproc > c.Nproc || l.Core > c.Core || l.Fsize == 0 || l.Fsize > c.Fsize {
 		return fmt.Errorf("limits %+v are outside the ceilings %+v", l, c)
+	}
+	if s.Cgroup != "" && s.Cgroup != "/"+cgroup.Name(s.UID) {
+		return fmt.Errorf("cgroup %q is not the group of uid %d", s.Cgroup, s.UID)
 	}
 	return nil
 }

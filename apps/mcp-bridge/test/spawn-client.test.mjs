@@ -260,7 +260,20 @@ test("the pool reply and an exit by signal are understood", async () => {
 
   const { proc } = await spawned();
   const exited = once(proc, "exit");
-  peer.reply(V.replies.find((r) => r.type === "exited" && r.signal));
+  peer.reply(V.replies.find((r) => r.type === "exited" && r.signal && !r.memory_exceeded));
+  assert.deepEqual(await exited, [null, "SIGKILL"]);
+});
+
+// The bridge asks for no memory bound: the report every `exited` carries is
+// understood, and the backend's end is its signal.
+test("an exit reported at a memory bound is understood", async () => {
+  assert.ok(V.replies.filter((r) => r.type === "exited").every((r) => typeof r.memory_exceeded === "boolean"));
+  assert.ok(V.valid_requests.filter((r) => r.pool === "backends").every((r) => !("memory_bytes" in r)));
+
+  const { proc, request } = await spawned();
+  assert.equal("memory_bytes" in request, false);
+  const exited = once(proc, "exit");
+  peer.reply(V.replies.find((r) => r.type === "exited" && r.memory_exceeded));
   assert.deepEqual(await exited, [null, "SIGKILL"]);
 });
 

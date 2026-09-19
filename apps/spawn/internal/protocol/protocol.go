@@ -7,7 +7,7 @@
 //
 // Client to spawner:
 //
-//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"control":true,"attach":{"path":…,"token":…}}
+//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"control":true,"attach":{"path":…,"token":…}}
 //	{"v":1,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
 //	{"v":1,"type":"release","spawn_id":…,"grace_ms":…}
 //	{"v":1,"type":"pool","id":…,"pool":…}
@@ -16,7 +16,7 @@
 //
 //	{"v":1,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
 //	{"v":1,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request)
-//	{"v":1,"type":"exited","spawn_id":…,"code":…,"signal":…}
+//	{"v":1,"type":"exited","spawn_id":…,"code":…,"signal":…,"memory_exceeded":…}
 //	{"v":1,"type":"released","spawn_id":…}
 //	{"v":1,"type":"pool","id":…,"pool":…,"size":…,"free":…,"quarantined":…}
 //
@@ -30,6 +30,19 @@
 // inherited, so the request names exactly the variables that reach the
 // command, and a reserved name (ReservedEnv, ReservedEnvPrefixes) is
 // refused.
+//
+// A spawn's `memory_bytes`, from MinMemoryBytes to MaxMemoryBytes, bounds
+// the memory of everything the spawn runs, whatever its pool: the spawner
+// puts the command in a cgroup of its own (package cgroup) limited to that
+// many bytes with no swap, so its processes, the pages of what it writes to
+// a tmpfs home and the kernel memory charged to it never exceed the bound
+// together. When they cannot stay under it the kernel kills every process
+// of the spawn, and the leader's `exited` carries `"memory_exceeded": true`,
+// read from the cgroup's own counters and never inferred from the signal;
+// every other `exited` carries false. A spawner that cannot give a spawn
+// such a cgroup refuses the request as CodeMemoryUnavailable: a bound asked
+// for is enforced or the command does not run. A spawn without
+// `memory_bytes` has no bound of its own.
 //
 // A spawn with `"control": true` also gets a control channel: the spawner
 // makes an AF_UNIX stream socketpair, installs one end as the command's file
@@ -88,6 +101,9 @@ const (
 	CodeUnknownSpawn = "unknown_spawn"
 	CodeNotRunning   = "not_running"
 	CodeInternal     = "internal"
+	// CodeMemoryUnavailable refuses a spawn asking for a memory bound the
+	// spawner cannot enforce where it runs.
+	CodeMemoryUnavailable = "memory_unavailable"
 )
 
 // Bounds on a request.
@@ -99,6 +115,12 @@ const (
 	MaxSpecBytes  = 256 << 10
 	MaxGraceMs    = 60_000
 	MaxSocketPath = 107
+	// MinMemoryBytes is the least a spawn's memory bound may be: the stage
+	// and a command's start fit under it.
+	MinMemoryBytes = 16 << 20
+	// MaxMemoryBytes is the most a spawn's memory bound may be, a number
+	// every client's JSON carries exactly.
+	MaxMemoryBytes = 1 << 40
 )
 
 // Signals a `signal` request may name.
@@ -205,11 +227,13 @@ type Request struct {
 	Argv    []string          `json:"argv,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	Rlimits *Rlimits          `json:"rlimits,omitempty"`
-	Control bool              `json:"control,omitempty"`
-	Attach  *Attach           `json:"attach,omitempty"`
-	SpawnID string            `json:"spawn_id,omitempty"`
-	Sig     string            `json:"sig,omitempty"`
-	GraceMs *int64            `json:"grace_ms,omitempty"`
+	// MemoryBytes is a spawn's memory bound; nil asks for none.
+	MemoryBytes *uint64 `json:"memory_bytes,omitempty"`
+	Control     bool    `json:"control,omitempty"`
+	Attach      *Attach `json:"attach,omitempty"`
+	SpawnID     string  `json:"spawn_id,omitempty"`
+	Sig         string  `json:"sig,omitempty"`
+	GraceMs     *int64  `json:"grace_ms,omitempty"`
 }
 
 // RequestError is a refused request: the code to reply with, the request's
@@ -296,8 +320,8 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 }
 
 func validateSpawn(req *Request) error {
-	if !req.only("id", "pool", "argv", "env", "rlimits", "control", "attach") {
-		return errors.New("spawn carries only id, pool, argv, env, rlimits, control and attach")
+	if !req.only("id", "pool", "argv", "env", "rlimits", "memory_bytes", "control", "attach") {
+		return errors.New("spawn carries only id, pool, argv, env, rlimits, memory_bytes, control and attach")
 	}
 	if !idPattern.MatchString(req.ID) {
 		return errors.New("id must match " + idPattern.String())
@@ -310,6 +334,9 @@ func validateSpawn(req *Request) error {
 	}
 	if err := req.Rlimits.validate(); err != nil {
 		return err
+	}
+	if m := req.MemoryBytes; m != nil && (*m < MinMemoryBytes || *m > MaxMemoryBytes) {
+		return fmt.Errorf("memory_bytes must be within %d..%d", uint64(MinMemoryBytes), uint64(MaxMemoryBytes))
 	}
 	if req.Attach == nil {
 		return errors.New("attach is required")
@@ -371,16 +398,17 @@ func ValidateEnvName(name string) error {
 // only reports whether every field set on r is among the named ones.
 func (r *Request) only(fields ...string) bool {
 	set := map[string]bool{
-		"id":       r.ID != "",
-		"pool":     r.Pool != "",
-		"argv":     r.Argv != nil,
-		"env":      r.Env != nil,
-		"rlimits":  r.Rlimits != nil,
-		"control":  r.Control,
-		"attach":   r.Attach != nil,
-		"spawn_id": r.SpawnID != "",
-		"sig":      r.Sig != "",
-		"grace_ms": r.GraceMs != nil,
+		"id":           r.ID != "",
+		"pool":         r.Pool != "",
+		"argv":         r.Argv != nil,
+		"env":          r.Env != nil,
+		"rlimits":      r.Rlimits != nil,
+		"memory_bytes": r.MemoryBytes != nil,
+		"control":      r.Control,
+		"attach":       r.Attach != nil,
+		"spawn_id":     r.SpawnID != "",
+		"sig":          r.Sig != "",
+		"grace_ms":     r.GraceMs != nil,
 	}
 	for _, f := range fields {
 		delete(set, f)
@@ -451,18 +479,20 @@ func NewError(id, spawnID, code string) ErrorReply {
 	return ErrorReply{V: Version, Type: TypeError, ID: id, SpawnID: spawnID, Code: code}
 }
 
-// Exited reports a leader's end: its exit code, or the signal that ended it.
+// Exited reports a leader's end: its exit code, or the signal that ended it,
+// and whether the kernel killed processes of the spawn at its memory bound.
 type Exited struct {
-	V       int     `json:"v"`
-	Type    string  `json:"type"`
-	SpawnID string  `json:"spawn_id"`
-	Code    *int    `json:"code"`
-	Signal  *string `json:"signal"`
+	V              int     `json:"v"`
+	Type           string  `json:"type"`
+	SpawnID        string  `json:"spawn_id"`
+	Code           *int    `json:"code"`
+	Signal         *string `json:"signal"`
+	MemoryExceeded bool    `json:"memory_exceeded"`
 }
 
 // NewExited builds an `exited` reply; exactly one of code and signal is set.
-func NewExited(spawnID string, code *int, signal *string) Exited {
-	return Exited{V: Version, Type: TypeExited, SpawnID: spawnID, Code: code, Signal: signal}
+func NewExited(spawnID string, code *int, signal *string, memoryExceeded bool) Exited {
+	return Exited{V: Version, Type: TypeExited, SpawnID: spawnID, Code: code, Signal: signal, MemoryExceeded: memoryExceeded}
 }
 
 // Released reports that a spawn's uid has been retired.

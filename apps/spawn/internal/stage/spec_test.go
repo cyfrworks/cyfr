@@ -44,6 +44,11 @@ func TestValidSpecPasses(t *testing.T) {
 	if err := validSpec().Validate(); err != nil {
 		t.Fatal(err)
 	}
+	bounded := validSpec()
+	bounded.Cgroup = "/spawn-20007"
+	if err := bounded.Validate(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSpecValidationRefusals(t *testing.T) {
@@ -60,6 +65,9 @@ func TestSpecValidationRefusals(t *testing.T) {
 		"zero nproc":           func(s *Spec) { s.Limits.Nproc = 0 },
 		"core dumps":           func(s *Spec) { s.Limits.Core = 1 },
 		"fsize above ceiling":  func(s *Spec) { s.Limits.Fsize = 1 << 30 },
+		"another uid's cgroup": func(s *Spec) { s.Cgroup = "/spawn-20008" },
+		"the keeper's cgroup":  func(s *Spec) { s.Cgroup = "/keeper" },
+		"the root cgroup":      func(s *Spec) { s.Cgroup = "/" },
 	}
 	for name, mutate := range cases {
 		s := validSpec()
