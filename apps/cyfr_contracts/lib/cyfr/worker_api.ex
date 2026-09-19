@@ -59,8 +59,10 @@ defmodule Cyfr.WorkerAPI do
   @typedoc """
   A worker service's state: its configured service id; its boot id, which
   changes on every start; its runners, counted by state
-  (`runner_states/0`); and the attempts its runners have claimed. A
-  runner is in exactly one state:
+  (`runner_states/0`); the attempts its runners have claimed; the memory
+  bound, in bytes, every runner it starts runs under, `nil` when its
+  keeper applies none; and its `refusal`, `nil` while its keeper starts
+  runners. A runner is in exactly one state:
 
     * `fresh` — started and not yet assigned, so it belongs to no
       athanor;
@@ -79,32 +81,147 @@ defmodule Cyfr.WorkerAPI do
             busy: non_neg_integer(),
             tainted: non_neg_integer()
           },
-          attempts: [String.t()]
+          attempts: [String.t()],
+          memory_bytes: pos_integer() | nil,
+          refusal: refusal() | nil
         }
 
+  @typedoc """
+  Why a worker service's keeper refuses to start runners, from the last
+  runner it refused until one starts again: `reason`, a code of lowercase
+  letters, digits and underscores (`memory_unavailable` where the keeper
+  cannot bound a runner's memory), and `message`, a sentence for the
+  operator naming what the deployment lacks. While it refuses, a `start`
+  no fresh or idle runner can take is refused `unavailable` with the same
+  sentence.
+  """
+  @type refusal :: %{reason: String.t(), message: String.t()}
+
   @runner_states [:fresh, :idle, :busy, :tainted]
+  @status_members ~w(service boot runners attempts memory_bytes refusal)
+  @refusal_members ~w(reason message)
+  @reason ~r/\A[a-z][a-z0-9_]{0,63}\z/
+  @max_message_bytes 1024
+  # 2^53 − 1: the largest integer every JSON reader holds exactly.
+  @max_integer 9_007_199_254_740_991
 
   @doc "The runner states a status counts, each runner in exactly one."
   @spec runner_states() :: [atom()]
   def runner_states, do: @runner_states
 
   @doc """
-  Whether `status` has the shape of `t:status/0`: its four members and no
+  Whether `status` has the shape of `t:status/0`: its six members and no
   other, a string service and boot, a count for every runner state and
-  no other, and a list of attempt id strings.
+  no other, a list of attempt id strings, a memory bound of 1 to 2^53 − 1
+  bytes or `nil`, and a `t:refusal/0` whose message is one to 1024 bytes
+  of UTF-8 without a control character, or `nil`.
   """
   @spec valid_status?(term()) :: boolean()
   def valid_status?(
-        %{service: service, boot: boot, runners: %{} = runners, attempts: attempts} = status
+        %{
+          service: service,
+          boot: boot,
+          runners: %{} = runners,
+          attempts: attempts,
+          memory_bytes: memory_bytes,
+          refusal: refusal
+        } = status
       )
-      when map_size(status) == 4 and is_binary(service) and is_binary(boot) and
+      when map_size(status) == 6 and is_binary(service) and is_binary(boot) and
              is_list(attempts) and map_size(runners) == length(@runner_states) do
     Enum.all?(@runner_states, fn state ->
       match?(count when is_integer(count) and count >= 0, Map.get(runners, state))
-    end) and Enum.all?(attempts, &is_binary/1)
+    end) and Enum.all?(attempts, &is_binary/1) and bound?(memory_bytes) and
+      refusal?(refusal)
   end
 
   def valid_status?(_status), do: false
+
+  defp bound?(nil), do: true
+  defp bound?(bytes), do: is_integer(bytes) and bytes > 0 and bytes <= @max_integer
+
+  defp refusal?(nil), do: true
+
+  defp refusal?(%{reason: reason, message: message} = refusal) when map_size(refusal) == 2,
+    do: is_binary(reason) and Regex.match?(@reason, reason) and message?(message)
+
+  defp refusal?(_refusal), do: false
+
+  # A sentence an operator's terminal shows as it reads.
+  defp message?(message) do
+    is_binary(message) and byte_size(message) in 1..@max_message_bytes and
+      String.valid?(message) and not String.match?(message, ~r/[\x00-\x1F\x7F]/)
+  end
+
+  @doc """
+  The status a JSON answer spells, as `status_to_wire/1` writes it, or
+  `:error` for anything else: a member missing or extra at any level, or
+  a value `valid_status?/1` refuses. `tests/fixtures/worker_auth.json`
+  holds the vectors (`status`).
+  """
+  @spec read_status(term()) :: {:ok, status()} | :error
+  def read_status(%{"runners" => %{} = runners, "refusal" => refusal} = wire) do
+    with true <- Enum.sort(Map.keys(wire)) == Enum.sort(@status_members),
+         {:ok, runners} <- read_runners(runners),
+         {:ok, refusal} <- read_refusal(refusal) do
+      status = %{
+        service: wire["service"],
+        boot: wire["boot"],
+        runners: runners,
+        attempts: wire["attempts"],
+        memory_bytes: wire["memory_bytes"],
+        refusal: refusal
+      }
+
+      if valid_status?(status), do: {:ok, status}, else: :error
+    else
+      _refused -> :error
+    end
+  end
+
+  def read_status(_wire), do: :error
+
+  defp read_runners(runners) do
+    names = Map.new(@runner_states, &{Atom.to_string(&1), &1})
+
+    if Enum.sort(Map.keys(runners)) == Enum.sort(Map.keys(names)),
+      do: {:ok, Map.new(names, fn {name, state} -> {state, Map.fetch!(runners, name)} end)},
+      else: :error
+  end
+
+  defp read_refusal(nil), do: {:ok, nil}
+
+  defp read_refusal(%{} = refusal) do
+    if Enum.sort(Map.keys(refusal)) == Enum.sort(@refusal_members),
+      do: {:ok, %{reason: refusal["reason"], message: refusal["message"]}},
+      else: :error
+  end
+
+  defp read_refusal(_refusal), do: :error
+
+  @doc """
+  `status` as its JSON answer spells it, every member a string, which
+  `read_status/1` reads back; raises `ArgumentError` for a status
+  `valid_status?/1` refuses, since it is the caller's own.
+  """
+  @spec status_to_wire(status()) :: %{String.t() => term()}
+  def status_to_wire(status) do
+    unless valid_status?(status), do: raise(ArgumentError, "not a status: #{inspect(status)}")
+
+    %{
+      "service" => status.service,
+      "boot" => status.boot,
+      "runners" => Map.new(@runner_states, &{Atom.to_string(&1), Map.fetch!(status.runners, &1)}),
+      "attempts" => status.attempts,
+      "memory_bytes" => status.memory_bytes,
+      "refusal" => refusal_to_wire(status.refusal)
+    }
+  end
+
+  defp refusal_to_wire(nil), do: nil
+
+  defp refusal_to_wire(%{reason: reason, message: message}),
+    do: %{"reason" => reason, "message" => message}
 
   @doc """
   Start an assignment on a runner. `input` is the execution's input bytes,
@@ -114,10 +231,15 @@ defmodule Cyfr.WorkerAPI do
   (`c:Cyfr.HostAPI.attach/2`) before it runs anything. `:malformed` means
   the assignment cannot be read or is addressed to another worker service
   or another boot of this one, the input does not match its digest or the
-  keys do not open as its attempt on this worker service.
+  keys do not open as its attempt on this worker service. `:unavailable`
+  means no runner could be given the assignment: none could be started,
+  and with a sentence when the worker service knows why (its keeper
+  refuses runners, `t:refusal/0`). Its listener refuses an unavailable
+  start `503`, naming the sentence, and CYFR reads that as a lost answer
+  and reconciles against the attempt's claim.
   """
   @callback start(Cyfr.Assignment.token(), input :: binary(), sealed_keys :: String.t()) ::
-              :ok | {:error, :malformed}
+              :ok | {:error, :malformed | :unavailable | {:unavailable, String.t()}}
 
   @doc """
   Stop an execution a runner of this worker service runs. For a subtree

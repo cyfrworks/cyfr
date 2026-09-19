@@ -38,9 +38,12 @@ defmodule Opus.WorkerService do
   ends with the subtree still assigned, is reported to CYFR at once,
   naming the runner and signed with the service's dispatch key
   (`Opus.HostClient.runner_exited/4`); a runner is reported once. A
-  `start` no runner can be found for (the keeper's pool is full, or a
-  runner cannot be spawned) answers `{:error, :unavailable}`, which the
-  listener refuses `503`, so CYFR reconciles against the claim.
+  `start` no runner can be found for answers `{:error, :unavailable}`,
+  and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
+  with the keeper's account of why; the listener refuses either `503`,
+  naming the sentence, so CYFR reconciles against the claim. Its status
+  counts the pool's runners and carries the bound its keeper holds each
+  to and the keeper's refusal (`Opus.RunnerPool.status/1`).
 
   `kill/1` for the root of a runner's subtree taints the runner and ends
   it through the keeper, with the grace to report its open attempts. For
@@ -209,18 +212,21 @@ defmodule Opus.WorkerService do
   def handle_call({:settled, pid}, _from, state), do: {:reply, :ok, Subtree.settle(state, pid)}
 
   def handle_call(:status, _from, state) do
-    {runners, attempts} =
+    {pool, attempts} =
       case state.mode do
         :local ->
-          {%{fresh: 0, idle: 0, busy: map_size(state.runners), tainted: 0},
-           Subtree.attempts(state)}
+          {%{
+             runners: %{fresh: 0, idle: 0, busy: map_size(state.runners), tainted: 0},
+             memory_bytes: nil,
+             refusal: nil
+           }, Subtree.attempts(state)}
 
         :pool ->
           {RunnerPool.status(RunnerPool), for({_pid, a} <- state.assigned, do: a.attempt)}
       end
 
     {:reply,
-     {:ok, %{service: state.service, boot: state.boot, runners: runners, attempts: attempts}},
+     {:ok, Map.merge(pool, %{service: state.service, boot: state.boot, attempts: attempts})},
      state}
   end
 
@@ -347,6 +353,9 @@ defmodule Opus.WorkerService do
               :ok = RunnerPool.taint(RunnerPool, pid, 0)
               {:reply, {:error, :unavailable}, state}
           end
+
+        {:error, {:refused, refusal}} ->
+          {:reply, {:error, {:unavailable, refusal.message}}, state}
 
         {:error, reason} ->
           Logger.error("[Opus.WorkerService] no runner for #{execution_id}: #{inspect(reason)}")

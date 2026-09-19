@@ -133,6 +133,15 @@ defmodule Opus.Keeper.Direct do
     GenServer.cast(janitor(), {:kill_after, os_pid, grace_ms})
   end
 
+  # A plain child process gets no cgroup of its own, so no bound.
+  @impl Opus.Keeper
+  def memory_bytes(_opts), do: nil
+
+  # A spawn fails here only when its home or its janitor cannot be had.
+  @impl Opus.Keeper
+  def refusal(_reason),
+    do: %{reason: "spawn_failed", message: "a runner could not be started on this machine"}
+
   @impl Opus.Keeper
   def stats, do: :unknown
 

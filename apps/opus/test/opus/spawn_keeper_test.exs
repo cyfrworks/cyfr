@@ -251,11 +251,14 @@ defmodule Opus.SpawnKeeperTest do
     assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 0} = request(spawner)
   end
 
-  test "a spawn the keeper refuses is a failure of the handle's", %{spawner: spawner, name: name} do
+  test "a spawn the keeper refuses reaches the handle as a refusal: no process of it ran", %{
+    spawner: spawner,
+    name: name
+  } do
     handle = start_handle!(name)
     %{"id" => id} = request(spawner)
     reply(spawner, %{v: 1, type: "error", id: id, code: "capacity"})
-    assert_receive {RunnerProcess, ^handle, {:error, "capacity"}}, 5_000
+    assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
   end
 
   test "the pool's stats are asked of the keeper and answered", %{spawner: spawner, name: name} do

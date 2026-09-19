@@ -77,7 +77,12 @@ defmodule Opus.WorkerListenerTest do
              status
 
     assert boot == context.boot
-    assert %{"fresh" => 0, "idle" => 0, "busy" => 0, "tainted" => 0} = runners
+    assert %{"fresh" => _, "idle" => 0, "busy" => 0, "tainted" => 0} = runners
+
+    # The answer is the contract's wire form of the service's own status.
+    assert {:ok, read} = Cyfr.WorkerAPI.read_status(status)
+    {:ok, own} = Opus.WorkerService.status()
+    assert Map.drop(read, [:runners]) == Map.drop(own, [:runners])
   end
 
   test "a request under another key is refused without the body being read", context do

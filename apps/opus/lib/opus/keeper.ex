@@ -26,9 +26,12 @@ defmodule Opus.Keeper do
   carries (`t:event/0`): the runner's OS pid once spawned, the channel
   attached, control bytes as the runner wrote them (lines are the
   caller's to split), the runner's log output, the channel closed, the
-  process exited, its uid or process group retired, or a failure. Control
-  bytes go back with `c:send/2`; `c:release/2` ends the runner: a term
-  signal, a grace to report what it holds, then the group kill.
+  process exited, its uid or process group retired, the spawn refused
+  (no process of it ever ran, as when `c:spawn/1` refuses), or a failure.
+  `c:refusal/1` says what a refusal means for an operator. Control bytes go back with `c:send/2`;
+  `c:release/2` ends the runner: a term signal, a grace to report what it
+  holds, then the group kill. `c:memory_bytes/1` is the bound every
+  runner runs under, nil for a keeper that applies none.
 
   The keeper's own process, one per pool (`c:child_spec/1`), holds the
   keeper channel and the attach listener (Spawn) or watches the runners'
@@ -54,6 +57,7 @@ defmodule Opus.Keeper do
           | :control_closed
           | {:exited, exit()}
           | :released
+          | {:refused, term()}
           | {:error, term()}
 
   @doc "The keeper's process for a pool, from the pool's options (`:attach_dir`, `:channel`, `:name`)."
@@ -73,6 +77,20 @@ defmodule Opus.Keeper do
 
   @doc "End the runner: a term signal, `grace_ms` to report, then the kill of everything it started."
   @callback release(channel(), non_neg_integer()) :: :ok
+
+  @doc """
+  The memory bound, in bytes, every runner this keeper starts with the
+  pool's keeper options runs under, or nil when it applies none.
+  """
+  @callback memory_bytes(keyword()) :: pos_integer() | nil
+
+  @doc """
+  What `reason`, the reason a spawn was refused before any runner process
+  started (`t:event/0`'s `{:refused, reason}`, or `c:spawn/1`'s error),
+  means for an operator: a code and a sentence, as
+  `t:Cyfr.WorkerAPI.refusal/0` spells them.
+  """
+  @callback refusal(term()) :: Cyfr.WorkerAPI.refusal()
 
   @doc "The keeper's own view of its runner pool, when it has one."
   @callback stats() ::

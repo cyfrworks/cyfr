@@ -120,7 +120,11 @@ defmodule Opus.Application do
     [
       {DynamicSupervisor, name: Opus.RunnerPool.Runners, strategy: :one_for_one},
       module.child_spec(keeper_opts),
-      {Opus.RunnerPool, settings: settings, keeper: module, supervisor: Opus.RunnerPool.Runners},
+      {Opus.RunnerPool,
+       settings: settings,
+       keeper: module,
+       keeper_opts: keeper_opts,
+       supervisor: Opus.RunnerPool.Runners},
       Opus.WorkerService
     ]
   end

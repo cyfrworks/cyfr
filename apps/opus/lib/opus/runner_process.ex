@@ -15,8 +15,10 @@ defmodule Opus.RunnerProcess do
   (`complete` or `exit`; a frame the runner may not send, or a line that
   is not one, is `{:error, {:protocol, reason}}`), `:closed` once the
   runner's end of the channel is closed, `{:exited, how}` once its
-  process ended, `:released` once the keeper has retired it, and
-  `{:error, reason}` for a failure of the keeper's. A message the service
+  process ended, `:released` once the keeper has retired it,
+  `{:refused, reason}` when the keeper refused the spawn, so no process of
+  the runner ever ran and nothing is left to release, and
+  `{:error, reason}` for a later failure of the keeper's. A message the service
   sends (`send_message/2`) is written at once, or held until the channel
   attaches. `release/2` asks the keeper to end the runner; when this
   process itself is stopped, the runner is released with no grace.
@@ -88,7 +90,7 @@ defmodule Opus.RunnerProcess do
         {:noreply, Enum.reduce(events, %{state | channel: channel}, &on_event/2)}
 
       {:error, reason} ->
-        notify(state, {:error, reason})
+        notify(state, {:refused, reason})
         {:noreply, state}
     end
   end
@@ -189,6 +191,11 @@ defmodule Opus.RunnerProcess do
   defp on_event(:released, state) do
     notify(state, :released)
     %{state | released: true}
+  end
+
+  defp on_event({:refused, reason}, state) do
+    notify(state, {:refused, reason})
+    state
   end
 
   defp on_event({:error, reason}, state) do

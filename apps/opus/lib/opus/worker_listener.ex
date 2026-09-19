@@ -18,8 +18,11 @@ defmodule Opus.WorkerListener do
   `assignment`, `input` and `sealed_keys`, `kill` with `execution_id`,
   `status` with nothing. The callback runs on `Opus.WorkerService`, and its
   answer is the plain `Cyfr.WorkerWire` answer: `{"ok": true}` for a
-  start or a kill, `{"ok": status}` for the status, `{"error": name}` for
-  a start that is `malformed` or a kill that finds nothing.
+  start or a kill, `{"ok": status}` for the status as
+  `Cyfr.WorkerAPI.status_to_wire/1` writes it, `{"error": name}` for a
+  start that is `malformed` or a kill that finds nothing. A start no
+  runner can take is refused `503` `unavailable`, with a `message` naming
+  why while the keeper refuses runners.
 
   Nothing a request carries is logged: a refusal is logged by its reason.
   """
@@ -155,6 +158,14 @@ defmodule Opus.WorkerListener do
 
       {:error, :unavailable} ->
         refuse(conn, 503, :unavailable)
+
+      {:error, {:unavailable, message}} ->
+        Logger.warning(
+          "[Opus.WorkerListener] #{conn.method} #{conn.request_path} refused: unavailable " <>
+            "(#{message})"
+        )
+
+        send_answer(conn, 503, WorkerWire.error(:unavailable, %{"message" => message}))
     end
   end
 
@@ -164,6 +175,7 @@ defmodule Opus.WorkerListener do
       :ok -> {:ok, true}
       {:error, :malformed} -> {:error, :malformed}
       {:error, :unavailable} -> {:error, :unavailable}
+      {:error, {:unavailable, message}} -> {:error, {:unavailable, message}}
     end
   catch
     :exit, _reason -> {:error, :unavailable}
@@ -180,19 +192,7 @@ defmodule Opus.WorkerListener do
 
   defp run(:status, args) when map_size(args) == 0 do
     {:ok, status} = Opus.WorkerService.status()
-
-    {:ok,
-     %{
-       "service" => status.service,
-       "boot" => status.boot,
-       "runners" => %{
-         "fresh" => status.runners.fresh,
-         "idle" => status.runners.idle,
-         "busy" => status.runners.busy,
-         "tainted" => status.runners.tainted
-       },
-       "attempts" => status.attempts
-     }}
+    {:ok, WorkerAPI.status_to_wire(status)}
   catch
     :exit, _reason -> {:error, :unavailable}
   end
