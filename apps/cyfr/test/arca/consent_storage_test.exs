@@ -63,12 +63,24 @@ defmodule Arca.ConsentStorageTest do
   describe "the blob digest is not optional" do
     test "a revision written without one raises rather than storing", %{athanor: athanor} do
       profile = profile!(athanor, "prof_no_digest")
-      attrs = consent_attrs(athanor, profile.id, 1) |> Map.delete(:blob_digest)
 
-      # Reject a missing blob_digest at the writer before inserting an unverifiable revision.
-      assert_raise KeyError, fn ->
-        ConsentStorage.insert_revision(attrs, [], nil)
+      # What a caller can still hand the writer: the digest it read from a
+      # commit that carries none, or an empty one. Attrs with no
+      # `blob_digest` key at all are refused where they are written — the
+      # writer takes a binary digest, and a caller that omits the key does
+      # not compile.
+      for carried <- [%{}, %{blob_digest: ""}] do
+        attrs =
+          Map.put(consent_attrs(athanor, profile.id, 1), :blob_digest, carried[:blob_digest])
+
+        assert_raise ArgumentError, ~r/require a blob_digest/, fn ->
+          ConsentStorage.insert_revision(attrs, [], nil)
+        end
       end
+
+      # Nothing unverifiable was stored, and the profile has no head.
+      assert {:error, :no_head} = ConsentStorage.get_head(athanor, profile.id)
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
     end
   end
 

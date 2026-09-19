@@ -7,6 +7,10 @@ defmodule Compendium.AutoIndexerTest.OutageAdapter do
   use Arca.Storage.TestDouble
 
   def list_recursive(_ctx, _path), do: {:error, :injected_outage}
+
+  # A listing that never answers empty leaves the double's prefix listing
+  # nothing to probe: it is the outage too.
+  def list_prefix(ctx, path), do: list_recursive(ctx, path)
 end
 
 defmodule Compendium.AutoIndexerTest do

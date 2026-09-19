@@ -32,7 +32,7 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
     {:ok, conn: conn, ctx: ctx, exec: execution}
   end
 
-  defp durable!(exec, type, data \\ %{}) do
+  defp durable!(exec, type, data) do
     {:ok, row} = Arca.ExecutionEvents.append(exec.athanor_id, exec.id, type, data: data)
     row.seq
   end

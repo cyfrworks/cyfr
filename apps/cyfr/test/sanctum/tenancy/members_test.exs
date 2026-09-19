@@ -232,7 +232,9 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       {:ok, :invited} = Members.add(other, [email: email], "system")
 
-      user = person(n)
+      # Known to the server already, under another address: the upsert
+      # below moves that same identity onto the invited one.
+      _known = person(n)
 
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
@@ -262,7 +264,9 @@ defmodule Sanctum.Tenancy.MembersTest do
          %{athanor: athanor} do
       n = System.unique_integer([:positive])
       email = "dup#{n}@example.com"
-      user = person(n)
+      # Known to the server already, under another address: the upsert
+      # below moves that same identity onto the invited one.
+      _known = person(n)
 
       {:ok, user} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
@@ -303,7 +307,8 @@ defmodule Sanctum.Tenancy.MembersTest do
       email = "unproven#{n}@example.com"
       {:ok, :invited} = Members.add(athanor, [email: email], "system")
 
-      user = person(n)
+      # Known to the server already, under a proven address of their own.
+      _known = person(n)
 
       for claim <- [nil, false] do
         {:ok, user} =

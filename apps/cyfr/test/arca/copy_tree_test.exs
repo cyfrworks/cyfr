@@ -25,6 +25,10 @@ defmodule Arca.CopyTreeTest.VanishingAdapter do
       {:ok, leaves ++ [path ++ ["ghost.txt"]]}
     end
   end
+
+  # The ghost is in every listing, so no listing is empty and the double's
+  # prefix listing has no empty prefix to probe: it is that listing.
+  def list_prefix(ctx, path), do: list_recursive(ctx, path)
 end
 
 defmodule Arca.CopyTreeTest do

@@ -145,8 +145,10 @@ defmodule Cyfr.BuilderProtocolTest do
       assert hex(MacEnvelope.derive(unhex(v["backends_key_hex"]), "cyfr-locus/v1/backends")) ==
                v["backends_request_key_hex"]
 
-      for text <- v["key_text"]["valid"],
-          do: assert({:ok, k} = BuilderProtocol.decode_key(text)) && assert(k == key())
+      for text <- v["key_text"]["valid"] do
+        assert {:ok, decoded} = BuilderProtocol.decode_key(text)
+        assert decoded == key()
+      end
 
       for text <- v["key_text"]["invalid"],
           do: assert(:error = BuilderProtocol.decode_key(text), inspect(text))
