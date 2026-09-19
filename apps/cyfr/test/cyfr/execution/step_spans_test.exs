@@ -104,6 +104,22 @@ defmodule Cyfr.Execution.StepSpansTest do
     assert drain() == []
   end
 
+  # The bench's catalyst is built reproducibly (`build.sh`): its binary and
+  # the sources it is built from are the ones its README records, so a
+  # source edit without a rebuild, or a binary from another build, fails
+  # here.
+  test "the step stub's binary and sources are the ones its README records" do
+    dir = Path.expand("../../support/test_wasm/step_stub", __DIR__)
+    readme = File.read!(Path.join(dir, "README.md"))
+
+    for name <- ["src/lib.rs", "Cargo.lock", "step_stub.wasm"] do
+      assert [_, recorded] =
+               Regex.run(~r/^#{Regex.escape(name)}\s+(sha256:[0-9a-f]{64})$/m, readme)
+
+      assert Cyfr.Digest.sha256(File.read!(Path.join(dir, name))) == recorded, name
+    end
+  end
+
   test "mix cyfr.bench.step prints each measure's percentiles and the adapters in use" do
     Mix.Tasks.Cyfr.Bench.Step.run(["--steps", "3", "--warmup", "1"])
 
