@@ -494,8 +494,10 @@ defmodule Cyfr.Execution.MCPTest do
     test "non-admin user can still run executions", %{restricted_ctx: restricted_ctx, ref: ref} do
       # The run action is open to all authenticated users. Even though execution
       # fails (math.wasm is a core module), the error should NOT be "Unauthorized".
+      # Through the dispatcher, where a permission refusal would come from: the
+      # handler alone refuses nothing on permission.
       result =
-        MCP.handle("execution", restricted_ctx, %{
+        Cyfr.Ops.Catalog.call_external("execution", restricted_ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}

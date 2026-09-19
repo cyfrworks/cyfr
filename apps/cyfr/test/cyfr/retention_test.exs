@@ -54,7 +54,7 @@ defmodule Cyfr.RetentionTest do
   describe "kinds/0" do
     test "every kind implements the behaviour, with a unique key" do
       kinds = Retention.kinds()
-      assert kinds != []
+      assert [_ | _] = kinds
 
       for kind <- kinds do
         assert is_binary(kind.key())

@@ -952,7 +952,7 @@ defmodule Cyfr.SlotsTest do
     test "every refusal has a sentence, and the execution ones read as before" do
       for reason <- [:capacity, :key_cap, :key_unreaped, :timeout, :cancelled, :unavailable] do
         sentence = Slots.refusal(reason)
-        assert is_binary(sentence) and sentence != ""
+        assert byte_size(sentence) > 0
       end
 
       assert Slots.refusal(:capacity) == "Server at maximum concurrent executions. Retry later."
