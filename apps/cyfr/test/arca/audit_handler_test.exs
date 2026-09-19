@@ -174,7 +174,7 @@ defmodule Arca.AuditHandlerTest do
   end
 
   describe "monitored events" do
-    test "a component reaching a credential is audited" do
+    test "a credential dispensed to a runner, and one a runner reports refused, are audited" do
       test_pid = self()
 
       defmodule SecretSink do
@@ -189,7 +189,7 @@ defmodule Arca.AuditHandlerTest do
 
       Application.put_env(:cyfr, :audit_sinks, [SecretSink])
 
-      for event <- [[:cyfr, :opus, :secret, :accessed], [:cyfr, :opus, :secret, :denied]] do
+      for event <- [[:cyfr, :opus, :secret, :dispensed], [:cyfr, :opus, :secret, :denied]] do
         Arca.AuditHandler.handle_event(
           event,
           %{count: 1},
@@ -201,16 +201,54 @@ defmodule Arca.AuditHandlerTest do
       end
     end
 
+    test "a secret entry reaches the sinks naming its field and its attempt, the name unredacted" do
+      test_pid = self()
+
+      defmodule FieldSink do
+        @behaviour Arca.AuditSink
+
+        @impl true
+        def handle_audit_event(%Arca.Audit.Event{} = event) do
+          send(event.metadata[:test_pid], {:event, event})
+          :ok
+        end
+      end
+
+      Application.put_env(:cyfr, :audit_sinks, [FieldSink])
+
+      identity = %{
+        test_pid: test_pid,
+        athanor_id: "ath_1",
+        user_id: "usr_1",
+        execution_id: "exec_1",
+        attempt: "att_1",
+        fence: 1,
+        component_ref: "catalyst:local.x:0.1.0",
+        consent_id: "cons_1",
+        runner: "runner_1",
+        service: "wrk_1",
+        field: "API_KEY"
+      }
+
+      for event <- [[:cyfr, :opus, :secret, :dispensed], [:cyfr, :opus, :secret, :denied]] do
+        Arca.AuditHandler.handle_event(event, %{system_time: 1}, identity, nil)
+
+        assert_receive {:event, %Arca.Audit.Event{name: ^event} = audited}
+        assert audited.athanor_id == "ath_1" and audited.user_id == "usr_1"
+        assert Map.delete(audited.metadata, :test_pid) == Map.delete(identity, :test_pid)
+      end
+    end
+
     test "the secret events are attached, not merely handled" do
       # handle_event/4 answers whatever it is handed; what matters is that
       # the roster actually subscribes to these event names.
       attached =
-        :telemetry.list_handlers([:cyfr, :opus, :secret, :accessed]) ++
+        :telemetry.list_handlers([:cyfr, :opus, :secret, :dispensed]) ++
           :telemetry.list_handlers([:cyfr, :opus, :secret, :denied])
 
       ids = Enum.map(attached, & &1.id)
 
-      assert "audit-cyfr-opus-secret-accessed" in ids
+      assert "audit-cyfr-opus-secret-dispensed" in ids
       assert "audit-cyfr-opus-secret-denied" in ids
     end
 

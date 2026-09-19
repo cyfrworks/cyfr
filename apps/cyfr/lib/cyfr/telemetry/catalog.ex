@@ -22,6 +22,18 @@ defmodule Cyfr.Telemetry.Catalog do
   - `:operator` — consciously unconsumed by shipped machinery: kept for an
     operator's own monitoring attach, or pinned by tests. The `note` says
     why it earns its place; no event is orphaned silently.
+
+  ## Emitters
+
+  Every consumer above but `:operator` attaches in the control plane's VM,
+  and telemetry does not cross a process boundary, so an event with one of
+  them is emitted by the control plane (`apps/cyfr/lib`). An event marked
+  `emitter: :worker` is emitted only inside a runner, the OS process that
+  runs a guest (`apps/opus/lib`), and is for the operator's own attach
+  there alone (`emitted_by/1`). What a runner does that the control plane
+  must know, it learns from the runner's host calls and emits itself: a
+  credential a runner is handed is audited where CYFR hands it over, and a
+  guest refused one is audited when its runner reports the refusal.
   """
 
   @catalog %{
@@ -83,8 +95,18 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:audit],
       note: "a component asked the host to dispense an OAuth token"
     },
-    [:cyfr, :opus, :secret, :accessed] => %{consumers: [:audit]},
-    [:cyfr, :opus, :secret, :denied] => %{consumers: [:audit]},
+    [:cyfr, :opus, :secret, :dispensed] => %{
+      consumers: [:audit],
+      note:
+        "a vault field of the consented projection handed to a runner at the attach that " <>
+          "claimed its attempt, by name, once per field and attempt"
+    },
+    [:cyfr, :opus, :secret, :denied] => %{
+      consumers: [:audit],
+      note:
+        "a runner reported its guest refused a vault field outside its projection, by the " <>
+          "name the guest asked for, attributed to the attempt whose call key signed the report"
+    },
 
     # ——— key rotation ———
     [:cyfr, :sanctum, :crypto_rotation, :run] => %{
@@ -116,8 +138,10 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :opus, :runtime, :authority_entered] => %{
       consumers: [:operator],
+      emitter: :worker,
       note:
-        "pinned by the authority characterization tests — every WASM entry names its authority"
+        "every WASM entry in a runner names the authority it runs under; the control plane " <>
+          "knows it from the assignment it signed"
     },
     [:cyfr, :opus, :execution_events, :broadcast_failure] => %{
       consumers: [:operator],
@@ -171,18 +195,22 @@ defmodule Cyfr.Telemetry.Catalog do
     # ——— guest activity (high-frequency observability) ———
     [:cyfr, :opus, :http, :request] => %{
       consumers: [:operator],
+      emitter: :worker,
       note: "guest egress activity; bounded and consented elsewhere, kept for operator metrics"
     },
     [:cyfr, :opus, :storage, :call] => %{
       consumers: [:operator],
+      emitter: :worker,
       note: "guest storage activity, kept for operator metrics"
     },
     [:cyfr, :opus, :mcp_tool, :call] => %{
       consumers: [:operator],
+      emitter: :worker,
       note: "guest tool-call activity, kept for operator metrics"
     },
     [:cyfr, :opus, :formula, :spawn] => %{
       consumers: [:operator],
+      emitter: :worker,
       note: "formula concurrency activity, kept for operator metrics"
     },
     [:cyfr, :opus, :emit] => %{
@@ -191,18 +219,22 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :opus, :formula, :cancel] => %{
       consumers: [:operator],
+      emitter: :worker,
       note: "formula concurrency activity, kept for operator metrics"
     },
     [:cyfr, :opus, :formula, :await] => %{
       consumers: [:operator],
+      emitter: :worker,
       note: "formula concurrency activity, kept for operator metrics"
     },
     [:cyfr, :opus, :formula, :await_any] => %{
       consumers: [:operator],
+      emitter: :worker,
       note: "formula concurrency activity, kept for operator metrics"
     },
     [:cyfr, :opus, :formula, :await_all] => %{
       consumers: [:operator],
+      emitter: :worker,
       note: "formula concurrency activity, kept for operator metrics"
     },
 
@@ -306,6 +338,18 @@ defmodule Cyfr.Telemetry.Catalog do
   @spec consumed_by(atom()) :: [[atom(), ...]]
   def consumed_by(consumer) do
     for {event, %{consumers: consumers}} <- @catalog, consumer in consumers do
+      event
+    end
+    |> Enum.sort()
+  end
+
+  @doc """
+  The events emitted by `emitter`, sorted: `:worker` for those emitted only
+  inside a runner, `:control_plane` for every other.
+  """
+  @spec emitted_by(:worker | :control_plane) :: [[atom(), ...]]
+  def emitted_by(emitter) when emitter in [:worker, :control_plane] do
+    for {event, entry} <- @catalog, Map.get(entry, :emitter, :control_plane) == emitter do
       event
     end
     |> Enum.sort()

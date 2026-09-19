@@ -24,8 +24,19 @@ defmodule Arca.AuditHandler do
   - `[:cyfr, :opus, :execute, :start]` — execution begins
   - `[:cyfr, :opus, :execute, :stop]` — execution completes
   - `[:cyfr, :opus, :execute, :exception]` — execution fails
-  - `[:cyfr, :opus, :secret, :accessed]` — a component read a credential
-  - `[:cyfr, :opus, :secret, :denied]` — a component was refused one
+  - `[:cyfr, :opus, :secret, :dispensed]` — CYFR handed a runner a vault
+    field of its run's consented projection, at the attach that claimed
+    the run's attempt: one entry per field, by name, never its value
+  - `[:cyfr, :opus, :secret, :denied]` — a runner reported its guest was
+    refused a field outside that projection, by the name the guest asked
+    for
+
+  Both carry the identity of the attempt CYFR verified (`athanor_id`,
+  `user_id`, `execution_id`, `attempt`, `fence`, `component_ref`,
+  `consent_id`, the claiming `runner`, the worker `service`) and the
+  `field`; a guest's own reads happen inside its runner, where nothing of
+  this VM's telemetry reaches, so the trail records what CYFR dispensed
+  and what a runner reported, which is what CYFR can know.
   - `[:cyfr, :sanctum, :platform_context]` — the tenant-bypassing platform
     scope was constructed
 

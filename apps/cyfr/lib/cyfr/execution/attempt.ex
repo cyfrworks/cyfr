@@ -368,12 +368,17 @@ defmodule Cyfr.Execution.Attempt do
   edge projects: an empty map when it grants none.
 
   The first attach unseals the edge while its consent is still the
-  profile's head, and marks the guest's start on the run's clock
+  profile's head, audits each field it hands over as
+  `[:cyfr, :opus, :secret, :dispensed]`, by its name and never its value,
+  under the identity this attempt was admitted with, and marks the guest's
+  start on the run's clock
   (`Cyfr.Execution.StepSpans.guest_started/1`). A selection the loader
   could not resolve, a consent that moved and an edge whose material cannot
   be produced each close the run failed as `{:setup_required, payload}`,
   which is answered. An attach by the runner already attached answers the
-  same fields; one by any other runner is `:replayed`. A caller naming
+  same fields and audits nothing again, so a runner retrying an attach
+  whose answer was lost leaves one entry per field; one by any other
+  runner is `:replayed`. A caller naming
   another attempt, fence or worker service, or an attempt that is not open,
   is `:lost`.
   """
@@ -976,10 +981,14 @@ defmodule Cyfr.Execution.Attempt do
 
   # Credentials come only from the current edge's vault resource, projected
   # by the vault reader, while the consent is still the profile's head.
+  # What is handed over is audited here, at the one attach that claims the
+  # attempt: a repeat by the same runner answers the same fields from the
+  # claim and audits nothing again.
   defp unseal(state, caller) do
     case fetch_secrets(state) do
       {:ok, secrets} ->
         StepSpans.guest_started(state.close.step_spans)
+        audit_dispensed(state, caller.runner, secrets)
         {:reply, {:ok, secrets}, %{state | claimed_by: caller.runner, secrets: secrets}}
 
       {:setup_required, reason} ->
@@ -1014,6 +1023,37 @@ defmodule Cyfr.Execution.Attempt do
     end
   rescue
     exception -> {:raised, Close.exception_message(exception, __STACKTRACE__)}
+  end
+
+  # One audit entry per field handed to the claiming runner, by its name and
+  # never its value, attributed from what this attempt was admitted with:
+  # its athanor and person, execution, attempt, fence, component and
+  # consent, with the runner that claimed it and the worker service it was
+  # dispatched to.
+  defp audit_dispensed(state, runner, secrets) do
+    for field <- secrets |> Map.keys() |> Enum.sort() do
+      :telemetry.execute(
+        [:cyfr, :opus, :secret, :dispensed],
+        %{system_time: System.system_time()},
+        Map.put(audit_identity(state, runner), :field, field)
+      )
+    end
+
+    :ok
+  end
+
+  defp audit_identity(state, runner) do
+    %{
+      athanor_id: state.ctx.athanor_id,
+      user_id: state.ctx.user_id,
+      execution_id: state.execution_id,
+      attempt: state.attempt,
+      fence: state.fence,
+      component_ref: state.component_ref,
+      consent_id: state.authority.consent_id,
+      runner: runner,
+      service: state.service_id
+    }
   end
 
   defp setup_payload(state, reason) do
@@ -1251,6 +1291,7 @@ defmodule Cyfr.Execution.Attempt do
       limits: state.limits,
       component_ref: state.component_ref,
       digest: state.digest,
+      audit: audit_identity(state, state.claimed_by),
       hold: &while_held(state, &1)
     }
   end

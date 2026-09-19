@@ -30,12 +30,15 @@ defmodule Cyfr.Execution.Dispatch do
        attempt's keys are sealed with the worker service's dispatch seal key
        (`Cyfr.WorkerAuth.seal_attempt_keys/3`), and it is started on the
        worker service (`Cyfr.Execution.WorkerClient.start/4`) with the
-       input's JSON; a run that is not started is closed failed. A start
+       input's JSON; a run that is not started is closed failed, and a
+       start the worker service refused (`{:unavailable, sentence}`: its
+       keeper starts no runner) is closed failed with the service's
+       sentence, "the execution worker refused the start: …". A start
        whose answer was lost after the worker service may have acted is
        reconciled against the attempt, never dispatched again: a runner
        that attached keeps the run, and a run no runner attached to is
-       closed failed (a runner attaching after that finds no attempt and
-       stops);
+       closed failed as "the execution worker did not answer the start"
+       (a runner attaching after that finds no attempt and stops);
     5. the waiter waits for the attempt to close the run (`await/2`) and
        answers what the close recorded.
 
@@ -371,6 +374,11 @@ defmodule Cyfr.Execution.Dispatch do
     else
       {:signed, {:error, reason}} ->
         refuse(admitted, "the execution assignment could not be signed", reason)
+
+      # The worker service refused the start and started nothing: its
+      # sentence is the run's failure, and there is nothing to reconcile.
+      {:error, {:unavailable, sentence}} ->
+        refuse(admitted, "the execution worker refused the start: " <> sentence, :unavailable)
 
       {:error, :lost} ->
         case Attempt.refuse(admitted.attempt, "the execution worker did not answer the start") do

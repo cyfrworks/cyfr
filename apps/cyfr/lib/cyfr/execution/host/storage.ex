@@ -30,8 +30,13 @@ defmodule Cyfr.Execution.Host.Storage do
   own component; any other digest, and bytes the store does not hold or
   that do not match it, are `not_found`. `record_denial` records a
   policy-driven egress denial of the attempt's component
-  (`Sanctum.Policy.Enforcement.record/1`) and ignores any other refusal
-  type.
+  (`Sanctum.Policy.Enforcement.record/1`), audits a `secret_denied` one as
+  `[:cyfr, :opus, :secret, :denied]` with the field name its guest asked
+  for, and ignores any other refusal type. A denial is attributed to the
+  attempt the call was checked against, under the identity it was
+  admitted with, whatever the runner sent; a `secret_denied` whose name is
+  no field name (`Cyfr.HostAPI.valid_field_name?/1`) is `lost` and
+  audits nothing.
   """
 
   require Logger
@@ -72,7 +77,9 @@ defmodule Cyfr.Execution.Host.Storage do
   @typedoc """
   What the attempt runs an operation with: its guest-plane context, its
   admission context, its authority, its node's limits, its component's
-  reference and digest, and its hold on its row
+  reference and digest, the identity an audit entry of it carries (its
+  athanor and person, execution, attempt, fence, component, consent,
+  claiming runner and worker service) and its hold on its row
   (`t:Cyfr.Execution.GuestStorage.hold/0`).
   """
   @type attempt :: %{
@@ -82,6 +89,7 @@ defmodule Cyfr.Execution.Host.Storage do
           limits: Cyfr.Limits.t() | nil,
           component_ref: String.t(),
           digest: String.t() | nil,
+          audit: map(),
           hold: GuestStorage.hold()
         }
 
@@ -98,6 +106,12 @@ defmodule Cyfr.Execution.Host.Storage do
 
   def operation("fetch_artifact", %{"digest" => digest}) when is_binary(digest),
     do: {:ok, {:fetch_artifact, digest}}
+
+  def operation("record_denial", %{"type" => "secret_denied", "message" => name}) do
+    if Cyfr.HostAPI.valid_field_name?(name),
+      do: {:ok, {:record_denial, %{type: "secret_denied", message: name}}},
+      else: {:error, :lost}
+  end
 
   def operation("record_denial", %{"type" => type, "message" => message})
       when is_binary(type) and is_binary(message),
@@ -140,6 +154,14 @@ defmodule Cyfr.Execution.Host.Storage do
     )
 
     {:error, :not_found}
+  end
+
+  def run({:record_denial, %{type: "secret_denied", message: name}}, attempt) do
+    :telemetry.execute(
+      [:cyfr, :opus, :secret, :denied],
+      %{system_time: System.system_time()},
+      Map.put(attempt.audit, :field, name)
+    )
   end
 
   def run({:record_denial, %{type: type, message: message}}, attempt) do

@@ -242,8 +242,10 @@ defmodule Opus.HostClient do
   end
 
   @doc """
-  Record a refusal of the runner's own egress checks for the attempt's
-  component: its WIT error `type` and `message`.
+  Record a refusal the runner made for the attempt's component: one of its
+  own egress checks, by its WIT error `type` and `message`, or
+  `secret_denied` with the vault field name the guest was refused
+  (`Cyfr.HostAPI.valid_field_name?/1`), which CYFR audits for this attempt.
   """
   @spec record_denial(t(), String.t(), String.t()) :: :ok | {:error, term()}
   def record_denial(%__MODULE__{} = client, type, message)

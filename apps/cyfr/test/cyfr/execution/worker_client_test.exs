@@ -7,7 +7,9 @@ defmodule Cyfr.Execution.WorkerClientTest do
   addresses, over the body it sends, and answers what that service
   answers. A lost answer is retried once for `kill` and `status` and never
   for `start`; a worker service that cannot be reached, or whose configured
-  id no key derives over, is unavailable and nothing is sent.
+  id no key derives over, is unavailable and nothing is sent. A start the
+  service refuses `503` `unavailable` with a refusal's sentence is that
+  refusal, carrying the sentence; any other `503` is a lost answer.
   """
 
   use ExUnit.Case, async: false
@@ -225,6 +227,50 @@ defmodule Cyfr.Execution.WorkerClientTest do
     assert_receive {:request, "/worker/v1/kill", _, _}
 
     assert {:error, :lost} = WorkerClient.status(endpoint)
+  end
+
+  test "a start the service refuses 503 with its sentence is its refusal, answered once" do
+    sentence =
+      "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: " <>
+        "start the opus service with the security option writable-cgroups=true"
+
+    endpoint =
+      serve!(%{
+        WorkerWire.worker_route(:start) =>
+          {503, WorkerWire.error(:unavailable, %{"message" => sentence})},
+        WorkerWire.worker_route(:kill) =>
+          {503, WorkerWire.error(:unavailable, %{"message" => sentence})},
+        WorkerWire.worker_route(:status) =>
+          {503, WorkerWire.error(:unavailable, %{"message" => sentence})}
+      })
+
+    assert {:error, {:unavailable, ^sentence}} =
+             WorkerClient.start(endpoint, "token", "{}", "sealed")
+
+    assert_receive {:request, "/worker/v1/start", {:ok, _}, _}
+    refute_receive {:request, "/worker/v1/start", _, _}
+
+    # Only a start's refusal names why; any other callback's 503 is lost.
+    assert {:error, :lost} = WorkerClient.kill(endpoint, "exec_1")
+    assert {:error, :lost} = WorkerClient.status(endpoint)
+  end
+
+  test "a 503 without a refusal's sentence is a lost start" do
+    for answer <- [
+          {503, WorkerWire.error(:unavailable)},
+          {503, WorkerWire.error(:malformed, %{"message" => "a sentence"})},
+          {503, WorkerWire.error(:unavailable, %{"message" => ""})},
+          {503, WorkerWire.error(:unavailable, %{"message" => "line\nbreak"})},
+          {503, WorkerWire.error(:unavailable, %{"message" => String.duplicate("x", 1025)})},
+          {503, WorkerWire.error(:unavailable, %{"message" => 42})},
+          {502, WorkerWire.error(:unavailable, %{"message" => "a sentence"})},
+          :lost
+        ] do
+      endpoint = serve!(%{WorkerWire.worker_route(:start) => answer})
+
+      assert {:error, :lost} = WorkerClient.start(endpoint, "token", "{}", "sealed"),
+             inspect(answer)
+    end
   end
 
   test "a worker service that cannot be reached is unavailable" do

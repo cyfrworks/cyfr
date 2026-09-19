@@ -33,7 +33,8 @@ defmodule Cyfr.Execution.Host do
        generation, it is addressed to the header's worker service and
        boot, and the attempt row is claimed for the header's runner
        (`Arca.ExecutionAttempts.claim/4`). The attempt then unseals the
-       run's vault edge (`Cyfr.Execution.Attempt.attach/2`).
+       run's vault edge and audits each field it hands over, once, at the
+       attach that claims it (`Cyfr.Execution.Attempt.attach/2`).
     3. `renew`: each named attempt's lease is renewed by one update
        predicated on the header's runner holding it on the header's
        service and boot (`Arca.ExecutionAttempts.renew_held/3`), the

@@ -69,6 +69,8 @@ defmodule Cyfr.HostAPI do
 
   @child_key ~r/\A[A-Za-z0-9_-]{1,128}\z/
 
+  @max_field_name_bytes 256
+
   @callbacks [
     :attach,
     :renew,
@@ -115,6 +117,20 @@ defmodule Cyfr.HostAPI do
   @spec valid_child_key?(term()) :: boolean()
   def valid_child_key?(key) when is_binary(key), do: Regex.match?(@child_key, key)
   def valid_child_key?(_key), do: false
+
+  @doc """
+  Whether `name` is a field name a `c:record_denial/2` of type
+  `secret_denied` may carry: 1 to 256 bytes of UTF-8 without a control
+  character. The name is the guest's, so a runner reports no other, and
+  CYFR records no other.
+  """
+  @spec valid_field_name?(term()) :: boolean()
+  def valid_field_name?(name) when is_binary(name) do
+    byte_size(name) in 1..@max_field_name_bytes and String.valid?(name) and
+      not String.match?(name, ~r/[\x00-\x1F\x7F]/)
+  end
+
+  def valid_field_name?(_name), do: false
 
   @doc """
   How long a client waits for `callback`'s answer, in milliseconds, before
@@ -306,7 +322,14 @@ defmodule Cyfr.HostAPI do
   @callback tool_call(caller(), name :: String.t(), args :: map(), guest_fn :: :call | :spawn) ::
               {:ok, term()} | {:error, refusal() | guest_error()}
 
-  @doc "Record a denial the runner's own egress checks made for the caller's component."
+  @doc """
+  Record a denial the runner made for the caller's component, as `attrs`'
+  `type` and `message`: a refusal of the runner's own egress checks, by
+  its WIT error type and sentence, or `secret_denied`, whose message is the
+  vault field name the guest asked for outside its consented projection
+  (`valid_field_name?/1`), which CYFR audits for the caller's attempt. A
+  `secret_denied` naming anything else is `:lost`.
+  """
   @callback record_denial(caller(), attrs :: map()) :: :ok | {:error, refusal()}
 
   @doc """
