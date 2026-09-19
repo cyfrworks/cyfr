@@ -33,6 +33,16 @@ defmodule Cyfr.Execution.WorkerClient do
   `Cyfr.WorkerAPI.retry/1` allows it (`kill` and `status`), never for
   `start`: its assignment's claim window bounds the worker service, and
   dispatch reconciles against the attempt.
+
+  One listener refusal is an answer: a `start` refused `503`
+  `{"error": "unavailable", "message": sentence}`, the worker service's
+  account of why no runner can take it (its keeper refuses runners,
+  `t:Cyfr.WorkerAPI.refusal/0`), is `{:error, {:unavailable, sentence}}`,
+  since the service answers it only once it has decided to start nothing.
+  A `503` without a sentence, or with one that is not a refusal's (1 to
+  1024 bytes of UTF-8 without a control character), stays lost: the
+  listener answers it too when its call into the service timed out, after
+  which the service may still start the run.
   """
 
   alias Cyfr.{HostAPI, WorkerAPI, WorkerAuth, WorkerWire}
@@ -53,16 +63,22 @@ defmodule Cyfr.Execution.WorkerClient do
     "not_found" => :not_found
   }
 
+  # The bound of a worker's refusal sentence (`t:Cyfr.WorkerAPI.refusal/0`).
+  @max_refusal_bytes 1024
+
   @typedoc "What the transport itself answers when the worker service did not."
   @type transport_refusal :: :lost | :unavailable
 
   @doc """
   Start an assignment on `endpoint` (`c:Cyfr.WorkerAPI.start/3`): `input`
   is the execution's input bytes and `sealed_keys` the attempt's keys
-  sealed for that worker service.
+  sealed for that worker service. `{:error, {:unavailable, sentence}}` is
+  the worker service's refusal of the start: it started nothing, and
+  `sentence` says why.
   """
   @spec start(WorkerAPI.endpoint(), Cyfr.Assignment.token(), binary(), String.t()) ::
-          :ok | {:error, :malformed | transport_refusal() | atom()}
+          :ok
+          | {:error, :malformed | {:unavailable, String.t()} | transport_refusal() | atom()}
   def start(%{id: id, url: url} = endpoint, token, input, sealed_keys)
       when is_binary(id) and is_binary(url) and is_binary(token) and is_binary(input) and
              is_binary(sealed_keys) do
@@ -171,6 +187,9 @@ defmodule Cyfr.Execution.WorkerClient do
          {:ok, raw} <- Cyfr.BoundedBody.read(resp, max_bytes) do
       answer(raw)
     else
+      {:ok, %Req.Response{status: 503} = resp} when callback == :start ->
+        refused_start(resp, max_bytes)
+
       {:ok, %Req.Response{}} ->
         {:error, :lost}
 
@@ -191,6 +210,23 @@ defmodule Cyfr.Execution.WorkerClient do
       {:ok, %{"error" => name}} when is_map_key(@refusals, name) -> {:error, @refusals[name]}
       _unreadable -> {:error, :lost}
     end
+  end
+
+  # The worker service's refusal of a start, with the sentence it names;
+  # any other 503 is no answer of the service's.
+  defp refused_start(resp, max_bytes) do
+    with {:ok, raw} <- Cyfr.BoundedBody.read(resp, max_bytes),
+         {:ok, %{"error" => "unavailable", "message" => sentence}} <- Jason.decode(raw),
+         true <- refusal_sentence?(sentence) do
+      {:error, {:unavailable, sentence}}
+    else
+      _ -> {:error, :lost}
+    end
+  end
+
+  defp refusal_sentence?(sentence) do
+    is_binary(sentence) and byte_size(sentence) in 1..@max_refusal_bytes and
+      String.valid?(sentence) and not String.match?(sentence, ~r/[\x00-\x1F\x7F]/)
   end
 
   defp dispatch_key(service) do
