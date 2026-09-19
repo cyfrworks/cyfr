@@ -270,8 +270,9 @@ defmodule Opus.SpawnKeeperTest do
              Base.decode16!(end_frame["encoded_hex"], case: :lower)
   end
 
-  # This client asks for no memory bound: the report every `exited` carries
-  # is understood, and the runner's end reaches its handle as its signal.
+  # This client asks for the pool's memory bound on every spawn: the report
+  # every `exited` carries is understood, and the runner's end reaches its
+  # handle as its signal.
   @tag skip:
          if(File.exists?(@vectors),
            do: false,
@@ -300,7 +301,7 @@ defmodule Opus.SpawnKeeperTest do
 
     handle = start_handle!(name)
     %{"id" => id, "attach" => %{"token" => token}} = sent = request(spawner)
-    refute Map.has_key?(sent, "memory_bytes")
+    assert {:ok, sent["memory_bytes"]} == Opus.Settings.runner_memory_bytes([])
     reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
     relay = attach!(dir, token)
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000

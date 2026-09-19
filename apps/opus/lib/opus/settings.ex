@@ -17,15 +17,33 @@ defmodule Opus.Settings do
   `:direct`, a launcher of plain OS processes for a machine without a
   keeper; or `:local`, subtrees run in the service's own BEAM, which the
   umbrella test environment uses so a test can hold a guest in its own
-  process), and where the keeper's relays attach (`:attach_dir`,
-  `/run/opus`). Unset, the keeper follows the environment: `:spawn` when
-  `CYFR_SPAWN_CHANNEL` names an inherited channel, `:direct` otherwise; set,
-  it is checked against that environment when the pool starts
-  (`Opus.Keeper`). The `:local` keeper is compiled in under the test
-  environment alone (`keepers/0`): a release knows two keepers and refuses
-  the third whatever its configuration says. A value that is not a
-  positive integer, or a keeper that is not one of the known ones, refuses
-  the boot with the key named.
+  process), where the keeper's relays attach (`:attach_dir`,
+  `/run/opus`), and the memory bound of every runner `cyfr-spawn` starts
+  (`:runner_memory_bytes`, 384 MiB). Unset, the keeper follows the
+  environment: `:spawn` when `CYFR_SPAWN_CHANNEL` names an inherited
+  channel, `:direct` otherwise; set, it is checked against that
+  environment when the pool starts (`Opus.Keeper`). The `:local` keeper is
+  compiled in under the test environment alone (`keepers/0`): a release
+  knows two keepers and refuses the third whatever its configuration says.
+  A value that is not a positive integer, or a keeper that is not one of
+  the known ones, refuses the boot with the key named.
+
+  `:runner_memory_bytes` is what `Opus.Keeper.Spawn` asks `cyfr-spawn` to
+  hold each runner to (`runner_memory_bytes/1`): a cgroup of the runner's
+  own at that many bytes for its VM, every guest's linear memory, the
+  pages of its home and the kernel memory charged to it, together. A
+  runner that reaches it is killed whole by the kernel and never reused.
+  Its range is the keeper's own for a spawn's `memory_bytes`, 16 MiB to
+  1 TiB, so a value accepted here is never refused there; a value outside
+  it, or not an integer, refuses the boot. There is no value that asks
+  for no bound. The `:direct` keeper applies none: it has no cgroup to
+  give a runner. The default is 1.8 times the largest peak of a runner
+  under the seed components, rounded up (`tests/worker-image/memory.py
+  --measure` repeats the measurement). The runner's own VM is most of
+  that peak, so the default leaves a subtree's guests room for two or
+  three at the default 64 MiB of linear memory at once, not for one at
+  the platform ceiling's 256 MiB: a deployment that consents to more
+  raises this bound with it.
 
   The runner role reads its settings from the process environment alone
   (`runner/1`): the service passed exactly these through the keeper's
@@ -47,12 +65,17 @@ defmodule Opus.Settings do
   @keepers if Mix.env() == :test, do: [:spawn, :direct, :local], else: [:spawn, :direct]
   @channel_env "CYFR_SPAWN_CHANNEL"
 
+  # cyfr-spawn's range for a spawn's `memory_bytes`
+  # (`apps/spawn/internal/protocol`: MinMemoryBytes, MaxMemoryBytes).
+  @runner_memory_range 16_777_216..1_099_511_627_776
+
   @pool_defaults %{
     pool_size: 4,
     idle_ttl_ms: 30_000,
     watchdog_grace_ms: 5_000,
     release_grace_ms: 2_000,
-    attach_dir: "/run/opus"
+    attach_dir: "/run/opus",
+    runner_memory_bytes: 402_653_184
   }
 
   @typedoc "The service role's pool settings."
@@ -62,7 +85,8 @@ defmodule Opus.Settings do
           watchdog_grace_ms: pos_integer(),
           release_grace_ms: pos_integer(),
           keeper: :spawn | :direct | :local,
-          attach_dir: String.t()
+          attach_dir: String.t(),
+          runner_memory_bytes: pos_integer()
         }
 
   @typedoc "The runner role's settings, as its environment spells them."
@@ -108,7 +132,8 @@ defmodule Opus.Settings do
          {:ok, watchdog} <- positive(env, :watchdog_grace_ms),
          {:ok, release} <- positive(env, :release_grace_ms),
          {:ok, keeper} <- keeper(Keyword.get(env, :keeper), system),
-         {:ok, attach_dir} <- attach_dir(Keyword.get(env, :attach_dir)) do
+         {:ok, attach_dir} <- attach_dir(Keyword.get(env, :attach_dir)),
+         {:ok, memory_bytes} <- runner_memory_bytes(env) do
       {:ok,
        %{
          pool_size: size,
@@ -116,10 +141,30 @@ defmodule Opus.Settings do
          watchdog_grace_ms: watchdog,
          release_grace_ms: release,
          keeper: keeper,
-         attach_dir: attach_dir
+         attach_dir: attach_dir,
+         runner_memory_bytes: memory_bytes
        }}
     end
   end
+
+  @doc """
+  The memory bound `env` (the `:opus` application environment) gives
+  every runner `cyfr-spawn` starts: its `:runner_memory_bytes`, or the
+  default when unset. A value that is not an integer from 16 MiB to 1 TiB
+  refuses.
+  """
+  @spec runner_memory_bytes(keyword()) ::
+          {:ok, pos_integer()} | {:error, {:malformed, :runner_memory_bytes}}
+  def runner_memory_bytes(env) when is_list(env) do
+    case Keyword.get(env, :runner_memory_bytes, @pool_defaults.runner_memory_bytes) do
+      bytes when is_integer(bytes) and bytes in @runner_memory_range -> {:ok, bytes}
+      _ -> {:error, {:malformed, :runner_memory_bytes}}
+    end
+  end
+
+  @doc "The least and the most a runner's memory bound may be, in bytes: `cyfr-spawn`'s range."
+  @spec runner_memory_range() :: Range.t()
+  def runner_memory_range, do: @runner_memory_range
 
   @doc "`pool/0`, raising on a value that refuses so the boot stops there."
   @spec pool!() :: pool()
@@ -283,6 +328,12 @@ defmodule Opus.Settings do
 
   def expected(:keeper), do: "one of #{Enum.map_join(@keepers, ", ", &inspect/1)}"
   def expected(:attach_dir), do: "a clean absolute directory path"
+
+  def expected(:runner_memory_bytes) do
+    first..last//1 = @runner_memory_range
+    "a whole number of bytes from #{first} (16 MiB) to #{last} (1 TiB)"
+  end
+
   def expected("OPUS_RUNNER_ID"), do: "1 to 256 bytes of printable ASCII without spaces"
   def expected("OPUS_BOOT_ID"), do: "1 to 256 bytes of printable ASCII without spaces"
   def expected("OPUS_SERVICE_ID"), do: Opus.Credentials.expected(:service_id)

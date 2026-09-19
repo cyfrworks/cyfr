@@ -41,6 +41,27 @@ defmodule Opus.Keeper.Spawn do
   and is exiting: every runner's owner hears `{:error, :channel_lost}`
   and this process stops, taking the pool and the service with it.
 
+  ## The memory bound
+
+  Every spawn this client asks for carries `memory_bytes`, the pool's
+  `:runner_memory_bytes` (`Opus.Settings.runner_memory_bytes/1`), or the
+  `:memory_bytes` it was started with; nothing asks for none. `cyfr-spawn`
+  gives the runner a cgroup of its own at that bound: its VM, every
+  guest's linear memory, the pages of its home and the kernel memory
+  charged to it, together. A runner that cannot stay under it loses every
+  process at once; the leader's `exited` then says `memory_exceeded`,
+  read by `cyfr-spawn` from the group's own counters, and this client
+  logs the runner's end at its bound before its owner hears the exit and
+  the retirement that follow, as for any other runner's end: the pool
+  taints it, the service reports it with the subtree it held, and its uid
+  is retired and scrubbed before another runner gets it. Where
+  `cyfr-spawn` cannot give a runner such a group it refuses the spawn as
+  `memory_unavailable`, which the owner hears as
+  `{:error, :memory_unavailable}`, and this client logs what the
+  deployment lacks: the container needs the `writable-cgroups=true`
+  security option (Docker Engine 28 or later on a cgroup v2 host). No
+  runner is started without its bound instead.
+
   ## arca:bypass-ok=D — entire module
 
   The only paths are the attach directory and the attach socket inside
@@ -74,13 +95,19 @@ defmodule Opus.Keeper.Spawn do
   @channel_send_timeout_ms 30_000
   @stats_timeout_ms 5_000
 
+  @memory_unavailable "cyfr-spawn cannot bound a runner's memory in this container, so it " <>
+                        "starts none: start the opus service with the security option " <>
+                        "writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
+
   @impl Opus.Keeper
   def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
 
   @doc """
   Start the client. Options: `:channel`, a connected `:socket` to use in
   place of fd 3; `:attach_dir`, a directory only the service's user can
-  enter; `:name` (default `#{inspect(__MODULE__)}`).
+  enter; `:memory_bytes`, the bound every runner is spawned with in place
+  of the pool's `:runner_memory_bytes`, in the same range and never none;
+  `:name` (default `#{inspect(__MODULE__)}`).
   """
   def start_link(opts \\ []),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -104,8 +131,8 @@ defmodule Opus.Keeper.Spawn do
   end
 
   @impl Opus.Keeper
-  def spawn(%{runner: _runner, argv: argv, env: env} = spec) do
-    case GenServer.call(server(spec), {:spawn, argv, env, self()}, @start_timeout_ms) do
+  def spawn(%{runner: runner, argv: argv, env: env} = spec) do
+    case GenServer.call(server(spec), {:spawn, runner, argv, env, self()}, @start_timeout_ms) do
       {:ok, ref} -> {:ok, %{ref: ref, server: server(spec)}, []}
       {:error, reason} -> {:error, reason}
     end
@@ -156,7 +183,8 @@ defmodule Opus.Keeper.Spawn do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
-    with {:ok, channel} <- open_channel(opts),
+    with {:ok, memory_bytes} <- memory_bytes(opts),
+         {:ok, channel} <- open_channel(opts),
          {:ok, listener, path} <- listen(Keyword.fetch!(opts, :attach_dir)) do
       server = self()
 
@@ -165,6 +193,8 @@ defmodule Opus.Keeper.Spawn do
          channel: channel,
          listener: listener,
          attach_path: path,
+         memory_bytes: memory_bytes,
+         bound_refused: false,
          reader: spawn_link(fn -> read_channel(channel, server) end),
          acceptor: spawn_link(fn -> accept(listener, server) end),
          buffer: "",
@@ -179,6 +209,19 @@ defmodule Opus.Keeper.Spawn do
     else
       {:error, reason} -> {:stop, {:keeper_unavailable, reason}}
     end
+  end
+
+  # The bound every spawn carries: the one the client was started with, or
+  # the pool's setting; a malformed one stops the client, and the pool and
+  # service with it, rather than start a runner without it.
+  defp memory_bytes(opts) do
+    env =
+      case Keyword.fetch(opts, :memory_bytes) do
+        {:ok, bytes} -> [runner_memory_bytes: bytes]
+        :error -> Application.get_all_env(:opus)
+      end
+
+    Opus.Settings.runner_memory_bytes(env)
   end
 
   defp open_channel(opts) do
@@ -270,7 +313,7 @@ defmodule Opus.Keeper.Spawn do
   end
 
   @impl GenServer
-  def handle_call({:spawn, argv, env, owner}, _from, state) do
+  def handle_call({:spawn, runner, argv, env, owner}, _from, state) do
     id = Integer.to_string(state.next_id + 1)
     token = 32 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower)
 
@@ -281,6 +324,7 @@ defmodule Opus.Keeper.Spawn do
       pool: @pool,
       argv: argv,
       env: env,
+      memory_bytes: state.memory_bytes,
       control: true,
       attach: %{path: state.attach_path, token: token}
     }
@@ -292,6 +336,7 @@ defmodule Opus.Keeper.Spawn do
       entry = %{
         owner: owner,
         monitor: Process.monitor(owner),
+        runner: runner,
         id: id,
         token: token,
         spawn_id: nil,
@@ -454,7 +499,7 @@ defmodule Opus.Keeper.Spawn do
   defp on_message(%{"type" => "spawned", "id" => id, "spawn_id" => spawn_id} = m, state) do
     with_request(state, state.ids[id], fn ref, entry ->
       notify(entry, ref, {:spawned, m["pid"]})
-      state = %{state | spawns: Map.put(state.spawns, spawn_id, ref)}
+      state = %{state | spawns: Map.put(state.spawns, spawn_id, ref), bound_refused: false}
       state = put_entry(state, ref, %{entry | spawn_id: spawn_id})
 
       case entry.release_on_spawn do
@@ -468,7 +513,8 @@ defmodule Opus.Keeper.Spawn do
     case Map.pop(state.stats, id) do
       {nil, _stats} ->
         with_request(state, state.ids[id], fn ref, entry ->
-          notify(entry, ref, {:error, code})
+          state = refused(state, entry, code)
+          notify(entry, ref, {:error, refusal(code)})
           drop(state, ref)
         end)
 
@@ -485,6 +531,16 @@ defmodule Opus.Keeper.Spawn do
   defp on_message(%{"type" => "exited", "spawn_id" => spawn_id} = m, state) do
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
       exit = if m["signal"], do: {:signal, m["signal"]}, else: {:status, m["code"]}
+
+      # cyfr-spawn read it from the group's own counters: the kernel killed
+      # the runner at its bound, not for the container's limit.
+      if m["memory_exceeded"] == true do
+        Logger.warning(
+          "[Opus.Keeper.Spawn] runner #{entry.runner} was ended at its memory bound of " <>
+            "#{state.memory_bytes} bytes (spawn #{spawn_id}, #{format_exit(exit)})"
+        )
+      end
+
       notify(entry, ref, {:exited, exit})
       state
     end)
@@ -516,6 +572,26 @@ defmodule Opus.Keeper.Spawn do
       drop(state, ref)
     end)
   end
+
+  # A spawn refused because its bound cannot be enforced here is typed;
+  # every other refusal is the keeper's code as it sent it.
+  defp refusal("memory_unavailable"), do: :memory_unavailable
+  defp refusal(code), do: code
+
+  # What the deployment lacks is logged once for each run of refusals; a
+  # runner spawned again under its bound ends the run.
+  defp refused(%{bound_refused: false} = state, entry, "memory_unavailable") do
+    Logger.error(
+      "[Opus.Keeper.Spawn] runner #{entry.runner} was not started: #{@memory_unavailable}"
+    )
+
+    %{state | bound_refused: true}
+  end
+
+  defp refused(state, _entry, _code), do: state
+
+  defp format_exit({:signal, signal}), do: "signal #{signal}"
+  defp format_exit({:status, code}), do: "status #{code}"
 
   # ————— a relay's frames —————
 
