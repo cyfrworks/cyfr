@@ -272,10 +272,19 @@ defmodule Compendium.Builds.Client do
       # Seen only by a caller that traps exits: the request's process ended
       # without an answer.
       {:exit, reason} ->
-        Logger.error("[Compendium.Builds.Client] the build request exited: #{inspect(reason)}")
+        Logger.error("[Compendium.Builds.Client] the build request exited: #{exit_kind(reason)}")
         {:error, :disconnected}
     end
   end
+
+  # An exit carries what it ended, and the request's process holds the
+  # tenant's sources and the signed header: only the exit's kind is logged.
+  defp exit_kind({%{__exception__: true, __struct__: exception}, _stacktrace}),
+    do: inspect(exception)
+
+  defp exit_kind({kind, _detail}) when is_atom(kind), do: Atom.to_string(kind)
+  defp exit_kind(kind) when is_atom(kind), do: Atom.to_string(kind)
+  defp exit_kind(_reason), do: "an exit of another shape"
 
   # ---------------------------------------------------------------------------
   # The answer, a line at a time
