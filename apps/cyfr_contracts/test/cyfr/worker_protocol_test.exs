@@ -116,6 +116,57 @@ defmodule Cyfr.WorkerProtocolTest do
     assert WorkerAPI.request_timeout_ms(:status) == 5_000
   end
 
+  test "a refusal's sentence is 1 to 1024 bytes of UTF-8 without a control character, and a status carries no other" do
+    for sentence <- [
+          "writable-cgroups=true is missing",
+          "x",
+          String.duplicate("x", 1024),
+          String.duplicate("é", 512),
+          "a sentence — with a dash"
+        ] do
+      assert WorkerAPI.valid_refusal_message?(sentence), inspect(sentence)
+    end
+
+    for sentence <- [
+          "",
+          String.duplicate("x", 1025),
+          String.duplicate("é", 513),
+          "line\nbreak",
+          "tab\there",
+          "nul\0byte",
+          "delete\x7F",
+          <<0xFF, 0xFE>>,
+          nil,
+          42,
+          :sentence,
+          ["a sentence"]
+        ] do
+      refute WorkerAPI.valid_refusal_message?(sentence), inspect(sentence)
+    end
+
+    status = %{
+      service: "wrk_4f3c2a1e9d8b7c6a",
+      boot: "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+      runners: %{fresh: 0, idle: 0, busy: 0, tainted: 0},
+      attempts: [],
+      memory_bytes: 402_653_184,
+      refusal: nil
+    }
+
+    for message <- [
+          "writable-cgroups=true is missing",
+          "",
+          "line\nbreak",
+          String.duplicate("x", 1025)
+        ] do
+      assert WorkerAPI.valid_status?(%{
+               status
+               | refusal: %{reason: "memory_unavailable", message: message}
+             }) == WorkerAPI.valid_refusal_message?(message),
+             inspect(message)
+    end
+  end
+
   describe "the status vectors" do
     @status_vectors Path.expand("../../../../tests/fixtures/worker_auth.json", __DIR__)
                     |> File.read!()

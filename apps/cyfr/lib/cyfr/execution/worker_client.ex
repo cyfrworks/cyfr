@@ -39,10 +39,10 @@ defmodule Cyfr.Execution.WorkerClient do
   account of why no runner can take it (its keeper refuses runners,
   `t:Cyfr.WorkerAPI.refusal/0`), is `{:error, {:unavailable, sentence}}`,
   since the service answers it only once it has decided to start nothing.
-  A `503` without a sentence, or with one that is not a refusal's (1 to
-  1024 bytes of UTF-8 without a control character), stays lost: the
-  listener answers it too when its call into the service timed out, after
-  which the service may still start the run.
+  A `503` without a sentence, or with one that is not a refusal's
+  (`Cyfr.WorkerAPI.valid_refusal_message?/1`), stays lost: the listener
+  answers it too when its call into the service timed out, after which the
+  service may still start the run.
   """
 
   alias Cyfr.{HostAPI, WorkerAPI, WorkerAuth, WorkerWire}
@@ -62,9 +62,6 @@ defmodule Cyfr.Execution.WorkerClient do
     "claim_expired" => :claim_expired,
     "not_found" => :not_found
   }
-
-  # The bound of a worker's refusal sentence (`t:Cyfr.WorkerAPI.refusal/0`).
-  @max_refusal_bytes 1024
 
   @typedoc "What the transport itself answers when the worker service did not."
   @type transport_refusal :: :lost | :unavailable
@@ -217,16 +214,11 @@ defmodule Cyfr.Execution.WorkerClient do
   defp refused_start(resp, max_bytes) do
     with {:ok, raw} <- Cyfr.BoundedBody.read(resp, max_bytes),
          {:ok, %{"error" => "unavailable", "message" => sentence}} <- Jason.decode(raw),
-         true <- refusal_sentence?(sentence) do
+         true <- WorkerAPI.valid_refusal_message?(sentence) do
       {:error, {:unavailable, sentence}}
     else
       _ -> {:error, :lost}
     end
-  end
-
-  defp refusal_sentence?(sentence) do
-    is_binary(sentence) and byte_size(sentence) in 1..@max_refusal_bytes and
-      String.valid?(sentence) and not String.match?(sentence, ~r/[\x00-\x1F\x7F]/)
   end
 
   defp dispatch_key(service) do

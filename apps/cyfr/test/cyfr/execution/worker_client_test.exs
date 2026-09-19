@@ -15,7 +15,7 @@ defmodule Cyfr.Execution.WorkerClientTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Execution.{Keys, WorkerClient}
-  alias Cyfr.{WorkerAuth, WorkerWire}
+  alias Cyfr.{WorkerAPI, WorkerAuth, WorkerWire}
 
   @service "wrk_client_test"
 
@@ -253,6 +253,30 @@ defmodule Cyfr.Execution.WorkerClientTest do
     # Only a start's refusal names why; any other callback's 503 is lost.
     assert {:error, :lost} = WorkerClient.kill(endpoint, "exec_1")
     assert {:error, :lost} = WorkerClient.status(endpoint)
+  end
+
+  test "a start's 503 is a refusal exactly when the contract accepts its sentence" do
+    for sentence <- [
+          String.duplicate("x", 1024),
+          String.duplicate("é", 512),
+          String.duplicate("é", 513),
+          "tab\there",
+          "delete\x7F",
+          "a sentence"
+        ] do
+      endpoint =
+        serve!(%{
+          WorkerWire.worker_route(:start) =>
+            {503, WorkerWire.error(:unavailable, %{"message" => sentence})}
+        })
+
+      expected =
+        if WorkerAPI.valid_refusal_message?(sentence),
+          do: {:error, {:unavailable, sentence}},
+          else: {:error, :lost}
+
+      assert WorkerClient.start(endpoint, "token", "{}", "sealed") == expected, inspect(sentence)
+    end
   end
 
   test "a 503 without a refusal's sentence is a lost start" do

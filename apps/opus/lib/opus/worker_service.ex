@@ -42,9 +42,13 @@ defmodule Opus.WorkerService do
   `start` no runner can be found for answers `{:error, :unavailable}`,
   and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
   with the keeper's account of why; the listener refuses either `503`,
-  naming the sentence, so CYFR reconciles against the claim. Its status
-  counts the pool's runners and carries the bound its keeper holds each
-  to and the keeper's refusal (`Opus.RunnerPool.status/1`).
+  the second naming the sentence. CYFR reads a `503` naming a sentence as
+  a definite refusal and closes the run failed with it; one naming none it
+  reconciles against the attempt's claim (`c:Cyfr.WorkerAPI.start/3`),
+  since the listener answers that too when its call into this service
+  timed out. Its status counts the pool's runners and carries the bound
+  its keeper holds each to and the keeper's refusal
+  (`Opus.RunnerPool.status/1`).
 
   A runner tells the service each child it starts (`child`), so the
   service knows which runner holds which child. `kill/1` for the root of
