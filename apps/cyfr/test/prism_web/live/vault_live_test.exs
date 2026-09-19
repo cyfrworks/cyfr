@@ -62,6 +62,10 @@ defmodule PrismWeb.VaultLiveTest do
     refute inspect(server) =~ "Authorization"
   end
 
+  # A secret no rendered page holds by accident: a LiveView's element id and
+  # session token are random base64url text, where three letters turn up.
+  @client_secret "client secret: never rendered"
+
   test "OAuth client credentials are stored, listed by provider only, and removed", %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
@@ -75,13 +79,13 @@ defmodule PrismWeb.VaultLiveTest do
     |> form("form[phx-submit=set_client]", %{
       "provider" => "google",
       "client_id" => "abc.apps.googleusercontent.com",
-      "client_secret" => "shh"
+      "client_secret" => @client_secret
     })
     |> render_submit()
 
     rendered = render(view)
     assert rendered =~ "google"
-    refute rendered =~ "shh"
+    refute rendered =~ @client_secret
     refute rendered =~ "abc.apps.googleusercontent.com"
 
     ctx =
@@ -94,7 +98,8 @@ defmodule PrismWeb.VaultLiveTest do
         authenticated: true
       )
 
-    assert {:ok, %{"client_id" => "abc.apps.googleusercontent.com", "client_secret" => "shh"}} =
+    assert {:ok,
+            %{"client_id" => "abc.apps.googleusercontent.com", "client_secret" => @client_secret}} =
              Sanctum.ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
 
     assert {:ok, %{providers: [%{provider: "google"}]}} =
