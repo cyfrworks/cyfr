@@ -397,6 +397,27 @@ defmodule Opus.ModelContractTest do
              for({:usage, totals} <- played.seen.thread, do: totals)
 
     assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, played.turn.budget_id)
+
+    # Each call passed the gate, which keeps a row of it with what it was
+    # asked; the rows close behind the calls.
+    gated = fn ->
+      {:ok, rows} = Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100)
+      for %{tool: tool} = row <- rows, tool in ["notes", "system"], do: row
+    end
+
+    wait_until(
+      fn -> Enum.count(gated.(), &(&1.status == "success")) == 4 end,
+      @settle_ms,
+      "the gate's rows of the four calls to close"
+    )
+
+    assert gated.() |> Enum.map(&"#{&1.tool}.#{&1.action}") |> Enum.sort() ==
+             ["notes.list", "notes.search", "notes.search", "system.status"]
+
+    assert gated.()
+           |> Enum.filter(&(&1.action == "search"))
+           |> Enum.map(&Jason.decode!(&1.input)["query"])
+           |> Enum.sort() == Enum.sort([search["query"], emoji["query"]])
   end
 
   test "the tools a catalyst is given are the gate's flat schemas", %{ctx: ctx} do
