@@ -21,14 +21,16 @@ defmodule Opus.RunnerPool do
   spawning one when none is ready, and refills the fresh ones behind it;
   the assign the caller then sends is held by the handle until the
   channel attaches. What a busy runner reports reaches the assignee as
-  `{Opus.RunnerPool, pid, event}`: `{:complete, execution_id, clean}`,
+  `{Opus.RunnerPool, pid, event}`: `{:child, execution_id, attempt}` for
+  each child it starts, `{:complete, execution_id, clean}`,
   `{:exit, runner_id, open}` or `{:gone, reason}` (its channel closed, its
   process exited or its keeper failed with the subtree still assigned).
   The pool moves the runner itself: a clean completion to idle, anything
   else to tainted, released through the keeper at once; `taint/3` does
   the same for a kill, with the grace the runner is given to report.
-  `cancel_child/2` sends every busy runner a `cancel_child`, since which
-  runs the child is the runner's to know; one that does not ignores it.
+  `cancel_child/3` sends one busy runner a `cancel_child`, and
+  `cancel_child/2` every busy runner; one that does not run the child
+  ignores it.
 
   A tainted runner leaves the pool once the keeper reports it retired;
   its handle is stopped then. A keeper that fails takes the pool with it
@@ -106,7 +108,12 @@ defmodule Opus.RunnerPool do
   @doc "Send every busy runner a `cancel_child` for `execution_id`."
   @spec cancel_child(GenServer.server(), String.t()) :: :ok
   def cancel_child(pool, execution_id) when is_binary(execution_id),
-    do: GenServer.call(pool, {:cancel_child, execution_id})
+    do: GenServer.call(pool, {:cancel_child, :busy, execution_id})
+
+  @doc "Send the runner `pid`, if it is busy, a `cancel_child` for `execution_id`."
+  @spec cancel_child(GenServer.server(), pid(), String.t()) :: :ok
+  def cancel_child(pool, pid, execution_id) when is_pid(pid) and is_binary(execution_id),
+    do: GenServer.call(pool, {:cancel_child, pid, execution_id})
 
   @doc """
   The pool's part of `t:Cyfr.WorkerAPI.status/0`: its runners counted by
@@ -195,8 +202,8 @@ defmodule Opus.RunnerPool do
     end
   end
 
-  def handle_call({:cancel_child, execution_id}, _from, state) do
-    for {pid, %{state: :busy}} <- state.runners do
+  def handle_call({:cancel_child, to, execution_id}, _from, state) do
+    for {pid, %{state: :busy}} <- state.runners, to == :busy or to == pid do
       _ = RunnerProcess.send_message(pid, %{type: :cancel_child, execution_id: execution_id})
     end
 
@@ -316,6 +323,14 @@ defmodule Opus.RunnerPool do
       true ->
         taint(state, pid, entry, 0)
     end
+  end
+
+  # A child the runner started for the subtree it runs: its assignee
+  # learns which runner holds it. One heard after the subtree was told of
+  # (the runner killed as it started the child) is the runner's end's.
+  defp on_event({:message, %{type: :child} = message}, pid, entry, state) do
+    if entry.execution_id, do: tell(state, pid, {:child, message.execution_id, message.attempt})
+    state
   end
 
   defp on_event({:message, %{type: :exit} = message}, pid, entry, state) do

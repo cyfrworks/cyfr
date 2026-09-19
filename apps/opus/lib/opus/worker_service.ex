@@ -45,14 +45,20 @@ defmodule Opus.WorkerService do
   counts the pool's runners and carries the bound its keeper holds each
   to and the keeper's refusal (`Opus.RunnerPool.status/1`).
 
-  `kill/1` for the root of a runner's subtree taints the runner and ends
-  it through the keeper, with the grace to report its open attempts. For
-  any other execution, every busy runner is sent a `cancel_child`, since
-  which of them runs a child is the runner's to know, and the one that
-  does kills the child and completes unclean. A kill is `:ok` again for
-  an execution a runner of this boot already ended, and `:not_found` only
-  when no runner of this boot ever ran it; the ids of the last ten
-  thousand subtrees ended are remembered for it.
+  A runner tells the service each child it starts (`child`), so the
+  service knows which runner holds which child. `kill/1` for the root of
+  a runner's subtree taints the runner and ends it through the keeper,
+  with the grace to report its open attempts; for a child a runner said
+  it holds, that runner is sent a `cancel_child`, kills the child and
+  completes unclean. Either kill is `:ok`, and `:ok` again for an
+  execution a runner of this boot already ended; the ids of the last ten
+  thousand roots and children ended are remembered for it. A kill of an
+  execution no runner of this boot holds or held is `:not_found`, however
+  busy the runners are, so CYFR counts no kill that reached nothing; it
+  is still offered to every busy runner, in case one started it too
+  recently for its word to have arrived. A runner that ends without an
+  `exit` is reported holding its subtree's root and every child it said
+  it started.
 
   Under the `:local` keeper the service runs each subtree in its own VM
   (`Opus.Subtree`, `Opus.Attempt`), as a test environment does so a test
@@ -197,14 +203,19 @@ defmodule Opus.WorkerService do
         :ok = RunnerPool.taint(RunnerPool, pid, state.settings.release_grace_ms)
         {:reply, :ok, state}
 
+      pid = holder(state, execution_id) ->
+        :ok = RunnerPool.cancel_child(RunnerPool, pid, execution_id)
+        {:reply, :ok, state}
+
       ended?(state, execution_id) ->
         {:reply, :ok, state}
 
-      map_size(state.assigned) > 0 ->
-        :ok = RunnerPool.cancel_child(RunnerPool, execution_id)
-        {:reply, :ok, state}
-
       true ->
+        # A child a runner started so recently that its word has not
+        # arrived is still reached; the kill found no runner holding it.
+        if map_size(state.assigned) > 0,
+          do: :ok = RunnerPool.cancel_child(RunnerPool, execution_id)
+
         {:reply, {:error, :not_found}, state}
     end
   end
@@ -222,7 +233,7 @@ defmodule Opus.WorkerService do
            }, Subtree.attempts(state)}
 
         :pool ->
-          {RunnerPool.status(RunnerPool), for({_pid, a} <- state.assigned, do: a.attempt)}
+          {RunnerPool.status(RunnerPool), held(state)}
       end
 
     {:reply,
@@ -267,6 +278,19 @@ defmodule Opus.WorkerService do
       assignment ->
         report(state, runner, Enum.uniq([assignment.attempt | open]), assignment)
         {:noreply, forget(state, pid)}
+    end
+  end
+
+  def handle_info({RunnerPool, pid, {:child, execution_id, attempt}}, state) do
+    case Map.get(state.assigned, pid) do
+      nil ->
+        {:noreply, state}
+
+      assignment ->
+        children = Map.put(assignment.children, execution_id, attempt)
+
+        {:noreply,
+         %{state | assigned: Map.put(state.assigned, pid, %{assignment | children: children})}}
     end
   end
 
@@ -330,6 +354,7 @@ defmodule Opus.WorkerService do
                 execution_id: execution_id,
                 attempt: assignment.attempt,
                 athanor: assignment.athanor_id,
+                children: %{},
                 callers: caller.callers,
                 logger: caller.logger
               }
@@ -377,27 +402,58 @@ defmodule Opus.WorkerService do
   # ---------------------------------------------------------------------------
 
   # A runner gone with its subtree assigned is reported holding the
-  # subtree's root, the one attempt the service knows it held.
+  # subtree's root and every child it said it started: the attempts the
+  # service knows it held. CYFR lapses the ones still running.
   defp gone(state, pid, _reason) do
     case Map.get(state.assigned, pid) do
       nil ->
         state
 
       assignment ->
-        report(state, assignment.runner, [assignment.attempt], assignment)
+        report(
+          state,
+          assignment.runner,
+          Enum.uniq([assignment.attempt | Map.values(assignment.children)]),
+          assignment
+        )
+
         forget(state, pid)
     end
   end
 
+  # The subtree's root and its children are ended for this boot: a kill of
+  # any of them is `:ok` from now on.
   defp forget(state, pid) do
     {assignment, assigned} = Map.pop(state.assigned, pid)
+
+    ended =
+      Enum.reduce(
+        [assignment.execution_id | Map.keys(assignment.children)],
+        state.ended,
+        &remember(&2, &1)
+      )
 
     %{
       state
       | assigned: assigned,
         executions: Map.delete(state.executions, assignment.execution_id),
-        ended: remember(state.ended, assignment.execution_id)
+        ended: ended
     }
+  end
+
+  # The runner that said it started the child `execution_id`.
+  defp holder(state, execution_id) do
+    Enum.find_value(state.assigned, fn {pid, assignment} ->
+      if is_map_key(assignment.children, execution_id), do: pid
+    end)
+  end
+
+  # Every attempt a runner of this boot holds: each subtree's root and the
+  # children its runner said it started.
+  defp held(state) do
+    for {_pid, assignment} <- state.assigned,
+        attempt <- Enum.uniq([assignment.attempt | Map.values(assignment.children)]),
+        do: attempt
   end
 
   defp remember(%{ids: ids, order: order}, execution_id) do

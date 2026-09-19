@@ -183,6 +183,11 @@ defmodule Opus.RunnerTest do
     child = child!(host, [])
     hold_artifact!(host, @echo)
     assert {:ok, _pid} = Opus.Subtree.start_child(child, nil)
+
+    # The service hears which child this runner holds.
+    child_id = child.assignment.execution_id
+    child_attempt = child.assignment.attempt
+    assert %{type: :child, execution_id: ^child_id, attempt: ^child_attempt} = frame(service)
     assert_receive {:held, _child_fetch}, 10_000
 
     cancel_child(service, child.assignment.execution_id)

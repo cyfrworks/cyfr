@@ -195,8 +195,9 @@ defmodule Opus.RunnerBoundaryTest do
     attempt = spin!(host, boot)
     assert :ok = start(attempt)
     wait_until(fn -> busy_runner() != nil end)
-    # A child the service cannot place is offered to every busy runner.
-    assert :ok = WorkerService.kill("exec_child_of_someone")
+    # No runner said it holds such a child: the kill reached nothing,
+    # however busy the runners are.
+    assert {:error, :not_found} = WorkerService.kill("exec_child_of_someone")
   end
 
   test "a host answer that is lost taints the runner, which is never reused", %{

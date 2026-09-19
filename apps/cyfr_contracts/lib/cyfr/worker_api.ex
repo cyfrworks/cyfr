@@ -254,7 +254,10 @@ defmodule Cyfr.WorkerAPI do
 
   A kill is idempotent: `:ok` again for an execution a runner of this
   boot already ended, whether by a kill or on its own. `:not_found` means
-  no runner of this boot of the worker service ever ran it.
+  no runner of this boot of the worker service holds or held it, however
+  busy its runners are: the kill reached nothing, and CYFR counts it as
+  nothing whose native work may still run. `:ok` means a runner holding
+  it was told.
   """
   @callback kill(execution_id :: String.t()) :: :ok | {:error, :not_found}
 

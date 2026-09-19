@@ -12,7 +12,9 @@ defmodule Opus.Runner do
   the root's attempt process (`Opus.Attempt`) with a host client of its
   own runner id, presenting the boot its settings name, and tracks the
   subtree that grows from it (`Opus.Subtree`): each child a formula's
-  guest starts runs in an attempt process of this VM. The attempt
+  guest starts runs in an attempt process of this VM, and the runner tells
+  its service it holds it (`child`), so a kill of that child reaches this
+  runner. The attempt
   processes renew their leases and enforce the guest's timeout, bounded
   by the subtree's deadline, as always; the runner adds the watchdog: at
   the assignment's `deadline` plus the configured grace, a subtree still
@@ -150,8 +152,17 @@ defmodule Opus.Runner do
       }
 
       case Subtree.start(state, state.supervisor, start, caller, waiter) do
-        {:ok, pid, state} -> {:reply, {:ok, pid}, state}
-        {:error, :malformed} -> {:reply, {:error, :malformed}, state}
+        {:ok, pid, state} ->
+          write(state, %{
+            type: :child,
+            execution_id: assignment.execution_id,
+            attempt: assignment.attempt
+          })
+
+          {:reply, {:ok, pid}, state}
+
+        {:error, :malformed} ->
+          {:reply, {:error, :malformed}, state}
       end
     else
       {:reply, {:error, :malformed}, state}
