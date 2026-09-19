@@ -251,10 +251,14 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
     assert_receive {:scripted_probe, runner, running_id}, 10_000
 
+    # The slot is held for the attempt by its slot holder, a process linked
+    # to it.
+    {:links, linked} = Process.info(Cyfr.Execution.Attempt.whereis(running_id), :links)
+    held_for = Enum.map(linked, &inspect/1)
+
     assert Enum.any?(
              Cyfr.Slots.status(Cyfr.Execution.Slots).holders,
-             &(&1.pid == inspect(Cyfr.Execution.Attempt.whereis(running_id)) and
-                 &1.class == :background)
+             &(&1.pid in held_for and &1.class == :background)
            )
 
     send(runner, :continue)
