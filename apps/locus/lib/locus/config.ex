@@ -107,7 +107,8 @@ defmodule Locus.Config do
              1..1024,
              "builds"
            ),
-         {:ok, memory_bytes} <- memory_bytes(getenv),
+         {:ok, memory_bytes} <-
+           EnvValue.bytes(getenv, "LOCUS_BUILDS_MEMORY_BYTES", @memory_range),
          {:ok, cargo_seed} <- EnvValue.text(getenv, "LOCUS_BUILDS_CARGO_SEED"),
          {:ok, log_level} <- log_level(getenv),
          {:ok, log_format} <- log_format(getenv) do
@@ -153,26 +154,6 @@ defmodule Locus.Config do
 
       other ->
         other
-    end
-  end
-
-  # `Cyfr.EnvValue.whole_number/4` reads at most twelve digits, one short
-  # of this range's upper end, so the bound is read here, in its form.
-  defp memory_bytes(getenv) do
-    {:ok, text} = EnvValue.text(getenv, "LOCUS_BUILDS_MEMORY_BYTES")
-    first..last//1 = @memory_range
-
-    cond do
-      text == nil ->
-        {:ok, nil}
-
-      Regex.match?(~r/\A[0-9]{1,13}\z/, text) and String.to_integer(text) in @memory_range ->
-        {:ok, String.to_integer(text)}
-
-      true ->
-        {:error,
-         "LOCUS_BUILDS_MEMORY_BYTES=#{inspect(text)} must be a whole number of bytes " <>
-           "from #{first} to #{last}."}
     end
   end
 

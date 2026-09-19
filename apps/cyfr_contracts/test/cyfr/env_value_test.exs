@@ -30,9 +30,9 @@ defmodule Cyfr.EnvValueTest do
 
     test "an unrecognised spelling is an error naming the key, not the default" do
       assert {:error, message} =
-               EnvValue.switch(env(%{"CYFR_BUILDS" => "disabled"}), "CYFR_BUILDS", true)
+               EnvValue.switch(env(%{"CYFR_CLUSTER" => "disabled"}), "CYFR_CLUSTER", true)
 
-      assert message =~ "CYFR_BUILDS"
+      assert message =~ "CYFR_CLUSTER"
       assert message =~ "disabled"
       assert message =~ "on or off"
     end
@@ -64,6 +64,62 @@ defmodule Cyfr.EnvValueTest do
                EnvValue.whole_number(env(%{"K" => "2G"}), "K", 64..65_536, "MiB")
 
       assert message =~ "whole number of MiB from 64 to 65536"
+    end
+
+    test "reads at most twelve digits, whatever the range" do
+      assert {:ok, 999_999_999_999} =
+               EnvValue.whole_number(
+                 env(%{"K" => "999999999999"}),
+                 "K",
+                 1..9_999_999_999_999,
+                 "things"
+               )
+
+      assert {:error, _} =
+               EnvValue.whole_number(
+                 env(%{"K" => "1000000000000"}),
+                 "K",
+                 1..9_999_999_999_999,
+                 "things"
+               )
+    end
+  end
+
+  describe "bytes/3" do
+    # The keeper's range for a spawn's memory bound: 16 MiB to 1 TiB.
+    @memory 16_777_216..1_099_511_627_776
+
+    test "unset and blank keep the default; every whole number of bytes in range is taken" do
+      assert {:ok, nil} = EnvValue.bytes(env(%{}), "K", @memory)
+      assert {:ok, nil} = EnvValue.bytes(env(%{"K" => "  "}), "K", @memory)
+      assert {:ok, 16_777_216} = EnvValue.bytes(env(%{"K" => "16777216"}), "K", @memory)
+      assert {:ok, 402_653_184} = EnvValue.bytes(env(%{"K" => " 402653184 "}), "K", @memory)
+
+      # Thirteen digits: the range's upper end, which `whole_number/4` cannot read.
+      assert {:ok, 1_099_511_627_776} =
+               EnvValue.bytes(env(%{"K" => "1099511627776"}), "K", @memory)
+    end
+
+    test "a unit, a fraction, a sign, a value out of range or more digits than the range holds is an error naming the key and the range" do
+      for bad <-
+            ~w(16777215 1099511627777 01099511627776 384M 1GiB 1e9 402653184.0 -402653184 +402653184 0x18000000 lots) do
+        assert {:error, message} =
+                 EnvValue.bytes(
+                   env(%{"OPUS_RUNNER_MEMORY_BYTES" => bad}),
+                   "OPUS_RUNNER_MEMORY_BYTES",
+                   @memory
+                 )
+
+        assert message =~ "OPUS_RUNNER_MEMORY_BYTES"
+        assert message =~ bad
+        assert message =~ "whole number of bytes from 16777216 to 1099511627776"
+      end
+    end
+
+    test "a spelling longer than the range's upper end is refused before it is converted" do
+      long = String.duplicate("9", 100_000)
+
+      assert {:error, _} = EnvValue.bytes(env(%{"K" => long}), "K", @memory)
     end
   end
 

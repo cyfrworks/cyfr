@@ -50,14 +50,33 @@ defmodule Cyfr.EnvValue do
   """
   @spec whole_number(getenv(), String.t(), Range.t(), String.t()) ::
           {:ok, non_neg_integer() | nil} | {:error, String.t()}
-  def whole_number(getenv, key, first..last//1 = range, unit)
-      when is_function(getenv, 1) and is_binary(unit) do
+  def whole_number(getenv, key, _first.._last//1 = range, unit)
+      when is_function(getenv, 1) and is_binary(unit),
+      do: bounded(getenv, key, range, unit, 12)
+
+  @doc """
+  A count of bytes within `range`, spelled as a whole number of bytes: a
+  memory bound, whose range reaches past what `whole_number/4` reads (1 TiB
+  is thirteen digits). It reads as many digits as the range's upper end
+  has, and refuses a unit suffix, a fraction, a sign or a value outside
+  `range` as `whole_number/4` does.
+  """
+  @spec bytes(getenv(), String.t(), Range.t()) ::
+          {:ok, non_neg_integer() | nil} | {:error, String.t()}
+  def bytes(getenv, key, _first..last//1 = range)
+      when is_function(getenv, 1) and is_integer(last) and last >= 0,
+      do: bounded(getenv, key, range, "bytes", length(Integer.digits(last)))
+
+  # A decimal integer of at most `digits` digits inside `range`, so no
+  # spelling makes the reader convert more text than the range can hold.
+  defp bounded(getenv, key, first..last//1 = range, unit, digits) do
     case trimmed(getenv, key) do
       nil ->
         {:ok, nil}
 
       text ->
-        if Regex.match?(~r/\A[0-9]{1,12}\z/, text) and String.to_integer(text) in range do
+        if byte_size(text) <= digits and Regex.match?(~r/\A[0-9]+\z/, text) and
+             String.to_integer(text) in range do
           {:ok, String.to_integer(text)}
         else
           {:error,
