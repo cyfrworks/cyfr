@@ -9,33 +9,6 @@ defmodule Cyfr.RuntimeConfigTest do
   # Build a getenv reader over a plain map (blank/absent both read as nil-ish).
   defp env(map), do: fn key -> Map.get(map, key) end
 
-  describe "switch/3 — on or off, never a silent default" do
-    test "unset and blank take the default" do
-      assert {:ok, true} = RuntimeConfig.switch(env(%{}), "CYFR_BUILDS", true)
-
-      assert {:ok, false} =
-               RuntimeConfig.switch(env(%{"CYFR_BUILDS" => "  "}), "CYFR_BUILDS", false)
-    end
-
-    test "every spelling of on and off, any case" do
-      for on <- ~w(on ON true True yes 1) do
-        assert {:ok, true} = RuntimeConfig.switch(env(%{"K" => on}), "K", false)
-      end
-
-      for off <- ~w(off OFF false False no 0) do
-        assert {:ok, false} = RuntimeConfig.switch(env(%{"K" => off}), "K", true)
-      end
-    end
-
-    test "an unrecognised spelling is an error naming the key, not the default" do
-      assert {:error, message} =
-               RuntimeConfig.switch(env(%{"CYFR_BUILDS" => "disabled"}), "CYFR_BUILDS", true)
-
-      assert message =~ "CYFR_BUILDS"
-      assert message =~ "disabled"
-    end
-  end
-
   describe "milliseconds/3 — a whole number in range, or the default" do
     test "unset and blank keep the default; a whole number in range is taken" do
       assert {:ok, nil} = RuntimeConfig.milliseconds(env(%{}), "K", 1_000..60_000)
@@ -422,6 +395,70 @@ defmodule Cyfr.RuntimeConfigTest do
 
         assert message =~ "CYFR_WORKER_WATCH_MISSES"
         assert message =~ bad
+      end
+    end
+  end
+
+  describe "resolve_locus_builds/1 — the builds service, both of its variables or neither" do
+    @key_hex String.duplicate("0f", 32)
+
+    test "unset => no builds service: this server builds nothing" do
+      assert {:ok, nil} = RuntimeConfig.resolve_locus_builds(env(%{}))
+
+      assert {:ok, nil} =
+               RuntimeConfig.resolve_locus_builds(
+                 env(%{"CYFR_LOCUS_BUILDS_URL" => " ", "CYFR_LOCUS_BUILDS_KEY" => ""})
+               )
+    end
+
+    test "a base URL and a 64-digit key => the URL without its slash and the key's 32 bytes" do
+      assert {:ok, %{url: "http://locus-builds:4100", key: key}} =
+               RuntimeConfig.resolve_locus_builds(
+                 env(%{
+                   "CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100/",
+                   "CYFR_LOCUS_BUILDS_KEY" => String.upcase(@key_hex)
+                 })
+               )
+
+      assert key == :binary.copy(<<0x0F>>, 32)
+    end
+
+    test "one without the other refuses the boot naming the missing one" do
+      assert {:error, message} =
+               RuntimeConfig.resolve_locus_builds(
+                 env(%{"CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100"})
+               )
+
+      assert message =~ "CYFR_LOCUS_BUILDS_KEY is not"
+
+      assert {:error, message} =
+               RuntimeConfig.resolve_locus_builds(env(%{"CYFR_LOCUS_BUILDS_KEY" => @key_hex}))
+
+      assert message =~ "CYFR_LOCUS_BUILDS_URL is not"
+      refute message =~ @key_hex
+    end
+
+    test "a URL with a path, or a key of another form, refuses the boot and never echoes the key" do
+      for bad <- ["locus-builds:4100", "ftp://locus-builds", "http://locus-builds/locus/v1"] do
+        assert {:error, message} =
+                 RuntimeConfig.resolve_locus_builds(
+                   env(%{"CYFR_LOCUS_BUILDS_URL" => bad, "CYFR_LOCUS_BUILDS_KEY" => @key_hex})
+                 )
+
+        assert message =~ "CYFR_LOCUS_BUILDS_URL"
+      end
+
+      for bad <- ["short", @key_hex <> "0", String.replace(@key_hex, "0", "g")] do
+        assert {:error, message} =
+                 RuntimeConfig.resolve_locus_builds(
+                   env(%{
+                     "CYFR_LOCUS_BUILDS_URL" => "http://locus-builds:4100",
+                     "CYFR_LOCUS_BUILDS_KEY" => bad
+                   })
+                 )
+
+        assert message =~ "CYFR_LOCUS_BUILDS_KEY"
+        refute message =~ bad
       end
     end
   end
