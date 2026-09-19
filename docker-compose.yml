@@ -12,7 +12,12 @@
 #                 request between cyfr and opus is signed under the worker
 #                 key CYFR derives for OPUS_SERVICE_ID; opus holds no
 #                 tenant state.
-#   caddy       — TLS + reverse proxy in front of cyfr. Opt-in via the `tls`
+#   locus-builds — the builder: compiles components and tinctures, each
+#                 build under a uid and a memory bound of its own. Every
+#                 build request is signed under CYFR_LOCUS_BUILDS_KEY; the
+#                 builder holds no tenant state. Opt-in via the
+#                 `locus-builds` profile.          [profile: locus-builds]
+#   caddy      — TLS + reverse proxy in front of cyfr. Opt-in via the `tls`
 #                 profile.                                   [profile: tls]
 #
 # `cyfr init` writes this file (and Caddyfile + .env) into a fresh project dir;
@@ -67,7 +72,7 @@ services:
       - CYFR_HOST_API_PORT=${CYFR_HOST_API_PORT:-4300}
     networks:
       - default
-      - builder
+      - locus-builds
       - worker
     restart: unless-stopped
     # The endpoints drain connections for up to 30s on shutdown; compose's
@@ -88,39 +93,48 @@ services:
     # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK) so the
     # port and the probed path have one author.
 
-  # Optional builder: `docker compose --profile builder up -d`, or `cyfr up`
-  # once .env sets CYFR_BUILDER_URL=http://builder:4100 and CYFR_BUILDER_TOKEN.
-  # Compose forwards the token; put builder-only overrides in .env.builder.
-  builder:
-    container_name: cyfr-builder
+  # Optional builds service: `docker compose --profile locus-builds up -d`,
+  # or `cyfr up` once .env sets CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100
+  # and CYFR_LOCUS_BUILDS_KEY. cyfr reads both from .env (env_file above);
+  # compose hands this service the same key as LOCUS_BUILDS_KEY. Its other
+  # settings go in .env.locus.
+  locus-builds:
+    container_name: cyfr-locus-builds
     # Pulled as published; a source checkout builds it with
-    # `docker compose --profile builder build builder`.
-    image: ghcr.io/cyfrworks/cyfr-builder:latest
+    # `docker compose --profile locus-builds build locus-builds`.
+    image: ghcr.io/cyfrworks/cyfr-locus:latest
     build:
       context: .
-      dockerfile: Dockerfile.builder
-    profiles: ["builder"]
+      dockerfile: Dockerfile.locus
+    profiles: ["locus-builds"]
     expose:
       - "4100"
+    # Builder-only settings from .env.locus, every one a LOCUS_BUILDS_*
+    # name. The builder never sees the rest of .env: not the keyring, not
+    # the database, not the worker root, not the bridge key, and refuses to
+    # start with any of them in its environment.
     env_file:
-      - path: .env.builder
+      - path: .env.locus
         required: false
     environment:
-      - CYFR_BUILDER_LISTEN=true
-      - CYFR_BUILDER_TOKEN=${CYFR_BUILDER_TOKEN:-}
+      # The builds key every build request is signed and verified with: 32
+      # random bytes as 64 hexadecimal digits, the value cyfr reads as
+      # CYFR_LOCUS_BUILDS_KEY. Without a valid key the builder refuses to
+      # start (and restart-loops here).
+      - LOCUS_BUILDS_KEY=${CYFR_LOCUS_BUILDS_KEY:-}
     # Only cyfr can reach the builder: it sits on its own network, which
-    # cyfr also joins; the bridge and caddy never see port 4100. The
+    # cyfr also joins; the bridge, opus and caddy never see port 4100. The
     # network is not `internal` — cargo and npm need crates.io and the
     # registry — so the isolation is who is attached, not egress. This is
     # the container's only network, so listening on every interface is
-    # listening on it (CYFR_BUILDER_BIND is for a builder outside compose).
+    # listening on it (LOCUS_BUILDS_BIND is for a builder outside compose).
     networks:
-      - builder
+      - locus-builds
     # docker-init is PID 1 and forwards stop signals to cyfr-spawn, the
     # child subreaper of every build process.
     init: true
     # cyfr-spawn refuses to start with any capability other than these: it
-    # starts the builder release and each build under their own uids and
+    # starts the locus release and each build under their own uids and
     # signals their processes. The release and every build run with none.
     cap_drop:
       - ALL
@@ -128,8 +142,15 @@ services:
       - SETUID
       - SETGID
       - KILL
+    # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
+    # mounts the container's own cgroup writable, which adds no capability:
+    # cyfr-spawn gives every build a group of its own there, bounded at
+    # LOCUS_BUILDS_MEMORY_BYTES. Without the option it cannot bound a build
+    # and refuses every one: the service answers each build `unavailable`,
+    # naming the option, and none runs unbounded.
     security_opt:
       - no-new-privileges:true
+      - writable-cgroups=true
     # No /data mount, read-only root: the builder holds no tenant state —
     # sources arrive in the request, artifacts leave in the response. The
     # tmpfs mounts below are the only writable surfaces, and cyfr-spawn
@@ -138,10 +159,10 @@ services:
     # uid creates its own 0700 home holding its sources, Cargo home, npm
     # cache, temporary files and target directory; mode 1733 lets it create
     # one without listing the others, and build scripts and bundler
-    # binaries run from there, so it allows exec. Its size bounds what all
-    # concurrent builds write, and counts against the memory limit below.
-    # /run/cyfr-builder holds the release's temporary files and the socket
-    # builds' relays attach to.
+    # binaries run from there, so it allows exec. What a build writes to its
+    # home counts against that build's memory bound, and the mount's size
+    # bounds what all concurrent builds write. /run/cyfr-builder holds the
+    # release's temporary files and the socket builds' relays attach to.
     read_only: true
     ipc: none
     tmpfs:
@@ -156,12 +177,18 @@ services:
     deploy:
       resources:
         limits:
-          # The one container that runs multi-minute cargo/npm compiles —
-          # without a ceiling a runaway build starves the host. No build has
-          # a memory bound of its own: this limit bounds every concurrent
-          # build, their homes' tmpfs pages and the release together.
-          memory: ${CYFR_BUILDER_MEMORY_LIMIT:-3G}
-          cpus: "${CYFR_BUILDER_CPU_LIMIT:-2}"
+          # The one container that runs multi-minute cargo/npm compiles.
+          # Every build has a memory bound of its own
+          # (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB): its processes, its home's
+          # tmpfs pages and the kernel memory charged to it, together, and
+          # a build that reaches it is ended there alone. This limit holds
+          # LOCUS_BUILDS_MAX_CONCURRENT (2) such bounds and the service,
+          # which takes up to 1 GiB for each result it answers at the
+          # wire's largest: 2 x (1 GiB + 1 GiB). Raise it with either
+          # setting (.env.locus.example has the arithmetic and the
+          # measurement, tests/builder-image/headroom.py repeats it).
+          memory: ${LOCUS_BUILDS_MEMORY_LIMIT:-4G}
+          cpus: "${LOCUS_BUILDS_CPU_LIMIT:-2}"
 
   # The execution worker. cyfr reaches it at http://opus:4200 (CYFR_WORKERS)
   # and it reaches cyfr's host API at OPUS_HOST_URL; both sit on the worker
@@ -201,8 +228,13 @@ services:
       - SETUID
       - SETGID
       - KILL
+    # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
+    # mounts the container's own cgroup writable, which adds no capability:
+    # cyfr-spawn bounds a spawn's memory with a group of its own there, and
+    # refuses a spawn that asks for a bound where it cannot make one.
     security_opt:
       - no-new-privileges:true
+      - writable-cgroups=true
     # The engine holds no tenant state: read-only root, and the tmpfs
     # mounts below are the only writable surfaces; cyfr-spawn refuses to
     # start if any other location is writable by a runner's uid
@@ -347,8 +379,8 @@ services:
 
 networks:
   default: {}
-  # cyfr <-> builder only (see the builder service).
-  builder: {}
+  # cyfr <-> locus-builds only (see the locus-builds service).
+  locus-builds: {}
   # cyfr <-> opus only: the bridge, the builder and caddy never see port
   # 4200. The network is not `internal` — a guest's consented HTTP egress
   # leaves from the worker — so the isolation is who is attached.

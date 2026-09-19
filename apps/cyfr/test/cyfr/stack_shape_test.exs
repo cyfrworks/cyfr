@@ -5,14 +5,30 @@ defmodule Cyfr.StackShapeTest do
   @moduledoc """
   The shipped stack is one origin: every request Caddy takes reaches cyfr's
   one endpoint, and compose runs cyfr, the execution worker, the bridge and
-  (optionally) caddy and the builder — nothing else. Read the files, assert
-  the shape; the same style as the ingress inventory.
+  (optionally) caddy and the builds service — nothing else. Read the files,
+  assert the shape; the same style as the ingress inventory.
   """
   use ExUnit.Case, async: true
 
   @root Path.expand("../../../..", __DIR__)
 
   defp read!(rel), do: File.read!(Path.join(@root, rel))
+
+  # One service's block of docker-compose.yml, and the entries of one of
+  # its list keys.
+  defp service_block(compose, name) do
+    [_, services | _] = Regex.split(~r/^services:\s*$/m, compose)
+    [services | _] = Regex.split(~r/^[a-z]/m, services)
+    [_, block | _] = Regex.split(~r/^  #{Regex.escape(name)}:\s*$/m, services)
+    [block | _] = Regex.split(~r/^  [a-z]/m, block)
+    block
+  end
+
+  defp list_entries(block, key) do
+    [_, list | _] = Regex.split(~r/^    #{key}:\s*$/m, block)
+    [list | _] = Regex.split(~r/^    [a-z]/m, list)
+    Regex.scan(~r/^      - (\S+)/m, list, capture: :all_but_first) |> List.flatten()
+  end
 
   test "the Caddyfile proxies everything to cyfr's one (parameterized) port" do
     caddy = read!("Caddyfile")
@@ -42,7 +58,7 @@ defmodule Cyfr.StackShapeTest do
       |> List.flatten()
       |> Enum.sort()
 
-    assert services == ["builder", "caddy", "cyfr", "mcp-bridge", "opus"]
+    assert services == ["caddy", "cyfr", "locus-builds", "mcp-bridge", "opus"]
     refute compose =~ ~r/porta|4001|8080/
 
     # The execution worker is attached to the worker network and no other,
@@ -62,16 +78,107 @@ defmodule Cyfr.StackShapeTest do
     assert cyfr_block =~ ~r/^\s*- CYFR_HOST_API_BIND=0\.0\.0\.0$/m
     assert cyfr_block =~ ~r/^\s*- worker$/m
 
-    # The builder is attached to its own network and no other: what it
-    # listens on is that network, which is its isolation.
-    [_, builder_block | _] = Regex.split(~r/^  builder:\s*$/m, services_block)
-    [builder_block | _] = Regex.split(~r/^  [a-z]/m, builder_block)
-    [_, networks | _] = Regex.split(~r/^    networks:\s*$/m, builder_block)
-    [networks | _] = Regex.split(~r/^    [a-z]/m, networks)
-    assert Regex.scan(~r/^      - (\S+)/m, networks, capture: :all_but_first) == [["builder"]]
+    assert cyfr_block =~ ~r/^\s*- locus-builds$/m
+
+    # The builds service is attached to its own network and no other: what
+    # it listens on is that network, which is its isolation.
+    assert list_entries(service_block(compose, "locus-builds"), "networks") == ["locus-builds"]
 
     # Runtime storage uses one data root.
     refute compose =~ ~r/^\s*- \.\/components:/m
+  end
+
+  test "the builds service is the locus image under the shipped names, holding only its own settings" do
+    compose = read!("docker-compose.yml")
+    builds = service_block(compose, "locus-builds")
+
+    assert builds =~ ~r/^    container_name: cyfr-locus-builds$/m
+    assert builds =~ ~r/^    image: ghcr\.io\/cyfrworks\/cyfr-locus:latest$/m
+    assert builds =~ ~r/^      dockerfile: Dockerfile\.locus$/m
+    assert builds =~ ~r/^    profiles: \["locus-builds"\]$/m
+    assert builds =~ ~r/^      - path: \.env\.locus$/m
+    assert File.regular?(Path.join(@root, "Dockerfile.locus"))
+
+    # `Locus.Config` refuses the control plane's variables, so the service
+    # is handed `LOCUS_BUILDS_*` names and nothing else; its key is the one
+    # cyfr reads as CYFR_LOCUS_BUILDS_KEY.
+    assert list_entries(builds, "environment") == ["LOCUS_BUILDS_KEY=${CYFR_LOCUS_BUILDS_KEY:-}"]
+
+    # The container's limit is a setting, since it holds the concurrent
+    # builds' bounds, which are settings too.
+    assert builds =~ ~r/^          memory: \$\{LOCUS_BUILDS_MEMORY_LIMIT:-[0-9]+[MG]\}$/m
+    assert builds =~ ~r/^          cpus: "\$\{LOCUS_BUILDS_CPU_LIMIT:-[0-9]+\}"$/m
+
+    # Spelled split so the retired names are not themselves found here. The
+    # release's user and its directories keep the name cyfr-builder.
+    refute compose =~
+             ~r/CYFR_BUILDE[R]_|CYFR_BUIL[D]_|CYFR_MAX_CONCURRENT_BUILD[S]|Dockerfile\.builde[r]|cyfrworks\/cyfr-builde[r]/
+
+    refute compose =~ ~r/\.env\.builde[r]/
+  end
+
+  test "the builds service and the worker keep their hardening, and can bound a spawn's memory" do
+    compose = read!("docker-compose.yml")
+
+    for {service, homes, run_dir} <- [
+          {"locus-builds", "/var/lib/cyfr-builder/homes:mode=1733,exec,size=2g",
+           "/run/cyfr-builder:uid=10001,gid=10001,mode=0700,size=16m"},
+          {"opus", "/var/lib/opus/homes:mode=1733,exec,size=256m",
+           "/run/opus:uid=10002,gid=10002,mode=0700,size=16m"}
+        ] do
+      block = service_block(compose, service)
+
+      assert list_entries(block, "cap_drop") == ["ALL"], service
+      assert list_entries(block, "cap_add") == ["SETUID", "SETGID", "KILL"], service
+
+      # cyfr-spawn bounds a spawn's memory only where the container's
+      # cgroup is mounted writable; without the option every bounded spawn
+      # is refused, so the shipped services carry it.
+      assert list_entries(block, "security_opt") == [
+               "no-new-privileges:true",
+               "writable-cgroups=true"
+             ],
+             service
+
+      assert list_entries(block, "tmpfs") == [homes, run_dir], service
+      assert block =~ ~r/^    read_only: true$/m, service
+      assert block =~ ~r/^    ipc: none$/m, service
+      assert block =~ ~r/^    init: true$/m, service
+      refute block =~ ~r/^    (privileged|pid|userns_mode|cgroup|devices|volumes):/m, service
+      assert block =~ ~r/^          memory: \S+$/m, service
+    end
+  end
+
+  test "the builds service's example names every setting of the locus release, and none of the control plane's" do
+    example = read!(".env.locus.example")
+
+    # The release's settings are the rows of `Locus.Config`'s table.
+    knobs =
+      Regex.scan(~r/^  \| `(LOCUS_BUILDS_[A-Z_]+)` \|/m, read!("apps/locus/lib/locus/config.ex"),
+        capture: :all_but_first
+      )
+      |> List.flatten()
+
+    assert "LOCUS_BUILDS_KEY" in knobs and "LOCUS_BUILDS_MEMORY_BYTES" in knobs
+
+    for knob <- knobs -- ["LOCUS_BUILDS_KEY"] do
+      assert example =~ ~r/^# #{knob}=/m, "#{knob} is missing from .env.locus.example"
+    end
+
+    # The key reaches the service from the project .env through compose,
+    # and the container's limits are compose's to read there: neither is
+    # set in this file, and the example says where each is.
+    assert example =~ "CYFR_LOCUS_BUILDS_KEY"
+    assert example =~ "LOCUS_BUILDS_MEMORY_LIMIT"
+
+    refute example =~
+             ~r/^#? ?(LOCUS_BUILDS_KEY|LOCUS_BUILDS_MEMORY_LIMIT|LOCUS_BUILDS_CPU_LIMIT)=/m
+
+    # No setting of the control plane's is offered here: `Locus.Config`
+    # refuses to start with the keyring, the database, the worker root or
+    # the bridge key in its environment.
+    refute example =~ ~r/^#? ?CYFR_[A-Z_]*=/m
+    refute File.exists?(Path.join(@root, ".env.builder.example"))
   end
 
   test "the port is a parameter everywhere, 4000 only as its default" do

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered over docker-compose.yml by the builder image tests
+# (tests/builder-image/stack.py): the locus-builds service keeps every
+# setting compose gives it, its security options among them (compose
+# appends a `security_opt` list and refuses an entry named twice, so none
+# is named here). This adds only the image under test, a loopback port,
+# the residue canary (tests/fixtures/residue-canary.go) and the two
+# settings a test chooses: the build pool's uid range and the build
+# deadline (empty for the default). The container takes the name compose
+# gives it from the project, so a run does not meet a deployed
+# cyfr-locus-builds on the same host. The tests supply the builds key as
+# CYFR_LOCUS_BUILDS_KEY through the environment compose interpolates,
+# which the shipped service reads as LOCUS_BUILDS_KEY.
+services:
+  locus-builds:
+    image: ${BUILDER_IMAGE:?set BUILDER_IMAGE}
+    container_name: !reset null
+    pull_policy: never
+    ports:
+      - "127.0.0.1::4100"
+    volumes:
+      - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro
+    entrypoint: ["cyfr-spawn", "serve", "--pool", "build:${BUILD_POOL:?set BUILD_POOL}", "--home-root", "/var/lib/cyfr-builder/homes", "--client-user", "cyfr-builder", "--", "/app/bin/locus", "start"]
+    environment:
+      - LOCUS_BUILDS_TIMEOUT_MS=${LOCUS_BUILDS_TIMEOUT_MS:-}

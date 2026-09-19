@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""The builder image isolates its builds, run as docker-compose.yml's builder service.
+"""The builder image isolates its builds, run as docker-compose.yml's locus-builds service.
 
 - cyfr-spawn holds exactly SETUID, SETGID and KILL; the release runs as
-  cyfr-builder with no capability and no Erlang distribution listener; and
-  the release refuses to serve builds when started without cyfr-spawn.
+  cyfr-builder with no capability and no Erlang distribution listener; the
+  release refuses to serve builds when started without cyfr-spawn, and to
+  start at all with a control-plane variable in its environment.
 - A build runs under a pooled uid, alone in its group, in a 0700 home,
   with none of the release's environment; it cannot read the release's
-  /proc environ (which holds CYFR_BUILDER_TOKEN) nor signal it.
+  /proc environ (which holds LOCUS_BUILDS_KEY) nor signal it.
 - A build cannot list the home root nor read a concurrent build's tree,
   even knowing its path.
 - No process of a build's uid survives the build — a daemon a build.rs
@@ -19,6 +20,10 @@
   memory, semaphores and message queues, a POSIX message queue) is gone
   before the next build runs under the same uid; /tmp, /var/tmp, /dev/shm,
   /run and /run/cyfr-builder are not writable to it.
+- Started without the `writable-cgroups=true` security option, as a
+  deployment that lacks it would be, the service answers every build
+  `unavailable`, naming the option, and runs nothing: no build is ever run
+  without its memory bound (tests/builder-image/memory.py proves the bound).
 
 Usage: tests/builder-image/isolation.py IMAGE
 """
@@ -35,7 +40,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stack import (  # noqa: E402
-    HOME_ROOT, POOL_FIRST, POOL_LAST, RELEASE_UID, TOKEN, Stack, build_canary, expect, output_file, run, tincture,
+    HOME_ROOT, POOL_FIRST, POOL_LAST, PROJECT_PREFIX, RELEASE_BIN, RELEASE_UID, RELEASE_USER, Stack, brief, build_canary,
+    expect, output_file, run, tincture,
 )
 
 SPAWNER_CAPS = "00000000000000e0"
@@ -147,15 +153,22 @@ def test_process_model(stack, image):
     ports = sorted({int(address.rsplit(":", 1)[1], 16) for address in listening if not address.startswith("0B00007F:")})
     expect(ports == [4100], "besides Docker's resolver, the builder's only listening TCP port is 4100", listening)
 
-    refused = run("docker", "run", "--rm", "-e", "CYFR_BUILDER_LISTEN=true", "-e", f"CYFR_BUILDER_TOKEN={TOKEN}",
-                  "--entrypoint", "/app/bin/builder", image, "start", check=False, timeout=120)
-    expect(refused.returncode != 0 and "runs builds only through cyfr-spawn" in refused.stdout + refused.stderr,
+    def start_alone(name, *env):
+        return run("docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}cyfr-builder-isolation-{name}-{os.getpid()}",
+                   "-e", f"LOCUS_BUILDS_KEY={stack.key}", *env, "--entrypoint", RELEASE_BIN, image, "start", check=False, timeout=120)
+
+    refused = start_alone("alone")
+    expect(refused.returncode != 0 and "runs a build only through cyfr-spawn" in refused.stdout + refused.stderr,
            "the release refuses to serve builds when started without cyfr-spawn", refused.stdout + refused.stderr)
+    refused = start_alone("keyring", "-e", "CYFR_CRYPTO_KEYRING=not-a-builders")
+    expect(refused.returncode != 0 and "must not see CYFR_CRYPTO_KEYRING" in refused.stdout + refused.stderr
+           and "not-a-builders" not in refused.stdout + refused.stderr,
+           "the release refuses to start with a control-plane variable in its environment", refused.stdout + refused.stderr)
 
 
 def test_build_identity(stack):
     status, answer = stack.build(tincture(PROBE), "javascript", "tincture")
-    expect(status == 200, "a probe build succeeds", answer)
+    expect(status == 200, "a probe build succeeds", brief(answer))
     who = fields(output_file(answer, "who.txt"))
     uid = int(who["uid"])
     expect(POOL_FIRST <= uid <= POOL_LAST and who["gid"] == str(uid) and who["groups"] == str(uid),
@@ -165,11 +178,11 @@ def test_build_identity(stack):
            "its home is a 0700 directory of its own, TMPDIR is inside it and it holds no capability", who)
 
     env = output_file(answer, "env.txt")
-    expect(TOKEN not in env and not re.search(r"^(CYFR_|RELEASE_|ERL_|ELIXIR_)", env, re.M),
+    expect(stack.key not in env and not re.search(r"^(CYFR_|LOCUS_|RELEASE_|ERL_|ELIXIR_)", env, re.M),
            "none of the release's environment reaches a build", env)
 
     release = output_file(answer, "release.txt") or ""
-    expect(release.startswith("pid=") and TOKEN not in release
+    expect(release.startswith("pid=") and stack.key not in release
            and "Permission denied" in release and "Operation not permitted" in release,
            "a build can neither read the release's environ nor signal it", release)
     expect("Permission denied" in (output_file(answer, "home-root.txt") or ""),
@@ -189,7 +202,7 @@ def test_concurrent_trees(stack):
     victim.join()
 
     status, answer = results["intruder"]
-    expect(status == 200, "the intruding build succeeds", answer)
+    expect(status == 200, "the intruding build succeeds", brief(answer))
     probe = output_file(answer, "probe.txt") or ""
     found = fields(probe).get("found", "")
     expect(re.fullmatch(rf"{HOME_ROOT}/3\d{{4}}-[0-9a-f]{{32}}", found),
@@ -197,15 +210,15 @@ def test_concurrent_trees(stack):
     expect("victim secret" not in probe and probe.count("Permission denied") >= 3
            and "ls_status=0" not in probe and "cat_status=0" not in probe and "root_status=0" not in probe,
            "it can neither list nor read the concurrent build's tree, nor list the home root", probe)
-    expect(results["victim"][0] == 200, "the concurrent build completes undisturbed", results["victim"][1])
+    expect(results["victim"][0] == 200, "the concurrent build completes undisturbed", brief(results["victim"][1]))
 
 
 def test_no_survivors(stack):
     manifest_result = stack.exec(
-        """/app/bin/builder eval 'IO.puts("<<<" <> Locus.Builder.cargo_toml_for(:reagent) <> ">>>")'""", user="cyfr-builder")
+        f"""{RELEASE_BIN} eval 'IO.puts("<<<" <> Locus.Builder.cargo_toml_for(:reagent) <> ">>>")'""", user=RELEASE_USER)
     manifest = manifest_result.stdout.split("<<<", 1)[1].split(">>>", 1)[0]
     status, answer = stack.build({"src/lib.rs": LIB_RS, "build.rs": DAEMON_BUILD_RS, "Cargo.toml": manifest}, "rust", "reagent")
-    expect(status == 200, "a Rust build whose build.rs starts a daemon succeeds", answer)
+    expect(status == 200, "a Rust build whose build.rs starts a daemon succeeds", brief(answer))
     survivors = stack.pool_processes()
     expect(survivors == [], "no process of the build's uid survives the build, its daemon included", survivors)
     expect(stack.homes() == [], "the build's home is gone when its response arrives", stack.homes())
@@ -217,7 +230,7 @@ def test_residue(stack):
 
     status, answer = stack.build(tincture(f"mkdir -p dist && /canary/canary plant {TAG} {paths} > dist/plant.json"),
                                  "javascript", "tincture")
-    expect(status == 200, "a build plants canaries", answer)
+    expect(status == 200, "a build plants canaries", brief(answer))
     planted = json.loads(output_file(answer, "plant.json"))
     expect(planted["uid"] == POOL_FIRST, "the first build runs under the pool's one uid", planted)
     expect(planted["files"] == {
@@ -229,7 +242,7 @@ def test_residue(stack):
 
     status, answer = stack.build(tincture(f"mkdir -p dist && /canary/canary probe {TAG} {paths} > dist/probe.json"),
                                  "javascript", "tincture")
-    expect(status == 200, "a second build probes for them", answer)
+    expect(status == 200, "a second build probes for them", brief(answer))
     probed = json.loads(output_file(answer, "probe.json"))
     expect(probed["uid"] == POOL_FIRST, "the second build runs under the same uid", probed)
     expect(probed["files"] == {
@@ -243,6 +256,22 @@ def test_residue(stack):
     expect("quarantined" not in logs and "outlived retirement" not in logs, "every build uid was retired clean", logs)
 
 
+def test_no_bound_no_build(stack):
+    stack.up(writable_cgroups=False)
+    options = json.loads(run("docker", "inspect", stack.container).stdout)[0]["HostConfig"]["SecurityOpt"]
+    expect(options == ["no-new-privileges:true"], "the service is started without the writable-cgroups=true option", options)
+    expect(all(toolchain["available"] for toolchain in stack.health["toolchains"].values()),
+           "it starts and answers health as the shipped service does", stack.health)
+
+    status, answer = stack.build(tincture("mkdir -p dist && id -u > dist/ran.txt"), "javascript", "tincture")
+    expect(status == 503 and answer.get("class") == "unavailable" and "writable-cgroups=true" in answer.get("reason", ""),
+           "a build is refused as unavailable, naming the option the service lacks", brief(answer))
+    expect(stack.pool_processes() == [] and stack.homes() == [], "nothing of the build was run: no process of a pool uid, no home",
+           [stack.pool_processes(), stack.homes()])
+    status, again = stack.build(tincture("mkdir -p dist && id -u > dist/ran.txt"), "javascript", "tincture")
+    expect(status == 503 and again.get("class") == "unavailable", "and so is the next: the service keeps refusing, and keeps running", brief(again))
+
+
 def main(image):
     canary = build_canary()
     stack = Stack("cyfr-builder-isolation", image, canary)
@@ -253,6 +282,7 @@ def main(image):
         test_concurrent_trees(stack)
         test_no_survivors(stack)
         test_residue(stack)
+        test_no_bound_no_build(stack)
     finally:
         stack.down()
         shutil.rmtree(canary, ignore_errors=True)
