@@ -80,13 +80,17 @@ defmodule Opus.StoreLimitsTest do
     end
   end
 
-  test "an instantiation failure that is no limit's is reported as it was" do
-    # A core module, not a component: it fails to compile, not to instantiate.
+  test "a component that fails for any other reason is not reported as a resource_limit" do
+    # A core module, not a component: it fails to compile.
     math = File.read!(Path.expand("../support/test_wasm/math.wasm", __DIR__))
 
-    assert {:error, message} =
+    assert {:error, "Component compilation failed: " <> _} =
              Opus.Runtime.execute_component(math, %{}, authority: Cyfr.Authority.zero())
 
-    refute message =~ "resource_limit"
+    # A catalyst run as a reagent is linked without the vault it imports.
+    assert {:error, "Component instantiation failed: " <> _} =
+             Opus.Runtime.execute_component(guest("vault_probe"), %{},
+               authority: Cyfr.Authority.zero()
+             )
   end
 end
