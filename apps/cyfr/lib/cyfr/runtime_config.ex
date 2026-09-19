@@ -35,28 +35,6 @@ defmodule Cyfr.RuntimeConfig do
   @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
 
   @doc """
-  Read an on/off switch from the environment.
-
-  Unset or blank values use `default`. Accepts `on`/`off`, `true`/`false`,
-  `yes`/`no`, and `1`/`0`, ignoring case. Other values return `{:error, message}`.
-  """
-  @spec switch(getenv, String.t(), boolean()) :: {:ok, boolean()} | {:error, String.t()}
-  def switch(getenv, key, default) when is_function(getenv, 1) and is_boolean(default) do
-    case getenv.(key) do
-      nil ->
-        {:ok, default}
-
-      raw when is_binary(raw) ->
-        case raw |> String.trim() |> String.downcase() do
-          "" -> {:ok, default}
-          on when on in ["on", "true", "yes", "1"] -> {:ok, true}
-          off when off in ["off", "false", "no", "0"] -> {:ok, false}
-          _ -> {:error, "#{key}=#{inspect(raw)} is not a switch; use on or off."}
-        end
-    end
-  end
-
-  @doc """
   Read a duration in whole milliseconds from the environment, within `range`.
 
   Unset or blank values answer `{:ok, nil}`, so the setting keeps its
@@ -193,11 +171,45 @@ defmodule Cyfr.RuntimeConfig do
   @spec release?() :: boolean()
   def release?, do: System.get_env("RELEASE_ROOT") != nil
 
-  @doc "Whether this server builds components (`CYFR_BUILDS`, default true)."
+  @doc """
+  Whether this server builds components: it does exactly when a builds
+  service is configured, its URL and its key both (`locus_builds_url/0`,
+  `locus_builds_key/0`). A server without one refuses every build and
+  runs no toolchain of its own.
+  """
   @spec builds_enabled?() :: boolean()
-  def builds_enabled?, do: Application.get_env(:cyfr, :builds_enabled, true) == true
+  def builds_enabled?, do: is_binary(locus_builds_url()) and is_binary(locus_builds_key())
 
-  @doc "The builder container's URL (`CYFR_BUILDER_URL`), or nil for in-process builds."
+  @doc """
+  The base URL of the Locus builds service (`CYFR_LOCUS_BUILDS_URL`), as
+  `resolve_locus_builds/1` answers it, or nil when none is configured.
+  """
+  @spec locus_builds_url() :: String.t() | nil
+  def locus_builds_url do
+    case Application.get_env(:cyfr, :locus_builds_url) do
+      url when is_binary(url) and url != "" -> url
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The builds service key (`CYFR_LOCUS_BUILDS_KEY`), its 32 bytes as
+  `resolve_locus_builds/1` answers them, or nil when none is configured.
+  `Compendium.Builds.Client` derives the key it signs requests with from
+  it; nothing else reads it, and it is never logged.
+  """
+  @spec locus_builds_key() :: <<_::256>> | nil
+  def locus_builds_key do
+    case Application.get_env(:cyfr, :locus_builds_key) do
+      <<_::256>> = key -> key
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The `CYFR_BUILDER_URL` value. Read by the boot guard in
+  `Cyfr.Application` only: no build is sent to it (`locus_builds_url/0`).
+  """
   @spec builder_url() :: String.t() | nil
   def builder_url, do: Application.get_env(:cyfr, :builder_url)
 
@@ -417,7 +429,7 @@ defmodule Cyfr.RuntimeConfig do
          # Use the configured receive timeout for object-store requests.
          {:ok, receive_timeout_ms} <-
            positive_int(getenv.("CYFR_S3_RECEIVE_TIMEOUT_MS"), "CYFR_S3_RECEIVE_TIMEOUT_MS"),
-         {:ok, path_style} <- switch(getenv, "CYFR_S3_PATH_STYLE", false) do
+         {:ok, path_style} <- Cyfr.EnvValue.switch(getenv, "CYFR_S3_PATH_STYLE", false) do
       opts =
         [
           bucket: resolved.bucket,
@@ -456,7 +468,7 @@ defmodule Cyfr.RuntimeConfig do
 
       url ->
         with {:ok, pool_size} <- parse_pool_size(getenv.("CYFR_DB_POOL_SIZE")),
-             {:ok, ssl} <- switch(getenv, "CYFR_DB_SSL", false) do
+             {:ok, ssl} <- Cyfr.EnvValue.switch(getenv, "CYFR_DB_SSL", false) do
           {:ok, [url: url, pool_size: pool_size, ssl: ssl]}
         end
     end
@@ -563,6 +575,44 @@ defmodule Cyfr.RuntimeConfig do
            Cyfr.EnvValue.whole_number(getenv, "CYFR_WORKER_WATCH_MISSES", 1..100, "misses") do
       {:ok,
        Enum.reject([poll_ms: poll_ms, misses: misses], fn {_key, value} -> is_nil(value) end)}
+    end
+  end
+
+  @doc """
+  Resolve the Locus builds service this server sends its builds to
+  (`Compendium.Builds.Client`): `CYFR_LOCUS_BUILDS_URL`, the base URL of
+  its listener (http or https with a host and no path), and
+  `CYFR_LOCUS_BUILDS_KEY`, the service's key as 64 hexadecimal digits, the
+  same key as `LOCUS_BUILDS_KEY` on the service. Answers `{:ok, nil}`
+  when neither is set — this server builds nothing — and
+  `{:ok, %{url: url, key: key}}`, the values `config :cyfr,
+  :locus_builds_url` and `:locus_builds_key` take, when both are. One
+  without the other, or a value of another form, is an error naming the
+  variable and never the key's text.
+  """
+  @spec resolve_locus_builds(getenv) ::
+          {:ok, %{url: String.t(), key: <<_::256>>} | nil} | {:error, String.t()}
+  def resolve_locus_builds(getenv) when is_function(getenv, 1) do
+    with {:ok, url} <- Cyfr.EnvValue.url(getenv, "CYFR_LOCUS_BUILDS_URL"),
+         {:ok, key} <- Cyfr.EnvValue.hex_key(getenv, "CYFR_LOCUS_BUILDS_KEY") do
+      case {url, key} do
+        {nil, nil} ->
+          {:ok, nil}
+
+        {url, key} when is_binary(url) and is_binary(key) ->
+          {:ok, %{url: url, key: key}}
+
+        {nil, _key} ->
+          {:error,
+           "CYFR_LOCUS_BUILDS_KEY is set but CYFR_LOCUS_BUILDS_URL is not; set both to " <>
+             "build on a Locus builds service, or neither to build nothing."}
+
+        {_url, nil} ->
+          {:error,
+           "CYFR_LOCUS_BUILDS_URL is set but CYFR_LOCUS_BUILDS_KEY is not; every build " <>
+             "request is signed with it (64 hexadecimal digits, the same key as " <>
+             "LOCUS_BUILDS_KEY on the builds service)."}
+      end
     end
   end
 

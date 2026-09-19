@@ -45,10 +45,11 @@ defmodule Cyfr.EgressInventoryTest do
     # exit reports to CYFR's host API (OPUS_HOST_URL), sealed and signed
     # with the attempt's keys, bounded answers.
     "apps/opus/lib/opus/host_client.ex" => :host_client,
-    # The build-isolation seam's client: POSTs source maps to the
-    # operator-configured builder container (CYFR_BUILDER_URL), bearer
-    # token both ends, bounded response.
-    "apps/locus/lib/locus/builder_client.ex" => :builder
+    # The builds wire, CYFR's side: `Cyfr.BuilderProtocol` requests to the
+    # operator-configured Locus builds service (CYFR_LOCUS_BUILDS_URL),
+    # signed with the key derived from the service's, the answer bounded
+    # while it streams (`Cyfr.BoundedBody`) and read strictly.
+    "apps/cyfr/lib/compendium/builds/client.ex" => :builds_client
   }
 
   @patterns [
