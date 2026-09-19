@@ -75,9 +75,17 @@ defmodule Cyfr.BuilderProtocol do
   | `unauthorized` | `malformed`, `outside_window`, `bad_mac` or `replayed` | the header does not verify, or its nonce was seen |
   | `capacity` | `{max}` | every slot of the cap is taken |
   | `timeout` | `{budget_ms}` | the build passed its budget |
+  | `memory` | `{limit_bytes}` | the build reached its memory bound and was ended there |
   | `unavailable` | a sentence naming what | a toolchain or the spawner is missing |
   | `failed` | `{status}` or `{signal}` | the build ran and did not produce its output |
   | `protocol_mismatch` | `{builder, client}` | the request's version is not `version/0` |
+
+  `memory` is the builder's report that the build's sandbox reached the
+  bound the builder runs every build under, `limit_bytes`: its processes,
+  what it wrote to its home and the kernel memory charged to it, together.
+  The builder answers it only when its spawner read that end from the
+  kernel's counters for the sandbox; a build killed for any other reason,
+  the container's own memory limit among them, is `failed` with its signal.
 
   ## Authentication
 
@@ -132,6 +140,7 @@ defmodule Cyfr.BuilderProtocol do
     :unauthorized,
     :capacity,
     :timeout,
+    :memory,
     :unavailable,
     :failed,
     :protocol_mismatch
@@ -146,7 +155,8 @@ defmodule Cyfr.BuilderProtocol do
     failed: 422,
     capacity: 429,
     unavailable: 503,
-    timeout: 504
+    timeout: 504,
+    memory: 507
   }
 
   # The pairing is declared here once; a component type the roster gains
@@ -208,6 +218,7 @@ defmodule Cyfr.BuilderProtocol do
           | {:unauthorized, :malformed | :outside_window | :bad_mac | :replayed}
           | {:capacity, pos_integer()}
           | {:timeout, non_neg_integer()}
+          | {:memory, pos_integer()}
           | {:unavailable, String.t()}
           | {:failed, {:status, integer()} | {:signal, String.t()}}
           | {:protocol_mismatch, pos_integer(), pos_integer() | nil}
@@ -676,6 +687,7 @@ defmodule Cyfr.BuilderProtocol do
   defp reason_wire({:unauthorized, why}) when is_atom(why), do: Atom.to_string(why)
   defp reason_wire({:capacity, max}), do: %{"max" => max}
   defp reason_wire({:timeout, budget_ms}), do: %{"budget_ms" => budget_ms}
+  defp reason_wire({:memory, limit_bytes}), do: %{"limit_bytes" => limit_bytes}
   defp reason_wire({:unavailable, what}), do: what
   defp reason_wire({:failed, {:status, status}}), do: %{"status" => status}
   defp reason_wire({:failed, {:signal, signal}}), do: %{"signal" => signal}
@@ -700,6 +712,10 @@ defmodule Cyfr.BuilderProtocol do
   defp reason(:timeout, %{"budget_ms" => budget} = wire)
        when map_size(wire) == 1 and is_integer(budget) and budget >= 0,
        do: {:ok, {:timeout, budget}}
+
+  defp reason(:memory, %{"limit_bytes" => limit} = wire)
+       when map_size(wire) == 1 and is_integer(limit) and limit > 0,
+       do: {:ok, {:memory, limit}}
 
   defp reason(:failed, %{"status" => status} = wire)
        when map_size(wire) == 1 and is_integer(status),
@@ -780,6 +796,9 @@ defmodule Cyfr.BuilderProtocol do
 
   def describe_refusal({:timeout, budget_ms}),
     do: "the build passed its budget of #{budget_ms} ms"
+
+  def describe_refusal({:memory, limit_bytes}),
+    do: "the build reached its memory bound of #{limit_bytes} bytes and was ended there"
 
   def describe_refusal({:unavailable, what}), do: "the builder cannot build this: #{what}"
   def describe_refusal({:failed, {:status, status}}), do: "the build failed (exit #{status})"
