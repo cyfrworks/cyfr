@@ -34,11 +34,6 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     "apps/cyfr/lib/cyfr/execution/mcp.ex" => 14,
     "apps/cyfr/lib/emissary/mcp/tools/system_provider.ex" => 12,
     "apps/cyfr/lib/sanctum/mcp/key_tool.ex" => 11,
-    # The tenth is the CYFR_BUILDS=false refusal: a configuration this
-    # server chose, not a resource that is missing, invalid or briefly away.
-    # The eleventh is a builder of another protocol or release, named with
-    # both sides' versions so an operator can match the images.
-    "apps/locus/lib/locus/mcp.ex" => 11,
     "apps/cyfr/lib/sanctum/mcp/profile_tool.ex" => 7,
     "apps/cyfr/lib/compendium/mcp/component_tool.ex" => 7,
     "apps/cyfr/lib/compendium/mcp.ex" => 7,
@@ -46,6 +41,9 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     "apps/cyfr/lib/emissary/mcp/mcp_servers_tool.ex" => 6,
     "apps/cyfr/lib/sanctum/mcp/oauth_tool.ex" => 3,
     "apps/cyfr/lib/sanctum/mcp.ex" => 2,
+    # A tool this provider does not define, and the validation rate a
+    # caller reached, with the seconds to wait.
+    "apps/cyfr/lib/compendium/builds/provider.ex" => 2,
     "apps/cyfr/lib/sanctum/mcp/tincture_visibility_tool.ex" => 1,
     # Two of the three are the capacity refusals a poller sees when the
     # server will not mint them an athanor: remediation prose (wait, or ask

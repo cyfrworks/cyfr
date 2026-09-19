@@ -39,7 +39,7 @@ config :cyfr,
     # Domain services
     Cyfr.Execution.MCP,
     Cyfr.Schedules.Provider,
-    Locus.MCP,
+    Compendium.Builds.Provider,
     Compendium.MCP,
     # External MCP server management. `Emissary.MCP.ExternalProvider` is not
     # here: it owns no tool of its own — the tools it discovers are the
