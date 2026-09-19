@@ -23,7 +23,7 @@ func init() {
 var updateCmd = &cobra.Command{
 	Use:     "update",
 	Short:   "Update project scaffold files (docs, WIT definitions, aqua prompts)",
-	Long:    "Update managed scaffold files (docs, WIT interface definitions, bundled aqua prompts) in the current project directory. Also ensures that docker-compose.yml has all the volume mounts and fields the cyfr server requires, adding any missing ones in place.",
+	Long:    "Update managed scaffold files (docs, WIT interface definitions, bundled aqua prompts) in the current project directory and pull the stack's images. Also ensures that docker-compose.yml has all the volume mounts and fields the cyfr server requires, adding any missing ones in place, and notes a service of the bundled stack (opus, locus-builds, mcp-bridge) that it lacks.",
 	GroupID: "server",
 	Example: "  cyfr update",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -34,10 +34,11 @@ var updateCmd = &cobra.Command{
 
 		fmt.Println("Updating project scaffold files...")
 
-		// Pull latest Docker images for the whole stack (cyfr, plus caddy when
-		// TLS mode is on and the builder when .env points builds at it) via
-		// compose so they're kept in sync. mcp-bridge is built locally and
-		// skipped by `compose pull`. Non-fatal — the project runs via Docker.
+		// Pull latest Docker images for the whole stack (cyfr and opus, plus
+		// caddy when TLS mode is on and locus-builds when .env points builds
+		// at it) via compose so they're kept in sync. mcp-bridge is built
+		// locally and skipped by `compose pull`. Non-fatal — the project runs
+		// via Docker.
 		if _, err := exec.LookPath("docker"); err == nil {
 			fmt.Println("Pulling latest Docker images...")
 			pullArgs := append(append([]string{"compose"}, profileArgs(composeProfiles(".env"))...), "pull")
@@ -73,29 +74,42 @@ var updateCmd = &cobra.Command{
 	},
 }
 
-// warnMissingStackServices prints a note if docker-compose.yml lacks the
-// mcp-bridge service — i.e. it predates the bundled stack. We don't auto-add
-// it: a hand-edited compose is the user's. `cyfr init --force` regenerates
-// the whole file from the scaffold.
-func warnMissingStackServices(path string) {
+// bundledServices are the services of the bundled stack besides cyfr, whose
+// fields ensureCyfrComposeFields keeps; caddy is the TLS profile's and
+// optional to a project that never runs one.
+var bundledServices = []string{"opus", "locus-builds", "mcp-bridge"}
+
+// missingStackServices returns the bundled services the compose file at
+// path lacks, in bundledServices' order; nil when it has them all or cannot
+// be read as a compose file.
+func missingStackServices(path string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return nil
 	}
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
-		return
+		return nil
 	}
 	services := mapValue(root.Content[0], "services")
 	if services == nil {
-		return
+		return nil
 	}
 	var missing []string
-	for _, name := range []string{"mcp-bridge"} {
+	for _, name := range bundledServices {
 		if mapValue(services, name) == nil {
 			missing = append(missing, name)
 		}
 	}
+	return missing
+}
+
+// warnMissingStackServices prints a note if docker-compose.yml lacks a
+// service of the bundled stack — i.e. it predates the stack. We don't
+// auto-add one: a hand-edited compose is the user's. `cyfr init --force`
+// regenerates the whole file from the scaffold.
+func warnMissingStackServices(path string) {
+	missing := missingStackServices(path)
 	if len(missing) == 0 {
 		return
 	}
