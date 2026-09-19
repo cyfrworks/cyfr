@@ -2,8 +2,17 @@
 # Copyright 2026 CYFR Works Inc.
 
 # :s3_integration requires MinIO, and :public_dns the public resolver;
-# each runs only when explicitly selected.
-ExUnit.configure(exclude: [:s3_integration, :public_dns])
+# each runs only when explicitly selected. A real build needs its
+# toolchain: :requires_cargo_component runs where `cargo-component` is on
+# PATH, as it is in CI, and is excluded, and said so, where it is not.
+toolchain_excludes =
+  if System.find_executable("cargo-component"), do: [], else: [:requires_cargo_component]
+
+if toolchain_excludes != [] do
+  IO.puts("cyfr: skipping #{inspect(toolchain_excludes)} — toolchain not found on PATH")
+end
+
+ExUnit.configure(exclude: [:s3_integration, :public_dns | toolchain_excludes])
 
 # The suite runs from the umbrella root, where the Opus worker service is
 # up beside CYFR: its listener and CYFR's host API listener each bound a
@@ -11,6 +20,14 @@ ExUnit.configure(exclude: [:s3_integration, :public_dns])
 # so every run the suite dispatches crosses the wire as a deployment's
 # does (`Cyfr.Test.OpusService`).
 Cyfr.Test.OpusService.wire!()
+
+# The Locus builds service is up beside them too, serving builds on a
+# loopback port of its own once given its key; a test that builds points
+# this server at it (`Cyfr.Test.LocusService.configure!/0`), and the build
+# crosses the build wire as a deployment's does. It stops serving when the
+# suite ends, so Locus's own suite, in this VM, finds it as it started.
+Cyfr.Test.LocusService.serve!()
+ExUnit.after_suite(fn _ -> Cyfr.Test.LocusService.stop!() end)
 
 # Owned by the test-runner process so it outlives every test and no two
 # tests race to create it. `Cyfr.Test.SourceTree` fills it lazily; see that
