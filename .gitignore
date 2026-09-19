@@ -20,7 +20,7 @@ erl_crash.dump
 .env.local
 .env.*.local
 # Per-container env files (the .example copies are tracked).
-.env.builder
+.env.locus
 .env.bridge
 
 # IDE and editors
