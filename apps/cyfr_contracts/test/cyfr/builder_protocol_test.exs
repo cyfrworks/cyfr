@@ -401,6 +401,8 @@ defmodule Cyfr.BuilderProtocolTest do
         {:unauthorized, :replayed},
         {:capacity, 16},
         {:timeout, 0},
+        {:memory, 1},
+        {:memory, 1_073_741_824},
         {:unavailable, "spawner"},
         {:failed, {:status, 0}},
         {:failed, {:status, -1}},
@@ -418,6 +420,59 @@ defmodule Cyfr.BuilderProtocolTest do
 
       assert Enum.sort(Enum.uniq(Enum.map(refusals, &elem(&1, 0)))) ==
                Enum.sort(BuilderProtocol.classes())
+    end
+
+    test "a build ended at its memory bound is a class of its own, never failed or timeout" do
+      vector = Enum.find(@vectors["lines"]["refusals"], &(&1["class"] == "memory"))
+      limit = vector["reason"]["limit_bytes"]
+
+      assert {:ok, {:refusal, {:memory, ^limit}, _diagnostics}} =
+               BuilderProtocol.read_line(vector["body"])
+
+      assert :memory in BuilderProtocol.classes()
+      statuses = Map.new(BuilderProtocol.classes(), &{&1, BuilderProtocol.status(&1)})
+      assert statuses.memory == 507
+      assert statuses |> Map.values() |> Enum.uniq() |> length() == map_size(statuses)
+
+      # The kill a bound ends a build with is a signal; without the class it
+      # would read as this.
+      assert {:ok, killed} = BuilderProtocol.encode_refusal({:failed, {:signal, "SIGKILL"}}, [])
+
+      assert {:ok, {:refusal, {:failed, {:signal, "SIGKILL"}}, []}} =
+               BuilderProtocol.read_line(killed)
+
+      assert {:ok, bounded} = BuilderProtocol.encode_refusal({:memory, limit}, [])
+      assert {:ok, {:refusal, {:memory, ^limit}, []}} = BuilderProtocol.read_line(bounded)
+      refute Jason.decode!(bounded)["class"] == Jason.decode!(killed)["class"]
+
+      assert BuilderProtocol.describe_refusal({:memory, limit}) =~
+               "memory bound of #{limit} bytes"
+
+      # A reason of another class's shape never reads under this one, nor
+      # this one's under another.
+      for {class, reason} <- [
+            {"memory", %{"signal" => "SIGKILL"}},
+            {"memory", %{"status" => 137}},
+            {"memory", %{"budget_ms" => 270_000}},
+            {"memory", %{"limit_bytes" => 0}},
+            {"memory", %{"limit_bytes" => -1}},
+            {"memory", %{"limit_bytes" => 1.5}},
+            {"memory", "1073741824"},
+            {"failed", %{"limit_bytes" => limit}},
+            {"timeout", %{"limit_bytes" => limit}}
+          ] do
+        body =
+          Jason.encode!(%{
+            "version" => 1,
+            "type" => "refusal",
+            "class" => class,
+            "reason" => reason,
+            "diagnostics" => []
+          })
+
+        assert {:error, {:invalid_field, "reason"}} = BuilderProtocol.read_line(body),
+               "#{class} read #{inspect(reason)}"
+      end
     end
 
     test "a read error maps to a refusal: another version to protocol_mismatch, anything else to malformed" do

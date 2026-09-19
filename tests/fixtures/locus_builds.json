@@ -15,6 +15,7 @@
     "unauthorized": 401,
     "capacity": 429,
     "timeout": 504,
+    "memory": 507,
     "unavailable": 503,
     "failed": 422,
     "protocol_mismatch": 409
@@ -174,6 +175,18 @@
         ],
         "sentence": "the build passed its budget of 270000 ms",
         "body": "{\"class\":\"timeout\",\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output:    Compiling vector v0.1.0\"],\"reason\":{\"budget_ms\":270000},\"type\":\"refusal\",\"version\":1}"
+      },
+      {
+        "class": "memory",
+        "reason": {
+          "limit_bytes": 1073741824
+        },
+        "diagnostics": [
+          "compiling: Compiling reagent (rust)...",
+          "output:    Compiling vector v0.1.0"
+        ],
+        "sentence": "the build reached its memory bound of 1073741824 bytes and was ended there",
+        "body": "{\"class\":\"memory\",\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output:    Compiling vector v0.1.0\"],\"reason\":{\"limit_bytes\":1073741824},\"type\":\"refusal\",\"version\":1}"
       },
       {
         "class": "unavailable",
@@ -446,6 +459,31 @@
     {
       "name": "refusal_capacity_reason_shape",
       "body": "{\"class\":\"capacity\",\"diagnostics\":[],\"reason\":\"2\",\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_memory_reason_shape",
+      "body": "{\"class\":\"memory\",\"diagnostics\":[],\"reason\":{\"signal\":\"KILL\"},\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_memory_limit_zero",
+      "body": "{\"class\":\"memory\",\"diagnostics\":[],\"reason\":{\"limit_bytes\":0},\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_memory_limit_not_an_integer",
+      "body": "{\"class\":\"memory\",\"diagnostics\":[],\"reason\":{\"limit_bytes\":\"1073741824\"},\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_memory_reason_with_another_field",
+      "body": "{\"class\":\"memory\",\"diagnostics\":[],\"reason\":{\"limit_bytes\":1073741824,\"signal\":\"KILL\"},\"type\":\"refusal\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "refusal_failed_with_a_memory_reason",
+      "body": "{\"class\":\"failed\",\"diagnostics\":[],\"reason\":{\"limit_bytes\":1073741824},\"type\":\"refusal\",\"version\":1}",
       "error": "invalid_field"
     },
     {

@@ -270,6 +270,47 @@ defmodule Opus.SpawnKeeperTest do
              Base.decode16!(end_frame["encoded_hex"], case: :lower)
   end
 
+  # This client asks for no memory bound: the report every `exited` carries
+  # is understood, and the runner's end reaches its handle as its signal.
+  @tag skip:
+         if(File.exists?(@vectors),
+           do: false,
+           else:
+             "the keeper's vectors (tests/fixtures/spawn_protocol.json) are not in this checkout"
+         )
+  test "the keeper's memory vectors: a runner spawn may carry a bound, and an exit reported at one is understood",
+       %{spawner: spawner, name: name, dir: dir} do
+    vectors = @vectors |> File.read!() |> Jason.decode!()
+
+    assert %{"memory_bytes" => bound, "control" => true, "argv" => ["/app/bin/opus", "start"]} =
+             Enum.find(
+               vectors["valid_requests"],
+               &(&1["pool"] == "runner" and &1["memory_bytes"])
+             )
+
+    assert is_integer(bound) and bound >= 16_777_216
+
+    assert Enum.all?(
+             vectors["replies"],
+             &(&1["type"] != "exited" or is_boolean(&1["memory_exceeded"]))
+           )
+
+    exited = Enum.find(vectors["replies"], &(&1["type"] == "exited" and &1["memory_exceeded"]))
+    assert %{"code" => nil, "signal" => "SIGKILL", "spawn_id" => spawn_id} = exited
+
+    handle = start_handle!(name)
+    %{"id" => id, "attach" => %{"token" => token}} = sent = request(spawner)
+    refute Map.has_key?(sent, "memory_bytes")
+    reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
+    relay = attach!(dir, token)
+    assert_receive {RunnerProcess, ^handle, :ready}, 5_000
+
+    reply(spawner, exited)
+    assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
+    :gen_tcp.close(relay)
+    assert_receive {RunnerProcess, ^handle, :closed}, 5_000
+  end
+
   test "the client refuses to run without an inherited channel, and the direct keeper with one" do
     assert :ok = Spawn.available(%{"CYFR_SPAWN_CHANNEL" => "socket:[3]"}, [])
     assert {:error, _} = Spawn.available(%{}, [])

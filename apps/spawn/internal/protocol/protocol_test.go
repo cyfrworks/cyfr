@@ -106,10 +106,12 @@ func TestSharedRepliesMatchTheEncoders(t *testing.T) {
 		NewSpawned("7", "00112233445566778899aabbccddeeff", 20007, 41),
 		NewError("8", "", CodeCapacity),
 		NewError("", "00112233445566778899aabbccddeeff", CodeUnknownSpawn),
-		NewExited("00112233445566778899aabbccddeeff", &code, nil),
-		NewExited("00112233445566778899aabbccddeeff", nil, &signal),
+		NewExited("00112233445566778899aabbccddeeff", &code, nil, false),
+		NewExited("00112233445566778899aabbccddeeff", nil, &signal, false),
 		NewReleased("00112233445566778899aabbccddeeff"),
 		NewPoolReply("9", "backends", 32, 30, 1),
+		NewExited("00112233445566778899aabbccddeeff", nil, &signal, true),
+		NewError("12", "", CodeMemoryUnavailable),
 	}
 	want := loadVectors(t).Replies
 	if len(want) != len(built) {
@@ -170,6 +172,45 @@ func TestControlIsDecodedAndDefaultsToNone(t *testing.T) {
 	}
 	if withControl == 0 || without == 0 || plain == 0 {
 		t.Fatalf("vectors: %d with control, %d with control false, %d without the field", withControl, without, plain)
+	}
+}
+
+func TestMemoryBoundIsDecodedForEveryPoolAndDefaultsToNone(t *testing.T) {
+	v := loadVectors(t)
+	bounds := map[string][]uint64{}
+	var unbounded int
+	for _, raw := range v.ValidRequests {
+		req, err := ParseRequest(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case req.Type != TypeSpawn:
+			if req.MemoryBytes != nil {
+				t.Fatalf("%s decoded a memory bound", raw)
+			}
+		case req.MemoryBytes == nil:
+			unbounded++
+		default:
+			bounds[req.Pool] = append(bounds[req.Pool], *req.MemoryBytes)
+		}
+	}
+	want := map[string][]uint64{"build": {1 << 30, MinMemoryBytes, MaxMemoryBytes}, "runner": {512 << 20}}
+	if !reflect.DeepEqual(bounds, want) || unbounded == 0 {
+		t.Fatalf("vectors: bounds %v, want %v; %d spawns without one", bounds, want, unbounded)
+	}
+	if MinMemoryBytes != 16<<20 || MaxMemoryBytes != 1<<40 {
+		t.Fatalf("bounds %d..%d", uint64(MinMemoryBytes), uint64(MaxMemoryBytes))
+	}
+
+	var refused int
+	for _, c := range v.InvalidRequests {
+		if strings.Contains(c.Why, "memory bound") {
+			refused++
+		}
+	}
+	if refused < 8 {
+		t.Fatalf("%d vectors refuse a malformed memory bound, want zero, below, above, negative, fractional, not a number, misplaced and on another request", refused)
 	}
 }
 

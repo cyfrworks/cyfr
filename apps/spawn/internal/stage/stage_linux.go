@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/spawn/internal/cgroup"
 	"github.com/cyfr/spawn/internal/procfs"
 	"github.com/cyfr/spawn/internal/protocol"
 )
@@ -70,6 +71,9 @@ func Main() int {
 	}
 	if err := checkCredentials(spec); err != nil {
 		return fail("credentials: %v", err)
+	}
+	if err := checkCgroup(spec); err != nil {
+		return fail("cgroup: %v", err)
 	}
 
 	syscall.Umask(0o077)
@@ -136,6 +140,27 @@ func checkCredentials(spec Spec) error {
 	}
 	if st.CapEff != 0 || st.CapPrm != 0 || st.CapAmb != 0 || !st.NoNewPrivs {
 		return errors.New("capabilities remain or no_new_privs is unset")
+	}
+	return nil
+}
+
+// checkCgroup refuses to continue unless the process is in the memory-bounded
+// group the spec names: a command asked to run under a bound never runs
+// outside one.
+func checkCgroup(spec Spec) error {
+	if spec.Cgroup == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(cgroup.SelfPath)
+	if err != nil {
+		return err
+	}
+	own, err := cgroup.Own(raw)
+	if err != nil {
+		return err
+	}
+	if own != spec.Cgroup {
+		return fmt.Errorf("running in %s, not %s", own, spec.Cgroup)
 	}
 	return nil
 }

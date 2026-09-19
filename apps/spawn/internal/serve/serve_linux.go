@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/cyfr/spawn/internal/cgroup"
 	"github.com/cyfr/spawn/internal/home"
 	"github.com/cyfr/spawn/internal/logx"
 	"github.com/cyfr/spawn/internal/pool"
@@ -137,7 +138,25 @@ func Main(args []string) int {
 	for _, spec := range cfg.Pools {
 		s.pools[spec.Name] = pool.New(spec)
 	}
+	s.memory = delegateMemory(log)
 	return s.run()
+}
+
+// delegateMemory prepares the spawner's cgroup for memory-bounded spawns, or
+// reports why a spawn asking for a bound will be refused here.
+func delegateMemory(log *logx.Logger) *cgroup.Manager {
+	self, err := os.ReadFile(cgroup.SelfPath)
+	if err != nil {
+		log.Info("memory bounds are unavailable; a spawn asking for one is refused: %v", err)
+		return nil
+	}
+	m, err := cgroup.Delegate(cgroup.Root, self)
+	if err != nil {
+		log.Info("memory bounds are unavailable; a spawn asking for one is refused: %v", err)
+		return nil
+	}
+	log.Info("memory bounds are enforced: a cgroup under %s for each spawn asking for one", cgroup.Root)
+	return m
 }
 
 // child is a process this spawner started and will reap.
@@ -164,6 +183,8 @@ type spawn struct {
 	home    string
 	leader  *child
 	relay   *child
+	// group is the spawn's memory-bounded cgroup, nil without a bound.
+	group *cgroup.Group
 
 	// exitReported closes once `exited` has been sent for the leader.
 	exitReported chan struct{}
@@ -181,6 +202,9 @@ type server struct {
 	// roots are the writable mounts and the mqueue mount a pooled uid can
 	// leave something behind in.
 	roots residue.Roots
+	// memory makes the cgroups of memory-bounded spawns; nil where the
+	// spawner cannot, and a spawn asking for a bound is refused.
+	memory *cgroup.Manager
 
 	// mu guards pools, spawns and waiters, and is held across every fork,
 	// reap and signal, so a pid is never signalled after it was reaped.
@@ -462,6 +486,11 @@ func (s *server) handleSpawn(req *protocol.Request) {
 	if s.closing.Load() {
 		return
 	}
+	if req.MemoryBytes != nil && s.memory == nil {
+		s.log.Warn("spawn %s refused: it asks for a memory bound, which is unavailable here", req.ID)
+		s.send(protocol.NewError(req.ID, "", protocol.CodeMemoryUnavailable))
+		return
+	}
 	s.mu.Lock()
 	p := s.pools[req.Pool]
 	var uid int
@@ -572,6 +601,19 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		opened = append(opened, commandCtl, relayCtl)
 	}
 
+	// A bounded spawn's group exists before its stage does, and the stage
+	// is moved into it while it still waits for its spec, so nothing of the
+	// spawn runs outside the bound; the stage checks where it is for itself.
+	var groupPath string
+	if req.MemoryBytes != nil {
+		group, err := s.memory.Create(cgroup.Name(sp.account.UID), *req.MemoryBytes)
+		if err != nil {
+			return protocol.CodeInternal, err
+		}
+		sp.group = group
+		groupPath = group.Path()
+	}
+
 	spec, err := json.Marshal(stage.Spec{
 		UID:      sp.account.UID,
 		GID:      sp.account.GID,
@@ -582,6 +624,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		Env:      req.Env,
 		Limits:   req.Rlimits.Resolve(),
 		Control:  req.Control,
+		Cgroup:   groupPath,
 	})
 	if err != nil {
 		return protocol.CodeInternal, err
@@ -600,6 +643,11 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	sp.leader = leader
 	for _, f := range stageOwned {
 		_ = f.Close()
+	}
+	if sp.group != nil {
+		if err := sp.group.Add(leader.pid); err != nil {
+			return protocol.CodeInternal, err
+		}
 	}
 
 	_ = specW.SetWriteDeadline(time.Now().Add(stageTimeout))
@@ -661,9 +709,29 @@ func (s *server) watchLeader(sp *spawn) {
 		c := ws.ExitStatus()
 		code = &c
 	}
-	s.send(protocol.NewExited(sp.id, code, sig))
+	s.send(protocol.NewExited(sp.id, code, sig, s.memoryExceeded(sp)))
 	close(sp.exitReported)
 	s.retire(sp, leaderExitGrace, true)
+}
+
+// memoryExceeded reports whether the kernel killed processes of the spawn at
+// the spawn's own memory bound, as the group's counters say; the kernel
+// counts a kill before it delivers it, so a leader reaped after one finds it
+// counted. A kill for the container's limit is not the spawn's bound.
+func (s *server) memoryExceeded(sp *spawn) bool {
+	if sp.group == nil {
+		return false
+	}
+	kills, err := sp.group.Kills()
+	switch {
+	case err != nil:
+		s.log.Error("spawn %s: reading its memory counters: %v", sp.id, err)
+	case kills.AtBound:
+		s.log.Warn("spawn %s: uid %d reached its memory bound and the kernel killed its processes", sp.id, sp.account.UID)
+	case kills.Outside:
+		s.log.Warn("spawn %s: processes of uid %d were killed for the container's memory limit, under the spawn's own bound", sp.id, sp.account.UID)
+	}
+	return kills.AtBound
 }
 
 // retire ends a spawn once: every process of its uid is terminated, what
@@ -685,6 +753,14 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 				case <-sp.relay.done:
 				case <-time.After(time.Second):
 					s.signalChild(sp.relay, unix.SIGKILL)
+				}
+			}
+			// A group is removable once it holds no process, which a clean
+			// scrub has established; the next spawn under the uid removes
+			// one that was not.
+			if sp.group != nil {
+				if err := sp.group.Remove(); err != nil {
+					s.log.Warn("spawn %s: removing the memory group of uid %d: %v", sp.id, uid, err)
 				}
 			}
 

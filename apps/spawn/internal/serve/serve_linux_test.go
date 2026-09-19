@@ -36,7 +36,8 @@ import (
 
 // TestMain lets the test binary stand in for cyfr-spawn's helpers, which
 // the spawner under test starts as `<self> stage`, `<self> relay` and
-// `<self> retire`, dispatched as main.go dispatches them.
+// `<self> retire`, dispatched as main.go dispatches them. `<self> hold` is
+// the memory tests' command.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -46,9 +47,29 @@ func TestMain(m *testing.M) {
 			os.Exit(relay.Main())
 		case "retire":
 			os.Exit(retire.Main())
+		case "hold":
+			os.Exit(hold(os.Args[2:]))
 		}
 	}
 	os.Exit(m.Run())
+}
+
+// hold touches every page of the MiB it is told to hold, says so, keeps them
+// for the seconds it is told to and exits 0.
+func hold(args []string) int {
+	mib, _ := strconv.Atoi(args[0])
+	seconds, _ := strconv.Atoi(args[1])
+	held := make([][]byte, 0, mib)
+	for i := 0; i < mib; i++ {
+		page := make([]byte, 1<<20)
+		for j := range page {
+			page[j] = 1
+		}
+		held = append(held, page)
+	}
+	fmt.Println("held")
+	time.Sleep(time.Duration(seconds) * time.Second)
+	return int(held[0][0]) - 1
 }
 
 const (
@@ -217,11 +238,22 @@ func (k *keeper) reply(t *testing.T) map[string]any {
 // and uid, and the relay's connection read past its attach frame.
 func (k *keeper) spawn(t *testing.T, id, script string, env map[string]string, control bool) (string, int, *relayConn) {
 	t.Helper()
-	line, err := json.Marshal(map[string]any{
+	return k.spawnBounded(t, id, script, env, control, 0)
+}
+
+// spawnRequest is the parsed request for a spawn of `/bin/sh -c script`,
+// with a memory bound when memoryBytes is not zero.
+func spawnRequest(t *testing.T, attach, id, script string, env map[string]string, control bool, memoryBytes uint64) *protocol.Request {
+	t.Helper()
+	message := map[string]any{
 		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "pool": "runner",
 		"argv": []string{"/bin/sh", "-c", script}, "env": env, "control": control,
-		"attach": map[string]string{"path": k.attach, "token": testToken},
-	})
+		"attach": map[string]string{"path": attach, "token": testToken},
+	}
+	if memoryBytes != 0 {
+		message["memory_bytes"] = memoryBytes
+	}
+	line, err := json.Marshal(message)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +261,13 @@ func (k *keeper) spawn(t *testing.T, id, script string, env map[string]string, c
 	if rerr != nil {
 		t.Fatal(rerr)
 	}
-	k.s.handleSpawn(req)
+	return req
+}
+
+// spawnBounded is spawn with a memory bound, none when memoryBytes is zero.
+func (k *keeper) spawnBounded(t *testing.T, id, script string, env map[string]string, control bool, memoryBytes uint64) (string, int, *relayConn) {
+	t.Helper()
+	k.s.handleSpawn(spawnRequest(t, k.attach, id, script, env, control, memoryBytes))
 
 	spawned := k.reply(t)
 	if spawned["type"] != protocol.TypeSpawned || spawned["id"] != id {
