@@ -282,6 +282,91 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert {:ok, %{attempts: []}} = ScriptedWorker.status()
   end
 
+  # A crash of a runner, or a memory kill the worker service made, ends the
+  # run and is reported: the work the tenant would be charged an unreaped
+  # kill for is over, and the worker service said so. The waiter's kill of
+  # its lost run would find the runner ended and be answered `:ok`, as a
+  # kill of a live runner is (`c:Cyfr.WorkerAPI.kill/1`), so a count taken
+  # there is a refusal the tenant did not earn.
+  test "a runner that ends on its own closes the run and costs the athanor no unreaped kill", %{
+    ctx: ctx
+  } do
+    start_supervised!({ScriptedWorker, ref: @scripted, script: [{:probe, self()}, :hang]})
+    id = Cyfr.UUID7.execution_id()
+    athanor_id = ctx.athanor_id
+    watch_unreaped!()
+
+    task =
+      Task.async(fn ->
+        Dispatch.run(ctx, "#{@scripted}:1.0.0", %{}, authority: Authority.zero(), execution_id: id)
+      end)
+
+    assert_receive {:scripted_probe, runner, ^id}, 10_000
+
+    # The runner ends while it holds the run, its attempt still open.
+    Process.exit(runner, :kill)
+
+    assert {:error, "Execution terminated: runner stopped without cleanup"} = Task.await(task)
+    assert Attempt.whereis(id) == nil
+    assert %{status: "failed"} = Arca.Repo.get(Arca.Execution, id)
+
+    # The athanor carries no note for it, and nothing was killed, because
+    # nothing was left to kill.
+    refute_received {:unreaped_kill, ^id, _count}
+    refute Map.has_key?(Cyfr.Slots.status(Cyfr.Execution.Slots).unreaped, athanor_id)
+    refute id in ScriptedWorker.kills()
+
+    # And the worker service answers a kill of that run as the contract
+    # says: `:ok` for a runner of this boot that already ended, and
+    # `:not_found` only where no runner of this boot ever held it.
+    assert :ok = WorkerClient.kill(ScriptedWorker.endpoint(), id)
+    assert {:error, :not_found} = WorkerClient.kill(ScriptedWorker.endpoint(), "exec_never_ran")
+  end
+
+  # The other half of the same distinction: a cancel ends the row and kills
+  # what ran it, so the kill the run's end is counted by is still made and
+  # still noted, however the runner's exit is reported afterwards.
+  test "a cancel of the same run is still counted against the athanor", %{ctx: ctx} do
+    start_supervised!({ScriptedWorker, ref: @scripted, script: [{:probe, self()}, :hang]})
+    id = Cyfr.UUID7.execution_id()
+    athanor_id = ctx.athanor_id
+    watch_unreaped!()
+
+    task =
+      Task.async(fn ->
+        Dispatch.run(ctx, "#{@scripted}:1.0.0", %{}, authority: Authority.zero(), execution_id: id)
+      end)
+
+    assert_receive {:scripted_probe, _runner, ^id}, 10_000
+
+    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, id)
+    assert {:error, _cancelled} = Task.await(task)
+
+    assert id in ScriptedWorker.kills()
+    assert_received {:unreaped_kill, ^id, 1}
+    assert Cyfr.Slots.status(Cyfr.Execution.Slots).unreaped[athanor_id] == 1
+  end
+
+  # Every unreaped kill noted from here on, forwarded to this process.
+  defp watch_unreaped! do
+    handler = "scripted-unreaped-#{System.unique_integer([:positive])}"
+    test = self()
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:cyfr, :opus, :execution, :unreaped_kill],
+        &__MODULE__.forward_unreaped/4,
+        test
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  @doc false
+  def forward_unreaped(_event, %{unreaped_count: count}, metadata, test),
+    do: send(test, {:unreaped_kill, metadata.execution_id, count})
+
   test "a waiter is killed once the answer it waits for is written, before it returns it", %{
     ctx: ctx
   } do

@@ -82,7 +82,7 @@ defmodule Cyfr.Execution.Attempt do
   back what the run held, when a call finds the attempt no longer holds its
   row (another attempt took it over, it was cancelled or it lapsed), when
   its row was ended before a runner attached (`stop_ended/1`), when
-  its runner is gone (`stop_unclosed/2`), and when its waiter exits. A
+  its row lapsed (`stop_unclosed/2`), and when its waiter exits. A
   waiter that exits kills the run: the attempt asks its worker service to
   kill the runner (`c:Cyfr.WorkerAPI.kill/1`), unless the run is still
   waiting for its slot and so has none, counts a kill of a runner
@@ -95,6 +95,17 @@ defmodule Cyfr.Execution.Attempt do
   `Cyfr.Execution.Dispatch.stop/2` kills its run through that worker
   service, and the worker service's report of the run's exit
   (`stop_unclosed/2`) stops it.
+
+  A runner that ended on its own is the one stop the attempt closes the
+  run for: the worker service reports that runner's exit
+  (`stop_unclosed/2` naming it), nothing of the run is running any more,
+  and no caller asked for a kill (`stop_ended/1`), so the attempt closes
+  the run lost itself and tells its waiter the result. The waiter then
+  neither kills a runner the worker service already reported ended nor
+  counts that kill against the athanor: a crash, a memory kill or a
+  deadline the worker service enforced costs the tenant no unreaped kill
+  it did not earn. A run whose row a caller ended keeps the old path, so
+  the kill a cancel made is still counted where the run's end is seen.
 
   A stop by its supervisor runs to the end: a waiter already gone is
   reacted to as above, whether or not its exit was handled yet, and what
@@ -187,6 +198,7 @@ defmodule Cyfr.Execution.Attempt do
                 declared_needs: [],
                 roster: [],
                 held_invoke: false,
+                ended_by_caller: false,
                 secrets: %{},
                 tokens: [],
                 nonces: %{}
@@ -314,7 +326,9 @@ defmodule Cyfr.Execution.Attempt do
   for its slot leaves the queue, and one that holds its slot gives it
   back, leaving a runner its start may have reached to its waiter's kill.
   An attempt whose runner attached is left to that runner's exit report
-  (`stop_unclosed/2`). One whose row is still live, or cannot be read, is
+  (`stop_unclosed/2`), and remembers that a caller ended its row: the kill
+  that caller makes reaches native work, and is counted where the run's end
+  is seen. One whose row is still live, or cannot be read, is
   left as it is; a queued one re-reads its row when its slot is granted.
   """
   @spec stop_ended(String.t()) :: :ok
@@ -465,9 +479,20 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   @doc """
-  Stop the open attempt `attempt` held by `holder`, without closing its
-  run: its runner exited, or its row lapsed. An attempt held by another
-  service, boot or runner, or none open, is left alone.
+  Stop the open attempt `attempt` held by `holder`: its runner exited, or
+  its row lapsed. An attempt held by another service, boot or runner, or
+  none open, is left alone.
+
+  A `holder` naming a runner is a worker service's report of that runner's
+  exit (`Cyfr.Execution.Host.runner_exited/2`), so nothing of the run is
+  running any more. Unless a caller ended the row first and is killing what
+  ran it (`stop_ended/1`), such an attempt closes the run lost
+  (`Cyfr.Execution.Close.lost/1`) and tells its waiter the result, which
+  answers the row as the waiter's own lost close would and spares the run a
+  kill of a runner already ended and the athanor its count. A holder naming
+  no runner is a lapse, whose runner may still be running, and a row a
+  caller ended is that caller's kill to count: each stops the attempt
+  without closing the run, leaving it to its waiter's lost close.
   """
   @spec stop_unclosed(String.t(), holder()) :: :ok
   def stop_unclosed(attempt, %{boot_id: boot_id} = holder)
@@ -667,9 +692,11 @@ defmodule Cyfr.Execution.Attempt do
         state.boot_id == holder.boot_id and
         (is_nil(holder.runner) or state.claimed_by == holder.runner)
 
-    if held?,
-      do: {:stop, :normal, :ok, release_holds(state)},
-      else: {:reply, :ok, state}
+    cond do
+      not held? -> {:reply, :ok, state}
+      runner_ended?(state, holder) -> close_lost(state)
+      true -> {:stop, :normal, :ok, release_holds(state)}
+    end
   end
 
   # A call no clause names is refused without matching its terms, which
@@ -720,9 +747,11 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   # A runner that attached was started: its exit report stops the attempt.
+  # The caller that ended the row is killing what ran it, so that kill is
+  # noted where the run's end is seen, not skipped as a runner's own end.
   @impl true
   def handle_cast(:stop_ended, %__MODULE__{claimed_by: runner} = state) when is_binary(runner),
-    do: {:noreply, state}
+    do: {:noreply, %{state | ended_by_caller: true}}
 
   def handle_cast(:stop_ended, state) do
     case row_live(state) do
@@ -947,6 +976,23 @@ defmodule Cyfr.Execution.Attempt do
         "[Cyfr.Execution.Attempt] #{state.execution_id}'s charge was not given back: " <>
           inspect(reason)
       )
+  end
+
+  # The worker service reported this runner's exit, and no caller ended the
+  # row to kill it: the run ended on its own, and nothing native is left for
+  # a kill to reap. An attempt handed to its runner has no waiter to tell,
+  # and its run is counted where its end is seen
+  # (`Cyfr.Execution.Dispatch.stop/2`).
+  defp runner_ended?(state, holder),
+    do: is_binary(holder.runner) and is_pid(state.waiter) and not state.ended_by_caller
+
+  # The run is closed as its waiter would close it, in this process, and
+  # what the run held goes back before the waiter hears the result.
+  defp close_lost(state) do
+    result = Close.lost(state.close)
+    state = release_holds(state)
+    send(state.waiter, {__MODULE__, self(), result})
+    {:stop, :normal, :ok, state}
   end
 
   # A waiter that exited kills its run and lapses its row. The kill of a

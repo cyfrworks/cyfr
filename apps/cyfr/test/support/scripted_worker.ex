@@ -29,7 +29,11 @@ defmodule Cyfr.Test.ScriptedWorker do
   Its status counts its runners as every worker service does: `busy` while
   a run's process is alive, and `tainted` from a kill until the killed
   process has gone; it keeps no runner fresh or idle, bounds no runner's
-  memory and never refuses one. A reference it does
+  memory and never refuses one. Its kill is idempotent as
+  `c:Cyfr.WorkerAPI.kill/1` says: `:ok` for an execution a runner of this
+  boot holds or already ended, whether by a kill or on its own, and
+  `{:error, :not_found}` only for one no runner of this boot ever held,
+  which CYFR counts as nothing whose native work may still run. A reference it does
   not script never reaches it: starting it puts an
   entry for its scripted references alone ahead of the configured worker
   services in `config :cyfr, :workers` (`workers/2`), so
@@ -245,6 +249,9 @@ defmodule Cyfr.Test.ScriptedWorker do
        calls: [],
        kills: [],
        runners: %{},
+       # The executions whose runner has ended on this boot: a kill of one
+       # is `:ok` again, as a real worker service answers it.
+       ended: MapSet.new(),
        tainted: MapSet.new()
      }}
   end
@@ -305,7 +312,12 @@ defmodule Cyfr.Test.ScriptedWorker do
         {:reply, :ok, %{state | tainted: MapSet.put(state.tainted, pid)}}
 
       nil ->
-        {:reply, {:error, :not_found}, state}
+        # A runner of this boot that already ended, by a kill or on its own,
+        # is `:ok` again; only an execution no runner of this boot ever held
+        # is `:not_found`.
+        if MapSet.member?(state.ended, execution_id),
+          do: {:reply, :ok, state},
+          else: {:reply, {:error, :not_found}, state}
     end
   end
 
@@ -356,7 +368,14 @@ defmodule Cyfr.Test.ScriptedWorker do
 
       {runner, runners} ->
         if reason != :normal, do: report(runner)
-        {:noreply, %{state | runners: runners, tainted: MapSet.delete(state.tainted, pid)}}
+
+        {:noreply,
+         %{
+           state
+           | runners: runners,
+             ended: MapSet.put(state.ended, runner.execution_id),
+             tainted: MapSet.delete(state.tainted, pid)
+         }}
     end
   end
 
