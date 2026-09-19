@@ -101,4 +101,45 @@ defmodule Opus.DirectKeeperTest do
 
     assert_gone([leader, child])
   end
+
+  describe "a runner's log relay" do
+    # A home as `Direct.spawn/1` lays it out, and the relay reading its
+    # fifo as `Direct.spawn/1` starts it, with no runner ever opening the
+    # fifo to write: the relay waits in its open, which is where a runner
+    # ended before its shell opened the fifo leaves it.
+    defp stranded_relay! do
+      home =
+        Path.join(System.tmp_dir!(), "opus_runner_test_#{System.unique_integer([:positive])}")
+
+      log = Path.join(home, "log")
+      File.mkdir_p!(home)
+      {_out, 0} = System.cmd("mkfifo", ["-m", "600", log])
+      relay = Port.open({:spawn_executable, "/bin/cat"}, [:binary, :stream, :eof, args: [log]])
+      {:os_pid, os_pid} = Port.info(relay, :os_pid)
+      {home, relay, os_pid}
+    end
+
+    test "a relay waiting on a fifo no runner opened ends when the home is removed" do
+      {home, relay, os_pid} = stranded_relay!()
+      assert alive?(os_pid)
+
+      assert :ok = Direct.remove_home(home)
+
+      assert_receive {^relay, :eof}, 5_000
+      Port.close(relay)
+      assert_gone([os_pid])
+      refute File.exists?(home)
+    end
+
+    test "removing a home whose relay has already ended does not wait on its fifo" do
+      {home, relay, os_pid} = stranded_relay!()
+      Port.close(relay)
+      System.cmd("kill", ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
+      assert_gone([os_pid])
+
+      task = Task.async(fn -> Direct.remove_home(home) end)
+      assert {:ok, :ok} = Task.yield(task, 5_000)
+      refute File.exists?(home)
+    end
+  end
 end

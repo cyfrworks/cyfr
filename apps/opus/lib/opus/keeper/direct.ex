@@ -96,7 +96,7 @@ defmodule Opus.Keeper.Direct do
           # No janitor to reap it: the runner is ended here and now.
           signal(os_pid, "KILL")
           Port.close(port)
-          File.rm_rf(home)
+          remove_home(home)
           {:error, {:spawn_failed, reason}}
       end
     else
@@ -130,7 +130,7 @@ defmodule Opus.Keeper.Direct do
 
   def handle_message(%{port: port} = channel, {port, {:exit_status, status}}) do
     GenServer.cast(janitor(), {:gone, channel.os_pid})
-    File.rm_rf(channel.home)
+    remove_home(channel.home)
     {:events, [{:exited, ended(status)}, :released], channel}
   end
 
@@ -237,7 +237,7 @@ defmodule Opus.Keeper.Direct do
     case Enum.find(state.runners, fn {_os_pid, entry} -> entry.monitor == monitor end) do
       {os_pid, entry} ->
         signal(os_pid, "KILL")
-        File.rm_rf(entry.home)
+        remove_home(entry.home)
         {:noreply, %{state | runners: Map.delete(state.runners, os_pid)}}
 
       nil ->
@@ -256,10 +256,39 @@ defmodule Opus.Keeper.Direct do
   def terminate(_reason, state) do
     for {os_pid, entry} <- state.runners do
       signal(os_pid, "KILL")
-      File.rm_rf(entry.home)
+      remove_home(entry.home)
     end
 
     :ok
+  end
+
+  @doc false
+  # A runner's home, and with it the fifo its standard error went to. The
+  # relay reading the fifo blocks in its open until a writer opens it, and
+  # a runner ended before its shell opened the fifo never does: the relay
+  # is no process of the runner's group, so no signal reaches it, and
+  # removing the fifo does not wake an open already waiting on it. Opening
+  # the fifo for reading and writing never blocks, counts as the writer the
+  # relay waits for, and closes as it is opened, so the relay reads its end
+  # and exits; a relay that has ended already is not waited for.
+  @spec remove_home(Path.t()) :: :ok
+  def remove_home(home) do
+    log = Path.join(home, "log")
+
+    if File.exists?(log) do
+      System.cmd("/bin/sh", ["-c", ~s(exec 3<>"$0"), log], stderr_to_stdout: true)
+    end
+
+    File.rm_rf(home)
+    :ok
+  rescue
+    e ->
+      Logger.warning(
+        "[Opus.Keeper.Direct] releasing a runner's log relay failed: #{Exception.message(e)}"
+      )
+
+      File.rm_rf(home)
+      :ok
   end
 
   # A port's child leads its own process group, so the group signal
