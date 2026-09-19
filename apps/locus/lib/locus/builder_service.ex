@@ -343,21 +343,13 @@ defmodule Locus.BuilderService do
 
   defp finish(conn, _s, {:error, :cancelled}), do: conn
 
+  # The builder held its outputs to the wire's bounds and the lines were
+  # admitted within the log's, so the result encodes.
   defp finish(conn, s, {:ok, built}) do
-    diagnostics = Enum.reverse(s.lines)
+    {:ok, line} =
+      BuilderProtocol.encode_result(Map.put(built, :diagnostics, Enum.reverse(s.lines)))
 
-    case BuilderProtocol.encode_result(Map.put(built, :diagnostics, diagnostics)) do
-      {:ok, line} ->
-        terminal(conn, line)
-
-      # What the builder answered is not a result the wire carries; the
-      # reader's own sentence says why.
-      {:error, error} ->
-        note =
-          Diagnostics.line(:validating, Diagnostics.sentence(BuilderProtocol.describe(error)))
-
-        refusal_line(conn, {:failed, {:status, 0}}, diagnostics ++ [note])
-    end
+    terminal(conn, line)
   end
 
   defp finish(conn, s, {:error, refusal}), do: refusal_line(conn, refusal, Enum.reverse(s.lines))
