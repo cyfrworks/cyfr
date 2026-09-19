@@ -310,17 +310,24 @@ class Sampler(threading.Thread):
 
 
 def container_state(stack):
-    """The container as Docker and its own cgroup report it; a container that is down reports what it can."""
+    """The container as Docker and its own cgroup report it; a container that is down reports what it can.
+
+    A container started again gives its init and its release the pids they
+    had, and Docker's own start time can lag the restart, so each is named by
+    its pid and the kernel's start time for it (field 22 of /proc/<pid>/stat).
+    """
     inspect = json.loads(run("docker", "inspect", stack.container).stdout)[0]
     events = {}
     for line in stack.exec("cat /sys/fs/cgroup/memory.events").stdout.splitlines():
         name, count = line.split()
         events[name] = int(count)
+    pids = [1] + [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]]
+    started = stack.exec(" ".join(f"echo {pid}:$(cut -d' ' -f22 /proc/{pid}/stat 2>/dev/null);" for pid in pids)).stdout.split()
     return {
         "oom_killed": inspect["State"]["OOMKilled"],
-        "started_at": inspect["State"]["StartedAt"],
+        "init": started[:1],
         "events": events,
-        "release_pids": [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]],
+        "release": started[1:],
         "current": int(stack.exec("cat /sys/fs/cgroup/memory.current").stdout.strip() or 0),
     }
 
@@ -340,12 +347,12 @@ def brief(answer):
 
 
 def print_container(limit, before, after, sampler):
-    again = after["started_at"] != before["started_at"]
+    again = after["init"] != before["init"]
     delta = {name: count - (0 if again else before["events"].get(name, 0)) for name, count in after["events"].items()}
     print(f"container: limit {mib(limit)}; {mib(before['current'])} before, {mib(sampler.container_peak())} at its peak "
           f"({mib(sampler.shmem_peak())} of it tmpfs), {mib(after['current'])} after")
     print(f"container: cgroup events {delta}{' since it started again' if again else ''}; Docker's OOMKilled flag "
-          f"{after['oom_killed']}; started again {again}; release pid {before['release_pids']} -> {after['release_pids']}")
+          f"{after['oom_killed']}; container started again {again}; release (pid:start) {before['release']} -> {after['release']}")
     return again
 
 
@@ -439,7 +446,7 @@ def test_keeper(stack, limit, canary):
     expect(stack.homes() == [], "no home is left", stack.homes())
     groups = stack.exec("ls -d /sys/fs/cgroup/spawn-* 2>/dev/null").stdout.split()
     expect(groups == [], "no spawn's cgroup is left", groups)
-    expect(not again and after["release_pids"] == before["release_pids"] and after["release_pids"],
+    expect(not again and after["release"] == before["release"] and after["release"],
            "the release and the container were not touched", {"before": before, "after": after})
 
 
@@ -500,7 +507,7 @@ def test_build(stack, case, limit, measure):
            f"{case}: the hostile build is answered with the memory class", {"status": status, "answer": brief(answer)})
     expect(left == [] and left_homes == [], f"{case}: no process of its uid and no home of its is left", [left, left_homes])
     expect(sibling_status == 200, f"{case}: the sibling build completes", brief(sibling_answer))
-    expect(not again and after["release_pids"] == before["release_pids"] and after["release_pids"],
+    expect(not again and after["release"] == before["release"] and after["release"],
            f"{case}: the release and the container were not touched", {"before": before, "after": after})
 
 
