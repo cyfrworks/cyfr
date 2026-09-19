@@ -17,10 +17,17 @@ Input selects the operation:
 {"op": "spawn_await_all", "requests": [{…}, …]}      // spawn N + await-all
 {"op": "emit",  "payload": {…}}
 {"op": "chain", "depth": 2, "leaf": {…request…}}     // self-invoke N deep
+{"op": "steps", "steps": [                           // several, in order
+  {"call": {…}}, {"spawn": {…}}, {"emit": {…}},
+  {"await": 1}, {"await_all": [1, 2]}, {"poll": 1}, {"cancel": "task_1"}
+]}                                                   // a task by the index of
+                                                     // the step that spawned
+                                                     // it, or by its id
 ```
 
-Raw host responses are returned verbatim in `result_raw` / `emit_raw` so
-tests characterize exactly what the host did.
+Raw host responses are returned verbatim in `result_raw` / `emit_raw`, and
+a `steps` run's in `results`, one per step, so tests characterize exactly
+what the host did.
 
 ## Rebuilding
 
@@ -54,7 +61,7 @@ version ever changes, update `SELF_REF` in `src/lib.rs` and `@probe_ref` in
 ## Digests
 
 ```
-src/lib.rs        sha256:dc14e4127322fb72f612cff1d612e5ca9c4501470af412b538ac104be60a4ced
+src/lib.rs        sha256:e206a6b3e4633a35636a4001957004714ef8ab25932399c74223d68636df436d
 Cargo.lock        sha256:695ceaa15daafe0e307ee5bb4497e044c8bcae806665f8923f015b8b86c6a1b2
-nested_probe.wasm sha256:c205df383dca253e3b6c8b9d87490fa5ad8e15ae9dcadce1f09a55f9deb75971
+nested_probe.wasm sha256:a14fb665a43078cdce13ad9c6879cc3984555dcf5b9a8e14efb0d858286262bb
 ```
