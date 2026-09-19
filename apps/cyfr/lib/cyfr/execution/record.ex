@@ -824,9 +824,11 @@ defmodule Cyfr.Execution.Record do
 
   defp hydrate_output(_ctx, record), do: record
 
-  defp usage_of(%{"usage" => usage}), do: usage
-  defp usage_of(%{usage: usage}), do: usage
-  defp usage_of(_), do: nil
+  # Usage is what a `model/chat@1` answer carries in its data
+  # (`{"status": 200, "data": {..., "usage": {...}}}`); no other output
+  # has a usage of its own.
+  defp usage_of(%{"status" => 200, "data" => %{"usage" => usage}}), do: usage
+  defp usage_of(_output), do: nil
 
   # The row's shape has one owner: the Ecto schema. The read map carries
   # every schema column except the lease mechanics, which belong to the

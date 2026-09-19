@@ -393,6 +393,10 @@ defmodule Opus.ModelContractTest do
     assert for(step <- [first, second, third], do: Jason.decode!(step.usage)) ==
              [tokens(10, 5), tokens(20, 8), tokens(30, 2)]
 
+    # Each chat step's execution keeps the usage its answer carried.
+    assert for(step <- [first, second, third], do: execution_usage(step.child_execution_id)) ==
+             [tokens(10, 5), tokens(20, 8), tokens(30, 2)]
+
     assert [%{input: 10, output: 5}, %{input: 30, output: 13}, %{input: 60, output: 15}] =
              for({:usage, totals} <- played.seen.thread, do: totals)
 
@@ -983,6 +987,15 @@ defmodule Opus.ModelContractTest do
   # ---------------------------------------------------------------------------
 
   defp model_steps(played), do: Enum.filter(played.steps, &(&1.kind == "model"))
+
+  # The usage an execution's row keeps in its output's envelope.
+  defp execution_usage(execution_id) do
+    Arca.Execution
+    |> Arca.Repo.get!(execution_id)
+    |> Map.fetch!(:output)
+    |> Jason.decode!()
+    |> Map.fetch!("usage")
+  end
 
   defp agent_rows(played) do
     agent = Arca.Schemas.Message.agent_author()
