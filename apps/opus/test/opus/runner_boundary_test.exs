@@ -45,7 +45,7 @@ defmodule Opus.RunnerBoundaryTest do
     boot = ScriptedHost.serve!(host)
 
     # Registered after `serve!/1`'s, so it runs first: the service the
-    # host's restart brings back runs subtrees in this VM again.
+    # host's restart brings back runs under the suite's settings again.
     on_exit(fn ->
       for {key, value} <- previous do
         if value,
@@ -107,9 +107,6 @@ defmodule Opus.RunnerBoundaryTest do
     assert Opus.Cache in runner
     assert Enum.any?(service, &match?(%{id: Opus.WorkerListener}, &1))
     refute Enum.any?(runner, &match?(%{id: Opus.WorkerListener}, &1))
-
-    {:ok, local} = Opus.Settings.pool([keeper: :local], %{})
-    assert Opus.SharedEngine in Opus.Application.children(:service, local)
 
     tree = Opus.Application.service_tree(settings)
     assert Enum.any?(tree, &match?(%{id: Opus.Keeper.Direct}, &1))

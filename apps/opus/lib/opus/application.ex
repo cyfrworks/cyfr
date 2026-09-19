@@ -9,9 +9,7 @@ defmodule Opus.Application do
   the runner pool with its keeper and the worker service, restarted
   together, so a restarted service is a new boot that monitors none of
   the old runners) and the listener CYFR reaches it through. It loads no
-  component: the engine, its cache and its task supervisor start in the
-  service's VM only under the `:local` keeper, where the service runs
-  subtrees itself.
+  component, and starts no engine.
 
   The runner role runs the engine and the runner (`Opus.Runner`) that
   takes subtrees over its control channel, and no listener: a runner is
@@ -52,21 +50,18 @@ defmodule Opus.Application do
   @spec children(:service | :runner, map()) :: [
           Supervisor.child_spec() | {module(), term()} | module()
         ]
-  def children(:service, %{keeper: keeper}) do
-    engine = if keeper == :local, do: engine(), else: []
-
-    engine ++
-      [
-        %{
-          id: Opus.WorkerService.Tree,
-          type: :supervisor,
-          start: {__MODULE__, :start_service_tree, []}
-        },
-        # Where CYFR reaches the worker service, on the address its
-        # credentials name. Started after the service, so a request never
-        # finds it absent.
-        listener()
-      ]
+  def children(:service, _settings) do
+    [
+      %{
+        id: Opus.WorkerService.Tree,
+        type: :supervisor,
+        start: {__MODULE__, :start_service_tree, []}
+      },
+      # Where CYFR reaches the worker service, on the address its
+      # credentials name. Started after the service, so a request never
+      # finds it absent.
+      listener()
+    ]
   end
 
   def children(:runner, settings) do
@@ -108,13 +103,6 @@ defmodule Opus.Application do
   @spec service_tree(Opus.Settings.pool()) :: [
           Supervisor.child_spec() | {module(), term()} | module()
         ]
-  def service_tree(%{keeper: :local}) do
-    [
-      {DynamicSupervisor, name: Opus.WorkerService.runners_supervisor(), strategy: :one_for_one},
-      Opus.WorkerService
-    ]
-  end
-
   def service_tree(%{keeper: keeper} = settings) do
     module = Opus.Keeper.module(keeper)
     keeper_opts = [attach_dir: settings.attach_dir]

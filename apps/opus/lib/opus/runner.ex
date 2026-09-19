@@ -76,7 +76,6 @@ defmodule Opus.Runner do
 
     {:ok,
      Subtree.new(%{
-       cancel: :abandon,
        settings: settings,
        port: port,
        buffer: "",

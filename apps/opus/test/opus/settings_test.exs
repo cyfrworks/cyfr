@@ -42,28 +42,18 @@ defmodule Opus.SettingsTest do
       assert {:ok, %{keeper: :spawn}} = Settings.pool([], %{"CYFR_SPAWN_CHANNEL" => "socket:[1]"})
       assert {:ok, %{keeper: :direct}} = Settings.pool([], %{"CYFR_SPAWN_CHANNEL" => ""})
 
-      assert {:ok, %{keeper: :local}} =
-               Settings.pool([keeper: :local], %{"CYFR_SPAWN_CHANNEL" => "socket:[1]"})
-
       assert {:ok, %{keeper: :direct}} =
                Settings.pool([keeper: :direct], %{"CYFR_SPAWN_CHANNEL" => "socket:[1]"})
 
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :remote], %{})
+      assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :local], %{})
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: "spawn"], %{})
     end
 
-    # Subtrees in the service's own VM are the suite's way of holding a
-    # guest; a release must not be able to select it, however configured,
-    # so the choice is compiled in under the test environment alone.
-    test "the local keeper is compiled in under the test environment alone" do
-      assert :local in Settings.keepers()
-      assert Settings.keepers() -- [:local] == [:spawn, :direct]
-
-      source = File.read!(Path.expand("../../lib/opus/settings.ex", __DIR__))
-
-      assert source =~
-               ~S|@keepers if Mix.env() == :test, do: [:spawn, :direct, :local], else: [:spawn, :direct]|,
-             "the keeper roster must be decided at compile time from the environment"
+    # A subtree runs in a runner's VM of its own in every build, the test
+    # build included: there is no keeper that runs one in the service's.
+    test "the keepers are spawn and direct, in every build" do
+      assert Settings.keepers() == [:spawn, :direct]
     end
 
     test "a bound that is not a positive integer refuses, naming its key" do

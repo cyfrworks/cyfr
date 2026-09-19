@@ -13,20 +13,16 @@ defmodule Opus.Settings do
   (`:watchdog_grace_ms`, 5 000), how long a released runner is given to
   report its open attempts before its process group is killed
   (`:release_grace_ms`, 2 000), which keeper starts its runners
-  (`:keeper`: `:spawn`, the `cyfr-spawn` channel the image inherits;
+  (`:keeper`: `:spawn`, the `cyfr-spawn` channel the image inherits, or
   `:direct`, a launcher of plain OS processes for a machine without a
-  keeper; or `:local`, subtrees run in the service's own BEAM, which the
-  umbrella test environment uses so a test can hold a guest in its own
-  process), where the keeper's relays attach (`:attach_dir`,
+  keeper), where the keeper's relays attach (`:attach_dir`,
   `/run/opus`), and the memory bound of every runner `cyfr-spawn` starts
   (`:runner_memory_bytes`, 384 MiB). Unset, the keeper follows the
   environment: `:spawn` when `CYFR_SPAWN_CHANNEL` names an inherited
   channel, `:direct` otherwise; set, it is checked against that
-  environment when the pool starts (`Opus.Keeper`). The `:local` keeper is
-  compiled in under the test environment alone (`keepers/0`): a release
-  knows two keepers and refuses the third whatever its configuration says.
-  A value that is not a positive integer, or a keeper that is not one of
-  the known ones, refuses the boot with the key named.
+  environment when the pool starts (`Opus.Keeper`). A value that is not a
+  positive integer, or a keeper that is not one of the two (`keepers/0`),
+  refuses the boot with the key named.
 
   `:runner_memory_bytes` is what `Opus.Keeper.Spawn` asks `cyfr-spawn` to
   hold each runner to (`runner_memory_bytes/1`): a cgroup of the runner's
@@ -60,9 +56,7 @@ defmodule Opus.Settings do
   @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
   @id ~r/\A[\x21-\x7E]{1,256}\z/
 
-  # Subtrees in the service's own VM are a test's way of holding a guest;
-  # no release may run one, so the choice exists only where the suite runs.
-  @keepers if Mix.env() == :test, do: [:spawn, :direct, :local], else: [:spawn, :direct]
+  @keepers [:spawn, :direct]
   @channel_env "CYFR_SPAWN_CHANNEL"
 
   # cyfr-spawn's range for a spawn's `memory_bytes`
@@ -84,7 +78,7 @@ defmodule Opus.Settings do
           idle_ttl_ms: pos_integer(),
           watchdog_grace_ms: pos_integer(),
           release_grace_ms: pos_integer(),
-          keeper: :spawn | :direct | :local,
+          keeper: :spawn | :direct,
           attach_dir: String.t(),
           runner_memory_bytes: pos_integer()
         }
@@ -99,7 +93,7 @@ defmodule Opus.Settings do
           watchdog_grace_ms: pos_integer()
         }
 
-  @doc "The keeper choices this build knows: `:spawn` and `:direct`, and `:local` under the test environment alone."
+  @doc "The keeper choices: `:spawn` and `:direct`."
   @spec keepers() :: [atom()]
   def keepers, do: @keepers
 

@@ -3,14 +3,12 @@
 
 defmodule Opus.Subtree do
   @moduledoc """
-  The attempt processes running in this VM, as the process that owns them
-  tracks them: a runner (`Opus.Runner`) tracks the subtree it was
-  assigned, and a worker service running subtrees in its own VM
-  (`Opus.WorkerService` under the `:local` keeper) tracks every attempt
-  it started. Either owner keeps three maps in its state — `runners`,
-  each attempt process by its monitor; `executions`, each execution id to
-  that monitor; and `waiters`, each waiting process's monitor to the
-  attempt it waits for — and the functions here move them.
+  The attempt processes running in a runner's VM, as the runner
+  (`Opus.Runner`) that owns them tracks the subtree it was assigned. The
+  runner keeps three maps in its state — `runners`, each attempt process
+  by its monitor; `executions`, each execution id to that monitor; and
+  `waiters`, each waiting process's monitor to the attempt it waits for —
+  and the functions here move them.
 
   An attempt process (`Opus.Attempt`) reaches its owner through the
   functions at the top: `start_child/2` starts a runner for a child CYFR
@@ -18,21 +16,16 @@ defmodule Opus.Subtree do
   component process and what that process started, `settled/0` records
   that CYFR has closed its attempt, and `unclean/1` records that a host
   answer was lost, so the subtree's runner is never reused. The owner is
-  whichever of the two is running in this VM (`owner/0`); with neither, a
-  child cannot start and the rest is a no-op.
+  the runner running in this VM (`owner/0`); with none, a child cannot
+  start and the rest is a no-op.
 
   A child with a waiting process (a formula's synchronous call or spawned
-  task) is ended when that process exits before its runner settles; a
-  streamed child, with none, runs until it closes. How an attempt process
-  is ended is the owner's `cancel` mode: `:kill` (a worker service running
-  subtrees itself) kills the attempt's component process, which traps
-  exits, stops the streaming requests its runtime registered and kills
-  the attempt process, whose exit the owner reports as its runner's, so
-  CYFR lapses the attempt; `:abandon` (a runner) tells the attempt process
-  to stop its component call and close its attempt as abandoned itself
-  (`Opus.Attempt`), so the subtree goes on with nothing left open. Either
-  way the formula tracker is linked to the component process and goes
-  with it, taking the spawned tasks.
+  task) is ended when that process exits before its attempt settles; a
+  streamed child, with none, runs until it closes. An attempt process is
+  ended by telling it to stop its component call and close its attempt as
+  abandoned itself (`Opus.Attempt`), so the subtree goes on with nothing
+  left open; the formula tracker is linked to the component process and
+  goes with it, taking the spawned tasks.
   """
 
   alias Cyfr.Assignment
@@ -51,12 +44,11 @@ defmodule Opus.Subtree do
           cleanup: map()
         }
 
-  @typedoc "An owner's state: the three maps and its cancel mode, beside whatever else it keeps."
+  @typedoc "The owner's state: the three maps, beside whatever else it keeps."
   @type state :: %{
           :runners => %{reference() => entry()},
           :executions => %{String.t() => reference()},
           :waiters => %{reference() => reference()},
-          :cancel => :kill | :abandon,
           optional(atom()) => term()
         }
 
@@ -64,10 +56,10 @@ defmodule Opus.Subtree do
   # What an attempt process asks of its owner
   # ---------------------------------------------------------------------------
 
-  @doc "The process tracking this VM's attempts: the runner, or the worker service running them itself."
+  @doc "The process tracking this VM's attempts: the runner."
   @spec owner() :: pid() | nil
   def owner do
-    case Process.whereis(Opus.Runner) || Process.whereis(Opus.WorkerService) do
+    case Process.whereis(Opus.Runner) do
       pid when is_pid(pid) -> pid
       _ -> nil
     end
@@ -76,8 +68,8 @@ defmodule Opus.Subtree do
   @doc """
   Start an attempt process for `child`, a child CYFR admitted and claimed
   for a formula's runner (`t:Opus.HostClient.child/0`). `waiter` is the
-  process the runner answers (`Opus.Attempt`), whose exit kills the
-  runner until it settles, or nil for a child nothing waits for. Answers
+  process the runner answers (`Opus.Attempt`), whose exit stops the
+  child until it settles, or nil for a child nothing waits for. Answers
   `{:ok, pid}`, or `{:error, :malformed}` when the child's client is not
   for the attempt its assignment names on this worker service, names an
   execution this VM already runs, or no owner is running here.
@@ -104,7 +96,7 @@ defmodule Opus.Subtree do
     end
   end
 
-  @doc "Record, for the calling attempt process, that CYFR has closed its attempt: its waiter's exit no longer kills it."
+  @doc "Record, for the calling attempt process, that CYFR has closed its attempt: its waiter's exit no longer stops it."
   @spec settled() :: :ok
   def settled do
     case owner() do
@@ -136,13 +128,10 @@ defmodule Opus.Subtree do
   # The owner's state
   # ---------------------------------------------------------------------------
 
-  @doc "`state` with the three maps, empty, and its cancel mode (`:kill` unless it names one)."
+  @doc "`state` with the three maps, empty."
   @spec new(map()) :: state()
-  def new(state) when is_map(state) do
-    state
-    |> Map.put_new(:cancel, :kill)
-    |> Map.merge(%{runners: %{}, executions: %{}, waiters: %{}})
-  end
+  def new(state) when is_map(state),
+    do: Map.merge(state, %{runners: %{}, executions: %{}, waiters: %{}})
 
   @doc """
   Start an attempt process for `start` (`t:Opus.Attempt.start/0` without
@@ -227,12 +216,12 @@ defmodule Opus.Subtree do
     end
   end
 
-  @doc "End the attempt process running `execution_id` in the owner's cancel mode; its exit follows as a `:DOWN`."
+  @doc "Tell the attempt process running `execution_id` to stop and close its attempt as abandoned; its exit follows as a `:DOWN`."
   @spec kill(state(), String.t()) :: :ok | :not_found
   def kill(state, execution_id) do
     case Map.fetch(state.executions, execution_id) do
       {:ok, ref} ->
-        cancel(state, Map.fetch!(state.runners, ref))
+        Attempt.cancel(Map.fetch!(state.runners, ref).pid)
         :ok
 
       :error ->
@@ -255,8 +244,8 @@ defmodule Opus.Subtree do
   What a `:DOWN` with monitor `ref` means: an attempt process ended
   (`{:attempt, entry, state}`, its component killed, its waiter
   forgotten), or a waiting process ended (`{:waiter, state}`, its
-  attempt process killed unless it had settled, whose exit then follows),
-  or nothing the owner tracks (`{:unknown, state}`).
+  attempt process told to stop unless it had settled, whose exit then
+  follows), or nothing the owner tracks (`{:unknown, state}`).
   """
   @spec down(state(), reference()) ::
           {:attempt, entry(), state()} | {:waiter, state()} | {:unknown, state()}
@@ -293,7 +282,7 @@ defmodule Opus.Subtree do
 
       {ref, waiters} ->
         case Map.fetch(state.runners, ref) do
-          {:ok, entry} -> cancel(state, entry)
+          {:ok, entry} -> Attempt.cancel(entry.pid)
           :error -> :ok
         end
 
@@ -307,13 +296,6 @@ defmodule Opus.Subtree do
     Process.demonitor(waiter_ref, [:flush])
     %{state | waiters: Map.delete(state.waiters, waiter_ref)}
   end
-
-  defp cancel(%{cancel: :kill}, entry) do
-    kill_component(entry)
-    Process.exit(entry.pid, :kill)
-  end
-
-  defp cancel(%{cancel: :abandon}, entry), do: Attempt.cancel(entry.pid)
 
   # The component process traps exits, so it is killed by name. Its formula
   # tracker is linked to it and goes with it, taking the spawned tasks; its

@@ -7,10 +7,10 @@ defmodule Opus.Attempt do
   component, renews the attempt's lease while it runs and closes the
   attempt.
 
-  Its owner (`Opus.Subtree`: the runner the subtree was assigned to, or a
-  worker service running subtrees in its own VM) starts it with the
-  assignment it read, the input the assignment's digest binds and a host
-  client (`Opus.HostClient`) holding the attempt's key. A formula's child
+  Its owner (`Opus.Subtree`: the runner the subtree was assigned to)
+  starts it with the assignment it read, the input the assignment's
+  digest binds and a host client (`Opus.HostClient`) holding the
+  attempt's key. A formula's child
   runs in an attempt process of its own in the same subtree
   (`Opus.Subtree.start_child/2`), started from the child CYFR admitted and
   claimed for the formula's runner (`Opus.HostClient.admit_child/5`), with
@@ -86,7 +86,7 @@ defmodule Opus.Attempt do
 
   @doc """
   Tell the attempt process `pid` to stop its component call and close its
-  attempt as abandoned (`Opus.Subtree`'s `:abandon` cancel mode). One
+  attempt as abandoned, as `Opus.Subtree` ends one. One
   still attaching does so once attached; one already closing has nothing
   left to stop.
   """
