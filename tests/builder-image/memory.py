@@ -36,9 +36,9 @@ without end), `rust` (a build.rs doing so), `tree` (100 processes of
 64 MiB) and `home` (files until the home is full). Each must be answered
 with the build wire's `memory` class (`Cyfr.BuilderProtocol`), leave no
 process of its uid and no home, and leave its sibling, the release and the
-container as they were. They pass once the builder asks cyfr-spawn for a
-bound for every build; until it does a hostile build is ended by the
-container's own limit or the deadline, and the first of them fails here.
+container as they were. The builder asks cyfr-spawn for a bound for every
+build (`Locus.Spawner`, LOCUS_BUILDS_MEMORY_BYTES); a build ended by the
+container's own limit or the deadline instead fails its case here.
 
 Every case prints what it measured: the peak of the hostile tree (the
 resident sets of its uid's processes, sampled from /proc about ten times a
