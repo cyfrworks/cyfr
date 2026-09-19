@@ -502,8 +502,13 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
 
-  bridge-e2e:
-    name: MCP bridge failures and leaks (cyfr + mcp-bridge images)
+  # D15: bridge backends isolated from each other and from the bridge. All
+  # four suites run here, in the workflow the tag's `verify` calls, so the
+  # release gates on them; three of them used to run in node-ci.yml, which
+  # nothing at the tag waited for. One job, because both images are built
+  # once for every suite that needs them.
+  bridge-image:
+    name: Bridge image (isolation, refusals, residue, failures and leaks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -530,6 +535,43 @@ jobs:
           tags: cyfr-mcp-bridge:bridge-e2e
           cache-from: type=gha,scope=mcp-bridge-e2e
           cache-to: type=gha,scope=mcp-bridge-e2e,mode=max
+
+      # Two owners' probe backends under the mcp-bridge service's own
+      # settings, driven by requests signed as CYFR signs them
+      # (tests/bridge-image/controller.mjs): each runs under its own pooled
+      # uid (never 0 or the bridge's), neither can read the other's home or
+      # /proc environ or signal it, the spawner holds exactly
+      # SETUID|SETGID|KILL (CapEff 0xe0) and no inet socket, the bridge holds
+      # no capability, the root is read-only, and releasing an owner leaves no
+      # process of its uid, a setsid daemon ignoring SIGTERM included, and no
+      # home. Also: the refused boot without a valid key, the spawner's
+      # refusal of Docker's default capabilities, and retirement on loss and
+      # on stop.
+      - name: Backend isolation
+        env:
+          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
+        run: node --test tests/bridge-image/isolation.test.mjs
+
+      # A forged MAC, a timestamp outside the window, a control message below
+      # the high-water mark, a stale or future epoch, a replayed nonce and a
+      # captured invoke sent again after `docker restart` are refused, and a
+      # sync the uid pool cannot hold spawns nothing.
+      - name: Refusals
+        env:
+          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
+        run: node --test tests/bridge-image/refusals.test.mjs
+
+      # With a pool of one uid: a backend can write outside its home only
+      # into the home root; the entries it leaves there, a directory tree it
+      # made unwritable, System V shared memory, semaphores and message
+      # queues and a POSIX message queue (tests/fixtures/residue-canary.go)
+      # are gone before the next owner runs under the same uid. The spawner
+      # refuses a writable root, a shared /tmp and Docker's default /dev/shm.
+      - name: Residue across uid reuse
+        env:
+          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
+        run: node --test tests/bridge-image/residue.test.mjs
+
       # Both images under docker compose with the services' own settings and
       # a 5 s bridge lease (tests/bridge-image/compose.e2e.yml): a crash of
       # cyfr between an update's commit and its sync, a sync held back across
@@ -543,6 +585,36 @@ jobs:
           CYFR_IMAGE: cyfr:bridge-e2e
           BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
         run: node --test tests/bridge-image/e2e.test.mjs
+
+      # The same scan docker.yml runs before publishing the bridge image.
+      - name: Scan the bridge image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cyfr-mcp-bridge:bridge-e2e
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          # Findings with no fix in any distribution, each scoped to the
+          # path it was observed at, with its reason and what would lift it.
+          # Everything else fixable still fails, including the same id in
+          # the bridge's own dependency tree.
+          trivyignores: .trivyignore.yaml
+
+      # The app image is built here, for the end-to-end run above, and this
+      # is the one push-time build of it — so it is scanned here too. Until
+      # now `cyfr` was the only shipped image scanned at tag time alone,
+      # where a finding stops a release instead of the commit that brought
+      # it in. Same scan docker.yml runs before publishing it.
+      - name: Scan the app image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cyfr:bridge-e2e
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
 
   arca-seam:
     name: Arca single-seam (no untagged filesystem I/O)
