@@ -183,6 +183,17 @@ defmodule Cyfr.SanctumInventoryTest do
     end
   end
 
+  # Section 6's declared moves: a target that takes a file out of these two
+  # directories leaves its row matching nothing, which is the row doing its
+  # job rather than an obsolete entry. Only these are exempt from the
+  # dead-row check.
+  defp declared_moves do
+    ~r/^\| `([^`]+)` \| ([A-Za-z0-9-]+) \| `[^`]+` \|$/m
+    |> Regex.scan(section(6))
+    |> Enum.map(fn [_, path, _target] -> path end)
+    |> MapSet.new()
+  end
+
   defp assigned_files do
     for glob <- ~w(apps/cyfr/lib/sanctum/**/*.ex apps/cyfr/lib/arca/**/*.ex
                    apps/cyfr/lib/arca.ex
@@ -303,15 +314,20 @@ defmodule Cyfr.SanctumInventoryTest do
     test "every row matches at least one file" do
       files = assigned_files()
 
+      moved = declared_moves()
+
       dead =
         for {pattern, target} <- assignment_rules(),
+            not MapSet.member?(moved, pattern),
             not Enum.any?(files, &matches?(pattern, &1)),
             do: "#{pattern} (#{target})"
 
       assert dead == [],
              """
              These rows of #{@inventory} §6 match no file. An exception list
-             is exact: a row whose file moved or was deleted must go with it.
+             is exact: a row whose file was deleted must go with it, and a
+             row whose file a target moved out of these directories must be
+             declared under "Files a target removes" in the same section.
 
              #{Enum.join(Enum.sort(dead), "\n")}
              """
@@ -329,6 +345,7 @@ defmodule Cyfr.SanctumInventoryTest do
       assert owner.("apps/cyfr/lib/sanctum/tenancy/caps.ex") == "G9"
       assert owner.("apps/cyfr/lib/sanctum/tenancy/users.ex") == "G4"
       assert owner.("apps/cyfr/lib/sanctum/test_context.ex") == "G1"
+      assert owner.("apps/cyfr/test/sanctum/establish_boundary_test.exs") == "G1"
       assert owner.("apps/cyfr/lib/arca/audit_handler.ex") == "G3"
       assert owner.("apps/cyfr/lib/arca/schemas/membership.ex") == "G3"
       assert owner.("apps/cyfr/lib/arca/schemas/thread.ex") == "G10-move"

@@ -39,8 +39,23 @@ defmodule Sanctum.EstablishBoundaryTest do
     # turn continues under, rebuilt from the turn's rows and refused when
     # the person is denied, unseated or the estate archived.
     "apps/cyfr/lib/sanctum/tenancy.ex" => 1,
-    # The test fixture.
-    "apps/cyfr/lib/sanctum/test_context.ex" => 1
+    # The suite's own builders. They live in `test/support`, which only the
+    # test build compiles, and the roster reaches outside lib to keep them
+    # enumerated: a permissive builder of authenticated contexts is worth
+    # naming wherever it sits. None of them is a credential recipe; each
+    # stands in for one that already ran.
+    #
+    # The general fixture, used by roughly 250 test files.
+    "apps/cyfr/test/support/sanctum_test_context.ex" => 1,
+    # `PrismConnCase`'s signed-in caller: the context a LiveView test's
+    # session would have carried had a real OIDC sign-in produced it.
+    "apps/cyfr/test/support/prism_conn_case.ex" => 1,
+    # Two people in two athanors, the pair every tenant-isolation test
+    # needs in order to prove one cannot read the other.
+    "apps/cyfr/test/support/tenant_test_helper.ex" => 2,
+    # The test `Sanctum.Auth` implementation's established identity — the
+    # provider seam, standing in for the real OIDC or OAuth strategy.
+    "apps/cyfr/test/support/test_auth_provider.ex" => 1
   }
 
   # The credential recipes, callable from `Sanctum.Caller` only.
@@ -59,9 +74,23 @@ defmodule Sanctum.EstablishBoundaryTest do
            Cyfr.Test.CodeLines.lines(Cyfr.Test.SourceTree.read(file))}
   end
 
+  # Where a context may be BUILT: every app's lib, plus this app's test
+  # support, which holds the one fixture that mints authenticated contexts.
+  # `lib_files/0` stays lib-only for the recipe test below, whose invariant
+  # is about production code alone.
+  defp builder_files do
+    support =
+      for file <- Cyfr.Test.SourceTree.files!(Path.join(@root, "apps/cyfr/test/support/**/*.ex")),
+          do:
+            {Path.relative_to(file, @root),
+             Cyfr.Test.CodeLines.lines(Cyfr.Test.SourceTree.read(file))}
+
+    lib_files() ++ support
+  end
+
   test "an authenticated context is built only at the enumerated sites" do
     found =
-      for {rel, lines} <- lib_files(),
+      for {rel, lines} <- builder_files(),
           count = Enum.count(lines, &Regex.match?(@build_line, &1)),
           count > 0,
           into: %{},
