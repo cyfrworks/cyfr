@@ -69,8 +69,14 @@ defmodule Sanctum.ContextFocusTest do
     # stored agent has no member to speak as) — but a closed furnace stays
     # closed to it too.
     sys = Sanctum.internal_context(user_id: "_test", athanor_id: a.id, scope: :athanor)
-    assert {:ok, %{athanor_id: bid, scope: :athanor}} = Context.refocus(sys, b.id)
+    assert {:ok, %{athanor_id: bid, scope: :athanor} = crossed} = Context.refocus(sys, b.id)
     assert bid == b.id
+
+    # The actor it projects keeps the system provenance and still reads one
+    # athanor: the two authorities Arca decides on are separate, and a
+    # crossing narrows the scope without giving up the system write.
+    assert Context.actor(crossed).system
+    assert Context.actor(crossed).scope == :athanor
 
     {:ok, _} = Athanors.archive(b)
     assert {:error, :archived} = Context.refocus(sys, b.id)
@@ -102,6 +108,12 @@ defmodule Sanctum.ContextFocusTest do
     assert focused.platform_admin
     assert_receive {:audit, %{caller: :focus, athanor_id: bid}}
     assert bid == b.id
+
+    # The actor an Arca facade receives carries neither authority: the
+    # capability admits the operator verbs, and the rows it then reads are
+    # the focused athanor's.
+    assert Context.actor(focused).scope == :athanor
+    refute Context.actor(focused).system
   end
 
   test "an admin focused on A cannot read B's records — no scope bypass",

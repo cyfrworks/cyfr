@@ -17,7 +17,8 @@ defmodule Sanctum.Context do
   `Arca.McpLog` show a chain as one group.
 
   Tests construct permissive single-user contexts via
-  `Sanctum.TestContext.local/0` (compiled only in `:test` and `:dev`).
+  `Sanctum.TestContext.local/0`, which lives in test support and so is
+  compiled only in `:test`.
 
   ## Usage
 
@@ -383,6 +384,15 @@ defmodule Sanctum.Context do
   this is the only construction path for that use — a facade accepts no
   actor assembled by hand.
 
+  Two of the actor's fields are read off this context rather than copied
+  from a field of the same name, because they are what the layers below
+  authorize on. `scope` travels as it stands — a `:platform` context reads
+  rows across every athanor, an `:athanor` one reads its own. `system` is
+  `auth_method == :system`, the provenance that lets the server's own work
+  mutate seed, global and tenant-reserved paths; every other
+  `auth_method` records where a caller came from and grants nothing, so it
+  projects `system: false`. Neither crosses the wire (`Cyfr.Actor`).
+
   A context whose athanor is unresolved projects `athanor_id: nil`, never a
   sentinel: the facade refuses it before any query, and it stays
   distinguishable from `anonymous: true`, which is a caller that has a
@@ -397,7 +407,9 @@ defmodule Sanctum.Context do
       user_id: ctx.user_id,
       request_id: ctx.request_id,
       authenticated: ctx.authenticated,
-      client_ip: ctx.client_ip
+      client_ip: ctx.client_ip,
+      scope: ctx.scope,
+      system: ctx.auth_method == :system
     }
   end
 
