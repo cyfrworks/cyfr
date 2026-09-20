@@ -192,7 +192,7 @@ defmodule Sanctum.Consent.Bootstrap do
     # it. Owner profiles mint here; public ones only via profile.publish.
     types = Cyfr.ComponentRef.valid_types()
 
-    case Arca.ComponentStorage.list_components(ctx,
+    case Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
            publisher: Cyfr.ComponentPath.default_publisher(),
            limit: :none
          ) do
@@ -227,7 +227,7 @@ defmodule Sanctum.Consent.Bootstrap do
         {:skip, :already_bootstrapped}
 
       {:claimed, profile} ->
-        case Arca.ConsentStorage.get_head(ctx.athanor_id, profile.id) do
+        case Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id) do
           {:ok, %{granted_via: "bootstrap"} = head, _refs} ->
             vouched = vouched_by(head, shipped_nodes)
             revise_bootstrap(held, component, source_ref, profile, head, vouched)
@@ -245,7 +245,7 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   defp claimed(ctx, source_ref) do
-    case Arca.ProfileStorage.list_for_source(ctx.athanor_id, source_ref) do
+    case Arca.ProfileStorage.list_for_source(Sanctum.Context.actor(ctx), source_ref) do
       {:ok, []} -> :unclaimed
       {:ok, existing} -> {:claimed, default_owner(existing)}
       {:error, reason} -> {:error, reason}

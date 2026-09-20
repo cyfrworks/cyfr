@@ -165,7 +165,7 @@ defmodule Sanctum.Webhook do
   """
   @spec get(Context.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
   def get(%Context{} = ctx, name) when is_binary(name) do
-    case WebhookStorage.get_by_name(athanor!(ctx), name) do
+    case WebhookStorage.get_by_name(actor!(ctx), name) do
       {:ok, row} -> {:ok, public_view(row)}
       {:error, :not_found} -> {:error, :not_found}
     end
@@ -176,7 +176,7 @@ defmodule Sanctum.Webhook do
   """
   @spec list(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def list(%Context{} = ctx) do
-    case WebhookStorage.list_webhooks(athanor!(ctx)) do
+    case WebhookStorage.list_webhooks(actor!(ctx)) do
       {:ok, rows} -> {:ok, Enum.map(rows, &public_view/1)}
       error -> error
     end
@@ -196,7 +196,7 @@ defmodule Sanctum.Webhook do
          :ok <- maybe_validate_target_ref(ctx, normalized),
          :ok <- maybe_authorize_profile_binding(ctx, name, athanor_id, normalized),
          :ok <- check_replay_transition(athanor_id, name, normalized, attrs),
-         :ok <- WebhookStorage.update_webhook(athanor_id, name, normalized) do
+         :ok <- WebhookStorage.update_webhook(Cyfr.Actor.in_athanor(athanor_id), name, normalized) do
       get(ctx, name)
     end
   end
@@ -218,7 +218,7 @@ defmodule Sanctum.Webhook do
         Map.has_key?(normalized, :idempotency_key_header)
 
     if touches_headers? do
-      case WebhookStorage.get_by_name(athanor_id, name) do
+      case WebhookStorage.get_by_name(Cyfr.Actor.in_athanor(athanor_id), name) do
         {:ok, row} ->
           resulting = %{
             timestamp_header: resulting_header(normalized, row, :timestamp_header),
@@ -263,7 +263,7 @@ defmodule Sanctum.Webhook do
               {:ok, ref}
 
             _ ->
-              case WebhookStorage.get_by_name(athanor_id, name) do
+              case WebhookStorage.get_by_name(Cyfr.Actor.in_athanor(athanor_id), name) do
                 {:ok, row} -> {:ok, row.target_ref}
                 {:error, _} = error -> error
               end
@@ -280,7 +280,7 @@ defmodule Sanctum.Webhook do
   """
   @spec revoke(Context.t(), String.t()) :: :ok | {:error, :not_found}
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    WebhookStorage.set_disabled(athanor!(ctx), name)
+    WebhookStorage.set_disabled(actor!(ctx), name)
   end
 
   @doc """
@@ -306,7 +306,7 @@ defmodule Sanctum.Webhook do
            Sanctum.Cipher.encrypt(new_secret, Sanctum.CipherAAD.webhook_secret(athanor_id, name)),
          :ok <-
            WebhookStorage.rotate_secret(
-             athanor_id,
+             Cyfr.Actor.in_athanor(athanor_id),
              name,
              new_secret_encrypted,
              previous_expires_at
@@ -707,6 +707,11 @@ defmodule Sanctum.Webhook do
   # The athanor every management path keys on, behind the tenant chokepoint:
   # an athanor-less context raises before it can touch any row.
   defp athanor!(%Context{} = ctx), do: Context.athanor!(ctx)
+
+  defp actor!(%Context{} = ctx) do
+    _ = athanor!(ctx)
+    Context.actor(ctx)
+  end
 
   # AAD for verify_with_grace/4, rebuilt from the stored webhook row. The
   # current and previous secret share this identity, so the rotation grace

@@ -63,7 +63,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   defp live_shape_key(%Sanctum.Context{athanor_id: athanor_id}, source_ref)
        when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref),
-       do: Arca.Cache.Keys.live_shape(athanor_id, source_ref)
+       do: Arca.Cache.Keys.live_shape(Cyfr.Actor.in_athanor(athanor_id), source_ref)
 
   defp live_shape_key(_ctx, _source_ref), do: nil
 

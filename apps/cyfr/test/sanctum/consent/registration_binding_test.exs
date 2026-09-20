@@ -218,7 +218,9 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
                  "profile_id" => "prof-bind"
                })
 
-      {:ok, schedule} = Arca.CronSchedule.get_by_id_or_name(ctx, created.schedule_id)
+      {:ok, schedule} =
+        Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), created.schedule_id)
+
       assert schedule.profile_id == "prof-bind"
     end
   end

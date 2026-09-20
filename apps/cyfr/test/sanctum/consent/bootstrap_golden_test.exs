@@ -56,9 +56,9 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
 
     # The bundle is copied in and the scan mints its rows, as a fill does;
     # the AQUA tree is copied in and indexed the same way.
-    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "components")
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "components")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
-    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "aqua")
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "aqua")
     {:ok, _rows} = Compendium.AgentIndex.sync(ctx)
 
     {:ok, ctx: ctx}
@@ -71,7 +71,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     blobs =
       Map.new(minted, fn ref ->
         {:ok, [profile]} = Source.DB.profiles(ctx, ref)
-        {:ok, row, _refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, profile.id)
+        {:ok, row, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
         assert row.granted_by == "system:bootstrap"
         {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
         assert is_map(consent.activation) and consent.activation != %{}

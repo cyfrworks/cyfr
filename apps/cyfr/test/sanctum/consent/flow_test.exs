@@ -123,7 +123,7 @@ defmodule Sanctum.Consent.FlowTest do
       publish!(ctx, "flow-grant-owner")
       entry = entry!(ctx)
       assert {:ok, %{profile_id: profile_id}} = walk!(ctx, "reagent:local.flow-grant-owner")
-      :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, profile_id, "revoked")
+      :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), profile_id, "revoked")
 
       assert {:error, :profile_revoked} =
                Commit.grant(ctx, %{
@@ -201,7 +201,7 @@ defmodule Sanctum.Consent.FlowTest do
       publish!(ctx, "flow-via")
       {:ok, %{profile_id: profile_id}} = walk!(ctx, "reagent:local.flow-via")
 
-      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, profile_id)
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
       assert head.granted_via == "interactive"
       assert head.granted_by == ctx.user_id
     end
@@ -379,7 +379,7 @@ defmodule Sanctum.Consent.FlowTest do
       {:ok, %{affected: [^profile_id]}} =
         Vault.rebind(ctx, %{id: entry.id, oauth_scopes: ["new.scope"]})
 
-      {:ok, blocked} = Arca.ProfileStorage.get(ctx.athanor_id, profile_id)
+      {:ok, blocked} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
       assert blocked.status == "needs_consent"
 
       # Re-consenting with the rebound entry unblocks it.
@@ -388,7 +388,7 @@ defmodule Sanctum.Consent.FlowTest do
                  bindings: [%{need: "@ingress", entry_id: entry.id}]
                })
 
-      {:ok, unblocked} = Arca.ProfileStorage.get(ctx.athanor_id, profile_id)
+      {:ok, unblocked} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
       assert unblocked.status == "active"
     end
   end
@@ -398,7 +398,7 @@ defmodule Sanctum.Consent.FlowTest do
       publish!(ctx, "flow-mcp")
 
       {:ok, server} =
-        Arca.McpServerStorage.insert(ctx, %{
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
           name: "flowsrv",
           url: "https://127.0.0.1:9/mcp",
           config_json: Jason.encode!(%{"headers" => %{}, "timeout_ms" => 1_000})
@@ -425,7 +425,7 @@ defmodule Sanctum.Consent.FlowTest do
           expected_consent_revision: 0
         })
 
-      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, profile_id)
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id)
       blob = Jason.decode!(head.resolved_policy)
 
       [grant] =
@@ -477,7 +477,7 @@ defmodule Sanctum.Consent.FlowTest do
       assert {:ok, %{profile_id: public_id, revision: 1}} = publish_walk!(ctx, staged)
       refute public_id == owner_id
 
-      {:ok, head, refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, public_id)
+      {:ok, head, refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), public_id)
       assert head.scope == "pinned"
       assert head.pinned_version == "1.0.0"
       assert head.invoke_mode == "edge_only"
@@ -556,7 +556,7 @@ defmodule Sanctum.Consent.FlowTest do
       # The approved read-only grant is what actually landed.
       {:ok, profiles} = Source.DB.profiles(ctx, "reagent:local.flow-pub-widen")
       public = Enum.find(profiles, &(&1.kind == :public))
-      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, public.id)
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), public.id)
 
       actions =
         Jason.decode!(head.resolved_policy)["nodes"]["reagent:local.flow-pub-widen"]["edges"][
@@ -577,7 +577,7 @@ defmodule Sanctum.Consent.FlowTest do
       {:ok, %{profile_id: owner_id}} =
         walk!(ctx, "reagent:local.flow-pub-digest", %{})
 
-      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, owner_id)
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), owner_id)
 
       assert head.blob_digest == Cyfr.JCS.hash_binary(head.resolved_policy),
              "a consent row must carry the hash of the policy it stores"
@@ -595,7 +595,7 @@ defmodule Sanctum.Consent.FlowTest do
       {:ok, staged} = Commit.stage_publish(ctx, %{profile_id: owner_id})
       {:ok, %{profile_id: public_id}} = publish_walk!(ctx, staged)
 
-      {:ok, head, refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, public_id)
+      {:ok, head, refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), public_id)
       assert refs == []
 
       blob = Jason.decode!(head.resolved_policy)

@@ -55,7 +55,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
   defp head!(ctx, ref) do
     {:ok, [profile]} = Source.DB.profiles(ctx, ref)
-    {:ok, row, refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, profile.id)
+    {:ok, row, refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
     {profile, row, refs}
   end
 
@@ -98,7 +98,14 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
   defp write_agent!(ctx, name, fun) do
     {:ok, agent} = AquaAgent.get(ctx, name)
-    :ok = Arca.put(ctx, AquaPath.agent_file(name), AquaAgent.serialize(fun.(agent)))
+
+    :ok =
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        AquaPath.agent_file(name),
+        AquaAgent.serialize(fun.(agent))
+      )
+
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
   end
 
@@ -306,7 +313,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     File.write!(Path.join(dest, "cyfr-manifest.json"), Jason.encode!(manifest))
     File.rm_rf!(src)
 
-    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "components")
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "components")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
 
@@ -386,7 +393,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     # The revision a turn would pin is retrievable as it was.
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
     soul_row = Enum.find(rows, &(&1.name == "aqua"))
-    {:ok, bytes} = Arca.AgentRevisions.get(ctx.athanor_id, soul_row.revision_digest)
-    assert {:ok, ^bytes} = Arca.get(ctx, AquaPath.soul_file())
+    {:ok, bytes} = Arca.AgentRevisions.get(Sanctum.Context.actor(ctx), soul_row.revision_digest)
+    assert {:ok, ^bytes} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.soul_file())
   end
 end

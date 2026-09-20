@@ -17,7 +17,8 @@ defmodule Sanctum.Consent.Source.DB do
 
   @impl Sanctum.Consent.Source
   def profiles(%Context{} = ctx, source_ref) do
-    with {:ok, rows} <- Arca.ProfileStorage.list_for_source(ctx.athanor_id, source_ref) do
+    with {:ok, rows} <-
+           Arca.ProfileStorage.list_for_source(Sanctum.Context.actor(ctx), source_ref) do
       summaries =
         rows
         |> Enum.map(&profile_summary/1)
@@ -29,7 +30,8 @@ defmodule Sanctum.Consent.Source.DB do
 
   @impl Sanctum.Consent.Source
   def head_consent(%Context{} = ctx, profile_id) do
-    with {:ok, consent, refs} <- Arca.ConsentStorage.get_head(ctx.athanor_id, profile_id) do
+    with {:ok, consent, refs} <-
+           Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id) do
       decode_consent(consent, refs)
     end
   end

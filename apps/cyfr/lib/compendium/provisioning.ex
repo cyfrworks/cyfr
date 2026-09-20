@@ -240,7 +240,7 @@ defmodule Compendium.Provisioning do
     # The agents are indexed before the consents are minted: an agent is a
     # consent source, and its revision bytes are registered by the index
     # before any consent names it.
-    with :ok <- Arca.ensure_roots(Estate.seed_ctx(athanor_id)),
+    with :ok <- Arca.ensure_roots(Context.actor(Estate.seed_ctx(athanor_id))),
          {:ok, _scan} <- register_bundle(athanor_id),
          :ok <- aqua_definitions(athanor_id),
          :ok <- Estate.holding(athanor_id, claim),
@@ -359,7 +359,7 @@ defmodule Compendium.Provisioning do
   defp sync_seed(athanor, claim) do
     ctx = Estate.seed_ctx(athanor.id)
 
-    case Arca.ensure_roots(ctx) do
+    case Arca.ensure_roots(Context.actor(ctx)) do
       :ok ->
         :ok
 
@@ -417,8 +417,10 @@ defmodule Compendium.Provisioning do
   # name but its tree lacks, and the shipped AQUA tree when it holds no
   # AQUA unit at all. A newer shipped version with no row is left available.
   defp heal_shipped(ctx, athanor_id) do
-    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "components"),
-         {:ok, rows} <- Arca.ComponentStorage.list_components(ctx, limit: :none) do
+    actor = Context.actor(ctx)
+
+    with {:ok, statuses} <- Arca.Overlay.unit_statuses(actor, "components"),
+         {:ok, rows} <- Arca.ComponentStorage.list_components(actor, limit: :none) do
       registered =
         MapSet.new(rows, fn row ->
           Compendium.ComponentPath.version_dir(
@@ -430,7 +432,7 @@ defmodule Compendium.Provisioning do
         end)
 
       for {unit, :available} <- statuses, MapSet.member?(registered, unit) do
-        case Arca.Overlay.pull_shipped(ctx, unit) do
+        case Arca.Overlay.pull_shipped(actor, unit) do
           :ok ->
             Logger.info("[Provisioning] #{athanor_id}: restored shipped #{Enum.join(unit, "/")}")
 
@@ -446,12 +448,12 @@ defmodule Compendium.Provisioning do
         Logger.warning("[Provisioning] #{athanor_id}: heal skipped — #{inspect(reason)}")
     end
 
-    case Arca.Overlay.unit_statuses(ctx, "aqua") do
+    case Arca.Overlay.unit_statuses(Context.actor(ctx), "aqua") do
       {:ok, statuses} ->
         held? = Enum.any?(statuses, fn {_unit, status} -> status != :available end)
 
         if not held? and statuses != %{} do
-          case Arca.Overlay.materialize_shipped(ctx, "aqua") do
+          case Arca.Overlay.materialize_shipped(Context.actor(ctx), "aqua") do
             {:ok, copied} ->
               Logger.info(
                 "[Provisioning] #{athanor_id}: copied #{length(copied)} shipped AQUA unit(s)"
@@ -511,9 +513,10 @@ defmodule Compendium.Provisioning do
   # minting an empty athanor.
   defp register_bundle(athanor_id) do
     ctx = Estate.seed_ctx(athanor_id)
+    actor = Context.actor(ctx)
 
-    with :ok <- bundle_present(ctx),
-         {:ok, _copied} <- Arca.Overlay.materialize_shipped(ctx, "components") do
+    with :ok <- bundle_present(actor),
+         {:ok, _copied} <- Arca.Overlay.materialize_shipped(actor, "components") do
       # A component that fails registration is logged by the scan and
       # skipped; the consent bootstrap's minting gate is what decides
       # whether what registered is enough to provision. A discovery outage
@@ -523,8 +526,8 @@ defmodule Compendium.Provisioning do
     end
   end
 
-  defp bundle_present(ctx) do
-    case Arca.list_recursive(ctx, Arca.Storage.seed_prefix("components")) do
+  defp bundle_present(actor) do
+    case Arca.list_recursive(actor, Arca.Storage.seed_prefix("components")) do
       {:ok, [_ | _]} -> :ok
       {:ok, []} -> {:error, :bundle_missing}
       {:error, reason} -> {:error, {:bundle_unreadable, reason}}
@@ -538,7 +541,7 @@ defmodule Compendium.Provisioning do
   defp aqua_definitions(athanor_id) do
     with :ok <- Compendium.AquaTemplate.seed_check(),
          {:ok, _copied} <-
-           Arca.Overlay.materialize_shipped(Estate.seed_ctx(athanor_id), "aqua") do
+           Arca.Overlay.materialize_shipped(Context.actor(Estate.seed_ctx(athanor_id)), "aqua") do
       :ok
     else
       {:error, reason} -> {:error, {:aqua_template, reason}}
@@ -650,7 +653,7 @@ defmodule Compendium.Provisioning do
   # published it, is what makes an interrupted closure heal on the next
   # attempt.
   defp missing_bundle_deps(ctx, include) do
-    case Arca.ComponentStorage.list_components(ctx, limit: :none) do
+    case Arca.ComponentStorage.list_components(Context.actor(ctx), limit: :none) do
       {:ok, rows} ->
         rows
         |> Enum.flat_map(&Pull.missing_deps(ctx, &1, include: include))

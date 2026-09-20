@@ -54,8 +54,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
       })
 
     ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor.id, scope: :athanor)
-    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "components")
-    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "aqua")
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "components")
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "aqua")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
 
@@ -64,7 +64,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
 
   defp head!(ctx, ref) do
     {:ok, [profile]} = Source.DB.profiles(ctx, ref)
-    {:ok, row, refs} = ConsentStorage.get_head(ctx.athanor_id, profile.id)
+    {:ok, row, refs} = ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
     {profile, row, refs}
   end
 
@@ -106,12 +106,12 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     ]
 
     mine = ["components", "formulas", "local", "mine", "0.1.0"]
-    {:ok, manifest} = Arca.get_json(ctx, shipped ++ ["cyfr-manifest.json"])
-    {:ok, wasm} = Arca.get(ctx, shipped ++ ["formula.wasm"])
-    :ok = Arca.put(ctx, mine ++ ["formula.wasm"], wasm)
+    {:ok, manifest} = Arca.get_json(Sanctum.Context.actor(ctx), shipped ++ ["cyfr-manifest.json"])
+    {:ok, wasm} = Arca.get(Sanctum.Context.actor(ctx), shipped ++ ["formula.wasm"])
+    :ok = Arca.put(Sanctum.Context.actor(ctx), mine ++ ["formula.wasm"], wasm)
 
     :ok =
-      Arca.put_json(ctx, mine ++ ["cyfr-manifest.json"], %{
+      Arca.put_json(Sanctum.Context.actor(ctx), mine ++ ["cyfr-manifest.json"], %{
         manifest
         | "name" => "mine",
           "version" => "0.1.0"
@@ -130,11 +130,11 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     {_claude, first, _} = head!(ctx, @claude)
     version = shipped_version("catalysts", "claude")
     unit = ["components", "catalysts", "local", "claude", version]
-    {:ok, manifest} = Arca.get_json(ctx, unit ++ ["cyfr-manifest.json"])
+    {:ok, manifest} = Arca.get_json(Sanctum.Context.actor(ctx), unit ++ ["cyfr-manifest.json"])
 
     :ok =
       Arca.put_json(
-        ctx,
+        Sanctum.Context.actor(ctx),
         unit ++ ["cyfr-manifest.json"],
         put_in(manifest, ["caps", "egress", "methods"], ["GET", "POST", "DELETE"])
       )
@@ -164,7 +164,13 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     File.rm_rf!(Path.join([seed_dir, "components", "catalysts", "local", "claude", current]))
 
     assert {:ok, :own} =
-             Arca.Overlay.unit_status(ctx, ["components", "catalysts", "local", "claude", current])
+             Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), [
+               "components",
+               "catalysts",
+               "local",
+               "claude",
+               current
+             ])
 
     assert {:ok, %{minted: [], revised: []}} = Bootstrap.run(ctx)
     {_, kept, _} = head!(ctx, @aqua)
@@ -173,7 +179,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
 
     # The estate takes the new release: the assistant's closure moves, and
     # every node of it is the seed's own or unchanged since the head.
-    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "components")
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "components")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
 
     # The catalyst's own head re-mints too: its new release widened its
@@ -206,13 +212,13 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     # is not the seed's, so the boot leaves the head where it is.
     own = ["components", "catalysts", "local", "claude", "9.1.0"]
     shipped = ["components", "catalysts", "local", "claude", "9.0.0"]
-    {:ok, manifest} = Arca.get_json(ctx, shipped ++ ["cyfr-manifest.json"])
-    {:ok, wasm} = Arca.get(ctx, shipped ++ ["catalyst.wasm"])
-    :ok = Arca.put(ctx, own ++ ["catalyst.wasm"], wasm)
+    {:ok, manifest} = Arca.get_json(Sanctum.Context.actor(ctx), shipped ++ ["cyfr-manifest.json"])
+    {:ok, wasm} = Arca.get(Sanctum.Context.actor(ctx), shipped ++ ["catalyst.wasm"])
+    :ok = Arca.put(Sanctum.Context.actor(ctx), own ++ ["catalyst.wasm"], wasm)
 
     :ok =
       Arca.put_json(
-        ctx,
+        Sanctum.Context.actor(ctx),
         own ++ ["cyfr-manifest.json"],
         manifest
         |> Map.put("version", "9.1.0")

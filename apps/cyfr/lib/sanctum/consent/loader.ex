@@ -252,7 +252,7 @@ defmodule Sanctum.Consent.Loader do
   # refuse.
   defp root_pin_intact?(ctx, profile_id, consent_id)
        when is_binary(profile_id) and is_binary(consent_id) do
-    case Arca.ProfileStorage.get(ctx.athanor_id, profile_id) do
+    case Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id) do
       {:ok, %{status: "active", head_consent_id: ^consent_id}} -> true
       _ -> false
     end
@@ -265,7 +265,7 @@ defmodule Sanctum.Consent.Loader do
        do: false
 
   defp pin_intact?(ctx, profile_id, consent_id) do
-    case Arca.ProfileStorage.get(ctx.athanor_id, profile_id) do
+    case Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id) do
       {:ok, %{status: "active", head_consent_id: ^consent_id}} -> true
       _ -> false
     end

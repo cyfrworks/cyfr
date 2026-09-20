@@ -95,7 +95,7 @@ defmodule Sanctum.Consent.BootstrapTest do
 
     for i <- 1..101 do
       {:ok, _} =
-        Arca.ComponentStorage.put_component(ctx, %{
+        Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
           id: Ecto.UUID.generate(),
           name: "bulk-#{i}",
           version: "1.0.0",
@@ -141,7 +141,7 @@ defmodule Sanctum.Consent.BootstrapTest do
     # A stale expectation cannot advance the head.
     assert {:error, :head_moved} =
              Arca.ProfileStorage.advance_head(
-               ctx.athanor_id,
+               Sanctum.Context.actor(ctx),
                profile.id,
                "cons_stale",
                "cons_new"
@@ -149,6 +149,11 @@ defmodule Sanctum.Consent.BootstrapTest do
 
     # The true expectation can.
     assert :ok =
-             Arca.ProfileStorage.advance_head(ctx.athanor_id, profile.id, consent.id, consent.id)
+             Arca.ProfileStorage.advance_head(
+               Sanctum.Context.actor(ctx),
+               profile.id,
+               consent.id,
+               consent.id
+             )
   end
 end

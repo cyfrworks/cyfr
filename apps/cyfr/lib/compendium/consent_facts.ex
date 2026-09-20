@@ -86,7 +86,7 @@ defmodule Compendium.ConsentFacts do
   defp seed_agent_digest(name, roster) do
     path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit(name), 1)
 
-    with {:ok, bytes} <- Arca.get(Sanctum.system_context(), path),
+    with {:ok, bytes} <- Arca.get(Cyfr.Actor.system(), path),
          {:ok, row} <- AgentSource.shipped_row(name, bytes, roster) do
       {:ok, Cyfr.ComponentRow.field(row, :release_digest)}
     end
@@ -103,8 +103,10 @@ defmodule Compendium.ConsentFacts do
         Cyfr.ComponentRow.field(row, :version)
       )
 
-    with {:ok, :shipped} <- Arca.Overlay.unit_status(ctx, unit),
-         {:ok, false} <- Arca.Overlay.edited?(ctx, unit),
+    actor = Context.actor(ctx)
+
+    with {:ok, :shipped} <- Arca.Overlay.unit_status(actor, unit),
+         {:ok, false} <- Arca.Overlay.edited?(actor, unit),
          digest when is_binary(digest) <- Cyfr.ComponentRow.field(row, :release_digest) do
       {:ok, digest}
     else

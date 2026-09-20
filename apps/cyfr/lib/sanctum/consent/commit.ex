@@ -141,7 +141,7 @@ defmodule Sanctum.Consent.Commit do
   @spec grant(Context.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def grant(%Context{} = ctx, %{profile_id: profile_id} = params, _opts \\ []) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
-         {:ok, profile} <- Arca.ProfileStorage.get(ctx.athanor_id, profile_id),
+         {:ok, profile} <- Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id),
          :ok <- check_grantable_profile(profile),
          {:ok, head} <- Source.impl().head_consent(ctx, profile_id),
          :ok <- check_no_tool_servers(head, profile.source_ref),
@@ -275,7 +275,8 @@ defmodule Sanctum.Consent.Commit do
 
   defp prepare(ctx, %{publish_from: owner_profile_id} = decisions)
        when is_binary(owner_profile_id) do
-    with {:ok, owner_profile} <- Arca.ProfileStorage.get(ctx.athanor_id, owner_profile_id),
+    with {:ok, owner_profile} <-
+           Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), owner_profile_id),
          :ok <- check_owner_profile(owner_profile),
          {:ok, owner_consent} <- Source.impl().head_consent(ctx, owner_profile_id),
          {:ok, published} <-
@@ -1101,7 +1102,7 @@ defmodule Sanctum.Consent.Commit do
   defp pinned_version(_prep), do: ""
 
   defp current_head_id(ctx, profile_id) do
-    case Arca.ConsentStorage.get_head(ctx.athanor_id, profile_id) do
+    case Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile_id) do
       {:ok, head, _refs} -> {:ok, head.id}
       {:error, :no_head} -> {:ok, nil}
       {:error, reason} -> {:error, reason}
@@ -1127,9 +1128,9 @@ defmodule Sanctum.Consent.Commit do
   # A profile blocked at needs_consent is unblocked by exactly this act —
   # a fresh revision IS the re-consent.
   defp reactivate_profile(ctx, %{profile_id: profile_id}) when is_binary(profile_id) do
-    case Arca.ProfileStorage.get(ctx.athanor_id, profile_id) do
+    case Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id) do
       {:ok, %{status: "needs_consent"}} ->
-        Arca.ProfileStorage.set_status(ctx.athanor_id, profile_id, "active")
+        Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), profile_id, "active")
 
       {:ok, _other_status} ->
         :ok
