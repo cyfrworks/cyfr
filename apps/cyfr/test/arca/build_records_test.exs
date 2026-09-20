@@ -238,6 +238,27 @@ defmodule Arca.BuildRecordsTest do
       assert {:error, :no_athanor} = BuildRecords.prune(nobody, 10)
     end
 
+    # An empty athanor is the same refusal, not an empty result. It is what
+    # an unresolved tenant looks like once it has been through a string:
+    # `Sanctum.Context.build/1` refuses it and `Arca.QueryHelpers.where_tenant/2`
+    # raises on it, so a facade that merely matched `is_binary/1` would filter
+    # on `athanor_id == ""`, find nothing and answer like an empty tenant --
+    # turning a refusal into silence.
+    test "an empty athanor is refused rather than read as a tenant with no rows" do
+      empty = %Cyfr.Actor{athanor_id: "", user_id: "usr_nobody"}
+
+      assert {:error, :no_athanor} = BuildRecords.get(empty, "build_x")
+
+      assert {:error, :no_athanor} =
+               BuildRecords.record_started(empty, "build_x", "reagent:local.demo:0.1.0")
+
+      assert {:error, :no_athanor} =
+               BuildRecords.record_finished(empty, "build_x", "failed", "no")
+
+      assert {:error, :no_athanor} = BuildRecords.record_registration(empty, "build_x", "done")
+      assert {:error, :no_athanor} = BuildRecords.prune(empty, 10)
+    end
+
     # The witness for the clause above: with a connection, the same calls
     # would have reached the database.
     test "the same calls do reach the database once the actor carries an athanor", %{

@@ -57,7 +57,8 @@ defmodule Arca.BuildRecords do
   @spec record_started(Cyfr.Actor.t(), String.t(), String.t()) ::
           :ok | {:error, :not_found | :invalid | Ecto.Changeset.t()} | refusal()
   def record_started(%Cyfr.Actor{athanor_id: athanor_id} = actor, build_id, reference)
-      when is_binary(athanor_id) and is_binary(build_id) and is_binary(reference) do
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(build_id) and
+             is_binary(reference) do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.record_started", fn ->
       start_row(athanor_id, actor.user_id, build_id, reference, DateTime.utc_now())
     end)
@@ -124,7 +125,8 @@ defmodule Arca.BuildRecords do
   @spec record_finished(Cyfr.Actor.t(), String.t(), String.t(), map() | String.t()) ::
           :ok | {:error, :not_found} | refusal()
   def record_finished(%Cyfr.Actor{athanor_id: athanor_id}, build_id, status, outcome)
-      when is_binary(athanor_id) and is_binary(build_id) and status in ["compiled", "failed"] do
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(build_id) and
+             status in ["compiled", "failed"] do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.record_finished", fn ->
       updates =
         case status do
@@ -152,7 +154,7 @@ defmodule Arca.BuildRecords do
   """
   @spec get(Cyfr.Actor.t(), String.t()) :: {:ok, map()} | {:error, :not_found} | refusal()
   def get(%Cyfr.Actor{athanor_id: athanor_id}, build_id)
-      when is_binary(athanor_id) and is_binary(build_id) do
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(build_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.get", fn ->
       case row(athanor_id, build_id) do
         nil -> {:error, :not_found}
@@ -178,14 +180,15 @@ defmodule Arca.BuildRecords do
   def record_registration(actor, build_id, outcome, attempts \\ @registration_attempts)
 
   def record_registration(%Cyfr.Actor{athanor_id: athanor_id}, build_id, outcome, attempts)
-      when is_binary(athanor_id) and is_binary(build_id) and is_binary(outcome) and attempts > 0 do
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(build_id) and
+             is_binary(outcome) and attempts > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.record_registration", fn ->
       patch_registration(athanor_id, build_id, outcome, attempts)
     end)
   end
 
   def record_registration(%Cyfr.Actor{athanor_id: athanor_id}, _build_id, _outcome, _attempts)
-      when is_binary(athanor_id),
+      when is_binary(athanor_id) and athanor_id != "",
       do: :ok
 
   def record_registration(%Cyfr.Actor{}, _build_id, _outcome, _attempts),
@@ -243,7 +246,7 @@ defmodule Arca.BuildRecords do
   def prune(actor, keep, opts \\ [])
 
   def prune(%Cyfr.Actor{athanor_id: athanor_id}, keep, opts)
-      when is_binary(athanor_id) and is_integer(keep) and keep >= 0 do
+      when is_binary(athanor_id) and athanor_id != "" and is_integer(keep) and keep >= 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.prune", fn ->
       # Keep the newest rows and recently started builds. Started rows also
       # need an age limit because builds have no lease sweeper. Use a survivor
