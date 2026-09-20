@@ -546,7 +546,16 @@ test("killing the spawner takes every backend down with the container, compose r
 
   const after = await eventually(() => {
     const answer = callTool("updatable:probe__whoami");
-    return answer.ok ? JSON.parse(answer.ok.content[0].text) : null;
+    // Until cyfr has synced the owner into the restarted bridge the call is
+    // answered, but with the bridge's own sentence about a backend it does
+    // not hold yet rather than the probe's JSON: that is the state this
+    // waits out, so it is not an answer, not a parse error.
+    if (!answer.ok) return null;
+    try {
+      return JSON.parse(answer.ok.content[0].text);
+    } catch {
+      return null;
+    }
   }, "cyfr to sync the owner into the restarted bridge", 30_000);
   assert.notEqual(after.home, before.home);
   t.diagnostic(`restart ${restarts} -> ${restarts + 1}; home ${before.home} -> ${after.home}`);
