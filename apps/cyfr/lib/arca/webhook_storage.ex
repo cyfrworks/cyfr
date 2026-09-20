@@ -48,7 +48,7 @@ defmodule Arca.WebhookStorage do
       slug: attrs.slug,
       target_ref: attrs.target_ref,
       secret_encrypted: attrs.secret_encrypted,
-      signature_header: attrs[:signature_header] || Sanctum.Webhook.default_signature_header(),
+      signature_header: attrs[:signature_header] || Cyfr.Webhook.default_signature_header(),
       timestamp_header: attrs[:timestamp_header],
       idempotency_key_header: attrs[:idempotency_key_header],
       input_template: attrs[:input_template] || "{}",

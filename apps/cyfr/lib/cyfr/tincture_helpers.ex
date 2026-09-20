@@ -58,15 +58,11 @@ defmodule Cyfr.TinctureHelpers do
   Canonical tincture path: `/t/:athanor/:publisher/:name`, where `:athanor`
   is the athanor's route segment (`Sanctum.Tenancy.Athanors.route_slug/1`).
 
-  Single source of truth for the tincture URL shape — every server-side caller
-  (controller base href, Prism shell iframe `src`, registry entry URL, the
-  `tincture_visibility` public URL) composes this.
+  The shape itself is `Cyfr.TinctureUrl.path/3`, where both sides of the
+  URL read it; this is the serving module's spelling of the same call.
   """
   @spec tincture_path(String.t(), String.t(), String.t()) :: String.t()
-  def tincture_path(athanor_segment, publisher, name)
-      when is_binary(athanor_segment) and athanor_segment != "" do
-    "/t/#{athanor_segment}/#{publisher}/#{name}"
-  end
+  defdelegate tincture_path(athanor_segment, publisher, name), to: Cyfr.TinctureUrl, as: :path
 
   @denylist ["data.db", Compendium.ComponentPath.manifest_name(), "schema.sql"]
   @allowed_extensions ~w(.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map)

@@ -103,7 +103,7 @@ defmodule Cyfr.Application do
       # The write-behind for bookkeeping rows (allowed policy lines, MCP log
       # completions, vault last-used); right after the repo so it drains
       # before the repo goes down.
-      Cyfr.RecordSink,
+      Arca.RecordSink,
       Cyfr.RetentionScheduler,
       # Recurring component executions: the runs the scheduler fires are
       # tasks of their own, monitored by it.
@@ -111,7 +111,11 @@ defmodule Cyfr.Application do
         shutdown: 30_000
       ),
       Cyfr.Schedules.Scheduler,
-      Arca.AuditHandler,
+      # The audit roster is the catalog's, read here and handed down: an
+      # event is audited exactly when `Cyfr.Telemetry.Catalog` names
+      # `:audit` among its consumers. The storage layer holds the handler
+      # and the sinks; naming the catalog is the host's part.
+      {Arca.AuditHandler, events: Cyfr.Telemetry.Catalog.consumed_by(:audit)},
       # Releases a charged invoke-budget slot when its holder dies without
       # running its `after` (the brutal-kill cancel/timeout paths).
       Sanctum.Authority.BudgetGuard,
@@ -185,7 +189,7 @@ defmodule Cyfr.Application do
       Emissary.MCP.RunningTasks,
       # Sanctum auth sliver — its own Finch pool for IdP OAuth Device-Flow
       # HTTP calls (GitHub / Google). Compendium's registry and OCI traffic
-      # goes through `Cyfr.Network.pinned_request/5`, which owns its own
+      # goes through `Cyfr.Egress.pinned_request/5`, which owns its own
       # connections; this pool keeps OAuth userinfo HTTP off that path and
       # reinforces the sliver boundary at the supervision level.
       {Finch, name: Sanctum.Auth.Finch},

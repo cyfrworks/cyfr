@@ -63,7 +63,7 @@ defmodule Cyfr.RetentionScheduler do
     # Settle the write-behind first so a sweep sees every completion that
     # was queued before it — a row about to be pruned should not have a
     # pending update racing the delete.
-    run_step("record sink flush", fn -> Cyfr.RecordSink.flush() end)
+    run_step("record sink flush", fn -> Arca.RecordSink.flush() end)
     run_step("retention cleanup", &run_retention/0)
 
     for {label, fun} <- sweeps(), do: run_step(label, fun)

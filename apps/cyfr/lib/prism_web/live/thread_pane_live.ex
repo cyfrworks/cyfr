@@ -36,8 +36,8 @@ defmodule PrismWeb.ThreadPaneLive do
   alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Users
 
-  @agent_author Arca.Schemas.Message.agent_author()
-  @system_author Arca.Schemas.Message.system_author()
+  @agent_author Cyfr.Author.agent()
+  @system_author Cyfr.Author.system()
 
   # How many pages the assistant may leave pointed at in the panel at once.
   @max_links 5

@@ -23,22 +23,24 @@ defmodule Arca.Schemas.User do
   @primary_key {:id, :string, autogenerate: false}
 
   @statuses ["active", "denied"]
-  @id_prefix "usr"
 
   @type t :: %__MODULE__{}
 
+  # The prefix and the predicate are `Cyfr.PersonId`'s: the identity
+  # domain mints with the one and this table refuses a row that fails the
+  # other, so both read one declaration.
+
   @doc "The prefix every person's id carries; `Sanctum.Tenancy.Users` mints with it."
   @spec id_prefix() :: String.t()
-  def id_prefix, do: @id_prefix
+  defdelegate id_prefix(), to: Cyfr.PersonId, as: :prefix
 
   @doc """
-  Whether `id` is a person's — minted here — as opposed to one of the
-  server's synthetic principals (`system`, `_seed`, `webhook:<slug>`, …),
-  which are never people and never have a row.
+  Whether `id` is a person's — minted with the prefix above — as opposed
+  to one of the server's synthetic principals (`system`, `_seed`,
+  `webhook:<slug>`, …), which are never people and never have a row.
   """
   @spec person_id?(term()) :: boolean()
-  def person_id?(id) when is_binary(id), do: String.starts_with?(id, @id_prefix <> "_")
-  def person_id?(_), do: false
+  defdelegate person_id?(id), to: Cyfr.PersonId, as: :person?
 
   schema "users" do
     field :email, :string

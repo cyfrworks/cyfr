@@ -3,7 +3,7 @@
 
 defmodule Cyfr.Network do
   @moduledoc """
-  Network security utilities for SSRF prevention.
+  Where an outbound request may connect: the decision, not the request.
 
   Validates outbound URLs before connecting, blocking requests to
   private/reserved IP ranges (`Cyfr.Cidr.private_ip?/1`). Used by OCI blob
@@ -15,11 +15,24 @@ defmodule Cyfr.Network do
   `validate_redirect_url/2` only *checks* a URL — a caller that then connects
   by hostname re-resolves DNS and reopens a time-of-check/time-of-use gap (an
   attacker-controlled domain can answer a public IP for the check and a private
-  IP for the connection). `pinned_request/5` closes that gap: it resolves and
-  validates the host ONCE, then connects to that exact IP while preserving the
-  original hostname for the TLS SNI, certificate verification, and `Host`
-  header (via Mint's `:hostname` connect option). The validated IP is the
-  connection target, so there is no second resolution to rebind.
+  IP for the connection). `pin/2` closes that gap: it resolves and validates
+  the host ONCE, and answers the request options that connect to that exact
+  IP while preserving the original hostname for the TLS SNI, certificate
+  verification, and `Host` header (via Mint's `:hostname` connect option).
+  The validated IP is the connection target, so there is no second
+  resolution to rebind.
+
+  ## Deciding here, connecting there
+
+  This module holds no HTTP client and issues no request: every check, the
+  `:resolver` seam and the fail-closed transport policy baked into
+  `req_opts` live here, so the layers below the host can validate a
+  destination without an HTTP client in their dependency tree. Actually
+  sending the request is a handful of lines over `pin/2` with no security
+  decision in them, and each side that speaks HTTP owns its own —
+  `Cyfr.Egress` for the control plane, `Sanctum.Vault.OAuth` for the token
+  endpoint, `Opus.Egress` for the guest. `Cyfr.EgressInventoryTest` is the
+  roster of those sites.
   """
 
   import Cyfr.MapUtil, only: [put_unless_nil: 3]
@@ -125,75 +138,6 @@ defmodule Cyfr.Network do
     end
   end
 
-  @doc """
-  Issue an HTTP request with SSRF protection AND DNS-rebinding protection.
-
-  Resolves and validates the host once, then connects to that validated IP
-  while preserving the original hostname for SNI / cert verification / `Host`
-  (no second DNS resolution → no rebinding window). The body is returned raw
-  (no decompression/decoding) and redirects are NOT followed, so callers stay
-  in control of redirect validation.
-
-  Returns a Finch-style 4-tuple `{:ok, status, headers, body}` (headers as a
-  `[{name, value}]` list) or `{:error, reason}`.
-
-  ## Options
-
-    * `:private_policy` — see `pin/2` (default `:deny`)
-    * `:resolver` — see `pin/2` (default `:inet`)
-    * `:receive_timeout` — ms (default 30_000)
-    * `:protocols` — Mint protocols list (e.g. `[:http1]`)
-    * `:transport_opts` — extra Mint transport opts
-    * `:max_response_bytes` — enforce a response-size ceiling WHILE the
-      body streams in (via `Cyfr.BoundedBody.collector/1`), aborting the transfer
-      at the limit instead of buffering an arbitrarily large body first.
-      Exceeding it returns `{:error, {:response_too_large, size, max}}`.
-  """
-  @spec pinned_request(atom(), String.t(), [{String.t(), String.t()}], binary() | nil, keyword()) ::
-          {:ok, non_neg_integer(), [{String.t(), String.t()}], binary()} | {:error, term()}
-  def pinned_request(method, url, headers \\ [], body \\ nil, opts \\ []) do
-    # The identity semantics matter here: no accept-encoding and no decode
-    # (OCI digest verification hashes the body as received), no redirects,
-    # no Req-level retry — `pin/2` bakes exactly that policy in.
-    case pin(url, opts) do
-      {:ok, %{req_opts: req_opts}} ->
-        max_bytes = Keyword.get(opts, :max_response_bytes)
-
-        req_opts =
-          req_opts
-          |> Keyword.put(:method, method)
-          |> Keyword.put(:headers, headers)
-          |> put_unless_nil(:body, body)
-          |> put_unless_nil(:into, max_bytes && Cyfr.BoundedBody.collector(max_bytes))
-
-        case Req.request(req_opts) do
-          {:ok, %Req.Response{status: status, headers: resp_headers} = resp} ->
-            with {:ok, resp_body} <- response_body(resp, max_bytes) do
-              {:ok, status, flatten_headers(resp_headers), resp_body}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      {:error, _type, message} ->
-        {:error, message}
-    end
-  end
-
-  defp response_body(%Req.Response{body: body}, nil), do: {:ok, body}
-  defp response_body(resp, max_bytes), do: Cyfr.BoundedBody.read(resp, max_bytes)
-
-  # Req returns headers as %{name => [values]}; flatten to the [{name, value}]
-  # list shape the Finch-style callers expect.
-  defp flatten_headers(headers) when is_map(headers) do
-    Enum.flat_map(headers, fn {k, vs} ->
-      Enum.map(List.wrap(vs), &{to_string(k), to_string(&1)})
-    end)
-  end
-
-  defp flatten_headers(headers) when is_list(headers), do: headers
-
   defp check_scheme(scheme) when scheme in ["http", "https"], do: :ok
   defp check_scheme(nil), do: {:error, :invalid_url, "missing URL scheme"}
   defp check_scheme(scheme), do: {:error, :invalid_url, "blocked URL scheme: #{scheme}"}
@@ -265,7 +209,15 @@ defmodule Cyfr.Network do
     end)
   end
 
-  @doc "The private-egress allowlist as configured (hostnames, IPs, CIDRs)."
+  @doc """
+  The private-egress allowlist as configured (hostnames, IPs, CIDRs).
+
+  The key stays under `:cyfr`: the allowlist is the operator's deployment
+  setting, read from `CYFR_PRIVATE_EGRESS_TARGETS` by the host's runtime
+  configuration, and this module is the shared transport that consults
+  it rather than its owner. An absent key is the empty allowlist, which
+  refuses every private target — the fail-closed direction.
+  """
   @spec private_egress_targets() :: [String.t()]
   def private_egress_targets do
     case Application.get_env(:cyfr, :private_egress_targets, []) do

@@ -77,6 +77,19 @@ defmodule Cyfr.Authority.RootSelect do
     do: is_binary(label) and label != "" and not String.starts_with?(label, @id_prefix)
 
   @doc """
+  The same rule in its typed form: `:ok`, or the refusal a caller reports.
+
+  This is what a consent verb answers with when it refuses a label on the
+  sheet — before a plan token or a proof is minted for it — and what the
+  row store's changeset is held to when one reaches the insert anyway.
+  One rule, one refusal, at both ends.
+  """
+  @spec check_label(term()) :: :ok | {:error, {:invalid_label, term()}}
+  def check_label(label) do
+    if valid_label?(label), do: :ok, else: {:error, {:invalid_label, label}}
+  end
+
+  @doc """
   A caller-supplied string as a selector: id-shaped becomes `{:id, _}`,
   everything else `{:label, _}`. Blank and non-binary become `:default`.
 

@@ -21,19 +21,19 @@ defmodule Arca.SanctumSurfaceTest do
 
   # The Sanctum namespaces lib/arca reaches into IN CODE (doc prose
   # mentions many more — the filter below is what keeps this list honest),
-  # and why each is here. Narrower than it reads from a raw grep, and mostly vocabulary.
+  # and why each is here. Much narrower than it reads from a raw grep.
+  #
+  # What was vocabulary is gone rather than forgotten: the tenancy scope
+  # list and the webhook signature header's default are shapes two sides
+  # agree on, so they live in the contracts (`Cyfr.TenancyScope`,
+  # `Cyfr.Webhook`) and the storage layer reads them there, while the auth
+  # domain keeps its names over the same declaration. What is left is the
+  # tenancy carrier alone.
   @surface [
     # The tenancy carrier and its resolution — the reason the cycle
     # exists at all: every scoped read and stamped write names it.
     "Sanctum.Context",
-    "Sanctum.Tenancy",
-
-    # Vocabulary that travels with rows.
-    "Sanctum.Atoms",
-
-    # The one genuine domain-logic reach: the webhook signature header's
-    # default is the domain's to name.
-    "Sanctum.Webhook"
+    "Sanctum.Tenancy"
   ]
 
   @namespace ~r/\bSanctum(?:\.[A-Z]\w+)+\b/

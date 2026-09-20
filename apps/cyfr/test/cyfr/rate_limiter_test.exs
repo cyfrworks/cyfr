@@ -4,6 +4,10 @@
 defmodule Cyfr.RateLimiterTest do
   # Rate-limit counters live in their own table, isolated from Arca.Cache, so an
   # attacker-cardinality flood cannot evict sessions or OAuth state.
+  #
+  # `Cyfr.RateLimiter` is a shared contract, but this suite stays here:
+  # the isolation case below reads `Arca.Cache`'s table, and every case
+  # needs the limiter started, which the control plane's boot does.
   use ExUnit.Case, async: false
 
   setup do

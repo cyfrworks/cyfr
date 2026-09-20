@@ -13,6 +13,10 @@ defmodule Cyfr.Ops.IndependenceTest do
     refute deps =~ ":sanctum"
     refute deps =~ ":locus"
     refute deps =~ ":opus"
+    # No HTTP client: `Cyfr.Network` decides, and each app that speaks
+    # HTTP issues the request with its own. The builder island carries
+    # these contracts and would carry anything added here.
+    refute deps =~ ":req"
   end
 
   test "operation modules compile without Sanctum or a running catalog" do

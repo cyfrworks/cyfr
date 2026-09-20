@@ -13,7 +13,11 @@ defmodule Compendium.ReverseSurfaceTest do
 
   `lib/arca` is the sharper of the two: the overlay's locators were wired
   through config precisely so the storage layer would not compile against
-  Compendium, and one call slipped back past that.
+  Compendium. Its roster is now **empty**, and is held to be — the one
+  call that had slipped back past the locators read the `source` roster,
+  which is a vocabulary two sides agree on and lives in the contracts
+  (`Cyfr.ComponentSource`). An empty roster only means something while
+  the scan still reads, so the case below asserts that too.
 
   `lib/sanctum` is the broader one, and it crosses the license boundary
   (FSL calling Apache-2.0). It is product-real — consent has to read live
@@ -22,15 +26,12 @@ defmodule Compendium.ReverseSurfaceTest do
 
   use ExUnit.Case, async: true
 
-  # lib/arca → Compendium, in code.
-  @arca_surface [
-    # The closed `source` roster the components row store enforces on write
-    # (`Arca.ComponentStorage.validate_source!/1`). The vocabulary is the
-    # component domain's — how a row's bytes arrived — and the row store is
-    # what refuses anything outside it. The ONE code edge; everything else
-    # Arca says about Compendium is prose.
-    "Compendium.Source"
-  ]
+  # lib/arca → Compendium, in code. Empty: everything lib/arca says about
+  # the component domain is prose. The closed `source` roster the row
+  # store enforces on write (`Arca.ComponentStorage.validate_source!/1`)
+  # was the one code edge, and it is `Cyfr.ComponentSource` now —
+  # `Compendium.Source` keeps its name and reads the same declaration.
+  @arca_surface []
 
   # lib/sanctum → Compendium, in code.
   @sanctum_surface [
@@ -77,6 +78,12 @@ defmodule Compendium.ReverseSurfaceTest do
   end
 
   test "the storage layer reaches only into the Compendium namespaces this surface names" do
+    # The roster is empty, so a scan that read nothing would pass this
+    # case having checked nothing. The same scan over lib/sanctum finds
+    # the reaches below, which is what says the scan works.
+    assert MapSet.size(reached("apps/cyfr/lib/sanctum/**/*.ex")) > 0,
+           "the scan read no Compendium reach anywhere — it is not reading"
+
     extra =
       "apps/cyfr/lib/arca/**/*.ex"
       |> reached()

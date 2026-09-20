@@ -25,7 +25,8 @@ defmodule Sanctum.Consent.Plan do
   bound on that profile rather than a copy of its own.
   """
 
-  alias Arca.Schemas.Profile
+  alias Cyfr.Authority.RootSelect
+
   alias Sanctum.Consent.Authz
   alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.Proof
@@ -60,7 +61,7 @@ defmodule Sanctum.Consent.Plan do
     kind = Map.get(params, :kind, :owner)
 
     with :ok <- Authz.authorize_staging(ctx),
-         :ok <- Profile.check_label(label),
+         :ok <- RootSelect.check_label(label),
          {:ok, source_ref} <- name_ref(ref),
          {:ok, component} <- fetch_component(ctx, source_ref),
          {:ok, shape_input} <- ShapeDerivation.shape_input(ctx, source_ref),

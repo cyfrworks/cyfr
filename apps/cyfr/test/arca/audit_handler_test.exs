@@ -173,6 +173,39 @@ defmodule Arca.AuditHandlerTest do
     end
   end
 
+  describe "the roster" do
+    # The roster is settled at start, not compiled in: the boot reads the
+    # catalog and hands the answer to `start_link/1`. Both directions are
+    # held here — a catalog entry with no attached handler, and an
+    # attached handler for an event the catalog does not name for audit —
+    # so a planted mismatch either way fails.
+    test "the handler is attached to exactly the catalog's :audit set" do
+      rostered = Cyfr.Telemetry.Catalog.consumed_by(:audit)
+
+      assert Arca.AuditHandler.events() == rostered
+
+      expected = MapSet.new(rostered, &("audit-" <> Enum.join(&1, "-")))
+
+      # Every handler on the node, not only the rostered events', so an
+      # audit handler attached to an event the catalog does not name for
+      # audit is caught too.
+      attached =
+        for handler <- :telemetry.list_handlers([]),
+            is_binary(handler.id),
+            String.starts_with?(handler.id, "audit-"),
+            into: MapSet.new(),
+            do: handler.id
+
+      assert attached == expected
+    end
+
+    test "a boot that names no roster does not start" do
+      # An empty roster audits nothing and says nothing about it, so the
+      # option is required rather than defaulted.
+      assert_raise KeyError, fn -> Arca.AuditHandler.init([]) end
+    end
+  end
+
   describe "monitored events" do
     test "a credential dispensed to a runner, and one a runner reports refused, are audited" do
       test_pid = self()

@@ -44,12 +44,11 @@ defmodule Aqua.Aloud do
   """
 
   alias Arca.ThreadStorage, as: Threads
-  alias Arca.Schemas.Message
   alias Aqua.Attachments
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Members, Users}
 
-  @agent_author Message.agent_author()
+  @agent_author Cyfr.Author.agent()
 
   @type error ::
           :not_a_member
@@ -191,7 +190,7 @@ defmodule Aqua.Aloud do
 
       case Threads.append(target_ctx, target_id, %{
              id: message_id,
-             author: target_ctx.user_id || Message.system_author(),
+             author: target_ctx.user_id || Cyfr.Author.system(),
              kind: "text",
              content: row.content || "",
              payload: payload

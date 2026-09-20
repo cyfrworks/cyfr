@@ -355,7 +355,7 @@ defmodule Sanctum.Tenancy do
           true
 
         {:error, :not_found} ->
-          not Arca.Schemas.User.person_id?(user_id)
+          not Cyfr.PersonId.person?(user_id)
 
         {:error, reason} ->
           Logger.warning(

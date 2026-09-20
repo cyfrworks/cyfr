@@ -139,7 +139,7 @@ defmodule Arca.ComponentStorage do
     end)
   end
 
-  # The closed source roster (`Compendium.Source.values/0`), enforced
+  # The closed source roster (`Cyfr.ComponentSource.values/0`), enforced
   # where rows are WRITTEN — an unrostered value would silently skew
   # provenance derivation and the signature verifier's fail-closed
   # branch. A raise, not a tuple: every legitimate ingress already
@@ -147,10 +147,10 @@ defmodule Arca.ComponentStorage do
   defp validate_source!(attrs) do
     source = Map.get(attrs, :source) || Map.get(attrs, "source")
 
-    unless source in Compendium.Source.values() do
+    unless source in Cyfr.ComponentSource.values() do
       raise ArgumentError,
             "unknown component source #{inspect(source)}; " <>
-              "the roster is #{inspect(Compendium.Source.values())}"
+              "the roster is #{inspect(Cyfr.ComponentSource.values())}"
     end
 
     attrs

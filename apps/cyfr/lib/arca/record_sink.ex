@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.RecordSink do
+defmodule Arca.RecordSink do
   @moduledoc """
   The write-behind for the hot path's bookkeeping rows.
 
@@ -18,6 +18,18 @@ defmodule Cyfr.RecordSink do
   write-behind's honest cost. With `config :cyfr, record_sink_inline:
   true` (the test env) every enqueue writes at once in the caller — the
   sandbox never sees another process's writes.
+
+  ## Where it starts
+
+  Directly after `Arca.Repo` in the supervision tree, and that order is a
+  data-integrity constraint rather than a convenience: a supervisor stops
+  its children in reverse start order, so starting after the repo is what
+  makes the sink stop **before** it. The buffered rows `terminate/2`
+  drains are written through a repo that is still up; started before the
+  repo, the same drain would meet a closed pool and every row held at
+  shutdown would be lost silently. Anything that starts later and
+  enqueues on its way down (the retention scheduler, the MCP request log)
+  is likewise still above the sink when it flushes.
   """
 
   use GenServer
@@ -181,7 +193,7 @@ defmodule Cyfr.RecordSink do
       # Retry each row separately after a batch rollback and count
       # persistent failures as shed records.
       {:error, reason} ->
-        Logger.error("[Cyfr.RecordSink] batch rolled back: #{inspect(reason)}")
+        Logger.error("[Arca.RecordSink] batch rolled back: #{inspect(reason)}")
 
         if length(items) > 1 do
           Enum.each(items, &write_single/1)
@@ -196,7 +208,7 @@ defmodule Cyfr.RecordSink do
     # but a structurally-bad queued item is a bug and must crash loudly —
     # never be dropped twice with :ok.
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Cyfr.RecordSink] batch write failed: #{Exception.message(e)}")
+      Logger.error("[Arca.RecordSink] batch write failed: #{Exception.message(e)}")
 
       # One bad row must not take the batch with it: write the rest
       # singly. A lone row that raised is already its own retry, so it is
@@ -213,7 +225,7 @@ defmodule Cyfr.RecordSink do
     write([item])
   rescue
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Cyfr.RecordSink] row write failed: #{Exception.message(e)}")
+      Logger.error("[Arca.RecordSink] row write failed: #{Exception.message(e)}")
   end
 
   # Every row still passes the schema's changeset — a batch bypasses
@@ -235,7 +247,7 @@ defmodule Cyfr.RecordSink do
 
           changeset ->
             Logger.warning(
-              "[Cyfr.RecordSink] dropping invalid policy log: #{inspect(changeset.errors)}"
+              "[Arca.RecordSink] dropping invalid policy log: #{inspect(changeset.errors)}"
             )
 
             []
@@ -256,7 +268,7 @@ defmodule Cyfr.RecordSink do
           :ok
 
         {:error, reason} ->
-          Logger.warning("[Cyfr.RecordSink] mcp log start failed: #{inspect(reason)}")
+          Logger.warning("[Arca.RecordSink] mcp log start failed: #{inspect(reason)}")
       end
     end)
   end
@@ -268,7 +280,7 @@ defmodule Cyfr.RecordSink do
           :ok
 
         {:error, reason} ->
-          Logger.warning("[Cyfr.RecordSink] mcp log close failed: #{inspect(reason)}")
+          Logger.warning("[Arca.RecordSink] mcp log close failed: #{inspect(reason)}")
       end
     end)
   end
@@ -285,7 +297,7 @@ defmodule Cyfr.RecordSink do
           :ok
 
         {:error, reason} ->
-          Logger.warning("[Cyfr.RecordSink] mcp log update failed: #{inspect(reason)}")
+          Logger.warning("[Arca.RecordSink] mcp log update failed: #{inspect(reason)}")
       end
     end)
   end

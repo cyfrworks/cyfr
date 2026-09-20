@@ -395,7 +395,7 @@ defmodule Emissary.MCP.RequestLogTest do
                  {{:ok, 1}, %{routed_to: "here"}}
                end)
 
-      :ok = Cyfr.RecordSink.flush()
+      :ok = Arca.RecordSink.flush()
 
       assert %{status: "success", routed_to: "here", tool: "t"} =
                Arca.Repo.get(Arca.McpLog, ok_id)
@@ -413,7 +413,7 @@ defmodule Emissary.MCP.RequestLogTest do
                  end
                )
 
-      :ok = Cyfr.RecordSink.flush()
+      :ok = Arca.RecordSink.flush()
       assert %{status: "error", error_code: -1, error: "no"} = Arca.Repo.get(Arca.McpLog, err_id)
     end
   end

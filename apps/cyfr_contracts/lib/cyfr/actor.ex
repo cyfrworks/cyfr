@@ -65,8 +65,11 @@ defmodule Cyfr.Actor do
   The tenancy scope an actor's reads run under: its own athanor, or every
   athanor. `:platform` is the cross-tenant read `Sanctum.Context`
   constructs only through its internal builder.
+
+  The vocabulary is `Cyfr.TenancyScope`'s, where the identity domain and
+  the stored membership row read it too.
   """
-  @type scope :: :athanor | :platform
+  @type scope :: Cyfr.TenancyScope.t()
 
   @type t :: %__MODULE__{
           user_id: String.t() | nil,

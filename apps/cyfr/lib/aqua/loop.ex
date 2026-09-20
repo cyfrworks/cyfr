@@ -28,7 +28,6 @@ defmodule Aqua.Loop do
   alias Aqua.Loop.Binding.Call
   alias Aqua.Loop.{Planner, Policy, Request, Turn}
   alias Aqua.Tape
-  alias Arca.Schemas.TurnStep
   alias Sanctum.Context
 
   # A root turn's holder on this boot registers here (`holder/1`).
@@ -247,7 +246,7 @@ defmodule Aqua.Loop do
   (`Aqua.Loop.Worker`); then the dispatched steps of the turn and of its
   open clones are cancel-marked, every child execution and every
   in-process catalog handler is cancelled, dispatched steps settle by
-  `Arca.Schemas.TurnStep.unresolved/1` — a call whose effect is unknown is
+  `Cyfr.TurnStep.unresolved/1` — a call whose effect is unknown is
   marked `uncertain`, since a cancel does not prove the effect never
   happened — unstarted steps are skipped, each open clone ends
   `cancelled`, and the aborted mark is written. The caller then ends the
@@ -321,7 +320,7 @@ defmodule Aqua.Loop do
         guest = Context.enter_guest(ctx)
 
         result =
-          case TurnStep.unresolved(step) do
+          case Cyfr.TurnStep.unresolved(step) do
             :uncertain -> Tape.mark_uncertain(guest, turn, step, reason)
             :unknown -> Tape.close_step(guest, turn, step, "uncertain", %{error: reason})
             _ -> Tape.close_step(guest, turn, step, "error", %{error: reason})
@@ -591,7 +590,7 @@ defmodule Aqua.Loop do
   end
 
   defp agent_or_system?(author),
-    do: author in [Arca.Schemas.Message.agent_author(), Arca.Schemas.Message.system_author()]
+    do: author in Cyfr.Author.reserved()
 
   # The model step is dispatched before the call: a recovery finds it
   # without a response and never replays it.
@@ -642,7 +641,7 @@ defmodule Aqua.Loop do
         {:halt, {:failed, message}, state}
 
       # A model request that died left nothing a person must judge
-      # (`TurnStep.unresolved/1`): it ends the turn like a refusal.
+      # (`Cyfr.TurnStep.unresolved/1`): it ends the turn like a refusal.
       {failure, reason} when failure in [:error, :exit] ->
         text = describe(reason)
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: text})
@@ -1338,7 +1337,7 @@ defmodule Aqua.Loop do
   defp render(%Call{} = call, result), do: Binding.render(call, result)
 
   # A worker that died or timed out: a step it never dispatched is
-  # skipped; a dispatched one settles by `TurnStep.unresolved/1` — one safe
+  # skipped; a dispatched one settles by `Cyfr.TurnStep.unresolved/1` — one safe
   # to run again closes as an error the model may retry, a flush's closes
   # with its outcome unknown, and one whose effect is unknown is reported
   # (`:report`, the default) so the loop stops the turn on it, or marked in
@@ -1361,7 +1360,7 @@ defmodule Aqua.Loop do
 
         why = describe(reason)
 
-        case TurnStep.unresolved(fresh) do
+        case Cyfr.TurnStep.unresolved(fresh) do
           :uncertain ->
             unknown(state, fresh, why, mode)
 
@@ -1600,7 +1599,7 @@ defmodule Aqua.Loop do
   # Settling open steps on a continuation
   # ---------------------------------------------------------------------------
 
-  # A step found open settles by `TurnStep.unresolved/1`: a model step
+  # A step found open settles by `Cyfr.TurnStep.unresolved/1`: a model step
   # without its response closes as an error (its request cannot be
   # rebuilt); a dispatched call that is safe to run again is opened afresh;
   # a flush's dispatched call closes with its outcome unknown and its
@@ -1618,7 +1617,7 @@ defmodule Aqua.Loop do
             if step.child_execution_id,
               do: Cyfr.Execution.cancel(ctx(state), step.child_execution_id)
 
-            case TurnStep.unresolved(step) do
+            case Cyfr.TurnStep.unresolved(step) do
               :unanswered ->
                 _ =
                   Tape.close_step(guest, state.turn, step, "error", %{error: "not reproducible"})
@@ -2136,7 +2135,7 @@ defmodule Aqua.Loop do
 
   defp system_row(%State{} = state, text) do
     Tape.append(guest(state), state.turn.thread_id, %{
-      author: Arca.Schemas.Message.system_author(),
+      author: Cyfr.Author.system(),
       kind: "system",
       content: text,
       turn_id: state.turn.id,

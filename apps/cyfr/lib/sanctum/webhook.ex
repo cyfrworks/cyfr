@@ -28,11 +28,13 @@ defmodule Sanctum.Webhook do
 
   require Logger
 
-  # Default HMAC header shared by webhook creation, the console and request redaction.
-  @default_signature_header "x-cyfr-signature"
+  # The default HMAC header is a wire shape (`Cyfr.Webhook`), read the same
+  # way by webhook creation, the row store, the console and request
+  # redaction.
+  @default_signature_header Cyfr.Webhook.default_signature_header()
 
   @doc false
-  def default_signature_header, do: @default_signature_header
+  defdelegate default_signature_header(), to: Cyfr.Webhook
 
   alias Sanctum.Context
   alias Arca.WebhookStorage
