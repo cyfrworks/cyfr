@@ -7,6 +7,13 @@ defmodule Arca.ProviderCredentialStorage do
 
   Persistence mechanics only — sealing and permission checks live in
   `Sanctum.ProviderCredentials`. One row per `(athanor_id, provider)`.
+
+  Every read and delete takes the `Cyfr.Actor` first and matches it in
+  its head, so the athanor comes from the caller and never from an
+  argument. An actor whose athanor is nil or the empty string is refused
+  before any query — `{:error, :no_athanor}`, and a raise from
+  `exists?/2`, whose `boolean()` has no refusal to spell and must not
+  read an unresolved tenant as "no credentials stored".
   """
 
   import Ecto.Query
@@ -14,9 +21,11 @@ defmodule Arca.ProviderCredentialStorage do
 
   alias Arca.Schemas.OauthProviderCredential
 
-  @spec get(String.t(), String.t()) ::
-          {:ok, OauthProviderCredential.t()} | {:error, :not_found | :database_error}
-  def get(athanor_id, provider) when is_binary(provider) do
+  @spec get(Cyfr.Actor.t(), String.t()) ::
+          {:ok, OauthProviderCredential.t()}
+          | {:error, :no_athanor | :not_found | :database_error}
+  def get(%Cyfr.Actor{athanor_id: athanor_id}, provider)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(provider) do
     Arca.Repo.Errors.with_db_rescue("ProviderCredentialStorage.get", fn ->
       query =
         from(c in OauthProviderCredential, where: c.provider == ^provider, limit: 1)
@@ -28,6 +37,8 @@ defmodule Arca.ProviderCredentialStorage do
       end
     end)
   end
+
+  def get(%Cyfr.Actor{}, _provider), do: {:error, :no_athanor}
 
   @spec put(map()) :: :ok | {:error, :database_error}
   def put(attrs) do
@@ -53,8 +64,10 @@ defmodule Arca.ProviderCredentialStorage do
     end)
   end
 
-  @spec delete(String.t(), String.t()) :: :ok | {:error, :not_found | :database_error}
-  def delete(athanor_id, provider) when is_binary(provider) do
+  @spec delete(Cyfr.Actor.t(), String.t()) ::
+          :ok | {:error, :no_athanor | :not_found | :database_error}
+  def delete(%Cyfr.Actor{athanor_id: athanor_id}, provider)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(provider) do
     Arca.Repo.Errors.with_db_rescue("ProviderCredentialStorage.delete", fn ->
       query =
         from(c in OauthProviderCredential, where: c.provider == ^provider)
@@ -67,16 +80,22 @@ defmodule Arca.ProviderCredentialStorage do
     end)
   end
 
-  @spec exists?(String.t(), String.t()) :: boolean()
-  def exists?(athanor_id, provider) when is_binary(provider) do
-    match?({:ok, _}, get(athanor_id, provider))
+  def delete(%Cyfr.Actor{}, _provider), do: {:error, :no_athanor}
+
+  @spec exists?(Cyfr.Actor.t(), String.t()) :: boolean()
+  def exists?(%Cyfr.Actor{athanor_id: athanor_id} = actor, provider)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(provider) do
+    match?({:ok, _}, get(actor, provider))
   end
 
+  def exists?(%Cyfr.Actor{}, _provider),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ProviderCredentialStorage.exists?/2")
+
   @doc "The athanor's rows, by provider name — never the ciphertext."
-  @spec list(String.t()) ::
+  @spec list(Cyfr.Actor.t()) ::
           {:ok, [%{provider: String.t(), created_by: String.t() | nil, updated_at: DateTime.t()}]}
-          | {:error, :database_error}
-  def list(athanor_id) do
+          | {:error, :no_athanor | :database_error}
+  def list(%Cyfr.Actor{athanor_id: athanor_id}) when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ProviderCredentialStorage.list", fn ->
       rows =
         from(c in OauthProviderCredential,
@@ -89,4 +108,6 @@ defmodule Arca.ProviderCredentialStorage do
       {:ok, rows}
     end)
   end
+
+  def list(%Cyfr.Actor{}), do: {:error, :no_athanor}
 end

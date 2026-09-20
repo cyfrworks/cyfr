@@ -114,7 +114,9 @@ defmodule Sanctum.ProvisioningTest do
     assert profile.kind == "owner"
 
     # the mint is attributed to the person who created the group
-    {:ok, consent, _refs} = Arca.ConsentStorage.get_head(group.id, profile.id)
+    {:ok, consent, _refs} =
+      Arca.ConsentStorage.get_head(Cyfr.Actor.in_athanor(group.id), profile.id)
+
     assert consent.granted_by == ctx.user_id
 
     # provisioning again is a no-op

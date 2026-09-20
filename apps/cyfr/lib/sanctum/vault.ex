@@ -292,7 +292,7 @@ defmodule Sanctum.Vault do
          {:ok, entry} <- get_living(ctx, id),
          :ok <- Arca.VaultStorage.set_status(Context.actor(ctx), id, "revoked"),
          {:ok, affected} <-
-           Arca.ConsentStorage.head_profiles_referencing(Context.athanor!(ctx), id) do
+           Arca.ConsentStorage.head_profiles_referencing(Context.actor(ctx), id) do
       broadcast(ctx, id, :revoke, %{name: entry.name})
       {:ok, %{affected: Enum.sort(affected)}}
     end

@@ -146,9 +146,17 @@ defmodule Arca.ConsentStorage do
   defp insert_refs(rows), do: Arca.Repo.insert_all(ConsentVaultRef, rows)
 
   @doc "The head consent revision of a profile, with its vault refs."
-  @spec get_head(String.t(), String.t()) ::
-          {:ok, Consent.t(), [ConsentVaultRef.t()]} | {:error, :not_found | :no_head | term()}
-  def get_head(athanor_id, profile_id) do
+  # `get_head/2` and `head_profiles_referencing/2` take the `Cyfr.Actor`
+  # first and match it in the head, so the athanor comes from the caller;
+  # an actor whose athanor is nil or the empty string is
+  # `{:error, :no_athanor}` before any query. The two multi writers take
+  # attribute maps their caller assembled and stamp no tenant of their
+  # own.
+  @spec get_head(Cyfr.Actor.t(), String.t()) ::
+          {:ok, Consent.t(), [ConsentVaultRef.t()]}
+          | {:error, :no_athanor | :not_found | :no_head | term()}
+  def get_head(%Cyfr.Actor{athanor_id: athanor_id}, profile_id)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.get_head", fn ->
       with {:ok, profile} <- Arca.ProfileStorage.get(athanor_id, profile_id),
            head_id when is_binary(head_id) <- profile.head_consent_id || {:error, :no_head},
@@ -167,6 +175,8 @@ defmodule Arca.ConsentStorage do
     end)
   end
 
+  def get_head(%Cyfr.Actor{}, _profile_id), do: {:error, :no_athanor}
+
   @doc """
   Profiles whose **head** revision references a vault entry.
 
@@ -174,9 +184,10 @@ defmodule Arca.ConsentStorage do
   over-report — a profile that dropped the entry two revisions ago is not
   affected right now.
   """
-  @spec head_profiles_referencing(String.t(), String.t()) ::
+  @spec head_profiles_referencing(Cyfr.Actor.t(), String.t()) ::
           {:ok, [String.t()]} | {:error, term()}
-  def head_profiles_referencing(athanor_id, vault_entry_id) do
+  def head_profiles_referencing(%Cyfr.Actor{athanor_id: athanor_id}, vault_entry_id)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.head_profiles_referencing", fn ->
       ids =
         from(r in ConsentVaultRef,
@@ -194,4 +205,6 @@ defmodule Arca.ConsentStorage do
       {:ok, ids}
     end)
   end
+
+  def head_profiles_referencing(%Cyfr.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
 end

@@ -136,7 +136,7 @@ defmodule Sanctum.ProviderCredentialsTest do
       refute ProviderCredentials.configured?(ctx, "google")
 
       assert {:error, :not_found} =
-               Arca.ProviderCredentialStorage.get(ctx.athanor_id, "google")
+               Arca.ProviderCredentialStorage.get(Sanctum.Context.actor(ctx), "google")
     end
   end
 
