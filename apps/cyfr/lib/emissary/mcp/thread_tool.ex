@@ -816,11 +816,12 @@ defmodule Emissary.MCP.ThreadTool do
 
   # Runner and storage refusals, translated to the typed vocabulary at the
   # boundary: an atom is the runner's business, and rendered raw it
-  # collapses to a generic "the tool call failed". A reason already in the
-  # vocabulary passes through untouched.
-  defp refusal(reason, id) do
-    if Cyfr.Ops.Error.reason?(reason), do: reason, else: translate(reason, id)
-  end
+  # collapses to a generic "the tool call failed". `translate/2`'s
+  # catch-all passes anything it does not name through untouched, a
+  # reason already in the vocabulary included; what it does name is this
+  # domain's spelling and wins over a shared one — `:unavailable` here is
+  # the thread store, not the storage-unit outcome `Cyfr.Ops.Error` maps.
+  defp refusal(reason, id), do: translate(reason, id)
 
   defp translate(:not_found, id), do: {:not_found, "thread", id}
 

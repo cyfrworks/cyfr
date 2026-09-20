@@ -711,6 +711,82 @@ defmodule Arca.Adapters.S3Test do
     end
   end
 
+  describe "a plain write whose outcome the store cannot state" do
+    # The object is there (the probe a delete makes answers 200); the
+    # write itself answers `status`.
+    defp stub_write_answer(status, body) do
+      parent = self()
+
+      Req.Test.stub(:s3, fn conn ->
+        send(parent, {:req, conn.method, conn.request_path, conn.req_headers, read_body(conn)})
+
+        case conn.method do
+          "HEAD" -> Plug.Conn.send_resp(conn, 200, "")
+          _put_or_delete -> Plug.Conn.send_resp(conn, status, body)
+        end
+      end)
+    end
+
+    test "a 5xx that may have applied is :unknown; a refusal, a 501 and a 503 stay refusals",
+         %{ctx: ctx} do
+      ExUnit.CaptureLog.capture_log(fn ->
+        for status <- [500, 502, 504] do
+          stub_write_answer(status, "<Error><Code>InternalError</Code></Error>")
+          assert {:error, :unknown} = S3.put(ctx, ["data", "unit"], "x")
+          assert {:error, :unknown} = S3.delete(ctx, ["data", "unit"])
+        end
+
+        # 503 is the store declining the request and 501 a method it does
+        # not implement: both wrote nothing, and both stay the refusal
+        # they are.
+        for status <- [503, 501, 403] do
+          stub_write_answer(status, "<Error><Code>Refused</Code></Error>")
+          assert {:error, {:s3_error, ^status}} = S3.put(ctx, ["data", "unit"], "x")
+          assert {:error, {:s3_error, ^status}} = S3.delete(ctx, ["data", "unit"])
+        end
+      end)
+    end
+
+    test "a probe that cannot answer is its own error: a delete that sent nothing", %{ctx: ctx} do
+      ExUnit.CaptureLog.capture_log(fn ->
+        stub_answer(500, "<Error><Code>InternalError</Code></Error>")
+        assert {:error, {:s3_error, 500}} = S3.delete(ctx, ["data", "unit"])
+      end)
+
+      # Only the probe was sent; nothing asked the store to remove a key.
+      assert_received {:req, "HEAD", _, _, _}
+      refute_received {:req, "DELETE", _, _, _}
+    end
+
+    test "a reset after the request was sent is :unknown for a put", %{ctx: ctx} do
+      point_at(endpoint_resetting_after_the_request())
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :unknown} = S3.put(ctx, ["data", "unit"], "committed?")
+      end)
+
+      assert_received {:request_read, request}
+      assert request =~ "PUT /test-bucket/athanors/ath_test/data/unit"
+      assert request =~ "committed?"
+    end
+
+    test "a connection that was never made is the store unreachable, not :unknown",
+         %{ctx: ctx} do
+      {:ok, listener} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+      {:ok, port} = :inet.port(listener)
+      :ok = :gen_tcp.close(listener)
+      point_at(port)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, %Req.TransportError{reason: :econnrefused}} =
+                 S3.put(ctx, ["data", "unit"], "x")
+
+        assert {:error, %Req.TransportError{reason: :econnrefused}} =
+                 S3.delete(ctx, ["data", "unit"])
+      end)
+    end
+  end
+
   describe "path traversal" do
     test "rejects '..' segments", %{ctx: ctx} do
       assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->

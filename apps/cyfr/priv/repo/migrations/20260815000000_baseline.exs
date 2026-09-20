@@ -384,9 +384,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :state, :string, null: false, default: "draft"
       # The revision the pointer names; null until the first commit.
       add :current_revision, :string
-      # The activation identity of the committed revision, for a component
-      # release (`Compendium.ReleaseDigest`); null for every other unit.
-      add :release_digest, :string
       # Held by the one writer staging the next revision; a commit
       # compares it and clears it.
       add :draft_writer_token, :string

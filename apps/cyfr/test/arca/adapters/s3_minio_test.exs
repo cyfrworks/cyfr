@@ -12,11 +12,14 @@ defmodule Arca.Adapters.S3MinioTest do
   and full round-trips through every callback.
 
   Excluded from ordinary runs; the `s3-minio` CI job runs it with
-  `mix test --only s3_integration` against a MinIO container. Locally:
+  `mix test apps/cyfr/test --only s3_integration` against a MinIO
+  container. `Arca.Test.S3Env` names the store, with defaults for that
+  container, so the same suite runs against another S3-compatible store
+  by environment alone. Locally:
 
       docker run -d -p 9000:9000 -e MINIO_ROOT_USER=cyfrtest \\
         -e MINIO_ROOT_PASSWORD=cyfrtest123 minio/minio server /data
-      cd apps/cyfr && mix test --only s3_integration
+      mix test apps/cyfr/test --only s3_integration
   """
 
   use ExUnit.Case, async: false
@@ -25,34 +28,11 @@ defmodule Arca.Adapters.S3MinioTest do
 
   alias Arca.Adapters.S3
 
-  @bucket "cyfr-test"
-  # Non-secret CI fixtures, mirrored in .github/workflows/test.yml.
-  @access "cyfrtest"
-  @secret "cyfrtest123"
-  @region "us-east-1"
-
   setup_all do
-    endpoint = System.get_env("CYFR_TEST_MINIO_ENDPOINT") || "http://127.0.0.1:9000"
-    prev = Application.get_env(:cyfr, :s3)
+    previous = Arca.Test.S3Env.configure!()
+    :ok = Arca.Test.S3Env.create_bucket!()
 
-    Application.put_env(:cyfr, :s3,
-      bucket: @bucket,
-      region: @region,
-      endpoint: endpoint,
-      access_key_id: @access,
-      secret_access_key: @secret,
-      prefix: nil,
-      path_style: true
-    )
-
-    create_bucket!(endpoint)
-
-    on_exit(fn ->
-      if prev,
-        do: Application.put_env(:cyfr, :s3, prev),
-        else: Application.delete_env(:cyfr, :s3)
-    end)
-
+    on_exit(fn -> Arca.Test.S3Env.restore(previous) end)
     :ok
   end
 
@@ -181,47 +161,5 @@ defmodule Arca.Adapters.S3MinioTest do
     # Without the prefix the object is elsewhere in the bucket.
     Application.put_env(:cyfr, :s3, prev)
     assert {:error, :not_found} = S3.get(ctx, ["data", "prefixed.txt"])
-  end
-
-  # MinIO answers 409 (BucketAlreadyOwnedByYou) when the bucket exists —
-  # both outcomes leave a usable bucket.
-  defp create_bucket!(endpoint) do
-    url = "#{endpoint}/#{@bucket}"
-    datetime = :calendar.universal_time()
-
-    # Only the host: sign_v4 supplies X-Amz-Content-SHA256 for the body it
-    # hashes, and a second copy signs the name twice (see Arca.Adapters.S3).
-    headers = [{"host", URI.parse(url).authority}]
-
-    signed =
-      :aws_signature.sign_v4(
-        @access,
-        @secret,
-        @region,
-        "s3",
-        datetime,
-        "PUT",
-        url,
-        headers,
-        "",
-        # S3 does not re-encode its canonical URI; see Arca.Adapters.S3.
-        [{:uri_encode_path, false}]
-      )
-
-    {:ok, %{status: status, body: body}} =
-      Req.request(
-        method: :put,
-        url: url,
-        headers: Enum.map(signed, fn {k, v} -> {to_string(k), to_string(v)} end),
-        body: "",
-        decode_body: false
-      )
-
-    unless status in [200, 409] do
-      # The body carries S3's error code, which is the whole diagnosis:
-      # SignatureDoesNotMatch, InvalidAccessKeyId and AccessDenied are all
-      # 403 and have nothing to do with each other.
-      raise "could not create MinIO bucket #{@bucket}: HTTP #{status} #{inspect(body)}"
-    end
   end
 end

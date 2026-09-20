@@ -82,8 +82,14 @@ defmodule Compendium.Scaffold do
              next_steps: next_steps(type, reference, template)
            }}
 
-        {:error, reason} ->
-          {:error, "Failed to write scaffold files: #{inspect(reason)}"}
+        # A commit's typed refusals are the vocabulary the surfaces
+        # render — another writer holding the unit is not a broken store
+        # — so they are answered as themselves; anything else is a
+        # storage term, said in words.
+        {:error, reason} = refusal ->
+          if Cyfr.Ops.Error.reason?(reason),
+            do: refusal,
+            else: {:error, "Failed to write scaffold files: #{inspect(reason)}"}
       end
     end
   end

@@ -129,6 +129,18 @@ defmodule Arca do
     do: guarded(ctx, normalize(path), fn p -> adapter(p).get(ctx, p) end)
 
   @doc """
+  Read content together with the precondition a conditional replace of it
+  must carry (`c:Arca.Storage.get_for_update/2`) — `get/2` for a caller
+  that will write back what it read, and the read half of
+  `Arca.Overlay.update/3`'s compare-and-set. The precondition is the
+  adapter's own: carry it to `put_if_match/5` unread.
+  """
+  @spec get_for_update(Context.t(), Arca.Storage.path()) ::
+          {:ok, binary(), Arca.Storage.precondition()} | {:error, term()}
+  def get_for_update(%Context{} = ctx, path),
+    do: guarded(ctx, normalize(path), fn p -> adapter(p).get_for_update(ctx, p) end)
+
+  @doc """
   Read and decode JSON content from storage.
 
   ## Examples
@@ -180,6 +192,37 @@ defmodule Arca do
       end)
 
   @doc """
+  Write content only while the object still holds the version
+  `precondition` names (`c:Arca.Storage.put_if_match/4`) — `put/4` for a
+  caller that read the object first (`get_for_update/2`) and must not
+  overwrite a writer that landed in between.
+
+  The same gate `put/4` passes: path authorization, the storage cap
+  (`cap:`, `:checked` by default) and usage accounting.
+  `{:error, :precondition_failed}` when the object moved since the read
+  and `{:error, :missing}` when nothing is at `path`; in both cases
+  nothing is written.
+  """
+  @spec put_if_match(
+          Context.t(),
+          Arca.Storage.path(),
+          binary(),
+          Arca.Storage.precondition(),
+          keyword()
+        ) :: :ok | {:error, :precondition_failed | :missing | term()}
+  def put_if_match(%Context{} = ctx, path, content, precondition, opts \\ []),
+    do:
+      mutating(ctx, normalize(path), {:create, byte_size(content)}, opts, fn p ->
+        # The new precondition is the adapter's answer to this write; a
+        # caller that needs it reads for update again, so the accounting
+        # this gate does sees the one shape every other write answers.
+        case adapter(p).put_if_match(ctx, p, content, precondition) do
+          {:ok, _next_precondition} -> :ok
+          {:error, _} = error -> error
+        end
+      end)
+
+  @doc """
   Encode and write JSON content to storage.
 
   ## Examples
@@ -207,10 +250,14 @@ defmodule Arca do
 
   Useful for logs stored as JSONL (JSON Lines) format.
 
-  On the S3 adapter, append is a read-modify-write with last-writer-wins:
-  concurrent appends to one key can lose lines (the adapter documents the
-  race). Concurrent JSONL streams that must not lose lines belong on
-  per-writer keys.
+  Concurrent appends to one path all land, on either adapter: Local
+  appends with `O_APPEND`, and S3, which has no atomic append, writes the
+  extended object back conditionally on the version it read and retries a
+  definite conflict within a bound (`Arca.Adapters.S3`). An append still
+  losing after the last attempt is `{:error, :precondition_failed}` —
+  nothing was appended and asking again is safe — and one whose request
+  may have reached the store when the connection failed is
+  `{:error, :unknown}`.
 
   ## Examples
 
@@ -394,8 +441,8 @@ defmodule Arca do
   a direct caller owns its own compensation.
 
   `exclude: fn relative_segments -> boolean end` skips matching files before
-  their content is ever read — how `Arca.Overlay.materialize/2` keeps build
-  droppings (`target/`, `node_modules/`) out of athanor trees.
+  their content is ever read — how `Arca.Overlay.pull_shipped/2` keeps
+  build droppings (`target/`, `node_modules/`) out of athanor trees.
   `transform: fn relative_segments, content -> content end` rewrites a
   file's bytes between the read and the write — how `Compendium.Fork`
   re-stamps the manifest without holding the whole tree in memory.
@@ -455,9 +502,10 @@ defmodule Arca do
   adapter's exact guarantee). A failure before the swap answers its error
   and leaves the tree at `path` as it was. An adapter that cannot hide a
   partial tree refuses with `{:error, :atomic_replace_unsupported}` and
-  writes nothing. Inside a unit the replacement holds the unit's lock
-  (`Arca.Overlay`), so writes to the unit wait for it; elsewhere a write
-  under `path` made during the replacement can land in the tree it retires.
+  writes nothing. A write under `path` made during the replacement can
+  land in the tree it retires. Replacing a UNIT's tree is not this call:
+  a unit is replaced whole by its commit (`Arca.Overlay.commit_unit/4`),
+  which publishes by its row and needs no tree swap of the adapter.
 
   `cap:` (required) — `{:checked, bytes}` checks `bytes`, the replacement's
   size, against the athanor's storage cap before anything is staged;
@@ -627,9 +675,10 @@ defmodule Arca do
         {:error, :reserved_name}
 
       true ->
-        # The unit lock and the `:bundled` refusal of the seeded roots
-        # live inside the `Arca.Overlay` decorator's own callbacks — this
-        # seam only gates, checks, dispatches and accounts.
+        # The write shapes of the seeded roots and their `:bundled`
+        # refusal live inside the `Arca.Overlay` decorator's own
+        # callbacks — this seam only gates, checks, dispatches and
+        # accounts.
         # Accounting is universal — every tenant write lands here, so a
         # new writer cannot forget — and the cap check rides the same
         # chokepoint (`check_cap/4` below): checked by default, exempt
@@ -690,9 +739,9 @@ defmodule Arca do
   # (the one seed tree, `:seed_path` — `Arca.Storage.seed_roots/0`), whatever
   # storage adapter is configured: an object-store deployment provisions
   # athanors from the shipped media without the bucket ever holding a copy.
-  # Every other path goes through the `Arca.Overlay` decorator (the unit
-  # lock, the `:bundled` refusal — wrapping the configured adapter),
-  # which delegates verbatim for paths outside the overlaid
+  # Every other path goes through the `Arca.Overlay` decorator (the write
+  # shapes of a unit, the `:bundled` refusal — wrapping the configured
+  # adapter), which delegates verbatim for paths outside the overlaid
   # roots — one routing decision instead of a per-root classification.
   defp adapter(["seed" | _]), do: Arca.Adapters.Local
   defp adapter(_path), do: Arca.Overlay

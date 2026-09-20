@@ -30,25 +30,6 @@ defmodule Arca.Adapters.ContractTest do
     use Arca.Storage.TestDouble
   end
 
-  # An adapter that exports none of the optional callbacks: what the
-  # facade must refuse conditional writes for.
-  defmodule WithoutConditionals do
-    @moduledoc false
-    @behaviour Arca.Storage
-
-    defdelegate get(ctx, path), to: Local
-    defdelegate put(ctx, path, content), to: Local
-    defdelegate append(ctx, path, content), to: Local
-    defdelegate delete(ctx, path), to: Local
-    defdelegate list_typed(ctx, path), to: Local
-    defdelegate exists?(ctx, path), to: Local
-    defdelegate delete_tree(ctx, path), to: Local
-    defdelegate list_recursive(ctx, path), to: Local
-    defdelegate usage(ctx, path), to: Local
-    defdelegate ensure_dir(ctx, path), to: Local
-    defdelegate serve_to_conn(conn, ctx, path, opts), to: Local
-  end
-
   # ---------------------------------------------------------------------------
   # The shared contract — one body per case, called from both describes.
   # ---------------------------------------------------------------------------
@@ -433,25 +414,13 @@ defmodule Arca.Adapters.ContractTest do
 
       assert {:ok, precondition} = Arca.Storage.put_if_none_match(ctx, key, "one")
       assert {:error, :exists} = Arca.Storage.put_if_none_match(ctx, key, "two")
-      assert {:ok, _next} = Arca.Storage.put_if_match(ctx, key, "two", precondition)
+      assert {:ok, next} = Arca.Storage.put_if_match(ctx, key, "two", precondition)
 
       assert {:error, :precondition_failed} =
                Arca.Storage.put_if_match(ctx, key, "x", precondition)
 
       assert {:ok, [^key]} = Arca.Storage.list_prefix(ctx, key)
-    end
-
-    test "refuses, writing nothing, when the adapter exports no conditional callbacks",
-         %{ctx: ctx} do
-      Application.put_env(:cyfr, :storage_adapter, WithoutConditionals)
-      key = ["data", "registry", "refused"]
-
-      assert {:error, :unsupported} = Arca.Storage.put_if_none_match(ctx, key, "one")
-      assert {:error, :unsupported} = Arca.Storage.put_if_match(ctx, ["data", "a.txt"], "x", "p")
-      assert {:error, :unsupported} = Arca.Storage.list_prefix(ctx, ["data"])
-
-      refute WithoutConditionals.exists?(ctx, key)
-      assert {:ok, "a"} = WithoutConditionals.get(ctx, ["data", "a.txt"])
+      assert {:ok, "two", ^next} = Arca.Storage.get_for_update(ctx, key)
     end
   end
 

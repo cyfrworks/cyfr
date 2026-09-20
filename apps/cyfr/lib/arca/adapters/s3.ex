@@ -55,6 +55,22 @@ defmodule Arca.Adapters.S3 do
   its own response limit does not raise this ceiling; the two deliberately
   track only the default).
 
+  ## What a write that did not succeed was
+
+  Every write — `put/3` and `delete/2` as much as the conditional writes —
+  is read the same way, so no caller is told a write definitely failed
+  when it may be in the bucket. `{:error, :unknown}` is a `5xx` other than
+  `501` and `503`, and a transport failure once the request may have been
+  sent (a reset, a close, a timeout); a failure that proves the request
+  never left (`:econnrefused` and its kin) is answered as the unreachable
+  store it is, and every other status is the refusal the store made, where
+  nothing was written. A delete's probe is a read: one that cannot answer
+  is its own error, since nothing was sent to remove the key.
+
+  A guest's write whose outcome is unknown is never settled `failed`
+  (`Arca.ExecutionAttempts.while_held/5`) and never answered as refused:
+  the guest is told `storage_uncertain` and reads the path back.
+
   ## Conditional writes
 
   The precondition this adapter mints is the ETag the store answered, sent
@@ -95,10 +111,18 @@ defmodule Arca.Adapters.S3 do
 
   This adapter does not export `c:Arca.Storage.replace_tree/3`. An object
   store has no rename, and a reader resolves each key directly, so a
-  replacement written key by key would be visible part-way. Replacing a
-  tree (`Arca.replace_tree/4`, and so a tincture build saved into its
-  `dist/`) refuses with `{:error, :atomic_replace_unsupported}` and writes
-  nothing.
+  replacement written key by key would be visible part-way.
+  `Arca.replace_tree/4` therefore refuses with
+  `{:error, :atomic_replace_unsupported}` and writes nothing.
+
+  A unit commit does not depend on it. Publication is the row
+  (`Arca.StorageUnits`), and the move to the served location falls back to
+  key-by-key where a tree cannot be swapped
+  (`Arca.Overlay`), so a tincture build's `dist/` publishes on this
+  adapter as on a filesystem — with the weaker read the moduledoc of
+  `Arca.Overlay` states: while the move runs, a reader of the unit's
+  objects can see some of the committed revision and some of the one
+  before it.
 
   ## Configuration
 
@@ -151,8 +175,7 @@ defmodule Arca.Adapters.S3 do
 
     case request(:put, build_key(ctx, segments), content) do
       {:ok, %{status: status}} when status in 200..299 -> :ok
-      {:ok, %{status: status, body: body}} -> log_and_error("put", status, body)
-      {:error, reason} -> log_and_error("put", reason)
+      answer -> write_outcome("put", answer)
     end
   end
 
@@ -196,25 +219,47 @@ defmodule Arca.Adapters.S3 do
   end
 
   # A missing object is an empty one: appending to a path that does not exist
-  # yet creates it, matching the local filesystem's `File.write(:append)`. An
-  # object read without an ETag cannot be written back conditionally, and an
-  # unconditional write back could drop a concurrent append: refuse.
+  # yet creates it, matching the local filesystem's `File.write(:append)`.
   defp read_for_append(ctx, segments) do
+    case versioned_read("append", ctx, segments) do
+      {:ok, body, etag} -> {:ok, body, etag}
+      {:error, :not_found} -> {:ok, "", nil}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
+  The object's bytes and the ETag a conditional replace of them must carry
+  (`c:Arca.Storage.get_for_update/2`) — the GET's own ETag, so the read
+  and the proof of what was read are one round trip.
+  """
+  @impl true
+  def get_for_update(%Context{} = ctx, segments),
+    do: versioned_read("get_for_update", ctx, segments)
+
+  # An object read without an ETag cannot be written back conditionally,
+  # and an unconditional write back could drop a concurrent writer's
+  # bytes: refuse rather than offer a precondition no store minted.
+  defp versioned_read(op, ctx, segments) do
     case request(:get, build_key(ctx, segments)) do
       {:ok, %{status: 200, body: body} = response} ->
         case etag(response) do
-          nil -> {:error, :unsupported}
-          etag -> {:ok, body, etag}
+          nil ->
+            Logger.warning("[Arca.S3.#{op}] the store answered a read with no ETag")
+            {:error, :unsupported}
+
+          etag ->
+            {:ok, body, etag}
         end
 
       {:ok, %{status: 404}} ->
-        {:ok, "", nil}
+        {:error, :not_found}
 
       {:ok, %{status: status, body: body}} ->
-        log_and_error("append", status, body)
+        log_and_error(op, status, body)
 
       {:error, reason} ->
-        log_and_error("append", reason)
+        log_and_error(op, reason)
     end
   end
 
@@ -305,23 +350,36 @@ defmodule Arca.Adapters.S3 do
       {:ok, %{status: 501}} ->
         {:error, :unsupported}
 
-      {:ok, %{status: status, body: body}} when status >= 500 and status != 503 ->
-        log_and_error(op, status, body)
-        {:error, :unknown}
-
-      {:ok, %{status: status, body: body}} ->
-        log_and_error(op, status, body)
-
-      {:error, reason} ->
-        log_and_error(op, reason)
-        {:error, write_failure(reason)}
+      answer ->
+        write_outcome(op, answer)
     end
   end
 
-  # A failure that proves the request never left (no connection was made)
-  # is the store being unreachable. Any other transport failure may have
-  # followed the store's commit: an unknown outcome, never read as a
-  # refusal.
+  # What a write that did not succeed was: a refusal the store made, where
+  # nothing was written, or an outcome it cannot state. Every write this
+  # adapter makes — the plain `put/3` and `delete/2` as much as the
+  # conditional ones — is read the same way, so no caller is told a write
+  # definitely failed when it may be in the bucket.
+  #
+  # `:unknown` is a `5xx` other than `503` (the store declining the
+  # request) and `501` (a method it does not implement), and a transport
+  # failure once the request may have been sent. A failure that proves the
+  # request never left is the store being unreachable, and is answered as
+  # what it is.
+  defp write_outcome(op, {:ok, %{status: status, body: body}})
+       when status >= 500 and status not in [501, 503] do
+    log_and_error(op, status, body)
+    {:error, :unknown}
+  end
+
+  defp write_outcome(op, {:ok, %{status: status, body: body}}),
+    do: log_and_error(op, status, body)
+
+  defp write_outcome(op, {:error, reason}) do
+    log_and_error(op, reason)
+    {:error, write_failure(reason)}
+  end
+
   @never_sent [:econnrefused, :nxdomain, :ehostunreach, :enetunreach, :eaddrnotavail]
 
   defp write_failure(%Req.TransportError{reason: reason} = error) when reason in @never_sent,
@@ -355,14 +413,16 @@ defmodule Arca.Adapters.S3 do
 
     # Real S3 answers 204 even for a key that never existed, so a bare DELETE
     # cannot tell "deleted" from "was never there" — probe first, and a
-    # missing file is `{:error, :not_found}` on both adapters.
+    # missing file is `{:error, :not_found}` on both adapters. The probe is
+    # a read: one that cannot answer is its own error and nothing was sent
+    # to remove the key. Only the DELETE itself can leave the outcome
+    # unknown.
     case request(:head, key) do
       {:ok, %{status: 200}} ->
         case request(:delete, key) do
           {:ok, %{status: status}} when status in [200, 204] -> :ok
           {:ok, %{status: 404}} -> {:error, :not_found}
-          {:ok, %{status: status, body: body}} -> log_and_error("delete", status, body)
-          {:error, reason} -> log_and_error("delete", reason)
+          answer -> write_outcome("delete", answer)
         end
 
       {:ok, %{status: 404}} ->

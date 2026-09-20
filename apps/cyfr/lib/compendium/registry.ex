@@ -161,14 +161,41 @@ defmodule Compendium.Registry do
           "publisher" => publisher
         })
 
-    case Arca.Overlay.commit_unit(ctx, version_dir, {:files, [{wasm_rel, wasm_bytes} | extras]},
-           cap: {:checked, total},
-           sentinel: sentinel
-         ) do
-      {:ok, _written} = ok -> ok
-      {:error, {:limit_reached, _, _}} = cap -> cap
-      {:error, :storage_unverifiable} = unverifiable -> unverifiable
-      {:error, reason} -> {:error, {:wasm_write_failed, reason}}
+    ctx
+    |> Arca.Overlay.commit_unit(version_dir, {:files, [{wasm_rel, wasm_bytes} | extras]},
+      cap: {:checked, total},
+      sentinel: sentinel
+    )
+    |> commit_outcome(:wasm_write_failed)
+  end
+
+  # What a unit commit answered, as the publish's own answer. A commit's
+  # typed refusals are already the vocabulary every surface renders and
+  # are passed through rather than flattened into one write failure —
+  # `:stale_writer` and `:stale_revision` are another writer, not a
+  # broken store, and two of them say the unit is not the publish's to
+  # clean up: `{:finish_failed, _}` is a PUBLISHED unit whose move to the
+  # served location did not finish, and `:unavailable` is a commit whose
+  # outcome the store could not state. Nothing here deletes the unit
+  # after either — a delete would retire a row that stands, or one that
+  # may stand — and no component row lands, so the tree and the rows
+  # disagree only until the storage sweep repairs the move and the
+  # indexer registers what it finds.
+  defp commit_outcome(answer, write_failure) do
+    case answer do
+      {:ok, _written} = ok ->
+        ok
+
+      {:error, {:limit_reached, _, _}} = cap ->
+        cap
+
+      {:error, :storage_unverifiable} = unverifiable ->
+        unverifiable
+
+      {:error, reason} = refusal ->
+        if Cyfr.Ops.Error.reason?(reason),
+          do: refusal,
+          else: {:error, {write_failure, reason}}
     end
   end
 
@@ -848,21 +875,15 @@ defmodule Compendium.Registry do
                      {rel, fn -> read_scratch(tmp_dir, path) end}
                    end) ++ extras}
 
-                case Arca.Overlay.commit_unit(ctx, version_dir, source,
-                       cap: {:checked, validation.size + extras_bytes},
-                       sentinel: Keyword.get(opts, :sentinel)
-                     ) do
-                  {:ok, _written} ->
-                    {:ok, validation}
-
-                  {:error, {:limit_reached, _, _} = cap} ->
-                    {:error, cap}
-
-                  {:error, :storage_unverifiable} = unverifiable ->
-                    unverifiable
-
-                  {:error, reason} ->
-                    {:error, {:tincture_store_failed, reason}}
+                ctx
+                |> Arca.Overlay.commit_unit(version_dir, source,
+                  cap: {:checked, validation.size + extras_bytes},
+                  sentinel: Keyword.get(opts, :sentinel)
+                )
+                |> commit_outcome(:tincture_store_failed)
+                |> case do
+                  {:ok, _written} -> {:ok, validation}
+                  {:error, _} = refusal -> refusal
                 end
               end
 

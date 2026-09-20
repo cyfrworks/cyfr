@@ -14,14 +14,15 @@ defmodule Arca.Storage.TestDouble do
         def usage(_ctx, _path), do: {:error, :eacces}
       end
 
-  The conditional writes and the prefix listing, which Local does not yet
-  export, are implemented here with real precondition semantics over the
-  double's own `exists?/2`, `get/2`, `put/3` and `list_recursive/2` (so
-  an override of those bends these too): a create fails when the object
-  exists, a conditional put fails when the precondition — the SHA-256 of
-  the bytes the caller last saw — no longer matches, and the check and
-  the write are one step per path on this node (`:global.trans/2`), so
-  two writers racing on one key get the answers the contract promises.
+  The conditional writes, the versioned read and the prefix listing are
+  implemented here over the double's own `exists?/2`, `get/2`, `put/3`
+  and `list_recursive/2` — so an override of those bends these too —
+  rather than delegating, which is what makes this double an object
+  store's shape: a create fails when the object exists, a conditional put
+  fails when the precondition (the SHA-256 of the bytes the caller last
+  saw) no longer matches, and the check and the write are one step per
+  path on this node (`:global.trans/2`), so two writers racing on one key
+  get the answers the contract promises.
   """
 
   defmacro __using__(_opts) do
@@ -75,6 +76,11 @@ defmodule Arca.Storage.TestDouble do
         end)
       end
 
+      def get_for_update(ctx, path) do
+        with {:ok, bytes} <- get(ctx, path),
+             do: {:ok, bytes, Arca.Storage.TestDouble.precondition(bytes)}
+      end
+
       # A listing or an error passes through; only an empty listing asks
       # whether the prefix is itself one object.
       def list_prefix(ctx, prefix) do
@@ -95,6 +101,7 @@ defmodule Arca.Storage.TestDouble do
                      serve_to_conn: 4,
                      put_if_none_match: 3,
                      put_if_match: 4,
+                     get_for_update: 2,
                      list_prefix: 2
     end
   end

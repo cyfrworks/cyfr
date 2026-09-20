@@ -224,7 +224,22 @@ config :cyfr, Cyfr.Retention,
   # Days of MCP request log kept.
   mcp_log_days: 30,
   # Days of thread messages kept.
-  messages_days: 365
+  messages_days: 365,
+  # Days a settled storage write intent is kept — the evidence of what
+  # became of one guest write. A guest reads it back within a turn or two
+  # of an uncertain write, so it is kept as long as a retained payload and
+  # not as long as the execution row it hangs from.
+  write_intent_days: 30,
+  # Days a staged unit revision no pointer, draft or pin keeps is left
+  # before the storage sweep collects it (`Arca.StorageGC`). One day is
+  # longer than any commit and short enough that a writer that died does
+  # not hold its bytes against the athanor's cap for a week.
+  staging_days: 1,
+  # How many staged prefixes one sweep of one athanor collects or
+  # repairs. A bound, not a target: the next sweep takes up where this one
+  # stopped, so a large backlog is worked off over several runs rather
+  # than in one long walk of the estate's staging area.
+  staging_sweep_limit: 200
 
 # Read-but-not-set here, deliberately: `:webhook_max_body_bytes` derives
 # its default from `Cyfr.Limits.default_max_request_size/0` (a literal

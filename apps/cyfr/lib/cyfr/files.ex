@@ -150,19 +150,22 @@ defmodule Cyfr.Files do
   end
 
   @doc """
-  Rewrite a text file inside a unit as one locked read-modify-write. `fun`
-  receives the file's current text and answers `{:ok, text}` to write it,
-  or `{:error, reason}` to leave the file as it is and answer that. The
-  read and the write hold the unit's lock together, so a concurrent writer
-  to the unit waits rather than being overwritten. The tier, size and
-  content checks and the unit refresh are `write/4`'s.
+  Rewrite a text file inside a unit as one serialized read-modify-write.
+  `fun` receives the file's current text and answers `{:ok, text}` to
+  write it, or `{:error, reason}` to leave the file as it is and answer
+  that. The write is made only while the file still holds the bytes `fun`
+  was given, so a writer that landed in between — another edit, a
+  publish, a pull, a reset — is read again rather than overwritten, and
+  neither edit is lost. A file still moving after the last attempt is a
+  conflict the caller may retry. The tier, size and content checks and
+  the unit refresh are `write/4`'s.
   """
   @spec update(Context.t(), String.t(), (String.t() -> {:ok, String.t()} | {:error, term()})) ::
           {:ok, %{written: String.t()}} | {:error, term()}
   def update(%Context{} = ctx, path, fun) when is_binary(path) and is_function(fun, 1) do
     with {:ok, segments, physical, tier} <- resolve_file(path),
          :ok <- writable(tier, physical, segments),
-         :ok <- locked_update(ctx, physical, path, fun) do
+         :ok <- serialized_update(ctx, physical, path, fun) do
       refresh_unit(ctx, physical)
       {:ok, %{written: join(segments)}}
     end
@@ -323,7 +326,7 @@ defmodule Cyfr.Files do
     end
   end
 
-  defp locked_update(ctx, physical, path, fun) do
+  defp serialized_update(ctx, physical, path, fun) do
     rewrite = fn current ->
       with :ok <- text(current, path),
            {:ok, next} <- fun.(current),
@@ -334,11 +337,24 @@ defmodule Cyfr.Files do
     end
 
     case Arca.Overlay.update(ctx, physical, rewrite) do
-      :ok -> :ok
-      {:error, :not_found} -> {:error, {:not_found, "File", path}}
-      {:error, :not_overlaid} -> {:error, {:invalid_argument, "'#{path}' is not inside a unit"}}
-      {:error, {:invalid_argument, _} = refusal} -> {:error, refusal}
-      {:error, reason} -> write_error(path, reason)
+      :ok ->
+        :ok
+
+      {:error, :not_found} ->
+        {:error, {:not_found, "File", path}}
+
+      {:error, :not_overlaid} ->
+        {:error, {:invalid_argument, "'#{path}' is not inside a unit"}}
+
+      # Nothing was written and asking again is safe.
+      {:error, :conflict} ->
+        {:error, {:conflict, "'#{path}' is being written — try the edit again"}}
+
+      {:error, {:invalid_argument, _} = refusal} ->
+        {:error, refusal}
+
+      {:error, reason} ->
+        write_error(path, reason)
     end
   end
 

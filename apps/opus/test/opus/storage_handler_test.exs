@@ -133,9 +133,9 @@ defmodule Opus.StorageHandlerTest do
     assert ScriptedHost.requests(host) == []
   end
 
-  test "an attempt that no longer holds its row, an unavailable store and a lost answer are each a storage_error",
+  test "an attempt that no longer holds its row and an unavailable store are each a storage_error",
        %{host: host, client: client} do
-    ScriptedHost.script(host, "storage", [{:error, :lost}, {:error, :unavailable}, :drop])
+    ScriptedHost.script(host, "storage", [{:error, :lost}, {:error, :unavailable}])
 
     assert %{"error" => %{"type" => "storage_error", "message" => lost}} =
              call(client, write("data/after.txt", "late"))
@@ -146,11 +146,23 @@ defmodule Opus.StorageHandlerTest do
              call(client, write("data/after.txt", "late"))
 
     assert unavailable =~ "unavailable"
+  end
 
-    assert %{"error" => %{"type" => "storage_error", "message" => uncertain}} =
+  test "a lost answer is storage_uncertain: the write may be in the store", %{
+    host: host,
+    client: client
+  } do
+    # CYFR answered, and the answer did not come back: the host client
+    # retried, found the call already made, and could not learn its
+    # outcome. The bytes may be at the path, so the guest is never told the
+    # write failed — it is told to read the path back.
+    ScriptedHost.script(host, "storage", :drop)
+
+    assert %{"error" => %{"type" => "storage_uncertain", "message" => message}} =
              call(client, write("data/after.txt", "late"))
 
-    assert uncertain =~ "lost"
+    assert message =~ "lost"
+    assert message =~ "read the path back"
   end
 
   test "every call fires its telemetry with the action and its outcome", %{

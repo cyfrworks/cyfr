@@ -259,6 +259,16 @@ defmodule Arca.Adapters.Local do
     end)
   end
 
+  @doc """
+  The file's bytes and the digest a conditional replace of them must carry
+  (`c:Arca.Storage.get_for_update/2`) — one read, since the digest is of
+  the bytes it answers.
+  """
+  @impl true
+  def get_for_update(%Context{} = ctx, path) do
+    with {:ok, bytes} <- get(ctx, path), do: {:ok, bytes, precondition(bytes)}
+  end
+
   # The precondition of what is at `full_path` now. A directory is not an
   # object (as `get/2` answers) and a symlink is refused as every read is.
   defp current_precondition(full_path) do

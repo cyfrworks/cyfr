@@ -24,6 +24,7 @@ defmodule Cyfr.Ops.Error do
   @type t ::
           {:not_found, resource :: String.t(), id :: String.t()}
           | {:invalid_argument, message :: String.t()}
+          | {:conflict, message :: String.t()}
           | {:unavailable, what :: String.t()}
           | {:corrupt, what :: String.t()}
           | {:crashed, message :: String.t()}
@@ -44,6 +45,12 @@ defmodule Cyfr.Ops.Error do
           | {:uncertain, message :: String.t()}
           | {:result_lost, message :: String.t()}
           | {:not_recorded, message :: String.t()}
+          | :stale_writer
+          | :stale_revision
+          | :missing_unit
+          | :invalid_objects
+          | :unavailable
+          | {:finish_failed, reason :: term()}
 
   @doc "Whether a term is this vocabulary — the renderers' dispatch test."
   @spec reason?(term()) :: boolean()
@@ -55,7 +62,16 @@ defmodule Cyfr.Ops.Error do
   def reason?({:crashed, message}) when is_binary(message), do: true
   def reason?({:exit, message}) when is_binary(message), do: true
   def reason?({:timeout, message}) when is_binary(message), do: true
-  def reason?(:unit_locked), do: true
+  # A unit commit's own refusals (`Arca.StorageUnits`), each a different
+  # thing to do about it.
+  def reason?(:stale_writer), do: true
+  def reason?(:stale_revision), do: true
+  def reason?(:missing_unit), do: true
+  def reason?(:invalid_objects), do: true
+  # The store could not say what it did. Distinct from `{:unavailable,
+  # what}`, which names a service that answered nothing.
+  def reason?(:unavailable), do: true
+  def reason?({:finish_failed, _reason}), do: true
   def reason?(:action_missing), do: true
   def reason?({:unknown_action, name_action}) when is_binary(name_action), do: true
   def reason?(:control_plane_lost), do: true
@@ -99,9 +115,39 @@ defmodule Cyfr.Ops.Error do
   def message({:exit, message}), do: message
   def message({:timeout, message}), do: message
 
-  # An overlay unit-lock timeout is retryable write contention.
-  def message(:unit_locked),
-    do: "Another write to this component is in progress — retry shortly"
+  # What a unit commit refused, and what the caller does about it. A
+  # writer that died holding a unit's draft blocks the unit until the
+  # draft expires (`Arca.StorageUnits.draft_ttl_ms/0`, fifteen minutes),
+  # so the sentence says how long rather than "retry shortly".
+  def message(:stale_writer),
+    do:
+      "Another write to this unit holds it — retry once its draft expires (up to fifteen minutes)"
+
+  def message(:stale_revision),
+    do: "Another write to this unit landed first — read it again and retry"
+
+  def message(:missing_unit), do: "This unit was removed while it was being written"
+
+  def message(:invalid_objects),
+    do: "What was staged for this unit is not what was written — nothing was published"
+
+  # A call that could not be answered at all, with no service named.
+  # More than one thing produces it — a unit commit whose store could not
+  # say what it did, a host call CYFR refused — so the sentence names
+  # none of them and takes the safe direction of the two: it asks the
+  # caller to look rather than to retry, because retrying an effect that
+  # may have happened is the dangerous mistake and looking at one that
+  # did not is only a wasted read. `{:unavailable, what}` is the other
+  # shape: a named service that was reached and gave nothing, where
+  # retrying is the right advice.
+  def message(:unavailable),
+    do: "Unavailable — what was asked may or may not have been done; check before asking again"
+
+  # The row is committed. The unit is published; only the move of its
+  # objects to where readers read did not finish, and the repair the
+  # storage sweep runs finishes it.
+  def message({:finish_failed, _reason}),
+    do: "This unit is published; serving its files did not finish and will be repaired"
 
   # Render registry dispatch refusals consistently across all surfaces.
   def message(:action_missing), do: "Missing required argument: action"

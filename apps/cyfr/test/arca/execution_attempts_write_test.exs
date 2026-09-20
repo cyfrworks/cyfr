@@ -402,6 +402,75 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     end
   end
 
+  describe "the retention kind's delete" do
+    test "takes settled intents past the cutoff and keeps every pending one", test do
+      %{ctx: ctx} = test
+
+      # One settled write, and one whose store call never answered, so
+      # its intent is still pending.
+      assert {:ok, {:confirmed, :ok}} = write(test, put(test))
+      parked = Task.async(fn -> write(test, fn -> Process.sleep(:infinity) end) end)
+      wait_for(fn -> length(intents(test)) == 2 end)
+
+      assert Enum.sort(states(test)) == [{"confirmed", nil}, {"pending", nil}]
+
+      # Both are older than the cutoff; only the settled one may go.
+      Arca.Repo.update_all(StorageWriteIntent, set: [inserted_at: days_ago(40)])
+      cutoff = Cyfr.Retention.Kind.days_cutoff(30)
+      opts = [athanor_id: ctx.athanor_id]
+
+      assert {:ok, 1} = ExecutionAttempts.count_intents_before(cutoff, opts)
+      assert {:ok, 1} = ExecutionAttempts.delete_intents_before(cutoff, opts)
+      assert states(test) == [{"pending", nil}]
+
+      # And nothing of another estate's is counted or taken.
+      assert {:ok, 0} = ExecutionAttempts.count_intents_before(cutoff, athanor_id: "ath_gamma")
+
+      # Stopped before the sandbox connection is given back. An assertion
+      # that failed earlier stops it too: `Task.async/1` links it to this
+      # process, so it dies with the case.
+      Task.shutdown(parked, :brutal_kill)
+    end
+
+    test "leaves an intent the cutoff does not reach", test do
+      %{ctx: ctx} = test
+      assert {:ok, {:confirmed, :ok}} = write(test, put(test))
+
+      cutoff = Cyfr.Retention.Kind.days_cutoff(30)
+      opts = [athanor_id: ctx.athanor_id]
+
+      assert {:ok, 0} = ExecutionAttempts.count_intents_before(cutoff, opts)
+      assert {:ok, 0} = ExecutionAttempts.delete_intents_before(cutoff, opts)
+      assert [{"confirmed", nil}] = states(test)
+    end
+
+    test "the kind prunes inside its own athanor, and counts on a dry run", test do
+      %{ctx: ctx} = test
+      assert {:ok, {:confirmed, :ok}} = write(test, put(test))
+      Arca.Repo.update_all(StorageWriteIntent, set: [inserted_at: days_ago(40)])
+
+      assert Cyfr.Retention.WriteIntents.key() == "write_intent_days"
+      assert Cyfr.Retention.WriteIntents.unit() == :days
+      assert Cyfr.Retention.WriteIntents in Cyfr.Retention.kinds()
+
+      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "write_intent_days", dry_run: true)
+      assert [{"confirmed", nil}] = states(test)
+
+      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "write_intent_days")
+      assert states(test) == []
+    end
+
+    defp days_ago(days), do: DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
+
+    defp wait_for(condition, attempts \\ 200) do
+      cond do
+        condition.() -> :ok
+        attempts == 0 -> flunk("the condition did not hold in time")
+        true -> Process.sleep(10) && wait_for(condition, attempts - 1)
+      end
+    end
+  end
+
   test "an intent is another estate's to neither read nor settle", test do
     assert {:ok, {:confirmed, :ok}} = write(test, put(test))
 

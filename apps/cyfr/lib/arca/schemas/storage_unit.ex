@@ -12,12 +12,15 @@ defmodule Arca.Schemas.StorageUnit do
   path inside it, segments joined with `/`; the pair is unique per athanor.
   `current_revision` names the committed, immutable revision readers see
   — a complete object set under the unit's prefix is staging until a
-  commit names it. `release_digest` is the activation identity of a
-  committed component release and nil for every other unit.
-  `draft_writer_token` is held by the one writer staging the next
-  revision: a commit compares it and clears it, so a writer that lost
-  the token cannot commit what it staged. Every commit appends one
+  commit names it. `draft_writer_token` is held by the one writer staging
+  the next revision: a commit compares it and clears it, so a writer that
+  lost the token cannot commit what it staged. Every commit appends one
   `Arca.Schemas.StorageCommit`.
+
+  A row says what is published and nothing about what was published: a
+  component release's activation identity is the `components` row's
+  (`Compendium.ReleaseDigest`), the bytes' identity is the journal's
+  `content_identity`, and neither is copied here to go stale.
 
   ## States
 
@@ -74,7 +77,6 @@ defmodule Arca.Schemas.StorageUnit do
     field :unit_key, :string
     field :state, :string, default: "draft"
     field :current_revision, :string
-    field :release_digest, :string
     field :draft_writer_token, :string
     timestamps(type: :utc_datetime_usec)
   end
@@ -90,7 +92,6 @@ defmodule Arca.Schemas.StorageUnit do
     :unit_key,
     :state,
     :current_revision,
-    :release_digest,
     :draft_writer_token
   ]
 
