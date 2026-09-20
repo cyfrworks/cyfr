@@ -56,12 +56,14 @@ defmodule Arca.StorageGC do
 
   `repair/2` restores what a committed row names and nothing else. The
   staged objects of the row's revision are moved to the served location
-  (`Arca.Overlay.repair_unit/2`) only when the journal's newest commit is
-  that revision and the staged objects hash to the content identity the
-  journal recorded: a prefix a failed removal left partial is never
-  served over a complete unit. Objects alone never make or move a
-  pointer: a complete prefix no row names is collected after the grace
-  like any other.
+  only when the journal's newest commit is that revision and the staged
+  objects hash to the content identity the journal recorded: a prefix a
+  failed removal left partial is never served over a complete unit. That
+  guard is `Arca.Overlay.repair_unit/2`'s, so it holds for every caller
+  of it and not only for this sweep, which reads the same two things to
+  tell a pending move from an unrecoverable row before it asks. Objects
+  alone never make or move a pointer: a complete prefix no row names is
+  collected after the grace like any other.
 
   A sweep finishes the same moves once they have outlived the grace, and
   is stricter, since nobody asked for it: it moves only over a served
