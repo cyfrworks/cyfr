@@ -164,8 +164,13 @@ defmodule Arca.SchemaBaselineTest do
 
     for column <- ~w(root unit_key state), do: assert(columns[column].not_null?)
 
-    for column <- ~w(current_revision release_digest draft_writer_token),
+    for column <- ~w(current_revision draft_writer_token),
         do: refute(columns[column].not_null?)
+
+    # A pointer row says what is published and nothing about what was
+    # published: a release's activation identity is the `components`
+    # row's, and the bytes' identity the journal's.
+    refute Map.has_key?(columns, "release_digest")
 
     unit = unit_row("components", "reagents/local/hello/1.0.0")
     assert :ok = insert_row("storage_units", unit)

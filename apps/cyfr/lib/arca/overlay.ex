@@ -637,9 +637,6 @@ defmodule Arca.Overlay do
       question and this one. A unit whose completion object is already
       served — its sentinel, or a file unit's file, whatever row names it
       — refuses as `{:error, :exists}` before any write.
-    * `release_digest:` — the activation identity of a component release,
-      recorded on the unit's row; nil for every other unit.
-
   A file unit commits as `{:files, [{[], bytes}]}` and refuses
   `sentinel:`. A commit over existing tenant content replaces it whole
   (stale files from a prior partial or an overwritten pull do not
@@ -682,7 +679,7 @@ defmodule Arca.Overlay do
     # never be completed must not move a byte or hold the unit.
     with {:ok, entries} <- entries(internal, loc, source, override),
          :ok <- check_commit_cap(ctx, cap) do
-      write(ctx, internal, loc, opts, fn _draft ->
+      write(ctx, internal, loc, fn _draft ->
         if Keyword.get(opts, :if_absent, false) and occupied?(ctx, loc),
           do: {:error, :exists},
           else: {:ok, entries}
@@ -736,7 +733,7 @@ defmodule Arca.Overlay do
         with :ok <- subtree_files(files),
              :ok <- check_commit_cap(ctx, cap),
              {:ok, _written} <-
-               write(ctx, internal, loc, opts, fn _draft ->
+               write(ctx, internal, loc, fn _draft ->
                  if occupied?(ctx, loc),
                    do: carried_entries(internal, loc, subtree, files),
                    else: {:error, :not_found}
@@ -1012,7 +1009,7 @@ defmodule Arca.Overlay do
   # Step 1's row half. `gate` is asked while this writer holds the draft,
   # so no other commit can land between its answer and this commit; it
   # answers what to write, or the refusal.
-  defp write(ctx, internal, loc, opts, gate) do
+  defp write(ctx, internal, loc, gate) do
     actor = Context.actor(ctx)
     {root, key} = UnitLocator.unit_key(unit_of(loc))
     token = StorageUnits.new_writer_token()
@@ -1021,7 +1018,7 @@ defmodule Arca.Overlay do
       case gate.(draft) do
         {:ok, entries} ->
           with_internal_writes(fn ->
-            publish(actor, internal, loc, draft, token, entries, opts)
+            publish(actor, internal, loc, draft, token, entries)
           end)
 
         {:error, _} = refusal ->
@@ -1044,7 +1041,7 @@ defmodule Arca.Overlay do
   # Steps 1–3 on the object side, then the commit. Everything a refusal
   # leaves behind is this revision's own prefix, which goes with it —
   # except when the commit's outcome is unknown.
-  defp publish(actor, internal, loc, draft, token, entries, opts) do
+  defp publish(actor, internal, loc, draft, token, entries) do
     unit = unit_of(loc)
     revision = StorageUnits.new_revision()
 
@@ -1060,8 +1057,7 @@ defmodule Arca.Overlay do
         identity = %{
           new_revision: revision,
           content_identity: content_identity(manifest),
-          commit_identity: actor.user_id || "system",
-          release_digest: Keyword.get(opts, :release_digest)
+          commit_identity: actor.user_id || "system"
         }
 
         case StorageUnits.commit(actor, draft, draft.current_revision, token, identity) do

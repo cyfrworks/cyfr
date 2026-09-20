@@ -52,8 +52,7 @@ defmodule Arca.StorageUnits do
   @type identity :: %{
           required(:new_revision) => String.t(),
           required(:content_identity) => String.t(),
-          required(:commit_identity) => String.t(),
-          optional(:release_digest) => String.t() | nil
+          required(:commit_identity) => String.t()
         }
 
   @doc "How long a registered draft holds its unit against another writer."
@@ -127,9 +126,8 @@ defmodule Arca.StorageUnits do
   @doc """
   Publish a staged revision: one transaction that moves the pointer from
   `expected_revision` (nil for a unit never committed) to
-  `identity.new_revision`, sets the state `committed` and the release
-  digest, clears the draft token and appends one journal row — or does
-  none of it. Answers `t:Arca.Schemas.StorageUnit.commit_result/0`:
+  `identity.new_revision`, sets the state `committed`, clears the draft
+  token and appends one journal row — or does none of it. Answers `t:Arca.Schemas.StorageUnit.commit_result/0`:
   `:stale_revision` when the pointer moved, `:stale_writer` when the draft
   is no longer the writer's, `:missing_unit` for a row that is absent,
   retired or another athanor's.
@@ -288,7 +286,6 @@ defmodule Arca.StorageUnits do
         set: [
           state: "draft",
           current_revision: nil,
-          release_digest: nil,
           draft_writer_token: writer_token,
           updated_at: now
         ]
@@ -397,7 +394,6 @@ defmodule Arca.StorageUnits do
         set: [
           state: "committed",
           current_revision: identity.new_revision,
-          release_digest: Map.get(identity, :release_digest),
           draft_writer_token: nil,
           updated_at: now
         ]

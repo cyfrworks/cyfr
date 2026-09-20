@@ -337,6 +337,42 @@ defmodule Arca.ExecutionAttempts do
   end
 
   @doc """
+  Delete an athanor's SETTLED write intents that were recorded before
+  `cutoff` — the retention kind's write (`Cyfr.Retention.WriteIntents`).
+
+  A `pending` intent is never deleted here whatever its age. It is the
+  only record that a write may be in the store and was never settled, so
+  age is no reason to lose it; the cascade from its execution's row is
+  what finally takes it.
+  """
+  @spec delete_intents_before(DateTime.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
+  def delete_intents_before(%DateTime{} = cutoff, opts) when is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.delete_intents_before", fn ->
+      {count, _} = Arca.Repo.delete_all(settled_before(cutoff, opts))
+      {:ok, count}
+    end)
+  end
+
+  @doc "How many rows `delete_intents_before/2` would remove — the dry-run count."
+  @spec count_intents_before(DateTime.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
+  def count_intents_before(%DateTime{} = cutoff, opts) when is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.count_intents_before", fn ->
+      {:ok, Arca.Repo.aggregate(settled_before(cutoff, opts), :count)}
+    end)
+  end
+
+  defp settled_before(cutoff, opts) do
+    athanor_id = Keyword.fetch!(opts, :athanor_id)
+
+    from(i in StorageWriteIntent,
+      where: i.athanor_id == ^athanor_id and i.state != "pending",
+      where: i.inserted_at < ^cutoff
+    )
+  end
+
+  @doc """
   Whether `runner` holds the attempt (`held?/4`) and it is live: its
   execution is `running` and still points at it. A cancel is a terminal
   write, so a cancelled execution is no longer live. One read. Answers

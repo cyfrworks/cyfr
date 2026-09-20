@@ -503,12 +503,14 @@ defmodule Compendium.MCP.AquaTool do
 
   # --- update ---
 
-  # One locked read-modify-write, like a scroll's: two members editing the
-  # same role at once each see the other's bytes, never overwrite them.
-  # Two edits meet inside the lock in two ways. An allowlist edit arrives
-  # as `tool_policy_patch` — the keys it names, `nil` to take one off —
-  # applied to the policy as it is under the lock and judged as the whole
-  # it makes, so two members toggling different keys at once keep both;
+  # One serialized read-modify-write, like a scroll's: two members
+  # editing the same role at once each see the other's bytes, never
+  # overwrite them, because the write is made only while the file still
+  # holds the bytes the edit was given. Two edits meet in two ways. An
+  # allowlist edit arrives as `tool_policy_patch` — the keys it names,
+  # `nil` to take one off — applied to the policy as it is at the moment
+  # of the write and judged as the whole it makes, so two members
+  # toggling different keys at once keep both;
   # `tool_policy` still replaces the map for a caller that means to. A
   # prompt edit may carry `expected_digest` (the `content_digest` `get`
   # answered) and is refused as a conflict when the prompt has changed
@@ -697,9 +699,9 @@ defmodule Compendium.MCP.AquaTool do
   # lands the manifest through the overlay's unit commit — sentinel last,
   # rollback on failure — so a half-written scroll never reads as one. The
   # name is taken if the union holds it, shipped or the estate's own, and
-  # the commit asks that under the unit's own lock (`if_absent:`), so two
-  # creators of one name cannot both pass a probe and have the second
-  # silently replace the first.
+  # the commit asks that while it holds the unit's draft (`if_absent:`),
+  # so two creators of one name cannot both pass a probe and have the
+  # second silently replace the first.
   def handle(%Context{} = ctx, %{"action" => "skill_create", "name" => name} = args) do
     with :ok <- validate_name(name),
          {:ok, manifest} <- skill_manifest_bytes(name, args["description"], args["content"]) do
@@ -720,8 +722,7 @@ defmodule Compendium.MCP.AquaTool do
           {:error, reason}
 
         {:error, reason} ->
-          Logger.error("[AquaTool] aqua.skill_create #{name} failed: #{inspect(reason)}")
-          {:error, {:unavailable, "Storage"}}
+          passthrough_or_unavailable(reason, "aqua.skill_create #{name}")
       end
     end
   end
@@ -730,9 +731,10 @@ defmodule Compendium.MCP.AquaTool do
     {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
-  # Updating rewrites the manifest alone, as one locked read-modify-write:
-  # the fields the call leaves out are read from the manifest as it is at
-  # the moment of the write, so two concurrent updates cannot lose one.
+  # Updating rewrites the manifest alone, as one serialized
+  # read-modify-write: the fields the call leaves out are read from the
+  # manifest as it is at the moment of the write, so two concurrent
+  # updates cannot lose one.
   # The write inside is a plain put, so the scroll's other files stay; a
   # unit commit here would replace the unit whole and drop them.
   def handle(%Context{} = ctx, %{"action" => "skill_update", "name" => name} = args) do
@@ -894,9 +896,9 @@ defmodule Compendium.MCP.AquaTool do
     # A role is a file unit: the one atomic put IS the unit commit — no
     # sentinel, no rollback needed, the overlay's file CoW applies. It
     # goes through the commit for `if_absent:` alone: the union answers
-    # for shipped and member-created roles alike, and asking it under the
-    # unit's lock is what keeps two creators of one name from both
-    # passing a probe.
+    # for shipped and member-created roles alike, and asking it while the
+    # commit holds the unit's draft is what keeps two creators of one
+    # name from both passing a probe.
     bytes = AquaAgent.serialize(role)
 
     case Arca.Overlay.commit_unit(ctx, AquaPath.role_file(name), {:files, [{[], bytes}]},
@@ -914,9 +916,23 @@ defmodule Compendium.MCP.AquaTool do
       {:error, {:limit_reached, _, _} = reason} ->
         {:error, reason}
 
+      # The unit's row is committed and only the move of its bytes did
+      # not finish, so the role IS published: an index that does not name
+      # a published role is a role the runtime never offers. The refusal
+      # still says the bytes are not all served, and the storage sweep's
+      # repair finishes the move.
+      {:error, {:finish_failed, _}} = published ->
+        resync_index(ctx)
+        published
+
+      # The store could not say whether the commit landed. The resync
+      # reads the tree, so it is right either way.
+      {:error, :unavailable} = unknown ->
+        resync_index(ctx)
+        unknown
+
       {:error, reason} ->
-        Logger.error("[AquaTool] aqua.create #{name} failed: #{inspect(reason)}")
-        {:error, {:unavailable, "Storage"}}
+        passthrough_or_unavailable(reason, "aqua.create #{name}")
     end
   end
 
@@ -984,7 +1000,7 @@ defmodule Compendium.MCP.AquaTool do
   defp one_policy_argument(_args), do: :ok
 
   # The patch's own shape is checked at the door; what it makes of the
-  # policy is checked under the lock, where the policy is known.
+  # policy is checked inside the rewrite, where the policy is known.
   defp validate_patch(nil), do: :ok
 
   defp validate_patch(patch) when is_map(patch) do

@@ -122,8 +122,9 @@ defmodule Compendium.Fork do
 
       # A storage fault must not read as "the target is free" — the fork
       # would then commit over a component this check could not see. The
-      # check-then-act window that remains is closed by commit_unit's
-      # per-unit lock.
+      # check-then-act window that remains is closed by the commit: it
+      # holds the unit's draft while it stages, and its pointer
+      # compare-and-set refuses a revision another writer landed first.
       {:error, reason} ->
         {:error, "Could not check the fork target: #{inspect(reason)}"}
     end

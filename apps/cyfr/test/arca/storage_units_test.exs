@@ -154,22 +154,10 @@ defmodule Arca.StorageUnitsTest do
     } do
       {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_1")
 
-      assert :committed =
-               StorageUnits.commit(
-                 actor,
-                 draft,
-                 nil,
-                 "wrt_1",
-                 identity("rev_1", %{release_digest: "sha256:release"})
-               )
+      assert :committed = StorageUnits.commit(actor, draft, nil, "wrt_1", identity("rev_1"))
 
-      assert {:ok,
-              %{
-                state: "committed",
-                current_revision: "rev_1",
-                release_digest: "sha256:release",
-                draft_writer_token: nil
-              }} = StorageUnits.current(actor, @root, key)
+      assert {:ok, %{state: "committed", current_revision: "rev_1", draft_writer_token: nil}} =
+               StorageUnits.current(actor, @root, key)
 
       assert {:ok, [%StorageCommit{} = commit]} = StorageUnits.journal(actor, @root, key)
 
