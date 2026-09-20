@@ -28,7 +28,11 @@ defmodule Cyfr.Execution.EventsTest do
   end
 
   defp durable!(record, type, data) do
-    {:ok, row} = Arca.ExecutionEvents.append(record.athanor_id, record.id, type, data: data)
+    {:ok, row} =
+      Arca.ExecutionEvents.append(Cyfr.Actor.in_athanor(record.athanor_id), record.id, type,
+        data: data
+      )
+
     :ok = Events.publish(record.id, record, type, row.seq, data)
     row.seq
   end

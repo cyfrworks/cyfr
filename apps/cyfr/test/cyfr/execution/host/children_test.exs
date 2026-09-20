@@ -163,7 +163,9 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
   end
 
   defp charges(ctx, authority) do
-    {:ok, charges} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
+    {:ok, charges} =
+      Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), authority.budget.id)
+
     charges
   end
 
@@ -196,7 +198,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       assert child.assignment.root_execution_id == fixture.execution_id
 
       assert %{state: "running", claimed_by: claimed_by, service_id: service_id, boot_id: boot_id} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, child.execution_id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), child.execution_id)
 
       assert claimed_by == fixture.runner
       assert service_id == fixture.service
@@ -473,7 +475,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
                Arca.Repo.get!(Arca.Execution, child.execution_id)
 
       assert %{state: "failed", outcome: "error"} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, child.execution_id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), child.execution_id)
 
       refute Process.alive?(pid)
       assert Sanctum.Authority.budget(authority).in_flight == 0

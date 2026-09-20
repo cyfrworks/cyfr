@@ -408,13 +408,13 @@ defmodule Cyfr.Ops.Catalog do
 
   # `opts[:charge]` is `%{id, attempt, generation, holder_execution_id}`;
   # the row's deadline is the dispatcher's own timeout.
-  defp charge_row(:spawn, %Context{athanor_id: athanor_id}, authority, opts)
+  defp charge_row(:spawn, %Context{athanor_id: athanor_id} = ctx, authority, opts)
        when is_binary(athanor_id) do
     case Keyword.get(opts, :charge) do
       %{id: _} = charge ->
         deadline = DateTime.add(DateTime.utc_now(), @tool_timeout_ms, :millisecond)
 
-        case Arca.BudgetReservations.charge(athanor_id, authority.budget.id, charge, 1,
+        case Arca.BudgetReservations.charge(Context.actor(ctx), authority.budget.id, charge, 1,
                holder_deadline: deadline
              ) do
           :ok -> :ok
@@ -431,10 +431,10 @@ defmodule Cyfr.Ops.Catalog do
 
   defp charge_row(_guest_fn, _ctx, _authority, _opts), do: :ok
 
-  defp release_row(%Context{athanor_id: athanor_id}, authority, opts)
+  defp release_row(%Context{athanor_id: athanor_id} = ctx, authority, opts)
        when is_binary(athanor_id) do
     case Keyword.get(opts, :charge) do
-      %{id: id} -> Arca.BudgetReservations.release(athanor_id, authority.budget.id, id)
+      %{id: id} -> Arca.BudgetReservations.release(Context.actor(ctx), authority.budget.id, id)
       _ -> :ok
     end
   end

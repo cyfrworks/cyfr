@@ -78,7 +78,9 @@ defmodule Arca.ScheduleOccurrencesTest do
 
     # The row the winner holds names the time it was due for; a stale
     # copy of the schedule (its cursor already moved) claims nothing.
-    assert {:ok, [%{scheduled_for: due_for}]} = ScheduleOccurrences.list(ctx, schedule.id)
+    assert {:ok, [%{scheduled_for: due_for}]} =
+             ScheduleOccurrences.list(Sanctum.Context.actor(ctx), schedule.id)
+
     assert DateTime.compare(due_for, schedule.next_run_at) == :eq
     assert :held = ScheduleOccurrences.claim(schedule, "node-d", next_occurrence())
   end
@@ -106,7 +108,7 @@ defmodule Arca.ScheduleOccurrencesTest do
                next_occurrence()
              )
 
-    assert {:ok, []} = ScheduleOccurrences.list(ctx, schedule.id)
+    assert {:ok, []} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), schedule.id)
   end
 
   test "forbid holds a due occurrence while another is open; allow claims it", %{ctx: ctx} do
@@ -118,7 +120,11 @@ defmodule Arca.ScheduleOccurrencesTest do
       {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
 
       assert 1 =
-               ScheduleOccurrences.start!(ctx.athanor_id, occurrence.id, "exec_#{occurrence.id}")
+               ScheduleOccurrences.start!(
+                 Sanctum.Context.actor(ctx),
+                 occurrence.id,
+                 "exec_#{occurrence.id}"
+               )
     end
 
     forbid = due_again!(forbid)
@@ -126,16 +132,18 @@ defmodule Arca.ScheduleOccurrencesTest do
 
     assert :overlapping = ScheduleOccurrences.claim(forbid, "node-a", next_occurrence())
     assert DateTime.compare(cursor!(forbid.id), forbid.next_run_at) == :eq
-    assert {:ok, [%{state: "started"}]} = ScheduleOccurrences.list(ctx, forbid.id)
+
+    assert {:ok, [%{state: "started"}]} =
+             ScheduleOccurrences.list(Sanctum.Context.actor(ctx), forbid.id)
 
     assert {:ok, %{state: "claimed"}} =
              ScheduleOccurrences.claim(allow, "node-a", next_occurrence())
 
-    assert {:ok, [_, _]} = ScheduleOccurrences.list(ctx, allow.id)
+    assert {:ok, [_, _]} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), allow.id)
 
     # Once the open one ends, forbid claims the waiting occurrence.
-    {:ok, [open]} = ScheduleOccurrences.list(ctx, forbid.id)
-    assert {:ok, 1} = ScheduleOccurrences.finish(ctx.athanor_id, open.id, "completed")
+    {:ok, [open]} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), forbid.id)
+    assert {:ok, 1} = ScheduleOccurrences.finish(Sanctum.Context.actor(ctx), open.id, "completed")
 
     assert {:ok, %{state: "claimed"}} =
              ScheduleOccurrences.claim(forbid, "node-a", next_occurrence())
@@ -147,24 +155,33 @@ defmodule Arca.ScheduleOccurrencesTest do
     schedule = due!(ctx)
     {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
 
-    assert 1 = ScheduleOccurrences.start!(ctx.athanor_id, occurrence.id, "exec_1")
-    assert 0 = ScheduleOccurrences.start!(ctx.athanor_id, occurrence.id, "exec_2")
+    assert 1 = ScheduleOccurrences.start!(Sanctum.Context.actor(ctx), occurrence.id, "exec_1")
+    assert 0 = ScheduleOccurrences.start!(Sanctum.Context.actor(ctx), occurrence.id, "exec_2")
 
     assert {:ok, %{state: "started", execution_id: "exec_1", attempts: 1}} =
-             ScheduleOccurrences.get(ctx, occurrence.id)
+             ScheduleOccurrences.get(Sanctum.Context.actor(ctx), occurrence.id)
 
-    assert {:ok, "uncertain"} = ScheduleOccurrences.settle_dead(ctx.athanor_id, occurrence.id)
-    assert {:ok, nil} = ScheduleOccurrences.settle_dead(ctx.athanor_id, occurrence.id)
-    assert {:ok, 0} = ScheduleOccurrences.finish(ctx.athanor_id, occurrence.id, "completed")
+    assert {:ok, "uncertain"} =
+             ScheduleOccurrences.settle_dead(Sanctum.Context.actor(ctx), occurrence.id)
+
+    assert {:ok, nil} = ScheduleOccurrences.settle_dead(Sanctum.Context.actor(ctx), occurrence.id)
+
+    assert {:ok, 0} =
+             ScheduleOccurrences.finish(Sanctum.Context.actor(ctx), occurrence.id, "completed")
 
     # A claimed one nothing invoked fails when its runner dies.
     later = due!(ctx)
     {:ok, claimed} = ScheduleOccurrences.claim(later, "node-a", next_occurrence())
-    assert {:ok, "failed"} = ScheduleOccurrences.settle_dead(ctx.athanor_id, claimed.id)
+
+    assert {:ok, "failed"} =
+             ScheduleOccurrences.settle_dead(Sanctum.Context.actor(ctx), claimed.id)
 
     # Another estate reads none of it.
     assert {:error, :not_found} =
-             ScheduleOccurrences.get(%{ctx | athanor_id: "ath_elsewhere"}, occurrence.id)
+             ScheduleOccurrences.get(
+               Sanctum.Context.actor(%{ctx | athanor_id: "ath_elsewhere"}),
+               occurrence.id
+             )
   end
 
   test "recovery names what a dead scheduler left: claimed never invoked, started with its execution gone",
@@ -210,7 +227,7 @@ defmodule Arca.ScheduleOccurrencesTest do
   test "an execution admitted for an occurrence nobody claimed is refused", %{ctx: ctx} do
     schedule = due!(ctx)
     {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
-    assert 1 = ScheduleOccurrences.start!(ctx.athanor_id, occurrence.id, "exec_first")
+    assert 1 = ScheduleOccurrences.start!(Sanctum.Context.actor(ctx), occurrence.id, "exec_first")
 
     assert {:error, :occurrence_not_claimed} =
              Arca.Execution.admit(

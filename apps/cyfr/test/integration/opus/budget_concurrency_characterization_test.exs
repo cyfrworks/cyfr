@@ -117,7 +117,10 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
 
     assert Sanctum.Authority.budget(authority).in_flight == @cap
     assert length(admitted(ctx, authority)) == @cap
-    assert Arca.BudgetReservations.lookup(ctx.athanor_id, authority.budget.id).charged == @cap
+
+    assert Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), authority.budget.id).charged ==
+             @cap
+
     assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before + @cap
 
     # Each admitted child closes as the runner it was handed to closes it.
@@ -134,8 +137,12 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
     end)
 
     wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
-    assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
-    assert Arca.BudgetReservations.lookup(ctx.athanor_id, authority.budget.id).charged == 0
+
+    assert {:ok, []} =
+             Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), authority.budget.id)
+
+    assert Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), authority.budget.id).charged ==
+             0
 
     assert %{in_flight: in_flight, admitted: admitted} = stop_sampling(sampler)
     assert in_flight <= @cap
@@ -143,7 +150,9 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
   end
 
   defp admitted(ctx, authority) do
-    {:ok, charges} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
+    {:ok, charges} =
+      Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), authority.budget.id)
+
     Enum.filter(charges, & &1.admitted_at)
   end
 

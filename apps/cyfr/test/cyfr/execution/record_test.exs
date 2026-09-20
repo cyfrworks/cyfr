@@ -369,7 +369,7 @@ defmodule Cyfr.Execution.RecordTest do
       assert row.error_message == "result not retained"
 
       assert %{state: "failed", outcome: "result_lost"} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, record.id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), record.id)
 
       # An input that cannot be kept admits nothing.
       other = Record.new(ctx, "reagent:local.test:0.1.0", %{"b" => 2})
@@ -683,7 +683,7 @@ defmodule Cyfr.Execution.RecordTest do
       :ok = Record.write_started(record)
       :ok = Record.write_completed(Record.complete(record, %{"sum" => 2}))
 
-      {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, record.id, 0)
+      {:ok, rows} = Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), record.id, 0)
 
       assert [
                %{seq: 1, type: "execution.started"},
@@ -699,7 +699,7 @@ defmodule Cyfr.Execution.RecordTest do
       :ok = Record.write_failed(Record.fail(failed, "boom"))
 
       assert {:ok, [_, %{type: "execution.failed"} = row]} =
-               Arca.ExecutionEvents.since(ctx.athanor_id, failed.id, 0)
+               Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), failed.id, 0)
 
       assert %{"error" => "boom"} = Arca.ExecutionEvents.data(row)
 
@@ -712,7 +712,7 @@ defmodule Cyfr.Execution.RecordTest do
         Record.write_completed(Record.complete(lost, %{"sum" => 2}))
 
       assert {:ok, [_, %{type: "execution.result_lost"}]} =
-               Arca.ExecutionEvents.since(ctx.athanor_id, lost.id, 0)
+               Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), lost.id, 0)
     end
 
     test "a cancel that asks for a restart says so on its event", %{ctx: ctx} do
@@ -723,7 +723,7 @@ defmodule Cyfr.Execution.RecordTest do
         Record.cancel(ctx, record.id, restart_required: %{"profile_id" => "prof_1"})
 
       assert {:ok, [_, %{type: "execution.cancelled"} = row]} =
-               Arca.ExecutionEvents.since(ctx.athanor_id, record.id, 0)
+               Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), record.id, 0)
 
       assert %{"restart_required" => %{"profile_id" => "prof_1"}} =
                Arca.ExecutionEvents.data(row)

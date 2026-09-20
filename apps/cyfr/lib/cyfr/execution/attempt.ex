@@ -677,7 +677,7 @@ defmodule Cyfr.Execution.Attempt do
     with true <- held?,
          true <-
            Arca.ExecutionAttempts.live?(
-             state.ctx.athanor_id,
+             Context.actor(state.ctx),
              state.attempt,
              state.fence,
              holder.runner
@@ -956,7 +956,7 @@ defmodule Cyfr.Execution.Attempt do
   # at this attempt, running at its fence. Every write that ends a run ends
   # its attempt row in the same transaction, so one read decides.
   defp row_live(state) do
-    case Arca.ExecutionAttempts.current(state.ctx.athanor_id, state.execution_id) do
+    case Arca.ExecutionAttempts.current(Context.actor(state.ctx), state.execution_id) do
       %Arca.Schemas.ExecutionAttempt{attempt: attempt, fence: fence, state: "running"}
       when attempt == state.attempt and fence == state.fence ->
         true
@@ -1147,7 +1147,7 @@ defmodule Cyfr.Execution.Attempt do
   # is refused without stopping the attempt, which its runner still closes.
   defp held(caller, :chain) do
     case Arca.ExecutionAttempts.live?(
-           caller.athanor_id,
+           Cyfr.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
            caller.fence,
            caller.runner
@@ -1160,7 +1160,7 @@ defmodule Cyfr.Execution.Attempt do
 
   defp held(caller, _op) do
     case Arca.ExecutionAttempts.held?(
-           caller.athanor_id,
+           Cyfr.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
            caller.fence,
            caller.runner
@@ -1349,7 +1349,7 @@ defmodule Cyfr.Execution.Attempt do
   # by the runner that attached.
   defp while_held(state, write) do
     case Arca.ExecutionAttempts.while_held(
-           state.ctx.athanor_id,
+           Context.actor(state.ctx),
            state.attempt,
            state.fence,
            state.claimed_by,

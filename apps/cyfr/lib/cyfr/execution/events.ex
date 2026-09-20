@@ -225,7 +225,7 @@ defmodule Cyfr.Execution.Events do
   def since(execution_id, {durable, n}, athanor_id)
       when is_binary(athanor_id) and athanor_id != "" and is_integer(durable) and is_integer(n) do
     rows =
-      case Arca.ExecutionEvents.since(athanor_id, execution_id, durable) do
+      case Arca.ExecutionEvents.since(Cyfr.Actor.in_athanor(athanor_id), execution_id, durable) do
         {:ok, rows} -> Enum.map(rows, &row_event/1)
         {:error, _} -> []
       end

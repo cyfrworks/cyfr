@@ -186,7 +186,9 @@ defmodule Cyfr.Ops.TypedDispatchTest do
              )
 
     assert Sanctum.Authority.budget(authority) == before
-    assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
+
+    assert {:ok, []} =
+             Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), authority.budget.id)
   end
 
   test "host lineage is applied after validation and replaces forged guest selectors", %{

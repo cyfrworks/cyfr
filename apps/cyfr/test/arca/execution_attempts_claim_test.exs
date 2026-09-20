@@ -49,18 +49,23 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     {_execution, attempt} = admit!(ctx)
     assert claimed_by(attempt.attempt) == nil
 
-    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    assert :ok =
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
+
     assert claimed_by(attempt.attempt) == "runner_a"
   end
 
   test "a repeated claim by the claimant holds; another runner's is replayed", %{ctx: ctx} do
     {_execution, attempt} = admit!(ctx)
-    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
 
-    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    assert :ok =
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
+
+    assert :ok =
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
     assert {:error, :replayed} =
-             ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_b")
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_b")
 
     assert claimed_by(attempt.attempt) == "runner_a"
   end
@@ -69,9 +74,15 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     {execution, attempt} = admit!(ctx)
 
     assert {:error, :lost} =
-             ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 2, "runner_a")
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 2, "runner_a")
 
-    assert {:error, :lost} = ExecutionAttempts.claim("ath_gamma", attempt.attempt, 1, "runner_a")
+    assert {:error, :lost} =
+             ExecutionAttempts.claim(
+               Cyfr.Actor.in_athanor("ath_gamma"),
+               attempt.attempt,
+               1,
+               "runner_a"
+             )
 
     {:ok, _} =
       Arca.Execution.record_end(
@@ -83,46 +94,64 @@ defmodule Arca.ExecutionAttemptsClaimTest do
       )
 
     assert {:error, :lost} =
-             ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
     assert claimed_by(attempt.attempt) == nil
   end
 
   test "an attempt a takeover retired can no longer be claimed or held", %{ctx: ctx} do
     {execution, attempt} = admit!(ctx)
-    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
-    assert ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+
+    assert :ok =
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
+
+    assert ExecutionAttempts.held?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
     {:ok, %{attempt: successor}} =
-      ExecutionAttempts.takeover(ctx.athanor_id, execution.id,
+      ExecutionAttempts.takeover(Sanctum.Context.actor(ctx), execution.id,
         boot_id: Cyfr.Boot.id(),
         lease_until: ExecutionAttempts.lease_until()
       )
 
     assert successor.fence == 2
-    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.held?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
     assert {:error, :lost} =
-             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", write())
+             ExecutionAttempts.while_held(
+               Sanctum.Context.actor(ctx),
+               attempt.attempt,
+               1,
+               "runner_a",
+               write()
+             )
 
     refute_received :ran
 
     assert {:error, :lost} =
-             ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_b")
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_b")
 
-    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, successor.attempt, 2, "runner_b")
+    assert :ok =
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), successor.attempt, 2, "runner_b")
   end
 
   test "an attempt is held only by its claimant, at its fence, while it runs", %{ctx: ctx} do
     {execution, attempt} = admit!(ctx)
 
-    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
-    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.held?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
-    assert ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
-    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_b")
-    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 2, "runner_a")
-    refute ExecutionAttempts.held?("ath_gamma", attempt.attempt, 1, "runner_a")
+    assert :ok =
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
+
+    assert ExecutionAttempts.held?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.held?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_b")
+    refute ExecutionAttempts.held?(Sanctum.Context.actor(ctx), attempt.attempt, 2, "runner_a")
+
+    refute ExecutionAttempts.held?(
+             Cyfr.Actor.in_athanor("ath_gamma"),
+             attempt.attempt,
+             1,
+             "runner_a"
+           )
 
     {:ok, _} =
       Arca.Execution.record_end(
@@ -133,16 +162,24 @@ defmodule Arca.ExecutionAttemptsClaimTest do
         attempt.attempt
       )
 
-    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.held?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
   end
 
   test "work runs while its claimant holds the attempt, and not once the attempt closed",
        %{ctx: ctx} do
     {execution, attempt} = admit!(ctx)
-    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+
+    assert :ok =
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
     assert {:ok, {:confirmed, :ok}} =
-             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", write())
+             ExecutionAttempts.while_held(
+               Sanctum.Context.actor(ctx),
+               attempt.attempt,
+               1,
+               "runner_a",
+               write()
+             )
 
     assert_received :ran
 
@@ -152,7 +189,13 @@ defmodule Arca.ExecutionAttemptsClaimTest do
           {"ath_gamma", 1, "runner_a"}
         ] do
       assert {:error, :lost} =
-               ExecutionAttempts.while_held(athanor, attempt.attempt, fence, runner, write())
+               ExecutionAttempts.while_held(
+                 Cyfr.Actor.in_athanor(athanor),
+                 attempt.attempt,
+                 fence,
+                 runner,
+                 write()
+               )
     end
 
     refute_received :ran
@@ -168,7 +211,13 @@ defmodule Arca.ExecutionAttemptsClaimTest do
       )
 
     assert {:error, :lost} =
-             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", write())
+             ExecutionAttempts.while_held(
+               Sanctum.Context.actor(ctx),
+               attempt.attempt,
+               1,
+               "runner_a",
+               write()
+             )
 
     refute_received :ran
   end
@@ -176,23 +225,43 @@ defmodule Arca.ExecutionAttemptsClaimTest do
   test "a held attempt is live until it is cancelled or its execution ends", %{ctx: ctx} do
     {_execution, attempt} = admit!(ctx)
 
-    refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
-    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.live?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
-    assert ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
-    refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_b")
-    refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 2, "runner_a")
-    refute ExecutionAttempts.live?("ath_gamma", attempt.attempt, 1, "runner_a")
+    assert :ok =
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
+
+    assert ExecutionAttempts.live?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.live?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_b")
+    refute ExecutionAttempts.live?(Sanctum.Context.actor(ctx), attempt.attempt, 2, "runner_a")
+
+    refute ExecutionAttempts.live?(
+             Cyfr.Actor.in_athanor("ath_gamma"),
+             attempt.attempt,
+             1,
+             "runner_a"
+           )
 
     # A cancel is a terminal write: nothing is held or live after it.
     assert {:ok, _ran} =
-             ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "cancelled", "cancelled")
+             ExecutionAttempts.close(
+               Sanctum.Context.actor(ctx),
+               attempt.attempt,
+               "cancelled",
+               "cancelled"
+             )
 
-    refute ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
-    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.live?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.held?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
     {other, other_attempt} = admit!(ctx)
-    assert :ok = ExecutionAttempts.claim(ctx.athanor_id, other_attempt.attempt, 1, "runner_a")
+
+    assert :ok =
+             ExecutionAttempts.claim(
+               Sanctum.Context.actor(ctx),
+               other_attempt.attempt,
+               1,
+               "runner_a"
+             )
 
     {:ok, _} =
       Arca.Execution.record_end(
@@ -203,15 +272,26 @@ defmodule Arca.ExecutionAttemptsClaimTest do
         nil
       )
 
-    refute ExecutionAttempts.live?(ctx.athanor_id, other_attempt.attempt, 1, "runner_a")
+    refute ExecutionAttempts.live?(
+             Sanctum.Context.actor(ctx),
+             other_attempt.attempt,
+             1,
+             "runner_a"
+           )
   end
 
   test "a turn root's attempt is never claimed, so no runner holds it", %{ctx: ctx} do
     {_execution, attempt} = admit!(ctx, %{kind: "turn", component_type: "agent"})
 
     assert claimed_by(attempt.attempt) == nil
-    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, Cyfr.Boot.id())
-    refute ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, attempt.boot_id)
+    refute ExecutionAttempts.held?(Sanctum.Context.actor(ctx), attempt.attempt, 1, Cyfr.Boot.id())
+
+    refute ExecutionAttempts.held?(
+             Sanctum.Context.actor(ctx),
+             attempt.attempt,
+             1,
+             attempt.boot_id
+           )
   end
 
   @tag :capture_log
@@ -220,16 +300,22 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     drop_executions!()
 
     assert {:error, :database_error} =
-             ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
     assert {:error, :database_error} =
-             ExecutionAttempts.held?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.held?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
     assert {:error, :database_error} =
-             ExecutionAttempts.live?(ctx.athanor_id, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.live?(Sanctum.Context.actor(ctx), attempt.attempt, 1, "runner_a")
 
     assert {:error, :database_error} =
-             ExecutionAttempts.while_held(ctx.athanor_id, attempt.attempt, 1, "runner_a", write())
+             ExecutionAttempts.while_held(
+               Sanctum.Context.actor(ctx),
+               attempt.attempt,
+               1,
+               "runner_a",
+               write()
+             )
 
     refute_received :ran
   end

@@ -336,7 +336,9 @@ defmodule Cyfr.Execution.HostTest do
       :ok = Cyfr.Execution.Events.subscribe(fixture.execution_id, fixture.ctx)
 
       {:ok, %{attempt: successor}} =
-        Arca.ExecutionAttempts.takeover(fixture.athanor_id, fixture.execution_id,
+        Arca.ExecutionAttempts.takeover(
+          Cyfr.Actor.in_athanor(fixture.athanor_id),
+          fixture.execution_id,
           boot_id: Cyfr.Boot.id(),
           lease_until: Arca.ExecutionAttempts.lease_until()
         )
@@ -560,7 +562,12 @@ defmodule Cyfr.Execution.HostTest do
       assert %{"error" => "unavailable"} = report(fixture)
 
       assert %{status: "running"} = row(fixture)
-      assert %{state: "running"} = Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+
+      assert %{state: "running"} =
+               Arca.ExecutionAttempts.get(
+                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt
+               )
     end
   end
 
@@ -608,10 +615,17 @@ defmodule Cyfr.Execution.HostTest do
       assert %{status: "failed"} = row(fixture)
 
       assert %{state: "lapsed", outcome: "uncertain"} =
-               Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+               Arca.ExecutionAttempts.get(
+                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt
+               )
 
       assert {:ok, events} =
-               Arca.ExecutionEvents.since(fixture.athanor_id, fixture.execution_id, 0)
+               Arca.ExecutionEvents.since(
+                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 fixture.execution_id,
+                 0
+               )
 
       assert "execution.lapsed" in Enum.map(events, & &1.type)
 
@@ -663,7 +677,13 @@ defmodule Cyfr.Execution.HostTest do
       assert %{"error" => "lost"} = report(fixture, signer: "wrk_other")
 
       assert row(fixture).status == "running"
-      assert %{state: "running"} = Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+
+      assert %{state: "running"} =
+               Arca.ExecutionAttempts.get(
+                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt
+               )
+
       assert Process.alive?(fixture.pid)
       assert %{"ok" => _} = renew(fixture)
       Cyfr.Execution.Attempt.refuse(fixture.pid, "not started")
@@ -681,7 +701,13 @@ defmodule Cyfr.Execution.HostTest do
   end
 
   defp terminal_events(fixture) do
-    {:ok, rows} = Arca.ExecutionEvents.since(fixture.athanor_id, fixture.execution_id, 0)
+    {:ok, rows} =
+      Arca.ExecutionEvents.since(
+        Cyfr.Actor.in_athanor(fixture.athanor_id),
+        fixture.execution_id,
+        0
+      )
+
     for %{type: type} <- rows, type in Arca.ExecutionEvents.terminal_types(), do: type
   end
 

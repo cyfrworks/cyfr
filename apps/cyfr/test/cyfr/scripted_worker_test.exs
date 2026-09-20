@@ -130,7 +130,10 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     refute runner == task.pid
 
     assert Sanctum.Authority.budget(auth).in_flight == 1
-    assert {:ok, [charge_row]} = Arca.BudgetReservations.charges(athanor_id, auth.budget.id)
+
+    assert {:ok, [charge_row]} =
+             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(athanor_id), auth.budget.id)
+
     assert charge_row.admitted_at != nil
     assert charge_row.holder_execution_id == child_id
 
@@ -142,7 +145,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
              service_id: service_id,
              boot_id: boot_id
            } =
-             Arca.ExecutionAttempts.current(athanor_id, child_id)
+             Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id)
 
     assert service_id == ScriptedWorker.service()
     assert boot_id == boot()
@@ -163,10 +166,12 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert data["content"] == [%{"type" => "text", "text" => "hi"}]
 
     assert Sanctum.Authority.budget(auth).in_flight == 0
-    assert {:ok, []} = Arca.BudgetReservations.charges(athanor_id, auth.budget.id)
+
+    assert {:ok, []} =
+             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(athanor_id), auth.budget.id)
 
     assert %{state: "completed", outcome: "ok"} =
-             Arca.ExecutionAttempts.current(athanor_id, child_id)
+             Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id)
 
     assert %{status: "completed"} = Arca.Repo.get(Arca.Execution, child_id)
     assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == 0
@@ -188,14 +193,19 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     wait_until(fn -> child_id in ScriptedWorker.kills() end)
 
     wait_until(fn ->
-      match?(%{state: "lapsed"}, Arca.ExecutionAttempts.current(athanor_id, child_id))
+      match?(
+        %{state: "lapsed"},
+        Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id)
+      )
     end)
 
     assert %{status: "failed"} = Arca.Repo.get(Arca.Execution, child_id)
 
     wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     wait_until(fn -> Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == 0 end)
-    assert {:ok, []} = Arca.BudgetReservations.charges(athanor_id, auth.budget.id)
+
+    assert {:ok, []} =
+             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(athanor_id), auth.budget.id)
   end
 
   test "an exhausted script fails the child and releases everything", fx do
@@ -207,10 +217,12 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert {:error, "script exhausted"} = run(fx)
 
     assert %{state: "failed", outcome: "error"} =
-             Arca.ExecutionAttempts.current(athanor_id, child_id)
+             Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id)
 
     assert Sanctum.Authority.budget(auth).in_flight == 0
-    assert {:ok, []} = Arca.BudgetReservations.charges(athanor_id, auth.budget.id)
+
+    assert {:ok, []} =
+             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(athanor_id), auth.budget.id)
   end
 
   test "an expired hold refuses admission before anything is dispatched", fx do
@@ -219,11 +231,13 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     start_supervised!({ScriptedWorker, ref: @scripted, script: [%{"content" => []}]})
 
-    :ok = Arca.BudgetReservations.charge(athanor_id, auth.budget.id, charge, 1)
+    :ok =
+      Arca.BudgetReservations.charge(Cyfr.Actor.in_athanor(athanor_id), auth.budget.id, charge, 1)
+
     expire_hold(athanor_id, charge.id)
 
     assert {:error, :hold_expired} = run(fx)
-    assert Arca.ExecutionAttempts.current(athanor_id, child_id) == nil
+    assert Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id) == nil
     assert Arca.Repo.get(Arca.Execution, child_id) == nil
     assert Sanctum.Authority.budget(auth).in_flight == 0
     assert ScriptedWorker.calls() == []
@@ -445,7 +459,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert [%{execution_id: ^id}] = ScriptedWorker.calls()
 
     assert %{state: "completed", outcome: "ok"} =
-             Arca.ExecutionAttempts.current(ctx.athanor_id, id)
+             Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
 
     assert Attempt.whereis(id) == nil
   end

@@ -138,12 +138,12 @@ defmodule Cyfr.TwoWorkersTest do
 
       # Each row's attempt names the service and boot it ran on.
       assert %{state: "completed", service_id: @local, boot_id: opus_boot} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, opus_id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), opus_id)
 
       assert opus_boot == OpusService.boot()
 
       assert %{state: "completed", service_id: @other, boot_id: scripted_boot} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, scripted_id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), scripted_id)
 
       assert {:ok, %{boot: ^scripted_boot}} = ScriptedWorker.status()
       assert [%{execution_id: ^scripted_id}] = ScriptedWorker.calls()
@@ -209,7 +209,7 @@ defmodule Cyfr.TwoWorkersTest do
       assert [%{execution_id: ^id}] = ScriptedWorker.calls()
 
       assert %{state: "completed", service_id: @other} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
     end
 
     test "a host call's lost answer is retried by its class, and a lossy stream stays whole and ordered",
@@ -336,7 +336,7 @@ defmodule Cyfr.TwoWorkersTest do
       wait_until(fn -> not Process.alive?(fixture.pid) end)
 
       assert %{state: "lapsed", outcome: "uncertain"} =
-               Arca.ExecutionAttempts.get(ctx.athanor_id, fixture.attempt)
+               Arca.ExecutionAttempts.get(Sanctum.Context.actor(ctx), fixture.attempt)
     end
 
     test "a run cancelled mid-flight releases nothing its masking set covers", %{ctx: ctx} do
@@ -454,7 +454,7 @@ defmodule Cyfr.TwoWorkersTest do
       assert_receive {:held, ^root_id, close}, 30_000
 
       assert %{attempt: attempt, boot_id: old_boot, state: "running"} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, root_id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), root_id)
 
       assert old_boot == OpusService.boot()
 
@@ -480,7 +480,7 @@ defmodule Cyfr.TwoWorkersTest do
       assert %{status: "failed", error_message: @lapsed} = row(root_id)
 
       assert %{state: "lapsed", outcome: "uncertain", boot_id: ^old_boot} =
-               Arca.ExecutionAttempts.get(ctx.athanor_id, attempt)
+               Arca.ExecutionAttempts.get(Sanctum.Context.actor(ctx), attempt)
 
       wait_until(fn -> Attempt.whereis(root_id) == nil end)
     end
@@ -558,7 +558,8 @@ defmodule Cyfr.TwoWorkersTest do
   defp row(id), do: Arca.Repo.get!(Arca.Execution, id)
 
   # The runner that claimed the run's attempt, as its host calls present it.
-  defp runner_of(ctx, id), do: Arca.ExecutionAttempts.current(ctx.athanor_id, id).claimed_by
+  defp runner_of(ctx, id),
+    do: Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id).claimed_by
 
   # Whether the Opus service reported `runner`'s exit over the wire.
   defp reported_exit?(runner) do
@@ -584,7 +585,7 @@ defmodule Cyfr.TwoWorkersTest do
   end
 
   defp event_rows(ctx, id) do
-    {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, id, 0)
+    {:ok, rows} = Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), id, 0)
     Enum.map(rows, &%{type: &1.type, data: Arca.ExecutionEvents.data(&1)})
   end
 

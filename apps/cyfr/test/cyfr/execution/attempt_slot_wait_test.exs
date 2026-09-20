@@ -616,11 +616,11 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
   # holds each, and the children's execution slots.
   defp accounting(%{ctx: ctx, authority: authority}) do
     budget = authority.budget.id
-    {:ok, charges} = Arca.BudgetReservations.charges(ctx.athanor_id, budget)
+    {:ok, charges} = Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), budget)
 
     %{
       in_flight: Sanctum.Authority.budget(authority).in_flight,
-      charged: Arca.BudgetReservations.lookup(ctx.athanor_id, budget).charged,
+      charged: Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), budget).charged,
       charges: charges |> Enum.map(& &1.holder_execution_id) |> Enum.sort(),
       child_slots: Slots.status(@slots).child_active
     }
@@ -666,7 +666,7 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
     assert counts.() == expected
   end
 
-  defp attempt(ctx, id), do: Arca.ExecutionAttempts.current(ctx.athanor_id, id)
+  defp attempt(ctx, id), do: Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
 
   # Every free execution slot, held by one process until `release_slots!/2`
   # gives it back or the test ends.

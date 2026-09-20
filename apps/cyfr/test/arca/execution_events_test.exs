@@ -38,7 +38,9 @@ defmodule Arca.ExecutionEventsTest do
     |> Task.async_stream(
       fn i ->
         {:ok, _} =
-          ExecutionEvents.append(ctx.athanor_id, exec.id, "step.closed", data: %{"i" => i})
+          ExecutionEvents.append(Sanctum.Context.actor(ctx), exec.id, "step.closed",
+            data: %{"i" => i}
+          )
       end,
       max_concurrency: 6,
       ordered: false
@@ -47,18 +49,24 @@ defmodule Arca.ExecutionEventsTest do
 
     # Admission appended `execution.started` as 1; the twelve follow it.
     assert {:ok, [%{seq: 1, type: "execution.started"} | rows]} =
-             ExecutionEvents.since(ctx.athanor_id, exec.id, 0)
+             ExecutionEvents.since(Sanctum.Context.actor(ctx), exec.id, 0)
 
     assert Enum.map(rows, & &1.seq) == Enum.to_list(2..13)
     assert Arca.Repo.get!(Arca.Execution, exec.id).event_seq == 13
 
-    assert {:ok, tail} = ExecutionEvents.since(ctx.athanor_id, exec.id, 11)
+    assert {:ok, tail} = ExecutionEvents.since(Sanctum.Context.actor(ctx), exec.id, 11)
     assert Enum.map(tail, & &1.seq) == [12, 13]
     assert Enum.all?(rows, &is_integer(ExecutionEvents.data(&1)["i"]))
   end
 
   test "an execution of another estate takes no event", %{ctx: ctx, exec: exec} do
-    assert {:error, _} = ExecutionEvents.append("ath_elsewhere", exec.id, "step.closed")
-    assert {:ok, []} = ExecutionEvents.since(ctx.athanor_id, exec.id, 1)
+    assert {:error, _} =
+             ExecutionEvents.append(
+               Cyfr.Actor.in_athanor("ath_elsewhere"),
+               exec.id,
+               "step.closed"
+             )
+
+    assert {:ok, []} = ExecutionEvents.since(Sanctum.Context.actor(ctx), exec.id, 1)
   end
 end

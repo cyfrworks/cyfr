@@ -312,7 +312,7 @@ defmodule Arca.Execution do
           end
 
         attempt =
-          Arca.ExecutionAttempts.open!(athanor_id, execution.id,
+          Arca.ExecutionAttempts.open!(Cyfr.Actor.in_athanor(athanor_id), execution.id,
             attempt: attempt_id,
             service_id: Keyword.get(opts, :service_id),
             boot_id: boot_id,
@@ -322,7 +322,12 @@ defmodule Arca.Execution do
 
         case Keyword.get(opts, :reservation) do
           %{budget_id: budget_id, cap: cap} ->
-            Arca.BudgetReservations.mint!(athanor_id, execution.id, budget_id, cap)
+            Arca.BudgetReservations.mint!(
+              Cyfr.Actor.in_athanor(athanor_id),
+              execution.id,
+              budget_id,
+              cap
+            )
 
           nil ->
             :ok
@@ -330,8 +335,12 @@ defmodule Arca.Execution do
 
         case Keyword.get(opts, :charge) do
           %{reservation_id: reservation_id, id: id} ->
-            if Arca.BudgetReservations.admit_hold!(athanor_id, reservation_id, id) != 1,
-              do: Arca.Repo.rollback(:hold_expired)
+            if Arca.BudgetReservations.admit_hold!(
+                 Cyfr.Actor.in_athanor(athanor_id),
+                 reservation_id,
+                 id
+               ) != 1,
+               do: Arca.Repo.rollback(:hold_expired)
 
           nil ->
             :ok
@@ -350,8 +359,12 @@ defmodule Arca.Execution do
           parent_attempt when is_binary(parent_attempt) ->
             parent_id = Map.fetch!(attrs, :parent_execution_id)
 
-            if Arca.ExecutionAttempts.hold_for_child!(athanor_id, parent_id, parent_attempt) != 1,
-              do: Arca.Repo.rollback(:parent_ended)
+            if Arca.ExecutionAttempts.hold_for_child!(
+                 Cyfr.Actor.in_athanor(athanor_id),
+                 parent_id,
+                 parent_attempt
+               ) != 1,
+               do: Arca.Repo.rollback(:parent_ended)
 
           nil ->
             :ok
@@ -361,15 +374,22 @@ defmodule Arca.Execution do
 
         case Keyword.get(opts, :occurrence_id) do
           occurrence_id when is_binary(occurrence_id) ->
-            if Arca.ScheduleOccurrences.start!(athanor_id, occurrence_id, execution.id) != 1,
-              do: Arca.Repo.rollback(:occurrence_not_claimed)
+            if Arca.ScheduleOccurrences.start!(
+                 Cyfr.Actor.in_athanor(athanor_id),
+                 occurrence_id,
+                 execution.id
+               ) != 1,
+               do: Arca.Repo.rollback(:occurrence_not_claimed)
 
           nil ->
             :ok
         end
 
         event =
-          Arca.ExecutionEvents.append!(athanor_id, execution.id, "execution.started",
+          Arca.ExecutionEvents.append!(
+            Cyfr.Actor.in_athanor(athanor_id),
+            execution.id,
+            "execution.started",
             data: %{"attempt" => attempt_id}
           )
 
@@ -791,7 +811,7 @@ defmodule Arca.Execution do
               # (`execution.lapsed`) or failed by its parent's end.
               event =
                 Arca.ExecutionEvents.append!(
-                  execution.athanor_id,
+                  Cyfr.Actor.in_athanor(execution.athanor_id),
                   id,
                   Keyword.get(fence, :event, "execution.failed"),
                   data: %{"status" => "failed", "error" => attrs[:error_message]}
@@ -851,7 +871,12 @@ defmodule Arca.Execution do
 
         if owner &&
              is_nil(
-               Arca.ExecutionAttempts.close!(execution.athanor_id, owner, attempt_state, outcome)
+               Arca.ExecutionAttempts.close!(
+                 Cyfr.Actor.in_athanor(execution.athanor_id),
+                 owner,
+                 attempt_state,
+                 outcome
+               )
              ),
            do: Arca.Repo.rollback(:not_running)
 
@@ -864,7 +889,7 @@ defmodule Arca.Execution do
 
         event =
           Arca.ExecutionEvents.append!(
-            execution.athanor_id,
+            Cyfr.Actor.in_athanor(execution.athanor_id),
             id,
             lifecycle_type(status, Map.get(attrs, :outcome)),
             data:
@@ -931,7 +956,14 @@ defmodule Arca.Execution do
   end
 
   defp retire_attempt(execution, attempt, nil) do
-    not is_nil(Arca.ExecutionAttempts.close!(execution.athanor_id, attempt, "failed", "error"))
+    not is_nil(
+      Arca.ExecutionAttempts.close!(
+        Cyfr.Actor.in_athanor(execution.athanor_id),
+        attempt,
+        "failed",
+        "error"
+      )
+    )
   end
 
   # Fence a write on the attempt that owns the row. A nil attempt adds no

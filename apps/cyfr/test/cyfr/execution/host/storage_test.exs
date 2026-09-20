@@ -121,7 +121,11 @@ defmodule Cyfr.Execution.Host.StorageTest do
   defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
 
   defp intents(fixture),
-    do: Arca.ExecutionAttempts.write_intents(fixture.athanor_id, fixture.attempt)
+    do:
+      Arca.ExecutionAttempts.write_intents(
+        Cyfr.Actor.in_athanor(fixture.athanor_id),
+        fixture.attempt
+      )
 
   describe "storage" do
     test "a validly signed operation outside the consented scope is refused on CYFR and writes nothing" do
@@ -192,7 +196,9 @@ defmodule Cyfr.Execution.Host.StorageTest do
       taken = attached(["data/"])
 
       {:ok, _successor} =
-        Arca.ExecutionAttempts.takeover(taken.athanor_id, taken.execution_id,
+        Arca.ExecutionAttempts.takeover(
+          Cyfr.Actor.in_athanor(taken.athanor_id),
+          taken.execution_id,
           boot_id: Cyfr.Boot.id(),
           lease_until: Arca.ExecutionAttempts.lease_until()
         )
@@ -263,7 +269,9 @@ defmodule Cyfr.Execution.Host.StorageTest do
       assert_receive {:gated, :host_storage_put_gate, putter}, 5_000
 
       {:ok, %{attempt: %{fence: 2}}} =
-        Arca.ExecutionAttempts.takeover(fixture.athanor_id, fixture.execution_id,
+        Arca.ExecutionAttempts.takeover(
+          Cyfr.Actor.in_athanor(fixture.athanor_id),
+          fixture.execution_id,
           boot_id: Cyfr.Boot.id(),
           lease_until: Arca.ExecutionAttempts.lease_until()
         )

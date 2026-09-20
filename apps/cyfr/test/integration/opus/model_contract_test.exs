@@ -400,7 +400,8 @@ defmodule Opus.ModelContractTest do
     assert [%{input: 10, output: 5}, %{input: 30, output: 13}, %{input: 60, output: 15}] =
              for({:usage, totals} <- played.seen.thread, do: totals)
 
-    assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, played.turn.budget_id)
+    assert {:ok, []} =
+             Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), played.turn.budget_id)
 
     # Each call passed the gate, which keeps a row of it with what it was
     # asked; the rows close behind the calls.
@@ -1003,7 +1004,9 @@ defmodule Opus.ModelContractTest do
   end
 
   defp turn_events(ctx, played, type, step_id) do
-    {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, played.turn.root_execution_id, 0)
+    {:ok, rows} =
+      Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), played.turn.root_execution_id, 0)
+
     for %{type: ^type, step_id: ^step_id} = row <- rows, do: Arca.ExecutionEvents.data(row)
   end
 

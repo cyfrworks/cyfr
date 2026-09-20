@@ -279,7 +279,9 @@ defmodule Opus.OrphanChildrenTest do
   defp raw(output, key), do: output |> decoded() |> Map.fetch!(key) |> Jason.decode!()
 
   defp charges(ctx, authority) do
-    {:ok, charges} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
+    {:ok, charges} =
+      Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), authority.budget.id)
+
     charges
   end
 end

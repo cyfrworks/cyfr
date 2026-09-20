@@ -53,7 +53,8 @@ defmodule Arca.ProvisioningClaims do
   @spec claim(Cyfr.Actor.t(), String.t(), String.t(), pos_integer()) ::
           {:ok, ProvisioningClaim.t()} | {:busy, ProvisioningClaim.t()} | refusal()
   def claim(%Cyfr.Actor{athanor_id: athanor_id}, owner, entry_kind, lease_ms)
-      when is_binary(athanor_id) and is_binary(owner) and is_binary(entry_kind) and
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and
+             is_binary(entry_kind) and
              is_integer(lease_ms) and lease_ms > 0 do
     if entry_kind not in ProvisioningClaim.entry_kinds(),
       do: raise(ArgumentError, "unknown provisioning entry kind #{inspect(entry_kind)}")
@@ -69,7 +70,7 @@ defmodule Arca.ProvisioningClaims do
   @spec renew(Cyfr.Actor.t(), String.t(), pos_integer(), pos_integer()) ::
           :ok | :stale | refusal()
   def renew(%Cyfr.Actor{athanor_id: athanor_id}, owner, fence, lease_ms)
-      when is_binary(athanor_id) and is_binary(owner) and is_integer(fence) and
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) and
              is_integer(lease_ms) and lease_ms > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.renew", fn ->
       now = now()
@@ -91,7 +92,7 @@ defmodule Arca.ProvisioningClaims do
   @spec settle(Cyfr.Actor.t(), String.t(), pos_integer(), String.t(), String.t() | nil) ::
           :ok | :stale | refusal()
   def settle(%Cyfr.Actor{athanor_id: athanor_id}, owner, fence, outcome, detail)
-      when is_binary(athanor_id) and is_binary(owner) and is_integer(fence) and
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) and
              is_binary(outcome) and (is_binary(detail) or is_nil(detail)) do
     if outcome not in ProvisioningClaim.outcomes(),
       do: raise(ArgumentError, "unknown provisioning outcome #{inspect(outcome)}")
@@ -114,7 +115,8 @@ defmodule Arca.ProvisioningClaims do
   @doc "The athanor's claim row as it reads now."
   @spec current(Cyfr.Actor.t()) ::
           {:ok, ProvisioningClaim.t()} | {:error, :not_found} | refusal()
-  def current(%Cyfr.Actor{athanor_id: athanor_id}) when is_binary(athanor_id) do
+  def current(%Cyfr.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.current", fn ->
       case read(athanor_id) do
         nil -> {:error, :not_found}

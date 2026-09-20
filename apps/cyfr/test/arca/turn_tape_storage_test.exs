@@ -264,7 +264,8 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:error, :not_open} =
                TurnStorage.close_step(ctx, call_step.id, "ok", %{fence: turn.fence})
 
-      assert {:ok, events} = Arca.ExecutionEvents.since(ctx.athanor_id, root.execution.id, 0)
+      assert {:ok, events} =
+               Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), root.execution.id, 0)
 
       assert Enum.map(events, & &1.type) ==
                ["execution.started", "turn.started", "model.completed", "step.closed"]
@@ -447,7 +448,10 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert paused.status == "paused" and paused.paused_reason == "approval"
       assert paused.active_ms >= 15
-      assert %{state: "paused"} = ExecutionAttempts.get(ctx.athanor_id, root.attempt.attempt)
+
+      assert %{state: "paused"} =
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), root.attempt.attempt)
+
       assert execution(root.execution.id).status == "paused"
 
       # Neither the sweeper nor retention sees a paused root.
@@ -461,7 +465,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert resumed.status == "running" and is_nil(resumed.paused_reason)
 
       assert %{state: "running", running_since: %DateTime{}} =
-               ExecutionAttempts.get(ctx.athanor_id, root.attempt.attempt)
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), root.attempt.attempt)
 
       assert execution(root.execution.id).status == "running"
     end
@@ -476,12 +480,12 @@ defmodule Arca.TurnTapeStorageTest do
       assert %DateTime{} = done.ended_at
 
       assert %{state: "completed", outcome: "ok"} =
-               ExecutionAttempts.get(ctx.athanor_id, root.attempt.attempt)
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), root.attempt.attempt)
 
       assert execution(root.execution.id).status == "completed"
 
       assert %{released_at: %DateTime{}} =
-               Arca.BudgetReservations.lookup(ctx.athanor_id, root.budget_id)
+               Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), root.budget_id)
 
       assert {:error, :already_finished} =
                TurnStorage.finish(ctx, turn.id, "failed", %{fence: turn.fence})
@@ -500,7 +504,7 @@ defmodule Arca.TurnTapeStorageTest do
                TurnStorage.finish(ctx, t3.id, "uncertain", %{error: "restart", fence: t3.fence})
 
       assert %{state: "failed", outcome: "uncertain"} =
-               ExecutionAttempts.get(ctx.athanor_id, root3.attempt.attempt)
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), root3.attempt.attempt)
 
       assert execution(root3.execution.id).status == "failed"
     end
@@ -782,7 +786,9 @@ defmodule Arca.TurnTapeStorageTest do
 
       # The root and its attempt left running with the turn.
       assert execution(root.execution.id).status == "paused"
-      assert %{state: "paused"} = ExecutionAttempts.get(ctx.athanor_id, root.attempt.attempt)
+
+      assert %{state: "paused"} =
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), root.attempt.attempt)
 
       assert TurnStorage.unacknowledged_episode?(ctx, turn.id)
       assert TurnStorage.restricted?(ctx, turn.id)
@@ -843,7 +849,10 @@ defmodule Arca.TurnTapeStorageTest do
       assert paused.status == "paused" and paused.paused_reason == "uncertain"
       assert paused.attempt != root.attempt.attempt and paused.fence != turn.fence
       assert paused.recovery_attempts == turn.recovery_attempts
-      assert %{state: "paused"} = ExecutionAttempts.get(ctx.athanor_id, paused.attempt)
+
+      assert %{state: "paused"} =
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), paused.attempt)
+
       assert execution(root.execution.id).status == "paused"
 
       {:ok, steps} = TurnStorage.steps(ctx, turn.id)

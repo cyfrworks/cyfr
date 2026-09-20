@@ -219,7 +219,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
                Jason.decode!(row.input)
 
       assert %{state: "failed", outcome: "error"} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, row.id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), row.id)
 
       Emissary.MCP.ExternalServerSupervisor.stop("rowed", ctx.athanor_id)
     end
@@ -421,7 +421,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
                Arca.Repo.get(Arca.Execution, id)
 
       assert %{state: "failed", outcome: "result_lost"} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
 
       assert {:error, :not_found} = Arca.ExecutionPayloads.get(ctx, id, "result")
       GenServer.stop(pid)

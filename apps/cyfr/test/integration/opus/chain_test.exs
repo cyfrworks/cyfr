@@ -739,12 +739,21 @@ defmodule Opus.ChainTest do
         )
 
       assert Sanctum.Authority.budget(auth).in_flight == 0
-      assert %{charged: 0} = Arca.BudgetReservations.lookup(ctx.athanor_id, auth.budget.id)
-      assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, auth.budget.id)
+
+      assert %{charged: 0} =
+               Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), auth.budget.id)
+
+      assert {:ok, []} =
+               Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), auth.budget.id)
 
       # A full reservation refuses the run and gives the slot back.
       :ok =
-        Arca.BudgetReservations.charge(ctx.athanor_id, auth.budget.id, %{charge | id: "other"}, 1)
+        Arca.BudgetReservations.charge(
+          Sanctum.Context.actor(ctx),
+          auth.budget.id,
+          %{charge | id: "other"},
+          1
+        )
 
       assert {:error, {:invoke_denied, :invoke_budget_exhausted}} =
                Cyfr.Execution.run_child(
@@ -784,7 +793,7 @@ defmodule Opus.ChainTest do
         holder_execution_id: child_id
       }
 
-      :ok = Arca.BudgetReservations.charge(ctx.athanor_id, auth.budget.id, charge, 1)
+      :ok = Arca.BudgetReservations.charge(Sanctum.Context.actor(ctx), auth.budget.id, charge, 1)
       past = DateTime.add(DateTime.utc_now(), -1, :second)
 
       {1, _} =

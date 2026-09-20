@@ -301,7 +301,7 @@ defmodule Cyfr.Execution.TurnRoot do
   # holder registered, and one that ended before is seen here. A row that
   # cannot be read is refused `:unavailable`, the slot given back.
   defp hold_live(ctx, execution_id, attempt, token) do
-    case Arca.ExecutionAttempts.current(ctx.athanor_id, execution_id) do
+    case Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), execution_id) do
       %Arca.Schemas.ExecutionAttempt{attempt: ^attempt, state: "running"} ->
         {:ok, token}
 

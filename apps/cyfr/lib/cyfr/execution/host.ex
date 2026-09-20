@@ -259,7 +259,7 @@ defmodule Cyfr.Execution.Host do
 
   defp claim(caller) do
     case Arca.ExecutionAttempts.claim(
-           caller.athanor_id,
+           Cyfr.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
            caller.fence,
            caller.runner
@@ -276,7 +276,11 @@ defmodule Cyfr.Execution.Host do
   defp renew(caller, attempt) do
     holder = %{service_id: caller.service, boot_id: caller.boot, runner: caller.runner}
 
-    case Arca.ExecutionAttempts.renew_held(caller.athanor_id, attempt, holder) do
+    case Arca.ExecutionAttempts.renew_held(
+           Cyfr.Actor.in_athanor(caller.athanor_id),
+           attempt,
+           holder
+         ) do
       {:ok, until} -> {:ok, {:ok, DateTime.to_unix(until, :millisecond)}}
       :lost -> {:ok, :lost}
       {:error, _reason} -> :unavailable

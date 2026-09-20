@@ -12,6 +12,12 @@ defmodule Arca.ExecutionEvents do
   order. Ephemeral deltas never take a durable number: they ride a
   sub-sequence under the last durable seq and are never replayed.
   Token deltas are not written here.
+
+  Every function that names an athanor takes the `Cyfr.Actor` first and
+  matches it in its head; an actor whose athanor is nil or the empty
+  string is refused before any query, as `{:error, :no_athanor}` from an
+  entry point and as a raise from `append!/4`, which runs inside a
+  caller's transaction.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -30,10 +36,12 @@ defmodule Arca.ExecutionEvents do
   `:data` (a map, stored as JSON). Raises when the execution is not the
   athanor's.
   """
-  @spec append!(String.t(), String.t(), String.t(), keyword()) :: ExecutionEvent.t()
+  @spec append!(Cyfr.Actor.t(), String.t(), String.t(), keyword()) :: ExecutionEvent.t()
+  def append!(actor, execution_id, type, opts \\ [])
+
   # arca:db-raise-ok inside the caller's transaction
-  def append!(athanor_id, execution_id, type, opts \\ [])
-      when is_binary(athanor_id) and is_binary(type) do
+  def append!(%Cyfr.Actor{athanor_id: athanor_id}, execution_id, type, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(type) do
     {count, _} =
       from(e in Arca.Execution, where: e.id == ^execution_id and e.athanor_id == ^athanor_id)
       |> Arca.Repo.update_all(inc: [event_seq: 1])
@@ -61,20 +69,30 @@ defmodule Arca.ExecutionEvents do
     })
   end
 
+  def append!(%Cyfr.Actor{}, _execution_id, _type, _opts),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ExecutionEvents.append!/4")
+
   @doc "Entry-point form of `append!/4`."
-  @spec append(String.t(), String.t(), String.t(), keyword()) ::
+  @spec append(Cyfr.Actor.t(), String.t(), String.t(), keyword()) ::
           {:ok, ExecutionEvent.t()} | {:error, term()}
-  def append(athanor_id, execution_id, type, opts \\ []) do
+  def append(actor, execution_id, type, opts \\ [])
+
+  def append(%Cyfr.Actor{athanor_id: athanor_id} = actor, execution_id, type, opts)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionEvents.append", fn ->
-      Arca.Repo.transaction(fn -> append!(athanor_id, execution_id, type, opts) end)
+      Arca.Repo.transaction(fn -> append!(actor, execution_id, type, opts) end)
     end)
   end
 
+  def append(%Cyfr.Actor{}, _execution_id, _type, _opts), do: {:error, :no_athanor}
+
   @doc "The events of an execution after `after_seq`, in order, at most `limit`."
-  @spec since(String.t(), String.t(), non_neg_integer(), pos_integer()) ::
+  @spec since(Cyfr.Actor.t(), String.t(), non_neg_integer(), pos_integer()) ::
           {:ok, [ExecutionEvent.t()]} | {:error, term()}
-  def since(athanor_id, execution_id, after_seq, limit \\ 500)
-      when is_binary(athanor_id) and is_integer(after_seq) do
+  def since(actor, execution_id, after_seq, limit \\ 500)
+
+  def since(%Cyfr.Actor{athanor_id: athanor_id}, execution_id, after_seq, limit)
+      when is_binary(athanor_id) and athanor_id != "" and is_integer(after_seq) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionEvents.since", fn ->
       {:ok,
        Arca.Repo.all(
@@ -87,6 +105,8 @@ defmodule Arca.ExecutionEvents do
        )}
     end)
   end
+
+  def since(%Cyfr.Actor{}, _execution_id, _after_seq, _limit), do: {:error, :no_athanor}
 
   @doc "The decoded `data` of an event row, or an empty map."
   @spec data(ExecutionEvent.t()) :: map()

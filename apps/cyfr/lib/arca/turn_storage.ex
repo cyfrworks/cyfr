@@ -281,7 +281,7 @@ defmodule Arca.TurnStorage do
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status != "running", do: Arca.Repo.rollback(:not_running)
 
-        ran = Arca.ExecutionAttempts.pause!(athanor_id, turn.attempt) || 0
+        ran = Arca.ExecutionAttempts.pause!(Cyfr.Actor.in_athanor(athanor_id), turn.attempt) || 0
         execution_status!(athanor_id, turn.root_execution_id, "running", "paused")
         now = DateTime.utc_now()
 
@@ -321,8 +321,9 @@ defmodule Arca.TurnStorage do
 
         until = Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until()
 
-        if Arca.ExecutionAttempts.resume!(athanor_id, turn.attempt, until) != 1,
-          do: Arca.Repo.rollback(:attempt_not_paused)
+        if Arca.ExecutionAttempts.resume!(Cyfr.Actor.in_athanor(athanor_id), turn.attempt, until) !=
+             1,
+           do: Arca.Repo.rollback(:attempt_not_paused)
 
         execution_status!(athanor_id, turn.root_execution_id, "paused", "running")
 
@@ -394,7 +395,13 @@ defmodule Arca.TurnStorage do
         ran =
           if turn.attempt do
             {attempt_state, outcome} = attempt_end(status)
-            Arca.ExecutionAttempts.close!(athanor_id, turn.attempt, attempt_state, outcome) || 0
+
+            Arca.ExecutionAttempts.close!(
+              Cyfr.Actor.in_athanor(athanor_id),
+              turn.attempt,
+              attempt_state,
+              outcome
+            ) || 0
           else
             0
           end
@@ -408,7 +415,10 @@ defmodule Arca.TurnStorage do
             error: Map.get(attrs, :error)
           )
 
-          Arca.BudgetReservations.close!(athanor_id, turn.root_execution_id)
+          Arca.BudgetReservations.close!(
+            Cyfr.Actor.in_athanor(athanor_id),
+            turn.root_execution_id
+          )
         end
 
         {1, _} =
@@ -455,7 +465,9 @@ defmodule Arca.TurnStorage do
         if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
 
         %{attempt: successor, ran_ms: ran} =
-          Arca.ExecutionAttempts.takeover!(athanor_id, turn.root_execution_id,
+          Arca.ExecutionAttempts.takeover!(
+            Cyfr.Actor.in_athanor(athanor_id),
+            turn.root_execution_id,
             boot_id: Cyfr.Boot.id(),
             lease_until: Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until()
           )
@@ -559,7 +571,10 @@ defmodule Arca.TurnStorage do
           ran =
             case turn do
               %Turn{status: "running"} ->
-                ran = Arca.ExecutionAttempts.pause!(athanor_id, turn.attempt) || 0
+                ran =
+                  Arca.ExecutionAttempts.pause!(Cyfr.Actor.in_athanor(athanor_id), turn.attempt) ||
+                    0
+
                 execution_status!(athanor_id, turn.root_execution_id, "running", "paused")
                 ran
 
@@ -620,12 +635,14 @@ defmodule Arca.TurnStorage do
           now = DateTime.utc_now()
 
           %{attempt: successor, ran_ms: ran} =
-            Arca.ExecutionAttempts.takeover!(athanor_id, turn.root_execution_id,
+            Arca.ExecutionAttempts.takeover!(
+              Cyfr.Actor.in_athanor(athanor_id),
+              turn.root_execution_id,
               boot_id: Cyfr.Boot.id(),
               lease_until: Arca.ExecutionAttempts.lease_until()
             )
 
-          _ = Arca.ExecutionAttempts.pause!(athanor_id, successor.attempt)
+          _ = Arca.ExecutionAttempts.pause!(Cyfr.Actor.in_athanor(athanor_id), successor.attempt)
 
           execution_status!(
             athanor_id,
@@ -1876,7 +1893,7 @@ defmodule Arca.TurnStorage do
   defp event!(_athanor_id, %Turn{root_execution_id: nil}, _type, _step_id, _data), do: :ok
 
   defp event!(athanor_id, %Turn{} = turn, type, step_id, data) do
-    Arca.ExecutionEvents.append!(athanor_id, turn.root_execution_id, type,
+    Arca.ExecutionEvents.append!(Cyfr.Actor.in_athanor(athanor_id), turn.root_execution_id, type,
       turn_id: turn.id,
       step_id: step_id,
       data: reject_nil(data)

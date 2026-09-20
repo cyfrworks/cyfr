@@ -41,7 +41,7 @@ defmodule Arca.BudgetReservationsTest do
 
   defp charge(ctx, budget, attempt, id, opts \\ []) do
     BudgetReservations.charge(
-      ctx.athanor_id,
+      Sanctum.Context.actor(ctx),
       budget,
       %{
         id: id,
@@ -54,7 +54,8 @@ defmodule Arca.BudgetReservationsTest do
     )
   end
 
-  defp charged(ctx, budget), do: BudgetReservations.lookup(ctx.athanor_id, budget).charged
+  defp charged(ctx, budget),
+    do: BudgetReservations.lookup(Sanctum.Context.actor(ctx), budget).charged
 
   defp child!(ctx, root, id) do
     {:ok, %{attempt: attempt}} =
@@ -85,11 +86,11 @@ defmodule Arca.BudgetReservationsTest do
     assert :ok = charge(ctx, budget, a, "c3")
     assert :exhausted = charge(ctx, budget, a, "c4")
     assert charged(ctx, budget) == 3
-    assert {:ok, rows} = BudgetReservations.charges(ctx.athanor_id, budget)
+    assert {:ok, rows} = BudgetReservations.charges(Sanctum.Context.actor(ctx), budget)
     assert Enum.map(rows, & &1.id) == ["c1", "c2", "c3"]
 
-    assert :ok = BudgetReservations.release(ctx.athanor_id, budget, "c2")
-    assert :ok = BudgetReservations.release(ctx.athanor_id, budget, "c2")
+    assert :ok = BudgetReservations.release(Sanctum.Context.actor(ctx), budget, "c2")
+    assert :ok = BudgetReservations.release(Sanctum.Context.actor(ctx), budget, "c2")
     assert charged(ctx, budget) == 2
     assert :ok = charge(ctx, budget, a, "c4")
   end
@@ -119,18 +120,24 @@ defmodule Arca.BudgetReservationsTest do
     budget: budget,
     attempt: attempt
   } do
-    {:ok, _} = ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "completed", "ok")
+    {:ok, _} =
+      ExecutionAttempts.close(Sanctum.Context.actor(ctx), attempt.attempt, "completed", "ok")
+
     assert :stale_attempt = charge(ctx, budget, attempt.attempt, "c1")
 
     {:ok, %{attempt: successor}} =
-      ExecutionAttempts.takeover(ctx.athanor_id, root.id,
+      ExecutionAttempts.takeover(Sanctum.Context.actor(ctx), root.id,
         boot_id: "b2",
         lease_until: ExecutionAttempts.lease_until()
       )
 
     assert :ok = charge(ctx, budget, successor.attempt, "c1")
 
-    {:ok, 1} = Arca.Repo.transaction(fn -> BudgetReservations.close!(ctx.athanor_id, root.id) end)
+    {:ok, 1} =
+      Arca.Repo.transaction(fn ->
+        BudgetReservations.close!(Sanctum.Context.actor(ctx), root.id)
+      end)
+
     assert :released = charge(ctx, budget, successor.attempt, "c2")
   end
 
@@ -149,19 +156,28 @@ defmodule Arca.BudgetReservationsTest do
         set: [admitted_at: DateTime.utc_now()]
       )
 
-    {:ok, _} = Arca.Repo.transaction(fn -> ExecutionAttempts.pause!(ctx.athanor_id, a) end)
-    assert {:ok, 0} = BudgetReservations.sweep(ctx.athanor_id)
+    {:ok, _} =
+      Arca.Repo.transaction(fn -> ExecutionAttempts.pause!(Sanctum.Context.actor(ctx), a) end)
+
+    assert {:ok, 0} = BudgetReservations.sweep(Sanctum.Context.actor(ctx))
     assert charged(ctx, budget) == 1
 
     # The holder ends: its failed release is repaired by the sweep.
-    {:ok, _} = ExecutionAttempts.close(ctx.athanor_id, child_attempt.attempt, "completed", "ok")
-    assert {:ok, 1} = BudgetReservations.sweep(ctx.athanor_id)
+    {:ok, _} =
+      ExecutionAttempts.close(
+        Sanctum.Context.actor(ctx),
+        child_attempt.attempt,
+        "completed",
+        "ok"
+      )
+
+    assert {:ok, 1} = BudgetReservations.sweep(Sanctum.Context.actor(ctx))
     assert charged(ctx, budget) == 0
 
     # A hold that never reached admission is dropped once its window
     # passed, and only then.
     :ok = charge(ctx, budget, a, "never", holder: "exec_never")
-    assert {:ok, 0} = BudgetReservations.sweep(ctx.athanor_id)
+    assert {:ok, 0} = BudgetReservations.sweep(Sanctum.Context.actor(ctx))
 
     {1, _} =
       Arca.Repo.update_all(
@@ -169,7 +185,7 @@ defmodule Arca.BudgetReservationsTest do
         set: [admit_by: DateTime.add(DateTime.utc_now(), -1, :second)]
       )
 
-    assert {:ok, 1} = BudgetReservations.sweep(ctx.athanor_id)
+    assert {:ok, 1} = BudgetReservations.sweep(Sanctum.Context.actor(ctx))
 
     # A charge with no holder goes with its deadline, or with its
     # authorizing attempt.
@@ -177,11 +193,13 @@ defmodule Arca.BudgetReservationsTest do
     future = DateTime.add(DateTime.utc_now(), 300, :second)
     :ok = charge(ctx, budget, a, "call_late", holder_deadline: past)
     :ok = charge(ctx, budget, a, "call_live", holder_deadline: future)
-    assert {:ok, 1} = BudgetReservations.sweep(ctx.athanor_id)
-    assert {:ok, [%{id: "call_live"}]} = BudgetReservations.charges(ctx.athanor_id, budget)
+    assert {:ok, 1} = BudgetReservations.sweep(Sanctum.Context.actor(ctx))
 
-    {:ok, _} = ExecutionAttempts.close(ctx.athanor_id, a, "completed", "ok")
-    assert {:ok, 1} = BudgetReservations.sweep(ctx.athanor_id)
+    assert {:ok, [%{id: "call_live"}]} =
+             BudgetReservations.charges(Sanctum.Context.actor(ctx), budget)
+
+    {:ok, _} = ExecutionAttempts.close(Sanctum.Context.actor(ctx), a, "completed", "ok")
+    assert {:ok, 1} = BudgetReservations.sweep(Sanctum.Context.actor(ctx))
     assert charged(ctx, budget) == 0
   end
 
@@ -195,8 +213,11 @@ defmodule Arca.BudgetReservationsTest do
     :ok = charge(ctx, budget, a, "call:t:1:c1:g1", generation: 1, holder: "exec_g1")
     assert charged(ctx, budget) == 2
 
-    assert :ok = BudgetReservations.release(ctx.athanor_id, budget, "call:t:1:c1:g0")
-    assert {:ok, [%{id: "call:t:1:c1:g1"}]} = BudgetReservations.charges(ctx.athanor_id, budget)
+    assert :ok = BudgetReservations.release(Sanctum.Context.actor(ctx), budget, "call:t:1:c1:g0")
+
+    assert {:ok, [%{id: "call:t:1:c1:g1"}]} =
+             BudgetReservations.charges(Sanctum.Context.actor(ctx), budget)
+
     assert charged(ctx, budget) == 1
   end
 end

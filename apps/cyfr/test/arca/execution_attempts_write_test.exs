@@ -58,14 +58,14 @@ defmodule Arca.ExecutionAttemptsWriteTest do
         input: "{}"
       })
 
-    :ok = ExecutionAttempts.claim(ctx.athanor_id, attempt.attempt, 1, @runner)
+    :ok = ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, @runner)
     {:ok, ctx: ctx, execution: execution, attempt: attempt.attempt}
   end
 
   # One write of the attempt at fence 1; `io` is the store call.
   defp write(%{ctx: ctx, attempt: attempt}, io, opts \\ []) do
     ExecutionAttempts.while_held(
-      ctx.athanor_id,
+      Sanctum.Context.actor(ctx),
       attempt,
       Keyword.get(opts, :fence, 1),
       @runner,
@@ -81,7 +81,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
   defp put(%{ctx: ctx}, bytes \\ "bytes"), do: fn -> Arca.put(ctx, @path, bytes) end
 
   defp intents(%{ctx: ctx, attempt: attempt}),
-    do: ExecutionAttempts.write_intents(ctx.athanor_id, attempt)
+    do: ExecutionAttempts.write_intents(Sanctum.Context.actor(ctx), attempt)
 
   defp states(test), do: for(i <- intents(test), do: {i.state, i.reason})
 
@@ -100,7 +100,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
 
   defp takeover!(%{ctx: ctx, execution: execution}) do
     {:ok, %{attempt: successor}} =
-      ExecutionAttempts.takeover(ctx.athanor_id, execution.id,
+      ExecutionAttempts.takeover(Sanctum.Context.actor(ctx), execution.id,
         boot_id: Cyfr.Boot.id(),
         lease_until: ExecutionAttempts.lease_until()
       )
@@ -285,7 +285,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(test)
 
       %{attempt: next, fence: 2} = Agent.get(successor, & &1)
-      :ok = ExecutionAttempts.claim(test.ctx.athanor_id, next, 2, @runner)
+      :ok = ExecutionAttempts.claim(Sanctum.Context.actor(test.ctx), next, 2, @runner)
 
       assert {:ok, {:confirmed, :ok}} = write(%{test | attempt: next}, put(test, "new"), fence: 2)
       assert {:ok, "new"} = Arca.get(test.ctx, @path)
@@ -342,7 +342,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       assert {:ok, {:uncertain, :unknown_outcome}} = write(test, fn -> {:error, :unknown} end)
       assert [{"uncertain", "unknown_outcome"}] = states(test)
 
-      assert ExecutionAttempts.held?(test.ctx.athanor_id, test.attempt, 1, @runner)
+      assert ExecutionAttempts.held?(Sanctum.Context.actor(test.ctx), test.attempt, 1, @runner)
       assert {:ok, {:confirmed, :ok}} = write(test, put(test))
     end
 
@@ -474,11 +474,11 @@ defmodule Arca.ExecutionAttemptsWriteTest do
   test "an intent is another estate's to neither read nor settle", test do
     assert {:ok, {:confirmed, :ok}} = write(test, put(test))
 
-    assert [] = ExecutionAttempts.write_intents("ath_gamma", test.attempt)
+    assert [] = ExecutionAttempts.write_intents(Cyfr.Actor.in_athanor("ath_gamma"), test.attempt)
 
     assert {:error, :lost} =
              ExecutionAttempts.while_held(
-               "ath_gamma",
+               Cyfr.Actor.in_athanor("ath_gamma"),
                test.attempt,
                1,
                @runner,

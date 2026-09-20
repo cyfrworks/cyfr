@@ -105,6 +105,20 @@ defmodule Arca.QueryHelpers do
   end
 
   @doc """
+  The refusal a `!` entry point owes an actor with no resolved athanor.
+
+  A `!` function runs inside a caller's transaction and answers a value,
+  not a tagged tuple, so it has no `{:error, :no_athanor}` to give: it
+  raises here instead, before any query, and the caller's transaction
+  rolls back. Entry points that already answer tagged tuples refuse with
+  `{:error, :no_athanor}` and never reach this.
+  """
+  @spec no_athanor!(String.t()) :: no_return()
+  def no_athanor!(fun) when is_binary(fun) do
+    raise ArgumentError, "#{fun}: a resolved athanor is required, got an actor carrying none"
+  end
+
+  @doc """
   Conditionally add a key-value pair to a keyword list.
   Returns the keyword list unchanged if the value is nil.
   """

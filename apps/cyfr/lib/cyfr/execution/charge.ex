@@ -52,8 +52,8 @@ defmodule Cyfr.Execution.Charge do
   @spec take(Authority.t(), keyword()) :: :ok | {:error, term()}
   def take(%Authority{budget: budget}, opts) do
     with %{id: _} = charge <- Keyword.get(opts, :charge),
-         athanor_id when is_binary(athanor_id) <- athanor_of(opts) do
-      case Arca.BudgetReservations.charge(athanor_id, budget.id, charge, 1) do
+         %Cyfr.Actor{} = actor <- actor_of(opts) do
+      case Arca.BudgetReservations.charge(actor, budget.id, charge, 1) do
         :ok ->
           :ok
 
@@ -70,18 +70,21 @@ defmodule Cyfr.Execution.Charge do
   @spec give_back(Authority.t(), keyword()) :: :ok
   def give_back(%Authority{budget: budget}, opts) do
     with %{id: id} <- Keyword.get(opts, :charge),
-         athanor_id when is_binary(athanor_id) <- athanor_of(opts) do
-      Arca.BudgetReservations.release(athanor_id, budget.id, id)
+         %Cyfr.Actor{} = actor <- actor_of(opts) do
+      Arca.BudgetReservations.release(actor, budget.id, id)
       :ok
     else
       _ -> :ok
     end
   end
 
-  defp athanor_of(opts) do
+  defp actor_of(opts) do
     case Keyword.get(opts, :ctx) do
-      %Sanctum.Context{athanor_id: athanor_id} -> athanor_id
-      _ -> nil
+      %Sanctum.Context{athanor_id: athanor_id} = ctx when is_binary(athanor_id) ->
+        Sanctum.Context.actor(ctx)
+
+      _ ->
+        nil
     end
   end
 

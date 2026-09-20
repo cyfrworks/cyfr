@@ -33,7 +33,11 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
   end
 
   defp durable!(exec, type, data) do
-    {:ok, row} = Arca.ExecutionEvents.append(exec.athanor_id, exec.id, type, data: data)
+    {:ok, row} =
+      Arca.ExecutionEvents.append(Cyfr.Actor.in_athanor(exec.athanor_id), exec.id, type,
+        data: data
+      )
+
     row.seq
   end
 

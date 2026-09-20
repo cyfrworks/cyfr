@@ -128,7 +128,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
   end
 
   defp occurrences(ctx, schedule) do
-    {:ok, rows} = ScheduleOccurrences.list(ctx, schedule.id)
+    {:ok, rows} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), schedule.id)
     rows
   end
 
@@ -277,7 +277,9 @@ defmodule Cyfr.Schedules.SchedulerTest do
              Arca.Repo.all(Arca.Execution)
 
     assert schedule_id == schedule.id
-    assert %{state: "completed"} = Arca.ExecutionAttempts.current(ctx.athanor_id, execution_id)
+
+    assert %{state: "completed"} =
+             Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), execution_id)
 
     # The cursor moved past the occurrence, and the row counts the run.
     wait_until(fn -> match?({:ok, %{run_count: 1}}, CronSchedule.get_for_daemon(schedule.id)) end)
@@ -377,11 +379,18 @@ defmodule Cyfr.Schedules.SchedulerTest do
     scheduler!()
 
     wait_until(fn ->
-      match?({:ok, %{state: "completed"}}, ScheduleOccurrences.get(ctx, claimed.id))
+      match?(
+        {:ok, %{state: "completed"}},
+        ScheduleOccurrences.get(Sanctum.Context.actor(ctx), claimed.id)
+      )
     end)
 
-    assert {:ok, %{state: "uncertain"}} = ScheduleOccurrences.get(ctx, "occ_started")
-    assert {:ok, %{execution_id: execution_id}} = ScheduleOccurrences.get(ctx, claimed.id)
+    assert {:ok, %{state: "uncertain"}} =
+             ScheduleOccurrences.get(Sanctum.Context.actor(ctx), "occ_started")
+
+    assert {:ok, %{execution_id: execution_id}} =
+             ScheduleOccurrences.get(Sanctum.Context.actor(ctx), claimed.id)
+
     assert [%{execution_id: ^execution_id}] = ScriptedWorker.calls()
     # The cursor is untouched: recovery re-runs a claim, it never claims anew.
     assert [_, _] = occurrences(ctx, schedule)

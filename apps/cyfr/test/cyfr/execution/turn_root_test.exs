@@ -134,10 +134,12 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert is_binary(row.activation_digest)
     assert row.current_attempt == claim.attempt
     assert row.turn_id == turn.id
-    assert %{fence: 1, state: "running"} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+
+    assert %{fence: 1, state: "running"} =
+             ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
 
     assert %{cap: cap, released_at: nil} =
-             Arca.BudgetReservations.lookup(ctx.athanor_id, claim.budget_id)
+             Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), claim.budget_id)
 
     assert cap == claim.authority.budget.cap
     assert roots() == before + 1
@@ -249,7 +251,7 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert roots() == before
     refute Process.alive?(claim.keeper)
     assert execution(claim.execution_id).status == "paused"
-    assert %{state: "paused"} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+    assert %{state: "paused"} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
 
     # A lapsed lease on a paused attempt is nobody's business: neither the
     # sweeper nor retention touches it.
@@ -285,7 +287,7 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert roots_while == before + 1
     assert resumed.turn.status == "running"
     assert execution(claim.execution_id).status == "running"
-    attempt = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+    attempt = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
     assert attempt.state == "running"
     assert DateTime.compare(attempt.lease_until, DateTime.utc_now()) == :gt
 
@@ -325,10 +327,10 @@ defmodule Cyfr.Execution.TurnRootTest do
       assert roots() == before + 1
       assert execution(claim.execution_id).status == "running"
 
-      %{lease_until: seen} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+      %{lease_until: seen} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
 
       wait_until(fn ->
-        %{lease_until: now} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+        %{lease_until: now} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
         DateTime.compare(now, seen) == :gt
       end)
 
@@ -392,7 +394,8 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert roots() == before + 1
 
     # The attempt is retired underneath the holder.
-    {:ok, _} = ExecutionAttempts.close(ctx.athanor_id, claim.attempt, "failed", "error")
+    {:ok, _} =
+      ExecutionAttempts.close(Sanctum.Context.actor(ctx), claim.attempt, "failed", "error")
 
     assert_receive {:DOWN, ^ref, :process, ^holder, {:lease_lost, id}}, 5_000
     assert id == claim.execution_id
@@ -433,7 +436,8 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert_receive {:resumed, resumed}, 10_000
     assert roots() == before + 1
 
-    {:ok, _} = ExecutionAttempts.close(ctx.athanor_id, resumed.attempt, "failed", "error")
+    {:ok, _} =
+      ExecutionAttempts.close(Sanctum.Context.actor(ctx), resumed.attempt, "failed", "error")
 
     assert_receive {:DOWN, ^ref, :process, ^holder, {:lease_lost, id}}, 5_000
     assert id == claim.execution_id
@@ -723,7 +727,7 @@ defmodule Cyfr.Execution.TurnRootTest do
 
     :ok = Cyfr.Execution.Sweeper.sweep()
     assert execution(claim.execution_id).status == "failed"
-    assert %{state: "lapsed"} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+    assert %{state: "lapsed"} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
 
     {:ok, taken} = TurnStorage.takeover(ctx, turn.id, %{fence: started.fence})
     assert taken.attempt != claim.attempt
@@ -737,7 +741,7 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert Process.alive?(adopted.keeper)
     Process.sleep(120)
     # The keeper renews the successor's lease, not the predecessor's.
-    assert %{state: "running"} = ExecutionAttempts.get(ctx.athanor_id, taken.attempt)
+    assert %{state: "running"} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), taken.attempt)
     assert Process.alive?(self())
 
     {:ok, _} = TurnStorage.finish(ctx, turn.id, "uncertain", %{fence: taken.fence})

@@ -343,7 +343,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
   end
 
   defp event_rows(ctx, id) do
-    {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, id, 0)
+    {:ok, rows} = Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), id, 0)
     Enum.map(rows, &%{type: &1.type, data: Arca.ExecutionEvents.data(&1)})
   end
 

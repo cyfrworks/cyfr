@@ -548,7 +548,8 @@ defmodule Arca.ExecutionTest do
                  live
                )
 
-      assert %{state: "completed", outcome: "ok"} = Arca.ExecutionAttempts.get(@athanor, live)
+      assert %{state: "completed", outcome: "ok"} =
+               Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(@athanor), live)
     end
 
     test "a renewed lease takes an execution out of the sweep" do
@@ -594,7 +595,7 @@ defmodule Arca.ExecutionTest do
                )
 
       assert %{state: "lapsed", outcome: "uncertain"} =
-               Arca.ExecutionAttempts.get(@athanor, attempt)
+               Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(@athanor), attempt)
 
       assert Arca.Repo.get!(Execution, id).status == "failed"
     end
