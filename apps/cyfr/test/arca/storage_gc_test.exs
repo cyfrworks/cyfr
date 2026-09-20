@@ -223,7 +223,7 @@ defmodule Arca.StorageGCTest do
 
   defp start_build(ctx) do
     id = Cyfr.UUID7.build_id()
-    :ok = Cyfr.BuildRecords.record_started(ctx, id, "c:local.gc:1.0.0")
+    :ok = Arca.BuildRecords.record_started(Sanctum.Context.actor(ctx), id, "c:local.gc:1.0.0")
     id
   end
 
@@ -356,7 +356,9 @@ defmodule Arca.StorageGCTest do
       assert MapSet.size(pins) == 1
       assert {:ok, %{collected: 0}} = StorageGC.sweep(actor, now: now)
 
-      :ok = Cyfr.BuildRecords.record_finished(ctx, build, "failed", "stopped")
+      :ok =
+        Arca.BuildRecords.record_finished(Sanctum.Context.actor(ctx), build, "failed", "stopped")
+
       assert {:ok, %{collected: 1}} = StorageGC.sweep(actor, now: now)
       assert staged(ctx, unit) == %{}
       assert served(ctx, unit) == whole("two")

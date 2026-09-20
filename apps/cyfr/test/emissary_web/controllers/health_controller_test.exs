@@ -49,6 +49,36 @@ defmodule EmissaryWeb.HealthControllerTest do
       assert hd(EmissaryWeb.HealthController.probe_dir()) in Arca.Storage.global_prefixes()
     end
 
+    test "an empty but reachable database is still ready", %{conn: conn} do
+      # A freshly migrated node has a schema and no rows. The probe asks
+      # the database for a value it computes itself, so "nothing stored
+      # yet" never reaches it — and a healthy node stays in rotation.
+      Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+      Arca.Repo.delete_all(Arca.Schemas.BuildRecord)
+
+      response = json_response(get(conn, "/api/health/ready"), 200)
+      assert response["status"] == "ready"
+      assert response["checks"]["database"] == "ok"
+    end
+
+    test "an unreachable database is 503 not_ready, and says so", %{conn: conn} do
+      # The pool will hand this process nothing, which is what a database
+      # the node cannot reach looks like from here. What must not happen is
+      # a 200 or the word "ready": either one puts a broken node back in
+      # front of traffic.
+      Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+
+      on_exit(fn ->
+        Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+      end)
+
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
+
+      response = json_response(get(conn, "/api/health/ready"), 503)
+      assert response["status"] == "not_ready"
+      assert response["checks"]["database"] == "failed"
+    end
+
     test "a stranded probe key is overwritten, not accumulated", %{conn: conn} do
       # The probe writes ONE fixed key and deletes it — a past failed
       # delete strands at most one object, reclaimed by the next probe's

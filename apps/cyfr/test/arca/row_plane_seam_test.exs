@@ -32,11 +32,11 @@ defmodule Arca.RowPlaneSeamTest do
     apps/cyfr/lib/compendium
   )
 
-  # The liveness probe: readiness has to prove the database answers, and
-  # "ask a storage module to read something" would prove a table instead.
-  @allowed %{
-    "apps/cyfr/lib/emissary_web/controllers/health_controller.ex" => 1
-  }
+  # Empty, and it stays a roster rather than a constant: the readiness
+  # probe was the last surface reach, and it now asks `Arca.Health`,
+  # which owns what "the database answers" means. A file added back here
+  # carries the count of its calls and the line saying why they stay.
+  @allowed %{}
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
@@ -75,7 +75,7 @@ defmodule Arca.RowPlaneSeamTest do
            """
   end
 
-  test "the one allowed exception still needs its exception" do
+  test "a listed exception still needs its exception" do
     found = repo_calls()
 
     for {file, count} <- @allowed do

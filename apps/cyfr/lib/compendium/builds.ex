@@ -20,7 +20,7 @@ defmodule Compendium.Builds do
   ## A build's life
 
   `compile/3` runs a build on the caller's process and answers its result.
-  `start/3` records the build as started (`Cyfr.BuildRecords`), runs the
+  `start/3` records the build as started (`Arca.BuildRecords`), runs the
   same build under `Compendium.Builds.TaskSupervisor` and answers its id
   at once; the row then carries the outcome, and a build whose process
   ends before it recorded one is recorded as failed by a second process
@@ -44,9 +44,10 @@ defmodule Compendium.Builds do
 
   require Logger
 
+  alias Arca.BuildRecords
   alias Compendium.Builds.Client
   alias Compendium.ComponentPath
-  alias Cyfr.{BuilderProtocol, BuildRecords}
+  alias Cyfr.BuilderProtocol
   alias Sanctum.Context
 
   @supervisor Compendium.Builds.TaskSupervisor
@@ -103,9 +104,13 @@ defmodule Compendium.Builds do
   @doc "A started build's row, as `build.status` answers it."
   @spec status(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def status(%Context{} = ctx, build_id) when is_binary(build_id) do
-    case BuildRecords.get(ctx, build_id) do
+    case BuildRecords.get(Context.actor(ctx), build_id) do
       {:ok, record} -> {:ok, record}
       {:error, :not_found} -> {:error, {:not_found, "Build", build_id}}
+      # The store could not say. A build that exists and one that never
+      # did both read as this, so neither may be answered as "no such
+      # build" — the caller is told to look again, not that it is gone.
+      {:error, :database_error} -> {:error, :unavailable}
     end
   end
 
@@ -164,7 +169,7 @@ defmodule Compendium.Builds do
   # before it starts the build — but it lands in topic names and rows, so
   # its shape is bounded, and an id naming a build still in flight is
   # refused rather than refreshing that build's row under its subscriber
-  # (`Cyfr.BuildRecords.record_started/3` overwrites the caller's own row).
+  # (`Arca.BuildRecords.record_started/3` overwrites the caller's own row).
   defp settle_build_id(_ctx, nil), do: {:ok, Cyfr.UUID7.generate_id("build")}
 
   defp settle_build_id(ctx, id) when is_binary(id) do
@@ -172,7 +177,7 @@ defmodule Compendium.Builds do
       not Regex.match?(@build_id, id) ->
         {:error, {:invalid_argument, "build_id must be 1-64 characters of [A-Za-z0-9_-]"}}
 
-      match?({:ok, %{"status" => "started"}}, BuildRecords.get(ctx, id)) ->
+      match?({:ok, %{"status" => "started"}}, BuildRecords.get(Context.actor(ctx), id)) ->
         {:error, {:invalid_argument, "build_id names a build still in flight"}}
 
       true ->
@@ -188,7 +193,7 @@ defmodule Compendium.Builds do
   # ---------------------------------------------------------------------------
 
   defp run_recorded(%{ctx: ctx, build_id: build_id, reference: reference} = build) do
-    case BuildRecords.record_started(ctx, build_id, reference) do
+    case BuildRecords.record_started(Context.actor(ctx), build_id, reference) do
       :ok ->
         logger_metadata = Cyfr.LoggerContext.capture()
 
@@ -211,7 +216,7 @@ defmodule Compendium.Builds do
             )
 
             BuildRecords.record_finished(
-              ctx,
+              Context.actor(ctx),
               build_id,
               "failed",
               "the build could not be started"
@@ -226,14 +231,14 @@ defmodule Compendium.Builds do
   end
 
   defp record_outcome(%{ctx: ctx, build_id: build_id}, {:ok, result}),
-    do: BuildRecords.record_finished(ctx, build_id, "compiled", result)
+    do: BuildRecords.record_finished(Context.actor(ctx), build_id, "compiled", result)
 
   defp record_outcome(%{ctx: ctx, build_id: build_id}, {:error, reason}) do
     sentence =
       Cyfr.Ops.Error.render(reason) ||
         "The build failed for an unexpected reason — see the server log"
 
-    BuildRecords.record_finished(ctx, build_id, "failed", sentence)
+    BuildRecords.record_finished(Context.actor(ctx), build_id, "failed", sentence)
   end
 
   # A runner that is killed records nothing, and its row would read
@@ -263,9 +268,9 @@ defmodule Compendium.Builds do
   end
 
   defp close_unfinished(ctx, build_id) do
-    with {:ok, %{"status" => "started"}} <- BuildRecords.get(ctx, build_id) do
+    with {:ok, %{"status" => "started"}} <- BuildRecords.get(Context.actor(ctx), build_id) do
       BuildRecords.record_finished(
-        ctx,
+        Context.actor(ctx),
         build_id,
         "failed",
         "The build's process ended before its outcome was recorded"
@@ -649,7 +654,7 @@ defmodule Compendium.Builds do
               "indexed"
           end
 
-        BuildRecords.record_registration(ctx, build_id, outcome)
+        BuildRecords.record_registration(Context.actor(ctx), build_id, outcome)
       end)
 
     # A task the supervisor refused would leave the row reading
@@ -660,7 +665,7 @@ defmodule Compendium.Builds do
           inspect(reason)
       )
 
-      BuildRecords.record_registration(ctx, build_id, "failed")
+      BuildRecords.record_registration(Context.actor(ctx), build_id, "failed")
     end
 
     :ok

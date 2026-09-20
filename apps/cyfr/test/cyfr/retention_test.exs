@@ -280,7 +280,14 @@ defmodule Cyfr.RetentionTest do
     test "a build still running is never pruned", %{ctx: ctx} do
       # Keep the started build outside the retention rank but inside the grace window to exercise the status guard.
       now = DateTime.utc_now()
-      :ok = Cyfr.BuildRecords.record_started(ctx, "build_live", "reagent:local.test:0.1.0")
+
+      :ok =
+        Arca.BuildRecords.record_started(
+          Sanctum.Context.actor(ctx),
+          "build_live",
+          "reagent:local.test:0.1.0"
+        )
+
       pin_started_at("build_live", DateTime.add(now, -5, :minute))
 
       for i <- 1..4 do
@@ -300,7 +307,12 @@ defmodule Cyfr.RetentionTest do
       # abandoned row off "started" (a node restart mid-build, or a build
       # task that ended with its watcher). Excluding the status
       # outright made those rows immortal and `keep` stopped being a cap.
-      :ok = Cyfr.BuildRecords.record_started(ctx, "build_orphan", "reagent:local.test:0.1.0")
+      :ok =
+        Arca.BuildRecords.record_started(
+          Sanctum.Context.actor(ctx),
+          "build_orphan",
+          "reagent:local.test:0.1.0"
+        )
 
       {1, _} =
         Arca.Repo.update_all(
@@ -434,7 +446,8 @@ defmodule Cyfr.RetentionTest do
   end
 
   defp create_build_with_timestamp(ctx, id, timestamp) do
-    :ok = Cyfr.BuildRecords.record_started(ctx, id, "reagent:local.test:0.1.0")
+    :ok =
+      Arca.BuildRecords.record_started(Sanctum.Context.actor(ctx), id, "reagent:local.test:0.1.0")
 
     # Pin started_at so ordering is the fixture's, not the insert order's,
     # and finish the build — retention never prunes a row still "started".
