@@ -40,32 +40,70 @@ defmodule Sanctum.Door do
   # The page the users walk takes; `Users.list/1` caps at 500 either way.
   @page 500
 
-  @type verdict :: {:ok, :admin | :allowed} | {:error, :denied | :not_allowed}
+  @type verdict :: {:ok, :admin | :allowed} | {:error, :denied | :not_allowed | :unavailable}
 
   @doc """
   Decide whether the identity may sign in.
 
   `verified` is what the provider asserted about `email`: `true`, `false`,
   or `:unknown` when it said nothing.
+
+  Three refusals, and they mean different things. `:denied` is a deny
+  entry, `:not_allowed` is no entry that admits, and `:unavailable` is the
+  store failing to answer — which is neither of the other two, because
+  "not denied" and "not allowed" are both claims this function must not
+  make without having looked.
   """
   @spec admit(String.t(), String.t() | nil, boolean() | :unknown) :: verdict()
   def admit(user_id, email, verified) when is_binary(user_id) do
     email = normalize_email(email)
 
-    cond do
-      # The operator arm sits above the deny on purpose: who runs this server
-      # is the env list's answer, and a stored row must not be able to
-      # contradict it. `Store.deny/4` already refuses to name an operator, so
-      # a row that reaches here predates the promotion; it stays on the list
-      # (demote them and it bites again) but it does not lock the box.
-      platform_admin_email?(email) and verified != false -> {:ok, :admin}
-      Store.denied?(user_id, email) -> {:error, :denied}
-      Store.wildcard?() and verified != false -> {:ok, :allowed}
-      Store.allowed?("user_id", user_id) -> {:ok, :allowed}
-      verified == true and Store.allowed?("email", email) -> {:ok, :allowed}
-      true -> {:error, :not_allowed}
+    # The operator arm sits above the deny on purpose: who runs this server
+    # is the env list's answer, and a stored row must not be able to
+    # contradict it. `Store.deny/4` already refuses to name an operator, so
+    # a row that reaches here predates the promotion; it stays on the list
+    # (demote them and it bites again) but it does not lock the box. It is
+    # also the one arm that needs no store, so an operator signs in through
+    # an outage.
+    if platform_admin_email?(email) and verified != false do
+      {:ok, :admin}
+    else
+      stored_verdict(user_id, email, verified)
     end
   end
+
+  # The stored door, in the order the entries outrank each other: a deny
+  # beats `*`, `*` beats an exact entry. A lookup the store could not
+  # answer stops the walk there rather than falling through to the next
+  # arm, which would read an outage as "nothing admits you".
+  defp stored_verdict(user_id, email, verified) do
+    with :no <- deny_arm(user_id, email),
+         :no <- wildcard_arm(verified),
+         :no <- allow_arm("user_id", user_id),
+         :no <- email_arm(email, verified) do
+      {:error, :not_allowed}
+    end
+  end
+
+  defp deny_arm(user_id, email) do
+    case Store.denied(user_id, email) do
+      {:ok, true} -> {:error, :denied}
+      {:ok, false} -> :no
+      {:error, :unavailable} -> {:error, :unavailable}
+    end
+  end
+
+  defp wildcard_arm(false), do: :no
+  defp wildcard_arm(_verified), do: admits(Store.wildcard())
+
+  defp allow_arm(kind, value), do: admits(Store.allowed(kind, value))
+
+  defp email_arm(email, true), do: allow_arm("email", email)
+  defp email_arm(_email, _verified), do: :no
+
+  defp admits({:ok, true}), do: {:ok, :allowed}
+  defp admits({:ok, false}), do: :no
+  defp admits({:error, :unavailable}), do: {:error, :unavailable}
 
   @doc """
   `admit/3` for an auth provider: takes the extracted user info (`email`,
@@ -143,14 +181,28 @@ defmodule Sanctum.Door do
 
     verdicts = Enum.map(keys, &admit(&1, user.email, verified_claim(user)))
 
-    if Enum.any?(verdicts, &match?({:ok, _}, &1)) do
-      false
-    else
-      {:error, reason} = hd(verdicts)
-      Logger.info("[Sanctum.Door] #{user.id} no longer admitted (#{reason}) — ejecting")
-      Sanctum.Session.revoke_all_for_user(user.id)
-      Sanctum.ApiKey.revoke_all_created_by(user.id)
-      true
+    cond do
+      Enum.any?(verdicts, &match?({:ok, _}, &1)) ->
+        false
+
+      # An outage is not a refusal. Ejecting on one would take every
+      # session and key on the server the first time the store blinked,
+      # and nothing here would say why. The walk leaves them and the next
+      # reconcile asks again.
+      Enum.any?(verdicts, &match?({:error, :unavailable}, &1)) ->
+        Logger.warning(
+          "[Sanctum.Door] #{user.id} could not be asked about (the door store did not " <>
+            "answer) — leaving them admitted"
+        )
+
+        false
+
+      true ->
+        {:error, reason} = hd(verdicts)
+        Logger.info("[Sanctum.Door] #{user.id} no longer admitted (#{reason}) — ejecting")
+        Sanctum.Session.revoke_all_for_user(user.id)
+        Sanctum.ApiKey.revoke_all_created_by(user.id)
+        true
     end
   end
 
@@ -196,14 +248,39 @@ defmodule Sanctum.Door do
   @doc """
   Would an invite of `email` admit that person on their first sign-in? True
   when the door is `*` or names the address; a request is queued otherwise
-  (`Sanctum.Door.Store.request/2`).
+  (`Sanctum.Door.Store.request/4`).
+
+  An address the store could not be asked about is not admitted, so the
+  invite queues a request the operator can resolve rather than going out
+  as if the door were open.
   """
   @spec email_admitted?(String.t()) :: boolean()
   def email_admitted?(email) when is_binary(email) do
     email = normalize_email(email)
 
-    not Store.denied?(nil, email) and
-      (platform_admin_email?(email) or Store.wildcard?() or Store.allowed?("email", email))
+    case admit_email(email) do
+      {:ok, :admin} -> true
+      {:ok, :allowed} -> true
+      {:error, _reason} -> false
+    end
+  end
+
+  # The same arms as `admit/3` without the identity ones: an invite names
+  # an address and nothing else about whoever will answer it. The deny
+  # sits above the operator arm here, where `admit/3` has it below: this
+  # asks whether an invite would land, not who runs the server, and an
+  # invite to a denied address is not one to send.
+  defp admit_email(email) do
+    with :no <- deny_arm(nil, email),
+         :no <- operator_arm(email),
+         :no <- wildcard_arm(:unknown),
+         :no <- allow_arm("email", email) do
+      {:error, :not_allowed}
+    end
+  end
+
+  defp operator_arm(email) do
+    if platform_admin_email?(email), do: {:ok, :admin}, else: :no
   end
 
   @doc "The one refusal a stranger sees, whichever branch refused."

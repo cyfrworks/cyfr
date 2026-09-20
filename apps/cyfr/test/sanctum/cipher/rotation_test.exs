@@ -9,6 +9,7 @@ defmodule Sanctum.Cipher.RotationTest do
   alias Sanctum.Cipher
   alias Sanctum.Cipher.Rotation
 
+  @k0 :crypto.strong_rand_bytes(32)
   @k1 :crypto.strong_rand_bytes(32)
   @k2 :crypto.strong_rand_bytes(32)
 
@@ -72,7 +73,7 @@ defmodule Sanctum.Cipher.RotationTest do
   end
 
   defp put_vault_row(name, plaintext, over \\ %{}) do
-    id = "vlt_" <> uuid()
+    id = Map.get(over, :id, "vlt_" <> uuid())
     hint = Map.get(over, :provider_hint, "legacy")
     aad = Sanctum.CipherAAD.vault_entry(@athanor, id, hint)
 
@@ -243,6 +244,110 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
+  describe "T-REENCRYPT: an interrupted run" do
+    test "leaves every row whole, and resuming finishes it" do
+      # Three rows in a known id order. The middle one is sealed under a
+      # key the rotation will not be given, so the run aborts on it: the
+      # first row is already re-sealed, the third has not been touched.
+      a = put_vault_row("legacy:a", "plain-a", %{id: "vlt_aaa"})
+
+      put_keyring(%{primary: "k0", keys: %{"k0" => @k0}})
+      b = put_vault_row("legacy:b", "plain-b", %{id: "vlt_bbb"})
+
+      put_keyring(%{primary: "k1", keys: %{"k1" => @k1}})
+      c = put_vault_row("legacy:c", "plain-c", %{id: "vlt_ccc"})
+
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      assert {:error,
+              {:vault_entries,
+               {:decrypt_failed, :sealed_payload, {:decrypt, {:unknown_key_label, "k0"}}}, ^b}} =
+               Rotation.reencrypt_all(batch_size: 1)
+
+      # Row by row, never half a row: `a` is wholly on the new key and `c`
+      # is wholly on the old one. Neither is a mixture.
+      assert {:ok, "k2"} = Cipher.label(col("vault_entries", a, :sealed_payload))
+
+      assert {:ok, "plain-a"} =
+               Cipher.decrypt(
+                 col("vault_entries", a, :sealed_payload),
+                 Sanctum.CipherAAD.vault_entry(@athanor, a, "legacy")
+               )
+
+      assert {:ok, "k1"} = Cipher.label(col("vault_entries", c, :sealed_payload))
+
+      assert {:ok, "plain-c"} =
+               Cipher.decrypt(
+                 col("vault_entries", c, :sealed_payload),
+                 Sanctum.CipherAAD.vault_entry(@athanor, c, "legacy")
+               )
+
+      # Give the run the key it was missing and rerun: `a` is already on
+      # the primary and is skipped, the other two finish.
+      put_keyring(%{primary: "k2", keys: %{"k0" => @k0, "k1" => @k1, "k2" => @k2}})
+
+      assert {:ok, %{vault_entries: %{scanned: 3, rotated: 2, skipped: 1}}} =
+               Rotation.reencrypt_all(batch_size: 1)
+
+      for {id, plain} <- [{a, "plain-a"}, {b, "plain-b"}, {c, "plain-c"}] do
+        ct = col("vault_entries", id, :sealed_payload)
+        assert {:ok, {4, "k2"}} = Cipher.envelope(ct)
+
+        assert {:ok, ^plain} =
+                 Cipher.decrypt(ct, Sanctum.CipherAAD.vault_entry(@athanor, id, "legacy"))
+      end
+    end
+  end
+
+  describe "T-REENCRYPT: the compare-and-set" do
+    test "a row written between the read and the write is not overwritten" do
+      # Both rows come back in one page, so the second row's ciphertext is
+      # already in hand when the first row's write completes. The handler
+      # rewrites the second row there — a legitimate concurrent re-seal —
+      # which is exactly the write a plain update would discard.
+      a = put_vault_row("legacy:a", "plain-a", %{id: "vlt_aaa"})
+      b = put_vault_row("legacy:b", "plain-b", %{id: "vlt_bbb"})
+
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      b_aad = Sanctum.CipherAAD.vault_entry(@athanor, b, "legacy")
+      {:ok, concurrent} = Cipher.encrypt("written-by-someone-else", b_aad)
+
+      handler = "rotation-cas-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :sanctum, :crypto_rotation, :row],
+        fn _e, _m, meta, _c ->
+          send(parent, {:row, meta.id, meta.result})
+
+          if meta.id == a do
+            {1, _} =
+              Arca.Repo.update_all(
+                from(r in Arca.Schemas.VaultEntry, where: r.id == ^b),
+                set: [sealed_payload: concurrent]
+              )
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, %{vault_entries: %{scanned: 2, rotated: 1, skipped: 1}}} =
+               Rotation.reencrypt_all()
+
+      assert_receive {:row, ^a, :rotated}
+      assert_receive {:row, ^b, :cas_miss}
+
+      # Byte-for-byte what the other writer left, not what the rotation
+      # had prepared for the ciphertext it read.
+      assert col("vault_entries", b, :sealed_payload) == concurrent
+      assert {:ok, "written-by-someone-else"} = Cipher.decrypt(concurrent, b_aad)
+    end
+  end
+
   describe "T-REENCRYPT: fail-closed" do
     test "aborts the table run on an undecryptable row (never silently skips)" do
       id = put_vault_row("legacy:s", "v")
@@ -296,8 +401,10 @@ defmodule Sanctum.Cipher.RotationTest do
   describe "T-REENCRYPT: roster binding" do
     # Every AAD purpose is a table of sealed rows somewhere; a purpose the
     # rotation tool does not walk is a key an operator retires while it still
-    # seals live secrets. The two lists live in different files, so this test
-    # is what keeps them one list.
+    # seals live secrets. `reencrypt_all/1` and `audit/0` walk one roster —
+    # `Arca.CipherRotation.tables/0`, where the schemas are — and the AAD
+    # each row is re-sealed under is a `rotate_row/3` clause here. The two
+    # lists live in different files, so this test is what keeps them one.
     @root Path.expand("../../../../..", __DIR__)
     @purpose_tables %{
       vault_entry: :vault_entries,
@@ -319,14 +426,18 @@ defmodule Sanctum.Cipher.RotationTest do
              "Sanctum.CipherAAD gained or lost a purpose — teach " <>
                "Sanctum.Cipher.Rotation its table and update @purpose_tables here"
 
+      # The roster both the re-encryption and the audit walk. Equality, not
+      # inclusion: a table in it with no purpose is a walk over rows nothing
+      # here knows how to re-seal.
+      assert Enum.sort(Arca.CipherRotation.tables()) ==
+               Enum.sort(Map.values(@purpose_tables)),
+             "Arca.CipherRotation's table roster and Sanctum.CipherAAD's purposes disagree"
+
       rot_src = File.read!(Path.join(@root, "apps/cyfr/lib/sanctum/cipher/rotation.ex"))
 
       for {purpose, table} <- @purpose_tables do
         assert rot_src =~ "defp rotate_row(:#{table}, ",
                "rotation has no rotate_row/3 clause for :#{table} (purpose :#{purpose})"
-
-        assert rot_src =~ "{:#{table}, :",
-               "audit/0's roster is missing :#{table} (purpose :#{purpose})"
       end
     end
   end

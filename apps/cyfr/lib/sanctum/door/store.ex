@@ -3,8 +3,7 @@
 
 defmodule Sanctum.Door.Store do
   @moduledoc """
-  The server allowlist rows (`Arca.Schemas.ServerAllowlistEntry`): what the
-  door reads and what platform admins edit.
+  The server allowlist: what the door reads and what platform admins edit.
 
   Entries name an email, an IdP subject (`user_id`) or the wildcard `*`.
   An `allow` entry with `status: "requested"` is one a member asked for by
@@ -12,56 +11,58 @@ defmodule Sanctum.Door.Store do
   platform admin resolves it. A `deny` entry cannot be written for an
   email in `CYFR_PLATFORM_ADMIN_EMAILS` — the operators can only be removed
   from that list.
+
+  The rows are `Arca.Doors`', asked as the server (`Cyfr.Actor.system/0`).
+  The door is consulted **before** a session exists, so at admission time
+  there is no caller actor to pass: the question "does this server admit
+  this identity?" is the server's own, whoever prompted it. An entry is a
+  plain map here, never a schema struct.
+
+  Reads that decide admission — `find/2` and everything built on it —
+  refuse when the store cannot answer, because "no such entry" and "we
+  could not look" are different answers and the door is where that
+  difference decides who gets in. The two display reads default to empty
+  instead, each saying so at its own call site.
   """
 
-  import Ecto.Query, only: [from: 2]
+  alias Arca.Doors
 
-  alias Arca.Schemas.ServerAllowlistEntry, as: Entry
+  @kinds Doors.kinds()
 
-  @kinds Entry.kinds()
+  @typedoc "A door row as this module hands it on: the ten columns, as a plain map."
+  @type entry :: Doors.entry()
 
   @doc "Every entry, allowed and requested, newest first."
-  @spec list() :: [Entry.t()]
+  @spec list() :: [entry()]
   def list do
     # Deliberate default: an admin display read — admission itself goes
     # through find/2, whose outage answer is an error the door refuses on.
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.list", [], fn ->
-      Arca.Repo.all(from(e in Entry, order_by: [desc: e.created_at]))
-    end)
+    case Doors.list(actor()) do
+      {:ok, entries} -> entries
+      {:error, _} -> []
+    end
   end
 
   @doc "The pending requests, oldest first."
-  @spec requests() :: [Entry.t()]
+  @spec requests() :: [entry()]
   def requests do
     # Deliberate default: a display read for the operator's queue — a request
     # a blinked read hides is still a row and shows on the next render.
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.requests", [], fn ->
-      Arca.Repo.all(
-        from(e in Entry, where: e.status == "requested", order_by: [asc: e.created_at])
-      )
-    end)
+    case Doors.requests(actor()) do
+      {:ok, entries} -> entries
+      {:error, _} -> []
+    end
   end
 
-  @spec get(String.t()) :: {:ok, Entry.t()} | {:error, :not_found}
-  def get(id) when is_binary(id) do
-    # Refusing, not defaulting: during a store outage "no such entry" is a
-    # different answer from "we could not look", and the door is where that
-    # difference decides who gets in. Every other read here already said so;
-    # these two were the exceptions.
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.get", fn ->
-      case Arca.Repo.get(Entry, id) do
-        nil -> {:error, :not_found}
-        entry -> {:ok, entry}
-      end
-    end)
-  end
+  @spec get(String.t()) :: {:ok, entry()} | {:error, :not_found | :database_error}
+  def get(id) when is_binary(id), do: Doors.get(actor(), id)
 
   @doc """
   Write an allow entry (or turn an existing deny / request into one).
   `kind` is `"email"`, `"user_id"` or `"wildcard"`.
   """
   @spec allow(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, Entry.t()} | {:error, term()}
+          {:ok, entry()} | {:error, term()}
   def allow(kind, value, added_by, note \\ nil) when kind in @kinds do
     upsert(kind, value, %{effect: "allow", status: "allowed", added_by: added_by, note: note})
   end
@@ -72,7 +73,7 @@ defmodule Sanctum.Door.Store do
   IdP subject of an identity that signed in with one.
   """
   @spec deny(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, Entry.t()} | {:error, :platform_admin | term()}
+          {:ok, entry()} | {:error, :platform_admin | term()}
   def deny(kind, value, added_by, note \\ nil) when kind in @kinds do
     cond do
       kind == "wildcard" ->
@@ -112,14 +113,7 @@ defmodule Sanctum.Door.Store do
 
   @doc "Delete an entry by id."
   @spec remove(String.t()) :: :ok | {:error, :not_found | :database_error}
-  def remove(id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.remove", fn ->
-      case Arca.Repo.delete_all(from(e in Entry, where: e.id == ^id)) do
-        {0, _} -> {:error, :not_found}
-        _ -> :ok
-      end
-    end)
-  end
+  def remove(id) when is_binary(id), do: Doors.delete(actor(), id)
 
   @doc """
   Record that someone wants `value` let in — an address a member invited, or
@@ -131,11 +125,11 @@ defmodule Sanctum.Door.Store do
   also bounds it — one row per address or identity, ever, however many times
   it is asked.
 
-  A request is not an allow: `allowed?/2` needs `status: "allowed"`, which
+  A request is not an allow: `allowed/2` needs `status: "allowed"`, which
   only `resolve/3` writes.
   """
   @spec request(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, :created | :existing, Entry.t()} | {:error, term()}
+          {:ok, :created | :existing, entry()} | {:error, term()}
   def request(kind, value, requested_by, note \\ nil)
       when kind in ["email", "user_id"] and is_binary(value) do
     value = if kind == "email", do: String.downcase(value), else: value
@@ -161,9 +155,9 @@ defmodule Sanctum.Door.Store do
 
   @doc "Approve (`:allow`) or drop (`:reject`) a request."
   @spec resolve(String.t(), :allow | :reject, String.t() | nil) ::
-          {:ok, Entry.t()} | :ok | {:error, term()}
+          {:ok, entry()} | :ok | {:error, term()}
   def resolve(id, decision, admin_user_id) do
-    with {:ok, %Entry{status: "requested"} = entry} <- get(id) do
+    with {:ok, %{status: "requested"} = entry} <- get(id) do
       case decision do
         :allow -> update(entry, %{status: "allowed", added_by: admin_user_id})
         :reject -> remove(id)
@@ -176,58 +170,60 @@ defmodule Sanctum.Door.Store do
 
   # ---- what the door reads ---------------------------------------------------
 
+  @typedoc """
+  What a door read says. `{:ok, true | false}` is an answer the store gave;
+  `{:error, :unavailable}` is no answer at all, and is never folded into
+  either — `Sanctum.Door` refuses on it rather than admitting or denying
+  without having looked.
+  """
+  @type answer :: {:ok, boolean()} | {:error, :unavailable}
+
   @doc """
   Is there a deny entry for this identity or email? Deliberately reads
-  `effect` alone — unlike `allowed?/2`, which also wants `status:
+  `effect` alone — unlike `allowed/2`, which also wants `status:
   "allowed"` — so a deny row is honoured whatever its status says: a
-  malformed or half-written deny must never read as an admit. The same
-  posture covers the store itself: a read the database could not answer
-  counts as denied, because "not denied" is the one answer this function
-  must never give without having actually looked.
+  malformed or half-written deny must never read as an admit.
   """
-  @spec denied?(String.t() | nil, String.t() | nil) :: boolean()
-  def denied?(user_id, email) do
-    values = [{"user_id", user_id}, {"email", downcase(email)}]
-
-    Enum.any?(values, fn
-      {_kind, nil} ->
-        false
-
-      {kind, value} ->
-        case find(kind, value) do
-          {:ok, %Entry{effect: "deny"}} -> true
-          {:ok, %Entry{}} -> false
-          {:error, :not_found} -> false
-          {:error, _} -> true
-        end
+  @spec denied(String.t() | nil, String.t() | nil) :: answer()
+  def denied(user_id, email) do
+    [{"user_id", user_id}, {"email", downcase(email)}]
+    |> Enum.reject(&match?({_kind, nil}, &1))
+    |> Enum.reduce_while({:ok, false}, fn {kind, value}, acc ->
+      case find(kind, value) do
+        {:ok, %{effect: "deny"}} -> {:halt, {:ok, true}}
+        {:ok, _entry} -> {:cont, acc}
+        {:error, :not_found} -> {:cont, acc}
+        {:error, _} -> {:halt, {:error, :unavailable}}
+      end
     end)
   end
 
   @doc "Is `*` on the list?"
-  @spec wildcard?() :: boolean()
-  def wildcard? do
-    match?({:ok, %Entry{effect: "allow", status: "allowed"}}, find("wildcard", "*"))
-  end
+  @spec wildcard() :: answer()
+  def wildcard, do: in_force(find("wildcard", "*"))
 
   @doc "Is this exact email or IdP subject allowed (a request does not count)?"
-  @spec allowed?(String.t(), String.t() | nil) :: boolean()
-  def allowed?(_kind, nil), do: false
+  @spec allowed(String.t(), String.t() | nil) :: answer()
+  def allowed(_kind, nil), do: {:ok, false}
 
-  def allowed?(kind, value) when kind in ["email", "user_id"] do
+  def allowed(kind, value) when kind in ["email", "user_id"] do
     value = if kind == "email", do: downcase(value), else: value
-    match?({:ok, %Entry{effect: "allow", status: "allowed"}}, find(kind, value))
+    in_force(find(kind, value))
   end
+
+  defp in_force({:ok, %{effect: "allow", status: "allowed"}}), do: {:ok, true}
+  defp in_force({:ok, _entry}), do: {:ok, false}
+  defp in_force({:error, :not_found}), do: {:ok, false}
+  defp in_force({:error, _reason}), do: {:error, :unavailable}
 
   # ---- internal --------------------------------------------------------------
 
-  defp find(kind, value) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.find", fn ->
-      case Arca.Repo.get_by(Entry, kind: kind, value: value) do
-        nil -> {:error, :not_found}
-        entry -> {:ok, entry}
-      end
-    end)
-  end
+  # The door is asked before anyone has signed in, so there is no caller
+  # actor to carry: the server asks its own question, with the platform
+  # scope `Arca.Doors` gates the table on.
+  defp actor, do: Cyfr.Actor.system()
+
+  defp find(kind, value), do: Doors.find(actor(), kind, value)
 
   defp upsert(kind, value, attrs) do
     value = if kind == "email", do: downcase(value), else: value
@@ -251,47 +247,19 @@ defmodule Sanctum.Door.Store do
   # The unique `[kind, value]` index is the arbiter: an insert that lost the
   # race to another write of the same entry answers the row that landed.
   defp insert_new(attrs) do
-    case insert(attrs) do
+    case Doors.insert(actor(), attrs) do
       {:ok, entry} ->
         {:ok, :created, entry}
 
-      {:error, %Ecto.Changeset{errors: errors}} = error ->
-        if Enum.any?(errors, fn {field, {_message, meta}} ->
-             field == :kind and meta[:constraint] == :unique
-           end) do
-          with {:ok, entry} <- find(attrs.kind, attrs.value), do: {:ok, :existing, entry}
-        else
-          error
-        end
+      {:error, :already_exists} ->
+        with {:ok, entry} <- find(attrs.kind, attrs.value), do: {:ok, :existing, entry}
 
       {:error, _} = error ->
         error
     end
   end
 
-  defp insert(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.insert", fn ->
-      now = DateTime.utc_now()
-
-      %Entry{}
-      |> Entry.changeset(
-        Map.merge(attrs, %{
-          id: Cyfr.UUID7.generate_id("door"),
-          created_at: now,
-          updated_at: now
-        })
-      )
-      |> Arca.Repo.insert()
-    end)
-  end
-
-  defp update(%Entry{} = entry, attrs) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Door.Store.update", fn ->
-      entry
-      |> Entry.changeset(Map.put(attrs, :updated_at, DateTime.utc_now()))
-      |> Arca.Repo.update()
-    end)
-  end
+  defp update(%{id: id}, attrs), do: Doors.update(actor(), id, attrs)
 
   defp downcase(nil), do: nil
   defp downcase(v) when is_binary(v), do: String.downcase(v)

@@ -35,6 +35,15 @@ defmodule Sanctum.Cipher.Rotation do
   column is the material CAS token, and a concurrent `vault.rotate` must not
   fail because an encryption pass rewrote unchanged material.
 
+  ## Where the halves live
+
+  The rows are `Arca.CipherRotation`'s: it holds the table roster, the
+  keyset pages and the compare-and-set write, and it is asked as the
+  server (`Cyfr.Actor.system/0`) because a rotation retires a key across
+  every athanor at once. Nothing below this module sees a key or a
+  plaintext — `classify/3` decrypts and re-seals in this process and hands
+  ciphertext down.
+
   ## AAD reconstruction (must mirror the callers)
 
   The cipher binds the row's canonical tenant tuple as AAD. This module
@@ -42,12 +51,11 @@ defmodule Sanctum.Cipher.Rotation do
   stay identical to how `Sanctum.Vault`, `Sanctum.Webhook` and
   `Sanctum.ProviderCredentials` persist them (the athanor id the storage
   layer persists is bound through unchanged). Every `Sanctum.CipherAAD`
-  purpose has a table here — the roster test pins the two lists together.
+  purpose has a `rotate_row/3` clause here — the roster test pins the two
+  lists together.
   """
 
   require Logger
-  require Arca.Repo.Errors
-  import Ecto.Query
 
   alias Sanctum.Cipher
 
@@ -76,20 +84,20 @@ defmodule Sanctum.Cipher.Rotation do
     ensure_started()
     dry = Keyword.get(opts, :dry_run, false)
 
-    with {:ok, w} <- rotate_table(:webhooks, opts),
-         {:ok, v} <- rotate_table(:vault_entries, opts),
-         {:ok, r} <- rotate_table(:registry_tokens, opts),
-         {:ok, p} <- rotate_table(:oauth_provider_credentials, opts) do
-      result = %{
-        webhooks: w,
-        vault_entries: v,
-        registry_tokens: r,
-        oauth_provider_credentials: p,
-        dry_run: dry
-      }
+    tables()
+    |> Enum.reduce_while({:ok, %{dry_run: dry}}, fn table, {:ok, acc} ->
+      case rotate_table(table, opts) do
+        {:ok, summary} -> {:cont, {:ok, Map.put(acc, table, summary)}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, result} ->
+        :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :run], %{count: 1}, result)
+        {:ok, result}
 
-      :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :run], %{count: 1}, result)
-      {:ok, result}
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -104,21 +112,16 @@ defmodule Sanctum.Cipher.Rotation do
     ensure_started()
     primary = Cipher.primary_label()
 
-    report =
-      Map.new(
-        [
-          {:webhooks, :secret_encrypted},
-          {:vault_entries, :sealed_payload},
-          {:registry_tokens, :credential_ciphertext},
-          {:oauth_provider_credentials, :payload_ciphertext}
-        ],
-        fn {table, col} ->
-          {table, audit_table(table, col, primary)}
-        end
-      )
-
-    {:ok, report}
+    {:ok, Map.new(tables(), fn table -> {table, audit_table(table, primary)} end)}
   end
+
+  # The one roster: every credential table with sealed rows. It lives
+  # below, beside the schemas it names, and `rotate_row/3` must have a
+  # clause for each of them — a table with no clause fails loudly on its
+  # first row rather than being walked past.
+  defp tables, do: Arca.CipherRotation.tables()
+
+  defp actor, do: Cyfr.Actor.system()
 
   # ==========================================================================
   # Per-table rotation (keyset pagination by id — bounded memory, resumable)
@@ -138,14 +141,15 @@ defmodule Sanctum.Cipher.Rotation do
     end
   end
 
+  # One page at a time, resuming from the last id seen. A store that
+  # cannot answer ends the run with the cursor it stopped at, so a rerun
+  # picks up there instead of walking the table again.
   defp page(table, cursor, batch, acc, opts) do
-    rows = fetch_page(table, cursor, batch)
-
-    case rows do
-      [] ->
+    case Arca.CipherRotation.page(actor(), table, cursor, batch) do
+      {:ok, []} ->
         {:ok, acc}
 
-      _ ->
+      {:ok, rows} ->
         case reduce_rows(table, rows, acc, opts) do
           {:ok, acc2} ->
             last_id = rows |> List.last() |> Map.fetch!(:id)
@@ -154,11 +158,11 @@ defmodule Sanctum.Cipher.Rotation do
           {:error, _} = err ->
             err
         end
+
+      {:error, reason} ->
+        Logger.error("[Cipher.Rotation] #{table} store error: #{inspect(reason)}")
+        {:error, {table, reason, cursor}}
     end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Cipher.Rotation] #{table} DB error: #{Exception.message(e)}")
-      {:error, {table, :database_error, cursor}}
   end
 
   defp reduce_rows(table, rows, acc, opts) do
@@ -183,78 +187,58 @@ defmodule Sanctum.Cipher.Rotation do
   defp rotate_row(:webhooks, row, opts) do
     aad = Sanctum.CipherAAD.webhook_secret(row.athanor_id, row.name)
 
-    cols =
-      [{:secret_encrypted, row.sec, aad}] ++
-        if is_binary(row.prev), do: [{:previous_secret_encrypted, row.prev, aad}], else: []
-
-    rotate_columns(:webhooks, row.id, cols, opts, fn -> :ok end)
+    rotate_columns(:webhooks, row, aad, opts)
   end
 
   defp rotate_row(:vault_entries, row, opts) do
     aad = Sanctum.CipherAAD.vault_entry(row.athanor_id, row.id, row.provider_hint)
 
-    rotate_columns(:vault_entries, row.id, [{:sealed_payload, row.ct, aad}], opts, fn -> :ok end)
+    rotate_columns(:vault_entries, row, aad, opts)
   end
 
   defp rotate_row(:registry_tokens, row, opts) do
     aad = Sanctum.CipherAAD.registry_token(row.user_id, row.registry, row.namespace_slug)
 
-    rotate_columns(
-      :registry_tokens,
-      row.id,
-      [{:credential_ciphertext, row.ct, aad}],
-      opts,
-      fn -> :ok end
-    )
+    rotate_columns(:registry_tokens, row, aad, opts)
   end
 
   defp rotate_row(:oauth_provider_credentials, row, opts) do
     aad = Sanctum.CipherAAD.provider_credential(row.athanor_id, row.provider)
 
-    rotate_columns(
-      :oauth_provider_credentials,
-      row.id,
-      [{:payload_ciphertext, row.ct, aad}],
-      opts,
-      fn -> :ok end
-    )
+    rotate_columns(:oauth_provider_credentials, row, aad, opts)
   end
 
   # Skip the row iff every ciphertext column is already on the primary label;
   # otherwise re-encrypt the lagging columns and commit them together with one
   # compare-and-swap keyed on the row's *current* primary-secret ciphertext.
-  defp rotate_columns(table, id, cols, opts, invalidate) do
+  defp rotate_columns(table, row, aad, opts) do
     primary = Cipher.primary_label()
 
-    case classify(cols, primary) do
+    case classify(row.ciphertexts, aad, primary) do
       {:error, _} = err ->
         err
 
-      {:skip} ->
+      :skip ->
         {:ok, :skipped}
 
       {:rotate, planned} ->
         if Keyword.get(opts, :dry_run, false) do
-          :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :row], %{count: 1}, %{
-            table: table,
-            id: id,
-            result: :would_rotate
-          })
-
+          emit(table, row.id, :would_rotate)
           {:ok, :rotated}
         else
-          commit(table, id, cols, planned, invalidate)
+          commit(table, row, planned)
         end
     end
   end
 
   # planned: %{col => new_ct} for columns that needed rotation. A column is
   # finished only when it is already sealed on the primary key in the current
-  # envelope version.
-  defp classify(cols, primary) do
+  # envelope version. Keys and plaintext stay in this function: what leaves
+  # it is a map of re-sealed ciphertext.
+  defp classify(ciphertexts, aad, primary) do
     current = Cipher.current_version()
 
-    Enum.reduce_while(cols, {:skip}, fn {col, ct, aad}, state ->
+    Enum.reduce_while(ciphertexts, :skip, fn {col, ct}, state ->
       case Cipher.envelope(ct) do
         {:ok, {^current, ^primary}} ->
           {:cont, state}
@@ -278,132 +262,76 @@ defmodule Sanctum.Cipher.Rotation do
     end)
   end
 
-  defp merge_plan({:skip}, col, ct), do: {:rotate, %{col => ct}}
+  defp merge_plan(:skip, col, ct), do: {:rotate, %{col => ct}}
   defp merge_plan({:rotate, m}, col, ct), do: {:rotate, Map.put(m, col, ct)}
 
-  defp commit(table, id, cols, planned, invalidate) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    [{cas_col, cas_old, _} | _] = cols
-    set = planned |> Map.to_list() |> Keyword.put(:updated_at, now)
+  # The compare-and-set token is the ciphertext this row's page read in the
+  # table's CAS column, which `Arca.CipherRotation` puts at the head of
+  # `ciphertexts`. A miss means a concurrent legitimate write changed the
+  # row; it is counted as skipped and reported, never as rotated, and a
+  # later pass confirms it.
+  defp commit(table, row, planned) do
+    [{_cas_column, cas} | _] = row.ciphertexts
 
-    q =
-      from(r in schema_for(table),
-        where: r.id == ^id and field(r, ^cas_col) == ^cas_old
-      )
-
-    case Arca.Repo.update_all(q, set: set) do
-      {1, _} ->
-        invalidate.()
-
-        :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :row], %{count: 1}, %{
-          table: table,
-          id: id,
-          result: :rotated
-        })
-
+    case Arca.CipherRotation.swap(actor(), table, row.id, cas, planned) do
+      {:ok, :swapped} ->
+        emit(table, row.id, :rotated)
         {:ok, :rotated}
 
-      {0, _} ->
-        # A concurrent legitimate write changed the row (it now holds a
-        # primary-key ciphertext). Treat as skipped; a later pass confirms.
-        :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :row], %{count: 1}, %{
-          table: table,
-          id: id,
-          result: :cas_miss
-        })
-
+      {:ok, :stale} ->
+        emit(table, row.id, :cas_miss)
         {:ok, :skipped}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
+  defp emit(table, id, result) do
+    :telemetry.execute([:cyfr, :sanctum, :crypto_rotation, :row], %{count: 1}, %{
+      table: table,
+      id: id,
+      result: result
+    })
+  end
+
   # ==========================================================================
-  # Queries
+  # Audit
   # ==========================================================================
 
-  defp fetch_page(:webhooks, cursor, batch) do
-    base(cursor, batch, Arca.Schemas.Webhook)
-    |> select([r], %{
-      id: r.id,
-      name: r.name,
-      athanor_id: r.athanor_id,
-      sec: r.secret_encrypted,
-      prev: r.previous_secret_encrypted
-    })
-    |> Arca.Repo.all()
+  defp audit_table(table, primary) do
+    tally(table, nil, %{total: 0, on_primary: 0, on_other: %{}, unknown: 0}, primary)
   end
 
-  defp fetch_page(:vault_entries, cursor, batch) do
-    base(cursor, batch, Arca.Schemas.VaultEntry)
-    |> where([r], not is_nil(r.sealed_payload))
-    |> select([r], %{
-      id: r.id,
-      athanor_id: r.athanor_id,
-      provider_hint: r.provider_hint,
-      ct: r.sealed_payload
-    })
-    |> Arca.Repo.all()
+  # Paged by the same cursor the rotation uses: an operator report over a
+  # credential table is still a walk of every athanor's rows, and reading
+  # it in one statement would be an unbounded read.
+  #
+  # Deliberate default: the audit is a read-only operator report — a table
+  # the store cannot answer renders as an errored section, nothing acts on it.
+  defp tally(table, cursor, acc, primary) do
+    case Arca.CipherRotation.ciphertext_page(actor(), table, cursor, @batch) do
+      {:ok, []} ->
+        acc
+
+      {:ok, rows} ->
+        acc = Enum.reduce(rows, acc, &count_label(&1.ciphertext, &2, primary))
+        tally(table, rows |> List.last() |> Map.fetch!(:id), acc, primary)
+
+      {:error, reason} ->
+        Logger.error("[Cipher.Rotation] #{table} audit store error: #{inspect(reason)}")
+        %{error: :database_error}
+    end
   end
 
-  defp fetch_page(:registry_tokens, cursor, batch) do
-    base(cursor, batch, Arca.Schemas.RegistryToken)
-    |> select([r], %{
-      id: r.id,
-      user_id: r.user_id,
-      registry: r.registry,
-      namespace_slug: r.namespace_slug,
-      ct: r.credential_ciphertext
-    })
-    |> Arca.Repo.all()
-  end
+  defp count_label(ct, acc, primary) do
+    acc = %{acc | total: acc.total + 1}
 
-  defp fetch_page(:oauth_provider_credentials, cursor, batch) do
-    base(cursor, batch, Arca.Schemas.OauthProviderCredential)
-    |> select([r], %{
-      id: r.id,
-      athanor_id: r.athanor_id,
-      provider: r.provider,
-      ct: r.payload_ciphertext
-    })
-    |> Arca.Repo.all()
-  end
-
-  defp base(nil, batch, schema) do
-    from(r in schema, order_by: [asc: r.id], limit: ^batch)
-  end
-
-  defp base(cursor, batch, schema) do
-    from(r in schema, where: r.id > ^cursor, order_by: [asc: r.id], limit: ^batch)
-  end
-
-  defp schema_for(:webhooks), do: Arca.Schemas.Webhook
-  defp schema_for(:vault_entries), do: Arca.Schemas.VaultEntry
-  defp schema_for(:registry_tokens), do: Arca.Schemas.RegistryToken
-  defp schema_for(:oauth_provider_credentials), do: Arca.Schemas.OauthProviderCredential
-
-  defp audit_table(table, col, primary) do
-    # Deliberate default: the audit is a read-only operator report — a table
-    # the store cannot answer renders as an errored section, nothing acts on it.
-    Arca.Repo.Errors.with_db_rescue(
-      "CryptoRotation.audit_table(#{table})",
-      %{error: :database_error},
-      fn ->
-        # nil excluded for tombstoned vault entries; the other ciphertext columns
-        # are non-null, so the filter is a no-op there.
-        rows =
-          from(r in schema_for(table), where: not is_nil(field(r, ^col)), select: field(r, ^col))
-          |> Arca.Repo.all()
-
-        Enum.reduce(rows, %{total: 0, on_primary: 0, on_other: %{}, unknown: 0}, fn ct, a ->
-          a = %{a | total: a.total + 1}
-
-          case Cipher.label(ct) do
-            {:ok, ^primary} -> %{a | on_primary: a.on_primary + 1}
-            {:ok, other} -> %{a | on_other: Map.update(a.on_other, other, 1, &(&1 + 1))}
-            :error -> %{a | unknown: a.unknown + 1}
-          end
-        end)
-      end
-    )
+    case Cipher.label(ct) do
+      {:ok, ^primary} -> %{acc | on_primary: acc.on_primary + 1}
+      {:ok, other} -> %{acc | on_other: Map.update(acc.on_other, other, 1, &(&1 + 1))}
+      :error -> %{acc | unknown: acc.unknown + 1}
+    end
   end
 
   defp ensure_started do
