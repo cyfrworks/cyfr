@@ -1144,7 +1144,7 @@ defmodule EmissaryWeb.MCPControllerTest do
     end
 
     test "an uncredentialed caller cannot hold a stream open", %{conn: conn} do
-      Application.put_env(:cyfr, :auth_provider, AnonymousAuthProvider)
+      Application.put_env(:sanctum, :auth_provider, AnonymousAuthProvider)
 
       conn =
         conn
@@ -1164,7 +1164,7 @@ defmodule EmissaryWeb.MCPControllerTest do
     test "an install with no auth provider still refuses an uncredentialed caller", %{conn: conn} do
       # The operator authenticates with an API key on these installs too, so
       # a request carrying nothing is a stranger here as well.
-      Application.delete_env(:cyfr, :auth_provider)
+      Application.delete_env(:sanctum, :auth_provider)
 
       conn =
         conn

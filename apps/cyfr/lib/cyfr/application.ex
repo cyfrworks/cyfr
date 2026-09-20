@@ -150,6 +150,10 @@ defmodule Cyfr.Application do
       Supervisor.child_spec({Task.Supervisor, name: Cyfr.Execution.TaskSupervisor},
         shutdown: 30_000
       ),
+      # Stops an archived athanor's running work. The archive announces and
+      # this reacts: what is still running is the execution domain's, and
+      # the identity domain must not name it.
+      Cyfr.Execution.ArchiveWatch,
       # Periodic sweep that fails running executions whose lease lapsed;
       # started only when `:execution_sweeper_enabled`.
       Cyfr.Execution.Sweeper,
@@ -203,6 +207,13 @@ defmodule Cyfr.Application do
       # Provisioning retries that must not ride a sign-in (registry pulls),
       # and the keepers that renew their claims' leases.
       {Task.Supervisor, name: Sanctum.ProvisioningSupervisor},
+      # Filling an athanor's component estate: the background fills the
+      # first-need hook and a sign-in ask for, and the registry pulls each
+      # attempt runs under its own deadline.
+      {Task.Supervisor, name: Compendium.ProvisioningSupervisor},
+      # The estate filler itself — it reacts to the identity domain's
+      # announcement that an athanor needs filling.
+      Compendium.Provisioning,
       # Single-use consent authorizations. The shipped store is the DB
       # (config.exs pins Proof.DB); the in-memory GenServer starts only
       # when a deployment explicitly configures it, so production does not
@@ -517,7 +528,7 @@ defmodule Cyfr.Application do
   # from the cause, so say it at boot.
   defp warn_if_public_origin_missing do
     if is_nil(Cyfr.RuntimeConfig.public_url()) and
-         not is_nil(Application.get_env(:cyfr, :auth_provider)) do
+         not is_nil(Cyfr.RuntimeConfig.auth_provider()) do
       Logger.warning(
         "[Cyfr] CYFR_PUBLIC_URL is not set. OAuth redirect URIs and webhook URLs " <>
           "will be built from CYFR_HOST/CYFR_PORT as http://…, which a TLS " <>
@@ -659,14 +670,16 @@ defmodule Cyfr.Application do
   def check_oidc_issuer(_),
     do:
       {:error,
-       "CYFR_AUTH_PROVIDER=oidc is selected but :cyfr, :oidc_issuer is absent or blank. " <>
+       "CYFR_AUTH_PROVIDER=oidc is selected but :sanctum, :oidc_issuer is absent or blank. " <>
          "Set CYFR_OIDC_ISSUER to your identity provider's issuer URL."}
 
-  # Resolve and pin :cyfr, :crypto_keyring. Nil or empty configuration derives
-  # a key labelled "default" from :secret_key_base; explicit JSON is parsed.
+  # Resolve and pin :sanctum, :crypto_keyring — the key the identity
+  # domain seals rows with, resolved here from the deployment's own
+  # environment. Nil or empty configuration derives a key labelled
+  # "default" from :secret_key_base; explicit JSON is parsed.
   # KeyringFingerprint checks the result against the database before writes.
   defp resolve_crypto_keyring! do
-    case Application.get_env(:cyfr, :crypto_keyring) do
+    case Application.get_env(:sanctum, :crypto_keyring) do
       %{primary: _, keys: _} = keyring when map_size(keyring.keys) > 0 ->
         :ok
 
@@ -686,7 +699,7 @@ defmodule Cyfr.Application do
               parse_keyring_env!(json)
           end
 
-        Application.put_env(:cyfr, :crypto_keyring, keyring)
+        Application.put_env(:sanctum, :crypto_keyring, keyring)
     end
   end
 

@@ -35,7 +35,6 @@ defmodule Cyfr.ConfigKeyRosterTest do
     # Test seams — see `Sanctum.Auth.DeviceFlow.impl/0` for the rule.
     allow_tenancy_resolver_override: :seam,
     tenancy_resolver_override: :seam,
-    catalog: :seam,
     tool_providers_lenient: :seam,
     thread_recovery: :seam,
     device_flow: :seam,
@@ -46,6 +45,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
     # Boot switches with an in-code default; flipping one is a code change.
     cron_scheduler_enabled: :default,
     execution_sweeper_enabled: :default,
+    execution_archive_watch_enabled: :default,
     worker_watch_enabled: :default,
     external_server_reconciler_enabled: :default,
     provisioning_boot_enabled: :default,
@@ -53,10 +53,6 @@ defmodule Cyfr.ConfigKeyRosterTest do
     control_plane_claim_enabled: :default,
     database_checks_enabled: :default,
     telemetry_console_enabled: :default,
-
-    # Derived at boot from `:crypto_keyring_json`, which IS an operator
-    # lever (`CYFR_CRYPTO_KEYRING`). Nothing sets this one directly.
-    crypto_keyring: :default,
 
     # Operator-shaped, with nothing to set them from. Each has a sensible
     # in-code default, so this is a gap in reach, not a broken deployment.

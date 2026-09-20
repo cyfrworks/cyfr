@@ -48,18 +48,20 @@ defmodule PrismWeb.SignInTraceTest do
       provisioning_inline: false
     ]
 
+    # The provider selection and the issuer are the identity domain's keys
+    # (`:sanctum`), the rest the host's: restoring the wrong application
+    # leaves a provider set for every test that runs after this one.
     restore =
-      restore_env(
-        :cyfr,
-        Keyword.keys(env) ++
-          [:auth_provider, :oidc_issuer, :github_client_id, :device_flow_endpoints]
-      )
+      restore_env(:cyfr, Keyword.keys(env) ++ [:github_client_id, :device_flow_endpoints])
+
+    restore_sanctum = restore_env(:sanctum, [:auth_provider, :oidc_issuer])
 
     prev_ueberauth = Application.get_env(:ueberauth, Ueberauth)
     for {key, value} <- env, do: Application.put_env(:cyfr, key, value)
 
     on_exit(fn ->
       restore.()
+      restore_sanctum.()
       Application.put_env(:ueberauth, Ueberauth, prev_ueberauth)
       File.rm_rf!(test_dir)
     end)
@@ -100,8 +102,8 @@ defmodule PrismWeb.SignInTraceTest do
   test "OIDC: the issuer round trip through /auth/oidcc/callback, the cookie, the filled estate",
        %{conn: conn} do
     n = System.unique_integer([:positive])
-    Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OIDC)
-    Application.put_env(:cyfr, :oidc_issuer, "https://idp.test")
+    Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OIDC)
+    Application.put_env(:sanctum, :oidc_issuer, "https://idp.test")
     Application.put_env(:ueberauth, Ueberauth, providers: [oidcc: {Cyfr.Test.OidcStrategy, []}])
 
     to_issuer =

@@ -40,11 +40,12 @@ defmodule Sanctum.Consent.Bootstrap do
   immutable, and its caps are auditable once at build time rather than per
   athanor.
 
-  The estate's agents (`agent:local.<name>`, `Compendium.AgentSource`)
-  are sources here too, minted after the components they run on. A
-  source is minted only while it is vouched for — the seed's own bytes,
-  or a head that already names it unchanged. A member-authored agent or
-  component, and an edited shipped copy, consent through the walk.
+  The estate's agents (`agent:local.<name>`, read through the
+  component-facts port) are sources here too, minted after the components
+  they run on. A source is minted only while it is vouched for — the
+  seed's own bytes, or a head that already names it unchanged. A
+  member-authored agent or component, and an edited shipped copy, consent
+  through the walk.
 
   Bootstrap consent applies only to the operator's seed bundle.
   Components discovered by `component.register` require explicit consent.
@@ -54,8 +55,11 @@ defmodule Sanctum.Consent.Bootstrap do
 
   alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.CommitDigest
+  alias Sanctum.Consent.Components
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
+  alias Cyfr.AgentRef
+  alias Cyfr.ComponentRow
   alias Cyfr.JCS
 
   @type result :: %{
@@ -85,9 +89,15 @@ defmodule Sanctum.Consent.Bootstrap do
   `{:error, :claim_lost}` — what it minted before the loss stands, since
   it held the estate then, and nothing is minted after. With no claim
   (`nil`) the walk is unfenced: an estate nothing else is filling.
+
+  Answers `{:error, {:component_facts, reason}}` when the estate's
+  component facts cannot be read (`Sanctum.Consent.Components`). That is
+  not "nothing is vouched for": a walk that cannot see what the seed ships
+  would skip every source as unvouched and report a clean, empty mint, so
+  it refuses instead, in a word no missing component and no denial shares.
   """
   @spec run(Context.t(), %{owner: String.t(), fence: pos_integer()} | nil) ::
-          {:ok, result()} | {:error, :claim_lost}
+          {:ok, result()} | {:error, :claim_lost | {:component_facts, term()}}
   def run(%Context{} = ctx, claim \\ nil) do
     with :ok <- holding(ctx, claim),
          {:ok, result} <- walk(ctx, claim) do
@@ -108,17 +118,24 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   defp walk(ctx, claim) do
-    components =
-      (executable_local_components(ctx) ++ agent_rows(ctx))
-      |> Enum.sort_by(fn row ->
-        {Map.get(@type_rank, to_string(row.component_type), 9), soul?(row), row.name}
-      end)
+    with {:ok, agents} <- agent_rows(ctx),
+         components = sources(ctx, agents),
+         # The releases the seed itself ships, at the seed's own digest —
+         # never the athanor's copy; an edited shipped unit is absent from
+         # the map. With the facts unreadable the walk refuses rather than
+         # reading an unreadable estate as one the operator vouched
+         # nothing for, which would skip every source and report a clean,
+         # empty mint.
+         {:ok, shipped} <- Components.shipped_nodes(ctx, components) do
+      run_components({ctx, claim}, components, shipped)
+    end
+  end
 
-    # The releases the seed itself ships, at the seed's own digest — never
-    # the athanor's copy. An edited shipped unit is absent here.
-    shipped_nodes = shipped_nodes(ctx, components)
-
-    run_components({ctx, claim}, components, shipped_nodes)
+  defp sources(ctx, agents) do
+    (executable_local_components(ctx) ++ agents)
+    |> Enum.sort_by(fn row ->
+      {Map.get(@type_rank, to_string(row.component_type), 9), soul?(row), row.name}
+    end)
   end
 
   # `held` is the context and the claim the walk runs under, carried to
@@ -126,7 +143,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp run_components(held, components, shipped_nodes) do
     {minted, revised, skipped} =
       Enum.reduce(components, {[], [], []}, fn component, {minted, revised, skipped} ->
-        source_ref = Compendium.Activation.node_key(component)
+        source_ref = ComponentRow.node_key(component)
 
         case bootstrap_component(held, component, source_ref, shipped_nodes) do
           {:ok, _profile_id} -> {[source_ref | minted], revised, skipped}
@@ -144,10 +161,17 @@ defmodule Sanctum.Consent.Bootstrap do
      }}
   end
 
+  # An estate whose agent files cannot be listed bootstraps no agent and
+  # goes on: the components are a separate roster and a transient tree
+  # read must not hold them up. Facts that are not configured at all are
+  # a different thing and refuse the walk — see `run/2`.
   defp agent_rows(ctx) do
-    case Compendium.AgentSource.rows(ctx) do
+    case Components.agent_rows(ctx) do
       {:ok, rows} ->
-        rows
+        {:ok, rows}
+
+      {:error, :component_facts_unavailable = reason} ->
+        {:error, {:component_facts, reason}}
 
       {:error, reason} ->
         Logger.error(
@@ -155,12 +179,12 @@ defmodule Sanctum.Consent.Bootstrap do
             "#{ctx.athanor_id}: #{inspect(reason)}; bootstrapping no agent"
         )
 
-        []
+        {:ok, []}
     end
   end
 
-  defp agent?(row), do: to_string(row.component_type) == Compendium.AgentSource.type()
-  defp soul?(row), do: agent?(row) and Compendium.AgentSource.soul?(row.name)
+  defp agent?(row), do: to_string(row.component_type) == AgentRef.type()
+  defp soul?(row), do: agent?(row) and AgentRef.soul?(row.name)
 
   defp executable_local_components(ctx) do
     # Every valid type is profile-bearing: tinctures are not executable,
@@ -169,14 +193,14 @@ defmodule Sanctum.Consent.Bootstrap do
     types = Cyfr.ComponentRef.valid_types()
 
     case Arca.ComponentStorage.list_components(ctx,
-           publisher: Compendium.ComponentPath.default_publisher(),
+           publisher: Cyfr.ComponentPath.default_publisher(),
            limit: :none
          ) do
       {:ok, rows} ->
         rows
         |> Enum.filter(fn row -> to_string(row.component_type) in types end)
         |> Enum.group_by(fn row -> {row.component_type, row.name} end)
-        |> Enum.map(fn {_key, versions} -> Compendium.Registry.latest_of(versions) end)
+        |> Enum.map(fn {_key, versions} -> ComponentRow.latest_of(versions) end)
 
       {:error, reason} ->
         Logger.error(
@@ -308,69 +332,8 @@ defmodule Sanctum.Consent.Bootstrap do
 
   defp release_digest(row), do: Map.get(row, :release_digest) || Map.get(row, "release_digest")
 
-  defp shipped_nodes(ctx, components) do
-    roster =
-      components
-      |> Enum.filter(&agent?/1)
-      |> MapSet.new(& &1.name)
-
-    Enum.reduce(components, %{}, fn row, acc ->
-      case shipped_digest(ctx, row, roster) do
-        {:ok, digest} -> Map.put(acc, Compendium.Activation.node_key(row), digest)
-        _ -> acc
-      end
-    end)
-  end
-
-  defp shipped_digest(ctx, row, roster) do
-    type = to_string(Map.get(row, :component_type) || Map.get(row, "component_type"))
-    name = Map.get(row, :name) || Map.get(row, "name")
-
-    cond do
-      type == Compendium.AgentSource.type() ->
-        seed_agent_digest(name, roster)
-
-      type == "tincture" ->
-        pristine_tincture_digest(ctx, row)
-
-      type in ~w(catalyst reagent formula) ->
-        Compendium.Provenance.shipped_release_digest(row)
-
-      true ->
-        :error
-    end
-  end
-
-  defp seed_agent_digest(name, roster) do
-    path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(Compendium.AgentSource.unit(name), 1)
-
-    with {:ok, bytes} <- Arca.get(Sanctum.system_context(), path),
-         {:ok, row} <- Compendium.AgentSource.shipped_row(name, bytes, roster) do
-      {:ok, release_digest(row)}
-    end
-  end
-
-  # A tincture's artifact is its directory; vouch only an unedited shipped copy.
-  defp pristine_tincture_digest(ctx, row) do
-    unit =
-      Compendium.ComponentPath.version_dir(
-        "tincture",
-        Map.get(row, :publisher) || Map.get(row, "publisher"),
-        Map.get(row, :name) || Map.get(row, "name"),
-        Map.get(row, :version) || Map.get(row, "version")
-      )
-
-    with {:ok, :shipped} <- Arca.Overlay.unit_status(ctx, unit),
-         {:ok, false} <- Arca.Overlay.edited?(ctx, unit),
-         digest when is_binary(digest) <- release_digest(row) do
-      {:ok, digest}
-    else
-      _ -> :error
-    end
-  end
-
   defp credential_needs?(manifest) do
-    case Compendium.Manifest.Needs.from_manifest(manifest) do
+    case Cyfr.Manifest.Needs.from_manifest(manifest) do
       needs when is_list(needs) -> Enum.any?(needs, &(&1.kind in ~w(api_key oauth bundle)))
       _ -> false
     end
@@ -433,7 +396,7 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   defp resolve_activation(ctx, component) do
-    case Compendium.Activation.resolve(ctx, component) do
+    case Components.resolve(ctx, component) do
       {:ok, activation} -> {:ok, activation}
       {:error, reason} -> {:skip, {:activation_unresolvable, reason}}
     end

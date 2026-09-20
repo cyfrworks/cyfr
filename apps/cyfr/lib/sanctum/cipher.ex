@@ -7,7 +7,7 @@ defmodule Sanctum.Cipher do
   bundles, webhook HMAC secrets, registry push tokens): versioned, AAD-bound,
   keyring-rotatable AES-256-GCM.
 
-  The keyring (`:crypto_keyring`) is resolved at boot by `Cyfr.Application`
+  The keyring (`:sanctum, :crypto_keyring`) is resolved at boot
   (`resolve_crypto_keyring!/0`) — explicit via `CYFR_CRYPTO_KEYRING`, or
   derived from `:secret_key_base` when that env var is absent
   (single-operator installs work zero-config).
@@ -121,11 +121,20 @@ defmodule Sanctum.Cipher do
   @spec current_version() :: pos_integer()
   def current_version, do: @version_v4
 
+  @doc """
+  The resolved keyring (`:sanctum, :crypto_keyring`), pinned at boot.
+  Raises when read before that resolution — a sealed row must never be
+  touched with a guessed key, so an absent keyring is a crash and never a
+  default.
+  """
+  @spec keyring!() :: map()
+  def keyring!, do: Application.fetch_env!(:sanctum, :crypto_keyring)
+
   # ============================================================================
   # Internal
   # ============================================================================
 
-  defp keyring, do: Cyfr.RuntimeConfig.crypto_keyring!()
+  defp keyring, do: keyring!()
 
   # Length-prefixed framing of the full identifying tuple. Absent fields frame
   # as "" so the AAD is well-defined and identical across encrypt/decrypt for

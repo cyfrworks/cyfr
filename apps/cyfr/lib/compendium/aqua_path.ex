@@ -26,7 +26,9 @@ defmodule Compendium.AquaPath do
 
   @root ["aqua"]
   @root_name hd(@root)
-  @soul "aqua"
+  # The soul's reserved name is `Cyfr.AgentRef`'s: the consent source ref
+  # `agent:local.aqua` and the file at the root of the tree are one name.
+  @soul Cyfr.AgentRef.soul_name()
   @soul_file @soul <> ".md"
   @roles "roles"
   @skills "skills"
@@ -65,7 +67,7 @@ defmodule Compendium.AquaPath do
 
   @doc "The soul's reserved name."
   @spec soul_name() :: String.t()
-  def soul_name, do: @soul
+  defdelegate soul_name(), to: Cyfr.AgentRef
 
   @doc """
   Whether `name` is the soul's — reserved, never a role.

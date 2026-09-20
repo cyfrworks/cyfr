@@ -386,21 +386,17 @@ defmodule Sanctum.Tenancy.Athanors do
 
   defp archived_attrs(%Athanor{}), do: %{status: "archived", archived_at: DateTime.utc_now()}
 
-  # What archiving closes: standing credentials, established authorization
-  # and in-flight work. Runs as the server inside the athanor (an internal
-  # context focused on it — cancellation is attributed to `system`); best
-  # effort, since the status gates already refuse new work.
+  # What archiving closes: standing credentials and established
+  # authorization, both before this returns — they are authorization
+  # properties, not notifications. In-flight work is the execution
+  # domain's and stops in reaction to the announcement
+  # (`Cyfr.Execution.ArchiveWatch`), as do the processes serving the
+  # athanor from outside any tenant topic; the status gates already refuse
+  # new work either way.
   defp close(%Athanor{id: id}) do
     Sanctum.ApiKey.revoke_all_for_athanor(id)
     drop_caller_memos(id)
-    cancel_running(id)
-
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      Cyfr.Bus.athanor_archived_global(),
-      {:athanor_archived_global, id}
-    )
-
+    Sanctum.Telemetry.athanor_archived(id)
     :ok
   end
 
@@ -426,24 +422,6 @@ defmodule Sanctum.Tenancy.Athanors do
     end
 
     :ok
-  end
-
-  defp cancel_running(athanor_id) do
-    if Cyfr.Execution.available?() do
-      ctx = Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
-
-      {:ok, running} = Cyfr.Execution.list(ctx, status: :running, limit: 500)
-      Enum.each(running, fn %{id: id} -> Cyfr.Execution.cancel(ctx, id) end)
-    end
-
-    :ok
-  rescue
-    e ->
-      Logger.warning(
-        "[Sanctum.Tenancy.Athanors] cancel on archive failed (#{Exception.message(e)})"
-      )
-
-      :ok
   end
 
   @doc """

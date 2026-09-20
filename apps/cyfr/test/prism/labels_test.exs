@@ -7,25 +7,25 @@ defmodule Prism.LabelsTest do
   alias Prism.Labels
 
   setup do
-    prev = Application.get_env(:cyfr, :auth_provider)
+    prev = Application.get_env(:sanctum, :auth_provider)
 
     on_exit(fn ->
       if prev,
-        do: Application.put_env(:cyfr, :auth_provider, prev),
-        else: Application.delete_env(:cyfr, :auth_provider)
+        do: Application.put_env(:sanctum, :auth_provider, prev),
+        else: Application.delete_env(:sanctum, :auth_provider)
     end)
 
     :ok
   end
 
   test "on a private box everyone lands in dev" do
-    Application.delete_env(:cyfr, :auth_provider)
+    Application.delete_env(:sanctum, :auth_provider)
     assert Labels.default(%{platform_admin: false}) == "dev"
     assert Labels.mode(nil, %{platform_admin: false}) == "dev"
   end
 
   test "behind a door a person lands in lite and the operator in dev; a saved preference wins" do
-    Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
+    Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
     assert Labels.default(%{platform_admin: false}) == "lite"
     assert Labels.default(%{platform_admin: true}) == "dev"
     assert Labels.mode(nil, %{platform_admin: false}) == "lite"

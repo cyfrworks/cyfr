@@ -11,10 +11,16 @@ defmodule Sanctum.Catalog do
   plan and a commit ask it which servers those are and what each exposes.
   Both ask through this port rather than the catalog module directly: the
   contract is written here, in the domain that depends on it, and the one
-  implementation (`Cyfr.Ops.Catalog`) answers for every provider it has
-  loaded. A provider that cannot load is a boot failure there, never a
-  narrower answer here — a digest derived from a partial catalog would
-  read as the whole.
+  implementation answers for every provider it has loaded. A provider that
+  cannot load is a boot failure there, never a narrower answer here — a
+  digest derived from a partial catalog would read as the whole.
+
+  Which module that is comes from configuration (`:sanctum, :catalog`),
+  so nothing here names it: a default spelled in code would be a
+  compile-time reference to the layer above. With the key unset the
+  catalog is unreadable, and every call raises rather than answering a
+  narrower roster — a shape derived from no catalog at all would grant
+  nothing and read as a component that asks for nothing.
   """
 
   alias Sanctum.Context
@@ -51,9 +57,16 @@ defmodule Sanctum.Catalog do
   @callback tool_server_candidate(Context.t(), String.t()) ::
               {:ok, tool_server_candidate()} | {:error, term()}
 
-  @doc "The implementation: `Cyfr.Ops.Catalog`, swappable for a test."
+  @doc """
+  The implementation, written by configuration at boot
+  (`:sanctum, :catalog`) and swappable for a test. Raises when unset:
+  see the note above on why an unreadable catalog is not an empty one.
+  """
   @spec impl() :: module()
-  def impl, do: Application.get_env(:cyfr, :catalog, Cyfr.Ops.Catalog)
+  def impl do
+    Application.get_env(:sanctum, :catalog) ||
+      raise "no :sanctum, :catalog is configured: consent cannot read the operation table"
+  end
 
   @spec tool_actions() :: [String.t()]
   def tool_actions, do: impl().tool_actions()

@@ -143,23 +143,32 @@ defmodule Sanctum.Policy.Enforcement do
           emit_telemetry(record_attrs)
           :ok
 
-        {:error, %Ecto.Changeset{} = changeset} ->
-          # A raw changeset must not escape the audit plane — the caller
-          # gets a typed reason; the detail goes to the log.
-          Logger.warning(
-            "[Policy.Enforcement] denial record refused: " <>
-              inspect(changeset.errors)
-          )
+        {:error, reason} when is_atom(reason) ->
+          {:error, reason}
+
+        {:error, refusal} ->
+          # A store's refusal is not a typed word, and its own shape must
+          # not escape the audit plane: the caller gets one word and the
+          # detail goes to the log. Read by field rather than by struct —
+          # the rule for a decision this domain records is that it never
+          # names the store's types.
+          Logger.warning("[Policy.Enforcement] denial record refused: " <> detail(refusal))
 
           {:error, :audit_write_failed}
-
-        {:error, reason} ->
-          {:error, reason}
       end
     end
   end
 
   defp do_record(_), do: {:error, :missing_ctx}
+
+  # The refusal's own detail, without naming the store's shapes: a
+  # validation refusal carries `errors`, anything else is sanitized whole
+  # — a policy record holds no credential, but the audit plane is not the
+  # place to find out.
+  defp detail(%{errors: errors}) when is_list(errors), do: inspect(errors)
+
+  defp detail(other),
+    do: inspect(Cyfr.Sanitizer.sanitize(other), limit: 20, printable_limit: 200)
 
   defp emit_telemetry(record_attrs) do
     :telemetry.execute(

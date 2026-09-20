@@ -15,33 +15,35 @@ defmodule Sanctum.Vault.OAuthRedirectUriTest do
   alias Sanctum.Vault.OAuthGrant
 
   setup do
-    original = Application.get_env(:cyfr, :public_url)
+    original = Application.get_env(:sanctum, :public_url)
 
     on_exit(fn ->
       if original,
-        do: Application.put_env(:cyfr, :public_url, original),
-        else: Application.delete_env(:cyfr, :public_url)
+        do: Application.put_env(:sanctum, :public_url, original),
+        else: Application.delete_env(:sanctum, :public_url)
     end)
 
     :ok
   end
 
   test "the public origin carries the scheme the deployment actually serves" do
-    Application.put_env(:cyfr, :public_url, "https://cyfr.example.com")
+    Application.put_env(:sanctum, :public_url, "https://cyfr.example.com")
 
     assert OAuthGrant.redirect_uri() == "https://cyfr.example.com" <> OAuthGrant.callback_path()
   end
 
   test "a trailing slash does not double up" do
-    Application.put_env(:cyfr, :public_url, "https://cyfr.example.com/")
+    Application.put_env(:sanctum, :public_url, "https://cyfr.example.com/")
 
     assert OAuthGrant.redirect_uri() == "https://cyfr.example.com" <> OAuthGrant.callback_path()
   end
 
   test "with no public origin configured it falls back to the endpoint" do
     # Local and dev deployments never set it, and there `http://host:port` is
-    # exactly right.
-    Application.delete_env(:cyfr, :public_url)
+    # exactly right. `:sanctum, :fallback_origin` is configured per
+    # environment beside the endpoint's own port, and this assertion is
+    # what holds the two together.
+    Application.delete_env(:sanctum, :public_url)
 
     assert OAuthGrant.redirect_uri() ==
              EmissaryWeb.Endpoint.url() <> OAuthGrant.callback_path()

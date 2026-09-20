@@ -36,31 +36,29 @@ defmodule Compendium.AgentSource do
   """
 
   alias Compendium.{AquaAgent, AquaPath}
-  alias Cyfr.ComponentRef
   alias Sanctum.Context
 
-  @type_name "agent"
+  # The ref vocabulary — the type segment, the publisher and the soul's
+  # reserved name — is `Cyfr.AgentRef`, where the identity domain reads it
+  # too: consent has to recognise an agent source it never mints.
+  @type_name Cyfr.AgentRef.type()
   @publisher "local"
 
   @doc "The source type an agent ref carries: `agent`."
   @spec type() :: String.t()
-  def type, do: @type_name
+  defdelegate type(), to: Cyfr.AgentRef
 
   @doc "The name-level ref of the agent `name`: `agent:local.<name>`."
   @spec ref(String.t()) :: String.t()
-  def ref(name) when is_binary(name), do: ComponentRef.build(@type_name, @publisher, name)
+  defdelegate ref(name), to: Cyfr.AgentRef
 
   @doc "The soul's name-level ref: `agent:local.aqua`."
   @spec soul_ref() :: String.t()
-  def soul_ref, do: ref(AquaPath.soul_name())
+  defdelegate soul_ref(), to: Cyfr.AgentRef
 
   @doc "Whether `ref` names an agent source."
   @spec agent_ref?(String.t()) :: boolean()
-  def agent_ref?(ref) when is_binary(ref) do
-    match?({:ok, %ComponentRef{type: @type_name}}, ComponentRef.parse(ref))
-  end
-
-  def agent_ref?(_), do: false
+  defdelegate agent_ref?(ref), to: Cyfr.AgentRef
 
   @doc """
   The row of every enabled agent in the estate's tree, the soul first.
@@ -160,7 +158,7 @@ defmodule Compendium.AgentSource do
 
   @doc "Whether `name` is the estate's soul."
   @spec soul?(String.t()) :: boolean()
-  def soul?(name) when is_binary(name), do: AquaPath.soul?(name)
+  defdelegate soul?(name), to: Cyfr.AgentRef
 
   @doc "The overlay unit an agent's file is: what `Arca.Overlay.unit_status/2` classifies."
   @spec unit(String.t()) :: Arca.Storage.path()

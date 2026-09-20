@@ -139,8 +139,13 @@ defmodule Sanctum.Consent.Proof do
 
   defp validate_bindings(_bindings), do: {:error, {:invalid_bindings, :bindings}}
 
-  # The in-code default matches the shipped config (config.exs): proofs are
-  # single-use REPLAY protection, so an unset key must not silently downgrade
-  # to a node-local in-memory store. Tests override to Memory explicitly.
-  defp store, do: Cyfr.RuntimeConfig.consent_proof_store()
+  @doc """
+  The selected adapter (`:sanctum, :consent_proof_store`). Proofs are
+  single-use REPLAY protection, so an unset key must not silently
+  downgrade to a node-local in-memory store: the durable store is the
+  default here as it is in the shipped config, and tests override to
+  `Memory` explicitly.
+  """
+  @spec store() :: module()
+  def store, do: Application.get_env(:sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB)
 end

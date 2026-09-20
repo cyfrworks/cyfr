@@ -329,10 +329,8 @@ defmodule Sanctum.MCP.WebhookTool do
 
   # --- helpers ---
 
-  defp broadcast_webhooks_changed(ctx) do
-    topic = Cyfr.Bus.webhooks(ctx)
-    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :webhooks_changed)
-  end
+  defp broadcast_webhooks_changed(ctx),
+    do: Sanctum.Telemetry.webhooks_changed(Sanctum.Context.athanor!(ctx))
 
   # Translate string-keyed JSON args from the MCP boundary into the atom-keyed
   # map shape that `Sanctum.Webhook.{create,update}` expect. Only known fields

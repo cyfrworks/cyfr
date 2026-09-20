@@ -38,7 +38,7 @@ defmodule PrismWeb.LoginLiveTest do
       github_id: Application.get_env(:cyfr, :github_client_id),
       google_id: Application.get_env(:cyfr, :google_client_id),
       google_secret: Application.get_env(:cyfr, :google_client_secret),
-      auth_provider: Application.get_env(:cyfr, :auth_provider),
+      auth_provider: Application.get_env(:sanctum, :auth_provider),
       device_flow: Application.get_env(:cyfr, :device_flow),
       poll_result: Application.get_env(:cyfr, :device_flow_poll_result)
     }
@@ -47,7 +47,7 @@ defmodule PrismWeb.LoginLiveTest do
       restore(:github_client_id, originals.github_id)
       restore(:google_client_id, originals.google_id)
       restore(:google_client_secret, originals.google_secret)
-      restore(:auth_provider, originals.auth_provider)
+      restore(:sanctum, :auth_provider, originals.auth_provider)
       restore(:device_flow, originals.device_flow)
       restore(:device_flow_poll_result, originals.poll_result)
     end)
@@ -55,8 +55,13 @@ defmodule PrismWeb.LoginLiveTest do
     :ok
   end
 
-  defp restore(key, nil), do: Application.delete_env(:cyfr, key)
-  defp restore(key, value), do: Application.put_env(:cyfr, key, value)
+  defp restore(key, value), do: restore(:cyfr, key, value)
+
+  # The provider selection is the identity domain's key; everything else
+  # here is the host's. Restoring the wrong application leaves a provider
+  # set for every test that runs after this one.
+  defp restore(app, key, nil), do: Application.delete_env(app, key)
+  defp restore(app, key, value), do: Application.put_env(app, key, value)
 
   describe "provider buttons" do
     test "GitHub and Google start device flow on this page, not /auth/:provider",
@@ -64,7 +69,7 @@ defmodule PrismWeb.LoginLiveTest do
       Application.put_env(:cyfr, :github_client_id, "github-device-id")
       Application.put_env(:cyfr, :google_client_id, "google-device-id")
       Application.put_env(:cyfr, :google_client_secret, "google-device-secret")
-      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
+      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
 
       {:ok, view, html} = live(conn, ~p"/login")
 
@@ -77,7 +82,7 @@ defmodule PrismWeb.LoginLiveTest do
     end
 
     test "an OIDC deployment still kicks off through /auth/oidcc", %{conn: conn} do
-      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OIDC)
+      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OIDC)
 
       {:ok, _view, html} = live(conn, ~p"/login")
 
@@ -89,7 +94,7 @@ defmodule PrismWeb.LoginLiveTest do
   describe "device flow" do
     setup do
       Application.put_env(:cyfr, :github_client_id, "github-device-id")
-      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
+      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
       Application.put_env(:cyfr, :device_flow, FakeDeviceFlow)
       :ok
     end

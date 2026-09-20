@@ -16,8 +16,8 @@ defmodule Sanctum do
   (`Sanctum.Door.admit_identity/2`) is asked first at both:
 
   - the browser flow — `EmissaryWeb.AuthController.callback/2` after the
-    configured `:auth_provider` (`Sanctum.Auth.OAuth` or `Sanctum.Auth.OIDC`)
-    proves the identity;
+    configured provider (`Sanctum.Auth.provider/0`: `Sanctum.Auth.OAuth`
+    or `Sanctum.Auth.OIDC`) proves the identity;
   - the CLI flow — `Sanctum.Auth.DeviceFlow.poll_for_session/3` behind the
     `session` MCP tool (`cyfr login`).
 
@@ -25,7 +25,7 @@ defmodule Sanctum do
 
   ## Configuration
 
-      config :cyfr,
+      config :sanctum,
         auth_provider: Sanctum.Auth.OAuth  # or the configured auth provider
   """
 
@@ -41,7 +41,47 @@ defmodule Sanctum do
   present, so those are locked down.
   """
   @spec auth_configured?() :: boolean()
-  def auth_configured?, do: not is_nil(Cyfr.RuntimeConfig.auth_provider())
+  def auth_configured?, do: not is_nil(Sanctum.Auth.provider())
+
+  @doc """
+  The externally reachable base URL of this instance, without a trailing
+  slash, or `nil` when the operator has not declared one
+  (`:sanctum, :public_url`, from `CYFR_PUBLIC_URL`).
+
+  Only the operator knows it: behind a proxy or a tunnel it is neither
+  the bind address nor the `Host` of any particular request. Two of this
+  domain's surfaces face outward and need it — the URL a webhook sender
+  is handed (`Sanctum.Webhook`) and the `redirect_uri` an OAuth provider
+  returns to (`Sanctum.Vault.OAuthGrant`) — so it is read here once.
+  """
+  @spec public_url() :: String.t() | nil
+  def public_url do
+    case Application.get_env(:sanctum, :public_url) do
+      url when is_binary(url) ->
+        case String.trim_trailing(String.trim(url), "/") do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc """
+  `public_url/0` when the operator declared one, otherwise the
+  deployment's own origin (`:sanctum, :fallback_origin`, the endpoint's
+  scheme, host and port).
+
+  Distinct from `public_url/0` on purpose: a webhook URL is a *path* when
+  nothing is declared, because handing a sender a guessed host is worse
+  than handing it nothing, while an OAuth `redirect_uri` must be absolute
+  or the flow cannot start at all. TLS deployments set `CYFR_PUBLIC_URL`.
+  """
+  @spec origin() :: String.t()
+  def origin do
+    public_url() || Application.get_env(:sanctum, :fallback_origin, "http://localhost:4000")
+  end
 
   @doc """
   Server-internal context for background/system operations — sweepers, health

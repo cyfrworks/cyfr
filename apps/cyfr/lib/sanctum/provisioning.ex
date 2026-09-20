@@ -3,14 +3,8 @@
 
 defmodule Sanctum.Provisioning do
   @moduledoc """
-  What turns an athanor row into a working athanor: the seed bundle
-  copied into the athanor's `components/` and registered as rows, the
-  shipped AQUA tree checked well-formed and copied into its `aqua/`, the
-  published components the bundle depends on pulled from the registry,
-  and a baseline consent minted for every executable local component —
-  so the athanor's AQUA answers from the first prompt. The seed tree is
-  the shipped default: what a release ships later is offered, never
-  pushed, and a reset copies it in again.
+  An athanor's half of being filled: who may hold it while it is filled,
+  what it is allowed to run once it is, and what the row says went wrong.
 
   A person's own athanor is minted at admission (`after_sign_in/1`): a
   person needs no registry, no namespace and no claim to have one, and its
@@ -22,9 +16,17 @@ defmodule Sanctum.Provisioning do
   failure leaves the row unprovisioned with the reason in its settings,
   and the next sign-in tries again.
 
-  The registry pull runs as the person whose sign-in caused it, so their
-  pull credential is used; a seed context pulls anonymously, which serves
-  public components.
+  ## What this module does, and what it does not
+
+  Copying the seed bundle in, scanning it into rows, pulling the published
+  closure, checking the shipped AQUA tree and indexing the estate's agents
+  are the component domain's work, not identity's — `Compendium.Provisioning`
+  owns them. This module owns the estate's **claim**, the **consent
+  bootstrap** the fill mints, the **readiness and failure writes** on the
+  row, and the **tenancy writes** that mint a person their own athanor. It
+  announces that an estate needs filling
+  (`[:cyfr, :sanctum, :provisioning, :fill_requested]`) and the component
+  domain reacts; nothing here names it.
 
   ## Entry points
 
@@ -35,26 +37,24 @@ defmodule Sanctum.Provisioning do
   fence. What differs per entry point is what it does when the claim is
   held:
 
-    * `after_sign_in/1`'s personal fill (`sign_in`): the row, the seat and
-      the claim are written on the sign-in; the fill runs in a background
-      task under that claim. A held claim means someone is filling
-      already, and the sign-in adds nothing. The group retries claim from
-      their own task, the same way. No backoff.
+    * `after_sign_in/1`'s personal fill (`sign_in`): the row and the seat
+      are written on the sign-in; the fill is announced and runs in the
+      background under its own claim. A held claim means someone is
+      filling already, and the sign-in adds nothing. The group retries are
+      announced the same way. No backoff.
     * `start_provisioning/1`, `ready/1` and `status/1` (`first_need`):
       readers never claim and never wait. They read the claim once and
-      answer — filled, filling, failed — and start a background fill only
-      when nothing holds the claim and no fill failed within the last
-      minute. Readers that start one at once coalesce on the claim.
+      answer — filled, filling, failed — and announce a fill only when
+      nothing holds the claim and no fill failed within the last minute.
+      Readers that announce at once coalesce on the claim.
     * `provision/2`, behind the explicit `athanor.provision`
-      (`provision`): synchronous; answers `{:error, :provisioning_busy}` at
-      once against a held claim. No backoff: a person who asks is never
-      told to wait out a failure.
-    * `install_shipped/2` (`install_shipped`): synchronous; tries the claim
-      once and answers `{:error, :provisioning_busy}` without waiting.
-    * `sync_seeds/0` at boot (`seed_sync`): synchronous; waits within a
-      bound for the claim, then heals — without the already-filled
-      short-circuit, since its job is to offer new seed media to estates
-      that are filled — and skips an estate still held past the bound.
+      (`provision`): announces an attempt and answers where the estate
+      stands once it has run. No backoff: a person who asks is never told
+      to wait out a failure, and a claim another attempt holds answers
+      `{:error, :provisioning_busy}` rather than queueing behind it.
+    * `Compendium.Provisioning`'s `install_shipped/2` (`install_shipped`)
+      and `sync_seeds/0` (`seed_sync`) take the claim through
+      `under_claim/3` and `await_claim/5` here.
 
   An attempt settles its claim `ready` or `failed`; an install, a sync and
   an attempt that found the estate filled release it. Every write that
@@ -66,19 +66,11 @@ defmodule Sanctum.Provisioning do
   them and answers `{:error, :provisioning_busy}`. An attempt that dies
   is released by its keeper, which monitors it; with the keeper gone too,
   the lease runs out.
-
-  Required dependency pulls run under one deadline per attempt
-  (`:provisioning_required_pull_budget_ms`); optional pulls under a
-  shorter fixed one. A walk cut short stops where it is: what landed stays
-  registered, the failure is recorded on the row, and the next attempt
-  finds what is still missing by reading every installed component's
-  manifest.
   """
 
   require Logger
 
   alias Arca.ProvisioningClaims, as: Claims
-  alias Compendium.{AutoIndexer, Pull}
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Caps, Members, Users}
 
@@ -87,23 +79,22 @@ defmodule Sanctum.Provisioning do
   @lease_ms 60_000
   @renew_ms 20_000
 
-  # How long a boot's seed sync waits for an estate another attempt holds.
-  @sync_wait_ms 30_000
-  @sync_poll_ms 250
+  @typedoc "The claim an attempt holds while it fills an estate."
+  @type claim :: Arca.Schemas.ProvisioningClaim.t()
 
   @doc """
   Called once the person is admitted, and again whenever their namespace
   is recorded (`Sanctum.SignIn.record_namespace/2`): mints their own
-  athanor if they have none, and retries any group of theirs whose
-  provisioning failed earlier. Admission is enough — a person needs no
-  registry, no namespace and no claim to have a furnace of their own.
+  athanor if they have none, and announces a retry for any group of theirs
+  whose provisioning failed earlier. Admission is enough — a person needs
+  no registry, no namespace and no claim to have a furnace of their own.
   """
   @spec after_sign_in(String.t()) ::
           {:ok, Arca.Schemas.Athanor.t()} | {:error, term()} | :pending
   def after_sign_in(user_id) when is_binary(user_id) do
     case Users.get(user_id) do
       {:ok, user} ->
-        retry_groups_async(user_id)
+        retry_groups(user_id)
         ensure_personal_athanor(user)
 
       {:error, :not_found} ->
@@ -118,8 +109,8 @@ defmodule Sanctum.Provisioning do
   The person's own athanor: the one their `users` row records, else a
   fresh one (kind person, a slug of this server's — their namespace when
   they have one and it is free, otherwise derived from their name — the
-  person its only member), provisioned if not yet, and recorded on the
-  row. Idempotent.
+  person its only member), announced for filling if not yet filled, and
+  recorded on the row. Idempotent.
   """
   @spec ensure_personal_athanor(Arca.Schemas.User.t()) ::
           {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
@@ -127,11 +118,9 @@ defmodule Sanctum.Provisioning do
     with {:ok, athanor} <- find_or_create_personal(user),
          {:ok, _} <- Members.ensure(user_id, scope: "athanor", athanor_id: athanor.id),
          {:ok, _} <- record_personal(user, athanor) do
-      # The row, its seat and the claim are the sign-in's business and are
-      # written here; filling it is not, and a sign-in must not wait on a
+      # The row and its seat are the sign-in's business and are written
+      # here; filling it is not, and a sign-in must not wait on a
       # registry. A failure lands on the row and the next read retries.
-      # The claim is taken before the task starts, so a reader arriving
-      # with the session already finds the estate being filled.
       fill_after_sign_in(athanor, person_ctx(user_id, athanor.id))
       {:ok, athanor}
     end
@@ -139,74 +128,7 @@ defmodule Sanctum.Provisioning do
 
   defp fill_after_sign_in(%{provisioned_at: %DateTime{}}, _ctx), do: :ok
 
-  defp fill_after_sign_in(%{id: athanor_id} = athanor, ctx) do
-    actor = actor(athanor_id)
-
-    with true <- Cyfr.ControlPlane.owner?(),
-         {:ok, claim} <- Claims.claim(actor, owner(), "sign_in", @lease_ms) do
-      in_background(
-        fn -> held(actor, claim, &fill(&1, athanor, ctx)) end,
-        fn -> Claims.release(actor, claim.owner, claim.fence) end
-      )
-    end
-
-    :ok
-  end
-
-  @doc """
-  Copy a shipped component version into the context's athanor — a newer
-  version a release brought, or one the athanor lacks — register it and
-  mint its baseline consent, as the first fill did for what shipped then.
-  A `local` ref names what the server ships; a versionless ref takes the
-  newest shipped version. Answers what `Compendium.Pull.pull_shipped/2`
-  does: `{:error, :not_shipped}` for a version the seed does not carry.
-  """
-  @spec install_shipped(Context.t(), String.t()) ::
-          {:ok, %{status: String.t(), component_ref: String.t()}} | {:error, term()}
-  def install_shipped(%Context{athanor_id: athanor_id} = ctx, reference)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(reference) do
-    # The same claim every other filler takes: this mints consent, and a
-    # background fill or a boot sync doing the same walk at the same moment
-    # would interleave two mints over one athanor's sources. Tried once —
-    # a person is holding this request open, and a refusal they can retry
-    # beats queueing behind a fill. Released with no verdict on readiness.
-    with_claim(athanor_id, "install_shipped", fn claim ->
-      with {:ok, pulled} <- Pull.pull_shipped(ctx, reference),
-           {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx, claim),
-           :ok <- installed_minted(bootstrap, pulled) do
-        {:ok, pulled}
-      else
-        {:error, :claim_lost} -> lost(athanor_id)
-        other -> other
-      end
-    end)
-  end
-
-  # What this install answers for is its own consent. The walk covers every
-  # source in the athanor, so a skip belonging to another one is that
-  # source's business — and `all_minted/1`'s benign reasons (already
-  # bootstrapped, not vouched, an agent whose closure is unresolved) are not
-  # failures anywhere.
-  defp installed_minted(bootstrap, %{component_ref: ref}) do
-    case all_minted(bootstrap) do
-      :ok ->
-        :ok
-
-      {:unminted, unminted} ->
-        if Enum.any?(unminted, fn {skipped_ref, _reason} -> same_component?(skipped_ref, ref) end),
-           do: {:error, {:consent_not_minted, ref}},
-           else: :ok
-    end
-  end
-
-  defp same_component?(a, b) do
-    with {:ok, a_name} <- Cyfr.ComponentRef.to_name_ref(a),
-         {:ok, b_name} <- Cyfr.ComponentRef.to_name_ref(b) do
-      a_name == b_name
-    else
-      _ -> a == b
-    end
-  end
+  defp fill_after_sign_in(athanor, ctx), do: request_fill(athanor, ctx, "sign_in")
 
   @doc """
   Whether the context's athanor has been filled.
@@ -223,17 +145,13 @@ defmodule Sanctum.Provisioning do
   def provisioned?(_ctx), do: false
 
   @doc """
-  Start filling the context's athanor if nothing has yet, and answer at
-  once — the first-need hook.
+  Ask for the context's athanor to be filled if nothing has yet, and
+  answer at once — the first-need hook.
 
-  Never waits: provisioning walks the seed overlay and may pull a
-  dependency closure over the network, and no request path may hold a page
-  open for that. The work is single-flighted per athanor, so a second
-  caller finding it already running adds nothing.
-
-  Deliberately **not** called from inside `Arca.Overlay`: `provision/2`
-  walks the overlay itself (`register_bundle/1` → `AutoIndexer.scan/1`), so
-  a hook down there would re-enter its own scan.
+  Never waits: filling walks the seed overlay and may pull a dependency
+  closure over the network, and no request path may hold a page open for
+  that. The work is single-flighted per athanor, so a second caller
+  finding it already running adds nothing.
   """
   @spec start_provisioning(Context.t()) :: :ok
   def start_provisioning(%Context{athanor_id: athanor_id} = ctx)
@@ -243,7 +161,7 @@ defmodule Sanctum.Provisioning do
         :ok
 
       {:ok, athanor} ->
-        if fill_state(athanor) == :unfilled, do: start_fill(athanor, ctx, "first_need")
+        if fill_state(athanor) == :unfilled, do: request_fill(athanor, ctx, "first_need")
         :ok
 
       _ ->
@@ -279,7 +197,7 @@ defmodule Sanctum.Provisioning do
   @retry_after_failure_ms :timer.minutes(1)
 
   # An unfilled estate, by its claim. A reader never takes the claim: the
-  # fill it may start does, from its own task.
+  # fill it asks for does, from its own task.
   defp fill_state(%{id: athanor_id} = athanor) do
     case Claims.current(actor(athanor_id)) do
       {:ok, claim} ->
@@ -313,11 +231,12 @@ defmodule Sanctum.Provisioning do
   defp recently_failed?(_athanor, _claim), do: false
 
   @doc """
-  Start the fill if needed, and say whether the estate can run a turn yet.
+  Ask for the fill if needed, and say whether the estate can run a turn
+  yet.
 
   `:ok` when the athanor is filled, `{:error, :not_provisioned}` while it
-  is not — with the work started, so an estate first touched over the wire
-  fills without a console ever opening it.
+  is not — with the work asked for, so an estate first touched over the
+  wire fills without a console ever opening it.
 
   Reads of the bundle do not use this: the tree reads through the seed
   overlay from the moment the row exists, so a roster is real straight
@@ -335,37 +254,72 @@ defmodule Sanctum.Provisioning do
   end
 
   @doc """
-  Fill an athanor: register the bundle (the scan walking the seed overlay)
-  → pull the dependency closure → baseline consents → mark provisioned.
-  `acting_ctx` is the person's context focused on the athanor (their pull
-  credential); `nil` provisions as the server (anonymous pulls). Returns
-  the row either way; a failure is recorded on it and logged.
+  Fill an athanor, behind the explicit `athanor.provision`: ask for an
+  attempt now — no backoff, since a person asked — and answer where the
+  estate stands once it has run.
 
-  Single-flighted per athanor: `provision/2` is idempotent but the closure
-  pull is not free, so two callers finding a fresh estate at once would
-  each walk it. Everything that fills an athanor comes through here.
+  `acting_ctx` is the person's context focused on the athanor (their pull
+  credential); `nil` provisions as the server (anonymous pulls). The
+  filler runs the attempt in this process, so this answers for the
+  attempt it asked for: an attempt another caller holds is
+  `{:error, :provisioning_busy}` at once, one that failed says where and
+  why, and the outcome is on the row either way. A deployment with no
+  filler attached answers `{:error, :unavailable}` — an estate nothing
+  can fill is neither busy nor failed.
   """
   @spec provision(Arca.Schemas.Athanor.t(), Context.t() | nil) ::
           {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
   def provision(%{provisioned_at: %DateTime{}} = athanor, _ctx), do: {:ok, athanor}
 
-  def provision(%{id: athanor_id} = athanor, acting_ctx),
-    do: with_claim(athanor_id, "provision", &fill(&1, athanor, acting_ctx))
+  def provision(athanor, acting_ctx) do
+    ref = make_ref()
+    request_fill(athanor, acting_ctx, "provision", %{reply_to: self(), ref: ref})
 
-  @doc false
-  # One attempt under a claim already taken — what every filling entry
-  # point runs once it holds the estate. Public so a test can run an
-  # attempt under a claim it took, and lost, itself.
-  @spec fill(Arca.Schemas.ProvisioningClaim.t(), Arca.Schemas.Athanor.t(), Context.t() | nil) ::
-          {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
-  def fill(claim, %{id: athanor_id} = athanor, acting_ctx) do
-    # Re-read under the claim: the attempt that just held it may have been
-    # filling this very athanor.
-    case Athanors.get(athanor_id) do
-      {:ok, %{provisioned_at: %DateTime{}} = filled} -> {:ok, filled}
-      {:ok, fresh} -> do_provision(claim, fresh, acting_ctx)
-      _ -> do_provision(claim, athanor, acting_ctx)
+    # The filler runs this attempt in the asking process — that is what
+    # makes the explicit verb synchronous, exactly as it was when this
+    # module ran the attempt itself — so its answer is already in the
+    # mailbox when the announcement returns. A deployment with no filler
+    # attached has an estate nothing can fill, which is neither busy nor
+    # failed.
+    receive do
+      {:provisioning_filled, ^ref, outcome} -> outcome
+    after
+      0 -> {:error, :unavailable}
     end
+  end
+
+  # ---- the estate's filler ---------------------------------------------------
+
+  @fill_event [:cyfr, :sanctum, :provisioning, :fill_requested]
+
+  @doc """
+  The event this module announces an estate needs filling with. Named
+  here so the component domain attaches to one spelling.
+  """
+  @spec fill_event() :: [atom(), ...]
+  def fill_event, do: @fill_event
+
+  # An estate needs filling. A foundation below the host announces and
+  # never calls up: the component domain attaches to this event and does
+  # the work — in the background for the hooks, in the caller's process
+  # for the explicit verb, which is what makes `provision/2` answer for
+  # the attempt it asked for.
+  defp request_fill(athanor, acting_ctx, entry_kind, extra \\ %{}) do
+    :telemetry.execute(
+      @fill_event,
+      %{count: 1},
+      Map.merge(
+        %{
+          athanor: athanor,
+          athanor_id: athanor.id,
+          acting_ctx: acting_ctx,
+          entry_kind: entry_kind
+        },
+        extra
+      )
+    )
+
+    :ok
   end
 
   # ---- the claim -------------------------------------------------------------
@@ -374,21 +328,95 @@ defmodule Sanctum.Provisioning do
   # attempt's own — never another boot's, and never another attempt's.
   defp owner, do: Cyfr.Boot.id() <> "/" <> Cyfr.UUID7.generate_id("own")
 
-  # The claim is the athanor's, whoever acts: the actor names the tenant
-  # and nothing else.
-  defp actor(athanor_id), do: Context.actor(seed_ctx(athanor_id))
+  @doc """
+  The actor a claim on `athanor_id` is taken under. The claim is the
+  athanor's, whoever acts: the actor names the tenant and nothing else.
+  """
+  @spec actor(String.t()) :: Cyfr.Actor.t()
+  def actor(athanor_id), do: Context.actor(seed_ctx(athanor_id))
 
-  # Try the estate's claim once and run `fun` holding it. A held claim is
-  # answered as in progress at once, never waited out.
-  defp with_claim(athanor_id, entry_kind, fun) do
-    actor = actor(athanor_id)
+  @doc """
+  Try the estate's claim once and run `fun` holding it. A held claim is
+  answered as in progress at once, never waited out.
+  """
+  @spec under_claim(String.t(), String.t(), (claim() -> result)) ::
+          result | {:error, :provisioning_busy} | {:error, term()}
+        when result: term()
+  def under_claim(athanor_id, entry_kind, fun) when is_function(fun, 1) do
+    case take_claim(athanor_id, entry_kind) do
+      {:ok, claim} -> hold(athanor_id, claim, fun)
+      {:error, _} = error -> error
+    end
+  end
 
-    case Claims.claim(actor, owner(), entry_kind, @lease_ms) do
-      {:ok, claim} -> held(actor, claim, fun)
+  @doc """
+  Take the estate's claim without holding it, for a filler that hands the
+  work to another process: the claim is taken here, so a reader arriving
+  straight after already finds the estate being filled, and `hold/3` runs
+  where the work does. A claim nothing released is `release/2`'s to give
+  back.
+  """
+  @spec take_claim(String.t(), String.t()) ::
+          {:ok, claim()} | {:error, :provisioning_busy} | {:error, term()}
+  def take_claim(athanor_id, entry_kind) do
+    case Claims.claim(actor(athanor_id), owner(), entry_kind, @lease_ms) do
+      {:ok, claim} -> {:ok, claim}
       {:busy, _claim} -> {:error, :provisioning_busy}
       {:error, _} = error -> error
     end
   end
+
+  @doc """
+  Run `fun` under a claim this process now answers for: a keeper renews
+  the lease while it runs, and whatever `fun` did not settle is released
+  when it ends.
+  """
+  @spec hold(String.t(), claim(), (claim() -> result)) :: result when result: term()
+  def hold(athanor_id, claim, fun) when is_function(fun, 1),
+    do: held(actor(athanor_id), claim, fun)
+
+  @doc "Give a taken claim back with no verdict on readiness."
+  @spec release(String.t(), claim()) :: :ok | :stale | {:error, term()}
+  def release(athanor_id, claim),
+    do: Claims.release(actor(athanor_id), claim.owner, claim.fence)
+
+  @doc """
+  Wait out an attempt in progress, within `wait_ms`, then run `fun`
+  holding the estate's claim. The boot's seed sync has no one to answer
+  to, so it waits — but one held estate must not keep the boot from the
+  next, which is what the bound is for.
+  """
+  @spec await_claim(String.t(), String.t(), non_neg_integer(), pos_integer(), (claim() -> result)) ::
+          result | {:error, :provisioning_busy} | {:error, term()}
+        when result: term()
+  def await_claim(athanor_id, entry_kind, wait_ms, poll_ms, fun) when is_function(fun, 1) do
+    actor = actor(athanor_id)
+
+    case wait_for_claim(actor, owner(), entry_kind, now_ms() + wait_ms, poll_ms) do
+      {:ok, claim} -> held(actor, claim, fun)
+      {:error, _} = error -> error
+    end
+  end
+
+  defp wait_for_claim(actor, owner, entry_kind, deadline, poll_ms) do
+    case Claims.claim(actor, owner, entry_kind, @lease_ms) do
+      {:ok, claim} ->
+        {:ok, claim}
+
+      {:busy, _claim} ->
+        if now_ms() < deadline do
+          Process.sleep(poll_ms)
+          wait_for_claim(actor, owner, entry_kind, deadline, poll_ms)
+        else
+          {:error, :provisioning_busy}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   # Run `fun` under a claim this process now answers for: a keeper renews
   # the lease while it runs, and whatever `fun` did not settle is released
@@ -441,9 +469,15 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  # Whether the claim still reads this attempt's owner and fence, asked
-  # before a write the claim's own settle cannot carry.
-  defp holding(actor, claim) do
+  @doc """
+  Whether the estate's claim still reads this attempt's owner and fence,
+  asked before a write the claim's own settle cannot carry.
+  """
+  @spec holding(String.t(), claim()) :: :ok | {:error, :claim_lost}
+  def holding(athanor_id, claim) when is_binary(athanor_id),
+    do: holding_actor(actor(athanor_id), claim)
+
+  defp holding_actor(actor, claim) do
     case Claims.current(actor) do
       {:ok, %{owner: owner, fence: fence, outcome: nil}}
       when owner == claim.owner and fence == claim.fence ->
@@ -454,163 +488,220 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  # An attempt whose claim a successor took: it marks nothing and records
-  # nothing, and the estate is the successor's — in progress, not failed.
-  defp lost(athanor_id) do
-    Logger.warning("[Provisioning] #{athanor_id}: claim lost to a later attempt; nothing written")
-    {:error, :provisioning_busy}
-  end
-
-  # A background fill through `entry_kind`, claimed from its own task.
-  # Several readers ask on one page load; each task that finds the claim
-  # held adds nothing and ends.
-  defp start_fill(%{id: athanor_id} = athanor, ctx, entry_kind) do
-    in_background(fn -> with_claim(athanor_id, entry_kind, &fill(&1, athanor, ctx)) end)
-  end
-
-  defp do_provision(claim, %{id: athanor_id} = athanor, acting_ctx) do
-    ctx = acting_ctx || seed_ctx(athanor_id)
-    actor = actor(athanor_id)
-
-    # The agents are indexed before the consents are minted: an agent is a
-    # consent source, and its revision bytes are registered by the index
-    # before any consent names it.
-    with :ok <- Arca.ensure_roots(seed_ctx(athanor_id)),
-         {:ok, _scan} <- register_bundle(athanor_id),
-         :ok <- aqua_definitions(athanor_id),
-         :ok <- holding(actor, claim),
-         :ok <- index_agents(ctx),
-         {:ok, closure} <- pull_required_deps(ctx),
-         optional <- pull_optional_deps(ctx),
-         {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx, claim),
-         :ok <- all_minted(bootstrap),
-         :ok <- settled(actor, claim, "ready", nil) do
-      Logger.info(
-        "[Provisioning] #{athanor_id} provisioned " <>
-          "(pulled #{length(closure.pulled)} required and #{optional} optional, " <>
-          "minted #{length(bootstrap.minted)})"
-      )
-
-      # The estate's own topic, the kind every console subscriber already
-      # re-reads the row on: a page rendering "still being prepared" clears
-      # itself rather than waiting for a reload. Only when the mark landed —
-      # announcing a fill that did not finish would have every listener read
-      # the bundle again and start another attempt.
-      case Athanors.mark_provisioned(athanor) do
-        {:ok, filled} ->
-          Sanctum.Notify.broadcast(athanor_id, :athanor_changed, %{name: filled.name})
-          {:ok, filled}
-
-        {:error, _} = error ->
-          Logger.error("[Provisioning] #{athanor_id} filled but not marked: #{inspect(error)}")
-          error
-      end
-    else
-      {:error, :claim_lost} ->
-        lost(athanor_id)
-
-      {:error, {:closure, detail}} ->
-        record_failure(claim, athanor, :closure, detail)
-
-      {:error, {:aqua_template, _} = reason} ->
-        record_failure(claim, athanor, :aqua_template, reason)
-
-      {:error, reason} ->
-        record_failure(claim, athanor, :seed, reason)
-
-      {:unminted, skipped} ->
-        record_failure(claim, athanor, :bootstrap, skipped)
-    end
-  end
-
-  # The claim's own verdict, written only while this attempt still holds
-  # it. What follows a verdict — the mark, the failure record — is written
-  # only once it landed.
-  defp settled(actor, claim, outcome, detail) do
-    case Claims.settle(actor, claim.owner, claim.fence, outcome, detail) do
+  @doc """
+  The claim's own verdict, written only while this attempt still holds
+  it. What follows a verdict — the mark, the failure record — is written
+  only once it landed.
+  """
+  @spec settle(String.t(), claim(), String.t(), String.t() | nil) ::
+          :ok | {:error, :claim_lost} | {:error, term()}
+  def settle(athanor_id, claim, outcome, detail) when is_binary(athanor_id) do
+    case Claims.settle(actor(athanor_id), claim.owner, claim.fence, outcome, detail) do
       :ok -> :ok
       :stale -> {:error, :claim_lost}
       {:error, _} = error -> error
     end
   end
 
-  # ---- internal --------------------------------------------------------------
+  @doc """
+  An attempt whose claim a successor took: it marks nothing and records
+  nothing, and the estate is the successor's — in progress, not failed.
+  """
+  @spec lost(String.t()) :: {:error, :provisioning_busy}
+  def lost(athanor_id) do
+    Logger.warning("[Provisioning] #{athanor_id}: claim lost to a later attempt; nothing written")
+    {:error, :provisioning_busy}
+  end
 
-  # The row exists whether or not provisioning succeeded: the caller gets
-  # it either way (a failure is on the row's settings and in the log), and a
-  # later sign-in or focus retries.
-  # The estate's agents as rows, derived from the tree the seed just
-  # filled or the release just moved. Never provisioning's failure.
-  defp index_agents(ctx) do
-    case Compendium.AgentIndex.sync(ctx) do
-      {:ok, _} ->
-        :ok
+  # ---- what a fill asks this module for --------------------------------------
 
-      {:error, reason} ->
-        Logger.warning("[Provisioning] agent index not synced: #{inspect(reason)}")
+  @doc """
+  The athanor row, for a filler that holds only its id. Reading tenancy
+  rows is this domain's; the component domain never queries them.
+  """
+  @spec athanor(String.t()) :: {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
+  defdelegate athanor(athanor_id), to: Athanors, as: :get
+
+  @doc """
+  Every filled athanor a boot's seed sync offers new media to — active,
+  and already provisioned.
+  """
+  @spec filled_athanors() :: [Arca.Schemas.Athanor.t()]
+  def filled_athanors do
+    for athanor <- Athanors.list_active(), not is_nil(athanor.provisioned_at), do: athanor
+  end
+
+  @doc """
+  The baseline consents for everything the fill registered, minted under
+  the attempt's claim. `:ok` when every vouched local source holds one;
+  `{:unminted, refs}` names what did not mint and why.
+
+  A skip for "already bootstrapped" or "not vouched" (a member-authored
+  or edited source) is not a provisioning failure: those consent through
+  the walk. An agent whose closure the bundle does not resolve is
+  re-minted by a later sync once it does.
+  """
+  @spec bootstrap_consents(Context.t(), claim()) ::
+          {:ok, Sanctum.Consent.Bootstrap.result()}
+          | {:unminted, [{String.t(), term()}]}
+          | {:error, term()}
+  def bootstrap_consents(%Context{} = ctx, claim) do
+    with {:ok, bootstrap} <- Sanctum.Consent.Bootstrap.run(ctx, claim),
+         :ok <- all_minted(bootstrap) do
+      {:ok, bootstrap}
     end
   end
 
-  # A person's unprovisioned groups are retried with their credential — off
-  # the sign-in path, since each retry may pull from the registry, and a
-  # sign-in must not hang on an unreachable one. Bounded per sign-in; a
+  @doc """
+  The consents a single install answers for: its own. The walk covers
+  every source in the athanor, so a skip belonging to another one is that
+  source's business.
+  """
+  @spec bootstrap_consents_for(Context.t(), claim(), String.t()) :: :ok | {:error, term()}
+  def bootstrap_consents_for(%Context{} = ctx, claim, component_ref) do
+    case bootstrap_consents(ctx, claim) do
+      {:ok, _bootstrap} ->
+        :ok
+
+      {:unminted, unminted} ->
+        if Enum.any?(unminted, fn {skipped_ref, _reason} ->
+             same_component?(skipped_ref, component_ref)
+           end),
+           do: {:error, {:consent_not_minted, component_ref}},
+           else: :ok
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp all_minted(%{skipped: skipped}) do
+    case Enum.reject(skipped, fn {ref, reason} ->
+           reason in [:already_bootstrapped, :not_vouched] or Cyfr.AgentRef.agent_ref?(ref)
+         end) do
+      [] -> :ok
+      unminted -> {:unminted, unminted}
+    end
+  end
+
+  defp same_component?(a, b) do
+    with {:ok, a_name} <- Cyfr.ComponentRef.to_name_ref(a),
+         {:ok, b_name} <- Cyfr.ComponentRef.to_name_ref(b) do
+      a_name == b_name
+    else
+      _ -> a == b
+    end
+  end
+
+  @doc """
+  Mark the estate filled and tell its subscribers. Called only once the
+  claim settled `ready`: announcing a fill that did not finish would have
+  every listener read the bundle again and ask for another attempt.
+  """
+  @spec mark_filled(Arca.Schemas.Athanor.t()) ::
+          {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
+  def mark_filled(athanor) do
+    case Athanors.mark_provisioned(athanor) do
+      {:ok, filled} ->
+        # The estate's own topic, the kind every console subscriber already
+        # re-reads the row on: a page rendering "still being prepared" clears
+        # itself rather than waiting for a reload.
+        Sanctum.Notify.broadcast(filled.id, :athanor_changed, %{name: filled.name})
+        {:ok, filled}
+
+      {:error, _} = error ->
+        Logger.error("[Provisioning] #{athanor.id} filled but not marked: #{inspect(error)}")
+        error
+    end
+  end
+
+  @doc """
+  Record where a fill stopped. The claim settles `failed` first, and the
+  row records the failure only once that landed: an attempt whose claim a
+  successor took leaves the successor's record alone.
+  """
+  @spec record_failure(claim(), Arca.Schemas.Athanor.t(), atom(), term()) :: {:error, term()}
+  def record_failure(claim, athanor, step, detail) do
+    case settle(athanor.id, claim, "failed", "#{step}: #{inspect(detail)}") do
+      :ok ->
+        Logger.warning(
+          "[Provisioning] #{athanor.id} not provisioned at #{step}: #{inspect(detail)}"
+        )
+
+        :telemetry.execute([:cyfr, :sanctum, :provisioning, :failed], %{count: 1}, %{
+          athanor_id: athanor.id,
+          step: step
+        })
+
+        Athanors.record_provisioning_failure(athanor, step, inspect(detail))
+
+        {:error, {:provisioning_failed, step, detail}}
+
+      {:error, :claim_lost} ->
+        lost(athanor.id)
+
+      {:error, reason} ->
+        # The claim could not be read, so whether this attempt still holds
+        # it is unknown: the row is left as it is.
+        Logger.error(
+          "[Provisioning] #{athanor.id} not provisioned at #{step} (#{inspect(detail)}), " <>
+            "and the failure not recorded: #{inspect(reason)}"
+        )
+
+        {:error, {:provisioning_failed, step, detail}}
+    end
+  end
+
+  # ---- contexts --------------------------------------------------------------
+
+  @doc """
+  The person's context, focused on the athanor: their pull credential,
+  their attribution on the minted consents.
+
+  Permissions are stated explicitly per `Context.for_scheduled/2`'s
+  convention — never `[:*]`, so what provisioning runs with is visible
+  here and cannot silently widen. The path performs storage acts only
+  (the seed scan, registration rows, registry pulls into `components/`);
+  it never executes a component, and the consent bootstrap mints via
+  `granted_via: "bootstrap"`, not through the consent surface gates.
+  `auth_method: :oidc` records provenance honestly — this context exists
+  because of the person's OIDC sign-in; no gate on this path requires
+  the interactive class.
+  """
+  @spec person_ctx(String.t(), String.t()) :: Context.t()
+  def person_ctx(user_id, athanor_id) do
+    Context.build(
+      user_id: user_id,
+      athanor_id: athanor_id,
+      permissions: [:storage_read, :storage_write],
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
+  end
+
+  @doc "The server's own context inside `athanor_id` — what a fill runs as."
+  @spec seed_ctx(String.t()) :: Context.t()
+  def seed_ctx(athanor_id) do
+    Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
+  end
+
+  # ---- the person's own athanor ----------------------------------------------
+
+  # A person's unprovisioned groups are retried with their credential — the
+  # announcement is what starts them, and a fill may pull from the registry,
+  # so a sign-in never hangs on an unreachable one. Bounded per sign-in; a
   # failure lands on the group's row and the next sign-in (or a member's
   # `athanor.provision`) tries again.
   @retry_groups_per_sign_in 5
 
-  defp retry_groups_async(user_id) do
-    pending =
-      Athanors.list_for_user(user_id)
-      |> Enum.filter(&match?(%{kind: "group", provisioned_at: nil}, &1))
-      |> Enum.take(@retry_groups_per_sign_in)
-
-    if pending != [] do
-      in_background(fn ->
-        Enum.each(pending, fn group ->
-          with_claim(group.id, "sign_in", &fill(&1, group, person_ctx(user_id, group.id)))
-        end)
-      end)
-    end
+  defp retry_groups(user_id) do
+    Athanors.list_for_user(user_id)
+    |> Enum.filter(&match?(%{kind: "group", provisioned_at: nil}, &1))
+    |> Enum.take(@retry_groups_per_sign_in)
+    |> Enum.each(fn group -> request_fill(group, person_ctx(user_id, group.id), "sign_in") end)
 
     :ok
-  end
-
-  # A fill runs only on the boot that owns the control plane; elsewhere it
-  # is not started, and the next read on the owner starts it. Under test
-  # the sandbox owns the connection, so background work runs inline (the
-  # tests assert on rows right after the call). `not_started` runs when the
-  # work will not: what a caller took for it beforehand is given back.
-  defp in_background(fun, not_started \\ fn -> :ok end) do
-    cond do
-      not Cyfr.ControlPlane.owner?() ->
-        not_started.()
-        :ok
-
-      Application.get_env(:cyfr, :provisioning_inline, false) ->
-        fun.()
-        :ok
-
-      true ->
-        logger_metadata = Cyfr.LoggerContext.capture()
-
-        task_fun = fn ->
-          Cyfr.LoggerContext.restore(logger_metadata)
-          fun.()
-        end
-
-        case Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, task_fun) do
-          {:ok, _pid} ->
-            :ok
-
-          {:error, reason} ->
-            # A retry the supervisor could not start is only a deferral: the
-            # next sign-in (or a member's athanor.provision) tries again.
-            Logger.error("[Provisioning] background provisioning not started: #{inspect(reason)}")
-
-            not_started.()
-            :ok
-        end
-    end
   end
 
   # One personal athanor per owner is the store's invariant, so the owner
@@ -679,418 +770,5 @@ defmodule Sanctum.Provisioning do
     Caps.check_counted(:mint_per_hour, fn ->
       Athanors.count_created_since(DateTime.add(DateTime.utc_now(), -3600))
     end)
-  end
-
-  # The person's own context, focused on the new athanor: their pull
-  # credential, their attribution on the minted consents.
-  #
-  # Permissions are stated explicitly per `Context.for_scheduled/2`'s
-  # convention — never `[:*]`, so what provisioning runs with is visible
-  # here and cannot silently widen. The path performs storage acts only
-  # (the seed scan, registration rows, registry pulls into `components/`);
-  # it never executes a component, and the consent bootstrap mints via
-  # `granted_via: "bootstrap"`, not through the consent surface gates.
-  # `auth_method: :oidc` records provenance honestly — this context exists
-  # because of the person's OIDC sign-in; no gate on this path requires
-  # the interactive class.
-  defp person_ctx(user_id, athanor_id) do
-    Context.build(
-      user_id: user_id,
-      athanor_id: athanor_id,
-      permissions: [:storage_read, :storage_write],
-      scope: :athanor,
-      auth_method: :oidc,
-      authenticated: true
-    )
-  end
-
-  defp seed_ctx(athanor_id) do
-    Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
-  end
-
-  # The bundle copied in and registered as rows: every shipped version
-  # directory the athanor does not hold is copied from the seed
-  # (`Arca.Overlay.materialize_shipped/2`), then the scan walks the
-  # athanor's `components/` and mints a row per version directory. An
-  # install without its bundle cannot provision anyone; say so rather than
-  # minting an empty athanor.
-  defp register_bundle(athanor_id) do
-    ctx = seed_ctx(athanor_id)
-
-    with :ok <- bundle_present(ctx),
-         {:ok, _copied} <- Arca.Overlay.materialize_shipped(ctx, "components") do
-      # A component that fails registration is logged by the scan and
-      # skipped; the consent bootstrap's `all_minted` is the gate that
-      # decides whether what registered is enough to provision. A
-      # discovery outage is the scan's own typed error and fails the
-      # provisioning step loudly.
-      AutoIndexer.scan(ctx: ctx)
-    end
-  end
-
-  defp bundle_present(ctx) do
-    case Arca.list_recursive(ctx, Arca.Storage.seed_prefix("components")) do
-      {:ok, [_ | _]} -> :ok
-      {:ok, []} -> {:error, :bundle_missing}
-      {:error, reason} -> {:error, {:bundle_unreadable, reason}}
-    end
-  end
-
-  # The shipped AQUA tree, checked well-formed first (a v2-shaped or empty
-  # mount fails loud here, at the one moment an operator is watching,
-  # instead of as an empty roster later), then copied into the athanor's
-  # `aqua/` — every shipped unit it does not yet hold.
-  defp aqua_definitions(athanor_id) do
-    with :ok <- Compendium.AquaTemplate.seed_check(),
-         {:ok, _copied} <- Arca.Overlay.materialize_shipped(seed_ctx(athanor_id), "aqua") do
-      :ok
-    else
-      {:error, reason} -> {:error, {:aqua_template, reason}}
-    end
-  end
-
-  @doc """
-  Make every provisioned athanor whole against the seed media a release
-  shipped — without changing what the athanor chose. A shipped version a
-  row names but the tree no longer holds is copied back; an athanor
-  without its shipped soul gets the shipped AQUA tree; the bundle's
-  published dependencies are re-pulled and baseline consents minted for
-  any row still without one. Newer shipped versions are NOT copied in:
-  they read as available until a person pulls them, so an upgrade never
-  changes an estate under its members.
-
-  Runs at boot (`Cyfr.Bootstrap`); a failure logs and moves on — a sync
-  must never take the server down or block another athanor's.
-  """
-  @spec sync_seeds() :: :ok
-  def sync_seeds do
-    for athanor <- Athanors.list_active(), not is_nil(athanor.provisioned_at) do
-      # The same claim every fill takes, so a boot healing an estate and an
-      # install or a retry cannot walk one estate at once. Not `provision/2`:
-      # this runs on athanors that are already filled, which is exactly what
-      # that function short-circuits. The sync has no one to answer to, so
-      # it waits out an attempt in progress — within a bound, since one
-      # held estate must not keep the boot from the next.
-      actor = actor(athanor.id)
-
-      case wait_for_claim(actor, owner(), now_ms() + @sync_wait_ms) do
-        {:ok, claim} ->
-          held(actor, claim, &sync_seed(athanor, &1))
-
-        {:error, reason} ->
-          Logger.warning("[Provisioning] #{athanor.id}: seed sync skipped — #{inspect(reason)}")
-      end
-    end
-
-    :ok
-  end
-
-  defp wait_for_claim(actor, owner, deadline) do
-    case Claims.claim(actor, owner, "seed_sync", @lease_ms) do
-      {:ok, claim} ->
-        {:ok, claim}
-
-      {:busy, _claim} ->
-        if now_ms() < deadline do
-          Process.sleep(@sync_poll_ms)
-          wait_for_claim(actor, owner, deadline)
-        else
-          {:error, :provisioning_busy}
-        end
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp now_ms, do: System.monotonic_time(:millisecond)
-
-  defp sync_seed(athanor, claim) do
-    ctx = seed_ctx(athanor.id)
-
-    case Arca.ensure_roots(ctx) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[Provisioning] #{athanor.id}: roots — #{inspect(reason)}")
-    end
-
-    heal_shipped(ctx, athanor.id)
-
-    case AutoIndexer.scan(ctx: ctx) do
-      {:ok, %{registered: registered}} when registered > 0 ->
-        Logger.info("[Provisioning] #{athanor.id}: registered #{registered} bundle version(s)")
-
-      {:ok, %{errors: errors}} when errors > 0 ->
-        Logger.warning("[Provisioning] #{athanor.id}: bundle sync hit #{errors} error(s)")
-
-      {:ok, _scan} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[Provisioning] #{athanor.id}: bundle sync skipped — #{inspect(reason)}")
-    end
-
-    # Deps and consents retry every boot, not only when the scan minted
-    # something — a transient registry outage at the previous sync must
-    # not leave the closure missing until the next release. Both are
-    # cheap no-ops when nothing is missing.
-    case pull_required_deps(ctx) do
-      {:ok, _closure} ->
-        :ok
-
-      {:error, {:closure, detail}} ->
-        Logger.warning(
-          "[Provisioning] #{athanor.id}: dep pull after sync failed: #{inspect(detail)}"
-        )
-    end
-
-    _ = pull_optional_deps(ctx)
-
-    # The index and the mint speak for the estate, so they are this sync's
-    # only while the claim is.
-    case holding(actor(athanor.id), claim) do
-      :ok ->
-        index_agents(ctx)
-        bootstrap_synced(ctx, claim, athanor.id)
-
-      {:error, :claim_lost} ->
-        lost(athanor.id)
-    end
-
-    :ok
-  end
-
-  # What the athanor already chose, restored: a shipped version its rows
-  # name but its tree lacks, and the shipped AQUA tree when it holds no
-  # AQUA unit at all. A newer shipped version with no row is left available.
-  defp heal_shipped(ctx, athanor_id) do
-    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "components"),
-         {:ok, rows} <- Arca.ComponentStorage.list_components(ctx, limit: :none) do
-      registered =
-        MapSet.new(rows, fn row ->
-          Compendium.ComponentPath.version_dir(
-            row.component_type,
-            Compendium.ComponentPath.normalize_publisher(row.publisher),
-            row.name,
-            row.version
-          )
-        end)
-
-      for {unit, :available} <- statuses, MapSet.member?(registered, unit) do
-        case Arca.Overlay.pull_shipped(ctx, unit) do
-          :ok ->
-            Logger.info("[Provisioning] #{athanor_id}: restored shipped #{Enum.join(unit, "/")}")
-
-          {:error, reason} ->
-            Logger.warning(
-              "[Provisioning] #{athanor_id}: shipped #{Enum.join(unit, "/")} not restored: " <>
-                inspect(reason)
-            )
-        end
-      end
-    else
-      {:error, reason} ->
-        Logger.warning("[Provisioning] #{athanor_id}: heal skipped — #{inspect(reason)}")
-    end
-
-    case Arca.Overlay.unit_statuses(ctx, "aqua") do
-      {:ok, statuses} ->
-        held? = Enum.any?(statuses, fn {_unit, status} -> status != :available end)
-
-        if not held? and statuses != %{} do
-          case Arca.Overlay.materialize_shipped(ctx, "aqua") do
-            {:ok, copied} ->
-              Logger.info(
-                "[Provisioning] #{athanor_id}: copied #{length(copied)} shipped AQUA unit(s)"
-              )
-
-            {:error, reason} ->
-              Logger.warning(
-                "[Provisioning] #{athanor_id}: AQUA not restored — #{inspect(reason)}"
-              )
-          end
-        end
-
-      {:error, reason} ->
-        Logger.warning("[Provisioning] #{athanor_id}: AQUA heal skipped — #{inspect(reason)}")
-    end
-
-    :ok
-  end
-
-  # Idempotent by construction: every already-consented ref lands in
-  # `skipped`, so only what the release just added mints anything, and
-  # only a bootstrap-only head the release moved is re-minted.
-  defp bootstrap_synced(ctx, claim, athanor_id) do
-    case Sanctum.Consent.Bootstrap.run(ctx, claim) do
-      {:error, :claim_lost} ->
-        lost(athanor_id)
-
-      {:ok, %{minted: minted, revised: revised}} when minted != [] or revised != [] ->
-        Logger.info(
-          "[Provisioning] #{athanor_id}: baseline consents minted for " <>
-            "[#{Enum.join(minted, ", ")}], re-minted for [#{Enum.join(revised, ", ")}]"
-        )
-
-      {:ok, _nothing_new} ->
-        :ok
-    end
-  end
-
-  # The bundle's required dependencies — everything a local component
-  # declares it cannot run without — pulled under the attempt's deadline.
-  # A pull that fails, times out or exits is a provisioning failure at the
-  # closure step, retried by the next attempt.
-  defp pull_required_deps(ctx) do
-    budget_ms = Application.fetch_env!(:cyfr, :provisioning_required_pull_budget_ms)
-
-    case bounded_pull(ctx, missing_bundle_deps(ctx, :required), budget_ms) do
-      {:ok, %{failed: []} = closure} -> {:ok, closure}
-      {:ok, %{failed: failed}} -> {:error, {:closure, failed}}
-      :timeout -> {:error, {:closure, {:timeout, budget_ms}}}
-      {:exit, reason} -> {:error, {:closure, {:exit, reason}}}
-    end
-  end
-
-  # The bundle's optional dependencies — the model catalysts — are pulled
-  # when a registry is configured to pull them from, as a courtesy with a
-  # budget: a registry that is slow, unreachable or unset-by-default and
-  # absent leaves the estate provisioned on what the bundle ships, its
-  # activations covering what is there, and the catalysts arrive when a
-  # model is connected. An optional dependency that fails to pull is never
-  # a provisioning failure.
-  @optional_pull_budget_ms 10_000
-
-  defp pull_optional_deps(ctx) do
-    optional =
-      if Compendium.RegistryHost.configured?(),
-        do: missing_bundle_deps(ctx, :all) -- missing_bundle_deps(ctx, :required),
-        else: []
-
-    case bounded_pull(ctx, optional, @optional_pull_budget_ms) do
-      {:ok, %{pulled: pulled, failed: []}} ->
-        length(pulled)
-
-      {:ok, %{pulled: pulled, failed: failed}} ->
-        Logger.warning(
-          "[Provisioning] #{length(failed)} optional dependencies not pulled " <>
-            "(#{inspect(Enum.map(failed, &elem(&1, 0)))}); the estate provisions without them"
-        )
-
-        length(pulled)
-
-      :timeout ->
-        Logger.warning(
-          "[Provisioning] optional dependencies not pulled within " <>
-            "#{@optional_pull_budget_ms} ms; the estate provisions without them"
-        )
-
-        0
-
-      {:exit, reason} ->
-        Logger.warning(
-          "[Provisioning] optional dependency pull exited (#{inspect(reason)}); " <>
-            "the estate provisions without them"
-        )
-
-        0
-    end
-  end
-
-  # Pull `refs` and their closure with `budget_ms` as the deadline for the
-  # whole walk, in a task of the provisioning supervisor's. Past the
-  # deadline the task is killed where it is — under the claim, so the
-  # attempt has stopped before the claim settles. The
-  # components it registered before the cut stay, and `missing_bundle_deps/2`
-  # lists what is installed, so the next attempt finds what is still
-  # missing below them. A task that exits is reported, never the caller's
-  # crash: a seed sync at boot must not take the server down.
-  defp bounded_pull(_ctx, [], _budget_ms), do: {:ok, %{pulled: [], failed: [], present: []}}
-
-  defp bounded_pull(ctx, refs, budget_ms) do
-    task =
-      Task.Supervisor.async_nolink(Sanctum.ProvisioningSupervisor, fn ->
-        Pull.ensure_published_deps(ctx, refs)
-      end)
-
-    case Task.yield(task, budget_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, outcome} -> {:ok, outcome}
-      {:exit, reason} -> {:exit, reason}
-      nil -> :timeout
-    end
-  end
-
-  # Every static dependency the athanor's components declare that is not
-  # present; `include: :required` names those the bundle cannot run
-  # without, `:all` adds the optional ones.
-  #
-  # Every component, not only the seeded ones: `Compendium.Pull` walks a
-  # closure by recursion and treats an already-present ref as done, so a
-  # pull cut short between a component and its own dependency would leave
-  # that dependency undiscoverable — the component is present, and nothing
-  # would re-read its manifest. Listing what is installed, whoever
-  # published it, is what makes an interrupted closure heal on the next
-  # attempt.
-  defp missing_bundle_deps(ctx, include) do
-    case Arca.ComponentStorage.list_components(ctx, limit: :none) do
-      {:ok, rows} ->
-        rows
-        |> Enum.flat_map(&Pull.missing_deps(ctx, &1, include: include))
-        |> Enum.uniq()
-
-      _ ->
-        []
-    end
-  end
-
-  # Every vouched local source must hold a consent. A skip for "already
-  # bootstrapped" or "not vouched" (a member-authored or edited source)
-  # is not a provisioning failure: those consent through the walk. An
-  # agent whose closure the bundle does not resolve is re-minted by a
-  # later sync once it does.
-  defp all_minted(%{skipped: skipped}) do
-    case Enum.reject(skipped, fn {ref, reason} ->
-           reason in [:already_bootstrapped, :not_vouched] or
-             Compendium.AgentSource.agent_ref?(ref)
-         end) do
-      [] -> :ok
-      unminted -> {:unminted, unminted}
-    end
-  end
-
-  # The claim settles `failed` first, and the row records the failure only
-  # once that landed: an attempt whose claim a successor took leaves the
-  # successor's record alone.
-  defp record_failure(claim, athanor, step, detail) do
-    case settled(actor(athanor.id), claim, "failed", "#{step}: #{inspect(detail)}") do
-      :ok ->
-        Logger.warning(
-          "[Provisioning] #{athanor.id} not provisioned at #{step}: #{inspect(detail)}"
-        )
-
-        :telemetry.execute([:cyfr, :sanctum, :provisioning, :failed], %{count: 1}, %{
-          athanor_id: athanor.id,
-          step: step
-        })
-
-        Athanors.record_provisioning_failure(athanor, step, inspect(detail))
-
-        {:error, {:provisioning_failed, step, detail}}
-
-      {:error, :claim_lost} ->
-        lost(athanor.id)
-
-      {:error, reason} ->
-        # The claim could not be read, so whether this attempt still holds
-        # it is unknown: the row is left as it is.
-        Logger.error(
-          "[Provisioning] #{athanor.id} not provisioned at #{step} (#{inspect(detail)}), " <>
-            "and the failure not recorded: #{inspect(reason)}"
-        )
-
-        {:error, {:provisioning_failed, step, detail}}
-    end
   end
 end

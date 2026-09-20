@@ -30,8 +30,8 @@ defmodule EmissaryWeb.AuthControllerTest do
 
   describe "callback/2" do
     setup do
-      original = Application.get_env(:cyfr, :auth_provider)
-      Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
+      original = Application.get_env(:sanctum, :auth_provider)
+      Application.put_env(:sanctum, :auth_provider, Sanctum.Test.AltAuthProvider)
       # The door: these callbacks sign in whoever the provider authenticates.
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
 
@@ -43,9 +43,9 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       on_exit(fn ->
         if original do
-          Application.put_env(:cyfr, :auth_provider, original)
+          Application.put_env(:sanctum, :auth_provider, original)
         else
-          Application.delete_env(:cyfr, :auth_provider)
+          Application.delete_env(:sanctum, :auth_provider)
         end
 
         if original_registry,
@@ -206,8 +206,8 @@ defmodule EmissaryWeb.AuthControllerTest do
     alias Compendium.Registry.CredentialStore
 
     setup do
-      original_provider = Application.get_env(:cyfr, :auth_provider)
-      Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
+      original_provider = Application.get_env(:sanctum, :auth_provider)
+      Application.put_env(:sanctum, :auth_provider, Sanctum.Test.AltAuthProvider)
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
 
       bypass = Bypass.open()
@@ -221,8 +221,8 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       on_exit(fn ->
         if original_provider,
-          do: Application.put_env(:cyfr, :auth_provider, original_provider),
-          else: Application.delete_env(:cyfr, :auth_provider)
+          do: Application.put_env(:sanctum, :auth_provider, original_provider),
+          else: Application.delete_env(:sanctum, :auth_provider)
 
         if original_url,
           do: Application.put_env(:cyfr, :registry_url, original_url),
@@ -489,13 +489,13 @@ defmodule EmissaryWeb.AuthControllerTest do
          %{conn: conn, bypass: bypass} do
       # Force at-rest encryption to fail by clearing the resolved keyring:
       # CredentialStore.put → Sanctum.Cipher.encrypt raises without it.
-      original_keyring = Application.get_env(:cyfr, :crypto_keyring)
-      Application.delete_env(:cyfr, :crypto_keyring)
+      original_keyring = Application.get_env(:sanctum, :crypto_keyring)
+      Application.delete_env(:sanctum, :crypto_keyring)
 
       on_exit(fn ->
         if original_keyring,
-          do: Application.put_env(:cyfr, :crypto_keyring, original_keyring),
-          else: Application.delete_env(:cyfr, :crypto_keyring)
+          do: Application.put_env(:sanctum, :crypto_keyring, original_keyring),
+          else: Application.delete_env(:sanctum, :crypto_keyring)
       end)
 
       n = System.unique_integer([:positive])

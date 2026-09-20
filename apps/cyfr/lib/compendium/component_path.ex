@@ -36,11 +36,13 @@ defmodule Compendium.ComponentPath do
 
   @type_plurals Enum.map(Cyfr.ComponentRef.valid_types(), &(&1 <> "s"))
 
-  @default_publisher "local"
-
   @manifest_name "cyfr-manifest.json"
 
-  @components_root "components"
+  # The layout both sides agree on — the root, the pluralization and the
+  # publisher default — is `Cyfr.ComponentPath`, read here so the parser
+  # below and the consent that names a version directory cannot spell it
+  # differently.
+  @components_root hd(Cyfr.ComponentPath.base_prefix())
 
   # components/{type}s/{publisher}/{name}/{version} — the shadow unit is
   # the version directory, `version_dir/4`'s exact shape.
@@ -48,7 +50,7 @@ defmodule Compendium.ComponentPath do
 
   @doc "Root prefix segments: `[\"components\"]` — the context's athanor's tree."
   @spec base_prefix() :: [String.t()]
-  def base_prefix, do: [@components_root]
+  defdelegate base_prefix(), to: Cyfr.ComponentPath
 
   @doc """
   Parse tenant-relative component segments against the one layout — the
@@ -182,7 +184,7 @@ defmodule Compendium.ComponentPath do
       "local"
   """
   @spec default_publisher() :: String.t()
-  def default_publisher, do: @default_publisher
+  defdelegate default_publisher(), to: Cyfr.ComponentPath
 
   @doc """
   Canonical publisher segment default. `nil`/`""` collapse to the seeded
@@ -190,8 +192,7 @@ defmodule Compendium.ComponentPath do
   component's path and its id never disagree about an absent publisher.
   """
   @spec normalize_publisher(String.t() | nil) :: String.t()
-  def normalize_publisher(publisher) when is_binary(publisher) and publisher != "", do: publisher
-  def normalize_publisher(_), do: @default_publisher
+  defdelegate normalize_publisher(publisher), to: Cyfr.ComponentPath
 
   @doc """
   Whether a publisher segment names the local namespace.
@@ -214,7 +215,7 @@ defmodule Compendium.ComponentPath do
       true
   """
   @spec local_publisher?(String.t() | nil) :: boolean()
-  def local_publisher?(publisher), do: normalize_publisher(publisher) == @default_publisher
+  defdelegate local_publisher?(publisher), to: Cyfr.ComponentPath
 
   @doc """
   The plural directory name for a component type — the one pluralization
@@ -226,7 +227,7 @@ defmodule Compendium.ComponentPath do
       "catalysts"
   """
   @spec type_plural(String.t()) :: String.t()
-  def type_plural(type) when is_binary(type), do: type <> "s"
+  defdelegate type_plural(type), to: Cyfr.ComponentPath
 
   @doc """
   The inverse of `type_plural/1` — the one de-pluralization, so the OCI
@@ -236,14 +237,11 @@ defmodule Compendium.ComponentPath do
       "catalyst"
   """
   @spec singular(String.t()) :: String.t()
-  def singular(type_plural) when is_binary(type_plural),
-    do: String.trim_trailing(type_plural, "s")
+  defdelegate singular(type_plural), to: Cyfr.ComponentPath
 
   @doc "Path segments to a component version directory."
   @spec version_dir(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
-  def version_dir(type, publisher, name, version) do
-    base_prefix() ++ [type_plural(type), normalize_publisher(publisher), name, version]
-  end
+  defdelegate version_dir(type, publisher, name, version), to: Cyfr.ComponentPath
 
   @doc "The artifact filename a component type's binary carries."
   @spec wasm_name(String.t()) :: String.t()

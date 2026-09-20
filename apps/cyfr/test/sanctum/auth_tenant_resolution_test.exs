@@ -74,8 +74,8 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
     test "OIDC.authenticate/1 names the identity and nothing more: the athanor comes after the door" do
       Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherAthanorResolver)
-      Application.put_env(:cyfr, :oidc_issuer, "https://auth.example.com")
-      on_exit(fn -> Application.delete_env(:cyfr, :oidc_issuer) end)
+      Application.put_env(:sanctum, :oidc_issuer, "https://auth.example.com")
+      on_exit(fn -> Application.delete_env(:sanctum, :oidc_issuer) end)
 
       auth = %{
         __struct__: Ueberauth.Auth,

@@ -31,6 +31,7 @@ defmodule Sanctum.Consent.Commit do
   alias Sanctum.Consent.Source
   alias Sanctum.Context
   alias Cyfr.Authority.RootSelect
+  alias Sanctum.Consent.Components
   alias Cyfr.JCS
   alias Sanctum.VaultReader
 
@@ -527,7 +528,7 @@ defmodule Sanctum.Consent.Commit do
 
   defp node_manifest(ctx, node_key) do
     with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
-         {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
+         {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
       {:ok, Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
     end
   end
@@ -577,7 +578,7 @@ defmodule Sanctum.Consent.Commit do
   defp declared_needs(component) do
     (Map.get(component, :manifest) || Map.get(component, "manifest"))
     |> Cyfr.Manifest.decode()
-    |> Compendium.Manifest.Needs.from_manifest()
+    |> Cyfr.Manifest.Needs.from_manifest()
   end
 
   # Apply public limits to the source and make storage read-only unless
@@ -687,7 +688,7 @@ defmodule Sanctum.Consent.Commit do
   defp default_invoke_mode(_), do: :open_inert
 
   defp resolve_activation(ctx, component) do
-    case Compendium.Activation.resolve_verified(ctx, component) do
+    case Components.resolve_verified(ctx, component) do
       {:ok, activation} -> {:ok, activation}
       {:error, reason} -> {:error, {:activation_unresolvable, reason}}
     end

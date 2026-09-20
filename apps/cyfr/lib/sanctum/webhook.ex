@@ -36,8 +36,10 @@ defmodule Sanctum.Webhook do
   @doc false
   defdelegate default_signature_header(), to: Cyfr.Webhook
 
-  alias Sanctum.Context
   alias Arca.WebhookStorage
+  alias Cyfr.ComponentRef
+  alias Sanctum.Consent.Components
+  alias Sanctum.Context
 
   @secret_random_bytes 24
   @slug_random_bytes 18
@@ -442,15 +444,25 @@ defmodule Sanctum.Webhook do
   # resolves the ref at request time). Mirrors the cron schedule gate.
   # Existence only; the ref is stored as given and still resolves per
   # delivery, matching update semantics for components.
+  #
+  # The row is read through the component-facts port
+  # (`Sanctum.Consent.Components`), which answers the exact version a
+  # pinned ref names and the newest otherwise — so a pinned target whose
+  # own version is gone is refused rather than admitted on its name.
   defp validate_target_ref(ctx, target_ref) do
-    case Compendium.Resolver.resolve(ctx, target_ref) do
-      {:ok, resolved, _meta} ->
-        case Compendium.Component.inspect_component(ctx, resolved) do
-          {:ok, _} ->
+    case ComponentRef.normalize_flexible(target_ref) do
+      {:ok, ref} ->
+        case Components.get_component(ctx, ref.name, ref.version, ref.namespace, ref.type) do
+          {:ok, _row} ->
             :ok
 
-          {:error, _} ->
-            {:error, "Component '#{resolved}' not found in registry. Register or pull it first."}
+          {:error, :not_found} ->
+            {:error,
+             "Component '#{ComponentRef.to_string(ref)}' not found in registry. " <>
+               "Register or pull it first."}
+
+          {:error, reason} ->
+            {:error, "Cannot use target_ref '#{target_ref}': #{inspect(reason)}"}
         end
 
       {:error, reason} ->
@@ -684,7 +696,7 @@ defmodule Sanctum.Webhook do
   defp build_url(slug) when is_binary(slug) and slug != "" do
     path = "/hooks/" <> slug
 
-    case Cyfr.RuntimeConfig.public_url() do
+    case Sanctum.public_url() do
       nil -> path
       base -> base <> path
     end

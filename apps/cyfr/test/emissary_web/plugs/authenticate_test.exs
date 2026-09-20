@@ -192,9 +192,9 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
 
     # Reject unrecognized credentials after configured providers have had a chance to resolve them.
     test "an unclaimed bearer is refused once nothing else can claim it", %{conn: conn} do
-      original = Application.get_env(:cyfr, :auth_provider)
-      Application.delete_env(:cyfr, :auth_provider)
-      on_exit(fn -> Application.put_env(:cyfr, :auth_provider, original) end)
+      original = Application.get_env(:sanctum, :auth_provider)
+      Application.delete_env(:sanctum, :auth_provider)
+      on_exit(fn -> Application.put_env(:sanctum, :auth_provider, original) end)
 
       conn =
         conn
@@ -222,12 +222,12 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
   describe "call/2 - context creation with no auth provider" do
     setup do
       # Store original config
-      original = Application.get_env(:cyfr, :auth_provider)
-      Application.delete_env(:cyfr, :auth_provider)
+      original = Application.get_env(:sanctum, :auth_provider)
+      Application.delete_env(:sanctum, :auth_provider)
 
       on_exit(fn ->
         if original do
-          Application.put_env(:cyfr, :auth_provider, original)
+          Application.put_env(:sanctum, :auth_provider, original)
         end
       end)
 
@@ -247,15 +247,15 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
   describe "call/2 - context creation with custom auth provider" do
     setup do
       # Store original config
-      original = Application.get_env(:cyfr, :auth_provider)
+      original = Application.get_env(:sanctum, :auth_provider)
 
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.StubAuthProvider)
+      Application.put_env(:sanctum, :auth_provider, __MODULE__.StubAuthProvider)
 
       on_exit(fn ->
         if original do
-          Application.put_env(:cyfr, :auth_provider, original)
+          Application.put_env(:sanctum, :auth_provider, original)
         else
-          Application.delete_env(:cyfr, :auth_provider)
+          Application.delete_env(:sanctum, :auth_provider)
         end
       end)
 
@@ -276,15 +276,15 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
   describe "call/2 - context creation with nil user from auth provider" do
     setup do
       # Store original config
-      original = Application.get_env(:cyfr, :auth_provider)
+      original = Application.get_env(:sanctum, :auth_provider)
 
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.NilAuthProvider)
+      Application.put_env(:sanctum, :auth_provider, __MODULE__.NilAuthProvider)
 
       on_exit(fn ->
         if original do
-          Application.put_env(:cyfr, :auth_provider, original)
+          Application.put_env(:sanctum, :auth_provider, original)
         else
-          Application.delete_env(:cyfr, :auth_provider)
+          Application.delete_env(:sanctum, :auth_provider)
         end
       end)
 
@@ -303,15 +303,15 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
   describe "Authorization header support" do
     setup do
       # Store original config
-      original = Application.get_env(:cyfr, :auth_provider)
+      original = Application.get_env(:sanctum, :auth_provider)
 
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.BearerAuthProvider)
+      Application.put_env(:sanctum, :auth_provider, __MODULE__.BearerAuthProvider)
 
       on_exit(fn ->
         if original do
-          Application.put_env(:cyfr, :auth_provider, original)
+          Application.put_env(:sanctum, :auth_provider, original)
         else
-          Application.delete_env(:cyfr, :auth_provider)
+          Application.delete_env(:sanctum, :auth_provider)
         end
       end)
 
@@ -363,11 +363,11 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
 
       # Store original configs
       original_base_path = Application.get_env(:cyfr, :base_path)
-      original_auth = Application.get_env(:cyfr, :auth_provider)
+      original_auth = Application.get_env(:sanctum, :auth_provider)
 
       Application.put_env(:cyfr, :base_path, test_dir)
       # Use an athanor-bearing provider so the session-fallback path resolves a tenant.
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.StubAuthProvider)
+      Application.put_env(:sanctum, :auth_provider, __MODULE__.StubAuthProvider)
 
       # Create a test API key
       ctx = Sanctum.TestContext.local()
@@ -388,9 +388,9 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
         end
 
         if original_auth do
-          Application.put_env(:cyfr, :auth_provider, original_auth)
+          Application.put_env(:sanctum, :auth_provider, original_auth)
         else
-          Application.delete_env(:cyfr, :auth_provider)
+          Application.delete_env(:sanctum, :auth_provider)
         end
       end)
 
@@ -433,9 +433,9 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
             "Bearer cyfr_pk_invalid123456789012345678",
             "Bearer not-a-real-session-token"
           ] do
-        original = Application.get_env(:cyfr, :auth_provider)
-        Application.delete_env(:cyfr, :auth_provider)
-        on_exit(fn -> Application.put_env(:cyfr, :auth_provider, original) end)
+        original = Application.get_env(:sanctum, :auth_provider)
+        Application.delete_env(:sanctum, :auth_provider)
+        on_exit(fn -> Application.put_env(:sanctum, :auth_provider, original) end)
 
         conn =
           conn
@@ -550,13 +550,13 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
 
   describe "call/2 - auth enforcement" do
     setup do
-      original_auth = Application.get_env(:cyfr, :auth_provider)
+      original_auth = Application.get_env(:sanctum, :auth_provider)
 
       on_exit(fn ->
         if original_auth do
-          Application.put_env(:cyfr, :auth_provider, original_auth)
+          Application.put_env(:sanctum, :auth_provider, original_auth)
         else
-          Application.delete_env(:cyfr, :auth_provider)
+          Application.delete_env(:sanctum, :auth_provider)
         end
       end)
 
@@ -565,7 +565,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
 
     test "no auth_provider configured — request reaches the public surface unauthenticated",
          %{conn: conn} do
-      Application.delete_env(:cyfr, :auth_provider)
+      Application.delete_env(:sanctum, :auth_provider)
 
       conn = Authenticate.call(conn, [])
 
@@ -575,7 +575,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
 
     test "auth provider returns nil credentials — unauthenticated context, not rejected",
          %{conn: conn} do
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.NilAuthProvider)
+      Application.put_env(:sanctum, :auth_provider, __MODULE__.NilAuthProvider)
 
       conn = Authenticate.call(conn, [])
 
@@ -584,7 +584,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
     end
 
     test "auth provider *error* fails closed with 503", %{conn: conn} do
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.ErrorAuthProvider)
+      Application.put_env(:sanctum, :auth_provider, __MODULE__.ErrorAuthProvider)
 
       conn = Authenticate.call(conn, [])
 
@@ -595,7 +595,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
     end
 
     test "allows an authenticated user with a resolved athanor through", %{conn: conn} do
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.StubAuthProvider)
+      Application.put_env(:sanctum, :auth_provider, __MODULE__.StubAuthProvider)
 
       conn = Authenticate.call(conn, [])
 
@@ -607,7 +607,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
     end
 
     test "rejects an authenticated user with no resolved athanor with 403", %{conn: conn} do
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.TestAuthProvider)
+      Application.put_env(:sanctum, :auth_provider, __MODULE__.TestAuthProvider)
 
       conn = Authenticate.call(conn, [])
 
@@ -641,19 +641,19 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
 
   describe "membership resolution error handling" do
     setup do
-      original_auth = Application.get_env(:cyfr, :auth_provider)
+      original_auth = Application.get_env(:sanctum, :auth_provider)
       original_resolver = Application.get_env(:cyfr, :tenancy_resolver_override)
 
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.NoAthanorAuthProvider)
+      Application.put_env(:sanctum, :auth_provider, __MODULE__.NoAthanorAuthProvider)
       # Inject a resolver that errors so the plug's "no resolved athanor → 403"
       # branch is exercised.
       Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.FailingResolver)
 
       on_exit(fn ->
         if original_auth do
-          Application.put_env(:cyfr, :auth_provider, original_auth)
+          Application.put_env(:sanctum, :auth_provider, original_auth)
         else
-          Application.delete_env(:cyfr, :auth_provider)
+          Application.delete_env(:sanctum, :auth_provider)
         end
 
         if original_resolver do

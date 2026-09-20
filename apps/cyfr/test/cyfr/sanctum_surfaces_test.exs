@@ -37,13 +37,15 @@ defmodule Cyfr.SanctumSurfacesTest do
     "aqua" => ~w(
       Sanctum.Context Sanctum.Notify Sanctum.Provisioning Sanctum.Tenancy
     ),
-    # `Sanctum.Provisioning` is `Compendium.MCP.AquaTool` and
-    # `ComponentTool`'s list action alone — the first-need hook. A group
-    # estate is now minted as a bare row and filled the first time
-    # something reads its bundle, because clicking a person's name to open
-    # a DM must not wait on a registry round trip that can fail. These two
-    # tools ARE the bundle's readers, so the hook lives where the read is
-    # rather than in every caller that might trigger one.
+    # `Sanctum.Provisioning` is the first-need hook (`Compendium.MCP.AquaTool`
+    # and `ComponentTool`'s list action — a group estate is minted as a bare
+    # row and filled the first time something reads its bundle, because
+    # clicking a person's name to open a DM must not wait on a registry
+    # round trip that can fail) and the half of filling an estate that is
+    # identity's: the claim it runs under, the baseline consents, the
+    # readiness and failure writes on the row. `Compendium.Provisioning`
+    # owns the component work and calls down into it.
+    # `Sanctum.ProvisioningSupervisor` is where the claim keepers run.
     "compendium" => ~w(
       Sanctum.Cipher Sanctum.CipherAAD Sanctum.Consent Sanctum.Context
       Sanctum.Namespace Sanctum.Provisioning Sanctum.SignIn Sanctum.VaultReader
@@ -72,7 +74,7 @@ defmodule Cyfr.SanctumSurfacesTest do
     "cyfr" => ~w(
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
       Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth
-      Sanctum.Policy Sanctum.Provisioning Sanctum.ProvisioningSupervisor
+      Sanctum.Policy Sanctum.ProvisioningSupervisor
       Sanctum.PubSub Sanctum.Session
       Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
       Sanctum.UnauthorizedError Sanctum.VaultReader
@@ -157,8 +159,16 @@ defmodule Cyfr.SanctumSurfacesTest do
   end
 
   # Restrict Compendium's sensitive Sanctum calls to credential encryption
-  # and the listed consent readers. Consent write operations are excluded.
+  # and the listed consent readers. Consent write operations are excluded:
+  # the estate filler mints its baseline consents through
+  # `Sanctum.Provisioning`, never `Sanctum.Consent.Bootstrap`.
+  #
+  # `Sanctum.Consent.Components` is the component-facts port — declared by
+  # consent, implemented here (`Compendium.ConsentFacts`). Naming a
+  # behaviour one implements is the opposite of reaching into the write
+  # plane: the arrow points down, from the declaration to its answer.
   @compendium_consent_allowed ~w(
+    Sanctum.Consent.Components
     Sanctum.Consent.ShapeDerivation
     Sanctum.Consent.Source
   )

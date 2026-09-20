@@ -267,9 +267,9 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       ctx = %{Sanctum.TestContext.local() | client_ip: "203.0.113.9", authenticated: false}
 
       prev_flow = Application.get_env(:cyfr, :device_flow)
-      prev_provider = Application.get_env(:cyfr, :auth_provider)
+      prev_provider = Application.get_env(:sanctum, :auth_provider)
       Application.put_env(:cyfr, :device_flow, IpRecordingDeviceFlow)
-      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
+      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
       Application.delete_env(:cyfr, :device_flow_last_ip)
 
       on_exit(fn ->
@@ -278,8 +278,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           else: Application.delete_env(:cyfr, :device_flow)
 
         if prev_provider,
-          do: Application.put_env(:cyfr, :auth_provider, prev_provider),
-          else: Application.delete_env(:cyfr, :auth_provider)
+          do: Application.put_env(:sanctum, :auth_provider, prev_provider),
+          else: Application.delete_env(:sanctum, :auth_provider)
 
         Application.delete_env(:cyfr, :device_flow_last_ip)
       end)
@@ -301,9 +301,9 @@ defmodule Sanctum.Auth.DeviceFlowTest do
   describe "a full server, seen from the CLI" do
     setup do
       prev_flow = Application.get_env(:cyfr, :device_flow)
-      prev_provider = Application.get_env(:cyfr, :auth_provider)
+      prev_provider = Application.get_env(:sanctum, :auth_provider)
       Application.put_env(:cyfr, :device_flow, FullServerDeviceFlow)
-      Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
+      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
 
       on_exit(fn ->
         if prev_flow,
@@ -311,8 +311,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           else: Application.delete_env(:cyfr, :device_flow)
 
         if prev_provider,
-          do: Application.put_env(:cyfr, :auth_provider, prev_provider),
-          else: Application.delete_env(:cyfr, :auth_provider)
+          do: Application.put_env(:sanctum, :auth_provider, prev_provider),
+          else: Application.delete_env(:sanctum, :auth_provider)
       end)
 
       :ok

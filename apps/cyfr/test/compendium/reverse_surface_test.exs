@@ -19,9 +19,15 @@ defmodule Compendium.ReverseSurfaceTest do
   (`Cyfr.ComponentSource`). An empty roster only means something while
   the scan still reads, so the case below asserts that too.
 
-  `lib/sanctum` is the broader one, and it crosses the license boundary
-  (FSL calling Apache-2.0). It is product-real — consent has to read live
-  manifests — but it should widen by decision, not by accident.
+  `lib/sanctum` crosses the license boundary (FSL calling Apache-2.0) and
+  is down to the sign-in probe alone. Everything consent reads about a
+  component now comes through the `Sanctum.Consent.Components` port, and
+  every shape the two domains agree on — a manifest's `needs` and `caps`
+  blocks, the component path, an activation node key, a name's newest row,
+  an agent ref — lives in the contracts. What is left is the one thing a
+  resolved value cannot replace: the probe of cyfr.run at first sign-in,
+  which needs the IdP access token, and the token must not travel past the
+  door.
   """
 
   use ExUnit.Case, async: true
@@ -35,33 +41,14 @@ defmodule Compendium.ReverseSurfaceTest do
 
   # lib/sanctum → Compendium, in code.
   @sanctum_surface [
-    # Consent is derived from what a component DECLARES, so the whole
-    # plan/preview/commit path reads manifests, activation graphs and the
-    # dependency edges a blob is built from.
-    "Compendium.Activation",
-    "Compendium.Component",
-    "Compendium.ComponentPath",
-    "Compendium.DependencyResolver",
-    "Compendium.Manifest",
-    "Compendium.Registry",
-    "Compendium.Resolver",
-
-    # Provisioning uses AutoIndexer and Pull for component scans and
-    # dependency closure, and AgentIndex to derive the agent roster; the
-    # consent bootstrap mints the estate's agents as sources (AgentSource)
-    # and vouches a WASM unit by the seed's own release digest
-    # (Provenance.shipped_release_digest/1), never the tenant copy.
-    "Compendium.AgentIndex",
-    "Compendium.AgentSource",
-    "Compendium.AquaTemplate",
-    "Compendium.AutoIndexer",
-    "Compendium.Provenance",
-    "Compendium.Pull",
-
-    # First sign-in talks to cyfr.run: the legal-acceptance refusal is an
-    # OCI error the door has to read, and the registry host is where the
-    # person's namespace is claimed.
+    # First sign-in talks to cyfr.run with the person's IdP access token:
+    # the budgeted probe of their publisher namespace, the push tokens it
+    # mints, the legal-acceptance refusal the door has to read, and the
+    # registry host the namespace is claimed at. The token is the reason
+    # this one cannot move to the caller — nothing after the door may hold
+    # it, so the step cannot be handed down a resolved value.
     "Compendium.OCI",
+    "Compendium.Registry",
     "Compendium.RegistryHost"
   ]
 

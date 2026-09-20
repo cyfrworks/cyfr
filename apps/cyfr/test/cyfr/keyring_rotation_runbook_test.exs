@@ -34,14 +34,14 @@ defmodule Cyfr.KeyringRotationRunbookTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    prev = Application.get_env(:cyfr, :crypto_keyring)
+    prev = Application.get_env(:sanctum, :crypto_keyring)
     on_exit(fn -> restore(prev) end)
     :ok
   end
 
-  defp restore(nil), do: Application.delete_env(:cyfr, :crypto_keyring)
-  defp restore(kr), do: Application.put_env(:cyfr, :crypto_keyring, kr)
-  defp put(kr), do: Application.put_env(:cyfr, :crypto_keyring, kr)
+  defp restore(nil), do: Application.delete_env(:sanctum, :crypto_keyring)
+  defp restore(kr), do: Application.put_env(:sanctum, :crypto_keyring, kr)
+  defp put(kr), do: Application.put_env(:sanctum, :crypto_keyring, kr)
 
   defp only_old, do: %{primary: "old", keys: %{"old" => @old}}
   defp both, do: %{primary: "new", keys: %{"new" => @new, "old" => @old}}

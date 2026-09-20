@@ -32,8 +32,8 @@ defmodule Sanctum.Auth.OIDCTest do
 
   describe "authenticate/1 with Ueberauth.Auth struct" do
     setup do
-      Application.put_env(:cyfr, :oidc_issuer, "https://auth.example.com")
-      on_exit(fn -> Application.delete_env(:cyfr, :oidc_issuer) end)
+      Application.put_env(:sanctum, :oidc_issuer, "https://auth.example.com")
+      on_exit(fn -> Application.delete_env(:sanctum, :oidc_issuer) end)
       :ok
     end
 
@@ -91,8 +91,8 @@ defmodule Sanctum.Auth.OIDCTest do
     test "rejects a reserved github.com issuer (direct-provider collision guard)" do
       # The configured issuer is the canonical source; ueberauth_oidcc pointed at
       # github.com would mint colliding ids, so it is rejected at login.
-      Application.put_env(:cyfr, :oidc_issuer, "https://github.com")
-      on_exit(fn -> Application.delete_env(:cyfr, :oidc_issuer) end)
+      Application.put_env(:sanctum, :oidc_issuer, "https://github.com")
+      on_exit(fn -> Application.delete_env(:sanctum, :oidc_issuer) end)
 
       auth = %{__struct__: Ueberauth.Auth, uid: "12345", provider: :oidcc, info: %{}, extra: nil}
 
@@ -102,8 +102,8 @@ defmodule Sanctum.Auth.OIDCTest do
     end
 
     test "rejects a reserved accounts.google.com issuer (direct-provider collision guard)" do
-      Application.put_env(:cyfr, :oidc_issuer, "https://accounts.google.com")
-      on_exit(fn -> Application.delete_env(:cyfr, :oidc_issuer) end)
+      Application.put_env(:sanctum, :oidc_issuer, "https://accounts.google.com")
+      on_exit(fn -> Application.delete_env(:sanctum, :oidc_issuer) end)
 
       auth = %{__struct__: Ueberauth.Auth, uid: "12345", provider: :oidcc, info: %{}, extra: nil}
 
@@ -112,8 +112,8 @@ defmodule Sanctum.Auth.OIDCTest do
       end
     end
 
-    test "rejects a generic OIDC login when :cyfr, :oidc_issuer is unset" do
-      Application.delete_env(:cyfr, :oidc_issuer)
+    test "rejects a generic OIDC login when :sanctum, :oidc_issuer is unset" do
+      Application.delete_env(:sanctum, :oidc_issuer)
 
       auth = %{__struct__: Ueberauth.Auth, uid: "12345", provider: :oidcc, info: %{}, extra: nil}
 
@@ -123,8 +123,8 @@ defmodule Sanctum.Auth.OIDCTest do
     end
 
     test "uses the configured issuer to build a generic OIDC user id" do
-      Application.put_env(:cyfr, :oidc_issuer, "https://auth.example.com")
-      on_exit(fn -> Application.delete_env(:cyfr, :oidc_issuer) end)
+      Application.put_env(:sanctum, :oidc_issuer, "https://auth.example.com")
+      on_exit(fn -> Application.delete_env(:sanctum, :oidc_issuer) end)
 
       auth = %{
         __struct__: Ueberauth.Auth,

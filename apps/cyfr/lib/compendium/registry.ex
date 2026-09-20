@@ -621,21 +621,12 @@ defmodule Compendium.Registry do
   @doc """
   The semver-latest of a list of rows, `inserted_at` as the tiebreak —
   the one place ROWS (not bare strings) are ordered. Registered versions
-  are validated semver; the comparator (`Compendium.Semver`) is total
-  regardless.
+  are validated semver; the comparator (`Cyfr.Semver`) is total
+  regardless. The ordering is `Cyfr.ComponentRow`'s, where the consent
+  bootstrap picks a name's newest row with the same rule.
   """
   @spec latest_of([map()]) :: map() | nil
-  def latest_of(rows) when is_list(rows) do
-    rows
-    |> Enum.sort(fn a, b ->
-      case Compendium.Semver.compare(a.version, b.version) do
-        :gt -> true
-        :lt -> false
-        :eq -> DateTime.compare(a.inserted_at, b.inserted_at) == :gt
-      end
-    end)
-    |> List.first()
-  end
+  defdelegate latest_of(rows), to: Cyfr.ComponentRow
 
   @doc """
   Get component WASM binary by digest.

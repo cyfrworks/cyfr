@@ -67,7 +67,7 @@ defmodule Sanctum.Consent.Loader do
 
   ## Options
 
-  - `:live` — verified live activation (`Compendium.Activation.resolve_verified/2`
+  - `:live` — verified live activation (`Sanctum.Consent.Components.resolve_verified/2`
     result), required for the integrity evaluation
   - `:live_shape_digest` — the installed source's shape digest, nil = unknown
   - `:ceiling` — override the platform ceiling (tests only)
@@ -423,7 +423,7 @@ defmodule Sanctum.Consent.Loader do
   defp local_source?(%{source_ref: source_ref}) do
     case ComponentRef.parse(source_ref) do
       {:ok, %ComponentRef{namespace: namespace}} ->
-        Compendium.ComponentPath.local_publisher?(namespace)
+        Cyfr.ComponentPath.local_publisher?(namespace)
 
       _ ->
         false

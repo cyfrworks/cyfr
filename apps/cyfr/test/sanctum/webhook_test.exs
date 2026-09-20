@@ -46,6 +46,43 @@ defmodule Sanctum.WebhookTest do
     )
   end
 
+  describe "the target is read before anything else" do
+    # A webhook must never be registered against a ref that does not
+    # exist: it would go live the moment anyone published that name,
+    # because delivery resolves the ref again at request time. The row is
+    # read through the component-facts port, which answers the exact
+    # version a pinned ref names — so a target pinned to a version the
+    # estate no longer holds is refused on its own terms, not admitted on
+    # its name.
+    test "a target the estate does not hold refuses, and not as a signature failure",
+         %{ctx: ctx} do
+      assert {:error, message} =
+               create(ctx, %{name: "ghost", target_ref: "f:local.no-such-handler"})
+
+      assert is_binary(message)
+      assert message =~ "not found in registry"
+
+      # The refusals that belong to the signature and replay posture are
+      # typed words; this one is a target refusal and none of them.
+      refute message =~ "signature"
+      refute message =~ "replay"
+    end
+
+    test "a target pinned to a version the estate no longer holds refuses", %{ctx: ctx} do
+      assert {:ok, _} = create(ctx, %{name: "pinned-ok", target_ref: "f:local.handler:1.0.0"})
+
+      assert {:error, message} =
+               create(ctx, %{name: "pinned-gone", target_ref: "f:local.handler:9.9.9"})
+
+      assert message =~ "not found in registry"
+    end
+
+    test "a ref that is not a ref refuses before the registry is asked", %{ctx: ctx} do
+      assert {:error, message} = create(ctx, %{name: "junk", target_ref: "local.handler"})
+      assert message =~ "Cannot use target_ref"
+    end
+  end
+
   describe "replay protection is a decision, not a default" do
     # `prof-handler` is seeded for `f:local.handler` in the setup above;
     # these call `Webhook.create/2` directly rather than through the
@@ -163,13 +200,13 @@ defmodule Sanctum.WebhookTest do
       # A sender needs an absolute URL, and behind a proxy or a tunnel only
       # the operator knows the host. Both surfaces told users to set
       # CYFR_PUBLIC_URL long before anything read it.
-      original = Application.get_env(:cyfr, :public_url)
-      Application.put_env(:cyfr, :public_url, "https://cyfr.example.com/")
+      original = Application.get_env(:sanctum, :public_url)
+      Application.put_env(:sanctum, :public_url, "https://cyfr.example.com/")
 
       on_exit(fn ->
         if original,
-          do: Application.put_env(:cyfr, :public_url, original),
-          else: Application.delete_env(:cyfr, :public_url)
+          do: Application.put_env(:sanctum, :public_url, original),
+          else: Application.delete_env(:sanctum, :public_url)
       end)
 
       assert {:ok, result} = create(ctx, %{name: "absolute", target_ref: "f:local.handler"})
@@ -177,11 +214,11 @@ defmodule Sanctum.WebhookTest do
     end
 
     test "the URL is a bare path when no public URL is declared", %{ctx: ctx} do
-      original = Application.get_env(:cyfr, :public_url)
-      Application.delete_env(:cyfr, :public_url)
+      original = Application.get_env(:sanctum, :public_url)
+      Application.delete_env(:sanctum, :public_url)
 
       on_exit(fn ->
-        if original, do: Application.put_env(:cyfr, :public_url, original)
+        if original, do: Application.put_env(:sanctum, :public_url, original)
       end)
 
       assert {:ok, result} = create(ctx, %{name: "relative", target_ref: "f:local.handler"})

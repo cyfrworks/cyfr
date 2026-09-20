@@ -19,6 +19,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   import Cyfr.Test.Wait
 
   alias Arca.ProvisioningClaims, as: Claims
+  alias Compendium.Provisioning, as: Filler
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
@@ -72,7 +73,14 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
   @repo_root Path.expand("../../../..", __DIR__)
   @wasm File.read!(Path.join(@repo_root, "apps/cyfr/test/support/test_wasm/math.wasm"))
-  @budget_ms 500
+  # The deadline a case exercising the CUT sets for itself. Every other
+  # case here pulls for real against the fixture registry, so the setup
+  # leaves a budget that cannot expire under suite load: a fill that
+  # times out where the case expects it to finish is a flake, not a
+  # finding, and the production budget is ten minutes
+  # (`config/config.exs`) — nothing here may stand in for it.
+  @cut_budget_ms 500
+  @budget_ms 60_000
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -144,6 +152,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   test "a stalled required pull ends within its budget, releases coordination, and the next attempt completes the closure",
        %{ctx: ctx, group: group, stall: stall} do
     Agent.update(stall, fn _ -> "someone/catalysts/below" end)
+    Application.put_env(:cyfr, :provisioning_required_pull_budget_ms, @cut_budget_ms)
 
     started = System.monotonic_time(:millisecond)
     :ok = Provisioning.start_provisioning(ctx)
@@ -152,7 +161,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     # The suite fills inline, so the attempt ran here: bounded by the
     # budget plus the seed scan and one answered pull, never by the
     # transport's own minutes-long patience.
-    assert elapsed < 10 * @budget_ms
+    assert elapsed < 10 * @cut_budget_ms
 
     {:ok, group} = Athanors.get(group.id)
     refute group.provisioned_at
@@ -197,7 +206,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     assert {:error, :not_found} =
              Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
 
-    assert :ok = Provisioning.sync_seeds()
+    assert :ok = Filler.sync_seeds()
     assert {:ok, _} = Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
   end
 
@@ -256,7 +265,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
                Sanctum.MCP.AthanorTool.handle(ctx, %{"action" => "provision"})
 
       assert {:error, :provisioning_busy} =
-               Provisioning.install_shipped(ctx, "catalyst:local.foo")
+               Filler.install_shipped(ctx, "catalyst:local.foo")
 
       assert System.monotonic_time(:millisecond) - started < 2_000
 

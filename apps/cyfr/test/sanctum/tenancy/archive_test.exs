@@ -5,9 +5,18 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   @moduledoc """
   Archiving is one chokepoint: whichever path archives an athanor — a
   member's `athanor.archive`, the last member leaving, a person being
-  denied — its API keys are revoked, what runs in it is cancelled as the
-  server (its runners killed through their worker service) and its
-  members are told.
+  denied — its API keys are revoked and every member's caller memo is
+  dropped before it returns, what runs in it is cancelled as the server
+  (its runners killed through their worker service) and its members are
+  told.
+
+  The credentials and the memos are authorization properties and go
+  synchronously. The running work is the execution domain's: the archive
+  announces and `Cyfr.Execution.ArchiveWatch` reacts, so the cases that
+  assert a cancel start that watch and wait for it. It is off by default
+  under test (its queries would outlive the sandbox connection its test
+  owns), which is why they turn it on here rather than relying on the
+  boot's.
   """
   use ExUnit.Case, async: false
 
@@ -58,6 +67,24 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     )
 
     on_exit(fn -> :telemetry.detach(handler) end)
+    :ok
+  end
+
+  # The execution domain's reaction to an archive, started for the cases
+  # that assert a cancel. Under `{:shared, self()}` it reads on this
+  # test's connection, and `start_supervised!` stops it before the test
+  # gives that connection back.
+  defp watch_archives! do
+    previous = Application.get_env(:cyfr, :execution_archive_watch_enabled)
+    Application.put_env(:cyfr, :execution_archive_watch_enabled, true)
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:cyfr, :execution_archive_watch_enabled),
+        else: Application.put_env(:cyfr, :execution_archive_watch_enabled, previous)
+    end)
+
+    start_supervised!(Cyfr.Execution.ArchiveWatch)
     :ok
   end
 
@@ -122,6 +149,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   end
 
   test "archive/2 revokes the athanor's keys, cancels its running work as the server, and tells its members" do
+    :ok = watch_archives!()
     n = System.unique_integer([:positive])
     owner = person(n)
     {:ok, group} = Athanors.create_group(owner.id, "Arch #{n}")
@@ -132,8 +160,8 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert {:ok, %{status: "archived"}} = Athanors.archive(group)
 
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
-    assert_receive {:cancelled, ^running, "system"}
-    assert cancelled?(running)
+    assert_receive {:cancelled, ^running, "system"}, 5_000
+    assert :ok = wait_until(fn -> cancelled?(running) end, 5_000)
     athanor_id = group.id
     assert_receive {:notify, ^athanor_id, :athanor_changed, _}
   end
@@ -179,6 +207,8 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   end
 
   test "the last member leaving a group archives it the same way" do
+    :ok = watch_archives!()
+
     n = System.unique_integer([:positive])
     owner = person(n)
     {:ok, group} = Athanors.create_group(owner.id, "Leave #{n}")
@@ -189,11 +219,13 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
-    assert_receive {:cancelled, ^running, "system"}
-    assert cancelled?(running)
+    assert_receive {:cancelled, ^running, "system"}, 5_000
+    assert :ok = wait_until(fn -> cancelled?(running) end, 5_000)
   end
 
   test "denying a person archives their own athanor and the groups they were the last member of, closing both" do
+    :ok = watch_archives!()
+
     n = System.unique_integer([:positive])
     u = person(n)
 
@@ -224,8 +256,9 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert {:error, :revoked} = Sanctum.ApiKey.validate(personal_key, [])
     assert {:error, :revoked} = Sanctum.ApiKey.validate(alone_key, [])
 
-    assert_receive {:cancelled, ^personal_run, "system"}
+    assert_receive {:cancelled, ^personal_run, "system"}, 5_000
     assert_receive {:cancelled, ^alone_run, "system"}
-    assert cancelled?(personal_run) and cancelled?(alone_run)
+    assert :ok = wait_until(fn -> cancelled?(personal_run) end, 5_000)
+    assert :ok = wait_until(fn -> cancelled?(alone_run) end, 5_000)
   end
 end

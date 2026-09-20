@@ -17,7 +17,7 @@ defmodule Sanctum.Cipher.RotationTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    orig_kr = Application.get_env(:cyfr, :crypto_keyring)
+    orig_kr = Application.get_env(:sanctum, :crypto_keyring)
 
     put_keyring(%{primary: "k1", keys: %{"k1" => @k1}})
 
@@ -28,9 +28,13 @@ defmodule Sanctum.Cipher.RotationTest do
     :ok
   end
 
-  defp put_keyring(kr), do: Application.put_env(:cyfr, :crypto_keyring, kr)
-  defp restore(k, nil), do: Application.delete_env(:cyfr, k)
-  defp restore(k, v), do: Application.put_env(:cyfr, k, v)
+  defp put_keyring(kr), do: Application.put_env(:sanctum, :crypto_keyring, kr)
+
+  # The keyring is the identity domain's key, which is where
+  # `put_keyring/1` sets it: restoring it under the host's application
+  # would leave this suite's test keyring live for every test after.
+  defp restore(k, nil), do: Application.delete_env(:sanctum, k)
+  defp restore(k, v), do: Application.put_env(:sanctum, k, v)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
   defp uuid, do: Ecto.UUID.generate()

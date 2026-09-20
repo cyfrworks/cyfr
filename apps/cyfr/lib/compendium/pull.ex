@@ -57,7 +57,7 @@ defmodule Compendium.Pull do
   Copy a shipped component into the caller's athanor and register it: a
   `local` ref names what the server ships, so the pull is from the seed
   tree, never a registry. A versionless ref takes the newest shipped
-  version. Its baseline consent is `Sanctum.Provisioning.install_shipped/2`'s
+  version. Its baseline consent is `Compendium.Provisioning.install_shipped/2`'s
   to mint, as the first fill did for what shipped then.
 
   `{:error, :not_shipped}` when the seed carries no such version;

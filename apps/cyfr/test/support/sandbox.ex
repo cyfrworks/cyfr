@@ -47,6 +47,7 @@ defmodule Cyfr.Test.Sandbox do
     Aqua.TaskSupervisor,
     Emissary.TaskSupervisor,
     Sanctum.ProvisioningSupervisor,
+    Compendium.ProvisioningSupervisor,
     Cyfr.Schedules.TaskSupervisor,
     Sanctum.OAuth.RefreshTaskSupervisor,
     Cyfr.Execution.TaskSupervisor,

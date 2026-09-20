@@ -18,6 +18,16 @@ defmodule Prism.TelemetryBridge do
   on the way out: today's emitters carry only identifiers and outcomes, and
   the next one to carry a credential name should not be the thing that finds
   out.
+
+  ## The identity domain's standing changes
+
+  A foundation below the host emits `:telemetry` and never broadcasts, so
+  every announcement `Sanctum.Telemetry` makes — a tray notification, a
+  session minted or revoked, a membership, a vault entry, an archive, the
+  API key and webhook rosters — becomes its bus message here. The topic
+  strings are still the domain's own (`Cyfr.Bus` delegates to them), and
+  the message shapes are unchanged from when Sanctum broadcast them
+  itself; what moved is who puts them on the bus.
   """
 
   use GenServer
@@ -85,7 +95,15 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :compendium, :component, :remove], :component_remove},
       {[:cyfr, :compendium, :component, :push], :component_push},
       {[:cyfr, :emissary, :tincture, :invoke, :start], :tincture_invoke_start},
-      {[:cyfr, :emissary, :tincture, :invoke, :stop], :tincture_invoke_stop}
+      {[:cyfr, :emissary, :tincture, :invoke, :stop], :tincture_invoke_stop},
+      {[:cyfr, :sanctum, :notify], :sanctum_notify},
+      {[:cyfr, :sanctum, :session, :created], :sanctum_session_created},
+      {[:cyfr, :sanctum, :sessions, :revoked], :sanctum_sessions_revoked},
+      {[:cyfr, :sanctum, :membership, :changed], :sanctum_membership_changed},
+      {[:cyfr, :sanctum, :vault, :entry_changed], :sanctum_vault_entry_changed},
+      {[:cyfr, :sanctum, :athanor, :archived], :sanctum_athanor_archived},
+      {[:cyfr, :sanctum, :api_keys, :changed], :sanctum_api_keys_changed},
+      {[:cyfr, :sanctum, :webhooks, :changed], :sanctum_webhooks_changed}
     ]
   end
 
@@ -176,6 +194,72 @@ defmodule Prism.TelemetryBridge do
     )
   end
 
+  # --- the identity domain's standing changes -----------------------------
+
+  def handle_event([:cyfr, :sanctum, :notify], _measurements, metadata, _config) do
+    kind = metadata[:kind]
+    payload = metadata[:payload] || %{}
+
+    case metadata[:athanor_id] do
+      athanor_id when is_binary(athanor_id) and athanor_id != "" ->
+        safe_topic_broadcast(Bus.notify(athanor_id), {:notify, athanor_id, kind, payload})
+
+      _platform ->
+        safe_topic_broadcast(Bus.platform_notify(), {:notify, :platform, kind, payload})
+    end
+  end
+
+  def handle_event([:cyfr, :sanctum, :session, :created], _measurements, _metadata, _config) do
+    safe_topic_broadcast(Bus.sessions(), {:session_created, :notification})
+  end
+
+  def handle_event([:cyfr, :sanctum, :sessions, :revoked], _measurements, metadata, _config) do
+    safe_topic_broadcast(Bus.sessions(), {:sessions_revoked, metadata[:user_id]})
+  end
+
+  def handle_event([:cyfr, :sanctum, :membership, :changed], _measurements, metadata, _config) do
+    safe_topic_broadcast(
+      Bus.memberships(metadata[:user_id]),
+      {:membership_changed,
+       %{
+         user_id: metadata[:user_id],
+         athanor_id: metadata[:athanor_id],
+         change: metadata[:change]
+       }}
+    )
+  end
+
+  # Two topics, one announcement: the athanor's own, and the deliberately
+  # global one the external-MCP reconciler reads because it cannot know
+  # every tenant topic.
+  def handle_event([:cyfr, :sanctum, :vault, :entry_changed], _measurements, metadata, _config) do
+    athanor_id = metadata[:athanor_id]
+    entry_id = metadata[:entry_id]
+    verb = metadata[:verb]
+
+    safe_broadcast(&Bus.vault_changed/1, metadata, {:vault_entry_changed, entry_id, verb})
+
+    safe_topic_broadcast(
+      Bus.vault_changed_global(),
+      {:vault_entry_changed_global, athanor_id, entry_id, verb, metadata[:meta] || %{}}
+    )
+  end
+
+  def handle_event([:cyfr, :sanctum, :athanor, :archived], _measurements, metadata, _config) do
+    safe_topic_broadcast(
+      Bus.athanor_archived_global(),
+      {:athanor_archived_global, metadata[:athanor_id]}
+    )
+  end
+
+  def handle_event([:cyfr, :sanctum, :api_keys, :changed], _measurements, metadata, _config) do
+    safe_broadcast(&Bus.api_keys/1, metadata, :api_keys_changed)
+  end
+
+  def handle_event([:cyfr, :sanctum, :webhooks, :changed], _measurements, metadata, _config) do
+    safe_broadcast(&Bus.webhooks/1, metadata, :webhooks_changed)
+  end
+
   def handle_event(_event, _measurements, _metadata, _config), do: :ok
 
   @impl true
@@ -201,6 +285,25 @@ defmodule Prism.TelemetryBridge do
         end
 
       :skip ->
+        :ok
+    end
+  rescue
+    e ->
+      Logger.warning("[TelemetryBridge] PubSub broadcast error: #{Exception.message(e)}")
+      :ok
+  end
+
+  # A topic the caller already built — an unscoped one, or a tenant topic
+  # from a metadata field this handler read itself. Same containment as
+  # `safe_broadcast/3`: a raising handler is permanently detached by the
+  # telemetry library, and every console update stops with it.
+  defp safe_topic_broadcast(topic, message) do
+    case Phoenix.PubSub.broadcast(@pubsub, topic, Cyfr.Sanitizer.sanitize(message)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[TelemetryBridge] PubSub broadcast failed: #{inspect(reason)}")
         :ok
     end
   rescue
