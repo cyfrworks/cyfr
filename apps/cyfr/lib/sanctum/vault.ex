@@ -25,6 +25,14 @@ defmodule Sanctum.Vault do
 
   What ships to callers is metadata only: names, kinds, field *names*,
   status. Material stays sealed; there is no read-back verb.
+
+  The keyring, the AEAD and every plaintext stay here. Rows move through
+  `Arca.VaultStorage`, which takes the caller's actor and answers plain
+  maps of ciphertext and metadata — the tenant a read runs under is the
+  actor's, and a row cannot name its own. Each verb decides everything a
+  write will contain before asking for it, so the writes that must land
+  together are one call and one transaction below, with nothing left for
+  this module to abort.
   """
 
   alias Sanctum.CipherAAD
@@ -37,6 +45,11 @@ defmodule Sanctum.Vault do
 
   @kinds ~w(api_key oauth bundle)
   @rebind_attempts 3
+
+  # The status a profile takes when the binding under its head consent
+  # moves. One word, written in one place: the operator's rebind and the
+  # OAuth grant's rebind block dependents identically.
+  @needs_consent "needs_consent"
 
   @type entry_view :: %{
           id: String.t(),
@@ -58,7 +71,7 @@ defmodule Sanctum.Vault do
   @doc "Living entries in the caller's athanor, metadata only."
   @spec list(Context.t()) :: {:ok, [entry_view()]} | {:error, term()}
   def list(%Context{} = ctx) do
-    with {:ok, rows} <- Arca.VaultStorage.list(Context.athanor!(ctx)) do
+    with {:ok, rows} <- Arca.VaultStorage.list(Context.actor(ctx)) do
       {:ok, Enum.map(rows, &view/1)}
     end
   end
@@ -97,20 +110,22 @@ defmodule Sanctum.Vault do
         oauth_scopes: encode_optional_list(Map.get(params, :oauth_scopes))
       }
 
+      # The tenant is the caller's, never an attribute's: the facade stamps
+      # the actor's athanor onto the row and refuses one supplied here.
       with {:ok, digest} <- VaultReader.binding_digest(binding),
            {:ok, entry} <-
-             binding
-             |> Map.merge(%{
-               id: id,
-               athanor_id: Context.athanor!(ctx),
-               name: name,
-               kind: kind,
-               provenance: Map.get(params, :provenance, "user"),
-               status: "active",
-               sealed_payload: sealed,
-               binding_digest: digest
-             })
-             |> Arca.VaultStorage.put() do
+             Arca.VaultStorage.put(
+               Context.actor(ctx),
+               Map.merge(binding, %{
+                 id: id,
+                 name: name,
+                 kind: kind,
+                 provenance: Map.get(params, :provenance, "user"),
+                 status: "active",
+                 sealed_payload: sealed,
+                 binding_digest: digest
+               })
+             ) do
         broadcast(ctx, id, :create, %{name: entry.name})
         {:ok, view(entry)}
       end
@@ -136,7 +151,7 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_living(ctx, id),
          :ok <- check_name_free(ctx, new_name),
-         :ok <- Arca.VaultStorage.update_meta(Context.athanor!(ctx), id, %{name: new_name}) do
+         :ok <- Arca.VaultStorage.update_meta(Context.actor(ctx), id, %{name: new_name}) do
       # The signal carries the name being VACATED: header templates
       # reference entries by name, so the servers a rename breaks are the
       # ones still spelling the old one — a post-hoc read of the row can
@@ -162,19 +177,26 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_rotatable(ctx, id),
          :ok <- check_schema(entry, fields),
-         {:ok, current} <- unseal(entry),
+         {:ok, current} <- unseal(ctx, entry),
          {:ok, oauth} <- rotation_oauth(current, Map.get(params, :oauth)),
          {:ok, json} <- Payload.encode_material(fields, oauth),
-         aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint),
+         aad = CipherAAD.vault_entry(Context.athanor!(ctx), entry.id, entry.provider_hint),
          {:ok, sealed} <- seal(json, aad) do
-      case Arca.VaultStorage.rotate_payload(Context.athanor!(ctx), id, expected, sealed) do
-        :ok ->
-          if entry.status == "needs_reauth" do
-            Arca.VaultStorage.set_status(Context.athanor!(ctx), id, "active")
-          end
+      # The material and the reactivation that belongs to it are one
+      # transaction, the same one an OAuth grant commits through: a rotate
+      # that fails part-way leaves the entry at the version it was already
+      # readable at, never at a payload its status has not caught up to.
+      plan = %{
+        expected_rev: expected,
+        sealed_payload: sealed,
+        status: if(entry.status == "needs_reauth", do: "active"),
+        rebind: nil
+      }
 
+      case Arca.VaultStorage.commit_payload(Context.actor(ctx), id, plan) do
+        {:ok, %{payload_rev: rev}} ->
           broadcast(ctx, id, :rotate, %{name: entry.name})
-          {:ok, expected + 1}
+          {:ok, rev}
 
         {:error, _} = err ->
           err
@@ -217,7 +239,7 @@ defmodule Sanctum.Vault do
 
   # A rebind that lost the race recomputes against what landed.
   defp rebind_entry(ctx, entry, changes, attempts) do
-    case move_binding(entry, changes) do
+    case move_binding(ctx, entry, changes) do
       {:error, :binding_moved} when attempts > 1 ->
         with {:ok, fresh} <- get_living(ctx, entry.id),
              do: rebind_entry(ctx, fresh, changes, attempts - 1)
@@ -227,44 +249,33 @@ defmodule Sanctum.Vault do
     end
   end
 
-  @doc """
-  Move a vault entry's binding (`changes`: `field_names`, `oauth_endpoints`,
-  `oauth_scopes`) in one transaction: the binding moves from the digest
-  `entry` was read at, and every profile whose head consent references the
-  entry is set `needs_consent` with it, so no consent ever covers a binding
-  it did not approve. `{:error, :binding_moved}` when another change landed
-  first or the entry is gone. The caller authorizes and broadcasts.
-  """
-  @spec move_binding(map(), map()) ::
-          {:ok, %{binding_digest: String.t(), affected: [String.t()]}} | {:error, term()}
-  def move_binding(%{athanor_id: athanor_id, id: id} = entry, changes) when is_map(changes) do
-    with {:ok, digest} <- VaultReader.binding_digest(Map.merge(Map.from_struct(entry), changes)) do
-      Arca.Repo.transaction(fn ->
-        with :ok <-
-               Arca.VaultStorage.move_binding(
-                 athanor_id,
-                 id,
-                 entry.binding_digest,
-                 Map.put(changes, :binding_digest, digest)
-               ),
-             {:ok, affected} <- Arca.ConsentStorage.head_profiles_referencing(athanor_id, id),
-             :ok <- block_profiles(athanor_id, affected) do
-          %{binding_digest: digest, affected: Enum.sort(affected)}
-        else
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
-      end)
+  # The new digest is derived here, from the entry as it was read merged
+  # with the edit: a decision, made before any transaction opens. What
+  # crosses into Arca is data — the digest the row must still read, the
+  # columns to write, and the word a blocked profile takes. The binding
+  # move and the invalidation of every profile that depended on it are one
+  # transaction there, so no consent is ever left covering a binding it
+  # did not approve, and a lost compare-and-set leaves neither behind.
+  defp move_binding(%Context{} = ctx, entry, changes) when is_map(changes) do
+    with {:ok, digest} <- VaultReader.binding_digest(Map.merge(entry, changes)),
+         {:ok, affected} <-
+           Arca.VaultStorage.move_binding(
+             Context.actor(ctx),
+             entry.id,
+             entry.binding_digest,
+             Map.put(changes, :binding_digest, digest),
+             @needs_consent
+           ) do
+      {:ok, %{binding_digest: digest, affected: affected}}
     end
   end
 
-  defp block_profiles(athanor_id, profile_ids) do
-    Enum.reduce_while(profile_ids, :ok, fn profile_id, :ok ->
-      case Arca.ProfileStorage.set_status(athanor_id, profile_id, "needs_consent") do
-        :ok -> {:cont, :ok}
-        {:error, _} = error -> {:halt, error}
-      end
-    end)
-  end
+  @doc false
+  # What a profile's status becomes when the binding under its head consent
+  # moves. `Sanctum.Vault.OAuthGrant` blocks dependents with the same word
+  # and reads it from here rather than spelling it a second time.
+  @spec blocked_profile_status() :: String.t()
+  def blocked_profile_status, do: @needs_consent
 
   # ---------------------------------------------------------------------------
   # Revoke / delete
@@ -279,7 +290,7 @@ defmodule Sanctum.Vault do
   def revoke(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_living(ctx, id),
-         :ok <- Arca.VaultStorage.set_status(Context.athanor!(ctx), id, "revoked"),
+         :ok <- Arca.VaultStorage.set_status(Context.actor(ctx), id, "revoked"),
          {:ok, affected} <-
            Arca.ConsentStorage.head_profiles_referencing(Context.athanor!(ctx), id) do
       broadcast(ctx, id, :revoke, %{name: entry.name})
@@ -292,7 +303,7 @@ defmodule Sanctum.Vault do
   def delete(%Context{} = ctx, id) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_any(ctx, id),
-         :ok <- Arca.VaultStorage.tombstone(Context.athanor!(ctx), id) do
+         :ok <- Arca.VaultStorage.tombstone(Context.actor(ctx), id) do
       broadcast(ctx, id, :delete, %{name: entry.name})
       :ok
     end
@@ -324,14 +335,14 @@ defmodule Sanctum.Vault do
   defp required_kind(_), do: {:error, {:invalid_kind, @kinds}}
 
   defp check_name_free(ctx, name) do
-    case Arca.VaultStorage.get_by_name(Context.athanor!(ctx), name) do
+    case Arca.VaultStorage.get_by_name(Context.actor(ctx), name) do
       {:error, :not_found} -> :ok
       {:ok, _} -> {:error, :name_taken}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp get_any(ctx, id), do: Arca.VaultStorage.get(Context.athanor!(ctx), id)
+  defp get_any(ctx, id), do: Arca.VaultStorage.get(Context.actor(ctx), id)
 
   defp get_living(ctx, id) do
     case get_any(ctx, id) do
@@ -376,8 +387,13 @@ defmodule Sanctum.Vault do
       {:error, :seal_failed}
   end
 
-  defp unseal(entry) do
-    aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
+  # The AAD's athanor is the CALLER's, not the row's. The facade has
+  # already refused any row outside the caller's athanor, and binding the
+  # ciphertext to the caller's tenant means a row that reached a foreign
+  # context by any path fails to unseal rather than decrypting under the
+  # tenant it brought with it.
+  defp unseal(%Context{} = ctx, entry) do
+    aad = CipherAAD.vault_entry(Context.athanor!(ctx), entry.id, entry.provider_hint)
 
     with sealed when is_binary(sealed) <- entry.sealed_payload,
          {:ok, plaintext} <- Sanctum.Cipher.decrypt(sealed, aad) do

@@ -682,7 +682,7 @@ defmodule Emissary.MCP.BridgeTest do
       on_exit(fn -> Application.put_env(:cyfr, :external_server_reconciler_enabled, false) end)
       start_supervised!(Emissary.MCP.ExternalServerReconciler)
 
-      {:ok, entry} = Arca.VaultStorage.get_by_name(ctx.athanor_id, "gh-token")
+      {:ok, entry} = Arca.VaultStorage.get_by_name(Sanctum.Context.actor(ctx), "gh-token")
       {:ok, _} = Sanctum.Vault.revoke(ctx, entry.id)
 
       assert_released(row, 1)

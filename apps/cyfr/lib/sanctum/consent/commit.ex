@@ -777,7 +777,7 @@ defmodule Sanctum.Consent.Commit do
   defp fetch_active_entry(_ctx, nil), do: {:error, {:invalid_binding, :entry_id_required}}
 
   defp fetch_active_entry(ctx, entry_id) do
-    case Arca.VaultStorage.get(ctx.athanor_id, entry_id) do
+    case Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry_id) do
       {:ok, %{status: "active"} = entry} -> {:ok, entry}
       {:ok, %{status: status}} -> {:error, {:entry_unavailable, entry_id, status}}
       {:error, reason} -> {:error, {:entry_unavailable, entry_id, reason}}

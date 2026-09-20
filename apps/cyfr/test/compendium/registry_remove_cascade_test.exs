@@ -90,7 +90,8 @@ defmodule Compendium.RegistryRemoveCascadeTest do
     assert Arca.Repo.get(Arca.Schemas.Consent, consent.id)
 
     # Vault entries are the operator's and outlive the component.
-    assert {:ok, %{status: "active"}} = Arca.VaultStorage.get(ctx.athanor_id, entry.id)
+    assert {:ok, %{status: "active"}} =
+             Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry.id)
   end
 
   test "a webhook pointed at the removed component is disabled", %{ctx: ctx} do

@@ -132,6 +132,9 @@ defmodule Arca.TenantArgumentOrderTest do
     assert api_key =~ "def get_key(athanor_id, name)"
     assert api_key =~ "def get_key_by_id(athanor_id, id)"
     assert webhook =~ "def get_by_name(athanor_id, name)"
-    assert vault =~ "def get_by_name(athanor_id, name)"
+    # `Arca.VaultStorage` no longer takes a bare athanor at all: the actor
+    # in the first position carries the tenant, which is the shape the
+    # positional rule exists to reach.
+    assert vault =~ "def get_by_name(%Cyfr.Actor{athanor_id: athanor_id}, name)"
   end
 end

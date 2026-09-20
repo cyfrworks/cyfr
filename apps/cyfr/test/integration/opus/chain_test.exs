@@ -337,9 +337,8 @@ defmodule Opus.ChainTest do
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
       {:ok, entry} =
-        Arca.VaultStorage.put(%{
+        Arca.VaultStorage.put(Sanctum.Context.actor(ctx), %{
           id: id,
-          athanor_id: ctx.athanor_id,
           name: "chain-revoked-entry",
           provider_hint: "",
           kind: "api_key",
@@ -348,7 +347,7 @@ defmodule Opus.ChainTest do
         })
 
       {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
-      :ok = Arca.VaultStorage.set_status(ctx.athanor_id, entry.id, "revoked")
+      :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), entry.id, "revoked")
       {entry, digest}
     end
 

@@ -75,19 +75,20 @@ defmodule Arca.RecordSinkTest do
 
   test "vault touches are deduplicated into one update per entry" do
     {:ok, entry} =
-      Arca.VaultStorage.put(%{
-        athanor_id: "ath_a",
+      Arca.VaultStorage.put(%Cyfr.Actor{athanor_id: "ath_a"}, %{
         name: "sink-probe",
         kind: "api_key",
         status: "active",
         sealed_payload: <<4, 2, "k1", 0>>
       })
 
+    actor = %Cyfr.Actor{athanor_id: "ath_a"}
+
     assert entry.last_used_at == nil
-    for _ <- 1..3, do: :ok = Arca.VaultStorage.touch_last_used("ath_a", entry.id)
+    for _ <- 1..3, do: :ok = Arca.VaultStorage.touch_last_used(actor, entry.id)
     :ok = RecordSink.flush()
 
-    {:ok, touched} = Arca.VaultStorage.get("ath_a", entry.id)
+    {:ok, touched} = Arca.VaultStorage.get(actor, entry.id)
     assert %DateTime{} = touched.last_used_at
   end
 

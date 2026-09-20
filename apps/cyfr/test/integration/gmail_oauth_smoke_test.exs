@@ -209,8 +209,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
       },
       redirect_uri: redirect_uri,
       code_verifier: "smoke-verifier",
-      athanor_id: ctx.athanor_id,
-      user_id: ctx.user_id
+      actor: Sanctum.Context.actor(ctx)
     }
 
     Arca.Cache.put({:vault_oauth_pending, state}, pending, 120_000)
@@ -291,7 +290,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     refute rendered =~ "sealed_payload"
 
     # And the sealed column really is sealed.
-    {:ok, row} = Arca.VaultStorage.get(ctx.athanor_id, entry.id)
+    {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry.id)
     refute row.sealed_payload =~ "ya29.super-secret"
 
     aad = CipherAAD.vault_entry(ctx.athanor_id, entry.id, @provider)

@@ -62,12 +62,14 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   defp mint_pending!(ctx, target) do
     state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
+    # The pending record carries the actor the interactive check passed
+    # for; the callback has no context of its own and acts with that
+    # authority and no other.
     pending = %{
       target: target,
       redirect_uri: EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback",
       code_verifier: "verifier-1",
-      athanor_id: ctx.athanor_id,
-      user_id: ctx.user_id
+      actor: Sanctum.Context.actor(ctx)
     }
 
     Arca.Cache.put({:vault_oauth_pending, state}, pending, 120_000)
@@ -110,8 +112,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   end
 
   defp unseal!(entry_id, athanor_id) do
-    {:ok, entry} = Arca.VaultStorage.get(athanor_id, entry_id)
-    aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
+    {:ok, entry} = Arca.VaultStorage.get(%Cyfr.Actor{athanor_id: athanor_id}, entry_id)
+    aad = CipherAAD.vault_entry(athanor_id, entry.id, entry.provider_hint)
     {:ok, plaintext} = Sanctum.Cipher.decrypt(entry.sealed_payload, aad)
     {:ok, payload} = Payload.decode(plaintext)
     {entry, payload}
@@ -329,8 +331,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
           oauth_scopes: @scopes
         })
 
-      :ok = Arca.VaultStorage.set_status(ctx.athanor_id, view.id, "needs_reauth")
-      {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), view.id, "needs_reauth")
+      {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
       digest_before = entry.binding_digest
 
       stub_token_endpoint(bypass, %{"access_token" => "at-2", "refresh_token" => "rt-2"})
@@ -388,7 +390,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
           expected_consent_revision: plan.expected_consent_revision
         })
 
-      {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
       digest_before = entry.binding_digest
 
       stub_token_endpoint(bypass, %{"access_token" => "at-3"})
@@ -399,7 +401,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert {:ok, %{rebound: true}} =
                OAuthGrant.complete(state, "code-3", pending.redirect_uri)
 
-      {:ok, after_entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      {:ok, after_entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
       assert after_entry.binding_digest != digest_before
       assert Jason.decode!(after_entry.oauth_scopes) |> Enum.sort() == Enum.sort(wider)
 

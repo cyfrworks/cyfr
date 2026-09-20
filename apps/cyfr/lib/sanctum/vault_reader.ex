@@ -100,10 +100,12 @@ defmodule Sanctum.VaultReader do
   @spec unseal_by_name(String.t(), String.t()) ::
           {:ok, %{String.t() => String.t()}} | {:error, error()}
   def unseal_by_name(athanor_id, name) when is_binary(athanor_id) and is_binary(name) do
-    with {:ok, entry} <- Arca.VaultStorage.get_by_name(athanor_id, name),
+    actor = tenant_actor(athanor_id)
+
+    with {:ok, entry} <- Arca.VaultStorage.get_by_name(actor, name),
          :ok <- check_status(entry),
-         {:ok, %{"v" => 2, "fields" => fields}} <- unseal_material(entry) do
-      Arca.VaultStorage.touch_last_used(athanor_id, entry.id)
+         {:ok, %{"v" => 2, "fields" => fields}} <- unseal_material(actor, entry) do
+      Arca.VaultStorage.touch_last_used(actor, entry.id)
       {:ok, fields}
     else
       {:error, reason} -> {:error, reason}
@@ -118,7 +120,7 @@ defmodule Sanctum.VaultReader do
   (rotation must not re-consent) and including everything a rebind edit
   would change.
   """
-  @spec binding_digest(Arca.Schemas.VaultEntry.t() | map()) ::
+  @spec binding_digest(Arca.VaultStorage.entry() | map()) ::
           {:ok, String.t()} | {:error, term()}
   def binding_digest(entry) do
     input = %{
@@ -134,11 +136,13 @@ defmodule Sanctum.VaultReader do
   defp load_and_unseal(%Context{anonymous: true}, _resource), do: {:error, :anonymous_denied}
 
   defp load_and_unseal(%Context{} = ctx, %{entry_id: entry_id} = resource) do
-    with {:ok, entry} <- Arca.VaultStorage.get(ctx.athanor_id, entry_id),
+    actor = Context.actor(ctx)
+
+    with {:ok, entry} <- Arca.VaultStorage.get(actor, entry_id),
          :ok <- check_status(entry),
          :ok <- check_binding(entry, resource),
-         {:ok, payload} <- unseal_material(entry) do
-      Arca.VaultStorage.touch_last_used(ctx.athanor_id, entry.id)
+         {:ok, payload} <- unseal_material(actor, entry) do
+      Arca.VaultStorage.touch_last_used(actor, entry.id)
       {:ok, entry, payload}
     end
   end
@@ -153,7 +157,7 @@ defmodule Sanctum.VaultReader do
           | {:error, {:entry_unavailable, name :: String.t() | nil, status :: String.t()}}
           | {:error, {:binding_mismatch, name :: String.t() | nil}}
   def usable(athanor_id, entry_id, binding_digest) when is_binary(binding_digest) do
-    case Arca.VaultStorage.get(athanor_id, entry_id) do
+    case Arca.VaultStorage.get(tenant_actor(athanor_id), entry_id) do
       {:ok, entry} ->
         with :ok <- check_status(entry),
              :ok <- check_binding(entry, %{binding_digest: binding_digest}) do
@@ -195,10 +199,14 @@ defmodule Sanctum.VaultReader do
 
   defp check_binding(_entry, _resource), do: {:error, :binding_mismatch}
 
-  # The AAD is rebuilt from the row itself: the entry's own athanor is bound,
-  # so a row that reached a foreign context by any path still fails to unseal.
-  defp unseal_material(%{sealed_payload: sealed} = entry) when is_binary(sealed) do
-    aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
+  # The AAD's athanor is the CALLER's, taken from the actor that read the
+  # row and never from the row itself. The facade has already refused any
+  # row outside that athanor, and binding the ciphertext to the reader's
+  # tenant means a row that reached a foreign context by any path fails to
+  # unseal instead of decrypting under the tenant it brought with it.
+  defp unseal_material(%Cyfr.Actor{athanor_id: athanor_id}, %{sealed_payload: sealed} = entry)
+       when is_binary(sealed) do
+    aad = CipherAAD.vault_entry(athanor_id, entry.id, entry.provider_hint)
 
     case Sanctum.Cipher.decrypt(sealed, aad) do
       {:ok, plaintext} -> decode_payload(plaintext)
@@ -206,7 +214,19 @@ defmodule Sanctum.VaultReader do
     end
   end
 
-  defp unseal_material(_entry), do: {:error, :unseal_failed}
+  defp unseal_material(%Cyfr.Actor{}, _entry), do: {:error, :unseal_failed}
+
+  # The one place a bare athanor becomes an actor, and it is inside the
+  # layer that owns tenancy. `usable/3` and `unseal_by_name/2` are reached
+  # by host-side callers that hold a resolved tenant and no context — the
+  # external-MCP reconciler resolving a `vault:<name>` template, the
+  # consent planner checking an edge — so what they get is the narrowest
+  # actor there is: this athanor, no person, athanor scope, no system
+  # authority. Nothing here widens a caller; it names the tenant it was
+  # already given.
+  defp tenant_actor(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
+    %Cyfr.Actor{athanor_id: athanor_id}
+  end
 
   defp decode_payload(plaintext), do: Sanctum.Vault.Payload.decode(plaintext)
 
@@ -254,9 +274,9 @@ defmodule Sanctum.VaultReader do
 
   defp check_scope_projection(_entry, _resource), do: :ok
 
-  defp resolve_oauth(_ctx, entry, %{"v" => 2} = payload, provider) do
+  defp resolve_oauth(%Context{} = ctx, entry, %{"v" => 2} = payload, provider) do
     case payload["oauth"] do
-      %{} = oauth -> Sanctum.Vault.OAuth.dispense(entry, oauth, provider)
+      %{} = oauth -> Sanctum.Vault.OAuth.dispense(Context.actor(ctx), entry, oauth, provider)
       _ -> {:error, :no_oauth_material}
     end
   end

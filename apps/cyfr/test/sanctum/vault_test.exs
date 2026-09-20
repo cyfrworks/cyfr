@@ -29,8 +29,10 @@ defmodule Sanctum.VaultTest do
     view
   end
 
+  defp actor(ctx), do: Sanctum.Context.actor(ctx)
+
   defp resource_for(ctx, id) do
-    {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, id)
+    {:ok, entry} = Arca.VaultStorage.get(actor(ctx), id)
     {:ok, digest} = VaultReader.binding_digest(entry)
     %{entry_id: id, binding_digest: digest}
   end
@@ -161,7 +163,7 @@ defmodule Sanctum.VaultTest do
 
     test "rotating a needs_reauth entry reactivates it", %{ctx: ctx} do
       view = create!(ctx, %{fields: %{"key" => "v"}})
-      :ok = Arca.VaultStorage.set_status(ctx.athanor_id, view.id, "needs_reauth")
+      :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
 
       assert {:ok, 1} =
                Vault.rotate(ctx, %{
@@ -170,8 +172,31 @@ defmodule Sanctum.VaultTest do
                  expected_payload_rev: 0
                })
 
-      {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      {:ok, entry} = Arca.VaultStorage.get(actor(ctx), view.id)
       assert entry.status == "active"
+    end
+
+    test "a rotate that loses its compare-and-set leaves the entry whole", %{ctx: ctx} do
+      view = create!(ctx, %{fields: %{"key" => "before"}})
+      resource = resource_for(ctx, view.id)
+      :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
+
+      # The material write and the reactivation that goes with it are one
+      # transaction: a lost race leaves neither, so the entry is still
+      # readable at exactly the version it was readable at before.
+      assert {:error, :payload_conflict} =
+               Vault.rotate(ctx, %{
+                 id: view.id,
+                 fields: %{"key" => "after"},
+                 expected_payload_rev: 7
+               })
+
+      {:ok, entry} = Arca.VaultStorage.get(actor(ctx), view.id)
+      assert entry.status == "needs_reauth"
+      assert entry.payload_rev == 0
+
+      :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "active")
+      assert {:ok, %{"key" => "before"}} = VaultReader.fetch(ctx, resource)
     end
   end
 
@@ -200,13 +225,17 @@ defmodule Sanctum.VaultTest do
     test "a binding moves only from the digest it was read at, and a rebind keeps what landed first",
          %{ctx: ctx} do
       view = create!(ctx)
-      {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      {:ok, entry} = Arca.VaultStorage.get(actor(ctx), view.id)
       assert is_binary(entry.binding_digest)
 
       assert {:error, :binding_moved} =
-               Arca.VaultStorage.move_binding(ctx.athanor_id, view.id, "sha256:stale", %{
-                 oauth_scopes: ~s(["x"])
-               })
+               Arca.VaultStorage.move_binding(
+                 actor(ctx),
+                 view.id,
+                 "sha256:stale",
+                 %{oauth_scopes: ~s(["x"])},
+                 Vault.blocked_profile_status()
+               )
 
       assert {:ok, _} = Vault.rebind(ctx, %{id: view.id, oauth_scopes: ["a"]})
 
@@ -216,7 +245,7 @@ defmodule Sanctum.VaultTest do
                  oauth_endpoints: %{"token_url" => "https://other.example/token"}
                })
 
-      {:ok, row} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      {:ok, row} = Arca.VaultStorage.get(actor(ctx), view.id)
       assert row.oauth_scopes == ~s(["a"])
       assert row.binding_digest == digest
       assert {:ok, ^digest} = VaultReader.binding_digest(row)
@@ -247,7 +276,7 @@ defmodule Sanctum.VaultTest do
 
       assert :ok = Vault.delete(ctx, view.id)
 
-      {:ok, row} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+      {:ok, row} = Arca.VaultStorage.get(actor(ctx), view.id)
       assert row.status == "tombstoned"
       assert row.sealed_payload == nil
 

@@ -499,7 +499,10 @@ defmodule Cyfr.Execution.HostTest do
       assert Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, fixture.attempt).claimed_by == nil
 
       assert {:ok, %{last_used_at: nil}} =
-               Arca.VaultStorage.get(fixture.athanor_id, fixture.entry.id)
+               Arca.VaultStorage.get(
+                 %Cyfr.Actor{athanor_id: fixture.athanor_id},
+                 fixture.entry.id
+               )
 
       assert %{status: "running"} = row(fixture)
       assert terminal_events(fixture) == []
