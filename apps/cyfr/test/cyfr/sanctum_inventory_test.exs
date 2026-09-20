@@ -196,10 +196,10 @@ defmodule Cyfr.SanctumInventoryTest do
     end
   end
 
-  # Section 6's declared moves: a target that takes a file out of these two
-  # directories leaves its row matching nothing, which is the row doing its
-  # job rather than an obsolete entry. Only these are exempt from the
-  # dead-row check.
+  # Section 6's declared additions and removals: a row can match nothing at
+  # either end of a target's life — a file moved out of these directories
+  # leaves its row behind, a file a target creates has a row before it
+  # exists. Only these are exempt from the dead-row check.
   defp declared_moves do
     ~r/^\| `([^`]+)` \| ([A-Za-z0-9-]+) \| `[^`]+` \|$/m
     |> Regex.scan(section(6))
