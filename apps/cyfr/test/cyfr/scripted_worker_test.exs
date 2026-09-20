@@ -310,7 +310,14 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     Process.exit(runner, :kill)
 
     assert {:error, "Execution terminated: runner stopped without cleanup"} = Task.await(task)
-    assert Attempt.whereis(id) == nil
+
+    # `Dispatch.run/3` answers the caller before the attempt process is
+    # done: the attempt closes the row, settles the accounting and then
+    # stops. Every assertion below reads state that settles on that path,
+    # so the attempt being gone is the barrier they all wait behind —
+    # without it this reads the accounting mid-flight and fails wherever
+    # the scheduler happened to be.
+    wait_until(fn -> Attempt.whereis(id) == nil end, 5_000, "the attempt to stop")
     assert %{status: "failed"} = Arca.Repo.get(Arca.Execution, id)
 
     # The athanor carries no note for it, and nothing was killed, because
