@@ -329,4 +329,25 @@ defmodule Arca.ThreadStorageTest do
     ids = Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
     assert ids == Enum.sort([running.id, fresh.id])
   end
+
+  test "a create over the estate's thread cap is refused through the port, and commits nothing",
+       %{ctx: ctx} do
+    {:ok, _first} = Threads.create(ctx, %{title: "One"})
+    before = Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
+
+    original = Application.get_env(:cyfr, :caps, [])
+    Application.put_env(:cyfr, :caps, Keyword.put(original, :max_threads_per_athanor, 1))
+    on_exit(fn -> Application.put_env(:cyfr, :caps, original) end)
+
+    # The refusal is the port's vocabulary (`Cyfr.Caps`), not the tenancy
+    # domain named from below it, and the row it refused is not there.
+    assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
+             Threads.create(ctx, %{title: "One too many"})
+
+    assert Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort() == before
+
+    # Another estate's count is its own.
+    other = Cyfr.Actor.in_athanor("ath_b")
+    assert {:ok, _} = Threads.create(other, %{title: "Theirs"})
+  end
 end
