@@ -17,7 +17,8 @@ defmodule Sanctum.Context do
   `Arca.McpLog` show a chain as one group.
 
   Tests construct permissive single-user contexts via
-  `Sanctum.TestContext.local/0` (compiled only in `:test` and `:dev`).
+  `Sanctum.TestContext.local/0`, which lives in test support and so is
+  compiled only in `:test`.
 
   ## Usage
 
