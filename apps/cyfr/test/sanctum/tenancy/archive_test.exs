@@ -138,6 +138,46 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert_receive {:notify, ^athanor_id, :athanor_changed, _}
   end
 
+  test "archive drops every member's established-context memo, so a cached caller is refused next call" do
+    # `Sanctum.Caller` memoizes an established context for a short TTL, and
+    # that context carries the athanor. The memo is a cache of an
+    # AUTHORIZATION decision, not of a display: the status gates that
+    # refuse an archived athanor run on the NEXT establish, which is
+    # exactly what a memo hit skips.
+    original = Application.get_env(:cyfr, :establish_cache_ms)
+    Application.put_env(:cyfr, :establish_cache_ms, 60_000)
+
+    on_exit(fn ->
+      Arca.Cache.delete_match({:established, :_, :_, :_})
+
+      if original,
+        do: Application.put_env(:cyfr, :establish_cache_ms, original),
+        else: Application.delete_env(:cyfr, :establish_cache_ms)
+    end)
+
+    n = System.unique_integer([:positive])
+    owner = person(n)
+    {:ok, group} = Athanors.create_group(owner.id, "Memo #{n}")
+
+    {:ok, session} =
+      Sanctum.Session.create(%{
+        member_ctx(group.id, owner.id)
+        | provider: "github",
+          email: owner.email
+      })
+
+    assert {:ok, %Context{athanor_id: cached}} = Sanctum.Caller.establish(session.token)
+    assert cached == group.id
+    refute Arca.Cache.match({:established, :_, :_, :_}) == []
+
+    assert {:ok, %{status: "archived"}} = Athanors.archive(group)
+
+    assert Arca.Cache.match({:established, :_, :_, :_}) == [],
+           "the archive left a member's caller memoized inside the athanor it just shut"
+
+    refute match?({:ok, %Context{athanor_id: ^cached}}, Sanctum.Caller.establish(session.token))
+  end
+
   test "the last member leaving a group archives it the same way" do
     n = System.unique_integer([:positive])
     owner = person(n)

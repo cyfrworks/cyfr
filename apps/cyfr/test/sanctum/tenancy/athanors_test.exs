@@ -68,17 +68,13 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     end
 
     test "a person athanor without an owner is rejected" do
-      assert {:error, changeset} =
+      assert {:error, {:invalid, %{owner_user_id: [_ | _]}}} =
                Athanors.create(%{kind: "person", name: "X", slug: slug(), created_by: "system"})
-
-      assert %{owner_user_id: [_ | _]} = errors_on(changeset)
     end
 
     test "rejects an unknown kind" do
-      assert {:error, changeset} =
+      assert {:error, {:invalid, %{kind: [_ | _]}}} =
                Athanors.create(%{kind: "team", name: "X", slug: slug(), created_by: "system"})
-
-      assert %{kind: [_ | _]} = errors_on(changeset)
     end
 
     test "slugs are unique per kind" do
@@ -87,10 +83,10 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       assert {:ok, _} =
                Athanors.create(%{kind: "group", name: "A", slug: s, created_by: "system"})
 
-      assert {:error, changeset} =
+      # The unique index on kind and slug is the one refusal a caller acts
+      # on rather than reports: a derived slug asks again with the next name.
+      assert {:error, :slug_taken} =
                Athanors.create(%{kind: "group", name: "B", slug: s, created_by: "system"})
-
-      assert %{kind: [_ | _]} = errors_on(changeset)
 
       # The same slug is free for a person athanor.
       assert {:ok, _} =
@@ -129,7 +125,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
                  created_by: "system"
                })
 
-      assert {:error, changeset} =
+      assert {:error, {:invalid, %{owner_user_id: [_ | _]}}} =
                Athanors.create(%{
                  kind: "person",
                  name: "A again",
@@ -137,20 +133,16 @@ defmodule Sanctum.Tenancy.AthanorsTest do
                  owner_user_id: owner,
                  created_by: "system"
                })
-
-      assert %{owner_user_id: [_ | _]} = errors_on(changeset)
     end
 
     test "rejects a slug outside the namespace grammar" do
-      assert {:error, changeset} =
+      assert {:error, {:invalid, %{slug: [_ | _]}}} =
                Athanors.create(%{
                  kind: "group",
                  name: "X",
                  slug: "Bad Slug",
                  created_by: "system"
                })
-
-      assert %{slug: [_ | _]} = errors_on(changeset)
     end
   end
 
@@ -264,16 +256,22 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       assert {:error, :invalid_name} = Athanors.create_group(creator, "!!!")
     end
 
-    test "the per-person group cap applies" do
-      creator = "u-cap-#{System.unique_integer([:positive])}"
+    test "the per-person group cap applies, and a mint that trips it commits nothing" do
+      n = System.unique_integer([:positive])
+      creator = "u-cap-#{n}"
       original = Application.get_env(:cyfr, :caps, [])
       Application.put_env(:cyfr, :caps, max_groups_per_person: 1)
       on_exit(fn -> Application.put_env(:cyfr, :caps, original) end)
 
-      assert {:ok, _} = Athanors.create_group(creator, "One")
+      assert {:ok, first} = Athanors.create_group(creator, "One #{n}")
 
       assert {:error, {:limit_reached, :max_groups_per_person, 1}} =
-               Athanors.create_group(creator, "Two")
+               Athanors.create_group(creator, "Two #{n}")
+
+      # The cap, the slug, the athanor row and the creator's seat are one
+      # transaction: a refused mint leaves no athanor row and no membership.
+      assert {:error, :not_found} = Athanors.get_by_slug("group", "two-#{n}")
+      assert Enum.map(Athanors.list_for_user(creator), & &1.id) == [first.id]
     end
   end
 
@@ -331,13 +329,5 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       assert first.id == person.id
       assert Enum.map(rest, & &1.id) == [g1.id]
     end
-  end
-
-  defp errors_on(%Ecto.Changeset{} = changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
-      Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
-        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-      end)
-    end)
   end
 end

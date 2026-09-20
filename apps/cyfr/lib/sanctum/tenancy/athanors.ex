@@ -14,12 +14,21 @@ defmodule Sanctum.Tenancy.Athanors do
   A person's athanor is archived only through `Sanctum.Tenancy.Users.deny/1`
   (`force: true`); a group is archived by its members or by its last member
   leaving.
+
+  ## What is decided here, and what is stored below
+
+  The statements are `Arca.Athanors`'. What stays here is the deciding:
+  which cap a mint must pass, what a slug may be, when an archive is
+  refused, what an unanswerable read should read as, and who is told
+  afterwards. Every call names the actor it runs as — the server
+  (`Cyfr.Actor.system/0`) for the fabric reads that choose an athanor,
+  and the server narrowed to one athanor for every write that must land
+  in exactly that one.
   """
 
-  import Ecto.Query, only: [from: 2]
   require Logger
 
-  alias Arca.Schemas.{Athanor, Membership}
+  alias Arca.Schemas.Athanor
   alias Sanctum.Tenancy.Caps
 
   @slug_attempts 3
@@ -31,28 +40,9 @@ defmodule Sanctum.Tenancy.Athanors do
   """
   @spec create(map()) :: {:ok, Athanor.t()} | {:error, term()}
   def create(attrs) do
-    now = DateTime.utc_now()
-
-    attrs =
-      attrs
-      |> Map.new()
-      |> Map.put_new(:id, generate_id())
-      |> Map.put_new(:created_at, now)
-      |> Map.put_new(:updated_at, now)
-
     with :ok <- Caps.check_counted(:max_athanors, &count/0) do
-      insert_row(attrs)
+      Arca.Athanors.insert(server(), Map.new(attrs))
     end
-  end
-
-  # The insert without the server caps. `create/1` is the capped mint every
-  # tenant goes through; this is reached only by `create_for_operator/1`.
-  defp insert_row(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.insert_row", fn ->
-      %Athanor{}
-      |> Athanor.create_changeset(attrs)
-      |> Arca.Repo.insert()
-    end)
   end
 
   @doc """
@@ -66,15 +56,8 @@ defmodule Sanctum.Tenancy.Athanors do
   other mint goes through `create/1` and is capped.
   """
   @spec create_for_operator(map()) :: {:ok, Athanor.t()} | {:error, term()}
-  def create_for_operator(attrs) when is_map(attrs) do
-    now = DateTime.utc_now()
-
-    attrs
-    |> Map.put_new(:id, generate_id())
-    |> Map.put_new(:created_at, now)
-    |> Map.put_new(:updated_at, now)
-    |> insert_row()
-  end
+  def create_for_operator(attrs) when is_map(attrs),
+    do: Arca.Athanors.insert(server(), Map.new(attrs))
 
   @doc """
   Mint a group athanor for `creator_user_id`: the row, its slug (from the
@@ -101,58 +84,42 @@ defmodule Sanctum.Tenancy.Athanors do
   # group. A derived slug another creation took first is derived again.
   defp mint_group(creator_user_id, name, explicit_slug, attempts) do
     result =
-      Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.mint_group", fn ->
-        Arca.Repo.transaction(fn ->
-          with :ok <- hold_person(creator_user_id),
-               :ok <-
-                 Caps.check_counted(:max_groups_per_person, fn ->
-                   count_groups_created_by(creator_user_id)
-                 end),
-               {:ok, slug} <- resolve_slug(explicit_slug, name),
-               {:ok, athanor} <-
-                 create(%{kind: "group", name: name, slug: slug, created_by: creator_user_id}),
-               {:ok, _} <-
+      Arca.Athanors.mint(server(),
+        hold: [creator_user_id],
+        guards: [
+          fn ->
+            Caps.check_counted(:max_groups_per_person, fn ->
+              Arca.Athanors.count_groups_created_by(server(), creator_user_id)
+            end)
+          end,
+          fn -> Caps.check_counted(:max_athanors, &count/0) end
+        ],
+        attrs: fn ->
+          with {:ok, slug} <- resolve_slug(explicit_slug, name) do
+            {:ok, %{kind: "group", name: name, slug: slug, created_by: creator_user_id}}
+          end
+        end,
+        seats: fn athanor ->
+          with {:ok, _} <-
                  Sanctum.Tenancy.Members.create(%{
                    user_id: creator_user_id,
                    scope: "athanor",
                    athanor_id: athanor.id,
                    added_by: creator_user_id
                  }) do
-            athanor
-          else
-            {:error, reason} -> Arca.Repo.rollback(reason)
+            :ok
           end
-        end)
-      end)
+        end
+      )
 
     case result do
-      {:error, %Ecto.Changeset{} = changeset} when is_nil(explicit_slug) and attempts > 1 ->
-        if slug_taken?(changeset),
-          do: mint_group(creator_user_id, name, nil, attempts - 1),
-          else: result
+      {:error, :slug_taken} when is_nil(explicit_slug) and attempts > 1 ->
+        mint_group(creator_user_id, name, nil, attempts - 1)
 
       result ->
         result
     end
   end
-
-  # A write to the row holds it until the transaction ends, on either
-  # adapter.
-  defp hold_person(user_id) do
-    from(u in Arca.Schemas.User,
-      where: u.id == ^user_id,
-      update: [set: [updated_at: u.updated_at]]
-    )
-    |> Arca.Repo.update_all([])
-
-    :ok
-  end
-
-  defp slug_taken?(%Ecto.Changeset{errors: errors}),
-    do:
-      Enum.any?(errors, fn {field, {_message, meta}} ->
-        field in [:kind, :slug] and meta[:constraint] == :unique
-      end)
 
   @doc """
   The pair of `user_a` and `user_b` — found if it exists, minted if not.
@@ -197,22 +164,6 @@ defmodule Sanctum.Tenancy.Athanors do
 
   def create_pair(_, _), do: {:error, :invalid_pair}
 
-  # A pair is minted for two, so the cap is asked for both, inside the mint
-  # with both people's rows held (in one order, so two mints cannot
-  # deadlock). Without it one member of a large room could mint an estate
-  # per co-member from the wire — a DM asks nobody else's consent — and
-  # spend `CYFR_MAX_ATHANORS` for everyone.
-  defp check_pair_cap(user_a, user_b) do
-    Enum.each(Enum.sort([user_a, user_b]), &hold_person/1)
-
-    Enum.reduce_while([user_a, user_b], :ok, fn user_id, :ok ->
-      case Caps.check_counted(:max_pairs_per_person, fn -> count_pairs_of(user_id) end) do
-        :ok -> {:cont, :ok}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
   @doc """
   The canonical key for a pair of people: order-independent, so
   `{alice, bob}` and `{bob, alice}` name the same estate. Exactly two ids
@@ -235,42 +186,50 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc "The active frozen estate with this canonical key, if there is one."
   @spec get_by_pair_key(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | :database_error}
-  def get_by_pair_key(key) when is_binary(key) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.get_by_pair_key", fn ->
-      case Arca.Repo.one(
-             from(a in Athanor, where: a.pair_key == ^key and a.status == "active", limit: 1)
-           ) do
-        nil -> {:error, :not_found}
-        athanor -> {:ok, athanor}
-      end
-    end)
-  end
+  def get_by_pair_key(key) when is_binary(key),
+    do: Arca.Athanors.get_by_pair_key(server(), key)
 
+  # A pair is minted for two, so the cap is asked for both, inside the mint
+  # with both people's rows held (in one order, so two mints cannot
+  # deadlock). Without it one member of a large room could mint an estate
+  # per co-member from the wire — a DM asks nobody else's consent — and
+  # spend `CYFR_MAX_ATHANORS` for everyone.
   defp mint_pair(key, user_a, user_b) do
     name = pair_name(user_a, user_b)
 
     result =
-      Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.mint_pair", fn ->
-        Arca.Repo.transaction(fn ->
-          with :ok <- check_pair_cap(user_a, user_b),
-               {:ok, slug} <- resolve_slug(nil, name),
-               {:ok, athanor} <-
-                 create(%{
-                   kind: "group",
-                   roster: "frozen",
-                   pair_key: key,
-                   name: name,
-                   slug: slug,
-                   created_by: user_a
-                 }),
-               {:ok, _} <- seat(athanor, user_a),
-               {:ok, _} <- seat(athanor, user_b) do
-            athanor
-          else
-            {:error, reason} -> Arca.Repo.rollback(reason)
+      Arca.Athanors.mint(server(),
+        hold: [user_a, user_b],
+        guards:
+          Enum.map([user_a, user_b], fn user_id ->
+            fn ->
+              Caps.check_counted(:max_pairs_per_person, fn ->
+                Arca.Athanors.count_pairs_of(server(), user_id)
+              end)
+            end
+          end) ++ [fn -> Caps.check_counted(:max_athanors, &count/0) end],
+        attrs: fn ->
+          with {:ok, slug} <- resolve_slug(nil, name) do
+            {:ok,
+             %{
+               kind: "group",
+               roster: "frozen",
+               pair_key: key,
+               name: name,
+               slug: slug,
+               created_by: user_a
+             }}
           end
-        end)
-      end)
+        end,
+        seats: fn athanor ->
+          Enum.reduce_while([user_a, user_b], :ok, fn user_id, :ok ->
+            case seat(athanor, user_id) do
+              {:ok, _} -> {:cont, :ok}
+              {:error, _} = err -> {:halt, err}
+            end
+          end)
+        end
+      )
 
     case result do
       {:ok, athanor} ->
@@ -336,40 +295,21 @@ defmodule Sanctum.Tenancy.Athanors do
   defp other_seat?(_row, _user_id), do: false
 
   @spec get(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | :database_error}
-  def get(id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.get", fn ->
-      case Arca.Repo.get(Athanor, id) do
-        nil -> {:error, :not_found}
-        athanor -> {:ok, athanor}
-      end
-    end)
-  end
+  def get(id) when is_binary(id), do: Arca.Athanors.get(server(), id)
 
   @doc """
   A person's own athanor, by its owner. At most one exists per person
   (a partial unique index on `owner_user_id` where `kind = 'person'`).
   """
   @spec get_by_owner(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | term()}
-  def get_by_owner(user_id) when is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.get_by_owner", fn ->
-      case Arca.Repo.get_by(Athanor, kind: "person", owner_user_id: user_id) do
-        nil -> {:error, :not_found}
-        athanor -> {:ok, athanor}
-      end
-    end)
-  end
+  def get_by_owner(user_id) when is_binary(user_id),
+    do: Arca.Athanors.get_by_owner(server(), user_id)
 
   @doc "Find an athanor by kind and slug."
   @spec get_by_slug(String.t(), String.t()) ::
           {:ok, Athanor.t()} | {:error, :not_found | :database_error}
-  def get_by_slug(kind, slug) when is_binary(kind) and is_binary(slug) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.get_by_slug", fn ->
-      case Arca.Repo.get_by(Athanor, kind: kind, slug: slug) do
-        nil -> {:error, :not_found}
-        athanor -> {:ok, athanor}
-      end
-    end)
-  end
+  def get_by_slug(kind, slug) when is_binary(kind) and is_binary(slug),
+    do: Arca.Athanors.get_by_slug(server(), kind, slug)
 
   @doc """
   Resolve a route segment: `@<namespace>` names a person's athanor, a bare
@@ -396,15 +336,7 @@ defmodule Sanctum.Tenancy.Athanors do
   def route_slug(%Athanor{slug: slug}), do: slug
 
   @spec update(Athanor.t(), map()) :: {:ok, Athanor.t()} | {:error, term()}
-  def update(%Athanor{} = athanor, attrs) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.update", fn ->
-      attrs = attrs |> Map.new() |> Map.put(:updated_at, DateTime.utc_now())
-
-      athanor
-      |> Athanor.update_changeset(attrs)
-      |> Arca.Repo.update()
-    end)
-  end
+  def update(%Athanor{id: id}, attrs), do: Arca.Athanors.update(in_athanor(id), Map.new(attrs))
 
   @doc "Rename an athanor. The slug stays: it is an address."
   @spec rename(Athanor.t(), String.t()) :: {:ok, Athanor.t()} | {:error, term()}
@@ -418,8 +350,9 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   Mark an athanor archived. Nothing is deleted; every ingress gate refuses
-  it, its API keys are revoked, whatever is running in it is cancelled, and
-  its members are told — the same on every path that archives (a member's
+  it, its API keys are revoked, whatever is running in it is cancelled, the
+  established-context memo of every member is dropped and its members are
+  told — the same on every path that archives (a member's
   `athanor.archive`, the last member leaving, a person being denied), so no
   path leaves work running in a furnace nobody may enter.
 
@@ -453,12 +386,13 @@ defmodule Sanctum.Tenancy.Athanors do
 
   defp archived_attrs(%Athanor{}), do: %{status: "archived", archived_at: DateTime.utc_now()}
 
-  # What archiving closes: standing credentials and in-flight work. Runs as
-  # the server inside the athanor (an internal context focused on it —
-  # cancellation is attributed to `system`); best effort, since the status
-  # gates already refuse new work.
+  # What archiving closes: standing credentials, established authorization
+  # and in-flight work. Runs as the server inside the athanor (an internal
+  # context focused on it — cancellation is attributed to `system`); best
+  # effort, since the status gates already refuse new work.
   defp close(%Athanor{id: id}) do
     Sanctum.ApiKey.revoke_all_for_athanor(id)
+    drop_caller_memos(id)
     cancel_running(id)
 
     Phoenix.PubSub.broadcast(
@@ -466,6 +400,30 @@ defmodule Sanctum.Tenancy.Athanors do
       Cyfr.Bus.athanor_archived_global(),
       {:athanor_archived_global, id}
     )
+
+    :ok
+  end
+
+  # `Sanctum.Caller` memoizes an established context for a short TTL, and
+  # that context carries the athanor. The memo is a cache of an
+  # AUTHORIZATION decision, not of a display, so an archive that only
+  # flipped the status would leave every member working inside the shut
+  # furnace until their memo aged out — the status gates the next
+  # establish runs are exactly what the memo skips. Every member's memos
+  # go before this returns; a roster the store cannot read is logged and
+  # left to the TTL, which is the same best-effort posture as the rest of
+  # the close.
+  defp drop_caller_memos(athanor_id) do
+    case Arca.Members.active_user_ids(in_athanor(athanor_id)) do
+      {:ok, user_ids} ->
+        Enum.each(user_ids, &Sanctum.Session.invalidate_memo_for_user/1)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Sanctum.Tenancy.Athanors] roster read failed while closing #{athanor_id}: " <>
+            "#{inspect(reason)} — cached callers age out instead"
+        )
+    end
 
     :ok
   end
@@ -649,23 +607,10 @@ defmodule Sanctum.Tenancy.Athanors do
   def provisioning_failure(%Athanor{}), do: nil
 
   defp set_provisioning(%Athanor{id: id}, set) do
-    result =
-      Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.set_provisioning", fn ->
-        from(a in Athanor, where: a.id == ^id) |> Arca.Repo.update_all(set: set)
-      end)
-
-    case result do
-      {1, _} ->
-        with {:ok, updated} <- get(id) do
-          Sanctum.Notify.broadcast(id, :athanor_changed, %{name: updated.name})
-          {:ok, updated}
-        end
-
-      {0, _} ->
-        {:error, :not_found}
-
-      {:error, _} = error ->
-        error
+    with :ok <- Arca.Athanors.set(in_athanor(id), set),
+         {:ok, updated} <- get(id) do
+      Sanctum.Notify.broadcast(id, :athanor_changed, %{name: updated.name})
+      {:ok, updated}
     end
   end
 
@@ -675,9 +620,7 @@ defmodule Sanctum.Tenancy.Athanors do
   def list_by_ids(ids) when is_list(ids) do
     # Deliberate default: a display batch-read over ids the caller already
     # holds — an outage renders an empty list, it grants or archives nothing.
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.list_by_ids", [], fn ->
-      Arca.Repo.all(from(a in Athanor, where: a.id in ^ids, order_by: [asc: a.created_at]))
-    end)
+    rows_or_empty(Arca.Athanors.list_by_ids(server(), ids))
   end
 
   @doc """
@@ -689,38 +632,19 @@ defmodule Sanctum.Tenancy.Athanors do
   def list_active do
     # Deliberate default: the roster scan's read — a scan that sees [] this
     # cadence walks the full roster on the next one; nothing is deleted on it.
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.list_active", [], fn ->
-      Arca.Repo.all(
-        from(a in Athanor, where: a.status == "active", order_by: [asc: a.created_at])
-      )
-    end)
+    rows_or_empty(Arca.Athanors.list_active(server()))
   end
 
   @doc """
   The active athanors a person may work in: their own, then every group an
   active membership grants, oldest first. Uncapped — a person's memberships
   are few, and a truncated list would hide a chat.
-
-  One row per athanor without `DISTINCT`: the membership assignment index
-  admits one active row per person and athanor, and Postgres refuses a
-  `SELECT DISTINCT` ordered by an expression outside the select list.
   """
   @spec list_for_user(String.t()) :: [Athanor.t()]
   def list_for_user(user_id) when is_binary(user_id) do
     # Deliberate default: a person's sidebar roster — an outage shows fewer
     # rooms, never more; entering one still resolves membership strictly.
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.list_for_user", [], fn ->
-      Arca.Repo.all(
-        from(a in Athanor,
-          join: m in Membership,
-          on: m.athanor_id == a.id,
-          where:
-            m.user_id == ^user_id and m.scope == "athanor" and m.status == "active" and
-              a.status == "active",
-          order_by: [desc: a.kind == "person", asc: a.created_at, asc: a.id]
-        )
-      )
-    end)
+    rows_or_empty(Arca.Athanors.list_for_user(server(), user_id))
   end
 
   @doc "Whether the athanor exists and is active."
@@ -742,17 +666,8 @@ defmodule Sanctum.Tenancy.Athanors do
   """
   @spec count_created_since(DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
-  def count_created_since(%DateTime{} = since) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.count_created_since", fn ->
-      {:ok,
-       Arca.Repo.one(
-         from(a in Athanor,
-           where: a.kind == "person" and a.created_at > ^since,
-           select: count(a.id)
-         )
-       ) || 0}
-    end)
-  end
+  def count_created_since(%DateTime{} = since),
+    do: Arca.Athanors.count_people_created_since(server(), since)
 
   @doc """
   How many active athanors this server holds — an archived one frees its
@@ -760,12 +675,7 @@ defmodule Sanctum.Tenancy.Athanors do
   an unanswerable count must refuse, not read as an empty server.
   """
   @spec count() :: {:ok, non_neg_integer()} | {:error, :database_error}
-  def count do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.count", fn ->
-      {:ok,
-       Arca.Repo.one(from(a in Athanor, where: a.status == "active", select: count(a.id))) || 0}
-    end)
-  end
+  def count, do: Arca.Athanors.count_active(server())
 
   @doc "The athanor's settings document (JSON on the row), as a map."
   @spec settings(Athanor.t()) :: map()
@@ -803,33 +713,26 @@ defmodule Sanctum.Tenancy.Athanors do
       end
 
     merged = deep_merge(settings(current), patch)
-    encoded = Jason.encode!(merged)
-    now = DateTime.utc_now()
 
-    result =
-      Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.put_settings", fn ->
-        from(a in Athanor, where: a.id == ^current.id)
-        |> settings_guard(current.settings)
-        |> Arca.Repo.update_all(set: [settings: encoded, updated_at: now])
-      end)
-
-    case result do
-      {1, _} ->
+    case Arca.Athanors.put_settings(
+           in_athanor(current.id),
+           current.settings,
+           Jason.encode!(merged),
+           DateTime.utc_now()
+         ) do
+      :ok ->
         with {:ok, updated} <- get(current.id) do
           Sanctum.Notify.broadcast(updated.id, :athanor_changed, %{name: updated.name})
           {:ok, updated}
         end
 
-      {0, _} ->
+      :stale ->
         put_settings_cas(athanor, patch, attempts - 1)
 
       {:error, _} = error ->
         error
     end
   end
-
-  defp settings_guard(query, nil), do: from(a in query, where: is_nil(a.settings))
-  defp settings_guard(query, expected), do: from(a in query, where: a.settings == ^expected)
 
   defp deep_merge(base, patch) do
     Enum.reduce(patch, base, fn
@@ -848,6 +751,17 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   # ---- internal --------------------------------------------------------------
+
+  # The tenancy fabric reads as the server: which athanor a caller works
+  # in is what these reads decide, so they cannot be filtered by one.
+  defp server, do: Cyfr.Actor.system()
+
+  # The server narrowed to one athanor — the actor a write that must land
+  # in exactly that athanor, and nowhere else, runs as.
+  defp in_athanor(id), do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
+
+  defp rows_or_empty({:ok, rows}), do: rows
+  defp rows_or_empty({:error, _}), do: []
 
   defp status_gate({:ok, %Athanor{status: "active"} = athanor}, _opts), do: {:ok, athanor}
 
@@ -916,46 +830,6 @@ defmodule Sanctum.Tenancy.Athanors do
   # collides with a person's and each is checked against its own kind.
   defp slug_free?(kind, slug), do: match?({:error, :not_found}, get_by_slug(kind, slug))
 
-  # Only the groups a person deliberately made. A frozen pair is a
-  # thread, not a group they created, and counting DMs against
-  # `CYFR_MAX_GROUPS_PER_PERSON` would make the cap mean "how many people
-  # may you talk to" — which is not what an operator setting it intends.
-  # DMs have their own ceiling, `CYFR_MAX_PAIRS_PER_PERSON`, counted by
-  # `count_pairs_of/1` below.
-  defp count_groups_created_by(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.count_groups_created_by", fn ->
-      {:ok,
-       Arca.Repo.one(
-         from(a in Athanor,
-           where:
-             a.kind == "group" and a.roster == "open" and
-               a.created_by == ^user_id and a.status == "active",
-           select: count(a.id)
-         )
-       ) || 0}
-    end)
-  end
-
-  # Every ACTIVE pair a person sits in — the pair cap's measure. Counted by
-  # membership, not by `created_by`: a pair is minted for two, and the one
-  # who did not click holds it just the same. An ended pair is archived
-  # and frees its place. Strict like the other counts the caps consult.
-  defp count_pairs_of(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Athanors.count_pairs_of", fn ->
-      {:ok,
-       Arca.Repo.one(
-         from(a in Athanor,
-           join: m in Membership,
-           on: m.athanor_id == a.id,
-           where:
-             m.user_id == ^user_id and m.scope == "athanor" and m.status == "active" and
-               a.roster == "frozen" and a.status == "active",
-           select: count(a.id)
-         )
-       ) || 0}
-    end)
-  end
-
   @doc """
   Whether `value` is an athanor id (`"ath_..."`) rather than a route slug.
   Discriminating by prefix is sound: the slug grammar (`Sanctum.Slug` /
@@ -964,6 +838,4 @@ defmodule Sanctum.Tenancy.Athanors do
   """
   @spec athanor_id?(term()) :: boolean()
   def athanor_id?(value), do: is_binary(value) and String.starts_with?(value, "ath_")
-
-  defp generate_id, do: Cyfr.UUID7.generate_id("ath")
 end
