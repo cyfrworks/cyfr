@@ -38,8 +38,10 @@ defmodule Opus.StorageHandler do
   On a refusal, `{"error": {"type": "...", "message": "..."}}`: CYFR's own
   refusal; `request_too_large` for a request past the envelope bound;
   `invalid_json`, `invalid_request` or `unknown_action` for one that does
-  not parse; and `storage_error` when the attempt no longer holds its row
-  or CYFR's store cannot answer.
+  not parse; `storage_error` when the attempt no longer holds its row or
+  CYFR's store cannot answer; and `storage_uncertain` when CYFR ran the
+  operation and its answer was lost, since the write may be at the path.
+  Every refusal but `storage_uncertain` wrote nothing.
 
   Each call fires `[:cyfr, :opus, :storage, :call]`
   (`Opus.Telemetry.storage_call/4`).
@@ -168,8 +170,12 @@ defmodule Opus.StorageHandler do
       {:error, :unavailable} ->
         {:error, :storage_error, "Storage refused: the execution store is unavailable."}
 
+      # CYFR ran the operation and its answer did not come back, so what
+      # the store holds is unknown. A write may be at the path: the guest
+      # is never told it failed, and the sentence says what to do about it
+      # — the same contract `storage_uncertain` carries from CYFR.
       {:error, {:uncertain, sentence}} ->
-        {:error, :storage_error, "Storage refused: " <> sentence <> "."}
+        {:error, :storage_uncertain, sentence <> " — read the path back before writing it again."}
 
       {:error, _lost} ->
         {:error, :storage_error, "Storage refused: the execution attempt is not current."}

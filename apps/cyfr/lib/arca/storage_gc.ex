@@ -511,9 +511,9 @@ defmodule Arca.StorageGC do
 
   defp served_relative(unit, key), do: Enum.drop(key, length(unit))
 
-  # The content identity `Arca.Overlay` records on a commit: each object
-  # in path order, framed as its path, its digest and its size,
-  # NUL-separated. The repair suite holds the two framings together.
+  # The content identity of a set of objects, read one at a time and
+  # framed by `Arca.Overlay.content_identity/1` — the framing a commit
+  # recorded, stated once, there.
   defp identity_of(ctx, keys, relative) do
     keys
     |> Enum.reduce_while({:ok, []}, fn key, {:ok, acc} ->
@@ -526,17 +526,8 @@ defmodule Arca.StorageGC do
       end
     end)
     |> case do
-      {:ok, manifest} ->
-        {:ok,
-         manifest
-         |> Enum.sort_by(&elem(&1, 0))
-         |> Enum.flat_map(fn {rel, digest, size} ->
-           [Enum.join(rel, "/"), <<0>>, digest, <<0>>, Integer.to_string(size), <<0>>]
-         end)
-         |> Cyfr.Digest.sha256_stream()}
-
-      {:error, _} = error ->
-        error
+      {:ok, manifest} -> {:ok, Arca.Overlay.content_identity(manifest)}
+      {:error, _} = error -> error
     end
   end
 
@@ -795,12 +786,9 @@ defmodule Arca.StorageGC do
 
   defp pins_prefix([root | rest]), do: staging_area(root) ++ [@pins | rest]
 
-  defp list_under(ctx, prefix) do
-    case Arca.Storage.list_prefix(ctx, prefix) do
-      {:error, :unsupported} -> Arca.list_recursive(ctx, prefix)
-      answer -> answer
-    end
-  end
+  # Every adapter answers the prefix listing (`c:Arca.Storage.list_prefix/2`),
+  # so a staging area is read as keys, never walked as a tree.
+  defp list_under(ctx, prefix), do: Arca.Storage.list_prefix(ctx, prefix)
 
   defp marker?(keys), do: Enum.any?(keys, &marker_key?/1)
   defp marker_key?(key), do: List.last(key) == UnitLocator.marker_name()

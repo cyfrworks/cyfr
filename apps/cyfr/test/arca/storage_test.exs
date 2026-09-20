@@ -448,10 +448,11 @@ defmodule Arca.StorageTest do
       end
 
       # Its listing always names the stuck leaf, so a prefix listing is
-      # that listing; and a conditional write reads first, which here is
-      # the read that never returns.
+      # that listing; and every call that reads first — a conditional
+      # replace, the versioned read — is the read that never returns.
       def list_prefix(ctx, path), do: list_recursive(ctx, path)
       def put_if_match(ctx, path, _content, _precondition), do: get(ctx, path)
+      def get_for_update(ctx, path), do: get(ctx, path)
     end
 
     test "a leaf read that hangs past the deadline is a typed error, not an exit" do

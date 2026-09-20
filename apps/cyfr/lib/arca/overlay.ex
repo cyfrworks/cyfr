@@ -48,19 +48,36 @@ defmodule Arca.Overlay do
   revision, or no unit. A failure in step 4 is never a lost commit: the
   row stands, the staged objects stay under their prefix, the answer is
   `{:error, {:finish_failed, reason}}` and `repair_unit/2` finishes the
-  move. Repair reads only the prefix of the revision the row names, so a
-  losing writer's objects are never promoted. Where the tenant adapter can
-  swap a tree (`c:Arca.Storage.replace_tree/3`) readers of the served
-  location see the previous revision whole and then the new one; on an
-  adapter that cannot, the move is object by object.
+  move. Repair reads only the prefix of the revision the row names, and
+  promotes it only when it hashes to the identity the journal recorded
+  for that revision, so neither a losing writer's objects nor the
+  remainder of a move that stopped part-way through removing its own
+  prefix is ever served over a unit.
+
+  ## What a reader sees while step 4 runs
+
+  Where the tenant adapter can swap a tree
+  (`c:Arca.Storage.replace_tree/3`, the Local adapter) readers of the
+  served location see the previous revision whole and then the new one.
+  Where it cannot — an object store, which has no rename — the move is
+  object by object (`serve_each/3`): the pointer and the journal already
+  name the new revision, each object changes whole, and a reader between
+  the first object and the last can see some objects of the new revision
+  and some of the one before it. The unit still reads complete
+  throughout, since its completion object is served the whole time and
+  written last. A reader that must have one revision whole pins it
+  (`Arca.StorageGC.pin/4`) and reads the staged prefix, which is
+  immutable.
 
   A reader resolves the row once per operation. A unit reads complete
   when its row is committed AND its served completion object — a
   directory unit's sentinel, a file unit's file — is there: a complete
   object set no row names is at most a partial, and a row whose served
   objects were cleared points at nothing a reader could read. There is no
-  lock: a write into a unit is an edit of its served objects, last writer
-  wins per object, and a commit replaces the unit whole.
+  lock: a plain write into a unit is an edit of its served objects, last
+  writer wins per object, a commit replaces the unit whole, and
+  `update/3` is the read-modify-write that loses neither
+  (`c:Arca.Storage.put_if_match/4`).
 
   ## Whose unit it is
 
@@ -229,6 +246,30 @@ defmodule Arca.Overlay do
 
   @impl true
   def exists?(%Context{} = ctx, path), do: tenant().exists?(ctx, path)
+
+  # The conditional writes, the versioned read and the prefix listing pass
+  # through to the tenant adapter under the same write shapes the
+  # unconditional ones are held to. The staging registry's own calls go
+  # straight to the tenant adapter (`Arca.Storage.put_if_none_match/3` and
+  # its kin), which is why nothing here filters staging out of
+  # `list_prefix/2` as `list_recursive/2` does: a key listing of a staging
+  # area is exactly what that callback is for.
+
+  @impl true
+  def put_if_none_match(%Context{} = ctx, path, content) do
+    with :ok <- writable(path), do: tenant().put_if_none_match(ctx, path, content)
+  end
+
+  @impl true
+  def put_if_match(%Context{} = ctx, path, content, precondition) do
+    with :ok <- writable(path), do: tenant().put_if_match(ctx, path, content, precondition)
+  end
+
+  @impl true
+  def get_for_update(%Context{} = ctx, path), do: tenant().get_for_update(ctx, path)
+
+  @impl true
+  def list_prefix(%Context{} = ctx, prefix), do: tenant().list_prefix(ctx, prefix)
 
   # Inside a directory unit or outside the units; the tenant adapter
   # decides whether it can swap at all.
@@ -739,11 +780,23 @@ defmodule Arca.Overlay do
   commit: the staged objects of the revision the row names are moved to
   the served location and their prefix removed. Only that revision's
   prefix is read — a losing writer's objects are never promoted.
+
+  The staged set is promoted only when it IS the revision the journal
+  recorded: its content identity must be the newest commit's
+  (`content_identity/1`). What a move that stopped part-way through
+  removing its own prefix leaves behind is a subset of a revision that is
+  already served whole, and serving it would take the rest of the unit
+  with it (`serve_each/3` prunes, a tree swap replaces). Such a remainder
+  is `{:error, :staged_incomplete}` and nothing is moved;
+  `{:error, :journal_mismatch}` when the newest commit does not name the
+  pointer's revision, which is a repair no journal supports.
+
   `{:ok, :nothing_pending}` when the prefix holds nothing;
   `{:error, :not_found}` for a unit no committed row names.
   """
   @spec repair_unit(Context.t(), Arca.Storage.path()) ::
-          {:ok, :repaired | :nothing_pending} | {:error, term()}
+          {:ok, :repaired | :nothing_pending}
+          | {:error, :staged_incomplete | :journal_mismatch | term()}
   def repair_unit(%Context{} = ctx, unit) do
     case Arca.Storage.locate(unit) do
       loc when loc in [:not_overlaid, :above_unit] ->
@@ -757,57 +810,141 @@ defmodule Arca.Overlay do
   defp repair(ctx, loc) do
     unit = unit_of(loc)
     {root, key} = UnitLocator.unit_key(unit)
+    actor = Context.actor(ctx)
     internal = internal_ctx(ctx)
 
-    with {:ok, pointer} <- StorageUnits.current(Context.actor(ctx), root, key),
-         {:ok, staged} <- staged_relatives(internal, loc, pointer.current_revision) do
+    with {:ok, pointer} <- StorageUnits.current(actor, root, key),
+         revision = pointer.current_revision,
+         {:ok, staged} <- staged_relatives(internal, loc, revision) do
       case staged do
         [] ->
           {:ok, :nothing_pending}
 
         relatives ->
-          with {:ok, _written} <-
-                 finish(internal, loc, pointer.current_revision, in_write_order(loc, relatives)),
+          with :ok <- staged_as_committed(actor, internal, loc, revision, relatives),
+               {:ok, _written} <- finish(internal, loc, revision, in_write_order(loc, relatives)),
                do: {:ok, :repaired}
       end
     end
   end
 
+  # The guard on every promotion: what is staged must hash to what the
+  # newest commit recorded, read from the journal the commit appended to.
+  defp staged_as_committed(actor, internal, loc, revision, relatives) do
+    unit = unit_of(loc)
+    {root, key} = UnitLocator.unit_key(unit)
+
+    with {:ok, commits} <- StorageUnits.journal(actor, root, key),
+         {:ok, committed} <- newest_commit_of(commits, revision),
+         {:ok, manifest} <- staged_manifest(internal, unit, revision, relatives) do
+      if content_identity(manifest) == committed, do: :ok, else: {:error, :staged_incomplete}
+    end
+  end
+
+  defp newest_commit_of(commits, revision) do
+    case List.last(commits) do
+      %{new_revision: ^revision, content_identity: identity} -> {:ok, identity}
+      _no_commit_names_the_pointer -> {:error, :journal_mismatch}
+    end
+  end
+
+  # The staged objects as a content manifest, one object at a time, so a
+  # unit never sits in memory whole.
+  defp staged_manifest(internal, unit, revision, relatives) do
+    relatives
+    |> Enum.reduce_while({:ok, []}, fn rel, {:ok, acc} ->
+      case Arca.get(internal, UnitLocator.staged_object(unit, revision, rel)) do
+        {:ok, bytes} -> {:cont, {:ok, [{rel, Cyfr.Digest.sha256(bytes), byte_size(bytes)} | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, manifest} -> {:ok, Enum.reverse(manifest)}
+      {:error, _} = error -> error
+    end
+  end
+
+  # The bound on an update's compare-and-set: attempts in all, and the
+  # base of the doubling backoff between them.
+  @update_attempts 5
+  @update_backoff_base_ms 20
+
   @doc """
   One serialized read-modify-write at a path inside a unit. `fun` receives
-  the bytes at `path` and answers `{:ok, bytes}` to write them — a plain
-  facade put, so the storage cap applies as for any write — or
-  `{:error, reason}` to write nothing and answer that. Updates of one
-  unit run one at a time on this node, so of two concurrent updates the
-  second reads what the first wrote instead of overwriting it; a plain
-  write beside an update is last writer wins, as between any two writes.
+  the bytes at `path` and answers `{:ok, bytes}` to write them — a gated
+  facade write, so the storage cap applies as for any write — or
+  `{:error, reason}` to write nothing and answer that.
+
+  Serialized against EVERY writer of the object, on every node: the read
+  answers the object's precondition
+  (`c:Arca.Storage.get_for_update/2`) and the write carries it
+  (`c:Arca.Storage.put_if_match/4`), so the bytes `fun` was given are
+  still the bytes at the path when its answer lands, or nothing is
+  written. An object another writer moved in between — a commit, a pull,
+  a reset, another update — is read again and `fun` applied to what is
+  there now, up to #{@update_attempts} attempts with a doubling,
+  jittered backoff. Nothing is overwritten unseen and no edit is lost.
+
+  `{:error, :conflict}` when the object was still moving after the last
+  attempt: nothing was written and asking again is safe.
   `{:error, :not_found}` when nothing is at `path`,
-  `{:error, :not_overlaid}` for a path no unit covers.
+  `{:error, :not_overlaid}` for a path no unit covers, and
+  `{:error, :unsupported}` from a store that can give no proof of the
+  version it read — an update is refused there rather than made a
+  last-writer-wins put.
   """
   @spec update(
           Context.t(),
           Arca.Storage.path(),
           (binary() -> {:ok, binary()} | {:error, term()})
-        ) :: :ok | {:error, term()}
+        ) :: :ok | {:error, :conflict | :not_found | :not_overlaid | term()}
   def update(%Context{} = ctx, path, fun) when is_function(fun, 1) do
     case Arca.Storage.locate(path) do
-      loc when loc in [:not_overlaid, :above_unit] ->
-        {:error, :not_overlaid}
-
-      loc ->
-        :global.trans(
-          {{__MODULE__, :update, ctx.athanor_id, unit_of(loc)}, self()},
-          fn ->
-            with {:ok, current} <- Arca.get(ctx, path) do
-              case fun.(current) do
-                {:ok, bytes} when is_binary(bytes) -> Arca.put(ctx, path, bytes)
-                {:error, _reason} = error -> error
-              end
-            end
-          end,
-          [node()]
-        )
+      loc when loc in [:not_overlaid, :above_unit] -> {:error, :not_overlaid}
+      _inside_a_unit -> compare_and_set(ctx, path, fun, 1)
     end
+  end
+
+  defp compare_and_set(ctx, path, fun, attempt) do
+    with {:ok, current, precondition} <- Arca.get_for_update(ctx, path),
+         {:ok, bytes} when is_binary(bytes) <- fun.(current) do
+      case Arca.put_if_match(ctx, path, bytes, precondition, cap: :checked) do
+        :ok ->
+          :ok
+
+        # The object moved between the read and the write: nothing was
+        # written, so reading it again and applying `fun` to what is there
+        # now loses neither writer's work.
+        {:error, :precondition_failed} when attempt < @update_attempts ->
+          Process.sleep(update_backoff_ms(attempt))
+          compare_and_set(ctx, path, fun, attempt + 1)
+
+        {:error, :precondition_failed} ->
+          Logger.warning(
+            "[Arca.Overlay] update of #{Enum.join(path, "/")} still losing after " <>
+              "#{attempt} attempts"
+          )
+
+          {:error, :conflict}
+
+        # The object was removed while the edit was being made. There is
+        # nothing to rewrite, and a create is not what was asked for.
+        {:error, :missing} ->
+          {:error, :not_found}
+
+        {:error, _} = error ->
+          error
+      end
+    else
+      {:error, _reason} = error -> error
+    end
+  end
+
+  # Doubling from the base, with jitter so the losers of one round do not
+  # collide again in the next.
+  defp update_backoff_ms(attempt) do
+    ceiling = @update_backoff_base_ms * Integer.pow(2, attempt - 1)
+    div(ceiling, 2) + :rand.uniform(div(ceiling, 2))
   end
 
   # ---------------------------------------------------------------------------
@@ -1036,13 +1173,7 @@ defmodule Arca.Overlay do
     prefix = UnitLocator.revision_prefix(unit_of(loc), revision)
     marker = UnitLocator.marker_name()
 
-    listing =
-      case Arca.Storage.list_prefix(internal, prefix) do
-        {:error, :unsupported} -> Arca.list_recursive(internal, prefix)
-        answer -> answer
-      end
-
-    with {:ok, leaves} <- listing do
+    with {:ok, leaves} <- Arca.Storage.list_prefix(internal, prefix) do
       relatives =
         for leaf <- leaves, rel = Enum.drop(leaf, length(prefix)), rel != [marker] do
           case loc do
@@ -1062,9 +1193,23 @@ defmodule Arca.Overlay do
     Enum.sort(body) ++ last
   end
 
-  # The digest of a revision's content: each object in path order, framed
-  # as its path, its digest and its size, NUL-separated.
-  defp content_identity(manifest) do
+  @typedoc """
+  What a revision holds, one entry per object: its path relative to the
+  unit, the SHA-256 of its bytes and their size.
+  """
+  @type content_manifest :: [{Arca.Storage.path(), String.t(), non_neg_integer()}]
+
+  @doc """
+  The content identity of a revision: each object in path order, framed
+  as its path, its digest and its size, NUL-separated, hashed.
+
+  The one framing there is. A commit records it in the journal, and every
+  reader that must tell one revision's objects from another's — this
+  module's repair, `Arca.StorageGC`'s collection and its own repair —
+  compares against it rather than restating the framing.
+  """
+  @spec content_identity(content_manifest()) :: String.t()
+  def content_identity(manifest) do
     manifest
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.flat_map(fn {rel, digest, size} ->

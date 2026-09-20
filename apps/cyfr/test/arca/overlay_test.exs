@@ -953,44 +953,102 @@ defmodule Arca.OverlayTest do
     @scroll ["aqua", "skills", "u"]
     @manifest @scroll ++ ["SKILL.md"]
 
-    test "a queued update reads what the one before it wrote", %{ctx: ctx} do
+    test "a writer that lands between the read and the write is not overwritten", %{ctx: ctx} do
       {:ok, _} =
         Arca.Overlay.commit_unit(ctx, @scroll, {:files, [{["SKILL.md"], "v0"}]}, cap: :exempt)
 
       test_pid = self()
 
-      first =
+      editing =
         Task.async(fn ->
           Arca.Overlay.update(ctx, @manifest, fn current ->
-            send(test_pid, {:read, self()})
-
-            receive do
-              :proceed -> {:ok, current <> "+A"}
+            # Parks on the first read alone: a retry reads afresh and does
+            # not wait for a message the test has already sent.
+            if is_nil(Process.put(:parked, true)) do
+              send(test_pid, {:read, current, self()})
+              receive do: (:proceed -> :ok)
             end
+
+            {:ok, current <> "+edit"}
           end)
         end)
 
-      assert_receive {:read, first_pid}, 5_000
+      assert_receive {:read, "v0", editor}, 5_000
 
-      second =
+      # A commit — a publish, a pull, a reset — lands the unit afresh
+      # while the edit is being made. It takes no lock this edit holds.
+      {:ok, _} =
+        Arca.Overlay.commit_unit(ctx, @scroll, {:files, [{["SKILL.md"], "v1"}]}, cap: :exempt)
+
+      send(editor, :proceed)
+      assert :ok = Task.await(editing, 30_000)
+
+      # The edit is made over what the commit published. A rewrite of
+      # bytes that are no longer at the path is never written over the
+      # bytes that are.
+      assert {:ok, "v1+edit"} = Arca.get(ctx, @manifest)
+    end
+
+    @tag :capture_log
+    test "an update that keeps losing is a conflict, and writes nothing", %{ctx: ctx} do
+      {:ok, _} =
+        Arca.Overlay.commit_unit(ctx, @scroll, {:files, [{["SKILL.md"], "v0"}]}, cap: :exempt)
+
+      # A writer that moves the object between every read and its write:
+      # no attempt of the bound can land, and the answer says so rather
+      # than overwriting what it never read.
+      counter = :counters.new(1, [])
+
+      assert {:error, :conflict} =
+               Arca.Overlay.update(ctx, @manifest, fn current ->
+                 :counters.add(counter, 1, 1)
+                 n = :counters.get(counter, 1)
+                 :ok = Arca.put(ctx, @manifest, "moved-#{n}")
+                 {:ok, current <> "+edit"}
+               end)
+
+      assert {:ok, bytes} = Arca.get(ctx, @manifest)
+      assert bytes =~ ~r/^moved-\d+$/
+      assert :counters.get(counter, 1) > 1
+    end
+
+    test "two updates racing on one object keep both edits", %{ctx: ctx} do
+      {:ok, _} =
+        Arca.Overlay.commit_unit(ctx, @scroll, {:files, [{["SKILL.md"], "v0"}]}, cap: :exempt)
+
+      test_pid = self()
+
+      slow =
         Task.async(fn ->
           Arca.Overlay.update(ctx, @manifest, fn current ->
-            send(test_pid, {:second_read, current})
-            {:ok, current <> "+B"}
+            if is_nil(Process.put(:parked, true)) do
+              send(test_pid, {:read, current, self()})
+              receive do: (:proceed -> :ok)
+            else
+              send(test_pid, {:read_again, current})
+            end
+
+            {:ok, current <> "+A"}
           end)
         end)
 
-      # The second update does not read while the first holds the unit.
-      refute_receive {:second_read, _}, 200
+      # Its read is done and its write has not been made. Nothing is held
+      # against the other writer: an update takes no lock, and what keeps
+      # the two apart is the precondition each write carries.
+      assert_receive {:read, "v0", editor}, 5_000
 
-      send(first_pid, :proceed)
-      assert :ok = Task.await(first, 30_000)
-      assert :ok = Task.await(second, 30_000)
+      assert :ok =
+               Arca.Overlay.update(ctx, @manifest, fn current -> {:ok, current <> "+B"} end)
 
-      # Serialised: the second read "v0+A", not the "v0" it would have read
-      # beside the first — and nothing was lost.
-      assert_received {:second_read, "v0+A"}
-      assert {:ok, "v0+A+B"} = Arca.get(ctx, @manifest)
+      assert {:ok, "v0+B"} = Arca.get(ctx, @manifest)
+
+      send(editor, :proceed)
+      assert :ok = Task.await(slow, 30_000)
+
+      # The slow edit's write met bytes it had not read, so it was not
+      # made: it read again and was applied to what the other writer left.
+      assert_received {:read_again, "v0+B"}
+      assert {:ok, "v0+B+A"} = Arca.get(ctx, @manifest)
     end
 
     test "a shipped unit not yet pulled is not there to update; a pulled one edits", %{

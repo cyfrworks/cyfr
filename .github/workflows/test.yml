@@ -344,7 +344,11 @@ jobs:
           docker logs minio || true
           exit 1
       # From the umbrella root: the CYFR suite's boot wires the Opus worker
-      # service, which a run from apps/cyfr does not load.
+      # service, which a run from apps/cyfr does not load. The suites read
+      # the store from the environment (`Arca.Test.S3Env`); the defaults
+      # are this container, so nothing is passed here. They are the S3
+      # adapter's contract and the publication contract of a unit, which
+      # only a real object store proves.
       - name: Run the S3 integration suite
         run: mix test apps/cyfr/test --only s3_integration
       # What the server thought of the requests, when it refused them.
