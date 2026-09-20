@@ -20,18 +20,18 @@ defmodule Arca.AgentRevisionsTest do
     bytes = "---\ntitle: Scout\n---\n\nYou scout.\n"
     digest = Cyfr.Digest.sha256(bytes)
 
-    assert {:ok, ^digest} = AgentRevisions.put("ath_a", bytes)
-    assert {:ok, ^digest} = AgentRevisions.put("ath_a", bytes)
-    assert {:ok, ^bytes} = AgentRevisions.get("ath_a", digest)
+    assert {:ok, ^digest} = AgentRevisions.put(Cyfr.Actor.in_athanor("ath_a"), bytes)
+    assert {:ok, ^digest} = AgentRevisions.put(Cyfr.Actor.in_athanor("ath_a"), bytes)
+    assert {:ok, ^bytes} = AgentRevisions.get(Cyfr.Actor.in_athanor("ath_a"), digest)
 
     # Another athanor never sees it.
-    assert {:error, :not_found} = AgentRevisions.get("ath_b", digest)
-    assert {:error, :not_found} = AgentRevisions.get("ath_a", "sha256:0")
+    assert {:error, :not_found} = AgentRevisions.get(Cyfr.Actor.in_athanor("ath_b"), digest)
+    assert {:error, :not_found} = AgentRevisions.get(Cyfr.Actor.in_athanor("ath_a"), "sha256:0")
   end
 
   test "bytes that no longer hash to their digest are refused" do
     digest = Cyfr.Digest.sha256("as written")
-    {:ok, ^digest} = AgentRevisions.put("ath_c", "as written")
+    {:ok, ^digest} = AgentRevisions.put(Cyfr.Actor.in_athanor("ath_c"), "as written")
 
     import Ecto.Query, only: [from: 2]
 
@@ -43,6 +43,6 @@ defmodule Arca.AgentRevisionsTest do
         set: [bytes: "altered"]
       )
 
-    assert {:error, :corrupt} = AgentRevisions.get("ath_c", digest)
+    assert {:error, :corrupt} = AgentRevisions.get(Cyfr.Actor.in_athanor("ath_c"), digest)
   end
 end

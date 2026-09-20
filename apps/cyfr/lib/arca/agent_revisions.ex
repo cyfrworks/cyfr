@@ -7,6 +7,11 @@ defmodule Arca.AgentRevisions do
   seen, by the digest of its bytes. Content-addressed and immutable — a
   revision is written once and read back verified, so what a turn pinned
   is retrievable as it was, whatever the tree holds now.
+
+  Both functions take the `Cyfr.Actor` first and match it in the head, so
+  the athanor a revision is kept and read under comes from the caller; an
+  actor whose athanor is nil or the empty string is
+  `{:error, :no_athanor}` before any query.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -17,8 +22,9 @@ defmodule Arca.AgentRevisions do
   Keep `bytes` as a revision of the athanor's, answering its digest. A
   revision already kept is left as it is.
   """
-  @spec put(String.t(), binary()) :: {:ok, String.t()} | {:error, term()}
-  def put(athanor_id, bytes) when is_binary(athanor_id) and is_binary(bytes) do
+  @spec put(Cyfr.Actor.t(), binary()) :: {:ok, String.t()} | {:error, term()}
+  def put(%Cyfr.Actor{athanor_id: athanor_id}, bytes)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(bytes) do
     digest = Cyfr.Digest.sha256(bytes)
 
     Arca.Repo.Errors.with_db_rescue("Arca.AgentRevisions.put", fn ->
@@ -40,13 +46,17 @@ defmodule Arca.AgentRevisions do
     end)
   end
 
+  def put(%Cyfr.Actor{}, _bytes), do: {:error, :no_athanor}
+
   @doc """
   The bytes kept under `digest` for the athanor, verified against it:
   `{:error, :not_found}` for a digest never kept, `{:error, :corrupt}`
   for bytes that no longer hash to it.
   """
-  @spec get(String.t(), String.t()) :: {:ok, binary()} | {:error, :not_found | :corrupt | term()}
-  def get(athanor_id, digest) when is_binary(athanor_id) and is_binary(digest) do
+  @spec get(Cyfr.Actor.t(), String.t()) ::
+          {:ok, binary()} | {:error, :no_athanor | :not_found | :corrupt | term()}
+  def get(%Cyfr.Actor{athanor_id: athanor_id}, digest)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(digest) do
     Arca.Repo.Errors.with_db_rescue("Arca.AgentRevisions.get", fn ->
       case Arca.Repo.one(
              from(r in AgentRevision, where: r.athanor_id == ^athanor_id and r.digest == ^digest)
@@ -56,6 +66,8 @@ defmodule Arca.AgentRevisions do
       end
     end)
   end
+
+  def get(%Cyfr.Actor{}, _digest), do: {:error, :no_athanor}
 
   defp verify(bytes, digest) do
     if Cyfr.Digest.sha256(bytes) == digest, do: {:ok, bytes}, else: {:error, :corrupt}

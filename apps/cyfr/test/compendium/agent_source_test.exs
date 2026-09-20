@@ -76,7 +76,7 @@ defmodule Compendium.AgentSourceTest do
     assert again.revision_digest == snap.revision_digest
     assert again.capability_digest == snap.capability_digest
 
-    {:ok, bytes} = Arca.AgentRevisions.get(ctx.athanor_id, snap.revision_digest)
+    {:ok, bytes} = Arca.AgentRevisions.get(Sanctum.Context.actor(ctx), snap.revision_digest)
     assert {:ok, ^bytes} = Arca.get(ctx, AquaPath.soul_file())
     assert {:ok, snap.agent} == AquaAgent.parse("aqua", bytes)
   end

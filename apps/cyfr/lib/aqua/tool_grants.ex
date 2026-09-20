@@ -209,7 +209,7 @@ defmodule Aqua.ToolGrants do
   @spec for_agents(Context.t(), String.t(), [String.t()]) ::
           {:ok, %{String.t() => [ToolGrant.t()]}} | {:error, unavailable()}
   def for_agents(%Context{} = ctx, thread_id, names) when is_list(names) do
-    case ToolGrantStorage.list_for_thread(Context.athanor!(ctx), thread_id) do
+    case ToolGrantStorage.list_for_thread(Context.actor(ctx), thread_id) do
       {:ok, rows} ->
         by_name = rows |> Enum.filter(&(&1.agent_name in names)) |> Enum.group_by(& &1.agent_name)
         {:ok, Map.new(names, &{&1, Map.get(by_name, &1, [])})}
@@ -229,7 +229,7 @@ defmodule Aqua.ToolGrants do
   @spec allowed_by_agent(Context.t(), String.t()) ::
           {:ok, MapSet.t({String.t(), String.t(), String.t()})} | {:error, unavailable()}
   def allowed_by_agent(%Context{} = ctx, thread_id) do
-    case ToolGrantStorage.list_for_thread(Context.athanor!(ctx), thread_id) do
+    case ToolGrantStorage.list_for_thread(Context.actor(ctx), thread_id) do
       {:ok, rows} ->
         {:ok,
          rows

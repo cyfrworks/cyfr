@@ -81,10 +81,10 @@ defmodule Arca.ToolGrantStorage do
   Read whole and filtered in memory — a thread has a handful of
   grants, and one indexed read beats a query per agent per turn.
   """
-  @spec list_for_thread(String.t(), String.t()) ::
+  @spec list_for_thread(Cyfr.Actor.t(), String.t()) ::
           {:ok, [ToolGrant.t()]} | {:error, term()}
-  def list_for_thread(athanor_id, thread_id)
-      when is_binary(athanor_id) and is_binary(thread_id) do
+  def list_for_thread(%Cyfr.Actor{athanor_id: athanor_id}, thread_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
     # A read that cannot reach the store is an ERROR, never an empty list:
     # "no standing answers" would drop every deny and leave an authored
     # `auto` automatic, so an outage would widen what runs with no card.
@@ -100,6 +100,8 @@ defmodule Arca.ToolGrantStorage do
        |> Arca.Repo.all()}
     end)
   end
+
+  def list_for_thread(%Cyfr.Actor{}, _thread_id), do: {:error, :no_athanor}
 
   # ---------------------------------------------------------------------------
   # Internal

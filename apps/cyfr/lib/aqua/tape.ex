@@ -477,7 +477,7 @@ defmodule Aqua.Tape do
   @doc "The agent bytes a turn pinned, by their digest."
   @spec agent_revision(Context.t(), turn()) :: {:ok, binary()} | {:error, term()}
   def agent_revision(%Context{} = ctx, %{agent_revision_digest: digest}) when is_binary(digest),
-    do: Arca.AgentRevisions.get(Context.athanor!(ctx), digest)
+    do: Arca.AgentRevisions.get(Context.actor(ctx), digest)
 
   def agent_revision(_ctx, _turn), do: {:error, :no_revision}
 

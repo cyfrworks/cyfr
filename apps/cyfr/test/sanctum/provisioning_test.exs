@@ -479,7 +479,7 @@ defmodule Sanctum.ProvisioningTest do
       refute row.provisioned_at
       refute Athanors.provisioning_failure(row)
       assert {:ok, []} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
-      assert {:ok, []} = Arca.AgentStorage.list(group.id)
+      assert {:ok, []} = Arca.AgentStorage.list(Cyfr.Actor.in_athanor(group.id))
 
       # The mint refuses the lost claim on its own, whoever calls it.
       assert {:error, :claim_lost} = Sanctum.Consent.Bootstrap.run(in_group, stale)
@@ -495,7 +495,7 @@ defmodule Sanctum.ProvisioningTest do
       assert {:ok, [_profile]} =
                Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
 
-      assert {:ok, [_ | _]} = Arca.AgentStorage.list(group.id)
+      assert {:ok, [_ | _]} = Arca.AgentStorage.list(Cyfr.Actor.in_athanor(group.id))
 
       # Settled, the late one is still stale: it cannot turn ready to failed.
       assert :stale = Claims.settle(actor, stale.owner, stale.fence, "failed", "late")

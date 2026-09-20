@@ -34,7 +34,13 @@ defmodule Arca.ToolGrantStorageTest do
     assert stored.effect == "deny"
 
     assert [%{effect: "deny"}] =
-             elem(ToolGrantStorage.list_for_thread(row.athanor_id, row.thread_id), 1)
+             elem(
+               ToolGrantStorage.list_for_thread(
+                 Cyfr.Actor.in_athanor(row.athanor_id),
+                 row.thread_id
+               ),
+               1
+             )
   end
 
   test "a duplicate thread-scope row is refused, not raised", %{thread: row} do
@@ -63,7 +69,12 @@ defmodule Arca.ToolGrantStorageTest do
       ToolGrantStorage.put(row |> Map.put(:id, other.id) |> Map.put(:effect, "deny"))
     end
 
-    rows = elem(ToolGrantStorage.list_for_thread(row.athanor_id, row.thread_id), 1)
+    rows =
+      elem(
+        ToolGrantStorage.list_for_thread(Cyfr.Actor.in_athanor(row.athanor_id), row.thread_id),
+        1
+      )
+
     assert Enum.find(rows, &(&1.id == first.id)).effect == "allow"
     assert length(rows) == 2
   end
@@ -73,7 +84,13 @@ defmodule Arca.ToolGrantStorageTest do
     assert {:error, _} = duplicate(row)
 
     assert [%{id: id}] =
-             elem(ToolGrantStorage.list_for_thread(row.athanor_id, row.thread_id), 1)
+             elem(
+               ToolGrantStorage.list_for_thread(
+                 Cyfr.Actor.in_athanor(row.athanor_id),
+                 row.thread_id
+               ),
+               1
+             )
 
     assert id == first.id
   end

@@ -30,7 +30,7 @@ defmodule Compendium.AgentIndex do
   def sync(%Context{} = ctx) do
     with {:ok, agents, _errors} <- AquaAgent.list(ctx),
          {:ok, rows} <- rows_for(ctx, agents),
-         {:ok, replaced} <- Arca.AgentStorage.replace_all(Context.athanor!(ctx), rows) do
+         {:ok, replaced} <- Arca.AgentStorage.replace_all(Context.actor(ctx), rows) do
       Compendium.Registry.invalidate_executor_caches(ctx)
       {:ok, replaced}
     end
@@ -39,7 +39,7 @@ defmodule Compendium.AgentIndex do
   @doc "The athanor's rows, the soul first, then the roles by name."
   @spec list(Context.t()) :: {:ok, [Agent.t()]} | {:error, term()}
   def list(%Context{} = ctx) do
-    with {:ok, rows} <- Arca.AgentStorage.list(Context.athanor!(ctx)) do
+    with {:ok, rows} <- Arca.AgentStorage.list(Context.actor(ctx)) do
       {:ok, Enum.sort_by(rows, &{&1.kind != AquaAgent.soul_type(), &1.name})}
     end
   end
@@ -58,7 +58,7 @@ defmodule Compendium.AgentIndex do
           | {:error, term()}
   def snapshot(%Context{} = ctx, name) when is_binary(name) do
     with {:ok, bytes} <- Arca.get(ctx, AquaPath.agent_file(name)),
-         {:ok, revision} <- Arca.AgentRevisions.put(Context.athanor!(ctx), bytes),
+         {:ok, revision} <- Arca.AgentRevisions.put(Context.actor(ctx), bytes),
          {:ok, agent} <- AquaAgent.parse(name, bytes),
          {:ok, capability} <- AquaAgent.capability_digest(agent) do
       {:ok, %{agent: agent, revision_digest: revision, capability_digest: capability}}
