@@ -3,7 +3,7 @@
 
 defmodule Arca.Schemas.BuildRecord do
   @moduledoc """
-  One build's lifecycle row. `Cyfr.BuildRecords` owns the surface —
+  One build's lifecycle row. `Arca.BuildRecords` owns the surface —
   `Compendium.Builds` writes through it and `Cyfr.Retention` prunes through it.
   """
 
@@ -42,7 +42,7 @@ defmodule Arca.Schemas.BuildRecord do
     record
     |> cast(attrs, @fields)
     |> validate_required([:id, :athanor_id, :user_id, :reference, :status, :started_at])
-    # Return id collisions as constraint errors for Cyfr.BuildRecords.
+    # Return id collisions as constraint errors for Arca.BuildRecords.
     # Declare both names reported by the adapters: Postgres uses the primary
     # key name; SQLite uses the index name.
     |> unique_constraint(:id, name: "build_records_id_index")

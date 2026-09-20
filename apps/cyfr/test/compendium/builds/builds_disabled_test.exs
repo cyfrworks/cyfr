@@ -61,7 +61,8 @@ defmodule Compendium.BuildsDisabledTest do
         assert message =~ "CYFR_LOCUS_BUILDS_KEY"
       end
 
-      assert {:error, :not_found} = Cyfr.BuildRecords.get(ctx, "build_disabled")
+      assert {:error, :not_found} =
+               Arca.BuildRecords.get(Sanctum.Context.actor(ctx), "build_disabled")
     end
 
     assert ScriptedBuilder.requests() == []

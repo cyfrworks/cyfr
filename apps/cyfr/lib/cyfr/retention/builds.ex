@@ -15,5 +15,6 @@ defmodule Cyfr.Retention.Builds do
   def unit, do: :keep
 
   @impl true
-  def prune(ctx, keep, dry_run), do: Cyfr.BuildRecords.prune(ctx, keep, dry_run: dry_run)
+  def prune(ctx, keep, dry_run),
+    do: Arca.BuildRecords.prune(Sanctum.Context.actor(ctx), keep, dry_run: dry_run)
 end

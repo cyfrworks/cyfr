@@ -22,10 +22,10 @@ defmodule Compendium.BuildsTest do
   """
   use ExUnit.Case, async: false
 
+  alias Arca.BuildRecords
   alias Compendium.Builds
   alias Compendium.Builds.Provider
   alias Compendium.ComponentPath
-  alias Cyfr.BuildRecords
   alias Cyfr.Test.ScriptedBuilder
 
   import Cyfr.Test.Wait
@@ -278,7 +278,7 @@ defmodule Compendium.BuildsTest do
       refute Arca.exists?(ctx, @wasm_path)
       refute registered?(ctx)
       # A build on its caller's process has no row: its caller was its record.
-      assert {:error, :not_found} = BuildRecords.get(ctx, "build_sync")
+      assert {:error, :not_found} = BuildRecords.get(Sanctum.Context.actor(ctx), "build_sync")
     end
   end
 

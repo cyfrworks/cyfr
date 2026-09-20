@@ -90,9 +90,15 @@ defmodule EmissaryWeb.HealthController do
     }
   end
 
+  # `Arca.Health` owns what "the database answers" means and keeps an
+  # outage apart from an empty database: the probe reads no table, so a
+  # freshly migrated node is ready and an unreachable one is not. The
+  # rescue is the belt its siblings here also wear — nothing on this path
+  # may turn a probe into a 500.
   defp check_database do
-    case Arca.Repo.query("SELECT 1") do
-      {:ok, _} -> :ok
+    case Arca.Health.check(Cyfr.Actor.system()) do
+      :ok -> :ok
+      {:error, {:unavailable, why}} -> {:error, why}
       {:error, reason} -> {:error, describe(reason)}
     end
   rescue
