@@ -13,9 +13,18 @@ defmodule Sanctum.Tenancy.Users do
   address was still holding are withdrawn; allowing them again reopens the
   door and the athanor, re-seats them in it, and leaves the revoked
   credentials revoked.
-  """
 
-  import Ecto.Query, only: [from: 2]
+  ## What is decided here, and what is stored below
+
+  The statements are `Arca.Users`'. What stays here is the deciding: which
+  provider claims are recorded and which are left as they stand, that a
+  person's id is minted with `Cyfr.PersonId.prefix/0` and that only an IdP
+  identity may sign in, what an eject costs the person, and what an
+  unanswerable read should read as. A person is not a row inside an
+  athanor — they exist before any athanor does and sit in several at once
+  — so every call runs as the server (`Cyfr.Actor.system/0`), which is
+  what `Arca.Users` requires and says why.
+  """
 
   alias Arca.Schemas.{ExternalIdentity, User}
   alias Sanctum.Auth.Identity
@@ -35,8 +44,8 @@ defmodule Sanctum.Tenancy.Users do
 
   @doc """
   The person an admitted identity names: their row refreshed, or a new
-  person minted (an id of this server's, `Arca.Schemas.User.id_prefix/0`)
-  with the identity recorded as theirs.
+  person minted (an id of this server's, `Cyfr.PersonId.prefix/0`) with
+  the identity recorded as theirs.
 
   `first_seen_at` is set once; `last_seen_at`, `email`, `email_verified`
   and `display_name` follow what the provider asserted this time —
@@ -47,31 +56,29 @@ defmodule Sanctum.Tenancy.Users do
   """
   @spec upsert_from_provider(provider_info()) :: {:ok, User.t()} | {:error, term()}
   def upsert_from_provider(%{id: key, provider: provider} = info) when is_binary(key) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.upsert_from_provider", fn ->
-      now = DateTime.utc_now()
+    now = DateTime.utc_now()
 
-      seen =
-        %{
-          email_verified: verified_claim(Map.get(info, :verified)),
-          provider: to_string(provider),
-          last_seen_at: now,
-          updated_at: now
-        }
-        |> Cyfr.MapUtil.put_present(:email, Map.get(info, :email))
-        |> Cyfr.MapUtil.put_present(:display_name, Map.get(info, :name))
+    seen =
+      %{
+        email_verified: verified_claim(Map.get(info, :verified)),
+        provider: to_string(provider),
+        last_seen_at: now,
+        updated_at: now
+      }
+      |> Cyfr.MapUtil.put_present(:email, Map.get(info, :email))
+      |> Cyfr.MapUtil.put_present(:display_name, Map.get(info, :name))
 
-      case get_by_identity(key) do
-        {:ok, user} ->
-          touch_identity(key, now)
-          user |> User.changeset(seen) |> Arca.Repo.update()
+    case get_by_identity(key) do
+      {:ok, user} ->
+        Arca.Users.touch_identity(server(), key, now)
+        Arca.Users.update(server(), user, seen)
 
-        {:error, :not_found} ->
-          first_sign_in(key, seen, now)
+      {:error, :not_found} ->
+        first_sign_in(key, seen, now)
 
-        {:error, _} = err ->
-          err
-      end
-    end)
+      {:error, _} = err ->
+        err
+    end
   end
 
   # The person and the identity that names them, minted together. A
@@ -81,100 +88,37 @@ defmodule Sanctum.Tenancy.Users do
     with {:ok, %{provider: provider, issuer: issuer, subject: subject}} <- Identity.parse(key) do
       user_attrs =
         Map.merge(seen, %{
-          id: Cyfr.UUID7.generate_id(User.id_prefix()),
+          id: Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix()),
           first_seen_at: now,
           created_at: now,
           prefs: Jason.encode!(%{})
         })
 
-      Arca.Repo.transaction(fn ->
-        with {:ok, user} <- %User{} |> User.changeset(user_attrs) |> Arca.Repo.insert(),
-             {:ok, _} <-
-               %ExternalIdentity{}
-               |> ExternalIdentity.changeset(%{
-                 id: Cyfr.UUID7.generate_id("ext"),
-                 user_id: user.id,
-                 key: key,
-                 provider: provider,
-                 issuer: issuer,
-                 subject: subject,
-                 first_seen_at: now,
-                 last_seen_at: now
-               })
-               |> Arca.Repo.insert() do
-          user
-        else
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
-      end)
-      |> case do
-        {:ok, user} ->
-          {:ok, user}
-
-        {:error, %Ecto.Changeset{} = changeset} ->
-          case get_by_identity(key) do
-            {:ok, user} -> {:ok, user}
-            _ -> {:error, changeset}
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      Arca.Users.mint(server(), user_attrs, %{
+        key: key,
+        provider: provider,
+        issuer: issuer,
+        subject: subject,
+        first_seen_at: now,
+        last_seen_at: now
+      })
     end
-  end
-
-  defp touch_identity(key, now) do
-    Arca.Repo.update_all(from(i in ExternalIdentity, where: i.key == ^key),
-      set: [last_seen_at: now]
-    )
-
-    :ok
   end
 
   @doc "The person an IdP identity key names, if any."
   @spec get_by_identity(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
-  def get_by_identity(key) when is_binary(key) and key != "" do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.get_by_identity", fn ->
-      query =
-        from(u in User,
-          join: i in ExternalIdentity,
-          on: i.user_id == u.id,
-          where: i.key == ^key
-        )
-
-      case Arca.Repo.one(query) do
-        nil -> {:error, :not_found}
-        user -> {:ok, user}
-      end
-    end)
-  end
-
-  def get_by_identity(_), do: {:error, :not_found}
+  def get_by_identity(key), do: Arca.Users.get_by_identity(server(), key)
 
   @doc "Every IdP identity that names this person, oldest first."
   @spec identities(String.t()) :: [ExternalIdentity.t()]
   def identities(user_id) when is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.identities", [], fn ->
-      Arca.Repo.all(
-        from(i in ExternalIdentity,
-          where: i.user_id == ^user_id,
-          order_by: [asc: i.first_seen_at]
-        )
-      )
-    end)
+    # Deliberate default: a display read of how a person has signed in —
+    # an outage shows fewer providers, it grants nothing.
+    rows_or_empty(Arca.Users.identities(server(), user_id))
   end
 
   @spec get(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
-  def get(id) when is_binary(id) and id != "" do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.get", fn ->
-      case Arca.Repo.get(User, id) do
-        nil -> {:error, :not_found}
-        user -> {:ok, user}
-      end
-    end)
-  end
-
-  def get(_), do: {:error, :not_found}
+  def get(id), do: Arca.Users.get(server(), id)
 
   @doc """
   How a person is named to other people: their display name, else their
@@ -201,10 +145,7 @@ defmodule Sanctum.Tenancy.Users do
   def list_by_email(email) when is_binary(email) do
     # Deliberate default: an unanswerable read means "no identity known for
     # this address" — callers then take the invite path, which grants nothing.
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.list_by_email", [], fn ->
-      email = String.downcase(email)
-      Arca.Repo.all(from(u in User, where: u.email == ^email, order_by: [asc: u.first_seen_at]))
-    end)
+    rows_or_empty(Arca.Users.list_by_email(server(), String.downcase(email)))
   end
 
   @doc """
@@ -220,9 +161,10 @@ defmodule Sanctum.Tenancy.Users do
   """
   @spec personal_athanor?(String.t()) :: boolean()
   def personal_athanor?(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.personal_athanor?", true, fn ->
-      Arca.Repo.exists?(from(u in User, where: u.personal_athanor_id == ^athanor_id))
-    end)
+    case Arca.Users.personal_athanor?(server(), athanor_id) do
+      {:ok, personal?} -> personal?
+      {:error, _} -> true
+    end
   end
 
   def personal_athanor?(_), do: true
@@ -263,37 +205,18 @@ defmodule Sanctum.Tenancy.Users do
 
   @doc "The identity whose cyfr.run namespace this is, if any."
   @spec get_by_namespace(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
-  def get_by_namespace(namespace) when is_binary(namespace) and namespace != "" do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.get_by_namespace", fn ->
-      case Arca.Repo.get_by(User, namespace: namespace) do
-        nil -> {:error, :not_found}
-        user -> {:ok, user}
-      end
-    end)
-  end
-
-  @max_page 500
+  def get_by_namespace(namespace) when is_binary(namespace) and namespace != "",
+    do: Arca.Users.get_by_namespace(server(), namespace)
 
   @doc """
   Everyone the server knows, newest first. A platform view, paged with
-  `limit:` (default and ceiling #{@max_page}) and `offset:`.
+  `limit:` (default and ceiling `Arca.Users.max_page/0`) and `offset:`.
   """
   @spec list(keyword()) :: [User.t()]
   def list(opts \\ []) do
     # Deliberate default: the operator's people page — a display read that
     # decides nothing; an outage renders an empty page, not a refusal.
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.list", [], fn ->
-      limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
-      offset = opts |> Keyword.get(:offset, 0) |> max(0)
-
-      Arca.Repo.all(
-        from(u in User,
-          order_by: [desc: u.last_seen_at, asc: u.id],
-          limit: ^limit,
-          offset: ^offset
-        )
-      )
-    end)
+    rows_or_empty(Arca.Users.list(server(), opts))
   end
 
   @doc """
@@ -425,13 +348,12 @@ defmodule Sanctum.Tenancy.Users do
   defp verified_claim(false), do: false
   defp verified_claim(_), do: nil
 
-  defp update(%User{} = user, attrs) do
-    Arca.Repo.Errors.with_db_rescue("Sanctum.Tenancy.Users.update", fn ->
-      attrs = attrs |> Map.new() |> Map.put(:updated_at, DateTime.utc_now())
+  defp update(%User{} = user, attrs), do: Arca.Users.update(server(), user, attrs)
 
-      user
-      |> User.changeset(attrs)
-      |> Arca.Repo.update()
-    end)
-  end
+  # A person is not a row inside an athanor: the row is written before any
+  # athanor exists and read from every one the person sits in.
+  defp server, do: Cyfr.Actor.system()
+
+  defp rows_or_empty({:ok, rows}), do: rows
+  defp rows_or_empty({:error, _}), do: []
 end

@@ -45,26 +45,25 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
 
     test "rejects an invalid scope", %{athanor: athanor} do
-      assert {:error, changeset} = Members.create(attrs(athanor.id, %{scope: "superadmin"}))
-      assert %{scope: [_ | _]} = errors_on(changeset)
+      assert {:error, {:invalid, %{scope: [_ | _]}}} =
+               Members.create(attrs(athanor.id, %{scope: "superadmin"}))
     end
 
-    test "requires an athanor for the athanor scope" do
+    test "an athanor row with no athanor is refused before any query runs" do
       uid = "user_" <> Ecto.UUID.generate()
-      assert {:error, changeset} = Members.create(%{user_id: uid, scope: "athanor"})
-      assert %{athanor_id: [_ | _]} = errors_on(changeset)
+      assert {:error, :no_athanor} = Members.create(%{user_id: uid, scope: "athanor"})
     end
 
     test "rejects a duplicate assignment", %{athanor: athanor} do
       attrs = attrs(athanor.id)
       assert {:ok, _} = Members.create(attrs)
-      assert {:error, changeset} = Members.create(attrs)
-      assert %{user_id: [_ | _]} = errors_on(changeset)
+      # The assignment index is the one refusal a caller acts on rather
+      # than reports: `ensure/2` re-reads the row it raced for.
+      assert {:error, :conflict} = Members.create(attrs)
     end
 
     test "requires an existing athanor row" do
-      assert {:error, changeset} = Members.create(attrs("ath_does_not_exist"))
-      assert %{athanor_id: [_ | _]} = errors_on(changeset)
+      assert {:error, :unknown_athanor} = Members.create(attrs("ath_does_not_exist"))
     end
   end
 
@@ -406,14 +405,6 @@ defmodule Sanctum.Tenancy.MembersTest do
       assert Members.member?(user.id, athanor.id)
       assert Subs.followed(ctx, user.id) == MapSet.new()
     end
-  end
-
-  defp errors_on(%Ecto.Changeset{} = changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
-      Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
-        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-      end)
-    end)
   end
 
   defp rows!({:ok, rows}), do: rows
