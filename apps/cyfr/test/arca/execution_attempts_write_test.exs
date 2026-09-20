@@ -410,6 +410,10 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       # its intent is still pending.
       assert {:ok, {:confirmed, :ok}} = write(test, put(test))
       parked = Task.async(fn -> write(test, fn -> Process.sleep(:infinity) end) end)
+
+      # Stopped before the sandbox connection is given back, whatever
+      # this case does next.
+      on_exit(fn -> Task.shutdown(parked, :brutal_kill) end)
       wait_for(fn -> length(intents(test)) == 2 end)
 
       assert Enum.sort(states(test)) == [{"confirmed", nil}, {"pending", nil}]
@@ -425,8 +429,6 @@ defmodule Arca.ExecutionAttemptsWriteTest do
 
       # And nothing of another estate's is counted or taken.
       assert {:ok, 0} = ExecutionAttempts.count_intents_before(cutoff, athanor_id: "ath_gamma")
-
-      Task.shutdown(parked, :brutal_kill)
     end
 
     test "leaves an intent the cutoff does not reach", test do
