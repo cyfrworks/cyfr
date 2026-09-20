@@ -67,8 +67,16 @@ defmodule Cyfr.ConfigKeyRosterTest do
   }
 
   # Keys declared ONLY in `config/test.exs`.
+  #
+  # `:default_test_namespace` was here and is not: its one reader is
+  # `Sanctum.TestContext`, a test-support fixture, and the scan below
+  # reads each app's `lib` alone. A key no application code reads is not
+  # application configuration, whatever a config file still sets, so it
+  # has no class in this roster. Widening the scan to `test/support`
+  # would change what the roster means — "keys the application reads"
+  # becomes "keys anything reads" — and pull in every fixture's `:cyfr`
+  # read with it.
   @test_only %{
-    default_test_namespace: :seam,
     establish_cache_ms: :seam,
     namespace_cache_ttl_ms: :seam,
     registry_health_probe: :seam,

@@ -7,7 +7,7 @@ defmodule Compendium.Registry.Transport do
 
   Sibling of `Compendium.OCI.Transport`, which does the same job for the OCI
   gateway, and shaped the same way on purpose: one entry point over
-  `Cyfr.Network.pinned_request/5` (SSRF + DNS-rebinding protection), retry with
+  `Cyfr.Egress.pinned_request/5` (SSRF + DNS-rebinding protection), retry with
   exponential backoff, `Retry-After` honoured on 429, and a consistent
   `{:ok, status, headers, body} | {:error, Errors.t()}` return.
 
@@ -98,7 +98,7 @@ defmodule Compendium.Registry.Transport do
     # a private network, so private targets are allowed exactly as far as the
     # operator's egress policy allows — the same posture the OCI transport takes.
     result =
-      Cyfr.Network.pinned_request(method, url, headers, body,
+      Cyfr.Egress.pinned_request(method, url, headers, body,
         receive_timeout: limits.receive_timeout,
         private_policy: :operator,
         max_response_bytes: @max_response_bytes

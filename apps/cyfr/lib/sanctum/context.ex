@@ -45,7 +45,9 @@ defmodule Sanctum.Context do
 
   require Logger
 
-  @type scope :: :platform | :athanor
+  # The vocabulary is `Cyfr.TenancyScope`'s, where the actor and the
+  # stored membership row read it too.
+  @type scope :: Cyfr.TenancyScope.t()
   @type auth_method ::
           :oidc | :api_key | :scheduled | :webhook | :tincture | :system | :session | nil
   @type api_key_type :: :application | :service | :admin | nil

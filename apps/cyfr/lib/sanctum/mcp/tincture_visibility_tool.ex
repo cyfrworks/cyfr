@@ -101,7 +101,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   defp public_url(ctx, publisher, name) do
     case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
       {:ok, athanor} ->
-        Cyfr.TinctureHelpers.tincture_path(
+        Cyfr.TinctureUrl.path(
           Sanctum.Tenancy.Athanors.route_slug(athanor),
           publisher,
           name

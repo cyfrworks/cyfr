@@ -5,6 +5,11 @@ defmodule Cyfr.Boot do
   @moduledoc """
   Identifies this application boot. Execution attempts and control-plane
   claims carry this id; each restart receives a different id.
+
+  The id is minted by the application that starts, at the top of its
+  `start/2`; this module only holds it. A boot that never minted one
+  still answers, lazily, so a bare script or an early caller reads an id
+  rather than `nil`.
   """
 
   @key {__MODULE__, :id}

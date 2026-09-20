@@ -82,7 +82,7 @@ defmodule Sanctum.Policy.Enforcement do
 
       {:error, reason} ->
         # `:error`, like every other "a security record did not land" site
-        # (`Cyfr.RecordSink`, `Emissary.MCP.RequestLog`, `Arca.AuditHandler`).
+        # (`Arca.RecordSink`, `Emissary.MCP.RequestLog`, `Arca.AuditHandler`).
         # An operator alarming on level:error over the audit plane was getting
         # an arbitrary subset while this one said :warning.
         Logger.error("[Policy.Enforcement] record failed: #{inspect(reason)}")
@@ -134,7 +134,7 @@ defmodule Sanctum.Policy.Enforcement do
     # A denial is on disk before the refusal returns; an allowed line is
     # bookkeeping and rides the write-behind.
     if decision == :allowed do
-      Cyfr.RecordSink.enqueue({:policy_log, record_attrs})
+      Arca.RecordSink.enqueue({:policy_log, record_attrs})
       emit_telemetry(record_attrs)
       :ok
     else

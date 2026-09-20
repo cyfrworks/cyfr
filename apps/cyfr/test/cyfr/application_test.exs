@@ -98,6 +98,20 @@ defmodule Cyfr.ApplicationTest do
       refute EmissaryWeb.Endpoint in ids
     end
 
+    # Shutdown is reverse start order, so "after the repo" is what makes
+    # the bookkeeping sink stop BEFORE it: the rows `terminate/2` drains
+    # are written through a pool that is still open. Started the other way
+    # round, every row buffered at shutdown would be lost silently.
+    test "the bookkeeping sink starts after the repo, so its drain outlives nothing it needs" do
+      started = Cyfr.InfraSupervisor |> started_ids()
+      at = fn id -> Enum.find_index(started, &(&1 == id)) end
+
+      assert is_integer(at.(Arca.RecordSink))
+
+      assert at.(Arca.RecordSink) > at.(Arca.Repo),
+             "the record sink must start after Arca.Repo so it drains before the repo goes down"
+    end
+
     test "execution rates, slots, event streams and attempts start under the infra tier after PubSub" do
       # `which_children/1` lists the most recently started child first.
       started = Cyfr.InfraSupervisor |> started_ids()
@@ -145,7 +159,7 @@ defmodule Cyfr.ApplicationTest do
       pubsub = Enum.find_index(started, &(&1 in [Emissary.PubSub, Phoenix.PubSub.Supervisor]))
       assert builds > pubsub
 
-      for id <- [Arca.Cache.TreeSupervisor, Cyfr.RecordSink] do
+      for id <- [Arca.Cache.TreeSupervisor, Arca.RecordSink] do
         assert builds > at.(id), "#{inspect(id)} must start before the builds' supervisor"
       end
 

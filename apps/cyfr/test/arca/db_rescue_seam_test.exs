@@ -46,7 +46,7 @@ defmodule Arca.DbRescueSeamTest do
     # failed batch retries per item, so the rescue cannot answer the one
     # constant the helper returns. DB errors only: a structurally-bad
     # queued item must crash, never be dropped with :ok.
-    "apps/cyfr/lib/cyfr/record_sink.ex" => 2,
+    "apps/cyfr/lib/arca/record_sink.ex" => 2,
     # Two boot steps (the platform reconcile and the seed sync) that tolerate
     # a database outage with their own step-specific log lines and keep the
     # remaining steps running — a bug still crashes the one-shot task loudly.

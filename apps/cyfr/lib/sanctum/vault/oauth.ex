@@ -289,26 +289,59 @@ defmodule Sanctum.Vault.OAuth do
   # both token-endpoint dialects, keyed on what the POST carries.
   def http_post(url, headers, body, credential \\ :refresh_token) do
     with :ok <- require_https(url, credential) do
-      case Cyfr.Network.pinned_request(:post, url, headers, body,
+      case pinned_post(url, headers, body,
              private_policy: :operator,
              receive_timeout: 15_000,
              # A token response is a small JSON object; the endpoint is
              # caller-supplied, so the ceiling streams rather than trusting it.
              max_response_bytes: 1024 * 1024
            ) do
-        {:ok, status, _resp_headers, resp_body} when status in 200..299 ->
+        {:ok, status, resp_body} when status in 200..299 ->
           case Jason.decode(resp_body) do
             {:ok, data} -> {:ok, data}
             {:error, _} -> {:error, "invalid JSON response from token endpoint"}
           end
 
-        {:ok, status, _resp_headers, _resp_body} ->
+        {:ok, status, _resp_body} ->
           {:error, "token exchange failed (status #{status})"}
 
         {:error, reason} ->
           Logger.warning("[Sanctum.Vault.OAuth] HTTP request failed: #{inspect(reason)}")
           {:error, "token endpoint unreachable"}
       end
+    end
+  end
+
+  # The token POST, issued to the address `Cyfr.Network.pin/2` validated
+  # and nowhere else. The decision is entirely the contracts' — scheme,
+  # resolution, the private and metadata classes, the operator's
+  # private-egress allowlist, and the fail-closed transport policy baked
+  # into `req_opts` (no redirect, no retry, no compression, no body
+  # decoding). What is here is the four lines that add the method, the
+  # headers, the body and the streaming ceiling; the auth domain owns
+  # them rather than reaching up to the host's transport for the same
+  # dozen lines. `Cyfr.EgressInventoryTest` rosters this site.
+  defp pinned_post(url, headers, body, opts) do
+    case Cyfr.Network.pin(url, opts) do
+      {:ok, %{req_opts: req_opts}} ->
+        max_bytes = Keyword.fetch!(opts, :max_response_bytes)
+
+        req_opts =
+          req_opts
+          |> Keyword.merge(method: :post, headers: headers, body: body)
+          |> Keyword.put(:into, Cyfr.BoundedBody.collector(max_bytes))
+
+        case Req.request(req_opts) do
+          {:ok, %{status: status} = resp} ->
+            with {:ok, resp_body} <- Cyfr.BoundedBody.read(resp, max_bytes),
+                 do: {:ok, status, resp_body}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, _type, message} ->
+        {:error, message}
     end
   end
 

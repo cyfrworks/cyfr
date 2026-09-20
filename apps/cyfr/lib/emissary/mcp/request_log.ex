@@ -13,7 +13,7 @@ defmodule Emissary.MCP.RequestLog do
 
   Routes all persistent storage through `Arca.McpLog`. The start of a call
   is written synchronously (the row must exist); its completion or failure
-  goes through `Cyfr.RecordSink`, the write-behind.
+  goes through `Arca.RecordSink`, the write-behind.
 
   Every row is filed under the athanor the call ran in. A call with no
   athanor on its context — the anonymous surface (`initialize`,
@@ -102,7 +102,7 @@ defmodule Emissary.MCP.RequestLog do
       when is_binary(call_id) and is_map(data) do
     # The row was started synchronously; its completion is bookkeeping and
     # rides the write-behind.
-    Cyfr.RecordSink.enqueue(
+    Arca.RecordSink.enqueue(
       {:mcp_log_update, ctx, call_id,
        %{
          status: "success",
@@ -123,7 +123,7 @@ defmodule Emissary.MCP.RequestLog do
 
   def log_failed(%Context{} = ctx, call_id, data)
       when is_binary(call_id) and is_map(data) do
-    Cyfr.RecordSink.enqueue(
+    Arca.RecordSink.enqueue(
       {:mcp_log_update, ctx, call_id,
        %{
          status: "error",
@@ -253,7 +253,7 @@ defmodule Emissary.MCP.RequestLog do
   # happens whenever the owning process finishes first. `rescue` alone left
   # that exit to travel into the call this is supposed to never fail.
   defp safe_enqueue(item) do
-    Cyfr.RecordSink.enqueue(item)
+    Arca.RecordSink.enqueue(item)
   rescue
     e -> Logger.warning("[RequestLog] log row not queued: #{Exception.message(e)}")
   catch

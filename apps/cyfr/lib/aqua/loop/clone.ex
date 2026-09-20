@@ -22,7 +22,6 @@ defmodule Aqua.Loop.Clone do
   alias Aqua.Loop.Binding.Call
   alias Aqua.Loop.Turn
   alias Aqua.Tape
-  alias Arca.Schemas.Message
   alias Compendium.AgentSource
   alias Cyfr.Authority
   alias Cyfr.Authority.Transition
@@ -185,7 +184,7 @@ defmodule Aqua.Loop.Clone do
   defp terminal({:uncertain, reason}), do: {"uncertain", describe(reason)}
 
   defp last_reply(guest, clone) do
-    agent = Message.agent_author()
+    agent = Cyfr.Author.agent()
 
     case Tape.projection(guest, clone) do
       {:ok, rows} ->

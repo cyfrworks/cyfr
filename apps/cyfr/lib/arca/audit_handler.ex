@@ -40,34 +40,58 @@ defmodule Arca.AuditHandler do
   - `[:cyfr, :sanctum, :platform_context]` — the tenant-bypassing platform
     scope was constructed
 
-  The full roster is `Cyfr.Telemetry.Catalog.consumed_by(:audit)`; this
-  list names the shapes, not every entry. Each event reaches the sinks as
-  one `Arca.Audit.Event` with the emitter's metadata sanitized.
+  This list names the shapes, not every entry: the full roster is the one
+  the boot hands `start_link/1`. Each event reaches the sinks as one
+  `Arca.Audit.Event` with the emitter's metadata sanitized.
+
+  ## The roster
+
+  Which events are audited is not this module's to know. The telemetry
+  catalog names each event's consumers, and an event is audited exactly
+  when `:audit` is among them — so the boot reads the catalog and hands
+  the answer here as the required `:events` option. The roster is
+  settled at start rather than at compile time: the storage layer builds
+  against the contracts alone and never names the catalog, and a restart
+  re-reads it.
+
+  `:events` is required, with no default. An empty roster attaches
+  nothing and audits nothing, and it does so silently — exactly the
+  shape of failure an audit trail must not have — so a boot that omits
+  it fails to start instead.
+
+  (The catalog's notes say why each entry earns its place, including why
+  `:platform_context` is safe to subscribe: this handler constructs no
+  context of its own, so the emit inside the platform-scope constructor
+  cannot recurse through here.)
   """
 
   use GenServer
   require Logger
 
-  # The roster derives from the one catalog — an event is audited exactly
-  # when `Cyfr.Telemetry.Catalog` names :audit among its consumers. The
-  # catalog's notes say why each entry earns its place (including why
-  # :platform_context is safe to subscribe: this handler constructs no
-  # context of its own, so the emit inside Sanctum.internal_context/1
-  # cannot recurse through here).
-  @audit_events Cyfr.Telemetry.Catalog.consumed_by(:audit)
-
-  def start_link(opts \\ []) do
+  @doc """
+  Start the handler on the roster `opts[:events]` names. No default: the
+  roster is the caller's to supply (see the moduledoc).
+  """
+  def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @impl true
-  def init(_opts) do
-    attach_handlers()
-    {:ok, %{}}
+  def init(opts) do
+    events = Keyword.fetch!(opts, :events)
+    attach_handlers(events)
+    {:ok, %{events: events}}
   end
 
-  defp attach_handlers do
-    for event <- @audit_events do
+  @doc "The roster this handler was started with, and is attached to."
+  @spec events() :: [[atom()]]
+  def events, do: GenServer.call(__MODULE__, :events)
+
+  @impl true
+  def handle_call(:events, _from, state), do: {:reply, state.events, state}
+
+  defp attach_handlers(events) do
+    for event <- events do
       event_id = "audit-" <> Enum.join(event, "-")
 
       # Detaching first makes the call idempotent across application restarts

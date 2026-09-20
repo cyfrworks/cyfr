@@ -221,9 +221,9 @@ defmodule Arca.VaultStorage do
     end)
   end
 
-  @doc "Mark an entry read now — bookkeeping, written behind by `Cyfr.RecordSink`."
+  @doc "Mark an entry read now — bookkeeping, written behind by `Arca.RecordSink`."
   @spec touch_last_used(String.t(), String.t()) :: :ok
   def touch_last_used(athanor_id, id) do
-    Cyfr.RecordSink.enqueue({:vault_touch, athanor_id, id})
+    Arca.RecordSink.enqueue({:vault_touch, athanor_id, id})
   end
 end

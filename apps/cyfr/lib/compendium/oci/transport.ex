@@ -5,7 +5,7 @@ defmodule Compendium.OCI.Transport do
   @moduledoc """
   HTTP transport layer for OCI Distribution API calls.
 
-  Issues requests via `Cyfr.Network.pinned_request/5` (SSRF + DNS-rebinding
+  Issues requests via `Cyfr.Egress.pinned_request/5` (SSRF + DNS-rebinding
   protection) and adds:
   - Automatic auth header injection via `OCI.Auth`, recomputed per attempt
     so a retry picks up a rotated token
@@ -150,7 +150,7 @@ defmodule Compendium.OCI.Transport do
     # registry is reachable only when the operator named it in the
     # private-egress allowlist. The size ceiling is enforced while the body
     # streams in — a hostile registry cannot flood the host's heap.
-    case Cyfr.Network.pinned_request(method, url, headers, body,
+    case Cyfr.Egress.pinned_request(method, url, headers, body,
            receive_timeout: @receive_timeout,
            private_policy: :operator,
            max_response_bytes: Keyword.get(opts, :max_response_bytes, @default_max_response_bytes)

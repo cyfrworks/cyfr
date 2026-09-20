@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.RecordSinkTest do
+defmodule Arca.RecordSinkTest do
   # async: false — flips the sink out of inline mode for the duration.
   import Ecto.Query, only: [from: 2]
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.RecordSink
+  alias Arca.RecordSink
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -99,6 +99,40 @@ defmodule Cyfr.RecordSinkTest do
     assert Enum.any?(sink_rows, &(&1.id == id))
   end
 
+  # The sink starts after the repo (`Cyfr.ApplicationTest` pins that), so
+  # it stops before it and `terminate/2` writes what it still holds
+  # through a pool that is still open. A row buffered at shutdown is not
+  # lost; only casts left in the mailbox are, which is the write-behind's
+  # stated cost.
+  test "a row still buffered at shutdown is drained by terminate/2, not lost" do
+    id = Cyfr.UUID7.generate_id("plog")
+    pid = Process.whereis(Arca.RecordSink)
+
+    :ok = RecordSink.flush()
+    :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: id})})
+
+    # `:sys.get_state/1` is answered after the cast ahead of it, so the
+    # row is in this process's buffer and no drain has run: what follows
+    # is about terminate/2 and not about the flush timer.
+    assert %{count: count} = :sys.get_state(pid)
+    assert count >= 1
+    {:ok, before} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
+    refute Enum.any?(before, &(&1.id == id))
+
+    ref = Process.monitor(pid)
+    :ok = GenServer.stop(pid, :normal)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
+
+    {:ok, rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
+    assert Enum.any?(rows, &(&1.id == id)), "the buffered row was lost at shutdown"
+
+    assert Enum.any?(1..200, fn _ ->
+             Process.sleep(25)
+             is_pid(Process.whereis(Arca.RecordSink))
+           end),
+           "the record sink did not come back"
+  end
+
   # The buffer is bounded by the batch size, but the mailbox is not: a drain
   # runs inside handle_cast, so a stalled database lets casts pile up behind
   # it with nothing pushing back. Bookkeeping must not be able to take the
@@ -120,7 +154,7 @@ defmodule Cyfr.RecordSinkTest do
     # Block the sink so its mailbox is the only thing that grows, then fill
     # past the ceiling. `:sys.suspend/1` stops it processing without killing
     # it, which is what a slow transaction looks like from outside.
-    pid = Process.whereis(Cyfr.RecordSink)
+    pid = Process.whereis(Arca.RecordSink)
     :sys.suspend(pid)
 
     for _ <- 1..10_050 do
@@ -144,7 +178,7 @@ defmodule Cyfr.RecordSinkTest do
 
     assert Enum.any?(1..200, fn _ ->
              Process.sleep(25)
-             is_pid(Process.whereis(Cyfr.RecordSink))
+             is_pid(Process.whereis(Arca.RecordSink))
            end),
            "the record sink did not come back"
   end
@@ -169,28 +203,28 @@ defmodule Cyfr.RecordSinkTest do
       id = "call_#{System.unique_integer([:positive])}"
       close = %{status: "success", duration_ms: 3, routed_to: "x", output: "{}"}
 
-      Cyfr.RecordSink.enqueue({:mcp_log_close, started_row(id), close})
-      :ok = Cyfr.RecordSink.flush()
+      Arca.RecordSink.enqueue({:mcp_log_close, started_row(id), close})
+      :ok = Arca.RecordSink.flush()
 
       assert %{status: "success", duration_ms: 3, tool: "athanor"} =
                Arca.Repo.get(Arca.McpLog, id)
 
       # The start, shed or late, does not reopen the row.
-      Cyfr.RecordSink.enqueue({:mcp_log_started, started_row(id)})
-      :ok = Cyfr.RecordSink.flush()
+      Arca.RecordSink.enqueue({:mcp_log_started, started_row(id)})
+      :ok = Arca.RecordSink.flush()
       assert %{status: "success", duration_ms: 3} = Arca.Repo.get(Arca.McpLog, id)
       assert 1 == Arca.Repo.aggregate(from(l in Arca.McpLog, where: l.id == ^id), :count)
     end
 
     test "a start then its close, in one batch or two, is the same row" do
       id = "call_#{System.unique_integer([:positive])}"
-      Cyfr.RecordSink.enqueue({:mcp_log_started, started_row(id)})
+      Arca.RecordSink.enqueue({:mcp_log_started, started_row(id)})
 
-      Cyfr.RecordSink.enqueue(
+      Arca.RecordSink.enqueue(
         {:mcp_log_close, started_row(id), %{status: "error", error_code: -1, error: "no"}}
       )
 
-      :ok = Cyfr.RecordSink.flush()
+      :ok = Arca.RecordSink.flush()
       assert %{status: "error", error_code: -1, error: "no"} = Arca.Repo.get(Arca.McpLog, id)
     end
   end

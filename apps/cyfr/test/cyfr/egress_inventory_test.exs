@@ -7,26 +7,42 @@ defmodule Cyfr.EgressInventoryTest do
   the mirror of `Cyfr.IngressInventoryTest`.
 
   Outbound HTTP is where SSRF, credential leakage and unbounded buffering
-  live, so each site must be a classified, deliberate act: the pinned
-  transport (`Cyfr.Network` — SSRF-validated IP, streaming byte caps),
-  the object store, the IdP sliver, or the two guest egress handlers.
+  live, so each site must be a classified, deliberate act: the control
+  plane's pinned transport, the auth domain's token POST, the object
+  store, the IdP sliver, or the two guest egress handlers.
   A new `Req`/`Finch`/`httpc` call fails here until someone classifies
   it — the fail-closed direction.
+
+  Deciding and connecting are separate, and only connecting is listed
+  here. `Cyfr.Network` (in the contracts) resolves the host once,
+  classifies the address and answers the options that connect to it with
+  redirects, retry, compression and body decoding all off; it holds no
+  HTTP client, so the layers below the host — the builder island among
+  them — can validate a destination without one in their tree. Every
+  `:pinned_*` row below is a few lines over that one decision, in the app
+  that already speaks HTTP. A row that starts deciding for itself is the
+  drift this inventory is for.
 
   The JS bridge (`apps/mcp-bridge/server.mjs`) is its own egress arm: it
   runs stdio MCP backends, which reach the network as their commands do,
   and speaks to them only over their stdio. It ships with the server, is
   scanned by nothing here, and is called out so this inventory is honest
-  about its edge. CYFR reaches the bridge through `Cyfr.Network`.
+  about its edge. CYFR reaches the bridge through `Cyfr.Egress`.
   """
 
   use ExUnit.Case, async: true
 
   @allowed %{
-    # The one pinned transport: SSRF validation and hostname-preserving IP
-    # pinning live here; its response is bounded while it streams
+    # The control plane's pinned transport: every OCI, registry, MCP and
+    # bridge request goes out here, to the address `Cyfr.Network.pin/2`
+    # validated, with its response bounded while it streams
     # (`Cyfr.BoundedBody`).
-    "apps/cyfr/lib/cyfr/network.ex" => :pinned_owner,
+    "apps/cyfr/lib/cyfr/egress.ex" => :pinned_owner,
+    # The OAuth token POST to a caller-supplied endpoint, pinned the same
+    # way under the operator's private-egress allowlist. The auth domain
+    # owns the few lines rather than reaching up to the host's transport;
+    # the decision is still `Cyfr.Network.pin/2`'s.
+    "apps/cyfr/lib/sanctum/vault/oauth.ex" => :pinned_token_exchange,
     # S3-compatible object store — operator-configured endpoint, SigV4.
     "apps/cyfr/lib/arca/adapters/s3.ex" => :object_store,
     # The IdP OAuth device-flow sliver: GitHub/Google fixed hosts, its own
@@ -89,7 +105,7 @@ defmodule Cyfr.EgressInventoryTest do
            the outbound-HTTP inventory changed.
 
            unclassified sites (add a row to @allowed with what they are,
-           or route them through Cyfr.Network):
+           or route them through a pinned site above):
              #{inspect(found -- allowed)}
 
            stale rows (the site no longer speaks HTTP):

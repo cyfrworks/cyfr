@@ -56,21 +56,10 @@ defmodule Arca.Schemas.TurnStep do
 
   @doc """
   What becomes of a step that was dispatched and never closed, read from
-  the row alone:
-
-    * `:unanswered` — a model request. It cannot be rebuilt and leaves no
-      effect to judge, so it closes as an error.
-    * `:replay` — a call reviewed replay-safe. It may be dispatched again.
-    * `:unknown` — a call a note flush proposed. It closes with an
-      `uncertain` outcome, is never replayed, and does not restrict the
-      turn.
-    * `:uncertain` — any other call. Its effect may have happened: it is
-      marked `uncertain`, the turn stops on it, and until a new turn only
-      replay-safe reads run.
+  the row alone — the rule is `Cyfr.TurnStep.unresolved/1`, where the loop
+  and the recovery table read it too. This head is the stored row's
+  spelling of it and takes nothing but a step.
   """
   @spec unresolved(t()) :: :unanswered | :replay | :unknown | :uncertain
-  def unresolved(%__MODULE__{kind: "model"}), do: :unanswered
-  def unresolved(%__MODULE__{recovery: "replay_safe"}), do: :replay
-  def unresolved(%__MODULE__{purpose: "flush"}), do: :unknown
-  def unresolved(%__MODULE__{}), do: :uncertain
+  def unresolved(%__MODULE__{} = step), do: Cyfr.TurnStep.unresolved(step)
 end

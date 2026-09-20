@@ -907,7 +907,7 @@ defmodule Emissary.MCP.ExternalServer do
       max_response_bytes: @max_response_body_bytes
     ]
 
-    case Cyfr.Network.pinned_request(:post, state.url, headers, json_body, opts) do
+    case Cyfr.Egress.pinned_request(:post, state.url, headers, json_body, opts) do
       {:ok, status, _headers, resp_body} when status in 200..299 ->
         with {:ok, parsed} <- parse_response(resp_body) do
           check_response_id(parsed, body)

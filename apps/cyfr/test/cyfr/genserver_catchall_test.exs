@@ -24,7 +24,7 @@ defmodule Cyfr.GenServerCatchallTest do
     {Prism.TelemetryBridge, "TelemetryBridge"},
     {Arca.AuditHandler, "AuditHandler"},
     {Prism.TinctureRegistry, "TinctureRegistry"},
-    {Cyfr.RecordSink, "RecordSink"},
+    {Arca.RecordSink, "RecordSink"},
     {Cyfr.RateLimiter, "RateLimiter"},
     {Cyfr.Execution.Rates, "Rates"},
     {Cyfr.Execution.Slots, "Slots"},

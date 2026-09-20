@@ -5,6 +5,10 @@ defmodule Cyfr.RateLimiter do
   @moduledoc """
   Fixed-window request rate limiting in a dedicated ETS table.
 
+  A shared primitive, started by the app that needs it — the control
+  plane starts one in its supervision tree, beside the rest of its
+  infrastructure — and holding nothing of any product's state.
+
   Kept separate from `Arca.Cache` on purpose: rate-limit keys are
   client-IP-derived, so their cardinality is **attacker-controlled**. Sharing a
   bounded table with sessions, OAuth CSRF state and tool metadata let a flood of

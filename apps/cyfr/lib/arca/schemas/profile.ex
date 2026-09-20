@@ -72,12 +72,10 @@ defmodule Arca.Schemas.Profile do
   end
 
   @doc """
-  The label rule in its typed form — what a consent verb answers when it
-  refuses a label on the sheet, before a plan token or proof is minted for
-  it, and what the insert answers when one reaches it anyway.
+  The label rule in its typed form — `Cyfr.Authority.RootSelect.check_label/1`,
+  which owns the rule this row is held to and which the consent verbs
+  answer with before a plan token or proof is minted for a label.
   """
   @spec check_label(term()) :: :ok | {:error, {:invalid_label, term()}}
-  def check_label(label) do
-    if RootSelect.valid_label?(label), do: :ok, else: {:error, {:invalid_label, label}}
-  end
+  defdelegate check_label(label), to: RootSelect
 end

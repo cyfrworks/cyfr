@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Cyfr.Egress do
+  @moduledoc """
+  The control plane's outbound arm: a request issued to the address
+  `Cyfr.Network.pin/2` validated, and nowhere else.
+
+  The decision is not here. Scheme, DNS resolution, the private and
+  metadata address classes, the operator's private-egress allowlist, the
+  `:resolver` seam and the fail-closed transport policy (no redirect, no
+  retry, no compression, no body decoding) are all `Cyfr.Network`'s, in
+  the contracts, where a layer with no HTTP client can still ask whether
+  a destination is allowed. What is here is the dozen lines that take
+  `pin/2`'s answer, add the caller's method, headers and body, and hand
+  it to `Req` — no branch in them that a compromised destination could
+  turn.
+
+  It is that way round on purpose. `Cyfr.Network` is reached by
+  everything, including the builder island, which declares four
+  dependencies and no HTTP client; putting `Req` behind it would put an
+  HTTP client in the release whose whole job is to run other people's
+  build tooling in a sandbox. `Opus.Egress` splits the same way for the
+  guest, and `Sanctum.Vault.OAuth` keeps its own for the token endpoint —
+  three sites, each in the app that already speaks HTTP, all deciding
+  through one `pin/2`. `Cyfr.EgressInventoryTest` is their roster.
+  """
+
+  import Cyfr.MapUtil, only: [put_unless_nil: 3]
+
+  @doc """
+  Issue an HTTP request with SSRF protection AND DNS-rebinding protection.
+
+  Resolves and validates the host once (`Cyfr.Network.pin/2`), then connects
+  to that validated IP while preserving the original hostname for SNI / cert
+  verification / `Host` (no second DNS resolution → no rebinding window). The
+  body is returned raw (no decompression/decoding) and redirects are NOT
+  followed, so callers stay in control of redirect validation.
+
+  Returns a Finch-style 4-tuple `{:ok, status, headers, body}` (headers as a
+  `[{name, value}]` list) or `{:error, reason}`.
+
+  ## Options
+
+    * `:private_policy` — see `Cyfr.Network.pin/2` (default `:deny`)
+    * `:resolver` — see `Cyfr.Network.pin/2` (default `:inet`)
+    * `:receive_timeout` — ms (default 30_000)
+    * `:protocols` — Mint protocols list (e.g. `[:http1]`)
+    * `:transport_opts` — extra Mint transport opts
+    * `:max_response_bytes` — enforce a response-size ceiling WHILE the
+      body streams in (via `Cyfr.BoundedBody.collector/1`), aborting the transfer
+      at the limit instead of buffering an arbitrarily large body first.
+      Exceeding it returns `{:error, {:response_too_large, size, max}}`.
+  """
+  @spec pinned_request(atom(), String.t(), [{String.t(), String.t()}], binary() | nil, keyword()) ::
+          {:ok, non_neg_integer(), [{String.t(), String.t()}], binary()} | {:error, term()}
+  def pinned_request(method, url, headers \\ [], body \\ nil, opts \\ []) do
+    # The identity semantics matter here: no accept-encoding and no decode
+    # (OCI digest verification hashes the body as received), no redirects,
+    # no Req-level retry — `pin/2` bakes exactly that policy in, and this
+    # adds only the method, the headers, the body and the ceiling.
+    case Cyfr.Network.pin(url, opts) do
+      {:ok, %{req_opts: req_opts}} ->
+        max_bytes = Keyword.get(opts, :max_response_bytes)
+
+        req_opts =
+          req_opts
+          |> Keyword.put(:method, method)
+          |> Keyword.put(:headers, headers)
+          |> put_unless_nil(:body, body)
+          |> put_unless_nil(:into, max_bytes && Cyfr.BoundedBody.collector(max_bytes))
+
+        case Req.request(req_opts) do
+          {:ok, %Req.Response{status: status, headers: resp_headers} = resp} ->
+            with {:ok, resp_body} <- response_body(resp, max_bytes) do
+              {:ok, status, flatten_headers(resp_headers), resp_body}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, _type, message} ->
+        {:error, message}
+    end
+  end
+
+  defp response_body(%Req.Response{body: body}, nil), do: {:ok, body}
+  defp response_body(resp, max_bytes), do: Cyfr.BoundedBody.read(resp, max_bytes)
+
+  # Req returns headers as %{name => [values]}; flatten to the [{name, value}]
+  # list shape the Finch-style callers expect.
+  defp flatten_headers(headers) when is_map(headers) do
+    Enum.flat_map(headers, fn {k, vs} ->
+      Enum.map(List.wrap(vs), &{to_string(k), to_string(&1)})
+    end)
+  end
+
+  defp flatten_headers(headers) when is_list(headers), do: headers
+end

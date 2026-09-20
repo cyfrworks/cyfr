@@ -24,7 +24,7 @@ defmodule Aqua.RoomExcerpt do
 
   @max_bytes 16 * 1024
   @rows 40
-  @agent_author Arca.Schemas.Message.agent_author()
+  @agent_author Cyfr.Author.agent()
 
   @typedoc "Which room, and how the person sees it named."
   @type room :: %{
