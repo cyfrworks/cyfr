@@ -181,7 +181,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
         selections: [%{dep: @dep, label: "work", fields: ["KEY"]}]
       })
 
-    {:ok, home_row} = Arca.VaultStorage.get(ctx.athanor_id, lenders.home_entry.id)
+    {:ok, home_row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), lenders.home_entry.id)
     {:ok, home_digest} = Sanctum.VaultReader.binding_digest(home_row)
 
     home_id = lenders.home_entry.id

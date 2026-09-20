@@ -291,7 +291,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         Map.put_new(attrs, :name, "attempt-fixture-#{System.unique_integer([:positive])}")
       )
 
-    {:ok, entry} = Arca.VaultStorage.get(ctx.athanor_id, view.id)
+    {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
     {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
     consent_id = Cyfr.UUID7.generate_id("cons")
 

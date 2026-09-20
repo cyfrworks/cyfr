@@ -15,6 +15,8 @@ defmodule Sanctum.VaultReaderTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
+  defp actor(ctx), do: Sanctum.Context.actor(ctx)
+
   defp mint_material_entry(ctx, fields, over \\ %{}) do
     id = Cyfr.UUID7.generate_id("vlt")
     hint = Map.get(over, :provider_hint, "")
@@ -25,7 +27,6 @@ defmodule Sanctum.VaultReaderTest do
 
     attrs = %{
       id: id,
-      athanor_id: ctx.athanor_id,
       name: Map.get(over, :name, "entry-#{id}"),
       provider_hint: hint,
       kind: Map.get(over, :kind, "api_key"),
@@ -36,7 +37,7 @@ defmodule Sanctum.VaultReaderTest do
       sealed_payload: sealed
     }
 
-    {:ok, entry} = Arca.VaultStorage.put(attrs)
+    {:ok, entry} = Arca.VaultStorage.put(actor(ctx), attrs)
     {:ok, digest} = VaultReader.binding_digest(entry)
     {entry, %{entry_id: entry.id, binding_digest: digest}}
   end
@@ -85,15 +86,37 @@ defmodule Sanctum.VaultReaderTest do
       assert {:error, :binding_mismatch} = VaultReader.fetch(ctx, resource)
     end
 
+    test "a reader in another athanor gets nothing, and not a different nothing", %{ctx: ctx} do
+      {_entry, resource} = mint_material_entry(ctx, %{"k" => "v"}, %{name: "a-only"})
+      foreign = %{ctx | athanor_id: "ath_other"}
+
+      # The entry's own athanor column says the row belongs to the test
+      # tenant; what decides the read is the caller's actor, and the answer
+      # is byte-identical to one for an id that exists nowhere — a
+      # different refusal would confirm the entry exists somewhere else.
+      assert {:error, :not_found} = VaultReader.fetch(foreign, resource)
+
+      assert VaultReader.fetch(foreign, resource) ==
+               VaultReader.fetch(foreign, %{resource | entry_id: "vlt_nonexistent"})
+
+      assert {:error, :not_found} = VaultReader.unseal_by_name("ath_other", "a-only")
+
+      assert {:error, :not_found} =
+               VaultReader.usable("ath_other", resource.entry_id, resource.binding_digest)
+
+      # The same reads inside the owning athanor still answer.
+      assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource)
+      assert {:ok, %{"k" => "v"}} = VaultReader.unseal_by_name(ctx.athanor_id, "a-only")
+    end
+
     test "a payload with unknown keys is refused at decode", %{ctx: ctx} do
       id = Cyfr.UUID7.generate_id("vlt")
       aad = CipherAAD.vault_entry(ctx.athanor_id, id, "")
       {:ok, sealed} = Sanctum.Cipher.encrypt(~s({"v":2,"fields":{},"extra":1}), aad)
 
       {:ok, entry} =
-        Arca.VaultStorage.put(%{
+        Arca.VaultStorage.put(actor(ctx), %{
           id: id,
-          athanor_id: ctx.athanor_id,
           name: "tampered",
           provider_hint: "",
           kind: "api_key",

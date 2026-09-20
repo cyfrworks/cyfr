@@ -16,7 +16,9 @@ defmodule Sanctum.Vault.OAuth do
   Refresh is single-flighted per **vault entry** on
   `{:vault_oauth_refresh, athanor_id, entry_id}` — the entry is the only route
   to a material bundle, so entry grain is exactly one lock per stored
-  refresh token.
+  refresh token. The athanor in the key, in every read and write below and
+  in the AEAD AAD is the CALLER's, carried on the actor; a row never names
+  the tenant that may act on it.
 
   INVARIANT: no database transaction is held across the provider HTTP
   call — the POST and the CAS write-back are sequential; serialization
@@ -36,18 +38,19 @@ defmodule Sanctum.Vault.OAuth do
   Dispense an access token from a v2 payload's oauth bundle, refreshing
   through the entry-keyed single-flight lock when expired.
   """
-  @spec dispense(Arca.Schemas.VaultEntry.t(), map(), String.t()) ::
+  @spec dispense(Cyfr.Actor.t(), Arca.VaultStorage.entry(), map(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
-  def dispense(entry, oauth, provider) do
+  def dispense(%Cyfr.Actor{athanor_id: athanor_id} = actor, entry, oauth, provider)
+      when is_binary(athanor_id) do
     if token_valid?(oauth) do
       {:ok, oauth["access_token"]}
     else
-      lock_key = {:vault_oauth_refresh, entry.athanor_id, entry.id}
+      lock_key = {:vault_oauth_refresh, athanor_id, entry.id}
 
       RefreshLock.run(
         lock_key,
-        fn -> refresh_as_leader(entry.athanor_id, entry.id, provider) end,
-        fn -> recheck(entry.athanor_id, entry.id) end
+        fn -> refresh_as_leader(actor, entry.id, provider) end,
+        fn -> recheck(actor, entry.id) end
       )
     end
   end
@@ -76,8 +79,8 @@ defmodule Sanctum.Vault.OAuth do
   # The leader re-reads the row inside the lock: a refresh that completed
   # between the caller's unseal and lock acquisition must be returned, not
   # repeated (the provider may have rotated the refresh token).
-  defp refresh_as_leader(athanor_id, entry_id, provider) do
-    with {:ok, entry, payload} <- load_fresh(athanor_id, entry_id) do
+  defp refresh_as_leader(actor, entry_id, provider) do
+    with {:ok, entry, payload} <- load_fresh(actor, entry_id) do
       oauth = payload["oauth"]
 
       cond do
@@ -94,15 +97,15 @@ defmodule Sanctum.Vault.OAuth do
               "(entry #{entry_id})"}}
 
         true ->
-          perform_refresh(entry, payload, oauth, provider)
+          perform_refresh(actor, entry, payload, oauth, provider)
       end
     end
   end
 
   # A follower re-reads after the leader finished; :stale hands leadership
   # to the next caller (bounded by RefreshLock's retry count).
-  defp recheck(athanor_id, entry_id) do
-    case load_fresh(athanor_id, entry_id) do
+  defp recheck(actor, entry_id) do
+    case load_fresh(actor, entry_id) do
       {:ok, _entry, %{"oauth" => oauth}} when is_map(oauth) ->
         if token_valid?(oauth), do: {:ok, oauth["access_token"]}, else: :stale
 
@@ -111,7 +114,7 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
-  defp perform_refresh(entry, payload, oauth, provider) do
+  defp perform_refresh(actor, entry, payload, oauth, provider) do
     endpoints = decode_endpoints(entry.oauth_endpoints)
 
     with {:ok, token_url} <- fetch_token_url(endpoints),
@@ -119,7 +122,7 @@ defmodule Sanctum.Vault.OAuth do
          # telemetry fires — a refresh token is never sent in the clear,
          # and the same rule runs again inside http_post for every caller.
          :ok <- require_https(token_url, :refresh_token),
-         {:ok, creds} <- fetch_provider_creds(entry, provider) do
+         {:ok, creds} <- fetch_provider_creds(actor, provider) do
       body_params = %{
         "grant_type" => "refresh_token",
         "refresh_token" => oauth["refresh_token"]
@@ -134,7 +137,7 @@ defmodule Sanctum.Vault.OAuth do
 
       case http_post(token_url, headers, URI.encode_query(body_params)) do
         {:ok, response} ->
-          write_back(entry, apply_refresh_response(payload, oauth, response), oauth)
+          write_back(actor, entry, apply_refresh_response(payload, oauth, response), oauth)
 
         {:error, reason} ->
           emit_telemetry(entry, entry.provider_hint, :error)
@@ -153,26 +156,26 @@ defmodule Sanctum.Vault.OAuth do
   # re-consent). The conflict is resolved by what the rotate actually
   # wrote — see merge_after_conflict/3. Public for tests, like
   # apply_refresh_response/3: the HTTP half is exercised separately.
-  def write_back(entry, new_payload, consumed_oauth) do
-    case seal_and_cas(entry, new_payload) do
+  def write_back(%Cyfr.Actor{} = actor, entry, new_payload, consumed_oauth) do
+    case seal_and_cas(actor, entry, new_payload) do
       :ok ->
         emit_telemetry(entry, entry.provider_hint, :ok)
         {:ok, get_in(new_payload, ["oauth", "access_token"])}
 
       {:error, :payload_conflict} ->
-        merge_after_conflict(entry, new_payload, consumed_oauth)
+        merge_after_conflict(actor, entry, new_payload, consumed_oauth)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp seal_and_cas(entry, new_payload) do
-    aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
+  defp seal_and_cas(%Cyfr.Actor{athanor_id: athanor_id} = actor, entry, new_payload) do
+    aad = CipherAAD.vault_entry(athanor_id, entry.id, entry.provider_hint)
 
     with {:ok, json} <- encode_payload(new_payload),
          {:ok, sealed} <- Sanctum.Cipher.encrypt(json, aad) do
-      Arca.VaultStorage.rotate_payload(entry.athanor_id, entry.id, entry.payload_rev, sealed)
+      Arca.VaultStorage.rotate_payload(actor, entry.id, entry.payload_rev, sealed)
     end
   end
 
@@ -187,8 +190,8 @@ defmodule Sanctum.Vault.OAuth do
   #     this refresh, so the refreshed bundle is folded into the fresh
   #     payload (the rotate's fields win) and written once more. A second
   #     conflict gives up rather than looping.
-  defp merge_after_conflict(entry, refreshed_payload, consumed_oauth) do
-    with {:ok, fresh_entry, fresh_payload} <- load_fresh(entry.athanor_id, entry.id) do
+  defp merge_after_conflict(actor, entry, refreshed_payload, consumed_oauth) do
+    with {:ok, fresh_entry, fresh_payload} <- load_fresh(actor, entry.id) do
       fresh_oauth = fresh_payload["oauth"]
 
       cond do
@@ -203,7 +206,7 @@ defmodule Sanctum.Vault.OAuth do
         true ->
           merged = Map.put(fresh_payload, "oauth", refreshed_payload["oauth"])
 
-          case seal_and_cas(fresh_entry, merged) do
+          case seal_and_cas(actor, fresh_entry, merged) do
             :ok ->
               emit_telemetry(fresh_entry, fresh_entry.provider_hint, :ok)
               {:ok, get_in(merged, ["oauth", "access_token"])}
@@ -225,10 +228,10 @@ defmodule Sanctum.Vault.OAuth do
   # Pieces
   # ---------------------------------------------------------------------------
 
-  defp load_fresh(athanor_id, entry_id) do
-    with {:ok, entry} <- Arca.VaultStorage.get(athanor_id, entry_id),
+  defp load_fresh(%Cyfr.Actor{athanor_id: athanor_id} = actor, entry_id) do
+    with {:ok, entry} <- Arca.VaultStorage.get(actor, entry_id),
          {:ok, sealed} <- fetch_sealed(entry) do
-      aad = CipherAAD.vault_entry(entry.athanor_id, entry.id, entry.provider_hint)
+      aad = CipherAAD.vault_entry(athanor_id, entry.id, entry.provider_hint)
 
       with {:ok, plaintext} <- Sanctum.Cipher.decrypt(sealed, aad),
            {:ok, payload} <- Payload.decode(plaintext) do
@@ -256,8 +259,8 @@ defmodule Sanctum.Vault.OAuth do
   defp fetch_token_url(%{"token_url" => url}) when is_binary(url), do: {:ok, url}
   defp fetch_token_url(_), do: {:error, :no_token_url}
 
-  defp fetch_provider_creds(entry, provider) do
-    Sanctum.ProviderCredentials.fetch_for_oauth(entry.athanor_id, provider)
+  defp fetch_provider_creds(%Cyfr.Actor{athanor_id: athanor_id}, provider) do
+    Sanctum.ProviderCredentials.fetch_for_oauth(athanor_id, provider)
   end
 
   @doc false

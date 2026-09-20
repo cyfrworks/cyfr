@@ -221,8 +221,8 @@ defmodule MultiTenantIsolationTest do
 
       # Storage-level get is athanor-keyed: B's entry id is invisible
       # through A's athanor.
-      assert {:error, :not_found} = Arca.VaultStorage.get(ctx_a.athanor_id, b_only.id)
-      assert {:ok, _} = Arca.VaultStorage.get(ctx_b.athanor_id, b_only.id)
+      assert {:error, :not_found} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx_a), b_only.id)
+      assert {:ok, _} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx_b), b_only.id)
     end
 
     test "no Sanctum.Vault verb reaches another athanor's entry by id",
@@ -244,10 +244,11 @@ defmodule MultiTenantIsolationTest do
 
       # And the consent walk cannot bind it: the commit-side entry fetch is
       # athanor-keyed too.
-      assert {:error, :not_found} = Arca.VaultStorage.get(ctx_a.athanor_id, b_entry.id)
+      assert {:error, :not_found} =
+               Arca.VaultStorage.get(Sanctum.Context.actor(ctx_a), b_entry.id)
 
       # The owner athanor still sees it untouched.
-      assert {:ok, row} = Arca.VaultStorage.get(ctx_b.athanor_id, b_entry.id)
+      assert {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx_b), b_entry.id)
       assert row.status == "active"
       assert row.name == "b-cred"
     end
@@ -318,25 +319,29 @@ defmodule MultiTenantIsolationTest do
         Sanctum.Context.require_tenant!(ctx)
       end
 
-      assert_raise KeyError, fn ->
-        Arca.VaultStorage.put(%{
-          name: "unresolved-probe",
-          kind: "api_key",
-          status: "active",
-          sealed_payload: <<4, 2, "k1", 0>>
-        })
-      end
+      attrs = %{
+        name: "unresolved-probe",
+        kind: "api_key",
+        status: "active",
+        sealed_payload: <<4, 2, "k1", 0>>
+      }
 
-      refute match?(
-               {:ok, _},
-               Arca.VaultStorage.put(%{
-                 athanor_id: nil,
-                 name: "unresolved-probe",
-                 kind: "api_key",
-                 status: "active",
-                 sealed_payload: <<4, 2, "k1", 0>>
-               })
-             )
+      # The facade takes the tenant from the actor and has no fallback:
+      # an actor with no athanor is a refusal, before any query.
+      assert {:error, :no_athanor} =
+               Arca.VaultStorage.put(Sanctum.Context.actor(ctx), attrs)
+
+      # And an athanor supplied as an argument is not a tenant at all —
+      # neither a context, nor a bare id, nor a value smuggled in the
+      # attributes selects one.
+      assert_raise FunctionClauseError, fn -> Arca.VaultStorage.put(ctx, attrs) end
+
+      assert_raise ArgumentError, fn ->
+        Arca.VaultStorage.put(
+          %Cyfr.Actor{athanor_id: "ath_other"},
+          Map.put(attrs, :athanor_id, "ath_other")
+        )
+      end
     end
 
     test "Sanctum.Webhook.create raises at the chokepoint", %{unresolved: ctx} do

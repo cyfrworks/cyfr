@@ -32,8 +32,7 @@ defmodule Arca.ConsentStorageTest do
 
   defp entry!(athanor) do
     {:ok, entry} =
-      VaultStorage.put(%{
-        athanor_id: athanor,
+      VaultStorage.put(%Cyfr.Actor{athanor_id: athanor}, %{
         name: "entry-#{System.unique_integer([:positive])}",
         kind: "api_key",
         sealed_payload: "sealed"

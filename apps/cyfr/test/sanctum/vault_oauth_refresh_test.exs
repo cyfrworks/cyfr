@@ -23,6 +23,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     "token_type" => "bearer"
   }
 
+  defp actor(ctx), do: Sanctum.Context.actor(ctx)
+
   defp mint_oauth_entry(ctx, oauth, over \\ %{}) do
     id = Cyfr.UUID7.generate_id("vlt")
     aad = CipherAAD.vault_entry(ctx.athanor_id, id, "google")
@@ -31,9 +33,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
     {:ok, entry} =
-      Arca.VaultStorage.put(%{
+      Arca.VaultStorage.put(actor(ctx), %{
         id: id,
-        athanor_id: ctx.athanor_id,
         name: "oauth-#{id}",
         provider_hint: "google",
         kind: "oauth",
@@ -52,8 +53,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       Payload.encode_material(%{}, %{"access_token" => token, "token_type" => "bearer"})
 
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
-    {:ok, fresh} = Arca.VaultStorage.get(ctx.athanor_id, entry.id)
-    :ok = Arca.VaultStorage.rotate_payload(ctx.athanor_id, entry.id, fresh.payload_rev, sealed)
+    {:ok, fresh} = Arca.VaultStorage.get(actor(ctx), entry.id)
+    :ok = Arca.VaultStorage.rotate_payload(actor(ctx), entry.id, fresh.payload_rev, sealed)
   end
 
   defp attach_attempt_counter do
@@ -114,7 +115,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       reseal_valid(ctx, entry, "tok-already-fresh")
 
       assert {:ok, "tok-already-fresh"} =
-               Sanctum.Vault.OAuth.dispense(entry, @expired, "google")
+               Sanctum.Vault.OAuth.dispense(actor(ctx), entry, @expired, "google")
 
       assert :counters.get(counter, 1) == 0
     end
@@ -163,16 +164,16 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     end
   end
 
-  describe "Arca.VaultStorage.rotate_payload/4 (the CAS)" do
+  describe "Arca.VaultStorage.rotate_payload/4 — the bare CAS" do
     test "the loser of a revision race gets payload_conflict", %{ctx: ctx} do
       {entry, _resource} = mint_oauth_entry(ctx, @expired)
 
-      assert :ok = Arca.VaultStorage.rotate_payload(ctx.athanor_id, entry.id, 0, "sealed-a")
+      assert :ok = Arca.VaultStorage.rotate_payload(actor(ctx), entry.id, 0, "sealed-a")
 
       assert {:error, :payload_conflict} =
-               Arca.VaultStorage.rotate_payload(ctx.athanor_id, entry.id, 0, "sealed-b")
+               Arca.VaultStorage.rotate_payload(actor(ctx), entry.id, 0, "sealed-b")
 
-      {:ok, row} = Arca.VaultStorage.get(ctx.athanor_id, entry.id)
+      {:ok, row} = Arca.VaultStorage.get(actor(ctx), entry.id)
       assert row.payload_rev == 1
       assert row.sealed_payload == "sealed-a"
     end
@@ -217,17 +218,17 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     end
   end
 
-  describe "write_back/3 — a rotate landing mid-refresh" do
+  describe "write_back/4 — a rotate landing mid-refresh" do
     defp rotate_behind!(ctx, entry, fields, oauth) do
       aad = CipherAAD.vault_entry(ctx.athanor_id, entry.id, "google")
       {:ok, json} = Payload.encode_material(fields, oauth)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
-      {:ok, fresh} = Arca.VaultStorage.get(ctx.athanor_id, entry.id)
-      :ok = Arca.VaultStorage.rotate_payload(ctx.athanor_id, entry.id, fresh.payload_rev, sealed)
+      {:ok, fresh} = Arca.VaultStorage.get(actor(ctx), entry.id)
+      :ok = Arca.VaultStorage.rotate_payload(actor(ctx), entry.id, fresh.payload_rev, sealed)
     end
 
     defp unseal!(ctx, entry_id) do
-      {:ok, row} = Arca.VaultStorage.get(ctx.athanor_id, entry_id)
+      {:ok, row} = Arca.VaultStorage.get(actor(ctx), entry_id)
       aad = CipherAAD.vault_entry(ctx.athanor_id, entry_id, "google")
       {:ok, plaintext} = Sanctum.Cipher.decrypt(row.sealed_payload, aad)
       {:ok, payload} = Payload.decode(plaintext)
@@ -250,7 +251,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
       # The provider has already rotated rt-1 → rt-2; losing this response
       # would strand the entry in re-consent.
-      assert {:ok, "tok-new"} = Sanctum.Vault.OAuth.write_back(entry, refreshed, @expired)
+      assert {:ok, "tok-new"} =
+               Sanctum.Vault.OAuth.write_back(actor(ctx), entry, refreshed, @expired)
 
       stored = unseal!(ctx, entry.id)
       assert stored["fields"] == %{"api_key" => "rotated-field"}
@@ -278,7 +280,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
       # The refresh descends from a token family the re-auth abandoned; the
       # rotate's material stands and its token is what the caller gets.
-      assert {:ok, "tok-rotate"} = Sanctum.Vault.OAuth.write_back(entry, refreshed, @expired)
+      assert {:ok, "tok-rotate"} =
+               Sanctum.Vault.OAuth.write_back(actor(ctx), entry, refreshed, @expired)
 
       stored = unseal!(ctx, entry.id)
       assert stored["oauth"]["access_token"] == "tok-rotate"

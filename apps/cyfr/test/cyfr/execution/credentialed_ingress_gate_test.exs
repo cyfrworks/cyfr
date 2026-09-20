@@ -32,9 +32,8 @@ defmodule Cyfr.Execution.CredentialedIngressGateTest do
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
     {:ok, entry} =
-      Arca.VaultStorage.put(%{
+      Arca.VaultStorage.put(Sanctum.Context.actor(ctx), %{
         id: id,
-        athanor_id: ctx.athanor_id,
         name: "gate-entry",
         provider_hint: "",
         kind: "api_key",
