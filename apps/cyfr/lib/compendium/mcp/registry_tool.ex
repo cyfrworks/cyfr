@@ -748,7 +748,7 @@ defmodule Compendium.MCP.RegistryTool do
   # put fails — partial failure is non-fatal, each namespace is independent.
   defp maybe_store_probe_credentials(%Context{user_id: user_id}, body)
        when is_binary(user_id) and user_id != "" do
-    case Sanctum.SignIn.absorb_probe(user_id, body) do
+    case Compendium.SignInSync.absorb_probe(user_id, body) do
       [] -> body
       warnings -> Map.put(body, "credential_store_warnings", warnings)
     end

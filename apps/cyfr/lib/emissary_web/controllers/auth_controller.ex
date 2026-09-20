@@ -144,7 +144,7 @@ defmodule EmissaryWeb.AuthController do
 
     with {:ok, ctx} <- authenticate_with_provider(auth),
          {:ok, ctx, user} <- admit(ctx, auth) do
-      {:proceed, user, report} = Sanctum.SignIn.complete(user, provider, access_token)
+      {:proceed, user, report} = Compendium.SignInSync.complete(user, provider, access_token)
 
       # The athanor may have been minted a moment ago: resolve again so the
       # session names it. A failed read here answers 503 with no session —
@@ -247,7 +247,7 @@ defmodule EmissaryWeb.AuthController do
         with {:ok, peeked} <- Sanctum.Caller.peek(session_token),
              {:ok, user} <- Sanctum.Tenancy.Users.get(peeked.user_id) do
           provider = peeked.provider || "github"
-          {:proceed, user, report} = Sanctum.SignIn.complete(user, provider, access_token)
+          {:proceed, user, report} = Compendium.SignInSync.complete(user, provider, access_token)
 
           # The token stays for the claim that may follow the acceptance.
           SignInResponse.respond(conn, {:proceed, report},

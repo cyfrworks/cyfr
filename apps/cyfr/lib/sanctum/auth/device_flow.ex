@@ -542,13 +542,21 @@ defmodule Sanctum.Auth.DeviceFlow do
   # What follows the door. The sign-in report travels intact on the result
   # — surfaces read it, never a re-derived flag; `wire/1` flattens it for
   # the CLI. The IdP token never travels: nothing after the door needs it.
-  defp complete(user, ctx, user_info, provider, access_token) do
+  #
+  # And nothing here probes cyfr.run. The probe is the component domain's
+  # (`Compendium.SignInSync`), which sits above Sanctum and cannot be
+  # called from inside it; reaching it would mean handing the IdP token up
+  # out of the door, which is the one thing this module's own invariant
+  # forbids. So a CLI sign-in reports `:skipped` and records no namespace
+  # and no push token. The `registry` tool's re-probe does both on request,
+  # which is an explicit ask rather than a credential travelling silently.
+  defp complete(user, ctx, user_info, _provider, _access_token) do
     base = %{
       status: "complete",
       user: %{id: user_info.id, email: user_info.email, name: user_info.name}
     }
 
-    {:proceed, user, report} = Sanctum.SignIn.complete(user, provider, access_token)
+    report = %{unsynced: [], probe: :skipped}
     with_session(base, %{ctx | namespace: user.namespace}, %{outcome: {:proceed, report}})
   end
 

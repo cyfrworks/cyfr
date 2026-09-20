@@ -32,7 +32,6 @@ defmodule Sanctum.SignIn do
   require Logger
 
   alias Arca.Schemas.User
-  alias Compendium.Registry.CredentialStore
   alias Sanctum.Slug
   alias Sanctum.Tenancy.{Members, Users}
 
@@ -54,11 +53,6 @@ defmodule Sanctum.SignIn do
           :ok | :skipped | :failed | :invalid_token | :legal_required | :namespace_conflict
   @type report :: %{unsynced: [String.t()], probe: probe()}
   @type outcome :: {:proceed, User.t(), report()}
-
-  # Nobody is held at the door by a black-holed registry: the probe gets
-  # this long, then the person proceeds and the push tokens are refreshed
-  # by the next probe. (Configurable for tests.)
-  @returning_probe_ms 5_000
 
   @doc """
   Record the admitted sign-in. `user_info` carries `id`, `provider`,
@@ -91,45 +85,6 @@ defmodule Sanctum.SignIn do
         {:error, reason} -> {:error, reason}
         _ -> Users.get(user_id)
       end
-    end
-  end
-
-  @doc """
-  What follows the door: probe cyfr.run with the IdP `access_token`,
-  absorb what it says, and proceed. See `t:report/0`.
-  """
-  @spec complete(User.t(), String.t() | atom(), String.t() | nil) :: outcome()
-  def complete(%User{} = user, _provider, access_token)
-      when not is_binary(access_token) or access_token == "" do
-    Logger.info(
-      "[Sanctum.SignIn] no IdP access token for #{user.id} — signing in without a probe"
-    )
-
-    {:proceed, user, %{unsynced: [], probe: :skipped}}
-  end
-
-  def complete(%User{} = user, provider, access_token) do
-    if Compendium.RegistryHost.configured?() do
-      case probe(provider, access_token) do
-        {:ok, body} ->
-          absorb(user, body)
-
-        {:error, :invalid_access_token} ->
-          {:proceed, user, %{unsynced: [], probe: :invalid_token}}
-
-        {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required}} ->
-          {:proceed, user, %{unsynced: [], probe: :legal_required}}
-
-        {:error, reason} ->
-          Logger.warning(
-            "[Sanctum.SignIn] cyfr.run probe failed for #{user.id} (#{inspect(reason)}) — " <>
-              "signing in without it"
-          )
-
-          {:proceed, user, %{unsynced: [], probe: :failed}}
-      end
-    else
-      {:proceed, user, %{unsynced: [], probe: :skipped}}
     end
   end
 
@@ -192,85 +147,6 @@ defmodule Sanctum.SignIn do
   end
 
   @doc """
-  Absorb a cyfr.run probe body for a signed-in person outside `complete/3`
-  (a re-probe from the CLI or after legal acceptance): record the
-  namespace, cache the push tokens. Returns the slugs whose tokens could
-  not be cached.
-  """
-  @spec absorb_probe(String.t(), map()) :: [String.t()]
-  def absorb_probe(user_id, %{} = body) when is_binary(user_id) do
-    personal = body["personal_namespace"]
-
-    case slug_of(personal) do
-      slug when is_binary(slug) ->
-        case record_namespace(user_id, slug) do
-          {:ok, _} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("[Sanctum.SignIn] namespace not recorded: #{inspect(reason)}")
-        end
-
-      _ ->
-        :ok
-    end
-
-    store_tokens(user_id, personal, body["memberships"] || [])
-  end
-
-  # The registry is a courtesy (push tokens, a namespace it already knows),
-  # never the door: the probe is budgeted for everyone.
-  defp probe(provider, access_token) do
-    logger_metadata = Cyfr.LoggerContext.capture()
-
-    task =
-      Task.Supervisor.async_nolink(Sanctum.ProvisioningSupervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
-        Compendium.Registry.Client.probe_identity(provider, access_token)
-      end)
-
-    budget = Application.get_env(:cyfr, :returning_probe_ms, @returning_probe_ms)
-
-    case Task.yield(task, budget) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} -> result
-      {:exit, reason} -> {:error, {:probe_exit, reason}}
-      nil -> {:error, :timeout}
-    end
-  end
-
-  defp absorb(user, body) do
-    personal = body["personal_namespace"]
-    memberships = body["memberships"] || []
-
-    case slug_of(personal) do
-      slug when is_binary(slug) ->
-        case record_namespace(user.id, slug) do
-          {:ok, user} ->
-            {:proceed, user, report(store_tokens(user.id, personal, memberships))}
-
-          {:error, :namespace_owned_by_another_identity} ->
-            Logger.error(
-              "[Sanctum.SignIn] cyfr.run names #{user.id} #{inspect(slug)}, which another " <>
-                "identity on this server holds — not recorded; reconcile it at cyfr.run"
-            )
-
-            {:proceed, user, %{unsynced: [], probe: :namespace_conflict}}
-
-          {:error, reason} ->
-            Logger.warning("[Sanctum.SignIn] namespace not recorded: #{inspect(reason)}")
-            {:proceed, user, %{unsynced: [], probe: :failed}}
-        end
-
-      _ ->
-        # No publisher namespace yet: theirs to claim when they first
-        # publish. The memberships' tokens are cached regardless.
-        {:proceed, user, report(store_tokens(user.id, nil, memberships))}
-    end
-  end
-
-  defp report(unsynced), do: %{unsynced: unsynced, probe: :ok}
-
-  @doc """
   The slug to suggest when a person claims a publisher namespace: their
   screen name, else the address's local part, else a provider-flavoured
   placeholder.
@@ -283,31 +159,6 @@ defmodule Sanctum.SignIn do
   # Push tokens are cached best-effort: a failed write costs a re-probe,
   # never the sign-in. `:skipped` (no token in the body) is not a failure —
   # the identity was recorded from the slug regardless.
-  defp store_tokens(user_id, personal, memberships) do
-    registry = Compendium.RegistryHost.canonical_host()
-
-    entries =
-      case personal do
-        %{} = p -> [{slug_of(p), token_of(p), "personal"} | membership_entries(memberships)]
-        _ -> membership_entries(memberships)
-      end
-
-    for {slug, token, role} <- entries,
-        match?({:error, _}, CredentialStore.put_push_token(user_id, registry, slug, token, role)),
-        do: slug
-  end
-
-  defp membership_entries(memberships) when is_list(memberships) do
-    for m <- memberships, is_map(m), do: {slug_of(m), token_of(m), role_of(m)}
-  end
-
-  defp membership_entries(_), do: []
-
-  defp slug_of(%{} = m), do: m["slug"] || m[:slug]
-  defp slug_of(_), do: nil
-  defp token_of(%{} = m), do: m["token"] || m[:token]
-  defp role_of(%{} = m), do: m["role"] || m[:role] || "member"
-
   # What to put in the claim box. The provider's own screen name is the
   # closest thing to what the person calls themselves — an
   # `alice.smith+work@` address suggests `alice-smith-work` when the GitHub

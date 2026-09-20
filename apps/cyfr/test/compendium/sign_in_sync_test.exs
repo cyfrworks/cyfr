@@ -1,17 +1,31 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.SignInCompleteTest do
+defmodule Compendium.SignInSyncTest do
   @moduledoc """
-  The courtesy both sign-in paths extend after the door: a budgeted probe
+  The courtesy the web sign-in extends after the door: a budgeted probe
   of cyfr.run for the person's publisher namespace and push tokens.
   Whatever the registry answers, the person proceeds; the report says how
   it answered. Push tokens are cached best-effort; a namespace lands on
   the users row first.
+
+  It lives here, not beside `Sanctum.SignIn`, because everything it does
+  is the component domain's. The CLI device flow does not probe at all —
+  `Sanctum.Auth.DeviceFlow` cannot reach a registry from below, and
+  handing the IdP token up to reach one is what its own invariant
+  forbids, so a CLI sign-in reports `probe: :skipped` and records nothing.
+
+  What holds that is structural rather than a case here: the device flow
+  completes inside `lib/sanctum`, and `Compendium.ReverseSurfaceTest`
+  asserts that nothing in `lib/sanctum` names a Compendium module at all.
+  A probe reintroduced on that path would have to name one, and would
+  fail that roster. There is no end-to-end case because completion needs
+  a real IdP round trip, which the suite does not make.
   """
   use ExUnit.Case, async: false
 
   alias Compendium.Registry.CredentialStore
+  alias Compendium.SignInSync
   alias Sanctum.SignIn
   alias Sanctum.Tenancy.{Athanors, Users}
 
@@ -92,7 +106,7 @@ defmodule Sanctum.SignInCompleteTest do
       })
 
       assert {:proceed, %{namespace: ns}, %{unsynced: [], probe: :ok}} =
-               SignIn.complete(user, "github", "gho_access")
+               SignInSync.complete(user, "github", "gho_access")
 
       assert ns == "first#{n}"
       assert {:ok, %{namespace: ^ns, personal_athanor_id: pid}} = Users.get(user.id)
@@ -112,7 +126,7 @@ defmodule Sanctum.SignInCompleteTest do
       probe_answers(bypass, 200, %{"personal_namespace" => %{"slug" => "tokenless#{n}"}})
 
       assert {:proceed, %{namespace: ns}, %{unsynced: [], probe: :ok}} =
-               SignIn.complete(user, "github", "gho_access")
+               SignInSync.complete(user, "github", "gho_access")
 
       assert ns == "tokenless#{n}"
       assert :not_found = CredentialStore.get(user.id, "registry.test", ns)
@@ -128,7 +142,7 @@ defmodule Sanctum.SignInCompleteTest do
       })
 
       assert {:proceed, %{namespace: nil}, %{unsynced: [], probe: :ok}} =
-               SignIn.complete(user, "github", "gho_access")
+               SignInSync.complete(user, "github", "gho_access")
 
       assert {:ok, %{namespace: nil}} = Users.get(user.id)
 
@@ -165,7 +179,7 @@ defmodule Sanctum.SignInCompleteTest do
       })
 
       assert {:proceed, _, %{probe: :legal_required}} =
-               SignIn.complete(user, "github", "gho_access")
+               SignInSync.complete(user, "github", "gho_access")
     end
 
     test "401, 5xx and no token each sign the person in with the reason reported", %{
@@ -173,13 +187,15 @@ defmodule Sanctum.SignInCompleteTest do
     } do
       user = person()
       probe_answers(bypass, 401, %{"error" => "invalid_access_token"})
-      assert {:proceed, _, %{probe: :invalid_token}} = SignIn.complete(user, "github", "expired")
+
+      assert {:proceed, _, %{probe: :invalid_token}} =
+               SignInSync.complete(user, "github", "expired")
 
       probe_answers(bypass, 500, %{"error" => "internal"}, repeat: true)
-      assert {:proceed, _, %{probe: :failed}} = SignIn.complete(user, "github", "gho_access")
+      assert {:proceed, _, %{probe: :failed}} = SignInSync.complete(user, "github", "gho_access")
       assert {:ok, %{namespace: nil}} = Users.get(user.id)
 
-      assert {:proceed, _, %{probe: :skipped}} = SignIn.complete(user, "github", nil)
+      assert {:proceed, _, %{probe: :skipped}} = SignInSync.complete(user, "github", nil)
     end
 
     test "a slug another identity here holds is reported, not recorded, and not a refusal", %{
@@ -193,7 +209,7 @@ defmodule Sanctum.SignInCompleteTest do
       })
 
       assert {:proceed, _, %{probe: :namespace_conflict}} =
-               SignIn.complete(user, "github", "gho_access")
+               SignInSync.complete(user, "github", "gho_access")
 
       assert {:ok, %{namespace: nil}} = Users.get(user.id)
     end
@@ -203,7 +219,7 @@ defmodule Sanctum.SignInCompleteTest do
       user = person()
 
       assert {:proceed, %{namespace: nil}, %{unsynced: [], probe: :skipped}} =
-               SignIn.complete(user, "github", "gho_access")
+               SignInSync.complete(user, "github", "gho_access")
     end
   end
 
@@ -216,7 +232,7 @@ defmodule Sanctum.SignInCompleteTest do
       })
 
       assert {:proceed, %{namespace: "returning-ok"}, %{unsynced: [], probe: :ok}} =
-               SignIn.complete(user, "github", "gho_access")
+               SignInSync.complete(user, "github", "gho_access")
 
       assert {:ok, %{token: "cyfr_pt_fresh"}} =
                CredentialStore.get(user.id, "registry.test", "returning-ok")
@@ -228,16 +244,18 @@ defmodule Sanctum.SignInCompleteTest do
       user = person("returning-offline")
 
       Bypass.down(bypass)
-      assert {:proceed, _, %{probe: :failed}} = SignIn.complete(user, "github", "gho_access")
+      assert {:proceed, _, %{probe: :failed}} = SignInSync.complete(user, "github", "gho_access")
       Bypass.up(bypass)
 
       probe_answers(bypass, 401, %{"error" => "invalid_access_token"})
-      assert {:proceed, _, %{probe: :invalid_token}} = SignIn.complete(user, "github", "expired")
+
+      assert {:proceed, _, %{probe: :invalid_token}} =
+               SignInSync.complete(user, "github", "expired")
 
       probe_answers(bypass, 500, %{"error" => "internal"}, repeat: true)
-      assert {:proceed, _, %{probe: :failed}} = SignIn.complete(user, "github", "gho_access")
+      assert {:proceed, _, %{probe: :failed}} = SignInSync.complete(user, "github", "gho_access")
 
-      assert {:proceed, _, %{probe: :skipped}} = SignIn.complete(user, "github", nil)
+      assert {:proceed, _, %{probe: :skipped}} = SignInSync.complete(user, "github", nil)
       assert {:ok, %{namespace: "returning-offline"}} = Users.get(user.id)
     end
 
@@ -249,7 +267,7 @@ defmodule Sanctum.SignInCompleteTest do
         json_resp(conn, 200, %{})
       end)
 
-      {us, result} = :timer.tc(fn -> SignIn.complete(user, "github", "gho_access") end)
+      {us, result} = :timer.tc(fn -> SignInSync.complete(user, "github", "gho_access") end)
       assert {:proceed, _, %{probe: :failed}} = result
       assert us < 1_500_000
       # The stranded handler must not fail the test as an unmet expectation.
@@ -263,10 +281,12 @@ defmodule Sanctum.SignInCompleteTest do
       probe_answers(bypass, 412, %{"errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}]})
 
       assert {:proceed, %{namespace: "returning-legal"}, %{probe: :legal_required}} =
-               SignIn.complete(user, "github", "gho_access")
+               SignInSync.complete(user, "github", "gho_access")
 
       probe_answers(bypass, 200, %{"personal_namespace" => nil})
-      assert {:proceed, %{namespace: "returning-legal"}, _} = SignIn.complete(user, "github", "x")
+
+      assert {:proceed, %{namespace: "returning-legal"}, _} =
+               SignInSync.complete(user, "github", "x")
     end
   end
 
@@ -280,7 +300,7 @@ defmodule Sanctum.SignInCompleteTest do
         "memberships" => [%{"slug" => "acme.com", "token" => "cyfr_pt_m", "role" => "member"}]
       }
 
-      assert [] = SignIn.absorb_probe(user.id, body)
+      assert [] = SignInSync.absorb_probe(user.id, body)
       assert {:ok, %{namespace: ns}} = Users.get(user.id)
       assert ns == "absorbed#{n}"
 

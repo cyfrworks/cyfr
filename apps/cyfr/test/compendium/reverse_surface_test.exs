@@ -19,15 +19,25 @@ defmodule Compendium.ReverseSurfaceTest do
   (`Cyfr.ComponentSource`). An empty roster only means something while
   the scan still reads, so the case below asserts that too.
 
-  `lib/sanctum` crosses the license boundary (FSL calling Apache-2.0) and
-  is down to the sign-in probe alone. Everything consent reads about a
-  component now comes through the `Sanctum.Consent.Components` port, and
-  every shape the two domains agree on — a manifest's `needs` and `caps`
-  blocks, the component path, an activation node key, a name's newest row,
-  an agent ref — lives in the contracts. What is left is the one thing a
-  resolved value cannot replace: the probe of cyfr.run at first sign-in,
-  which needs the IdP access token, and the token must not travel past the
-  door.
+  `lib/sanctum` crossed the license boundary (FSL calling Apache-2.0) and
+  its roster is **empty** too. Everything consent reads about a component
+  comes through the `Sanctum.Consent.Components` port, and every shape the
+  two domains agree on — a manifest's `needs` and `caps` blocks, the
+  component path, an activation node key, a name's newest row, an agent
+  ref — lives in the contracts. The last reach was the probe of cyfr.run
+  at first sign-in, which could not be handed a resolved value because the
+  IdP access token *is* its input and the token must not travel past the
+  door. It moved the other way instead: `Compendium.SignInSync` holds the
+  probe and reaches down into `Sanctum.SignIn.record_namespace/2`, the web
+  callback (a surface above the domain) calls it, and the CLI device flow
+  skips it rather than handing its token up.
+
+  Both rosters being empty is the point, and it is also what makes the
+  canary below load-bearing: with nothing left to find in either
+  directory, a scan that silently stopped reading would pass both cases
+  having checked nothing. So it anchors on `lib/cyfr`, the host, whose
+  reach into the component domain is ordinary downward layering and is
+  not going away.
   """
 
   use ExUnit.Case, async: true
@@ -39,18 +49,16 @@ defmodule Compendium.ReverseSurfaceTest do
   # `Compendium.Source` keeps its name and reads the same declaration.
   @arca_surface []
 
-  # lib/sanctum → Compendium, in code.
-  @sanctum_surface [
-    # First sign-in talks to cyfr.run with the person's IdP access token:
-    # the budgeted probe of their publisher namespace, the push tokens it
-    # mints, the legal-acceptance refusal the door has to read, and the
-    # registry host the namespace is claimed at. The token is the reason
-    # this one cannot move to the caller — nothing after the door may hold
-    # it, so the step cannot be handed down a resolved value.
-    "Compendium.OCI",
-    "Compendium.Registry",
-    "Compendium.RegistryHost"
-  ]
+  # lib/sanctum → Compendium, in code. Empty: the auth domain names
+  # nothing in the component domain. The sign-in probe was the last one
+  # and it is `Compendium.SignInSync` now, calling down.
+  @sanctum_surface []
+
+  # Where the scan is proved to read. The host reaches the component
+  # domain as a matter of ordinary layering, so this is non-empty for a
+  # structural reason rather than by accident — which is what a canary
+  # needs to be.
+  @canary "apps/cyfr/lib/cyfr/**/*.ex"
 
   @namespace ~r/\bCompendium(?:\.[A-Z]\w+)+\b/
 
@@ -65,10 +73,10 @@ defmodule Compendium.ReverseSurfaceTest do
   end
 
   test "the storage layer reaches only into the Compendium namespaces this surface names" do
-    # The roster is empty, so a scan that read nothing would pass this
-    # case having checked nothing. The same scan over lib/sanctum finds
-    # the reaches below, which is what says the scan works.
-    assert MapSet.size(reached("apps/cyfr/lib/sanctum/**/*.ex")) > 0,
+    # Both rosters are empty, so a scan that read nothing would pass every
+    # case here having checked nothing. The same scan over the host finds
+    # its ordinary downward reaches, which is what says the scan works.
+    assert MapSet.size(reached(@canary)) > 0,
            "the scan read no Compendium reach anywhere — it is not reading"
 
     extra =
