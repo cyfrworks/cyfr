@@ -101,7 +101,11 @@ defmodule Arca.PublicationContract.Faults do
     through(:replace_tree, path, fn ->
       adapter = base()
 
-      if function_exported?(adapter, :replace_tree, 3),
+      # `Code.ensure_loaded?/1` first, as `Arca.Overlay` asks it: on a
+      # module the VM has not loaded yet, `function_exported?/3` answers
+      # false and an adapter that CAN swap a tree would be taken for one
+      # that cannot.
+      if Code.ensure_loaded?(adapter) and function_exported?(adapter, :replace_tree, 3),
         do: adapter.replace_tree(ctx, path, files),
         else: {:error, :atomic_replace_unsupported}
     end)
