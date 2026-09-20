@@ -33,6 +33,19 @@ defmodule Cyfr.SanctumInventoryTest do
 
   @inventory "docs/plans/sanctum-inventory.md"
 
+  # `docs/` is an ignored symlink to the owner's plan directory, so the
+  # inventory is not in the repository and is absent from a fresh clone and
+  # from CI. The five cases that read it are skipped there, by name and with
+  # a reason, rather than raising: a checkout without the document has
+  # nothing to drift against. The two scan cases below need no document and
+  # always run, which is what keeps a CI leg from passing on an empty scan.
+  @document Path.join(Path.expand("../../../..", __DIR__), @inventory)
+  @needs_document if File.exists?(@document),
+                    do: [],
+                    else: [
+                      skip: "#{@inventory} is not in this checkout (docs/ is an ignored symlink)"
+                    ]
+
   # The layers a dependency may point at. Sanctum may reach contracts and
   # Arca; Arca may reach contracts alone. Anything else is a row the
   # inventory must carry.
@@ -248,6 +261,7 @@ defmodule Cyfr.SanctumInventoryTest do
   # --- every dependency is listed ---------------------------------------
 
   describe "the inventory lists every dependency" do
+    @tag @needs_document
     test "Sanctum's, outside sanctum -> cyfr_contracts, arca" do
       listed = listed_modules(2)
 
@@ -268,6 +282,7 @@ defmodule Cyfr.SanctumInventoryTest do
              """
     end
 
+    @tag @needs_document
     test "Arca's, outside arca -> cyfr_contracts" do
       listed = listed_modules(3)
 
@@ -292,6 +307,7 @@ defmodule Cyfr.SanctumInventoryTest do
   # --- every file has exactly one owner ---------------------------------
 
   describe "the file assignment" do
+    @tag @needs_document
     test "every file matches exactly one row" do
       rules = assignment_rules()
       assert rules != [], "#{@inventory} §6 has no assignment rows"
@@ -311,6 +327,7 @@ defmodule Cyfr.SanctumInventoryTest do
              """
     end
 
+    @tag @needs_document
     test "every row matches at least one file" do
       files = assigned_files()
 
@@ -333,6 +350,7 @@ defmodule Cyfr.SanctumInventoryTest do
              """
     end
 
+    @tag @needs_document
     test "the most specific row wins, and it is the one the document means" do
       rules = assignment_rules()
 
