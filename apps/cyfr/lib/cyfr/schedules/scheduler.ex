@@ -647,7 +647,7 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   defp record_run(ctx, schedule_id, execution_id) do
-    case CronSchedule.record_run(ctx, schedule_id, execution_id) do
+    case CronSchedule.record_run(Sanctum.Context.actor(ctx), schedule_id, execution_id) do
       {:ok, _} ->
         :ok
 
@@ -657,7 +657,7 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   defp record_error(ctx, schedule_id, message) do
-    case CronSchedule.record_error(ctx, schedule_id, message) do
+    case CronSchedule.record_error(Sanctum.Context.actor(ctx), schedule_id, message) do
       {:ok, _} ->
         :ok
 

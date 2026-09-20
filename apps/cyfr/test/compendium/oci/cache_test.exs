@@ -38,7 +38,7 @@ defmodule Compendium.OCI.CacheTest do
 
       assert :miss = Cache.get_blob(digest)
       # The corrupt entry is removed on detection, not left to be re-read.
-      refute Arca.exists?(Sanctum.system_context(), blob_segments(digest))
+      refute Arca.exists?(Cyfr.Actor.system(), blob_segments(digest))
     end
 
     defp blob_segments("sha256:" <> hex), do: ["cache", "oci", "blobs", "sha256", hex]
@@ -84,7 +84,7 @@ defmodule Compendium.OCI.CacheTest do
       Cache.put_blob(digest, content)
 
       ctx = Sanctum.system_context()
-      {:ok, leaves} = Arca.list_recursive(ctx, ["cache"])
+      {:ok, leaves} = Arca.list_recursive(Sanctum.Context.actor(ctx), ["cache"])
 
       assert leaves != []
 

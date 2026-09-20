@@ -124,6 +124,6 @@ defmodule Emissary.MCP.FileToolTest do
                "content" => "x"
              })
 
-    refute Arca.exists?(ctx, ["data", "x.txt"])
+    refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "x.txt"])
   end
 end

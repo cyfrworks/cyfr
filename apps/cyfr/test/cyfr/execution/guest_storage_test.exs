@@ -90,7 +90,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
 
   describe "operations" do
     test "read answers base64 content; a missing file is not_found", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["data", "test.txt"], "hello world")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "test.txt"], "hello world")
 
       assert {:ok, answer} =
                run(ctx, edge(["data/"]), %{"action" => "read", "path" => "data/test.txt"})
@@ -114,7 +114,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
       assert {:ok, %{"path" => "data/test.txt", "written" => true, "size" => 11}} =
                run(ctx, edge(["data/"]), write("data/test.txt", "hello world"))
 
-      assert {:ok, "hello world"} = Arca.get(ctx, ["data", "test.txt"])
+      assert {:ok, "hello world"} = Arca.get(Sanctum.Context.actor(ctx), ["data", "test.txt"])
     end
 
     test "write and append refuse invalid base64 and missing content", %{ctx: ctx} do
@@ -138,11 +138,11 @@ defmodule Cyfr.Execution.GuestStorageTest do
         assert message =~ "content"
       end
 
-      refute Arca.exists?(ctx, ["data", "test.txt"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "test.txt"])
     end
 
     test "append adds to a file, creating it when absent", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["data", "log.txt"], "line1\n")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "log.txt"], "line1\n")
 
       assert {:ok, %{"appended" => true, "size" => 6}} =
                run(ctx, edge(["data/"]), %{
@@ -151,7 +151,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
                  "content" => Base.encode64("line2\n")
                })
 
-      assert {:ok, "line1\nline2\n"} = Arca.get(ctx, ["data", "log.txt"])
+      assert {:ok, "line1\nline2\n"} = Arca.get(Sanctum.Context.actor(ctx), ["data", "log.txt"])
 
       assert {:ok, %{"appended" => true}} =
                run(ctx, edge(["data/"]), %{
@@ -162,8 +162,8 @@ defmodule Cyfr.Execution.GuestStorageTest do
     end
 
     test "list marks directories with a trailing slash", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["data", "file.txt"], "content")
-      :ok = Arca.put(ctx, ["data", "subdir", "nested.txt"], "nested")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "file.txt"], "content")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "subdir", "nested.txt"], "nested")
 
       assert {:ok, %{"path" => "data", "files" => files}} =
                run(ctx, edge(["data/"]), %{"action" => "list", "path" => "data"})
@@ -172,7 +172,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
     end
 
     test "delete removes a file; exists answers whether one is there", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["data", "to-delete.txt"], "content")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "to-delete.txt"], "content")
 
       assert {:ok, %{"exists" => true}} =
                run(ctx, edge(["data/"]), %{"action" => "exists", "path" => "data/to-delete.txt"})
@@ -180,7 +180,8 @@ defmodule Cyfr.Execution.GuestStorageTest do
       assert {:ok, %{"path" => "data/to-delete.txt", "deleted" => true}} =
                run(ctx, edge(["data/"]), %{"action" => "delete", "path" => "data/to-delete.txt"})
 
-      assert {:error, :not_found} = Arca.get(ctx, ["data", "to-delete.txt"])
+      assert {:error, :not_found} =
+               Arca.get(Sanctum.Context.actor(ctx), ["data", "to-delete.txt"])
 
       assert {:ok, %{"exists" => false}} =
                run(ctx, edge(["data/"]), %{"action" => "exists", "path" => "data/to-delete.txt"})
@@ -205,7 +206,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
 
   describe "the bare root" do
     test "lists the guest scopes, never the athanor's tree, even under '*'", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["aqua", "agent.json"], "{}")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["aqua", "agent.json"], "{}")
 
       assert {:ok, %{"path" => "", "files" => files}} =
                run(ctx, edge(["*"]), %{"action" => "list", "path" => ""})
@@ -233,7 +234,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
     test "an action the edge does not name is denied; actions match case-insensitively", %{
       ctx: ctx
     } do
-      :ok = Arca.put(ctx, ["data", "test.txt"], "content")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "test.txt"], "content")
 
       assert {"action_denied", "Storage action 'write' is not allowed by policy."} =
                refused(
@@ -258,7 +259,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
                  "path" => "data/test.txt"
                })
 
-      assert {:ok, "content"} = Arca.get(ctx, ["data", "test.txt"])
+      assert {:ok, "content"} = Arca.get(Sanctum.Context.actor(ctx), ["data", "test.txt"])
     end
 
     test "a nil edge, a nil storage group and empty lists deny everything", %{ctx: ctx} do
@@ -279,7 +280,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
 
     test "an entry without a trailing slash is that exact path", %{ctx: ctx} do
       exact = edge(["data/notes/todo.md"])
-      :ok = Arca.put(ctx, ["data", "notes", "todo.md"], "t")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "notes", "todo.md"], "t")
 
       assert {:ok, _} = run(ctx, exact, %{"action" => "read", "path" => "data/notes/todo.md"})
 
@@ -291,7 +292,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
 
     test "a trailing slash is a prefix, and a directory is named with or without it", %{ctx: ctx} do
       prefix = edge(["data/notes/"])
-      :ok = Arca.put(ctx, ["data", "notes", "deep", "todo.md"], "t")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "notes", "deep", "todo.md"], "t")
 
       assert {:ok, _} =
                run(ctx, prefix, %{"action" => "read", "path" => "data/notes/deep/todo.md"})
@@ -307,7 +308,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
     test "several prefixes each allow their own scope", %{ctx: ctx} do
       grants = edge(["data/", "components/catalysts/"], ["read"])
       unit = ["components", "catalysts", "test", "pkg", "0.1.0", "output.json"]
-      :ok = Arca.put(ctx, unit, "{}")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), unit, "{}")
 
       assert {:ok, _} =
                run(ctx, grants, %{"action" => "read", "path" => Enum.join(unit, "/")})
@@ -354,8 +355,10 @@ defmodule Cyfr.Execution.GuestStorageTest do
       # Refused as host roots of the athanor's tree, not as unknown ones.
       assert "aqua" in Arca.Storage.tenant_roots()
       assert "threads" in Arca.Storage.tenant_roots()
-      :ok = Arca.put(ctx, ["aqua", "agent.json"], "{}")
-      :ok = Arca.put(ctx, ["threads", "thread_1", "msg_1.txt"], "host bytes")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["aqua", "agent.json"], "{}")
+
+      :ok =
+        Arca.put(Sanctum.Context.actor(ctx), ["threads", "thread_1", "msg_1.txt"], "host bytes")
 
       for path <- ["aqua/agent.json", "aqua", "threads/thread_1/msg_1.txt", "threads"],
           request <- [%{"action" => "read"}, %{"action" => "list"}, write(path, "guest bytes")] do
@@ -363,7 +366,8 @@ defmodule Cyfr.Execution.GuestStorageTest do
                  refused(run(ctx, edge(["*"]), Map.put(request, "path", path)))
       end
 
-      assert {:ok, "host bytes"} = Arca.get(ctx, ["threads", "thread_1", "msg_1.txt"])
+      assert {:ok, "host bytes"} =
+               Arca.get(Sanctum.Context.actor(ctx), ["threads", "thread_1", "msg_1.txt"])
 
       # The retired name for threads/ (spelled split for the vocabulary
       # gate) is no root at all, and no guest path either.
@@ -436,7 +440,13 @@ defmodule Cyfr.Execution.GuestStorageTest do
 
     test "a guest reads a shipped bundle file the athanor holds", %{ctx: ctx} do
       :ok =
-        Arca.Overlay.pull_shipped(ctx, ["components", "catalysts", "local", "bundled", "1.0.0"])
+        Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), [
+          "components",
+          "catalysts",
+          "local",
+          "bundled",
+          "1.0.0"
+        ])
 
       grants = edge(["components/"], ["read", "list"])
 
@@ -457,7 +467,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
 
     test "a guest write into a shipped copy lands as an edit", %{ctx: ctx} do
       unit = ["components", "catalysts", "local", "bundled", "1.0.0"]
-      :ok = Arca.Overlay.pull_shipped(ctx, unit)
+      :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), unit)
 
       assert {:ok, %{"written" => true}} =
                run(
@@ -469,10 +479,16 @@ defmodule Cyfr.Execution.GuestStorageTest do
                  )
                )
 
-      assert {:ok, ~s({"seeded":false})} = Arca.get(ctx, unit ++ ["config.json"])
-      assert Arca.Adapters.Local.exists?(ctx, unit ++ ["cyfr-manifest.json"])
-      assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :shipped}
-      assert {:ok, true} = Arca.Overlay.edited?(ctx, unit)
+      assert {:ok, ~s({"seeded":false})} =
+               Arca.get(Sanctum.Context.actor(ctx), unit ++ ["config.json"])
+
+      assert Arca.Adapters.Local.exists?(
+               Sanctum.Context.actor(ctx),
+               unit ++ ["cyfr-manifest.json"]
+             )
+
+      assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :shipped}
+      assert {:ok, true} = Arca.Overlay.edited?(Sanctum.Context.actor(ctx), unit)
     end
 
     test "a mutation above the unit grammar is refused; data/ at the same depth is not", %{
@@ -523,7 +539,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
                )
 
       assert message =~ "24 bytes"
-      refute Arca.exists?(ctx, ["data", "big.txt"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "big.txt"])
 
       assert {:ok, %{"written" => true}} =
                run(ctx, edge(["data/"]), write("data/small.txt", "tiny"), limits: small_limits())
@@ -536,7 +552,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
     end
 
     test "a read or listing past max_response_size is refused", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["data", "big.txt"], String.duplicate("y", 64))
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "big.txt"], String.duplicate("y", 64))
 
       assert {"response_too_large", _} =
                refused(
@@ -546,7 +562,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
                )
 
       for name <- ["a-long-file-name.txt", "another-long-name.txt"],
-          do: :ok = Arca.put(ctx, ["data", "listed", name], "x")
+          do: :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "listed", name], "x")
 
       assert {"response_too_large", _} =
                refused(
@@ -588,8 +604,8 @@ defmodule Cyfr.Execution.GuestStorageTest do
       quota = %{max_bytes: 1_000_000, max_files: 10}
       assert {:ok, _} = quota_write(ctx, "data/a.txt", 4, quota)
 
-      bytes_key = Arca.Cache.Keys.scope_usage_bytes(ctx.athanor_id, "data")
-      files_key = Arca.Cache.Keys.scope_usage_files(ctx.athanor_id, "data")
+      bytes_key = Arca.Cache.Keys.scope_usage_bytes(Sanctum.Context.actor(ctx), "data")
+      files_key = Arca.Cache.Keys.scope_usage_files(Sanctum.Context.actor(ctx), "data")
       assert {:ok, 4} = Arca.Cache.get(bytes_key)
       assert {:ok, 1} = Arca.Cache.get(files_key)
 
@@ -647,8 +663,17 @@ defmodule Cyfr.Execution.GuestStorageTest do
   end
 
   test "a scope at the file ceiling refuses one more guest write", %{ctx: ctx} do
-    Arca.Cache.put(Arca.Cache.Keys.scope_usage_files(ctx.athanor_id, "data"), 100_000, 60_000)
-    Arca.Cache.put(Arca.Cache.Keys.scope_usage_bytes(ctx.athanor_id, "data"), 1_000, 60_000)
+    Arca.Cache.put(
+      Arca.Cache.Keys.scope_usage_files(Sanctum.Context.actor(ctx), "data"),
+      100_000,
+      60_000
+    )
+
+    Arca.Cache.put(
+      Arca.Cache.Keys.scope_usage_bytes(Sanctum.Context.actor(ctx), "data"),
+      1_000,
+      60_000
+    )
 
     assert {"storage_quota_exceeded", message} =
              refused(run(ctx, edge(["data/"]), write("data/one-more.txt", "x")))
@@ -658,7 +683,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
 
   describe "the attempt's hold" do
     test "a refused hold writes, appends and deletes nothing, and reads need none", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["data", "kept.txt"], "kept")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "kept.txt"], "kept")
       test = self()
 
       lost = fn _write ->
@@ -685,8 +710,8 @@ defmodule Cyfr.Execution.GuestStorageTest do
                  hold: fn _ -> {:error, :unavailable} end
                )
 
-      refute Arca.exists?(ctx, ["data", "late.txt"])
-      assert {:ok, "kept"} = Arca.get(ctx, ["data", "kept.txt"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "late.txt"])
+      assert {:ok, "kept"} = Arca.get(Sanctum.Context.actor(ctx), ["data", "kept.txt"])
 
       for request <- [
             %{"action" => "read", "path" => "data/kept.txt"},
@@ -702,13 +727,13 @@ defmodule Cyfr.Execution.GuestStorageTest do
     test "the hold is handed the operation, the physical path, the size and the store call", %{
       ctx: ctx
     } do
-      :ok = Arca.put(ctx, ["data", "log.txt"], "a")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "log.txt"], "a")
       test = self()
 
       hold = fn write ->
         send(test, {:write, Map.delete(write, :io)})
         # Nothing moved before the hold ran the store call.
-        assert {:ok, "a"} = Arca.get(ctx, ["data", "log.txt"])
+        assert {:ok, "a"} = Arca.get(Sanctum.Context.actor(ctx), ["data", "log.txt"])
         held(write)
       end
 
@@ -724,7 +749,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
 
       assert_received {:write, %{op: :append, path: ["data", "log.txt"], bytes: 2}}
 
-      Arca.put(ctx, ["data", "log.txt"], "a")
+      Arca.put(Sanctum.Context.actor(ctx), ["data", "log.txt"], "a")
 
       assert {:ok, %{"deleted" => true}} =
                run(ctx, edge(["data/"]), %{"action" => "delete", "path" => "data/log.txt"},

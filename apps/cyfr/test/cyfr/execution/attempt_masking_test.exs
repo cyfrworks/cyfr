@@ -64,7 +64,9 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert row.status == "completed"
     refute_unmasked(row)
 
-    assert {:ok, _row, payload} = Arca.ExecutionPayloads.get(ctx, id, "result")
+    assert {:ok, _row, payload} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
+
     assert payload =~ @redacted
     refute_unmasked(payload)
     refute_unmasked(Cyfr.Execution.Events.since(id, {0, 0}, ctx.athanor_id))
@@ -166,7 +168,9 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     refute_unmasked(row)
     refute_unmasked(live_events())
     refute_unmasked(event_rows(ctx, id))
-    assert {:error, :not_found} = Arca.ExecutionPayloads.get(ctx, id, "result")
+
+    assert {:error, :not_found} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
   end
 
   test "an attempt whose opener exits stops, sending nothing it held", %{ctx: ctx} do

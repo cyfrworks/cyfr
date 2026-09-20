@@ -737,7 +737,7 @@ defmodule Cyfr.Ops.Catalog do
   # unreadable server resolves to no row and a digest no edge can name —
   # fail closed, not fail absent.
   defp resolve_server(ctx, server_name) do
-    with {:ok, server} <- Arca.McpServerStorage.get(ctx, server_name),
+    with {:ok, server} <- Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), server_name),
          {:ok, digest} <- Sanctum.ToolServerDigest.from_server(server) do
       {server, digest}
     else

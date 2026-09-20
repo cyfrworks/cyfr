@@ -12,8 +12,8 @@ defmodule Arca.ConsentStorageTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Sanctum.TestContext.local()
-    {:ok, athanor: ctx.athanor_id}
+    actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+    {:ok, athanor: actor.athanor_id}
   end
 
   defp profile!(athanor, id) do
@@ -192,7 +192,7 @@ defmodule Arca.ConsentStorageTest do
                  [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}]
                )
 
-      {:ok, profile} = ProfileStorage.get(athanor, "prof_mint_1")
+      {:ok, profile} = ProfileStorage.get(Cyfr.Actor.in_athanor(athanor), "prof_mint_1")
       assert profile.head_consent_id == consent.id
     end
 
@@ -214,7 +214,8 @@ defmodule Arca.ConsentStorageTest do
                  verify: fn -> {:error, :nope} end
                )
 
-      assert {:error, :not_found} = ProfileStorage.get(athanor, "prof_mint_2")
+      assert {:error, :not_found} =
+               ProfileStorage.get(Cyfr.Actor.in_athanor(athanor), "prof_mint_2")
     end
   end
 

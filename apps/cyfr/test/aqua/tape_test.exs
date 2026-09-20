@@ -19,7 +19,7 @@ defmodule Aqua.TapeTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local()
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
     {:ok, ctx: ctx, thread: thread}
   end
@@ -118,7 +118,7 @@ defmodule Aqua.TapeTest do
     bare = update_in(attrs, [:message], &Map.delete(&1, :client_id))
     assert {:error, :message_id_reused} = Tape.accept(ctx, thread.id, bare)
 
-    assert [_] = Threads.messages(ctx, thread.id)
+    assert [_] = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
   end
 
   test "rows are broadcast only after they committed, and a moved fence refuses", %{

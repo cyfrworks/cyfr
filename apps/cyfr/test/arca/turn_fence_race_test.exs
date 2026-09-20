@@ -21,34 +21,39 @@ defmodule Arca.TurnFenceRaceTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   setup do
-    ctx = Sanctum.TestContext.local()
+    actor = Sanctum.Context.actor(Sanctum.TestContext.local())
 
     {thread, turn} =
       unboxed(fn ->
-        {:ok, thread} = Threads.create(ctx)
+        {:ok, thread} = Threads.create(actor)
 
         {:ok, %{turn: turn}} =
-          TurnStorage.accept_message(ctx, thread.id, %{
-            message: %{author: ctx.user_id, content: "@aqua go"},
-            turn: %{agent: "aqua", requested_by: ctx.user_id}
+          TurnStorage.accept_message(actor, thread.id, %{
+            message: %{author: actor.user_id, content: "@aqua go"},
+            turn: %{agent: "aqua", requested_by: actor.user_id}
           })
 
         {thread, turn}
       end)
 
-    on_exit(fn -> unboxed(fn -> delete_thread!(ctx.athanor_id, thread.id) end) end)
-    {:ok, ctx: ctx, turn: turn}
+    on_exit(fn -> unboxed(fn -> delete_thread!(actor.athanor_id, thread.id) end) end)
+    {:ok, actor: actor, turn: turn}
   end
 
   test "a takeover waits behind a runner's write, lands after it, and the runner writes nothing more",
-       %{ctx: ctx, turn: turn} do
+       %{actor: actor, turn: turn} do
     test = self()
 
     runner =
       Task.async(fn ->
         unboxed(fn ->
           Arca.Repo.transaction(fn ->
-            {:ok, step} = TurnStorage.put_step(ctx, turn.id, %{kind: "model", fence: turn.fence})
+            {:ok, step} =
+              TurnStorage.put_step(actor, turn.id, %{
+                kind: "model",
+                fence: turn.fence
+              })
+
             send(test, {:holding, step.id})
 
             receive do
@@ -62,7 +67,9 @@ defmodule Arca.TurnFenceRaceTest do
 
     host =
       Task.async(fn ->
-        unboxed(fn -> TurnStorage.supersede(ctx, turn.id, %{fence: turn.fence}) end)
+        unboxed(fn ->
+          TurnStorage.supersede(actor, turn.id, %{fence: turn.fence})
+        end)
       end)
 
     # The runner's transaction holds the turn row; the host cannot move it yet.
@@ -75,18 +82,23 @@ defmodule Arca.TurnFenceRaceTest do
 
     assert {:error, :superseded} =
              unboxed(fn ->
-               TurnStorage.put_step(ctx, turn.id, %{kind: "model", fence: turn.fence})
+               TurnStorage.put_step(actor, turn.id, %{
+                 kind: "model",
+                 fence: turn.fence
+               })
              end)
 
-    assert [^step_id] = unboxed(fn -> step_ids(ctx.athanor_id, turn.id) end)
+    assert [^step_id] = unboxed(fn -> step_ids(actor.athanor_id, turn.id) end)
   end
 
-  test "of two transitions that read the same fence, one lands", %{ctx: ctx, turn: turn} do
+  test "of two transitions that read the same fence, one lands", %{actor: actor, turn: turn} do
     results =
       1..2
       |> Enum.map(fn _ ->
         Task.async(fn ->
-          unboxed(fn -> TurnStorage.supersede(ctx, turn.id, %{fence: turn.fence}) end)
+          unboxed(fn ->
+            TurnStorage.supersede(actor, turn.id, %{fence: turn.fence})
+          end)
         end)
       end)
       |> Enum.map(&Task.await(&1, 25_000))

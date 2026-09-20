@@ -59,21 +59,24 @@ defmodule Sanctum.Tenancy.CapsTest do
 
   test "the write gate checks every tenant create by default; :exempt is the stated exception" do
     ctx = Sanctum.TestContext.local()
-    Arca.Usage.invalidate(ctx.athanor_id)
+    Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1)
 
     # Default posture: a writer that states nothing is capped.
     assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
-             Arca.put(ctx, ["data", "capped.txt"], "too many bytes")
+             Arca.put(Sanctum.Context.actor(ctx), ["data", "capped.txt"], "too many bytes")
 
-    refute Arca.exists?(ctx, ["data", "capped.txt"])
+    refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "capped.txt"])
 
     # The uncapped-by-design writers say so, visibly, per call.
-    assert :ok = Arca.put(ctx, ["data", "exempted.txt"], "still lands", cap: :exempt)
+    assert :ok =
+             Arca.put(Sanctum.Context.actor(ctx), ["data", "exempted.txt"], "still lands",
+               cap: :exempt
+             )
 
     # Anything else is caller misuse, not a policy.
     assert_raise ArgumentError, ~r/cap: must be :checked or :exempt/, fn ->
-      Arca.put(ctx, ["data", "typo.txt"], "x", cap: :always)
+      Arca.put(Sanctum.Context.actor(ctx), ["data", "typo.txt"], "x", cap: :always)
     end
   end
 
@@ -176,20 +179,20 @@ defmodule Sanctum.Tenancy.CapsTest do
       )
 
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 100)
-    assert :ok = Caps.check_storage(ctx, 50)
+    assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 50)
 
     assert {:error, {:limit_reached, :athanor_storage_bytes, 100}} =
-             Caps.check_storage(ctx, 1_000)
+             Caps.check_storage(Sanctum.Context.actor(ctx), 1_000)
 
     Application.delete_env(:cyfr, :caps)
-    assert :ok = Caps.check_storage(ctx, 1_000_000_000)
+    assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 1_000_000_000)
   end
 
   test "athanor_storage_bytes counts the component tree on every write, not only a publish" do
     ctx = Sanctum.TestContext.local()
 
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1_000_000_000)
-    assert :ok = Caps.check_storage(ctx, 10)
+    assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 10)
 
     # A cap below what this athanor's components already hold refuses the
     # next write of any kind — a chat attachment and a guest storage write
@@ -197,7 +200,7 @@ defmodule Sanctum.Tenancy.CapsTest do
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1)
 
     assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
-             Caps.check_storage(ctx, 10)
+             Caps.check_storage(Sanctum.Context.actor(ctx), 10)
   end
 
   test "an unreadable usage walk fails CLOSED while a cap is configured" do
@@ -211,14 +214,15 @@ defmodule Sanctum.Tenancy.CapsTest do
     end)
 
     ctx = Sanctum.TestContext.local()
-    Arca.Usage.invalidate(ctx.athanor_id)
+    Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 100)
 
     # A walk that cannot answer must refuse the write — treating the tree
     # as empty would let writes march past the ceiling.
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:error, :storage_unverifiable} = Caps.check_storage(ctx, 50)
+        assert {:error, :storage_unverifiable} =
+                 Caps.check_storage(Sanctum.Context.actor(ctx), 50)
       end)
 
     assert log =~ "usage walk failed"
@@ -226,39 +230,39 @@ defmodule Sanctum.Tenancy.CapsTest do
     # With no cap configured, no walk runs — the broken adapter is never
     # even asked.
     Application.delete_env(:cyfr, :caps)
-    assert :ok = Caps.check_storage(ctx, 50)
+    assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 50)
   end
 
   test "the athanor total is cached, bumped by writes, and dropped by deletes" do
     ctx = Sanctum.TestContext.local()
-    key = Arca.Cache.Keys.athanor_usage(ctx.athanor_id)
+    key = Arca.Cache.Keys.athanor_usage(Sanctum.Context.actor(ctx))
 
     Arca.Cache.invalidate(key)
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1_000_000_000)
 
     # The first check walks the tree and remembers what it found.
-    assert :ok = Caps.check_storage(ctx, 1)
+    assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 1)
     assert {:ok, cached} = Arca.Cache.get(key)
     assert is_integer(cached)
 
     # A write anywhere in the athanor's tree bumps the total by exactly
     # what was written — no re-walk — components and guest files alike.
-    :ok = Arca.put(ctx, ["components", "cap-probe.txt"], "bytes")
+    :ok = Arca.put(Sanctum.Context.actor(ctx), ["components", "cap-probe.txt"], "bytes")
     assert Arca.Cache.get(key) == {:ok, cached + 5}
 
-    :ok = Arca.put(ctx, ["data", "cap-probe.txt"], "1234567890")
+    :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "cap-probe.txt"], "1234567890")
     assert Arca.Cache.get(key) == {:ok, cached + 15}
 
     # A delete reclaims space: the entry drops so the next check walks the
     # tree afresh instead of guessing what the delete removed.
-    :ok = Arca.delete(ctx, ["data", "cap-probe.txt"])
+    :ok = Arca.delete(Sanctum.Context.actor(ctx), ["data", "cap-probe.txt"])
     assert Arca.Cache.get(key) == :miss
 
     # A write to a global root is the server's bytes, not the athanor's,
     # and leaves the total alone.
-    assert :ok = Caps.check_storage(ctx, 1)
+    assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 1)
     assert {:ok, rewalked} = Arca.Cache.get(key)
-    sys = Sanctum.internal_context(user_id: "_s", athanor_id: ctx.athanor_id, scope: :athanor)
+    sys = %{Cyfr.Actor.system() | user_id: "_s", athanor_id: ctx.athanor_id, scope: :athanor}
     :ok = Arca.put(sys, ["cache", "cap-probe.txt"], "bytes")
     assert Arca.Cache.get(key) == {:ok, rewalked}
   end

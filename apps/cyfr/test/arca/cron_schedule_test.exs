@@ -13,18 +13,20 @@ defmodule Arca.CronScheduleTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx =
-      Context.build(
-        user_id: "test_user",
-        athanor_id: @athanor,
-        permissions: [:*],
-        scope: :athanor,
-        auth_method: :oidc,
-        namespace: "testns",
-        authenticated: true
+    actor =
+      Sanctum.Context.actor(
+        Context.build(
+          user_id: "test_user",
+          athanor_id: @athanor,
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          namespace: "testns",
+          authenticated: true
+        )
       )
 
-    {:ok, ctx: ctx}
+    {:ok, actor: actor}
   end
 
   defp valid_attrs(overrides \\ %{}) do
@@ -65,53 +67,57 @@ defmodule Arca.CronScheduleTest do
   end
 
   describe "get_by_id_or_name/2" do
-    test "finds by name", %{ctx: ctx} do
+    test "finds by name", %{actor: actor} do
       {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "find-me"}))
-      {:ok, found} = CronSchedule.get_by_id_or_name(ctx, "find-me")
+      {:ok, found} = CronSchedule.get_by_id_or_name(actor, "find-me")
       assert found.id == schedule.id
     end
 
-    test "finds by id", %{ctx: ctx} do
+    test "finds by id", %{actor: actor} do
       {:ok, schedule} = CronSchedule.create(valid_attrs())
-      {:ok, found} = CronSchedule.get_by_id_or_name(ctx, schedule.id)
+      {:ok, found} = CronSchedule.get_by_id_or_name(actor, schedule.id)
       assert found.id == schedule.id
     end
 
-    test "does not find deleted schedules", %{ctx: ctx} do
+    test "does not find deleted schedules", %{actor: actor} do
       {:ok, schedule} = CronSchedule.create(valid_attrs(%{name: "deleted-one"}))
-      CronSchedule.soft_delete(ctx, schedule.id)
-      assert CronSchedule.get_by_id_or_name(ctx, "deleted-one") == {:error, :not_found}
+      CronSchedule.soft_delete(actor, schedule.id)
+
+      assert CronSchedule.get_by_id_or_name(actor, "deleted-one") ==
+               {:error, :not_found}
     end
 
     test "finds a fellow member's schedule in the same athanor (interchangeable)" do
       {:ok, created} = CronSchedule.create(valid_attrs(%{name: "private", user_id: "other_user"}))
 
-      ctx =
-        Context.build(
-          user_id: "test_user",
-          athanor_id: @athanor,
-          permissions: [:*],
-          scope: :athanor,
-          auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+      actor =
+        Sanctum.Context.actor(
+          Context.build(
+            user_id: "test_user",
+            athanor_id: @athanor,
+            permissions: [:*],
+            scope: :athanor,
+            auth_method: :oidc,
+            namespace: "testns",
+            authenticated: true
+          )
         )
 
       # Same athanor, different creator — visible.
-      {:ok, found} = CronSchedule.get_by_id_or_name(ctx, "private")
+      {:ok, found} = CronSchedule.get_by_id_or_name(actor, "private")
       assert found != nil
       assert found.id == created.id
     end
   end
 
   describe "list/2" do
-    test "lists all non-deleted schedules in the athanor regardless of creator", %{ctx: ctx} do
+    test "lists all non-deleted schedules in the athanor regardless of creator", %{actor: actor} do
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "s1"}))
       {:ok, s2} = CronSchedule.create(valid_attrs(%{name: "s2"}))
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "other", user_id: "other_user"}))
-      CronSchedule.soft_delete(ctx, s2.id)
+      CronSchedule.soft_delete(actor, s2.id)
 
-      {:ok, schedules} = CronSchedule.list(ctx)
+      {:ok, schedules} = CronSchedule.list(actor)
       names = Enum.map(schedules, & &1.name)
 
       assert length(schedules) == 2
@@ -122,10 +128,10 @@ defmodule Arca.CronScheduleTest do
   end
 
   describe "active_schedules/0" do
-    test "returns only active schedules", %{ctx: ctx} do
+    test "returns only active schedules", %{actor: actor} do
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "active1"}))
       {:ok, paused} = CronSchedule.create(valid_attrs(%{name: "paused1"}))
-      CronSchedule.update(ctx, paused.id, %{status: "paused"})
+      CronSchedule.update(actor, paused.id, %{status: "paused"})
 
       {:ok, active} = CronSchedule.active_schedules()
       names = Enum.map(active, & &1.name)
@@ -135,9 +141,12 @@ defmodule Arca.CronScheduleTest do
   end
 
   describe "record_run/3" do
-    test "increments run_count and sets last_run_at", %{ctx: ctx} do
+    test "increments run_count and sets last_run_at", %{actor: actor} do
       {:ok, schedule} = CronSchedule.create(valid_attrs())
-      assert {:ok, updated} = CronSchedule.record_run(ctx, schedule.id, "exec_123")
+
+      assert {:ok, updated} =
+               CronSchedule.record_run(actor, schedule.id, "exec_123")
+
       assert updated.run_count == 1
       assert updated.last_execution_id == "exec_123"
       assert updated.last_run_at != nil
@@ -145,20 +154,23 @@ defmodule Arca.CronScheduleTest do
   end
 
   describe "record_error/3" do
-    test "increments error_count", %{ctx: ctx} do
+    test "increments error_count", %{actor: actor} do
       {:ok, schedule} = CronSchedule.create(valid_attrs())
-      assert {:ok, updated} = CronSchedule.record_error(ctx, schedule.id, "boom")
+
+      assert {:ok, updated} =
+               CronSchedule.record_error(actor, schedule.id, "boom")
+
       assert updated.error_count == 1
     end
   end
 
   describe "count_active/1" do
-    test "counts non-deleted schedules", %{ctx: ctx} do
+    test "counts non-deleted schedules", %{actor: actor} do
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "c1"}))
       {:ok, s2} = CronSchedule.create(valid_attrs(%{name: "c2"}))
-      CronSchedule.soft_delete(ctx, s2.id)
+      CronSchedule.soft_delete(actor, s2.id)
 
-      assert CronSchedule.count_active(ctx) == {:ok, 1}
+      assert CronSchedule.count_active(actor) == {:ok, 1}
     end
   end
 end

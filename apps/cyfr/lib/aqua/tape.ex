@@ -56,7 +56,7 @@ defmodule Aqua.Tape do
   @spec accept(Context.t(), String.t(), map()) ::
           {:ok, %{message: row(), turn: turn() | nil, replayed: boolean()}} | {:error, term()}
   def accept(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
-    case TurnStorage.accept_message(ctx, thread_id, attrs) do
+    case TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread_id, attrs) do
       {:ok, %{message: message, turn: turn}} ->
         broadcast(ctx, thread_id, {:message, message})
         {:ok, %{message: message, turn: turn, replayed: false}}
@@ -76,7 +76,7 @@ defmodule Aqua.Tape do
   defp replay(ctx, thread_id, attrs, reason) do
     case get_in(attrs, [:message, :client_id]) do
       client_id when is_binary(client_id) ->
-        case TurnStorage.accepted(ctx, thread_id, client_id) do
+        case TurnStorage.accepted(Sanctum.Context.actor(ctx), thread_id, client_id) do
           {:ok, %{message: message, turn: turn}} ->
             if same_send?(message, turn, attrs),
               do: {:ok, %{message: message, turn: turn, replayed: true}},
@@ -105,12 +105,12 @@ defmodule Aqua.Tape do
   @spec accepted(Context.t(), String.t(), String.t()) ::
           {:ok, %{message: row(), turn: turn() | nil}} | {:error, term()}
   def accepted(%Context{} = ctx, thread_id, client_id) when is_binary(client_id),
-    do: TurnStorage.accepted(ctx, thread_id, client_id)
+    do: TurnStorage.accepted(Sanctum.Context.actor(ctx), thread_id, client_id)
 
   @doc "Append one row outside a turn's step machinery (a system note, a compaction, an aborted mark)."
   @spec append(Context.t(), String.t(), map()) :: {:ok, row()} | {:error, term()}
   def append(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
-    with {:ok, row} <- Threads.append(ctx, thread_id, attrs) do
+    with {:ok, row} <- Threads.append(Sanctum.Context.actor(ctx), thread_id, attrs) do
       broadcast(ctx, thread_id, {:message, row})
       {:ok, row}
     end
@@ -136,7 +136,7 @@ defmodule Aqua.Tape do
       |> Map.put(:execution_id, turn.root_execution_id)
       |> Map.put(:fence, turn.fence)
 
-    with {:ok, row} <- TurnStorage.append_turn_row(ctx, turn.id, attrs) do
+    with {:ok, row} <- TurnStorage.append_turn_row(Sanctum.Context.actor(ctx), turn.id, attrs) do
       broadcast(ctx, turn.thread_id, {:message, row})
       {:ok, row}
     end
@@ -167,14 +167,19 @@ defmodule Aqua.Tape do
   @doc "Start an accepted turn with its root, attempt, budget and pins (`TurnStorage.start/3`)."
   @spec start_turn(Context.t(), turn(), map()) :: {:ok, turn()} | {:error, term()}
   def start_turn(%Context{} = ctx, turn, attrs) when is_map(attrs) do
-    TurnStorage.start(ctx, turn.id, Map.put_new(attrs, :fence, turn.fence))
+    TurnStorage.start(Sanctum.Context.actor(ctx), turn.id, Map.put_new(attrs, :fence, turn.fence))
   end
 
   @doc "End a turn: the one terminal transaction (`TurnStorage.finish/4`)."
   @spec finish(Context.t(), turn(), String.t(), map()) :: {:ok, turn()} | {:error, term()}
   def finish(%Context{} = ctx, turn, status, attrs \\ %{}) do
     with {:ok, finished} <-
-           TurnStorage.finish(ctx, turn.id, status, Map.put_new(attrs, :fence, turn.fence)) do
+           TurnStorage.finish(
+             Sanctum.Context.actor(ctx),
+             turn.id,
+             status,
+             Map.put_new(attrs, :fence, turn.fence)
+           ) do
       broadcast(ctx, turn.thread_id, {:turn_finished})
       {:ok, finished}
     end
@@ -187,17 +192,20 @@ defmodule Aqua.Tape do
   """
   @spec bump_recovery(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
   def bump_recovery(%Context{} = ctx, turn),
-    do: TurnStorage.takeover(ctx, turn.id, %{fence: turn.fence})
+    do: TurnStorage.takeover(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
 
   @doc "Pin the exact catalyst release the turn runs on (`TurnStorage.pin_catalyst/4`)."
   @spec pin_catalyst(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
   def pin_catalyst(%Context{} = ctx, turn, catalyst_ref),
-    do: TurnStorage.pin_catalyst(ctx, turn.id, catalyst_ref, %{fence: turn.fence})
+    do:
+      TurnStorage.pin_catalyst(Sanctum.Context.actor(ctx), turn.id, catalyst_ref, %{
+        fence: turn.fence
+      })
 
   @doc "Renew the fence and cancel-mark the dispatched steps, before the loop is stopped."
   @spec supersede(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
   def supersede(%Context{} = ctx, turn),
-    do: TurnStorage.supersede(ctx, turn.id, %{fence: turn.fence})
+    do: TurnStorage.supersede(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
 
   # ---------------------------------------------------------------------------
   # Steps
@@ -207,7 +215,7 @@ defmodule Aqua.Tape do
   @spec record_model_intent(Context.t(), turn(), map()) :: {:ok, step()} | {:error, term()}
   def record_model_intent(%Context{} = ctx, turn, attrs \\ %{}) do
     TurnStorage.put_step(
-      ctx,
+      Sanctum.Context.actor(ctx),
       turn.id,
       attrs |> Map.put(:kind, "model") |> Map.put_new(:fence, turn.fence)
     )
@@ -223,7 +231,7 @@ defmodule Aqua.Tape do
   def record_response(%Context{} = ctx, turn, model_step, response) when is_map(response) do
     with {:ok, %{text: text, calls: calls} = recorded} <-
            TurnStorage.record_response(
-             ctx,
+             Sanctum.Context.actor(ctx),
              turn.id,
              model_step.id,
              Map.put_new(response, :fence, turn.fence)
@@ -237,14 +245,19 @@ defmodule Aqua.Tape do
   @doc "Flip a proposed step to dispatched, in its own commit."
   @spec mark_dispatched(Context.t(), turn(), step()) :: {:ok, step()} | {:error, term()}
   def mark_dispatched(%Context{} = ctx, turn, step),
-    do: TurnStorage.dispatch_step(ctx, step.id, %{fence: turn.fence})
+    do: TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), step.id, %{fence: turn.fence})
 
   @doc "Close a step with its result row, outcome and event, in one transaction."
   @spec close_step(Context.t(), turn(), step(), String.t(), map()) ::
           {:ok, %{step: step(), result: row() | nil}} | {:error, term()}
   def close_step(%Context{} = ctx, turn, step, outcome, attrs \\ %{}) do
     with {:ok, %{result: result} = closed} <-
-           TurnStorage.close_step(ctx, step.id, outcome, Map.put_new(attrs, :fence, turn.fence)) do
+           TurnStorage.close_step(
+             Sanctum.Context.actor(ctx),
+             step.id,
+             outcome,
+             Map.put_new(attrs, :fence, turn.fence)
+           ) do
       if result, do: broadcast(ctx, turn.thread_id, {:message, result})
       {:ok, closed}
     end
@@ -259,7 +272,7 @@ defmodule Aqua.Tape do
           {:ok, step()} | {:error, term()}
   def mark_uncertain(%Context{} = ctx, turn, step, reason \\ nil),
     do:
-      TurnStorage.mark_step_uncertain(ctx, step.id, reason, %{
+      TurnStorage.mark_step_uncertain(Sanctum.Context.actor(ctx), step.id, reason, %{
         fence: turn.fence,
         generation: step.generation
       })
@@ -274,7 +287,11 @@ defmodule Aqua.Tape do
           {:ok, %{turn: turn(), aborted: row()}} | {:error, term()}
   def pause_uncertain(%Context{} = ctx, turn, attrs) when is_map(attrs) do
     with {:ok, %{aborted: aborted} = paused} <-
-           TurnStorage.pause_uncertain(ctx, turn.id, Map.put_new(attrs, :fence, turn.fence)) do
+           TurnStorage.pause_uncertain(
+             Sanctum.Context.actor(ctx),
+             turn.id,
+             Map.put_new(attrs, :fence, turn.fence)
+           ) do
       broadcast(ctx, turn.thread_id, {:message, aborted})
       {:ok, paused}
     end
@@ -283,23 +300,31 @@ defmodule Aqua.Tape do
   @doc "Set down a running turn a dead runner left with an unacknowledged uncertainty (`TurnStorage.pause_recovered/3`)."
   @spec pause_recovered(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
   def pause_recovered(%Context{} = ctx, turn, content) when is_binary(content),
-    do: TurnStorage.pause_recovered(ctx, turn.id, %{content: content, fence: turn.fence})
+    do:
+      TurnStorage.pause_recovered(Sanctum.Context.actor(ctx), turn.id, %{
+        content: content,
+        fence: turn.fence
+      })
 
   @doc "Whether the turn holds an uncertainty its sender has not acknowledged."
   @spec unacknowledged_episode?(Context.t(), turn()) :: boolean()
   def unacknowledged_episode?(%Context{} = ctx, turn),
-    do: TurnStorage.unacknowledged_episode?(ctx, turn.id) == true
+    do: TurnStorage.unacknowledged_episode?(Sanctum.Context.actor(ctx), turn.id) == true
 
   @doc "Whether the turn is restricted to replay-safe reads: any of its steps is `uncertain`."
   @spec restricted?(Context.t(), turn()) :: boolean()
-  def restricted?(%Context{} = ctx, turn), do: TurnStorage.restricted?(ctx, turn.id) == true
+  def restricted?(%Context{} = ctx, turn),
+    do: TurnStorage.restricted?(Sanctum.Context.actor(ctx), turn.id) == true
 
   @doc "Close every unstarted step as skipped and invalidate their cards."
   @spec skip_steps(Context.t(), turn(), String.t()) :: {:ok, [step()]} | {:error, term()}
   def skip_steps(%Context{} = ctx, turn, reason) do
-    with {:ok, steps} <- TurnStorage.skip_steps(ctx, turn.id, reason, %{fence: turn.fence}) do
+    with {:ok, steps} <-
+           TurnStorage.skip_steps(Sanctum.Context.actor(ctx), turn.id, reason, %{
+             fence: turn.fence
+           }) do
       Enum.each(steps, fn step ->
-        with {:ok, row} <- Threads.get_message(ctx, step.result_message_id),
+        with {:ok, row} <- Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
              do: broadcast(ctx, turn.thread_id, {:message, row})
       end)
 
@@ -312,7 +337,7 @@ defmodule Aqua.Tape do
           {:ok, step()} | {:error, term()}
   def next_generation(%Context{} = ctx, turn, step, child_execution_id),
     do:
-      TurnStorage.next_generation(ctx, step.id, %{
+      TurnStorage.next_generation(Sanctum.Context.actor(ctx), step.id, %{
         child_execution_id: child_execution_id,
         fence: turn.fence
       })
@@ -321,7 +346,12 @@ defmodule Aqua.Tape do
   @spec mark_excluded(Context.t(), turn(), step(), map()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def mark_excluded(%Context{} = ctx, turn, step, attrs),
-    do: TurnStorage.update_step(ctx, step.id, Map.put(attrs, :fence, turn.fence))
+    do:
+      TurnStorage.update_step(
+        Sanctum.Context.actor(ctx),
+        step.id,
+        Map.put(attrs, :fence, turn.fence)
+      )
 
   # ---------------------------------------------------------------------------
   # Approvals
@@ -332,7 +362,11 @@ defmodule Aqua.Tape do
           {:ok, %{approval: approval(), card: row()}} | {:error, term()}
   def open_approval(%Context{} = ctx, turn, step, attrs) when is_map(attrs) do
     with {:ok, %{card: card, approval: approval} = opened} <-
-           TurnStorage.open_approval(ctx, step.id, Map.put_new(attrs, :fence, turn.fence)) do
+           TurnStorage.open_approval(
+             Sanctum.Context.actor(ctx),
+             step.id,
+             Map.put_new(attrs, :fence, turn.fence)
+           ) do
       broadcast(ctx, turn.thread_id, {:message, card})
 
       Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_pending, %{
@@ -351,7 +385,7 @@ defmodule Aqua.Tape do
   def resolve_approval(%Context{} = ctx, turn, approval_id, decision, attrs) when is_map(attrs) do
     with {:ok, %{card: card, step: step} = resolved} <-
            TurnStorage.resolve_approval(
-             ctx,
+             Sanctum.Context.actor(ctx),
              approval_id,
              decision,
              Map.put_new(attrs, :fence, turn.fence)
@@ -359,7 +393,7 @@ defmodule Aqua.Tape do
       broadcast(ctx, turn.thread_id, {:message, card})
 
       if step.result_message_id do
-        with {:ok, row} <- Threads.get_message(ctx, step.result_message_id),
+        with {:ok, row} <- Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
              do: broadcast(ctx, turn.thread_id, {:message, row})
       end
 
@@ -396,7 +430,11 @@ defmodule Aqua.Tape do
           {:ok, %{turn: turn(), step: step(), task: row()}} | {:error, term()}
   def open_clone_turn(%Context{} = ctx, parent, attrs) when is_map(attrs) do
     with {:ok, %{task: task} = opened} <-
-           TurnStorage.open_clone_turn(ctx, parent.id, Map.put_new(attrs, :fence, parent.fence)) do
+           TurnStorage.open_clone_turn(
+             Sanctum.Context.actor(ctx),
+             parent.id,
+             Map.put_new(attrs, :fence, parent.fence)
+           ) do
       broadcast(ctx, parent.thread_id, {:message, task})
       {:ok, opened}
     end
@@ -404,14 +442,20 @@ defmodule Aqua.Tape do
 
   @doc "The open clone turns under `turn`, oldest first."
   @spec open_clones(Context.t(), turn()) :: {:ok, [turn()]} | {:error, term()}
-  def open_clones(%Context{} = ctx, turn), do: TurnStorage.open_clones(ctx, turn.id)
+  def open_clones(%Context{} = ctx, turn),
+    do: TurnStorage.open_clones(Sanctum.Context.actor(ctx), turn.id)
 
   @doc "End a clone turn."
   @spec close_clone_turn(Context.t(), turn(), String.t(), map()) ::
           {:ok, turn()} | {:error, term()}
   def close_clone_turn(%Context{} = ctx, clone, status, attrs \\ %{}),
     do:
-      TurnStorage.close_clone_turn(ctx, clone.id, status, Map.put_new(attrs, :fence, clone.fence))
+      TurnStorage.close_clone_turn(
+        Sanctum.Context.actor(ctx),
+        clone.id,
+        status,
+        Map.put_new(attrs, :fence, clone.fence)
+      )
 
   # ---------------------------------------------------------------------------
   # Reads
@@ -419,38 +463,40 @@ defmodule Aqua.Tape do
 
   @doc "The rows a turn may read now, in `seq` order (`TurnStorage.projection/2`)."
   @spec projection(Context.t(), turn()) :: {:ok, [row()]} | {:error, term()}
-  def projection(%Context{} = ctx, turn), do: TurnStorage.projection(ctx, turn.id)
+  def projection(%Context{} = ctx, turn),
+    do: TurnStorage.projection(Sanctum.Context.actor(ctx), turn.id)
 
   @doc "Drain the steer rows past the turn's boundary, moving the boundary."
   @spec drain_steer(Context.t(), turn()) :: {:ok, [row()]} | {:error, term()}
   def drain_steer(%Context{} = ctx, turn),
-    do: TurnStorage.drain_steer(ctx, turn.id, %{fence: turn.fence})
+    do: TurnStorage.drain_steer(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
 
   @doc "Whether a steer row waits past the turn's boundary."
   @spec steer_pending?(Context.t(), turn()) :: boolean()
-  def steer_pending?(%Context{} = ctx, turn), do: TurnStorage.steer_pending?(ctx, turn.id) == true
+  def steer_pending?(%Context{} = ctx, turn),
+    do: TurnStorage.steer_pending?(Sanctum.Context.actor(ctx), turn.id) == true
 
   @doc "One turn, re-read."
   @spec turn(Context.t(), String.t()) :: {:ok, turn()} | {:error, term()}
-  def turn(%Context{} = ctx, turn_id), do: TurnStorage.get(ctx, turn_id)
+  def turn(%Context{} = ctx, turn_id), do: TurnStorage.get(Sanctum.Context.actor(ctx), turn_id)
 
   @doc "The turn a message opened."
   @spec turn_of_message(Context.t(), String.t()) :: {:ok, turn()} | {:error, term()}
   def turn_of_message(%Context{} = ctx, message_id),
-    do: TurnStorage.turn_of_message(ctx, message_id)
+    do: TurnStorage.turn_of_message(Sanctum.Context.actor(ctx), message_id)
 
   @doc "A turn's steps in order."
   @spec steps(Context.t(), turn()) :: {:ok, [step()]} | {:error, term()}
-  def steps(%Context{} = ctx, turn), do: TurnStorage.steps(ctx, turn.id)
+  def steps(%Context{} = ctx, turn), do: TurnStorage.steps(Sanctum.Context.actor(ctx), turn.id)
 
   @doc "One step, re-read."
   @spec step(Context.t(), String.t()) :: {:ok, step()} | {:error, term()}
-  def step(%Context{} = ctx, step_id), do: TurnStorage.step(ctx, step_id)
+  def step(%Context{} = ctx, step_id), do: TurnStorage.step(Sanctum.Context.actor(ctx), step_id)
 
   @doc "The open turns of a thread, oldest first."
   @spec open_turns(Context.t(), String.t()) :: {:ok, [turn()]} | {:error, term()}
   def open_turns(%Context{} = ctx, thread_id),
-    do: TurnStorage.open_turns(ctx, thread_id)
+    do: TurnStorage.open_turns(Sanctum.Context.actor(ctx), thread_id)
 
   @doc "Every thread with an open root turn, across tenants — the boot's recovery scan."
   @spec with_open_turns() :: [{String.t(), String.t()}]
@@ -458,21 +504,23 @@ defmodule Aqua.Tape do
 
   @doc "One approval."
   @spec approval(Context.t(), String.t()) :: {:ok, approval()} | {:error, term()}
-  def approval(%Context{} = ctx, approval_id), do: TurnStorage.approval(ctx, approval_id)
+  def approval(%Context{} = ctx, approval_id),
+    do: TurnStorage.approval(Sanctum.Context.actor(ctx), approval_id)
 
   @doc "The approval a card references."
   @spec approval_by_message(Context.t(), String.t()) :: {:ok, approval()} | {:error, term()}
   def approval_by_message(%Context{} = ctx, message_id),
-    do: TurnStorage.approval_by_message(ctx, message_id)
+    do: TurnStorage.approval_by_message(Sanctum.Context.actor(ctx), message_id)
 
   @doc "A turn's pending approvals."
   @spec pending_approvals(Context.t(), turn()) :: {:ok, [approval()]} | {:error, term()}
-  def pending_approvals(%Context{} = ctx, turn), do: TurnStorage.pending_approvals(ctx, turn.id)
+  def pending_approvals(%Context{} = ctx, turn),
+    do: TurnStorage.pending_approvals(Sanctum.Context.actor(ctx), turn.id)
 
   @doc "The estate's pending approvals past their expiry."
   @spec expired_approvals(Context.t()) :: {:ok, [approval()]} | {:error, term()}
   def expired_approvals(%Context{} = ctx),
-    do: TurnStorage.expired_approvals(ctx, DateTime.utc_now())
+    do: TurnStorage.expired_approvals(Sanctum.Context.actor(ctx), DateTime.utc_now())
 
   @doc "The agent bytes a turn pinned, by their digest."
   @spec agent_revision(Context.t(), turn()) :: {:ok, binary()} | {:error, term()}
@@ -492,7 +540,8 @@ defmodule Aqua.Tape do
 
   @doc "The `tool_call` payloads of the calls a turn and its clones closed."
   @spec closed_calls(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
-  def closed_calls(%Context{} = ctx, turn), do: TurnStorage.closed_calls(ctx, turn.id)
+  def closed_calls(%Context{} = ctx, turn),
+    do: TurnStorage.closed_calls(Sanctum.Context.actor(ctx), turn.id)
 
   @doc "The decoded `payload` of a message row."
   @spec payload(row()) :: map()
@@ -500,17 +549,18 @@ defmodule Aqua.Tape do
 
   @doc "One message row of the tenant."
   @spec message(Context.t(), String.t()) :: {:ok, row()} | {:error, term()}
-  def message(%Context{} = ctx, message_id), do: Threads.get_message(ctx, message_id)
+  def message(%Context{} = ctx, message_id),
+    do: Threads.get_message(Sanctum.Context.actor(ctx), message_id)
 
   @doc "The thread a turn belongs to."
   @spec thread(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def thread(%Context{} = ctx, thread_id), do: Threads.get(ctx, thread_id)
+  def thread(%Context{} = ctx, thread_id), do: Threads.get(Sanctum.Context.actor(ctx), thread_id)
 
   @doc "The newest rows of a thread, for a viewer."
   @spec latest_messages(Context.t(), String.t(), pos_integer()) ::
           [row()] | {:error, term()}
   def latest_messages(%Context{} = ctx, thread_id, n),
-    do: Threads.latest_messages(ctx, thread_id, n)
+    do: Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, n)
 
   @doc "The topic a thread's rows are broadcast on."
   @spec topic(Context.t(), String.t()) :: String.t()

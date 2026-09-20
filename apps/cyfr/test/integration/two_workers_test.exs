@@ -364,7 +364,9 @@ defmodule Cyfr.TwoWorkersTest do
       refute_unmasked(row(id), secrets)
       refute_unmasked(live_events(), secrets)
       refute_unmasked(event_rows(ctx, id), secrets)
-      assert {:error, :not_found} = Arca.ExecutionPayloads.get(ctx, id, "result")
+
+      assert {:error, :not_found} =
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
 
       wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
     end

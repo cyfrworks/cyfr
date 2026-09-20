@@ -48,7 +48,7 @@ defmodule Compendium.Builds.BuildRefusalsTest do
   # The reference's unit, scaffolded in `ctx`'s athanor, so a build of it
   # is one the builder is asked for.
   defp scaffolded(ctx) do
-    :ok = Arca.ensure_roots(ctx)
+    :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
     {:ok, _} = Compendium.Scaffold.create(ctx, "refused", "reagent", "0.1.0")
     ctx
   end

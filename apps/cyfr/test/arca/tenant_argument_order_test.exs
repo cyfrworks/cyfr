@@ -61,20 +61,6 @@ defmodule Arca.TenantArgumentOrderTest do
     "budget_reservations.ex" => ~w(fetch)
   }
 
-  # The files whose heads still take a `%Sanctum.Context{}` or a bare id.
-  # The actor-first conversion lands facade by facade, so this is a
-  # shrinking list and not an exemption: nothing may be added to it, and
-  # it is empty by the end of the conversion, when it goes with this
-  # comment.
-  @pending ~w(
-    agent_revisions.ex agent_storage.ex arca.ex component_storage.ex
-    cron_schedule.ex execution.ex execution_payloads.ex keys.ex local.ex
-    mcp_log.ex mcp_server_storage.ex overlay.ex policy_log.ex
-    profile_storage.ex s3.ex storage.ex tenant_tables.ex thread_storage.ex
-    thread_subscription_storage.ex tool_grant_storage.ex turn_storage.ex
-    usage.ex webhook_storage.ex
-  )
-
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp sources do
@@ -126,7 +112,10 @@ defmodule Arca.TenantArgumentOrderTest do
   # The heads that bind the athanor out of the actor without refusing the
   # empty string in the same guard.
   defp unguarded(file, source) do
-    for {_name, text, n} <- heads(source),
+    exempt = Map.get(@exempt, file, [])
+
+    for {name, text, n} <- heads(source),
+        name not in exempt,
         text =~ ~r/%Cyfr\.Actor\{athanor_id: athanor_id\}/,
         not (text =~ ~r/athanor_id\s*!=\s*""/ or text =~ ~r/\bresolved\(athanor_id\)/),
         do: "#{file}:#{n}: #{text |> String.split("\n") |> hd() |> String.trim()}"
@@ -134,10 +123,9 @@ defmodule Arca.TenantArgumentOrderTest do
 
   test "every tenant-scoped storage function takes the actor first" do
     found =
-      for path <- sources(),
-          Path.basename(path) not in @pending,
-          offender <- offending(Path.basename(path), Cyfr.Test.SourceTree.read(path)),
-          do: offender
+      Enum.flat_map(sources(), fn path ->
+        offending(Path.basename(path), Cyfr.Test.SourceTree.read(path))
+      end)
 
     assert found == [],
            """

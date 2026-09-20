@@ -13,14 +13,15 @@ defmodule Arca.ThreadSubscriptionStorageTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    alice = Sanctum.TestContext.local()
+    alice_ctx = Sanctum.TestContext.local()
+    alice = Sanctum.Context.actor(alice_ctx)
 
     bob = %{
       alice
       | user_id: "github|https://github.com|bob-#{System.unique_integer([:positive])}"
     }
 
-    {:ok, alice: alice, bob: bob}
+    {:ok, alice_ctx: alice_ctx, alice: alice, bob: bob}
   end
 
   test "the creator follows their own thread without picking themselves", %{alice: alice} do
@@ -60,7 +61,7 @@ defmodule Arca.ThreadSubscriptionStorageTest do
 
     :ok = Subs.follow(bob, thread.id, bob.user_id)
     :ok = Subs.follow(bob, thread.id, bob.user_id)
-    assert Subs.follows?(bob.athanor_id, thread.id, bob.user_id)
+    assert Subs.follows?(Cyfr.Actor.in_athanor(bob.athanor_id), thread.id, bob.user_id)
 
     :ok = Subs.unfollow(bob, thread.id, bob.user_id)
     :ok = Subs.unfollow(bob, thread.id, bob.user_id)
@@ -98,7 +99,7 @@ defmodule Arca.ThreadSubscriptionStorageTest do
     elsewhere = %{bob | athanor_id: "ath_other"}
     :ok = Subs.follow(elsewhere, a.id <> "-other", bob.user_id)
 
-    :ok = Subs.unfollow_all(alice.athanor_id, bob.user_id)
+    :ok = Subs.unfollow_all(alice, bob.user_id)
 
     assert Subs.followed(bob, bob.user_id) == MapSet.new()
     assert MapSet.member?(Subs.followed(elsewhere, bob.user_id), a.id <> "-other")
@@ -108,10 +109,11 @@ defmodule Arca.ThreadSubscriptionStorageTest do
     assert MapSet.member?(followed, b.id)
 
     # Idempotent, like its siblings.
-    assert :ok = Subs.unfollow_all(alice.athanor_id, bob.user_id)
+    assert :ok = Subs.unfollow_all(alice, bob.user_id)
   end
 
   test "deleting a thread sweeps its follows and its thread-scope grants", %{
+    alice_ctx: alice_ctx,
     alice: alice,
     bob: bob
   } do
@@ -131,7 +133,7 @@ defmodule Arca.ThreadSubscriptionStorageTest do
     :ok = Subs.follow(bob, thread.id, bob.user_id)
 
     {:ok, _} =
-      Aqua.ToolGrants.put(alice, %{
+      Aqua.ToolGrants.put(alice_ctx, %{
         scope: "thread",
         effect: "allow",
         thread_id: thread.id,
@@ -142,7 +144,7 @@ defmodule Arca.ThreadSubscriptionStorageTest do
 
     # An agent-scope answer belongs to the agent, not the thread — it stays.
     {:ok, _} =
-      Aqua.ToolGrants.put(alice, %{
+      Aqua.ToolGrants.put(alice_ctx, %{
         scope: "agent",
         effect: "allow",
         thread_id: thread.id,
@@ -155,10 +157,10 @@ defmodule Arca.ThreadSubscriptionStorageTest do
 
     # Until the athanor's own destroy, nothing else reclaimed these — a
     # deleted thread left rows naming it forever.
-    refute Subs.follows?(alice.athanor_id, thread.id, alice.user_id)
+    refute Subs.follows?(Cyfr.Actor.in_athanor(alice.athanor_id), thread.id, alice.user_id)
     refute MapSet.member?(Subs.followed(bob, bob.user_id), thread.id)
 
-    remaining = Aqua.ToolGrants.for_thread(alice, thread.id, "aqua")
+    remaining = Aqua.ToolGrants.for_thread(alice_ctx, thread.id, "aqua")
     assert {:ok, [%{scope: "agent", action: "inspect"}]} = remaining
   end
 end

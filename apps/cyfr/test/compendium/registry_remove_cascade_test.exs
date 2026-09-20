@@ -83,7 +83,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     {:ok, _} = Compendium.Registry.delete(ctx, "cascade-target", "1.0.0", "local")
 
-    {:ok, profile} = Arca.ProfileStorage.get(ctx.athanor_id, profile_id)
+    {:ok, profile} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
     assert profile.status == "revoked"
 
     # Consents are insert-only history — the revoked status is the gate.
@@ -112,7 +112,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     {:ok, _} = Compendium.Registry.delete(ctx, "cascade-hooked", "1.0.0", "local")
 
-    {:ok, live} = Arca.WebhookStorage.list_webhooks(ctx.athanor_id)
+    {:ok, live} = Arca.WebhookStorage.list_webhooks(Sanctum.Context.actor(ctx))
 
     refute Enum.any?(live, &(&1.name == "cascade-hook"))
   end
@@ -124,7 +124,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     {:ok, _} = Compendium.Registry.delete(ctx, "cascade-multi", "1.0.0", "local")
 
-    {:ok, profile} = Arca.ProfileStorage.get(ctx.athanor_id, profile_id)
+    {:ok, profile} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
     assert profile.status == "active"
   end
 
@@ -135,7 +135,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     {:ok, _} = Compendium.Registry.delete(ctx, "cascade-a", "1.0.0", "local")
 
-    {:ok, profile} = Arca.ProfileStorage.get(ctx.athanor_id, other_id)
+    {:ok, profile} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), other_id)
     assert profile.status == "active"
   end
 end

@@ -55,32 +55,41 @@ defmodule Arca.McpLogTest do
     test "updates an existing log" do
       {:ok, log} = McpLog.record(log_attrs(%{id: "req_upd_1"}))
 
-      ctx =
-        Sanctum.TestContext.platform(
-          user_id: "admin",
-          permissions: [:*],
-          auth_method: :oidc,
-          namespace: "testns"
+      actor =
+        Sanctum.Context.actor(
+          Sanctum.TestContext.platform(
+            user_id: "admin",
+            permissions: [:*],
+            auth_method: :oidc,
+            namespace: "testns"
+          )
         )
 
       assert {:ok, updated} =
-               McpLog.record_update(ctx, log.id, %{status: "success", duration_ms: 42})
+               McpLog.record_update(actor, log.id, %{
+                 status: "success",
+                 duration_ms: 42
+               })
 
       assert updated.status == "success"
       assert updated.duration_ms == 42
     end
 
     test "returns not_found for missing log" do
-      ctx =
-        Sanctum.TestContext.platform(
-          user_id: "admin",
-          permissions: [:*],
-          auth_method: :oidc,
-          namespace: "testns"
+      actor =
+        Sanctum.Context.actor(
+          Sanctum.TestContext.platform(
+            user_id: "admin",
+            permissions: [:*],
+            auth_method: :oidc,
+            namespace: "testns"
+          )
         )
 
       assert {:error, :not_found} =
-               McpLog.record_update(ctx, "req_nonexistent", %{status: "success"})
+               McpLog.record_update(actor, "req_nonexistent", %{
+                 status: "success"
+               })
     end
 
     test "cross-tenant update returns not_found" do
@@ -99,7 +108,9 @@ defmodule Arca.McpLogTest do
         )
 
       assert {:error, :not_found} =
-               McpLog.record_update(ctx_other, "req_cross", %{status: "success"})
+               McpLog.record_update(Sanctum.Context.actor(ctx_other), "req_cross", %{
+                 status: "success"
+               })
     end
   end
 
@@ -195,7 +206,8 @@ defmodule Arca.McpLogTest do
           namespace: "testns"
         )
 
-      assert %McpLog{id: "req_plat"} = McpLog.get_tenant(platform_ctx, log.id)
+      assert %McpLog{id: "req_plat"} =
+               McpLog.get_tenant(Sanctum.Context.actor(platform_ctx), log.id)
     end
 
     test "athanor scope filters by tenant" do
@@ -223,8 +235,8 @@ defmodule Arca.McpLogTest do
           authenticated: true
         )
 
-      assert %McpLog{} = McpLog.get_tenant(ctx_match, "req_t1")
-      assert is_nil(McpLog.get_tenant(ctx_miss, "req_t1"))
+      assert %McpLog{} = McpLog.get_tenant(Sanctum.Context.actor(ctx_match), "req_t1")
+      assert is_nil(McpLog.get_tenant(Sanctum.Context.actor(ctx_miss), "req_t1"))
     end
   end
 
@@ -246,8 +258,8 @@ defmodule Arca.McpLogTest do
           namespace: "testns"
         )
 
-      assert is_nil(McpLog.get_tenant(platform_ctx, "req_del1"))
-      assert %McpLog{} = McpLog.get_tenant(platform_ctx, "req_del2")
+      assert is_nil(McpLog.get_tenant(Sanctum.Context.actor(platform_ctx), "req_del1"))
+      assert %McpLog{} = McpLog.get_tenant(Sanctum.Context.actor(platform_ctx), "req_del2")
     end
 
     test "respects tenant scoping" do
@@ -284,9 +296,9 @@ defmodule Arca.McpLogTest do
         )
 
       # ath_a record deleted
-      assert is_nil(McpLog.get_tenant(platform_ctx, "req_delt1"))
+      assert is_nil(McpLog.get_tenant(Sanctum.Context.actor(platform_ctx), "req_delt1"))
       # ath_b record untouched
-      assert %McpLog{} = McpLog.get_tenant(platform_ctx, "req_delt2")
+      assert %McpLog{} = McpLog.get_tenant(Sanctum.Context.actor(platform_ctx), "req_delt2")
     end
   end
 

@@ -63,7 +63,7 @@ defmodule Opus.BootstrapFirstRunTest do
   defp stage_and_register(ctx, rel) do
     segments = ["components" | String.split(rel, "/")]
 
-    with :ok <- Arca.Overlay.pull_shipped(ctx, segments) do
+    with :ok <- Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), segments) do
       Compendium.Registry.register_from_arca(ctx, segments)
     end
   end

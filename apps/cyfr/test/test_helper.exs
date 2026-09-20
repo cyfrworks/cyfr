@@ -45,6 +45,13 @@ seed_path = Application.fetch_env!(:cyfr, :seed_path)
 File.mkdir_p!(Path.join(seed_path, "components"))
 File.cp_r!(Path.expand("../../../seed/aqua", __DIR__), Path.join(seed_path, "aqua"))
 
+# The cap port every capped write asks, which raises while nothing is
+# installed rather than reading an uninstalled port as a server with no
+# caps. The boot write belongs in `Cyfr.Application` and lands with the
+# app split; until it does, the suite installs the one implementation
+# here, before the first test that writes a tenant byte.
+Cyfr.Caps.install!(Sanctum.Tenancy.Caps)
+
 # A suite database built from a different schema would run stale, since the
 # baseline still reads as applied; refuse it before any test touches it.
 Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, &Arca.SchemaFingerprint.verify!/0)

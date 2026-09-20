@@ -39,7 +39,7 @@ defmodule Compendium.MCPTest do
 
       :ok =
         Arca.put(
-          Sanctum.TestContext.local(),
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
           Compendium.AquaPath.agent_file(name),
           Compendium.AquaAgent.serialize(agent)
         )
@@ -225,7 +225,7 @@ defmodule Compendium.MCPTest do
       # Write an asset file into the component's storage directory
       asset_dir =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "reagents", "local", "asset-test", "1.0.0"]
         )
 
@@ -708,7 +708,12 @@ defmodule Compendium.MCPTest do
 
     defp setup_dep_test_dir(_test_dir, type, name, version, manifest) do
       segments = ["components", "#{type}s", "local", name, version]
-      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
+
+      comp_dir =
+        Arca.Adapters.Local.build_path(
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
+          segments
+        )
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
@@ -906,7 +911,12 @@ defmodule Compendium.MCPTest do
 
     defp setup_plan_component(_test_dir, type, name, version, manifest) do
       segments = ["components", "#{type}s", "local", name, version]
-      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
+
+      comp_dir =
+        Arca.Adapters.Local.build_path(
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
+          segments
+        )
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
@@ -1192,7 +1202,7 @@ defmodule Compendium.MCPTest do
 
     test "removes a filesystem component", %{ctx: ctx} do
       segments = ["components", "catalysts", "local", "remove-fs-test", "1.0.0"]
-      comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -1535,7 +1545,7 @@ defmodule Compendium.MCPTest do
   describe "component inspect - include_readme" do
     test "inspect with include_readme returns readme content", %{ctx: ctx} do
       segments = ["components", "catalysts", "local", "readme-test", "1.0.0"]
-      comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -1559,7 +1569,7 @@ defmodule Compendium.MCPTest do
 
     test "inspect without include_readme omits readme", %{ctx: ctx} do
       segments = ["components", "catalysts", "local", "no-readme-flag", "1.0.0"]
-      comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -1581,7 +1591,7 @@ defmodule Compendium.MCPTest do
 
     test "inspect with include_readme returns nil when no README", %{ctx: ctx} do
       segments = ["components", "reagents", "local", "no-readme-file", "1.0.0"]
-      comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
 
       File.mkdir_p!(comp_dir)
 
@@ -1605,7 +1615,7 @@ defmodule Compendium.MCPTest do
   describe "component tool - status overview" do
     test "status without a reference answers the whole-athanor overview", %{ctx: ctx} do
       segments = ["components", "reagents", "local", "ov-tool", "1.0.0"]
-      comp_dir = Arca.Adapters.Local.build_path(ctx, segments)
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
       File.mkdir_p!(comp_dir)
 
       File.write!(
@@ -1643,7 +1653,7 @@ defmodule Compendium.MCPTest do
     test "reset keeps member-created agents and scrolls unless all=true", %{ctx: ctx} do
       :ok =
         Arca.put(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["aqua", "roles", "keeper.md"],
           "---\ntitle: Keeper\n---\n\nkeeper\n"
         )
@@ -1662,13 +1672,13 @@ defmodule Compendium.MCPTest do
       assert "aqua/roles/keeper.md" in kept
       assert "aqua/skills/pdf" in kept
       assert "aqua/roles/web.md" in reverted
-      assert Arca.exists?(ctx, ["aqua", "roles", "keeper.md"])
+      assert Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "roles", "keeper.md"])
 
       {:ok, %{reset: true, kept: []}} =
         MCP.handle("aqua", ctx, %{"action" => "reset", "all" => true})
 
-      refute Arca.exists?(ctx, ["aqua", "roles", "keeper.md"])
-      refute Arca.exists?(ctx, ["aqua", "skills", "pdf", "SKILL.md"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "roles", "keeper.md"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "skills", "pdf", "SKILL.md"])
     end
 
     test "skill_list and skill_get serve the scrolls, shipped and the estate's own", %{ctx: ctx} do
@@ -1687,7 +1697,12 @@ defmodule Compendium.MCPTest do
         })
 
       # A resource beside the manifest, as a member adds one by hand.
-      :ok = Arca.put(ctx, ["aqua", "skills", "pdf", "reference.md"], "field tables")
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          ["aqua", "skills", "pdf", "reference.md"],
+          "field tables"
+        )
 
       {:ok, listing} = MCP.handle("aqua", ctx, %{"action" => "skill_list"})
       assert Enum.map(listing.skills, & &1.name) == ["capability-acquisition", "pdf"]
@@ -1707,7 +1722,12 @@ defmodule Compendium.MCPTest do
           "content" => "Use the reference."
         })
 
-      :ok = Arca.put(ctx, ["aqua", "skills", "pdf", "reference.md"], "field tables")
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          ["aqua", "skills", "pdf", "reference.md"],
+          "field tables"
+        )
 
       {:ok, %{updated: "pdf"}} =
         MCP.handle("aqua", ctx, %{
@@ -1970,7 +1990,12 @@ defmodule Compendium.MCPTest do
 
     defp setup_component_dir(_test_dir, type, name, version, manifest) do
       segments = ["components", "#{type}s", "local", name, version]
-      comp_dir = Arca.Adapters.Local.build_path(Sanctum.TestContext.local(), segments)
+
+      comp_dir =
+        Arca.Adapters.Local.build_path(
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
+          segments
+        )
 
       File.mkdir_p!(comp_dir)
 

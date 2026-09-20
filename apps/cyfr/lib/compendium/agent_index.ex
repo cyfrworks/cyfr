@@ -57,7 +57,7 @@ defmodule Compendium.AgentIndex do
            }}
           | {:error, term()}
   def snapshot(%Context{} = ctx, name) when is_binary(name) do
-    with {:ok, bytes} <- Arca.get(ctx, AquaPath.agent_file(name)),
+    with {:ok, bytes} <- Arca.get(Sanctum.Context.actor(ctx), AquaPath.agent_file(name)),
          {:ok, revision} <- Arca.AgentRevisions.put(Context.actor(ctx), bytes),
          {:ok, agent} <- AquaAgent.parse(name, bytes),
          {:ok, capability} <- AquaAgent.capability_digest(agent) do

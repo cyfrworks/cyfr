@@ -465,7 +465,11 @@ defmodule Arca.VaultStorage do
 
   defp block_profiles(athanor_id, profile_ids, blocked_status) do
     Enum.reduce_while(profile_ids, :ok, fn profile_id, :ok ->
-      case Arca.ProfileStorage.set_status(athanor_id, profile_id, blocked_status) do
+      case Arca.ProfileStorage.set_status(
+             Cyfr.Actor.in_athanor(athanor_id),
+             profile_id,
+             blocked_status
+           ) do
         :ok -> {:cont, :ok}
         {:error, _} = error -> {:halt, error}
       end

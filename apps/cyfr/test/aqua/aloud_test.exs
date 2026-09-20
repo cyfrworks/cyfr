@@ -46,9 +46,11 @@ defmodule Aqua.AloudTest do
     base = Sanctum.TestContext.local()
     alice_ctx = %{base | user_id: alice}
 
-    {:ok, private} = Threads.create(%{alice_ctx | athanor_id: mine.id})
-    {:ok, shared} = Threads.create(%{alice_ctx | athanor_id: room.id})
-    {:ok, theirs} = Threads.create(%{base | user_id: bob, athanor_id: elsewhere.id})
+    {:ok, private} = Threads.create(Sanctum.Context.actor(%{alice_ctx | athanor_id: mine.id}))
+    {:ok, shared} = Threads.create(Sanctum.Context.actor(%{alice_ctx | athanor_id: room.id}))
+
+    {:ok, theirs} =
+      Threads.create(Sanctum.Context.actor(%{base | user_id: bob, athanor_id: elsewhere.id}))
 
     {:ok,
      ctx: %{alice_ctx | athanor_id: mine.id}, private: private, shared: shared, theirs: theirs}
@@ -56,7 +58,7 @@ defmodule Aqua.AloudTest do
 
   defp said(ctx, thread, text) do
     {:ok, msg} =
-      Threads.append(%{ctx | athanor_id: thread.athanor_id}, thread.id, %{
+      Threads.append(Sanctum.Context.actor(%{ctx | athanor_id: thread.athanor_id}), thread.id, %{
         author: ctx.user_id,
         kind: "text",
         content: text
@@ -74,14 +76,18 @@ defmodule Aqua.AloudTest do
     b = said(ctx, private, "BA117, apparently")
 
     # Nothing crosses on its own.
-    assert [] = Threads.messages(%{ctx | athanor_id: shared.athanor_id}, shared.id)
+    assert [] =
+             Threads.messages(
+               Sanctum.Context.actor(%{ctx | athanor_id: shared.athanor_id}),
+               shared.id
+             )
 
     assert {:ok, [posted]} = Aloud.post(ctx, private.id, [b.id], shared.athanor_id, shared.id)
     assert posted.content == "BA117, apparently"
 
     # Only what was chosen — the question stayed private.
     contents =
-      %{ctx | athanor_id: shared.athanor_id}
+      Sanctum.Context.actor(%{ctx | athanor_id: shared.athanor_id})
       |> Threads.messages(shared.id)
       |> Enum.map(& &1.content)
 
@@ -89,7 +95,12 @@ defmodule Aqua.AloudTest do
 
     # And the original is untouched: saying something aloud is a copy, not
     # a move out of your own thread.
-    assert length(Threads.messages(%{ctx | athanor_id: private.athanor_id}, private.id)) ==
+    assert length(
+             Threads.messages(
+               Sanctum.Context.actor(%{ctx | athanor_id: private.athanor_id}),
+               private.id
+             )
+           ) ==
              2
 
     assert a.id != posted.id
@@ -156,7 +167,11 @@ defmodule Aqua.AloudTest do
     end
 
     {:ok, answer} =
-      Threads.append(ctx, private.id, %{author: "aqua", kind: "text", content: "Try BA117."})
+      Threads.append(Sanctum.Context.actor(ctx), private.id, %{
+        author: "aqua",
+        kind: "text",
+        content: "Try BA117."
+      })
 
     assert {:ok, [copy]} = Aloud.post(ctx, private.id, [answer.id], shared.athanor_id, shared.id)
 
@@ -169,14 +184,22 @@ defmodule Aqua.AloudTest do
     room_ctx = %{ctx | athanor_id: shared.athanor_id}
 
     {:ok, room_answer} =
-      Threads.append(room_ctx, shared.id, %{author: "aqua", kind: "text", content: "Sure."})
+      Threads.append(Sanctum.Context.actor(room_ctx), shared.id, %{
+        author: "aqua",
+        kind: "text",
+        content: "Sure."
+      })
 
     assert {:error, :not_the_author} =
              Aloud.post(room_ctx, shared.id, [room_answer.id], private.athanor_id, private.id)
 
     # A system line is nobody's to say aloud, at home or not.
     {:ok, note} =
-      Threads.append(ctx, private.id, %{author: "system", kind: "system", content: "📝"})
+      Threads.append(Sanctum.Context.actor(ctx), private.id, %{
+        author: "system",
+        kind: "system",
+        content: "📝"
+      })
 
     assert {:error, :not_the_author} =
              Aloud.post(ctx, private.id, [note.id], shared.athanor_id, shared.id)
@@ -186,11 +209,15 @@ defmodule Aqua.AloudTest do
     mine = said(ctx, private, "my line")
 
     {:ok, other} =
-      Threads.append(%{ctx | athanor_id: private.athanor_id}, private.id, %{
-        author: "local|idp|somebody-else",
-        kind: "text",
-        content: "their line"
-      })
+      Threads.append(
+        Sanctum.Context.actor(%{ctx | athanor_id: private.athanor_id}),
+        private.id,
+        %{
+          author: "local|idp|somebody-else",
+          kind: "text",
+          content: "their line"
+        }
+      )
 
     # Refused whole, not filtered: publishing less than the person picked
     # would quietly say less than they chose to say — and publishing the
@@ -199,7 +226,7 @@ defmodule Aqua.AloudTest do
              Aloud.post(ctx, private.id, [mine.id, other.id], shared.athanor_id, shared.id)
 
     target_ctx = %{ctx | athanor_id: shared.athanor_id}
-    assert Threads.messages(target_ctx, shared.id) == []
+    assert Threads.messages(Sanctum.Context.actor(target_ctx), shared.id) == []
   end
 
   test "an operator who is not a member is refused like anyone else", %{
@@ -250,7 +277,7 @@ defmodule Aqua.AloudTest do
       ])
 
     {:ok, m} =
-      Threads.append(ctx, private.id, %{
+      Threads.append(Sanctum.Context.actor(ctx), private.id, %{
         id: message_id,
         author: ctx.user_id,
         kind: "text",
@@ -285,7 +312,7 @@ defmodule Aqua.AloudTest do
       ])
 
     {:ok, m} =
-      Threads.append(ctx, private.id, %{
+      Threads.append(Sanctum.Context.actor(ctx), private.id, %{
         id: message_id,
         author: ctx.user_id,
         kind: "text",
@@ -298,7 +325,10 @@ defmodule Aqua.AloudTest do
     assert {:error, :attachment_missing} =
              Aloud.post(ctx, private.id, [m.id], shared.athanor_id, shared.id)
 
-    assert Threads.messages(%{ctx | athanor_id: shared.athanor_id}, shared.id) == []
+    assert Threads.messages(
+             Sanctum.Context.actor(%{ctx | athanor_id: shared.athanor_id}),
+             shared.id
+           ) == []
   end
 
   test "refuses a copy into the same thread and an empty selection", %{

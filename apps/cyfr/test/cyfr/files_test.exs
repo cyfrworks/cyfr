@@ -51,7 +51,7 @@ defmodule Cyfr.FilesTest do
 
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
-    :ok = Arca.ensure_roots(ctx)
+    :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx}
   end
 
@@ -167,8 +167,8 @@ defmodule Cyfr.FilesTest do
     assert {:ok, %{written: "components/reagents/local/shelf/1.0.0/notes.txt"}} =
              Files.write(ctx, "components/reagents/local/shelf/1.0.0/notes.txt", "mine")
 
-    assert Arca.Overlay.unit_status(ctx, @shipped) == {:ok, :shipped}
-    assert {:ok, true} = Arca.Overlay.edited?(ctx, @shipped)
+    assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), @shipped) == {:ok, :shipped}
+    assert {:ok, true} = Arca.Overlay.edited?(Sanctum.Context.actor(ctx), @shipped)
 
     # A file inside goes; the unit whole does not.
     assert {:ok, _} = Files.delete(ctx, "components/reagents/local/shelf/1.0.0/notes.txt")

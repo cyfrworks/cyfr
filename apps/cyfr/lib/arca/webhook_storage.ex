@@ -24,6 +24,11 @@ defmodule Arca.WebhookStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
+  # Every function that names an athanor takes the `Cyfr.Actor` first and
+  # matches it in the head, refusing an actor whose athanor is nil or the
+  # empty string with `{:error, :no_athanor}` before any query.
+  # `get_by_slug/1` is the ingress lookup by the slug a caller presented
+  # and says why it is unscoped where it stands.
 
   import Arca.QueryHelpers, only: [where_athanor: 2]
 
@@ -103,9 +108,10 @@ defmodule Arca.WebhookStorage do
   @doc """
   Look up a webhook by name within an athanor. Excludes disabled rows.
   """
-  @spec get_by_name(String.t(), String.t()) ::
-          {:ok, Webhook.t()} | {:error, :not_found | :database_error}
-  def get_by_name(athanor_id, name) do
+  @spec get_by_name(Cyfr.Actor.t(), String.t()) ::
+          {:ok, Webhook.t()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_by_name(%Cyfr.Actor{athanor_id: athanor_id}, name)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.get_by_name", fn ->
       query =
         from(w in Webhook, where: w.name == ^name and w.enabled == ^true, limit: 1)
@@ -118,6 +124,8 @@ defmodule Arca.WebhookStorage do
     end)
   end
 
+  def get_by_name(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+
   @doc """
   List an athanor's enabled webhooks, ordered by inserted_at.
 
@@ -125,8 +133,9 @@ defmodule Arca.WebhookStorage do
   deliberately not loaded here (the only caller redacts them anyway; the verify
   path uses `get_by_slug`/`get_by_name`, which do load the secret).
   """
-  @spec list_webhooks(String.t()) :: {:ok, [Webhook.t()]} | {:error, term()}
-  def list_webhooks(athanor_id) do
+  @spec list_webhooks(Cyfr.Actor.t()) :: {:ok, [Webhook.t()]} | {:error, term()}
+  def list_webhooks(%Cyfr.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.list_webhooks", fn ->
       query =
         from(w in Webhook,
@@ -155,13 +164,16 @@ defmodule Arca.WebhookStorage do
     end)
   end
 
+  def list_webhooks(%Cyfr.Actor{}), do: {:error, :no_athanor}
+
   @doc """
   Update mutable fields on an existing webhook (target_ref, signature_header,
   input_template, description, rate_limit). Does NOT change the secret or slug.
   """
-  @spec update_webhook(String.t(), String.t(), map()) ::
-          :ok | {:error, :not_found | :database_error}
-  def update_webhook(athanor_id, name, fields) when is_map(fields) do
+  @spec update_webhook(Cyfr.Actor.t(), String.t(), map()) ::
+          :ok | {:error, :no_athanor | :not_found | :database_error}
+  def update_webhook(%Cyfr.Actor{athanor_id: athanor_id}, name, fields)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(fields) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.update_webhook", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -194,11 +206,15 @@ defmodule Arca.WebhookStorage do
     end)
   end
 
+  def update_webhook(%Cyfr.Actor{}, _name, _fields), do: {:error, :no_athanor}
+
   @doc """
   Soft-disable a webhook. Returns `{:error, :not_found}` if no enabled row matches.
   """
-  @spec set_disabled(String.t(), String.t()) :: :ok | {:error, :not_found | :database_error}
-  def set_disabled(athanor_id, name) do
+  @spec set_disabled(Cyfr.Actor.t(), String.t()) ::
+          :ok | {:error, :no_athanor | :not_found | :database_error}
+  def set_disabled(%Cyfr.Actor{athanor_id: athanor_id}, name)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.set_disabled", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -213,6 +229,8 @@ defmodule Arca.WebhookStorage do
     end)
   end
 
+  def set_disabled(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+
   @doc """
   Replace the encrypted secret for an existing webhook.
 
@@ -224,9 +242,15 @@ defmodule Arca.WebhookStorage do
   answers `{:error, :conflict}` rather than overwriting the grace secret
   the other one just installed.
   """
-  @spec rotate_secret(String.t(), String.t(), binary(), DateTime.t()) ::
-          :ok | {:error, :not_found | :conflict | :database_error}
-  def rotate_secret(athanor_id, name, new_secret_encrypted, previous_expires_at) do
+  @spec rotate_secret(Cyfr.Actor.t(), String.t(), binary(), DateTime.t()) ::
+          :ok | {:error, :no_athanor | :not_found | :conflict | :database_error}
+  def rotate_secret(
+        %Cyfr.Actor{athanor_id: athanor_id},
+        name,
+        new_secret_encrypted,
+        previous_expires_at
+      )
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.rotate_secret", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -261,4 +285,7 @@ defmodule Arca.WebhookStorage do
       end
     end)
   end
+
+  def rotate_secret(%Cyfr.Actor{}, _name, _new_secret_encrypted, _previous_expires_at),
+    do: {:error, :no_athanor}
 end

@@ -122,7 +122,8 @@ defmodule Arca.PolicyLogTest do
           namespace: "testns"
         )
 
-      assert %PolicyLog{id: "pl_plat"} = PolicyLog.get_tenant(platform_ctx, log.id)
+      assert %PolicyLog{id: "pl_plat"} =
+               PolicyLog.get_tenant(Sanctum.Context.actor(platform_ctx), log.id)
     end
 
     test "athanor scope filters by tenant" do
@@ -151,8 +152,8 @@ defmodule Arca.PolicyLogTest do
           authenticated: true
         )
 
-      assert %PolicyLog{} = PolicyLog.get_tenant(ctx_match, "pl_t1")
-      assert is_nil(PolicyLog.get_tenant(ctx_miss, "pl_t1"))
+      assert %PolicyLog{} = PolicyLog.get_tenant(Sanctum.Context.actor(ctx_match), "pl_t1")
+      assert is_nil(PolicyLog.get_tenant(Sanctum.Context.actor(ctx_miss), "pl_t1"))
     end
   end
 
@@ -169,7 +170,7 @@ defmodule Arca.PolicyLogTest do
         )
 
       assert %PolicyLog{request_id: "req_plat"} =
-               PolicyLog.get_by_request_id_tenant(platform_ctx, "req_plat")
+               PolicyLog.get_by_request_id_tenant(Sanctum.Context.actor(platform_ctx), "req_plat")
     end
 
     test "athanor scope filters by tenant" do
@@ -204,8 +205,12 @@ defmodule Arca.PolicyLogTest do
           authenticated: true
         )
 
-      assert %PolicyLog{} = PolicyLog.get_by_request_id_tenant(ctx_match, "req_scoped")
-      assert is_nil(PolicyLog.get_by_request_id_tenant(ctx_miss, "req_scoped"))
+      assert %PolicyLog{} =
+               PolicyLog.get_by_request_id_tenant(Sanctum.Context.actor(ctx_match), "req_scoped")
+
+      assert is_nil(
+               PolicyLog.get_by_request_id_tenant(Sanctum.Context.actor(ctx_miss), "req_scoped")
+             )
     end
   end
 

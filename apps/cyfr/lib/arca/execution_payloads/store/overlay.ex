@@ -12,13 +12,13 @@ defmodule Arca.ExecutionPayloads.Store.Overlay do
   @behaviour Arca.ExecutionPayloads.Store
 
   @impl true
-  def put(ctx, segments, bytes),
-    do: Arca.Overlay.with_internal_writes(fn -> Arca.put(ctx, segments, bytes) end)
+  def put(actor, segments, bytes),
+    do: Arca.Overlay.with_internal_writes(fn -> Arca.put(actor, segments, bytes) end)
 
   @impl true
-  def get(ctx, segments), do: Arca.get(ctx, segments)
+  def get(actor, segments), do: Arca.get(actor, segments)
 
   @impl true
-  def delete(ctx, segments),
-    do: Arca.Overlay.with_internal_writes(fn -> Arca.delete(ctx, segments) end)
+  def delete(actor, segments),
+    do: Arca.Overlay.with_internal_writes(fn -> Arca.delete(actor, segments) end)
 end

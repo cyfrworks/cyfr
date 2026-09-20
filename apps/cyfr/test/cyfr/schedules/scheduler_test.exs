@@ -186,7 +186,10 @@ defmodule Cyfr.Schedules.SchedulerTest do
         send(worker, :continue)
 
         wait_until(fn ->
-          match?(%{status: "completed"}, Arca.Execution.get_tenant(ctx, execution_id))
+          match?(
+            %{status: "completed"},
+            Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), execution_id)
+          )
         end)
       end
 
@@ -271,7 +274,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
     assert [%{execution_id: ^execution_id}] = ScriptedWorker.calls()
 
     assert {:ok, %{retention_class: "schedule"}, _bytes} =
-             Arca.ExecutionPayloads.get(ctx, execution_id, "input")
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), execution_id, "input")
 
     assert [%{id: ^execution_id, schedule_id: schedule_id, status: "completed"}] =
              Arca.Repo.all(Arca.Execution)
@@ -357,7 +360,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
     {:ok, _} =
       Arca.Execution.record_end(
-        ctx,
+        Sanctum.Context.actor(ctx),
         "exec_lapsed",
         "failed",
         %{completed_at: now, duration_ms: 1, error_message: "swept"},

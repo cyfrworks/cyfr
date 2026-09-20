@@ -67,10 +67,10 @@ defmodule Arca.RecordSinkTest do
       })
 
     :ok = Emissary.MCP.RequestLog.log_completed(ctx, call_id, %{duration_ms: 3, output: %{}})
-    assert Arca.McpLog.get_tenant(ctx, call_id).status == "pending"
+    assert Arca.McpLog.get_tenant(Sanctum.Context.actor(ctx), call_id).status == "pending"
 
     :ok = RecordSink.flush()
-    assert Arca.McpLog.get_tenant(ctx, call_id).status == "success"
+    assert Arca.McpLog.get_tenant(Sanctum.Context.actor(ctx), call_id).status == "success"
   end
 
   test "vault touches are deduplicated into one update per entry" do

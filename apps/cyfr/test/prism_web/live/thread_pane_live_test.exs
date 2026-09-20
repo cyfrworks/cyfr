@@ -32,9 +32,15 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     conn = log_in_user(conn, user, athanor_id: room.id)
     in_room = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: room.id}
 
-    {:ok, thread} = Threads.create(in_room)
-    {:ok, _} = Threads.append(in_room, thread.id, %{author: user.user_id, content: "hello"})
-    {:ok, thread} = Threads.get(in_room, thread.id)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(in_room))
+
+    {:ok, _} =
+      Threads.append(Sanctum.Context.actor(in_room), thread.id, %{
+        author: user.user_id,
+        content: "hello"
+      })
+
+    {:ok, thread} = Threads.get(Sanctum.Context.actor(in_room), thread.id)
 
     {:ok, conn: conn, user: user, room: room, in_room: in_room, thread: thread}
   end

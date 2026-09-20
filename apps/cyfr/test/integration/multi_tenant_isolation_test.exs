@@ -256,34 +256,34 @@ defmodule MultiTenantIsolationTest do
 
   describe "Arca blob isolation" do
     test "an athanor's private tree is invisible to another athanor", %{a: ctx_a, b: ctx_b} do
-      :ok = Arca.put(ctx_a, ["data", "secret.txt"], "for A only")
+      :ok = Arca.put(Sanctum.Context.actor(ctx_a), ["data", "secret.txt"], "for A only")
 
-      assert {:ok, "for A only"} = Arca.get(ctx_a, ["data", "secret.txt"])
-      assert {:error, :not_found} = Arca.get(ctx_b, ["data", "secret.txt"])
-      refute Arca.exists?(ctx_b, ["data", "secret.txt"])
+      assert {:ok, "for A only"} = Arca.get(Sanctum.Context.actor(ctx_a), ["data", "secret.txt"])
+      assert {:error, :not_found} = Arca.get(Sanctum.Context.actor(ctx_b), ["data", "secret.txt"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx_b), ["data", "secret.txt"])
     end
 
     test "the components tree is tenant-relative: the same spelling is each athanor's own",
          %{a: ctx_a, b: ctx_b} do
       path = ["components", "catalysts", "local", "tool", "1.0.0", "x.txt"]
-      :ok = Arca.put(ctx_a, path, "compiled")
+      :ok = Arca.put(Sanctum.Context.actor(ctx_a), path, "compiled")
 
       # b's context addresses b's tree — a's bytes are unreachable, not
       # merely refused: no path spelling names another athanor.
-      assert {:ok, "compiled"} = Arca.get(ctx_a, path)
-      assert {:error, :not_found} = Arca.get(ctx_b, path)
-      refute Arca.exists?(ctx_b, path)
-      assert {:error, :not_found} = Arca.delete(ctx_b, path)
+      assert {:ok, "compiled"} = Arca.get(Sanctum.Context.actor(ctx_a), path)
+      assert {:error, :not_found} = Arca.get(Sanctum.Context.actor(ctx_b), path)
+      refute Arca.exists?(Sanctum.Context.actor(ctx_b), path)
+      assert {:error, :not_found} = Arca.delete(Sanctum.Context.actor(ctx_b), path)
 
-      assert :ok = Arca.put(ctx_b, path, "b's own")
-      assert {:ok, "compiled"} = Arca.get(ctx_a, path)
-      assert {:ok, "b's own"} = Arca.get(ctx_b, path)
+      assert :ok = Arca.put(Sanctum.Context.actor(ctx_b), path, "b's own")
+      assert {:ok, "compiled"} = Arca.get(Sanctum.Context.actor(ctx_a), path)
+      assert {:ok, "b's own"} = Arca.get(Sanctum.Context.actor(ctx_b), path)
     end
 
     test "the seed bundle is readable only by the system", %{a: ctx_a} do
       path = ["seed", "components", "catalysts", "local", "seed", "1.0.0", "manifest.json"]
-      assert {:error, :forbidden} = Arca.get(ctx_a, path)
-      assert {:error, :seed_read_only} = Arca.put(ctx_a, path, "{}")
+      assert {:error, :forbidden} = Arca.get(Sanctum.Context.actor(ctx_a), path)
+      assert {:error, :seed_read_only} = Arca.put(Sanctum.Context.actor(ctx_a), path, "{}")
     end
   end
 
@@ -364,7 +364,14 @@ defmodule MultiTenantIsolationTest do
     end
 
     test "Arca refuses an athanor-less blob path", %{unresolved: ctx} do
-      assert_raise ArgumentError, fn -> Arca.put(ctx, ["data", "x"], "y") end
+      # The facade refuses before any adapter is asked; the raise stays
+      # under it, at the backstop a direct adapter call still meets.
+      assert {:error, :no_athanor} = Arca.put(Sanctum.Context.actor(ctx), ["data", "x"], "y")
+      assert {:error, :no_athanor} = Arca.get(Sanctum.Context.actor(ctx), ["data", "x"])
+
+      assert_raise ArgumentError, fn ->
+        Arca.Storage.tenant_segments(Sanctum.Context.actor(ctx))
+      end
     end
 
     test "an athanor-scoped context is still allowed", %{a: ctx} do

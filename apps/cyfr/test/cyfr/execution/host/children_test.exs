@@ -321,7 +321,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       assert child.input == expected
 
       assert {:ok, _row, staged} =
-               Arca.ExecutionPayloads.get(ctx, child.execution_id, "input")
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), child.execution_id, "input")
 
       assert Jason.decode!(staged) == expected
       assert %{"ok" => _} = fail!(child, "done")

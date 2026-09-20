@@ -210,12 +210,12 @@ defmodule Arca.PolicyLog do
 
   Platform scope bypasses tenant filtering.
   """
-  @spec get_tenant(Sanctum.Context.t(), String.t()) ::
+  @spec get_tenant(Cyfr.Actor.t(), String.t()) ::
           %__MODULE__{} | nil | {:error, :database_error}
-  def get_tenant(%Sanctum.Context{} = ctx, id) do
+  def get_tenant(%Cyfr.Actor{} = actor, id) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.get_tenant", fn ->
       from(l in __MODULE__, where: l.id == ^id)
-      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
       |> Arca.Repo.one()
     end)
   end
@@ -225,12 +225,12 @@ defmodule Arca.PolicyLog do
 
   Platform scope bypasses tenant filtering.
   """
-  @spec get_by_request_id_tenant(Sanctum.Context.t(), String.t()) ::
+  @spec get_by_request_id_tenant(Cyfr.Actor.t(), String.t()) ::
           %__MODULE__{} | nil | {:error, :database_error}
-  def get_by_request_id_tenant(%Sanctum.Context{} = ctx, request_id) do
+  def get_by_request_id_tenant(%Cyfr.Actor{} = actor, request_id) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.get_by_request_id_tenant", fn ->
       from(l in __MODULE__, where: l.request_id == ^request_id, limit: 1)
-      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
       |> Arca.Repo.one()
     end)
   end

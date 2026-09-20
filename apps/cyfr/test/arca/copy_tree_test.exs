@@ -8,9 +8,9 @@ defmodule Arca.CopyTreeTest.RecordingAdapter do
   # non-default adapter configured.
   use Arca.Storage.TestDouble
 
-  def put(ctx, path, content) do
+  def put(actor, path, content) do
     if pid = Process.whereis(:copy_tree_recorder), do: send(pid, {:adapter_put, path})
-    Arca.Adapters.Local.put(ctx, path, content)
+    Arca.Adapters.Local.put(actor, path, content)
   end
 end
 
@@ -20,15 +20,15 @@ defmodule Arca.CopyTreeTest.VanishingAdapter do
   # between the walk and its read.
   use Arca.Storage.TestDouble
 
-  def list_recursive(ctx, path) do
-    with {:ok, leaves} <- Arca.Adapters.Local.list_recursive(ctx, path) do
+  def list_recursive(actor, path) do
+    with {:ok, leaves} <- Arca.Adapters.Local.list_recursive(actor, path) do
       {:ok, leaves ++ [path ++ ["ghost.txt"]]}
     end
   end
 
   # The ghost is in every listing, so no listing is empty and the double's
   # prefix listing has no empty prefix to probe: it is that listing.
-  def list_prefix(ctx, path), do: list_recursive(ctx, path)
+  def list_prefix(actor, path), do: list_recursive(actor, path)
 end
 
 defmodule Arca.CopyTreeTest do
@@ -62,27 +62,34 @@ defmodule Arca.CopyTreeTest do
   end
 
   test "copies a subtree preserving relative layout, source untouched" do
-    ctx = Sanctum.TestContext.local()
-    :ok = Arca.put(ctx, ["data", "src", "a.txt"], "A")
-    :ok = Arca.put(ctx, ["data", "src", "sub", "b.txt"], "B")
+    actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+    :ok = Arca.put(actor, ["data", "src", "a.txt"], "A")
+    :ok = Arca.put(actor, ["data", "src", "sub", "b.txt"], "B")
 
-    assert {:ok, _} = Arca.copy_tree(ctx, ["data", "src"], ["data", "dest"])
+    assert {:ok, _} =
+             Arca.copy_tree(actor, ["data", "src"], ["data", "dest"])
 
-    assert {:ok, "A"} = Arca.get(ctx, ["data", "dest", "a.txt"])
-    assert {:ok, "B"} = Arca.get(ctx, ["data", "dest", "sub", "b.txt"])
-    assert {:ok, "A"} = Arca.get(ctx, ["data", "src", "a.txt"])
+    assert {:ok, "A"} = Arca.get(actor, ["data", "dest", "a.txt"])
+    assert {:ok, "B"} = Arca.get(actor, ["data", "dest", "sub", "b.txt"])
+    assert {:ok, "A"} = Arca.get(actor, ["data", "src", "a.txt"])
   end
 
   test "exclude: skips matching files before their content is read" do
-    ctx = Sanctum.TestContext.local()
-    :ok = Arca.put(ctx, ["data", "src", "a.txt"], "A")
-    :ok = Arca.put(ctx, ["data", "src", "target", "debug", "junk.o"], "JUNK")
+    actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+    :ok = Arca.put(actor, ["data", "src", "a.txt"], "A")
+
+    :ok =
+      Arca.put(actor, ["data", "src", "target", "debug", "junk.o"], "JUNK")
 
     exclude = fn relative -> "target" in relative end
-    assert {:ok, _} = Arca.copy_tree(ctx, ["data", "src"], ["data", "dest"], exclude: exclude)
 
-    assert {:ok, "A"} = Arca.get(ctx, ["data", "dest", "a.txt"])
-    assert {:error, :not_found} = Arca.get(ctx, ["data", "dest", "target", "debug", "junk.o"])
+    assert {:ok, _} =
+             Arca.copy_tree(actor, ["data", "src"], ["data", "dest"], exclude: exclude)
+
+    assert {:ok, "A"} = Arca.get(actor, ["data", "dest", "a.txt"])
+
+    assert {:error, :not_found} =
+             Arca.get(actor, ["data", "dest", "target", "debug", "junk.o"])
   end
 
   test "a file that vanishes between the walk and its read is skipped, not fatal" do
@@ -95,12 +102,16 @@ defmodule Arca.CopyTreeTest do
         else: Application.delete_env(:cyfr, :storage_adapter)
     end)
 
-    ctx = Sanctum.TestContext.local()
-    :ok = Arca.put(ctx, ["data", "src", "a.txt"], "A")
+    actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+    :ok = Arca.put(actor, ["data", "src", "a.txt"], "A")
 
-    assert {:ok, _} = Arca.copy_tree(ctx, ["data", "src"], ["data", "dest"])
-    assert {:ok, "A"} = Arca.get(ctx, ["data", "dest", "a.txt"])
-    assert {:error, :not_found} = Arca.get(ctx, ["data", "dest", "ghost.txt"])
+    assert {:ok, _} =
+             Arca.copy_tree(actor, ["data", "src"], ["data", "dest"])
+
+    assert {:ok, "A"} = Arca.get(actor, ["data", "dest", "a.txt"])
+
+    assert {:error, :not_found} =
+             Arca.get(actor, ["data", "dest", "ghost.txt"])
   end
 
   test "materializes bundle bytes through the configured adapter, reading seed in place", %{
@@ -124,8 +135,12 @@ defmodule Arca.CopyTreeTest do
 
     Process.register(self(), :copy_tree_recorder)
 
-    internal =
-      Sanctum.internal_context(user_id: "_overlay", athanor_id: "ath_seeded", scope: :athanor)
+    internal = %{
+      Cyfr.Actor.system()
+      | user_id: "_overlay",
+        athanor_id: "ath_seeded",
+        scope: :athanor
+    }
 
     src = Arca.Storage.seed_prefix("components") ++ ["catalysts", "local"]
     dest = ["components", "catalysts", "local"]

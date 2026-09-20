@@ -83,7 +83,7 @@ defmodule Cyfr.Execution.BarrierRefusalTest do
 
     {:ok, _} =
       Arca.Execution.record_end(
-        ctx,
+        Sanctum.Context.actor(ctx),
         parent_id,
         "completed",
         %{completed_at: DateTime.utc_now(), duration_ms: 1, output: "{}"},

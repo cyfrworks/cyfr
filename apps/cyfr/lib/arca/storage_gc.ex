@@ -153,24 +153,24 @@ defmodule Arca.StorageGC do
   def pin(%Cyfr.Actor{} = actor, unit, revision, holder) when is_binary(revision) do
     with {:ok, _athanor} <- tenant(actor),
          {:ok, path} <- pin_path(unit, revision, holder) do
-      ctx = internal_ctx(actor)
+      inner = internal_actor(actor)
       {root, key} = UnitLocator.unit_key(unit)
 
-      with :ok <- internally(fn -> Arca.put(ctx, path, pin_body(holder), cap: :exempt) end) do
+      with :ok <- internally(fn -> Arca.put(inner, path, pin_body(holder), cap: :exempt) end) do
         case StorageUnits.current(actor, root, key) do
           {:ok, %StorageUnit{current_revision: ^revision}} ->
             :ok
 
           {:ok, _moved_on} ->
-            remove(ctx, path)
+            remove(inner, path)
             {:error, :stale_revision}
 
           {:error, :not_found} ->
-            remove(ctx, path)
+            remove(inner, path)
             {:error, :stale_revision}
 
           {:error, _} = error ->
-            remove(ctx, path)
+            remove(inner, path)
             error
         end
       end
@@ -183,7 +183,7 @@ defmodule Arca.StorageGC do
   def unpin(%Cyfr.Actor{} = actor, unit, revision, holder) when is_binary(revision) do
     with {:ok, _athanor} <- tenant(actor),
          {:ok, path} <- pin_path(unit, revision, holder) do
-      remove(internal_ctx(actor), path)
+      remove(internal_actor(actor), path)
     end
   end
 
@@ -307,7 +307,7 @@ defmodule Arca.StorageGC do
     with {:ok, _athanor} <- tenant(actor),
          {:ok, listing} <- given_listing(actor, opts) do
       {now, grace_ms} = clock(opts)
-      ctx = internal_ctx(actor)
+      inner = internal_actor(actor)
 
       found =
         for {{root, key, revision} = id, keys} <- listing.groups,
@@ -316,7 +316,7 @@ defmodule Arca.StorageGC do
             unit = UnitLocator.unit_path(root, key),
             {:ok, marker?} = {:ok, marker?(keys)},
             not (marker? and live_draft?(Map.get(roots.drafts, {root, key}), now, grace_ms)),
-            older_than?(started_at(ctx, unit, revision, marker?), now, grace_ms) do
+            older_than?(started_at(inner, unit, revision, marker?), now, grace_ms) do
           %{
             root: root,
             unit_key: key,
@@ -343,11 +343,11 @@ defmodule Arca.StorageGC do
       when is_binary(revision) do
     with {:ok, athanor} <- tenant(actor) do
       {now, grace_ms} = clock(opts)
-      ctx = internal_ctx(actor)
+      inner = internal_actor(actor)
 
       with :ok <- retire_dead_draft(actor, athanor, candidate, now, grace_ms),
-           :ok <- unrooted(athanor, ctx, candidate, now, grace_ms) do
-        delete_prefix(ctx, unit, revision)
+           :ok <- unrooted(athanor, inner, candidate, now, grace_ms) do
+        delete_prefix(inner, unit, revision)
       end
     end
   end
@@ -387,7 +387,7 @@ defmodule Arca.StorageGC do
              {:ok, {committed_rows(athanor), orphan_commits(athanor)}}
            end),
          {:ok, listing} <- listing(actor) do
-      ctx = internal_ctx(actor)
+      inner = internal_actor(actor)
       report = %{repaired: [], intact: 0, left: [], unrecoverable: [], orphan_commits: orphans}
 
       {:ok,
@@ -395,7 +395,7 @@ defmodule Arca.StorageGC do
          unit = UnitLocator.unit_path(row.root, row.unit_key)
          staged = Map.get(listing.groups, {row.root, row.unit_key, row.current_revision}, [])
 
-         case audit(athanor, ctx, row, unit, staged) do
+         case audit(athanor, inner, row, unit, staged) do
            :repaired -> %{acc | repaired: [unit | acc.repaired]}
            :intact -> %{acc | intact: acc.intact + 1}
            :unrecoverable -> %{acc | unrecoverable: [unit | acc.unrecoverable]}
@@ -405,11 +405,11 @@ defmodule Arca.StorageGC do
     end
   end
 
-  defp audit(athanor, ctx, row, unit, staged) do
+  defp audit(athanor, inner, row, unit, staged) do
     if Enum.any?(staged, &(not marker_key?(&1))) do
-      finish_move(athanor, ctx, row, unit, :asked)
+      finish_move(athanor, inner, row, unit, :asked)
     else
-      case served_complete?(ctx, unit) do
+      case served_complete?(inner, unit) do
         true ->
           :intact
 
@@ -426,11 +426,11 @@ defmodule Arca.StorageGC do
 
   # The one promotion there is: the revision the row names, proven against
   # the journal before a byte moves.
-  defp finish_move(athanor, ctx, %StorageUnit{} = row, unit, asked) do
+  defp finish_move(athanor, inner, %StorageUnit{} = row, unit, asked) do
     with {:ok, newest, prior} <- journal_of(athanor, row),
-         :ok <- staged_as_committed(ctx, unit, row.current_revision, newest),
-         :ok <- if(asked == :asked, do: :ok, else: served_replaceable(ctx, unit, newest, prior)) do
-      case Arca.Overlay.repair_unit(ctx, unit) do
+         :ok <- staged_as_committed(inner, unit, row.current_revision, newest),
+         :ok <- if(asked == :asked, do: :ok, else: served_replaceable(inner, unit, newest, prior)) do
+      case Arca.Overlay.repair_unit(inner, unit) do
         {:ok, _repaired_or_nothing_pending} -> :repaired
         {:error, reason} -> {:left, {:repair_failed, reason}}
       end
@@ -460,12 +460,16 @@ defmodule Arca.StorageGC do
     end)
   end
 
-  defp staged_as_committed(ctx, unit, revision, %StorageCommit{content_identity: committed}) do
+  defp staged_as_committed(inner, unit, revision, %StorageCommit{content_identity: committed}) do
     prefix = UnitLocator.revision_prefix(unit, revision)
 
-    with {:ok, keys} <- list_under(ctx, prefix),
+    with {:ok, keys} <- list_under(inner, prefix),
          {:ok, identity} <-
-           identity_of(ctx, Enum.reject(keys, &marker_key?/1), &staged_relative(unit, prefix, &1)) do
+           identity_of(
+             inner,
+             Enum.reject(keys, &marker_key?/1),
+             &staged_relative(unit, prefix, &1)
+           ) do
       if identity == committed, do: :ok, else: {:left, :staged_incomplete}
     end
   end
@@ -474,12 +478,12 @@ defmodule Arca.StorageGC do
   # complete one is replaced only when it is, byte for byte, this revision
   # or the one before it: anything else has been written to since, and a
   # move over it would take those writes.
-  defp served_replaceable(ctx, unit, newest, prior) do
-    if served_complete?(ctx, unit) do
+  defp served_replaceable(inner, unit, newest, prior) do
+    if served_complete?(inner, unit) do
       known = [newest.content_identity | List.wrap(prior && prior.content_identity)]
 
-      with {:ok, keys} <- served_keys(ctx, unit),
-           {:ok, identity} <- identity_of(ctx, keys, &served_relative(unit, &1)) do
+      with {:ok, keys} <- served_keys(inner, unit),
+           {:ok, identity} <- identity_of(inner, keys, &served_relative(unit, &1)) do
         if identity in known, do: :ok, else: {:left, :served_diverged}
       end
     else
@@ -487,17 +491,17 @@ defmodule Arca.StorageGC do
     end
   end
 
-  defp served_keys(ctx, unit) do
+  defp served_keys(inner, unit) do
     case Arca.Storage.locate(unit) do
       {:file, ^unit} -> {:ok, [unit]}
-      {:dir, ^unit, _sentinel} -> Arca.list_recursive(ctx, unit)
+      {:dir, ^unit, _sentinel} -> Arca.list_recursive(inner, unit)
     end
   end
 
-  defp served_complete?(ctx, unit) do
+  defp served_complete?(inner, unit) do
     case Arca.Storage.locate(unit) do
-      {:file, ^unit} -> Arca.exists?(ctx, unit)
-      {:dir, ^unit, sentinel} -> Arca.exists?(ctx, unit ++ [sentinel])
+      {:file, ^unit} -> Arca.exists?(inner, unit)
+      {:dir, ^unit, sentinel} -> Arca.exists?(inner, unit ++ [sentinel])
       _not_a_unit -> false
     end
   end
@@ -516,10 +520,10 @@ defmodule Arca.StorageGC do
   # The content identity of a set of objects, read one at a time and
   # framed by `Arca.Overlay.content_identity/1` — the framing a commit
   # recorded, stated once, there.
-  defp identity_of(ctx, keys, relative) do
+  defp identity_of(inner, keys, relative) do
     keys
     |> Enum.reduce_while({:ok, []}, fn key, {:ok, acc} ->
-      case Arca.get(ctx, key) do
+      case Arca.get(inner, key) do
         {:ok, bytes} ->
           {:cont, {:ok, [{relative.(key), Cyfr.Digest.sha256(bytes), byte_size(bytes)} | acc]}}
 
@@ -553,7 +557,7 @@ defmodule Arca.StorageGC do
   # A prefix with neither a marker nor a dated revision name says nothing
   # of its age. It is given a marker now, and a later sweep reads it.
   defp date_unaged(report, actor, listing, roots) do
-    ctx = internal_ctx(actor)
+    inner = internal_actor(actor)
 
     undated =
       for {{root, key, revision} = id, keys} <- listing.groups,
@@ -564,7 +568,7 @@ defmodule Arca.StorageGC do
 
     Enum.each(undated, fn path ->
       body = Jason.encode!(%{"observed_at" => DateTime.to_iso8601(DateTime.utc_now())})
-      internally(fn -> Arca.put(ctx, path, body, cap: :exempt) end)
+      internally(fn -> Arca.put(inner, path, body, cap: :exempt) end)
     end)
 
     %{report | unaged: length(undated)}
@@ -582,7 +586,7 @@ defmodule Arca.StorageGC do
 
   defp finish_moves(report, actor, moves, budget) do
     {:ok, athanor} = tenant(actor)
-    ctx = internal_ctx(actor)
+    inner = internal_actor(actor)
 
     moves
     |> Enum.take(budget)
@@ -591,7 +595,7 @@ defmodule Arca.StorageGC do
 
       case rescuing_db("finish_moves", fn -> {:ok, fetch(athanor, root, key)} end) do
         {:ok, %StorageUnit{state: "committed"} = row} ->
-          case finish_move(athanor, ctx, row, unit, :unasked) do
+          case finish_move(athanor, inner, row, unit, :unasked) do
             :repaired -> %{acc | repaired: acc.repaired + 1}
             {:left, reason} -> %{acc | pending: [{unit, reason} | acc.pending]}
           end
@@ -608,12 +612,12 @@ defmodule Arca.StorageGC do
   # A pin whose holder is no longer live holds nothing.
   defp drop_dead_pins(report, actor, listing) do
     {:ok, athanor} = tenant(actor)
-    ctx = internal_ctx(actor)
+    inner = internal_actor(actor)
     holders = for {_id, holder, _path} <- listing.pins, do: holder
 
     with {:ok, live} <- live_holders(athanor, holders) do
       for {_id, holder, path} <- listing.pins, not MapSet.member?(live, holder) do
-        remove(ctx, path)
+        remove(inner, path)
       end
     end
 
@@ -643,11 +647,11 @@ defmodule Arca.StorageGC do
   end
 
   # Step 4's second half: the roots of this one prefix, read now.
-  defp unrooted(athanor, ctx, %{root: root, unit_key: key} = candidate, now, grace_ms) do
+  defp unrooted(athanor, inner, %{root: root, unit_key: key} = candidate, now, grace_ms) do
     with {:ok, row} <- rescuing_db("unrooted", fn -> {:ok, fetch(athanor, root, key)} end),
          :ok <- not_the_pointer(row, candidate.revision),
-         :ok <- no_live_draft(ctx, row, candidate, now, grace_ms) do
-      not_pinned(athanor, ctx, candidate)
+         :ok <- no_live_draft(inner, row, candidate, now, grace_ms) do
+      not_pinned(athanor, inner, candidate)
     end
   end
 
@@ -659,22 +663,22 @@ defmodule Arca.StorageGC do
   # The marker is looked for again: a prefix listed without one may be a
   # writer's that had not created it yet on a store that lists late.
   defp no_live_draft(
-         ctx,
+         inner,
          %StorageUnit{draft_writer_token: token, updated_at: registered},
          candidate,
          now,
          grace_ms
        )
        when is_binary(token) do
-    marked? = Arca.exists?(ctx, UnitLocator.marker_path(candidate.unit, candidate.revision))
+    marked? = Arca.exists?(inner, UnitLocator.marker_path(candidate.unit, candidate.revision))
 
     if marked? and live_draft?(registered, now, grace_ms), do: {:kept, :live_draft}, else: :ok
   end
 
-  defp no_live_draft(_ctx, _row, _candidate, _now, _grace_ms), do: :ok
+  defp no_live_draft(_inner, _row, _candidate, _now, _grace_ms), do: :ok
 
-  defp not_pinned(athanor, ctx, %{unit: unit, revision: revision}) do
-    with {:ok, keys} <- list_under(ctx, pins_prefix(unit) ++ [revision]),
+  defp not_pinned(athanor, inner, %{unit: unit, revision: revision}) do
+    with {:ok, keys} <- list_under(inner, pins_prefix(unit) ++ [revision]),
          holders = for(key <- keys, {:ok, holder} <- [parse_holder(List.last(key))], do: holder),
          {:ok, live} <- live_holders(athanor, holders) do
       if Enum.any?(holders, &MapSet.member?(live, &1)), do: {:kept, :pinned}, else: :ok
@@ -683,30 +687,30 @@ defmodule Arca.StorageGC do
 
   # Steps 5 and 6. The marker outlives every object, so what a crash leaves
   # is still a dated prefix.
-  defp delete_prefix(ctx, unit, revision) do
+  defp delete_prefix(inner, unit, revision) do
     prefix = UnitLocator.revision_prefix(unit, revision)
     marker = UnitLocator.marker_path(unit, revision)
 
-    with {:ok, keys} <- list_under(ctx, prefix),
-         :ok <- remove_each(ctx, Enum.reject(keys, &(&1 == marker))),
-         :ok <- remove(ctx, marker),
-         :ok <- internally(fn -> Arca.delete_tree(ctx, prefix) end),
-         :ok <- internally(fn -> Arca.delete_tree(ctx, pins_prefix(unit) ++ [revision]) end) do
+    with {:ok, keys} <- list_under(inner, prefix),
+         :ok <- remove_each(inner, Enum.reject(keys, &(&1 == marker))),
+         :ok <- remove(inner, marker),
+         :ok <- internally(fn -> Arca.delete_tree(inner, prefix) end),
+         :ok <- internally(fn -> Arca.delete_tree(inner, pins_prefix(unit) ++ [revision]) end) do
       :collected
     end
   end
 
-  defp remove_each(ctx, keys) do
+  defp remove_each(inner, keys) do
     Enum.reduce_while(keys, :ok, fn key, :ok ->
-      case remove(ctx, key) do
+      case remove(inner, key) do
         :ok -> {:cont, :ok}
         {:error, _} = error -> {:halt, error}
       end
     end)
   end
 
-  defp remove(ctx, path) do
-    case internally(fn -> Arca.delete(ctx, path) end) do
+  defp remove(inner, path) do
+    case internally(fn -> Arca.delete(inner, path) end) do
       :ok -> :ok
       {:error, :not_found} -> :ok
       {:error, _} = error -> error
@@ -728,13 +732,13 @@ defmodule Arca.StorageGC do
   # prefixes, pins and the rest. One listing per overlaid root, inside the
   # actor's athanor.
   defp listing(actor) do
-    ctx = internal_ctx(actor)
+    inner = internal_actor(actor)
 
     Enum.reduce_while(
       Arca.Storage.overlay_roots(),
       {:ok, %{groups: %{}, pins: [], unrecognized: 0}},
       fn root, {:ok, acc} ->
-        case list_under(ctx, staging_area(root)) do
+        case list_under(inner, staging_area(root)) do
           {:ok, keys} -> {:cont, {:ok, Enum.reduce(keys, acc, &sort_key(root, &1, &2))}}
           {:error, _} = error -> {:halt, error}
         end
@@ -790,7 +794,7 @@ defmodule Arca.StorageGC do
 
   # Every adapter answers the prefix listing (`c:Arca.Storage.list_prefix/2`),
   # so a staging area is read as keys, never walked as a tree.
-  defp list_under(ctx, prefix), do: Arca.Storage.list_prefix(ctx, prefix)
+  defp list_under(inner, prefix), do: Arca.Storage.list_prefix(inner, prefix)
 
   defp marker?(keys), do: Enum.any?(keys, &marker_key?/1)
   defp marker_key?(key), do: List.last(key) == UnitLocator.marker_name()
@@ -816,8 +820,8 @@ defmodule Arca.StorageGC do
 
   # When a prefix was begun: its marker says, and a revision name
   # (`Arca.StorageUnits.new_revision/0`) carries its own time.
-  defp started_at(ctx, unit, revision, true) do
-    with {:ok, body} <- Arca.get(ctx, UnitLocator.marker_path(unit, revision)),
+  defp started_at(inner, unit, revision, true) do
+    with {:ok, body} <- Arca.get(inner, UnitLocator.marker_path(unit, revision)),
          {:ok, %{} = marker} <- Jason.decode(body),
          stamp when is_binary(stamp) <- marker["started_at"] || marker["observed_at"],
          {:ok, at, _offset} <- DateTime.from_iso8601(stamp) do
@@ -827,7 +831,7 @@ defmodule Arca.StorageGC do
     end
   end
 
-  defp started_at(_ctx, _unit, revision, false), do: revision_time(revision)
+  defp started_at(_inner, _unit, revision, false), do: revision_time(revision)
 
   # The millisecond timestamp a UUIDv7 opens with.
   defp revision_time(
@@ -970,8 +974,12 @@ defmodule Arca.StorageGC do
   defp internally(fun), do: Arca.Overlay.with_internal_writes(fun)
 
   # Focused on the actor's athanor and no other; the user_id is
-  # attribution only.
-  defp internal_ctx(%Cyfr.Actor{athanor_id: athanor}) do
-    Sanctum.internal_context(user_id: "_storage_gc", athanor_id: athanor, scope: :athanor)
+  # attribution only. The server's own actor NARROWED to this athanor:
+  # `system: true` is what lets the sweep write the pin and date files
+  # under a reserved root, and `scope: :athanor` is what keeps its
+  # listings inside the one estate. A bare `Cyfr.Actor.system/0` here
+  # would widen every sweep to platform scope with nothing to fail.
+  defp internal_actor(%Cyfr.Actor{athanor_id: athanor}) do
+    %{Cyfr.Actor.system() | athanor_id: athanor, scope: :athanor, user_id: "_storage_gc"}
   end
 end

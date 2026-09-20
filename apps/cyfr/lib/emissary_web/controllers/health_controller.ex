@@ -141,8 +141,13 @@ defmodule EmissaryWeb.HealthController do
     # `Arca.Storage.global_prefixes/0` — witnessed in the controller test.
     path = probe_dir() ++ [".write_probe"]
 
-    with :ok <- Arca.put(ctx, path, Integer.to_string(System.system_time(:second))) do
-      case Arca.delete(ctx, path) do
+    with :ok <-
+           Arca.put(
+             Sanctum.Context.actor(ctx),
+             path,
+             Integer.to_string(System.system_time(:second))
+           ) do
+      case Arca.delete(Sanctum.Context.actor(ctx), path) do
         :ok ->
           :ok
 

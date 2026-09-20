@@ -449,7 +449,7 @@ defmodule Emissary.MCP.BridgeTest do
 
   defp stdio_row(ctx, name, env \\ %{"GITHUB_TOKEN" => "vault:gh-token"}) do
     {:ok, row} =
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: name,
         transport: "stdio",
         url: nil,
@@ -630,7 +630,9 @@ defmodule Emissary.MCP.BridgeTest do
                })
 
       assert_released(row, 1)
-      assert {:error, :not_found} = Arca.McpServerStorage.get(ctx, "stoppable")
+
+      assert {:error, :not_found} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "stoppable")
     end
 
     test "disable raises the epoch and releases", %{ctx: ctx, row: row, admin: admin} do
@@ -641,7 +643,9 @@ defmodule Emissary.MCP.BridgeTest do
                })
 
       assert_released(row, 1)
-      assert {:ok, %{epoch: 2}} = Arca.McpServerStorage.get(ctx, "stoppable")
+
+      assert {:ok, %{epoch: 2}} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "stoppable")
     end
 
     test "restart releases and syncs again at the next epoch", %{row: row, admin: admin} do
@@ -687,7 +691,9 @@ defmodule Emissary.MCP.BridgeTest do
 
       assert_released(row, 1)
       :sys.get_state(Emissary.MCP.ExternalServerReconciler)
-      assert {:ok, %{epoch: 2}} = Arca.McpServerStorage.get(ctx, "stoppable")
+
+      assert {:ok, %{epoch: 2}} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "stoppable")
     end
 
     test "an archived athanor", %{ctx: ctx, row: row} do
@@ -720,7 +726,9 @@ defmodule Emissary.MCP.BridgeTest do
       assert_receive {:control, "renew", _renew, _fields}, 2_000
       assert_receive {:DOWN, ^watched, :process, ^pid, _reason}, 2_000
       assert_released(row, 1)
-      assert {:ok, %{epoch: 2}} = Arca.McpServerStorage.get(ctx, "stoppable")
+
+      assert {:ok, %{epoch: 2}} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "stoppable")
 
       # A row whose epoch moved without a stop fails the fence at renewal.
       other = stdio_row(ctx, "fenced")
@@ -728,7 +736,7 @@ defmodule Emissary.MCP.BridgeTest do
       assert_receive {:control, "sync", %{"owner" => %{"server" => server}}, _}, 2_000
       assert server == other.id
       other_watched = Process.monitor(other_pid)
-      {:ok, _} = Arca.McpServerStorage.bump_epoch(ctx, other.id)
+      {:ok, _} = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), other.id)
       tick(bridge)
       assert_receive {:DOWN, ^other_watched, :process, ^other_pid, _reason}, 2_000
       assert_released(other, 1)
@@ -862,7 +870,7 @@ defmodule Emissary.MCP.BridgeTest do
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, _fields}, 2_000
 
-    {:ok, _} = Arca.McpServerStorage.bump_epoch(ctx, row.id)
+    {:ok, _} = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), row.id)
     FakeBridge.refuse_once(fake, "tools/call", "stale_epoch")
 
     assert {:error, message} = Emissary.MCP.ExternalServer.call_tool(pid, "github__search", %{})

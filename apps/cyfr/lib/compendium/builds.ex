@@ -409,7 +409,7 @@ defmodule Compendium.Builds do
     base = ComponentPath.version_dir("tincture", publisher(), name, version)
     package = base ++ ["package.json"]
 
-    case Arca.get(ctx, package) do
+    case Arca.get(Sanctum.Context.actor(ctx), package) do
       {:ok, _} ->
         {:ok, collect(ctx, base, &tincture_source?/1)}
 
@@ -424,7 +424,7 @@ defmodule Compendium.Builds do
     base = ComponentPath.version_dir(type, publisher(), name, version) ++ ["src"]
     lib_rs = base ++ ["src", "lib.rs"]
 
-    case Arca.get(ctx, lib_rs) do
+    case Arca.get(Sanctum.Context.actor(ctx), lib_rs) do
       {:ok, _} ->
         {:ok, collect(ctx, base, &rust_source?/1)}
 
@@ -438,7 +438,7 @@ defmodule Compendium.Builds do
   # One subtree read, without the build droppings every tree copy excludes
   # (`target/`, `node_modules/`, `.git/`).
   defp collect(ctx, base, keep?) do
-    case Arca.read_subtree(ctx, base) do
+    case Arca.read_subtree(Sanctum.Context.actor(ctx), base) do
       {:ok, pairs} ->
         for {rel, content} <- pairs,
             not Arca.Storage.build_dropping?(rel),
@@ -566,7 +566,7 @@ defmodule Compendium.Builds do
     wasm_path = ComponentPath.wasm_path(unit.type, publisher(), unit.name, unit.version)
 
     published(
-      with :ok <- Arca.put(ctx, wasm_path, wasm_bytes),
+      with :ok <- Arca.put(Sanctum.Context.actor(ctx), wasm_path, wasm_bytes),
            do: keep_lockfile(ctx, unit, built)
     )
   end
@@ -585,7 +585,7 @@ defmodule Compendium.Builds do
       :ok
     else
       path = ComponentPath.version_dir(unit.type, publisher(), unit.name, unit.version)
-      Arca.put(ctx, path ++ ["src", "Cargo.lock"], lockfile)
+      Arca.put(Sanctum.Context.actor(ctx), path ++ ["src", "Cargo.lock"], lockfile)
     end
   end
 
@@ -621,7 +621,9 @@ defmodule Compendium.Builds do
     files = Enum.map(output_files, fn {rel, content} -> {Path.split(rel), content} end)
     total_bytes = Enum.reduce(files, 0, fn {_segs, content}, acc -> acc + byte_size(content) end)
 
-    Arca.Overlay.replace_subtree(ctx, unit, [@dist], files, cap: {:checked, total_bytes})
+    Arca.Overlay.replace_subtree(Sanctum.Context.actor(ctx), unit, [@dist], files,
+      cap: {:checked, total_bytes}
+    )
   end
 
   # ---------------------------------------------------------------------------

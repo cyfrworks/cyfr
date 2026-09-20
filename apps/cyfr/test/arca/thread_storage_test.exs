@@ -7,7 +7,9 @@ defmodule Arca.ThreadStorageTest.FailingDeleteAdapter do
 
   # A thread's whole blob tree refuses to delete.
   def delete_tree(_ctx, ["threads", _id]), do: {:error, :eacces}
-  def delete_tree(ctx, path), do: Arca.Adapters.Local.delete_tree(ctx, path)
+
+  def delete_tree(actor, path),
+    do: Arca.Adapters.Local.delete_tree(actor, path)
 end
 
 defmodule Arca.ThreadStorageTest do
@@ -19,18 +21,20 @@ defmodule Arca.ThreadStorageTest do
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    {:ok, ctx: user_ctx("local|idp|alice", "ath_a"), bob: user_ctx("local|idp|bob", "ath_a")}
+    {:ok, ctx: user_actor("local|idp|alice", "ath_a"), bob: user_actor("local|idp|bob", "ath_a")}
   end
 
-  defp user_ctx(user_id, athanor_id) do
-    Context.build(
-      user_id: user_id,
-      provider: "oidc",
-      athanor_id: athanor_id,
-      permissions: [:*],
-      scope: :athanor,
-      auth_method: :oidc,
-      authenticated: true
+  defp user_actor(user_id, athanor_id) do
+    Sanctum.Context.actor(
+      Context.build(
+        user_id: user_id,
+        provider: "oidc",
+        athanor_id: athanor_id,
+        permissions: [:*],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
     )
   end
 
@@ -41,7 +45,7 @@ defmodule Arca.ThreadStorageTest do
     assert [%{id: id}] = Threads.list(ctx)
     assert id == thread.id
 
-    other = user_ctx("local|idp|carol", "ath_b")
+    other = user_actor("local|idp|carol", "ath_b")
     assert Threads.list(other) == []
     assert {:error, :not_found} = Threads.get(other, thread.id)
 
@@ -49,10 +53,14 @@ defmodule Arca.ThreadStorageTest do
              Threads.append(other, thread.id, %{author: "x", content: "hi"})
   end
 
-  test "an athanor-less context cannot read", %{ctx: ctx} do
-    assert_raise ArgumentError, ~r/athanor_id is required/, fn ->
-      Threads.list(%{ctx | athanor_id: nil})
-    end
+  test "an athanor-less actor is refused before any query, nil and empty alike", %{ctx: ctx} do
+    assert {:error, :no_athanor} = Threads.list(%{ctx | athanor_id: nil})
+    assert {:error, :no_athanor} = Threads.list(%{ctx | athanor_id: ""})
+
+    # Not an actor at all: no head matches, so a context cannot be read as
+    # an estate with no threads.
+    context = Sanctum.TestContext.local()
+    assert_raise FunctionClauseError, fn -> Threads.list(context) end
   end
 
   test "messages append in seq order and the first user text titles the thread", %{
@@ -63,13 +71,21 @@ defmodule Arca.ThreadStorageTest do
     assert thread.title == "New thread"
 
     {:ok, m1} =
-      Threads.append(ctx, thread.id, %{author: ctx.user_id, content: "Plan my week\nplease"})
+      Threads.append(ctx, thread.id, %{
+        author: ctx.user_id,
+        content: "Plan my week\nplease"
+      })
 
     {:ok, m2} = Threads.append(bob, thread.id, %{author: "aqua", content: "Sure."})
     {:ok, m3} = Threads.append(bob, thread.id, %{author: bob.user_id, content: "Thanks"})
 
     assert [m1.seq, m2.seq, m3.seq] == [1, 2, 3]
-    assert Enum.map(Threads.messages(ctx, thread.id), & &1.id) == [m1.id, m2.id, m3.id]
+
+    assert Enum.map(Threads.messages(ctx, thread.id), & &1.id) == [
+             m1.id,
+             m2.id,
+             m3.id
+           ]
 
     {:ok, thread} = Threads.get(ctx, thread.id)
     assert thread.title == "Plan my week"
@@ -105,7 +121,9 @@ defmodule Arca.ThreadStorageTest do
     assert [%{id: id}] = Threads.pending_approvals(ctx, thread.id)
     assert id == apr.id
 
-    assert {:ok, running} = Threads.resolve_approval(ctx, apr.id, "pending", "running")
+    assert {:ok, running} =
+             Threads.resolve_approval(ctx, apr.id, "pending", "running")
+
     assert running.status == "running"
     assert running.resolved_by == ctx.user_id
     assert running.resolved_at == nil
@@ -114,9 +132,15 @@ defmodule Arca.ThreadStorageTest do
              Threads.resolve_approval(bob, apr.id, "pending", "declined")
 
     assert {:ok, done} =
-             Threads.resolve_approval(ctx, apr.id, "running", "approved", %{
-               resolution: %{"summary" => "ok"}
-             })
+             Threads.resolve_approval(
+               ctx,
+               apr.id,
+               "running",
+               "approved",
+               %{
+                 resolution: %{"summary" => "ok"}
+               }
+             )
 
     assert done.status == "approved"
     assert done.resolved_at
@@ -124,7 +148,12 @@ defmodule Arca.ThreadStorageTest do
     assert Threads.pending_approvals(ctx, thread.id) == []
 
     assert {:error, :not_found} =
-             Threads.resolve_approval(ctx, "msg_nope", "pending", "running")
+             Threads.resolve_approval(
+               ctx,
+               "msg_nope",
+               "pending",
+               "running"
+             )
   end
 
   test "blob_root/1 spells a real tenant root" do
@@ -136,7 +165,10 @@ defmodule Arca.ThreadStorageTest do
 
   test "delete removes the messages and the attachment blobs too", %{ctx: ctx} do
     {:ok, thread} = Threads.create(ctx)
-    {:ok, msg} = Threads.append(ctx, thread.id, %{author: "aqua", content: "x"})
+
+    {:ok, msg} =
+      Threads.append(ctx, thread.id, %{author: "aqua", content: "x"})
+
     blob = Threads.blob_root(thread.id) ++ [msg.id, "0-a.txt"]
     :ok = Arca.put(ctx, blob, "bytes")
 
@@ -148,7 +180,10 @@ defmodule Arca.ThreadStorageTest do
 
   test "delete goes bytes-first: a failed blob delete keeps the rows", %{ctx: ctx} do
     {:ok, thread} = Threads.create(ctx)
-    {:ok, msg} = Threads.append(ctx, thread.id, %{author: "aqua", content: "x"})
+
+    {:ok, msg} =
+      Threads.append(ctx, thread.id, %{author: "aqua", content: "x"})
+
     blob = Threads.blob_root(thread.id) ++ [msg.id, "0-a.txt"]
     :ok = Arca.put(ctx, blob, "bytes")
 
@@ -167,7 +202,9 @@ defmodule Arca.ThreadStorageTest do
     end)
 
     # The DB never claims a deletion the tree didn't make.
-    assert {:error, {:storage_delete_failed, :eacces}} = Threads.delete(ctx, thread.id)
+    assert {:error, {:storage_delete_failed, :eacces}} =
+             Threads.delete(ctx, thread.id)
+
     assert {:ok, _} = Threads.get(ctx, thread.id)
     assert [_] = Threads.messages(ctx, thread.id)
 
@@ -197,16 +234,24 @@ defmodule Arca.ThreadStorageTest do
     {:ok, thread} = Threads.create(ctx)
 
     for n <- 1..4,
-        do: {:ok, _} = Threads.append(ctx, thread.id, %{author: "u", content: "m#{n}"})
+        do:
+          {:ok, _} =
+            Threads.append(ctx, thread.id, %{author: "u", content: "m#{n}"})
 
-    seqs = fn opts -> Threads.messages(ctx, thread.id, opts) |> Enum.map(& &1.seq) end
+    seqs = fn opts ->
+      Threads.messages(ctx, thread.id, opts) |> Enum.map(& &1.seq)
+    end
+
     assert seqs.([]) == [1, 2, 3, 4]
     assert seqs.(after_seq: 1) == [2, 3, 4]
     assert seqs.(after_seq: 1, upto_seq: 3) == [2, 3]
     assert seqs.(upto_seq: 2) == [1, 2]
 
     assert {:ok, %{turn_seq: 0, agent: nil}} = Threads.get(ctx, thread.id)
-    {:ok, updated} = Threads.update(ctx, thread.id, %{turn_seq: 3, agent: "aqua"})
+
+    {:ok, updated} =
+      Threads.update(ctx, thread.id, %{turn_seq: 3, agent: "aqua"})
+
     assert updated.turn_seq == 3 and updated.agent == "aqua"
   end
 
@@ -220,7 +265,11 @@ defmodule Arca.ThreadStorageTest do
 
     for author <- [Arca.Schemas.Message.agent_author(), Arca.Schemas.Message.system_author()] do
       {:ok, _} =
-        Threads.append(ctx, thread.id, %{author: author, kind: "text", content: "not a title"})
+        Threads.append(ctx, thread.id, %{
+          author: author,
+          kind: "text",
+          content: "not a title"
+        })
     end
 
     {:ok, still} = Threads.get(ctx, thread.id)
@@ -231,17 +280,24 @@ defmodule Arca.ThreadStorageTest do
     {:ok, thread} = Threads.create(ctx)
 
     {:ok, msg} =
-      Threads.append(ctx, thread.id, %{author: "u", content: "@aqua what's the plan?"})
+      Threads.append(ctx, thread.id, %{
+        author: "u",
+        content: "@aqua what's the plan?"
+      })
 
     assert msg.content == "@aqua what's the plan?"
-    assert {:ok, %{title: "what's the plan?"}} = Threads.get(ctx, thread.id)
+
+    assert {:ok, %{title: "what's the plan?"}} =
+             Threads.get(ctx, thread.id)
   end
 
   test "retention drops stale idle threads and keeps one holding an open turn", %{ctx: ctx} do
     {:ok, stale} = Threads.create(ctx)
     {:ok, running} = Threads.create(ctx)
     {:ok, fresh} = Threads.create(ctx)
-    {:ok, _} = Threads.append(ctx, fresh.id, %{author: "aqua", content: "recent"})
+
+    {:ok, _} =
+      Threads.append(ctx, fresh.id, %{author: "aqua", content: "recent"})
 
     old = DateTime.add(DateTime.utc_now(), -400 * 86_400, :second)
     {:ok, _} = Threads.update(ctx, stale.id, %{last_message_at: old})
@@ -255,11 +311,20 @@ defmodule Arca.ThreadStorageTest do
     {:ok, _} = Threads.update(ctx, running.id, %{last_message_at: old})
 
     # a blob under the stale thread goes with it
-    :ok = Arca.put(ctx, Threads.blob_root(stale.id) ++ ["msg_1", "note.txt"], "bytes")
+    :ok =
+      Arca.put(
+        ctx,
+        Threads.blob_root(stale.id) ++ ["msg_1", "note.txt"],
+        "bytes"
+      )
 
     cutoff = DateTime.add(DateTime.utc_now(), -365 * 86_400, :second)
     assert {:ok, 1} = Threads.delete_before(ctx, cutoff)
-    refute Arca.exists?(ctx, Threads.blob_root(stale.id) ++ ["msg_1", "note.txt"])
+
+    refute Arca.exists?(
+             ctx,
+             Threads.blob_root(stale.id) ++ ["msg_1", "note.txt"]
+           )
 
     ids = Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
     assert ids == Enum.sort([running.id, fresh.id])

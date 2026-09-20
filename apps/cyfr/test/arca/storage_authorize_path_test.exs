@@ -3,15 +3,17 @@
 
 defmodule Arca.StorageAuthorizePathTest do
   @moduledoc """
-  Every tenant path takes its athanor from the context, so isolation is
+  Every tenant path takes its athanor from the ACTOR, so isolation is
   structural — no path spelling names another athanor's tree. What
   `authorize_path/2` still guards is the server's own: the seed bundle and
-  the global roots.
+  the global roots, and the authority it reads for them is
+  `Cyfr.Actor.system`, which is not a wire member and so cannot be
+  claimed by anything a worker returns.
   """
 
   use ExUnit.Case, async: false
 
-  alias Sanctum.Context
+  alias Cyfr.Actor
 
   setup do
     base = Path.join(System.tmp_dir!(), "arca_authz_#{System.unique_integer([:positive])}")
@@ -33,16 +35,18 @@ defmodule Arca.StorageAuthorizePathTest do
       File.rm_rf!(base)
     end)
 
-    a =
-      Context.build(user_id: "alice", athanor_id: "ath_a", permissions: [:*], authenticated: true)
+    a = %{Actor.in_athanor("ath_a") | user_id: "alice", authenticated: true}
+    b = %{Actor.in_athanor("ath_b") | user_id: "bob", authenticated: true}
 
-    b = Context.build(user_id: "bob", athanor_id: "ath_b", permissions: [:*], authenticated: true)
-    seed = Sanctum.internal_context(user_id: "_seed", athanor_id: "ath_a", scope: :athanor)
+    # The server's own actor narrowed to one athanor: `system: true` is
+    # what opens the seed and global roots, `scope: :athanor` is what
+    # keeps its tenant reads inside this estate.
+    seed = %{Actor.system() | user_id: "_seed", athanor_id: "ath_a", scope: :athanor}
 
     {:ok, a: a, b: b, seed: seed}
   end
 
-  test "component paths are tenant-relative — the context is the only addressing", %{a: a, b: b} do
+  test "component paths are tenant-relative — the actor is the only addressing", %{a: a, b: b} do
     path = ["components", "catalysts", "local", "x", "0.1.0", "cyfr-manifest.json"]
     assert :ok = Arca.put(a, path, "{}")
 
@@ -57,12 +61,12 @@ defmodule Arca.StorageAuthorizePathTest do
     assert {:ok, "mine"} = Arca.get(b, path)
   end
 
-  test "the seed bundle is read-only, and readable only by server-internal contexts",
+  test "the seed bundle is read-only, and readable only by a system actor",
        %{a: a, seed: seed} do
     path = ["seed", "components", "catalysts", "local", "x", "0.1.0", "cyfr-manifest.json"]
 
     # Seed is install media: writes are refused at the seam for EVERY
-    # context, system ones included — fixtures land on disk, the way
+    # actor, the system's included — fixtures land on disk, the way
     # install media does.
     assert {:error, :seed_read_only} = Arca.put(seed, path, "{}")
     assert {:error, :seed_read_only} = Arca.put(a, path, "{}")
@@ -152,19 +156,48 @@ defmodule Arca.StorageAuthorizePathTest do
     assert :ok = Arca.put(a, ["data", "sub.tmp", "nested.txt"], "x")
   end
 
-  test "a context without an athanor cannot touch tenant storage at all" do
-    platform =
-      Sanctum.TestContext.platform(user_id: "op")
+  test "an actor without an athanor cannot touch tenant storage at all" do
+    platform = Actor.system()
 
-    # Platform opens an athanor the way it does for rows — with a context
-    # focused on it. Unfocused, tenant paths are nowhere: fail closed.
-    assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-      Arca.list_recursive(platform, ["components"])
-    end
+    # Platform opens an athanor the way it does for rows — with an actor
+    # narrowed to it. Unnarrowed, tenant paths are nowhere: the facade
+    # refuses before any adapter is asked, and `""` is refused with nil.
+    assert {:error, :no_athanor} = Arca.list_recursive(platform, ["components"])
+    assert {:error, :no_athanor} = Arca.get(platform, ["data", "x.txt"])
+    assert {:error, :no_athanor} = Arca.put(platform, ["data", "x.txt"], "x")
 
+    assert {:error, :no_athanor} =
+             Arca.get(%{platform | athanor_id: ""}, ["data", "x.txt"])
+
+    # The raise stays as the backstop under the facade, for anything that
+    # reaches an adapter directly.
     assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-      Arca.get(platform, ["data", "x.txt"])
+      Arca.Storage.tenant_segments(platform)
     end
+  end
+
+  test "the global roots are the system's, and an ordinary actor may not touch them", %{a: a} do
+    system = Actor.system()
+    blob = ["cache", "oci", "sha256_g9"]
+
+    # `system: true` is the authority `authorize_path/2` reads for a
+    # global root — not `scope`, and not anything a caller presented.
+    assert :ok = Arca.put(system, blob, "bytes")
+    assert {:ok, "bytes"} = Arca.get(system, blob)
+
+    # An ordinary tenant actor is refused, whatever its athanor, and a
+    # platform-scope actor that is NOT the system is refused too: the two
+    # authorities are separate meanings.
+    assert {:error, :forbidden} = Arca.get(a, blob)
+    assert {:error, :forbidden} = Arca.put(a, blob, "mine")
+
+    platform_only = %{Actor.in_athanor("ath_a") | scope: :platform}
+    assert {:error, :forbidden} = Arca.get(platform_only, blob)
+    assert {:error, :forbidden} = Arca.put(platform_only, blob, "mine")
+
+    # And the bytes the system wrote are still what it wrote.
+    assert {:ok, "bytes"} = Arca.get(system, blob)
+    assert :ok = Arca.delete(system, blob)
   end
 
   test "tenant-prefixed data paths are untouched by the pin", %{a: a, b: b} do

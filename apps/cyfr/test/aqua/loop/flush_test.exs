@@ -60,7 +60,7 @@ defmodule Aqua.Loop.FlushTest do
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, thread: thread}
   end
 
@@ -112,7 +112,7 @@ defmodule Aqua.Loop.FlushTest do
     assert %{purpose: "flush", outcome: "ok"} = Enum.find(steps, &(&1.action == "keep"))
     assert {:ok, _} = Aqua.Notes.read(ctx, "plan")
 
-    rows = Threads.messages(ctx, thread.id)
+    rows = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
     assert Enum.any?(rows, &(&1.kind == "compaction"))
     refute Enum.any?(rows, &(&1.content == "Keeping a note."))
 
@@ -131,11 +131,16 @@ defmodule Aqua.Loop.FlushTest do
     {:ok, _} =
       Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
 
-    {:ok, room} = Threads.create(ctx)
-    {:ok, _} = Threads.append(ctx, room.id, %{author: ctx.user_id, content: "ROOM-ONLY-LINE"})
+    {:ok, room} = Threads.create(Sanctum.Context.actor(ctx))
 
     {:ok, _} =
-      Threads.append(ctx, thread.id, %{
+      Threads.append(Sanctum.Context.actor(ctx), room.id, %{
+        author: ctx.user_id,
+        content: "ROOM-ONLY-LINE"
+      })
+
+    {:ok, _} =
+      Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
         author: ctx.user_id,
         content: String.duplicate("lorem ipsum ", 7_000)
       })
@@ -170,7 +175,10 @@ defmodule Aqua.Loop.FlushTest do
 
     refute Jason.encode!(flush.input) =~ "ROOM-ONLY-LINE"
     assert Jason.encode!(chat.input) =~ "ROOM-ONLY-LINE"
-    assert {:ok, _record, kept} = Arca.ExecutionPayloads.get(ctx, flush.execution_id, "input")
+
+    assert {:ok, _record, kept} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), flush.execution_id, "input")
+
     refute kept =~ "ROOM-ONLY-LINE"
   end
 
@@ -188,7 +196,10 @@ defmodule Aqua.Loop.FlushTest do
     assert ["chat", "compaction", "chat"] =
              for(%{kind: "model", purpose: purpose} <- steps, do: purpose)
 
-    assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.kind == "compaction"))
+    assert Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+             &(&1.kind == "compaction")
+           )
   end
 
   test "a flush runs notes.keep alone, never past its size, and never as a card", %{
@@ -246,7 +257,11 @@ defmodule Aqua.Loop.FlushTest do
     {:ok, steps} = Tape.steps(ctx, turn)
     assert %{purpose: "flush", outcome: "denied"} = Enum.find(steps, &(&1.action == "keep"))
     assert {:error, _} = Aqua.Notes.read(ctx, "plan")
-    assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.kind == "compaction"))
+
+    assert Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+             &(&1.kind == "compaction")
+           )
   end
 
   test "a grant store that cannot answer makes no flush request", %{ctx: ctx, thread: thread} do
@@ -265,7 +280,11 @@ defmodule Aqua.Loop.FlushTest do
     assert :completed = Task.await(task, 60_000)
     {:ok, steps} = Tape.steps(ctx, turn)
     refute Enum.any?(steps, &(&1.purpose == "flush"))
-    assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.kind == "compaction"))
+
+    assert Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+             &(&1.kind == "compaction")
+           )
   end
 
   test "a summary that fails after a flush keeps the note and the turn goes on", %{
@@ -290,7 +309,11 @@ defmodule Aqua.Loop.FlushTest do
              Enum.find(steps, &(&1.purpose == "compaction"))
 
     assert {:ok, _} = Aqua.Notes.read(ctx, "plan")
-    refute Enum.any?(Threads.messages(ctx, thread.id), &(&1.kind == "compaction"))
+
+    refute Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+             &(&1.kind == "compaction")
+           )
   end
 
   describe "a flush interrupted before its outcomes were recorded" do

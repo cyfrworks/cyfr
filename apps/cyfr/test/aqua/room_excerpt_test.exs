@@ -33,16 +33,20 @@ defmodule Aqua.RoomExcerptTest do
     {:ok, elsewhere} = Sanctum.Tenancy.Athanors.create_group(other, "Not mine #{n}")
 
     me = %{Sanctum.TestContext.local() | user_id: user, athanor_id: mine.id}
-    in_room = %{me | athanor_id: room.id}
+    in_room = Sanctum.Context.actor(%{me | athanor_id: room.id})
     them = %{in_room | user_id: other}
     {:ok, thread} = Threads.create(in_room)
 
     {:ok, me: me, them: them, in_room: in_room, room: room, elsewhere: elsewhere, thread: thread}
   end
 
-  defp say(ctx, thread, attrs) do
+  defp say(actor, thread, attrs) do
     {:ok, row} =
-      Threads.append(ctx, thread.id, Map.merge(%{kind: "text", author: ctx.user_id}, attrs))
+      Threads.append(
+        actor,
+        thread.id,
+        Map.merge(%{kind: "text", author: actor.user_id}, attrs)
+      )
 
     row
   end

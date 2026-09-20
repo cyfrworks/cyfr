@@ -11,16 +11,16 @@ defmodule Arca.ScheduleOccurrencesTest do
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, actor: Sanctum.Context.actor(Sanctum.TestContext.local())}
   end
 
-  defp due!(ctx, attrs \\ %{}) do
+  defp due!(actor, attrs \\ %{}) do
     {:ok, schedule} =
       CronSchedule.create(
         Map.merge(
           %{
-            user_id: ctx.user_id,
-            athanor_id: ctx.athanor_id,
+            user_id: actor.user_id,
+            athanor_id: actor.athanor_id,
             name: "occ-#{System.unique_integer([:positive])}",
             cron_expression: "0 * * * *",
             reference: "reagent:local.test:1.0.0",
@@ -60,8 +60,8 @@ defmodule Arca.ScheduleOccurrencesTest do
     row.next_run_at
   end
 
-  test "one claimant wins the occurrence and the cursor moves with it", %{ctx: ctx} do
-    schedule = due!(ctx)
+  test "one claimant wins the occurrence and the cursor moves with it", %{actor: actor} do
+    schedule = due!(actor)
     advanced_to = next_occurrence()
 
     results =
@@ -79,14 +79,16 @@ defmodule Arca.ScheduleOccurrencesTest do
     # The row the winner holds names the time it was due for; a stale
     # copy of the schedule (its cursor already moved) claims nothing.
     assert {:ok, [%{scheduled_for: due_for}]} =
-             ScheduleOccurrences.list(Sanctum.Context.actor(ctx), schedule.id)
+             ScheduleOccurrences.list(actor, schedule.id)
 
     assert DateTime.compare(due_for, schedule.next_run_at) == :eq
     assert :held = ScheduleOccurrences.claim(schedule, "node-d", next_occurrence())
   end
 
-  test "an occurrence not yet due, or a schedule without a cursor, is not claimed", %{ctx: ctx} do
-    schedule = due!(ctx)
+  test "an occurrence not yet due, or a schedule without a cursor, is not claimed", %{
+    actor: actor
+  } do
+    schedule = due!(actor)
     future = DateTime.add(DateTime.utc_now(), 600, :second)
 
     {1, _} =
@@ -108,12 +110,12 @@ defmodule Arca.ScheduleOccurrencesTest do
                next_occurrence()
              )
 
-    assert {:ok, []} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), schedule.id)
+    assert {:ok, []} = ScheduleOccurrences.list(actor, schedule.id)
   end
 
-  test "forbid holds a due occurrence while another is open; allow claims it", %{ctx: ctx} do
-    forbid = due!(ctx, %{concurrency: "forbid"})
-    allow = due!(ctx, %{concurrency: "allow"})
+  test "forbid holds a due occurrence while another is open; allow claims it", %{actor: actor} do
+    forbid = due!(actor, %{concurrency: "forbid"})
+    allow = due!(actor, %{concurrency: "allow"})
 
     # Each schedule has an occurrence open, and its next one already due.
     for schedule <- [forbid, allow] do
@@ -121,7 +123,7 @@ defmodule Arca.ScheduleOccurrencesTest do
 
       assert 1 =
                ScheduleOccurrences.start!(
-                 Sanctum.Context.actor(ctx),
+                 actor,
                  occurrence.id,
                  "exec_#{occurrence.id}"
                )
@@ -134,62 +136,62 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert DateTime.compare(cursor!(forbid.id), forbid.next_run_at) == :eq
 
     assert {:ok, [%{state: "started"}]} =
-             ScheduleOccurrences.list(Sanctum.Context.actor(ctx), forbid.id)
+             ScheduleOccurrences.list(actor, forbid.id)
 
     assert {:ok, %{state: "claimed"}} =
              ScheduleOccurrences.claim(allow, "node-a", next_occurrence())
 
-    assert {:ok, [_, _]} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), allow.id)
+    assert {:ok, [_, _]} = ScheduleOccurrences.list(actor, allow.id)
 
     # Once the open one ends, forbid claims the waiting occurrence.
-    {:ok, [open]} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), forbid.id)
-    assert {:ok, 1} = ScheduleOccurrences.finish(Sanctum.Context.actor(ctx), open.id, "completed")
+    {:ok, [open]} = ScheduleOccurrences.list(actor, forbid.id)
+    assert {:ok, 1} = ScheduleOccurrences.finish(actor, open.id, "completed")
 
     assert {:ok, %{state: "claimed"}} =
              ScheduleOccurrences.claim(forbid, "node-a", next_occurrence())
   end
 
   test "start moves a claimed occurrence once; finish and settle_dead end it as the row says", %{
-    ctx: ctx
+    actor: actor
   } do
-    schedule = due!(ctx)
+    schedule = due!(actor)
     {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
 
-    assert 1 = ScheduleOccurrences.start!(Sanctum.Context.actor(ctx), occurrence.id, "exec_1")
-    assert 0 = ScheduleOccurrences.start!(Sanctum.Context.actor(ctx), occurrence.id, "exec_2")
+    assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "exec_1")
+    assert 0 = ScheduleOccurrences.start!(actor, occurrence.id, "exec_2")
 
     assert {:ok, %{state: "started", execution_id: "exec_1", attempts: 1}} =
-             ScheduleOccurrences.get(Sanctum.Context.actor(ctx), occurrence.id)
+             ScheduleOccurrences.get(actor, occurrence.id)
 
     assert {:ok, "uncertain"} =
-             ScheduleOccurrences.settle_dead(Sanctum.Context.actor(ctx), occurrence.id)
+             ScheduleOccurrences.settle_dead(actor, occurrence.id)
 
-    assert {:ok, nil} = ScheduleOccurrences.settle_dead(Sanctum.Context.actor(ctx), occurrence.id)
+    assert {:ok, nil} = ScheduleOccurrences.settle_dead(actor, occurrence.id)
 
     assert {:ok, 0} =
-             ScheduleOccurrences.finish(Sanctum.Context.actor(ctx), occurrence.id, "completed")
+             ScheduleOccurrences.finish(actor, occurrence.id, "completed")
 
     # A claimed one nothing invoked fails when its runner dies.
-    later = due!(ctx)
+    later = due!(actor)
     {:ok, claimed} = ScheduleOccurrences.claim(later, "node-a", next_occurrence())
 
     assert {:ok, "failed"} =
-             ScheduleOccurrences.settle_dead(Sanctum.Context.actor(ctx), claimed.id)
+             ScheduleOccurrences.settle_dead(actor, claimed.id)
 
     # Another estate reads none of it.
     assert {:error, :not_found} =
              ScheduleOccurrences.get(
-               Sanctum.Context.actor(%{ctx | athanor_id: "ath_elsewhere"}),
+               %{actor | athanor_id: "ath_elsewhere"},
                occurrence.id
              )
   end
 
   test "recovery names what a dead scheduler left: claimed never invoked, started with its execution gone",
-       %{ctx: ctx} do
-    schedule = due!(ctx)
+       %{actor: actor} do
+    schedule = due!(actor)
     {:ok, claimed} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
 
-    running = due!(ctx)
+    running = due!(actor)
     {:ok, started} = ScheduleOccurrences.claim(running, "node-a", next_occurrence())
 
     {:ok, %{attempt: attempt}} =
@@ -197,8 +199,8 @@ defmodule Arca.ScheduleOccurrencesTest do
         %{
           id: "exec_live",
           reference: "reagent:local.test:1.0.0",
-          user_id: ctx.user_id,
-          athanor_id: ctx.athanor_id,
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
           component_type: "reagent",
           schedule_id: running.id
         },
@@ -213,7 +215,7 @@ defmodule Arca.ScheduleOccurrencesTest do
 
     {:ok, _} =
       Arca.Execution.record_end(
-        ctx,
+        actor,
         "exec_live",
         "failed",
         %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "swept"},
@@ -224,18 +226,18 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert started_id == started.id
   end
 
-  test "an execution admitted for an occurrence nobody claimed is refused", %{ctx: ctx} do
-    schedule = due!(ctx)
+  test "an execution admitted for an occurrence nobody claimed is refused", %{actor: actor} do
+    schedule = due!(actor)
     {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
-    assert 1 = ScheduleOccurrences.start!(Sanctum.Context.actor(ctx), occurrence.id, "exec_first")
+    assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "exec_first")
 
     assert {:error, :occurrence_not_claimed} =
              Arca.Execution.admit(
                %{
                  id: "exec_second",
                  reference: "reagent:local.test:1.0.0",
-                 user_id: ctx.user_id,
-                 athanor_id: ctx.athanor_id,
+                 user_id: actor.user_id,
+                 athanor_id: actor.athanor_id,
                  component_type: "reagent",
                  schedule_id: schedule.id
                },

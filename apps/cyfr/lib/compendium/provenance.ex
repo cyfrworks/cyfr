@@ -37,7 +37,8 @@ defmodule Compendium.Provenance do
     if Compendium.Source.remote?(Map.get(component, :source)) do
       {:ok, :remote}
     else
-      with {:ok, status} <- Arca.Overlay.unit_status(ctx, version_dir(component)) do
+      with {:ok, status} <-
+             Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), version_dir(component)) do
         {:ok, of_status(status)}
       end
     end
@@ -69,8 +70,9 @@ defmodule Compendium.Provenance do
   @spec map(Context.t()) ::
           {:ok, %{{String.t(), String.t(), String.t()} => t()}} | {:error, term()}
   def map(%Context{} = ctx) do
-    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "components"),
-         {:ok, rows} <- Arca.ComponentStorage.list_components(ctx, limit: :none) do
+    with {:ok, statuses} <- Arca.Overlay.unit_statuses(Sanctum.Context.actor(ctx), "components"),
+         {:ok, rows} <-
+           Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), limit: :none) do
       {:ok,
        Map.new(rows, fn row ->
          publisher = ComponentPath.normalize_publisher(Map.get(row, :publisher))
@@ -108,9 +110,9 @@ defmodule Compendium.Provenance do
     else
       unit_dir = version_dir(component)
 
-      case Arca.Overlay.unit_status(ctx, unit_dir) do
+      case Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit_dir) do
         {:ok, :shipped} ->
-          with {:ok, diff} <- Arca.Overlay.diff_unit(ctx, unit_dir) do
+          with {:ok, diff} <- Arca.Overlay.diff_unit(Sanctum.Context.actor(ctx), unit_dir) do
             case diff do
               %{added: [], removed: [], changed: []} ->
                 {:ok, %{provenance: :bundled, drift: :pristine}}
@@ -174,7 +176,7 @@ defmodule Compendium.Provenance do
            ]}
           | {:error, term()}
   def annotate(%Context{} = ctx, rows) when is_list(rows) do
-    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "components"),
+    with {:ok, statuses} <- Arca.Overlay.unit_statuses(Sanctum.Context.actor(ctx), "components"),
          {:ok, catalog} <- shipped_catalog(rows) do
       annotated =
         Enum.map(rows, fn row ->
@@ -228,7 +230,7 @@ defmodule Compendium.Provenance do
     with forked when is_binary(forked) <- forked_from(component),
          {:ok, %Cyfr.ComponentRef{} = cref} <- Cyfr.ComponentRef.parse(forked),
          {:ok, rows} <-
-           Arca.ComponentStorage.list_components(ctx,
+           Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
              name: cref.name,
              publisher: cref.namespace,
              component_type: cref.type,
@@ -252,7 +254,8 @@ defmodule Compendium.Provenance do
   """
   @spec overview(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def overview(%Context{} = ctx) do
-    with {:ok, rows} <- Arca.ComponentStorage.list_components(ctx, limit: :none) do
+    with {:ok, rows} <-
+           Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), limit: :none) do
       annotate(ctx, rows)
     end
   end
@@ -307,7 +310,7 @@ defmodule Compendium.Provenance do
       Arca.Storage.seed_prefix("components") ++
         [ComponentPath.type_plural(type), ComponentPath.default_publisher(), name]
 
-    with {:ok, entries} <- Arca.list_typed(Sanctum.system_context(), prefix) do
+    with {:ok, entries} <- Arca.list_typed(Cyfr.Actor.system(), prefix) do
       {:ok, sort_versions_desc(for {version, :dir} <- entries, do: version)}
     end
   end
@@ -362,10 +365,11 @@ defmodule Compendium.Provenance do
   defp compute_seed_release(type, publisher, name, version) do
     rel = [ComponentPath.type_plural(type), publisher, name, version]
     prefix = Arca.Storage.seed_prefix("components") ++ rel
-    ctx = Sanctum.system_context()
 
-    with {:ok, manifest} <- Arca.get_json(ctx, prefix ++ [ComponentPath.manifest_name()]),
-         {:ok, bytes} <- Arca.get(ctx, prefix ++ [ComponentPath.wasm_name(type)]) do
+    with {:ok, manifest} <-
+           Arca.get_json(Cyfr.Actor.system(), prefix ++ [ComponentPath.manifest_name()]),
+         {:ok, bytes} <-
+           Arca.get(Cyfr.Actor.system(), prefix ++ [ComponentPath.wasm_name(type)]) do
       digest = Compendium.WasmValidator.compute_digest(bytes)
       Compendium.ReleaseDigest.compute(digest, Cyfr.Manifest.decode(manifest))
     else

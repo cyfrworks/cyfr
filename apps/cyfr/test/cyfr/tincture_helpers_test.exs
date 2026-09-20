@@ -20,7 +20,7 @@ defmodule Cyfr.TinctureHelpersTest do
     Application.put_env(:cyfr, :base_path, root)
 
     ctx = Sanctum.TestContext.local()
-    base = Arca.Adapters.Local.build_path(ctx, ["components"])
+    base = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), ["components"])
     File.mkdir_p!(base)
     File.write!(Path.join(base, "index.html"), "<html></html>")
     File.write!(Path.join(base, "app.js"), "console.log('hi')")

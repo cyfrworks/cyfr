@@ -226,7 +226,7 @@ defmodule Cyfr.TinctureHelpers do
 
   defp discover_icon(ctx, version_segs) do
     Enum.find(@media_icon_candidates, fn rel ->
-      Arca.exists?(ctx, version_segs ++ String.split(rel, "/"))
+      Arca.exists?(Sanctum.Context.actor(ctx), version_segs ++ String.split(rel, "/"))
     end)
   end
 
@@ -234,7 +234,9 @@ defmodule Cyfr.TinctureHelpers do
     Enum.flat_map(1..@media_preview_count, fn i ->
       Enum.find_value(@media_preview_extensions, [], fn ext ->
         rel = "public/media/preview-#{i}.#{ext}"
-        if Arca.exists?(ctx, version_segs ++ String.split(rel, "/")), do: [rel]
+
+        if Arca.exists?(Sanctum.Context.actor(ctx), version_segs ++ String.split(rel, "/")),
+          do: [rel]
       end)
     end)
   end
@@ -303,7 +305,12 @@ defmodule Cyfr.TinctureHelpers do
             |> put_resp_content_type(mime)
             |> put_resp_header("access-control-allow-origin", "*")
 
-          case Arca.serve_to_conn(conn, ctx, version_segs ++ asset_segs, []) do
+          case Arca.serve_to_conn(
+                 conn,
+                 Sanctum.Context.actor(ctx),
+                 version_segs ++ asset_segs,
+                 []
+               ) do
             {:ok, conn} -> conn
             {:error, _} -> send_resp(conn, 404, "Not Found")
           end
@@ -335,7 +342,7 @@ defmodule Cyfr.TinctureHelpers do
           String.t()
         ) :: Plug.Conn.t()
   def serve_index(conn, %Sanctum.Context{} = ctx, version_segs, entry, base_href, csp) do
-    case Arca.get(ctx, version_segs ++ Path.split(entry)) do
+    case Arca.get(Sanctum.Context.actor(ctx), version_segs ++ Path.split(entry)) do
       {:ok, content} ->
         nonce = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
         csp = String.replace(csp, "script-src 'self'", "script-src 'self' 'nonce-#{nonce}'")

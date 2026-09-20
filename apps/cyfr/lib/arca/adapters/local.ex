@@ -70,11 +70,10 @@ defmodule Arca.Adapters.Local do
   @behaviour Arca.Storage
 
   require Logger
-  alias Sanctum.Context
 
   @impl true
-  def get(%Context{} = ctx, path) do
-    full_path = build_path(ctx, path)
+  def get(%Cyfr.Actor{} = actor, path) do
+    full_path = build_path(actor, path)
 
     # `File.read` follows symlinks; nothing tenant-reachable can create one
     # (the tar ingests refuse them), so a link here is host tampering or a
@@ -110,9 +109,9 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def put(%Context{} = ctx, path, content) do
+  def put(%Cyfr.Actor{} = actor, path, content) do
     refuse_seed_write!(path)
-    write_via_rename(build_path(ctx, path), content)
+    write_via_rename(build_path(actor, path), content)
   end
 
   # Write-then-rename is atomic for readers: they see complete old or new
@@ -143,9 +142,9 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def append(%Context{} = ctx, path, content) do
+  def append(%Cyfr.Actor{} = actor, path, content) do
     refuse_seed_write!(path)
-    full_path = build_path(ctx, path)
+    full_path = build_path(actor, path)
 
     # `File.write [:append]` opens with O_APPEND and FOLLOWS a symlink —
     # unlike `put/3`, whose rename replaces the link. Refuse like `get/2`
@@ -190,9 +189,9 @@ defmodule Arca.Adapters.Local do
   mechanism and the result vocabulary.
   """
   @impl true
-  def put_if_none_match(%Context{} = ctx, path, content) do
+  def put_if_none_match(%Cyfr.Actor{} = actor, path, content) do
     refuse_seed_write!(path)
-    full_path = build_path(ctx, path)
+    full_path = build_path(actor, path)
     bytes = IO.iodata_to_binary(content)
 
     serialized(full_path, fn ->
@@ -240,9 +239,9 @@ defmodule Arca.Adapters.Local do
   the mechanism and the result vocabulary.
   """
   @impl true
-  def put_if_match(%Context{} = ctx, path, content, precondition) do
+  def put_if_match(%Cyfr.Actor{} = actor, path, content, precondition) do
     refuse_seed_write!(path)
-    full_path = build_path(ctx, path)
+    full_path = build_path(actor, path)
     bytes = IO.iodata_to_binary(content)
 
     serialized(full_path, fn ->
@@ -265,8 +264,8 @@ defmodule Arca.Adapters.Local do
   the bytes it answers.
   """
   @impl true
-  def get_for_update(%Context{} = ctx, path) do
-    with {:ok, bytes} <- get(ctx, path), do: {:ok, bytes, precondition(bytes)}
+  def get_for_update(%Cyfr.Actor{} = actor, path) do
+    with {:ok, bytes} <- get(actor, path), do: {:ok, bytes, precondition(bytes)}
   end
 
   # The precondition of what is at `full_path` now. A directory is not an
@@ -303,8 +302,8 @@ defmodule Arca.Adapters.Local do
   for a prefix that is one file, `[]` for nothing (or a symlink).
   """
   @impl true
-  def list_prefix(%Context{} = ctx, prefix) do
-    full_path = build_path(ctx, prefix)
+  def list_prefix(%Cyfr.Actor{} = actor, prefix) do
+    full_path = build_path(actor, prefix)
 
     case lstat_type(full_path) do
       :directory -> {:ok, leaves_as_segments(full_path, prefix)}
@@ -314,9 +313,9 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def delete(%Context{} = ctx, path) do
+  def delete(%Cyfr.Actor{} = actor, path) do
     refuse_seed_write!(path)
-    full_path = build_path(ctx, path)
+    full_path = build_path(actor, path)
 
     case File.rm(full_path) do
       :ok -> :ok
@@ -326,14 +325,14 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def ensure_dir(%Context{} = ctx, path) do
+  def ensure_dir(%Cyfr.Actor{} = actor, path) do
     refuse_seed_write!(path)
-    File.mkdir_p(build_path(ctx, path))
+    File.mkdir_p(build_path(actor, path))
   end
 
   @impl true
-  def list_typed(%Context{} = ctx, path) do
-    full_path = build_path(ctx, path)
+  def list_typed(%Cyfr.Actor{} = actor, path) do
+    full_path = build_path(actor, path)
 
     case File.ls(full_path) do
       {:ok, names} ->
@@ -364,8 +363,8 @@ defmodule Arca.Adapters.Local do
   defp tmp_name?(name), do: Arca.Storage.tmp_name?(name)
 
   @impl true
-  def exists?(%Context{} = ctx, path) do
-    full_path = build_path(ctx, path)
+  def exists?(%Cyfr.Actor{} = actor, path) do
+    full_path = build_path(actor, path)
     # Files only, matching the S3 adapter's HEAD probe: a directory "exists"
     # on a filesystem but has no object-store counterpart, and the two
     # adapters must answer the same question the same way. Directories are
@@ -375,9 +374,9 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def delete_tree(%Context{} = ctx, path) do
+  def delete_tree(%Cyfr.Actor{} = actor, path) do
     refuse_seed_write!(path)
-    full_path = build_path(ctx, path)
+    full_path = build_path(actor, path)
 
     case File.rm_rf(full_path) do
       {:ok, _} -> :ok
@@ -386,8 +385,8 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def list_recursive(%Context{} = ctx, path) do
-    full_path = build_path(ctx, path)
+  def list_recursive(%Cyfr.Actor{} = actor, path) do
+    full_path = build_path(actor, path)
 
     if File.dir?(full_path) do
       {:ok, leaves_as_segments(full_path, path)}
@@ -406,14 +405,14 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def usage(%Context{} = ctx, path) do
-    full_path = build_path(ctx, path)
+  def usage(%Cyfr.Actor{} = actor, path) do
+    full_path = build_path(actor, path)
 
     if File.dir?(full_path) do
       # Strict, unlike the listing walk: the storage cap rides this
       # number, and an unreadable subtree silently read as empty would
       # weaken it — the cap layer fails CLOSED on a usage error
-      # (`Sanctum.Tenancy.Caps.check_storage/2`), so the error must reach
+      # (`Cyfr.Caps.check_storage/2`), so the error must reach
       # it. A missing root stays zero (nothing stored is honestly zero).
       case walk_files_sized(full_path) do
         {:ok, sized} ->
@@ -483,8 +482,8 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def serve_to_conn(conn, %Context{} = ctx, path, opts) do
-    full_path = build_path(ctx, path)
+  def serve_to_conn(conn, %Cyfr.Actor{} = actor, path, opts) do
+    full_path = build_path(actor, path)
     status = Keyword.get(opts, :status, 200)
 
     # lstat, same rule as get/2: a symlink is not servable content.
@@ -523,11 +522,12 @@ defmodule Arca.Adapters.Local do
   are not fsynced, as `put/3` is not.
   """
   @impl true
-  def replace_tree(%Context{} = ctx, path, files) when is_list(files) do
+  def replace_tree(%Cyfr.Actor{} = actor, path, files)
+      when is_list(files) do
     refuse_seed_write!(path)
-    swap = swap_names(build_path(ctx, path))
+    swap = swap_names(build_path(actor, path))
 
-    with :ok <- stage(ctx, path, swap.staged, files),
+    with :ok <- stage(actor, path, swap.staged, files),
          :ok <- swap(swap) do
       :ok
     else
@@ -558,11 +558,11 @@ defmodule Arca.Adapters.Local do
 
   # A staged file lands at a fresh name no reader resolves, so it is
   # written in place rather than through `put/3`'s rename.
-  defp stage(ctx, path, staged, files) do
+  defp stage(actor, path, staged, files) do
     with :ok <- File.mkdir_p(staged) do
       Enum.reduce_while(files, :ok, fn {rel, content}, :ok ->
         # Validates `rel` and its containment exactly as a write would.
-        _live_file = build_path(ctx, path ++ rel)
+        _live_file = build_path(actor, path ++ rel)
         target = Path.join([staged | rel])
 
         with {:ok, bytes} <- file_bytes(content),
@@ -856,7 +856,7 @@ defmodule Arca.Adapters.Local do
   it before any I/O, so `Arca.Storage.validate_path!/1` runs exactly once
   per operation — never per callback on top.
   """
-  def build_path(%Context{} = ctx, segments) do
+  def build_path(%Cyfr.Actor{} = actor, segments) do
     Arca.Storage.validate_path!(segments)
 
     {root, relative} =
@@ -865,7 +865,7 @@ defmodule Arca.Adapters.Local do
           {seed_root_path!(seed_root), rest}
 
         _ ->
-          {base_path(), Arca.Storage.physical_segments(ctx, segments)}
+          {base_path(), Arca.Storage.physical_segments(actor, segments)}
       end
 
     path = Path.join([root | relative])

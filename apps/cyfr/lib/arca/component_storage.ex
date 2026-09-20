@@ -10,7 +10,7 @@ defmodule Arca.ComponentStorage do
   structs; the `Compendium` layer normalizes them into its own document
   representation (which it also builds from remote-registry responses).
 
-  All public functions take a `%Sanctum.Context{}` as the first argument
+  All public functions take a `%Cyfr.Actor{}` as the first argument
   to enforce tenant isolation via `where_tenant/3`.
   """
 
@@ -18,15 +18,22 @@ defmodule Arca.ComponentStorage do
   import Arca.QueryHelpers, only: [where_tenant: 2]
 
   alias Arca.Schemas.Component
-  alias Sanctum.Context
 
   @doc """
   Get a component by name and version, with optional publisher and component_type filters.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  def get_component(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
-      when is_binary(name) and is_binary(version) do
+  def get_component(actor, name, version, publisher \\ nil, component_type \\ nil)
+
+  def get_component(
+        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        name,
+        version,
+        publisher,
+        component_type
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and is_binary(version) do
     # `limit: 1` over a filter that may match two rows (the same
     # name:version can exist as two component_types) — the order_by keeps
     # the pick deterministic on every adapter.
@@ -36,7 +43,7 @@ defmodule Arca.ComponentStorage do
         order_by: [desc: c.inserted_at, asc: c.id],
         limit: 1
       )
-      |> where_tenant(ctx)
+      |> where_tenant(actor)
 
     query = if publisher, do: from(c in query, where: c.publisher == ^publisher), else: query
 
@@ -53,16 +60,20 @@ defmodule Arca.ComponentStorage do
     end)
   end
 
+  def get_component(%Cyfr.Actor{}, _name, _version, _publisher, _component_type),
+    do: {:error, :no_athanor}
+
   @doc """
   Get a component by its WASM digest (SHA256 hash).
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   This is a direct index lookup, avoiding O(n) scan of all components.
   """
-  def get_by_digest(%Context{} = ctx, digest) when is_binary(digest) do
+  def get_by_digest(%Cyfr.Actor{athanor_id: athanor_id} = actor, digest)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(digest) do
     query =
       from(c in Component, where: c.digest == ^digest, limit: 1)
-      |> where_tenant(ctx)
+      |> where_tenant(actor)
 
     rescuing_db("get_by_digest", fn ->
       case Arca.Repo.one(query) do
@@ -72,6 +83,8 @@ defmodule Arca.ComponentStorage do
     end)
   end
 
+  def get_by_digest(%Cyfr.Actor{}, _digest), do: {:error, :no_athanor}
+
   @doc """
   Save or update a component.
 
@@ -80,11 +93,14 @@ defmodule Arca.ComponentStorage do
   (`Compendium.Registry`), not the storage layer's. Ensures tenant fields from
   the context.
   """
-  def put_component(%Context{} = ctx, attrs) when is_map(attrs) do
-    attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(ctx, &1))
+  def put_component(%Cyfr.Actor{athanor_id: athanor_id} = actor, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
+    attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(actor, &1))
 
     rescuing_db("put_component", fn -> do_put_component(attrs) end)
   end
+
+  def put_component(%Cyfr.Actor{}, _attrs), do: {:error, :no_athanor}
 
   # arca:unscoped-ok the attrs arrive with the athanor set by the caller-facing entry (ensure_tenant_fields).
   defp do_put_component(attrs) do
@@ -127,8 +143,9 @@ defmodule Arca.ComponentStorage do
   athanor/publisher/name/version/type combination already exists.
   """
   # arca:unscoped-ok ensure_tenant_fields/2 stamps the context's athanor onto the row before the write.
-  def insert_component(%Context{} = ctx, attrs) when is_map(attrs) do
-    attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(ctx, &1))
+  def insert_component(%Cyfr.Actor{athanor_id: athanor_id} = actor, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
+    attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(actor, &1))
 
     rescuing_db("insert_component", fn ->
       case Arca.Repo.insert_all(Component, [attrs], on_conflict: :nothing) do
@@ -138,6 +155,8 @@ defmodule Arca.ComponentStorage do
       end
     end)
   end
+
+  def insert_component(%Cyfr.Actor{}, _attrs), do: {:error, :no_athanor}
 
   # The closed source roster (`Cyfr.ComponentSource.values/0`), enforced
   # where rows are WRITTEN — an unrostered value would silently skew
@@ -159,11 +178,19 @@ defmodule Arca.ComponentStorage do
   @doc """
   Delete a component by name and version, with optional publisher and component_type filters.
   """
-  def delete_component(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
-      when is_binary(name) and is_binary(version) do
+  def delete_component(actor, name, version, publisher \\ nil, component_type \\ nil)
+
+  def delete_component(
+        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        name,
+        version,
+        publisher,
+        component_type
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and is_binary(version) do
     query =
       from(c in Component, where: c.name == ^name and c.version == ^version)
-      |> where_tenant(ctx)
+      |> where_tenant(actor)
 
     query = if publisher, do: from(c in query, where: c.publisher == ^publisher), else: query
 
@@ -180,19 +207,22 @@ defmodule Arca.ComponentStorage do
     end)
   end
 
+  def delete_component(%Cyfr.Actor{}, _name, _version, _publisher, _component_type),
+    do: {:error, :no_athanor}
+
   @doc """
   Check if any versions of a component exist for the given name, publisher, and tenant.
   Used during component removal to determine if name-level grants/policies should be cleaned up.
   """
-  def has_remaining_versions?(%Context{} = ctx, name, publisher)
-      when is_binary(name) and is_binary(publisher) do
+  def has_remaining_versions?(%Cyfr.Actor{athanor_id: athanor_id} = actor, name, publisher)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and is_binary(publisher) do
     query =
       from(c in Component,
         where: c.name == ^name and c.publisher == ^publisher,
         select: c.id,
         limit: 1
       )
-      |> where_tenant(ctx)
+      |> where_tenant(actor)
 
     # Fail safe: on a store outage assume versions remain, so name-level
     # grants/policies are never deleted on an unanswerable read.
@@ -200,6 +230,9 @@ defmodule Arca.ComponentStorage do
       Arca.Repo.one(query) != nil
     end)
   end
+
+  def has_remaining_versions?(%Cyfr.Actor{}, _name, _publisher),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ComponentStorage.has_remaining_versions?/3")
 
   @doc """
   List components with optional filters.
@@ -214,7 +247,10 @@ defmodule Arca.ComponentStorage do
     callers that feed completeness-sensitive answers (consent bootstrap,
     provenance maps, prune) must use it, a page here silently truncates
   """
-  def list_components(%Context{} = ctx, opts \\ []) do
+  def list_components(actor, opts \\ [])
+
+  def list_components(%Cyfr.Actor{athanor_id: athanor_id} = actor, opts)
+      when is_binary(athanor_id) and athanor_id != "" do
     limit = Keyword.get(opts, :limit, 100)
 
     # Stable baseline ordering so row order (and thus limit truncation) is
@@ -226,7 +262,7 @@ defmodule Arca.ComponentStorage do
       from(c in Component,
         order_by: [desc: c.inserted_at, asc: c.name, asc: c.version, asc: c.id]
       )
-      |> where_tenant(ctx)
+      |> where_tenant(actor)
 
     query =
       if limit == :none do
@@ -295,20 +331,34 @@ defmodule Arca.ComponentStorage do
     rescuing_db("list_components", fn -> {:ok, Arca.Repo.all(query)} end)
   end
 
+  def list_components(%Cyfr.Actor{}, _opts), do: {:error, :no_athanor}
+
   @doc """
   Check if a component exists by name and version, with optional publisher and component_type filters.
   """
-  def exists?(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) do
-    case get_component(ctx, name, version, publisher, component_type) do
+  def exists?(actor, name, version, publisher \\ nil, component_type \\ nil)
+
+  def exists?(
+        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        name,
+        version,
+        publisher,
+        component_type
+      )
+      when is_binary(athanor_id) and athanor_id != "" do
+    case get_component(actor, name, version, publisher, component_type) do
       {:ok, _} -> true
       {:error, _} -> false
     end
   end
 
+  def exists?(%Cyfr.Actor{}, _name, _version, _publisher, _component_type),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ComponentStorage.exists?/5")
+
   # The row's athanor is the context's; a caller cannot write into another.
   # One spelling for the whole storage layer: Arca.QueryHelpers.stamp_tenant!/2.
-  defp ensure_tenant_fields(%Context{} = ctx, attrs),
-    do: Arca.QueryHelpers.stamp_tenant!(ctx, attrs)
+  defp ensure_tenant_fields(%Cyfr.Actor{} = actor, attrs),
+    do: Arca.QueryHelpers.stamp_tenant!(actor, attrs)
 
   # One rescue for the module's typed-refusal contract: DB errors log with
   # the operation's name and answer `{:error, :database_error}`

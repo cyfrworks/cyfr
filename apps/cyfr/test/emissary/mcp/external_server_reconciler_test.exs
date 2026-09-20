@@ -51,7 +51,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       })
 
     {:ok, _} =
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "refsrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -82,7 +82,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       })
 
     {:ok, _} =
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "oldnamesrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -103,7 +103,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       Vault.create(ctx, %{name: "bearer-token", kind: "api_key", fields: %{"token" => "t1"}})
 
     {:ok, _} =
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "bearersrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -125,7 +125,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       Vault.create(ctx, %{name: "env-token", kind: "api_key", fields: %{"token" => "t1"}})
 
     {:ok, %{epoch: 1}} =
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "envsrv",
         transport: "stdio",
         url: nil,
@@ -145,7 +145,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
 
     sync_reconciler()
     assert_receive {:reconciled, %{server: "envsrv"}}, 2_000
-    assert {:ok, %{epoch: 2}} = Arca.McpServerStorage.get(ctx, "envsrv")
+    assert {:ok, %{epoch: 2}} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "envsrv")
   end
 
   test "a signal that names no entry stops every server whose templates reference one",
@@ -155,7 +155,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
           {"literalsrv", %{"accept" => "application/json"}}
         ] do
       {:ok, _} =
-        Arca.McpServerStorage.insert(ctx, %{
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
           name: name,
           url: "https://127.0.0.1:9/mcp",
           config_json: Jason.encode!(%{"headers" => headers, "timeout_ms" => 1_000})
@@ -199,7 +199,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       Vault.create(ctx, %{name: "unrelated", kind: "api_key", fields: %{"k" => "v"}})
 
     {:ok, _} =
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "quietsrv",
         url: "https://127.0.0.1:9/mcp",
         config_json:
@@ -230,9 +230,12 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
       })
 
     case result do
-      {:ok, _} -> assert {:ok, _} = Arca.McpServerStorage.get(ctx, "vaultref")
+      {:ok, _} ->
+        assert {:ok, _} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "vaultref")
+
       # Creation may fail on the unreachable probe, but never on validation.
-      {:error, message} -> refute message =~ "looks like a credential"
+      {:error, message} ->
+        refute message =~ "looks like a credential"
     end
   end
 

@@ -42,10 +42,18 @@ defmodule Compendium.MCP.SourceToolTest do
     end)
 
     ctx = Sanctum.TestContext.local()
-    :ok = Arca.ensure_roots(ctx)
+    :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
     segs = String.split(@dir, "/")
-    :ok = Arca.put(ctx, segs ++ ["cyfr-manifest.json"], ~s({"name":"widget"}))
-    :ok = Arca.put(ctx, segs ++ ["src", "lib.rs"], "fn one() {}\nfn two() {}\nfn three() {}")
+
+    :ok =
+      Arca.put(Sanctum.Context.actor(ctx), segs ++ ["cyfr-manifest.json"], ~s({"name":"widget"}))
+
+    :ok =
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        segs ++ ["src", "lib.rs"],
+        "fn one() {}\nfn two() {}\nfn three() {}"
+      )
 
     {:ok, ctx: ctx}
   end
@@ -117,7 +125,7 @@ defmodule Compendium.MCP.SourceToolTest do
       assert {:ok, %{files: [_ | _]}} =
                SourceTool.handle("source", ctx, %{"action" => "tree", "path" => @dir})
 
-      assert {:ok, _} = Arca.get(ctx, @manifest_segments)
+      assert {:ok, _} = Arca.get(Sanctum.Context.actor(ctx), @manifest_segments)
     end
 
     test "the manifest is read here and never written, edited or deleted, at any spelling",
@@ -140,7 +148,8 @@ defmodule Compendium.MCP.SourceToolTest do
         assert msg =~ "Files page"
       end
 
-      assert {:ok, ~s({"name":"widget"})} = Arca.get(ctx, @manifest_segments)
+      assert {:ok, ~s({"name":"widget"})} =
+               Arca.get(Sanctum.Context.actor(ctx), @manifest_segments)
 
       assert {:ok, %{content: ~s({"name":"widget"})}} =
                SourceTool.handle("source", ctx, %{
@@ -168,7 +177,8 @@ defmodule Compendium.MCP.SourceToolTest do
                "#{action} #{path} was not refused"
       end
 
-      assert {:ok, ~s({"name":"widget"})} = Arca.get(ctx, @manifest_segments)
+      assert {:ok, ~s({"name":"widget"})} =
+               Arca.get(Sanctum.Context.actor(ctx), @manifest_segments)
     end
 
     test "a path outside a component version refuses in words", %{ctx: ctx} do
@@ -246,7 +256,12 @@ defmodule Compendium.MCP.SourceToolTest do
     end
 
     test "edit works on text; a binary file is written whole", %{ctx: ctx} do
-      :ok = Arca.put(ctx, String.split(@dir, "/") ++ ["media", "icon.png"], <<137, 0, 1, 2>>)
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          String.split(@dir, "/") ++ ["media", "icon.png"],
+          <<137, 0, 1, 2>>
+        )
 
       assert {:error, {:invalid_argument, msg}} =
                SourceTool.handle("source", ctx, %{
@@ -259,7 +274,13 @@ defmodule Compendium.MCP.SourceToolTest do
     end
 
     test "edits of one file serialize: none is lost to a concurrent one", %{ctx: ctx} do
-      :ok = Arca.put(ctx, String.split(@dir, "/") ++ ["src", "log.txt"], "start")
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          String.split(@dir, "/") ++ ["src", "log.txt"],
+          "start"
+        )
+
       parent = self()
 
       1..8

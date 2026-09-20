@@ -68,7 +68,7 @@ defmodule Aqua.Attachments do
         {:ok, path} = blob_path(thread_id, message_id, %{"stored_name" => stored_name})
         bytes = file["bytes"] || ""
 
-        case Arca.put(ctx, path, bytes) do
+        case Arca.put(Sanctum.Context.actor(ctx), path, bytes) do
           :ok ->
             ref = %{
               "filename" => safe_filename(file["filename"]),
@@ -87,7 +87,7 @@ defmodule Aqua.Attachments do
 
             Enum.each(refs, fn written ->
               with {:ok, blob} <- blob_path(thread_id, message_id, written) do
-                Arca.delete(ctx, blob)
+                Arca.delete(Sanctum.Context.actor(ctx), blob)
               end
             end)
 
@@ -111,7 +111,7 @@ defmodule Aqua.Attachments do
   def discard(%Context{} = ctx, thread_id, message_id, refs) when is_list(refs) do
     Enum.each(refs, fn ref ->
       with {:ok, blob} <- blob_path(thread_id, message_id, ref) do
-        Arca.delete(ctx, blob)
+        Arca.delete(Sanctum.Context.actor(ctx), blob)
       end
     end)
   end
@@ -153,7 +153,7 @@ defmodule Aqua.Attachments do
   def load(%Context{} = ctx, thread_id, attachments) when is_list(attachments) do
     Enum.flat_map(attachments, fn %{message_id: message_id, ref: ref} ->
       with {:ok, path} <- blob_path(thread_id, message_id, ref),
-           {:ok, bytes} <- Arca.get(ctx, path) do
+           {:ok, bytes} <- Arca.get(Sanctum.Context.actor(ctx), path) do
         [
           %{
             "filename" => ref["filename"],
@@ -246,7 +246,7 @@ defmodule Aqua.Attachments do
   defp check_quota(ctx, files) do
     incoming = files |> Enum.map(&byte_size(&1["bytes"] || "")) |> Enum.sum()
 
-    case Caps.check_storage(ctx, incoming) do
+    case Caps.check_storage(Sanctum.Context.actor(ctx), incoming) do
       :ok -> :ok
       {:error, {:limit_reached, :athanor_storage_bytes, _cap}} -> {:error, :storage_full}
       # Pass through — the cap layer worked to tell "over the cap" from

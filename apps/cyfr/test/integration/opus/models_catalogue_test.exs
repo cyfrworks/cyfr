@@ -50,7 +50,7 @@ defmodule Opus.ModelsCatalogueTest do
 
     for unit <- models ++ [files] do
       segments = ["components" | String.split(unit.rel, "/")]
-      :ok = Arca.Overlay.pull_shipped(ctx, segments)
+      :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), segments)
       {:ok, _} = Compendium.Registry.register_from_arca(ctx, segments)
     end
 

@@ -111,9 +111,15 @@ defmodule Emissary.MCP.McpServersConsentTest do
       end
     end
 
-    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx, "relay-http")
-    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx, "relay-stdio")
-    assert {:ok, %{epoch: 1} = saved} = Arca.McpServerStorage.get(ctx, "saved")
+    assert {:error, :not_found} =
+             Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "relay-http")
+
+    assert {:error, :not_found} =
+             Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "relay-stdio")
+
+    assert {:ok, %{epoch: 1} = saved} =
+             Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "saved")
+
     refute saved.config_json =~ "prod-db"
 
     key = admin_key(ctx, [:admin])
@@ -163,7 +169,9 @@ defmodule Emissary.MCP.McpServersConsentTest do
                "config" => http_config("gh-token-2")
              })
 
-    assert {:ok, %{config_json: config}} = Arca.McpServerStorage.get(ctx, "wired")
+    assert {:ok, %{config_json: config}} =
+             Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "wired")
+
     assert config =~ "vault:gh-token-2"
   end
 
@@ -181,6 +189,6 @@ defmodule Emissary.MCP.McpServersConsentTest do
                Catalog.call_external("mcp_servers", guest, args)
     end
 
-    assert {:error, :not_found} = Arca.McpServerStorage.get(ctx, "wired")
+    assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "wired")
   end
 end

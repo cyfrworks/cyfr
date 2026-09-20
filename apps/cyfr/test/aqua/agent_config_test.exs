@@ -39,13 +39,13 @@ defmodule Aqua.AgentConfigTest do
 
   # Every AQUA unit the athanor holds is an unedited copy of what ships.
   defp pristine?(ctx) do
-    {:ok, statuses} = Arca.Overlay.unit_statuses(ctx, "aqua")
+    {:ok, statuses} = Arca.Overlay.unit_statuses(Sanctum.Context.actor(ctx), "aqua")
     statuses != %{} and Enum.all?(statuses, fn {_unit, status} -> status == :shipped end)
   end
 
   test "the shipped roster is read from the athanor's own copy", %{ctx: ctx} do
     assert is_map(policy(ctx, "aqua"))
-    assert Arca.exists?(ctx, Compendium.AquaPath.agent_file("aqua"))
+    assert Arca.exists?(Sanctum.Context.actor(ctx), Compendium.AquaPath.agent_file("aqua"))
     assert pristine?(ctx)
   end
 

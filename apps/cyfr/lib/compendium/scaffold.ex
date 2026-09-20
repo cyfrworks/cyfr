@@ -67,7 +67,9 @@ defmodule Compendium.Scaffold do
         Enum.map(files, fn {path, content} -> {Enum.drop(path, length(base_path)), content} end)
 
       # Scaffolds are exempt from Sanctum.Tenancy.Caps.
-      case Arca.Overlay.commit_unit(ctx, base_path, {:files, rel_files}, cap: :exempt) do
+      case Arca.Overlay.commit_unit(Sanctum.Context.actor(ctx), base_path, {:files, rel_files},
+             cap: :exempt
+           ) do
         {:ok, written} ->
           reference = local_ref(type, name, version)
           # In write order — the manifest (the unit's completion sentinel)
@@ -152,7 +154,7 @@ defmodule Compendium.Scaffold do
              "#{local_ref(type, name, version)} is bundled with the server — edit your copy " <>
                "in place, or scaffold a new version or name"}
 
-          Arca.exists?(ctx, path) ->
+          Arca.exists?(Sanctum.Context.actor(ctx), path) ->
             {:error, "Component already exists: #{local_ref(type, name, version)}"}
 
           true ->

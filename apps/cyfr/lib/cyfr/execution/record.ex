@@ -404,7 +404,14 @@ defmodule Cyfr.Execution.Record do
   defp publish(_record, _type, _seq, _data), do: :ok
 
   defp stage(ctx, %__MODULE__{} = record, kind, bytes),
-    do: Arca.ExecutionPayloads.stage(ctx, record.id, kind, bytes, record.retention_class)
+    do:
+      Arca.ExecutionPayloads.stage(
+        Sanctum.Context.actor(ctx),
+        record.id,
+        kind,
+        bytes,
+        record.retention_class
+      )
 
   @doc "How long one lease renewal is good for."
   def lease_seconds, do: Arca.ExecutionAttempts.lease_seconds()
@@ -466,7 +473,7 @@ defmodule Cyfr.Execution.Record do
     case stage_result(ctx, record) do
       {:ok, staged} ->
         case Arca.Execution.record_end(
-               ctx,
+               Sanctum.Context.actor(ctx),
                record.id,
                "completed",
                Map.put(close, :payloads, List.wrap(staged)),
@@ -508,7 +515,7 @@ defmodule Cyfr.Execution.Record do
     )
 
     case Arca.Execution.record_end(
-           ctx,
+           Sanctum.Context.actor(ctx),
            record.id,
            "failed",
            %{
@@ -546,7 +553,7 @@ defmodule Cyfr.Execution.Record do
     ctx = record_to_ctx(record)
 
     case Arca.Execution.record_end(
-           ctx,
+           Sanctum.Context.actor(ctx),
            record.id,
            Atom.to_string(status),
            %{
@@ -579,7 +586,7 @@ defmodule Cyfr.Execution.Record do
   """
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get(%Context{} = ctx, id) do
-    case Arca.Execution.get_tenant(ctx, id) do
+    case Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), id) do
       nil ->
         {:error, :not_found}
 
@@ -814,7 +821,9 @@ defmodule Cyfr.Execution.Record do
          %__MODULE__{output: %{"envelope" => "v1", "output_hash" => _}} = record
        ) do
     with {:ok, _row, bytes} <-
-           Arca.ExecutionPayloads.get(ctx, record.id, "result", attempt: record.attempt),
+           Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), record.id, "result",
+             attempt: record.attempt
+           ),
          {:ok, output} <- Jason.decode(bytes) do
       %{record | output: output}
     else

@@ -54,7 +54,7 @@ defmodule Compendium.ActivationTest do
   defp rebuild_locally(ctx, name) do
     segments = ["components", "reagents", "local", name, "1.0.0"]
 
-    base = Arca.Adapters.Local.build_path(ctx, segments)
+    base = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
     File.mkdir_p!(base)
     File.write!(Path.join(base, "reagent.wasm"), @wasm_variant)
 
@@ -68,7 +68,9 @@ defmodule Compendium.ActivationTest do
   end
 
   defp row!(ctx, name, version \\ "1.0.0") do
-    {:ok, row} = Arca.ComponentStorage.get_component(ctx, name, version, "local")
+    {:ok, row} =
+      Arca.ComponentStorage.get_component(Sanctum.Context.actor(ctx), name, version, "local")
+
     row
   end
 
@@ -329,7 +331,13 @@ defmodule Compendium.ActivationTest do
         )
 
       {:ok, row} =
-        Arca.ComponentStorage.get_component(ctx, "verified-forged", "1.0.0", "local", "reagent")
+        Arca.ComponentStorage.get_component(
+          Sanctum.Context.actor(ctx),
+          "verified-forged",
+          "1.0.0",
+          "local",
+          "reagent"
+        )
 
       assert {:ok, %{nodes: nodes}} = Activation.resolve_verified(ctx, row)
       assert nodes[key].integrity == :mismatch

@@ -90,7 +90,7 @@ defmodule EmissaryWeb.HealthControllerTest do
 
       :ok =
         Arca.put(
-          ctx,
+          Sanctum.Context.actor(ctx),
           EmissaryWeb.HealthController.probe_dir() ++ [".write_probe"],
           "stranded"
         )
@@ -98,7 +98,11 @@ defmodule EmissaryWeb.HealthControllerTest do
       conn = get(conn, "/api/health/ready")
       assert json_response(conn, 200)["checks"]["storage"] == "ok"
 
-      assert {:ok, []} = Arca.list_typed(ctx, EmissaryWeb.HealthController.probe_dir())
+      assert {:ok, []} =
+               Arca.list_typed(
+                 Sanctum.Context.actor(ctx),
+                 EmissaryWeb.HealthController.probe_dir()
+               )
     end
   end
 end

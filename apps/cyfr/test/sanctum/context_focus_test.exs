@@ -123,7 +123,7 @@ defmodule Sanctum.ContextFocusTest do
     assert {:error, _} = Context.authorize(focused, :read, {:tenant, %{athanor_id: b.id}})
     assert {:error, _} = Sanctum.TenantPolicy.verify(focused, %{athanor_id: b.id})
 
-    query = Arca.QueryHelpers.where_tenant_unless_platform(Arca.Execution, focused)
+    query = Arca.QueryHelpers.where_tenant_unless_platform(Arca.Execution, Context.actor(focused))
     assert inspect(query) =~ "athanor_id"
   end
 
@@ -144,7 +144,7 @@ defmodule Sanctum.ContextFocusTest do
       })
 
     b_ctx = ctx.("github|https://github.com|someone", b.id, false)
-    :ok = Arca.put(b_ctx, ["data", "secret.txt"], "b's bytes")
+    :ok = Arca.put(Sanctum.Context.actor(b_ctx), ["data", "secret.txt"], "b's bytes")
 
     # the audit ledger of B is invisible from A
     assert {:error, msg} =

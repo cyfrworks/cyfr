@@ -29,39 +29,39 @@ defmodule Arca.Storage.TestDouble do
     quote do
       @behaviour Arca.Storage
 
-      defdelegate get(ctx, path), to: Arca.Adapters.Local
-      defdelegate put(ctx, path, content), to: Arca.Adapters.Local
-      defdelegate append(ctx, path, content), to: Arca.Adapters.Local
-      defdelegate delete(ctx, path), to: Arca.Adapters.Local
-      defdelegate list_typed(ctx, path), to: Arca.Adapters.Local
-      defdelegate exists?(ctx, path), to: Arca.Adapters.Local
-      defdelegate delete_tree(ctx, path), to: Arca.Adapters.Local
-      defdelegate list_recursive(ctx, path), to: Arca.Adapters.Local
-      defdelegate usage(ctx, path), to: Arca.Adapters.Local
-      defdelegate ensure_dir(ctx, path), to: Arca.Adapters.Local
-      defdelegate serve_to_conn(conn, ctx, path, opts), to: Arca.Adapters.Local
+      defdelegate get(actor, path), to: Arca.Adapters.Local
+      defdelegate put(actor, path, content), to: Arca.Adapters.Local
+      defdelegate append(actor, path, content), to: Arca.Adapters.Local
+      defdelegate delete(actor, path), to: Arca.Adapters.Local
+      defdelegate list_typed(actor, path), to: Arca.Adapters.Local
+      defdelegate exists?(actor, path), to: Arca.Adapters.Local
+      defdelegate delete_tree(actor, path), to: Arca.Adapters.Local
+      defdelegate list_recursive(actor, path), to: Arca.Adapters.Local
+      defdelegate usage(actor, path), to: Arca.Adapters.Local
+      defdelegate ensure_dir(actor, path), to: Arca.Adapters.Local
+      defdelegate serve_to_conn(conn, actor, path, opts), to: Arca.Adapters.Local
 
-      def put_if_none_match(ctx, path, content) do
+      def put_if_none_match(actor, path, content) do
         bytes = IO.iodata_to_binary(content)
 
         Arca.Storage.TestDouble.serialized(path, fn ->
-          if exists?(ctx, path) do
+          if exists?(actor, path) do
             {:error, :exists}
           else
-            with :ok <- put(ctx, path, bytes),
+            with :ok <- put(actor, path, bytes),
                  do: {:ok, Arca.Storage.TestDouble.precondition(bytes)}
           end
         end)
       end
 
-      def put_if_match(ctx, path, content, precondition) do
+      def put_if_match(actor, path, content, precondition) do
         bytes = IO.iodata_to_binary(content)
 
         Arca.Storage.TestDouble.serialized(path, fn ->
-          case get(ctx, path) do
+          case get(actor, path) do
             {:ok, current} ->
               if Arca.Storage.TestDouble.precondition(current) == precondition do
-                with :ok <- put(ctx, path, bytes),
+                with :ok <- put(actor, path, bytes),
                      do: {:ok, Arca.Storage.TestDouble.precondition(bytes)}
               else
                 {:error, :precondition_failed}
@@ -76,16 +76,16 @@ defmodule Arca.Storage.TestDouble do
         end)
       end
 
-      def get_for_update(ctx, path) do
-        with {:ok, bytes} <- get(ctx, path),
+      def get_for_update(actor, path) do
+        with {:ok, bytes} <- get(actor, path),
              do: {:ok, bytes, Arca.Storage.TestDouble.precondition(bytes)}
       end
 
       # A listing or an error passes through; only an empty listing asks
       # whether the prefix is itself one object.
-      def list_prefix(ctx, prefix) do
-        with {:ok, []} <- list_recursive(ctx, prefix) do
-          if exists?(ctx, prefix), do: {:ok, [prefix]}, else: {:ok, []}
+      def list_prefix(actor, prefix) do
+        with {:ok, []} <- list_recursive(actor, prefix) do
+          if exists?(actor, prefix), do: {:ok, [prefix]}, else: {:ok, []}
         end
       end
 

@@ -78,7 +78,7 @@ defmodule Arca.VaultStorageTest do
   end
 
   defp profile_status(actor, profile_id) do
-    {:ok, profile} = Arca.ProfileStorage.get(actor.athanor_id, profile_id)
+    {:ok, profile} = Arca.ProfileStorage.get(actor, profile_id)
     profile.status
   end
 
@@ -350,7 +350,12 @@ defmodule Arca.VaultStorageTest do
 
       # The winner blocked the dependent; put it back so the loser's own
       # effect on it, if any, is the only thing the assertion can see.
-      :ok = Arca.ProfileStorage.set_status(actor.athanor_id, profile.id, "active")
+      :ok =
+        Arca.ProfileStorage.set_status(
+          Cyfr.Actor.in_athanor(actor.athanor_id),
+          profile.id,
+          "active"
+        )
 
       assert {:error, :binding_moved} =
                VaultStorage.move_binding(

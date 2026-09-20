@@ -166,7 +166,7 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "catalysts", "local", "weather-api", "0.1.0"]
         )
 
@@ -204,7 +204,7 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "formulas", "local", "my-workflow", "0.1.0"]
         )
 
@@ -232,7 +232,7 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "reagents", "local", "my-transform", "0.1.0"]
         )
 
@@ -266,7 +266,7 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "tinctures", "local", "test-dash", "0.1.0"]
         )
 
@@ -292,7 +292,7 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "tinctures", "local", "build-dash", "0.1.0"]
         )
 
@@ -310,7 +310,7 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "tinctures", "local", "pkg-dash", "0.1.0"]
         )
 
@@ -330,7 +330,7 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "tinctures", "local", "vite-dash", "0.1.0"]
         )
 
@@ -354,7 +354,7 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "tinctures", "local", "vanilla", "0.1.0"]
         )
 
@@ -383,7 +383,7 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx_other,
+          Sanctum.Context.actor(ctx_other),
           ["components", "catalysts", "local", "other-tool", "0.1.0"]
         )
 
@@ -398,7 +398,7 @@ defmodule Compendium.ScaffoldTest do
 
       base =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "reagents", "local", "flat-tool", "0.1.0"]
         )
 

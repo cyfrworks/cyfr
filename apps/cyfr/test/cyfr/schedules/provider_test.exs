@@ -371,7 +371,9 @@ defmodule Cyfr.Schedules.ProviderTest do
       assert message =~ "profile binding refused"
 
       # The row was not moved.
-      {:ok, row} = Arca.CronSchedule.get_by_id_or_name(ctx, created.schedule_id)
+      {:ok, row} =
+        Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), created.schedule_id)
+
       assert row.resolved_reference == "reagent:local.test:1.0.0"
     end
 
@@ -471,7 +473,7 @@ defmodule Cyfr.Schedules.ProviderTest do
         })
 
       # Manually set reference to a version-less ref that can't resolve
-      Arca.CronSchedule.update(ctx, created.schedule_id, %{
+      Arca.CronSchedule.update(Sanctum.Context.actor(ctx), created.schedule_id, %{
         reference: "c:local.nonexistent-component"
       })
 
@@ -515,7 +517,9 @@ defmodule Cyfr.Schedules.ProviderTest do
       assert after_.resolved_reference == "reagent:local.test:1.0.0"
 
       # And the row kept its binding rather than being re-pointed unbound.
-      {:ok, row} = Arca.CronSchedule.get_by_id_or_name(ctx, created.schedule_id)
+      {:ok, row} =
+        Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), created.schedule_id)
+
       assert row.profile_id == "prof-cron"
     end
   end

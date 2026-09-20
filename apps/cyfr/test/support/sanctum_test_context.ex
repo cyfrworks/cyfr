@@ -108,7 +108,7 @@ defmodule Sanctum.TestContext do
     ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
 
     for root <- Arca.Storage.overlay_roots() do
-      {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, root)
+      {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), root)
     end
 
     :ok

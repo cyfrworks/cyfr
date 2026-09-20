@@ -6,7 +6,7 @@ defmodule Arca.Usage do
   The usage-cache discipline, in one place: what every tenant write does
   to the cached counters (`account/4`, called from the `Arca` facade's
   write gate), and how the two enforcement surfaces read them back —
-  the athanor byte cap (`Sanctum.Tenancy.Caps`) through
+  the athanor byte cap (`Cyfr.Caps`, the port) through
   `athanor_bytes/1`, the public per-scope quota (`Cyfr.Execution.GuestStorage`)
   through `scope_usage/2` — under ONE TTL.
 
@@ -23,8 +23,6 @@ defmodule Arca.Usage do
   reader and writer.
   """
 
-  alias Sanctum.Context
-
   @ttl_ms :timer.minutes(5)
 
   @doc """
@@ -32,11 +30,11 @@ defmodule Arca.Usage do
   successful create, drop on a delete or a failed write. Called by
   `Arca`'s write gate for every mutation, so a new writer cannot forget.
   """
-  @spec account(Context.t(), Arca.Storage.path(), term(), term()) :: :ok
-  def account(%Context{athanor_id: athanor_id}, path, kind, result)
+  @spec account(Cyfr.Actor.t(), Arca.Storage.path(), term(), term()) :: :ok
+  def account(%Cyfr.Actor{athanor_id: athanor_id} = actor, path, kind, result)
       when is_binary(athanor_id) and athanor_id != "" do
     if Arca.Storage.classify(path) == :tenant do
-      whole = Arca.Cache.Keys.athanor_usage(athanor_id)
+      whole = Arca.Cache.Keys.athanor_usage(actor)
       scope = List.first(path)
 
       case {kind, result} do
@@ -47,8 +45,8 @@ defmodule Arca.Usage do
           # unconditionally — an overwrite over-counts a file the same safe
           # direction the bytes over-count — and the TTL walks it true again.
           if scope do
-            Arca.Cache.bump_existing(Arca.Cache.Keys.scope_usage_bytes(athanor_id, scope), bytes)
-            Arca.Cache.bump_existing(Arca.Cache.Keys.scope_usage_files(athanor_id, scope), 1)
+            Arca.Cache.bump_existing(Arca.Cache.Keys.scope_usage_bytes(actor, scope), bytes)
+            Arca.Cache.bump_existing(Arca.Cache.Keys.scope_usage_files(actor, scope), 1)
           end
 
         _delete_or_failed ->
@@ -57,8 +55,8 @@ defmodule Arca.Usage do
           # Both scope counters go together: dropping only one would leave a
           # stale count that never recovers inside its TTL.
           if scope do
-            Arca.Cache.invalidate(Arca.Cache.Keys.scope_usage_bytes(athanor_id, scope))
-            Arca.Cache.invalidate(Arca.Cache.Keys.scope_usage_files(athanor_id, scope))
+            Arca.Cache.invalidate(Arca.Cache.Keys.scope_usage_bytes(actor, scope))
+            Arca.Cache.invalidate(Arca.Cache.Keys.scope_usage_files(actor, scope))
           end
       end
     end
@@ -74,16 +72,16 @@ defmodule Arca.Usage do
   maps it fail-closed (`:storage_unverifiable`), and the next check
   walks again.
   """
-  @spec athanor_bytes(Context.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def athanor_bytes(%Context{athanor_id: id} = ctx) when is_binary(id) and id != "" do
-    key = Arca.Cache.Keys.athanor_usage(id)
+  @spec athanor_bytes(Cyfr.Actor.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def athanor_bytes(%Cyfr.Actor{athanor_id: id} = actor) when is_binary(id) and id != "" do
+    key = Arca.Cache.Keys.athanor_usage(actor)
 
     case Arca.Cache.get(key) do
       {:ok, bytes} when is_integer(bytes) ->
         {:ok, bytes}
 
       _miss ->
-        case Arca.usage(ctx, []) do
+        case Arca.usage(actor, []) do
           {:ok, %{bytes: bytes}} when is_integer(bytes) ->
             Arca.Cache.put(key, bytes, @ttl_ms)
             {:ok, bytes}
@@ -97,7 +95,11 @@ defmodule Arca.Usage do
     end
   end
 
-  def athanor_bytes(%Context{}), do: {:ok, 0}
+  # An actor with no resolved athanor names no tree to walk. That is a
+  # refusal, not a total of zero: answering `{:ok, 0}` would read an
+  # unresolved tenant as an empty estate, and the byte cap above would
+  # admit the write.
+  def athanor_bytes(%Cyfr.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   One tenant scope's cached `%{files:, bytes:}` — or one scope walk on a
@@ -105,18 +107,19 @@ defmodule Arca.Usage do
   closed on them, the file-count backstop fails open — that asymmetry is
   the call sites' policy, not this cache's.
   """
-  @spec scope_usage(Context.t(), String.t()) ::
+  @spec scope_usage(Cyfr.Actor.t(), String.t()) ::
           {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | {:error, term()}
-  def scope_usage(%Context{athanor_id: athanor_id} = ctx, scope) when is_binary(scope) do
-    bytes_key = Arca.Cache.Keys.scope_usage_bytes(athanor_id, scope)
-    files_key = Arca.Cache.Keys.scope_usage_files(athanor_id, scope)
+  def scope_usage(%Cyfr.Actor{athanor_id: athanor_id} = actor, scope)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(scope) do
+    bytes_key = Arca.Cache.Keys.scope_usage_bytes(actor, scope)
+    files_key = Arca.Cache.Keys.scope_usage_files(actor, scope)
 
     with {:ok, bytes} when is_integer(bytes) <- Arca.Cache.get(bytes_key),
          {:ok, files} when is_integer(files) <- Arca.Cache.get(files_key) do
       {:ok, %{files: files, bytes: bytes}}
     else
       _miss ->
-        case Arca.usage(ctx, [scope]) do
+        case Arca.usage(actor, [scope]) do
           {:ok, %{files: files, bytes: bytes} = usage} ->
             Arca.Cache.put(bytes_key, bytes, @ttl_ms)
             Arca.Cache.put(files_key, files, @ttl_ms)
@@ -128,15 +131,20 @@ defmodule Arca.Usage do
     end
   end
 
+  def scope_usage(%Cyfr.Actor{}, scope) when is_binary(scope), do: {:error, :no_athanor}
+
   @doc """
   Drop every cached counter for one athanor — the whole-tree total and
   all its scope pairs. Maintenance and test hygiene; the write path
   keeps itself coherent through `account/4`.
   """
-  @spec invalidate(String.t()) :: :ok
-  def invalidate(athanor_id) when is_binary(athanor_id) do
-    Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(athanor_id))
-    Arca.Cache.delete_match(Arca.Cache.Keys.match_scope_usage(athanor_id))
+  @spec invalidate(Cyfr.Actor.t()) :: :ok
+  def invalidate(%Cyfr.Actor{athanor_id: athanor_id} = actor)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(actor))
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_scope_usage(actor))
     :ok
   end
+
+  def invalidate(%Cyfr.Actor{}), do: {:error, :no_athanor}
 end

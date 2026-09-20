@@ -56,7 +56,7 @@ defmodule Cyfr.Execution.LeaseWatchTest do
 
     {:ok, _} =
       Arca.Execution.record_end(
-        ctx,
+        Sanctum.Context.actor(ctx),
         id,
         "failed",
         %{completed_at: DateTime.utc_now(), duration_ms: 0, error_message: "swept"},

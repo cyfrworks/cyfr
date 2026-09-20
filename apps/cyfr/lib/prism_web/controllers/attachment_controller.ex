@@ -33,7 +33,7 @@ defmodule PrismWeb.AttachmentController do
 
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, ctx} <- PrismWeb.AuthHelpers.authenticate_session(token, athanor.id),
-         {:ok, msg} <- Threads.get_message(ctx, message_id),
+         {:ok, msg} <- Threads.get_message(Sanctum.Context.actor(ctx), message_id),
          {:ok, ref} <- find_ref(msg, filename),
          {:ok, path} <- Aqua.Attachments.blob_path(msg.thread_id, msg.id, ref) do
       conn
@@ -64,7 +64,7 @@ defmodule PrismWeb.AttachmentController do
   end
 
   defp serve(conn, ctx, path) do
-    case Arca.serve_to_conn(conn, ctx, path) do
+    case Arca.serve_to_conn(conn, Sanctum.Context.actor(ctx), path) do
       {:ok, %Plug.Conn{} = served} -> served
       _ -> send_resp(conn, 404, "Not found")
     end

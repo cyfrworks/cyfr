@@ -329,7 +329,9 @@ defmodule Cyfr.Test.ChatFixture do
   """
   @spec report(Sanctum.Context.t(), String.t()) :: map()
   def report(ctx, execution_id) do
-    {:ok, _row, bytes} = Arca.ExecutionPayloads.get(ctx, execution_id, "result")
+    {:ok, _row, bytes} =
+      Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), execution_id, "result")
+
     %{"data" => %{"fixture" => report}} = Jason.decode!(bytes)
     report
   end

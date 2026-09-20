@@ -97,7 +97,7 @@ defmodule Sanctum.MCPVaultProfileTest do
         "profile_id" => committed.profile_id
       })
 
-    {:ok, reloaded} = Arca.ProfileStorage.get(ctx.athanor_id, committed.profile_id)
+    {:ok, reloaded} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), committed.profile_id)
     assert reloaded.status == "revoked"
   end
 

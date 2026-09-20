@@ -59,7 +59,7 @@ defmodule Aqua.LoopTest do
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
     {:ok, ctx: ctx, thread: thread}
   end
@@ -294,7 +294,7 @@ defmodule Aqua.LoopTest do
     end
 
     # The response's rows: the text, one tool_call per call, then results.
-    rows = Threads.messages(ctx, thread.id)
+    rows = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
     kinds = Enum.map(rows, & &1.kind)
 
     assert kinds == [
@@ -426,9 +426,14 @@ defmodule Aqua.LoopTest do
              Tape.turn(ctx, turn.id)
 
     assert {:error, :catalyst_pinned} =
-             Arca.TurnStorage.pin_catalyst(ctx, turn.id, "catalyst:local.openai:1.3.1", %{
-               fence: paused.fence
-             })
+             Arca.TurnStorage.pin_catalyst(
+               Sanctum.Context.actor(ctx),
+               turn.id,
+               "catalyst:local.openai:1.3.1",
+               %{
+                 fence: paused.fence
+               }
+             )
 
     # A spec is built on the pinned release alone, and only on one that
     # speaks the chat contract.
@@ -561,12 +566,16 @@ defmodule Aqua.LoopTest do
       Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
     assert Jason.encode!(messages) =~ "one more thing"
-    assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.content == "and hi again"))
+
+    assert Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+             &(&1.content == "and hi again")
+           )
   end
 
   test "a steer names an open turn of its own thread", %{ctx: ctx, thread: thread} do
     turn = accept!(ctx, thread, "@aqua hello")
-    {:ok, elsewhere} = Threads.create(ctx)
+    {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(ctx))
 
     assert {:error, :turn_over} =
              Tape.accept(ctx, elsewhere.id, %{
@@ -574,7 +583,7 @@ defmodule Aqua.LoopTest do
                steer_turn_id: turn.id
              })
 
-    assert Threads.messages(ctx, elsewhere.id) == []
+    assert Threads.messages(Sanctum.Context.actor(ctx), elsewhere.id) == []
   end
 
   test "a policy refusal is the call's own result; a dead worker stops the turn, and the sender's next line continues it with reads only",
@@ -609,7 +618,12 @@ defmodule Aqua.LoopTest do
     assert %{dispatch_state: "uncertain", outcome: "uncertain"} =
              get = Enum.find(steps, &(&1.action == "get"))
 
-    [row] = Enum.filter(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
+    [row] =
+      Enum.filter(
+        Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+        &(&1.kind == "turn_aborted")
+      )
+
     assert %{"covers" => [%{"step_id" => step_id}]} = Threads.payload(row)
     assert step_id == get.id
     assert paused.window_upto_seq == row.seq
@@ -658,10 +672,13 @@ defmodule Aqua.LoopTest do
     {:ok, _} =
       Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
 
-    {:ok, room} = Threads.create(ctx)
+    {:ok, room} = Threads.create(Sanctum.Context.actor(ctx))
 
     {:ok, _} =
-      Threads.append(ctx, room.id, %{author: ctx.user_id, content: "ROOM-ONLY-LINE"})
+      Threads.append(Sanctum.Context.actor(ctx), room.id, %{
+        author: ctx.user_id,
+        content: "ROOM-ONLY-LINE"
+      })
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{
@@ -682,7 +699,7 @@ defmodule Aqua.LoopTest do
     assert Jason.encode!(sent) =~ "ROOM-ONLY-LINE"
 
     assert {:ok, %{retention_class: "chat_step"}, kept} =
-             Arca.ExecutionPayloads.get(ctx, id, "input")
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "input")
 
     refute kept =~ "ROOM-ONLY-LINE"
     assert kept =~ "what did they say?"
@@ -780,7 +797,7 @@ defmodule Aqua.LoopTest do
 
     [row] =
       Enum.filter(
-        Threads.messages(ctx, thread.id),
+        Threads.messages(Sanctum.Context.actor(ctx), thread.id),
         &(&1.kind == "turn_aborted" and &1.turn_id == turn.id)
       )
 
@@ -810,7 +827,12 @@ defmodule Aqua.LoopTest do
     assert length(gets) == 2
     assert Enum.all?(gets, &(&1.dispatch_state == "uncertain"))
 
-    [row] = Enum.filter(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
+    [row] =
+      Enum.filter(
+        Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+        &(&1.kind == "turn_aborted")
+      )
+
     covered = row |> Threads.payload() |> Map.fetch!("covers") |> Enum.map(& &1["step_id"])
     assert Enum.sort(covered) == Enum.sort(Enum.map(gets, & &1.id))
   end
@@ -977,7 +999,7 @@ defmodule Aqua.LoopTest do
 
     assert [%{content: "the answer"} = row] =
              Enum.filter(
-               Threads.messages(ctx, thread.id),
+               Threads.messages(Sanctum.Context.actor(ctx), thread.id),
                &(&1.kind == "text" and &1.author == "aqua")
              )
 

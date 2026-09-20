@@ -85,7 +85,10 @@ defmodule Opus.ExecutionProvenanceTest do
              Arca.Repo.get_by(Arca.Schemas.ExecutionPayload, execution_id: row.id, kind: "result")
 
     assert digest == output["output_hash"]
-    assert {:ok, _payload, bytes} = Arca.ExecutionPayloads.get(ctx, row.id, "result")
+
+    assert {:ok, _payload, bytes} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), row.id, "result")
+
     assert Cyfr.Digest.sha256(bytes) == digest
     assert {:ok, %{output: %{"op" => "echo"} = joined}} = Cyfr.Execution.get(ctx, row.id)
     assert Jason.decode!(bytes) == joined

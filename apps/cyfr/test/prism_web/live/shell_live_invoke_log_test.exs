@@ -26,7 +26,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
 
     dir =
       Arca.Adapters.Local.build_path(
-        %{Sanctum.TestContext.local() | athanor_id: estate.id},
+        Sanctum.Context.actor(%{Sanctum.TestContext.local() | athanor_id: estate.id}),
         ["components", "tinctures", "local", @tincture, "1.0.0"]
       )
 

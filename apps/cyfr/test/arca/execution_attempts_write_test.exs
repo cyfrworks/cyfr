@@ -47,25 +47,26 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     end)
 
     ctx = Sanctum.TestContext.local()
+    actor = Sanctum.Context.actor(ctx)
 
     {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(%{
         id: "exec_write_#{System.unique_integer([:positive])}",
         reference: "catalyst:local.write:0.1.0",
-        user_id: ctx.user_id,
-        athanor_id: ctx.athanor_id,
+        user_id: actor.user_id,
+        athanor_id: actor.athanor_id,
         component_type: "catalyst",
         input: "{}"
       })
 
-    :ok = ExecutionAttempts.claim(Sanctum.Context.actor(ctx), attempt.attempt, 1, @runner)
-    {:ok, ctx: ctx, execution: execution, attempt: attempt.attempt}
+    :ok = ExecutionAttempts.claim(actor, attempt.attempt, 1, @runner)
+    {:ok, ctx: ctx, actor: actor, execution: execution, attempt: attempt.attempt}
   end
 
   # One write of the attempt at fence 1; `io` is the store call.
-  defp write(%{ctx: ctx, attempt: attempt}, io, opts \\ []) do
+  defp write(%{actor: actor, attempt: attempt}, io, opts \\ []) do
     ExecutionAttempts.while_held(
-      Sanctum.Context.actor(ctx),
+      actor,
       attempt,
       Keyword.get(opts, :fence, 1),
       @runner,
@@ -78,17 +79,18 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     )
   end
 
-  defp put(%{ctx: ctx}, bytes \\ "bytes"), do: fn -> Arca.put(ctx, @path, bytes) end
+  defp put(%{actor: actor}, bytes \\ "bytes"),
+    do: fn -> Arca.put(actor, @path, bytes) end
 
-  defp intents(%{ctx: ctx, attempt: attempt}),
-    do: ExecutionAttempts.write_intents(Sanctum.Context.actor(ctx), attempt)
+  defp intents(%{actor: actor, attempt: attempt}),
+    do: ExecutionAttempts.write_intents(actor, attempt)
 
   defp states(test), do: for(i <- intents(test), do: {i.state, i.reason})
 
-  defp cancel!(%{ctx: ctx, execution: execution}) do
+  defp cancel!(%{actor: actor, execution: execution}) do
     {:ok, _} =
       Arca.Execution.record_end(
-        ctx,
+        actor,
         execution.id,
         "cancelled",
         %{completed_at: DateTime.utc_now(), duration_ms: 1},
@@ -98,9 +100,9 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     :ok
   end
 
-  defp takeover!(%{ctx: ctx, execution: execution}) do
+  defp takeover!(%{actor: actor, execution: execution}) do
     {:ok, %{attempt: successor}} =
-      ExecutionAttempts.takeover(Sanctum.Context.actor(ctx), execution.id,
+      ExecutionAttempts.takeover(actor, execution.id,
         boot_id: Cyfr.Boot.id(),
         lease_until: ExecutionAttempts.lease_until()
       )
@@ -120,12 +122,12 @@ defmodule Arca.ExecutionAttemptsWriteTest do
         assert {intent.fence, intent.runner} == {1, @runner}
         assert {intent.op, intent.path, intent.bytes} == {"put", "data/intent.txt", 5}
         assert intent.settled_at == nil
-        refute Arca.exists?(test.ctx, @path)
+        refute Arca.exists?(test.actor, @path)
         put(test).()
       end
 
       assert {:ok, {:confirmed, :ok}} = write(test, io)
-      assert {:ok, "bytes"} = Arca.get(test.ctx, @path)
+      assert {:ok, "bytes"} = Arca.get(test.actor, @path)
 
       assert [%{state: "confirmed", reason: nil, settled_at: %DateTime{}}] = intents(test)
       assert attempt_row(test).fence == 1
@@ -149,7 +151,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       io = fn ->
         refute Arca.Repo.in_transaction?()
         Process.put(:in_store_call, true)
-        result = Arca.Adapters.Local.put(test.ctx, @path, "bytes")
+        result = Arca.Adapters.Local.put(test.actor, @path, "bytes")
         Process.delete(:in_store_call)
         result
       end
@@ -164,21 +166,27 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     end
 
     test "a delete and an append are intents of their own operation", test do
-      :ok = Arca.put(test.ctx, @path, "a")
+      :ok = Arca.put(test.actor, @path, "a")
 
       assert {:ok, {:confirmed, :ok}} =
-               write(test, fn -> Arca.append(test.ctx, @path, "b") end, op: :append, bytes: 1)
+               write(test, fn -> Arca.append(test.actor, @path, "b") end,
+                 op: :append,
+                 bytes: 1
+               )
 
       assert {:ok, {:confirmed, :ok}} =
-               write(test, fn -> Arca.delete(test.ctx, @path) end, op: :delete, bytes: nil)
+               write(test, fn -> Arca.delete(test.actor, @path) end,
+                 op: :delete,
+                 bytes: nil
+               )
 
       assert [%{op: "append", bytes: 1}, %{op: "delete", bytes: nil}] = intents(test)
-      refute Arca.exists?(test.ctx, @path)
+      refute Arca.exists?(test.actor, @path)
     end
 
     test "two concurrent writes to one path are two confirmed intents, and both appends land",
          test do
-      :ok = Arca.put(test.ctx, @path, "")
+      :ok = Arca.put(test.actor, @path, "")
       gate = self()
 
       writers =
@@ -188,7 +196,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
               send(gate, {:in_store_call, self()})
 
               receive do
-                :go -> Arca.append(test.ctx, @path, line)
+                :go -> Arca.append(test.actor, @path, line)
               end
             end
 
@@ -209,7 +217,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       assert [{:ok, {:confirmed, :ok}}, {:ok, {:confirmed, :ok}}] = Task.await_many(writers)
       assert [{"confirmed", nil}, {"confirmed", nil}] = states(test)
 
-      assert {:ok, content} = Arca.get(test.ctx, @path)
+      assert {:ok, content} = Arca.get(test.actor, @path)
       assert Enum.sort(String.split(content, "\n", trim: true)) == ["one", "two"]
     end
   end
@@ -221,7 +229,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
 
       assert {:error, :lost} = write(test, fn -> flunk("the store was touched") end)
       assert [] = intents(test)
-      refute Arca.exists?(test.ctx, @path)
+      refute Arca.exists?(test.actor, @path)
     end
 
     test "between the intent and the store call: uncertain, settled by the cancel", test do
@@ -246,7 +254,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
 
       assert {:ok, {:uncertain, :hold_lost}} = write(test, io)
       assert [{"uncertain", "cancelled"}] = states(test)
-      assert {:ok, "bytes"} = Arca.get(test.ctx, @path)
+      assert {:ok, "bytes"} = Arca.get(test.actor, @path)
     end
 
     test "after the settlement: the write stays confirmed", test do
@@ -285,10 +293,10 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(test)
 
       %{attempt: next, fence: 2} = Agent.get(successor, & &1)
-      :ok = ExecutionAttempts.claim(Sanctum.Context.actor(test.ctx), next, 2, @runner)
+      :ok = ExecutionAttempts.claim(test.actor, next, 2, @runner)
 
       assert {:ok, {:confirmed, :ok}} = write(%{test | attempt: next}, put(test, "new"), fence: 2)
-      assert {:ok, "new"} = Arca.get(test.ctx, @path)
+      assert {:ok, "new"} = Arca.get(test.actor, @path)
 
       # The stale fence is refused outright from here on.
       assert {:error, :lost} = write(test, fn -> flunk("the store was touched") end)
@@ -342,7 +350,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       assert {:ok, {:uncertain, :unknown_outcome}} = write(test, fn -> {:error, :unknown} end)
       assert [{"uncertain", "unknown_outcome"}] = states(test)
 
-      assert ExecutionAttempts.held?(Sanctum.Context.actor(test.ctx), test.attempt, 1, @runner)
+      assert ExecutionAttempts.held?(test.actor, test.attempt, 1, @runner)
       assert {:ok, {:confirmed, :ok}} = write(test, put(test))
     end
 
@@ -364,7 +372,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
         assert %{state: "failed", reason: ^reason} = List.last(intents(test))
       end
 
-      refute Arca.exists?(test.ctx, @path)
+      refute Arca.exists?(test.actor, @path)
     end
 
     @tag :capture_log
@@ -404,7 +412,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
 
   describe "the retention kind's delete" do
     test "takes settled intents past the cutoff and keeps every pending one", test do
-      %{ctx: ctx} = test
+      %{actor: actor} = test
 
       # One settled write, and one whose store call never answered, so
       # its intent is still pending.
@@ -417,7 +425,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       # Both are older than the cutoff; only the settled one may go.
       Arca.Repo.update_all(StorageWriteIntent, set: [inserted_at: days_ago(40)])
       cutoff = Cyfr.Retention.Kind.days_cutoff(30)
-      opts = [athanor_id: ctx.athanor_id]
+      opts = [athanor_id: actor.athanor_id]
 
       assert {:ok, 1} = ExecutionAttempts.count_intents_before(cutoff, opts)
       assert {:ok, 1} = ExecutionAttempts.delete_intents_before(cutoff, opts)
@@ -433,11 +441,11 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     end
 
     test "leaves an intent the cutoff does not reach", test do
-      %{ctx: ctx} = test
+      %{actor: actor} = test
       assert {:ok, {:confirmed, :ok}} = write(test, put(test))
 
       cutoff = Cyfr.Retention.Kind.days_cutoff(30)
-      opts = [athanor_id: ctx.athanor_id]
+      opts = [athanor_id: actor.athanor_id]
 
       assert {:ok, 0} = ExecutionAttempts.count_intents_before(cutoff, opts)
       assert {:ok, 0} = ExecutionAttempts.delete_intents_before(cutoff, opts)

@@ -231,7 +231,8 @@ defmodule Cyfr.Retention do
 
     results =
       Enum.map(athanors, fn athanor ->
-        {athanor.id, Arca.ThreadStorage.sweep_orphaned_blobs(athanor_ctx(athanor.id))}
+        {athanor.id,
+         Arca.ThreadStorage.sweep_orphaned_blobs(Sanctum.Context.actor(athanor_ctx(athanor.id)))}
       end)
 
     reclaimed =

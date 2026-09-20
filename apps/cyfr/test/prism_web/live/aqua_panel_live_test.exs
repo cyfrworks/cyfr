@@ -71,10 +71,10 @@ defmodule PrismWeb.AquaPanelLiveTest do
     ready_estate!(room.id, user.user_id)
     script_model!()
 
-    {:ok, thread} = Threads.create(in_room)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(in_room))
     {:ok, _} = Runner.send_message(them, thread.id, "ship friday")
     # The first line names the thread.
-    {:ok, thread} = Threads.get(in_room, thread.id)
+    {:ok, thread} = Threads.get(Sanctum.Context.actor(in_room), thread.id)
 
     {:ok,
      conn: conn,
@@ -134,13 +134,16 @@ defmodule PrismWeb.AquaPanelLiveTest do
   defp settled_you!(me) do
     wait_until(
       fn ->
-        match?([_], Threads.list(me)) and
-          match?({:ok, []}, Aqua.Tape.open_turns(me, hd(Threads.list(me)).id))
+        match?([_], Threads.list(Sanctum.Context.actor(me))) and
+          match?(
+            {:ok, []},
+            Aqua.Tape.open_turns(me, hd(Threads.list(Sanctum.Context.actor(me))).id)
+          )
       end,
       60_000
     )
 
-    [you_thread] = Threads.list(me)
+    [you_thread] = Threads.list(Sanctum.Context.actor(me))
     you_thread
   end
 
@@ -171,12 +174,12 @@ defmodule PrismWeb.AquaPanelLiveTest do
     refute request["system"] =~ "ship friday"
 
     assert Enum.any?(
-             Threads.latest_messages(me, you_thread.id, 10),
+             Threads.latest_messages(Sanctum.Context.actor(me), you_thread.id, 10),
              &(&1.content == "what do they mean?")
            )
 
     refute Enum.any?(
-             Threads.latest_messages(in_room, thread.id, 10),
+             Threads.latest_messages(Sanctum.Context.actor(in_room), thread.id, 10),
              &(&1.content == "what do they mean?")
            )
 
@@ -186,8 +189,10 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
   test "the panel reads what the page shows: open another thread and it says so",
        %{conn: conn, room: room, in_room: in_room, thread: thread} do
-    {:ok, second} = Threads.create(in_room)
-    {:ok, _} = Threads.update(in_room, second.id, %{title: "Second thread"})
+    {:ok, second} = Threads.create(Sanctum.Context.actor(in_room))
+
+    {:ok, _} =
+      Threads.update(Sanctum.Context.actor(in_room), second.id, %{title: "Second thread"})
 
     {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
@@ -211,7 +216,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     answer =
       Enum.find(
-        Threads.latest_messages(me, you_thread.id, 10),
+        Threads.latest_messages(Sanctum.Context.actor(me), you_thread.id, 10),
         &(&1.content == "They mean Friday.")
       )
 
@@ -229,7 +234,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     copy =
       Enum.find(
-        Threads.latest_messages(in_room, thread.id, 10),
+        Threads.latest_messages(Sanctum.Context.actor(in_room), thread.id, 10),
         &(&1.content == "They mean Friday.")
       )
 
@@ -265,7 +270,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
   defp panel_thread(panel, me, text) do
     pane = child!(panel, "aqua-panel-pane")
     pane |> form("form", %{"message" => text}) |> render_submit()
-    [you_thread] = Threads.list(me)
+    [you_thread] = Threads.list(Sanctum.Context.actor(me))
     {on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id), you_thread}
   end
 
@@ -293,7 +298,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     refute render(pane) =~ "AQUA points to"
 
     # A thread of You: the panel turns to it.
-    {:ok, second} = Threads.create(me)
+    {:ok, second} = Threads.create(Sanctum.Context.actor(me))
     to = PrismWeb.ChatLive.chat_path(route(mine), second.id)
     intents(pane, you_thread, user, [%{kind: "navigate", to: to}])
     refute_push_event(pane, "aqua:intents", %{intents: _})
@@ -382,8 +387,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
   test "the panel keeps its thread from one page to the next, and closed stays closed",
        %{conn: conn, room: room, me: me, thread: thread} do
-    {:ok, kept} = Threads.create(me)
-    {:ok, _} = Threads.update(me, kept.id, %{title: "Kept"})
+    {:ok, kept} = Threads.create(Sanctum.Context.actor(me))
+    {:ok, _} = Threads.update(Sanctum.Context.actor(me), kept.id, %{title: "Kept"})
 
     {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)

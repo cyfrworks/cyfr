@@ -56,9 +56,15 @@ defmodule Cyfr.Integration.Locus.CompileLockTest do
     LocusService.configure!()
 
     ctx = Sanctum.TestContext.local()
-    :ok = Arca.ensure_roots(ctx)
-    :ok = Arca.put(ctx, @src ++ ["src", "lib.rs"], @lib_rs)
-    :ok = Arca.put(ctx, @src ++ ["Cargo.toml"], Cyfr.CargoToml.template(:reagent))
+    :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
+    :ok = Arca.put(Sanctum.Context.actor(ctx), @src ++ ["src", "lib.rs"], @lib_rs)
+
+    :ok =
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        @src ++ ["Cargo.toml"],
+        Cyfr.CargoToml.template(:reagent)
+      )
 
     {:ok, ctx: ctx}
   end
@@ -67,29 +73,29 @@ defmodule Cyfr.Integration.Locus.CompileLockTest do
     assert Cyfr.RuntimeConfig.locus_builds_url() == LocusService.url()
 
     assert {:ok, %{status: "compiled"}} = compile(ctx)
-    assert {:ok, first_lock} = Arca.get(ctx, @src ++ ["Cargo.lock"])
+    assert {:ok, first_lock} = Arca.get(Sanctum.Context.actor(ctx), @src ++ ["Cargo.lock"])
     assert first_lock =~ ~s(name = "wit-bindgen-rt")
     refute first_lock =~ ~s(name = "smallvec")
 
-    {:ok, cargo_toml} = Arca.get(ctx, @src ++ ["Cargo.toml"])
+    {:ok, cargo_toml} = Arca.get(Sanctum.Context.actor(ctx), @src ++ ["Cargo.toml"])
 
     :ok =
       Arca.put(
-        ctx,
+        Sanctum.Context.actor(ctx),
         @src ++ ["Cargo.toml"],
         String.replace(cargo_toml, "[dependencies]\n", "[dependencies]\nsmallvec = \"1\"\n")
       )
 
     assert {:error, reason} = compile(ctx)
     assert Cyfr.Ops.Error.render(reason) =~ "--locked"
-    assert {:ok, ^first_lock} = Arca.get(ctx, @src ++ ["Cargo.lock"])
+    assert {:ok, ^first_lock} = Arca.get(Sanctum.Context.actor(ctx), @src ++ ["Cargo.lock"])
 
     assert {:ok, %{status: "compiled"}} = compile(ctx, %{"resolve" => true})
-    assert {:ok, resolved_lock} = Arca.get(ctx, @src ++ ["Cargo.lock"])
+    assert {:ok, resolved_lock} = Arca.get(Sanctum.Context.actor(ctx), @src ++ ["Cargo.lock"])
     assert resolved_lock =~ ~s(name = "smallvec")
 
     assert {:ok, %{status: "compiled"}} = compile(ctx)
-    assert {:ok, ^resolved_lock} = Arca.get(ctx, @src ++ ["Cargo.lock"])
+    assert {:ok, ^resolved_lock} = Arca.get(Sanctum.Context.actor(ctx), @src ++ ["Cargo.lock"])
 
     # Each successful build started its registration; it ends while the
     # tree it writes is still this test's.

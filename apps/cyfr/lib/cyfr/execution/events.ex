@@ -132,7 +132,7 @@ defmodule Cyfr.Execution.Events do
   end
 
   defp durable_seq(execution_id, athanor_id) do
-    case Arca.Execution.event_seq(athanor_id, execution_id) do
+    case Arca.Execution.event_seq(Cyfr.Actor.in_athanor(athanor_id), execution_id) do
       {:ok, seq} when is_integer(seq) -> seq
       _ -> 0
     end
@@ -267,7 +267,9 @@ defmodule Cyfr.Execution.Events do
   end
 
   defp buffered(execution_id, athanor_id) do
-    case Arca.Cache.get(Arca.Cache.Keys.exec_events(execution_id, athanor_id)) do
+    case Arca.Cache.get(
+           Arca.Cache.Keys.exec_events(Cyfr.Actor.in_athanor(athanor_id), execution_id)
+         ) do
       {:ok, events} -> events
       :miss -> []
     end
@@ -326,7 +328,9 @@ defmodule Cyfr.Execution.Events do
     # retain their replay window, and the durable prefix the stream is at:
     # the row's counter, or what the cache saw last.
     events =
-      case Arca.Cache.get(Arca.Cache.Keys.exec_events(execution_id, athanor_id)) do
+      case Arca.Cache.get(
+             Arca.Cache.Keys.exec_events(Cyfr.Actor.in_athanor(athanor_id), execution_id)
+           ) do
         {:ok, cached} when is_list(cached) -> cached
         _ -> []
       end
@@ -371,7 +375,7 @@ defmodule Cyfr.Execution.Events do
     events = (state.events ++ [event]) |> Enum.take(-@max_events)
 
     Arca.Cache.put(
-      Arca.Cache.Keys.exec_events(state.execution_id, state.athanor_id),
+      Arca.Cache.Keys.exec_events(Cyfr.Actor.in_athanor(state.athanor_id), state.execution_id),
       events,
       @buffer_ttl_ms
     )
@@ -404,7 +408,8 @@ defmodule Cyfr.Execution.Events do
     # process existed — a wholesale put would erase those events. Order
     # can interleave; losing events cannot.
     if state.events != [] do
-      key = Arca.Cache.Keys.exec_events(state.execution_id, state.athanor_id)
+      key =
+        Arca.Cache.Keys.exec_events(Cyfr.Actor.in_athanor(state.athanor_id), state.execution_id)
 
       cached =
         case Arca.Cache.get(key) do
@@ -476,7 +481,7 @@ defmodule Cyfr.Execution.Events do
 
   # Direct fallback for when GenServer infrastructure isn't available
   defp buffer_event_direct(execution_id, athanor_id, event) do
-    key = Arca.Cache.Keys.exec_events(execution_id, athanor_id)
+    key = Arca.Cache.Keys.exec_events(Cyfr.Actor.in_athanor(athanor_id), execution_id)
 
     events =
       case Arca.Cache.get(key) do

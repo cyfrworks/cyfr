@@ -58,7 +58,7 @@ defmodule Compendium.AquaTemplate do
   """
   @spec files() :: [[String.t()]]
   def files do
-    case Arca.list_recursive(Sanctum.system_context(), @seed_prefix) do
+    case Arca.list_recursive(Cyfr.Actor.system(), @seed_prefix) do
       {:ok, leaves} ->
         leaves
         |> Enum.map(&Enum.drop(&1, length(@seed_prefix)))
@@ -83,7 +83,7 @@ defmodule Compendium.AquaTemplate do
   @spec status(Context.t()) ::
           {:ok, [%{path: String.t(), state: Compendium.Provenance.t()}]} | {:error, term()}
   def status(%Context{} = ctx) do
-    with {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "aqua") do
+    with {:ok, statuses} <- Arca.Overlay.unit_statuses(Sanctum.Context.actor(ctx), "aqua") do
       statuses
       |> Enum.sort_by(fn {unit, _state} -> unit end)
       |> Enum.reduce_while({:ok, []}, fn {unit, state}, {:ok, acc} ->
@@ -103,7 +103,7 @@ defmodule Compendium.AquaTemplate do
   # A held copy is bundled or edited by its bytes; the athanor's own is
   # the athanor's; what it does not hold is not listed.
   defp unit_provenance(ctx, unit, :shipped) do
-    with {:ok, edited?} <- Arca.Overlay.edited?(ctx, unit) do
+    with {:ok, edited?} <- Arca.Overlay.edited?(Sanctum.Context.actor(ctx), unit) do
       {:ok, if(edited?, do: :bundled_modified, else: :bundled)}
     end
   end
@@ -126,7 +126,7 @@ defmodule Compendium.AquaTemplate do
     all? = Keyword.get(opts, :all, false)
 
     with :ok <- seed_check(),
-         {:ok, statuses} <- Arca.Overlay.unit_statuses(ctx, "aqua") do
+         {:ok, statuses} <- Arca.Overlay.unit_statuses(Sanctum.Context.actor(ctx), "aqua") do
       statuses
       |> Enum.sort_by(fn {unit, _state} -> unit end)
       |> Enum.reduce_while({:ok, %{reverted: [], kept: []}}, fn {unit, state}, {:ok, acc} ->
@@ -155,10 +155,10 @@ defmodule Compendium.AquaTemplate do
     Context.require_tenant!(ctx)
 
     with :ok <- seed_check(),
-         {:ok, status} <- Arca.Overlay.unit_status(ctx, unit) do
+         {:ok, status} <- Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) do
       case status do
         held_or_offered when held_or_offered in [:shipped, :available] ->
-          Arca.Overlay.pull_shipped(ctx, unit)
+          Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), unit)
 
         :own ->
           {:error, :not_a_copy}
@@ -173,17 +173,18 @@ defmodule Compendium.AquaTemplate do
   # the athanor lacks is copied in, and the athanor's own work is kept —
   # or, with `all: true`, deleted so the shipped set is all that remains.
   defp reset_unit(ctx, unit, :shipped, _all?) do
-    case Arca.Overlay.edited?(ctx, unit) do
-      {:ok, true} -> outcome(Arca.Overlay.pull_shipped(ctx, unit))
+    case Arca.Overlay.edited?(Sanctum.Context.actor(ctx), unit) do
+      {:ok, true} -> outcome(Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), unit))
       {:ok, false} -> :unchanged
       {:error, _} = error -> error
     end
   end
 
-  defp reset_unit(ctx, unit, :available, _all?), do: outcome(Arca.Overlay.pull_shipped(ctx, unit))
+  defp reset_unit(ctx, unit, :available, _all?),
+    do: outcome(Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), unit))
 
   defp reset_unit(ctx, unit, :own, true) do
-    case Arca.Overlay.drop_unit(ctx, unit) do
+    case Arca.Overlay.drop_unit(Sanctum.Context.actor(ctx), unit) do
       {:ok, :deleted} -> :reverted
       {:error, :not_found} -> :unchanged
       {:error, _} = error -> error
@@ -201,7 +202,7 @@ defmodule Compendium.AquaTemplate do
   # parses": there is one soul by construction, and a role has no parent
   # to resolve.
   defp seed_soul(ctx) do
-    case Arca.get(ctx, @seed_prefix ++ [List.last(AquaPath.soul_file())]) do
+    case Arca.get(Sanctum.Context.actor(ctx), @seed_prefix ++ [List.last(AquaPath.soul_file())]) do
       {:ok, binary} ->
         case AquaAgent.parse(AquaPath.soul_name(), binary) do
           {:ok, soul} -> {:ok, soul}
@@ -217,14 +218,17 @@ defmodule Compendium.AquaTemplate do
   end
 
   defp seed_roles(ctx) do
-    case Arca.list_typed(ctx, @seed_prefix ++ [AquaPath.roles_dirname()]) do
+    case Arca.list_typed(Sanctum.Context.actor(ctx), @seed_prefix ++ [AquaPath.roles_dirname()]) do
       {:ok, entries} ->
         entries
         |> Enum.filter(fn {file, kind} -> kind == :file and String.ends_with?(file, ".md") end)
         |> Enum.map(fn {file, _kind} -> String.trim_trailing(file, ".md") end)
         |> Enum.reduce_while({:ok, []}, fn name, {:ok, acc} ->
           with {:ok, binary} <-
-                 Arca.get(ctx, @seed_prefix ++ [AquaPath.roles_dirname(), name <> ".md"]),
+                 Arca.get(
+                   Sanctum.Context.actor(ctx),
+                   @seed_prefix ++ [AquaPath.roles_dirname(), name <> ".md"]
+                 ),
                {:ok, role} <- AquaAgent.parse(name, binary) do
             {:cont, {:ok, [role | acc]}}
           else

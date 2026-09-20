@@ -143,7 +143,6 @@ defmodule Arca.Adapters.S3 do
   @behaviour Arca.Storage
 
   require Logger
-  alias Sanctum.Context
 
   @service "s3"
 
@@ -160,8 +159,8 @@ defmodule Arca.Adapters.S3 do
   @append_backoff_base_ms 20
 
   @impl true
-  def get(%Context{} = ctx, segments) do
-    case request(:get, build_key(ctx, segments)) do
+  def get(%Cyfr.Actor{} = actor, segments) do
+    case request(:get, build_key(actor, segments)) do
       {:ok, %{status: 200, body: body}} -> {:ok, body}
       {:ok, %{status: 404}} -> {:error, :not_found}
       {:ok, %{status: status, body: body}} -> log_and_error("get", status, body)
@@ -170,19 +169,19 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def put(%Context{} = ctx, segments, content) do
+  def put(%Cyfr.Actor{} = actor, segments, content) do
     Arca.Storage.refuse_seed_write!(segments)
 
-    case request(:put, build_key(ctx, segments), content) do
+    case request(:put, build_key(actor, segments), content) do
       {:ok, %{status: status}} when status in 200..299 -> :ok
       answer -> write_outcome("put", answer)
     end
   end
 
   @impl true
-  def append(%Context{} = ctx, segments, content) do
+  def append(%Cyfr.Actor{} = actor, segments, content) do
     Arca.Storage.refuse_seed_write!(segments)
-    append_attempt(ctx, segments, IO.iodata_to_binary(content), 1)
+    append_attempt(actor, segments, IO.iodata_to_binary(content), 1)
   end
 
   # One read-extend-write, conditional on what the read saw. A definite
@@ -190,17 +189,17 @@ defmodule Arca.Adapters.S3 do
   # first) reads again within the bound; every other answer, the unknown
   # outcome included, is final — an append that may have landed is not
   # sent twice.
-  defp append_attempt(ctx, segments, content, attempt) do
-    with {:ok, existing, etag} <- read_for_append(ctx, segments),
+  defp append_attempt(actor, segments, content, attempt) do
+    with {:ok, existing, etag} <- read_for_append(actor, segments),
          :ok <- check_append_ceiling(existing, content) do
-      case write_for_append(ctx, segments, existing <> content, etag) do
+      case write_for_append(actor, segments, existing <> content, etag) do
         {:ok, _precondition} ->
           :ok
 
         {:error, conflict} when conflict in [:exists, :precondition_failed, :missing] ->
           if attempt < @append_attempts do
             Process.sleep(append_backoff_ms(attempt))
-            append_attempt(ctx, segments, content, attempt + 1)
+            append_attempt(actor, segments, content, attempt + 1)
           else
             Logger.warning("[Arca.S3.append] still losing after #{attempt} attempts")
             {:error, :precondition_failed}
@@ -220,8 +219,8 @@ defmodule Arca.Adapters.S3 do
 
   # A missing object is an empty one: appending to a path that does not exist
   # yet creates it, matching the local filesystem's `File.write(:append)`.
-  defp read_for_append(ctx, segments) do
-    case versioned_read("append", ctx, segments) do
+  defp read_for_append(actor, segments) do
+    case versioned_read("append", actor, segments) do
       {:ok, body, etag} -> {:ok, body, etag}
       {:error, :not_found} -> {:ok, "", nil}
       {:error, _} = error -> error
@@ -234,14 +233,14 @@ defmodule Arca.Adapters.S3 do
   and the proof of what was read are one round trip.
   """
   @impl true
-  def get_for_update(%Context{} = ctx, segments),
-    do: versioned_read("get_for_update", ctx, segments)
+  def get_for_update(%Cyfr.Actor{} = actor, segments),
+    do: versioned_read("get_for_update", actor, segments)
 
   # An object read without an ETag cannot be written back conditionally,
   # and an unconditional write back could drop a concurrent writer's
   # bytes: refuse rather than offer a precondition no store minted.
-  defp versioned_read(op, ctx, segments) do
-    case request(:get, build_key(ctx, segments)) do
+  defp versioned_read(op, actor, segments) do
+    case request(:get, build_key(actor, segments)) do
       {:ok, %{status: 200, body: body} = response} ->
         case etag(response) do
           nil ->
@@ -263,10 +262,11 @@ defmodule Arca.Adapters.S3 do
     end
   end
 
-  defp write_for_append(ctx, segments, merged, nil), do: put_if_none_match(ctx, segments, merged)
+  defp write_for_append(actor, segments, merged, nil),
+    do: put_if_none_match(actor, segments, merged)
 
-  defp write_for_append(ctx, segments, merged, etag),
-    do: put_if_match(ctx, segments, merged, etag)
+  defp write_for_append(actor, segments, merged, etag),
+    do: put_if_match(actor, segments, merged, etag)
 
   # Doubling from the base, with jitter so the losers of one round do not
   # collide again in the next.
@@ -281,9 +281,9 @@ defmodule Arca.Adapters.S3 do
   states the result vocabulary.
   """
   @impl true
-  def put_if_none_match(%Context{} = ctx, segments, content) do
+  def put_if_none_match(%Cyfr.Actor{} = actor, segments, content) do
     Arca.Storage.refuse_seed_write!(segments)
-    key = build_key(ctx, segments)
+    key = build_key(actor, segments)
 
     conditional_put("put_if_none_match", key, content, {"if-none-match", "*"}, :exists)
   end
@@ -294,9 +294,9 @@ defmodule Arca.Adapters.S3 do
   result vocabulary.
   """
   @impl true
-  def put_if_match(%Context{} = ctx, segments, content, precondition) do
+  def put_if_match(%Cyfr.Actor{} = actor, segments, content, precondition) do
     Arca.Storage.refuse_seed_write!(segments)
-    key = build_key(ctx, segments)
+    key = build_key(actor, segments)
 
     if etag_shaped?(precondition) do
       conditional_put(
@@ -400,16 +400,16 @@ defmodule Arca.Adapters.S3 do
   `prefix/`, `[prefix]` for a prefix that is one object, `[]` for nothing.
   """
   @impl true
-  def list_prefix(%Context{} = ctx, prefix) do
-    with {:ok, []} <- list_recursive(ctx, prefix) do
-      if exists?(ctx, prefix), do: {:ok, [prefix]}, else: {:ok, []}
+  def list_prefix(%Cyfr.Actor{} = actor, prefix) do
+    with {:ok, []} <- list_recursive(actor, prefix) do
+      if exists?(actor, prefix), do: {:ok, [prefix]}, else: {:ok, []}
     end
   end
 
   @impl true
-  def delete(%Context{} = ctx, segments) do
+  def delete(%Cyfr.Actor{} = actor, segments) do
     Arca.Storage.refuse_seed_write!(segments)
-    key = build_key(ctx, segments)
+    key = build_key(actor, segments)
 
     # Real S3 answers 204 even for a key that never existed, so a bare DELETE
     # cannot tell "deleted" from "was never there" — probe first, and a
@@ -439,15 +439,15 @@ defmodule Arca.Adapters.S3 do
   # An object store has no directories: a prefix exists when a key sits
   # under it, and nothing needs creating for that.
   @impl true
-  def ensure_dir(%Context{} = _ctx, segments) do
+  def ensure_dir(%Cyfr.Actor{} = _actor, segments) do
     Arca.Storage.refuse_seed_write!(segments)
     Arca.Storage.validate_path!(segments)
     :ok
   end
 
   @impl true
-  def list_typed(%Context{} = ctx, segments) do
-    prefix = build_key(ctx, segments)
+  def list_typed(%Cyfr.Actor{} = actor, segments) do
+    prefix = build_key(actor, segments)
 
     case list_keys(prefix) do
       {:ok, []} ->
@@ -455,7 +455,7 @@ defmodule Arca.Adapters.S3 do
         # object itself — the local adapter's `File.ls` says `:enotdir` for the
         # latter, and one HEAD on an already-empty listing keeps the two
         # adapters answering the same thing.
-        if exists?(ctx, segments), do: {:error, :enotdir}, else: {:ok, []}
+        if exists?(actor, segments), do: {:error, :enotdir}, else: {:ok, []}
 
       {:ok, keys} ->
         {:ok, entries_under(prefix, keys)}
@@ -466,17 +466,17 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def exists?(%Context{} = ctx, segments) do
-    case request(:head, build_key(ctx, segments)) do
+  def exists?(%Cyfr.Actor{} = actor, segments) do
+    case request(:head, build_key(actor, segments)) do
       {:ok, %{status: 200}} -> true
       _ -> false
     end
   end
 
   @impl true
-  def delete_tree(%Context{} = ctx, segments) do
+  def delete_tree(%Cyfr.Actor{} = actor, segments) do
     Arca.Storage.refuse_seed_write!(segments)
-    prefix = build_key(ctx, segments)
+    prefix = build_key(actor, segments)
 
     # An object can sit AT the tree's own key (Local's rm_rf removes it, and
     # the listing below only sees keys under `prefix/`) — delete it
@@ -535,8 +535,8 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def list_recursive(%Context{} = ctx, segments) do
-    prefix_key = build_key(ctx, segments)
+  def list_recursive(%Cyfr.Actor{} = actor, segments) do
+    prefix_key = build_key(actor, segments)
     prefix_with_slash = prefix_key <> "/"
 
     case list_keys(prefix_key) do
@@ -564,8 +564,8 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def usage(%Context{} = ctx, segments) do
-    prefix_key = build_key(ctx, segments)
+  def usage(%Cyfr.Actor{} = actor, segments) do
+    prefix_key = build_key(actor, segments)
     prefix_with_slash = prefix_key <> "/"
 
     case list_entries(prefix_key) do
@@ -587,14 +587,14 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def serve_to_conn(conn, %Context{} = ctx, segments, opts) do
+  def serve_to_conn(conn, %Cyfr.Actor{} = actor, segments, opts) do
     status = Keyword.get(opts, :status, 200)
 
     # Buffer-and-send: simple and correct, fits manifests + tincture HTML
     # well. Streaming via `send_chunked` + `Req`'s `:into` callback is the
     # next-step optimization for very large assets — defer until profiling
     # shows the buffered path matters in practice.
-    case get(ctx, segments) do
+    case get(actor, segments) do
       {:ok, body} -> {:ok, Plug.Conn.send_resp(conn, status, body)}
       {:error, _} = err -> err
     end
@@ -607,9 +607,9 @@ defmodule Arca.Adapters.S3 do
   # The adapter's one validation chokepoint: every callback reaches it
   # before any request (append and serve via get), so `validate_path!/1`
   # runs exactly once per operation.
-  defp build_key(%Context{} = ctx, segments) do
+  defp build_key(%Cyfr.Actor{} = actor, segments) do
     Arca.Storage.validate_path!(segments)
-    base = Arca.Storage.physical_segments(ctx, segments)
+    base = Arca.Storage.physical_segments(actor, segments)
 
     case prefix() do
       nil -> Enum.join(base, "/")

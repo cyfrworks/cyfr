@@ -312,7 +312,11 @@ defmodule PrismWeb.TopbarLive do
       athanor_id == viewing ->
         {:noreply, socket}
 
-      Arca.ThreadSubscriptionStorage.follows?(athanor_id, thread_id, ctx.user_id) ->
+      Arca.ThreadSubscriptionStorage.follows?(
+        Cyfr.Actor.in_athanor(athanor_id),
+        thread_id,
+        ctx.user_id
+      ) ->
         {:noreply, assign(socket, :badges, Prism.Tray.bump(socket.assigns.tray_key, athanor_id))}
 
       true ->

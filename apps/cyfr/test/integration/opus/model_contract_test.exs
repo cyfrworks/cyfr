@@ -92,9 +92,14 @@ defmodule Opus.ModelContractTest do
     assert [%{dispatch_state: "closed", outcome: "ok", child_execution_id: id}] =
              model_steps(played)
 
-    assert {:ok, _row, request} = Arca.ExecutionPayloads.get(ctx, id, "input")
+    assert {:ok, _row, request} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "input")
+
     assert request =~ "@aqua hello"
-    assert {:ok, _row, result} = Arca.ExecutionPayloads.get(ctx, id, "result")
+
+    assert {:ok, _row, result} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
+
     assert result =~ "The fixture answers."
 
     # The scan finds what is there: the person's line in its row and in the
@@ -859,7 +864,7 @@ defmodule Opus.ModelContractTest do
   defp play(ctx, steps, thread) when is_list(steps), do: play(ctx, message(steps), thread)
 
   defp play(ctx, text, thread) when is_binary(text) do
-    thread = thread || elem({:ok, _} = Threads.create(ctx), 1)
+    thread = thread || elem({:ok, _} = Threads.create(Sanctum.Context.actor(ctx)), 1)
 
     # The thread's runner has let its last turn go, so this line opens a
     # turn of its own and steers none.
@@ -900,7 +905,7 @@ defmodule Opus.ModelContractTest do
     Map.merge(played, %{
       turn: turn,
       steps: steps,
-      rows: Threads.messages(ctx, thread.id),
+      rows: Threads.messages(Sanctum.Context.actor(ctx), thread.id),
       seen: await_seen(observer, turn, steps)
     })
   end
@@ -1064,7 +1069,7 @@ defmodule Opus.ModelContractTest do
 
     for id <- ids,
         kind <- ["input", "result"],
-        {:ok, _row, bytes} <- [Arca.ExecutionPayloads.get(ctx, id, kind)] do
+        {:ok, _row, bytes} <- [Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, kind)] do
       {id, kind, bytes}
     end
   end

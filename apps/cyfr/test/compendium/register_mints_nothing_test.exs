@@ -148,7 +148,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
       {:ok, _} =
         Arca.Overlay.commit_unit(
-          ctx,
+          Sanctum.Context.actor(ctx),
           unit,
           {:files, [{["cyfr-manifest.json"], manifest}, {["reagent.wasm"], @wasm}]},
           cap: :exempt

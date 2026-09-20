@@ -65,16 +65,16 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
         fields: %{"token" => "super-secret-value"}
       })
 
-    {:ok, thread} = Arca.ThreadStorage.create(ctx)
+    {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
     {:ok, _msg} =
-      Arca.ThreadStorage.append(ctx, thread.id, %{
+      Arca.ThreadStorage.append(Sanctum.Context.actor(ctx), thread.id, %{
         author: ctx.user_id,
         kind: "text",
         content: "something private"
       })
 
-    :ok = Arca.put(ctx, ["data", "notes.txt"], "kept until destroy")
+    :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "notes.txt"], "kept until destroy")
 
     # The rest of the roster, written straight through the row plane. Going
     # via each domain API would need a component, a consent walk and a
@@ -158,8 +158,8 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
              "#{table} still holds rows for a destroyed athanor"
     end
 
-    refute Arca.exists?(ctx, ["data", "notes.txt"])
-    assert {:ok, []} = Arca.list_recursive(ctx, [])
+    refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "notes.txt"])
+    assert {:ok, []} = Arca.list_recursive(Sanctum.Context.actor(ctx), [])
 
     # The tombstone stands: an audit trail that forgets an athanor existed
     # cannot say what happened to it.

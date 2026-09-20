@@ -87,7 +87,7 @@ defmodule Sanctum.TinctureAccessTest do
 
     # Register components in SQLite so Compendium.Registry.get_latest finds them
     {:ok, _} =
-      Arca.ComponentStorage.put_component(ctx, %{
+      Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
         id: "test_pub_dash_#{:rand.uniform(1_000_000)}",
         name: "public-dash",
         version: "1.0.0",
@@ -107,7 +107,7 @@ defmodule Sanctum.TinctureAccessTest do
       })
 
     {:ok, _} =
-      Arca.ComponentStorage.put_component(ctx, %{
+      Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
         id: "test_priv_dash_#{:rand.uniform(1_000_000)}",
         name: "private-dash",
         version: "1.0.0",
@@ -155,7 +155,7 @@ defmodule Sanctum.TinctureAccessTest do
 
   defp tincture_dir(name) do
     Arca.Adapters.Local.build_path(
-      Sanctum.TestContext.local(),
+      Sanctum.Context.actor(Sanctum.TestContext.local()),
       ["components", "tinctures", "local", name, "1.0.0"]
     )
   end

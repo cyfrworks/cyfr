@@ -27,26 +27,26 @@ defmodule Arca.AppendParityTest do
   # The shared parity cases
   # ---------------------------------------------------------------------------
 
-  defp parity_append_ceiling(adapter, ctx, dir) do
+  defp parity_append_ceiling(adapter, actor, dir) do
     ceiling = Cyfr.Limits.default_max_response_size()
     path = dir ++ ["ceiling.log"]
 
-    :ok = adapter.put(ctx, path, :binary.copy(<<0>>, ceiling))
-    assert {:error, :object_too_large} = adapter.append(ctx, path, "x")
+    :ok = adapter.put(actor, path, :binary.copy(<<0>>, ceiling))
+    assert {:error, :object_too_large} = adapter.append(actor, path, "x")
 
     # Refused whole: the object is as it was, and nothing sits beside it.
-    assert {:ok, %{files: 1, bytes: ^ceiling}} = adapter.usage(ctx, dir)
+    assert {:ok, %{files: 1, bytes: ^ceiling}} = adapter.usage(actor, dir)
   end
 
   # As many one-shot writers as the S3 adapter has attempts: a writer
   # loses a round only to one that has finished, so every one lands.
-  defp parity_concurrent_appends_all_land(adapter, ctx, dir) do
+  defp parity_concurrent_appends_all_land(adapter, actor, dir) do
     path = dir ++ ["race.jsonl"]
     lines = for n <- 1..5, do: String.duplicate("writer-#{n};", 200) <> "\n"
 
     answers =
       lines
-      |> Task.async_stream(&adapter.append(ctx, path, &1),
+      |> Task.async_stream(&adapter.append(actor, path, &1),
         max_concurrency: 5,
         ordered: false,
         timeout: 30_000
@@ -57,7 +57,7 @@ defmodule Arca.AppendParityTest do
 
     # Whole lines, each once: the appends serialized, none interleaved
     # with or overwrote another.
-    assert {:ok, content} = adapter.get(ctx, path)
+    assert {:ok, content} = adapter.get(actor, path)
     assert content |> String.split("\n", trim: true) |> Enum.sort() == lines_sorted(lines)
   end
 
@@ -67,7 +67,7 @@ defmodule Arca.AppendParityTest do
   # adapter's bound, so the invariant is on the accounting: what answered
   # `:ok` is there once, in its writer's order; what did not answered the
   # definite conflict and is absent.
-  defp parity_sustained_appends_lose_nothing(adapter, ctx, dir) do
+  defp parity_sustained_appends_lose_nothing(adapter, actor, dir) do
     path = dir ++ ["sustained.jsonl"]
 
     answers =
@@ -76,7 +76,7 @@ defmodule Arca.AppendParityTest do
         fn writer ->
           for seq <- 1..4 do
             line = "#{writer}:#{seq}"
-            {line, adapter.append(ctx, path, line <> "\n")}
+            {line, adapter.append(actor, path, line <> "\n")}
           end
         end,
         max_concurrency: 3,
@@ -85,7 +85,7 @@ defmodule Arca.AppendParityTest do
       )
       |> Enum.flat_map(fn {:ok, per_writer} -> per_writer end)
 
-    assert {:ok, content} = adapter.get(ctx, path)
+    assert {:ok, content} = adapter.get(actor, path)
     stored = String.split(content, "\n", trim: true)
 
     landed = for {line, :ok} <- answers, do: line
@@ -102,44 +102,44 @@ defmodule Arca.AppendParityTest do
     end
   end
 
-  defp parity_append_moves_the_precondition(adapter, ctx, dir) do
+  defp parity_append_moves_the_precondition(adapter, actor, dir) do
     path = dir ++ ["moved.jsonl"]
 
-    assert {:ok, seen} = adapter.put_if_none_match(ctx, path, "one\n")
-    assert :ok = adapter.append(ctx, path, "two\n")
+    assert {:ok, seen} = adapter.put_if_none_match(actor, path, "one\n")
+    assert :ok = adapter.append(actor, path, "two\n")
 
-    assert {:error, :precondition_failed} = adapter.put_if_match(ctx, path, "rewrite", seen)
-    assert {:ok, "one\ntwo\n"} = adapter.get(ctx, path)
+    assert {:error, :precondition_failed} = adapter.put_if_match(actor, path, "rewrite", seen)
+    assert {:ok, "one\ntwo\n"} = adapter.get(actor, path)
   end
 
-  defp parity_conditional_vocabulary(adapter, ctx, dir) do
+  defp parity_conditional_vocabulary(adapter, actor, dir) do
     key = dir ++ ["registry", "unit"]
 
     # Create over an existing key.
-    assert {:ok, first} = adapter.put_if_none_match(ctx, key, "v1")
-    assert {:error, :exists} = adapter.put_if_none_match(ctx, key, "other")
-    assert {:ok, "v1"} = adapter.get(ctx, key)
+    assert {:ok, first} = adapter.put_if_none_match(actor, key, "v1")
+    assert {:error, :exists} = adapter.put_if_none_match(actor, key, "other")
+    assert {:ok, "v1"} = adapter.get(actor, key)
 
     # A stale precondition, and one the adapter never minted.
-    assert {:ok, second} = adapter.put_if_match(ctx, key, "v2", first)
-    assert {:error, :precondition_failed} = adapter.put_if_match(ctx, key, "v3", first)
-    assert {:error, :precondition_failed} = adapter.put_if_match(ctx, key, "v3", :never_minted)
-    assert {:ok, "v2"} = adapter.get(ctx, key)
-    assert {:ok, _third} = adapter.put_if_match(ctx, key, "v3", second)
+    assert {:ok, second} = adapter.put_if_match(actor, key, "v2", first)
+    assert {:error, :precondition_failed} = adapter.put_if_match(actor, key, "v3", first)
+    assert {:error, :precondition_failed} = adapter.put_if_match(actor, key, "v3", :never_minted)
+    assert {:ok, "v2"} = adapter.get(actor, key)
+    assert {:ok, _third} = adapter.put_if_match(actor, key, "v3", second)
 
     # A missing key, whatever the precondition claims.
     absent = dir ++ ["registry", "absent"]
-    assert {:error, :missing} = adapter.put_if_match(ctx, absent, "x", second)
-    assert {:error, :missing} = adapter.put_if_match(ctx, absent, "x", :never_minted)
-    refute adapter.exists?(ctx, absent)
+    assert {:error, :missing} = adapter.put_if_match(actor, absent, "x", second)
+    assert {:error, :missing} = adapter.put_if_match(actor, absent, "x", :never_minted)
+    refute adapter.exists?(actor, absent)
   end
 
-  defp parity_racing_creates(adapter, ctx, dir) do
+  defp parity_racing_creates(adapter, actor, dir) do
     key = dir ++ ["registry", "raced"]
 
     answers =
       1..8
-      |> Task.async_stream(fn n -> adapter.put_if_none_match(ctx, key, "writer-#{n}") end,
+      |> Task.async_stream(fn n -> adapter.put_if_none_match(actor, key, "writer-#{n}") end,
         max_concurrency: 8,
         ordered: false,
         timeout: 30_000
@@ -150,17 +150,17 @@ defmodule Arca.AppendParityTest do
     assert Enum.count(answers, &(&1 == {:error, :exists})) == 7
 
     # The winner's precondition is the stored object's: it replaces it.
-    assert {:ok, "writer-" <> _} = adapter.get(ctx, key)
-    assert {:ok, _next} = adapter.put_if_match(ctx, key, "settled", winner)
+    assert {:ok, "writer-" <> _} = adapter.get(actor, key)
+    assert {:ok, _next} = adapter.put_if_match(actor, key, "settled", winner)
   end
 
-  defp parity_racing_replaces(adapter, ctx, dir) do
+  defp parity_racing_replaces(adapter, actor, dir) do
     key = dir ++ ["registry", "replaced"]
-    assert {:ok, seen} = adapter.put_if_none_match(ctx, key, "v0")
+    assert {:ok, seen} = adapter.put_if_none_match(actor, key, "v0")
 
     answers =
       1..8
-      |> Task.async_stream(fn n -> adapter.put_if_match(ctx, key, "writer-#{n}", seen) end,
+      |> Task.async_stream(fn n -> adapter.put_if_match(actor, key, "writer-#{n}", seen) end,
         max_concurrency: 8,
         ordered: false,
         timeout: 30_000
@@ -169,7 +169,7 @@ defmodule Arca.AppendParityTest do
 
     assert [{:ok, _winner}] = Enum.filter(answers, &match?({:ok, _}, &1))
     assert Enum.count(answers, &(&1 == {:error, :precondition_failed})) == 7
-    assert {:ok, "writer-" <> _} = adapter.get(ctx, key)
+    assert {:ok, "writer-" <> _} = adapter.get(actor, key)
   end
 
   # ---------------------------------------------------------------------------
@@ -188,54 +188,55 @@ defmodule Arca.AppendParityTest do
         File.rm_rf!(test_dir)
       end)
 
-      {:ok, ctx: Sanctum.TestContext.local(), dir: ["data", "parity"]}
+      {:ok, actor: Sanctum.Context.actor(Sanctum.TestContext.local()), dir: ["data", "parity"]}
     end
 
-    test "the facade refuses an append past the shared ceiling, like S3 does", %{ctx: ctx} do
+    test "the facade refuses an append past the shared ceiling, like S3 does", %{actor: actor} do
       ceiling = Cyfr.Limits.default_max_response_size()
       path = ["data", "parity.log"]
 
       # A file already at the ceiling: the cheapest way is to write it whole
       # (cap-exempt — this test measures the append bound, not the quota).
-      :ok = Arca.put(ctx, path, :binary.copy(<<0>>, ceiling), cap: :exempt)
+      :ok = Arca.put(actor, path, :binary.copy(<<0>>, ceiling), cap: :exempt)
 
-      assert {:error, :object_too_large} = Arca.append(ctx, path, "x", cap: :exempt)
+      assert {:error, :object_too_large} =
+               Arca.append(actor, path, "x", cap: :exempt)
 
       # Under the ceiling still appends.
-      :ok = Arca.delete(ctx, path)
-      :ok = Arca.put(ctx, path, "hello ", cap: :exempt)
-      assert :ok = Arca.append(ctx, path, "world", cap: :exempt)
-      assert {:ok, "hello world"} = Arca.get(ctx, path)
+      :ok = Arca.delete(actor, path)
+      :ok = Arca.put(actor, path, "hello ", cap: :exempt)
+      assert :ok = Arca.append(actor, path, "world", cap: :exempt)
+      assert {:ok, "hello world"} = Arca.get(actor, path)
     end
 
-    test("an append past the ceiling is refused whole", %{ctx: ctx, dir: dir},
-      do: parity_append_ceiling(Local, ctx, dir)
+    test("an append past the ceiling is refused whole", %{actor: actor, dir: dir},
+      do: parity_append_ceiling(Local, actor, dir)
     )
 
-    test("concurrent one-shot appends all land, whole", %{ctx: ctx, dir: dir},
-      do: parity_concurrent_appends_all_land(Local, ctx, dir)
+    test("concurrent one-shot appends all land, whole", %{actor: actor, dir: dir},
+      do: parity_concurrent_appends_all_land(Local, actor, dir)
     )
 
     test(
       "sustained concurrent appends lose nothing and keep each writer's order",
-      %{ctx: ctx, dir: dir},
-      do: parity_sustained_appends_lose_nothing(Local, ctx, dir)
+      %{actor: actor, dir: dir},
+      do: parity_sustained_appends_lose_nothing(Local, actor, dir)
     )
 
-    test("an append moves the precondition", %{ctx: ctx, dir: dir},
-      do: parity_append_moves_the_precondition(Local, ctx, dir)
+    test("an append moves the precondition", %{actor: actor, dir: dir},
+      do: parity_append_moves_the_precondition(Local, actor, dir)
     )
 
-    test("the conditional writes answer the one vocabulary", %{ctx: ctx, dir: dir},
-      do: parity_conditional_vocabulary(Local, ctx, dir)
+    test("the conditional writes answer the one vocabulary", %{actor: actor, dir: dir},
+      do: parity_conditional_vocabulary(Local, actor, dir)
     )
 
-    test("racing creates land exactly one", %{ctx: ctx, dir: dir},
-      do: parity_racing_creates(Local, ctx, dir)
+    test("racing creates land exactly one", %{actor: actor, dir: dir},
+      do: parity_racing_creates(Local, actor, dir)
     )
 
-    test("racing replaces from one precondition land exactly one", %{ctx: ctx, dir: dir},
-      do: parity_racing_replaces(Local, ctx, dir)
+    test("racing replaces from one precondition land exactly one", %{actor: actor, dir: dir},
+      do: parity_racing_replaces(Local, actor, dir)
     )
   end
 
@@ -264,37 +265,37 @@ defmodule Arca.AppendParityTest do
         Application.delete_env(:cyfr, :s3)
       end)
 
-      {:ok, ctx: Sanctum.TestContext.local(), dir: ["data", "parity"]}
+      {:ok, actor: Sanctum.Context.actor(Sanctum.TestContext.local()), dir: ["data", "parity"]}
     end
 
-    test("an append past the ceiling is refused whole", %{ctx: ctx, dir: dir},
-      do: parity_append_ceiling(S3, ctx, dir)
+    test("an append past the ceiling is refused whole", %{actor: actor, dir: dir},
+      do: parity_append_ceiling(S3, actor, dir)
     )
 
-    test("concurrent one-shot appends all land, whole", %{ctx: ctx, dir: dir},
-      do: parity_concurrent_appends_all_land(S3, ctx, dir)
+    test("concurrent one-shot appends all land, whole", %{actor: actor, dir: dir},
+      do: parity_concurrent_appends_all_land(S3, actor, dir)
     )
 
     test(
       "sustained concurrent appends lose nothing and keep each writer's order",
-      %{ctx: ctx, dir: dir},
-      do: parity_sustained_appends_lose_nothing(S3, ctx, dir)
+      %{actor: actor, dir: dir},
+      do: parity_sustained_appends_lose_nothing(S3, actor, dir)
     )
 
-    test("an append moves the precondition", %{ctx: ctx, dir: dir},
-      do: parity_append_moves_the_precondition(S3, ctx, dir)
+    test("an append moves the precondition", %{actor: actor, dir: dir},
+      do: parity_append_moves_the_precondition(S3, actor, dir)
     )
 
-    test("the conditional writes answer the one vocabulary", %{ctx: ctx, dir: dir},
-      do: parity_conditional_vocabulary(S3, ctx, dir)
+    test("the conditional writes answer the one vocabulary", %{actor: actor, dir: dir},
+      do: parity_conditional_vocabulary(S3, actor, dir)
     )
 
-    test("racing creates land exactly one", %{ctx: ctx, dir: dir},
-      do: parity_racing_creates(S3, ctx, dir)
+    test("racing creates land exactly one", %{actor: actor, dir: dir},
+      do: parity_racing_creates(S3, actor, dir)
     )
 
-    test("racing replaces from one precondition land exactly one", %{ctx: ctx, dir: dir},
-      do: parity_racing_replaces(S3, ctx, dir)
+    test("racing replaces from one precondition land exactly one", %{actor: actor, dir: dir},
+      do: parity_racing_replaces(S3, actor, dir)
     )
   end
 
@@ -385,50 +386,50 @@ defmodule Arca.AppendParityTest do
         path_style: true
       )
 
-      ctx = Sanctum.TestContext.local()
+      actor = Sanctum.Context.actor(Sanctum.TestContext.local())
       dir = ["data", "parity"]
       create_bucket!(endpoint)
-      :ok = S3.delete_tree(ctx, dir)
+      :ok = S3.delete_tree(actor, dir)
 
       on_exit(fn ->
-        S3.delete_tree(ctx, dir)
+        S3.delete_tree(actor, dir)
 
         if prev,
           do: Application.put_env(:cyfr, :s3, prev),
           else: Application.delete_env(:cyfr, :s3)
       end)
 
-      {:ok, ctx: ctx, dir: dir}
+      {:ok, actor: actor, dir: dir}
     end
 
-    test("an append past the ceiling is refused whole", %{ctx: ctx, dir: dir},
-      do: parity_append_ceiling(S3, ctx, dir)
+    test("an append past the ceiling is refused whole", %{actor: actor, dir: dir},
+      do: parity_append_ceiling(S3, actor, dir)
     )
 
-    test("concurrent one-shot appends all land, whole", %{ctx: ctx, dir: dir},
-      do: parity_concurrent_appends_all_land(S3, ctx, dir)
+    test("concurrent one-shot appends all land, whole", %{actor: actor, dir: dir},
+      do: parity_concurrent_appends_all_land(S3, actor, dir)
     )
 
     test(
       "sustained concurrent appends lose nothing and keep each writer's order",
-      %{ctx: ctx, dir: dir},
-      do: parity_sustained_appends_lose_nothing(S3, ctx, dir)
+      %{actor: actor, dir: dir},
+      do: parity_sustained_appends_lose_nothing(S3, actor, dir)
     )
 
-    test("an append moves the precondition", %{ctx: ctx, dir: dir},
-      do: parity_append_moves_the_precondition(S3, ctx, dir)
+    test("an append moves the precondition", %{actor: actor, dir: dir},
+      do: parity_append_moves_the_precondition(S3, actor, dir)
     )
 
-    test("the conditional writes answer the one vocabulary", %{ctx: ctx, dir: dir},
-      do: parity_conditional_vocabulary(S3, ctx, dir)
+    test("the conditional writes answer the one vocabulary", %{actor: actor, dir: dir},
+      do: parity_conditional_vocabulary(S3, actor, dir)
     )
 
-    test("racing creates land exactly one", %{ctx: ctx, dir: dir},
-      do: parity_racing_creates(S3, ctx, dir)
+    test("racing creates land exactly one", %{actor: actor, dir: dir},
+      do: parity_racing_creates(S3, actor, dir)
     )
 
-    test("racing replaces from one precondition land exactly one", %{ctx: ctx, dir: dir},
-      do: parity_racing_replaces(S3, ctx, dir)
+    test("racing replaces from one precondition land exactly one", %{actor: actor, dir: dir},
+      do: parity_racing_replaces(S3, actor, dir)
     )
   end
 

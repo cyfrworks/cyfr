@@ -451,13 +451,13 @@ defmodule Emissary.MCP.ThreadTool do
         _ -> %{}
       end
 
-    with {:ok, thread} <- Arca.ThreadStorage.create(ctx, attrs) do
+    with {:ok, thread} <- Arca.ThreadStorage.create(Sanctum.Context.actor(ctx), attrs) do
       {:ok, render_thread(thread)}
     end
   end
 
   defp dispatch(ctx, %{"action" => "list"}) do
-    case Arca.ThreadStorage.list(ctx) do
+    case Arca.ThreadStorage.list(Sanctum.Context.actor(ctx)) do
       rows when is_list(rows) ->
         {:ok, %{threads: Enum.map(rows, &render_thread/1), count: length(rows)}}
 
@@ -514,7 +514,7 @@ defmodule Emissary.MCP.ThreadTool do
   end
 
   defp act("get", ctx, id, _args) do
-    with {:ok, thread} <- Arca.ThreadStorage.get(ctx, id) do
+    with {:ok, thread} <- Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id) do
       {:ok, Map.merge(render_thread(thread), waiting(ctx, id))}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
@@ -527,7 +527,7 @@ defmodule Emissary.MCP.ThreadTool do
   # send names them, so the bytes are the sender's own write.
   defp act("attach", ctx, id, %{"message_id" => message_id, "files" => files})
        when is_binary(message_id) and is_list(files) do
-    with {:ok, _thread} <- Arca.ThreadStorage.get(ctx, id),
+    with {:ok, _thread} <- Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id),
          {:ok, decoded} <- decode_files(files),
          {:ok, refs} <- Aqua.Attachments.store(ctx, id, message_id, decoded) do
       {:ok, %{message_id: message_id, attachments: refs}}
@@ -575,7 +575,7 @@ defmodule Emissary.MCP.ThreadTool do
         {:error, {:conflict, "a turn is running in this thread — stop it first"}}
 
       true ->
-        case Arca.ThreadStorage.delete(ctx, id) do
+        case Arca.ThreadStorage.delete(Sanctum.Context.actor(ctx), id) do
           :ok -> {:ok, %{deleted: true, thread: id}}
           {:error, :not_found} -> {:error, {:not_found, "thread", id}}
           {:error, reason} -> {:error, refusal(reason, id)}
@@ -632,8 +632,8 @@ defmodule Emissary.MCP.ThreadTool do
   # deltas, which are the runner's business. A client that reconnects wants
   # what was SAID, and the final rows are enough.
   defp act("events", ctx, id, args) do
-    with {:ok, _thread} <- Arca.ThreadStorage.get(ctx, id) do
-      case Arca.ThreadStorage.messages(ctx, id, message_opts(args)) do
+    with {:ok, _thread} <- Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id) do
+      case Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), id, message_opts(args)) do
         rows when is_list(rows) ->
           rows = Enum.map(rows, &render/1)
           {:ok, %{thread: id, messages: rows, cursor: cursor(rows)}}
@@ -651,8 +651,8 @@ defmodule Emissary.MCP.ThreadTool do
   # argument exists on the wire. The tenant-scoped `get` proves the thread
   # is the focused estate's before the row is written.
   defp act("follow", ctx, id, _args) do
-    with {:ok, _thread} <- Arca.ThreadStorage.get(ctx, id),
-         :ok <- Arca.ThreadSubscriptionStorage.follow(ctx, id, ctx.user_id) do
+    with {:ok, _thread} <- Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id),
+         :ok <- Arca.ThreadSubscriptionStorage.follow(Sanctum.Context.actor(ctx), id, ctx.user_id) do
       {:ok, %{following: true, thread: id}}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
@@ -660,8 +660,9 @@ defmodule Emissary.MCP.ThreadTool do
   end
 
   defp act("unfollow", ctx, id, _args) do
-    with {:ok, _thread} <- Arca.ThreadStorage.get(ctx, id),
-         :ok <- Arca.ThreadSubscriptionStorage.unfollow(ctx, id, ctx.user_id) do
+    with {:ok, _thread} <- Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id),
+         :ok <-
+           Arca.ThreadSubscriptionStorage.unfollow(Sanctum.Context.actor(ctx), id, ctx.user_id) do
       {:ok, %{following: false, thread: id}}
     else
       {:error, reason} -> {:error, refusal(reason, id)}
@@ -784,7 +785,7 @@ defmodule Emissary.MCP.ThreadTool do
       end
 
     pending =
-      case Arca.ThreadStorage.pending_approvals(ctx, id) do
+      case Arca.ThreadStorage.pending_approvals(Sanctum.Context.actor(ctx), id) do
         rows when is_list(rows) -> Enum.map(rows, &render/1)
         _ -> []
       end

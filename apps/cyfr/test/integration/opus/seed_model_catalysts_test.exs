@@ -66,7 +66,7 @@ defmodule Opus.SeedModelCatalystsTest do
       # The newest shipped version, found rather than pinned, copied in as a
       # fill copies it, then registered.
       unit = ["components", "catalysts", "local", name, newest_shipped("catalysts", name)]
-      :ok = Arca.Overlay.pull_shipped(ctx, unit)
+      :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), unit)
       {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
 
       {:ok, %{minted: minted}} = Bootstrap.run(ctx)
@@ -166,11 +166,11 @@ defmodule Opus.SeedModelCatalystsTest do
           {"catalysts", "http"}
         ] do
       unit = ["components", plural, "local", name, newest_shipped(plural, name)]
-      :ok = Arca.Overlay.pull_shipped(ctx, unit)
+      :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), unit)
       {:ok, _} = Compendium.Registry.register_from_arca(ctx, unit)
     end
 
-    {:ok, _copied} = Arca.Overlay.materialize_shipped(ctx, "aqua")
+    {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "aqua")
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
 
     # The baseline consents: the soul's edge to claude selects claude's
@@ -228,7 +228,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
     # Revoking the catalyst's profile cuts the assistant off at the next load.
     {:ok, [claude_profile]} = Source.DB.profiles(ctx, "catalyst:local.claude")
-    :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, claude_profile.id, "revoked")
+    :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), claude_profile.id, "revoked")
     {:ok, revoked} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =

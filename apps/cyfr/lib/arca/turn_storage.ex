@@ -30,10 +30,13 @@ defmodule Arca.TurnStorage do
 
   """
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query
+  # Every function takes the `Cyfr.Actor` first and matches it in the
+  # head; an actor whose athanor is nil OR the empty string is
+  # `{:error, :no_athanor}` before any query, and `bind_child!/4`, which
+  # runs inside admission's transaction, raises instead., only: [from: 2]
 
   alias Arca.Schemas.{Approval, Thread, Message, Turn, TurnStep}
-  alias Sanctum.Context
 
   @statuses ["accepted", "running", "paused", "completed", "failed", "cancelled", "uncertain"]
   @open ["accepted", "running", "paused"]
@@ -79,11 +82,11 @@ defmodule Arca.TurnStorage do
   (the caller reads the existing acceptance with `accepted/3`); a
   message that already opened a turn answers `{:error, :turn_exists}`.
   """
-  @spec accept_message(Context.t(), String.t(), map()) ::
+  @spec accept_message(Cyfr.Actor.t(), String.t(), map()) ::
           {:ok, %{message: Message.t(), turn: Turn.t() | nil}} | {:error, term()}
-  def accept_message(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+  def accept_message(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.accept_message", fn ->
-      athanor_id = Context.athanor!(ctx)
       message = Map.fetch!(attrs, :message)
 
       with_seq_retry(fn ->
@@ -96,7 +99,11 @@ defmodule Arca.TurnStorage do
             if is_nil(opens) and steer_id, do: hold_open_turn!(athanor_id, thread, steer_id)
 
           row =
-            Arca.ThreadStorage.insert_message!(ctx, thread, Map.put(message, :turn_id, steer_id))
+            Arca.ThreadStorage.insert_message!(
+              actor,
+              thread,
+              Map.put(message, :turn_id, steer_id)
+            )
 
           turn =
             case opens do
@@ -122,15 +129,16 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "The acceptance a sender's `client_id` already produced: its message and turn."
-  @spec accepted(Context.t(), String.t(), String.t()) ::
-          {:ok, %{message: Message.t(), turn: Turn.t() | nil}} | {:error, term()}
-  def accepted(%Context{} = ctx, thread_id, client_id) do
-    with {:ok, message} <-
-           Arca.ThreadStorage.get_by_client_id(ctx, thread_id, client_id) do
-      Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.accepted", fn ->
-        athanor_id = Context.athanor!(ctx)
+  def accept_message(%Cyfr.Actor{}, _thread_id, _attrs), do: {:error, :no_athanor}
 
+  @doc "The acceptance a sender's `client_id` already produced: its message and turn."
+  @spec accepted(Cyfr.Actor.t(), String.t(), String.t()) ::
+          {:ok, %{message: Message.t(), turn: Turn.t() | nil}} | {:error, term()}
+  def accepted(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id, client_id)
+      when is_binary(athanor_id) and athanor_id != "" do
+    with {:ok, message} <-
+           Arca.ThreadStorage.get_by_client_id(actor, thread_id, client_id) do
+      Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.accepted", fn ->
         turn =
           Arca.Repo.one(
             from(t in Turn,
@@ -146,6 +154,8 @@ defmodule Arca.TurnStorage do
       end)
     end
   end
+
+  def accepted(%Cyfr.Actor{}, _thread_id, _client_id), do: {:error, :no_athanor}
 
   # arca:db-raise-ok inside the caller's transaction
   defp open_turn!(athanor_id, %Thread{} = thread, %Message{} = row, attrs) do
@@ -198,11 +208,10 @@ defmodule Arca.TurnStorage do
   `:agent_capability_digest`), and the consumption boundary set to the
   highest seq the turn may read now. Event `turn.started`.
   """
-  @spec start(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
-  def start(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
+  @spec start(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def start(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.start", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       Arca.Repo.transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         window = boundary(athanor_id, turn)
@@ -235,18 +244,19 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def start(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
   @doc """
   Pin the exact catalyst release the turn runs on, under `:fence`. A turn
   pins once: pinning the release already pinned answers the turn, and a
   different one is `{:error, :catalyst_pinned}`.
   """
-  @spec pin_catalyst(Context.t(), String.t(), String.t(), map()) ::
+  @spec pin_catalyst(Cyfr.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, Turn.t()} | {:error, term()}
-  def pin_catalyst(%Context{} = ctx, turn_id, catalyst_ref, attrs)
-      when is_binary(catalyst_ref) and is_map(attrs) do
+  def pin_catalyst(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, catalyst_ref, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(catalyst_ref) and
+             is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pin_catalyst", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       Arca.Repo.transaction(fn ->
         case own!(athanor_id, turn_id, attrs) do
           %Turn{catalyst_ref: nil} ->
@@ -266,17 +276,20 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def pin_catalyst(%Cyfr.Actor{}, _turn_id, _catalyst_ref, _attrs), do: {:error, :no_athanor}
+
   @doc """
   Pause a running turn: the turn, its root attempt and its root execution
   leave `running` together. `attrs`: `:fence`, `:reason`
   (`"approval" | "launch"`), `:launch_step_id`. The running interval is
   added to `active_ms`. Event `turn.paused`.
   """
-  @spec pause(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
-  def pause(%Context{} = ctx, turn_id, attrs \\ %{}) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pause", fn ->
-      athanor_id = Context.athanor!(ctx)
+  @spec pause(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def pause(actor, turn_id, attrs \\ %{})
 
+  def pause(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pause", fn ->
       Arca.Repo.transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status != "running", do: Arca.Repo.rollback(:not_running)
@@ -306,15 +319,18 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def pause(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
   @doc """
   Resume a paused turn with a fresh lease: the turn, its root attempt and
   its root execution return to `running` together. Event `turn.resumed`.
   """
-  @spec resume(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
-  def resume(%Context{} = ctx, turn_id, attrs \\ %{}) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.resume", fn ->
-      athanor_id = Context.athanor!(ctx)
+  @spec resume(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def resume(actor, turn_id, attrs \\ %{})
 
+  def resume(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.resume", fn ->
       Arca.Repo.transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status != "paused", do: Arca.Repo.rollback(:not_paused)
@@ -342,6 +358,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def resume(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
   @doc """
   Append one row the turn owns but no step produced — a compaction, an
   aborted mark, a system note — inside the turn's fence. `attrs`: the
@@ -351,23 +369,25 @@ defmodule Arca.TurnStorage do
   fence has moved must not be able to add one: a superseded loop appending
   a compaction would change the projection its successor is working from.
   """
-  @spec append_turn_row(Context.t(), String.t(), map()) :: {:ok, Message.t()} | {:error, term()}
-  def append_turn_row(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
+  @spec append_turn_row(Cyfr.Actor.t(), String.t(), map()) ::
+          {:ok, Message.t()} | {:error, term()}
+  def append_turn_row(%Cyfr.Actor{athanor_id: athanor_id} = actor, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.append_turn_row", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       Arca.Repo.transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         thread = thread!(athanor_id, turn.thread_id)
 
         Arca.ThreadStorage.insert_message!(
-          ctx,
+          actor,
           thread,
           attrs |> Map.drop([:fence]) |> Map.put(:turn_id, turn.id)
         )
       end)
     end)
   end
+
+  def append_turn_row(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
 
   @doc """
   End a turn: the one terminal transaction. `status` is
@@ -380,11 +400,13 @@ defmodule Arca.TurnStorage do
   boundary refuses `completed` with `{:error, :steer_pending}`: its loop
   goes on to answer the steer. Event `turn.<status>`.
   """
-  @spec finish(Context.t(), String.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
-  def finish(%Context{} = ctx, turn_id, status, attrs \\ %{}) when status in @terminal do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.finish", fn ->
-      athanor_id = Context.athanor!(ctx)
+  @spec finish(Cyfr.Actor.t(), String.t(), String.t(), map()) ::
+          {:ok, Turn.t()} | {:error, term()}
+  def finish(actor, turn_id, status, attrs \\ %{})
 
+  def finish(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, status, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and status in @terminal do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.finish", fn ->
       Arca.Repo.transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status in @terminal, do: Arca.Repo.rollback(:already_finished)
@@ -444,6 +466,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def finish(%Cyfr.Actor{}, _turn_id, _status, _attrs), do: {:error, :no_athanor}
+
   @doc """
   Take over a running turn another runner lost: the one place a
   successor attempt is opened. `attrs`: `:fence` (the one the caller read)
@@ -453,11 +477,12 @@ defmodule Arca.TurnStorage do
   unaccounted running interval added. Refused `{:error, :recovery_exhausted}` past
   the cap and `{:error, :not_open}` for a turn that is over.
   """
-  @spec takeover(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
-  def takeover(%Context{} = ctx, turn_id, attrs \\ %{}) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.takeover", fn ->
-      athanor_id = Context.athanor!(ctx)
+  @spec takeover(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def takeover(actor, turn_id, attrs \\ %{})
 
+  def takeover(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.takeover", fn ->
       Arca.Repo.transaction(fn ->
         turn = take!(athanor_id, turn_id, attrs)
         if turn.status not in ["running", "paused"], do: Arca.Repo.rollback(:not_open)
@@ -501,6 +526,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def takeover(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
   @doc """
   Raise the fence of the turn and of its open clones, and mark every step
   either has dispatched cancel-requested, before the loop is stopped: a
@@ -508,11 +535,10 @@ defmodule Arca.TurnStorage do
   refused. `attrs`: `:fence`, the one the caller read. Answers the turn
   with its new fence.
   """
-  @spec supersede(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
-  def supersede(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
+  @spec supersede(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def supersede(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.supersede", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       Arca.Repo.transaction(fn ->
         turn = take!(athanor_id, turn_id, attrs)
         if turn.status not in @open, do: Arca.Repo.rollback(:not_open)
@@ -532,6 +558,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def supersede(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
   @aborted_content "a call's outcome is unknown; tools may have partially executed"
 
   @doc """
@@ -546,12 +574,11 @@ defmodule Arca.TurnStorage do
   `paused` with reason `uncertain` and its boundary moved to that row.
   `:fence` is required. Answers the turn and the aborted row.
   """
-  @spec pause_uncertain(Context.t(), String.t(), map()) ::
+  @spec pause_uncertain(Cyfr.Actor.t(), String.t(), map()) ::
           {:ok, %{turn: Turn.t(), aborted: Message.t()}} | {:error, term()}
-  def pause_uncertain(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
+  def pause_uncertain(%Cyfr.Actor{athanor_id: athanor_id} = actor, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pause_uncertain", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
           turn = own!(athanor_id, turn_id, attrs)
@@ -587,8 +614,8 @@ defmodule Arca.TurnStorage do
 
           content = Map.get(attrs, :content, @aborted_content)
           cancel_dispatched!(athanor_id, turn, step.id, now)
-          _skipped = skip_proposed!(ctx, athanor_id, turn, content)
-          aborted = aborted_row!(ctx, athanor_id, turn, content)
+          _skipped = skip_proposed!(actor, athanor_id, turn, content)
+          aborted = aborted_row!(actor, athanor_id, turn, content)
 
           {1, _} =
             from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
@@ -611,6 +638,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def pause_uncertain(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
   @doc """
   A running turn a dead runner left holding an unacknowledged
   uncertainty is set down as paused `uncertain`, resumable: the
@@ -622,11 +651,10 @@ defmodule Arca.TurnStorage do
   appended and the boundary moved to it. `attrs`: `:fence` (the one the caller read),
   `:content`. Answers the turn.
   """
-  @spec pause_recovered(Context.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
-  def pause_recovered(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
+  @spec pause_recovered(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def pause_recovered(%Cyfr.Actor{athanor_id: athanor_id} = actor, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pause_recovered", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
           turn = take!(athanor_id, turn_id, attrs)
@@ -659,13 +687,13 @@ defmodule Arca.TurnStorage do
               where: s.dispatch_state == "dispatched"
             )
           )
-          |> Enum.each(&settle_unresolved!(ctx, athanor_id, turn, &1, content))
+          |> Enum.each(&settle_unresolved!(actor, athanor_id, turn, &1, content))
 
-          _skipped = skip_proposed!(ctx, athanor_id, turn, content)
+          _skipped = skip_proposed!(actor, athanor_id, turn, content)
 
           window =
             if uncovered_uncertain(athanor_id, turn) != [],
-              do: aborted_row!(ctx, athanor_id, turn, content).seq,
+              do: aborted_row!(actor, athanor_id, turn, content).seq,
               else: turn.window_upto_seq
 
           {1, _} =
@@ -691,16 +719,18 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def pause_recovered(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
   @doc """
   Whether the turn holds an uncertainty nobody has acknowledged: an
   `uncertain` step no `turn_aborted` row covers, or a covering row with
   no later row from the turn's sender. A covered, acknowledged
   uncertainty is a restricted continuation, not an open episode.
   """
-  @spec unacknowledged_episode?(Context.t(), String.t()) :: boolean() | {:error, term()}
-  def unacknowledged_episode?(%Context{} = ctx, turn_id) do
+  @spec unacknowledged_episode?(Cyfr.Actor.t(), String.t()) :: boolean() | {:error, term()}
+  def unacknowledged_episode?(%Cyfr.Actor{athanor_id: athanor_id}, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.unacknowledged_episode?", fn ->
-      athanor_id = Context.athanor!(ctx)
       turn = turn!(athanor_id, turn_id)
 
       uncovered_uncertain(athanor_id, turn) != [] or
@@ -715,12 +745,14 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "Whether any step of the turn is `uncertain`: the continuation runs replay-safe reads only."
-  @spec restricted?(Context.t(), String.t()) :: boolean() | {:error, term()}
-  def restricted?(%Context{} = ctx, turn_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.restricted?", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def unacknowledged_episode?(%Cyfr.Actor{}, _turn_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.unacknowledged_episode?/2")
 
+  @doc "Whether any step of the turn is `uncertain`: the continuation runs replay-safe reads only."
+  @spec restricted?(Cyfr.Actor.t(), String.t()) :: boolean() | {:error, term()}
+  def restricted?(%Cyfr.Actor{athanor_id: athanor_id}, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.restricted?", fn ->
       Arca.Repo.exists?(
         from(s in TurnStep,
           where: s.athanor_id == ^athanor_id and s.turn_id == ^turn_id,
@@ -729,6 +761,9 @@ defmodule Arca.TurnStorage do
       )
     end)
   end
+
+  def restricted?(%Cyfr.Actor{}, _turn_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.restricted?/2")
 
   # arca:db-raise-ok inside the caller's transaction
   defp cancel_dispatched!(athanor_id, %Turn{} = turn, except_step_id, now) do
@@ -742,7 +777,7 @@ defmodule Arca.TurnStorage do
 
   # The covering aborted row: every step dispatched or uncertain now.
   # arca:db-raise-ok inside the caller's transaction
-  defp aborted_row!(ctx, athanor_id, %Turn{} = turn, content) do
+  defp aborted_row!(actor, athanor_id, %Turn{} = turn, content) do
     covers =
       Arca.Repo.all(
         from(s in TurnStep,
@@ -755,7 +790,7 @@ defmodule Arca.TurnStorage do
 
     thread = thread!(athanor_id, turn.thread_id)
 
-    Arca.ThreadStorage.insert_message!(ctx, thread, %{
+    Arca.ThreadStorage.insert_message!(actor, thread, %{
       author: Message.system_author(),
       kind: "turn_aborted",
       content: content,
@@ -811,17 +846,18 @@ defmodule Arca.TurnStorage do
   list), `:message_id`, `:child_execution_id`, `:dispatch_state`
   (default `proposed`), `:fence`.
   """
-  @spec put_step(Context.t(), String.t(), map()) :: {:ok, TurnStep.t()} | {:error, term()}
-  def put_step(%Context{} = ctx, turn_id, attrs) when is_map(attrs) do
+  @spec put_step(Cyfr.Actor.t(), String.t(), map()) :: {:ok, TurnStep.t()} | {:error, term()}
+  def put_step(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.put_step", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       Arca.Repo.transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         insert_step!(athanor_id, turn, attrs)
       end)
     end)
   end
+
+  def put_step(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
 
   @doc """
   Persist a model response before any of its calls run: the model step
@@ -832,13 +868,16 @@ defmodule Arca.TurnStorage do
   recovery, child_execution_id}`; `:fence`. Answers
   `{:ok, %{text: row | nil, calls: [%{message: row, step: step}]}}`.
   """
-  @spec record_response(Context.t(), String.t(), String.t(), map()) ::
+  @spec record_response(Cyfr.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, %{text: Message.t() | nil, calls: [map()]}} | {:error, term()}
-  def record_response(%Context{} = ctx, turn_id, model_step_id, response)
-      when is_map(response) do
+  def record_response(
+        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        turn_id,
+        model_step_id,
+        response
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_map(response) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.record_response", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
           turn = own!(athanor_id, turn_id, response)
@@ -854,7 +893,7 @@ defmodule Arca.TurnStorage do
                 nil
 
               content ->
-                Arca.ThreadStorage.insert_message!(ctx, thread, %{
+                Arca.ThreadStorage.insert_message!(actor, thread, %{
                   author: Message.agent_author(),
                   kind: "text",
                   content: content,
@@ -887,7 +926,7 @@ defmodule Arca.TurnStorage do
             |> Map.get(:tool_calls, [])
             |> Enum.map(fn call ->
               row =
-                Arca.ThreadStorage.insert_message!(ctx, thread, %{
+                Arca.ThreadStorage.insert_message!(actor, thread, %{
                   author: Message.agent_author(),
                   kind: "tool_call",
                   content: Map.get(call, :name, ""),
@@ -936,16 +975,20 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def record_response(%Cyfr.Actor{}, _turn_id, _model_step_id, _response),
+    do: {:error, :no_athanor}
+
   @doc """
   Flip a proposed step to `dispatched` in its own commit. Answers the
   step, or `{:error, :not_proposed}` when it was not proposed (dispatched
   already, closed, or cancel-requested).
   """
-  @spec dispatch_step(Context.t(), String.t(), map()) :: {:ok, TurnStep.t()} | {:error, term()}
-  def dispatch_step(%Context{} = ctx, step_id, attrs \\ %{}) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.dispatch_step", fn ->
-      athanor_id = Context.athanor!(ctx)
+  @spec dispatch_step(Cyfr.Actor.t(), String.t(), map()) :: {:ok, TurnStep.t()} | {:error, term()}
+  def dispatch_step(actor, step_id, attrs \\ %{})
 
+  def dispatch_step(%Cyfr.Actor{athanor_id: athanor_id}, step_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.dispatch_step", fn ->
       Arca.Repo.transaction(fn ->
         _ = own_step!(athanor_id, step_id, attrs)
 
@@ -964,6 +1007,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def dispatch_step(%Cyfr.Actor{}, _step_id, _attrs), do: {:error, :no_athanor}
+
   @doc """
   Close a step with its result: the `tool_result` row, the step's
   `outcome`, `execution_id` and error, and the `step.closed` event, in
@@ -972,21 +1017,24 @@ defmodule Arca.TurnStorage do
   `:fence`. A step closes from `dispatched`, or from `proposed` for
   `denied` and `skipped`.
   """
-  @spec close_step(Context.t(), String.t(), String.t(), map()) ::
+  @spec close_step(Cyfr.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, %{step: TurnStep.t(), result: Message.t() | nil}} | {:error, term()}
-  def close_step(%Context{} = ctx, step_id, outcome, attrs \\ %{}) when outcome in @outcomes do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.close_step", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def close_step(actor, step_id, outcome, attrs \\ %{})
 
+  def close_step(%Cyfr.Actor{athanor_id: athanor_id} = actor, step_id, outcome, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and outcome in @outcomes do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.close_step", fn ->
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
           turn = own_step!(athanor_id, step_id, attrs)
           step = step!(athanor_id, step_id)
-          close_step!(ctx, athanor_id, turn, step, outcome, attrs)
+          close_step!(actor, athanor_id, turn, step, outcome, attrs)
         end)
       end)
     end)
   end
+
+  def close_step(%Cyfr.Actor{}, _step_id, _outcome, _attrs), do: {:error, :no_athanor}
 
   @doc """
   Mark a dispatched step as `uncertain`: its effect may have happened and
@@ -995,12 +1043,11 @@ defmodule Arca.TurnStorage do
   generation marks nothing. Answers `{:error, :not_dispatched}` for a
   step in any other state. Event `step.uncertain`.
   """
-  @spec mark_step_uncertain(Context.t(), String.t(), String.t() | nil, map()) ::
+  @spec mark_step_uncertain(Cyfr.Actor.t(), String.t(), String.t() | nil, map()) ::
           {:ok, TurnStep.t()} | {:error, term()}
-  def mark_step_uncertain(%Context{} = ctx, step_id, reason, attrs) when is_map(attrs) do
+  def mark_step_uncertain(%Cyfr.Actor{athanor_id: athanor_id}, step_id, reason, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.mark_step_uncertain", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       Arca.Repo.transaction(fn ->
         turn = own_step!(athanor_id, step_id, attrs)
         step = step!(athanor_id, step_id)
@@ -1010,15 +1057,22 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def mark_step_uncertain(%Cyfr.Actor{}, _step_id, _reason, _attrs), do: {:error, :no_athanor}
+
   # A dispatched step no runner will answer, by `TurnStep.unresolved/1`.
   # A closed call with no result row reads to the model as an unknown
   # outcome (`Aqua.Loop.Request`).
   # arca:db-raise-ok inside the caller's transaction
-  defp settle_unresolved!(ctx, athanor_id, %Turn{} = turn, %TurnStep{} = step, reason) do
+  defp settle_unresolved!(actor, athanor_id, %Turn{} = turn, %TurnStep{} = step, reason) do
     case TurnStep.unresolved(step) do
-      :uncertain -> mark_uncertain!(athanor_id, turn, step, step.generation, reason)
-      :unknown -> close_step!(ctx, athanor_id, turn, step, "uncertain", %{error: reason})
-      _unanswered_or_replay -> close_step!(ctx, athanor_id, turn, step, "error", %{error: reason})
+      :uncertain ->
+        mark_uncertain!(athanor_id, turn, step, step.generation, reason)
+
+      :unknown ->
+        close_step!(actor, athanor_id, turn, step, "uncertain", %{error: reason})
+
+      _unanswered_or_replay ->
+        close_step!(actor, athanor_id, turn, step, "error", %{error: reason})
     end
   end
 
@@ -1048,23 +1102,26 @@ defmodule Arca.TurnStorage do
   result, and invalidate their pending approvals. Answers the steps
   skipped.
   """
-  @spec skip_steps(Context.t(), String.t(), String.t(), map()) ::
+  @spec skip_steps(Cyfr.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, [TurnStep.t()]} | {:error, term()}
-  def skip_steps(%Context{} = ctx, turn_id, reason, attrs \\ %{}) when is_binary(reason) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.skip_steps", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def skip_steps(actor, turn_id, reason, attrs \\ %{})
 
+  def skip_steps(%Cyfr.Actor{athanor_id: athanor_id} = actor, turn_id, reason, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(reason) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.skip_steps", fn ->
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
           turn = own!(athanor_id, turn_id, attrs)
-          skip_proposed!(ctx, athanor_id, turn, reason)
+          skip_proposed!(actor, athanor_id, turn, reason)
         end)
       end)
     end)
   end
 
+  def skip_steps(%Cyfr.Actor{}, _turn_id, _reason, _attrs), do: {:error, :no_athanor}
+
   # arca:db-raise-ok inside the caller's transaction
-  defp skip_proposed!(ctx, athanor_id, %Turn{} = turn, reason) do
+  defp skip_proposed!(actor, athanor_id, %Turn{} = turn, reason) do
     steps =
       Arca.Repo.all(
         from(s in TurnStep,
@@ -1090,7 +1147,7 @@ defmodule Arca.TurnStorage do
       end
 
       %{step: closed} =
-        close_step!(ctx, athanor_id, turn, step, "skipped", %{
+        close_step!(actor, athanor_id, turn, step, "skipped", %{
           result: %{content: reason, payload: %{"skipped" => true}}
         })
 
@@ -1102,11 +1159,11 @@ defmodule Arca.TurnStorage do
   Rewrite a step's bookkeeping (`:excluded`, `:request_digest`, `:error`,
   `:authority_digest`) under `:fence`. Answers the rows written.
   """
-  @spec update_step(Context.t(), String.t(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def update_step(%Context{} = ctx, step_id, attrs) when is_map(attrs) do
+  @spec update_step(Cyfr.Actor.t(), String.t(), map()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def update_step(%Cyfr.Actor{athanor_id: athanor_id}, step_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.update_step", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       sets =
         attrs
         |> Map.take([:excluded, :request_digest, :error, :authority_digest])
@@ -1125,15 +1182,19 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def update_step(%Cyfr.Actor{}, _step_id, _attrs), do: {:error, :no_athanor}
+
   @doc """
   The step barrier, run inside admission's transaction: bind the child
   execution to its step while the step is dispatched, on this generation,
   not cancel-requested, and the child id is the one the step pre-minted.
   Answers the rows bound — 0 when admission must abort.
   """
-  @spec bind_child!(String.t(), String.t(), non_neg_integer(), String.t()) :: non_neg_integer()
+  @spec bind_child!(Cyfr.Actor.t(), String.t(), non_neg_integer(), String.t()) ::
+          non_neg_integer()
   # arca:db-raise-ok inside the caller's transaction
-  def bind_child!(athanor_id, step_id, generation, execution_id) when is_binary(athanor_id) do
+  def bind_child!(%Cyfr.Actor{athanor_id: athanor_id}, step_id, generation, execution_id)
+      when is_binary(athanor_id) and athanor_id != "" do
     {count, _} =
       from(s in TurnStep,
         where: s.athanor_id == ^athanor_id and s.id == ^step_id,
@@ -1145,17 +1206,20 @@ defmodule Arca.TurnStorage do
     count
   end
 
+  def bind_child!(%Cyfr.Actor{}, _step_id, _generation, _execution_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.bind_child!/4")
+
   @doc """
   Open the next generation of a step for a replay-safe re-dispatch: the
   old generation is cancel-marked so its late admission is refused, and
   the step returns to `proposed` with `generation + 1` and a fresh child
   execution id. `attrs`: `:child_execution_id`, `:fence`. Answers the step.
   """
-  @spec next_generation(Context.t(), String.t(), map()) :: {:ok, TurnStep.t()} | {:error, term()}
-  def next_generation(%Context{} = ctx, step_id, attrs) when is_map(attrs) do
+  @spec next_generation(Cyfr.Actor.t(), String.t(), map()) ::
+          {:ok, TurnStep.t()} | {:error, term()}
+  def next_generation(%Cyfr.Actor{athanor_id: athanor_id}, step_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.next_generation", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       Arca.Repo.transaction(fn ->
         _ = own_step!(athanor_id, step_id, attrs)
         step = step!(athanor_id, step_id)
@@ -1178,6 +1242,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def next_generation(%Cyfr.Actor{}, _step_id, _attrs), do: {:error, :no_athanor}
+
   # ---------------------------------------------------------------------------
   # Approvals
   # ---------------------------------------------------------------------------
@@ -1190,12 +1256,11 @@ defmodule Arca.TurnStorage do
   — the payload the console card reads), `:fence`. Answers
   `{:ok, %{approval: row, card: row}}`, or `{:error, :proposal_digest_required}`.
   """
-  @spec open_approval(Context.t(), String.t(), map()) ::
+  @spec open_approval(Cyfr.Actor.t(), String.t(), map()) ::
           {:ok, %{approval: Approval.t(), card: Message.t()}} | {:error, term()}
-  def open_approval(%Context{} = ctx, step_id, attrs) when is_map(attrs) do
+  def open_approval(%Cyfr.Actor{athanor_id: athanor_id} = actor, step_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_approval", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
           digest = Map.get(attrs, :proposal_digest)
@@ -1211,7 +1276,7 @@ defmodule Arca.TurnStorage do
           now = DateTime.utc_now()
 
           card_row =
-            Arca.ThreadStorage.insert_message!(ctx, thread, %{
+            Arca.ThreadStorage.insert_message!(actor, thread, %{
               id: Map.get(card, :id),
               author: Message.agent_author(),
               kind: "approval",
@@ -1249,6 +1314,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def open_approval(%Cyfr.Actor{}, _step_id, _attrs), do: {:error, :no_athanor}
+
   @doc """
   Resolve a pending approval in one transaction. `decision` is
   `approved | declined | expired | error`; `attrs`: `:decided_by`,
@@ -1262,14 +1329,12 @@ defmodule Arca.TurnStorage do
   `{:ok, %{approval, step, card}}`; a decision already made answers
   `{:error, {:already_resolved, approval}}`.
   """
-  @spec resolve_approval(Context.t(), String.t(), String.t(), map()) ::
+  @spec resolve_approval(Cyfr.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, %{approval: Approval.t(), step: TurnStep.t(), card: Message.t()}}
           | {:error, term()}
-  def resolve_approval(%Context{} = ctx, approval_id, decision, attrs)
-      when decision in @decisions and is_map(attrs) do
+  def resolve_approval(%Cyfr.Actor{athanor_id: athanor_id} = actor, approval_id, decision, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and decision in @decisions and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.resolve_approval", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
           approval = approval!(athanor_id, approval_id)
@@ -1315,7 +1380,7 @@ defmodule Arca.TurnStorage do
               from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step.id)
               |> Arca.Repo.update_all(set: [dispatch_state: "proposed", kind: kind])
           else
-            close_step!(ctx, athanor_id, turn, step, "denied", %{
+            close_step!(actor, athanor_id, turn, step, "denied", %{
               result: Map.get(attrs, :denied_result),
               error: Map.get(attrs, :reason)
             })
@@ -1344,6 +1409,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def resolve_approval(%Cyfr.Actor{}, _approval_id, _decision, _attrs), do: {:error, :no_athanor}
+
   # ---------------------------------------------------------------------------
   # Clones
   # ---------------------------------------------------------------------------
@@ -1358,12 +1425,11 @@ defmodule Arca.TurnStorage do
   `:agent_capability_digest` — written with the row so the clone runs
   the bytes that were checked. Answers `{:ok, %{turn, step, task: row}}`.
   """
-  @spec open_clone_turn(Context.t(), String.t(), map()) ::
+  @spec open_clone_turn(Cyfr.Actor.t(), String.t(), map()) ::
           {:ok, %{turn: Turn.t(), step: TurnStep.t(), task: Message.t()}} | {:error, term()}
-  def open_clone_turn(%Context{} = ctx, parent_turn_id, attrs) when is_map(attrs) do
+  def open_clone_turn(%Cyfr.Actor{athanor_id: athanor_id} = actor, parent_turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_clone_turn", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       with_seq_retry(fn ->
         Arca.Repo.transaction(fn ->
           parent = own!(athanor_id, parent_turn_id, attrs)
@@ -1415,7 +1481,7 @@ defmodule Arca.TurnStorage do
             )
 
           task =
-            Arca.ThreadStorage.insert_message!(ctx, thread, %{
+            Arca.ThreadStorage.insert_message!(actor, thread, %{
               author: Message.agent_author(),
               kind: "text",
               content: Map.get(attrs, :task, ""),
@@ -1431,12 +1497,13 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "The open clone turns under `turn_id`, oldest first."
-  @spec open_clones(Context.t(), String.t()) :: {:ok, [Turn.t()]} | {:error, term()}
-  def open_clones(%Context{} = ctx, turn_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_clones", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def open_clone_turn(%Cyfr.Actor{}, _parent_turn_id, _attrs), do: {:error, :no_athanor}
 
+  @doc "The open clone turns under `turn_id`, oldest first."
+  @spec open_clones(Cyfr.Actor.t(), String.t()) :: {:ok, [Turn.t()]} | {:error, term()}
+  def open_clones(%Cyfr.Actor{athanor_id: athanor_id}, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_clones", fn ->
       {:ok,
        Arca.Repo.all(
          from(t in Turn,
@@ -1448,14 +1515,16 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "End a clone turn as `status` (`completed | failed | cancelled | uncertain`)."
-  @spec close_clone_turn(Context.t(), String.t(), String.t(), map()) ::
-          {:ok, Turn.t()} | {:error, term()}
-  def close_clone_turn(%Context{} = ctx, turn_id, status, attrs \\ %{})
-      when status in @terminal do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.close_clone_turn", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def open_clones(%Cyfr.Actor{}, _turn_id), do: {:error, :no_athanor}
 
+  @doc "End a clone turn as `status` (`completed | failed | cancelled | uncertain`)."
+  @spec close_clone_turn(Cyfr.Actor.t(), String.t(), String.t(), map()) ::
+          {:ok, Turn.t()} | {:error, term()}
+  def close_clone_turn(actor, turn_id, status, attrs \\ %{})
+
+  def close_clone_turn(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, status, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and status in @terminal do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.close_clone_turn", fn ->
       Arca.Repo.transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         if is_nil(turn.parent_turn_id), do: Arca.Repo.rollback(:not_a_clone)
@@ -1474,6 +1543,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def close_clone_turn(%Cyfr.Actor{}, _turn_id, _status, _attrs), do: {:error, :no_athanor}
+
   # ---------------------------------------------------------------------------
   # The consumption boundary
   # ---------------------------------------------------------------------------
@@ -1483,11 +1554,12 @@ defmodule Arca.TurnStorage do
   arrived while it worked, and answer those rows in `seq` order: the
   steer the loop drains before its next model request.
   """
-  @spec drain_steer(Context.t(), String.t(), map()) :: {:ok, [Message.t()]} | {:error, term()}
-  def drain_steer(%Context{} = ctx, turn_id, attrs \\ %{}) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.drain_steer", fn ->
-      athanor_id = Context.athanor!(ctx)
+  @spec drain_steer(Cyfr.Actor.t(), String.t(), map()) :: {:ok, [Message.t()]} | {:error, term()}
+  def drain_steer(actor, turn_id, attrs \\ %{})
 
+  def drain_steer(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.drain_steer", fn ->
       Arca.Repo.transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         rows = steer_rows(athanor_id, turn)
@@ -1509,15 +1581,20 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def drain_steer(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
   @doc "Whether a human row attached to the turn waits past its boundary."
-  @spec steer_pending?(Context.t(), String.t()) :: boolean() | {:error, term()}
-  def steer_pending?(%Context{} = ctx, turn_id) do
+  @spec steer_pending?(Cyfr.Actor.t(), String.t()) :: boolean() | {:error, term()}
+  def steer_pending?(%Cyfr.Actor{athanor_id: athanor_id}, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.steer_pending?", fn ->
-      athanor_id = Context.athanor!(ctx)
       turn = turn!(athanor_id, turn_id)
       steer_rows(athanor_id, turn) != []
     end)
   end
+
+  def steer_pending?(%Cyfr.Actor{}, _turn_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.steer_pending?/2")
 
   @doc """
   The rows a turn may read, in `seq` order: its own rows except undrained
@@ -1525,10 +1602,10 @@ defmodule Arca.TurnStorage do
   of terminal, non-clone turns of the thread. A clone reads its
   own rows only. Rows attached to other open turns are never read.
   """
-  @spec projection(Context.t(), String.t()) :: {:ok, [Message.t()]} | {:error, term()}
-  def projection(%Context{} = ctx, turn_id) do
+  @spec projection(Cyfr.Actor.t(), String.t()) :: {:ok, [Message.t()]} | {:error, term()}
+  def projection(%Cyfr.Actor{athanor_id: athanor_id}, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.projection", fn ->
-      athanor_id = Context.athanor!(ctx)
       turn = turn!(athanor_id, turn_id)
       window = turn.window_upto_seq || 0
       humans = [Message.agent_author(), Message.system_author()]
@@ -1560,6 +1637,8 @@ defmodule Arca.TurnStorage do
     end)
   end
 
+  def projection(%Cyfr.Actor{}, _turn_id), do: {:error, :no_athanor}
+
   # ---------------------------------------------------------------------------
   # Reads
   # ---------------------------------------------------------------------------
@@ -1569,11 +1648,10 @@ defmodule Arca.TurnStorage do
   with an `ok` outcome, oldest first: what the turn wrote to, read from
   the rows.
   """
-  @spec closed_calls(Context.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
-  def closed_calls(%Context{} = ctx, turn_id) do
+  @spec closed_calls(Cyfr.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def closed_calls(%Cyfr.Actor{athanor_id: athanor_id}, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.closed_calls", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       turns =
         from(t in Turn,
           where:
@@ -1597,12 +1675,13 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "One turn of the athanor."
-  @spec get(Context.t(), String.t()) :: {:ok, Turn.t()} | {:error, term()}
-  def get(%Context{} = ctx, turn_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.get", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def closed_calls(%Cyfr.Actor{}, _turn_id), do: {:error, :no_athanor}
 
+  @doc "One turn of the athanor."
+  @spec get(Cyfr.Actor.t(), String.t()) :: {:ok, Turn.t()} | {:error, term()}
+  def get(%Cyfr.Actor{athanor_id: athanor_id}, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.get", fn ->
       case Arca.Repo.one(from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)) do
         nil -> {:error, :not_found}
         turn -> {:ok, turn}
@@ -1610,12 +1689,13 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "The turn a message opened, if any."
-  @spec turn_of_message(Context.t(), String.t()) :: {:ok, Turn.t()} | {:error, term()}
-  def turn_of_message(%Context{} = ctx, message_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.turn_of_message", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def get(%Cyfr.Actor{}, _turn_id), do: {:error, :no_athanor}
 
+  @doc "The turn a message opened, if any."
+  @spec turn_of_message(Cyfr.Actor.t(), String.t()) :: {:ok, Turn.t()} | {:error, term()}
+  def turn_of_message(%Cyfr.Actor{athanor_id: athanor_id}, message_id)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.turn_of_message", fn ->
       case Arca.Repo.one(
              from(t in Turn, where: t.athanor_id == ^athanor_id and t.message_id == ^message_id)
            ) do
@@ -1625,12 +1705,13 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "The steps of a turn in `seq` order."
-  @spec steps(Context.t(), String.t()) :: {:ok, [TurnStep.t()]} | {:error, term()}
-  def steps(%Context{} = ctx, turn_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.steps", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def turn_of_message(%Cyfr.Actor{}, _message_id), do: {:error, :no_athanor}
 
+  @doc "The steps of a turn in `seq` order."
+  @spec steps(Cyfr.Actor.t(), String.t()) :: {:ok, [TurnStep.t()]} | {:error, term()}
+  def steps(%Cyfr.Actor{athanor_id: athanor_id}, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.steps", fn ->
       {:ok,
        Arca.Repo.all(
          from(s in TurnStep,
@@ -1641,12 +1722,13 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "One step of the athanor."
-  @spec step(Context.t(), String.t()) :: {:ok, TurnStep.t()} | {:error, term()}
-  def step(%Context{} = ctx, step_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.step", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def steps(%Cyfr.Actor{}, _turn_id), do: {:error, :no_athanor}
 
+  @doc "One step of the athanor."
+  @spec step(Cyfr.Actor.t(), String.t()) :: {:ok, TurnStep.t()} | {:error, term()}
+  def step(%Cyfr.Actor{athanor_id: athanor_id}, step_id)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.step", fn ->
       case Arca.Repo.one(
              from(s in TurnStep, where: s.athanor_id == ^athanor_id and s.id == ^step_id)
            ) do
@@ -1656,12 +1738,13 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "The open turns of a thread (accepted, running or paused), oldest first."
-  @spec open_turns(Context.t(), String.t()) :: {:ok, [Turn.t()]} | {:error, term()}
-  def open_turns(%Context{} = ctx, thread_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_turns", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def step(%Cyfr.Actor{}, _step_id), do: {:error, :no_athanor}
 
+  @doc "The open turns of a thread (accepted, running or paused), oldest first."
+  @spec open_turns(Cyfr.Actor.t(), String.t()) :: {:ok, [Turn.t()]} | {:error, term()}
+  def open_turns(%Cyfr.Actor{athanor_id: athanor_id}, thread_id)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.open_turns", fn ->
       {:ok,
        Arca.Repo.all(
          from(t in Turn,
@@ -1672,6 +1755,8 @@ defmodule Arca.TurnStorage do
        )}
     end)
   end
+
+  def open_turns(%Cyfr.Actor{}, _thread_id), do: {:error, :no_athanor}
 
   @doc """
   Every thread holding an open root turn, across all tenants, as
@@ -1694,11 +1779,10 @@ defmodule Arca.TurnStorage do
   end
 
   @doc "One approval of the athanor."
-  @spec approval(Context.t(), String.t()) :: {:ok, Approval.t()} | {:error, term()}
-  def approval(%Context{} = ctx, approval_id) do
+  @spec approval(Cyfr.Actor.t(), String.t()) :: {:ok, Approval.t()} | {:error, term()}
+  def approval(%Cyfr.Actor{athanor_id: athanor_id}, approval_id)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.approval", fn ->
-      athanor_id = Context.athanor!(ctx)
-
       case Arca.Repo.one(
              from(a in Approval, where: a.athanor_id == ^athanor_id and a.id == ^approval_id)
            ) do
@@ -1708,12 +1792,13 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "The approval a card message references."
-  @spec approval_by_message(Context.t(), String.t()) :: {:ok, Approval.t()} | {:error, term()}
-  def approval_by_message(%Context{} = ctx, message_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.approval_by_message", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def approval(%Cyfr.Actor{}, _approval_id), do: {:error, :no_athanor}
 
+  @doc "The approval a card message references."
+  @spec approval_by_message(Cyfr.Actor.t(), String.t()) :: {:ok, Approval.t()} | {:error, term()}
+  def approval_by_message(%Cyfr.Actor{athanor_id: athanor_id}, message_id)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.approval_by_message", fn ->
       case Arca.Repo.one(
              from(a in Approval,
                where: a.athanor_id == ^athanor_id and a.message_id == ^message_id
@@ -1725,12 +1810,13 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "The pending approvals of a turn, oldest first."
-  @spec pending_approvals(Context.t(), String.t()) :: {:ok, [Approval.t()]} | {:error, term()}
-  def pending_approvals(%Context{} = ctx, turn_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pending_approvals", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def approval_by_message(%Cyfr.Actor{}, _message_id), do: {:error, :no_athanor}
 
+  @doc "The pending approvals of a turn, oldest first."
+  @spec pending_approvals(Cyfr.Actor.t(), String.t()) :: {:ok, [Approval.t()]} | {:error, term()}
+  def pending_approvals(%Cyfr.Actor{athanor_id: athanor_id}, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pending_approvals", fn ->
       {:ok,
        Arca.Repo.all(
          from(a in Approval,
@@ -1742,12 +1828,14 @@ defmodule Arca.TurnStorage do
     end)
   end
 
-  @doc "The athanor's pending approvals whose `expires_at` passed."
-  @spec expired_approvals(Context.t(), DateTime.t()) :: {:ok, [Approval.t()]} | {:error, term()}
-  def expired_approvals(%Context{} = ctx, %DateTime{} = now) do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.expired_approvals", fn ->
-      athanor_id = Context.athanor!(ctx)
+  def pending_approvals(%Cyfr.Actor{}, _turn_id), do: {:error, :no_athanor}
 
+  @doc "The athanor's pending approvals whose `expires_at` passed."
+  @spec expired_approvals(Cyfr.Actor.t(), DateTime.t()) ::
+          {:ok, [Approval.t()]} | {:error, term()}
+  def expired_approvals(%Cyfr.Actor{athanor_id: athanor_id}, %DateTime{} = now)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.expired_approvals", fn ->
       {:ok,
        Arca.Repo.all(
          from(a in Approval,
@@ -1758,6 +1846,8 @@ defmodule Arca.TurnStorage do
        )}
     end)
   end
+
+  def expired_approvals(%Cyfr.Actor{}, _now), do: {:error, :no_athanor}
 
   # ---------------------------------------------------------------------------
   # Internal
@@ -1799,7 +1889,7 @@ defmodule Arca.TurnStorage do
   end
 
   # arca:db-raise-ok inside the caller's transaction
-  defp close_step!(ctx, athanor_id, turn, step, outcome, attrs) do
+  defp close_step!(actor, athanor_id, turn, step, outcome, attrs) do
     from_states =
       if outcome in ["denied", "skipped"], do: ["dispatched", "proposed"], else: ["dispatched"]
 
@@ -1813,7 +1903,7 @@ defmodule Arca.TurnStorage do
         %{} = result ->
           thread = thread!(athanor_id, turn.thread_id)
 
-          Arca.ThreadStorage.insert_message!(ctx, thread, %{
+          Arca.ThreadStorage.insert_message!(actor, thread, %{
             author: Message.system_author(),
             kind: "tool_result",
             content: Map.get(result, :content, ""),

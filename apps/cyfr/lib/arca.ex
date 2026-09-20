@@ -17,8 +17,13 @@ defmodule Arca do
   filesystem or object store. Don't put "storage" in a new blob helper's
   name — the suffix is the row plane's.
 
-  All operations require a `Sanctum.Context` to enable per-user isolation
-  and a tenant-scoping-ready architecture.
+  Every operation takes a `%Cyfr.Actor{}` first and matches it in its
+  head. The athanor a path is resolved under is the actor's and never an
+  argument, so no path a caller passes can name another tenant's tree; an
+  actor whose athanor is nil or the empty string is refused before any
+  adapter is asked. `scope: :platform` widens a read across athanors and
+  `system: true` opens the seed and global roots — two separate
+  authorities, neither of which crosses the wire.
 
   ## Path Scoping
 
@@ -78,21 +83,21 @@ defmodule Arca do
 
   ## Usage
 
-      ctx = Sanctum.TestContext.local()
+      actor = Cyfr.Actor.in_athanor("ath_test")
 
       # Tenant-scoped storage (auto-prefixed with {athanor_id}/)
-      :ok = Arca.put(ctx, ["data", "notes.txt"], content)
-      {:ok, content} = Arca.get(ctx, ["data", "notes.txt"])
+      :ok = Arca.put(actor, ["data", "notes.txt"], content)
+      {:ok, content} = Arca.get(actor, ["data", "notes.txt"])
 
       # Global storage (no tenant prefix)
-      :ok = Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
+      :ok = Arca.put(actor, ["cache", "oci", "sha256_abc"], wasm_binary)
 
       # Append-only storage (JSONL-style logs)
-      :ok = Arca.append(ctx, ["data", "logs", "2025-01-15.jsonl"], log_line <> "\\n")
+      :ok = Arca.append(actor, ["data", "logs", "2025-01-15.jsonl"], log_line <> "\\n")
 
       # JSON convenience functions
-      :ok = Arca.put_json(ctx, ["data", "state.json"], %{...})
-      {:ok, map} = Arca.get_json(ctx, ["data", "state.json"])
+      :ok = Arca.put_json(actor, ["data", "state.json"], %{...})
+      {:ok, map} = Arca.get_json(actor, ["data", "state.json"])
 
   ## Retention
 
@@ -111,22 +116,20 @@ defmodule Arca do
         builds: 100
   """
 
-  alias Sanctum.Context
-
   @doc """
   Read content from storage.
 
   ## Examples
 
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["data", "file.txt"], "hello")
+      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> Arca.put(actor, ["data", "file.txt"], "hello")
       :ok
-      iex> Arca.get(ctx, ["data", "file.txt"])
+      iex> Arca.get(actor, ["data", "file.txt"])
       {:ok, "hello"}
   """
-  @spec get(Context.t(), Arca.Storage.path()) :: {:ok, binary()} | {:error, term()}
-  def get(%Context{} = ctx, path),
-    do: guarded(ctx, normalize(path), fn p -> adapter(p).get(ctx, p) end)
+  @spec get(Cyfr.Actor.t(), Arca.Storage.path()) :: {:ok, binary()} | {:error, term()}
+  def get(%Cyfr.Actor{} = actor, path),
+    do: guarded(actor, normalize(path), fn p -> adapter(p).get(actor, p) end)
 
   @doc """
   Read content together with the precondition a conditional replace of it
@@ -135,25 +138,25 @@ defmodule Arca do
   `Arca.Overlay.update/3`'s compare-and-set. The precondition is the
   adapter's own: carry it to `put_if_match/5` unread.
   """
-  @spec get_for_update(Context.t(), Arca.Storage.path()) ::
+  @spec get_for_update(Cyfr.Actor.t(), Arca.Storage.path()) ::
           {:ok, binary(), Arca.Storage.precondition()} | {:error, term()}
-  def get_for_update(%Context{} = ctx, path),
-    do: guarded(ctx, normalize(path), fn p -> adapter(p).get_for_update(ctx, p) end)
+  def get_for_update(%Cyfr.Actor{} = actor, path),
+    do: guarded(actor, normalize(path), fn p -> adapter(p).get_for_update(actor, p) end)
 
   @doc """
   Read and decode JSON content from storage.
 
   ## Examples
 
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put_json(ctx, ["data", "data.json"], %{"key" => "value"})
+      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> Arca.put_json(actor, ["data", "data.json"], %{"key" => "value"})
       :ok
-      iex> Arca.get_json(ctx, ["data", "data.json"])
+      iex> Arca.get_json(actor, ["data", "data.json"])
       {:ok, %{"key" => "value"}}
   """
-  @spec get_json(Context.t(), Arca.Storage.path()) :: {:ok, term()} | {:error, term()}
-  def get_json(%Context{} = ctx, path) do
-    with {:ok, content} <- get(ctx, path) do
+  @spec get_json(Cyfr.Actor.t(), Arca.Storage.path()) :: {:ok, term()} | {:error, term()}
+  def get_json(%Cyfr.Actor{} = actor, path) do
+    with {:ok, content} <- get(actor, path) do
       # Normalize storage JSON errors through Cyfr.Json.decode/1.
       Cyfr.Json.decode(content)
     end
@@ -168,7 +171,7 @@ defmodule Arca do
 
     * `cap:` — `:checked` (default) or `:exempt`. A tenant-scoped write
       is checked against the athanor's storage cap
-      (`Sanctum.Tenancy.Caps.check_storage/2`) before a byte moves,
+      (`Cyfr.Caps.check_storage/2`) before a byte moves,
       refusing with `{:error, {:limit_reached, :athanor_storage_bytes,
       cap}}` or `{:error, :storage_unverifiable}`. The default is the
       protective posture — a new writer that states nothing is capped —
@@ -180,15 +183,15 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["data", "nested", "path", "file.txt"], "content")
+      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> Arca.put(actor, ["data", "nested", "path", "file.txt"], "content")
       :ok
   """
-  @spec put(Context.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
-  def put(%Context{} = ctx, path, content, opts \\ []),
+  @spec put(Cyfr.Actor.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
+  def put(%Cyfr.Actor{} = actor, path, content, opts \\ []),
     do:
-      mutating(ctx, normalize(path), {:create, byte_size(content)}, opts, fn p ->
-        adapter(p).put(ctx, p, content)
+      mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
+        adapter(p).put(actor, p, content)
       end)
 
   @doc """
@@ -204,19 +207,19 @@ defmodule Arca do
   nothing is written.
   """
   @spec put_if_match(
-          Context.t(),
+          Cyfr.Actor.t(),
           Arca.Storage.path(),
           binary(),
           Arca.Storage.precondition(),
           keyword()
         ) :: :ok | {:error, :precondition_failed | :missing | term()}
-  def put_if_match(%Context{} = ctx, path, content, precondition, opts \\ []),
+  def put_if_match(%Cyfr.Actor{} = actor, path, content, precondition, opts \\ []),
     do:
-      mutating(ctx, normalize(path), {:create, byte_size(content)}, opts, fn p ->
+      mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
         # The new precondition is the adapter's answer to this write; a
         # caller that needs it reads for update again, so the accounting
         # this gate does sees the one shape every other write answers.
-        case adapter(p).put_if_match(ctx, p, content, precondition) do
+        case adapter(p).put_if_match(actor, p, content, precondition) do
           {:ok, _next_precondition} -> :ok
           {:error, _} = error -> error
         end
@@ -227,17 +230,17 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put_json(ctx, ["data", "data.json"], %{"key" => "value"})
+      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> Arca.put_json(actor, ["data", "data.json"], %{"key" => "value"})
       :ok
   """
-  @spec put_json(Context.t(), Arca.Storage.path(), term(), keyword()) :: :ok | {:error, term()}
-  def put_json(%Context{} = ctx, path, data, opts \\ []) do
+  @spec put_json(Cyfr.Actor.t(), Arca.Storage.path(), term(), keyword()) :: :ok | {:error, term()}
+  def put_json(%Cyfr.Actor{} = actor, path, data, opts \\ []) do
     # `Cyfr.Json` on both sides of the round-trip: `get_json/2` speaks its
     # `:invalid_json`, so the write side speaks its `:unencodable` too —
     # not a `%Jason.EncodeError{}` escaping into the caller's error tuple.
     case Cyfr.Json.encode(data) do
-      {:ok, json} -> put(ctx, path, json, opts)
+      {:ok, json} -> put(actor, path, json, opts)
       {:error, :unencodable} -> {:error, :unencodable}
     end
   end
@@ -261,17 +264,17 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.append(ctx, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
+      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> Arca.append(actor, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
       :ok
-      iex> Arca.append(ctx, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
+      iex> Arca.append(actor, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
       :ok
   """
-  @spec append(Context.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
-  def append(%Context{} = ctx, path, content, opts \\ []),
+  @spec append(Cyfr.Actor.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
+  def append(%Cyfr.Actor{} = actor, path, content, opts \\ []),
     do:
-      mutating(ctx, normalize(path), {:create, byte_size(content)}, opts, fn p ->
-        adapter(p).append(ctx, p, content)
+      mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
+        adapter(p).append(actor, p, content)
       end)
 
   @doc """
@@ -279,17 +282,17 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["data", "file.txt"], "hello")
+      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> Arca.put(actor, ["data", "file.txt"], "hello")
       :ok
-      iex> Arca.delete(ctx, ["data", "file.txt"])
+      iex> Arca.delete(actor, ["data", "file.txt"])
       :ok
-      iex> Arca.get(ctx, ["data", "file.txt"])
+      iex> Arca.get(actor, ["data", "file.txt"])
       {:error, :not_found}
   """
-  @spec delete(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
-  def delete(%Context{} = ctx, path),
-    do: mutating(ctx, normalize(path), :delete, [], fn p -> adapter(p).delete(ctx, p) end)
+  @spec delete(Cyfr.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
+  def delete(%Cyfr.Actor{} = actor, path),
+    do: mutating(actor, normalize(path), :delete, [], fn p -> adapter(p).delete(actor, p) end)
 
   @doc """
   List contents at path.
@@ -299,20 +302,20 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["data", "listdir", "a.txt"], "a")
+      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> Arca.put(actor, ["data", "listdir", "a.txt"], "a")
       :ok
-      iex> Arca.put(ctx, ["data", "listdir", "b.txt"], "b")
+      iex> Arca.put(actor, ["data", "listdir", "b.txt"], "b")
       :ok
-      iex> {:ok, files} = Arca.list(ctx, ["data", "listdir"])
+      iex> {:ok, files} = Arca.list(actor, ["data", "listdir"])
       iex> Enum.sort(files)
       ["a.txt", "b.txt"]
   """
   # Names are the typed listing minus its kinds — one adapter callback, not
   # two spellings of the same walk.
-  @spec list(Context.t(), Arca.Storage.path()) :: {:ok, [String.t()]} | {:error, term()}
-  def list(%Context{} = ctx, path) do
-    with {:ok, entries} <- list_typed(ctx, path) do
+  @spec list(Cyfr.Actor.t(), Arca.Storage.path()) :: {:ok, [String.t()]} | {:error, term()}
+  def list(%Cyfr.Actor{} = actor, path) do
+    with {:ok, entries} <- list_typed(actor, path) do
       {:ok, Enum.map(entries, fn {name, _kind} -> name end)}
     end
   end
@@ -324,20 +327,20 @@ defmodule Arca do
   know which adapter is configured or how it lays paths out. A path that is
   itself a file answers `{:error, :enotdir}`.
   """
-  @spec list_typed(Context.t(), Arca.Storage.path()) ::
+  @spec list_typed(Cyfr.Actor.t(), Arca.Storage.path()) ::
           {:ok, [{String.t(), :file | :dir}]} | {:error, term()}
-  def list_typed(%Context{} = ctx, path),
-    do: guarded(ctx, normalize(path), fn p -> adapter(p).list_typed(ctx, p) end)
+  def list_typed(%Cyfr.Actor{} = actor, path),
+    do: guarded(actor, normalize(path), fn p -> adapter(p).list_typed(actor, p) end)
 
   @doc """
   Recursive file count and byte total under a path prefix.
 
   Returns `{:ok, %{files: n, bytes: n}}`. Quota enforcement reads this.
   """
-  @spec usage(Context.t(), Arca.Storage.path()) ::
+  @spec usage(Cyfr.Actor.t(), Arca.Storage.path()) ::
           {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | {:error, term()}
-  def usage(%Context{} = ctx, path),
-    do: guarded(ctx, normalize(path), fn p -> adapter(p).usage(ctx, p) end)
+  def usage(%Cyfr.Actor{} = actor, path),
+    do: guarded(actor, normalize(path), fn p -> adapter(p).usage(actor, p) end)
 
   @doc """
   Check if path exists — FILES only: a directory answers `false` on every
@@ -355,22 +358,22 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.exists?(ctx, ["data", "nonexistent"])
+      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> Arca.exists?(actor, ["data", "nonexistent"])
       false
 
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.exists?(ctx, ["data", "..", "aqua"])
+      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> Arca.exists?(actor, ["data", "..", "aqua"])
       false
   """
-  @spec exists?(Context.t(), Arca.Storage.path()) :: boolean()
-  def exists?(%Context{} = ctx, path) do
+  @spec exists?(Cyfr.Actor.t(), Arca.Storage.path()) :: boolean()
+  def exists?(%Cyfr.Actor{} = actor, path) do
     path = normalize(path)
 
     with :ok <- Cyfr.PathSafety.validate_segments(path),
-         :ok <- Arca.Storage.authorize_path(ctx, path),
-         true <- tenant_ctx_ok?(ctx, path) do
-      adapter(path).exists?(ctx, path)
+         :ok <- Arca.Storage.authorize_path(actor, path),
+         true <- tenant_ctx_ok?(actor, path) do
+      adapter(path).exists?(actor, path)
     else
       _refused -> false
     end
@@ -380,24 +383,26 @@ defmodule Arca do
   # totality contract extends to the context, not just the path. The gate
   # must run before the adapter hop, which raises for an athanor-less
   # context (`Arca.Storage.tenant_segments/1`).
-  defp tenant_ctx_ok?(ctx, path),
-    do: Arca.Storage.classify(path) != :tenant or Arca.Storage.athanor_ready?(ctx)
+  defp tenant_ctx_ok?(actor, path),
+    do: Arca.Storage.classify(path) != :tenant or Arca.Storage.athanor_ready?(actor)
 
   @doc """
   Recursively delete a directory tree at path.
 
   ## Examples
 
-      iex> ctx = Sanctum.TestContext.local()
-      iex> Arca.put(ctx, ["threads", "thread_1", "msg_1.json"], "{}")
+      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> Arca.put(actor, ["threads", "thread_1", "msg_1.json"], "{}")
       :ok
-      iex> Arca.delete_tree(ctx, ["threads", "thread_1"])
+      iex> Arca.delete_tree(actor, ["threads", "thread_1"])
       :ok
   """
-  @spec delete_tree(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
-  def delete_tree(%Context{} = ctx, path),
+  @spec delete_tree(Cyfr.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
+  def delete_tree(%Cyfr.Actor{} = actor, path),
     do:
-      mutating(ctx, normalize(path), :delete_tree, [], fn p -> adapter(p).delete_tree(ctx, p) end)
+      mutating(actor, normalize(path), :delete_tree, [], fn p ->
+        adapter(p).delete_tree(actor, p)
+      end)
 
   @doc """
   Recursively list all leaf paths under a prefix.
@@ -405,10 +410,10 @@ defmodule Arca do
   Returns full segment lists so callers can pass them straight to `get/2`.
   Order is unspecified.
   """
-  @spec list_recursive(Context.t(), Arca.Storage.path()) ::
+  @spec list_recursive(Cyfr.Actor.t(), Arca.Storage.path()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
-  def list_recursive(%Context{} = ctx, path),
-    do: guarded(ctx, normalize(path), fn p -> adapter(p).list_recursive(ctx, p) end)
+  def list_recursive(%Cyfr.Actor{} = actor, path),
+    do: guarded(actor, normalize(path), fn p -> adapter(p).list_recursive(actor, p) end)
 
   @doc """
   Read a whole subtree as `{relative_path, binary}` pairs — the shared
@@ -419,11 +424,13 @@ defmodule Arca do
 
   Memory-bounded; for large single files use `serve_to_conn/4` instead.
   """
-  @spec read_subtree(Context.t(), Arca.Storage.path()) ::
+  @spec read_subtree(Cyfr.Actor.t(), Arca.Storage.path()) ::
           {:ok, [{Arca.Storage.path(), binary()}]} | {:error, term()}
-  def read_subtree(%Context{} = ctx, path),
+  def read_subtree(%Cyfr.Actor{} = actor, path),
     do:
-      guarded(ctx, normalize(path), fn p -> Arca.Storage.read_subtree_via(adapter(p), ctx, p) end)
+      guarded(actor, normalize(path), fn p ->
+        Arca.Storage.read_subtree_via(adapter(p), actor, p)
+      end)
 
   @doc """
   Copy a whole subtree from `src` to `dest` (segment prefix → segment prefix).
@@ -449,23 +456,23 @@ defmodule Arca do
   `cap:` is threaded through to each `put/4` (default `:checked`, like
   any other write).
   """
-  @spec copy_tree(Context.t(), Arca.Storage.path(), Arca.Storage.path(), keyword()) ::
+  @spec copy_tree(Cyfr.Actor.t(), Arca.Storage.path(), Arca.Storage.path(), keyword()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
-  def copy_tree(%Context{} = ctx, src, dest, opts \\ []) do
+  def copy_tree(%Cyfr.Actor{} = actor, src, dest, opts \\ []) do
     exclude = Keyword.get(opts, :exclude, fn _relative -> false end)
     transform = Keyword.get(opts, :transform, fn _relative, content -> content end)
     src = normalize(src)
     dest = normalize(dest)
 
-    with {:ok, leaves} <- list_recursive(ctx, src) do
+    with {:ok, leaves} <- list_recursive(actor, src) do
       leaves
       |> Enum.map(&Enum.drop(&1, length(src)))
       |> Enum.reject(exclude)
       |> Enum.reduce_while({:ok, []}, fn relative, {:ok, acc} ->
-        case get(ctx, src ++ relative) do
+        case get(actor, src ++ relative) do
           {:ok, content} ->
             case put(
-                   ctx,
+                   actor,
                    dest ++ relative,
                    transform.(relative, content),
                    Keyword.take(opts, [:cap])
@@ -516,12 +523,12 @@ defmodule Arca do
   counters, so the next cap check measures the tree afresh.
   """
   @spec replace_tree(
-          Context.t(),
+          Cyfr.Actor.t(),
           Arca.Storage.path(),
           [Arca.Storage.tree_file()],
           keyword()
         ) :: :ok | {:error, term()}
-  def replace_tree(%Context{} = ctx, path, files, opts) when is_list(files) do
+  def replace_tree(%Cyfr.Actor{} = actor, path, files, opts) when is_list(files) do
     path = normalize(path)
     files = Enum.map(files, fn {rel, content} when is_list(rel) -> {normalize(rel), content} end)
 
@@ -533,8 +540,8 @@ defmodule Arca do
         {:error, :reserved_name}
 
       true ->
-        mutating(ctx, path, :replace_tree, opts, fn p ->
-          adapter(p).replace_tree(ctx, p, files)
+        mutating(actor, path, :replace_tree, opts, fn p ->
+          adapter(p).replace_tree(actor, p, files)
         end)
     end
   end
@@ -546,14 +553,14 @@ defmodule Arca do
   refused — a directory carries no bytes a row could name. Refused like
   any path outside the tenant roster; seed media stays read-only.
   """
-  @spec ensure_dir(Context.t(), Arca.Storage.path()) :: :ok | {:error, term()}
-  def ensure_dir(%Context{} = ctx, path) do
+  @spec ensure_dir(Cyfr.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
+  def ensure_dir(%Cyfr.Actor{} = actor, path) do
     path = normalize(path)
 
     cond do
       Arca.Storage.classify(path) != :tenant -> {:error, :forbidden}
       path == [] -> {:error, :invalid_path}
-      true -> guarded(ctx, path, fn p -> adapter(p).ensure_dir(ctx, p) end)
+      true -> guarded(actor, path, fn p -> adapter(p).ensure_dir(actor, p) end)
     end
   end
 
@@ -561,10 +568,10 @@ defmodule Arca do
   Make every tenant root of the context's athanor exist — the folder
   structure a person browses, laid at provisioning and healed at boot.
   """
-  @spec ensure_roots(Context.t()) :: :ok | {:error, term()}
-  def ensure_roots(%Context{} = ctx) do
+  @spec ensure_roots(Cyfr.Actor.t()) :: :ok | {:error, term()}
+  def ensure_roots(%Cyfr.Actor{} = actor) do
     Enum.reduce_while(Arca.Storage.tenant_roots(), :ok, fn root, :ok ->
-      case ensure_dir(ctx, [root]) do
+      case ensure_dir(actor, [root]) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, {root, reason}}}
       end
@@ -577,10 +584,10 @@ defmodule Arca do
   Caller owns Content-Type, CSP, and caching headers; the adapter handles
   the body transfer. Returns `{:ok, conn}` or `{:error, term()}`.
   """
-  @spec serve_to_conn(Plug.Conn.t(), Context.t(), Arca.Storage.path(), keyword()) ::
+  @spec serve_to_conn(Plug.Conn.t(), Cyfr.Actor.t(), Arca.Storage.path(), keyword()) ::
           {:ok, Plug.Conn.t()} | {:error, term()}
-  def serve_to_conn(conn, %Context{} = ctx, path, opts \\ []) do
-    guarded(ctx, normalize(path), fn p -> adapter(p).serve_to_conn(conn, ctx, p, opts) end)
+  def serve_to_conn(conn, %Cyfr.Actor{} = actor, path, opts \\ []) do
+    guarded(actor, normalize(path), fn p -> adapter(p).serve_to_conn(conn, actor, p, opts) end)
   end
 
   @doc """
@@ -631,11 +638,27 @@ defmodule Arca do
   # adapter: the seed bundle and the global roots are the server's own, and
   # every tenant path takes its athanor from the context — there is no path
   # spelling that reaches another athanor's bytes.
-  defp guarded(ctx, path, fun) do
-    case Arca.Storage.authorize_path(ctx, path) do
-      :ok -> fun.(path)
-      {:error, :forbidden} = err -> err
+  defp guarded(actor, path, fun) do
+    with :ok <- resolved(actor, path),
+         :ok <- Arca.Storage.authorize_path(actor, path) do
+      fun.(path)
     end
+  end
+
+  # A tenant path is resolved under the ACTOR's athanor and no other, so
+  # an actor carrying none names no tree at all: refuse here, once, before
+  # any adapter is asked, rather than let `Arca.Storage.tenant_segments/1`
+  # raise from underneath. The empty string is refused with nil
+  # (`athanor_ready?/1`): it is an identity that was never resolved, and
+  # admitting it would name a directory called "" under the tenant root.
+  #
+  # The global and seed roots carry no athanor, which is why this asks the
+  # path first: the server's own actor legitimately holds none, and
+  # `authorize_path/2` is the gate that decides whether it may touch them.
+  defp resolved(actor, path) do
+    if Arca.Storage.classify(path) == :tenant and not Arca.Storage.athanor_ready?(actor),
+      do: {:error, :no_athanor},
+      else: :ok
   end
 
   # Seed media is read-only at this seam, whatever the context: a shipped
@@ -649,7 +672,13 @@ defmodule Arca do
   # Accounting here rather than in each writer means a new writer cannot
   # forget — every mutation already passes through. Globals are not tenant
   # bytes and touch nothing.
-  defp mutating(ctx, path, kind, opts, fun) do
+  defp mutating(actor, path, kind, opts, fun) do
+    with :ok <- resolved(actor, path) do
+      mutating_resolved(actor, path, kind, opts, fun)
+    end
+  end
+
+  defp mutating_resolved(actor, path, kind, opts, fun) do
     cond do
       Arca.Storage.classify(path) == :seed ->
         {:error, :seed_read_only}
@@ -683,10 +712,10 @@ defmodule Arca do
         # new writer cannot forget — and the cap check rides the same
         # chokepoint (`check_cap/4` below): checked by default, exempt
         # only where a call site says so. `Arca.Usage` owns the cache
-        # discipline, `Sanctum.Tenancy.Caps.check_storage/2` the policy.
-        with :ok <- check_cap(ctx, path, kind, opts) do
-          result = guarded(ctx, path, fun)
-          Arca.Usage.account(ctx, path, kind, result)
+        # discipline, `Cyfr.Caps.check_storage/2` the policy.
+        with :ok <- check_cap(actor, path, kind, opts) do
+          result = guarded(actor, path, fun)
+          Arca.Usage.account(actor, path, kind, result)
           result
         end
     end
@@ -699,11 +728,11 @@ defmodule Arca do
   # carry no policy; globals are not tenant bytes; the overlay's internal
   # writes were checked at unit level by `commit_unit/4` (its cap is a
   # required argument) and must not be re-checked per file.
-  defp check_cap(ctx, path, {:create, bytes}, opts) do
+  defp check_cap(actor, path, {:create, bytes}, opts) do
     if Arca.Storage.classify(path) == :tenant and not Arca.Overlay.internal_writes?() do
       case Keyword.get(opts, :cap, :checked) do
         :checked ->
-          Sanctum.Tenancy.Caps.check_storage(ctx, bytes)
+          Cyfr.Caps.check_storage(actor, bytes)
 
         :exempt ->
           :ok
@@ -718,11 +747,11 @@ defmodule Arca do
 
   # A replacement states its size with its policy, since its contents may
   # not be resolved until it is staged.
-  defp check_cap(ctx, path, :replace_tree, opts) do
+  defp check_cap(actor, path, :replace_tree, opts) do
     case Keyword.fetch!(opts, :cap) do
       {:checked, bytes} when is_integer(bytes) and bytes >= 0 ->
         if Arca.Storage.classify(path) == :tenant and not Arca.Overlay.internal_writes?(),
-          do: Sanctum.Tenancy.Caps.check_storage(ctx, bytes),
+          do: Cyfr.Caps.check_storage(actor, bytes),
           else: :ok
 
       :exempt ->

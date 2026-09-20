@@ -192,7 +192,15 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     # closure unpulled; dropping its row is exactly that state. The next
     # boot registers no new bundle versions, and the closure still heals.
     {:ok, below} = Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
-    :ok = Arca.ComponentStorage.delete_component(ctx, "below", below.version, "someone", nil)
+
+    :ok =
+      Arca.ComponentStorage.delete_component(
+        Sanctum.Context.actor(ctx),
+        "below",
+        below.version,
+        "someone",
+        nil
+      )
 
     assert {:error, :not_found} =
              Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")

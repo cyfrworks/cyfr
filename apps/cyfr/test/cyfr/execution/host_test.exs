@@ -176,7 +176,7 @@ defmodule Cyfr.Execution.HostTest do
         )
 
       {:ok, profile} =
-        Arca.ProfileStorage.get(fixture.ctx.athanor_id, fixture.authority.profile_id)
+        Arca.ProfileStorage.get(Sanctum.Context.actor(fixture.ctx), fixture.authority.profile_id)
 
       :ok = move_head!(profile)
 
@@ -718,7 +718,7 @@ defmodule Cyfr.Execution.HostTest do
 
   defp move_head!(profile) do
     Arca.ProfileStorage.advance_head(
-      profile.athanor_id,
+      Cyfr.Actor.in_athanor(profile.athanor_id),
       profile.id,
       profile.head_consent_id,
       Cyfr.UUID7.generate_id("cons")

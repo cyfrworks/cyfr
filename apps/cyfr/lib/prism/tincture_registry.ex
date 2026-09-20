@@ -253,7 +253,7 @@ defmodule Prism.TinctureRegistry do
     ctx = scan_context(athanor.id)
 
     case Arca.list_recursive(
-           ctx,
+           Sanctum.Context.actor(ctx),
            Compendium.ComponentPath.base_prefix() ++ [@tincture_type_plural]
          ) do
       {:ok, leaves} ->
@@ -295,7 +295,7 @@ defmodule Prism.TinctureRegistry do
     # catalysts/reagents/formulas which we ignore here. The seed bundle is
     # not an athanor and carries no route.
     if tincture_path?(manifest_segs) do
-      case Arca.get(ctx, manifest_segs) do
+      case Arca.get(Sanctum.Context.actor(ctx), manifest_segs) do
         {:ok, raw} ->
           parse_manifest(ctx, manifest_segs, raw, athanor_id)
 

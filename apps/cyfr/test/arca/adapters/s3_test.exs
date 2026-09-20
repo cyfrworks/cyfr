@@ -53,7 +53,7 @@ defmodule Arca.Adapters.S3Test do
       Application.delete_env(:cyfr, :s3)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, actor: Sanctum.Context.actor(Sanctum.TestContext.local())}
   end
 
   defp read_body(conn) do
@@ -83,8 +83,8 @@ defmodule Arca.Adapters.S3Test do
   end
 
   describe "put/3" do
-    test "writes content with tenant key under the athanor root", %{ctx: ctx} do
-      assert :ok = S3.put(ctx, ["data", "notes.json"], "{}")
+    test "writes content with tenant key under the athanor root", %{actor: actor} do
+      assert :ok = S3.put(actor, ["data", "notes.json"], "{}")
 
       assert_received {:req, "PUT", path, headers, body}
       assert path == "/test-bucket/athanors/ath_test/data/notes.json"
@@ -94,51 +94,67 @@ defmodule Arca.Adapters.S3Test do
       assert auth =~ "AKIATEST"
     end
 
-    test "component paths key inside the athanor's components subtree", %{ctx: ctx} do
-      assert :ok = S3.put(ctx, ["components", "catalysts", "x.wasm"], "wasm-bytes")
+    test "component paths key inside the athanor's components subtree", %{actor: actor} do
+      assert :ok =
+               S3.put(
+                 actor,
+                 ["components", "catalysts", "x.wasm"],
+                 "wasm-bytes"
+               )
 
       assert_received {:req, "PUT", path, _headers, _body}
       assert path == "/test-bucket/athanors/ath_test/components/catalysts/x.wasm"
     end
 
-    test "an athanor named after a reserved root keys under athanors/, not the root", %{ctx: ctx} do
+    test "an athanor named after a reserved root keys under athanors/, not the root", %{
+      actor: actor
+    } do
       # An athanor id literally "components" must not collide with a global
       # root: every tenant key lives under the disjoint athanors/ root.
-      odd_ctx = %{ctx | athanor_id: "components"}
+      odd_ctx = %{actor | athanor_id: "components"}
       assert :ok = S3.put(odd_ctx, ["data", "b.json"], "{}")
 
       assert_received {:req, "PUT", path, _headers, _body}
       assert path == "/test-bucket/athanors/components/data/b.json"
     end
 
-    test "seed media never reaches the bucket", %{ctx: ctx} do
+    test "seed media never reaches the bucket", %{actor: actor} do
       assert_raise ArgumentError, ~r/seed media/, fn ->
-        S3.put(ctx, ["seed", "components", "catalysts", "x.wasm"], "wasm-bytes")
+        S3.put(
+          actor,
+          ["seed", "components", "catalysts", "x.wasm"],
+          "wasm-bytes"
+        )
       end
     end
 
-    test "the bare components root is the context's athanor's subtree", %{ctx: ctx} do
-      # No raise — the root maps under athanors/{ctx}/components like any
+    test "the bare components root is the context's athanor's subtree", %{actor: actor} do
+      # No raise — the root maps under athanors/{actor}/components like any
       # other tenant path (this stub's listing answer is irrelevant here).
-      _ = S3.list_recursive(ctx, ["components"])
+      _ = S3.list_recursive(actor, ["components"])
       assert_received {:req, "GET", _path, _headers, _body}
     end
 
-    test "cache paths bypass user scoping", %{ctx: ctx} do
-      assert :ok = S3.put(ctx, ["cache", "oci", "blobs", "sha256", "abc"], "blob")
+    test "cache paths bypass user scoping", %{actor: actor} do
+      assert :ok =
+               S3.put(
+                 actor,
+                 ["cache", "oci", "blobs", "sha256", "abc"],
+                 "blob"
+               )
 
       assert_received {:req, "PUT", path, _headers, _body}
       assert path == "/test-bucket/cache/oci/blobs/sha256/abc"
     end
 
-    test "applies CYFR_S3_PREFIX when configured", %{ctx: ctx} do
+    test "applies CYFR_S3_PREFIX when configured", %{actor: actor} do
       Application.put_env(
         :cyfr,
         :s3,
         Application.get_env(:cyfr, :s3) |> Keyword.put(:prefix, "tenants/prod")
       )
 
-      assert :ok = S3.put(ctx, ["data", "x.txt"], "content")
+      assert :ok = S3.put(actor, ["data", "x.txt"], "content")
 
       assert_received {:req, "PUT", path, _headers, _body}
       assert path == "/test-bucket/tenants/prod/athanors/ath_test/data/x.txt"
@@ -146,43 +162,45 @@ defmodule Arca.Adapters.S3Test do
   end
 
   describe "get/2" do
-    test "returns content on 200", %{ctx: ctx} do
-      assert {:ok, "hi"} = S3.get(ctx, ["data", "exists.txt"])
+    test "returns content on 200", %{actor: actor} do
+      assert {:ok, "hi"} = S3.get(actor, ["data", "exists.txt"])
     end
 
-    test "returns :not_found on 404", %{ctx: ctx} do
-      assert {:error, :not_found} = S3.get(ctx, ["data", "missing.txt"])
+    test "returns :not_found on 404", %{actor: actor} do
+      assert {:error, :not_found} = S3.get(actor, ["data", "missing.txt"])
     end
   end
 
   describe "exists?/2" do
-    test "returns true on 200", %{ctx: ctx} do
-      assert S3.exists?(ctx, ["data", "exists.txt"])
+    test "returns true on 200", %{actor: actor} do
+      assert S3.exists?(actor, ["data", "exists.txt"])
     end
 
-    test "returns false on 404", %{ctx: ctx} do
-      refute S3.exists?(ctx, ["data", "missing.txt"])
+    test "returns false on 404", %{actor: actor} do
+      refute S3.exists?(actor, ["data", "missing.txt"])
     end
   end
 
   describe "delete/2" do
-    test "deletes an existing object", %{ctx: ctx} do
-      assert :ok = S3.delete(ctx, ["data", "exists.txt"])
+    test "deletes an existing object", %{actor: actor} do
+      assert :ok = S3.delete(actor, ["data", "exists.txt"])
       assert_received {:req, "HEAD", "/test-bucket/athanors/ath_test/data/exists.txt", _, _}
       assert_received {:req, "DELETE", "/test-bucket/athanors/ath_test/data/exists.txt", _, _}
     end
 
-    test "a missing key is :not_found, not a silent :ok", %{ctx: ctx} do
+    test "a missing key is :not_found, not a silent :ok", %{actor: actor} do
       # Real S3 answers 204 for a DELETE of a key that never existed; the
       # probe is what keeps this `{:error, :not_found}` like the Local adapter.
-      assert {:error, :not_found} = S3.delete(ctx, ["data", "whatever.txt"])
+      assert {:error, :not_found} =
+               S3.delete(actor, ["data", "whatever.txt"])
+
       refute_received {:req, "DELETE", _, _, _}
     end
   end
 
   describe "append/3" do
-    test "extends the object in place, so get/2 returns the whole file", %{ctx: ctx} do
-      assert :ok = S3.append(ctx, ["data", "exists.txt"], "-more")
+    test "extends the object in place, so get/2 returns the whole file", %{actor: actor} do
+      assert :ok = S3.append(actor, ["data", "exists.txt"], "-more")
 
       # One path stays one object: the existing body is read and written back
       # extended, rather than a child object appearing under the path.
@@ -192,8 +210,13 @@ defmodule Arca.Adapters.S3Test do
                        "hi-more"}
     end
 
-    test "creates the object when the path does not exist yet", %{ctx: ctx} do
-      assert :ok = S3.append(ctx, ["data", "audit", "2026-05-05.jsonl"], "event-1\n")
+    test "creates the object when the path does not exist yet", %{actor: actor} do
+      assert :ok =
+               S3.append(
+                 actor,
+                 ["data", "audit", "2026-05-05.jsonl"],
+                 "event-1\n"
+               )
 
       assert_received {:req, "GET", "/test-bucket/athanors/ath_test/data/audit/2026-05-05.jsonl",
                        _, _}
@@ -202,29 +225,33 @@ defmodule Arca.Adapters.S3Test do
                        _, "event-1\n"}
     end
 
-    test "refuses an object that would grow past the read ceiling", %{ctx: ctx} do
+    test "refuses an object that would grow past the read ceiling", %{actor: actor} do
       oversized = :binary.copy("x", 5_242_881)
 
       assert {:error, :object_too_large} =
-               S3.append(ctx, ["data", "audit", "2026-05-05.jsonl"], oversized)
+               S3.append(
+                 actor,
+                 ["data", "audit", "2026-05-05.jsonl"],
+                 oversized
+               )
 
       refute_received {:req, "PUT", _, _, _}
     end
 
     test "writes back under If-Match on the ETag it read, If-None-Match on a create",
-         %{ctx: ctx} do
-      assert :ok = S3.append(ctx, ["data", "exists.txt"], "-more")
+         %{actor: actor} do
+      assert :ok = S3.append(actor, ["data", "exists.txt"], "-more")
       assert_received {:req, "PUT", _, headers, "hi-more"}
       assert header(headers, "if-match") == ~s("etag-of-GET")
       assert header(headers, "if-none-match") == nil
 
-      assert :ok = S3.append(ctx, ["data", "fresh.jsonl"], "one\n")
+      assert :ok = S3.append(actor, ["data", "fresh.jsonl"], "one\n")
       assert_received {:req, "PUT", _, headers, "one\n"}
       assert header(headers, "if-none-match") == "*"
       assert header(headers, "if-match") == nil
     end
 
-    test "a lost round reads again and lands on what the winner wrote", %{ctx: ctx} do
+    test "a lost round reads again and lands on what the winner wrote", %{actor: actor} do
       # The first write back loses to a concurrent append; the object the
       # second read answers carries the winner's line.
       rounds = start_supervised!({Agent, fn -> 0 end})
@@ -251,7 +278,7 @@ defmodule Arca.Adapters.S3Test do
         end
       end)
 
-      assert :ok = S3.append(ctx, ["data", "log.jsonl"], "mine\n")
+      assert :ok = S3.append(actor, ["data", "log.jsonl"], "mine\n")
 
       assert_received {:req, "PUT", _, first, "mine\n"}
       assert header(first, "if-match") == ~s("v0")
@@ -261,7 +288,7 @@ defmodule Arca.Adapters.S3Test do
     end
 
     test "a 412 storm exhausts the bound and answers :precondition_failed, not a loop",
-         %{ctx: ctx} do
+         %{actor: actor} do
       parent = self()
 
       Req.Test.stub(:s3, fn conn ->
@@ -280,7 +307,8 @@ defmodule Arca.Adapters.S3Test do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert {:error, :precondition_failed} = S3.append(ctx, ["data", "log.jsonl"], "mine\n")
+          assert {:error, :precondition_failed} =
+                   S3.append(actor, ["data", "log.jsonl"], "mine\n")
         end)
 
       assert log =~ "still losing after 5 attempts"
@@ -295,7 +323,7 @@ defmodule Arca.Adapters.S3Test do
     end
 
     test "an unknown outcome is final: an append that may have landed is not sent twice",
-         %{ctx: ctx} do
+         %{actor: actor} do
       parent = self()
 
       Req.Test.stub(:s3, fn conn ->
@@ -308,7 +336,8 @@ defmodule Arca.Adapters.S3Test do
       end)
 
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:error, :unknown} = S3.append(ctx, ["data", "log.jsonl"], "mine\n")
+        assert {:error, :unknown} =
+                 S3.append(actor, ["data", "log.jsonl"], "mine\n")
       end)
 
       assert_received {:req, "PUT", _, _, "mine\n"}
@@ -316,7 +345,7 @@ defmodule Arca.Adapters.S3Test do
     end
 
     test "an object read without an ETag is refused, never written back unconditionally",
-         %{ctx: ctx} do
+         %{actor: actor} do
       parent = self()
 
       Req.Test.stub(:s3, fn conn ->
@@ -324,7 +353,9 @@ defmodule Arca.Adapters.S3Test do
         Plug.Conn.send_resp(conn, 200, "no etag here")
       end)
 
-      assert {:error, :unsupported} = S3.append(ctx, ["data", "log.jsonl"], "mine\n")
+      assert {:error, :unsupported} =
+               S3.append(actor, ["data", "log.jsonl"], "mine\n")
+
       refute_received {:req, "PUT", _, _, _}
     end
   end
@@ -344,92 +375,138 @@ defmodule Arca.Adapters.S3Test do
     end
 
     test "a create sends If-None-Match: * inside the signature and answers the ETag",
-         %{ctx: ctx} do
-      assert {:ok, ~s("etag-of-PUT")} = S3.put_if_none_match(ctx, ["data", "unit"], ["by", "tes"])
+         %{actor: actor} do
+      assert {:ok, ~s("etag-of-PUT")} =
+               S3.put_if_none_match(actor, ["data", "unit"], ["by", "tes"])
 
       assert_received {:req, "PUT", "/test-bucket/athanors/ath_test/data/unit", headers, "bytes"}
       assert header(headers, "if-none-match") == "*"
       assert header(headers, "authorization") =~ ~r/SignedHeaders=[^,]*if-none-match/
     end
 
-    test "a replace sends the precondition verbatim as If-Match, signed", %{ctx: ctx} do
-      assert {:ok, ~s("etag-of-PUT")} = S3.put_if_match(ctx, ["data", "unit"], "v2", ~s("abc123"))
+    test "a replace sends the precondition verbatim as If-Match, signed", %{actor: actor} do
+      assert {:ok, ~s("etag-of-PUT")} =
+               S3.put_if_match(actor, ["data", "unit"], "v2", ~s("abc123"))
 
       assert_received {:req, "PUT", _, headers, "v2"}
       assert header(headers, "if-match") == ~s("abc123")
       assert header(headers, "authorization") =~ ~r/SignedHeaders=[^,]*if-match/
     end
 
-    test "412 is :exists for a create and :precondition_failed for a replace", %{ctx: ctx} do
+    test "412 is :exists for a create and :precondition_failed for a replace", %{actor: actor} do
       stub_answer(412, "<Error><Code>PreconditionFailed</Code></Error>")
 
-      assert {:error, :exists} = S3.put_if_none_match(ctx, ["data", "unit"], "x")
-      assert {:error, :precondition_failed} = S3.put_if_match(ctx, ["data", "unit"], "x", ~s("e"))
+      assert {:error, :exists} =
+               S3.put_if_none_match(actor, ["data", "unit"], "x")
+
+      assert {:error, :precondition_failed} =
+               S3.put_if_match(actor, ["data", "unit"], "x", ~s("e"))
     end
 
-    test "409, a conditional write racing another, is the same definite conflict", %{ctx: ctx} do
+    test "409, a conditional write racing another, is the same definite conflict", %{actor: actor} do
       stub_answer(409, "<Error><Code>ConditionalRequestConflict</Code></Error>")
 
-      assert {:error, :exists} = S3.put_if_none_match(ctx, ["data", "unit"], "x")
-      assert {:error, :precondition_failed} = S3.put_if_match(ctx, ["data", "unit"], "x", ~s("e"))
+      assert {:error, :exists} =
+               S3.put_if_none_match(actor, ["data", "unit"], "x")
+
+      assert {:error, :precondition_failed} =
+               S3.put_if_match(actor, ["data", "unit"], "x", ~s("e"))
     end
 
-    test "404 on a conditional replace is :missing; a missing bucket is not", %{ctx: ctx} do
+    test "404 on a conditional replace is :missing; a missing bucket is not", %{actor: actor} do
       stub_answer(404, "<Error><Code>NoSuchKey</Code></Error>")
-      assert {:error, :missing} = S3.put_if_match(ctx, ["data", "unit"], "x", ~s("e"))
+
+      assert {:error, :missing} =
+               S3.put_if_match(actor, ["data", "unit"], "x", ~s("e"))
 
       stub_answer(404, "<Error><Code>NoSuchBucket</Code></Error>")
 
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:error, {:s3_error, 404}} = S3.put_if_match(ctx, ["data", "unit"], "x", ~s("e"))
-        assert {:error, {:s3_error, 404}} = S3.put_if_none_match(ctx, ["data", "unit"], "x")
+        assert {:error, {:s3_error, 404}} =
+                 S3.put_if_match(actor, ["data", "unit"], "x", ~s("e"))
+
+        assert {:error, {:s3_error, 404}} =
+                 S3.put_if_none_match(actor, ["data", "unit"], "x")
       end)
     end
 
-    test "a precondition no header can carry is never sent: the key is probed", %{ctx: ctx} do
+    test "a precondition no header can carry is never sent: the key is probed", %{actor: actor} do
       for unsendable <- [:not_an_etag, "", "line\r\nx-injected: 1", <<0xFF>>] do
         assert {:error, :precondition_failed} =
-                 S3.put_if_match(ctx, ["data", "exists.txt"], "x", unsendable)
+                 S3.put_if_match(
+                   actor,
+                   ["data", "exists.txt"],
+                   "x",
+                   unsendable
+                 )
 
-        assert {:error, :missing} = S3.put_if_match(ctx, ["data", "absent.txt"], "x", unsendable)
+        assert {:error, :missing} =
+                 S3.put_if_match(
+                   actor,
+                   ["data", "absent.txt"],
+                   "x",
+                   unsendable
+                 )
       end
 
       refute_received {:req, "PUT", _, _, _}
     end
 
-    test "a store that cannot make the write conditional is :unsupported", %{ctx: ctx} do
+    test "a store that cannot make the write conditional is :unsupported", %{actor: actor} do
       stub_answer(501, "<Error><Code>NotImplemented</Code></Error>")
-      assert {:error, :unsupported} = S3.put_if_none_match(ctx, ["data", "unit"], "x")
-      assert {:error, :unsupported} = S3.put_if_match(ctx, ["data", "unit"], "x", ~s("e"))
+
+      assert {:error, :unsupported} =
+               S3.put_if_none_match(actor, ["data", "unit"], "x")
+
+      assert {:error, :unsupported} =
+               S3.put_if_match(actor, ["data", "unit"], "x", ~s("e"))
 
       # A write answered without an ETag cannot be followed conditionally.
       stub_answer(200)
 
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:error, :unsupported} = S3.put_if_none_match(ctx, ["data", "unit"], "x")
+        assert {:error, :unsupported} =
+                 S3.put_if_none_match(actor, ["data", "unit"], "x")
       end)
     end
 
-    test "a refusal stays a refusal; a 5xx that may have applied is :unknown", %{ctx: ctx} do
+    test "a refusal stays a refusal; a 5xx that may have applied is :unknown", %{actor: actor} do
       ExUnit.CaptureLog.capture_log(fn ->
         stub_answer(403, "<Error><Code>AccessDenied</Code></Error>")
-        assert {:error, {:s3_error, 403}} = S3.put_if_none_match(ctx, ["data", "unit"], "x")
+
+        assert {:error, {:s3_error, 403}} =
+                 S3.put_if_none_match(actor, ["data", "unit"], "x")
 
         stub_answer(503, "<Error><Code>SlowDown</Code></Error>")
-        assert {:error, {:s3_error, 503}} = S3.put_if_match(ctx, ["data", "unit"], "x", ~s("e"))
+
+        assert {:error, {:s3_error, 503}} =
+                 S3.put_if_match(actor, ["data", "unit"], "x", ~s("e"))
 
         for status <- [500, 502, 504] do
           stub_answer(status, "<Error><Code>InternalError</Code></Error>")
-          assert {:error, :unknown} = S3.put_if_none_match(ctx, ["data", "unit"], "x")
-          assert {:error, :unknown} = S3.put_if_match(ctx, ["data", "unit"], "x", ~s("e"))
+
+          assert {:error, :unknown} =
+                   S3.put_if_none_match(actor, ["data", "unit"], "x")
+
+          assert {:error, :unknown} =
+                   S3.put_if_match(actor, ["data", "unit"], "x", ~s("e"))
         end
       end)
     end
 
-    test "seed media never reaches the bucket", %{ctx: ctx} do
+    test "seed media never reaches the bucket", %{actor: actor} do
       for call <- [
-            fn -> S3.put_if_none_match(ctx, ["seed", "components", "x"], "x") end,
-            fn -> S3.put_if_match(ctx, ["seed", "components", "x"], "x", ~s("e")) end
+            fn ->
+              S3.put_if_none_match(actor, ["seed", "components", "x"], "x")
+            end,
+            fn ->
+              S3.put_if_match(
+                actor,
+                ["seed", "components", "x"],
+                "x",
+                ~s("e")
+              )
+            end
           ] do
         assert_raise ArgumentError, ~r/seed media/, call
       end
@@ -488,10 +565,14 @@ defmodule Arca.Adapters.S3Test do
     end
 
     test "a reset after the request was sent is :unknown, for a create and a replace",
-         %{ctx: ctx} do
+         %{actor: actor} do
       for write <- [
-            fn -> S3.put_if_none_match(ctx, ["data", "unit"], "committed?") end,
-            fn -> S3.put_if_match(ctx, ["data", "unit"], "committed?", ~s("e")) end
+            fn ->
+              S3.put_if_none_match(actor, ["data", "unit"], "committed?")
+            end,
+            fn ->
+              S3.put_if_match(actor, ["data", "unit"], "committed?", ~s("e"))
+            end
           ] do
         point_at(endpoint_resetting_after_the_request())
 
@@ -507,7 +588,7 @@ defmodule Arca.Adapters.S3Test do
     end
 
     test "a connection that was never made is the store unreachable, not :unknown",
-         %{ctx: ctx} do
+         %{actor: actor} do
       {:ok, listener} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
       {:ok, port} = :inet.port(listener)
       :ok = :gen_tcp.close(listener)
@@ -515,13 +596,13 @@ defmodule Arca.Adapters.S3Test do
 
       ExUnit.CaptureLog.capture_log(fn ->
         assert {:error, %Req.TransportError{reason: :econnrefused}} =
-                 S3.put_if_none_match(ctx, ["data", "unit"], "x")
+                 S3.put_if_none_match(actor, ["data", "unit"], "x")
       end)
     end
   end
 
   describe "list_prefix/2" do
-    test "answers the keys under prefix/, markers dropped; one object; nothing", %{ctx: ctx} do
+    test "answers the keys under prefix/, markers dropped; one object; nothing", %{actor: actor} do
       parent = self()
 
       listing = """
@@ -548,11 +629,13 @@ defmodule Arca.Adapters.S3Test do
         end
       end)
 
-      assert {:ok, keys} = S3.list_prefix(ctx, ["data", "reg"])
+      assert {:ok, keys} = S3.list_prefix(actor, ["data", "reg"])
       assert Enum.sort(keys) == [["data", "reg", "deep", "u2"], ["data", "reg", "u1"]]
 
-      assert {:ok, [["data", "reg", "u1"]]} = S3.list_prefix(ctx, ["data", "reg", "u1"])
-      assert {:ok, []} = S3.list_prefix(ctx, ["data", "reg", "absent"])
+      assert {:ok, [["data", "reg", "u1"]]} =
+               S3.list_prefix(actor, ["data", "reg", "u1"])
+
+      assert {:ok, []} = S3.list_prefix(actor, ["data", "reg", "absent"])
     end
   end
 
@@ -603,10 +686,10 @@ defmodule Arca.Adapters.S3Test do
       end)
     end
 
-    test "list_recursive follows continuation tokens across pages", %{ctx: ctx} do
+    test "list_recursive follows continuation tokens across pages", %{actor: actor} do
       stub_paged_listing(self())
 
-      assert {:ok, leaves} = S3.list_recursive(ctx, ["data"])
+      assert {:ok, leaves} = S3.list_recursive(actor, ["data"])
 
       assert Enum.sort(leaves) == [
                ["data", "a.txt"],
@@ -621,10 +704,10 @@ defmodule Arca.Adapters.S3Test do
       assert q2 =~ "continuation-token=tok%2Bpage%2F2%3D%3D"
     end
 
-    test "delete_tree removes keys from every page in one DeleteObjects batch", %{ctx: ctx} do
+    test "delete_tree removes keys from every page in one DeleteObjects batch", %{actor: actor} do
       stub_paged_listing(self())
 
-      assert :ok = S3.delete_tree(ctx, ["data"])
+      assert :ok = S3.delete_tree(actor, ["data"])
 
       # The bare-prefix object goes first, then one batched POST carrying
       # every key from both pages — not one DELETE per key.
@@ -636,7 +719,7 @@ defmodule Arca.Adapters.S3Test do
       refute_received {:delete_objects, _}
     end
 
-    test "a repeated continuation token errors instead of looping", %{ctx: ctx} do
+    test "a repeated continuation token errors instead of looping", %{actor: actor} do
       parent = self()
 
       looping_page = """
@@ -652,12 +735,14 @@ defmodule Arca.Adapters.S3Test do
         Plug.Conn.send_resp(conn, 200, looping_page)
       end)
 
-      assert {:error, _} = S3.list_recursive(ctx, ["data"])
+      assert {:error, _} = S3.list_recursive(actor, ["data"])
     end
   end
 
   describe "component-prefix walks" do
-    test "list_recursive returns logical leaves for an athanor's components subtree", %{ctx: ctx} do
+    test "list_recursive returns logical leaves for an athanor's components subtree", %{
+      actor: actor
+    } do
       # The roster-driven tincture scan and the auto-indexer walk exactly
       # this prefix on an object-store deployment.
       parent = self()
@@ -676,7 +761,8 @@ defmodule Arca.Adapters.S3Test do
         Plug.Conn.send_resp(conn, 200, listing)
       end)
 
-      assert {:ok, leaves} = S3.list_recursive(ctx, ["components", "tinctures"])
+      assert {:ok, leaves} =
+               S3.list_recursive(actor, ["components", "tinctures"])
 
       assert Enum.sort(leaves) == [
                ["components", "tinctures", "local", "dash", "1.0.0", "cyfr-manifest.json"],
@@ -687,7 +773,7 @@ defmodule Arca.Adapters.S3Test do
       assert URI.decode_query(query)["prefix"] =~ "athanors/ath_test/components/tinctures"
     end
 
-    test "usage sums sizes under the athanor's components subtree", %{ctx: ctx} do
+    test "usage sums sizes under the athanor's components subtree", %{actor: actor} do
       parent = self()
 
       listing = """
@@ -704,7 +790,7 @@ defmodule Arca.Adapters.S3Test do
         Plug.Conn.send_resp(conn, 200, listing)
       end)
 
-      assert {:ok, %{files: 2, bytes: 12}} = S3.usage(ctx, ["components"])
+      assert {:ok, %{files: 2, bytes: 12}} = S3.usage(actor, ["components"])
 
       assert_received {:req, "GET", _, query}
       assert URI.decode_query(query)["prefix"] =~ "athanors/ath_test/components"
@@ -728,12 +814,12 @@ defmodule Arca.Adapters.S3Test do
     end
 
     test "a 5xx that may have applied is :unknown; a refusal, a 501 and a 503 stay refusals",
-         %{ctx: ctx} do
+         %{actor: actor} do
       ExUnit.CaptureLog.capture_log(fn ->
         for status <- [500, 502, 504] do
           stub_write_answer(status, "<Error><Code>InternalError</Code></Error>")
-          assert {:error, :unknown} = S3.put(ctx, ["data", "unit"], "x")
-          assert {:error, :unknown} = S3.delete(ctx, ["data", "unit"])
+          assert {:error, :unknown} = S3.put(actor, ["data", "unit"], "x")
+          assert {:error, :unknown} = S3.delete(actor, ["data", "unit"])
         end
 
         # 503 is the store declining the request and 501 a method it does
@@ -741,16 +827,24 @@ defmodule Arca.Adapters.S3Test do
         # they are.
         for status <- [503, 501, 403] do
           stub_write_answer(status, "<Error><Code>Refused</Code></Error>")
-          assert {:error, {:s3_error, ^status}} = S3.put(ctx, ["data", "unit"], "x")
-          assert {:error, {:s3_error, ^status}} = S3.delete(ctx, ["data", "unit"])
+
+          assert {:error, {:s3_error, ^status}} =
+                   S3.put(actor, ["data", "unit"], "x")
+
+          assert {:error, {:s3_error, ^status}} =
+                   S3.delete(actor, ["data", "unit"])
         end
       end)
     end
 
-    test "a probe that cannot answer is its own error: a delete that sent nothing", %{ctx: ctx} do
+    test "a probe that cannot answer is its own error: a delete that sent nothing", %{
+      actor: actor
+    } do
       ExUnit.CaptureLog.capture_log(fn ->
         stub_answer(500, "<Error><Code>InternalError</Code></Error>")
-        assert {:error, {:s3_error, 500}} = S3.delete(ctx, ["data", "unit"])
+
+        assert {:error, {:s3_error, 500}} =
+                 S3.delete(actor, ["data", "unit"])
       end)
 
       # Only the probe was sent; nothing asked the store to remove a key.
@@ -758,11 +852,12 @@ defmodule Arca.Adapters.S3Test do
       refute_received {:req, "DELETE", _, _, _}
     end
 
-    test "a reset after the request was sent is :unknown for a put", %{ctx: ctx} do
+    test "a reset after the request was sent is :unknown for a put", %{actor: actor} do
       point_at(endpoint_resetting_after_the_request())
 
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:error, :unknown} = S3.put(ctx, ["data", "unit"], "committed?")
+        assert {:error, :unknown} =
+                 S3.put(actor, ["data", "unit"], "committed?")
       end)
 
       assert_received {:request_read, request}
@@ -771,7 +866,7 @@ defmodule Arca.Adapters.S3Test do
     end
 
     test "a connection that was never made is the store unreachable, not :unknown",
-         %{ctx: ctx} do
+         %{actor: actor} do
       {:ok, listener} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
       {:ok, port} = :inet.port(listener)
       :ok = :gen_tcp.close(listener)
@@ -779,24 +874,24 @@ defmodule Arca.Adapters.S3Test do
 
       ExUnit.CaptureLog.capture_log(fn ->
         assert {:error, %Req.TransportError{reason: :econnrefused}} =
-                 S3.put(ctx, ["data", "unit"], "x")
+                 S3.put(actor, ["data", "unit"], "x")
 
         assert {:error, %Req.TransportError{reason: :econnrefused}} =
-                 S3.delete(ctx, ["data", "unit"])
+                 S3.delete(actor, ["data", "unit"])
       end)
     end
   end
 
   describe "path traversal" do
-    test "rejects '..' segments", %{ctx: ctx} do
+    test "rejects '..' segments", %{actor: actor} do
       assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->
-        S3.get(ctx, ["..", "etc", "passwd"])
+        S3.get(actor, ["..", "etc", "passwd"])
       end
     end
 
-    test "rejects null bytes in segments", %{ctx: ctx} do
+    test "rejects null bytes in segments", %{actor: actor} do
       assert_raise ArgumentError, ~r/null bytes/, fn ->
-        S3.get(ctx, ["foo\0bar"])
+        S3.get(actor, ["foo\0bar"])
       end
     end
   end

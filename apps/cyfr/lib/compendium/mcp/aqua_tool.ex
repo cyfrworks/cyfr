@@ -531,7 +531,8 @@ defmodule Compendium.MCP.AquaTool do
          :ok <- one_policy_argument(args),
          :ok <- validate_tool_policy(args["tool_policy"], type),
          :ok <- validate_patch(args["tool_policy_patch"]),
-         :ok <- Arca.Overlay.update(ctx, AquaPath.agent_file(name), rewrite) do
+         :ok <-
+           Arca.Overlay.update(Sanctum.Context.actor(ctx), AquaPath.agent_file(name), rewrite) do
       resync_index(ctx)
       {:ok, %{updated: name}}
     else
@@ -561,7 +562,7 @@ defmodule Compendium.MCP.AquaTool do
     # refusal, the not-found, the delete — so this adapter only puts
     # words on its answers.
     with :ok <- validate_name(name) do
-      case Arca.Overlay.drop_unit(ctx, AquaPath.agent_file(name)) do
+      case Arca.Overlay.drop_unit(Sanctum.Context.actor(ctx), AquaPath.agent_file(name)) do
         {:ok, :deleted} ->
           resync_index(ctx)
           {:ok, %{deleted: name}}
@@ -658,7 +659,7 @@ defmodule Compendium.MCP.AquaTool do
     with :ok <- validate_name(name),
          {:ok, meta, body} <- Compendium.AquaSkills.read_manifest(ctx, name) do
       resources =
-        case Arca.list_recursive(ctx, AquaPath.skill_dir(name)) do
+        case Arca.list_recursive(Sanctum.Context.actor(ctx), AquaPath.skill_dir(name)) do
           {:ok, leaves} ->
             leaves
             |> Enum.map(&Enum.drop(&1, length(AquaPath.skill_dir(name))))
@@ -706,7 +707,7 @@ defmodule Compendium.MCP.AquaTool do
     with :ok <- validate_name(name),
          {:ok, manifest} <- skill_manifest_bytes(name, args["description"], args["content"]) do
       case Arca.Overlay.commit_unit(
-             ctx,
+             Sanctum.Context.actor(ctx),
              AquaPath.skill_dir(name),
              {:files, [{[AquaPath.skill_manifest_name()], manifest}]},
              cap: {:checked, byte_size(manifest)},
@@ -749,7 +750,8 @@ defmodule Compendium.MCP.AquaTool do
     end
 
     with :ok <- validate_name(name),
-         :ok <- Arca.Overlay.update(ctx, AquaPath.skill_manifest(name), rewrite) do
+         :ok <-
+           Arca.Overlay.update(Sanctum.Context.actor(ctx), AquaPath.skill_manifest(name), rewrite) do
       {:ok, %{updated: name}}
     else
       {:error, :not_found} ->
@@ -777,7 +779,7 @@ defmodule Compendium.MCP.AquaTool do
   # never deleted; the estate's own goes.
   def handle(%Context{} = ctx, %{"action" => "skill_delete", "name" => name}) do
     with :ok <- validate_name(name) do
-      case Arca.Overlay.drop_unit(ctx, AquaPath.skill_dir(name)) do
+      case Arca.Overlay.drop_unit(Sanctum.Context.actor(ctx), AquaPath.skill_dir(name)) do
         {:ok, :deleted} ->
           {:ok, %{deleted: name}}
 
@@ -901,7 +903,10 @@ defmodule Compendium.MCP.AquaTool do
     # name from both passing a probe.
     bytes = AquaAgent.serialize(role)
 
-    case Arca.Overlay.commit_unit(ctx, AquaPath.role_file(name), {:files, [{[], bytes}]},
+    case Arca.Overlay.commit_unit(
+           Sanctum.Context.actor(ctx),
+           AquaPath.role_file(name),
+           {:files, [{[], bytes}]},
            cap: {:checked, byte_size(bytes)},
            if_absent: true
          ) do
@@ -952,7 +957,7 @@ defmodule Compendium.MCP.AquaTool do
       end
     end
 
-    case Arca.Overlay.update(ctx, AquaPath.agent_file(soul), rewrite) do
+    case Arca.Overlay.update(Sanctum.Context.actor(ctx), AquaPath.agent_file(soul), rewrite) do
       :ok ->
         %{cloneable: true}
 

@@ -6,10 +6,10 @@ defmodule Compendium.BuildsTest.RefusingStore do
   # A store that takes no artifact: every write of a `.wasm` fails.
   use Arca.Storage.TestDouble
 
-  def put(ctx, path, content) do
+  def put(actor, path, content) do
     if String.ends_with?(List.last(path), ".wasm"),
       do: {:error, :injected_outage},
-      else: Arca.Adapters.Local.put(ctx, path, content)
+      else: Arca.Adapters.Local.put(actor, path, content)
   end
 end
 
@@ -54,7 +54,7 @@ defmodule Compendium.BuildsTest do
     ScriptedBuilder.start!()
 
     ctx = Sanctum.TestContext.local()
-    :ok = Arca.ensure_roots(ctx)
+    :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
     {:ok, _} = Compendium.Scaffold.create(ctx, "adder", "reagent", "0.1.0")
 
     {:ok, ctx: ctx}
@@ -118,14 +118,17 @@ defmodule Compendium.BuildsTest do
       assert request.athanor_id == ctx.athanor_id
       assert request.language == :rust and request.target_type == :reagent
       refute request.resolve
-      assert {:ok, lib_rs} = Arca.get(ctx, @unit ++ ["src", "src", "lib.rs"])
+
+      assert {:ok, lib_rs} =
+               Arca.get(Sanctum.Context.actor(ctx), @unit ++ ["src", "src", "lib.rs"])
+
       assert request.sources["src/lib.rs"] == lib_rs
       assert Map.has_key?(request.sources, "Cargo.toml")
       assert Enum.all?(Map.keys(request.sources), &(&1 =~ ~r/(\.rs|\.wit|Cargo\.toml)$/))
 
       # Published into the unit, and registered from there.
-      assert {:ok, @wasm} = Arca.get(ctx, @wasm_path)
-      assert {:ok, @lock} = Arca.get(ctx, @unit ++ ["src", "Cargo.lock"])
+      assert {:ok, @wasm} = Arca.get(Sanctum.Context.actor(ctx), @wasm_path)
+      assert {:ok, @lock} = Arca.get(Sanctum.Context.actor(ctx), @unit ++ ["src", "Cargo.lock"])
       wait_until(fn -> registered?(ctx) end, 10_000, "the built component to be registered")
 
       assert {:ok, component} = Compendium.Registry.get(ctx, "adder", "0.1.0", "local", "reagent")
@@ -135,7 +138,7 @@ defmodule Compendium.BuildsTest do
 
     test "is locked to the unit's Cargo.lock, which resolve asks the builder to resolve afresh",
          %{ctx: ctx} do
-      :ok = Arca.put(ctx, @unit ++ ["src", "Cargo.lock"], @lock)
+      :ok = Arca.put(Sanctum.Context.actor(ctx), @unit ++ ["src", "Cargo.lock"], @lock)
       relocked = @lock <> "# resolved afresh\n"
 
       ScriptedBuilder.script([
@@ -150,7 +153,10 @@ defmodule Compendium.BuildsTest do
       assert locked.sources["Cargo.lock"] == @lock
       refute locked.resolve
       assert resolved.resolve
-      assert {:ok, ^relocked} = Arca.get(ctx, @unit ++ ["src", "Cargo.lock"])
+
+      assert {:ok, ^relocked} =
+               Arca.get(Sanctum.Context.actor(ctx), @unit ++ ["src", "Cargo.lock"])
+
       ScriptedBuilder.await_builds()
     end
   end
@@ -181,7 +187,7 @@ defmodule Compendium.BuildsTest do
         "the build's row to carry its result"
       )
 
-      assert {:ok, @wasm} = Arca.get(ctx, @wasm_path)
+      assert {:ok, @wasm} = Arca.get(Sanctum.Context.actor(ctx), @wasm_path)
 
       wait_until(
         fn ->
@@ -211,7 +217,7 @@ defmodule Compendium.BuildsTest do
 
       assert {:ok, %{"error" => error}} = status(ctx, build_id)
       assert error == "Compilation failed (exit 101): output: error[E0425]"
-      refute Arca.exists?(ctx, @wasm_path)
+      refute Arca.exists?(Sanctum.Context.actor(ctx), @wasm_path)
       ScriptedBuilder.await_builds()
     end
 
@@ -238,7 +244,7 @@ defmodule Compendium.BuildsTest do
 
       assert {:ok, %{"error" => error}} = status(ctx, "build_killed")
       assert error =~ "ended before its outcome was recorded"
-      refute Arca.exists?(ctx, @wasm_path)
+      refute Arca.exists?(Sanctum.Context.actor(ctx), @wasm_path)
       refute registered?(ctx)
       ScriptedBuilder.await_builds()
     end
@@ -275,7 +281,7 @@ defmodule Compendium.BuildsTest do
 
       assert_receive {:scripted_builder, :disconnected}, 5_000
       refute_received {:answered, _}
-      refute Arca.exists?(ctx, @wasm_path)
+      refute Arca.exists?(Sanctum.Context.actor(ctx), @wasm_path)
       refute registered?(ctx)
       # A build on its caller's process has no row: its caller was its record.
       assert {:error, :not_found} = BuildRecords.get(Sanctum.Context.actor(ctx), "build_sync")
@@ -368,8 +374,8 @@ defmodule Compendium.BuildsTest do
       end)
 
       assert length(ScriptedBuilder.requests()) == length(endings)
-      refute Arca.exists?(ctx, @wasm_path)
-      refute Arca.exists?(ctx, @unit ++ ["src", "Cargo.lock"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), @wasm_path)
+      refute Arca.exists?(Sanctum.Context.actor(ctx), @unit ++ ["src", "Cargo.lock"])
       refute registered?(ctx)
     end
 
@@ -380,7 +386,7 @@ defmodule Compendium.BuildsTest do
       assert message =~ "deadline"
       assert_receive {:scripted_builder, :holding, _handler}, 5_000
       assert_receive {:scripted_builder, :disconnected}, 5_000
-      refute Arca.exists?(ctx, @wasm_path)
+      refute Arca.exists?(Sanctum.Context.actor(ctx), @wasm_path)
     end
 
     test "a store that refuses the artifact is the build store unavailable, not a build", %{
@@ -403,7 +409,7 @@ defmodule Compendium.BuildsTest do
         end)
 
       assert log =~ "the built artifact was not saved"
-      refute Arca.exists?(ctx, @wasm_path)
+      refute Arca.exists?(Sanctum.Context.actor(ctx), @wasm_path)
       refute registered?(ctx)
     end
   end

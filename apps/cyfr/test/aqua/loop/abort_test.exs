@@ -18,10 +18,10 @@ defmodule Aqua.Loop.AbortTest do
   setup do
     Cyfr.Test.Sandbox.setup!()
     ctx = Sanctum.TestContext.local()
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
-      TurnStorage.accept_message(ctx, thread.id, %{
+      TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
@@ -34,15 +34,19 @@ defmodule Aqua.Loop.AbortTest do
     turn: turn
   } do
     {:ok, model} =
-      TurnStorage.put_step(ctx, turn.id, %{kind: "model", fence: turn.fence})
+      TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
+        kind: "model",
+        fence: turn.fence
+      })
 
     {:ok, %{calls: [%{step: call}]}} =
-      TurnStorage.record_response(ctx, turn.id, model.id, %{
+      TurnStorage.record_response(Sanctum.Context.actor(ctx), turn.id, model.id, %{
         fence: turn.fence,
         tool_calls: [%{tool_call_id: "c1", name: "notes.keep", tool: "notes", action: "keep"}]
       })
 
-    {:ok, call} = TurnStorage.dispatch_step(ctx, call.id, %{fence: turn.fence})
+    {:ok, call} =
+      TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), call.id, %{fence: turn.fence})
 
     handler = spawn(fn -> Process.sleep(:infinity) end)
     ref = Process.monitor(handler)
@@ -52,11 +56,15 @@ defmodule Aqua.Loop.AbortTest do
     assert aborted.fence != turn.fence
 
     assert_receive {:DOWN, ^ref, :process, ^handler, :cancelled}, 1_000
-    assert {:ok, %{dispatch_state: "uncertain"}} = TurnStorage.step(ctx, call.id)
+
+    assert {:ok, %{dispatch_state: "uncertain"}} =
+             TurnStorage.step(Sanctum.Context.actor(ctx), call.id)
 
     # The loop that held the old fence writes nothing more.
     assert {:error, :superseded} =
-             TurnStorage.close_step(ctx, call.id, "ok", %{fence: turn.fence})
+             TurnStorage.close_step(Sanctum.Context.actor(ctx), call.id, "ok", %{
+               fence: turn.fence
+             })
   end
 
   test "a model request closes as an error, and a flush's call closes with its outcome unknown",
@@ -65,18 +73,23 @@ defmodule Aqua.Loop.AbortTest do
          turn: turn
        } do
     {:ok, flush} =
-      TurnStorage.put_step(ctx, turn.id, %{kind: "model", purpose: "flush", fence: turn.fence})
+      TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
+        kind: "model",
+        purpose: "flush",
+        fence: turn.fence
+      })
 
     {:ok, %{calls: [%{step: note}]}} =
-      TurnStorage.record_response(ctx, turn.id, flush.id, %{
+      TurnStorage.record_response(Sanctum.Context.actor(ctx), turn.id, flush.id, %{
         fence: turn.fence,
         tool_calls: [%{tool_call_id: "n1", name: "notes", tool: "notes", action: "keep"}]
       })
 
-    {:ok, _} = TurnStorage.dispatch_step(ctx, note.id, %{fence: turn.fence})
+    {:ok, _} =
+      TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), note.id, %{fence: turn.fence})
 
     {:ok, model} =
-      TurnStorage.put_step(ctx, turn.id, %{
+      TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
         kind: "model",
         dispatch_state: "dispatched",
         fence: turn.fence
@@ -85,14 +98,18 @@ defmodule Aqua.Loop.AbortTest do
     assert {:ok, _aborted} = Aqua.Loop.abort(ctx, turn, "stopped")
 
     assert {:ok, %{dispatch_state: "closed", outcome: "uncertain"}} =
-             TurnStorage.step(ctx, note.id)
+             TurnStorage.step(Sanctum.Context.actor(ctx), note.id)
 
-    assert {:ok, %{dispatch_state: "closed", outcome: "error"}} = TurnStorage.step(ctx, model.id)
-    refute TurnStorage.restricted?(ctx, turn.id)
+    assert {:ok, %{dispatch_state: "closed", outcome: "error"}} =
+             TurnStorage.step(Sanctum.Context.actor(ctx), model.id)
+
+    refute TurnStorage.restricted?(Sanctum.Context.actor(ctx), turn.id)
   end
 
   test "a lost abort fence leaves the successor and its worker untouched", %{ctx: ctx, turn: turn} do
-    {:ok, successor} = TurnStorage.supersede(ctx, turn.id, %{fence: turn.fence})
+    {:ok, successor} =
+      TurnStorage.supersede(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+
     test = self()
 
     assert {:error, :superseded} =
@@ -111,6 +128,10 @@ defmodule Aqua.Loop.AbortTest do
 
     assert {:ok, %{status: "accepted", fence: fence}} = Aqua.Tape.turn(ctx, turn.id)
     assert fence == turn.fence + 1
-    refute Enum.any?(Threads.messages(ctx, turn.thread_id), &(&1.kind == "turn_aborted"))
+
+    refute Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), turn.thread_id),
+             &(&1.kind == "turn_aborted")
+           )
   end
 end

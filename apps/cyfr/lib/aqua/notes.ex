@@ -146,8 +146,11 @@ defmodule Aqua.Notes do
          :ok <- refuse_pinned(name, "keep", "pin"),
          # Keeping under a name that exists replaces what was there — said
          # so in the answer, so the tape can say so too, never silently.
-         replaced? = Arca.exists?(ctx, path(name)),
-         :ok <- written(Arca.put(ctx, path(name), encode(ctx, content, provenance))) do
+         replaced? = Arca.exists?(Sanctum.Context.actor(ctx), path(name)),
+         :ok <-
+           written(
+             Arca.put(Sanctum.Context.actor(ctx), path(name), encode(ctx, content, provenance))
+           ) do
       {:ok, %{kept: name, athanor_id: Context.athanor!(ctx), replaced: replaced?}}
     end
   end
@@ -180,7 +183,7 @@ defmodule Aqua.Notes do
   def forget(%Context{} = ctx, name) do
     with :ok <- check_name(name),
          :ok <- refuse_pinned(name, "forget", "pin with empty content to clear it") do
-      case Arca.delete(ctx, path(name)) do
+      case Arca.delete(Sanctum.Context.actor(ctx), path(name)) do
         :ok -> {:ok, %{forgot: name, athanor_id: Context.athanor!(ctx)}}
         {:error, :not_found} -> {:error, {:not_found, "note", name}}
         {:error, reason} -> {:error, storage_refusal(reason)}
@@ -259,7 +262,7 @@ defmodule Aqua.Notes do
       entries =
         for name <- shown do
           line =
-            case Arca.get(ctx, path(name)) do
+            case Arca.get(Sanctum.Context.actor(ctx), path(name)) do
               {:ok, binary} -> ctx |> decode(name, binary) |> Map.fetch!(:content) |> first_line()
               _ -> ""
             end
@@ -484,7 +487,10 @@ defmodule Aqua.Notes do
         "a pinned page holds at most #{@pin_max_bytes} bytes and this one is #{size} — " <>
           "trim it, or keep the detail as a note"}}
     else
-      with :ok <- written(Arca.put(ctx, path(name), encode(ctx, body, provenance))) do
+      with :ok <-
+             written(
+               Arca.put(Sanctum.Context.actor(ctx), path(name), encode(ctx, body, provenance))
+             ) do
         {:ok, %{pinned: name, athanor_id: Context.athanor!(ctx)}}
       end
     end
@@ -492,7 +498,7 @@ defmodule Aqua.Notes do
 
   # Clearing a page nobody set is already clear.
   defp clear(ctx, name) do
-    case Arca.delete(ctx, path(name)) do
+    case Arca.delete(Sanctum.Context.actor(ctx), path(name)) do
       :ok -> {:ok, %{cleared: name, athanor_id: Context.athanor!(ctx)}}
       {:error, :not_found} -> {:ok, %{cleared: name, athanor_id: Context.athanor!(ctx)}}
       {:error, reason} -> {:error, storage_refusal(reason)}
@@ -522,7 +528,7 @@ defmodule Aqua.Notes do
   end
 
   defp fetch(ctx, name) do
-    case Arca.get(ctx, path(name)) do
+    case Arca.get(Sanctum.Context.actor(ctx), path(name)) do
       {:ok, binary} -> {:ok, decode(ctx, name, binary)}
       _ -> {:error, {:not_found, "note", name}}
     end
@@ -531,7 +537,7 @@ defmodule Aqua.Notes do
   # Only names the grammar admits are notes; anything else under the root
   # is not this module's to report.
   defp names(ctx) do
-    case Arca.list_typed(ctx, [@root]) do
+    case Arca.list_typed(Sanctum.Context.actor(ctx), [@root]) do
       {:ok, entries} ->
         {:ok, for({name, :file} <- entries, name =~ @name_format, do: name) |> Enum.sort()}
 
@@ -544,7 +550,7 @@ defmodule Aqua.Notes do
   end
 
   defp match(ctx, name, needle) do
-    case Arca.get(ctx, path(name)) do
+    case Arca.get(Sanctum.Context.actor(ctx), path(name)) do
       {:ok, binary} ->
         %{content: body} = decode(ctx, name, binary)
 

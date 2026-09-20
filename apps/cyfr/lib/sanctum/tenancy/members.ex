@@ -366,7 +366,8 @@ defmodule Sanctum.Tenancy.Members do
     # orphaned follows would stand until a re-add revived them.
     with {:ok, row} <- find(user_id, "athanor", athanor_id),
          :ok <- end_if_frozen(athanor),
-         :ok <- Arca.ThreadSubscriptionStorage.unfollow_all(athanor_id, user_id),
+         :ok <-
+           Arca.ThreadSubscriptionStorage.unfollow_all(Cyfr.Actor.in_athanor(athanor_id), user_id),
          {:ok, _} <- remove(row) do
       # Invalidate cached contexts after membership removal; retain sessions for revalidation.
       Sanctum.Session.invalidate_memo_for_user(user_id)
@@ -443,7 +444,7 @@ defmodule Sanctum.Tenancy.Members do
     rows
     |> athanor_ids()
     |> Enum.reduce_while(:ok, fn athanor_id, :ok ->
-      case Arca.ThreadSubscriptionStorage.unfollow_all(athanor_id, user_id) do
+      case Arca.ThreadSubscriptionStorage.unfollow_all(Cyfr.Actor.in_athanor(athanor_id), user_id) do
         :ok -> {:cont, :ok}
         {:error, _} = err -> {:halt, err}
       end

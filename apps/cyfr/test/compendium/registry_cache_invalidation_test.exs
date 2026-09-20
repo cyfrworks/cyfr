@@ -17,7 +17,9 @@ defmodule Compendium.RegistryCacheInvalidationTest do
   test "sweep clears the athanor's component metadata and nothing else" do
     ctx = %Context{athanor_id: "ath_sweep", user_id: "test", scope: :athanor}
 
-    meta_key = Keys.component_meta("ath_sweep", "formula:local.sweep-two:1.0.0")
+    meta_key =
+      Keys.component_meta(Cyfr.Actor.in_athanor("ath_sweep"), "formula:local.sweep-two:1.0.0")
+
     compiled_key = Keys.compiled_component("sha256:shared-bytes")
     Arca.Cache.put(meta_key, %{some: :meta}, 60_000)
     Arca.Cache.put(compiled_key, {1, :fake_component}, 60_000)
@@ -31,7 +33,9 @@ defmodule Compendium.RegistryCacheInvalidationTest do
   test "sweep leaves another athanor's metadata alone" do
     ctx = %Context{athanor_id: "ath_sweep", user_id: "test", scope: :athanor}
 
-    other_meta = Keys.component_meta("ath_other", "formula:local.sweep-two:1.0.0")
+    other_meta =
+      Keys.component_meta(Cyfr.Actor.in_athanor("ath_other"), "formula:local.sweep-two:1.0.0")
+
     Arca.Cache.put(other_meta, %{some: :meta}, 60_000)
 
     Registry.invalidate_executor_caches(ctx)

@@ -53,21 +53,32 @@ defmodule Arca.TenantIsolationTest do
         updated_at: DateTime.utc_now()
       }
 
-      {:ok, _} = Arca.ComponentStorage.put_component(ctx_a, attrs)
+      {:ok, _} = Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx_a), attrs)
 
       # A can see it
-      {:ok, comp} = Arca.ComponentStorage.get_component(ctx_a, "tenant-widget", "1.0.0")
+      {:ok, comp} =
+        Arca.ComponentStorage.get_component(
+          Sanctum.Context.actor(ctx_a),
+          "tenant-widget",
+          "1.0.0"
+        )
+
       assert comp.name == "tenant-widget"
 
       # B cannot see it
-      {:error, :not_found} = Arca.ComponentStorage.get_component(ctx_b, "tenant-widget", "1.0.0")
+      {:error, :not_found} =
+        Arca.ComponentStorage.get_component(
+          Sanctum.Context.actor(ctx_b),
+          "tenant-widget",
+          "1.0.0"
+        )
 
       # list_components for A includes it
-      {:ok, a_list} = Arca.ComponentStorage.list_components(ctx_a)
+      {:ok, a_list} = Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx_a))
       assert Enum.any?(a_list, &(&1.name == "tenant-widget"))
 
       # list_components for B does NOT include it
-      {:ok, b_list} = Arca.ComponentStorage.list_components(ctx_b)
+      {:ok, b_list} = Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx_b))
       refute Enum.any?(b_list, &(&1.name == "tenant-widget"))
     end
 
@@ -96,10 +107,10 @@ defmodule Arca.TenantIsolationTest do
         updated_at: DateTime.utc_now()
       }
 
-      {:ok, _} = Arca.ComponentStorage.put_component(ctx_a, attrs)
+      {:ok, _} = Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx_a), attrs)
 
-      assert Arca.ComponentStorage.exists?(ctx_a, "exists-widget", "1.0.0")
-      refute Arca.ComponentStorage.exists?(ctx_b, "exists-widget", "1.0.0")
+      assert Arca.ComponentStorage.exists?(Sanctum.Context.actor(ctx_a), "exists-widget", "1.0.0")
+      refute Arca.ComponentStorage.exists?(Sanctum.Context.actor(ctx_b), "exists-widget", "1.0.0")
     end
 
     test "delete respects tenant boundary" do
@@ -127,13 +138,17 @@ defmodule Arca.TenantIsolationTest do
         updated_at: DateTime.utc_now()
       }
 
-      {:ok, _} = Arca.ComponentStorage.put_component(ctx_a, attrs)
+      {:ok, _} = Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx_a), attrs)
 
       # B tries to delete — should not affect A's component
-      Arca.ComponentStorage.delete_component(ctx_b, "delete-widget", "1.0.0")
+      Arca.ComponentStorage.delete_component(
+        Sanctum.Context.actor(ctx_b),
+        "delete-widget",
+        "1.0.0"
+      )
 
       # A can still see it
-      assert Arca.ComponentStorage.exists?(ctx_a, "delete-widget", "1.0.0")
+      assert Arca.ComponentStorage.exists?(Sanctum.Context.actor(ctx_a), "delete-widget", "1.0.0")
     end
   end
 
@@ -158,10 +173,10 @@ defmodule Arca.TenantIsolationTest do
 
       # A can get their own execution
       assert %Arca.Execution{id: "exec_cross_a"} =
-               Arca.Execution.get_tenant(ctx_a, "exec_cross_a")
+               Arca.Execution.get_tenant(Sanctum.Context.actor(ctx_a), "exec_cross_a")
 
       # B cannot get A's execution
-      assert nil == Arca.Execution.get_tenant(ctx_b, "exec_cross_a")
+      assert nil == Arca.Execution.get_tenant(Sanctum.Context.actor(ctx_b), "exec_cross_a")
     end
 
     test "platform scope bypasses tenant check" do
@@ -187,7 +202,10 @@ defmodule Arca.TenantIsolationTest do
         )
 
       assert %Arca.Execution{id: "exec_platform_test"} =
-               Arca.Execution.get_tenant(platform_ctx, "exec_platform_test")
+               Arca.Execution.get_tenant(
+                 Sanctum.Context.actor(platform_ctx),
+                 "exec_platform_test"
+               )
     end
   end
 
@@ -257,11 +275,11 @@ defmodule Arca.TenantIsolationTest do
           athanor_id: ctx_b.athanor_id
         })
 
-      {:ok, a_schedules} = Arca.CronSchedule.list(ctx_a)
+      {:ok, a_schedules} = Arca.CronSchedule.list(Sanctum.Context.actor(ctx_a))
       assert length(a_schedules) == 1
       assert hd(a_schedules).name == "sched-a"
 
-      {:ok, b_schedules} = Arca.CronSchedule.list(ctx_b)
+      {:ok, b_schedules} = Arca.CronSchedule.list(Sanctum.Context.actor(ctx_b))
       assert length(b_schedules) == 1
       assert hd(b_schedules).name == "sched-b"
     end
@@ -279,8 +297,8 @@ defmodule Arca.TenantIsolationTest do
           athanor_id: ctx_a.athanor_id
         })
 
-      assert Arca.CronSchedule.count_active(ctx_a) == {:ok, 1}
-      assert Arca.CronSchedule.count_active(ctx_b) == {:ok, 0}
+      assert Arca.CronSchedule.count_active(Sanctum.Context.actor(ctx_a)) == {:ok, 1}
+      assert Arca.CronSchedule.count_active(Sanctum.Context.actor(ctx_b)) == {:ok, 0}
     end
 
     test "get_by_id_or_name scoped to tenant" do
@@ -297,10 +315,12 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can find by name
-      assert {:ok, _} = Arca.CronSchedule.get_by_id_or_name(ctx_a, "get-sched-a")
+      assert {:ok, _} =
+               Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx_a), "get-sched-a")
 
       # B cannot find A's schedule even by ID
-      assert Arca.CronSchedule.get_by_id_or_name(ctx_b, sched.id) == {:error, :not_found}
+      assert Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx_b), sched.id) ==
+               {:error, :not_found}
     end
   end
 
@@ -361,11 +381,14 @@ defmodule Arca.TenantIsolationTest do
       assert attrs_a.id != attrs_b.id
 
       # Both rows survive in the database
-      {:ok, _} = Arca.ComponentStorage.put_component(ctx_a, attrs_a)
-      {:ok, _} = Arca.ComponentStorage.put_component(ctx_b, attrs_b)
+      {:ok, _} = Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx_a), attrs_a)
+      {:ok, _} = Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx_b), attrs_b)
 
-      {:ok, comp_a} = Arca.ComponentStorage.get_component(ctx_a, "shared-tool", "1.0.0")
-      {:ok, comp_b} = Arca.ComponentStorage.get_component(ctx_b, "shared-tool", "1.0.0")
+      {:ok, comp_a} =
+        Arca.ComponentStorage.get_component(Sanctum.Context.actor(ctx_a), "shared-tool", "1.0.0")
+
+      {:ok, comp_b} =
+        Arca.ComponentStorage.get_component(Sanctum.Context.actor(ctx_b), "shared-tool", "1.0.0")
 
       assert comp_a.description == "Same component, tenant A"
       assert comp_b.description == "Same component, tenant B"
@@ -587,10 +610,11 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can get their own log
-      assert %Arca.McpLog{id: "mlog_cross_a"} = Arca.McpLog.get_tenant(ctx_a, "mlog_cross_a")
+      assert %Arca.McpLog{id: "mlog_cross_a"} =
+               Arca.McpLog.get_tenant(Sanctum.Context.actor(ctx_a), "mlog_cross_a")
 
       # B cannot get A's log
-      assert nil == Arca.McpLog.get_tenant(ctx_b, "mlog_cross_a")
+      assert nil == Arca.McpLog.get_tenant(Sanctum.Context.actor(ctx_b), "mlog_cross_a")
     end
 
     test "platform scope bypasses tenant check" do
@@ -614,7 +638,7 @@ defmodule Arca.TenantIsolationTest do
         )
 
       assert %Arca.McpLog{id: "mlog_platform_test"} =
-               Arca.McpLog.get_tenant(platform_ctx, "mlog_platform_test")
+               Arca.McpLog.get_tenant(Sanctum.Context.actor(platform_ctx), "mlog_platform_test")
     end
   end
 
@@ -638,10 +662,10 @@ defmodule Arca.TenantIsolationTest do
 
       # A can get their own log
       assert %Arca.PolicyLog{id: "plog_cross_a"} =
-               Arca.PolicyLog.get_tenant(ctx_a, "plog_cross_a")
+               Arca.PolicyLog.get_tenant(Sanctum.Context.actor(ctx_a), "plog_cross_a")
 
       # B cannot get A's log
-      assert nil == Arca.PolicyLog.get_tenant(ctx_b, "plog_cross_a")
+      assert nil == Arca.PolicyLog.get_tenant(Sanctum.Context.actor(ctx_b), "plog_cross_a")
     end
 
     test "platform scope bypasses tenant check" do
@@ -665,7 +689,10 @@ defmodule Arca.TenantIsolationTest do
         )
 
       assert %Arca.PolicyLog{id: "plog_platform_test"} =
-               Arca.PolicyLog.get_tenant(platform_ctx, "plog_platform_test")
+               Arca.PolicyLog.get_tenant(
+                 Sanctum.Context.actor(platform_ctx),
+                 "plog_platform_test"
+               )
     end
   end
 
@@ -685,10 +712,17 @@ defmodule Arca.TenantIsolationTest do
 
       # A can find by request_id
       assert %Arca.PolicyLog{} =
-               Arca.PolicyLog.get_by_request_id_tenant(ctx_a, "req_cross_tenant_123")
+               Arca.PolicyLog.get_by_request_id_tenant(
+                 Sanctum.Context.actor(ctx_a),
+                 "req_cross_tenant_123"
+               )
 
       # B cannot find A's log by request_id
-      assert nil == Arca.PolicyLog.get_by_request_id_tenant(ctx_b, "req_cross_tenant_123")
+      assert nil ==
+               Arca.PolicyLog.get_by_request_id_tenant(
+                 Sanctum.Context.actor(ctx_b),
+                 "req_cross_tenant_123"
+               )
     end
 
     test "platform scope bypasses tenant check" do
@@ -713,7 +747,10 @@ defmodule Arca.TenantIsolationTest do
         )
 
       assert %Arca.PolicyLog{} =
-               Arca.PolicyLog.get_by_request_id_tenant(platform_ctx, "req_platform_456")
+               Arca.PolicyLog.get_by_request_id_tenant(
+                 Sanctum.Context.actor(platform_ctx),
+                 "req_platform_456"
+               )
     end
   end
 

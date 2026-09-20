@@ -102,7 +102,7 @@ defmodule Compendium.Fork do
   end
 
   defp check_source_exists(ctx, source_base, source_ref_str) do
-    case Arca.get(ctx, source_base ++ [ComponentPath.manifest_name()]) do
+    case Arca.get(Sanctum.Context.actor(ctx), source_base ++ [ComponentPath.manifest_name()]) do
       {:ok, _} ->
         :ok
 
@@ -113,7 +113,7 @@ defmodule Compendium.Fork do
   end
 
   defp check_target_not_exists(ctx, target_base, target_ref_str) do
-    case Arca.get(ctx, target_base ++ [ComponentPath.manifest_name()]) do
+    case Arca.get(Sanctum.Context.actor(ctx), target_base ++ [ComponentPath.manifest_name()]) do
       {:ok, _} ->
         {:error, "Target already exists: #{target_ref_str}"}
 
@@ -131,7 +131,7 @@ defmodule Compendium.Fork do
   end
 
   defp check_source_available(ctx, source_base, source_ref_str) do
-    case Arca.list(ctx, source_base ++ ["src"]) do
+    case Arca.list(Sanctum.Context.actor(ctx), source_base ++ ["src"]) do
       {:ok, entries} when entries != [] ->
         :ok
 
@@ -154,12 +154,13 @@ defmodule Compendium.Fork do
   # operator-shipped bytes into the athanor's own name, so it stays
   # cap-exempt (the `Sanctum.Tenancy.Caps` roster).
   defp do_fork(ctx, source_base, target_base, target_name, target_version, source_ref_str) do
-    with {:ok, source_manifest} <- Arca.get(ctx, source_base ++ [ComponentPath.manifest_name()]),
+    with {:ok, source_manifest} <-
+           Arca.get(Sanctum.Context.actor(ctx), source_base ++ [ComponentPath.manifest_name()]),
          {:ok, sentinel} <-
            rewrite_manifest(source_manifest, target_name, target_version, source_ref_str),
          {:ok, written} <-
            Arca.Overlay.commit_unit(
-             ctx,
+             Sanctum.Context.actor(ctx),
              target_base,
              {:tree, source_base, exclude: &Arca.Storage.build_dropping?/1},
              cap: :exempt,

@@ -477,7 +477,7 @@ defmodule Cyfr.RetentionTest do
 
   defp build_ids(ctx) do
     from(b in Arca.Schemas.BuildRecord, select: b.id)
-    |> Arca.QueryHelpers.where_tenant(ctx)
+    |> Arca.QueryHelpers.where_tenant(Sanctum.Context.actor(ctx))
     |> Arca.Repo.all()
     |> Enum.sort()
   end

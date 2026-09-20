@@ -197,7 +197,7 @@ defmodule Cyfr.Execution.GuestStorage do
   # Every guest path is tenant-relative, so a context without an athanor has
   # no storage at all.
   defp athanor(ctx) do
-    if Arca.Storage.athanor_ready?(ctx),
+    if Arca.Storage.athanor_ready?(Sanctum.Context.actor(ctx)),
       do: :ok,
       else: guest_error(:storage_path_denied, "Storage requires an athanor-scoped context.")
   end
@@ -368,7 +368,7 @@ defmodule Cyfr.Execution.GuestStorage do
 
   defp scope_usage(ctx, path) do
     [scope | _] = physical(String.split(path, "/", parts: 2))
-    Arca.Usage.scope_usage(ctx, scope)
+    Arca.Usage.scope_usage(Sanctum.Context.actor(ctx), scope)
   end
 
   # ---------------------------------------------------------------------------
@@ -376,7 +376,7 @@ defmodule Cyfr.Execution.GuestStorage do
   # ---------------------------------------------------------------------------
 
   defp dispatch(:read, path, _content, scope) do
-    case Arca.get(scope.ctx, segments(path)) do
+    case Arca.get(Sanctum.Context.actor(scope.ctx), segments(path)) do
       {:ok, content} ->
         with :ok <- response_size(scope.limits, "read", byte_size(content)) do
           {:ok,
@@ -402,7 +402,7 @@ defmodule Cyfr.Execution.GuestStorage do
     do: {:ok, %{"path" => "", "files" => Enum.map(guest_scope_names(), &(&1 <> "/"))}}
 
   defp dispatch(:list, path, _content, scope) do
-    case Arca.list_typed(scope.ctx, segments(path)) do
+    case Arca.list_typed(Sanctum.Context.actor(scope.ctx), segments(path)) do
       {:ok, entries} ->
         files =
           Enum.map(entries, fn
@@ -422,7 +422,12 @@ defmodule Cyfr.Execution.GuestStorage do
   defp dispatch(:exists, "", _content, _scope), do: {:ok, %{"path" => "", "exists" => true}}
 
   defp dispatch(:exists, path, _content, scope),
-    do: {:ok, %{"path" => path, "exists" => Arca.exists?(scope.ctx, segments(path))}}
+    do:
+      {:ok,
+       %{
+         "path" => path,
+         "exists" => Arca.exists?(Sanctum.Context.actor(scope.ctx), segments(path))
+       }}
 
   defp dispatch(op, _path, nil, _scope) when op in @writing do
     guest_error(
@@ -443,7 +448,7 @@ defmodule Cyfr.Execution.GuestStorage do
           op: verb,
           path: physical,
           bytes: byte_size(bytes),
-          io: fn -> store.(scope.ctx, physical, bytes) end
+          io: fn -> store.(Sanctum.Context.actor(scope.ctx), physical, bytes) end
         })
         |> written(op, path, byte_size(bytes))
 
@@ -457,7 +462,12 @@ defmodule Cyfr.Execution.GuestStorage do
 
   defp dispatch(:delete, path, _content, scope) do
     physical = segments(path)
-    write = %{op: :delete, path: physical, io: fn -> Arca.delete(scope.ctx, physical) end}
+
+    write = %{
+      op: :delete,
+      path: physical,
+      io: fn -> Arca.delete(Sanctum.Context.actor(scope.ctx), physical) end
+    }
 
     case held(scope, write) do
       {:ok, {:confirmed, :ok}} -> {:ok, %{"path" => path, "deleted" => true}}

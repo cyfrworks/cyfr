@@ -117,7 +117,12 @@ defmodule Arca.ConsentStorage do
       end
     end)
     |> Ecto.Multi.run(:head, fn _repo, _done ->
-      case Arca.ProfileStorage.advance_head(athanor_id, row.profile_id, expected_head, row.id) do
+      case Arca.ProfileStorage.advance_head(
+             Cyfr.Actor.in_athanor(athanor_id),
+             row.profile_id,
+             expected_head,
+             row.id
+           ) do
         :ok -> {:ok, :advanced}
         {:error, reason} -> {:error, reason}
       end
@@ -155,10 +160,10 @@ defmodule Arca.ConsentStorage do
   @spec get_head(Cyfr.Actor.t(), String.t()) ::
           {:ok, Consent.t(), [ConsentVaultRef.t()]}
           | {:error, :no_athanor | :not_found | :no_head | term()}
-  def get_head(%Cyfr.Actor{athanor_id: athanor_id}, profile_id)
+  def get_head(%Cyfr.Actor{athanor_id: athanor_id} = actor, profile_id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.get_head", fn ->
-      with {:ok, profile} <- Arca.ProfileStorage.get(athanor_id, profile_id),
+      with {:ok, profile} <- Arca.ProfileStorage.get(actor, profile_id),
            head_id when is_binary(head_id) <- profile.head_consent_id || {:error, :no_head},
            %Consent{} = consent <-
              Arca.Repo.get_by(Consent, id: head_id, athanor_id: athanor_id) do

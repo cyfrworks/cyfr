@@ -7,14 +7,14 @@ defmodule Cyfr.Execution.Host.StorageTest.GatedAdapter do
 
   # A put or a usage walk waits for its release while a test process is
   # registered under its gate's name.
-  def put(ctx, path, content) do
+  def put(actor, path, content) do
     gate(:host_storage_put_gate)
-    Arca.Adapters.Local.put(ctx, path, content)
+    Arca.Adapters.Local.put(actor, path, content)
   end
 
-  def usage(ctx, path) do
+  def usage(actor, path) do
     gate(:host_storage_usage_gate)
-    Arca.Adapters.Local.usage(ctx, path)
+    Arca.Adapters.Local.usage(actor, path)
   end
 
   defp gate(name) do
@@ -39,10 +39,11 @@ defmodule Cyfr.Execution.Host.StorageTest.AnsweringAdapter do
   # A store whose answer is chosen by the file's name: it cannot say whether
   # it wrote `unknown.txt`, keeps losing the append to `contended.txt`, and
   # refuses `refused.txt` outright.
-  def put(ctx, path, content), do: answer(path) || Arca.Adapters.Local.put(ctx, path, content)
+  def put(actor, path, content),
+    do: answer(path) || Arca.Adapters.Local.put(actor, path, content)
 
-  def append(ctx, path, content),
-    do: answer(path) || Arca.Adapters.Local.append(ctx, path, content)
+  def append(actor, path, content),
+    do: answer(path) || Arca.Adapters.Local.append(actor, path, content)
 
   defp answer(path) do
     case List.last(path) do
@@ -153,12 +154,13 @@ defmodule Cyfr.Execution.Host.StorageTest do
             ["threads", "thread_1", "x.txt"],
             ["components", "catalysts", "moonmoon69", "x", "1.0.0", "catalyst.wasm"]
           ],
-          do: refute(Arca.exists?(fixture.ctx, segments))
+          do: refute(Arca.exists?(Sanctum.Context.actor(fixture.ctx), segments))
 
       assert %{"ok" => %{"written" => true}} =
                storage(fixture, write("data/reports/q3.txt", "granted"))
 
-      assert {:ok, "granted"} = Arca.get(fixture.ctx, ["data", "reports", "q3.txt"])
+      assert {:ok, "granted"} =
+               Arca.get(Sanctum.Context.actor(fixture.ctx), ["data", "reports", "q3.txt"])
     end
 
     test "an operation a runner's parse could not have produced is lost, and the attempt keeps running" do
@@ -205,9 +207,11 @@ defmodule Cyfr.Execution.Host.StorageTest do
 
       assert %{"error" => "lost"} = storage(taken, write("data/stale.txt", "late"))
 
-      refute Arca.exists?(cancelled.ctx, ["data", "after.txt"])
-      refute Arca.exists?(cancelled.ctx, ["data", "stale.txt"])
-      assert {:ok, "kept"} = Arca.get(cancelled.ctx, ["data", "before.txt"])
+      refute Arca.exists?(Sanctum.Context.actor(cancelled.ctx), ["data", "after.txt"])
+      refute Arca.exists?(Sanctum.Context.actor(cancelled.ctx), ["data", "stale.txt"])
+
+      assert {:ok, "kept"} =
+               Arca.get(Sanctum.Context.actor(cancelled.ctx), ["data", "before.txt"])
     end
 
     test "a cancel that commits after a write's checks and before the write refuses it" do
@@ -224,7 +228,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
       send(walker, {:release, :host_storage_usage_gate})
 
       assert %{"error" => "lost"} = Task.await(writer)
-      refute Arca.exists?(fixture.ctx, ["data", "between.txt"])
+      refute Arca.exists?(Sanctum.Context.actor(fixture.ctx), ["data", "between.txt"])
       assert row(fixture).status == "cancelled"
     end
 
@@ -244,7 +248,11 @@ defmodule Cyfr.Execution.Host.StorageTest do
       assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(fixture.ctx, fixture.execution_id)
       assert row(fixture).status == "cancelled"
       assert [%{state: "uncertain", reason: "cancelled"}] = intents(fixture)
-      refute Arca.Adapters.Local.exists?(fixture.ctx, ["data", "in-flight.txt"])
+
+      refute Arca.Adapters.Local.exists?(Sanctum.Context.actor(fixture.ctx), [
+               "data",
+               "in-flight.txt"
+             ])
 
       send(putter, {:release, :host_storage_put_gate})
 
@@ -257,7 +265,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
 
       # The attempt no longer holds its row: its next write is lost.
       assert %{"error" => "lost"} = storage(fixture, write("data/next.txt", "late"))
-      refute Arca.exists?(fixture.ctx, ["data", "next.txt"])
+      refute Arca.exists?(Sanctum.Context.actor(fixture.ctx), ["data", "next.txt"])
     end
 
     test "a takeover while a write is in flight leaves it uncertain under the stale fence" do
@@ -326,7 +334,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
             Task.async(fn ->
               Process.sleep(Enum.random(0..3))
               {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(fixture.ctx, fixture.execution_id)
-              {Arca.exists?(fixture.ctx, path), intents(fixture)}
+              {Arca.exists?(Sanctum.Context.actor(fixture.ctx), path), intents(fixture)}
             end)
 
           written = Task.await(writer)
@@ -343,7 +351,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
 
             %{"error" => "lost"} ->
               refute existed_at_cancel
-              refute Arca.exists?(fixture.ctx, path)
+              refute Arca.exists?(Sanctum.Context.actor(fixture.ctx), path)
               assert [] = intents(fixture)
               :refused
 

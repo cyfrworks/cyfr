@@ -196,7 +196,7 @@ defmodule Cyfr.Execution.Host.Children do
   # its slot, invoke slot and charge, and the waiter hears the refusal.
   defp release(caller, chain, child_id) do
     with %Arca.Execution{parent_execution_id: parent} <-
-           Arca.Execution.get_tenant(chain.ctx, child_id),
+           Arca.Execution.get_tenant(Sanctum.Context.actor(chain.ctx), child_id),
          true <- parent == caller.execution_id do
       case Arca.ExecutionAttempts.current(Sanctum.Context.actor(chain.ctx), child_id) do
         %{state: "running", claimed_by: runner, service_id: service, boot_id: boot}

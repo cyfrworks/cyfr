@@ -959,7 +959,7 @@ defmodule Emissary.MCP.Bridge do
     with {:http, 200, _boot, %{"unknown" => [_ | _] = unknown}} <- answer do
       for %{"athanor" => athanor, "server" => server, "e" => epoch} <- unknown do
         ctx = Sanctum.Context.internal(athanor_id: athanor, scope: :athanor)
-        Arca.McpServerStorage.bump_epoch(ctx, server, epoch)
+        Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), server, epoch)
       end
     end
 
