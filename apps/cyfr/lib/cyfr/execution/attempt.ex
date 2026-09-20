@@ -439,10 +439,13 @@ defmodule Cyfr.Execution.Attempt do
   - `{:storage, op, args}`, `{:fetch_artifact, digest}` and
     `{:record_denial, denial}` run as `Cyfr.Execution.Host.Storage.run/2`
     answers them, in the attempt's context, under its edge and limits, for
-    its component. A storage write runs only while the row is still held
-    by the caller, decided with the write
-    (`Arca.ExecutionAttempts.while_held/5`); one refused there is `:lost`
-    and stops the attempt.
+    its component. A storage write records its intent, runs the store call
+    outside any transaction and settles the intent against the same hold
+    (`Arca.ExecutionAttempts.while_held/5`): one the attempt does not hold
+    its row for is `:lost`, touches nothing and stops the attempt, and one
+    whose hold ended while the store call was in flight, or whose store
+    could not say what it did, is `storage_uncertain` to the guest —
+    never answered as written and never as refused.
 
   An outcome or delta naming another attempt than the caller's is refused
   without closing anything.

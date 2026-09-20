@@ -590,11 +590,15 @@ defmodule Compendium.Builds do
   Publish a tincture build into its version directory: the build replaces
   the unit's `dist/` whole, as a new revision of the unit
   (`Arca.Overlay.replace_subtree/5`). The revision's row commit publishes
-  it, so a reader sees the previous `dist/` or the new one and never a
-  mixture, and the rest of the unit — its manifest, its source and its own
+  it, and the rest of the unit — its manifest, its source and its own
   `data.db` — is carried over as it is. A version with no manifest
   publishes nothing (`{:error, :not_found}`), and a commit that landed on
   the unit meanwhile refuses this one (`{:error, :stale_revision}`).
+
+  What a reader sees while the new revision is moved into place is the
+  adapter's (`Arca.Overlay`): on a filesystem, the previous `dist/` whole
+  and then the new one; on an object store, which has no rename, some
+  files of each until the move finishes.
 
   Public because the build and the publication fail independently: a
   scripted builder proves the one, this the other.

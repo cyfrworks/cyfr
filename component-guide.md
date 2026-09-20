@@ -839,6 +839,26 @@ let token = bindings::cyfr::oauth::token::get_access_token("google")
 
 All content is base64-encoded. Host enforces: the granted storage paths and actions, path safety (no `..`), scoped to `data/` or `components/`.
 
+Error: `{"error": {"type": "...", "message": "..."}}`.
+
+| `type` | What it means |
+|---|---|
+| `storage_path_denied` | The path is outside the granted scopes, or not a path at all |
+| `action_denied` | The action is not one this component was granted |
+| `request_too_large` / `response_too_large` | The request, or what a read would answer, is past the node's size limits |
+| `storage_quota_exceeded` | The athanor's storage cap, or the public profile's quota, would be passed |
+| `not_found` | Nothing is at the path |
+| `invalid_request` / `invalid_json` / `invalid_base64` / `unknown_action` | The request does not parse or does not name an action |
+| `storage_conflict` | The write met concurrent writers to the same path and gave up; nothing was written, and asking again is safe |
+| `storage_uncertain` | The write may or may not be in the store |
+| `storage_error` | The store could not be reached, or the execution is no longer current |
+
+**Every refusal but `storage_uncertain` wrote nothing.** A `write`, `append` or `delete` that answers any other error left the path exactly as it was, so a component may retry it or give up without checking.
+
+`storage_uncertain` is the one answer that says nothing about the store: the write was sent and its outcome was never learned — the connection failed once the request may have arrived, the store could not say what it did, or the execution stopped holding its slot while the write was in flight. **Read the path back before writing it again.** A blind retry of an `append` after `storage_uncertain` can write the bytes twice; a `write` is safe to repeat only because it replaces the object whole.
+
+`storage_conflict` is the opposite and needs no check: it is a definite loss to another writer, nothing was written, and the same call made again is the ordinary way to resolve it.
+
 > For extended file operations (read_lines, edit, search, grep, tree), use the `files` catalyst (`catalyst:local.files`) via formula invoke — those are catalyst-level features, not host function actions.
 
 ### `cyfr:formula/invoke` — Sub-Component Orchestration

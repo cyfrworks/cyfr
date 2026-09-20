@@ -250,10 +250,14 @@ defmodule Arca do
 
   Useful for logs stored as JSONL (JSON Lines) format.
 
-  On the S3 adapter, append is a read-modify-write with last-writer-wins:
-  concurrent appends to one key can lose lines (the adapter documents the
-  race). Concurrent JSONL streams that must not lose lines belong on
-  per-writer keys.
+  Concurrent appends to one path all land, on either adapter: Local
+  appends with `O_APPEND`, and S3, which has no atomic append, writes the
+  extended object back conditionally on the version it read and retries a
+  definite conflict within a bound (`Arca.Adapters.S3`). An append still
+  losing after the last attempt is `{:error, :precondition_failed}` —
+  nothing was appended and asking again is safe — and one whose request
+  may have reached the store when the connection failed is
+  `{:error, :unknown}`.
 
   ## Examples
 
@@ -437,8 +441,8 @@ defmodule Arca do
   a direct caller owns its own compensation.
 
   `exclude: fn relative_segments -> boolean end` skips matching files before
-  their content is ever read — how `Arca.Overlay.materialize/2` keeps build
-  droppings (`target/`, `node_modules/`) out of athanor trees.
+  their content is ever read — how `Arca.Overlay.pull_shipped/2` keeps
+  build droppings (`target/`, `node_modules/`) out of athanor trees.
   `transform: fn relative_segments, content -> content end` rewrites a
   file's bytes between the read and the write — how `Compendium.Fork`
   re-stamps the manifest without holding the whole tree in memory.
@@ -498,9 +502,10 @@ defmodule Arca do
   adapter's exact guarantee). A failure before the swap answers its error
   and leaves the tree at `path` as it was. An adapter that cannot hide a
   partial tree refuses with `{:error, :atomic_replace_unsupported}` and
-  writes nothing. Inside a unit the replacement holds the unit's lock
-  (`Arca.Overlay`), so writes to the unit wait for it; elsewhere a write
-  under `path` made during the replacement can land in the tree it retires.
+  writes nothing. A write under `path` made during the replacement can
+  land in the tree it retires. Replacing a UNIT's tree is not this call:
+  a unit is replaced whole by its commit (`Arca.Overlay.commit_unit/4`),
+  which publishes by its row and needs no tree swap of the adapter.
 
   `cap:` (required) — `{:checked, bytes}` checks `bytes`, the replacement's
   size, against the athanor's storage cap before anything is staged;
@@ -670,9 +675,10 @@ defmodule Arca do
         {:error, :reserved_name}
 
       true ->
-        # The unit lock and the `:bundled` refusal of the seeded roots
-        # live inside the `Arca.Overlay` decorator's own callbacks — this
-        # seam only gates, checks, dispatches and accounts.
+        # The write shapes of the seeded roots and their `:bundled`
+        # refusal live inside the `Arca.Overlay` decorator's own
+        # callbacks — this seam only gates, checks, dispatches and
+        # accounts.
         # Accounting is universal — every tenant write lands here, so a
         # new writer cannot forget — and the cap check rides the same
         # chokepoint (`check_cap/4` below): checked by default, exempt
@@ -733,9 +739,9 @@ defmodule Arca do
   # (the one seed tree, `:seed_path` — `Arca.Storage.seed_roots/0`), whatever
   # storage adapter is configured: an object-store deployment provisions
   # athanors from the shipped media without the bucket ever holding a copy.
-  # Every other path goes through the `Arca.Overlay` decorator (the unit
-  # lock, the `:bundled` refusal — wrapping the configured adapter),
-  # which delegates verbatim for paths outside the overlaid
+  # Every other path goes through the `Arca.Overlay` decorator (the write
+  # shapes of a unit, the `:bundled` refusal — wrapping the configured
+  # adapter), which delegates verbatim for paths outside the overlaid
   # roots — one routing decision instead of a per-root classification.
   defp adapter(["seed" | _]), do: Arca.Adapters.Local
   defp adapter(_path), do: Arca.Overlay

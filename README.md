@@ -631,10 +631,16 @@ All four required vars must be set or the server refuses to start.
 > holds the database (`cyfr.db`), so backing up an S3 deployment means both.
 
 > A built tincture's compile (one whose manifest declares `tincture.build`)
-> is not saved on S3: a build replaces the tincture's `dist/` so that nobody
-> is served a partial build, and an object store cannot swap a tree. The
-> compile answers that it was not saved and the previous build stays served.
-> WASM components compile as usual.
+> saves on S3 as it does on disk: what publishes a version is its database
+> pointer and the journal entry beside it, not the objects, so the commit
+> needs nothing of the store that an object store lacks. What differs is
+> what a reader can see while the new `dist/` is moved into place. On disk
+> the tree is swapped, so a reader sees the whole previous build and then
+> the whole new one. An object store has no rename, so the move is object
+> by object: between its first object and its last, a reader can be served
+> some files of the new build and some of the previous one. Each file is
+> whole, the version reads complete throughout, and the mixture lasts only
+> as long as the move.
 
 ### Proxy trust and rate limits
 

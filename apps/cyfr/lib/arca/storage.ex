@@ -727,10 +727,16 @@ defmodule Arca.Storage do
   @doc """
   Append content to storage, creating the path when it does not exist.
 
-  `get/2` returns the whole object afterwards, on every adapter. An adapter
-  with no atomic append implements this as a read-modify-write, where
-  concurrent appends to one path are last-writer-wins and an oversized object
-  is refused; the local filesystem's `O_APPEND` write has neither limit.
+  `get/2` returns the whole object afterwards, on every adapter, and
+  concurrent appends to one path all land. An adapter with no atomic
+  append implements this as a read-modify-write made conditional on the
+  version it read (`c:put_if_match/4`), retrying a definite conflict
+  within a bound: one still losing after the last attempt is
+  `{:error, :precondition_failed}`, where nothing was appended and asking
+  again is safe, and one the store may have applied is
+  `{:error, :unknown}` and is never sent twice. Such an adapter also
+  refuses an oversized object; the local filesystem's `O_APPEND` write
+  has neither limit.
   """
   @callback append(Context.t(), path(), binary()) :: :ok | error()
 
