@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Cyfr.Semver do
+  @moduledoc """
+  The one version ordering, for every side that orders versions.
+
+  Registered versions are validated semver
+  (`Cyfr.ComponentRef.validate_version/1` at every ingress), so
+  unparsable input reaches ordering only from remote tag lists and seed
+  directory names — and the order is total anyway: both parse →
+  `Version.compare/2` (prereleases order correctly, `1.0.0-rc1 < 1.0.0`);
+  exactly one parses → the parsable side is greater; neither → binary
+  comparison. Never raises.
+
+  Supersession (`strictly_newer?/2`) is deliberately more conservative:
+  true only when BOTH sides parse — an unparsable seed directory name
+  never supersedes anything.
+
+  The component domain spells it `Compendium.Semver`, which delegates
+  here; the identity domain reads it through `Cyfr.ComponentRow.latest_of/1`.
+  """
+
+  @type comparison :: :lt | :eq | :gt
+
+  @doc "Parse a version string — a thin `Version.parse/1`."
+  @spec parse(String.t()) :: {:ok, Version.t()} | :error
+  def parse(version) when is_binary(version), do: Version.parse(version)
+
+  @doc "Whether the string is valid semver."
+  @spec semver?(term()) :: boolean()
+  def semver?(version), do: is_binary(version) and match?({:ok, _}, Version.parse(version))
+
+  @doc "The total order."
+  @spec compare(String.t(), String.t()) :: comparison()
+  def compare(a, b) when is_binary(a) and is_binary(b) do
+    case {Version.parse(a), Version.parse(b)} do
+      {{:ok, va}, {:ok, vb}} -> Version.compare(va, vb)
+      {{:ok, _}, :error} -> :gt
+      {:error, {:ok, _}} -> :lt
+      {:error, :error} -> binary_compare(a, b)
+    end
+  end
+
+  @doc "Nil-aware strict greater-than: `nil` never beats anything, anything beats `nil`."
+  @spec gt?(String.t() | nil, String.t() | nil) :: boolean()
+  def gt?(nil, _b), do: false
+  def gt?(_a, nil), do: true
+  def gt?(a, b), do: compare(a, b) == :gt
+
+  @doc """
+  Sort version strings newest-first under the total order — parsable
+  versions semver-descending, unparsable ones last, by string.
+  """
+  @spec sort_desc([String.t()]) :: [String.t()]
+  def sort_desc(versions), do: Enum.sort(versions, &(compare(&1, &2) != :lt))
+
+  @doc """
+  Sort elements by a version projected from each, newest first — the one
+  spelling of "semver-descending by key" (`sort_desc/1` is the
+  bare-strings form), so no view re-derives the comparator inline.
+  """
+  @spec sort_desc_by([elem], (elem -> String.t())) :: [elem] when elem: term()
+  def sort_desc_by(items, key_fun) when is_list(items) and is_function(key_fun, 1) do
+    Enum.sort_by(items, key_fun, &(compare(&1, &2) != :lt))
+  end
+
+  @doc """
+  The supersession predicate: `newer` strictly supersedes `version` only
+  when BOTH parse and `newer` is greater — an unparsable name never
+  supersedes anything.
+  """
+  @spec strictly_newer?(String.t(), String.t()) :: boolean()
+  def strictly_newer?(newer, version) when is_binary(newer) and is_binary(version) do
+    case {Version.parse(newer), Version.parse(version)} do
+      {{:ok, n}, {:ok, v}} -> Version.compare(n, v) == :gt
+      _either_unparsable -> false
+    end
+  end
+
+  defp binary_compare(a, b) do
+    cond do
+      a == b -> :eq
+      a > b -> :gt
+      true -> :lt
+    end
+  end
+end

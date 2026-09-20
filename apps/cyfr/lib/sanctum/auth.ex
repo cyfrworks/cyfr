@@ -18,6 +18,19 @@ defmodule Sanctum.Auth do
   alias Sanctum.Context
 
   @doc """
+  The configured provider (`:sanctum, :auth_provider`), or `nil` when the
+  deployment runs without sign-in.
+
+  Which strategy proves an identity is the identity domain's own
+  selection, the same shape as the consent proof store: declared and
+  implemented inside Sanctum, chosen by configuration. Nothing above
+  needs to know which one — `Sanctum.auth_configured?/0` answers the only
+  question exposure-dependent behaviour asks.
+  """
+  @spec provider() :: module() | nil
+  def provider, do: Application.get_env(:sanctum, :auth_provider)
+
+  @doc """
   Authenticate with provided credentials/params.
 
   Returns `{:ok, context}` on success, `{:error, reason}` on failure. A

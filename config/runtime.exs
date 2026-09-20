@@ -765,7 +765,7 @@ if config_env() != :test do
     # webhook sender an absolute URL, which behind a proxy or a tunnel is
     # neither the bind address nor any request's Host. Unset means the console
     # and the CLI show the path and say to set this.
-    config :cyfr, :public_url, env_str.("CYFR_PUBLIC_URL", nil)
+    config :sanctum, :public_url, env_str.("CYFR_PUBLIC_URL", nil)
 
     oci_registry_url_config =
       env_str.(
@@ -806,7 +806,7 @@ if config_env() != :test do
         {:error, message} -> raise message
       end
 
-    config :cyfr, :auth_provider, auth_provider
+    config :sanctum, :auth_provider, auth_provider
 
     # A headless node has no browser page, and an external OIDC provider signs
     # people in through one (the CLI's device flow is the built-in provider's):
@@ -819,13 +819,13 @@ if config_env() != :test do
 
     # Generic OIDC, the one browser-callback sign-in. When selected, register
     # the issuer for ueberauth_oidcc and its strategy. CYFR_OIDC_ISSUER is also
-    # pinned at `:cyfr, :oidc_issuer` — the single source both the boot
+    # pinned at `:sanctum, :oidc_issuer` — the single source both the boot
     # reserved-host check (`Cyfr.Application.validate_oidc_issuer_config!/0`) and
     # the login id builder (`Sanctum.Auth.OIDC.resolve_issuer/0`) read.
     if auth_provider == Sanctum.Auth.OIDC do
       {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
 
-      config :cyfr, :oidc_issuer, oidc.issuer
+      config :sanctum, :oidc_issuer, oidc.issuer
       config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
 
       # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the

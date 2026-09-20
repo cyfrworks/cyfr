@@ -94,8 +94,8 @@ defmodule EmissaryWeb.ConnCase do
     # conveniences off and breaks unrelated ones — e.g. external server URL
     # validation).
     unless tags[:async] do
-      Application.put_env(:cyfr, :auth_provider, Emissary.TestAuthProvider)
-      on_exit(fn -> Application.delete_env(:cyfr, :auth_provider) end)
+      Application.put_env(:sanctum, :auth_provider, Emissary.TestAuthProvider)
+      on_exit(fn -> Application.delete_env(:sanctum, :auth_provider) end)
     end
 
     {:ok, conn: Phoenix.ConnTest.build_conn()}

@@ -10,6 +10,12 @@ defmodule Sanctum.Notify do
   belongs to and to `platform_topic/0` when they are a platform admin.
 
   Messages: `{:notify, athanor_id | :platform, kind, payload}`.
+
+  This module owns the topic and the vocabulary; it does not broadcast.
+  A foundation below the host emits `:telemetry`
+  (`[:cyfr, :sanctum, :notify]`) and the host's bridge is the one place
+  that becomes a bus message — so a tray update travels the same path as
+  every other standing change, and nothing here names the PubSub server.
   """
 
   @type kind ::
@@ -32,25 +38,16 @@ defmodule Sanctum.Notify do
   @spec platform_topic() :: String.t()
   def platform_topic, do: "platform:notify"
 
-  @doc "Broadcast an event about one athanor."
+  @doc "Announce an event about one athanor."
   @spec broadcast(String.t(), kind(), map()) :: :ok
-  def broadcast(athanor_id, kind, payload \\ %{}) when is_atom(kind) and is_map(payload) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      topic(athanor_id),
-      {:notify, athanor_id, kind, payload}
-    )
-  end
+  def broadcast(athanor_id, kind, payload \\ %{})
+      when is_binary(athanor_id) and is_atom(kind) and is_map(payload),
+      do: Sanctum.Telemetry.notify(athanor_id, kind, payload)
 
-  @doc "Broadcast a server-level event to platform admins."
+  @doc "Announce a server-level event to platform admins."
   @spec broadcast_platform(kind(), map()) :: :ok
-  def broadcast_platform(kind, payload \\ %{}) when is_atom(kind) and is_map(payload) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      platform_topic(),
-      {:notify, :platform, kind, payload}
-    )
-  end
+  def broadcast_platform(kind, payload \\ %{}) when is_atom(kind) and is_map(payload),
+    do: Sanctum.Telemetry.notify(nil, kind, payload)
 
   @doc false
   def member_changed(athanor_id), do: broadcast(athanor_id, :member_changed)

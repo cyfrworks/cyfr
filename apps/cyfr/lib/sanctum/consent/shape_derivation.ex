@@ -25,8 +25,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   same shape.
   """
 
-  alias Compendium.Manifest.Caps
-  alias Compendium.Manifest.Needs
+  alias Cyfr.Manifest.Caps
+  alias Cyfr.Manifest.Needs
+  alias Sanctum.Consent.Components
   alias Sanctum.Consent.ShapeDigest
   alias Cyfr.ToolPattern
 
@@ -75,7 +76,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   def shape_input(ctx, source_ref) do
     with {:ok, row, needs, caps} <- manifest_row(ctx, source_ref) do
       needs = needs || []
-      caps = caps || Caps.from_manifest(%{"caps" => %{}})
+      caps = caps || Caps.empty()
 
       {:ok,
        %{
@@ -148,7 +149,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   """
   @spec dependency_releases(Sanctum.Context.t(), map(), String.t()) :: [String.t()]
   def dependency_releases(ctx, row, source_ref) do
-    case Compendium.Activation.resolve(ctx, row) do
+    case Components.resolve(ctx, row) do
       {:ok, %{graph: graph}} when is_map(graph) ->
         graph
         |> Enum.reject(fn {node_key, _digest} -> node_key == source_ref end)
@@ -179,9 +180,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # its other callers read.
   defp manifest_row(ctx, source_ref) do
     with {:ok, ref} <- Cyfr.ComponentRef.parse(source_ref),
-         {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
+         {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
       manifest = Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
-      {:ok, row, Needs.from_manifest(manifest), Caps.from_manifest(manifest)}
+
+      {:ok, row, Needs.from_manifest(manifest),
+       Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)}
     end
   end
 

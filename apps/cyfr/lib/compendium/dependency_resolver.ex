@@ -17,64 +17,16 @@ defmodule Compendium.DependencyResolver do
   @doc """
   Extract static dependencies from a manifest map.
 
-  Parses `dependencies.static` entries, validates each ref via
-  `Cyfr.ComponentRef.parse/1`, and returns a list of dependency maps
-  ready for storage.
+  The block's grammar is `Cyfr.Manifest.Dependencies`, which the consent
+  blob reads too — a dependency a row records and an edge a consent
+  carries are one parse. `component_id` names the component the entries
+  are read for; it does not change the parse.
 
   Returns `{:ok, [dep_map]}` or `{:error, reason}`.
   """
-  @spec extract_from_manifest(map(), String.t()) :: {:ok, [map()]} | {:error, term()}
-  def extract_from_manifest(manifest, component_id)
-      when is_map(manifest) and is_binary(component_id) do
-    case get_in(manifest, ["dependencies", "static"]) ||
-           get_in(manifest, [:dependencies, :static]) do
-      nil ->
-        {:ok, []}
-
-      static when is_list(static) ->
-        deps =
-          Enum.reduce_while(static, {:ok, []}, fn entry, {:ok, acc} ->
-            ref_str =
-              if is_binary(entry), do: entry, else: entry["ref"] || entry[:ref]
-
-            {optional, reason} =
-              if is_binary(entry) do
-                {false, nil}
-              else
-                {(entry["optional"] || entry[:optional]) == true,
-                 entry["reason"] || entry[:reason]}
-              end
-
-            case Cyfr.ComponentRef.parse(ref_str) do
-              {:ok, parsed} ->
-                dep = %{
-                  dependency_ref: ref_str,
-                  dep_type: parsed.type,
-                  dep_namespace: parsed.namespace,
-                  dep_name: parsed.name,
-                  dep_version: parsed.version,
-                  optional: optional,
-                  reason: reason
-                }
-
-                {:cont, {:ok, [dep | acc]}}
-
-              {:error, reason} ->
-                {:halt, {:error, "Invalid dependency ref '#{ref_str}': #{reason}"}}
-            end
-          end)
-
-        case deps do
-          {:ok, list} -> {:ok, Enum.reverse(list)}
-          {:error, _} = err -> err
-        end
-
-      _ ->
-        {:ok, []}
-    end
-  end
-
-  def extract_from_manifest(nil, _component_id), do: {:ok, []}
+  @spec extract_from_manifest(map() | nil, String.t()) :: {:ok, [map()]} | {:error, term()}
+  def extract_from_manifest(manifest, component_id) when is_binary(component_id),
+    do: Cyfr.Manifest.Dependencies.from_manifest(manifest)
 
   @doc """
   Resolve the full dependency tree for a component.

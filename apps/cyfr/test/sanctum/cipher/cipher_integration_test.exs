@@ -17,13 +17,13 @@ defmodule Sanctum.CipherIntegrationTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    orig_kr = Application.get_env(:cyfr, :crypto_keyring)
-    Application.put_env(:cyfr, :crypto_keyring, %{primary: "k1", keys: %{"k1" => @key}})
+    orig_kr = Application.get_env(:sanctum, :crypto_keyring)
+    Application.put_env(:sanctum, :crypto_keyring, %{primary: "k1", keys: %{"k1" => @key}})
 
     on_exit(fn ->
       if orig_kr == nil,
-        do: Application.delete_env(:cyfr, :crypto_keyring),
-        else: Application.put_env(:cyfr, :crypto_keyring, orig_kr)
+        do: Application.delete_env(:sanctum, :crypto_keyring),
+        else: Application.put_env(:sanctum, :crypto_keyring, orig_kr)
     end)
 
     %{ctx: ctx("ath_a")}

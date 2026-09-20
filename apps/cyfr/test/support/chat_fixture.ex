@@ -11,7 +11,7 @@ defmodule Cyfr.Test.ChatFixture do
   - The estate: `lay_seed!/2` lays a seed whose only catalyst is the
     fixture and whose soul runs on it with a small tool policy of catalog
     operations; `estate!/0` fills a fresh group estate from the configured
-    seed the way a person's is filled (`Sanctum.Provisioning.provision/2`);
+    seed the way a person's is filled (`Compendium.Provisioning.provision/2`);
     `bind_key!/2` connects a key to the fixture through the consent walk.
   - The script: `message/2` is the line a person sends, the script in a
     fenced block of it; `text/1`, `call_start/3`, `call_delta/2`,
@@ -143,7 +143,7 @@ defmodule Cyfr.Test.ChatFixture do
 
     {:ok, group} = Athanors.create_group(user.id, "Chat fixture #{n}")
     {:ok, ctx} = Sanctum.Context.focus(%{Sanctum.TestContext.local() | user_id: user.id}, group)
-    {:ok, %{provisioned_at: %DateTime{}}} = Sanctum.Provisioning.provision(group, ctx)
+    {:ok, %{provisioned_at: %DateTime{}}} = Compendium.Provisioning.provision(group, ctx)
     ctx
   end
 

@@ -440,20 +440,10 @@ defmodule Sanctum.Vault do
     end
   end
 
-  defp broadcast(ctx, entry_id, verb, %{name: _} = meta) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      Cyfr.Bus.vault_changed(ctx),
-      {:vault_entry_changed, entry_id, verb}
-    )
-
-    # A second, deliberately global signal (the "sanctum:sessions"
-    # precedent) so singletons that cannot know every tenant topic —
-    # the external-MCP reconciler — still see every mutation.
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      Cyfr.Bus.vault_changed_global(),
-      {:vault_entry_changed_global, Context.athanor!(ctx), entry_id, verb, meta}
-    )
-  end
+  # One announcement, two topics: the athanor's own, and a deliberately
+  # global one (the "sanctum:sessions" precedent) so singletons that
+  # cannot know every tenant topic — the external-MCP reconciler — still
+  # see every mutation. Both are the host bridge's to broadcast.
+  defp broadcast(ctx, entry_id, verb, %{name: _} = meta),
+    do: Sanctum.Telemetry.vault_entry_changed(Context.athanor!(ctx), entry_id, verb, meta)
 end

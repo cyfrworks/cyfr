@@ -446,10 +446,10 @@ defmodule Sanctum.MCPTest do
 
   describe "session.device-init / device-poll gate" do
     test "device-init is available when auth_provider is OAuth", %{ctx: ctx} do
-      previous = Application.get_env(:cyfr, :auth_provider)
+      previous = Application.get_env(:sanctum, :auth_provider)
 
       try do
-        Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
+        Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
 
         # The call will still fail because no GitHub client_id is set in the
         # test env, but it should fail with the "client ID not configured"
@@ -470,10 +470,10 @@ defmodule Sanctum.MCPTest do
     end
 
     test "device-init is disabled when auth_provider is a non-OAuth provider", %{ctx: ctx} do
-      previous = Application.get_env(:cyfr, :auth_provider)
+      previous = Application.get_env(:sanctum, :auth_provider)
 
       try do
-        Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
+        Application.put_env(:sanctum, :auth_provider, Sanctum.Test.AltAuthProvider)
 
         assert {:error, msg} =
                  MCP.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
@@ -486,10 +486,10 @@ defmodule Sanctum.MCPTest do
     end
 
     test "device-poll is disabled when auth_provider is a non-OAuth provider", %{ctx: ctx} do
-      previous = Application.get_env(:cyfr, :auth_provider)
+      previous = Application.get_env(:sanctum, :auth_provider)
 
       try do
-        Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
+        Application.put_env(:sanctum, :auth_provider, Sanctum.Test.AltAuthProvider)
 
         assert {:error, msg} =
                  MCP.handle("session", ctx, %{
@@ -505,10 +505,10 @@ defmodule Sanctum.MCPTest do
     end
 
     test "nil auth_provider is treated as single-user (OAuth-equivalent)", %{ctx: ctx} do
-      previous = Application.get_env(:cyfr, :auth_provider)
+      previous = Application.get_env(:sanctum, :auth_provider)
 
       try do
-        Application.delete_env(:cyfr, :auth_provider)
+        Application.delete_env(:sanctum, :auth_provider)
 
         result = MCP.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
 
@@ -578,8 +578,10 @@ defmodule Sanctum.MCPTest do
     end
   end
 
-  defp restore_env(key, nil), do: Application.delete_env(:cyfr, key)
-  defp restore_env(key, value), do: Application.put_env(:cyfr, key, value)
+  # `:auth_provider` is the identity domain's key: restoring it under the
+  # host's application would leave a provider set for every test after.
+  defp restore_env(key, nil), do: Application.delete_env(:sanctum, key)
+  defp restore_env(key, value), do: Application.put_env(:sanctum, key, value)
 
   # Providers answer typed reasons where the class is clear; the shared
   # renderer is the one spelling of every sentence, so assert through it.

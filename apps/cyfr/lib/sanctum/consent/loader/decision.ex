@@ -44,7 +44,7 @@ defmodule Sanctum.Consent.Loader.Decision do
 
   * `scope` — consent scope.
   * `granted_digest` — hash of the stored activation map.
-  * `live` — verified resolution from `Compendium.Activation.resolve_verified/2`.
+  * `live` — verified resolution from `Sanctum.Consent.Components.resolve_verified/2`.
   * `shape` — live versus stored shape digest; `:unknown` is treated as `:differ`.
   * `local_source?` — whether the profile source is locally published.
   """

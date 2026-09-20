@@ -5,26 +5,21 @@ defmodule Cyfr.EmissarySurfaceTest do
   @moduledoc """
   The auth domain's reach into the transport, written down.
 
-  Checks Sanctum’s dependencies on the Apache transport namespace.
-  Consent shape derivation uses available providers to restrict actions
-  to those the registry can dispatch.
+  The roster is **empty**, and is held to be: a foundation below the host
+  emits `:telemetry` and never broadcasts, so the PubSub server's own
+  name — the last thing `lib/sanctum` knew about the transport — is the
+  host bridge's now. Consent reaches the operation catalog and its
+  external tool servers through the `Sanctum.Catalog` port, and the
+  catalog lives under `Cyfr.Ops` rather than in Emissary.
 
-  The roster records today's reality, one reason per module. A new reach
-  fails here until someone decides it belongs; a module Sanctum stops
-  naming must leave the roster.
+  An empty roster only means something while the scan still reads, so
+  the case below asserts that too, against a namespace `lib/sanctum` does
+  reach.
   """
 
   use ExUnit.Case, async: true
 
-  @surface ~w(
-    Emissary.PubSub
-  )
-
-  # Why each entry is on the roster (the operation catalog lives under
-  # `Cyfr.Ops`, so its modules are not Emissary's surface, and consent
-  # reaches external tool servers through the `Sanctum.Catalog` port):
-  #   Emissary.PubSub — the global PubSub server's process name (the
-  #     vocabulary moved to Cyfr.Bus; the name did not).
+  @surface []
 
   @namespace ~r/\bEmissary(?:\.[A-Z]\w+)+\b/
 
@@ -43,6 +38,16 @@ defmodule Cyfr.EmissarySurfaceTest do
   end
 
   test "lib/sanctum reaches only the Emissary modules its surface names" do
+    # The roster is empty, so a scan that read nothing would pass this
+    # case having checked nothing. The same reader, over the same tree,
+    # has to come back with code.
+    lines =
+      for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/sanctum/**/*.ex")),
+          line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
+          do: line
+
+    assert length(lines) > 100, "the scan read no code line under lib/sanctum — it is not reading"
+
     extra =
       reached()
       |> MapSet.difference(MapSet.new(@surface))

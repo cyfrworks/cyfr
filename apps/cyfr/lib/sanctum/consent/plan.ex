@@ -26,6 +26,7 @@ defmodule Sanctum.Consent.Plan do
   """
 
   alias Cyfr.Authority.RootSelect
+  alias Sanctum.Consent.Components
 
   alias Sanctum.Consent.Authz
   alias Sanctum.Consent.BlobBuilder
@@ -127,7 +128,7 @@ defmodule Sanctum.Consent.Plan do
   def fetch_component(ctx, source_ref) do
     with {:ok, parsed} <- Cyfr.ComponentRef.parse(source_ref),
          {:ok, component} <-
-           Compendium.Registry.get_latest(ctx, parsed.name, parsed.namespace, parsed.type) do
+           Components.get_latest(ctx, parsed.name, parsed.namespace, parsed.type) do
       {:ok, component}
     else
       {:error, reason} -> {:error, {:component_not_found, reason}}
@@ -146,7 +147,7 @@ defmodule Sanctum.Consent.Plan do
   # need's reason, never the developer's key names. A manifest with no
   # needs block keeps the single ingress slot.
   defp need_rows(manifest) do
-    case Compendium.Manifest.Needs.from_manifest(manifest) do
+    case Cyfr.Manifest.Needs.from_manifest(manifest) do
       nil ->
         [
           %{
@@ -194,7 +195,7 @@ defmodule Sanctum.Consent.Plan do
   # what a selection may name. A closure that cannot be resolved offers
   # none; the commit refuses a selection it cannot place anyway.
   defp dependency_needs(ctx, component, _source_ref) do
-    case Compendium.Activation.resolve(ctx, component) do
+    case Components.resolve(ctx, component) do
       {:ok, %{graph: graph}} ->
         graph
         |> Map.keys()
@@ -219,7 +220,7 @@ defmodule Sanctum.Consent.Plan do
 
   defp node_manifest(ctx, node_key) do
     with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
-         {:ok, row} <- Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
+         {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
       {:ok, Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
     end
   end

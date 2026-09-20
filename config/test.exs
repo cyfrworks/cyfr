@@ -12,6 +12,9 @@ config :cyfr, EmissaryWeb.Endpoint,
   secret_key_base: "test-secret-key-base-minimum-64-characters-long-for-testing-only",
   server: false
 
+# The origin an absolute URL falls back to, the endpoint's own above.
+config :sanctum, :fallback_origin, "http://localhost:4002"
+
 # Effectively disable the MCP transport rate limit in tests — controller
 # suites drive hundreds of /mcp requests from 127.0.0.1 within one window.
 # MCPRateLimitTest overrides this per-test to exercise the limiter itself.
@@ -23,7 +26,7 @@ config :cyfr, :consent_source, Sanctum.Consent.Source.Memory
 
 # Proofs likewise: unit tests run on the ETS store; proof_db_test.exs
 # exercises the durable adapter directly.
-config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.Memory
+config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory
 
 # Same for the tincture transport rate limit; TinctureRateLimitTest and the
 # tincture controller's 429 tests override this per-test.
@@ -137,6 +140,12 @@ config :cyfr, provisioning_inline: true
 # querying on a 60s timer) and the same sandbox hazard; its own suite
 # exercises sweep logic directly.
 config :cyfr, execution_sweeper_enabled: false
+
+# Same reason as the sweeper: the archive watch would answer an archive
+# from its own process, on a sandbox connection its test does not own.
+# `Sanctum.Tenancy.ArchiveTest` starts it for the cases that assert a
+# cancel, where it is stopped with the test that owns the connection.
+config :cyfr, execution_archive_watch_enabled: false
 
 # The worker watch follows the sweeper's flag by default; off by name here,
 # since it polls the worker services on a timer and writes the lapses it

@@ -19,6 +19,10 @@ defmodule Cyfr.Telemetry.Catalog do
   - `:log` — a dedicated Logger attach (`Cyfr.Application`).
   - `:notes` — `Cyfr.ScheduleNotes`, which files a completed schedule's
     outcome as a note when the schedule asked for it. Pinned by test.
+  - `:estate` — `Compendium.Provisioning`, the component domain's answer
+    to the identity domain's "this athanor needs filling". A foundation
+    below the host announces and never calls up, and this is the one
+    event whose consumer does work rather than fan out.
   - `:operator` — consciously unconsumed by shipped machinery: kept for an
     operator's own monitoring attach, or pinned by tests. The `note` says
     why it earns its place; no event is orphaned silently.
@@ -67,6 +71,41 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap] => %{consumers: [:audit]},
     [:cyfr, :sanctum, :platform_context] => %{consumers: [:audit]},
+    [:cyfr, :sanctum, :notify] => %{
+      consumers: [:bridge],
+      note: "the tray fan-in: what an estate's members, or the operator, see happened"
+    },
+    [:cyfr, :sanctum, :session, :created] => %{
+      consumers: [:bridge],
+      note: "a session was minted; no token travels, a subscriber adopts its own"
+    },
+    [:cyfr, :sanctum, :sessions, :revoked] => %{
+      consumers: [:bridge],
+      note: "every session of a person was retired; their sockets must let go"
+    },
+    [:cyfr, :sanctum, :membership, :changed] => %{
+      consumers: [:bridge],
+      note: "which estates a person may now reach"
+    },
+    [:cyfr, :sanctum, :vault, :entry_changed] => %{
+      consumers: [:bridge],
+      note:
+        "a credential changed: the athanor's own topic and the global one a " <>
+          "server-wide reconciler reads"
+    },
+    [:cyfr, :sanctum, :athanor, :archived] => %{
+      consumers: [:bridge],
+      note: "what serves an archived athanor from outside any tenant topic must stop"
+    },
+    [:cyfr, :sanctum, :api_keys, :changed] => %{consumers: [:bridge]},
+    [:cyfr, :sanctum, :webhooks, :changed] => %{consumers: [:bridge]},
+    [:cyfr, :sanctum, :provisioning, :fill_requested] => %{
+      consumers: [:estate],
+      note:
+        "an athanor needs filling; the component domain fills it " <>
+          "(`Compendium.Provisioning`) — the identity domain owns the claim and the " <>
+          "consents, not the bundle"
+    },
     [:cyfr, :sanctum, :provisioning, :failed] => %{
       consumers: [:operator],
       note: "athanor provisioning failed mid-way; the sign-in path logs and surfaces it"

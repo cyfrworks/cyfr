@@ -16,7 +16,7 @@ defmodule Arca.Schemas.ProvisioningClaim do
   never lands — so a stale owner cannot mark readiness, overwrite a
   successor's failure, mint consent or replace the agent index.
 
-  `entry_kind` names the entry point of `Sanctum.Provisioning` the
+  `entry_kind` names the provisioning entry point the
   attempt came through:
 
     * `sign_in` — the personal fill and group retries of `after_sign_in/1`.

@@ -122,19 +122,25 @@ defmodule Sanctum.Auth.OIDC do
     end
   end
 
-  # The canonical issuer is the operator-configured value, pinned at boot
-  # from CYFR_OIDC_ISSUER (config/runtime.exs). Reading it here — rather than
-  # digging it out of ueberauth_oidcc's Auth struct — keeps the user-id issuer
-  # deterministic and reads the SAME source as the boot reserved-host check
+  @doc """
+  The operator-configured issuer (`:sanctum, :oidc_issuer`, pinned at boot
+  from `CYFR_OIDC_ISSUER`), or `nil` when none is set.
+  """
+  @spec issuer() :: String.t() | nil
+  def issuer, do: Application.get_env(:sanctum, :oidc_issuer)
+
+  # Reading the issuer here — rather than digging it out of
+  # ueberauth_oidcc's Auth struct — keeps the user-id issuer deterministic
+  # and reads the SAME source as the boot reserved-host check
   # (Cyfr.Application.validate_oidc_issuer_config!/0).
   defp resolve_issuer do
     iss =
-      case Cyfr.RuntimeConfig.oidc_issuer() do
+      case issuer() do
         issuer when is_binary(issuer) and issuer != "" ->
           issuer
 
         _ ->
-          raise "OIDC misconfiguration: :cyfr, :oidc_issuer is not set " <>
+          raise "OIDC misconfiguration: :sanctum, :oidc_issuer is not set " <>
                   "(CYFR_OIDC_ISSUER was absent at boot)."
       end
 

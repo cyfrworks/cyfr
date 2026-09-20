@@ -469,7 +469,7 @@ defmodule Compendium.MCP.ComponentTool do
             :shipped ->
               broadcast_progress(ctx, progress_id, :pulling, "Copying shipped #{reference}...")
 
-              case Sanctum.Provisioning.install_shipped(ctx, reference) do
+              case Compendium.Provisioning.install_shipped(ctx, reference) do
                 {:ok, res} ->
                   broadcast_progress(ctx, progress_id, :complete, "Pulled #{res.component_ref}")
                   broadcast_components_changed(ctx)

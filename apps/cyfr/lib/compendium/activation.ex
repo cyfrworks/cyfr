@@ -152,15 +152,12 @@ defmodule Compendium.Activation do
 
   @doc """
   The name-level key a component row occupies in an activation graph.
+
+  The shape is `Cyfr.ComponentRow`'s, where consent reads it too: a
+  stored graph and the key a consent names it by are one spelling.
   """
   @spec node_key(map()) :: String.t()
-  def node_key(component) do
-    type = field(component, :component_type)
-    publisher = Compendium.ComponentPath.normalize_publisher(field(component, :publisher))
-    name = field(component, :name)
-
-    Cyfr.ComponentRef.build(type, publisher, name)
-  end
+  defdelegate node_key(component), to: Cyfr.ComponentRow
 
   # ============================================================================
   # Private

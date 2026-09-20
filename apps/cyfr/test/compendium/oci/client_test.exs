@@ -245,17 +245,17 @@ defmodule Compendium.OCI.ClientTest do
 
       original_base = Application.get_env(:cyfr, :base_path)
       original_registry = Application.get_env(:cyfr, :oci_registry_url)
-      original_auth = Application.get_env(:cyfr, :auth_provider)
+      original_auth = Application.get_env(:sanctum, :auth_provider)
 
       Application.put_env(:cyfr, :base_path, test_dir)
       # No auth provider → localhost registries are reachable (private_policy: :allow_all).
-      Application.delete_env(:cyfr, :auth_provider)
+      Application.delete_env(:sanctum, :auth_provider)
 
       on_exit(fn ->
         File.rm_rf!(test_dir)
         restore_env(:base_path, original_base)
         restore_env(:oci_registry_url, original_registry)
-        restore_env(:auth_provider, original_auth)
+        restore_env(:sanctum, :auth_provider, original_auth)
       end)
 
       :ok
@@ -407,6 +407,10 @@ defmodule Compendium.OCI.ClientTest do
     end
   end
 
-  defp restore_env(key, nil), do: Application.delete_env(:cyfr, key)
-  defp restore_env(key, value), do: Application.put_env(:cyfr, key, value)
+  defp restore_env(key, value), do: restore_env(:cyfr, key, value)
+
+  # `:auth_provider` is the identity domain's key; the paths and the
+  # registry URL are the host's.
+  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 end

@@ -11,6 +11,13 @@ defmodule Cyfr.Bus do
   Naming them here makes a rename a compile error. `Sanctum.Notify` proves the
   shape: one function for the topic, a `@type` for what rides on it.
 
+  Naming a topic is not broadcasting on it. The foundations below the
+  host emit `:telemetry` and never touch PubSub — every topic below whose
+  producer is the identity domain is put on the bus by the host's bridge
+  (`Prism.TelemetryBridge`), from the event `Sanctum.Telemetry`
+  announced. The topic strings stay the domain's, which is why several of
+  them delegate downward.
+
   The `bus:` prefix is an in-VM PubSub address shared by the AQUA domain
   and console, independent of module names.
 

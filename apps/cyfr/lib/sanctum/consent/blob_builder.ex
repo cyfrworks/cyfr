@@ -24,7 +24,8 @@ defmodule Sanctum.Consent.BlobBuilder do
   bootstrap selects on each vouched edge into a shipped dependency.
   """
 
-  alias Compendium.Manifest.Caps
+  alias Cyfr.Manifest.Caps
+  alias Sanctum.Consent.Components
   alias Cyfr.JCS
 
   @type vault_fn ::
@@ -195,7 +196,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   # empty ask. Public for the plan verb, which must show the same grant
   # this builder would freeze.
   def node_grant(_ctx, node_key, manifest) do
-    caps = Caps.from_manifest(manifest) || Caps.from_manifest(%{"caps" => %{}})
+    caps = Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1) || Caps.empty()
     {:ok, resource_map_from_caps(caps), limits_map_from_caps(node_key, caps)}
   end
 
@@ -246,7 +247,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   defp node_row(ctx, node_key) do
     case Cyfr.ComponentRef.parse(node_key) do
       {:ok, ref} ->
-        case Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
+        case Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
           {:ok, row} -> {:ok, row}
           {:error, reason} -> {:error, {:missing_node_row, reason}}
         end
@@ -262,7 +263,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   # dangling dep. A required dependency always edges: the activation
   # refused to resolve without it, so it is in the graph.
   defp direct_dep_keys(manifest, graph, node_key) do
-    case Compendium.DependencyResolver.extract_from_manifest(manifest, node_key) do
+    case Cyfr.Manifest.Dependencies.from_manifest(manifest) do
       {:ok, deps} ->
         deps
         |> Enum.map(fn dep ->

@@ -107,10 +107,12 @@ defmodule Cyfr.RuntimeConfig do
 
   @doc """
   The configured auth provider module, or `nil` when the deployment runs
-  without sign-in.
+  without sign-in. The identity domain owns the key
+  (`:sanctum, :auth_provider`) and the selection; this accessor is what
+  the surfaces and the boot checks read it by.
   """
   @spec auth_provider() :: module() | nil
-  def auth_provider, do: Application.get_env(:cyfr, :auth_provider)
+  defdelegate auth_provider(), to: Sanctum.Auth, as: :provider
 
   @doc """
   Browser cross-origin allowlist. Unset means the wildcard default — the
@@ -180,14 +182,21 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  @doc "The consent-proof store module (default: the DB store)."
+  @doc """
+  The consent-proof store module (default: the DB store). The identity
+  domain owns the key (`:sanctum, :consent_proof_store`) and the default;
+  this accessor is the boot check's reader.
+  """
   @spec consent_proof_store() :: module()
-  def consent_proof_store,
-    do: Application.get_env(:cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB)
+  defdelegate consent_proof_store(), to: Sanctum.Consent.Proof, as: :store
 
-  @doc "The configured OIDC issuer URL, or nil."
+  @doc """
+  The configured OIDC issuer URL, or nil. Pinned at
+  `:sanctum, :oidc_issuer` — the single source the boot reserved-host
+  check and the login id builder both read.
+  """
   @spec oidc_issuer() :: String.t() | nil
-  def oidc_issuer, do: Application.get_env(:cyfr, :oidc_issuer)
+  defdelegate oidc_issuer(), to: Sanctum.Auth.OIDC, as: :issuer
 
   @doc "Whether the Prometheus /metrics endpoint is enabled."
   @spec prometheus_metrics_enabled?() :: boolean()
@@ -204,49 +213,32 @@ defmodule Cyfr.RuntimeConfig do
   def require_signed_pulls?, do: Application.get_env(:cyfr, :require_signed_pulls, false)
 
   @doc """
-  The resolved crypto keyring. Raises when read before boot resolution —
-  a sealed row must never be touched with a guessed key.
+  The resolved crypto keyring (`:sanctum, :crypto_keyring`). Raises when
+  read before boot resolution — a sealed row must never be touched with a
+  guessed key.
   """
   @spec crypto_keyring!() :: map()
-  def crypto_keyring!, do: Application.fetch_env!(:cyfr, :crypto_keyring)
+  defdelegate crypto_keyring!(), to: Sanctum.Cipher, as: :keyring!
 
   @doc """
   The externally reachable base URL of this instance, without a trailing
   slash, or `nil` when the operator has not declared one.
 
   Only the operator knows it: behind a proxy or a tunnel it is neither the
-  bind address nor the `Host` of any particular request.
+  bind address nor the `Host` of any particular request. The two surfaces
+  that hand it out are the identity domain's, which owns the key
+  (`:sanctum, :public_url`) and the trimming.
   """
   @spec public_url() :: String.t() | nil
-  def public_url do
-    case Application.get_env(:cyfr, :public_url) do
-      url when is_binary(url) ->
-        case String.trim_trailing(String.trim(url), "/") do
-          "" -> nil
-          trimmed -> trimmed
-        end
-
-      _ ->
-        nil
-    end
-  end
+  defdelegate public_url(), to: Sanctum
 
   @doc """
-  Returns `public_url/0` when configured, otherwise an HTTP development
-  origin built from the endpoint’s configured host and port.
-  TLS deployments must set CYFR_PUBLIC_URL.
+  Returns `public_url/0` when configured, otherwise this deployment's own
+  origin (`:sanctum, :fallback_origin`, kept in step with the endpoint's
+  host and port). TLS deployments must set CYFR_PUBLIC_URL.
   """
   @spec origin() :: String.t()
-  def origin do
-    public_url() || dev_origin()
-  end
-
-  defp dev_origin do
-    endpoint = Application.get_env(:cyfr, EmissaryWeb.Endpoint, [])
-    host = get_in(endpoint, [:url, :host]) || "localhost"
-    port = get_in(endpoint, [:http, :port]) || 4000
-    "http://#{host}:#{port}"
-  end
+  defdelegate origin(), to: Sanctum
 
   # DNS-rebinding guard: unset means localhost-only.
   @mcp_default_origins [

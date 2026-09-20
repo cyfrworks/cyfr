@@ -13,17 +13,19 @@ defmodule Sanctum.TinctureAccess do
   It does NOT call `Context.authorize` — that function rejects all
   unauthenticated contexts. Instead it checks whether an active public
   profile exists for the tincture (what `profile.publish` mints), then
-  looks up the component via `Compendium.Registry`, and returns
+  looks up the component through the component-facts port, and returns
   `:not_found` for both missing and private tinctures (indistinguishable
   404 to avoid leaking existence).
 
-  Tincture lookups go through `Compendium.Registry` (the authoritative
-  component store), not `Prism.TinctureRegistry` (a shell-only UI cache).
+  Tincture lookups go through `Sanctum.Consent.Components` (the port the
+  authoritative component store answers), not `Prism.TinctureRegistry` (a
+  shell-only UI cache).
   """
 
   require Logger
 
   alias Cyfr.ComponentRef
+  alias Sanctum.Consent.Components
   alias Sanctum.Context
 
   @doc """
@@ -101,7 +103,7 @@ defmodule Sanctum.TinctureAccess do
   Look up a tincture via the authoritative registry without auth checks.
 
   Used for asset serving where sandboxed iframes (no allow-same-origin)
-  cannot send cookies. Validates refs and resolves through Compendium.Registry.
+  cannot send cookies. Validates refs and resolves through the component-facts port.
   Does NOT check visibility — callers should use `get_public/3` for that.
   """
   @spec lookup(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
@@ -120,10 +122,10 @@ defmodule Sanctum.TinctureAccess do
   defp validate_refs(publisher, name),
     do: ComponentRef.validate_ref_parts(publisher, name)
 
-  # Look up the latest tincture version via Compendium.Registry and enrich
+  # Look up the latest tincture version through the port and enrich
   # with the Arca segments needed by controllers for asset serving.
   defp lookup_tincture(ctx, publisher, tincture_name) do
-    case Compendium.Registry.get_latest(ctx, tincture_name, publisher, "tincture") do
+    case Components.get_latest(ctx, tincture_name, publisher, "tincture") do
       {:ok, component} ->
         {:ok, enrich_with_segments(component)}
 
@@ -136,7 +138,7 @@ defmodule Sanctum.TinctureAccess do
     manifest = decode_manifest(component[:manifest] || component["manifest"])
 
     segments =
-      Compendium.ComponentPath.version_dir(
+      Cyfr.ComponentPath.version_dir(
         component.component_type,
         component.publisher,
         component.name,

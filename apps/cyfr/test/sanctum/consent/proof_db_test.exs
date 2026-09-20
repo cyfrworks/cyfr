@@ -120,13 +120,13 @@ defmodule Sanctum.Consent.ProofDBTest do
 
   describe "through the configured-store front" do
     test "Proof.mint/consume round-trips via the DB store when configured" do
-      original = Application.get_env(:cyfr, :consent_proof_store)
-      Application.put_env(:cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB)
+      original = Application.get_env(:sanctum, :consent_proof_store)
+      Application.put_env(:sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB)
 
       on_exit(fn ->
         if original,
-          do: Application.put_env(:cyfr, :consent_proof_store, original),
-          else: Application.delete_env(:cyfr, :consent_proof_store)
+          do: Application.put_env(:sanctum, :consent_proof_store, original),
+          else: Application.delete_env(:sanctum, :consent_proof_store)
       end)
 
       {:ok, token} = Proof.mint(bindings())

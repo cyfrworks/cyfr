@@ -7,7 +7,7 @@ defmodule Cyfr.Bootstrap do
   to the estates that already exist.
 
   No athanor is created here. A person's estate is minted at the door and
-  filled on first need (`Sanctum.Provisioning`), so a server with nobody on
+  filled on first need (`Compendium.Provisioning`), so a server with nobody on
   it provisions nothing and reaches no registry. A failure is logged, never
   fatal — the app keeps serving and the next boot tries again.
 
@@ -68,7 +68,7 @@ defmodule Cyfr.Bootstrap do
   # (the next boot and every sign-in retry); anything else raising here is
   # a bug and crashes this one-shot task loudly.
   defp sync_seed_media do
-    Sanctum.Provisioning.sync_seeds()
+    Compendium.Provisioning.sync_seeds()
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Cyfr.Bootstrap] seed sync raised: #{Exception.message(e)}")

@@ -229,10 +229,8 @@ defmodule Sanctum.MCP.KeyTool do
   defp parse_key_type_arg(invalid),
     do: {:error, "Invalid key type: #{invalid}. Use: application, service, or admin"}
 
-  defp broadcast_api_keys_changed(ctx) do
-    topic = Cyfr.Bus.api_keys(ctx)
-    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :api_keys_changed)
-  end
+  defp broadcast_api_keys_changed(ctx),
+    do: Sanctum.Telemetry.api_keys_changed(Sanctum.Context.athanor!(ctx))
 
   defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
 end

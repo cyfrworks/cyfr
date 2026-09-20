@@ -142,7 +142,7 @@ defmodule Cyfr.KeyringFingerprint do
     @impl true
     def init(_opts) do
       Cyfr.KeyringFingerprint.verify!(
-        Application.fetch_env!(:cyfr, :crypto_keyring),
+        Cyfr.RuntimeConfig.crypto_keyring!(),
         Application.get_env(:cyfr, :crypto_keyring_fingerprint_accept)
       )
 

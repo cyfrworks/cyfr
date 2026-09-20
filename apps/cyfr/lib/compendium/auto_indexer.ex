@@ -10,7 +10,7 @@ defmodule Compendium.AutoIndexer do
   with `source: "filesystem"`.
 
   A scan is triggered when an athanor is provisioned and at every boot sync
-  (`Sanctum.Provisioning`, once the shipped bundle is copied into the
+  (`Compendium.Provisioning`, once the shipped bundle is copied into the
   athanor), by `component.register`, and from the Components page.
 
   ## Security

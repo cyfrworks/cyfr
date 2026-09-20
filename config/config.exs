@@ -51,7 +51,22 @@ config :cyfr,
 
 # Consent proofs are durable: the plan → preview → commit walk spans human
 # minutes and must survive a restart. Tests override to the ETS store.
-config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB
+config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
+
+# The two ports the identity domain declares and something above it
+# implements. `:catalog` is consent's view of the operation table;
+# `:consent_components` is the component facts a consent decision rests
+# on. Sanctum names neither implementation: with the key unset every call
+# through the port refuses, distinguishably from an absent component.
+config :sanctum, :catalog, Cyfr.Ops.Catalog
+config :sanctum, :consent_components, Compendium.ConsentFacts
+
+# Where this deployment is reachable when the operator declared nothing:
+# the endpoint's own scheme, host and port. `CYFR_PUBLIC_URL` overrides it
+# (`:sanctum, :public_url`); an OAuth `redirect_uri` needs an absolute
+# origin either way. Kept in step with the endpoint below — and with the
+# per-environment ports, which override this value.
+config :sanctum, :fallback_origin, "http://localhost:4000"
 
 # Store consent revisions in the database; tests override this with the Memory adapter.
 config :cyfr, :consent_source, Sanctum.Consent.Source.DB

@@ -347,23 +347,31 @@ defmodule Sanctum.MCP.VaultTool do
 
   defp fmt(:not_found), do: "not_found"
 
-  # An unknown term is internal — logged, never inspected to the client
-  # (the rule every renderer in the tree applies).
+  defp fmt(:name_required), do: "name_required: an entry needs a name"
+
+  defp fmt(:no_binding_changes),
+    do: "no_binding_changes: rebind needs at least one field to change"
+
+  defp fmt(:binding_moved),
+    do: "binding_moved: the entry was rebound since you read it; re-read and retry"
+
+  defp fmt({:entry_unavailable, status}),
+    do: "entry_unavailable: the entry is #{status}"
+
+  # A reason this tool has no sentence for is not rendered here: a typed
+  # refusal travels as data and each surface says it in its own words
+  # (the external wire, the console, the in-chain guest view). What the
+  # vault still owns is the sanitizing — an internal reason on THIS
+  # surface can carry credential material, and a renderer that inspects
+  # an unknown term would spell it out — so the term is logged sanitized
+  # and bounded here, and what leaves is one word carrying none of it.
   defp fmt(reason) do
-    case Cyfr.Ops.Error.render(reason) do
-      nil ->
-        # Sanitized and bounded: an internal reason on the VAULT surface
-        # can carry credential material a bare inspect would spell out.
-        Logger.warning(
-          "[VaultTool] unrenderable reason: " <>
-            inspect(Cyfr.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
-        )
+    Logger.warning(
+      "[VaultTool] unrenderable reason: " <>
+        inspect(Cyfr.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
+    )
 
-        "the request failed"
-
-      msg ->
-        msg
-    end
+    {:unavailable, "Vault"}
   end
 
   defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())

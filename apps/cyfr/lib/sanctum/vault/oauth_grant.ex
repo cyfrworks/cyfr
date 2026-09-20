@@ -484,19 +484,8 @@ defmodule Sanctum.Vault.OAuthGrant do
   # Plumbing
   # ---------------------------------------------------------------------------
 
-  defp broadcast(%{actor: actor}, entry_id, name, verb) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      Cyfr.Bus.vault_changed(actor.athanor_id),
-      {:vault_entry_changed, entry_id, verb}
-    )
-
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      Cyfr.Bus.vault_changed_global(),
-      {:vault_entry_changed_global, actor.athanor_id, entry_id, verb, %{name: name}}
-    )
-  end
+  defp broadcast(%{actor: actor}, entry_id, name, verb),
+    do: Sanctum.Telemetry.vault_entry_changed(actor.athanor_id, entry_id, verb, %{name: name})
 
   @doc """
   The OAuth callback route, spelled once: the router mounts it, the
@@ -507,17 +496,16 @@ defmodule Sanctum.Vault.OAuthGrant do
   @spec callback_path() :: String.t()
   def callback_path, do: "/auth/oauth/callback"
 
-  # The HOST still comes from the endpoint's configured URL — the one
-  # place the deployment's public origin is known; only the path is ours.
   @doc """
   The `redirect_uri` this deployment registers with a provider.
 
-  Uses `Cyfr.RuntimeConfig.origin/0`: `CYFR_PUBLIC_URL` when configured,
-  otherwise the development origin derived from endpoint configuration.
+  Uses `Sanctum.origin/0`: `CYFR_PUBLIC_URL` when the operator declared
+  one, otherwise this deployment's own origin. Absolute either way — a
+  provider cannot redirect to a path.
   """
   @spec redirect_uri() :: String.t()
   def redirect_uri do
-    Cyfr.RuntimeConfig.origin() <> callback_path()
+    Sanctum.origin() <> callback_path()
   end
 
   defp build_redirect_uri, do: redirect_uri()

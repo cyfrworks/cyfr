@@ -10,6 +10,7 @@ defmodule Sanctum.ProvisioningTest do
   use ExUnit.Case, async: false
 
   alias Arca.ProvisioningClaims, as: Claims
+  alias Compendium.Provisioning, as: Filler
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
@@ -202,7 +203,7 @@ defmodule Sanctum.ProvisioningTest do
              Enum.sort(for root <- Arca.Storage.tenant_roots(), do: {root, :dir})
 
     :ok = Arca.delete_tree(in_group, ["notes"])
-    assert :ok = Provisioning.sync_seeds()
+    assert :ok = Filler.sync_seeds()
     assert {:ok, [_ | _] = healed} = Arca.list_typed(in_group, [])
     assert {"notes", :dir} in healed
   end
@@ -237,7 +238,7 @@ defmodule Sanctum.ProvisioningTest do
       })
     )
 
-    assert :ok = Provisioning.sync_seeds()
+    assert :ok = Filler.sync_seeds()
 
     # The edit survives the release, and the new catalyst is only offered.
     assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :shipped}
@@ -254,7 +255,7 @@ defmodule Sanctum.ProvisioningTest do
     # Pulling it gives the athanor a row AND a baseline profile — invocable
     # without a human walking the consent sheet.
     assert {:ok, %{component_ref: "catalyst:local.fresh:1.0.0"}} =
-             Provisioning.install_shipped(in_group, "catalyst:local.fresh")
+             Filler.install_shipped(in_group, "catalyst:local.fresh")
 
     assert Arca.Overlay.unit_status(in_group, fresh_dir) == {:ok, :shipped}
 
@@ -277,12 +278,12 @@ defmodule Sanctum.ProvisioningTest do
     :ok = Provisioning.start_provisioning(in_group)
 
     assert {:ok, %{component_ref: ref}} =
-             Provisioning.install_shipped(in_group, "catalyst:local.foo")
+             Filler.install_shipped(in_group, "catalyst:local.foo")
 
     # The walk skips it as `:already_bootstrapped` the second time. That is
     # not this install failing — the consent it asked for is there.
     assert {:ok, %{component_ref: ^ref}} =
-             Provisioning.install_shipped(in_group, "catalyst:local.foo")
+             Filler.install_shipped(in_group, "catalyst:local.foo")
   end
 
   test "an install refuses at once while another filler holds the claim, rather than queueing",
@@ -298,7 +299,7 @@ defmodule Sanctum.ProvisioningTest do
 
     # A boot's sync waits 30s for a held estate. This must answer well inside it.
     {elapsed_us, result} =
-      :timer.tc(fn -> Provisioning.install_shipped(in_group, "catalyst:local.foo") end)
+      :timer.tc(fn -> Filler.install_shipped(in_group, "catalyst:local.foo") end)
 
     assert result == {:error, :provisioning_busy}
     assert elapsed_us < 5_000_000
@@ -310,7 +311,7 @@ defmodule Sanctum.ProvisioningTest do
     assert fence == held.fence
     :ok = Claims.release(actor, held.owner, held.fence)
 
-    assert {:ok, _} = Provisioning.install_shipped(in_group, "catalyst:local.foo")
+    assert {:ok, _} = Filler.install_shipped(in_group, "catalyst:local.foo")
 
     assert {:ok, %{entry_kind: "install_shipped", outcome: "released"}} = Claims.current(actor)
   end
@@ -471,7 +472,7 @@ defmodule Sanctum.ProvisioningTest do
       # The whole fill would succeed — the same bundle fills a group in the
       # first test of this module. Run under the claim it lost, it is told
       # the estate is another attempt's, in progress.
-      assert {:error, :provisioning_busy} = Provisioning.fill(stale, group, in_group)
+      assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
 
       {:ok, row} = Athanors.get(group.id)
       refute row.provisioned_at
@@ -487,7 +488,7 @@ defmodule Sanctum.ProvisioningTest do
       assert {:ok, %{owner: owner, fence: fence, outcome: nil}} = Claims.current(actor)
       assert {owner, fence} == {successor.owner, successor.fence}
 
-      assert {:ok, %{provisioned_at: %DateTime{}}} = Provisioning.fill(successor, group, in_group)
+      assert {:ok, %{provisioned_at: %DateTime{}}} = Filler.fill(successor, group, in_group)
       assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
 
       assert {:ok, [_profile]} =
@@ -510,13 +511,13 @@ defmodule Sanctum.ProvisioningTest do
 
       # The successor fails first, and says where.
       assert {:error, {:provisioning_failed, :seed, :bundle_missing}} =
-               Provisioning.fill(successor, group, in_group)
+               Filler.fill(successor, group, in_group)
 
       {:ok, failed} = Athanors.get(group.id)
       assert %{step: "seed", at: recorded_at} = Athanors.provisioning_failure(failed)
 
       # The late attempt fails the same way and writes nothing over it.
-      assert {:error, :provisioning_busy} = Provisioning.fill(stale, group, in_group)
+      assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
 
       {:ok, after_late} = Athanors.get(group.id)
       assert Athanors.provisioning_failure(after_late).at == recorded_at
@@ -541,7 +542,7 @@ defmodule Sanctum.ProvisioningTest do
     actor = %Cyfr.Actor{athanor_id: group.id}
     held = held_elsewhere!(group.id, "install_shipped")
 
-    sync = Task.async(fn -> Provisioning.sync_seeds() end)
+    sync = Task.async(fn -> Filler.sync_seeds() end)
 
     # It waits rather than refusing or walking the estate beside the holder.
     assert Task.yield(sync, 750) == nil
@@ -587,8 +588,8 @@ defmodule Sanctum.ProvisioningTest do
 
     # What follows on the claim — an install released, a sync released, a
     # claim settled failed — moves neither the mark nor the estate's standing.
-    assert {:ok, _} = Provisioning.install_shipped(in_group, "catalyst:local.foo")
-    assert :ok = Provisioning.sync_seeds()
+    assert {:ok, _} = Filler.install_shipped(in_group, "catalyst:local.foo")
+    assert :ok = Filler.sync_seeds()
     {:ok, later} = Claims.claim(actor, "boot_elsewhere/own_later", "provision", 60_000)
     :ok = Claims.settle(actor, later.owner, later.fence, "failed", "seed: :whatever")
 

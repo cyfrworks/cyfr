@@ -522,13 +522,8 @@ defmodule Sanctum.Tenancy.Members do
   def topic(user_id) when is_binary(user_id), do: @topic_prefix <> user_id
 
   @doc false
-  def broadcast_change(user_id, athanor_id, change) when is_binary(user_id) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      topic(user_id),
-      {:membership_changed, %{user_id: user_id, athanor_id: athanor_id, change: change}}
-    )
-  end
+  def broadcast_change(user_id, athanor_id, change) when is_binary(user_id),
+    do: Sanctum.Telemetry.membership_changed(user_id, athanor_id, change)
 
   def broadcast_change(_user_id, _athanor_id, _change), do: :ok
 
