@@ -101,7 +101,9 @@ defmodule Opus.ExecutorMaskedOutputTest do
     assert row.status == "completed"
     refute_unmasked(row, secrets)
 
-    assert {:ok, _row, payload} = Arca.ExecutionPayloads.get(ctx, id, "result")
+    assert {:ok, _row, payload} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
+
     assert payload =~ @redacted
     refute_unmasked(payload, secrets)
 
@@ -136,7 +138,9 @@ defmodule Opus.ExecutorMaskedOutputTest do
     assert %{"error" => ^message} = Enum.find(rows, &(&1.type == "execution.failed")).data
     refute_unmasked(rows, secrets)
     refute_unmasked(live_events(), secrets)
-    assert {:error, :not_found} = Arca.ExecutionPayloads.get(ctx, id, "result")
+
+    assert {:error, :not_found} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
   end
 
   test "a timed-out run's error is masked in the row, its event and the result", %{ctx: ctx} do
@@ -192,7 +196,10 @@ defmodule Opus.ExecutorMaskedOutputTest do
     refute_unmasked(child, secrets)
     refute_unmasked(Cyfr.Execution.Events.since(child.id, {0, 0}, ctx.athanor_id), secrets)
     refute_unmasked(event_rows(ctx, child.id), secrets)
-    assert {:ok, _row, payload} = Arca.ExecutionPayloads.get(ctx, child.id, "result")
+
+    assert {:ok, _row, payload} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), child.id, "result")
+
     assert payload =~ @redacted
     refute_unmasked(payload, secrets)
   end
@@ -226,7 +233,9 @@ defmodule Opus.ExecutorMaskedOutputTest do
     refute_unmasked(row, secrets)
     refute_unmasked(live_events(), secrets)
     refute_unmasked(event_rows(ctx, id), secrets)
-    assert {:error, :not_found} = Arca.ExecutionPayloads.get(ctx, id, "result")
+
+    assert {:error, :not_found} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
   end
 
   # ---------------------------------------------------------------------------
@@ -343,7 +352,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
   end
 
   defp event_rows(ctx, id) do
-    {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, id, 0)
+    {:ok, rows} = Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), id, 0)
     Enum.map(rows, &%{type: &1.type, data: Arca.ExecutionEvents.data(&1)})
   end
 

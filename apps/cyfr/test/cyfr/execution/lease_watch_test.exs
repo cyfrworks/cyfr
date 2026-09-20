@@ -56,7 +56,7 @@ defmodule Cyfr.Execution.LeaseWatchTest do
 
     {:ok, _} =
       Arca.Execution.record_end(
-        ctx,
+        Sanctum.Context.actor(ctx),
         id,
         "failed",
         %{completed_at: DateTime.utc_now(), duration_ms: 0, error_message: "swept"},
@@ -98,15 +98,17 @@ defmodule Cyfr.Execution.LeaseWatchTest do
   } do
     {pid, ref, watch} = holder!(id, attempt)
     :ok = LeaseWatch.suspend(watch)
-    %{lease_until: suspended} = Arca.ExecutionAttempts.get(ctx.athanor_id, attempt)
+    %{lease_until: suspended} = Arca.ExecutionAttempts.get(Sanctum.Context.actor(ctx), attempt)
 
     Process.sleep(100)
-    assert %{lease_until: ^suspended} = Arca.ExecutionAttempts.get(ctx.athanor_id, attempt)
+
+    assert %{lease_until: ^suspended} =
+             Arca.ExecutionAttempts.get(Sanctum.Context.actor(ctx), attempt)
 
     :ok = LeaseWatch.resume(watch)
 
     Cyfr.Test.Wait.wait_until(fn ->
-      %{lease_until: renewed} = Arca.ExecutionAttempts.get(ctx.athanor_id, attempt)
+      %{lease_until: renewed} = Arca.ExecutionAttempts.get(Sanctum.Context.actor(ctx), attempt)
       DateTime.compare(renewed, suspended) == :gt
     end)
 

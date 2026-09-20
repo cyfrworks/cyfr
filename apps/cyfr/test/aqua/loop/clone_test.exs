@@ -60,7 +60,7 @@ defmodule Aqua.Loop.CloneTest do
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, thread: thread}
   end
 
@@ -376,8 +376,8 @@ defmodule Aqua.Loop.CloneTest do
 
     # A prose edit after the pin: the same capability, other bytes.
     path = AquaPath.role_file("planner")
-    {:ok, bytes} = Arca.get(ctx, path)
-    :ok = Arca.put(ctx, path, bytes <> "\n\nLIVE-EDIT-MARKER\n")
+    {:ok, bytes} = Arca.get(Sanctum.Context.actor(ctx), path)
+    :ok = Arca.put(Sanctum.Context.actor(ctx), path, bytes <> "\n\nLIVE-EDIT-MARKER\n")
     {:ok, _} = AgentIndex.sync(ctx)
 
     {:ok, soul} = Cyfr.Execution.authority_for(ctx, :default, @soul)
@@ -418,7 +418,7 @@ defmodule Aqua.Loop.CloneTest do
     assert_receive {:scripted_probe, worker, _}, 30_000
 
     {:ok, [soul_profile]} = Source.DB.profiles(ctx, @soul)
-    :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, soul_profile.id, "revoked")
+    :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), soul_profile.id, "revoked")
     send(worker, :continue)
 
     # The call in flight finishes; the soul's next model call is refused at

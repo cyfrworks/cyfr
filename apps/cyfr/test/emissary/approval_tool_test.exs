@@ -20,7 +20,7 @@ defmodule Emissary.MCP.ApprovalToolTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local()
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, thread: thread}
   end
 

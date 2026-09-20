@@ -107,7 +107,7 @@ defmodule Cyfr.Execution.AgentAuthorityTest do
     assert {:ok, %{"contracts" => ["model/chat@1"]}} = Cyfr.Models.decode_envelope(output)
 
     {:ok, [claude]} = Source.DB.profiles(ctx, "catalyst:local.claude")
-    :ok = Arca.ProfileStorage.set_status(ctx.athanor_id, claude.id, "revoked")
+    :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), claude.id, "revoked")
     refute Sanctum.Consent.Loader.pinned_intact?(ctx, authority)
 
     assert {:error, {:setup_required, %{reason: "consent_moved"}}} =

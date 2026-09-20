@@ -45,7 +45,7 @@ defmodule Compendium.AquaSkills do
   @spec index(Context.t(), pos_integer() | :all) ::
           {:ok, %{entries: [entry()], more: non_neg_integer()}} | {:error, term()}
   def index(%Context{} = ctx, limit) do
-    with {:ok, entries} <- Arca.list_typed(ctx, AquaPath.skills_root()) do
+    with {:ok, entries} <- Arca.list_typed(Sanctum.Context.actor(ctx), AquaPath.skills_root()) do
       names =
         for {name, :dir} <- entries, AquaPath.valid_name?(name), do: name
 
@@ -70,7 +70,7 @@ defmodule Compendium.AquaSkills do
   """
   @spec read_manifest(Context.t(), String.t()) :: {:ok, map(), String.t()} | {:error, term()}
   def read_manifest(%Context{} = ctx, name) when is_binary(name) do
-    with {:ok, binary} <- Arca.get(ctx, AquaPath.skill_manifest(name)) do
+    with {:ok, binary} <- Arca.get(Sanctum.Context.actor(ctx), AquaPath.skill_manifest(name)) do
       AquaAgent.parse_frontmatter(binary)
     end
   end

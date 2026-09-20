@@ -3,7 +3,7 @@
 
 defmodule Arca.StorageGCTest.Adapter do
   @moduledoc false
-  # Local's bytes behind a hook the test sets: `hook.(op, ctx, path)` runs
+  # Local's bytes behind a hook the test sets: `hook.(op, actor, path)` runs
   # in the calling process before the operation and may answer
   # `{:error, reason}` to fail it, or `exit/1` — a process that died at
   # exactly that operation.
@@ -14,36 +14,48 @@ defmodule Arca.StorageGCTest.Adapter do
   def hook(fun) when is_function(fun, 3), do: :persistent_term.put(@hook, fun)
   def clear, do: :persistent_term.erase(@hook)
 
-  defp through(op, ctx, path, fun) do
+  defp through(op, actor, path, fun) do
     case :persistent_term.get(@hook, nil) do
       nil ->
         fun.()
 
       hook ->
-        case hook.(op, ctx, path) do
+        case hook.(op, actor, path) do
           {:error, _} = error -> error
           _pass -> fun.()
         end
     end
   end
 
-  def put(ctx, path, content),
-    do: through(:put, ctx, path, fn -> Arca.Adapters.Local.put(ctx, path, content) end)
-
-  def delete(ctx, path),
-    do: through(:delete, ctx, path, fn -> Arca.Adapters.Local.delete(ctx, path) end)
-
-  def replace_tree(ctx, path, files),
+  def put(actor, path, content),
     do:
-      through(:replace_tree, ctx, path, fn ->
-        Arca.Adapters.Local.replace_tree(ctx, path, files)
+      through(:put, actor, path, fn ->
+        Arca.Adapters.Local.put(actor, path, content)
       end)
 
-  def list_recursive(ctx, path),
-    do: through(:list, ctx, path, fn -> Arca.Adapters.Local.list_recursive(ctx, path) end)
+  def delete(actor, path),
+    do:
+      through(:delete, actor, path, fn ->
+        Arca.Adapters.Local.delete(actor, path)
+      end)
 
-  def list_prefix(ctx, path),
-    do: through(:list, ctx, path, fn -> Arca.Adapters.Local.list_prefix(ctx, path) end)
+  def replace_tree(actor, path, files),
+    do:
+      through(:replace_tree, actor, path, fn ->
+        Arca.Adapters.Local.replace_tree(actor, path, files)
+      end)
+
+  def list_recursive(actor, path),
+    do:
+      through(:list, actor, path, fn ->
+        Arca.Adapters.Local.list_recursive(actor, path)
+      end)
+
+  def list_prefix(actor, path),
+    do:
+      through(:list, actor, path, fn ->
+        Arca.Adapters.Local.list_prefix(actor, path)
+      end)
 end
 
 defmodule Arca.StorageGCTest do
@@ -120,17 +132,20 @@ defmodule Arca.StorageGCTest do
   defp whole(tag), do: Map.new(files(tag))
 
   defp commit(ctx, unit, tag),
-    do: Arca.Overlay.commit_unit(ctx, unit, {:files, files(tag)}, cap: :exempt)
+    do:
+      Arca.Overlay.commit_unit(Sanctum.Context.actor(ctx), unit, {:files, files(tag)},
+        cap: :exempt
+      )
 
   defp served(ctx, unit) do
-    {:ok, read} = Arca.read_subtree(ctx, UnitLocator.served_path(unit))
+    {:ok, read} = Arca.read_subtree(Sanctum.Context.actor(ctx), UnitLocator.served_path(unit))
     Map.new(read)
   end
 
   # The names of what is staged for a unit, by revision.
   defp staged(ctx, unit) do
     prefix = UnitLocator.staging_prefix(unit)
-    {:ok, leaves} = Arca.list_recursive(ctx, prefix)
+    {:ok, leaves} = Arca.list_recursive(Sanctum.Context.actor(ctx), prefix)
 
     leaves
     |> Enum.map(&Enum.drop(&1, length(prefix)))
@@ -161,11 +176,16 @@ defmodule Arca.StorageGCTest do
   defp lay_prefix(ctx, unit, revision, tag, opts \\ []) do
     if Keyword.get(opts, :marker, true) do
       marker = Jason.encode!(%{"revision" => revision, "started_at" => iso(DateTime.utc_now())})
-      :ok = Arca.put(ctx, UnitLocator.marker_path(unit, revision), marker)
+      :ok = Arca.put(Sanctum.Context.actor(ctx), UnitLocator.marker_path(unit, revision), marker)
     end
 
     for {rel, bytes} <- files(tag) do
-      :ok = Arca.put(ctx, UnitLocator.staged_object(unit, revision, rel), bytes)
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          UnitLocator.staged_object(unit, revision, rel),
+          bytes
+        )
     end
 
     revision
@@ -228,10 +248,10 @@ defmodule Arca.StorageGCTest do
   end
 
   defp open_turn(ctx) do
-    {:ok, thread} = Arca.ThreadStorage.create(ctx)
+    {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
-      Arca.TurnStorage.accept_message(ctx, thread.id, %{
+      Arca.TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
@@ -377,7 +397,11 @@ defmodule Arca.StorageGCTest do
       assert {:ok, _} = commit(ctx, unit, "two")
       assert {:kept, :pinned} = StorageGC.collect(actor, candidate(unit, one), now: later(@day))
 
-      {:ok, _} = Arca.TurnStorage.finish(ctx, turn.id, "cancelled", %{fence: turn.fence})
+      {:ok, _} =
+        Arca.TurnStorage.finish(Sanctum.Context.actor(ctx), turn.id, "cancelled", %{
+          fence: turn.fence
+        })
+
       assert :collected = StorageGC.collect(actor, candidate(unit, one), now: later(@day))
     end
 
@@ -435,7 +459,7 @@ defmodule Arca.StorageGCTest do
       assert row(actor, unit) == nil
       assert {:ok, %{collected: 1}} = StorageGC.sweep(actor, now: later(2 * @day))
       assert row(actor, unit) == nil
-      assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :absent}
+      assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :absent}
     end
 
     test "that carries no date is given one, and collected a grace later", %{
@@ -569,13 +593,18 @@ defmodule Arca.StorageGCTest do
       assert {:error, {:finish_failed, _}} = commit(ctx, unit, "one")
 
       assert {:error, {:finish_failed, _}} =
-               Arca.Overlay.commit_unit(ctx, agent, {:files, [{[], "# a role"}]}, cap: :exempt)
+               Arca.Overlay.commit_unit(
+                 Sanctum.Context.actor(ctx),
+                 agent,
+                 {:files, [{[], "# a role"}]},
+                 cap: :exempt
+               )
 
       Adapter.clear()
 
       assert {:ok, %{repaired: repaired, left: []}} = StorageGC.repair(actor)
       assert Enum.sort(repaired) == Enum.sort([unit, agent])
-      assert {:ok, "# a role"} = Arca.get(ctx, agent)
+      assert {:ok, "# a role"} = Arca.get(Sanctum.Context.actor(ctx), agent)
     end
 
     test "never serves a staged revision that is not what was committed", %{
@@ -588,7 +617,8 @@ defmodule Arca.StorageGCTest do
       {:ok, %{current_revision: two}} = pointer(actor, unit)
 
       # What a removal that failed part-way leaves of a prefix.
-      :ok = Arca.delete(ctx, UnitLocator.staged_object(unit, two, ["a.txt"]))
+      :ok =
+        Arca.delete(Sanctum.Context.actor(ctx), UnitLocator.staged_object(unit, two, ["a.txt"]))
 
       assert {:ok, %{repaired: [], left: [{^unit, :staged_incomplete}]}} = StorageGC.repair(actor)
       assert served(ctx, unit) == whole("one")
@@ -605,7 +635,7 @@ defmodule Arca.StorageGCTest do
       orphan = lay_prefix(ctx, unit, StorageUnits.new_revision(), "orphan")
 
       # The served objects go without the row: beneath the overlay.
-      :ok = Arca.Adapters.Local.delete_tree(ctx, unit)
+      :ok = Arca.Adapters.Local.delete_tree(Sanctum.Context.actor(ctx), unit)
 
       ExUnit.CaptureLog.capture_log(fn ->
         assert {:ok, %{repaired: [], unrecoverable: [^unit], orphan_commits: []}} =
@@ -640,12 +670,12 @@ defmodule Arca.StorageGCTest do
     } do
       assert {:ok, _} = commit(ctx, unit, "one")
       commit_unserved(ctx, unit, "two")
-      :ok = Arca.put(ctx, unit ++ ["a.txt"], "an edit")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), unit ++ ["a.txt"], "an edit")
 
       assert {:ok, %{repaired: 0, pending: [{^unit, :served_diverged}]}} =
                StorageGC.sweep(actor, now: later(2 * @day))
 
-      assert {:ok, "an edit"} = Arca.get(ctx, unit ++ ["a.txt"])
+      assert {:ok, "an edit"} = Arca.get(Sanctum.Context.actor(ctx), unit ++ ["a.txt"])
 
       # Asked for, the move is made.
       assert {:ok, %{repaired: [^unit]}} = StorageGC.repair(actor)

@@ -53,51 +53,51 @@ defmodule Arca.PublicationContract.Faults do
   end
 
   @impl true
-  def get(ctx, path), do: through(:get, path, fn -> base().get(ctx, path) end)
+  def get(actor, path), do: through(:get, path, fn -> base().get(actor, path) end)
 
   @impl true
-  def put(ctx, path, content) do
+  def put(actor, path, content) do
     case fault(:put, path) do
-      :pass -> base().put(ctx, path, content)
+      :pass -> base().put(actor, path, content)
       :lose -> :ok
-      {:store, bytes} -> base().put(ctx, path, bytes)
+      {:store, bytes} -> base().put(actor, path, bytes)
       {:error, _} = error -> error
     end
   end
 
   @impl true
-  def append(ctx, path, content),
-    do: through(:append, path, fn -> base().append(ctx, path, content) end)
+  def append(actor, path, content),
+    do: through(:append, path, fn -> base().append(actor, path, content) end)
 
   @impl true
-  def delete(ctx, path), do: through(:delete, path, fn -> base().delete(ctx, path) end)
+  def delete(actor, path), do: through(:delete, path, fn -> base().delete(actor, path) end)
 
   @impl true
-  def delete_tree(ctx, path),
-    do: through(:delete_tree, path, fn -> base().delete_tree(ctx, path) end)
+  def delete_tree(actor, path),
+    do: through(:delete_tree, path, fn -> base().delete_tree(actor, path) end)
 
   @impl true
-  def list_typed(ctx, path), do: base().list_typed(ctx, path)
+  def list_typed(actor, path), do: base().list_typed(actor, path)
 
   @impl true
-  def exists?(ctx, path), do: base().exists?(ctx, path)
+  def exists?(actor, path), do: base().exists?(actor, path)
 
   @impl true
-  def list_recursive(ctx, path), do: base().list_recursive(ctx, path)
+  def list_recursive(actor, path), do: base().list_recursive(actor, path)
 
   @impl true
-  def usage(ctx, path), do: base().usage(ctx, path)
+  def usage(actor, path), do: base().usage(actor, path)
 
   @impl true
-  def ensure_dir(ctx, path), do: base().ensure_dir(ctx, path)
+  def ensure_dir(actor, path), do: base().ensure_dir(actor, path)
 
   @impl true
-  def serve_to_conn(conn, ctx, path, opts), do: base().serve_to_conn(conn, ctx, path, opts)
+  def serve_to_conn(conn, actor, path, opts), do: base().serve_to_conn(conn, actor, path, opts)
 
   # The one callback under test an adapter may not export: an object
   # store has no rename, and the contract must hold either way.
   @impl true
-  def replace_tree(ctx, path, files) do
+  def replace_tree(actor, path, files) do
     through(:replace_tree, path, fn ->
       adapter = base()
 
@@ -106,25 +106,26 @@ defmodule Arca.PublicationContract.Faults do
       # false and an adapter that CAN swap a tree would be taken for one
       # that cannot.
       if Code.ensure_loaded?(adapter) and function_exported?(adapter, :replace_tree, 3),
-        do: adapter.replace_tree(ctx, path, files),
+        do: adapter.replace_tree(actor, path, files),
         else: {:error, :atomic_replace_unsupported}
     end)
   end
 
   @impl true
-  def put_if_none_match(ctx, path, content),
-    do: through(:put_if_none_match, path, fn -> base().put_if_none_match(ctx, path, content) end)
+  def put_if_none_match(actor, path, content),
+    do:
+      through(:put_if_none_match, path, fn -> base().put_if_none_match(actor, path, content) end)
 
   @impl true
-  def put_if_match(ctx, path, content, precondition),
-    do: base().put_if_match(ctx, path, content, precondition)
+  def put_if_match(actor, path, content, precondition),
+    do: base().put_if_match(actor, path, content, precondition)
 
   @impl true
-  def get_for_update(ctx, path),
-    do: through(:get_for_update, path, fn -> base().get_for_update(ctx, path) end)
+  def get_for_update(actor, path),
+    do: through(:get_for_update, path, fn -> base().get_for_update(actor, path) end)
 
   @impl true
-  def list_prefix(ctx, prefix), do: base().list_prefix(ctx, prefix)
+  def list_prefix(actor, prefix), do: base().list_prefix(actor, prefix)
 end
 
 defmodule Arca.PublicationContract do
@@ -229,7 +230,8 @@ defmodule Arca.PublicationContract do
       end
 
       defp commit(ctx, unit, tag),
-        do: Arca.Overlay.commit_unit(ctx, unit, revision(tag), cap: :exempt)
+        do:
+          Arca.Overlay.commit_unit(Sanctum.Context.actor(ctx), unit, revision(tag), cap: :exempt)
 
       # What a reader reads: the pointer, resolved once, then the unit's
       # objects where they are served.
@@ -238,7 +240,9 @@ defmodule Arca.PublicationContract do
 
         case StorageUnits.current(actor, root, key) do
           {:ok, pointer} ->
-            {:ok, served} = Arca.read_subtree(ctx, UnitLocator.served_path(unit))
+            {:ok, served} =
+              Arca.read_subtree(Sanctum.Context.actor(ctx), UnitLocator.served_path(unit))
+
             {pointer.current_revision, Map.new(served)}
 
           {:error, :not_found} ->
@@ -264,7 +268,9 @@ defmodule Arca.PublicationContract do
       end
 
       defp staged(ctx, unit) do
-        {:ok, leaves} = Arca.list_recursive(ctx, UnitLocator.staging_prefix(unit))
+        {:ok, leaves} =
+          Arca.list_recursive(Sanctum.Context.actor(ctx), UnitLocator.staging_prefix(unit))
+
         for leaf <- leaves, do: List.last(leaf)
       end
 
@@ -324,7 +330,7 @@ defmodule Arca.PublicationContract do
                    journal(actor, unit)
 
           assert staged(ctx, unit) == []
-          assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :own}
+          assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :own}
         end
 
         test "registers its prefix before any upload", %{ctx: ctx, unit: unit} do
@@ -397,8 +403,10 @@ defmodule Arca.PublicationContract do
 
           {_a, ctx_b} = Arca.TenantTestHelper.two_contexts()
           assert read(ctx_b, Sanctum.Context.actor(ctx_b), unit) == :unpublished
-          assert Arca.Overlay.unit_status(ctx_b, unit) == {:ok, :absent}
-          assert {:error, :not_found} = Arca.Overlay.repair_unit(ctx_b, unit)
+          assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx_b), unit) == {:ok, :absent}
+
+          assert {:error, :not_found} =
+                   Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx_b), unit)
         end
 
         test "a subtree replacement is a commit like any other", %{
@@ -409,7 +417,11 @@ defmodule Arca.PublicationContract do
           assert {:ok, _} = commit(ctx, unit, "one")
 
           assert :ok =
-                   Arca.Overlay.replace_subtree(ctx, unit, ["sub"], [{["c.txt"], "c of two"}],
+                   Arca.Overlay.replace_subtree(
+                     Sanctum.Context.actor(ctx),
+                     unit,
+                     ["sub"],
+                     [{["c.txt"], "c of two"}],
                      cap: :exempt
                    )
 
@@ -447,7 +459,7 @@ defmodule Arca.PublicationContract do
           assert staged(ctx, unit) == [UnitLocator.marker_name()]
           assert read(ctx, actor, unit) == :unpublished
           assert journal(actor, unit) == []
-          assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :absent}
+          assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :absent}
 
           # Its draft holds the unit until it has outlived its lifetime; then
           # the next writer lands, and the dead writer's prefix is not its own.
@@ -483,7 +495,9 @@ defmodule Arca.PublicationContract do
 
           # Nothing for repair to promote: it reads the committed revision's
           # prefix, which is long served and gone.
-          assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(ctx, unit)
+          assert {:ok, :nothing_pending} =
+                   Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), unit)
+
           assert {^first, served} = read(ctx, actor, unit)
           assert served == whole("one")
         end
@@ -508,11 +522,11 @@ defmodule Arca.PublicationContract do
 
           assert read(ctx, actor, unit) == :unpublished
           assert journal(actor, unit) == []
-          assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :absent}
-          refute Arca.exists?(ctx, unit ++ [@sentinel])
+          assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :absent}
+          refute Arca.exists?(Sanctum.Context.actor(ctx), unit ++ [@sentinel])
 
           # And repair promotes none of it: no row names that revision.
-          assert {:error, :not_found} = Arca.Overlay.repair_unit(ctx, unit)
+          assert {:error, :not_found} = Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), unit)
           assert read(ctx, actor, unit) == :unpublished
         end
 
@@ -539,14 +553,16 @@ defmodule Arca.PublicationContract do
           assert [%{new_revision: ^revision}] = journal(actor, unit)
           assert "a.txt" in staged(ctx, unit)
 
-          assert {:ok, :repaired} = Arca.Overlay.repair_unit(ctx, unit)
+          assert {:ok, :repaired} = Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), unit)
 
           assert {^revision, served} = read(ctx, actor, unit)
           assert served == whole("one")
           assert staged(ctx, unit) == []
-          assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :own}
+          assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :own}
           assert [_still_one] = journal(actor, unit)
-          assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(ctx, unit)
+
+          assert {:ok, :nothing_pending} =
+                   Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), unit)
         end
       end
 
@@ -584,12 +600,14 @@ defmodule Arca.PublicationContract do
           assert [%{new_revision: ^revision}] = journal(actor, unit)
 
           # The repair fails where the commit's own move did.
-          assert {:error, {:finish_failed, :enospc}} = Arca.Overlay.repair_unit(ctx, unit)
+          assert {:error, {:finish_failed, :enospc}} =
+                   Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), unit)
+
           assert {:ok, %{current_revision: ^revision}} = StorageUnits.current(actor, root, key)
           assert "b.txt" in staged(ctx, unit)
 
           Faults.clear()
-          assert {:ok, :repaired} = Arca.Overlay.repair_unit(ctx, unit)
+          assert {:ok, :repaired} = Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), unit)
           assert {^revision, served} = read(ctx, actor, unit)
           assert served == whole("one")
           assert staged(ctx, unit) == []
@@ -616,15 +634,22 @@ defmodule Arca.PublicationContract do
           assert served == whole("one")
 
           # What the removal got through before it failed.
-          :ok = Arca.delete(ctx, UnitLocator.staged_object(unit, revision, ["a.txt"]))
+          :ok =
+            Arca.delete(
+              Sanctum.Context.actor(ctx),
+              UnitLocator.staged_object(unit, revision, ["a.txt"])
+            )
+
           refute "a.txt" in staged(ctx, unit)
 
           # The remainder is not the revision the journal recorded, so it is
           # promoted over nothing: the served unit stands whole.
-          assert {:error, :staged_incomplete} = Arca.Overlay.repair_unit(ctx, unit)
+          assert {:error, :staged_incomplete} =
+                   Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), unit)
+
           assert {^revision, served} = read(ctx, actor, unit)
           assert served == whole("one")
-          assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :own}
+          assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :own}
           assert [_one_commit_throughout] = journal(actor, unit)
 
           # A later commit lands over it as any commit does.
@@ -676,7 +701,10 @@ defmodule Arca.PublicationContract do
 
           # The loser's objects are gone, and repair has nothing of its to find.
           assert staged(ctx, unit) == []
-          assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(ctx, unit)
+
+          assert {:ok, :nothing_pending} =
+                   Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), unit)
+
           assert {^revision, served} = read(ctx, actor, unit)
           assert served == whole("winner")
         end
@@ -727,7 +755,7 @@ defmodule Arca.PublicationContract do
           assert read(ctx, actor, unit) == :unpublished
           assert journal(actor, unit) == []
           assert staged(ctx, unit) == []
-          assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :absent}
+          assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :absent}
 
           # The draft was given back: the next writer lands at once.
           assert {:ok, _} = commit(ctx, unit, "two")
@@ -782,17 +810,21 @@ defmodule Arca.PublicationContract do
 
       describe "a complete object set no row names" do
         test "is not a published unit to any reader", %{ctx: ctx, actor: actor, unit: unit} do
-          for {rel, bytes} <- whole("hand-laid"), do: :ok = Arca.put(ctx, unit ++ rel, bytes)
+          for {rel, bytes} <- whole("hand-laid"),
+              do: :ok = Arca.put(Sanctum.Context.actor(ctx), unit ++ rel, bytes)
 
           assert read(ctx, actor, unit) == :unpublished
           # Bytes the athanor holds, never a complete copy.
-          assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :own}
-          assert {:ok, %{^unit => :own}} = Arca.Overlay.unit_statuses(ctx, "components")
-          assert {:error, :not_found} = Arca.Overlay.repair_unit(ctx, unit)
+          assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :own}
+
+          assert {:ok, %{^unit => :own}} =
+                   Arca.Overlay.unit_statuses(Sanctum.Context.actor(ctx), "components")
+
+          assert {:error, :not_found} = Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), unit)
 
           # A create never replaces what stands there; a commit does, whole.
           assert {:error, :exists} =
-                   Arca.Overlay.commit_unit(ctx, unit, revision("one"),
+                   Arca.Overlay.commit_unit(Sanctum.Context.actor(ctx), unit, revision("one"),
                      cap: :exempt,
                      if_absent: true
                    )
@@ -807,10 +839,15 @@ defmodule Arca.PublicationContract do
           actor: actor,
           unit: unit
         } do
-          for {rel, bytes} <- whole("hand-laid"), do: :ok = Arca.put(ctx, unit ++ rel, bytes)
+          for {rel, bytes} <- whole("hand-laid"),
+              do: :ok = Arca.put(Sanctum.Context.actor(ctx), unit ++ rel, bytes)
 
           assert :ok =
-                   Arca.Overlay.replace_subtree(ctx, unit, ["sub"], [{["c.txt"], "c"}],
+                   Arca.Overlay.replace_subtree(
+                     Sanctum.Context.actor(ctx),
+                     unit,
+                     ["sub"],
+                     [{["c.txt"], "c"}],
                      cap: :exempt
                    )
 
@@ -822,10 +859,14 @@ defmodule Arca.PublicationContract do
 
           # With no sentinel served there is no unit to carry over.
           bare = List.replace_at(unit, 3, "bare-" <> Enum.at(unit, 3))
-          :ok = Arca.put(ctx, bare ++ ["a.txt"], "orphan")
+          :ok = Arca.put(Sanctum.Context.actor(ctx), bare ++ ["a.txt"], "orphan")
 
           assert {:error, :not_found} =
-                   Arca.Overlay.replace_subtree(ctx, bare, ["sub"], [{["c.txt"], "c"}],
+                   Arca.Overlay.replace_subtree(
+                     Sanctum.Context.actor(ctx),
+                     bare,
+                     ["sub"],
+                     [{["c.txt"], "c"}],
                      cap: :exempt
                    )
 
@@ -838,12 +879,12 @@ defmodule Arca.PublicationContract do
           unit: unit
         } do
           assert {:ok, _} = commit(ctx, unit, "one")
-          assert {:ok, :deleted} = Arca.Overlay.drop_unit(ctx, unit)
+          assert {:ok, :deleted} = Arca.Overlay.drop_unit(Sanctum.Context.actor(ctx), unit)
 
           assert read(ctx, actor, unit) == :unpublished
-          assert Arca.Overlay.unit_status(ctx, unit) == {:ok, :absent}
-          refute Arca.exists?(ctx, unit ++ [@sentinel])
-          assert {:error, :not_found} = Arca.Overlay.drop_unit(ctx, unit)
+          assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :absent}
+          refute Arca.exists?(Sanctum.Context.actor(ctx), unit ++ [@sentinel])
+          assert {:error, :not_found} = Arca.Overlay.drop_unit(Sanctum.Context.actor(ctx), unit)
 
           # The journal outlives the drop; the next commit starts from no pointer.
           assert {:ok, _} = commit(ctx, unit, "two")

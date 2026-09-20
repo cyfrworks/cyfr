@@ -184,7 +184,10 @@ defmodule Cyfr.Execution.StartRefusalTest do
     # One start, and nothing claimed: no runner was given the run.
     assert_received {:request, "/worker/v1/start"}
     refute_received {:request, "/worker/v1/start"}
-    assert %{claimed_by: nil, state: state} = Arca.ExecutionAttempts.current(ctx.athanor_id, id)
+
+    assert %{claimed_by: nil, state: state} =
+             Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
+
     refute state == "running"
   end
 
@@ -203,7 +206,7 @@ defmodule Cyfr.Execution.StartRefusalTest do
 
     assert_received {:request, "/worker/v1/start"}
     refute_received {:request, "/worker/v1/start"}
-    assert %{claimed_by: nil} = Arca.ExecutionAttempts.current(ctx.athanor_id, id)
+    assert %{claimed_by: nil} = Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
   end
 
   @tag :capture_log

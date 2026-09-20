@@ -6,7 +6,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   defp tincture_dir(name) do
     Arca.Adapters.Local.build_path(
-      Sanctum.TestContext.local(),
+      Sanctum.Context.actor(Sanctum.TestContext.local()),
       ["components", "tinctures", "local", name, "1.0.0"]
     )
   end
@@ -125,7 +125,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
           {"built-dash", built_manifest}
         ] do
       {:ok, _} =
-        Arca.ComponentStorage.put_component(ctx, %{
+        Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
           id: "test_#{name}_#{:rand.uniform(1_000_000)}",
           name: name,
           version: "1.0.0",

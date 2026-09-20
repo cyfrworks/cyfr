@@ -29,7 +29,7 @@ defmodule Arca.Test.UnitFixtures do
   def tenant_component!(ctx, type, publisher, name, version, opts \\ []) do
     dir =
       Arca.Adapters.Local.build_path(
-        ctx,
+        Sanctum.Context.actor(ctx),
         ComponentPath.version_dir(type, publisher, name, version)
       )
 
@@ -55,7 +55,7 @@ defmodule Arca.Test.UnitFixtures do
   def ship_and_register!(ctx, type, publisher, name, version, opts \\ []) do
     seed_component!(type, publisher, name, version, opts)
     unit = ComponentPath.version_dir(type, publisher, name, version)
-    :ok = Arca.Overlay.pull_shipped(ctx, unit)
+    :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), unit)
     Compendium.Registry.register_from_arca(ctx, unit)
   end
 

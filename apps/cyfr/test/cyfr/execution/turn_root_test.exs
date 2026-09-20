@@ -54,10 +54,10 @@ defmodule Cyfr.Execution.TurnRootTest do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted
 
-    {:ok, thread} = Arca.ThreadStorage.create(ctx)
+    {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
-      TurnStorage.accept_message(ctx, thread.id, %{
+      TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
         turn: %{agent: "aqua", requested_by: ctx.user_id}
       })
@@ -107,7 +107,7 @@ defmodule Cyfr.Execution.TurnRootTest do
       )
 
     {:ok, started} =
-      TurnStorage.start(ctx, turn.id, %{
+      TurnStorage.start(Sanctum.Context.actor(ctx), turn.id, %{
         root_execution_id: claim.execution_id,
         attempt: claim.attempt,
         budget_id: claim.budget_id,
@@ -134,10 +134,12 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert is_binary(row.activation_digest)
     assert row.current_attempt == claim.attempt
     assert row.turn_id == turn.id
-    assert %{fence: 1, state: "running"} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+
+    assert %{fence: 1, state: "running"} =
+             ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
 
     assert %{cap: cap, released_at: nil} =
-             Arca.BudgetReservations.lookup(ctx.athanor_id, claim.budget_id)
+             Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), claim.budget_id)
 
     assert cap == claim.authority.budget.cap
     assert roots() == before + 1
@@ -154,7 +156,9 @@ defmodule Cyfr.Execution.TurnRootTest do
     # itself, so the children it dispatches from workers class as `:child`.
     assert is_nil(row.output)
 
-    {:ok, _} = TurnStorage.finish(ctx, turn.id, "completed", %{fence: started.fence})
+    {:ok, _} =
+      TurnStorage.finish(Sanctum.Context.actor(ctx), turn.id, "completed", %{fence: started.fence})
+
     :ok = TurnRoot.release(ctx, claim.execution_id, claim: claim)
     assert roots() == before
     assert [] = registered(claim.execution_id)
@@ -249,7 +253,7 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert roots() == before
     refute Process.alive?(claim.keeper)
     assert execution(claim.execution_id).status == "paused"
-    assert %{state: "paused"} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+    assert %{state: "paused"} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
 
     # A lapsed lease on a paused attempt is nobody's business: neither the
     # sweeper nor retention touches it.
@@ -285,7 +289,7 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert roots_while == before + 1
     assert resumed.turn.status == "running"
     assert execution(claim.execution_id).status == "running"
-    attempt = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+    attempt = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
     assert attempt.state == "running"
     assert DateTime.compare(attempt.lease_until, DateTime.utc_now()) == :gt
 
@@ -325,10 +329,10 @@ defmodule Cyfr.Execution.TurnRootTest do
       assert roots() == before + 1
       assert execution(claim.execution_id).status == "running"
 
-      %{lease_until: seen} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+      %{lease_until: seen} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
 
       wait_until(fn ->
-        %{lease_until: now} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+        %{lease_until: now} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
         DateTime.compare(now, seen) == :gt
       end)
 
@@ -353,7 +357,11 @@ defmodule Cyfr.Execution.TurnRootTest do
       claim: claim,
       started: started
     } do
-      {:ok, _} = TurnStorage.finish(ctx, turn.id, "completed", %{fence: started.fence})
+      {:ok, _} =
+        TurnStorage.finish(Sanctum.Context.actor(ctx), turn.id, "completed", %{
+          fence: started.fence
+        })
+
       :ok = TurnRoot.release(ctx, claim.execution_id, claim: claim)
 
       refute Process.alive?(claim.keeper)
@@ -392,7 +400,8 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert roots() == before + 1
 
     # The attempt is retired underneath the holder.
-    {:ok, _} = ExecutionAttempts.close(ctx.athanor_id, claim.attempt, "failed", "error")
+    {:ok, _} =
+      ExecutionAttempts.close(Sanctum.Context.actor(ctx), claim.attempt, "failed", "error")
 
     assert_receive {:DOWN, ^ref, :process, ^holder, {:lease_lost, id}}, 5_000
     assert id == claim.execution_id
@@ -433,7 +442,8 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert_receive {:resumed, resumed}, 10_000
     assert roots() == before + 1
 
-    {:ok, _} = ExecutionAttempts.close(ctx.athanor_id, resumed.attempt, "failed", "error")
+    {:ok, _} =
+      ExecutionAttempts.close(Sanctum.Context.actor(ctx), resumed.attempt, "failed", "error")
 
     assert_receive {:DOWN, ^ref, :process, ^holder, {:lease_lost, id}}, 5_000
     assert id == claim.execution_id
@@ -580,7 +590,10 @@ defmodule Cyfr.Execution.TurnRootTest do
       )
 
     :ok = Cyfr.Execution.Sweeper.sweep()
-    {:ok, taken} = TurnStorage.takeover(ctx, turn.id, %{fence: started.fence})
+
+    {:ok, taken} =
+      TurnStorage.takeover(Sanctum.Context.actor(ctx), turn.id, %{fence: started.fence})
+
     assert execution(id).status == "running"
 
     filler = fill_foreground!()
@@ -723,9 +736,11 @@ defmodule Cyfr.Execution.TurnRootTest do
 
     :ok = Cyfr.Execution.Sweeper.sweep()
     assert execution(claim.execution_id).status == "failed"
-    assert %{state: "lapsed"} = ExecutionAttempts.get(ctx.athanor_id, claim.attempt)
+    assert %{state: "lapsed"} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
 
-    {:ok, taken} = TurnStorage.takeover(ctx, turn.id, %{fence: started.fence})
+    {:ok, taken} =
+      TurnStorage.takeover(Sanctum.Context.actor(ctx), turn.id, %{fence: started.fence})
+
     assert taken.attempt != claim.attempt
     assert execution(claim.execution_id).status == "running"
 
@@ -737,10 +752,12 @@ defmodule Cyfr.Execution.TurnRootTest do
     assert Process.alive?(adopted.keeper)
     Process.sleep(120)
     # The keeper renews the successor's lease, not the predecessor's.
-    assert %{state: "running"} = ExecutionAttempts.get(ctx.athanor_id, taken.attempt)
+    assert %{state: "running"} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), taken.attempt)
     assert Process.alive?(self())
 
-    {:ok, _} = TurnStorage.finish(ctx, turn.id, "uncertain", %{fence: taken.fence})
+    {:ok, _} =
+      TurnStorage.finish(Sanctum.Context.actor(ctx), turn.id, "uncertain", %{fence: taken.fence})
+
     :ok = TurnRoot.release(ctx, claim.execution_id, claim: adopted)
     assert roots() == before
     _ = started

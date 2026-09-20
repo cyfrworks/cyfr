@@ -39,7 +39,9 @@ defmodule Arca.ProfileStorageTest do
                ProfileStorage.put(attrs(athanor, %{label: "prof_sneaky"}))
 
       assert {:error, {:invalid_label, ""}} = ProfileStorage.put(attrs(athanor, %{label: ""}))
-      assert {:ok, []} = ProfileStorage.list_for_source(athanor, @source_ref)
+
+      assert {:ok, []} =
+               ProfileStorage.list_for_source(Cyfr.Actor.in_athanor(athanor), @source_ref)
     end
 
     test "a label merely carrying the prefix's letters is stored", %{athanor: athanor} do

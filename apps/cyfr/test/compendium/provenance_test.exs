@@ -45,7 +45,7 @@ defmodule Compendium.ProvenanceTest do
     end)
 
     ctx = Sanctum.TestContext.local()
-    :ok = Arca.Overlay.pull_shipped(ctx, @bundled_dir)
+    :ok = Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), @bundled_dir)
     {:ok, bundled} = Registry.register_from_arca(ctx, @bundled_dir)
 
     {:ok, ctx: ctx, bundled: bundled}
@@ -55,7 +55,7 @@ defmodule Compendium.ProvenanceTest do
     assert Provenance.of(ctx, bundled) == {:ok, :bundled}
 
     # An edit does not change whose unit it is.
-    :ok = Arca.put(ctx, @bundled_dir ++ ["notes.txt"], "edited")
+    :ok = Arca.put(Sanctum.Context.actor(ctx), @bundled_dir ++ ["notes.txt"], "edited")
     assert Provenance.of(ctx, bundled) == {:ok, :bundled}
 
     # The athanor's own component: tenant bytes, no seed counterpart.
@@ -142,11 +142,12 @@ defmodule Compendium.ProvenanceTest do
 
     # An edit that leaves the shipped content as it was is still pristine
     # by bytes — the diff decides.
-    :ok = Arca.put(ctx, @bundled_dir ++ ["notes.txt"], "x")
-    :ok = Arca.delete(ctx, @bundled_dir ++ ["notes.txt"])
+    :ok = Arca.put(Sanctum.Context.actor(ctx), @bundled_dir ++ ["notes.txt"], "x")
+    :ok = Arca.delete(Sanctum.Context.actor(ctx), @bundled_dir ++ ["notes.txt"])
     assert {:ok, :pristine} = Provenance.drift(ctx, bundled)
 
-    :ok = Arca.put(ctx, @bundled_dir ++ ["reagent.wasm"], @valid_wasm <> <<0>>)
+    :ok =
+      Arca.put(Sanctum.Context.actor(ctx), @bundled_dir ++ ["reagent.wasm"], @valid_wasm <> <<0>>)
 
     assert {:ok, {:modified, %{changed: [["reagent.wasm"]]}}} =
              Provenance.drift(ctx, bundled)
@@ -160,7 +161,7 @@ defmodule Compendium.ProvenanceTest do
 
     # Row intact, bytes still visible — nothing half-deleted.
     assert {:ok, _} = Registry.get(ctx, "bundled-tool", "1.0.0")
-    assert Arca.exists?(ctx, @bundled_dir ++ ["reagent.wasm"])
+    assert Arca.exists?(Sanctum.Context.actor(ctx), @bundled_dir ++ ["reagent.wasm"])
 
     # And the next scan registers nothing new: there is nothing to resurrect.
     assert {:ok, %{registered: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
@@ -168,7 +169,7 @@ defmodule Compendium.ProvenanceTest do
   end
 
   test "deleting an edited bundled copy refuses and points at reset", %{ctx: ctx} do
-    :ok = Arca.put(ctx, @bundled_dir ++ ["notes.txt"], "edited")
+    :ok = Arca.put(Sanctum.Context.actor(ctx), @bundled_dir ++ ["notes.txt"], "edited")
 
     assert {:error, :bundled} = Registry.delete(ctx, "bundled-tool", "1.0.0")
     assert {:ok, _} = Registry.get(ctx, "bundled-tool", "1.0.0")
@@ -181,12 +182,16 @@ defmodule Compendium.ProvenanceTest do
     # An unedited copy resets to itself.
     assert {:ok, :reset} = Registry.reset(ctx, "bundled-tool", "1.0.0")
 
-    :ok = Arca.put(ctx, @bundled_dir ++ ["reagent.wasm"], @valid_wasm <> <<0>>)
+    :ok =
+      Arca.put(Sanctum.Context.actor(ctx), @bundled_dir ++ ["reagent.wasm"], @valid_wasm <> <<0>>)
+
     assert {:ok, %{provenance: :bundled_modified}} = Provenance.status(ctx, bundled)
 
     assert {:ok, :reset} = Registry.reset(ctx, "bundled-tool", "1.0.0")
     assert {:ok, %{provenance: :bundled, drift: :pristine}} = Provenance.status(ctx, bundled)
-    assert {:ok, @valid_wasm} = Arca.get(ctx, @bundled_dir ++ ["reagent.wasm"])
+
+    assert {:ok, @valid_wasm} =
+             Arca.get(Sanctum.Context.actor(ctx), @bundled_dir ++ ["reagent.wasm"])
 
     # The row survived the revert and matches the pristine bytes again.
     assert {:ok, row} = Registry.get(ctx, "bundled-tool", "1.0.0")
@@ -210,7 +215,7 @@ defmodule Compendium.ProvenanceTest do
     # complete copy once a release ships the same path.
     {:ok, _written} =
       Arca.Overlay.commit_unit(
-        ctx,
+        Sanctum.Context.actor(ctx),
         own_dir,
         {:files,
          [
@@ -236,7 +241,10 @@ defmodule Compendium.ProvenanceTest do
     assert {:error, :bundled} = Registry.delete(ctx, "mine-first", "1.0.0")
 
     assert {:ok, :reset} = Registry.reset(ctx, "mine-first", "1.0.0")
-    assert {:ok, manifest} = Arca.get(ctx, own_dir ++ ["cyfr-manifest.json"])
+
+    assert {:ok, manifest} =
+             Arca.get(Sanctum.Context.actor(ctx), own_dir ++ ["cyfr-manifest.json"])
+
     assert %{"description" => "shipped"} = Jason.decode!(manifest)
     assert {:ok, %{provenance: :bundled, drift: :pristine}} = Provenance.status(ctx, own)
   end
@@ -244,7 +252,8 @@ defmodule Compendium.ProvenanceTest do
   test "status/2 answers provenance and drift in one probe", %{ctx: ctx, bundled: bundled} do
     assert {:ok, %{provenance: :bundled, drift: :pristine}} = Provenance.status(ctx, bundled)
 
-    :ok = Arca.put(ctx, @bundled_dir ++ ["reagent.wasm"], @valid_wasm <> <<0>>)
+    :ok =
+      Arca.put(Sanctum.Context.actor(ctx), @bundled_dir ++ ["reagent.wasm"], @valid_wasm <> <<0>>)
 
     assert {:ok,
             %{
@@ -348,11 +357,13 @@ defmodule Compendium.ProvenanceTest do
     bundled: bundled
   } do
     {:ok, seed_digest} = Provenance.shipped_release_digest(bundled)
-    {:ok, manifest} = Arca.get_json(ctx, @bundled_dir ++ ["cyfr-manifest.json"])
+
+    {:ok, manifest} =
+      Arca.get_json(Sanctum.Context.actor(ctx), @bundled_dir ++ ["cyfr-manifest.json"])
 
     :ok =
       Arca.put_json(
-        ctx,
+        Sanctum.Context.actor(ctx),
         @bundled_dir ++ ["cyfr-manifest.json"],
         Map.put(manifest, "caps", %{"tools" => ["component.list"]})
       )
@@ -389,7 +400,7 @@ defmodule Compendium.ProvenanceTest do
     assert {:ok, _} = Registry.delete(ctx, "gone-tool", "1.0.0")
     assert {:error, :not_found} = Registry.get(ctx, "gone-tool", "1.0.0")
 
-    refute Arca.exists?(ctx, [
+    refute Arca.exists?(Sanctum.Context.actor(ctx), [
              "components",
              "reagents",
              "local",

@@ -94,16 +94,23 @@ defmodule Compendium.ReleaseImmutabilityTest do
       wasm_path =
         Compendium.ComponentPath.wasm_path("reagent", "local", "no-orphans", "1.0.0")
 
-      {:ok, stored_before} = Arca.get(ctx, wasm_path)
+      {:ok, stored_before} = Arca.get(Sanctum.Context.actor(ctx), wasm_path)
 
       assert {:error, {:release_immutable, _}} =
                publish(ctx, name: "no-orphans", bytes: @wasm_b)
 
       # The artifact on disk is still the original — a refused publish must
       # not leave new bytes for the scanner to index.
-      assert {:ok, ^stored_before} = Arca.get(ctx, wasm_path)
+      assert {:ok, ^stored_before} = Arca.get(Sanctum.Context.actor(ctx), wasm_path)
 
-      {:ok, row} = Arca.ComponentStorage.get_component(ctx, "no-orphans", "1.0.0", "local")
+      {:ok, row} =
+        Arca.ComponentStorage.get_component(
+          Sanctum.Context.actor(ctx),
+          "no-orphans",
+          "1.0.0",
+          "local"
+        )
+
       assert row.digest == Compendium.WasmValidator.compute_digest(@wasm_a)
     end
 
@@ -134,7 +141,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
       segments = ["components", "reagents", "local", "rebuilt", "1.0.0"]
 
       write_component = fn bytes ->
-        base = Arca.Adapters.Local.build_path(ctx, segments)
+        base = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
         File.mkdir_p!(base)
         File.write!(Path.join(base, "reagent.wasm"), bytes)
         File.write!(Path.join(base, "cyfr-manifest.json"), Jason.encode!(manifest))
@@ -149,7 +156,14 @@ defmodule Compendium.ReleaseImmutabilityTest do
       assert {:ok, registered} = Registry.register_from_arca(ctx, segments)
       refute registered == :unchanged
 
-      {:ok, row} = Arca.ComponentStorage.get_component(ctx, "rebuilt", "1.0.0", "local")
+      {:ok, row} =
+        Arca.ComponentStorage.get_component(
+          Sanctum.Context.actor(ctx),
+          "rebuilt",
+          "1.0.0",
+          "local"
+        )
+
       assert row.digest == Compendium.WasmValidator.compute_digest(@wasm_b)
       assert row.release_digest != nil
     end

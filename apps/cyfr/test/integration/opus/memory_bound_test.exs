@@ -130,7 +130,7 @@ defmodule Opus.MemoryBoundTest do
         execution_id: id
       )
 
-    attempt = Arca.ExecutionAttempts.current(ctx.athanor_id, id)
+    attempt = Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
     wait_until(fn -> attempt.attempt not in OpusService.status().attempts end, 10_000)
     {result, Arca.Repo.get!(Arca.Execution, id), attempt.claimed_by}
   end

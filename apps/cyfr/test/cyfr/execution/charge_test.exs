@@ -75,7 +75,7 @@ defmodule Cyfr.Execution.ChargeTest do
     # The one slot is taken by another dispatch.
     :ok =
       Arca.BudgetReservations.charge(
-        ctx.athanor_id,
+        Sanctum.Context.actor(ctx),
         auth.budget.id,
         %{id: "other", attempt: attempt, generation: 0, holder_execution_id: nil},
         1
@@ -99,6 +99,6 @@ defmodule Cyfr.Execution.ChargeTest do
     assert Sanctum.Authority.budget(auth).in_flight == 0
 
     assert {:ok, [%{id: "other"}]} =
-             Arca.BudgetReservations.charges(ctx.athanor_id, auth.budget.id)
+             Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), auth.budget.id)
   end
 end

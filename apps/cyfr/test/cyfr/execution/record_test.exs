@@ -297,18 +297,24 @@ defmodule Cyfr.Execution.RecordTest do
       # The bytes are the attempt's payload, under the record's class; the
       # input was kept with admission.
       assert {:ok, %{retention_class: "chat_step", attempt: attempt}, bytes} =
-               Arca.ExecutionPayloads.get(ctx, child.id, "result")
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), child.id, "result")
 
       assert attempt == child.attempt
       assert Jason.decode!(bytes) == reply
-      assert {:ok, _, input} = Arca.ExecutionPayloads.get(ctx, child.id, "input")
+
+      assert {:ok, _, input} =
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), child.id, "input")
+
       assert Jason.decode!(input) == %{"messages" => []}
 
       # A read joins them back; swept, the envelope alone answers.
       assert {:ok, %{output: ^reply}} = Record.get(ctx, child.id)
       old = DateTime.add(DateTime.utc_now(), -2 * 86_400, :second)
       {2, _} = Arca.Repo.update_all(Arca.Schemas.ExecutionPayload, set: [inserted_at: old])
-      {:ok, 2} = Arca.ExecutionPayloads.delete_older_than_days(ctx, 1, ["chat_step"])
+
+      {:ok, 2} =
+        Arca.ExecutionPayloads.delete_older_than_days(Sanctum.Context.actor(ctx), 1, ["chat_step"])
+
       assert {:ok, %{output: %{"envelope" => "v1"}}} = Record.get(ctx, child.id)
     end
 
@@ -347,7 +353,7 @@ defmodule Cyfr.Execution.RecordTest do
                Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
 
       assert {:ok, %{retention_class: "api"}, bytes} =
-               Arca.ExecutionPayloads.get(ctx, record.id, "result")
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), record.id, "result")
 
       assert Jason.decode!(bytes) == %{"sum" => 2}
       assert {:ok, %{output: %{"sum" => 2}}} = Record.get(ctx, record.id)
@@ -369,7 +375,7 @@ defmodule Cyfr.Execution.RecordTest do
       assert row.error_message == "result not retained"
 
       assert %{state: "failed", outcome: "result_lost"} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, record.id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), record.id)
 
       # An input that cannot be kept admits nothing.
       other = Record.new(ctx, "reagent:local.test:0.1.0", %{"b" => 2})
@@ -683,7 +689,7 @@ defmodule Cyfr.Execution.RecordTest do
       :ok = Record.write_started(record)
       :ok = Record.write_completed(Record.complete(record, %{"sum" => 2}))
 
-      {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, record.id, 0)
+      {:ok, rows} = Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), record.id, 0)
 
       assert [
                %{seq: 1, type: "execution.started"},
@@ -699,7 +705,7 @@ defmodule Cyfr.Execution.RecordTest do
       :ok = Record.write_failed(Record.fail(failed, "boom"))
 
       assert {:ok, [_, %{type: "execution.failed"} = row]} =
-               Arca.ExecutionEvents.since(ctx.athanor_id, failed.id, 0)
+               Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), failed.id, 0)
 
       assert %{"error" => "boom"} = Arca.ExecutionEvents.data(row)
 
@@ -712,7 +718,7 @@ defmodule Cyfr.Execution.RecordTest do
         Record.write_completed(Record.complete(lost, %{"sum" => 2}))
 
       assert {:ok, [_, %{type: "execution.result_lost"}]} =
-               Arca.ExecutionEvents.since(ctx.athanor_id, lost.id, 0)
+               Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), lost.id, 0)
     end
 
     test "a cancel that asks for a restart says so on its event", %{ctx: ctx} do
@@ -723,7 +729,7 @@ defmodule Cyfr.Execution.RecordTest do
         Record.cancel(ctx, record.id, restart_required: %{"profile_id" => "prof_1"})
 
       assert {:ok, [_, %{type: "execution.cancelled"} = row]} =
-               Arca.ExecutionEvents.since(ctx.athanor_id, record.id, 0)
+               Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), record.id, 0)
 
       assert %{"restart_required" => %{"profile_id" => "prof_1"}} =
                Arca.ExecutionEvents.data(row)
@@ -879,7 +885,9 @@ defmodule Cyfr.Execution.RecordTest do
       record = Record.new(ctx, "reagent:local.test:0.1.0", sent, retained_input: kept)
       :ok = Record.write_started(record)
 
-      assert {:ok, _payload, bytes} = Arca.ExecutionPayloads.get(ctx, record.id, "input")
+      assert {:ok, _payload, bytes} =
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), record.id, "input")
+
       assert Jason.decode!(bytes) == kept
 
       row = Arca.Repo.get(Arca.Execution, record.id)

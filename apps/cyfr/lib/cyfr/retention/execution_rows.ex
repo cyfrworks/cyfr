@@ -24,7 +24,7 @@ defmodule Cyfr.Retention.ExecutionRows do
       ids
       |> Enum.chunk_every(@batch)
       |> Enum.reduce_while({:ok, 0}, fn batch, {:ok, deleted} ->
-        with {:ok, held} <- Arca.ExecutionPayloads.release(ctx, batch),
+        with {:ok, held} <- Arca.ExecutionPayloads.release(Sanctum.Context.actor(ctx), batch),
              {:ok, count} <- Arca.Execution.delete_ids(batch -- held, opts) do
           {:cont, {:ok, deleted + count}}
         else

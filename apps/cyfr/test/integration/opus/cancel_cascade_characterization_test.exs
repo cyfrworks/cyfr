@@ -139,9 +139,11 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     wait_until(fn -> Cyfr.Slots.status(Cyfr.Execution.Slots).active == slots_before end)
     assert Sanctum.Authority.budget(authority).in_flight == 0
 
-    assert {:ok, _reclaimed} = Arca.BudgetReservations.sweep(ctx.athanor_id)
+    assert {:ok, _reclaimed} = Arca.BudgetReservations.sweep(Sanctum.Context.actor(ctx))
     assert charges(ctx, authority) == []
-    assert %{charged: 0} = Arca.BudgetReservations.lookup(ctx.athanor_id, authority.budget.id)
+
+    assert %{charged: 0} =
+             Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), authority.budget.id)
 
     assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Execution, root_id)
     assert ["execution.cancelled"] = terminal_events(ctx, root_id)
@@ -190,7 +192,9 @@ defmodule Opus.CancelCascadeCharacterizationTest do
           assert terminal == "execution.completed"
       end
 
-      assert %{state: state} = Arca.ExecutionAttempts.get(ctx.athanor_id, row.current_attempt)
+      assert %{state: state} =
+               Arca.ExecutionAttempts.get(Sanctum.Context.actor(ctx), row.current_attempt)
+
       refute state == "running"
     end
   end
@@ -248,7 +252,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
 
   # The runner that claimed the run's attempt, as its host calls present it.
   defp runner_of(ctx, id),
-    do: Arca.ExecutionAttempts.current(ctx.athanor_id, id).claimed_by
+    do: Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id).claimed_by
 
   defp reported_exit?(runner) do
     Enum.any?(
@@ -258,12 +262,14 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   end
 
   defp terminal_events(ctx, id) do
-    {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, id, 0)
+    {:ok, rows} = Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), id, 0)
     for %{type: type} <- rows, type in @terminal, do: type
   end
 
   defp charges(ctx, authority) do
-    {:ok, charges} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
+    {:ok, charges} =
+      Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), authority.budget.id)
+
     charges
   end
 end

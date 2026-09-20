@@ -103,7 +103,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "read/2" do
     test "reads file resource", %{ctx: ctx} do
       # Create a test file using Arca API
-      :ok = Arca.put(ctx, ["data", "test.txt"], "hello world")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "test.txt"], "hello world")
 
       {:ok, result} = MCP.read(ctx, "arca://files/data/test.txt")
       assert result.mimeType == "application/octet-stream"
@@ -157,7 +157,14 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           }
         ])
 
-      {:ok, _} = Arca.ExecutionPayloads.put(ctx, exec, "result", ~s({"answer":42}), "api")
+      {:ok, _} =
+        Arca.ExecutionPayloads.put(
+          Sanctum.Context.actor(ctx),
+          exec,
+          "result",
+          ~s({"answer":42}),
+          "api"
+        )
 
       assert {:ok, %{execution_id: ^exec, kind: "result", bytes: 13, content: content}} =
                MCP.handle("record", ctx, %{"action" => "payload", "id" => exec})
@@ -191,7 +198,15 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
           }
         ])
 
-      {:ok, _} = Arca.ExecutionPayloads.put(ctx, exec, "input", ~s({"given":1}), "api")
+      {:ok, _} =
+        Arca.ExecutionPayloads.put(
+          Sanctum.Context.actor(ctx),
+          exec,
+          "input",
+          ~s({"given":1}),
+          "api"
+        )
+
       guest = Context.enter_guest(ctx)
 
       # The lineage the host stamps names the caller and its attempt.
@@ -226,9 +241,9 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "a key scoped to storage reads reaches data/ and threads/, a person everything",
          %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["data", "reach.txt"], "g")
-      :ok = Arca.put(ctx, ["threads", "thread_r", "reach.bin"], "t")
-      :ok = Arca.put(ctx, ["aqua", "reach.md"], "a")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "reach.txt"], "g")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["threads", "thread_r", "reach.bin"], "t")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["aqua", "reach.md"], "a")
 
       key = %{ctx | permissions: MapSet.new([:storage_read]), auth_method: :api_key}
 
@@ -749,14 +764,14 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "resource read error paths" do
     test "handles get error other than not_found", %{ctx: ctx} do
       # read/2 with valid file
-      :ok = Arca.put(ctx, ["data", "resource_test.txt"], "content")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "resource_test.txt"], "content")
 
       {:ok, result} = MCP.read(ctx, "arca://files/data/resource_test.txt")
       assert Base.decode64!(result.content) == "content"
     end
 
     test "handles nested path in resource URI", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["data", "nested", "file.txt"], "nested content")
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "nested", "file.txt"], "nested content")
 
       {:ok, result} = MCP.read(ctx, "arca://files/data/nested/file.txt")
       assert Base.decode64!(result.content) == "nested content"

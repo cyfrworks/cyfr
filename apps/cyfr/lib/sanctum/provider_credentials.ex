@@ -55,7 +55,7 @@ defmodule Sanctum.ProviderCredentials do
   def delete(%Context{} = ctx, provider) do
     with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
          :ok <- validate_provider(provider) do
-      Arca.ProviderCredentialStorage.delete(athanor!(ctx), provider)
+      Arca.ProviderCredentialStorage.delete(actor!(ctx), provider)
     end
   end
 
@@ -66,7 +66,7 @@ defmodule Sanctum.ProviderCredentials do
   @spec list(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def list(%Context{} = ctx) do
     with :ok <- Context.require_permission(ctx, :vault_read) do
-      Arca.ProviderCredentialStorage.list(athanor!(ctx))
+      Arca.ProviderCredentialStorage.list(actor!(ctx))
     end
   end
 
@@ -75,7 +75,7 @@ defmodule Sanctum.ProviderCredentials do
   def configured?(%Context{} = ctx, provider) do
     with :ok <- Context.require_permission(ctx, :vault_read),
          :ok <- validate_provider(provider) do
-      Arca.ProviderCredentialStorage.exists?(athanor!(ctx), provider)
+      Arca.ProviderCredentialStorage.exists?(actor!(ctx), provider)
     end
   end
 
@@ -91,7 +91,7 @@ defmodule Sanctum.ProviderCredentials do
   @spec fetch_for_oauth(String.t(), String.t()) :: {:ok, map()} | {:error, String.t()}
   def fetch_for_oauth(athanor_id, provider) do
     with :ok <- validate_provider(provider) do
-      case Arca.ProviderCredentialStorage.get(athanor_id, provider) do
+      case Arca.ProviderCredentialStorage.get(Cyfr.Actor.in_athanor(athanor_id), provider) do
         {:ok, row} ->
           emit_fetch(provider, :store)
           unseal(row)
@@ -111,6 +111,15 @@ defmodule Sanctum.ProviderCredentials do
 
   # The athanor every management path keys on, behind the tenant chokepoint.
   defp athanor!(%Context{} = ctx), do: Context.athanor!(ctx)
+
+  # The actor the credential rows are read and written under. The
+  # product-boundary refusal stays where it was: `athanor!/1` raises
+  # `Sanctum.UnauthorizedError` for an unresolved tenant, so only a
+  # resolved context reaches Arca.
+  defp actor!(%Context{} = ctx) do
+    _ = athanor!(ctx)
+    Context.actor(ctx)
+  end
 
   defp unseal(row) do
     aad = CipherAAD.provider_credential(row.athanor_id, row.provider)

@@ -253,7 +253,7 @@ defmodule Cyfr.Schedules.Provider do
   def handle("schedule", %Context{} = ctx, %{"action" => "list"} = args) do
     limit = min(args["limit"] || 25, 1000)
 
-    case Arca.CronSchedule.list(ctx, limit: limit) do
+    case Arca.CronSchedule.list(Sanctum.Context.actor(ctx), limit: limit) do
       {:ok, schedules} ->
         {:ok,
          %{
@@ -268,7 +268,7 @@ defmodule Cyfr.Schedules.Provider do
 
   # Get
   def handle("schedule", %Context{} = ctx, %{"action" => "get", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
+    case Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id) do
       {:ok, schedule} -> {:ok, format_schedule(schedule)}
       {:error, reason} -> {:error, format_store_error(reason, id)}
     end
@@ -281,7 +281,7 @@ defmodule Cyfr.Schedules.Provider do
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
     with {:schedule, {:ok, schedule}} <-
-           {:schedule, Arca.CronSchedule.get_by_id_or_name(ctx, id)},
+           {:schedule, Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id)},
          :ok <- validate_cron_if_present(args["cron_expression"]),
          :ok <- validate_concurrency(args["concurrency"]) do
       update_attrs = %{}
@@ -331,7 +331,7 @@ defmodule Cyfr.Schedules.Provider do
             _ -> update_attrs
           end
 
-        case Arca.CronSchedule.update(ctx, schedule.id, update_attrs) do
+        case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, update_attrs) do
           {:ok, updated} ->
             Cyfr.Schedules.Scheduler.update(updated.id)
             {:ok, format_schedule(updated)}
@@ -352,12 +352,12 @@ defmodule Cyfr.Schedules.Provider do
 
   # Pause
   def handle("schedule", %Context{} = ctx, %{"action" => "pause", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
+    case Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id) do
       {:error, reason} ->
         {:error, format_store_error(reason, id)}
 
       {:ok, schedule} ->
-        case Arca.CronSchedule.update(ctx, schedule.id, %{status: "paused"}) do
+        case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{status: "paused"}) do
           {:ok, updated} ->
             Cyfr.Schedules.Scheduler.pause(updated.id)
             {:ok, format_schedule(updated)}
@@ -374,7 +374,7 @@ defmodule Cyfr.Schedules.Provider do
 
   # Resume
   def handle("schedule", %Context{} = ctx, %{"action" => "resume", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
+    case Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id) do
       {:error, reason} ->
         {:error, format_store_error(reason, id)}
 
@@ -387,7 +387,7 @@ defmodule Cyfr.Schedules.Provider do
             _ -> nil
           end
 
-        case Arca.CronSchedule.update(ctx, schedule.id, %{
+        case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
                status: "active",
                next_run_at: next_run
              }) do
@@ -407,12 +407,12 @@ defmodule Cyfr.Schedules.Provider do
 
   # Delete
   def handle("schedule", %Context{} = ctx, %{"action" => "delete", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
+    case Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id) do
       {:error, reason} ->
         {:error, format_store_error(reason, id)}
 
       {:ok, schedule} ->
-        case Arca.CronSchedule.soft_delete(ctx, schedule.id) do
+        case Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), schedule.id) do
           {:ok, _} ->
             Cyfr.Schedules.Scheduler.remove(schedule.id)
             {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
@@ -429,7 +429,7 @@ defmodule Cyfr.Schedules.Provider do
 
   # Re-resolve — bump resolved_reference to latest version without recreating the schedule
   def handle("schedule", %Context{} = ctx, %{"action" => "re_resolve", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_id_or_name(ctx, id) do
+    case Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), id) do
       {:error, reason} ->
         {:error, format_store_error(reason, id)}
 
@@ -499,7 +499,7 @@ defmodule Cyfr.Schedules.Provider do
   defp validate_limit(ctx) do
     # A cap check the store cannot answer refuses — a default of zero
     # would wave every create through during an outage.
-    case Arca.CronSchedule.count_active(ctx) do
+    case Arca.CronSchedule.count_active(Sanctum.Context.actor(ctx)) do
       {:ok, count} when count >= @max_schedules_per_athanor ->
         {:error, "Schedule limit reached (#{@max_schedules_per_athanor} per athanor)"}
 
@@ -573,7 +573,9 @@ defmodule Cyfr.Schedules.Provider do
     with :ok <- verify_component_exists(ctx, pinned),
          :ok <- authorize_profile_binding(ctx, pinned, schedule.profile_id),
          {:ok, updated} <-
-           Arca.CronSchedule.update(ctx, schedule.id, %{resolved_reference: pinned}) do
+           Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
+             resolved_reference: pinned
+           }) do
       Cyfr.Schedules.Scheduler.update(updated.id)
       {:ok, format_schedule(updated)}
     else

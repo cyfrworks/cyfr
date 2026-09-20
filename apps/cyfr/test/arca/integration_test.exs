@@ -44,6 +44,8 @@ defmodule Arca.IntegrationTest do
         authenticated: true
       )
 
+    actor = Sanctum.Context.actor(ctx)
+
     on_exit(fn ->
       File.rm_rf!(test_path)
 
@@ -52,7 +54,7 @@ defmodule Arca.IntegrationTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
-    {:ok, ctx: ctx, test_path: test_path}
+    {:ok, ctx: ctx, actor: actor, test_path: test_path}
   end
 
   # ============================================================================
@@ -60,32 +62,47 @@ defmodule Arca.IntegrationTest do
   # ============================================================================
 
   describe "list → write → read → delete workflow" do
-    test "complete file lifecycle via Arca API", %{ctx: ctx} do
+    test "complete file lifecycle via Arca API", %{actor: actor} do
       # 1. List - should start empty
-      {:ok, files} = Arca.list(ctx, ["data", "workflow"])
+      {:ok, files} = Arca.list(actor, ["data", "workflow"])
       assert files == []
 
       # 2. Write - create a file
-      :ok = Arca.put(ctx, ["data", "workflow", "test.txt"], "hello world")
+      :ok = Arca.put(actor, ["data", "workflow", "test.txt"], "hello world")
 
       # 3. List - should now contain the file
-      {:ok, files} = Arca.list(ctx, ["data", "workflow"])
+      {:ok, files} = Arca.list(actor, ["data", "workflow"])
       assert "test.txt" in files
 
       # 4. Read - verify content
-      {:ok, content} = Arca.get(ctx, ["data", "workflow", "test.txt"])
+      {:ok, content} = Arca.get(actor, ["data", "workflow", "test.txt"])
       assert content == "hello world"
 
       # 5. Exists - verify existence
-      assert Arca.exists?(ctx, ["data", "workflow", "test.txt"])
+      assert Arca.exists?(actor, ["data", "workflow", "test.txt"])
 
       # 6. Delete - remove the file
-      :ok = Arca.delete(ctx, ["data", "workflow", "test.txt"])
+      :ok = Arca.delete(actor, ["data", "workflow", "test.txt"])
 
       # 7. Verify deletion
-      refute Arca.exists?(ctx, ["data", "workflow", "test.txt"])
-      {:error, :not_found} = Arca.get(ctx, ["data", "workflow", "test.txt"])
+      refute Arca.exists?(actor, ["data", "workflow", "test.txt"])
+
+      {:error, :not_found} =
+        Arca.get(actor, ["data", "workflow", "test.txt"])
     end
+  end
+
+  # A member of `athanor`, as the identity domain would establish them.
+  defp member_ctx(user_id, athanor_id) do
+    Context.build(
+      user_id: user_id,
+      namespace: user_id,
+      athanor_id: athanor_id,
+      permissions: [:*],
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
   end
 
   # ============================================================================
@@ -93,7 +110,7 @@ defmodule Arca.IntegrationTest do
   # ============================================================================
 
   describe "retention workflow: set settings → create data → cleanup → verify" do
-    test "execution retention workflow", %{ctx: ctx} do
+    test "execution retention workflow", %{ctx: ctx, actor: actor} do
       # 1. Set retention to keep only 3 executions
       :ok = Retention.set_settings(ctx, %{"executions" => 3})
 
@@ -109,8 +126,8 @@ defmodule Arca.IntegrationTest do
         Arca.Execution.record_start(%{
           id: "exec_#{i}",
           request_id: "req_test",
-          user_id: ctx.user_id,
-          athanor_id: ctx.athanor_id,
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
@@ -122,9 +139,9 @@ defmodule Arca.IntegrationTest do
       # Verify all 5 exist
       records =
         Arca.Execution.list(
-          user_id: ctx.user_id,
+          user_id: actor.user_id,
           limit: 100,
-          athanor_id: ctx.athanor_id
+          athanor_id: actor.athanor_id
         )
 
       assert length(records) == 5
@@ -138,9 +155,9 @@ defmodule Arca.IntegrationTest do
       # 5. Verify only 3 remain
       records =
         Arca.Execution.list(
-          user_id: ctx.user_id,
+          user_id: actor.user_id,
           limit: 100,
-          athanor_id: ctx.athanor_id
+          athanor_id: actor.athanor_id
         )
 
       assert length(records) == 3
@@ -152,7 +169,7 @@ defmodule Arca.IntegrationTest do
       assert "exec_5" in ids
     end
 
-    test "retention workflow via MCP", %{ctx: ctx} do
+    test "retention workflow via MCP", %{ctx: ctx, actor: actor} do
       # 1. Set retention via MCP
       {:ok, set_result} =
         MCP.handle("retention", ctx, %{
@@ -171,8 +188,8 @@ defmodule Arca.IntegrationTest do
         Arca.Execution.record_start(%{
           id: "mcp_exec_#{i}",
           request_id: "req_test",
-          user_id: ctx.user_id,
-          athanor_id: ctx.athanor_id,
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
@@ -217,36 +234,12 @@ defmodule Arca.IntegrationTest do
   describe "user isolation" do
     test "members of the same athanor share files; different athanors are isolated" do
       # Same athanor, different users — interchangeable members share storage.
-      member1 = %Context{
-        user_id: "user_alpha",
-        namespace: "user_alpha",
-        athanor_id: "ath_test",
-        permissions: MapSet.new([:*]),
-        scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
-      }
+      member1 = Cyfr.Actor.in_athanor("ath_test")
 
-      member2 = %Context{
-        user_id: "user_beta",
-        namespace: "user_beta",
-        athanor_id: "ath_test",
-        permissions: MapSet.new([:*]),
-        scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
-      }
+      member2 = Cyfr.Actor.in_athanor("ath_test")
 
       # A different athanor must remain isolated.
-      other_tenant = %Context{
-        user_id: "user_gamma",
-        namespace: "user_gamma",
-        athanor_id: "ath_other",
-        permissions: MapSet.new([:*]),
-        scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
-      }
+      other_tenant = Cyfr.Actor.in_athanor("ath_other")
 
       :ok = Arca.put(member1, ["data", "private", "secret.txt"], "shared secret")
 
@@ -322,35 +315,11 @@ defmodule Arca.IntegrationTest do
     end
 
     test "retention settings are shared within an athanor; isolated across athanors" do
-      member1 = %Context{
-        user_id: "settings_user_1",
-        namespace: "settings_user_1",
-        athanor_id: "ath_test",
-        permissions: MapSet.new([:*]),
-        scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
-      }
-
-      member2 = %Context{
-        user_id: "settings_user_2",
-        namespace: "settings_user_2",
-        athanor_id: "ath_test",
-        permissions: MapSet.new([:*]),
-        scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
-      }
-
-      other_tenant = %Context{
-        user_id: "settings_user_3",
-        namespace: "settings_user_3",
-        athanor_id: "ath_other",
-        permissions: MapSet.new([:*]),
-        scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
-      }
+      # Retention is a Cyfr-layer verb and still takes the context; only
+      # the storage facades under it take the actor it projects.
+      member1 = member_ctx("user_alpha", "ath_test")
+      member2 = member_ctx("user_beta", "ath_test")
+      other_tenant = member_ctx("user_gamma", "ath_other")
 
       :ok = Retention.set_settings(member1, %{"executions" => 5})
 
@@ -367,7 +336,7 @@ defmodule Arca.IntegrationTest do
 
   describe "global vs user path separation" do
     test "the cache is the server's, shared by its internal contexts and closed to tenants",
-         %{ctx: _ctx} do
+         %{actor: _ctx} do
       user_ctx = %Context{
         user_id: "cache_user_1",
         namespace: "cache_user_1",
@@ -380,17 +349,20 @@ defmodule Arca.IntegrationTest do
       }
 
       # The server caches a blob under the global root...
-      :ok = Arca.put(Sanctum.system_context(), ["cache", "oci", "sha256_abc"], "cached blob")
+      :ok = Arca.put(Cyfr.Actor.system(), ["cache", "oci", "sha256_abc"], "cached blob")
 
       # ...another internal context reads it back...
       {:ok, content} =
-        Arca.get(Sanctum.internal_context(user_id: "_probe"), ["cache", "oci", "sha256_abc"])
+        Arca.get(%{Cyfr.Actor.system() | user_id: "_probe"}, ["cache", "oci", "sha256_abc"])
 
       assert content == "cached blob"
 
       # ...and a tenant context, whatever its athanor, cannot reach it.
-      assert {:error, :forbidden} = Arca.get(user_ctx, ["cache", "oci", "sha256_abc"])
-      assert {:error, :forbidden} = Arca.put(user_ctx, ["cache", "oci", "x"], "nope")
+      assert {:error, :forbidden} =
+               Arca.get(Sanctum.Context.actor(user_ctx), ["cache", "oci", "sha256_abc"])
+
+      assert {:error, :forbidden} =
+               Arca.put(Sanctum.Context.actor(user_ctx), ["cache", "oci", "x"], "nope")
     end
 
     test "executions in SQLite are user-scoped" do
@@ -453,7 +425,7 @@ defmodule Arca.IntegrationTest do
   # ============================================================================
 
   describe "JSON helper workflow" do
-    test "put_json and get_json roundtrip", %{ctx: ctx} do
+    test "put_json and get_json roundtrip", %{actor: actor} do
       data = %{
         "name" => "test",
         "count" => 42,
@@ -461,23 +433,30 @@ defmodule Arca.IntegrationTest do
         "list" => [1, 2, 3]
       }
 
-      :ok = Arca.put_json(ctx, ["data", "json_test", "data.json"], data)
+      :ok = Arca.put_json(actor, ["data", "json_test", "data.json"], data)
 
-      {:ok, read_data} = Arca.get_json(ctx, ["data", "json_test", "data.json"])
+      {:ok, read_data} =
+        Arca.get_json(actor, ["data", "json_test", "data.json"])
 
       assert read_data == data
     end
 
-    test "get_json returns error for missing file", %{ctx: ctx} do
-      {:error, :not_found} = Arca.get_json(ctx, ["data", "json_test", "nonexistent.json"])
+    test "get_json returns error for missing file", %{actor: actor} do
+      {:error, :not_found} =
+        Arca.get_json(actor, ["data", "json_test", "nonexistent.json"])
     end
 
-    test "get_json returns error for invalid JSON", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["data", "json_test", "invalid.json"], "not valid json {{{")
+    test "get_json returns error for invalid JSON", %{actor: actor} do
+      :ok =
+        Arca.put(
+          actor,
+          ["data", "json_test", "invalid.json"],
+          "not valid json {{{"
+        )
 
       # Return the shared :invalid_json error for corrupt stored JSON.
       assert {:error, :invalid_json} =
-               Arca.get_json(ctx, ["data", "json_test", "invalid.json"])
+               Arca.get_json(actor, ["data", "json_test", "invalid.json"])
     end
   end
 end

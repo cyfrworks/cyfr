@@ -78,11 +78,11 @@ defmodule Opus.ExecutorCascadeTest do
           namespace: "testns"
         )
 
-      child1 = Execution.get_tenant(ctx, child1_id)
+      child1 = Execution.get_tenant(Sanctum.Context.actor(ctx), child1_id)
       assert child1.status == "failed"
       assert child1.error_message =~ parent_id
 
-      child2 = Execution.get_tenant(ctx, child2_id)
+      child2 = Execution.get_tenant(Sanctum.Context.actor(ctx), child2_id)
       assert child2.status == "failed"
     end
 
@@ -118,7 +118,7 @@ defmodule Opus.ExecutorCascadeTest do
         )
 
       {:ok, _} =
-        Execution.record_complete(ctx, child_id, %{
+        Execution.record_complete(Sanctum.Context.actor(ctx), child_id, %{
           completed_at: DateTime.utc_now(),
           duration_ms: 100,
           status: "completed",
@@ -148,7 +148,7 @@ defmodule Opus.ExecutorCascadeTest do
           namespace: "testns"
         )
 
-      child = Execution.get_tenant(read_ctx, child_id)
+      child = Execution.get_tenant(Sanctum.Context.actor(read_ctx), child_id)
       assert child.status == "completed"
     end
 
@@ -251,12 +251,16 @@ defmodule Opus.ExecutorCascadeTest do
 
       # The parent finishes normally.
       {:ok, _} =
-        Execution.record_complete(Sanctum.TestContext.local(), parent_id, %{
-          status: "completed",
-          completed_at: DateTime.utc_now(),
-          duration_ms: 5_000,
-          output: ~s({"ok":true})
-        })
+        Execution.record_complete(
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
+          parent_id,
+          %{
+            status: "completed",
+            completed_at: DateTime.utc_now(),
+            duration_ms: 5_000,
+            output: ~s({"ok":true})
+          }
+        )
 
       # Nothing swept the child with it; it is still the streaming child's own
       # to finish.
@@ -307,7 +311,8 @@ defmodule Opus.ExecutorCascadeTest do
           namespace: "ns_b"
         )
 
-      assert Execution.get_tenant(platform_ctx, exec_id).status == "running"
+      assert Execution.get_tenant(Sanctum.Context.actor(platform_ctx), exec_id).status ==
+               "running"
 
       Process.exit(target, :kill)
     end
@@ -353,7 +358,8 @@ defmodule Opus.ExecutorCascadeTest do
           namespace: "ns_b"
         )
 
-      refute Execution.get_tenant(platform_ctx, exec_id).status == "running"
+      refute Execution.get_tenant(Sanctum.Context.actor(platform_ctx), exec_id).status ==
+               "running"
     end
   end
 

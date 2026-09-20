@@ -19,7 +19,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     ctx = Sanctum.TestContext.local()
 
     {:ok, server} =
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "ghserver",
         url: "https://127.0.0.1:1/mcp",
         config_json:
@@ -100,7 +100,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     # Seed the discovery cache with three external tools: one covered by the
     # edge's grant (issues.*), one on the same server outside the patterns,
     # and one on an ungranted server. Only the first may be discovered.
-    Arca.Cache.put(Arca.Cache.Keys.external_tools(ctx.athanor_id), [
+    Arca.Cache.put(Arca.Cache.Keys.external_tools(Sanctum.Context.actor(ctx)), [
       %{"name" => "ghserver:issues.list", "description" => "granted", "inputSchema" => %{}},
       %{"name" => "ghserver:repo_get", "description" => "outside patterns", "inputSchema" => %{}},
       %{"name" => "othersrv:anything", "description" => "no grant", "inputSchema" => %{}}
@@ -190,7 +190,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
   test "one server's grant never authorizes another", %{ctx: ctx, digest: digest} do
     {:ok, _other} =
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "othersrv",
         url: "https://127.0.0.1:2/mcp",
         config_json: Jason.encode!(%{"headers" => %{}, "timeout_ms" => 1_000})
@@ -209,7 +209,9 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:ok, _} =
-      Arca.McpServerStorage.update(ctx, "ghserver", %{url: "https://elsewhere.example/mcp"})
+      Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "ghserver", %{
+        url: "https://elsewhere.example/mcp"
+      })
 
     # The digest cache is tenant-invalidated on config mutation.
     Emissary.MCP.ExternalProvider.invalidate_external_tools_cache(ctx)

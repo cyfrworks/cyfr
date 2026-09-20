@@ -10,7 +10,7 @@ defmodule Compendium.AutoIndexerTest.OutageAdapter do
 
   # A listing that never answers empty leaves the double's prefix listing
   # nothing to probe: it is the outage too.
-  def list_prefix(ctx, path), do: list_recursive(ctx, path)
+  def list_prefix(actor, path), do: list_recursive(actor, path)
 end
 
 defmodule Compendium.AutoIndexerTest do
@@ -86,7 +86,7 @@ defmodule Compendium.AutoIndexerTest do
       # always writes one — so it is not on the roster.
       bare =
         Arca.Adapters.Local.build_path(
-          ctx,
+          Sanctum.Context.actor(ctx),
           ["components", "reagents", "local", "manifest-less", "1.0.0"]
         )
 
@@ -236,16 +236,16 @@ defmodule Compendium.AutoIndexerTest do
       # athanor holds, so the shipped bundle registers once it is copied in.
       {:ok, %{registered: 0}} = AutoIndexer.scan(ctx: ctx)
 
-      {:ok, [_unit]} = Arca.Overlay.materialize_shipped(ctx, "components")
+      {:ok, [_unit]} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "components")
       {:ok, result} = AutoIndexer.scan(ctx: ctx)
       assert result.registered == 1
 
       assert {:ok, %{name: "bundled"}} =
-               Arca.ComponentStorage.get_component(ctx, "bundled", "0.1.0")
+               Arca.ComponentStorage.get_component(Sanctum.Context.actor(ctx), "bundled", "0.1.0")
 
       assert File.exists?(
                Arca.Adapters.Local.build_path(
-                 ctx,
+                 Sanctum.Context.actor(ctx),
                  ["components", "catalysts", "local", "bundled", "0.1.0", "catalyst.wasm"]
                )
              )
@@ -256,7 +256,7 @@ defmodule Compendium.AutoIndexerTest do
       assert rescan.pruned == 0
 
       assert {:ok, %{name: "bundled"}} =
-               Arca.ComponentStorage.get_component(ctx, "bundled", "0.1.0")
+               Arca.ComponentStorage.get_component(Sanctum.Context.actor(ctx), "bundled", "0.1.0")
     end
   end
 
@@ -264,7 +264,9 @@ defmodule Compendium.AutoIndexerTest do
     test "a re-scan of a manifest gone dep-broken keeps the existing row", %{ctx: ctx} do
       dir = create_component("catalyst", "local", "dep-regress", "1.0.0")
       {:ok, %{registered: 1}} = AutoIndexer.scan(ctx: ctx)
-      {:ok, row} = Arca.ComponentStorage.get_component(ctx, "dep-regress", "1.0.0")
+
+      {:ok, row} =
+        Arca.ComponentStorage.get_component(Sanctum.Context.actor(ctx), "dep-regress", "1.0.0")
 
       # The manifest goes dep-broken on disk; the next scan must not
       # replace the standing row with a failure (refs validate before
@@ -280,7 +282,13 @@ defmodule Compendium.AutoIndexerTest do
 
       {:ok, %{errors: 1}} = AutoIndexer.scan(ctx: ctx)
 
-      assert {:ok, kept} = Arca.ComponentStorage.get_component(ctx, "dep-regress", "1.0.0")
+      assert {:ok, kept} =
+               Arca.ComponentStorage.get_component(
+                 Sanctum.Context.actor(ctx),
+                 "dep-regress",
+                 "1.0.0"
+               )
+
       assert kept.manifest == row.manifest
     end
   end
@@ -312,7 +320,11 @@ defmodule Compendium.AutoIndexerTest do
         else: Application.delete_env(:cyfr, :storage_adapter)
 
       assert {:ok, %{name: "outage-survivor"}} =
-               Arca.ComponentStorage.get_component(ctx, "outage-survivor", "1.0.0")
+               Arca.ComponentStorage.get_component(
+                 Sanctum.Context.actor(ctx),
+                 "outage-survivor",
+                 "1.0.0"
+               )
     end
   end
 end

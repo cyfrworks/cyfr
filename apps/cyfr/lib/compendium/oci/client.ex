@@ -688,7 +688,7 @@ defmodule Compendium.OCI.Client do
     manifest_path =
       Compendium.ComponentPath.manifest_path(cref.type, cref.namespace, cref.name, cref.version)
 
-    with {:ok, content} <- Arca.get(ctx, manifest_path),
+    with {:ok, content} <- Arca.get(Sanctum.Context.actor(ctx), manifest_path),
          {:ok, manifest} <- Jason.decode(content),
          updated =
            manifest
@@ -715,7 +715,7 @@ defmodule Compendium.OCI.Client do
         "README.md"
       )
 
-    case Arca.get(ctx, readme_path) do
+    case Arca.get(Sanctum.Context.actor(ctx), readme_path) do
       {:ok, bytes} -> {:ok, bytes}
       {:error, _} -> :none
     end
@@ -747,13 +747,13 @@ defmodule Compendium.OCI.Client do
 
   # Recursively collect all files from an Arca directory as {relative_path, content} tuples.
   defp collect_arca_files(ctx, base_path, current_path) do
-    case Arca.list(ctx, current_path) do
+    case Arca.list(Sanctum.Context.actor(ctx), current_path) do
       {:ok, entries} ->
         Enum.flat_map(entries, fn entry ->
           entry_path = current_path ++ [entry]
           rel_segments = entry_path -- base_path
 
-          case Arca.get(ctx, entry_path) do
+          case Arca.get(Sanctum.Context.actor(ctx), entry_path) do
             {:ok, content} ->
               [{Path.join(rel_segments), content}]
 

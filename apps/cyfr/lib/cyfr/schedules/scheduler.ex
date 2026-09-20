@@ -276,7 +276,11 @@ defmodule Cyfr.Schedules.Scheduler do
                        "and its execution ended without it: uncertain"
                    )
 
-                   ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "uncertain")
+                   ScheduleOccurrences.finish(
+                     Cyfr.Actor.in_athanor(occurrence.athanor_id),
+                     occurrence.id,
+                     "uncertain"
+                   )
                  end) do
               :not_owner -> recover_later(acc)
               {:error, :database_error} -> recover_later(acc)
@@ -320,7 +324,11 @@ defmodule Cyfr.Schedules.Scheduler do
 
       _ ->
         Cyfr.ControlPlane.when_owner(generation, fn ->
-          ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "failed")
+          ScheduleOccurrences.finish(
+            Cyfr.Actor.in_athanor(occurrence.athanor_id),
+            occurrence.id,
+            "failed"
+          )
         end)
 
         state
@@ -499,7 +507,13 @@ defmodule Cyfr.Schedules.Scheduler do
                  "[Schedules] failed to spawn task for schedule #{schedule.id}: #{inspect(reason)}"
                )
 
-               _ = ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "failed")
+               _ =
+                 ScheduleOccurrences.finish(
+                   Cyfr.Actor.in_athanor(occurrence.athanor_id),
+                   occurrence.id,
+                   "failed"
+                 )
+
                emit_schedule_failed(schedule.id, ctx, {:spawn_failed, reason})
                record_error(ctx, schedule.id, "spawn_failed: #{inspect(reason)}")
                schedule_timer(schedule.id, state)
@@ -559,7 +573,14 @@ defmodule Cyfr.Schedules.Scheduler do
       case run_result do
         {:ok, result} ->
           output = Map.get(result, :output, result)
-          _ = ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "completed")
+
+          _ =
+            ScheduleOccurrences.finish(
+              Cyfr.Actor.in_athanor(occurrence.athanor_id),
+              occurrence.id,
+              "completed"
+            )
+
           record_run(ctx, schedule.id, execution_id)
 
           Emissary.MCP.RequestLog.safe_log_completed(ctx, request_id, %{
@@ -594,7 +615,12 @@ defmodule Cyfr.Schedules.Scheduler do
           # An admission that failed left the occurrence claimed; a run
           # that failed left it started. Either way it ends failed, and
           # nothing was invoked twice.
-          _ = ScheduleOccurrences.finish(occurrence.athanor_id, occurrence.id, "failed")
+          _ =
+            ScheduleOccurrences.finish(
+              Cyfr.Actor.in_athanor(occurrence.athanor_id),
+              occurrence.id,
+              "failed"
+            )
 
           Emissary.MCP.RequestLog.safe_log_failed(ctx, request_id, %{
             error: inspect(reason),
@@ -613,12 +639,15 @@ defmodule Cyfr.Schedules.Scheduler do
   # what the row says — never invoked, or started with an unknown end.
   defp runner_died(schedule_id, task, reason) do
     Logger.warning("[Schedules] schedule #{schedule_id} execution failed: #{inspect(reason)}")
-    _ = ScheduleOccurrences.settle_dead(task.athanor_id, task.occurrence_id)
+
+    _ =
+      ScheduleOccurrences.settle_dead(Cyfr.Actor.in_athanor(task.athanor_id), task.occurrence_id)
+
     record_error(task.ctx, schedule_id, inspect(reason))
   end
 
   defp record_run(ctx, schedule_id, execution_id) do
-    case CronSchedule.record_run(ctx, schedule_id, execution_id) do
+    case CronSchedule.record_run(Sanctum.Context.actor(ctx), schedule_id, execution_id) do
       {:ok, _} ->
         :ok
 
@@ -628,7 +657,7 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   defp record_error(ctx, schedule_id, message) do
-    case CronSchedule.record_error(ctx, schedule_id, message) do
+    case CronSchedule.record_error(Sanctum.Context.actor(ctx), schedule_id, message) do
       {:ok, _} ->
         :ok
 

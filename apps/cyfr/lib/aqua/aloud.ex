@@ -90,7 +90,7 @@ defmodule Aqua.Aloud do
              # `member_of/2`) — and adds the archive refusal a raw swap
              # skipped: nothing is said aloud into a closed furnace.
              {:ok, target_ctx} <- Context.focus(ctx, target_athanor_id),
-             {:ok, _} <- Threads.get(target_ctx, target_id),
+             {:ok, _} <- Threads.get(Sanctum.Context.actor(target_ctx), target_id),
              {:ok, rows} <- take(ctx, source_id, message_ids) do
           copy(ctx, target_ctx, source_id, target_id, rows)
         else
@@ -137,7 +137,7 @@ defmodule Aqua.Aloud do
       message_ids
       |> Enum.uniq()
       |> Enum.flat_map(fn id ->
-        case Threads.get_message(ctx, id) do
+        case Threads.get_message(Sanctum.Context.actor(ctx), id) do
           {:ok, %{thread_id: ^thread_id} = row} -> [row]
           _ -> []
         end
@@ -188,7 +188,7 @@ defmodule Aqua.Aloud do
         |> put_shared_agent(row)
         |> put_refs(refs)
 
-      case Threads.append(target_ctx, target_id, %{
+      case Threads.append(Sanctum.Context.actor(target_ctx), target_id, %{
              id: message_id,
              author: target_ctx.user_id || Cyfr.Author.system(),
              kind: "text",

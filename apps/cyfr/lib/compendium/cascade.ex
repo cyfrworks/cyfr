@@ -23,7 +23,11 @@ defmodule Compendium.Cascade do
   def name_removed(%Context{} = ctx, comp) do
     publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
 
-    unless Arca.ComponentStorage.has_remaining_versions?(ctx, comp.name, publisher) do
+    unless Arca.ComponentStorage.has_remaining_versions?(
+             Sanctum.Context.actor(ctx),
+             comp.name,
+             publisher
+           ) do
       component_type = Map.get(comp, :component_type, "")
       name_ref = Cyfr.ComponentRef.build(component_type, publisher, comp.name)
 
@@ -40,10 +44,10 @@ defmodule Compendium.Cascade do
 
   # Revoke profiles while retaining consent history and vault entries.
   defp revoke_profiles(ctx, name_ref) do
-    case Arca.ProfileStorage.list_for_source(ctx.athanor_id, name_ref) do
+    case Arca.ProfileStorage.list_for_source(Sanctum.Context.actor(ctx), name_ref) do
       {:ok, profiles} ->
         Enum.each(profiles, fn profile ->
-          Arca.ProfileStorage.set_status(ctx.athanor_id, profile.id, "revoked")
+          Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), profile.id, "revoked")
         end)
 
       _ ->
@@ -59,12 +63,12 @@ defmodule Compendium.Cascade do
   defp disable_webhooks(ctx, name_ref) do
     athanor_id = ctx.athanor_id
 
-    case Arca.WebhookStorage.list_webhooks(athanor_id) do
+    case Arca.WebhookStorage.list_webhooks(Cyfr.Actor.in_athanor(athanor_id)) do
       {:ok, webhooks} ->
         webhooks
         |> Enum.filter(&targets?(&1.target_ref, name_ref))
         |> Enum.each(fn webhook ->
-          Arca.WebhookStorage.set_disabled(athanor_id, webhook.name)
+          Arca.WebhookStorage.set_disabled(Cyfr.Actor.in_athanor(athanor_id), webhook.name)
         end)
 
       _ ->
@@ -80,14 +84,16 @@ defmodule Compendium.Cascade do
   end
 
   defp disable_schedules(ctx, name_ref) do
-    case Arca.CronSchedule.list(ctx, limit: 1000) do
+    case Arca.CronSchedule.list(Sanctum.Context.actor(ctx), limit: 1000) do
       {:ok, schedules} ->
         schedules
         |> Enum.filter(fn schedule ->
           targets?(schedule.resolved_reference, name_ref) or
             targets?(Map.get(schedule, :reference), name_ref)
         end)
-        |> Enum.each(fn schedule -> Arca.CronSchedule.soft_delete(ctx, schedule.id) end)
+        |> Enum.each(fn schedule ->
+          Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), schedule.id)
+        end)
 
       {:error, reason} ->
         Logger.warning("[Compendium.Cascade] schedule sweep skipped: #{inspect(reason)}")

@@ -193,7 +193,7 @@ defmodule Opus.SecretAuditTest do
   # The identity every entry of the run carries: the attempt the host
   # verified, as its row and the assignment it signed name it.
   defp identity(ctx, id, authority) do
-    row = Arca.ExecutionAttempts.current(ctx.athanor_id, id)
+    row = Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
     [%{args: %{"assignment" => token}} | _] = TwoServices.calls(:attach, id)
     {:ok, assignment} = Cyfr.Assignment.read(token)
 

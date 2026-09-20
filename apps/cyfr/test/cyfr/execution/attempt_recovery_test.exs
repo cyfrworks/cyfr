@@ -40,7 +40,7 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
     :ok = Cyfr.Execution.Sweeper.sweep()
 
     assert %{state: "lapsed", outcome: "uncertain"} =
-             ExecutionAttempts.get(ctx.athanor_id, record.attempt)
+             ExecutionAttempts.get(Sanctum.Context.actor(ctx), record.attempt)
 
     assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, record.id)
 
@@ -51,7 +51,7 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
     assert %{status: "failed", output: nil} = Arca.Repo.get!(Arca.Execution, record.id)
 
     {:ok, %{attempt: successor}} =
-      ExecutionAttempts.takeover(ctx.athanor_id, record.id,
+      ExecutionAttempts.takeover(Sanctum.Context.actor(ctx), record.id,
         boot_id: Record.boot_id(),
         lease_until: Record.lease_until()
       )
@@ -97,7 +97,7 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
              Record.write_completed(Record.complete(record, %{"ok" => true}))
 
     assert %{state: "completed", outcome: "ok"} =
-             ExecutionAttempts.get(ctx.athanor_id, record.attempt)
+             ExecutionAttempts.get(Sanctum.Context.actor(ctx), record.attempt)
 
     other = Record.new(ctx, "catalyst:local.test:1.0.0", %{}, component_type: :catalyst)
     :ok = Record.write_started(other)
@@ -106,7 +106,7 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
     assert {:ok, %{status: :cancelled}} = Record.cancel(ctx, other.id)
 
     assert %{state: "cancelled", outcome: "cancelled"} =
-             ExecutionAttempts.get(ctx.athanor_id, other.attempt)
+             ExecutionAttempts.get(Sanctum.Context.actor(ctx), other.attempt)
 
     assert {:error, :not_cancellable} = Record.cancel(ctx, other.id)
   end

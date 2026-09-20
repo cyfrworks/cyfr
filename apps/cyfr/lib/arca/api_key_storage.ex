@@ -7,6 +7,14 @@ defmodule Arca.ApiKeyStorage do
 
   This module provides the database layer for API key storage.
   It's called by `Sanctum.ApiKey` which handles key generation and hashing.
+
+  Every function that names an athanor takes the `Cyfr.Actor` first and
+  matches it in its head, refusing an actor whose athanor is nil or the
+  empty string with `{:error, :no_athanor}` before any query.
+  `get_key_by_hash/1` and `revoke_all_created_by/1` name no athanor: one
+  is the presented secret's own lookup and says so where it stands, the
+  other sweeps one person's keys across every estate as part of denying
+  them on this server.
   Writes use `insert_all`/`update_all` and trust their caller — they run no
   changeset validation, so callers must validate input first.
 
@@ -91,9 +99,10 @@ defmodule Arca.ApiKeyStorage do
   presence asks for the predicate rather than the value. It gates an
   admission decision, so an unanswerable store refuses rather than defaults.
   """
-  @spec capability_bearing?(String.t(), String.t()) ::
-          {:ok, boolean()} | {:error, :database_error}
-  def capability_bearing?(athanor_id, name) do
+  @spec capability_bearing?(Cyfr.Actor.t(), String.t()) ::
+          {:ok, boolean()} | {:error, :no_athanor | :database_error}
+  def capability_bearing?(%Cyfr.Actor{athanor_id: athanor_id}, name)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.capability_bearing?", fn ->
       found =
         from(k in ApiKey,
@@ -108,14 +117,17 @@ defmodule Arca.ApiKeyStorage do
     end)
   end
 
+  def capability_bearing?(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+
   @doc """
   Get a key by name within an athanor. Excludes revoked keys.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  @spec get_key(String.t(), String.t()) ::
-          {:ok, ApiKey.t()} | {:error, :not_found | :database_error}
-  def get_key(athanor_id, name) do
+  @spec get_key(Cyfr.Actor.t(), String.t()) ::
+          {:ok, ApiKey.t()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_key(%Cyfr.Actor{athanor_id: athanor_id}, name)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key", fn ->
       query =
         from(k in ApiKey,
@@ -132,13 +144,16 @@ defmodule Arca.ApiKeyStorage do
     end)
   end
 
+  def get_key(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+
   @doc """
   Get an unrevoked key row by its id within an athanor — the lookup a
   key-authenticated context uses to read its own key's attributes.
   """
-  @spec get_key_by_id(String.t(), String.t()) ::
-          {:ok, ApiKey.t()} | {:error, :not_found | :database_error}
-  def get_key_by_id(athanor_id, id) when is_binary(id) do
+  @spec get_key_by_id(Cyfr.Actor.t(), String.t()) ::
+          {:ok, ApiKey.t()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_key_by_id(%Cyfr.Actor{athanor_id: athanor_id}, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key_by_id", fn ->
       query =
         from(k in ApiKey, where: k.id == ^id and k.revoked == false)
@@ -150,6 +165,8 @@ defmodule Arca.ApiKeyStorage do
       end
     end)
   end
+
+  def get_key_by_id(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc """
   Get a key by its hash. Used for validate() lookups.
@@ -184,8 +201,9 @@ defmodule Arca.ApiKeyStorage do
   @doc """
   List all non-revoked keys of an athanor, sorted by inserted_at.
   """
-  @spec list_keys(String.t()) :: {:ok, [ApiKey.t()]} | {:error, :database_error}
-  def list_keys(athanor_id) do
+  @spec list_keys(Cyfr.Actor.t()) :: {:ok, [ApiKey.t()]} | {:error, :no_athanor | :database_error}
+  def list_keys(%Cyfr.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.list_keys", fn ->
       query =
         from(k in ApiKey,
@@ -199,11 +217,15 @@ defmodule Arca.ApiKeyStorage do
     end)
   end
 
+  def list_keys(%Cyfr.Actor{}), do: {:error, :no_athanor}
+
   @doc """
   Revoke a key by name within an athanor.
   """
-  @spec revoke_key(String.t(), String.t()) :: :ok | {:error, :not_found | :database_error}
-  def revoke_key(athanor_id, name) do
+  @spec revoke_key(Cyfr.Actor.t(), String.t()) ::
+          :ok | {:error, :no_athanor | :not_found | :database_error}
+  def revoke_key(%Cyfr.Actor{athanor_id: athanor_id}, name)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_key", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -217,6 +239,8 @@ defmodule Arca.ApiKeyStorage do
       end
     end)
   end
+
+  def revoke_key(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   Revoke every live key a person created, across athanors. Returns the count.
@@ -236,8 +260,10 @@ defmodule Arca.ApiKeyStorage do
   @doc """
   Revoke every live key of an athanor. Returns the count.
   """
-  @spec revoke_all_for_athanor(String.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
-  def revoke_all_for_athanor(athanor_id) do
+  @spec revoke_all_for_athanor(Cyfr.Actor.t()) ::
+          {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
+  def revoke_all_for_athanor(%Cyfr.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_all_for_athanor", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
       query = from(k in ApiKey, where: k.revoked == ^false) |> where_athanor(athanor_id)
@@ -246,12 +272,15 @@ defmodule Arca.ApiKeyStorage do
     end)
   end
 
+  def revoke_all_for_athanor(%Cyfr.Actor{}), do: {:error, :no_athanor}
+
   @doc """
   Rotate a key: update key_hash, key_prefix, and rotated_at.
   """
-  @spec rotate_key(String.t(), String.t(), binary(), String.t()) ::
-          :ok | {:error, :not_found | :database_error}
-  def rotate_key(athanor_id, name, new_key_hash, new_key_prefix) do
+  @spec rotate_key(Cyfr.Actor.t(), String.t(), binary(), String.t()) ::
+          :ok | {:error, :no_athanor | :not_found | :database_error}
+  def rotate_key(%Cyfr.Actor{athanor_id: athanor_id}, name, new_key_hash, new_key_prefix)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.rotate_key", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -272,4 +301,6 @@ defmodule Arca.ApiKeyStorage do
       end
     end)
   end
+
+  def rotate_key(%Cyfr.Actor{}, _name, _new_key_hash, _new_key_prefix), do: {:error, :no_athanor}
 end

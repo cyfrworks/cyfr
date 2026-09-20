@@ -88,7 +88,7 @@ defmodule Compendium.Activation do
        when is_binary(athanor_id) and athanor_id != "" do
     case release_digest(component) do
       digest when is_binary(digest) ->
-        Arca.Cache.Keys.activation(athanor_id, node_key(component), digest)
+        Arca.Cache.Keys.activation(Cyfr.Actor.in_athanor(athanor_id), node_key(component), digest)
 
       _ ->
         nil
@@ -211,7 +211,7 @@ defmodule Compendium.Activation do
   defp resolve_dependency(ctx, dep) do
     if dep.dep_version do
       Arca.ComponentStorage.get_component(
-        ctx,
+        Sanctum.Context.actor(ctx),
         dep.dep_name,
         dep.dep_version,
         dep.dep_namespace,

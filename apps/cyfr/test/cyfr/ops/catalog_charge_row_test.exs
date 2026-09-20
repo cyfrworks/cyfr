@@ -113,8 +113,12 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
     end
 
     assert Sanctum.Authority.budget(auth).in_flight == 0
-    assert %{charged: 0} = Arca.BudgetReservations.lookup(@athanor, auth.budget.id)
-    assert {:ok, []} = Arca.BudgetReservations.charges(@athanor, auth.budget.id)
+
+    assert %{charged: 0} =
+             Arca.BudgetReservations.lookup(Cyfr.Actor.in_athanor(@athanor), auth.budget.id)
+
+    assert {:ok, []} =
+             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(@athanor), auth.budget.id)
   end
 
   test "a full reservation refuses the call and gives the slot back", %{
@@ -122,13 +126,20 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
     ctx: ctx,
     charge: charge
   } do
-    :ok = Arca.BudgetReservations.charge(@athanor, auth.budget.id, %{charge | id: "other"}, 1)
+    :ok =
+      Arca.BudgetReservations.charge(
+        Cyfr.Actor.in_athanor(@athanor),
+        auth.budget.id,
+        %{charge | id: "other"},
+        1
+      )
 
     assert {:error, msg} = call(ctx, auth, charge)
     assert msg =~ "Denied by chain authority"
     assert Sanctum.Authority.budget(auth).in_flight == 0
 
-    assert {:ok, [%{id: "other"}]} = Arca.BudgetReservations.charges(@athanor, auth.budget.id)
+    assert {:ok, [%{id: "other"}]} =
+             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(@athanor), auth.budget.id)
   end
 
   test "a call under the chain's attempt with no identity of its own holds a row of its own", %{
@@ -154,11 +165,20 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
     end
 
     # Charged for the call, released after it.
-    assert %{charged: 0} = Arca.BudgetReservations.lookup(@athanor, auth.budget.id)
-    assert {:ok, []} = Arca.BudgetReservations.charges(@athanor, auth.budget.id)
+    assert %{charged: 0} =
+             Arca.BudgetReservations.lookup(Cyfr.Actor.in_athanor(@athanor), auth.budget.id)
+
+    assert {:ok, []} =
+             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(@athanor), auth.budget.id)
 
     # The row is the authority: a full reservation refuses the call.
-    :ok = Arca.BudgetReservations.charge(@athanor, auth.budget.id, %{charge | id: "other"}, 1)
+    :ok =
+      Arca.BudgetReservations.charge(
+        Cyfr.Actor.in_athanor(@athanor),
+        auth.budget.id,
+        %{charge | id: "other"},
+        1
+      )
 
     assert {:error, msg} =
              Catalog.call_in_chain(

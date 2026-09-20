@@ -30,6 +30,22 @@ defmodule Sanctum.Tenancy.Caps do
   person sits in — an ended DM is archived and frees its place — and is
   asked for both people, since a pair is minted for two.
 
+  ## The port
+
+  This module is the one implementation of `Cyfr.Caps`, the contract the
+  layers below the tenancy domain ask their ceilings through. The port's
+  two callbacks take the `%Cyfr.Actor{}` first — `check_counted/3` and
+  `check_storage/2` — because a cap bounds what one tenant or one person
+  holds, and which one that is comes from the authenticated caller and
+  never from an argument. `Cyfr.Application` installs this module at
+  boot; until it does, `Cyfr.Caps.impl/0` raises rather than reading an
+  uninstalled port as a server with no caps.
+
+  `check_counted/2` is the tenancy domain's own spelling, for the mints
+  and seats that decide which athanor a caller works in and so have no
+  athanor to carry: it holds the policy, and the port's `check_counted/3`
+  matches the actor and defers to it. One definition, two doors.
+
   The byte cap counts the athanor's whole tree — every scope — on every
   write, which is what `CYFR_ATHANOR_STORAGE_BYTES` claims to bound.
   A shipped copy is never refused by the cap — provisioning and a pull
@@ -40,6 +56,8 @@ defmodule Sanctum.Tenancy.Caps do
   total before the next check reads it — a per-athanor reservation lock
   would serialize all tenant writes to close that sliver.
   """
+
+  @behaviour Cyfr.Caps
 
   @type key ::
           :max_athanors
@@ -118,6 +136,21 @@ defmodule Sanctum.Tenancy.Caps do
     end
   end
 
+  @doc """
+  `Cyfr.Caps.check_counted/3`: the port's door onto `check_counted/2`.
+
+  The actor is matched and not otherwise read. What a counted cap bounds
+  is counted by the caller's own `count` — Arca counts an athanor's
+  threads, the tenancy domain counts athanors, groups, pairs and seats —
+  and each closure already names the tenant or the person it counts for.
+  Matching the actor is what keeps a caller from passing a bare key or a
+  context in its place.
+  """
+  @impl Cyfr.Caps
+  @spec check_counted(Cyfr.Actor.t(), key(), Cyfr.Caps.count()) :: Cyfr.Caps.counted_decision()
+  def check_counted(%Cyfr.Actor{}, key, count) when key in @keys and is_function(count, 0),
+    do: check_counted(key, count)
+
   # `Arca` keeps this current without re-walking: every successful tenant
   # write bumps the cached total by the bytes written (over-counting an
   # overwrite — the safe direction), and deletes drop it so reclaimed space
@@ -147,22 +180,20 @@ defmodule Sanctum.Tenancy.Caps do
   (bytes bumped on writes,
   dropped on deletes), so the hot path pays no walk at all.
   """
-  @spec check_storage(Sanctum.Context.t(), non_neg_integer()) ::
-          :ok
-          | {:error, {:limit_reached, :athanor_storage_bytes, pos_integer()}}
-          | {:error, :storage_unverifiable}
+  @impl Cyfr.Caps
+  @spec check_storage(Cyfr.Actor.t(), non_neg_integer()) :: Cyfr.Caps.storage_decision()
   # Read-then-write without a lock (the cached total, then the caller's
   # write): N concurrent writes can each pass before any lands, so the cap
   # can overshoot by at most (per-tenant execution slots × max write size)
   # — bounded and accepted, the same call Cyfr.Execution.Rates documents for
   # its window.
-  def check_storage(%Sanctum.Context{} = ctx, incoming) when is_integer(incoming) do
+  def check_storage(%Cyfr.Actor{} = actor, incoming) when is_integer(incoming) do
     case get(:athanor_storage_bytes) do
       nil ->
         :ok
 
       cap ->
-        case athanor_bytes(ctx) do
+        case athanor_bytes(actor) do
           {:ok, bytes} when bytes + incoming > cap ->
             {:error, {:limit_reached, :athanor_storage_bytes, cap}}
 
@@ -179,8 +210,8 @@ defmodule Sanctum.Tenancy.Caps do
   # this cap's own: a walk that cannot answer must refuse the write —
   # treating an unreadable tree as empty would let writes march past the
   # ceiling. The failure is never cached: the next check walks again.
-  defp athanor_bytes(%{athanor_id: id} = ctx) when is_binary(id) and id != "" do
-    case Arca.Usage.athanor_bytes(ctx) do
+  defp athanor_bytes(%Cyfr.Actor{athanor_id: id} = actor) when is_binary(id) and id != "" do
+    case Arca.Usage.athanor_bytes(actor) do
       {:ok, bytes} ->
         {:ok, bytes}
 
@@ -188,7 +219,7 @@ defmodule Sanctum.Tenancy.Caps do
         require Logger
 
         Logger.warning(
-          "[Sanctum.Tenancy.Caps] usage walk failed for #{ctx.athanor_id}: " <>
+          "[Sanctum.Tenancy.Caps] usage walk failed for #{id}: " <>
             "#{inspect(reason)}; refusing capped writes until it answers"
         )
 
@@ -196,5 +227,11 @@ defmodule Sanctum.Tenancy.Caps do
     end
   end
 
-  defp athanor_bytes(_ctx), do: {:ok, 0}
+  # An actor with no resolved athanor names no tree, so there is no total
+  # to compare against the ceiling. That is unverifiable, not zero: a
+  # `{:ok, 0}` here would read an unresolved tenant as an empty estate and
+  # admit the write, which is the refusal-as-silence the tenancy rules
+  # forbid. Nothing reaches it through the `Arca` gate, which refuses such
+  # an actor first; it is the backstop for a direct caller.
+  defp athanor_bytes(%Cyfr.Actor{}), do: {:error, :storage_unverifiable}
 end

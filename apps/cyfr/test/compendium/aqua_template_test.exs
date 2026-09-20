@@ -82,7 +82,8 @@ defmodule Compendium.AquaTemplateTest do
   end
 
   # What a fill does for the tree: every shipped unit copied in.
-  defp fill!(ctx), do: {:ok, _} = Arca.Overlay.materialize_shipped(ctx, "aqua")
+  defp fill!(ctx),
+    do: {:ok, _} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "aqua")
 
   test "a fill copies the shipped tree in; until then the athanor has no soul", %{ctx: ctx} do
     assert :ok = AquaTemplate.seed_check()
@@ -95,7 +96,7 @@ defmodule Compendium.AquaTemplateTest do
     assert {:ok, %{prompt: "soul prompt v1"}} = AquaAgent.get(ctx, "aqua")
 
     # Real bytes of the athanor's own.
-    assert {:ok, %{files: 2}} = Arca.usage(ctx, ["aqua"])
+    assert {:ok, %{files: 2}} = Arca.usage(Sanctum.Context.actor(ctx), ["aqua"])
   end
 
   test "a release's change to the seed is not pushed; a reset brings it in", %{
@@ -107,7 +108,7 @@ defmodule Compendium.AquaTemplateTest do
 
     :ok =
       Arca.put(
-        ctx,
+        Sanctum.Context.actor(ctx),
         AquaPath.agent_file("scribe"),
         AquaAgent.serialize(%{scribe | prompt: "ours"})
       )
@@ -135,14 +136,20 @@ defmodule Compendium.AquaTemplateTest do
     write_skill!(template, "pdf", "v1")
     fill!(ctx)
 
-    assert {:ok, binary} = Arca.get(ctx, AquaPath.skill_manifest("pdf"))
+    assert {:ok, binary} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.skill_manifest("pdf"))
     assert binary =~ "skill instructions v1"
-    assert {:ok, "extra v1"} = Arca.get(ctx, AquaPath.skill_dir("pdf") ++ ["reference.md"])
 
-    assert {:error, :bundled} = Arca.delete_tree(ctx, AquaPath.skill_dir("pdf"))
+    assert {:ok, "extra v1"} =
+             Arca.get(Sanctum.Context.actor(ctx), AquaPath.skill_dir("pdf") ++ ["reference.md"])
 
-    :ok = Arca.put(ctx, AquaPath.skill_dir("pdf") ++ ["notes.md"], "mine")
-    assert Arca.Overlay.unit_status(ctx, AquaPath.skill_dir("pdf")) == {:ok, :shipped}
+    assert {:error, :bundled} =
+             Arca.delete_tree(Sanctum.Context.actor(ctx), AquaPath.skill_dir("pdf"))
+
+    :ok = Arca.put(Sanctum.Context.actor(ctx), AquaPath.skill_dir("pdf") ++ ["notes.md"], "mine")
+
+    assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), AquaPath.skill_dir("pdf")) ==
+             {:ok, :shipped}
+
     {:ok, files} = AquaTemplate.status(ctx)
     assert %{state: :bundled_modified} = Enum.find(files, &(&1.path == "aqua/skills/pdf"))
   end
@@ -155,13 +162,17 @@ defmodule Compendium.AquaTemplateTest do
 
     :ok =
       Arca.put(
-        ctx,
+        Sanctum.Context.actor(ctx),
         AquaPath.agent_file("scribe"),
         AquaAgent.serialize(%{scribe | prompt: "ours"})
       )
 
     :ok =
-      Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        AquaPath.agent_file("mine"),
+        AquaAgent.serialize(%{scribe | name: "mine"})
+      )
 
     # A role the seed ships later is not the athanor's until pulled.
     File.write!(Path.join([template, "roles", "later.md"]), "---\ntitle: Later\n---\n\nlater\n")
@@ -184,13 +195,17 @@ defmodule Compendium.AquaTemplateTest do
 
     :ok =
       Arca.put(
-        ctx,
+        Sanctum.Context.actor(ctx),
         AquaPath.agent_file("scribe"),
         AquaAgent.serialize(%{scribe | prompt: "ours"})
       )
 
     :ok =
-      Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        AquaPath.agent_file("mine"),
+        AquaAgent.serialize(%{scribe | name: "mine"})
+      )
 
     File.write!(Path.join([template, "roles", "later.md"]), "---\ntitle: Later\n---\n\nlater\n")
 
@@ -213,20 +228,24 @@ defmodule Compendium.AquaTemplateTest do
 
     :ok =
       Arca.put(
-        ctx,
+        Sanctum.Context.actor(ctx),
         AquaPath.agent_file("scribe"),
         AquaAgent.serialize(%{scribe | prompt: "ours"})
       )
 
     :ok =
-      Arca.put(ctx, AquaPath.agent_file("mine"), AquaAgent.serialize(%{scribe | name: "mine"}))
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        AquaPath.agent_file("mine"),
+        AquaAgent.serialize(%{scribe | name: "mine"})
+      )
 
     assert {:ok, %{reverted: reverted, kept: []}} = AquaTemplate.reset(ctx, all: true)
     assert Enum.sort(reverted) == ["aqua/roles/mine.md", "aqua/roles/scribe.md"]
 
     assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
     assert {:error, :not_found} = AquaAgent.get(ctx, "mine")
-    assert {:ok, %{files: 2}} = Arca.usage(ctx, ["aqua"])
+    assert {:ok, %{files: 2}} = Arca.usage(Sanctum.Context.actor(ctx), ["aqua"])
   end
 
   test "reset refuses before changing anything when the install ships no template", %{
@@ -234,7 +253,13 @@ defmodule Compendium.AquaTemplateTest do
     template: template
   } do
     fill!(ctx)
-    :ok = Arca.put(ctx, AquaPath.agent_file("mine"), "---\ntitle: Mine\n---\n\nmine\n")
+
+    :ok =
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        AquaPath.agent_file("mine"),
+        "---\ntitle: Mine\n---\n\nmine\n"
+      )
 
     # The install loses its template: reset must refuse and leave the
     # athanor's own work intact — deleting first would destroy the only
@@ -244,8 +269,8 @@ defmodule Compendium.AquaTemplateTest do
 
     assert {:error, :template_missing} = AquaTemplate.reset(ctx)
     assert {:error, :template_missing} = AquaTemplate.reset(ctx, all: true)
-    assert {:ok, _} = Arca.get(ctx, AquaPath.agent_file("mine"))
-    assert {:ok, _} = Arca.get(ctx, AquaPath.agent_file("scribe"))
+    assert {:ok, _} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.agent_file("mine"))
+    assert {:ok, _} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.agent_file("scribe"))
   end
 
   test "seed_check/0 fails loud on broken install media", %{template: template} do

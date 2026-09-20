@@ -188,9 +188,9 @@ defmodule Compendium.OCI.ClientTest do
 
       content = Jason.encode!(%{"name" => "my-tool", "version" => "1.0.0", "schema" => %{}})
 
-      :ok = Arca.put(ctx, path, content)
+      :ok = Arca.put(Sanctum.Context.actor(ctx), path, content)
 
-      {:ok, read_content} = Arca.get(ctx, path)
+      {:ok, read_content} = Arca.get(Sanctum.Context.actor(ctx), path)
       assert read_content == content
     end
 
@@ -198,9 +198,9 @@ defmodule Compendium.OCI.ClientTest do
       path = ["components", "reagents", "cyfr", "data-proc", "2.0.0", "README.md"]
       readme = "# Data Processor\n\nProcesses data."
 
-      :ok = Arca.put(ctx, path, readme)
+      :ok = Arca.put(Sanctum.Context.actor(ctx), path, readme)
 
-      {:ok, read_content} = Arca.get(ctx, path)
+      {:ok, read_content} = Arca.get(Sanctum.Context.actor(ctx), path)
       assert read_content == readme
     end
 
@@ -215,14 +215,14 @@ defmodule Compendium.OCI.ClientTest do
 
       for {segments, content} <- files do
         path = base ++ segments
-        :ok = Arca.put(ctx, path, content)
+        :ok = Arca.put(Sanctum.Context.actor(ctx), path, content)
       end
 
       # Verify files can be read back
-      {:ok, cargo_content} = Arca.get(ctx, base ++ ["src", "Cargo.toml"])
+      {:ok, cargo_content} = Arca.get(Sanctum.Context.actor(ctx), base ++ ["src", "Cargo.toml"])
       assert cargo_content =~ "tool"
 
-      {:ok, lib_content} = Arca.get(ctx, base ++ ["src", "src", "lib.rs"])
+      {:ok, lib_content} = Arca.get(Sanctum.Context.actor(ctx), base ++ ["src", "src", "lib.rs"])
       assert lib_content =~ "fn main()"
     end
 
@@ -230,7 +230,7 @@ defmodule Compendium.OCI.ClientTest do
       path =
         ["components", "reagents", "cyfr", "nonexistent", "1.0.0", "README.md"]
 
-      assert {:error, _} = Arca.get(ctx, path)
+      assert {:error, _} = Arca.get(Sanctum.Context.actor(ctx), path)
     end
   end
 

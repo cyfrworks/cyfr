@@ -131,7 +131,7 @@ defmodule Emissary.MCP.McpServersToolTest do
       assert {:ok, %{name: "test-save", id: id, transport: "http", epoch: 1}} = result
 
       # Verify it was persisted
-      assert {:ok, server} = Arca.McpServerStorage.get(ctx, "test-save")
+      assert {:ok, server} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "test-save")
       assert server.id == id
       assert server.url == "https://localhost:99999/mcp"
     end
@@ -154,7 +154,7 @@ defmodule Emissary.MCP.McpServersToolTest do
                  "config" => %{"url" => "https://localhost:99999/mcp"}
                })
 
-      {:ok, %{id: id}} = Arca.McpServerStorage.get(ctx, "kept")
+      {:ok, %{id: id}} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "kept")
 
       assert {:error, {:conflict, message}} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -164,7 +164,9 @@ defmodule Emissary.MCP.McpServersToolTest do
                })
 
       assert message =~ "update"
-      assert {:ok, %{url: "https://localhost:99999/mcp"}} = Arca.McpServerStorage.get(ctx, "kept")
+
+      assert {:ok, %{url: "https://localhost:99999/mcp"}} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "kept")
 
       assert {:ok, _} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -172,7 +174,7 @@ defmodule Emissary.MCP.McpServersToolTest do
                  "name" => "kept"
                })
 
-      {:ok, %{epoch: epoch}} = Arca.McpServerStorage.get(ctx, "kept")
+      {:ok, %{epoch: epoch}} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "kept")
 
       assert {:ok, %{status: "disabled", epoch: new_epoch}} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -183,7 +185,7 @@ defmodule Emissary.MCP.McpServersToolTest do
                })
 
       assert new_epoch == epoch + 1
-      assert {:ok, server} = Arca.McpServerStorage.get(ctx, "kept")
+      assert {:ok, server} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "kept")
       assert server.id == id
       assert server.url == "https://localhost:99998/mcp"
       assert server.enabled == false
@@ -193,7 +195,10 @@ defmodule Emissary.MCP.McpServersToolTest do
     test "update names the epoch it read, and is refused once the server has moved on",
          %{ctx: ctx} do
       {:ok, %{epoch: epoch}} =
-        Arca.McpServerStorage.insert(ctx, %{name: "kept", url: "https://localhost:99999/mcp"})
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          name: "kept",
+          url: "https://localhost:99999/mcp"
+        })
 
       update = fn args ->
         McpServersTool.handle(
@@ -218,7 +223,9 @@ defmodule Emissary.MCP.McpServersToolTest do
 
       assert {:error, {:conflict, message}} = update.(%{"epoch" => epoch})
       assert message =~ "changed since epoch #{epoch}"
-      assert {:ok, %{url: "https://localhost:99999/mcp"}} = Arca.McpServerStorage.get(ctx, "kept")
+
+      assert {:ok, %{url: "https://localhost:99999/mcp"}} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "kept")
     end
 
     test "update validates like create and finds only a server that exists", %{ctx: ctx} do
@@ -263,7 +270,7 @@ defmodule Emissary.MCP.McpServersToolTest do
                })
 
       assert message =~ "CYFR_MCP_BRIDGE_KEY"
-      assert {:error, :not_found} = Arca.McpServerStorage.get(ctx, "piped")
+      assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "piped")
     end
 
     test "carry no url or headers, and their backends are validated", %{ctx: ctx} do
@@ -285,9 +292,12 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "restart is for an enabled stdio server only", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{name: "webby", url: "https://x.com/mcp"})
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        name: "webby",
+        url: "https://x.com/mcp"
+      })
 
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "sleepy",
         transport: "stdio",
         url: nil,
@@ -315,7 +325,7 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "list names the transport and the vault entries the env reads", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "listed",
         transport: "stdio",
         url: nil,
@@ -337,7 +347,10 @@ defmodule Emissary.MCP.McpServersToolTest do
 
     test "deletes existing server", %{ctx: ctx} do
       {:ok, %{id: id}} =
-        Arca.McpServerStorage.insert(ctx, %{name: "to-delete", url: "https://x.com/mcp"})
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          name: "to-delete",
+          url: "https://x.com/mcp"
+        })
 
       assert {:ok, %{deleted: "to-delete", id: ^id}} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -345,7 +358,8 @@ defmodule Emissary.MCP.McpServersToolTest do
                  "name" => "to-delete"
                })
 
-      assert {:error, :not_found} = Arca.McpServerStorage.get(ctx, "to-delete")
+      assert {:error, :not_found} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "to-delete")
 
       assert {:error, {:not_found, "Server", "to-delete"}} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -362,8 +376,15 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "returns configured servers", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{name: "s1", url: "https://a.com/mcp"})
-      Arca.McpServerStorage.insert(ctx, %{name: "s2", url: "https://b.com/mcp"})
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        name: "s1",
+        url: "https://a.com/mcp"
+      })
+
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        name: "s2",
+        url: "https://b.com/mcp"
+      })
 
       assert {:ok, %{servers: servers, count: 2}} =
                McpServersTool.handle("mcp_servers", ctx, %{"action" => "list"})
@@ -375,7 +396,11 @@ defmodule Emissary.MCP.McpServersToolTest do
 
     test "listing starts no server processes", %{ctx: ctx} do
       # Listing servers must not start processes or open outbound connections.
-      Arca.McpServerStorage.insert(ctx, %{name: "lazy-1", url: "https://a.com/mcp", enabled: true})
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        name: "lazy-1",
+        url: "https://a.com/mcp",
+        enabled: true
+      })
 
       assert {:ok, %{servers: [server]}} =
                McpServersTool.handle("mcp_servers", ctx, %{"action" => "list"})
@@ -458,7 +483,7 @@ defmodule Emissary.MCP.McpServersToolTest do
   describe "handle/3 - a disabled server" do
     test "is neither tested nor refreshed by name, and a refresh of all skips it", %{ctx: ctx} do
       {:ok, _} =
-        Arca.McpServerStorage.insert(ctx, %{
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
           name: "dormant",
           url: "https://127.0.0.1:9/mcp",
           enabled: false,
@@ -489,25 +514,34 @@ defmodule Emissary.MCP.McpServersToolTest do
   describe "the stored row" do
     test "insert and update answer the row they wrote", %{ctx: ctx} do
       assert {:ok, %{id: "mcp_" <> _ = id, name: "rowsrv", enabled: true}} =
-               Arca.McpServerStorage.insert(ctx, %{name: "rowsrv", url: "https://127.0.0.1:9/mcp"})
+               Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+                 name: "rowsrv",
+                 url: "https://127.0.0.1:9/mcp"
+               })
 
       assert {:ok, %{id: ^id, enabled: false}} =
-               Arca.McpServerStorage.update(ctx, "rowsrv", %{enabled: false})
+               Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "rowsrv", %{
+                 enabled: false
+               })
 
       assert {:error, :exists} =
-               Arca.McpServerStorage.insert(ctx, %{name: "rowsrv", url: "https://127.0.0.1:9/mcp"})
+               Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+                 name: "rowsrv",
+                 url: "https://127.0.0.1:9/mcp"
+               })
 
-      assert {:error, :not_found} = Arca.McpServerStorage.update(ctx, "nosuch", %{enabled: true})
+      assert {:error, :not_found} =
+               Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "nosuch", %{enabled: true})
     end
 
     test "a row deleted and recreated under its name is served by a new process", %{ctx: ctx} do
       attrs = %{name: "reborn", url: "https://127.0.0.1:9/mcp"}
-      {:ok, first} = Arca.McpServerStorage.insert(ctx, attrs)
+      {:ok, first} = Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), attrs)
       config = Emissary.MCP.ExternalServers.server_config(first, ctx)
       {:ok, old_pid} = Emissary.MCP.ExternalServerSupervisor.ensure_started(config)
 
-      {:ok, _} = Arca.McpServerStorage.delete(ctx, "reborn")
-      {:ok, second} = Arca.McpServerStorage.insert(ctx, attrs)
+      {:ok, _} = Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), "reborn")
+      {:ok, second} = Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), attrs)
       refute second.id == first.id
 
       {:ok, new_pid} =
@@ -541,7 +575,10 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "returns server details for existing server", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{name: "get-test", url: "https://x.com/mcp"})
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        name: "get-test",
+        url: "https://x.com/mcp"
+      })
 
       assert {:ok, %{name: "get-test", url: "https://x.com/mcp"}} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -571,7 +608,10 @@ defmodule Emissary.MCP.McpServersToolTest do
     end
 
     test "returns status for existing server", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{name: "test-srv", url: "https://localhost:99999/mcp"})
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        name: "test-srv",
+        url: "https://localhost:99999/mcp"
+      })
 
       # Will fail to connect but should return a status result, not a not_found error
       assert {:ok, %{name: "test-srv"}} =
@@ -608,7 +648,10 @@ defmodule Emissary.MCP.McpServersToolTest do
 
   describe "handle/3 - enable/disable" do
     test "disables a server", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{name: "toggle", url: "https://x.com/mcp"})
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        name: "toggle",
+        url: "https://x.com/mcp"
+      })
 
       assert {:ok, %{enabled: false}} =
                McpServersTool.handle("mcp_servers", ctx, %{
@@ -616,12 +659,12 @@ defmodule Emissary.MCP.McpServersToolTest do
                  "name" => "toggle"
                })
 
-      assert {:ok, server} = Arca.McpServerStorage.get(ctx, "toggle")
+      assert {:ok, server} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "toggle")
       assert server.enabled == false
     end
 
     test "enables a disabled server", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "toggle2",
         url: "https://x.com/mcp",
         enabled: false

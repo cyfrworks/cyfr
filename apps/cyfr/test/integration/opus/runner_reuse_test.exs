@@ -171,6 +171,9 @@ defmodule Opus.RunnerReuseTest do
     }
   end
 
-  defp runner_of(ctx, id), do: Arca.ExecutionAttempts.current(ctx.athanor_id, id).claimed_by
-  defp attempt_of(ctx, id), do: Arca.ExecutionAttempts.current(ctx.athanor_id, id).attempt
+  defp runner_of(ctx, id),
+    do: Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id).claimed_by
+
+  defp attempt_of(ctx, id),
+    do: Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id).attempt
 end

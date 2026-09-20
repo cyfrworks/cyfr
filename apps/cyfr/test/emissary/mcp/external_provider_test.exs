@@ -25,7 +25,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "returns error for disabled server", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "disabled-srv",
         url: "https://x.com/mcp",
         enabled: false
@@ -37,7 +37,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
     test "a row handed in is the revision dispatch speaks to, not a second read", %{ctx: ctx} do
       {:ok, stored} =
-        Arca.McpServerStorage.insert(ctx, %{
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
           name: "one-rev",
           url: "https://x.com/mcp",
           enabled: true
@@ -61,7 +61,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "refuses an external-plane call unless the server opts in", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "chain-only",
         url: "https://x.com/mcp"
       })
@@ -76,7 +76,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "console opt-in admits the external plane", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "console-ok",
         url: "https://localhost:99999/mcp",
         config_json: Jason.encode!(%{"console" => true})
@@ -93,7 +93,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
     test "the console flag is not part of the consent digest", %{ctx: ctx} do
       {:ok, without_flag} =
-        Arca.McpServerStorage.insert(ctx, %{
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
           name: "digest-check",
           url: "https://x.com/mcp",
           enabled: true
@@ -102,7 +102,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       {:ok, digest_before} = Sanctum.ToolServerDigest.from_server(without_flag)
 
       {:ok, with_flag} =
-        Arca.McpServerStorage.update(ctx, "digest-check", %{
+        Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), "digest-check", %{
           config_json: Jason.encode!(%{"console" => true})
         })
 
@@ -118,7 +118,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       # dispatches proxied names as :external, so without the server's
       # opt-in the refusal is the plane sentence — the gate is enforced at
       # dispatch, not left to the HTTP router's cache wiring.
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "plane-pin",
         url: "https://localhost:99999/mcp"
       })
@@ -132,7 +132,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "auto-starts server process on dispatch", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "autostart",
         url: "https://localhost:99999/mcp"
       })
@@ -165,7 +165,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "dispatches to running server", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "dispatch-test",
         url: "https://localhost:99999/mcp"
       })
@@ -193,7 +193,11 @@ defmodule Emissary.MCP.ExternalProviderTest do
   describe "an outbound call's own row" do
     test "an in-chain call is admitted as a tool_call under the caller's lineage and closed after",
          %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{name: "rowed", url: "https://localhost:99999/mcp"})
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        name: "rowed",
+        url: "https://localhost:99999/mcp"
+      })
+
       parent = "exec_parent_#{System.unique_integer([:positive])}"
 
       assert {:error, _unreachable} =
@@ -219,13 +223,13 @@ defmodule Emissary.MCP.ExternalProviderTest do
                Jason.decode!(row.input)
 
       assert %{state: "failed", outcome: "error"} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, row.id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), row.id)
 
       Emissary.MCP.ExternalServerSupervisor.stop("rowed", ctx.athanor_id)
     end
 
     test "a console call writes no row", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "console-rowless",
         url: "https://localhost:99999/mcp",
         config_json: Jason.encode!(%{"console" => true})
@@ -245,7 +249,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "skips disabled servers", %{ctx: ctx} do
-      Arca.McpServerStorage.insert(ctx, %{
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         name: "disabled",
         url: "https://x.com/mcp",
         enabled: false
@@ -318,7 +322,10 @@ defmodule Emissary.MCP.ExternalProviderTest do
       on_exit(fn -> Application.delete_env(:cyfr, :execution_payload_store) end)
 
       {:ok, server} =
-        Arca.McpServerStorage.insert(ctx, %{name: "kept", url: "https://localhost:99999/mcp"})
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          name: "kept",
+          url: "https://localhost:99999/mcp"
+        })
 
       {:ok, server: server}
     end
@@ -336,10 +343,13 @@ defmodule Emissary.MCP.ExternalProviderTest do
       assert %{id: ^id, kind: "tool_call"} = Arca.Repo.get(Arca.Execution, id)
 
       assert {:ok, %{retention_class: "chat_step"}, bytes} =
-               Arca.ExecutionPayloads.get(ctx, id, "input")
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "input")
 
       assert Jason.decode!(bytes) == %{"x" => 1}
-      assert {:error, :not_found} = Arca.ExecutionPayloads.get(ctx, id, "result")
+
+      assert {:error, :not_found} =
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
+
       Emissary.MCP.ExternalServerSupervisor.stop("kept", ctx.athanor_id)
     end
 
@@ -351,7 +361,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       assert [row] = Arca.Repo.all(Arca.Execution)
 
       assert {:ok, %{retention_class: class}, _} =
-               Arca.ExecutionPayloads.get(ctx, row.id, "input")
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), row.id, "input")
 
       assert class == Cyfr.Retention.default_class(ctx)
       Emissary.MCP.ExternalServerSupervisor.stop("kept", ctx.athanor_id)
@@ -400,7 +410,10 @@ defmodule Emissary.MCP.ExternalProviderTest do
                )
 
       assert %{status: "completed"} = row = Arca.Repo.get(Arca.Execution, id)
-      assert {:ok, _, bytes} = Arca.ExecutionPayloads.get(ctx, id, "result")
+
+      assert {:ok, _, bytes} =
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
+
       assert Jason.decode!(bytes) == answer
       assert %{"output_hash" => hash} = Jason.decode!(row.output)
       assert hash == Cyfr.Digest.sha256(bytes)
@@ -421,9 +434,11 @@ defmodule Emissary.MCP.ExternalProviderTest do
                Arca.Repo.get(Arca.Execution, id)
 
       assert %{state: "failed", outcome: "result_lost"} =
-               Arca.ExecutionAttempts.current(ctx.athanor_id, id)
+               Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
 
-      assert {:error, :not_found} = Arca.ExecutionPayloads.get(ctx, id, "result")
+      assert {:error, :not_found} =
+               Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
+
       GenServer.stop(pid)
     end
   end

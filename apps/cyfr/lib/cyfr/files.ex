@@ -294,7 +294,7 @@ defmodule Cyfr.Files do
   # ---- storage ---------------------------------------------------------------
 
   defp list_typed(ctx, physical, path) do
-    case Arca.list_typed(ctx, physical) do
+    case Arca.list_typed(Sanctum.Context.actor(ctx), physical) do
       {:ok, entries} -> {:ok, entries}
       {:error, :enotdir} -> {:error, {:invalid_argument, "'#{path}' is a file — read it"}}
       {:error, :not_found} -> {:ok, []}
@@ -305,14 +305,14 @@ defmodule Cyfr.Files do
   defp size(_ctx, _physical, _name, :dir), do: nil
 
   defp size(ctx, physical, name, :file) do
-    case Arca.usage(ctx, physical ++ [name]) do
+    case Arca.usage(Sanctum.Context.actor(ctx), physical ++ [name]) do
       {:ok, %{bytes: bytes}} -> bytes
       {:error, _} -> nil
     end
   end
 
   defp get(ctx, physical, path) do
-    case Arca.get(ctx, physical) do
+    case Arca.get(Sanctum.Context.actor(ctx), physical) do
       {:ok, bytes} -> {:ok, bytes}
       {:error, :not_found} -> {:error, {:not_found, "File", path}}
       {:error, reason} -> storage_error("read", path, reason)
@@ -320,7 +320,7 @@ defmodule Cyfr.Files do
   end
 
   defp put(ctx, physical, path, bytes) do
-    case Arca.put(ctx, physical, bytes) do
+    case Arca.put(Sanctum.Context.actor(ctx), physical, bytes) do
       :ok -> :ok
       {:error, reason} -> write_error(path, reason)
     end
@@ -336,7 +336,7 @@ defmodule Cyfr.Files do
       end
     end
 
-    case Arca.Overlay.update(ctx, physical, rewrite) do
+    case Arca.Overlay.update(Sanctum.Context.actor(ctx), physical, rewrite) do
       :ok ->
         :ok
 
@@ -379,12 +379,12 @@ defmodule Cyfr.Files do
 
   # A folder goes whole; a file goes alone; a missing path is not found.
   defp remove(ctx, physical, path) do
-    case Arca.list_typed(ctx, physical) do
+    case Arca.list_typed(Sanctum.Context.actor(ctx), physical) do
       {:ok, [_ | _]} ->
         delete_tree(ctx, physical, path)
 
       {:ok, []} ->
-        if Arca.exists?(ctx, physical),
+        if Arca.exists?(Sanctum.Context.actor(ctx), physical),
           do: delete_tree(ctx, physical, path),
           else: {:error, {:not_found, "File", path}}
 
@@ -397,7 +397,7 @@ defmodule Cyfr.Files do
   end
 
   defp delete_file(ctx, physical, path) do
-    case Arca.delete(ctx, physical) do
+    case Arca.delete(Sanctum.Context.actor(ctx), physical) do
       :ok -> :ok
       {:error, :not_found} -> {:error, {:not_found, "File", path}}
       {:error, :bundled} -> {:error, {:invalid_argument, bundled_message(path)}}
@@ -406,7 +406,7 @@ defmodule Cyfr.Files do
   end
 
   defp delete_tree(ctx, physical, path) do
-    case Arca.delete_tree(ctx, physical) do
+    case Arca.delete_tree(Sanctum.Context.actor(ctx), physical) do
       :ok ->
         :ok
 

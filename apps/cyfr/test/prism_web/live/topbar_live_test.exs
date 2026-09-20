@@ -68,7 +68,9 @@ defmodule PrismWeb.TopbarLiveTest do
         authenticated: true
       )
 
-    {:ok, thread} = Arca.ThreadStorage.create(group_ctx, %{title: "Bells thread"})
+    {:ok, thread} =
+      Arca.ThreadStorage.create(Sanctum.Context.actor(group_ctx), %{title: "Bells thread"})
+
     Sanctum.Notify.broadcast(group.id, :approval_pending, %{thread_id: thread.id})
     :sys.get_state(bar.pid)
     assert render(bar) =~ "bg-blue-500/80"

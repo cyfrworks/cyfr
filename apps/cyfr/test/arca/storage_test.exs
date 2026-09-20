@@ -60,20 +60,20 @@ defmodule Arca.StorageTest do
   end
 
   describe "physical_segments/2" do
-    defp ath_ctx do
-      Context.build(user_id: "u", athanor_id: "ath_x", authenticated: true)
+    defp ath_actor do
+      %{Cyfr.Actor.in_athanor("ath_x") | user_id: "u", authenticated: true}
     end
 
     test "everything an athanor owns lives under athanors/{id} — the context's id, verbatim" do
-      assert Storage.physical_segments(ath_ctx(), ["components", "tinctures"]) ==
+      assert Storage.physical_segments(ath_actor(), ["components", "tinctures"]) ==
                ["athanors", "ath_x", "components", "tinctures"]
 
-      assert Storage.physical_segments(ath_ctx(), ["threads", "thread_1", "a.png"]) ==
+      assert Storage.physical_segments(ath_actor(), ["threads", "thread_1", "a.png"]) ==
                ["athanors", "ath_x", "threads", "thread_1", "a.png"]
 
       # The one spelling: the Local sweep walks the same root this mapping
       # writes under, via tenant_physical_root/0 — never a second literal.
-      assert hd(Storage.physical_segments(ath_ctx(), ["data"])) ==
+      assert hd(Storage.physical_segments(ath_actor(), ["data"])) ==
                Storage.tenant_physical_root()
     end
 
@@ -81,46 +81,50 @@ defmodule Arca.StorageTest do
       # The guest's `data/` is the athanor's `data/` root, so a `data/`
       # grant physically cannot reach aqua/, threads/ or any other
       # host scope — they are siblings, not children.
-      assert Storage.physical_segments(ath_ctx(), ["data", "notes.txt"]) ==
+      assert Storage.physical_segments(ath_actor(), ["data", "notes.txt"]) ==
                ["athanors", "ath_x", "data", "notes.txt"]
 
-      assert Storage.physical_segments(ath_ctx(), ["aqua", "agent.json"]) ==
+      assert Storage.physical_segments(ath_actor(), ["aqua", "agent.json"]) ==
                ["athanors", "ath_x", "aqua", "agent.json"]
     end
 
     test "the empty path is the athanor's whole tree" do
       # The storage cap's one walk: everything the athanor owns, components
       # included.
-      assert Storage.physical_segments(ath_ctx(), []) == ["athanors", "ath_x"]
+      assert Storage.physical_segments(ath_actor(), []) == ["athanors", "ath_x"]
     end
 
     test "globals stay at the storage root" do
-      assert Storage.physical_segments(ath_ctx(), ["cache", "oci", "d"]) == ["cache", "oci", "d"]
+      assert Storage.physical_segments(ath_actor(), ["cache", "oci", "d"]) == [
+               "cache",
+               "oci",
+               "d"
+             ]
 
-      assert Storage.physical_segments(ath_ctx(), ["system", "health", ".write_probe"]) ==
+      assert Storage.physical_segments(ath_actor(), ["system", "health", ".write_probe"]) ==
                ["system", "health", ".write_probe"]
     end
 
     test "seed media is not tenant storage" do
       assert_raise ArgumentError, ~r/seed media/, fn ->
-        Storage.physical_segments(ath_ctx(), ["seed", "components", "x"])
+        Storage.physical_segments(ath_actor(), ["seed", "components", "x"])
       end
 
       assert_raise ArgumentError, ~r/seed media/, fn ->
-        Storage.physical_segments(ath_ctx(), ["seed", "aqua", "agent.json"])
+        Storage.physical_segments(ath_actor(), ["seed", "aqua", "agent.json"])
       end
     end
 
     test "the bare components root is the athanor's own components subtree" do
-      assert Storage.physical_segments(ath_ctx(), ["components"]) ==
+      assert Storage.physical_segments(ath_actor(), ["components"]) ==
                ["athanors", "ath_x", "components"]
     end
 
-    test "a context without an athanor cannot name a component path (fail closed)" do
-      ctx = Sanctum.TestContext.platform(user_id: "op")
-
-      assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-        Storage.physical_segments(ctx, ["components", "tinctures"])
+    test "an actor without an athanor cannot name a component path (fail closed)" do
+      for unresolved <- [Cyfr.Actor.system(), %Cyfr.Actor{athanor_id: ""}] do
+        assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
+          Storage.physical_segments(unresolved, ["components", "tinctures"])
+        end
       end
     end
   end
@@ -149,31 +153,24 @@ defmodule Arca.StorageTest do
         )
 
       # namespace ("alice") is identity-only and does NOT appear in the path.
-      assert Storage.tenant_segments(ctx) == ["ath_acme"]
+      assert Storage.tenant_segments(Sanctum.Context.actor(ctx)) == ["ath_acme"]
     end
 
-    test "namespace is ignored — the athanor alone determines the path" do
-      with_ns =
-        Context.build(
-          user_id: "u",
-          namespace: "alice",
-          athanor_id: "ath_acme",
-          authenticated: true
-        )
+    test "nothing but the athanor determines the path" do
+      named = %{Cyfr.Actor.in_athanor("ath_acme") | user_id: "u", request_id: "req_1"}
+      bare = Cyfr.Actor.in_athanor("ath_acme")
 
-      without_ns = Context.build(user_id: "u", athanor_id: "ath_acme", authenticated: true)
-
-      assert Storage.tenant_segments(with_ns) == Storage.tenant_segments(without_ns)
-      assert Storage.tenant_segments(with_ns) == ["ath_acme"]
+      assert Storage.tenant_segments(named) == Storage.tenant_segments(bare)
+      assert Storage.tenant_segments(named) == ["ath_acme"]
     end
 
-    test "raises when the context has no athanor (fail closed)" do
-      # A resolved athanor is required to name a tenant directory; a nil means
-      # a caller bypassed the Sanctum.Context.require_tenant! chokepoint.
+    test "raises when the actor has no athanor (fail closed)" do
+      # A resolved athanor is required to name a tenant directory; a nil
+      # means a caller reached here around the chokepoint that resolves one.
       ctx = Context.build(user_id: "user_1", athanor_id: nil, authenticated: false)
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-        Storage.tenant_segments(ctx)
+        Storage.tenant_segments(Sanctum.Context.actor(ctx))
       end
     end
 
@@ -182,7 +179,7 @@ defmodule Arca.StorageTest do
         Sanctum.TestContext.platform(user_id: "system")
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-        Storage.tenant_segments(ctx)
+        Storage.tenant_segments(Sanctum.Context.actor(ctx))
       end
     end
 
@@ -199,7 +196,7 @@ defmodule Arca.StorageTest do
           )
 
         assert_raise ArgumentError, ~r/invalid athanor_id/, fn ->
-          Storage.tenant_segments(ctx)
+          Storage.tenant_segments(Sanctum.Context.actor(ctx))
         end
       end
     end
@@ -208,19 +205,26 @@ defmodule Arca.StorageTest do
   describe "authorize_path/2" do
     test "an athanor's component tree is its own — the path is tenant-relative" do
       ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
-      assert :ok = Storage.authorize_path(ctx, ["components", "catalysts", "local"])
-      assert :ok = Storage.authorize_path(ctx, ["components"])
+
+      assert :ok =
+               Storage.authorize_path(Sanctum.Context.actor(ctx), [
+                 "components",
+                 "catalysts",
+                 "local"
+               ])
+
+      assert :ok = Storage.authorize_path(Sanctum.Context.actor(ctx), ["components"])
     end
 
-    test "the seed bundle is readable only by server-internal contexts" do
-      member = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
+    test "the seed bundle is readable only by a system actor" do
+      member = %{Cyfr.Actor.in_athanor("ath_a") | user_id: "u", authenticated: true}
 
-      # An operator's platform context is person-derived (`auth_method:
-      # :oidc`), not the `:system` provenance the seed gate admits.
-      platform =
-        Sanctum.TestContext.platform(user_id: "op", auth_method: :oidc)
+      # An operator reading across athanors is platform SCOPE, which is a
+      # different authority from `system`: it widens a read, it does not
+      # open a shared path.
+      platform = %{Cyfr.Actor.in_athanor("ath_a") | user_id: "op", scope: :platform}
 
-      seed = Sanctum.internal_context(user_id: "_seed", athanor_id: "ath_a", scope: :athanor)
+      seed = %{Cyfr.Actor.system() | user_id: "_seed", athanor_id: "ath_a", scope: :athanor}
 
       assert {:error, :forbidden} = Storage.authorize_path(member, ["seed", "components"])
       assert {:error, :forbidden} = Storage.authorize_path(platform, ["seed", "aqua"])
@@ -230,19 +234,32 @@ defmodule Arca.StorageTest do
 
     test "tenant-prefixed paths are not gated here; the global roots are the server's" do
       ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
-      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["config", "retention.json"])
-      assert :ok = Storage.authorize_path(ctx, ["data", "notes.txt"])
-      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["cache", "oci", "x"])
-      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["system", "health"])
-      assert :ok = Storage.authorize_path(Sanctum.system_context(), ["cache", "oci", "x"])
-      assert :ok = Storage.authorize_path(Sanctum.system_context(), ["system", "health"])
+
+      assert {:error, :forbidden} =
+               Storage.authorize_path(Sanctum.Context.actor(ctx), ["config", "retention.json"])
+
+      assert :ok = Storage.authorize_path(Sanctum.Context.actor(ctx), ["data", "notes.txt"])
+
+      assert {:error, :forbidden} =
+               Storage.authorize_path(Sanctum.Context.actor(ctx), ["cache", "oci", "x"])
+
+      assert {:error, :forbidden} =
+               Storage.authorize_path(Sanctum.Context.actor(ctx), ["system", "health"])
+
+      assert :ok = Storage.authorize_path(Cyfr.Actor.system(), ["cache", "oci", "x"])
+      assert :ok = Storage.authorize_path(Cyfr.Actor.system(), ["system", "health"])
     end
 
-    test "an unknown first segment is refused for every context" do
+    test "an unknown first segment is refused for every actor" do
       ctx = Context.build(user_id: "u", athanor_id: "ath_a", authenticated: true)
-      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["scratch", "hello.txt"])
-      assert {:error, :forbidden} = Storage.authorize_path(ctx, ["guest", "x.txt"])
-      assert {:error, :forbidden} = Storage.authorize_path(Sanctum.system_context(), ["scratch"])
+
+      assert {:error, :forbidden} =
+               Storage.authorize_path(Sanctum.Context.actor(ctx), ["scratch", "hello.txt"])
+
+      assert {:error, :forbidden} =
+               Storage.authorize_path(Sanctum.Context.actor(ctx), ["guest", "x.txt"])
+
+      assert {:error, :forbidden} = Storage.authorize_path(Cyfr.Actor.system(), ["scratch"])
     end
   end
 
@@ -265,7 +282,7 @@ defmodule Arca.StorageTest do
 
     test "physical_segments refuses an unknown root instead of minting a subtree" do
       assert_raise ArgumentError, ~r/unknown storage root/, fn ->
-        Storage.physical_segments(ath_ctx(), ["scratch", "hello.txt"])
+        Storage.physical_segments(ath_actor(), ["scratch", "hello.txt"])
       end
     end
 
@@ -379,25 +396,32 @@ defmodule Arca.StorageTest do
     test "a traversal segment under a legal root answers false, never raises" do
       ctx = Sanctum.TestContext.local()
 
-      refute Arca.exists?(ctx, ["data", "..", "aqua"])
-      refute Arca.exists?(ctx, ["data", ".."])
-      refute Arca.exists?(ctx, ["nope", "x"])
-      refute Arca.exists?(ctx, ["data", String.duplicate("a", 500)])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "..", "aqua"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", ".."])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["nope", "x"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", String.duplicate("a", 500)])
 
       # Every other facade entry keeps failing loud on the same input.
-      assert_raise ArgumentError, fn -> Arca.get(ctx, ["data", "..", "aqua"]) end
+      assert_raise ArgumentError, fn ->
+        Arca.get(Sanctum.Context.actor(ctx), ["data", "..", "aqua"])
+      end
     end
 
-    test "an athanor-less context answers false for a tenant path, never raises" do
+    test "an athanor-less actor answers false for a tenant path, never raises" do
       ctx = Sanctum.Context.internal()
 
-      refute Arca.exists?(ctx, ["data", "x"])
-      refute Arca.exists?(ctx, ["components"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "x"])
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["components"])
+      refute Arca.exists?(%Cyfr.Actor{athanor_id: ""}, ["data", "x"])
 
-      # Every other facade entry keeps failing loud on the same context —
-      # reaching one without an athanor is host-side programmer error.
+      # Every other facade entry refuses the same actor loudly rather than
+      # answering an empty result, and the raise stays under the facade,
+      # for anything that reaches an adapter directly.
+      assert {:error, :no_athanor} = Arca.get(Sanctum.Context.actor(ctx), ["data", "x"])
+      assert {:error, :no_athanor} = Arca.list(%Cyfr.Actor{athanor_id: ""}, ["data"])
+
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-        Arca.get(ctx, ["data", "x"])
+        Arca.Storage.tenant_segments(Sanctum.Context.actor(ctx))
       end
     end
   end
@@ -409,13 +433,13 @@ defmodule Arca.StorageTest do
     test "put/append/delete below depth 2 answer {:error, :invalid_path}" do
       ctx = Sanctum.TestContext.local()
 
-      assert {:error, :invalid_path} = Arca.put(ctx, [], "x")
-      assert {:error, :invalid_path} = Arca.put(ctx, ["data"], "x")
-      assert {:error, :invalid_path} = Arca.append(ctx, ["data"], "x")
-      assert {:error, :invalid_path} = Arca.delete(ctx, ["data"])
+      assert {:error, :invalid_path} = Arca.put(Sanctum.Context.actor(ctx), [], "x")
+      assert {:error, :invalid_path} = Arca.put(Sanctum.Context.actor(ctx), ["data"], "x")
+      assert {:error, :invalid_path} = Arca.append(Sanctum.Context.actor(ctx), ["data"], "x")
+      assert {:error, :invalid_path} = Arca.delete(Sanctum.Context.actor(ctx), ["data"])
 
       # Globals are covered by the same gate.
-      assert {:error, :invalid_path} = Arca.put(Sanctum.Context.internal(), ["cache"], "x")
+      assert {:error, :invalid_path} = Arca.put(Cyfr.Actor.system(), ["cache"], "x")
     end
 
     test "a multi-level string segment counts as its real depth" do
@@ -423,15 +447,15 @@ defmodule Arca.StorageTest do
 
       # `"data/…"` normalizes to two segments before the gate runs, so the
       # gate cannot regress to counting pre-split shapes.
-      assert :ok = Arca.put(ctx, ["data/depth_gate_pin.txt"], "x")
-      assert :ok = Arca.delete(ctx, ["data/depth_gate_pin.txt"])
+      assert :ok = Arca.put(Sanctum.Context.actor(ctx), ["data/depth_gate_pin.txt"], "x")
+      assert :ok = Arca.delete(Sanctum.Context.actor(ctx), ["data/depth_gate_pin.txt"])
     end
 
     test "delete_tree keeps working on the whole tree and on a scope" do
       ctx = Sanctum.TestContext.local()
 
-      assert :ok = Arca.put(ctx, ["data", "depth_gate_tree", "a.txt"], "x")
-      assert :ok = Arca.delete_tree(ctx, ["data", "depth_gate_tree"])
+      assert :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "depth_gate_tree", "a.txt"], "x")
+      assert :ok = Arca.delete_tree(Sanctum.Context.actor(ctx), ["data", "depth_gate_tree"])
     end
   end
 
@@ -458,10 +482,10 @@ defmodule Arca.StorageTest do
     test "a leaf read that hangs past the deadline is a typed error, not an exit" do
       # The callers of a bulk read are request handlers; a hung adapter must
       # answer as an error tuple — never kill the caller.
-      ctx = Context.build(user_id: "u", athanor_id: "ath_x", authenticated: true)
+      actor = Cyfr.Actor.in_athanor("ath_x")
 
       assert {:error, {:subtree_read_failed, ["data", "sub", "stuck.txt"], :timeout}} =
-               Storage.read_subtree_via(HangingAdapter, ctx, ["data", "sub"], timeout: 50)
+               Storage.read_subtree_via(HangingAdapter, actor, ["data", "sub"], timeout: 50)
     end
   end
 end

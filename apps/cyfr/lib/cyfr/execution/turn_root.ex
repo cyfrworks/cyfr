@@ -117,14 +117,14 @@ defmodule Cyfr.Execution.TurnRoot do
         # aborted row and the pause are one transaction.
         %{step_id: _} = uncertain ->
           Arca.TurnStorage.pause_uncertain(
-            ctx,
+            Sanctum.Context.actor(ctx),
             turn_id,
             Map.put(uncertain, :fence, Keyword.get(opts, :fence))
           )
 
         nil ->
           with {:ok, turn} <-
-                 Arca.TurnStorage.pause(ctx, turn_id, %{
+                 Arca.TurnStorage.pause(Sanctum.Context.actor(ctx), turn_id, %{
                    fence: Keyword.get(opts, :fence),
                    reason: Keyword.get(opts, :reason, "approval"),
                    launch_step_id: Keyword.get(opts, :launch_step_id)
@@ -158,7 +158,7 @@ defmodule Cyfr.Execution.TurnRoot do
            take_slot(ctx, execution_id, Keyword.get(opts, :timeout_ms, @slot_wait_ms)) do
       until = Record.lease_until()
 
-      case Arca.TurnStorage.resume(ctx, Keyword.fetch!(opts, :turn_id), %{
+      case Arca.TurnStorage.resume(Sanctum.Context.actor(ctx), Keyword.fetch!(opts, :turn_id), %{
              fence: Keyword.get(opts, :fence),
              lease_until: until
            }) do
@@ -248,7 +248,7 @@ defmodule Cyfr.Execution.TurnRoot do
   defp fail_open_root(ctx, execution_id, attempt, error) do
     _ =
       Arca.Execution.record_end(
-        ctx,
+        Sanctum.Context.actor(ctx),
         execution_id,
         "failed",
         %{completed_at: DateTime.utc_now(), duration_ms: 0, error_message: error},
@@ -301,7 +301,7 @@ defmodule Cyfr.Execution.TurnRoot do
   # holder registered, and one that ended before is seen here. A row that
   # cannot be read is refused `:unavailable`, the slot given back.
   defp hold_live(ctx, execution_id, attempt, token) do
-    case Arca.ExecutionAttempts.current(ctx.athanor_id, execution_id) do
+    case Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), execution_id) do
       %Arca.Schemas.ExecutionAttempt{attempt: ^attempt, state: "running"} ->
         {:ok, token}
 

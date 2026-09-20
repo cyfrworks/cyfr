@@ -108,14 +108,21 @@ defmodule Sanctum.ProvisioningTest do
     :ok = Provisioning.start_provisioning(in_group)
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at
-    {:ok, [row]} = Arca.ComponentStorage.list_components(in_group, publisher: "local")
+
+    {:ok, [row]} =
+      Arca.ComponentStorage.list_components(Sanctum.Context.actor(in_group), publisher: "local")
+
     assert row.name == "foo"
 
-    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+    {:ok, [profile]} =
+      Arca.ProfileStorage.list_for_source(Cyfr.Actor.in_athanor(group.id), "catalyst:local.foo")
+
     assert profile.kind == "owner"
 
     # the mint is attributed to the person who created the group
-    {:ok, consent, _refs} = Arca.ConsentStorage.get_head(group.id, profile.id)
+    {:ok, consent, _refs} =
+      Arca.ConsentStorage.get_head(Cyfr.Actor.in_athanor(group.id), profile.id)
+
     assert consent.granted_by == ctx.user_id
 
     # provisioning again is a no-op
@@ -197,14 +204,14 @@ defmodule Sanctum.ProvisioningTest do
     in_group = %{ctx | athanor_id: group.id}
     :ok = Provisioning.start_provisioning(in_group)
 
-    {:ok, entries} = Arca.list_typed(in_group, [])
+    {:ok, entries} = Arca.list_typed(Sanctum.Context.actor(in_group), [])
 
     assert Enum.sort(entries) ==
              Enum.sort(for root <- Arca.Storage.tenant_roots(), do: {root, :dir})
 
-    :ok = Arca.delete_tree(in_group, ["notes"])
+    :ok = Arca.delete_tree(Sanctum.Context.actor(in_group), ["notes"])
     assert :ok = Filler.sync_seeds()
-    assert {:ok, [_ | _] = healed} = Arca.list_typed(in_group, [])
+    assert {:ok, [_ | _] = healed} = Arca.list_typed(Sanctum.Context.actor(in_group), [])
     assert {"notes", :dir} in healed
   end
 
@@ -220,8 +227,8 @@ defmodule Sanctum.ProvisioningTest do
 
     # A member edited their copy of foo.
     version_dir = ["components", "catalysts", "local", "foo", "1.0.0"]
-    :ok = Arca.put(in_group, version_dir ++ ["scratch.txt"], "x")
-    assert {:ok, true} = Arca.Overlay.edited?(in_group, version_dir)
+    :ok = Arca.put(Sanctum.Context.actor(in_group), version_dir ++ ["scratch.txt"], "x")
+    assert {:ok, true} = Arca.Overlay.edited?(Sanctum.Context.actor(in_group), version_dir)
 
     # The next release ships a second bundled catalyst.
     src = Path.join([bundle_dir, "catalysts", "local", "fresh", "1.0.0"])
@@ -241,14 +248,21 @@ defmodule Sanctum.ProvisioningTest do
     assert :ok = Filler.sync_seeds()
 
     # The edit survives the release, and the new catalyst is only offered.
-    assert Arca.Overlay.unit_status(in_group, version_dir) == {:ok, :shipped}
-    assert {:ok, "x"} = Arca.get(in_group, version_dir ++ ["scratch.txt"])
+    assert Arca.Overlay.unit_status(Sanctum.Context.actor(in_group), version_dir) ==
+             {:ok, :shipped}
+
+    assert {:ok, "x"} = Arca.get(Sanctum.Context.actor(in_group), version_dir ++ ["scratch.txt"])
 
     fresh_dir = ["components", "catalysts", "local", "fresh", "1.0.0"]
-    assert Arca.Overlay.unit_status(in_group, fresh_dir) == {:ok, :available}
+
+    assert Arca.Overlay.unit_status(Sanctum.Context.actor(in_group), fresh_dir) ==
+             {:ok, :available}
 
     {:ok, rows} =
-      Arca.ComponentStorage.list_components(in_group, publisher: "local", limit: :none)
+      Arca.ComponentStorage.list_components(Sanctum.Context.actor(in_group),
+        publisher: "local",
+        limit: :none
+      )
 
     refute Enum.any?(rows, &(&1.name == "fresh"))
 
@@ -257,14 +271,19 @@ defmodule Sanctum.ProvisioningTest do
     assert {:ok, %{component_ref: "catalyst:local.fresh:1.0.0"}} =
              Filler.install_shipped(in_group, "catalyst:local.fresh")
 
-    assert Arca.Overlay.unit_status(in_group, fresh_dir) == {:ok, :shipped}
+    assert Arca.Overlay.unit_status(Sanctum.Context.actor(in_group), fresh_dir) == {:ok, :shipped}
 
     {:ok, rows} =
-      Arca.ComponentStorage.list_components(in_group, publisher: "local", limit: :none)
+      Arca.ComponentStorage.list_components(Sanctum.Context.actor(in_group),
+        publisher: "local",
+        limit: :none
+      )
 
     assert Enum.any?(rows, &(&1.name == "fresh"))
 
-    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.fresh")
+    {:ok, [profile]} =
+      Arca.ProfileStorage.list_for_source(Cyfr.Actor.in_athanor(group.id), "catalyst:local.fresh")
+
     assert profile.kind == "owner"
   end
 
@@ -340,7 +359,10 @@ defmodule Sanctum.ProvisioningTest do
 
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at
-    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+
+    {:ok, [profile]} =
+      Arca.ProfileStorage.list_for_source(Cyfr.Actor.in_athanor(group.id), "catalyst:local.foo")
+
     assert profile.kind == "owner"
   end
 
@@ -363,7 +385,10 @@ defmodule Sanctum.ProvisioningTest do
     {:ok, group} = Athanors.get(group.id)
     assert group.provisioned_at
     refute Athanors.provisioning_failure(group)
-    {:ok, [profile]} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+
+    {:ok, [profile]} =
+      Arca.ProfileStorage.list_for_source(Cyfr.Actor.in_athanor(group.id), "catalyst:local.foo")
+
     assert profile.kind == "owner"
   end
 
@@ -397,7 +422,9 @@ defmodule Sanctum.ProvisioningTest do
     assert %{step: "closure"} = Athanors.provisioning_failure(group)
 
     # the seed itself landed; only the closure is missing, and a retry says so again
-    {:ok, [_row]} = Arca.ComponentStorage.list_components(in_group, publisher: "local")
+    {:ok, [_row]} =
+      Arca.ComponentStorage.list_components(Sanctum.Context.actor(in_group), publisher: "local")
+
     assert {:error, {:provisioning_failed, :closure, _}} = Provisioning.provision(group, in_group)
   end
 
@@ -477,12 +504,23 @@ defmodule Sanctum.ProvisioningTest do
       {:ok, row} = Athanors.get(group.id)
       refute row.provisioned_at
       refute Athanors.provisioning_failure(row)
-      assert {:ok, []} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
-      assert {:ok, []} = Arca.AgentStorage.list(group.id)
+
+      assert {:ok, []} =
+               Arca.ProfileStorage.list_for_source(
+                 Cyfr.Actor.in_athanor(group.id),
+                 "catalyst:local.foo"
+               )
+
+      assert {:ok, []} = Arca.AgentStorage.list(Cyfr.Actor.in_athanor(group.id))
 
       # The mint refuses the lost claim on its own, whoever calls it.
       assert {:error, :claim_lost} = Sanctum.Consent.Bootstrap.run(in_group, stale)
-      assert {:ok, []} = Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+
+      assert {:ok, []} =
+               Arca.ProfileStorage.list_for_source(
+                 Cyfr.Actor.in_athanor(group.id),
+                 "catalyst:local.foo"
+               )
 
       # The successor's claim is as it took it, and its own fill lands.
       assert {:ok, %{owner: owner, fence: fence, outcome: nil}} = Claims.current(actor)
@@ -492,9 +530,12 @@ defmodule Sanctum.ProvisioningTest do
       assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
 
       assert {:ok, [_profile]} =
-               Arca.ProfileStorage.list_for_source(group.id, "catalyst:local.foo")
+               Arca.ProfileStorage.list_for_source(
+                 Cyfr.Actor.in_athanor(group.id),
+                 "catalyst:local.foo"
+               )
 
-      assert {:ok, [_ | _]} = Arca.AgentStorage.list(group.id)
+      assert {:ok, [_ | _]} = Arca.AgentStorage.list(Cyfr.Actor.in_athanor(group.id))
 
       # Settled, the late one is still stale: it cannot turn ready to failed.
       assert :stale = Claims.settle(actor, stale.owner, stale.fence, "failed", "late")
@@ -538,7 +579,7 @@ defmodule Sanctum.ProvisioningTest do
     assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(group.id)
 
     # Something for the sync to heal, and another attempt holding the estate.
-    :ok = Arca.delete_tree(in_group, ["notes"])
+    :ok = Arca.delete_tree(Sanctum.Context.actor(in_group), ["notes"])
     actor = %Cyfr.Actor{athanor_id: group.id}
     held = held_elsewhere!(group.id, "install_shipped")
 
@@ -546,7 +587,7 @@ defmodule Sanctum.ProvisioningTest do
 
     # It waits rather than refusing or walking the estate beside the holder.
     assert Task.yield(sync, 750) == nil
-    assert {:ok, entries} = Arca.list_typed(in_group, [])
+    assert {:ok, entries} = Arca.list_typed(Sanctum.Context.actor(in_group), [])
     refute {"notes", :dir} in entries
     assert {:ok, %{owner: owner, outcome: nil}} = Claims.current(actor)
     assert owner == held.owner
@@ -555,7 +596,7 @@ defmodule Sanctum.ProvisioningTest do
     :ok = Claims.release(actor, held.owner, held.fence)
     assert :ok = Task.await(sync, 30_000)
 
-    assert {:ok, healed} = Arca.list_typed(in_group, [])
+    assert {:ok, healed} = Arca.list_typed(Sanctum.Context.actor(in_group), [])
     assert {"notes", :dir} in healed
 
     assert {:ok, %{entry_kind: "seed_sync", outcome: "released", fence: fence}} =

@@ -6,7 +6,9 @@ defmodule Aqua.AttachmentsTest.FailingAdapter do
   use Arca.Storage.TestDouble
 
   def put(_ctx, _path, "FAIL-THIS-WRITE"), do: {:error, :enospc}
-  def put(ctx, path, content), do: Arca.Adapters.Local.put(ctx, path, content)
+
+  def put(actor, path, content),
+    do: Arca.Adapters.Local.put(actor, path, content)
 end
 
 defmodule Aqua.AttachmentsTest.UnverifiableUsageAdapter do
@@ -71,8 +73,8 @@ defmodule Aqua.AttachmentsTest do
     assert {:ok, pa} = Attachments.blob_path("thread_x", "msg_y", a)
     assert {:ok, pb} = Attachments.blob_path("thread_x", "msg_y", b)
     assert pa == ["threads", "thread_x", "msg_y", "0-report.pdf"]
-    assert {:ok, "one"} = Arca.get(ctx, pa)
-    assert {:ok, "two"} = Arca.get(ctx, pb)
+    assert {:ok, "one"} = Arca.get(Sanctum.Context.actor(ctx), pa)
+    assert {:ok, "two"} = Arca.get(Sanctum.Context.actor(ctx), pb)
 
     assert [%{"data" => d1}, %{"data" => d2}] =
              Attachments.load(ctx, "thread_x", [
@@ -101,7 +103,7 @@ defmodule Aqua.AttachmentsTest do
     files = [%{"filename" => "report.tmp.1", "media_type" => "text/plain", "bytes" => "x"}]
     assert {:ok, [ref]} = Attachments.store(ctx, "thread_t", "msg_t", files)
     assert {:ok, path} = Attachments.blob_path("thread_t", "msg_t", ref)
-    assert {:ok, "x"} = Arca.get(ctx, path)
+    assert {:ok, "x"} = Arca.get(Sanctum.Context.actor(ctx), path)
   end
 
   test "a multibyte filename is capped in bytes and stays valid UTF-8" do
@@ -138,7 +140,7 @@ defmodule Aqua.AttachmentsTest do
 
     # The first file was written, then rolled back — a message never
     # references a partial set, and no orphan blob remains.
-    refute Arca.exists?(ctx, ["threads", "thread_r", "msg_r", "0-a.txt"])
+    refute Arca.exists?(Sanctum.Context.actor(ctx), ["threads", "thread_r", "msg_r", "0-a.txt"])
   end
 
   test "bounds: too many files, a file too large, or a full athanor writes nothing", %{ctx: ctx} do
@@ -153,12 +155,12 @@ defmodule Aqua.AttachmentsTest do
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 10)
     # The usage cache is suite-shared per athanor and now survives writes
     # (bumped, not dropped) — start this cap check from a fresh walk.
-    Arca.Usage.invalidate(ctx.athanor_id)
+    Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
     ok = [%{"filename" => "small", "media_type" => "text/plain", "bytes" => "12345"}]
     assert {:ok, _} = Attachments.store(ctx, "c", "m1", ok)
     over = [%{"filename" => "more", "media_type" => "text/plain", "bytes" => "1234567"}]
     assert {:error, :storage_full} = Attachments.store(ctx, "c", "m2", over)
-    refute Arca.exists?(ctx, ["threads", "c", "m2", "0-more"])
+    refute Arca.exists?(Sanctum.Context.actor(ctx), ["threads", "c", "m2", "0-more"])
   end
 
   test "an unverifiable usage walk surfaces as itself, not a generic error", %{ctx: ctx} do
@@ -166,7 +168,7 @@ defmodule Aqua.AttachmentsTest do
     # CLOSED with :storage_unverifiable — the member must see the honest,
     # transient message, not \"storing failed\".
     Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1_000_000)
-    Arca.Usage.invalidate(ctx.athanor_id)
+    Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
 
     prev = Application.get_env(:cyfr, :storage_adapter)
     Application.put_env(:cyfr, :storage_adapter, Aqua.AttachmentsTest.UnverifiableUsageAdapter)

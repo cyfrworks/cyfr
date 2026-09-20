@@ -298,7 +298,7 @@ defmodule Cyfr.Test.StepBench do
   # One turn on a thread of its own, so every step sends the same request;
   # answers its chat step's four spans.
   defp step!(ctx) do
-    {:ok, thread} = Arca.ThreadStorage.create(ctx)
+    {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
       Tape.accept(ctx, thread.id, %{

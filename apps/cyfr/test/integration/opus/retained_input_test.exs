@@ -95,7 +95,9 @@ defmodule Opus.RetainedInputTest do
                retained_input: kept
              )
 
-    assert {:ok, _payload, bytes} = Arca.ExecutionPayloads.get(ctx, id, "input")
+    assert {:ok, _payload, bytes} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "input")
+
     refute bytes =~ "SENT-ONLY"
     assert Jason.decode!(bytes) == kept
 

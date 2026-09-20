@@ -137,9 +137,9 @@ defmodule Arca.McpLog do
   Uses tenant-scoped lookup when a context is provided.
   """
   # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 one line above.
-  def record_update(%Sanctum.Context{} = ctx, id, attrs) do
+  def record_update(%Cyfr.Actor{} = actor, id, attrs) do
     Arca.Repo.Errors.with_db_rescue("McpLog.record_update", fn ->
-      case get_tenant(ctx, id) do
+      case get_tenant(actor, id) do
         nil ->
           {:error, :not_found}
 
@@ -201,12 +201,12 @@ defmodule Arca.McpLog do
 
   Platform scope bypasses tenant filtering.
   """
-  @spec get_tenant(Sanctum.Context.t(), String.t()) ::
+  @spec get_tenant(Cyfr.Actor.t(), String.t()) ::
           %__MODULE__{} | nil | {:error, :database_error}
-  def get_tenant(%Sanctum.Context{} = ctx, id) do
+  def get_tenant(%Cyfr.Actor{} = actor, id) do
     Arca.Repo.Errors.with_db_rescue("McpLog.get_tenant", fn ->
       from(l in __MODULE__, where: l.id == ^id)
-      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
       |> Arca.Repo.one()
     end)
   end

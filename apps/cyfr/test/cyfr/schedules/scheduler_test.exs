@@ -128,7 +128,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
   end
 
   defp occurrences(ctx, schedule) do
-    {:ok, rows} = ScheduleOccurrences.list(ctx, schedule.id)
+    {:ok, rows} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), schedule.id)
     rows
   end
 
@@ -186,7 +186,10 @@ defmodule Cyfr.Schedules.SchedulerTest do
         send(worker, :continue)
 
         wait_until(fn ->
-          match?(%{status: "completed"}, Arca.Execution.get_tenant(ctx, execution_id))
+          match?(
+            %{status: "completed"},
+            Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), execution_id)
+          )
         end)
       end
 
@@ -271,13 +274,15 @@ defmodule Cyfr.Schedules.SchedulerTest do
     assert [%{execution_id: ^execution_id}] = ScriptedWorker.calls()
 
     assert {:ok, %{retention_class: "schedule"}, _bytes} =
-             Arca.ExecutionPayloads.get(ctx, execution_id, "input")
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), execution_id, "input")
 
     assert [%{id: ^execution_id, schedule_id: schedule_id, status: "completed"}] =
              Arca.Repo.all(Arca.Execution)
 
     assert schedule_id == schedule.id
-    assert %{state: "completed"} = Arca.ExecutionAttempts.current(ctx.athanor_id, execution_id)
+
+    assert %{state: "completed"} =
+             Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), execution_id)
 
     # The cursor moved past the occurrence, and the row counts the run.
     wait_until(fn -> match?({:ok, %{run_count: 1}}, CronSchedule.get_for_daemon(schedule.id)) end)
@@ -355,7 +360,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
     {:ok, _} =
       Arca.Execution.record_end(
-        ctx,
+        Sanctum.Context.actor(ctx),
         "exec_lapsed",
         "failed",
         %{completed_at: now, duration_ms: 1, error_message: "swept"},
@@ -377,11 +382,18 @@ defmodule Cyfr.Schedules.SchedulerTest do
     scheduler!()
 
     wait_until(fn ->
-      match?({:ok, %{state: "completed"}}, ScheduleOccurrences.get(ctx, claimed.id))
+      match?(
+        {:ok, %{state: "completed"}},
+        ScheduleOccurrences.get(Sanctum.Context.actor(ctx), claimed.id)
+      )
     end)
 
-    assert {:ok, %{state: "uncertain"}} = ScheduleOccurrences.get(ctx, "occ_started")
-    assert {:ok, %{execution_id: execution_id}} = ScheduleOccurrences.get(ctx, claimed.id)
+    assert {:ok, %{state: "uncertain"}} =
+             ScheduleOccurrences.get(Sanctum.Context.actor(ctx), "occ_started")
+
+    assert {:ok, %{execution_id: execution_id}} =
+             ScheduleOccurrences.get(Sanctum.Context.actor(ctx), claimed.id)
+
     assert [%{execution_id: ^execution_id}] = ScriptedWorker.calls()
     # The cursor is untouched: recovery re-runs a claim, it never claims anew.
     assert [_, _] = occurrences(ctx, schedule)

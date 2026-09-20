@@ -149,7 +149,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # another estate holds is nothing here — or the blank slate, where the
   # first message creates the row.
   defp thread_of(ctx, id) when is_binary(id) and id != "" do
-    case Threads.get(ctx, id) do
+    case Threads.get(Sanctum.Context.actor(ctx), id) do
       {:ok, thread} -> thread
       _ -> nil
     end
@@ -182,7 +182,11 @@ defmodule PrismWeb.ThreadPaneLive do
         # long-lived thread into every viewer's socket. The runner's
         # own turn assembly stays windowed separately.
         rows =
-          case Threads.latest_messages(socket.assigns.context, thread.id, 500) do
+          case Threads.latest_messages(
+                 Sanctum.Context.actor(socket.assigns.context),
+                 thread.id,
+                 500
+               ) do
             rows when is_list(rows) -> rows
             {:error, _} -> []
           end
@@ -871,7 +875,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
     with true <- is_list(attachments) and Enum.all?(attachments, &is_map/1),
          true <- is_nil(room) or is_map(room),
-         {:ok, _thread} <- Threads.get(socket.assigns.context, thread_id) do
+         {:ok, _thread} <- Threads.get(Sanctum.Context.actor(socket.assigns.context), thread_id) do
       {:ok,
        %{
          thread_id: thread_id,
@@ -958,7 +962,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp current_or_new(socket) do
     with {:ok, %{id: id}} <- PrismWeb.Ops.call_tool(socket, "thread/create", %{}),
-         {:ok, thread} <- Threads.get(socket.assigns.context, id) do
+         {:ok, thread} <- Threads.get(Sanctum.Context.actor(socket.assigns.context), id) do
       {:ok, thread, true}
     end
   end

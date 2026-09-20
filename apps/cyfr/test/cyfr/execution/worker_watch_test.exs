@@ -108,7 +108,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
   defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
 
   defp attempt_row(fixture),
-    do: Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+    do: Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(fixture.athanor_id), fixture.attempt)
 
   defp seen(watch), do: Map.fetch!(WorkerWatch.seen(watch), @service)
 

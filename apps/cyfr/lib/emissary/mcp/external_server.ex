@@ -476,7 +476,7 @@ defmodule Emissary.MCP.ExternalServer do
     ctx = Sanctum.Context.internal(athanor_id: state.athanor_id, scope: :athanor)
 
     state =
-      case Arca.McpServerStorage.get_by_id(ctx, state.server_id) do
+      case Arca.McpServerStorage.get_by_id(Sanctum.Context.actor(ctx), state.server_id) do
         {:ok, %{epoch: epoch}} when epoch == state.epoch ->
           state
 

@@ -56,7 +56,7 @@ defmodule Arca.RecordSink do
 
   @type item ::
           {:policy_log, map()}
-          | {:mcp_log_update, Sanctum.Context.t(), String.t(), map()}
+          | {:mcp_log_update, Cyfr.Actor.t(), String.t(), map()}
           | {:mcp_log_started, map()}
           | {:mcp_log_close, map(), map()}
           | {:vault_touch, String.t(), String.t()}
@@ -288,8 +288,8 @@ defmodule Arca.RecordSink do
   defp write_mcp_updates([]), do: :ok
 
   defp write_mcp_updates(items) do
-    Enum.each(items, fn {:mcp_log_update, ctx, call_id, attrs} ->
-      case Arca.McpLog.record_update(ctx, call_id, attrs) do
+    Enum.each(items, fn {:mcp_log_update, actor, call_id, attrs} ->
+      case Arca.McpLog.record_update(actor, call_id, attrs) do
         {:ok, _} ->
           :ok
 

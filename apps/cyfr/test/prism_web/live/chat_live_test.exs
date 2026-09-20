@@ -64,13 +64,16 @@ defmodule PrismWeb.ChatLiveTest do
   defp settled_thread!(ctx) do
     wait_until(
       fn ->
-        match?([_], Threads.list(ctx)) and
-          match?({:ok, []}, Aqua.Tape.open_turns(ctx, hd(Threads.list(ctx)).id))
+        match?([_], Threads.list(Sanctum.Context.actor(ctx))) and
+          match?(
+            {:ok, []},
+            Aqua.Tape.open_turns(ctx, hd(Threads.list(Sanctum.Context.actor(ctx))).id)
+          )
       end,
       60_000
     )
 
-    [thread] = Threads.list(ctx)
+    [thread] = Threads.list(Sanctum.Context.actor(ctx))
     thread
   end
 
@@ -153,8 +156,13 @@ defmodule PrismWeb.ChatLiveTest do
         authenticated: true
       )
 
-    {:ok, thread} = Threads.create(ctx)
-    {:ok, _} = Threads.append(ctx, thread.id, %{author: alice.user_id, content: "cold open"})
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+
+    {:ok, _} =
+      Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+        author: alice.user_id,
+        content: "cold open"
+      })
 
     # A cold mount — no rail click, the session defaulting to the shared estate.
     {view, html} = mount_chat(conn, group, thread.id)
@@ -264,7 +272,8 @@ defmodule PrismWeb.ChatLiveTest do
     agent = Arca.Schemas.Message.agent_author()
 
     assert [%{author: a}, %{kind: "text", author: ^agent}] =
-             Threads.messages(start_ctx, thread.id) |> Enum.filter(&(&1.kind == "text"))
+             Threads.messages(Sanctum.Context.actor(start_ctx), thread.id)
+             |> Enum.filter(&(&1.kind == "text"))
 
     assert a == alice.user_id
   end
@@ -291,18 +300,21 @@ defmodule PrismWeb.ChatLiveTest do
       fn ->
         match?(
           [_],
-          Threads.pending_approvals(start_ctx, hd(Threads.list(start_ctx)).id)
+          Threads.pending_approvals(
+            Sanctum.Context.actor(start_ctx),
+            hd(Threads.list(Sanctum.Context.actor(start_ctx))).id
+          )
         )
       end,
       60_000
     )
 
-    [thread] = Threads.list(start_ctx)
+    [thread] = Threads.list(Sanctum.Context.actor(start_ctx))
     {bob_view, _} = mount_chat(bob_conn, nil, thread.id)
 
     assert render(pane(alice_view)) =~ "notes.keep"
     assert render(pane(bob_view)) =~ "notes.keep"
-    [apr] = Threads.pending_approvals(start_ctx, thread.id)
+    [apr] = Threads.pending_approvals(Sanctum.Context.actor(start_ctx), thread.id)
 
     # Bob approves from his tab; the turn continues and answers.
     Cyfr.Test.ScriptedWorker.script([model_reply("Kept.")])
@@ -314,7 +326,7 @@ defmodule PrismWeb.ChatLiveTest do
     settled_thread!(start_ctx)
     assert render(pane(bob_view)) =~ "Kept."
     assert render(pane(alice_view)) =~ "Kept."
-    {:ok, done} = Threads.get_message(start_ctx, apr.id)
+    {:ok, done} = Threads.get_message(Sanctum.Context.actor(start_ctx), apr.id)
     assert done.status == "approved"
     assert done.resolved_by == bob.user_id
 
@@ -343,10 +355,13 @@ defmodule PrismWeb.ChatLiveTest do
         authenticated: true
       )
 
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
 
     {:ok, _} =
-      Threads.append(ctx, thread.id, %{author: alice.user_id, content: "secret plan"})
+      Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+        author: alice.user_id,
+        content: "secret plan"
+      })
 
     # The focused estate, asked for the group's thread id, opens
     # nothing of it: the id is not one of its threads, so the page says so
@@ -382,7 +397,7 @@ defmodule PrismWeb.ChatLiveTest do
     |> render_submit()
 
     ctx = member_ctx(alice, group)
-    [thread] = Threads.list(ctx)
+    [thread] = Threads.list(Sanctum.Context.actor(ctx))
     assert {:ok, []} = Aqua.Tape.open_turns(ctx, thread.id)
     {bob_view, bob_html} = mount_chat(bob_conn, group, thread.id)
     assert bob_html =~ "lunch at noon?"
@@ -476,7 +491,7 @@ defmodule PrismWeb.ChatLiveTest do
     assert [%{"filename" => "note.txt", "data" => data}, %{"filename" => "plan.md"}] = attached
     assert Base.decode64!(data) == "hi there"
 
-    [msg | _] = Threads.messages(ctx, thread.id)
+    [msg | _] = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
     refs = msg |> Aqua.Attachments.refs_of() |> Enum.sort_by(& &1["filename"])
     assert Enum.map(refs, & &1["filename"]) == ["note.txt", "plan.md"]
     assert Enum.map(refs, & &1["size"]) == [8, 6]
@@ -489,7 +504,7 @@ defmodule PrismWeb.ChatLiveTest do
                Aqua.Attachments.blob_path(thread.id, msg.id, ref)
 
       assert thread_id == thread.id and msg_id == msg.id
-      assert Arca.exists?(ctx, blob)
+      assert Arca.exists?(Sanctum.Context.actor(ctx), blob)
     end
 
     note = Enum.find(refs, &(&1["filename"] == "note.txt"))
@@ -592,7 +607,7 @@ defmodule PrismWeb.ChatLiveTest do
     })
 
     assert render(pane(view)) =~ "Retry"
-    assert [] == Threads.latest_messages(ctx, thread_id, 10)
+    assert [] == Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 10)
 
     # A reload: the hook offers the held send back, and it is held again
     # under the same identity.
@@ -604,7 +619,7 @@ defmodule PrismWeb.ChatLiveTest do
       envelope: %{"message_id" => ^message_id}
     })
 
-    assert [] == Threads.latest_messages(ctx, thread_id, 10)
+    assert [] == Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 10)
 
     # The fill completes: every pane holding the send retries on its own,
     # the estate accepts the message once, and the turn runs.
@@ -617,7 +632,10 @@ defmodule PrismWeb.ChatLiveTest do
     # Both panes offer the send; the turn it opens ends with the reply.
     wait_until(
       fn ->
-        Enum.any?(Threads.latest_messages(ctx, thread_id, 10), &(&1.id == message_id)) and
+        Enum.any?(
+          Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 10),
+          &(&1.id == message_id)
+        ) and
           match?({:ok, []}, Aqua.Tape.open_turns(ctx, thread_id))
       end,
       60_000
@@ -627,7 +645,7 @@ defmodule PrismWeb.ChatLiveTest do
     assert_push_event(view, "aqua:held_send", %{envelope: nil}, 5_000)
     refute render(pane(reloaded)) =~ "Retry"
 
-    rows = Threads.latest_messages(ctx, thread_id, 50)
+    rows = Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 50)
     assert [%{id: ^message_id}] = Enum.filter(rows, &(&1.author == alice.user_id))
     assert Enum.any?(rows, &(&1.content == "Held, then heard"))
     wait_until(fn -> render(pane(reloaded)) =~ "Held, then heard" end)
@@ -644,7 +662,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     assert [%{id: ^message_id}] =
              Enum.filter(
-               Threads.latest_messages(ctx, thread_id, 50),
+               Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 50),
                &(&1.author == alice.user_id)
              )
   end
@@ -743,8 +761,14 @@ defmodule PrismWeb.ChatLiveTest do
         authenticated: true
       )
 
-    {:ok, thread} = Threads.create(home_ctx)
-    :ok = Arca.ThreadSubscriptionStorage.unfollow(home_ctx, thread.id, alice.user_id)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(home_ctx))
+
+    :ok =
+      Arca.ThreadSubscriptionStorage.unfollow(
+        Sanctum.Context.actor(home_ctx),
+        thread.id,
+        alice.user_id
+      )
 
     {view, _html} = mount_chat(conn)
     fold = "#estate-#{estate().id} button[phx-click=toggle_other]"
@@ -786,14 +810,30 @@ defmodule PrismWeb.ChatLiveTest do
         authenticated: true
       )
 
-    {:ok, foreign} = Threads.create(group_ctx)
-    :ok = Arca.ThreadSubscriptionStorage.unfollow(group_ctx, foreign.id, alice.user_id)
+    {:ok, foreign} = Threads.create(Sanctum.Context.actor(group_ctx))
+
+    :ok =
+      Arca.ThreadSubscriptionStorage.unfollow(
+        Sanctum.Context.actor(group_ctx),
+        foreign.id,
+        alice.user_id
+      )
 
     # The focused estate is open; the id belongs to the group.
     {view, _html} = mount_chat(conn)
     assert render_click(view, "follow_thread", %{"id" => foreign.id}) =~ "That thread isn"
-    refute Arca.ThreadSubscriptionStorage.follows?(estate().id, foreign.id, alice.user_id)
-    refute Arca.ThreadSubscriptionStorage.follows?(group.id, foreign.id, alice.user_id)
+
+    refute Arca.ThreadSubscriptionStorage.follows?(
+             Cyfr.Actor.in_athanor(estate().id),
+             foreign.id,
+             alice.user_id
+           )
+
+    refute Arca.ThreadSubscriptionStorage.follows?(
+             Cyfr.Actor.in_athanor(group.id),
+             foreign.id,
+             alice.user_id
+           )
 
     assert render_click(view, "unfollow_thread", %{"id" => foreign.id}) =~
              "That thread isn"
@@ -804,7 +844,7 @@ defmodule PrismWeb.ChatLiveTest do
     conn = log_in_user(conn, alice, athanor_id: estate().id)
     home = estate()
     ctx = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: home.id}
-    {:ok, existing} = Threads.create(ctx)
+    {:ok, existing} = Threads.create(Sanctum.Context.actor(ctx))
 
     {view, _html} = mount_chat(conn, home, existing.id)
     assert pane(view).id == "pane-#{home.id}"
@@ -830,8 +870,8 @@ defmodule PrismWeb.ChatLiveTest do
     conn = log_in_user(conn, alice, athanor_id: estate().id)
     home = estate()
     ctx = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: home.id}
-    {:ok, first} = Threads.create(ctx)
-    {:ok, second} = Threads.create(ctx)
+    {:ok, first} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, second} = Threads.create(Sanctum.Context.actor(ctx))
 
     {view, _html} = mount_chat(conn, home, first.id)
     pid = pane(view).pid

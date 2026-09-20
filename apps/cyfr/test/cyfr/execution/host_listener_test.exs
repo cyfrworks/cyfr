@@ -219,7 +219,11 @@ defmodule Cyfr.Execution.HostListenerTest do
       assert {:error, "Execution terminated: runner stopped without cleanup"} =
                Dispatch.await(fixture.pid, fixture.close)
 
-      assert %{state: "lapsed"} = Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+      assert %{state: "lapsed"} =
+               Arca.ExecutionAttempts.get(
+                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt
+               )
     end
   end
 
@@ -314,7 +318,12 @@ defmodule Cyfr.Execution.HostListenerTest do
       assert {401, %{"error" => "lost"}} =
                post(url, WorkerWire.host_route(:runner_exited), [forged], body)
 
-      assert %{state: "running"} = Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+      assert %{state: "running"} =
+               Arca.ExecutionAttempts.get(
+                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt
+               )
+
       assert Process.alive?(fixture.pid)
       Attempt.refuse(fixture.pid, "not started")
     end
@@ -330,7 +339,12 @@ defmodule Cyfr.Execution.HostListenerTest do
 
       assert claimed_by(fixture) == nil
       assert %{status: "running"} = row(fixture)
-      assert %{state: "running"} = Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+
+      assert %{state: "running"} =
+               Arca.ExecutionAttempts.get(
+                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt
+               )
     end
   end
 

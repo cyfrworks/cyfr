@@ -220,12 +220,12 @@ defmodule Aqua.AquaToolEditsTest do
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
     assert Enum.any?(rows, &(&1.name == "scout"))
     refute Enum.any?(rows, &(&1.name == "tracker"))
-    refute Arca.exists?(ctx, role)
+    refute Arca.exists?(Sanctum.Context.actor(ctx), role)
 
     # The move is what was left: once it finishes, the published role is
     # served and the next sync names it.
-    assert {:ok, :repaired} = Arca.Overlay.repair_unit(ctx, role)
-    assert Arca.exists?(ctx, role)
+    assert {:ok, :repaired} = Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), role)
+    assert Arca.exists?(Sanctum.Context.actor(ctx), role)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
     assert Enum.any?(rows, &(&1.name == "tracker"))

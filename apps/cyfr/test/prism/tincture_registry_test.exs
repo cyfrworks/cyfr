@@ -60,7 +60,7 @@ defmodule Prism.TinctureRegistryTest do
     ctx = Sanctum.Context.build(user_id: "fixture", athanor_id: athanor_id, authenticated: true)
 
     Arca.Adapters.Local.build_path(
-      ctx,
+      Sanctum.Context.actor(ctx),
       ["components", "tinctures", publisher, name, version]
     )
   end

@@ -30,6 +30,14 @@ defmodule Arca.Execution do
   use Ecto.Schema
   import Ecto.Changeset
   import Ecto.Query
+  # Every function that names a tenant takes the `Cyfr.Actor` first. The
+  # record readers and the lifecycle writes branch on `scope` through
+  # `Arca.QueryHelpers.where_tenant_unless_platform/2` — a platform-scope
+  # actor reads across athanors and legitimately carries none, so they
+  # match the actor and let the backstop raise for an athanor-scope actor
+  # with no athanor rather than guarding a resolved one in the head. The
+  # sweeps and the retention primitives carry no actor and say why where
+  # they stand.
 
   # The execution lifecycle vocabulary, in one place like its sibling
   # stores. A row starts "running" and ends in exactly one of the
@@ -178,15 +186,16 @@ defmodule Arca.Execution do
   the caller's athanor: `{:ok, row}`, or `:none` when no child carries
   that key.
   """
-  @spec child_by_key(Sanctum.Context.t(), String.t(), String.t()) ::
+  @spec child_by_key(Cyfr.Actor.t(), String.t(), String.t()) ::
           {:ok, struct()} | :none | {:error, :database_error}
-  def child_by_key(%Sanctum.Context{} = ctx, parent_execution_id, child_key)
-      when is_binary(parent_execution_id) and is_binary(child_key) do
+  def child_by_key(%Cyfr.Actor{} = actor, parent_execution_id, child_key)
+      when is_binary(parent_execution_id) and
+             is_binary(child_key) do
     Arca.Repo.Errors.with_db_rescue("Execution.child_by_key", fn ->
       from(e in __MODULE__,
         where: e.parent_execution_id == ^parent_execution_id and e.child_key == ^child_key
       )
-      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
       |> Arca.Repo.one()
       |> case do
         nil -> :none
@@ -312,7 +321,7 @@ defmodule Arca.Execution do
           end
 
         attempt =
-          Arca.ExecutionAttempts.open!(athanor_id, execution.id,
+          Arca.ExecutionAttempts.open!(Cyfr.Actor.in_athanor(athanor_id), execution.id,
             attempt: attempt_id,
             service_id: Keyword.get(opts, :service_id),
             boot_id: boot_id,
@@ -322,7 +331,12 @@ defmodule Arca.Execution do
 
         case Keyword.get(opts, :reservation) do
           %{budget_id: budget_id, cap: cap} ->
-            Arca.BudgetReservations.mint!(athanor_id, execution.id, budget_id, cap)
+            Arca.BudgetReservations.mint!(
+              Cyfr.Actor.in_athanor(athanor_id),
+              execution.id,
+              budget_id,
+              cap
+            )
 
           nil ->
             :ok
@@ -330,8 +344,12 @@ defmodule Arca.Execution do
 
         case Keyword.get(opts, :charge) do
           %{reservation_id: reservation_id, id: id} ->
-            if Arca.BudgetReservations.admit_hold!(athanor_id, reservation_id, id) != 1,
-              do: Arca.Repo.rollback(:hold_expired)
+            if Arca.BudgetReservations.admit_hold!(
+                 Cyfr.Actor.in_athanor(athanor_id),
+                 reservation_id,
+                 id
+               ) != 1,
+               do: Arca.Repo.rollback(:hold_expired)
 
           nil ->
             :ok
@@ -339,8 +357,13 @@ defmodule Arca.Execution do
 
         case Keyword.get(opts, :step) do
           %{id: step_id, generation: generation} ->
-            if Arca.TurnStorage.bind_child!(athanor_id, step_id, generation, execution.id) != 1,
-              do: Arca.Repo.rollback(:step_superseded)
+            if Arca.TurnStorage.bind_child!(
+                 Cyfr.Actor.in_athanor(athanor_id),
+                 step_id,
+                 generation,
+                 execution.id
+               ) != 1,
+               do: Arca.Repo.rollback(:step_superseded)
 
           nil ->
             :ok
@@ -350,8 +373,12 @@ defmodule Arca.Execution do
           parent_attempt when is_binary(parent_attempt) ->
             parent_id = Map.fetch!(attrs, :parent_execution_id)
 
-            if Arca.ExecutionAttempts.hold_for_child!(athanor_id, parent_id, parent_attempt) != 1,
-              do: Arca.Repo.rollback(:parent_ended)
+            if Arca.ExecutionAttempts.hold_for_child!(
+                 Cyfr.Actor.in_athanor(athanor_id),
+                 parent_id,
+                 parent_attempt
+               ) != 1,
+               do: Arca.Repo.rollback(:parent_ended)
 
           nil ->
             :ok
@@ -361,15 +388,22 @@ defmodule Arca.Execution do
 
         case Keyword.get(opts, :occurrence_id) do
           occurrence_id when is_binary(occurrence_id) ->
-            if Arca.ScheduleOccurrences.start!(athanor_id, occurrence_id, execution.id) != 1,
-              do: Arca.Repo.rollback(:occurrence_not_claimed)
+            if Arca.ScheduleOccurrences.start!(
+                 Cyfr.Actor.in_athanor(athanor_id),
+                 occurrence_id,
+                 execution.id
+               ) != 1,
+               do: Arca.Repo.rollback(:occurrence_not_claimed)
 
           nil ->
             :ok
         end
 
         event =
-          Arca.ExecutionEvents.append!(athanor_id, execution.id, "execution.started",
+          Arca.ExecutionEvents.append!(
+            Cyfr.Actor.in_athanor(athanor_id),
+            execution.id,
+            "execution.started",
             data: %{"attempt" => attempt_id}
           )
 
@@ -429,9 +463,11 @@ defmodule Arca.Execution do
   longer the row's is refused the same way. The attempt row itself is
   closed by `record_end/5`, which every engine completion uses.
   """
-  def record_complete(%Sanctum.Context{} = ctx, id, attrs, fence \\ []) do
+  def record_complete(actor, id, attrs, fence \\ [])
+
+  def record_complete(%Cyfr.Actor{} = actor, id, attrs, fence) do
     Arca.Repo.Errors.with_db_rescue("Execution.record_complete", fn ->
-      case get_tenant(ctx, id) do
+      case get_tenant(actor, id) do
         nil ->
           {:error, :not_found}
 
@@ -450,7 +486,7 @@ defmodule Arca.Execution do
 
             from(e in __MODULE__, where: e.id == ^id, where: e.status == "running")
             |> fenced(fence)
-            |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+            |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
             |> Arca.Repo.update_all(set: sets)
             |> case do
               {1, _} -> {:ok, Ecto.Changeset.apply_changes(changeset)}
@@ -528,12 +564,12 @@ defmodule Arca.Execution do
   `where_tenant/2`, which raises for a context without an athanor (fail
   closed).
   """
-  @spec get_tenant(Sanctum.Context.t(), String.t()) ::
+  @spec get_tenant(Cyfr.Actor.t(), String.t()) ::
           %__MODULE__{} | nil | {:error, :database_error}
-  def get_tenant(%Sanctum.Context{} = ctx, id) do
+  def get_tenant(%Cyfr.Actor{} = actor, id) do
     Arca.Repo.Errors.with_db_rescue("Execution.get_tenant", fn ->
       from(e in __MODULE__, where: e.id == ^id)
-      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
       |> Arca.Repo.one()
     end)
   end
@@ -545,10 +581,11 @@ defmodule Arca.Execution do
   Returns execution records associated with an MCP request for
   `mcp_log.correlate`.
   """
-  @spec list_by_request(Sanctum.Context.t(), String.t(), non_neg_integer()) ::
+  @spec list_by_request(Cyfr.Actor.t(), String.t(), non_neg_integer()) ::
           [%__MODULE__{}] | {:error, :database_error}
-  def list_by_request(%Sanctum.Context{} = ctx, request_id, limit \\ 100)
-      when is_binary(request_id) do
+  def list_by_request(actor, request_id, limit \\ 100)
+
+  def list_by_request(%Cyfr.Actor{} = actor, request_id, limit) when is_binary(request_id) do
     Arca.Repo.Errors.with_db_rescue("Execution.list_by_request", fn ->
       from(e in __MODULE__,
         where: e.request_id == ^request_id,
@@ -558,7 +595,7 @@ defmodule Arca.Execution do
       # Scoped to the caller's athanor — no per-user narrowing (members are
       # interchangeable), and no cross-athanor reach for an operator either:
       # only a server-internal context reads unfiltered.
-      |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+      |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
       |> Arca.Repo.all()
     end)
   end
@@ -568,9 +605,9 @@ defmodule Arca.Execution do
   count `mcp_log.fan_outs` reports. Same tenant scoping as
   `list_by_request/3`.
   """
-  @spec count_by_request(Sanctum.Context.t(), [String.t()]) ::
+  @spec count_by_request(Cyfr.Actor.t(), [String.t()]) ::
           %{String.t() => non_neg_integer()} | {:error, :database_error}
-  def count_by_request(%Sanctum.Context{} = ctx, request_ids) when is_list(request_ids) do
+  def count_by_request(%Cyfr.Actor{} = actor, request_ids) when is_list(request_ids) do
     Arca.Repo.Errors.with_db_rescue("Execution.count_by_request", fn ->
       case Enum.filter(request_ids, &is_binary/1) do
         [] ->
@@ -582,7 +619,7 @@ defmodule Arca.Execution do
             group_by: e.request_id,
             select: {e.request_id, count(e.id)}
           )
-          |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+          |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
           |> Arca.Repo.all()
           |> Map.new()
       end
@@ -791,7 +828,7 @@ defmodule Arca.Execution do
               # (`execution.lapsed`) or failed by its parent's end.
               event =
                 Arca.ExecutionEvents.append!(
-                  execution.athanor_id,
+                  Cyfr.Actor.in_athanor(execution.athanor_id),
                   id,
                   Keyword.get(fence, :event, "execution.failed"),
                   data: %{"status" => "failed", "error" => attrs[:error_message]}
@@ -819,7 +856,7 @@ defmodule Arca.Execution do
   from a read-back record). `{:error, :not_running}` when the row is not
   open or the attempt does not own it.
   """
-  @spec record_end(Sanctum.Context.t(), String.t(), String.t(), map(), String.t() | nil) ::
+  @spec record_end(Cyfr.Actor.t(), String.t(), String.t(), map(), String.t() | nil) ::
           {:ok, %__MODULE__{}}
           | {:error,
              :not_running
@@ -827,7 +864,7 @@ defmodule Arca.Execution do
              | :database_error
              | {:payload_not_retained, term()}
              | Ecto.Changeset.t()}
-  def record_end(%Sanctum.Context{} = ctx, id, status, attrs, attempt)
+  def record_end(%Cyfr.Actor{} = actor, id, status, attrs, attempt)
       when status in @terminal_statuses do
     # `attrs[:payloads]` are staged payloads committed for the owning
     # attempt in this transaction; `attrs[:outcome]` names the attempt's
@@ -837,7 +874,7 @@ defmodule Arca.Execution do
       Arca.Repo.transaction(fn ->
         execution =
           from(e in __MODULE__, where: e.id == ^id and e.status in ["running", "paused"])
-          |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+          |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
           |> Arca.Repo.one()
 
         if is_nil(execution), do: Arca.Repo.rollback(:not_running)
@@ -851,7 +888,12 @@ defmodule Arca.Execution do
 
         if owner &&
              is_nil(
-               Arca.ExecutionAttempts.close!(execution.athanor_id, owner, attempt_state, outcome)
+               Arca.ExecutionAttempts.close!(
+                 Cyfr.Actor.in_athanor(execution.athanor_id),
+                 owner,
+                 attempt_state,
+                 outcome
+               )
              ),
            do: Arca.Repo.rollback(:not_running)
 
@@ -859,12 +901,12 @@ defmodule Arca.Execution do
 
         {1, _} =
           from(e in __MODULE__, where: e.id == ^id and e.status in ["running", "paused"])
-          |> Arca.QueryHelpers.where_tenant_unless_platform(ctx)
+          |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
           |> Arca.Repo.update_all(set: Map.to_list(changeset.changes))
 
         event =
           Arca.ExecutionEvents.append!(
-            execution.athanor_id,
+            Cyfr.Actor.in_athanor(execution.athanor_id),
             id,
             lifecycle_type(status, Map.get(attrs, :outcome)),
             data:
@@ -889,8 +931,9 @@ defmodule Arca.Execution do
   defp lifecycle_type(status, _outcome), do: "execution." <> status
 
   @doc "The execution's durable event counter, within the athanor."
-  @spec event_seq(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def event_seq(athanor_id, id) when is_binary(athanor_id) and is_binary(id) do
+  @spec event_seq(Cyfr.Actor.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def event_seq(%Cyfr.Actor{athanor_id: athanor_id}, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Execution.event_seq", fn ->
       case Arca.Repo.one(
              from(e in __MODULE__,
@@ -903,6 +946,8 @@ defmodule Arca.Execution do
       end
     end)
   end
+
+  def event_seq(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
 
   # Staged payloads join the transaction as the attempt's rows; one the
   # store refuses rolls the whole write back.
@@ -931,7 +976,14 @@ defmodule Arca.Execution do
   end
 
   defp retire_attempt(execution, attempt, nil) do
-    not is_nil(Arca.ExecutionAttempts.close!(execution.athanor_id, attempt, "failed", "error"))
+    not is_nil(
+      Arca.ExecutionAttempts.close!(
+        Cyfr.Actor.in_athanor(execution.athanor_id),
+        attempt,
+        "failed",
+        "error"
+      )
+    )
   end
 
   # Fence a write on the attempt that owns the row. A nil attempt adds no

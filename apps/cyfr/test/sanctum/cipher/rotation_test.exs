@@ -117,7 +117,7 @@ defmodule Sanctum.Cipher.RotationTest do
         created_by: "user_1"
       })
 
-    {:ok, row} = Arca.ProviderCredentialStorage.get(@athanor, provider)
+    {:ok, row} = Arca.ProviderCredentialStorage.get(Cyfr.Actor.in_athanor(@athanor), provider)
     row.id
   end
 

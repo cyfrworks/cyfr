@@ -103,7 +103,7 @@ defmodule Emissary.MCP.RequestLog do
     # The row was started synchronously; its completion is bookkeeping and
     # rides the write-behind.
     Arca.RecordSink.enqueue(
-      {:mcp_log_update, ctx, call_id,
+      {:mcp_log_update, Context.actor(ctx), call_id,
        %{
          status: "success",
          duration_ms: data[:duration_ms] || data["duration_ms"],
@@ -124,7 +124,7 @@ defmodule Emissary.MCP.RequestLog do
   def log_failed(%Context{} = ctx, call_id, data)
       when is_binary(call_id) and is_map(data) do
     Arca.RecordSink.enqueue(
-      {:mcp_log_update, ctx, call_id,
+      {:mcp_log_update, Context.actor(ctx), call_id,
        %{
          status: "error",
          error_code: data[:code] || data["code"],

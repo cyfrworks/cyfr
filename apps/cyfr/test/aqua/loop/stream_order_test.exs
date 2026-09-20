@@ -64,7 +64,7 @@ defmodule Aqua.Loop.StreamOrderTest do
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
     {:ok, ctx: ctx, thread: thread}
   end

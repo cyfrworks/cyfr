@@ -218,7 +218,7 @@ defmodule Sanctum.VaultTest do
       # The old consent's digest no longer verifies.
       assert {:error, :binding_mismatch} = VaultReader.fetch(ctx, old_resource)
 
-      {:ok, reloaded} = Arca.ProfileStorage.get(ctx.athanor_id, profile.id)
+      {:ok, reloaded} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile.id)
       assert reloaded.status == "needs_consent"
     end
 

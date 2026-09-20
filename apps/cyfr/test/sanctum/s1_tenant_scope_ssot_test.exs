@@ -109,16 +109,21 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
          %{ctx: ctx, unresolved: unresolved} do
       base = from(k in Arca.Schemas.ApiKey)
 
-      scoped = Arca.QueryHelpers.where_tenant(base, ctx)
+      scoped = Arca.QueryHelpers.where_tenant(base, Context.actor(ctx))
       assert inspect(scoped) =~ "athanor_id == ^\"ath_acme\""
 
-      assert_raise ArgumentError, fn -> Arca.QueryHelpers.where_tenant(base, unresolved) end
+      assert_raise ArgumentError, fn ->
+        Arca.QueryHelpers.where_tenant(base, Context.actor(unresolved))
+      end
     end
 
     test "tenant_segments/1 is the same athanor, and refuses the unresolved context",
          %{ctx: ctx, unresolved: unresolved} do
-      assert Arca.Storage.tenant_segments(ctx) == ["ath_acme"]
-      assert_raise ArgumentError, fn -> Arca.Storage.tenant_segments(unresolved) end
+      assert Arca.Storage.tenant_segments(Sanctum.Context.actor(ctx)) == ["ath_acme"]
+
+      assert_raise ArgumentError, fn ->
+        Arca.Storage.tenant_segments(Context.actor(unresolved))
+      end
     end
 
     test "TenantPolicy is the gate both paths delegate to", %{unresolved: unresolved} do

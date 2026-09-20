@@ -24,7 +24,7 @@ defmodule Cyfr.Retention.Threads do
     cutoff = Cyfr.Retention.Kind.days_cutoff(days)
 
     if dry_run,
-      do: Arca.ThreadStorage.count_before(ctx, cutoff),
-      else: Arca.ThreadStorage.delete_before(ctx, cutoff)
+      do: Arca.ThreadStorage.count_before(Sanctum.Context.actor(ctx), cutoff),
+      else: Arca.ThreadStorage.delete_before(Sanctum.Context.actor(ctx), cutoff)
   end
 end

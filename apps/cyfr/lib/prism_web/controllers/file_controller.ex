@@ -63,7 +63,7 @@ defmodule PrismWeb.FileController do
   end
 
   defp serve(conn, ctx, physical) do
-    case Arca.serve_to_conn(conn, ctx, physical) do
+    case Arca.serve_to_conn(conn, Sanctum.Context.actor(ctx), physical) do
       {:ok, %Plug.Conn{} = served} -> served
       _ -> send_resp(conn, 404, "Not found")
     end

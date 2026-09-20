@@ -17,29 +17,34 @@ defmodule Arca.EnsureRootsTest do
       File.rm_rf!(base)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, actor: Sanctum.Context.actor(Sanctum.TestContext.local())}
   end
 
-  test "ensure_roots/1 lays every tenant root, idempotently, and counts nothing", %{ctx: ctx} do
-    assert {:ok, []} = Arca.list_typed(ctx, [])
-    assert :ok = Arca.ensure_roots(ctx)
-    assert :ok = Arca.ensure_roots(ctx)
+  test "ensure_roots/1 lays every tenant root, idempotently, and counts nothing", %{actor: actor} do
+    assert {:ok, []} = Arca.list_typed(actor, [])
+    assert :ok = Arca.ensure_roots(actor)
+    assert :ok = Arca.ensure_roots(actor)
 
-    {:ok, entries} = Arca.list_typed(ctx, [])
+    {:ok, entries} = Arca.list_typed(actor, [])
 
     assert Enum.sort(entries) ==
              Enum.sort(for root <- Arca.Storage.tenant_roots(), do: {root, :dir})
 
-    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(ctx, [])
+    assert {:ok, %{files: 0, bytes: 0}} = Arca.usage(actor, [])
   end
 
-  test "ensure_dir/2 refuses what the roster refuses", %{ctx: ctx} do
-    assert :ok = Arca.ensure_dir(ctx, ["data", "reports", "2026"])
-    assert {:ok, [{"2026", :dir}]} = Arca.list_typed(ctx, ["data", "reports"])
+  test "ensure_dir/2 refuses what the roster refuses", %{actor: actor} do
+    assert :ok = Arca.ensure_dir(actor, ["data", "reports", "2026"])
 
-    assert {:error, :forbidden} = Arca.ensure_dir(ctx, ["scratch"])
-    assert {:error, :forbidden} = Arca.ensure_dir(ctx, ["seed", "components", "x"])
-    assert {:error, :forbidden} = Arca.ensure_dir(ctx, ["cache", "oci"])
-    assert {:error, :invalid_path} = Arca.ensure_dir(ctx, [])
+    assert {:ok, [{"2026", :dir}]} =
+             Arca.list_typed(actor, ["data", "reports"])
+
+    assert {:error, :forbidden} = Arca.ensure_dir(actor, ["scratch"])
+
+    assert {:error, :forbidden} =
+             Arca.ensure_dir(actor, ["seed", "components", "x"])
+
+    assert {:error, :forbidden} = Arca.ensure_dir(actor, ["cache", "oci"])
+    assert {:error, :invalid_path} = Arca.ensure_dir(actor, [])
   end
 end

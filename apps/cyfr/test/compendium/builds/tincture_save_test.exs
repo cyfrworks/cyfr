@@ -38,15 +38,18 @@ defmodule Compendium.Builds.TinctureSaveTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     ctx = Sanctum.TestContext.local()
-    :ok = Arca.ensure_roots(ctx)
+    :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
 
     # The unit as an author leaves it: source, the manifest, and the
     # tincture's own data beside them.
-    :ok = Arca.put(ctx, @base ++ ["cyfr-manifest.json"], @manifest)
-    :ok = Arca.put(ctx, @base ++ ["package.json"], ~s({"name":"saver"}))
-    :ok = Arca.put(ctx, @base ++ ["index.html"], "<html>source</html>")
-    :ok = Arca.put(ctx, @base ++ ["src", "main.tsx"], "console.log('source')")
-    :ok = Arca.put(ctx, @base ++ ["data.db"], "rows")
+    :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["cyfr-manifest.json"], @manifest)
+    :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["package.json"], ~s({"name":"saver"}))
+    :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["index.html"], "<html>source</html>")
+
+    :ok =
+      Arca.put(Sanctum.Context.actor(ctx), @base ++ ["src", "main.tsx"], "console.log('source')")
+
+    :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["data.db"], "rows")
 
     {:ok, ctx: ctx}
   end
@@ -56,14 +59,25 @@ defmodule Compendium.Builds.TinctureSaveTest do
 
     assert :ok = Builds.store_tincture_output(ctx, "tincture", "local", "saver", "0.1.0", build)
 
-    assert {:ok, "<html>built</html>"} = Arca.get(ctx, @base ++ ["dist", "index.html"])
-    assert {:ok, "console.log(1)"} = Arca.get(ctx, @base ++ ["dist", "assets", "app-abc.js"])
+    assert {:ok, "<html>built</html>"} =
+             Arca.get(Sanctum.Context.actor(ctx), @base ++ ["dist", "index.html"])
 
-    assert {:ok, "<html>source</html>"} = Arca.get(ctx, @base ++ ["index.html"])
-    assert {:ok, ~s({"name":"saver"})} = Arca.get(ctx, @base ++ ["package.json"])
-    assert {:ok, "console.log('source')"} = Arca.get(ctx, @base ++ ["src", "main.tsx"])
-    assert {:ok, "rows"} = Arca.get(ctx, @base ++ ["data.db"])
-    assert {:ok, @manifest} = Arca.get(ctx, @base ++ ["cyfr-manifest.json"])
+    assert {:ok, "console.log(1)"} =
+             Arca.get(Sanctum.Context.actor(ctx), @base ++ ["dist", "assets", "app-abc.js"])
+
+    assert {:ok, "<html>source</html>"} =
+             Arca.get(Sanctum.Context.actor(ctx), @base ++ ["index.html"])
+
+    assert {:ok, ~s({"name":"saver"})} =
+             Arca.get(Sanctum.Context.actor(ctx), @base ++ ["package.json"])
+
+    assert {:ok, "console.log('source')"} =
+             Arca.get(Sanctum.Context.actor(ctx), @base ++ ["src", "main.tsx"])
+
+    assert {:ok, "rows"} = Arca.get(Sanctum.Context.actor(ctx), @base ++ ["data.db"])
+
+    assert {:ok, @manifest} =
+             Arca.get(Sanctum.Context.actor(ctx), @base ++ ["cyfr-manifest.json"])
   end
 
   test "a rebuild replaces dist/ whole: an asset the new build did not produce is gone",
@@ -80,12 +94,19 @@ defmodule Compendium.Builds.TinctureSaveTest do
                "assets/app-two.js" => "two"
              })
 
-    assert {:ok, "<html>two</html>"} = Arca.get(ctx, @base ++ ["dist", "index.html"])
-    assert {:ok, "two"} = Arca.get(ctx, @base ++ ["dist", "assets", "app-two.js"])
-    assert {:error, :not_found} = Arca.get(ctx, @base ++ ["dist", "assets", "app-one.js"])
+    assert {:ok, "<html>two</html>"} =
+             Arca.get(Sanctum.Context.actor(ctx), @base ++ ["dist", "index.html"])
 
-    assert {:ok, "console.log('source')"} = Arca.get(ctx, @base ++ ["src", "main.tsx"])
-    assert {:ok, "rows"} = Arca.get(ctx, @base ++ ["data.db"])
+    assert {:ok, "two"} =
+             Arca.get(Sanctum.Context.actor(ctx), @base ++ ["dist", "assets", "app-two.js"])
+
+    assert {:error, :not_found} =
+             Arca.get(Sanctum.Context.actor(ctx), @base ++ ["dist", "assets", "app-one.js"])
+
+    assert {:ok, "console.log('source')"} =
+             Arca.get(Sanctum.Context.actor(ctx), @base ++ ["src", "main.tsx"])
+
+    assert {:ok, "rows"} = Arca.get(Sanctum.Context.actor(ctx), @base ++ ["data.db"])
   end
 
   test "a build for a version with no manifest saves nothing", %{ctx: ctx} do
@@ -95,7 +116,7 @@ defmodule Compendium.Builds.TinctureSaveTest do
              })
 
     absent = ComponentPath.version_dir("tincture", "local", "absent", "0.1.0")
-    refute Arca.exists?(ctx, absent ++ ["dist", "index.html"])
+    refute Arca.exists?(Sanctum.Context.actor(ctx), absent ++ ["dist", "index.html"])
   end
 
   describe "through the builds service" do
@@ -128,14 +149,25 @@ defmodule Compendium.Builds.TinctureSaveTest do
       assert {result.digest, result.size} == Cyfr.Digest.file_set(first)
       assert Enum.sort(result.files) == ["assets/app-one.js", "index.html"]
       assert result.language == "javascript" and result.target_type == "tincture"
-      assert {:ok, "one"} = Arca.get(ctx, @base ++ ["dist", "assets", "app-one.js"])
+
+      assert {:ok, "one"} =
+               Arca.get(Sanctum.Context.actor(ctx), @base ++ ["dist", "assets", "app-one.js"])
 
       assert {:ok, _} = compile(ctx)
-      assert {:ok, "<html>two</html>"} = Arca.get(ctx, @base ++ ["dist", "index.html"])
-      assert {:ok, "two"} = Arca.get(ctx, @base ++ ["dist", "assets", "app-two.js"])
-      assert {:error, :not_found} = Arca.get(ctx, @base ++ ["dist", "assets", "app-one.js"])
-      assert {:ok, "rows"} = Arca.get(ctx, @base ++ ["data.db"])
-      assert {:ok, @manifest} = Arca.get(ctx, @base ++ ["cyfr-manifest.json"])
+
+      assert {:ok, "<html>two</html>"} =
+               Arca.get(Sanctum.Context.actor(ctx), @base ++ ["dist", "index.html"])
+
+      assert {:ok, "two"} =
+               Arca.get(Sanctum.Context.actor(ctx), @base ++ ["dist", "assets", "app-two.js"])
+
+      assert {:error, :not_found} =
+               Arca.get(Sanctum.Context.actor(ctx), @base ++ ["dist", "assets", "app-one.js"])
+
+      assert {:ok, "rows"} = Arca.get(Sanctum.Context.actor(ctx), @base ++ ["data.db"])
+
+      assert {:ok, @manifest} =
+               Arca.get(Sanctum.Context.actor(ctx), @base ++ ["cyfr-manifest.json"])
 
       # The second build's input is the source again: the first build's
       # output and the tincture's data are not build input.
@@ -164,7 +196,9 @@ defmodule Compendium.Builds.TinctureSaveTest do
       ScriptedBuilder.script([{:stream, [{:line, escaping}]}])
 
       ExUnit.CaptureLog.capture_log(fn -> assert {:error, _} = compile(ctx) end)
-      assert {:ok, "<html>kept</html>"} = Arca.get(ctx, @base ++ ["dist", "index.html"])
+
+      assert {:ok, "<html>kept</html>"} =
+               Arca.get(Sanctum.Context.actor(ctx), @base ++ ["dist", "index.html"])
     end
   end
 end

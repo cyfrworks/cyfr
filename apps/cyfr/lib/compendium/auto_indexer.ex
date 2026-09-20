@@ -251,7 +251,7 @@ defmodule Compendium.AutoIndexer do
   def discover(ctx) do
     root = Compendium.ComponentPath.base_prefix()
 
-    with {:ok, leaves} <- Arca.list_recursive(ctx, root) do
+    with {:ok, leaves} <- Arca.list_recursive(Sanctum.Context.actor(ctx), root) do
       {:ok,
        leaves
        |> Compendium.ComponentPath.manifest_leaves()

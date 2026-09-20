@@ -18,54 +18,63 @@ defmodule Arca.UsageTest do
     Application.put_env(:cyfr, :base_path, base)
     Arca.Cache.init()
 
-    ctx = Sanctum.TestContext.local()
-    Arca.Usage.invalidate(ctx.athanor_id)
+    actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+    Arca.Usage.invalidate(actor)
 
     on_exit(fn ->
-      Arca.Usage.invalidate(ctx.athanor_id)
+      Arca.Usage.invalidate(actor)
       Application.put_env(:cyfr, :base_path, prev_base)
       File.rm_rf!(base)
     end)
 
-    {:ok, ctx: ctx}
+    {:ok, actor: actor}
   end
 
-  test "reads walk once and cache; creates bump; deletes drop", %{ctx: ctx} do
-    :ok = Arca.put(ctx, ["data", "a.txt"], "aaaa")
+  test "reads walk once and cache; creates bump; deletes drop", %{actor: actor} do
+    :ok = Arca.put(actor, ["data", "a.txt"], "aaaa")
 
-    assert {:ok, 4} = Arca.Usage.athanor_bytes(ctx)
-    assert {:ok, %{files: 1, bytes: 4}} = Arca.Usage.scope_usage(ctx, "data")
+    assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
+
+    assert {:ok, %{files: 1, bytes: 4}} =
+             Arca.Usage.scope_usage(actor, "data")
 
     # A successful create bumps the cached counters in place — no walk.
-    :ok = Arca.put(ctx, ["data", "b.txt"], "bb")
-    assert {:ok, 6} = Arca.Usage.athanor_bytes(ctx)
-    assert {:ok, %{files: 2, bytes: 6}} = Arca.Usage.scope_usage(ctx, "data")
+    :ok = Arca.put(actor, ["data", "b.txt"], "bb")
+    assert {:ok, 6} = Arca.Usage.athanor_bytes(actor)
+
+    assert {:ok, %{files: 2, bytes: 6}} =
+             Arca.Usage.scope_usage(actor, "data")
 
     # A delete drops the entries; the next read walks the truth afresh.
-    :ok = Arca.delete(ctx, ["data", "b.txt"])
-    assert {:ok, 4} = Arca.Usage.athanor_bytes(ctx)
-    assert {:ok, %{files: 1, bytes: 4}} = Arca.Usage.scope_usage(ctx, "data")
+    :ok = Arca.delete(actor, ["data", "b.txt"])
+    assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
+
+    assert {:ok, %{files: 1, bytes: 4}} =
+             Arca.Usage.scope_usage(actor, "data")
   end
 
-  test "an overwrite over-counts — the safe direction — until invalidated", %{ctx: ctx} do
-    :ok = Arca.put(ctx, ["data", "a.txt"], "aaaa")
-    assert {:ok, 4} = Arca.Usage.athanor_bytes(ctx)
+  test "an overwrite over-counts — the safe direction — until invalidated", %{actor: actor} do
+    :ok = Arca.put(actor, ["data", "a.txt"], "aaaa")
+    assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
 
     # Overwriting the same 4 bytes bumps again: 8 cached over 4 stored.
-    :ok = Arca.put(ctx, ["data", "a.txt"], "aaaa")
-    assert {:ok, 8} = Arca.Usage.athanor_bytes(ctx)
+    :ok = Arca.put(actor, ["data", "a.txt"], "aaaa")
+    assert {:ok, 8} = Arca.Usage.athanor_bytes(actor)
 
     # invalidate/1 clears the whole athanor — total and scope pairs — and
     # the next read walks the truth.
-    Arca.Usage.invalidate(ctx.athanor_id)
-    assert {:ok, 4} = Arca.Usage.athanor_bytes(ctx)
-    assert {:ok, %{files: 1, bytes: 4}} = Arca.Usage.scope_usage(ctx, "data")
+    Arca.Usage.invalidate(actor)
+    assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
+
+    assert {:ok, %{files: 1, bytes: 4}} =
+             Arca.Usage.scope_usage(actor, "data")
   end
 
-  test "a failed walk answers raw and is never cached", %{ctx: ctx} do
-    # An athanor-less context cannot walk tenant storage: the raising
-    # guard downstream is the fail-closed backstop; here only the
-    # empty-athanor clause answers.
-    assert {:ok, 0} = Arca.Usage.athanor_bytes(%{ctx | athanor_id: nil})
+  test "an actor with no athanor names no tree, and that is a refusal, not zero",
+       %{actor: actor} do
+    # `{:ok, 0}` here would read an unresolved tenant as an empty estate,
+    # and the byte cap above would admit the write it was asked about.
+    assert {:error, :no_athanor} = Arca.Usage.athanor_bytes(%{actor | athanor_id: nil})
+    assert {:error, :no_athanor} = Arca.Usage.athanor_bytes(%{actor | athanor_id: ""})
   end
 end

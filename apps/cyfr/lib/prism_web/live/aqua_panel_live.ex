@@ -109,7 +109,7 @@ defmodule PrismWeb.AquaPanelLive do
   # panel costs the page nothing. `nil` is the blank thread; an id the list
   # no longer holds falls back to it.
   defp open_on(socket, thread_id) do
-    threads = Threads.list(socket.assigns.context)
+    threads = Threads.list(Sanctum.Context.actor(socket.assigns.context))
     thread = Enum.find(threads, &(&1.id == thread_id))
 
     socket

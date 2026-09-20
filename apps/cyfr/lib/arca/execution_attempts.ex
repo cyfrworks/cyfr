@@ -24,6 +24,19 @@ defmodule Arca.ExecutionAttempts do
   entry points and answer `{:error, :database_error}` when the store
   cannot answer.
 
+  ## Tenancy
+
+  Every function that names an athanor takes the `Cyfr.Actor` first and
+  matches it in its head, so the tenant comes from the caller and never
+  from an argument the caller chose. An actor whose athanor is nil OR
+  the empty string is refused before any query: an entry point answers
+  `{:error, :no_athanor}`, a `!` function raises. The empty string is an
+  identity that was never resolved, so a guard that took it would filter
+  on `athanor_id == ""`, match nothing and answer an ordinary empty
+  result where the refusal belongs. The sweeps — `renew/2`, `lapse/2`,
+  `list_stale/2` and the two retention primitives — carry no actor and
+  say why where they stand.
+
   ## A guest's mutable storage write
 
   A put, an append and a delete are the mutable storage operations a guest
@@ -138,9 +151,10 @@ defmodule Arca.ExecutionAttempts do
   control plane holds it), `:boot_id` (the boot holding it), `:lease_until`,
   `:started_at`.
   """
-  @spec open!(String.t(), String.t(), keyword()) :: ExecutionAttempt.t()
+  @spec open!(Cyfr.Actor.t(), String.t(), keyword()) :: ExecutionAttempt.t()
   # arca:db-raise-ok inside the caller's transaction
-  def open!(athanor_id, execution_id, opts) when is_binary(athanor_id) do
+  def open!(%Cyfr.Actor{athanor_id: athanor_id}, execution_id, opts)
+      when is_binary(athanor_id) and athanor_id != "" do
     now = Keyword.get(opts, :started_at, DateTime.utc_now())
 
     attempt =
@@ -160,6 +174,9 @@ defmodule Arca.ExecutionAttempts do
     point!(athanor_id, execution_id, attempt.attempt)
     attempt
   end
+
+  def open!(%Cyfr.Actor{}, _execution_id, _opts),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ExecutionAttempts.open!/3")
 
   @doc """
   Renew the lease `attempt` holds. `{:ok, until}` when the attempt still
@@ -194,10 +211,10 @@ defmodule Arca.ExecutionAttempts do
   running owner at that fence; `{:error, :database_error}` when the store
   cannot answer.
   """
-  @spec claim(String.t(), String.t(), pos_integer(), String.t()) ::
-          :ok | {:error, :replayed | :lost | :database_error}
-  def claim(athanor_id, attempt, fence, runner)
-      when is_binary(athanor_id) and is_binary(attempt) and is_integer(fence) and
+  @spec claim(Cyfr.Actor.t(), String.t(), pos_integer(), String.t()) ::
+          :ok | {:error, :no_athanor | :replayed | :lost | :database_error}
+  def claim(%Cyfr.Actor{athanor_id: athanor_id}, attempt, fence, runner)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) and is_integer(fence) and
              is_binary(runner) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.claim", fn ->
       Arca.Repo.transaction(fn ->
@@ -225,6 +242,8 @@ defmodule Arca.ExecutionAttempts do
     end
   end
 
+  def claim(%Cyfr.Actor{}, _attempt, _fence, _runner), do: {:error, :no_athanor}
+
   @doc """
   Renew the lease of `attempt` while `holder` holds it: one update,
   predicated on the row owning its execution, being `running`, dispatched
@@ -233,14 +252,19 @@ defmodule Arca.ExecutionAttempts do
   `{:error, :database_error}` when the store cannot answer. A header's own
   attempt and the children its runner runs renew alike.
   """
-  @spec renew_held(String.t(), String.t(), %{
+  @spec renew_held(Cyfr.Actor.t(), String.t(), %{
           service_id: String.t() | nil,
           boot_id: String.t(),
           runner: String.t()
         }) ::
-          {:ok, DateTime.t()} | :lost | {:error, :database_error}
-  def renew_held(athanor_id, attempt, %{boot_id: boot_id, runner: runner} = holder)
-      when is_binary(athanor_id) and is_binary(attempt) and is_binary(boot_id) and
+          {:ok, DateTime.t()} | :lost | {:error, :no_athanor | :database_error}
+  def renew_held(
+        %Cyfr.Actor{athanor_id: athanor_id},
+        attempt,
+        %{boot_id: boot_id, runner: runner} = holder
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) and
+             is_binary(boot_id) and
              is_binary(runner) do
     until = lease_until()
 
@@ -263,15 +287,17 @@ defmodule Arca.ExecutionAttempts do
     end)
   end
 
+  def renew_held(%Cyfr.Actor{}, _attempt, _holder), do: {:error, :no_athanor}
+
   @doc """
   Whether `runner` holds the attempt: it owns its execution, is `running`,
   is at `fence` and is claimed by `runner`. One read. Answers
   `{:error, :database_error}` when the store cannot answer.
   """
-  @spec held?(String.t(), String.t(), pos_integer(), String.t()) ::
-          boolean() | {:error, :database_error}
-  def held?(athanor_id, attempt, fence, runner)
-      when is_binary(athanor_id) and is_binary(attempt) and is_integer(fence) and
+  @spec held?(Cyfr.Actor.t(), String.t(), pos_integer(), String.t()) ::
+          boolean() | {:error, :no_athanor | :database_error}
+  def held?(%Cyfr.Actor{athanor_id: athanor_id}, attempt, fence, runner)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) and is_integer(fence) and
              is_binary(runner) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.held?", fn ->
       Arca.Repo.exists?(
@@ -279,6 +305,8 @@ defmodule Arca.ExecutionAttempts do
       )
     end)
   end
+
+  def held?(%Cyfr.Actor{}, _attempt, _fence, _runner), do: {:error, :no_athanor}
 
   @typedoc """
   A mutable storage write: the operation, the athanor-relative path it
@@ -309,10 +337,16 @@ defmodule Arca.ExecutionAttempts do
   database cannot answer. In both the store call did not run and nothing
   was recorded.
   """
-  @spec while_held(String.t(), String.t(), pos_integer(), String.t(), write()) ::
-          {:ok, written()} | {:error, :lost | :database_error}
-  def while_held(athanor_id, attempt, fence, runner, %{op: op, path: path, io: io} = write)
-      when is_binary(athanor_id) and is_binary(attempt) and is_integer(fence) and
+  @spec while_held(Cyfr.Actor.t(), String.t(), pos_integer(), String.t(), write()) ::
+          {:ok, written()} | {:error, :no_athanor | :lost | :database_error}
+  def while_held(
+        %Cyfr.Actor{athanor_id: athanor_id},
+        attempt,
+        fence,
+        runner,
+        %{op: op, path: path, io: io} = write
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) and is_integer(fence) and
              is_binary(runner) and op in [:put, :append, :delete] and is_list(path) and
              is_function(io, 0) do
     holder = %{athanor_id: athanor_id, attempt: attempt, fence: fence, runner: runner}
@@ -322,10 +356,13 @@ defmodule Arca.ExecutionAttempts do
     end
   end
 
+  def while_held(%Cyfr.Actor{}, _attempt, _fence, _runner, _write), do: {:error, :no_athanor}
+
   @doc "The write intents of `attempt`, oldest first."
-  @spec write_intents(String.t(), String.t()) ::
-          [StorageWriteIntent.t()] | {:error, :database_error}
-  def write_intents(athanor_id, attempt) when is_binary(athanor_id) and is_binary(attempt) do
+  @spec write_intents(Cyfr.Actor.t(), String.t()) ::
+          [StorageWriteIntent.t()] | {:error, :no_athanor | :database_error}
+  def write_intents(%Cyfr.Actor{athanor_id: athanor_id}, attempt)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.write_intents", fn ->
       Arca.Repo.all(
         from(i in StorageWriteIntent,
@@ -335,6 +372,8 @@ defmodule Arca.ExecutionAttempts do
       )
     end)
   end
+
+  def write_intents(%Cyfr.Actor{}, _attempt), do: {:error, :no_athanor}
 
   @doc """
   Delete an athanor's SETTLED write intents that were recorded before
@@ -378,10 +417,10 @@ defmodule Arca.ExecutionAttempts do
   write, so a cancelled execution is no longer live. One read. Answers
   `{:error, :database_error}` when the store cannot answer.
   """
-  @spec live?(String.t(), String.t(), pos_integer(), String.t()) ::
-          boolean() | {:error, :database_error}
-  def live?(athanor_id, attempt, fence, runner)
-      when is_binary(athanor_id) and is_binary(attempt) and is_integer(fence) and
+  @spec live?(Cyfr.Actor.t(), String.t(), pos_integer(), String.t()) ::
+          boolean() | {:error, :no_athanor | :database_error}
+  def live?(%Cyfr.Actor{athanor_id: athanor_id}, attempt, fence, runner)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) and is_integer(fence) and
              is_binary(runner) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.live?", fn ->
       Arca.Repo.exists?(
@@ -396,6 +435,8 @@ defmodule Arca.ExecutionAttempts do
     end)
   end
 
+  def live?(%Cyfr.Actor{}, _attempt, _fence, _runner), do: {:error, :no_athanor}
+
   @doc """
   Hold the attempt a child is admitted under, inside the caller's admission
   transaction: `attempt` must own `execution_id` and be `running`, and the
@@ -405,10 +446,11 @@ defmodule Arca.ExecutionAttempts do
   refused, or waits for the admission to commit, and finds the child to
   fail.
   """
-  @spec hold_for_child!(String.t(), String.t(), String.t()) :: non_neg_integer()
+  @spec hold_for_child!(Cyfr.Actor.t(), String.t(), String.t()) :: non_neg_integer()
   # arca:db-raise-ok inside the caller's transaction
-  def hold_for_child!(athanor_id, execution_id, attempt)
-      when is_binary(athanor_id) and is_binary(execution_id) and is_binary(attempt) do
+  def hold_for_child!(%Cyfr.Actor{athanor_id: athanor_id}, execution_id, attempt)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(execution_id) and
+             is_binary(attempt) do
     running_execution =
       from(e in Arca.Execution,
         where: e.id == ^execution_id and e.athanor_id == ^athanor_id and e.status == "running",
@@ -426,26 +468,34 @@ defmodule Arca.ExecutionAttempts do
     count
   end
 
+  def hold_for_child!(%Cyfr.Actor{}, _execution_id, _attempt),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ExecutionAttempts.hold_for_child!/3")
+
   @doc """
   Pause a running attempt inside the caller's transaction: `running →
   paused`, the running interval closed. Answers the milliseconds it ran,
   or `nil` when the attempt was not the running owner (the caller rolls
   back).
   """
-  @spec pause!(String.t(), String.t()) :: non_neg_integer() | nil
+  @spec pause!(Cyfr.Actor.t(), String.t()) :: non_neg_integer() | nil
   # arca:db-raise-ok inside the caller's transaction
-  def pause!(athanor_id, attempt) when is_binary(athanor_id) do
+  def pause!(%Cyfr.Actor{athanor_id: athanor_id}, attempt)
+      when is_binary(athanor_id) and athanor_id != "" do
     close_interval!(athanor_id, attempt, "running", "paused", nil, nil)
   end
+
+  def pause!(%Cyfr.Actor{}, _attempt),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ExecutionAttempts.pause!/2")
 
   @doc """
   Resume a paused attempt inside the caller's transaction with a fresh
   lease: `paused → running`, a new running interval opened. Answers the
   rows moved (1, or 0 when the attempt was not the paused owner).
   """
-  @spec resume!(String.t(), String.t(), DateTime.t()) :: non_neg_integer()
+  @spec resume!(Cyfr.Actor.t(), String.t(), DateTime.t()) :: non_neg_integer()
   # arca:db-raise-ok inside the caller's transaction
-  def resume!(athanor_id, attempt, %DateTime{} = until) when is_binary(athanor_id) do
+  def resume!(%Cyfr.Actor{athanor_id: athanor_id}, attempt, %DateTime{} = until)
+      when is_binary(athanor_id) and athanor_id != "" do
     {count, _} =
       from(a in ExecutionAttempt,
         where: a.athanor_id == ^athanor_id and a.attempt == ^attempt and a.state == "paused",
@@ -458,33 +508,43 @@ defmodule Arca.ExecutionAttempts do
     count
   end
 
+  def resume!(%Cyfr.Actor{}, _attempt, _until),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ExecutionAttempts.resume!/3")
+
   @doc """
   Close an open attempt inside the caller's transaction as
   `completed | failed | cancelled` with its `outcome`. Answers the
   milliseconds its last running interval ran (0 when it was paused), or
   `nil` when the attempt was not the open owner.
   """
-  @spec close!(String.t(), String.t(), String.t(), String.t()) :: non_neg_integer() | nil
+  @spec close!(Cyfr.Actor.t(), String.t(), String.t(), String.t()) :: non_neg_integer() | nil
   # arca:db-raise-ok inside the caller's transaction
-  def close!(athanor_id, attempt, state, outcome)
-      when is_binary(athanor_id) and state in ["completed", "failed", "cancelled"] and
+  def close!(%Cyfr.Actor{athanor_id: athanor_id}, attempt, state, outcome)
+      when is_binary(athanor_id) and athanor_id != "" and
+             state in ["completed", "failed", "cancelled"] and
              outcome in @outcomes do
     close_interval!(athanor_id, attempt, @open_states, state, outcome, DateTime.utc_now())
   end
 
+  def close!(%Cyfr.Actor{}, _attempt, _state, _outcome),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ExecutionAttempts.close!/4")
+
   @doc "Entry-point form of `close!/4`: `{:ok, ran_ms}` or `{:error, :not_owner}`."
-  @spec close(String.t(), String.t(), String.t(), String.t()) ::
-          {:ok, non_neg_integer()} | {:error, :not_owner | :database_error}
-  def close(athanor_id, attempt, state, outcome) do
+  @spec close(Cyfr.Actor.t(), String.t(), String.t(), String.t()) ::
+          {:ok, non_neg_integer()} | {:error, :no_athanor | :not_owner | :database_error}
+  def close(%Cyfr.Actor{athanor_id: athanor_id} = actor, attempt, state, outcome)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.close", fn ->
       Arca.Repo.transaction(fn ->
-        case close!(athanor_id, attempt, state, outcome) do
+        case close!(actor, attempt, state, outcome) do
           nil -> Arca.Repo.rollback(:not_owner)
           ran -> ran
         end
       end)
     end)
   end
+
+  def close(%Cyfr.Actor{}, _attempt, _state, _outcome), do: {:error, :no_athanor}
 
   @doc """
   Retire a running attempt whose lease the sweeper observed lapsed:
@@ -542,13 +602,14 @@ defmodule Arca.ExecutionAttempts do
   `%{previous: t | nil, attempt: t, ran_ms: n}` where `ran_ms` is the
   predecessor's unaccounted running interval (0 when it had none).
   """
-  @spec takeover!(String.t(), String.t(), keyword()) :: %{
+  @spec takeover!(Cyfr.Actor.t(), String.t(), keyword()) :: %{
           previous: ExecutionAttempt.t() | nil,
           attempt: ExecutionAttempt.t(),
           ran_ms: non_neg_integer()
         }
   # arca:db-raise-ok inside the caller's transaction
-  def takeover!(athanor_id, execution_id, opts) when is_binary(athanor_id) do
+  def takeover!(%Cyfr.Actor{athanor_id: athanor_id}, execution_id, opts)
+      when is_binary(athanor_id) and athanor_id != "" do
     now = DateTime.utc_now()
 
     previous =
@@ -610,17 +671,24 @@ defmodule Arca.ExecutionAttempts do
     %{previous: previous, attempt: attempt, ran_ms: ran}
   end
 
+  def takeover!(%Cyfr.Actor{}, _execution_id, _opts),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ExecutionAttempts.takeover!/3")
+
   @doc "Entry-point form of `takeover!/3`."
-  @spec takeover(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def takeover(athanor_id, execution_id, opts) do
+  @spec takeover(Cyfr.Actor.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def takeover(%Cyfr.Actor{athanor_id: athanor_id} = actor, execution_id, opts)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.takeover", fn ->
-      Arca.Repo.transaction(fn -> takeover!(athanor_id, execution_id, opts) end)
+      Arca.Repo.transaction(fn -> takeover!(actor, execution_id, opts) end)
     end)
   end
 
+  def takeover(%Cyfr.Actor{}, _execution_id, _opts), do: {:error, :no_athanor}
+
   @doc "The attempt that owns `execution_id`, or nil."
-  @spec current(String.t(), String.t()) :: ExecutionAttempt.t() | nil | {:error, term()}
-  def current(athanor_id, execution_id) when is_binary(athanor_id) do
+  @spec current(Cyfr.Actor.t(), String.t()) :: ExecutionAttempt.t() | nil | {:error, term()}
+  def current(%Cyfr.Actor{athanor_id: athanor_id}, execution_id)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.current", fn ->
       Arca.Repo.one(
         from(a in ExecutionAttempt,
@@ -631,9 +699,12 @@ defmodule Arca.ExecutionAttempts do
     end)
   end
 
+  def current(%Cyfr.Actor{}, _execution_id), do: {:error, :no_athanor}
+
   @doc "One attempt by id, within the athanor."
-  @spec get(String.t(), String.t()) :: ExecutionAttempt.t() | nil | {:error, term()}
-  def get(athanor_id, attempt) when is_binary(athanor_id) do
+  @spec get(Cyfr.Actor.t(), String.t()) :: ExecutionAttempt.t() | nil | {:error, term()}
+  def get(%Cyfr.Actor{athanor_id: athanor_id}, attempt)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.get", fn ->
       Arca.Repo.one(
         from(a in ExecutionAttempt, where: a.athanor_id == ^athanor_id and a.attempt == ^attempt)
@@ -641,16 +712,18 @@ defmodule Arca.ExecutionAttempts do
     end)
   end
 
+  def get(%Cyfr.Actor{}, _attempt), do: {:error, :no_athanor}
+
   @doc """
   Running attempts whose lease lapsed before `now` (the sweep). Spans
   every tenant: the sweeper reaps what a crashed runner left when no
-  tenant context can be reconstructed. System-internal only.
+  tenant can be reconstructed. System-internal only.
   """
   @spec list_stale(DateTime.t(), pos_integer()) :: [ExecutionAttempt.t()]
   def list_stale(%DateTime{} = now, limit \\ 50) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.list_stale", [], fn ->
       # arca:unscoped-ok the sweeper reaps lapsed attempts across all
-      # tenants when no tenant context can be reconstructed.
+      # tenants when no tenant can be reconstructed.
       Arca.Repo.all(
         from(a in ExecutionAttempt,
           where: a.state == "running" and a.lease_until < ^now,

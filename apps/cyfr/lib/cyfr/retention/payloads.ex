@@ -31,7 +31,8 @@ defmodule Cyfr.Retention.Payloads do
           {:ok, non_neg_integer()} | {:error, term()}
   def prune_classes(ctx, classes, days, dry_run) do
     if dry_run,
-      do: Arca.ExecutionPayloads.count_older_than_days(ctx, days, classes),
-      else: Arca.ExecutionPayloads.delete_older_than_days(ctx, days, classes)
+      do: Arca.ExecutionPayloads.count_older_than_days(Sanctum.Context.actor(ctx), days, classes),
+      else:
+        Arca.ExecutionPayloads.delete_older_than_days(Sanctum.Context.actor(ctx), days, classes)
   end
 end

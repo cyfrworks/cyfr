@@ -54,7 +54,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
   test "a turn on an estate still being filled says so", %{ctx: ctx, group: group} do
     {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: group.id)
-    {:ok, thread} = Arca.ThreadStorage.create(ctx)
+    {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
     # The roster is handed in: reading it would itself start the fill.
     assert {:error, :not_provisioned} =
@@ -62,7 +62,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
                agents: [%{"name" => "aqua", "title" => "AQUA"}]
              )
 
-    assert [] = Arca.ThreadStorage.messages(ctx, thread.id)
+    assert [] = Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id)
 
     # And the refusal has a sentence every surface renders the same way.
     assert Cyfr.Ops.Error.render(:not_provisioned) =~ "still being prepared"

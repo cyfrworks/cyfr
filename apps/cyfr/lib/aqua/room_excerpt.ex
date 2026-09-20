@@ -46,9 +46,9 @@ defmodule Aqua.RoomExcerpt do
   @spec read(Context.t(), room()) :: {:ok, String.t()} | {:error, term()}
   def read(%Context{} = ctx, %{athanor_id: athanor_id, thread_id: thread_id} = room) do
     with {:ok, room_ctx} <- Context.focus(ctx, athanor_id),
-         {:ok, thread} <- Threads.get(room_ctx, thread_id),
+         {:ok, thread} <- Threads.get(Sanctum.Context.actor(room_ctx), thread_id),
          rows when is_list(rows) <-
-           Threads.latest_messages(room_ctx, thread_id, @rows) do
+           Threads.latest_messages(Sanctum.Context.actor(room_ctx), thread_id, @rows) do
       case lines(rows) do
         [] -> {:error, :nothing_said}
         lines -> {:ok, header(room, thread) <> "\n" <> fit(lines)}

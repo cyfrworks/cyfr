@@ -26,7 +26,7 @@ defmodule Compendium.OCI.Cache do
   # All cache operations run under a single global storage context.
   # The `cache/` prefix is in `Arca.Storage.global_prefixes/0`, so the
   # adapter writes to root rather than user-scoping by `user_id`.
-  defp ctx, do: Sanctum.system_context()
+  defp actor, do: Cyfr.Actor.system()
 
   @doc """
   Get a cached blob by digest.
@@ -35,13 +35,13 @@ defmodule Compendium.OCI.Cache do
   """
   @spec get_blob(String.t()) :: {:ok, binary()} | :miss
   def get_blob("sha256:" <> hex = digest) do
-    case Arca.get(ctx(), blob_segments(hex)) do
+    case Arca.get(actor(), blob_segments(hex)) do
       {:ok, bytes} ->
         if BlobUtil.compute_digest(bytes) == digest do
           {:ok, bytes}
         else
           Logger.error("[OCI.Cache.get_blob] Corrupt cache entry for #{digest}, removing")
-          Arca.delete(ctx(), blob_segments(hex))
+          Arca.delete(actor(), blob_segments(hex))
           :miss
         end
 
@@ -60,7 +60,7 @@ defmodule Compendium.OCI.Cache do
   """
   @spec put_blob(String.t(), binary()) :: :ok | {:error, term()}
   def put_blob("sha256:" <> hex, content) do
-    case Arca.put(ctx(), blob_segments(hex), content) do
+    case Arca.put(actor(), blob_segments(hex), content) do
       :ok ->
         :ok
 
@@ -79,7 +79,7 @@ defmodule Compendium.OCI.Cache do
   """
   @spec get_manifest(String.t(), String.t(), String.t()) :: {:ok, String.t(), String.t()} | :miss
   def get_manifest(registry, repository, tag) do
-    case Arca.get(ctx(), manifest_segments(registry, repository, tag)) do
+    case Arca.get(actor(), manifest_segments(registry, repository, tag)) do
       {:ok, content} ->
         case Jason.decode(content) do
           {:ok, %{"manifest" => manifest, "digest" => digest}} ->
@@ -107,7 +107,7 @@ defmodule Compendium.OCI.Cache do
     }
 
     with {:ok, entry} <- Jason.encode(payload),
-         :ok <- Arca.put(ctx(), manifest_segments(registry, repository, tag), entry) do
+         :ok <- Arca.put(actor(), manifest_segments(registry, repository, tag), entry) do
       :ok
     else
       {:error, %Jason.EncodeError{} = err} ->
@@ -128,7 +128,7 @@ defmodule Compendium.OCI.Cache do
   """
   @spec clear() :: :ok | {:error, term()}
   def clear do
-    case Arca.delete_tree(ctx(), [@cache_root, "oci"]) do
+    case Arca.delete_tree(actor(), [@cache_root, "oci"]) do
       :ok ->
         :ok
 

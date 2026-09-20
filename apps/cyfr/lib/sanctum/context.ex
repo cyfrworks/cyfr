@@ -22,11 +22,11 @@ defmodule Sanctum.Context do
 
   ## Usage
 
-  Every service function takes context as its first argument:
+  Every service function takes the context as its first argument, and the
+  persistence layer takes the actor it projects (`actor/1`):
 
-      Arca.get(ctx, path)
-      Arca.put(ctx, path, bytes)
       Sanctum.Context.authorize(ctx, :storage_read, path)
+      Arca.get(Sanctum.Context.actor(ctx), path)
 
   Context carries the tenant coordinate `athanor_id` and its `scope`. Every
   request context is `:athanor` — it works inside one athanor, the one its

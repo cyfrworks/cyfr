@@ -46,7 +46,9 @@ defmodule PrismWeb.SchedulesLiveTest do
   } do
     assert has_element?(view, "input[name=profile_id][required]")
     render_submit(view, "create", params)
-    assert {:ok, schedule} = Arca.CronSchedule.get_by_id_or_name(ctx, params["name"])
+
+    assert {:ok, schedule} =
+             Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), params["name"])
 
     assert schedule.profile_id == params["profile_id"]
     assert Jason.decode!(schedule.input) == %{"count" => 0, "enabled" => false}
@@ -62,7 +64,10 @@ defmodule PrismWeb.SchedulesLiveTest do
       submitted = Map.put(params, "input", input)
       html = render_submit(view, "create", submitted)
       assert html =~ "Input must be a valid JSON object"
-      assert {:error, :not_found} = Arca.CronSchedule.get_by_id_or_name(ctx, params["name"])
+
+      assert {:error, :not_found} =
+               Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), params["name"])
+
       assert_form(view, submitted)
     end
   end
@@ -75,7 +80,10 @@ defmodule PrismWeb.SchedulesLiveTest do
     submitted = Map.delete(params, "profile_id")
     html = render_submit(view, "create", submitted)
     assert html =~ "Please enter the profile"
-    assert {:error, :not_found} = Arca.CronSchedule.get_by_id_or_name(ctx, params["name"])
+
+    assert {:error, :not_found} =
+             Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), params["name"])
+
     assert_form(view, Map.put(submitted, "profile_id", ""))
   end
 
@@ -87,7 +95,10 @@ defmodule PrismWeb.SchedulesLiveTest do
     submitted = Map.put(params, "profile_id", "nonexistent-profile")
     render_submit(view, "create", submitted)
     assert :sys.get_state(view.pid).socket.assigns.flash["error"]
-    assert {:error, :not_found} = Arca.CronSchedule.get_by_id_or_name(ctx, params["name"])
+
+    assert {:error, :not_found} =
+             Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), params["name"])
+
     assert_form(view, submitted)
   end
 

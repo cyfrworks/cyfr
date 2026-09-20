@@ -62,7 +62,7 @@ defmodule Aqua.RunnerTest do
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, user: user, thread: thread}
   end
@@ -138,7 +138,7 @@ defmodule Aqua.RunnerTest do
 
     %{
       thread: Tape.thread(ctx, thread_id),
-      messages: Threads.messages(ctx, thread_id),
+      messages: Threads.messages(Sanctum.Context.actor(ctx), thread_id),
       turns: turns,
       approvals: Enum.map(approval_ids, &Tape.approval(ctx, &1))
     }
@@ -168,16 +168,16 @@ defmodule Aqua.RunnerTest do
 
     {:ok, _} = Members.ensure(ctx.user_id, scope: "athanor", athanor_id: fresh.id)
     {:ok, fresh_ctx} = Sanctum.Context.focus(ctx, fresh.id)
-    {:ok, fresh_thread} = Threads.create(fresh_ctx)
+    {:ok, fresh_thread} = Threads.create(Sanctum.Context.actor(fresh_ctx))
     # The roster is handed in: reading it would itself start the fill.
     assert {:error, :not_provisioned} =
              Runner.send_message(fresh_ctx, fresh_thread.id, "@aqua hi",
                agents: [%{"name" => "aqua", "title" => "AQUA"}]
              )
 
-    assert [] = Threads.messages(fresh_ctx, fresh_thread.id)
+    assert [] = Threads.messages(Sanctum.Context.actor(fresh_ctx), fresh_thread.id)
 
-    assert [] = Threads.messages(ctx, thread.id)
+    assert [] = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
   end
 
   test "people talking is a row and no turn; an addressed line starts one and completes", %{
@@ -239,7 +239,7 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, second)
 
     # The steer rode the first turn, which answered it before completing.
-    rows = Threads.messages(ctx, thread.id)
+    rows = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
     assert %{turn_id: ^first} = Enum.find(rows, &(&1.content == "@aqua also this"))
     assert %{turn_id: ^first} = Enum.find(rows, &(&1.content == "steered"))
     assert %{turn_id: ^second} = Enum.find(rows, &(&1.content == "second"))
@@ -345,7 +345,10 @@ defmodule Aqua.RunnerTest do
     assert_receive {:thread, _, {:turn_finished}}, 60_000
 
     assert [_] =
-             Enum.filter(Threads.messages(ctx, thread.id), &(&1.content == "@aqua also this"))
+             Enum.filter(
+               Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               &(&1.content == "@aqua also this")
+             )
   end
 
   test "the sender's line while the turn is paused on a card steers it, drained on resume", %{
@@ -377,7 +380,10 @@ defmodule Aqua.RunnerTest do
     assert %{action: "keep", outcome: "skipped"} = Enum.find(steps, &(&1.action == "keep"))
 
     assert %{turn_id: ^turn_id} =
-             Enum.find(Threads.messages(ctx, thread.id), &(&1.content == "@aqua never mind"))
+             Enum.find(
+               Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               &(&1.content == "@aqua never mind")
+             )
   end
 
   test "a runner that starts over a paused row knows it before the first send", %{
@@ -528,7 +534,12 @@ defmodule Aqua.RunnerTest do
 
     send(worker, :continue)
     assert_receive {:thread, _, {:turn_finished}}, 60_000
-    assert [_] = Enum.filter(Threads.messages(ctx, thread.id), &(&1.author == ctx.user_id))
+
+    assert [_] =
+             Enum.filter(
+               Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               &(&1.author == ctx.user_id)
+             )
   end
 
   test "a turn that cannot start once its root is claimed ends failed, root and all", %{
@@ -697,7 +708,7 @@ defmodule Aqua.RunnerTest do
     for {_id, pid, _, _} <- DynamicSupervisor.which_children(Aqua.RunnerSupervisor),
         do: DynamicSupervisor.terminate_child(Aqua.RunnerSupervisor, pid)
 
-    {:ok, other_thread} = Threads.create(ctx)
+    {:ok, other_thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Runner.subscribe(other_thread.id, ctx.athanor_id)
 
     {:ok, %{turn: turn}} =
@@ -731,7 +742,7 @@ defmodule Aqua.RunnerTest do
     assert_receive {:thread, _, {:turn_finished}}, 60_000
     assert {:ok, %{status: "completed", recovery_attempts: 1} = done} = Tape.turn(ctx, turn.id)
     assert done.attempt != claim.attempt
-    rows = Threads.messages(ctx, other_thread.id)
+    rows = Threads.messages(Sanctum.Context.actor(ctx), other_thread.id)
     assert Enum.any?(rows, &(&1.kind == "turn_aborted"))
     assert Enum.any?(rows, &(&1.content == "taken over"))
   end
@@ -762,7 +773,8 @@ defmodule Aqua.RunnerTest do
 
       assert ["taken over"] =
                for(
-                 %{author: ^agent, turn_id: ^turn_id} = row <- Threads.messages(ctx, thread.id),
+                 %{author: ^agent, turn_id: ^turn_id} = row <-
+                   Threads.messages(Sanctum.Context.actor(ctx), thread.id),
                  do: row.content
                )
 
@@ -822,7 +834,10 @@ defmodule Aqua.RunnerTest do
       assert {:ok, %{status: "running", fence: 1, recovery_attempts: 0}} =
                Tape.turn(ctx, turn_id)
 
-      refute Enum.any?(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
+      refute Enum.any?(
+               Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+               &(&1.kind == "turn_aborted")
+             )
 
       Cyfr.ControlPlane.mark(:unclaimed)
       {:ok, _runner} = Runner.ensure(thread.id, ctx.athanor_id)
@@ -1051,8 +1066,16 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, queued)
     assert %{live: nil, paused: nil, held: held, queue: []} = :sys.get_state(runner)
     assert held == %{}
-    assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.content == "@aqua held"))
-    assert Enum.any?(Threads.messages(ctx, thread.id), &(&1.content == "@aqua queued"))
+
+    assert Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+             &(&1.content == "@aqua held")
+           )
+
+    assert Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+             &(&1.content == "@aqua queued")
+           )
 
     send(runner, {:DOWN, held_ref, :process, holder, :normal})
     send(runner, {:recover, turn.id})
@@ -1127,7 +1150,11 @@ defmodule Aqua.RunnerTest do
     assert {:error, :superseded} = Task.await(stop, 10_000)
     assert {:ok, ^successor} = Tape.turn(ctx, id)
     refute Process.alive?(pids.loop)
-    refute Enum.any?(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
+
+    refute Enum.any?(
+             Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+             &(&1.kind == "turn_aborted")
+           )
   end
 
   @tag :stop_handoff

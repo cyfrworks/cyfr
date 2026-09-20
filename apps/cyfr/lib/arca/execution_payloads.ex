@@ -41,7 +41,6 @@ defmodule Arca.ExecutionPayloads do
 
   alias Arca.ExecutionPayloads.Store
   alias Arca.Schemas.ExecutionPayload
-  alias Sanctum.Context
 
   defmodule Staged do
     @moduledoc """
@@ -52,7 +51,7 @@ defmodule Arca.ExecutionPayloads do
     @type t :: %__MODULE__{}
 
     defstruct [
-      :ctx,
+      :actor,
       :athanor_id,
       :execution_id,
       :kind,
@@ -73,19 +72,25 @@ defmodule Arca.ExecutionPayloads do
   `Staged` for `commit!/2` or `discard/1`. The execution need not exist
   yet — admission commits the input it was given.
   """
-  @spec stage(Context.t(), String.t(), String.t(), binary(), String.t()) ::
+  @spec stage(Cyfr.Actor.t(), String.t(), String.t(), binary(), String.t()) ::
           {:ok, Staged.t()} | {:error, term()}
-  def stage(%Context{} = ctx, execution_id, kind, bytes, retention_class)
-      when is_binary(execution_id) and kind in @kinds and is_binary(bytes) and
+  def stage(
+        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        execution_id,
+        kind,
+        bytes,
+        retention_class
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(execution_id) and
+             kind in @kinds and is_binary(bytes) and
              is_binary(retention_class) do
-    athanor_id = Context.athanor!(ctx)
     digest = Cyfr.Digest.sha256(bytes)
     segments = object_segments(execution_id, kind, digest)
 
-    with :ok <- Store.impl().put(ctx, segments, bytes) do
+    with :ok <- Store.impl().put(actor, segments, bytes) do
       {:ok,
        %Staged{
-         ctx: ctx,
+         actor: actor,
          athanor_id: athanor_id,
          execution_id: execution_id,
          kind: kind,
@@ -97,6 +102,9 @@ defmodule Arca.ExecutionPayloads do
        }}
     end
   end
+
+  def stage(%Cyfr.Actor{}, _execution_id, _kind, _bytes, _retention_class),
+    do: {:error, :no_athanor}
 
   @doc """
   Insert the row for staged bytes as `attempt`'s payload, inside the
@@ -121,7 +129,7 @@ defmodule Arca.ExecutionPayloads do
   def discard(%Staged{} = staged) do
     case referenced?(staged) do
       {:ok, true} -> :ok
-      {:ok, false} -> delete_object(staged.ctx, staged.segments)
+      {:ok, false} -> delete_object(staged.actor, staged.segments)
       {:error, reason} -> {:error, reason}
     end
   end
@@ -131,17 +139,25 @@ defmodule Arca.ExecutionPayloads do
   for `opts[:attempt]` — the execution's current attempt by default — in
   one transaction: the bytes, then the row.
   """
-  @spec put(Context.t(), String.t(), String.t(), binary(), String.t(), keyword()) ::
-          {:ok, ExecutionPayload.t()} | {:error, :exists | :no_execution | term()}
-  def put(%Context{} = ctx, execution_id, kind, bytes, retention_class, opts \\ [])
-      when is_binary(execution_id) and kind in @kinds and is_binary(bytes) and
-             is_binary(retention_class) and is_list(opts) do
-    athanor_id = Context.athanor!(ctx)
+  @spec put(Cyfr.Actor.t(), String.t(), String.t(), binary(), String.t(), keyword()) ::
+          {:ok, ExecutionPayload.t()} | {:error, :no_athanor | :exists | :no_execution | term()}
+  def put(actor, execution_id, kind, bytes, retention_class, opts \\ [])
 
+  def put(
+        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        execution_id,
+        kind,
+        bytes,
+        retention_class,
+        opts
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(execution_id) and
+             kind in @kinds and is_binary(bytes) and
+             is_binary(retention_class) and is_list(opts) do
     with {:ok, current} <- current_attempt(athanor_id, execution_id),
          attempt = Keyword.get(opts, :attempt, current),
          :none <- existing(athanor_id, execution_id, kind, attempt),
-         {:ok, staged} <- stage(ctx, execution_id, kind, bytes, retention_class) do
+         {:ok, staged} <- stage(actor, execution_id, kind, bytes, retention_class) do
       case insert_row(staged, attempt) do
         {:ok, row} ->
           {:ok, row}
@@ -159,21 +175,24 @@ defmodule Arca.ExecutionPayloads do
     end
   end
 
+  def put(%Cyfr.Actor{}, _execution_id, _kind, _bytes, _retention_class, _opts),
+    do: {:error, :no_athanor}
+
   @doc """
   The execution's `kind` payload — its row and its bytes, verified
   against the row's digest — for `opts[:attempt]`, the execution's
   current attempt by default.
   """
-  @spec get(Context.t(), String.t(), String.t(), keyword()) ::
-          {:ok, ExecutionPayload.t(), binary()} | {:error, :not_found | :payload_corrupt | term()}
-  def get(ctx, execution_id, kind, opts \\ [])
+  @spec get(Cyfr.Actor.t(), String.t(), String.t(), keyword()) ::
+          {:ok, ExecutionPayload.t(), binary()}
+          | {:error, :no_athanor | :not_found | :payload_corrupt | term()}
+  def get(actor, execution_id, kind, opts \\ [])
 
-  def get(%Context{} = ctx, execution_id, kind, opts)
-      when is_binary(execution_id) and kind in @kinds and is_list(opts) do
-    athanor_id = Context.athanor!(ctx)
-
+  def get(%Cyfr.Actor{athanor_id: athanor_id} = actor, execution_id, kind, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(execution_id) and
+             kind in @kinds and is_list(opts) do
     with {:ok, row} <- fetch_row(athanor_id, execution_id, kind, Keyword.get(opts, :attempt)),
-         {:ok, bytes} <- Store.impl().get(ctx, String.split(row.blob_ref, "/")) do
+         {:ok, bytes} <- Store.impl().get(actor, String.split(row.blob_ref, "/")) do
       if Cyfr.Digest.sha256(bytes) == row.digest do
         {:ok, row, bytes}
       else
@@ -187,19 +206,22 @@ defmodule Arca.ExecutionPayloads do
     end
   end
 
+  def get(%Cyfr.Actor{}, _execution_id, _kind, _opts), do: {:error, :no_athanor}
+
   def get(_ctx, _execution_id, _kind, _opts), do: {:error, :not_found}
 
   @doc "How many of the context's athanor's payloads in `classes` are older than `days`."
-  @spec count_older_than_days(Context.t(), pos_integer(), [String.t()]) ::
+  @spec count_older_than_days(Cyfr.Actor.t(), pos_integer(), [String.t()]) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def count_older_than_days(%Context{} = ctx, days, classes)
-      when is_integer(days) and days > 0 and is_list(classes) do
-    athanor_id = Context.athanor!(ctx)
-
+  def count_older_than_days(%Cyfr.Actor{athanor_id: athanor_id}, days, classes)
+      when is_binary(athanor_id) and athanor_id != "" and is_integer(days) and days > 0 and
+             is_list(classes) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.count_older_than_days", fn ->
       {:ok, Arca.Repo.aggregate(aged(athanor_id, days, classes), :count)}
     end)
   end
+
+  def count_older_than_days(%Cyfr.Actor{}, _days, _classes), do: {:error, :no_athanor}
 
   @doc """
   Delete the context's athanor's payloads in `classes` older than `days`:
@@ -207,16 +229,17 @@ defmodule Arca.ExecutionPayloads do
   so the next sweep finds them again; bytes already gone are not a
   failure.
   """
-  @spec delete_older_than_days(Context.t(), pos_integer(), [String.t()]) ::
+  @spec delete_older_than_days(Cyfr.Actor.t(), pos_integer(), [String.t()]) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def delete_older_than_days(%Context{} = ctx, days, classes)
-      when is_integer(days) and days > 0 and is_list(classes) do
-    athanor_id = Context.athanor!(ctx)
-
+  def delete_older_than_days(%Cyfr.Actor{athanor_id: athanor_id} = actor, days, classes)
+      when is_binary(athanor_id) and athanor_id != "" and is_integer(days) and days > 0 and
+             is_list(classes) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.delete_older_than_days", fn ->
-      {:ok, delete_rows(ctx, Arca.Repo.all(aged(athanor_id, days, classes)))}
+      {:ok, delete_rows(actor, Arca.Repo.all(aged(athanor_id, days, classes)))}
     end)
   end
+
+  def delete_older_than_days(%Cyfr.Actor{}, _days, _classes), do: {:error, :no_athanor}
 
   @doc """
   Release the payloads of the named executions — bytes, then rows — before
@@ -224,12 +247,11 @@ defmodule Arca.ExecutionPayloads do
   held because their bytes could not be deleted; those executions are
   kept with them, and the next sweep tries again.
   """
-  @spec release(Context.t(), [String.t()]) :: {:ok, [String.t()]} | {:error, term()}
+  @spec release(Cyfr.Actor.t(), [String.t()]) :: {:ok, [String.t()]} | {:error, term()}
   def release(_ctx, []), do: {:ok, []}
 
-  def release(%Context{} = ctx, execution_ids) when is_list(execution_ids) do
-    athanor_id = Context.athanor!(ctx)
-
+  def release(%Cyfr.Actor{athanor_id: athanor_id} = actor, execution_ids)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(execution_ids) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.release", fn ->
       rows =
         Arca.Repo.all(
@@ -238,19 +260,20 @@ defmodule Arca.ExecutionPayloads do
           )
         )
 
-      {gone, kept} = delete_bytes(ctx, rows)
+      {gone, kept} = delete_bytes(actor, rows)
       _ = delete_row_ids(athanor_id, Enum.map(gone, & &1.id))
       {:ok, kept |> Enum.map(& &1.execution_id) |> Enum.uniq()}
     end)
   end
 
-  defp delete_rows(ctx, rows) do
-    {gone, _kept} = delete_bytes(ctx, rows)
-    delete_row_ids(Context.athanor!(ctx), Enum.map(gone, & &1.id))
+  def release(%Cyfr.Actor{}, _execution_ids), do: {:error, :no_athanor}
+
+  defp delete_rows(%Cyfr.Actor{athanor_id: athanor_id} = actor, rows) do
+    {gone, _kept} = delete_bytes(actor, rows)
+    delete_row_ids(athanor_id, Enum.map(gone, & &1.id))
   end
 
-  defp delete_bytes(ctx, rows) do
-    athanor_id = Context.athanor!(ctx)
+  defp delete_bytes(%Cyfr.Actor{athanor_id: athanor_id} = actor, rows) do
     expiring = MapSet.new(rows, & &1.id)
 
     Enum.split_with(rows, fn row ->
@@ -263,7 +286,7 @@ defmodule Arca.ExecutionPayloads do
           true
 
         {:ok, false} ->
-          delete_only_reference(ctx, row)
+          delete_only_reference(actor, row)
 
         :unknown ->
           Logger.warning(
@@ -276,8 +299,8 @@ defmodule Arca.ExecutionPayloads do
     end)
   end
 
-  defp delete_only_reference(ctx, row) do
-    case delete_object(ctx, String.split(row.blob_ref, "/")) do
+  defp delete_only_reference(actor, row) do
+    case delete_object(actor, String.split(row.blob_ref, "/")) do
       :ok ->
         true
 
@@ -308,8 +331,8 @@ defmodule Arca.ExecutionPayloads do
     end
   end
 
-  defp delete_object(ctx, segments) do
-    case Store.impl().delete(ctx, segments) do
+  defp delete_object(actor, segments) do
+    case Store.impl().delete(actor, segments) do
       :ok -> :ok
       {:error, :not_found} -> :ok
       {:error, reason} -> {:error, reason}

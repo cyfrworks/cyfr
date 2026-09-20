@@ -729,7 +729,13 @@ defmodule Compendium.MCP.ComponentTool do
     with {:ok, %{version: version} = cref} when is_binary(version) <-
            Cyfr.ComponentRef.parse(reference),
          {:ok, component} <-
-           Arca.ComponentStorage.get_component(ctx, cref.name, cref.version, cref.namespace, nil),
+           Arca.ComponentStorage.get_component(
+             Sanctum.Context.actor(ctx),
+             cref.name,
+             cref.version,
+             cref.namespace,
+             nil
+           ),
          {:ok, overlay} <- Compendium.Provenance.status(ctx, component),
          {:ok, shipped} <- status_shipped_versions(overlay, component, cref) do
       drift =
@@ -1227,7 +1233,13 @@ defmodule Compendium.MCP.ComponentTool do
     publisher =
       Compendium.ComponentPath.normalize_publisher(comp[:publisher] || comp["publisher"])
 
-    case Arca.ComponentStorage.get_component(ctx, name, version, publisher, type) do
+    case Arca.ComponentStorage.get_component(
+           Sanctum.Context.actor(ctx),
+           name,
+           version,
+           publisher,
+           type
+         ) do
       {:ok, component} ->
         manifest = decode_manifest(component.manifest)
         component_id = component.id || ""
@@ -1542,7 +1554,7 @@ defmodule Compendium.MCP.ComponentTool do
             "README.md"
           )
 
-        case Arca.get(ctx, path) do
+        case Arca.get(Sanctum.Context.actor(ctx), path) do
           {:ok, content} -> content
           _ -> nil
         end

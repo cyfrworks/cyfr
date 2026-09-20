@@ -161,7 +161,7 @@ defmodule Compendium.Registry do
           "publisher" => publisher
         })
 
-    ctx
+    Sanctum.Context.actor(ctx)
     |> Arca.Overlay.commit_unit(version_dir, {:files, [{wasm_rel, wasm_bytes} | extras]},
       cap: {:checked, total},
       sentinel: sentinel
@@ -229,7 +229,7 @@ defmodule Compendium.Registry do
   defp rollback_unit(_ctx, nil), do: :ok
 
   defp rollback_unit(ctx, version_dir) do
-    case Arca.delete_tree(ctx, version_dir) do
+    case Arca.delete_tree(Sanctum.Context.actor(ctx), version_dir) do
       :ok ->
         :ok
 
@@ -416,7 +416,13 @@ defmodule Compendium.Registry do
            :ok <- validate_dependencies(component, manifest) do
         # Replace whatever type this name:version held — the path's type
         # segment is the truth the row follows.
-        Arca.ComponentStorage.delete_component(ctx, name, version, publisher, nil)
+        Arca.ComponentStorage.delete_component(
+          Sanctum.Context.actor(ctx),
+          name,
+          version,
+          publisher,
+          nil
+        )
 
         with {:ok, _} <- put_component(ctx, component) do
           invalidate_executor_caches(ctx)
@@ -455,7 +461,7 @@ defmodule Compendium.Registry do
           {:ok, non_neg_integer()} | {:error, term()}
   def prune_stale_entries(%Context{} = ctx, discovered_components) do
     with {:ok, existing} <-
-           Arca.ComponentStorage.list_components(ctx,
+           Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
              source: Compendium.Source.filesystem(),
              limit: :none
            ) do
@@ -474,7 +480,13 @@ defmodule Compendium.Registry do
         # during scan/register. If a component temporarily fails to be discovered
         # (mid-edit, transient error), we must not destroy user source files.
         # File deletion only happens via explicit `component.delete` (Registry.delete).
-        Arca.ComponentStorage.delete_component(ctx, comp.name, comp.version, publisher, nil)
+        Arca.ComponentStorage.delete_component(
+          Sanctum.Context.actor(ctx),
+          comp.name,
+          comp.version,
+          publisher,
+          nil
+        )
       end
 
       # After all deletions, clean up name-level entries for components with no remaining versions
@@ -517,7 +529,7 @@ defmodule Compendium.Registry do
 
     opts = if query = filters[:query], do: Keyword.put(opts, :query, query), else: opts
 
-    case Arca.ComponentStorage.list_components(ctx, opts) do
+    case Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), opts) do
       {:ok, results} ->
         results =
           results
@@ -550,7 +562,13 @@ defmodule Compendium.Registry do
     if version == nil do
       {:error, :version_required}
     else
-      case Arca.ComponentStorage.get_component(ctx, name, version, publisher, component_type) do
+      case Arca.ComponentStorage.get_component(
+             Sanctum.Context.actor(ctx),
+             name,
+             version,
+             publisher,
+             component_type
+           ) do
         {:ok, row} -> {:ok, decode_row_json_fields(row)}
         {:error, :not_found} -> {:error, :not_found}
         # Propagate database faults unchanged.
@@ -606,7 +624,7 @@ defmodule Compendium.Registry do
     opts = if publisher, do: Keyword.put(opts, :publisher, publisher), else: opts
     opts = if component_type, do: Keyword.put(opts, :component_type, component_type), else: opts
 
-    case Arca.ComponentStorage.list_components(ctx, opts) do
+    case Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), opts) do
       {:ok, []} ->
         {:error, :not_found}
 
@@ -635,7 +653,7 @@ defmodule Compendium.Registry do
   """
   def get_blob(%Context{} = ctx, digest) when is_binary(digest) do
     # Direct digest lookup via indexed query (replaces O(n) linear scan)
-    case Arca.ComponentStorage.get_by_digest(ctx, digest) do
+    case Arca.ComponentStorage.get_by_digest(Sanctum.Context.actor(ctx), digest) do
       {:ok, %{component_type: "tincture"}} ->
         # Tinctures are directory-based, not single binary blobs
         {:error, :not_applicable}
@@ -655,7 +673,7 @@ defmodule Compendium.Registry do
           "[Registry.get_blob] Found #{component.name}:#{component.version}, reading path=#{inspect(path)}"
         )
 
-        case Arca.get(ctx, path) do
+        case Arca.get(Sanctum.Context.actor(ctx), path) do
           {:ok, content} ->
             # The caller asked BY DIGEST, so the answer is verified against
             # it here — the row and blob planes can diverge (an
@@ -705,7 +723,13 @@ defmodule Compendium.Registry do
           {:ok, :deleted} | {:error, :not_found | :bundled | term()}
   def delete(%Context{} = ctx, name, version, publisher_filter \\ nil)
       when is_binary(name) and is_binary(version) do
-    case Arca.ComponentStorage.get_component(ctx, name, version, publisher_filter, nil) do
+    case Arca.ComponentStorage.get_component(
+           Sanctum.Context.actor(ctx),
+           name,
+           version,
+           publisher_filter,
+           nil
+         ) do
       {:ok, component} ->
         with {:ok, disposition} <- delete_disposition(ctx, component),
              :ok <- cleanup_component_associations(ctx, component) do
@@ -714,7 +738,7 @@ defmodule Compendium.Registry do
           # component_type, and a nil-typed delete would take that row too
           # while its bytes survive.
           Arca.ComponentStorage.delete_component(
-            ctx,
+            Sanctum.Context.actor(ctx),
             name,
             version,
             ComponentPath.normalize_publisher(Map.get(component, :publisher)),
@@ -771,10 +795,16 @@ defmodule Compendium.Registry do
   def reset(%Context{} = ctx, name, version, publisher_filter \\ nil)
       when is_binary(name) and is_binary(version) do
     with {:ok, component} <-
-           Arca.ComponentStorage.get_component(ctx, name, version, publisher_filter, nil) do
+           Arca.ComponentStorage.get_component(
+             Sanctum.Context.actor(ctx),
+             name,
+             version,
+             publisher_filter,
+             nil
+           ) do
       unit = Compendium.Provenance.version_dir(component)
 
-      case Arca.Overlay.pull_shipped(ctx, unit) do
+      case Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), unit) do
         :ok ->
           # The re-registration invalidates the executor caches when the
           # shipped bytes differ from the row; an `:unchanged` answer
@@ -866,7 +896,7 @@ defmodule Compendium.Registry do
                      {rel, fn -> read_scratch(tmp_dir, path) end}
                    end) ++ extras}
 
-                ctx
+                Sanctum.Context.actor(ctx)
                 |> Arca.Overlay.commit_unit(version_dir, source,
                   cap: {:checked, validation.size + extras_bytes},
                   sentinel: Keyword.get(opts, :sentinel)
@@ -1027,7 +1057,7 @@ defmodule Compendium.Registry do
   # For local publisher, allow overwrite (skip check_not_exists).
   # Other publishers reject duplicates.
   defp put_component(ctx, component) do
-    Arca.ComponentStorage.put_component(ctx, component)
+    Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), component)
   end
 
   # Atomically insert or upsert depending on allow_overwrite.
@@ -1043,7 +1073,7 @@ defmodule Compendium.Registry do
     if ComponentPath.local_publisher?(publisher) do
       put_component(ctx, component)
     else
-      case Arca.ComponentStorage.insert_component(ctx, component) do
+      case Arca.ComponentStorage.insert_component(Sanctum.Context.actor(ctx), component) do
         {:ok, _} = ok -> ok
         {:error, :already_exists} -> {:error, {:already_exists, name, version}}
         error -> error
@@ -1326,7 +1356,7 @@ defmodule Compendium.Registry do
   # ---------------------------------------------------------------------------
 
   defp read_manifest_arca(ctx, segments) do
-    case Arca.get(ctx, segments ++ [ComponentPath.manifest_name()]) do
+    case Arca.get(Sanctum.Context.actor(ctx), segments ++ [ComponentPath.manifest_name()]) do
       {:ok, content} ->
         case Jason.decode(content) do
           {:ok, manifest} ->
@@ -1349,7 +1379,7 @@ defmodule Compendium.Registry do
     # interpolation — the same derivation the publish path uses.
     wasm_name = ComponentPath.wasm_name(component_type)
 
-    case Arca.get(ctx, segments ++ [wasm_name]) do
+    case Arca.get(Sanctum.Context.actor(ctx), segments ++ [wasm_name]) do
       {:ok, bytes} ->
         {:ok, bytes}
 
@@ -1362,7 +1392,7 @@ defmodule Compendium.Registry do
   end
 
   defp validate_artifact_arca(ctx, segments, "tincture") do
-    case Arca.read_subtree(ctx, segments) do
+    case Arca.read_subtree(Sanctum.Context.actor(ctx), segments) do
       {:ok, pairs} -> Compendium.TinctureValidator.validate_from_pairs(pairs)
       {:error, reason} -> {:error, {:tincture_read_error, reason}}
     end
@@ -1450,7 +1480,13 @@ defmodule Compendium.Registry do
   end
 
   defp release_status(ctx, name, version, digest, manifest_json, publisher, component_type) do
-    case Arca.ComponentStorage.get_component(ctx, name, version, publisher, component_type) do
+    case Arca.ComponentStorage.get_component(
+           Sanctum.Context.actor(ctx),
+           name,
+           version,
+           publisher,
+           component_type
+         ) do
       {:ok, existing} ->
         if existing.digest == digest and existing.manifest == manifest_json,
           do: :identical,
@@ -1508,7 +1544,7 @@ defmodule Compendium.Registry do
     version_dir =
       ComponentPath.version_dir(component_type, publisher, comp.name, comp.version)
 
-    case Arca.delete_tree(ctx, version_dir) do
+    case Arca.delete_tree(Sanctum.Context.actor(ctx), version_dir) do
       :ok ->
         # Clean up empty parent directories (name, then publisher)
         name_dir = ComponentPath.name_dir(component_type, publisher, comp.name)
@@ -1532,9 +1568,12 @@ defmodule Compendium.Registry do
     # (Sanctum.Consent.ShapeDerivation) — all functions of this athanor's
     # registry. Compiled components are keyed by digest and need no sweep: a
     # changed component is a changed digest.
-    Arca.Cache.delete_match(Arca.Cache.Keys.match_component_meta(athanor_id))
-    Arca.Cache.delete_match(Arca.Cache.Keys.match_activation(athanor_id))
-    Arca.Cache.delete_match(Arca.Cache.Keys.match_live_shape(athanor_id))
+    Arca.Cache.delete_match(
+      Arca.Cache.Keys.match_component_meta(Cyfr.Actor.in_athanor(athanor_id))
+    )
+
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_activation(Cyfr.Actor.in_athanor(athanor_id)))
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_live_shape(Cyfr.Actor.in_athanor(athanor_id)))
 
     Logger.debug(
       "[Compendium.Registry] Invalidated component execution caches for athanor #{athanor_id}"
@@ -1544,9 +1583,9 @@ defmodule Compendium.Registry do
   # Local directory cleanup is a non-atomic list-then-delete. A concurrent
   # publish between those operations can be removed by the delete.
   defp maybe_remove_empty_dir(ctx, dir_path) do
-    case Arca.list(ctx, dir_path) do
+    case Arca.list(Sanctum.Context.actor(ctx), dir_path) do
       {:ok, []} ->
-        Arca.delete_tree(ctx, dir_path)
+        Arca.delete_tree(Sanctum.Context.actor(ctx), dir_path)
 
       _ ->
         :ok

@@ -128,7 +128,7 @@ defmodule Compendium.MCP do
               ref.version
             ) ++ asset_segments
 
-          case Arca.get(ctx, asset_path) do
+          case Arca.get(Sanctum.Context.actor(ctx), asset_path) do
             {:ok, content} ->
               {:ok, %{content: Base.encode64(content), mimeType: Cyfr.MediaType.binary()}}
 

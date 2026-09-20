@@ -139,8 +139,8 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   # A context focused on the athanor as this person — what a follow is written through.
-  defp follow_ctx(athanor_id, user_id),
-    do: %{Sanctum.TestContext.local() | athanor_id: athanor_id, user_id: user_id}
+  defp follow_actor(athanor_id, user_id),
+    do: %{Cyfr.Actor.in_athanor(athanor_id) | user_id: user_id}
 
   describe "add/3 by user id" do
     test "seats a known active person; refuses an unknown or denied id", %{athanor: athanor} do
@@ -357,13 +357,13 @@ defmodule Sanctum.Tenancy.MembersTest do
       {:ok, :added} = Members.add(athanor, [user_id: stayer.id], "system")
 
       thread = "thread_#{n}"
-      :ok = Subs.follow(follow_ctx(athanor.id, leaver.id), thread, leaver.id)
-      :ok = Subs.follow(follow_ctx(athanor.id, stayer.id), thread, stayer.id)
+      :ok = Subs.follow(follow_actor(athanor.id, leaver.id), thread, leaver.id)
+      :ok = Subs.follow(follow_actor(athanor.id, stayer.id), thread, stayer.id)
 
       :ok = Members.remove_member(athanor, user_id: leaver.id)
 
-      refute Subs.follows?(athanor.id, thread, leaver.id)
-      assert Subs.follows?(athanor.id, thread, stayer.id)
+      refute Subs.follows?(Cyfr.Actor.in_athanor(athanor.id), thread, leaver.id)
+      assert Subs.follows?(Cyfr.Actor.in_athanor(athanor.id), thread, stayer.id)
     end
 
     test "remove_all_for_user/1 drops the follows in every athanor the person sat in", %{
@@ -378,13 +378,13 @@ defmodule Sanctum.Tenancy.MembersTest do
       {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
       {:ok, :added} = Members.add(other, [user_id: user.id], "system")
 
-      :ok = Subs.follow(follow_ctx(athanor.id, user.id), "thread_a_#{n}", user.id)
-      :ok = Subs.follow(follow_ctx(other.id, user.id), "thread_b_#{n}", user.id)
+      :ok = Subs.follow(follow_actor(athanor.id, user.id), "thread_a_#{n}", user.id)
+      :ok = Subs.follow(follow_actor(other.id, user.id), "thread_b_#{n}", user.id)
 
       :ok = Members.remove_all_for_user(user.id)
 
-      assert Subs.followed(follow_ctx(athanor.id, user.id), user.id) == MapSet.new()
-      assert Subs.followed(follow_ctx(other.id, user.id), user.id) == MapSet.new()
+      assert Subs.followed(follow_actor(athanor.id, user.id), user.id) == MapSet.new()
+      assert Subs.followed(follow_actor(other.id, user.id), user.id) == MapSet.new()
     end
 
     test "a member who leaves and is added again starts unfollowed", %{athanor: athanor} do
@@ -394,7 +394,7 @@ defmodule Sanctum.Tenancy.MembersTest do
       {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
       {:ok, :added} = Members.add(athanor, [user_id: stayer.id], "system")
 
-      ctx = follow_ctx(athanor.id, user.id)
+      ctx = follow_actor(athanor.id, user.id)
       thread = "thread_#{n}"
       :ok = Subs.follow(ctx, thread, user.id)
       assert MapSet.member?(Subs.followed(ctx, user.id), thread)

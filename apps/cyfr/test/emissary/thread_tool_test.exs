@@ -15,7 +15,7 @@ defmodule Emissary.MCP.ThreadToolTest do
     Cyfr.Test.Sandbox.setup!()
 
     ctx = Sanctum.TestContext.local()
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, thread: thread}
   end
 
@@ -178,10 +178,18 @@ defmodule Emissary.MCP.ThreadToolTest do
   describe "shape" do
     test "events replays messages by seq, not execution events", %{ctx: ctx, thread: thread} do
       {:ok, a} =
-        Threads.append(ctx, thread.id, %{author: ctx.user_id, kind: "text", content: "one"})
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+          author: ctx.user_id,
+          kind: "text",
+          content: "one"
+        })
 
       {:ok, _b} =
-        Threads.append(ctx, thread.id, %{author: "aqua", kind: "text", content: "two"})
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+          author: "aqua",
+          kind: "text",
+          content: "two"
+        })
 
       assert {:ok, %{messages: msgs, cursor: cursor}} =
                call(ctx, %{"action" => "events", "thread" => thread.id})
@@ -213,7 +221,7 @@ defmodule Emissary.MCP.ThreadToolTest do
       }
 
       {:ok, apr} =
-        Threads.append(ctx, thread.id, %{
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
           author: "aqua",
           kind: "approval",
           status: "pending",
@@ -228,7 +236,11 @@ defmodule Emissary.MCP.ThreadToolTest do
 
       # A line that is not a card carries no intent key at all.
       {:ok, line} =
-        Threads.append(ctx, thread.id, %{author: ctx.user_id, kind: "text", content: "hi"})
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+          author: ctx.user_id,
+          kind: "text",
+          content: "hi"
+        })
 
       assert {:ok, %{messages: rows}} =
                call(ctx, %{"action" => "events", "thread" => thread.id})
@@ -351,18 +363,18 @@ defmodule Emissary.MCP.ThreadToolTest do
     } do
       alias Arca.ThreadSubscriptionStorage, as: Subs
 
-      :ok = Subs.unfollow(ctx, thread.id, ctx.user_id)
-      refute MapSet.member?(Subs.followed(ctx, ctx.user_id), thread.id)
+      :ok = Subs.unfollow(Sanctum.Context.actor(ctx), thread.id, ctx.user_id)
+      refute MapSet.member?(Subs.followed(Sanctum.Context.actor(ctx), ctx.user_id), thread.id)
 
       assert {:ok, %{following: true}} =
                call(ctx, %{"action" => "follow", "thread" => thread.id})
 
-      assert MapSet.member?(Subs.followed(ctx, ctx.user_id), thread.id)
+      assert MapSet.member?(Subs.followed(Sanctum.Context.actor(ctx), ctx.user_id), thread.id)
 
       assert {:ok, %{following: false}} =
                call(ctx, %{"action" => "unfollow", "thread" => thread.id})
 
-      refute MapSet.member?(Subs.followed(ctx, ctx.user_id), thread.id)
+      refute MapSet.member?(Subs.followed(Sanctum.Context.actor(ctx), ctx.user_id), thread.id)
 
       # A thread in another estate is not followable from here.
       elsewhere = %{ctx | athanor_id: "ath_elsewhere"}
@@ -397,7 +409,7 @@ defmodule Emissary.MCP.ThreadToolTest do
         )
 
       {:ok, room} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Room #{n}")
-      {:ok, shared} = Threads.create(%{ctx | athanor_id: room.id})
+      {:ok, shared} = Threads.create(Sanctum.Context.actor(%{ctx | athanor_id: room.id}))
       {:ok, room: room, shared: shared}
     end
 
@@ -429,10 +441,14 @@ defmodule Emissary.MCP.ThreadToolTest do
       shared: shared
     } do
       {:ok, mine} =
-        Threads.append(ctx, thread.id, %{author: ctx.user_id, kind: "text", content: "hi"})
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+          author: ctx.user_id,
+          kind: "text",
+          content: "hi"
+        })
 
       {:ok, other} =
-        Threads.append(ctx, thread.id, %{
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
           author: "local|idp|someone-else",
           kind: "text",
           content: "not yours"
@@ -448,7 +464,7 @@ defmodule Emissary.MCP.ThreadToolTest do
                })
 
       assert [%{content: "hi", author: author}] =
-               Threads.messages(%{ctx | athanor_id: room.id}, shared.id)
+               Threads.messages(Sanctum.Context.actor(%{ctx | athanor_id: room.id}), shared.id)
 
       assert author == ctx.user_id
 
@@ -529,7 +545,7 @@ defmodule Emissary.MCP.ThreadToolTest do
                  "client_id" => "c-1"
                })
 
-      {:ok, row} = Threads.get_message(ctx, message_id)
+      {:ok, row} = Threads.get_message(Sanctum.Context.actor(ctx), message_id)
       assert Threads.payload(row)["attachments"] == [ref]
 
       assert {:ok, %{messages: [%{id: ^message_id}], cursor: cursor}} =
@@ -542,8 +558,13 @@ defmodule Emissary.MCP.ThreadToolTest do
       ctx: ctx,
       thread: thread
     } do
-      {:ok, room} = Threads.create(ctx, %{title: "the room"})
-      {:ok, _} = Threads.append(ctx, room.id, %{author: ctx.user_id, content: "room talk"})
+      {:ok, room} = Threads.create(Sanctum.Context.actor(ctx), %{title: "the room"})
+
+      {:ok, _} =
+        Threads.append(Sanctum.Context.actor(ctx), room.id, %{
+          author: ctx.user_id,
+          content: "room talk"
+        })
 
       assert {:ok, %{accepted: true, message_id: id}} =
                call(ctx, %{
@@ -557,7 +578,7 @@ defmodule Emissary.MCP.ThreadToolTest do
                  }
                })
 
-      {:ok, row} = Threads.get_message(ctx, id)
+      {:ok, row} = Threads.get_message(Sanctum.Context.actor(ctx), id)
       assert row.content == "about the room"
       refute inspect(Threads.payload(row)) =~ "room talk"
 
@@ -572,7 +593,11 @@ defmodule Emissary.MCP.ThreadToolTest do
     end
 
     test "delete removes the thread whole", %{ctx: ctx, thread: thread} do
-      {:ok, _} = Threads.append(ctx, thread.id, %{author: ctx.user_id, content: "bye"})
+      {:ok, _} =
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+          author: ctx.user_id,
+          content: "bye"
+        })
 
       assert {:ok, %{deleted: true}} =
                call(ctx, %{"action" => "delete", "thread" => thread.id})

@@ -112,7 +112,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
          :ok <- storage_ctx_gate(ctx),
          :ok <- validate_segments(segments),
          :ok <- within_reach(ctx, segments) do
-      case Arca.get(ctx, segments) do
+      case Arca.get(Sanctum.Context.actor(ctx), segments) do
         {:ok, content} ->
           {:ok, %{content: Base.encode64(content), mimeType: Cyfr.MediaType.binary()}}
 
@@ -162,7 +162,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
         {:error, {:invalid_argument, "in-chain, record.payload needs the caller's attempt"}}
 
       true ->
-        case Arca.Execution.get_tenant(ctx, id) do
+        case Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), id) do
           %{current_attempt: ^attempt} ->
             {:ok, attempt}
 
@@ -187,7 +187,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   end
 
   defp storage_ctx_gate(ctx) do
-    if Arca.Storage.athanor_ready?(ctx),
+    if Arca.Storage.athanor_ready?(Sanctum.Context.actor(ctx)),
       do: :ok,
       else: {:error, :missing_tenant}
   end
@@ -440,7 +440,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   def handle("record", ctx, %{"action" => "get", "id" => id}) do
     with :ok <- Context.tenant_ok(ctx) do
-      case Arca.Execution.get_tenant(ctx, id) do
+      case Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), id) do
         nil ->
           {:error, {:not_found, "Execution", id}}
 
@@ -479,7 +479,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
            kind in ["input", "result"] ||
              {:error, {:invalid_argument, "kind must be input or result"}},
          {:ok, attempt} <- payload_attempt(ctx, id, args) do
-      case Arca.ExecutionPayloads.get(ctx, id, kind, attempt: attempt) do
+      case Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, kind, attempt: attempt) do
         {:ok, row, bytes} ->
           {:ok,
            %{
@@ -544,7 +544,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   def handle("mcp_log", ctx, %{"action" => "get", "id" => id}) do
     with :ok <- Context.tenant_ok(ctx) do
-      case Arca.McpLog.get_tenant(ctx, id) do
+      case Arca.McpLog.get_tenant(Sanctum.Context.actor(ctx), id) do
         nil ->
           {:error, {:not_found, "MCP log", id}}
 
@@ -599,7 +599,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       # outage on one leaves that leg empty, the way the mcp_log leg above
       # already does, rather than raising on the error tuple.
       executions =
-        case Arca.Execution.list_by_request(ctx, request_id) do
+        case Arca.Execution.list_by_request(Sanctum.Context.actor(ctx), request_id) do
           rows when is_list(rows) -> Enum.map(rows, &execution_to_map/1)
           {:error, _} -> []
         end
@@ -645,7 +645,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
       # shipped as `counts: ["error", "database_error"]`, a structured
       # falsehood a client would render as a fan-out count. Same refusal
       # the other arms give.
-      case Arca.Execution.count_by_request(ctx, ids) do
+      case Arca.Execution.count_by_request(Sanctum.Context.actor(ctx), ids) do
         counts when is_map(counts) -> {:ok, %{counts: counts}}
         {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
       end
@@ -697,7 +697,8 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
   def handle("policy_log", ctx, %{"action" => "get", "id" => id}) do
     with :ok <- Context.tenant_ok(ctx) do
       record =
-        Arca.PolicyLog.get_tenant(ctx, id) || Arca.PolicyLog.get_by_request_id_tenant(ctx, id)
+        Arca.PolicyLog.get_tenant(Sanctum.Context.actor(ctx), id) ||
+          Arca.PolicyLog.get_by_request_id_tenant(Sanctum.Context.actor(ctx), id)
 
       case record do
         nil ->

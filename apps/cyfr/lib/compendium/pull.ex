@@ -71,7 +71,7 @@ defmodule Compendium.Pull do
          {:ok, version} <- shipped_version(cref),
          unit =
            Compendium.ComponentPath.version_dir(cref.type, cref.namespace, cref.name, version),
-         :ok <- Arca.Overlay.pull_shipped(ctx, unit),
+         :ok <- Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), unit),
          {:ok, _} <- Compendium.Registry.register_from_arca(ctx, unit) do
       pulled = %Cyfr.ComponentRef{cref | version: version}
       {:ok, %{status: "pulled", component_ref: Cyfr.ComponentRef.to_string(pulled)}}

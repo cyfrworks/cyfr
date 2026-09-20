@@ -56,14 +56,21 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
     revision = "rev_" <> Cyfr.UUID7.generate_at(begun)
 
     for {rel, bytes} <- [{[@sentinel], "{}"}, {["a.txt"], "a"}] do
-      :ok = Arca.put(ctx, UnitLocator.staged_object(unit, revision, rel), bytes)
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          UnitLocator.staged_object(unit, revision, rel),
+          bytes
+        )
     end
 
     revision
   end
 
   defp staged(ctx, unit) do
-    {:ok, leaves} = Arca.list_recursive(ctx, UnitLocator.staging_prefix(unit))
+    {:ok, leaves} =
+      Arca.list_recursive(Sanctum.Context.actor(ctx), UnitLocator.staging_prefix(unit))
+
     leaves |> Enum.map(&Enum.at(&1, length(unit) + 1)) |> Enum.uniq()
   end
 

@@ -53,7 +53,7 @@ defmodule Cyfr.ConsentDrift do
   # The estate's own formulas: what a fill consents, and what installing a
   # component can therefore invalidate.
   defp local_formula_refs(%Context{} = ctx) do
-    case Arca.ComponentStorage.list_components(ctx,
+    case Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
            publisher: Compendium.ComponentPath.default_publisher(),
            component_type: "formula",
            limit: :none

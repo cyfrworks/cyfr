@@ -313,7 +313,7 @@ defmodule Emissary.MCP.McpServersTool do
   defp handle_create(ctx, args) do
     with {:ok, name, attrs} <- server_args(args),
          :ok <- under_server_cap(ctx) do
-      case Arca.McpServerStorage.insert(ctx, Map.put(attrs, :name, name)) do
+      case Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), Map.put(attrs, :name, name)) do
         {:ok, server} ->
           {:ok, connect(ctx, server)}
 
@@ -332,7 +332,7 @@ defmodule Emissary.MCP.McpServersTool do
   defp handle_update(ctx, args) do
     with {:ok, name, attrs} <- server_args(args),
          {:ok, epoch} <- epoch_arg(args) do
-      case Arca.McpServerStorage.update(ctx, name, attrs, epoch) do
+      case Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), name, attrs, epoch) do
         {:ok, %{enabled: true} = server} ->
           stop_process(ctx, name)
           {:ok, connect(ctx, server)}
@@ -444,7 +444,7 @@ defmodule Emissary.MCP.McpServersTool do
   defp under_server_cap(ctx) do
     max = Application.get_env(:cyfr, :max_external_servers, 50)
 
-    case Arca.McpServerStorage.list(ctx) do
+    case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       {:ok, existing} when length(existing) < max -> :ok
       {:ok, _existing} -> {:error, "Maximum server limit (#{max}) reached"}
       {:error, reason} when is_atom(reason) -> {:error, "Storage error: #{reason}"}
@@ -577,7 +577,7 @@ defmodule Emissary.MCP.McpServersTool do
   # ran.
   defp handle_delete(ctx, args) do
     with {:ok, name} <- name_arg(args) do
-      case Arca.McpServerStorage.delete(ctx, name) do
+      case Arca.McpServerStorage.delete(Sanctum.Context.actor(ctx), name) do
         {:ok, server} ->
           stop_process(ctx, name)
           changed(ctx)
@@ -597,7 +597,7 @@ defmodule Emissary.MCP.McpServersTool do
   # a new epoch.
   defp handle_restart(ctx, args) do
     with {:ok, name} <- name_arg(args) do
-      case Arca.McpServerStorage.get(ctx, name) do
+      case Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name) do
         {:ok, %{transport: transport}} when transport != "stdio" ->
           {:error,
            {:invalid_argument, "Only a stdio server restarts — '#{name}' is #{transport}"}}
@@ -606,7 +606,11 @@ defmodule Emissary.MCP.McpServersTool do
           {:error, disabled(name)}
 
         {:ok, server} ->
-          case Arca.McpServerStorage.bump_epoch(ctx, server.id, server.epoch) do
+          case Arca.McpServerStorage.bump_epoch(
+                 Sanctum.Context.actor(ctx),
+                 server.id,
+                 server.epoch
+               ) do
             {:ok, restarted} ->
               stop_process(ctx, name)
               {:ok, ctx |> connect(restarted) |> Map.put(:action, "restarted")}
@@ -632,7 +636,7 @@ defmodule Emissary.MCP.McpServersTool do
   end
 
   defp handle_list(ctx) do
-    case Arca.McpServerStorage.list(ctx) do
+    case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       {:ok, servers} ->
         server_list =
           Enum.map(servers, fn server ->
@@ -665,7 +669,7 @@ defmodule Emissary.MCP.McpServersTool do
 
   defp handle_get(ctx, args) do
     with {:ok, name} <- name_arg(args) do
-      case Arca.McpServerStorage.get(ctx, name) do
+      case Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name) do
         {:ok, server} ->
           # Auto-start enabled servers so status reflects reality
           if server.enabled do
@@ -717,7 +721,7 @@ defmodule Emissary.MCP.McpServersTool do
 
   defp handle_test(ctx, args) do
     with {:ok, name} <- name_arg(args) do
-      case Arca.McpServerStorage.get(ctx, name) do
+      case Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name) do
         {:ok, %{enabled: false}} ->
           {:error, disabled(name)}
 
@@ -764,7 +768,7 @@ defmodule Emissary.MCP.McpServersTool do
   end
 
   defp refresh_one(ctx, name) do
-    case Arca.McpServerStorage.get(ctx, name) do
+    case Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), name) do
       {:ok, %{enabled: false}} ->
         {:error, disabled(name)}
 
@@ -797,7 +801,7 @@ defmodule Emissary.MCP.McpServersTool do
 
   # Every enabled server, in parallel with a concurrency limit.
   defp refresh_all(ctx) do
-    case Arca.McpServerStorage.list(ctx) do
+    case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       {:ok, servers} ->
         results =
           servers
@@ -856,7 +860,7 @@ defmodule Emissary.MCP.McpServersTool do
     action_name = if enabled, do: "enable", else: "disable"
 
     with {:ok, name} <- name_arg(args) do
-      case Arca.McpServerStorage.update(ctx, name, %{enabled: enabled}) do
+      case Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), name, %{enabled: enabled}) do
         {:ok, server} ->
           # The row's epoch moved either way, so a running process no longer
           # matches it; a disabled server is not started again.

@@ -242,7 +242,7 @@ defmodule Cyfr.Execution do
   # its row alone.
   defp child_under_key(opts) do
     case Arca.Execution.child_by_key(
-           Keyword.fetch!(opts, :ctx),
+           Sanctum.Context.actor(Keyword.fetch!(opts, :ctx)),
            Keyword.fetch!(opts, :parent_execution_id),
            Keyword.fetch!(opts, :child_key)
          ) do

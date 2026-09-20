@@ -300,7 +300,7 @@ defmodule Sanctum.ApiKey do
   def consent_capability(_ctx, nil), do: {:ok, nil}
 
   def consent_capability(%Context{} = ctx, api_key_id) when is_binary(api_key_id) do
-    with {:ok, row} <- Arca.ApiKeyStorage.get_key_by_id(athanor!(ctx), api_key_id),
+    with {:ok, row} <- Arca.ApiKeyStorage.get_key_by_id(actor!(ctx), api_key_id),
          {:ok, %{"consent" => %{"commit_digest" => digest} = consent}} <-
            Jason.decode(row.capability || "null"),
          true <- is_binary(digest),
@@ -317,7 +317,7 @@ defmodule Sanctum.ApiKey do
   Get a key by name (key value is redacted).
   """
   def get(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.ApiKeyStorage.get_key(athanor!(ctx), name) do
+    case Arca.ApiKeyStorage.get_key(actor!(ctx), name) do
       {:ok, row} -> {:ok, redact_key(row)}
       {:error, :not_found} -> {:error, :not_found}
       {:error, :database_error} -> {:error, :database_error}
@@ -328,7 +328,7 @@ defmodule Sanctum.ApiKey do
   List all keys (key values are redacted).
   """
   def list(%Context{} = ctx) do
-    case Arca.ApiKeyStorage.list_keys(athanor!(ctx)) do
+    case Arca.ApiKeyStorage.list_keys(actor!(ctx)) do
       {:ok, rows} ->
         entries = Enum.map(rows, &redact_key/1)
         {:ok, entries}
@@ -342,7 +342,7 @@ defmodule Sanctum.ApiKey do
   Revoke a key by name.
   """
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    Arca.ApiKeyStorage.revoke_key(athanor!(ctx), name)
+    Arca.ApiKeyStorage.revoke_key(actor!(ctx), name)
   end
 
   @doc "Revoke every live key a person created — part of denying them on this server."
@@ -354,7 +354,7 @@ defmodule Sanctum.ApiKey do
   @doc "Revoke every live key of an athanor."
   @spec revoke_all_for_athanor(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def revoke_all_for_athanor(athanor_id) when is_binary(athanor_id) do
-    Arca.ApiKeyStorage.revoke_all_for_athanor(athanor_id)
+    Arca.ApiKeyStorage.revoke_all_for_athanor(Cyfr.Actor.in_athanor(athanor_id))
   end
 
   @doc """
@@ -366,18 +366,18 @@ defmodule Sanctum.ApiKey do
   mint a new key instead — that path asks the consent plane again.
   """
   def rotate(%Context{} = ctx, name) when is_binary(name) do
-    athanor_id = athanor!(ctx)
+    actor = actor!(ctx)
 
-    with {:ok, false} <- Arca.ApiKeyStorage.capability_bearing?(athanor_id, name) do
-      rotate_plain(ctx, athanor_id, name)
+    with {:ok, false} <- Arca.ApiKeyStorage.capability_bearing?(actor, name) do
+      rotate_plain(ctx, actor, name)
     else
       {:ok, true} -> {:error, :capability_key_immutable}
       {:error, :database_error} -> {:error, :database_error}
     end
   end
 
-  defp rotate_plain(_ctx, athanor_id, name) do
-    case Arca.ApiKeyStorage.get_key(athanor_id, name) do
+  defp rotate_plain(_ctx, actor, name) do
+    case Arca.ApiKeyStorage.get_key(actor, name) do
       {:ok, row} ->
         case parse_key_type(row.type) do
           {:ok, key_type} ->
@@ -386,7 +386,7 @@ defmodule Sanctum.ApiKey do
             scope_list = Cyfr.Json.decode_or(row.scope, [], "Sanctum.ApiKey")
 
             case Arca.ApiKeyStorage.rotate_key(
-                   athanor_id,
+                   actor,
                    name,
                    hash_key(new_key),
                    String.slice(new_key, 0, 12)
@@ -697,6 +697,16 @@ defmodule Sanctum.ApiKey do
   # The athanor every key path keys on, behind the tenant chokepoint: an
   # athanor-less context raises before it can touch any row.
   defp athanor!(%Context{} = ctx), do: Context.athanor!(ctx)
+
+  # The actor the key rows are read and written under, with the
+  # product-boundary refusal kept where it has always been: `athanor!/1`
+  # raises `Sanctum.UnauthorizedError` for an unresolved tenant, so only a
+  # resolved context reaches Arca and the storage refusal is unreachable
+  # from here.
+  defp actor!(%Context{} = ctx) do
+    _ = athanor!(ctx)
+    Context.actor(ctx)
+  end
 
   defp safe_encode(value) do
     case Jason.encode(value) do

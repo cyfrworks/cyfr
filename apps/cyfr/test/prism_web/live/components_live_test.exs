@@ -75,16 +75,16 @@ defmodule PrismWeb.ComponentsLiveTest do
   end
 
   test "Reset restores the shipped bytes over an edit", %{conn: conn, ctx: ctx} do
-    :ok = Arca.put(ctx, @version_dir ++ ["notes.txt"], "edited")
-    assert {:ok, true} = Arca.Overlay.edited?(ctx, @version_dir)
+    :ok = Arca.put(Sanctum.Context.actor(ctx), @version_dir ++ ["notes.txt"], "edited")
+    assert {:ok, true} = Arca.Overlay.edited?(Sanctum.Context.actor(ctx), @version_dir)
 
     {view, _html} = expanded_html(conn)
     render_click(view, "reset", %{"ref" => "reagent:local.shelf-tool:1.0.0"})
 
     # The edit is gone; the copy matches the shipped version again, and a
     # fresh mount agrees.
-    refute Arca.exists?(ctx, @version_dir ++ ["notes.txt"])
-    assert {:ok, false} = Arca.Overlay.edited?(ctx, @version_dir)
+    refute Arca.exists?(Sanctum.Context.actor(ctx), @version_dir ++ ["notes.txt"])
+    assert {:ok, false} = Arca.Overlay.edited?(Sanctum.Context.actor(ctx), @version_dir)
 
     {_view, html} = expanded_html(conn)
     assert html =~ ~r/>\s*bundled\s*</
@@ -122,8 +122,8 @@ defmodule PrismWeb.ComponentsLiveTest do
     assert html =~ "1.1.0"
 
     newer_dir = ["components", "reagents", "local", "shelf-tool", "1.1.0"]
-    assert Arca.Overlay.unit_status(ctx, newer_dir) == {:ok, :shipped}
-    assert Arca.Overlay.unit_status(ctx, @version_dir) == {:ok, :shipped}
+    assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), newer_dir) == {:ok, :shipped}
+    assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), @version_dir) == {:ok, :shipped}
 
     assert {:ok, %{version: "1.1.0"}} =
              Compendium.Registry.get_latest(ctx, "shelf-tool", "local", "reagent")

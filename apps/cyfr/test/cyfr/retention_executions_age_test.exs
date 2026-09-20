@@ -30,7 +30,7 @@ defmodule Cyfr.Retention.ExecutionsAgeTest do
 
     if status != "running" do
       {:ok, _} =
-        Execution.record_complete(ctx, id, %{
+        Execution.record_complete(Sanctum.Context.actor(ctx), id, %{
           completed_at: DateTime.add(started, 1, :second),
           duration_ms: 1000,
           status: status
@@ -50,9 +50,9 @@ defmodule Cyfr.Retention.ExecutionsAgeTest do
     assert {:ok, 1} = ExecutionsAge.prune(ctx, 90, true)
     assert {:ok, 1} = ExecutionsAge.prune(ctx, 90, false)
 
-    assert is_nil(Execution.get_tenant(ctx, old))
-    refute is_nil(Execution.get_tenant(ctx, old_running))
-    refute is_nil(Execution.get_tenant(ctx, recent))
+    assert is_nil(Execution.get_tenant(Sanctum.Context.actor(ctx), old))
+    refute is_nil(Execution.get_tenant(Sanctum.Context.actor(ctx), old_running))
+    refute is_nil(Execution.get_tenant(Sanctum.Context.actor(ctx), recent))
   end
 
   test "the kind is on the roster the settings document derives from" do

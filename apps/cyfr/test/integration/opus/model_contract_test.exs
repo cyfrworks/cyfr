@@ -92,9 +92,14 @@ defmodule Opus.ModelContractTest do
     assert [%{dispatch_state: "closed", outcome: "ok", child_execution_id: id}] =
              model_steps(played)
 
-    assert {:ok, _row, request} = Arca.ExecutionPayloads.get(ctx, id, "input")
+    assert {:ok, _row, request} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "input")
+
     assert request =~ "@aqua hello"
-    assert {:ok, _row, result} = Arca.ExecutionPayloads.get(ctx, id, "result")
+
+    assert {:ok, _row, result} =
+             Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
+
     assert result =~ "The fixture answers."
 
     # The scan finds what is there: the person's line in its row and in the
@@ -400,7 +405,8 @@ defmodule Opus.ModelContractTest do
     assert [%{input: 10, output: 5}, %{input: 30, output: 13}, %{input: 60, output: 15}] =
              for({:usage, totals} <- played.seen.thread, do: totals)
 
-    assert {:ok, []} = Arca.BudgetReservations.charges(ctx.athanor_id, played.turn.budget_id)
+    assert {:ok, []} =
+             Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), played.turn.budget_id)
 
     # Each call passed the gate, which keeps a row of it with what it was
     # asked; the rows close behind the calls.
@@ -858,7 +864,7 @@ defmodule Opus.ModelContractTest do
   defp play(ctx, steps, thread) when is_list(steps), do: play(ctx, message(steps), thread)
 
   defp play(ctx, text, thread) when is_binary(text) do
-    thread = thread || elem({:ok, _} = Threads.create(ctx), 1)
+    thread = thread || elem({:ok, _} = Threads.create(Sanctum.Context.actor(ctx)), 1)
 
     # The thread's runner has let its last turn go, so this line opens a
     # turn of its own and steers none.
@@ -899,7 +905,7 @@ defmodule Opus.ModelContractTest do
     Map.merge(played, %{
       turn: turn,
       steps: steps,
-      rows: Threads.messages(ctx, thread.id),
+      rows: Threads.messages(Sanctum.Context.actor(ctx), thread.id),
       seen: await_seen(observer, turn, steps)
     })
   end
@@ -1003,7 +1009,9 @@ defmodule Opus.ModelContractTest do
   end
 
   defp turn_events(ctx, played, type, step_id) do
-    {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, played.turn.root_execution_id, 0)
+    {:ok, rows} =
+      Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), played.turn.root_execution_id, 0)
+
     for %{type: ^type, step_id: ^step_id} = row <- rows, do: Arca.ExecutionEvents.data(row)
   end
 
@@ -1061,7 +1069,7 @@ defmodule Opus.ModelContractTest do
 
     for id <- ids,
         kind <- ["input", "result"],
-        {:ok, _row, bytes} <- [Arca.ExecutionPayloads.get(ctx, id, kind)] do
+        {:ok, _row, bytes} <- [Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, kind)] do
       {id, kind, bytes}
     end
   end

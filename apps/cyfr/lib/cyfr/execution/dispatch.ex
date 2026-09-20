@@ -453,7 +453,7 @@ defmodule Cyfr.Execution.Dispatch do
 
   defp claim_row(admitted, claimant) do
     case Arca.ExecutionAttempts.claim(
-           claimant.athanor_id,
+           Cyfr.Actor.in_athanor(claimant.athanor_id),
            claimant.attempt,
            claimant.fence,
            claimant.runner

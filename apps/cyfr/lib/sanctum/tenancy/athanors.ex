@@ -438,11 +438,11 @@ defmodule Sanctum.Tenancy.Athanors do
       if current.status == "archived" do
         ctx = Sanctum.internal_context(athanor_id: current.id, scope: :athanor)
 
-        with :ok <- Arca.delete_tree(ctx, []) do
+        with :ok <- Arca.delete_tree(Sanctum.Context.actor(ctx), []) do
           # The write gate invalidates the whole-tree counter, but the
           # empty path names no scope, so the per-scope pairs would
           # otherwise survive until their TTL — drop them all.
-          Arca.Usage.invalidate(current.id)
+          Arca.Usage.invalidate(internal_actor(current))
         end
       else
         {:error, :not_archived}
@@ -484,9 +484,9 @@ defmodule Sanctum.Tenancy.Athanors do
   def destroy(%Athanor{} = athanor) do
     with {:ok, current} <- get(athanor.id),
          :ok <- check_destroyable(current),
-         :ok <- Arca.delete_tree(internal_ctx(current), []),
-         {:ok, counts} <- Arca.TenantTables.delete_all_for(current.id) do
-      Arca.Usage.invalidate(current.id)
+         :ok <- Arca.delete_tree(internal_actor(current), []),
+         {:ok, counts} <- Arca.TenantTables.delete_all_for(internal_actor(current)) do
+      Arca.Usage.invalidate(internal_actor(current))
 
       Logger.warning(
         "[Sanctum.Tenancy.Athanors] destroyed #{current.id}: " <>
@@ -508,8 +508,11 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  defp internal_ctx(%Athanor{id: id}),
-    do: Sanctum.internal_context(athanor_id: id, scope: :athanor)
+  # The server's own actor narrowed to this athanor: `system: true` is
+  # what lets the purge reach the whole tree, `scope: :athanor` is what
+  # keeps it inside this one estate.
+  defp internal_actor(%Athanor{id: id}),
+    do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
 
   @doc """
   Reopen an archived athanor, if the server still has room for it. An ended

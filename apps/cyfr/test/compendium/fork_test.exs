@@ -127,7 +127,7 @@ defmodule Compendium.ForkTest do
       # Verify files at target path
       target_base =
         Arca.Adapters.Local.build_path(
-          Sanctum.TestContext.local(),
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
           [
             "components",
             "catalysts",
@@ -185,7 +185,7 @@ defmodule Compendium.ForkTest do
 
       # The member rebuilds the fork; the fixture's source wasm is fake.
       target_dir = ["components", "reagents", "local", "my-lineage", "1.0.0"]
-      :ok = Arca.put(ctx, target_dir ++ ["reagent.wasm"], valid_wasm)
+      :ok = Arca.put(Sanctum.Context.actor(ctx), target_dir ++ ["reagent.wasm"], valid_wasm)
       {:ok, row} = Compendium.Registry.register_from_arca(ctx, target_dir)
 
       assert %{
@@ -212,7 +212,7 @@ defmodule Compendium.ForkTest do
 
       target_base =
         Arca.Adapters.Local.build_path(
-          Sanctum.TestContext.local(),
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
           [
             "components",
             "tinctures",
@@ -253,7 +253,10 @@ defmodule Compendium.ForkTest do
         Compendium.ComponentPath.version_dir("catalyst", "acme", "bad-manifest", "1.0.0") ++
           [Compendium.ComponentPath.manifest_name()]
 
-      :ok = Arca.Overlay.with_internal_writes(fn -> Arca.put(ctx, manifest_path, "{not json") end)
+      :ok =
+        Arca.Overlay.with_internal_writes(fn ->
+          Arca.put(Sanctum.Context.actor(ctx), manifest_path, "{not json")
+        end)
 
       source_ref = parse_ref!("c:acme.bad-manifest:1.0.0")
       assert {:error, reason} = Fork.fork(ctx, source_ref)
@@ -261,7 +264,11 @@ defmodule Compendium.ForkTest do
 
       # And nothing was written under the target's name.
       target = Compendium.ComponentPath.version_dir("catalyst", "local", "bad-manifest", "1.0.0")
-      refute Arca.exists?(ctx, target ++ [Compendium.ComponentPath.manifest_name()])
+
+      refute Arca.exists?(
+               Sanctum.Context.actor(ctx),
+               target ++ [Compendium.ComponentPath.manifest_name()]
+             )
     end
   end
 
@@ -302,7 +309,7 @@ defmodule Compendium.ForkTest do
 
       target_base =
         Arca.Adapters.Local.build_path(
-          Sanctum.TestContext.local(),
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
           [
             "components",
             "reagents",
@@ -330,7 +337,7 @@ defmodule Compendium.ForkTest do
 
       target_base =
         Arca.Adapters.Local.build_path(
-          Sanctum.TestContext.local(),
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
           [
             "components",
             "formulas",
@@ -354,7 +361,7 @@ defmodule Compendium.ForkTest do
 
       source_base =
         Arca.Adapters.Local.build_path(
-          Sanctum.TestContext.local(),
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
           [
             "components",
             "tinctures",
@@ -371,7 +378,7 @@ defmodule Compendium.ForkTest do
 
       target_base =
         Arca.Adapters.Local.build_path(
-          Sanctum.TestContext.local(),
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
           [
             "components",
             "tinctures",

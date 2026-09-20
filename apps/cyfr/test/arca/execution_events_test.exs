@@ -16,29 +16,29 @@ defmodule Arca.ExecutionEventsTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Sanctum.TestContext.athanor!()
-    ctx = Sanctum.TestContext.local()
+    actor = Sanctum.Context.actor(Sanctum.TestContext.local())
 
     {:ok, %{execution: execution}} =
       Arca.Execution.admit(%{
         id: "exec_evt_#{System.unique_integer([:positive])}",
         reference: "catalyst:local.files:0.1.0",
-        user_id: ctx.user_id,
-        athanor_id: ctx.athanor_id,
+        user_id: actor.user_id,
+        athanor_id: actor.athanor_id,
         component_type: "catalyst"
       })
 
-    {:ok, ctx: ctx, exec: execution}
+    {:ok, actor: actor, exec: execution}
   end
 
   test "events take the next number from the row, in order, under concurrent writers", %{
-    ctx: ctx,
+    actor: actor,
     exec: exec
   } do
     1..12
     |> Task.async_stream(
       fn i ->
         {:ok, _} =
-          ExecutionEvents.append(ctx.athanor_id, exec.id, "step.closed", data: %{"i" => i})
+          ExecutionEvents.append(actor, exec.id, "step.closed", data: %{"i" => i})
       end,
       max_concurrency: 6,
       ordered: false
@@ -47,18 +47,24 @@ defmodule Arca.ExecutionEventsTest do
 
     # Admission appended `execution.started` as 1; the twelve follow it.
     assert {:ok, [%{seq: 1, type: "execution.started"} | rows]} =
-             ExecutionEvents.since(ctx.athanor_id, exec.id, 0)
+             ExecutionEvents.since(actor, exec.id, 0)
 
     assert Enum.map(rows, & &1.seq) == Enum.to_list(2..13)
     assert Arca.Repo.get!(Arca.Execution, exec.id).event_seq == 13
 
-    assert {:ok, tail} = ExecutionEvents.since(ctx.athanor_id, exec.id, 11)
+    assert {:ok, tail} = ExecutionEvents.since(actor, exec.id, 11)
     assert Enum.map(tail, & &1.seq) == [12, 13]
     assert Enum.all?(rows, &is_integer(ExecutionEvents.data(&1)["i"]))
   end
 
-  test "an execution of another estate takes no event", %{ctx: ctx, exec: exec} do
-    assert {:error, _} = ExecutionEvents.append("ath_elsewhere", exec.id, "step.closed")
-    assert {:ok, []} = ExecutionEvents.since(ctx.athanor_id, exec.id, 1)
+  test "an execution of another estate takes no event", %{actor: actor, exec: exec} do
+    assert {:error, _} =
+             ExecutionEvents.append(
+               Cyfr.Actor.in_athanor("ath_elsewhere"),
+               exec.id,
+               "step.closed"
+             )
+
+    assert {:ok, []} = ExecutionEvents.since(actor, exec.id, 1)
   end
 end

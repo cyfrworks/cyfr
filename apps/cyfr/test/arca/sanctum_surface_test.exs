@@ -6,35 +6,33 @@ defmodule Arca.SanctumSurfaceTest do
   What the storage layer actually needs from the auth domain, written down.
 
   Sanctum→Arca is ordinary layering (the auth domain persists through the
-  storage layer). Arca→Sanctum is the arrow pointing BACK UP — a real,
-  deliberate cycle (`Sanctum.Context` is the tenancy carrier every write
-  stamps; the cipher seals what storage holds) that also spans the license
-  boundary: `lib/arca` is Apache-2.0, `lib/sanctum` is FSL. Nothing
-  guarded it, so it could only widen silently.
+  storage layer). Arca→Sanctum was the arrow pointing BACK UP — a real
+  cycle that also spanned the license boundary, `lib/arca` being
+  Apache-2.0 and `lib/sanctum` FSL. It is closed: the roster below is
+  empty, and this test is what keeps it that way.
 
   Same shape as `Opus.HostSurfaceTest`: the roster is pinned in both
   directions. A new Arca→Sanctum reach fails here until someone decides it
   belongs on the list; a namespace Arca stops reaching into must leave it.
+  With an empty roster the first half is the whole test.
   """
 
   use ExUnit.Case, async: true
 
   # The Sanctum namespaces lib/arca reaches into IN CODE (doc prose
-  # mentions many more — the filter below is what keeps this list honest),
-  # and why each is here. Much narrower than it reads from a raw grep.
+  # mentions many more — the filter below is what keeps this list honest).
+  # It is empty, and that is the point: there is no arrow back up left to
+  # widen.
   #
   # What was vocabulary is gone rather than forgotten: the tenancy scope
   # list and the webhook signature header's default are shapes two sides
   # agree on, so they live in the contracts (`Cyfr.TenancyScope`,
   # `Cyfr.Webhook`) and the storage layer reads them there, while the auth
-  # domain keeps its names over the same declaration. What is left is the
-  # tenancy carrier alone.
-  @surface [
-    # The tenancy carrier and its resolution — the reason the cycle
-    # exists at all: every scoped read and stamped write names it.
-    "Sanctum.Context",
-    "Sanctum.Tenancy"
-  ]
+  # domain keeps its names over the same declaration. The tenancy carrier
+  # was the last row: every facade now takes the `%Cyfr.Actor{}` the
+  # context projects, the caps are asked through `Cyfr.Caps`, and the
+  # server's own work carries `Cyfr.Actor.system/0`.
+  @surface []
 
   @namespace ~r/\bSanctum(?:\.[A-Z]\w+)+\b/
 

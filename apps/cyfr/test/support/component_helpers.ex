@@ -34,6 +34,6 @@ defmodule Sanctum.Test.ComponentHelpers do
       updated_at: now
     }
 
-    Arca.ComponentStorage.put_component(ctx, attrs)
+    Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), attrs)
   end
 end

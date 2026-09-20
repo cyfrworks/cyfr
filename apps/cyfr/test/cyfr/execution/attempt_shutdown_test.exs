@@ -109,7 +109,10 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
     assert %{status: "failed", error_message: @lapsed} = row(fixture)
 
     assert %{state: "lapsed", outcome: "uncertain"} =
-             Arca.ExecutionAttempts.get(fixture.athanor_id, fixture.attempt)
+             Arca.ExecutionAttempts.get(
+               Cyfr.Actor.in_athanor(fixture.athanor_id),
+               fixture.attempt
+             )
 
     # The kill of a runner that had attached is counted against the
     # athanor's execution slots, and said with the athanor's live count.

@@ -408,7 +408,7 @@ defmodule Cyfr.Execution.AdmissionTest do
   end
 
   defp cached?(ctx, reference) do
-    case Arca.Cache.get(Arca.Cache.Keys.component_meta(ctx.athanor_id, reference)) do
+    case Arca.Cache.get(Arca.Cache.Keys.component_meta(Sanctum.Context.actor(ctx), reference)) do
       {:ok, _} -> {:ok, :cached}
       :miss -> :miss
     end

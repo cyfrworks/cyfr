@@ -16,8 +16,8 @@ defmodule Arca.CronScheduleIndexTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Sanctum.TestContext.local()
-    {:ok, ctx: ctx}
+    actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+    {:ok, actor: actor}
   end
 
   defp schedule_attrs(name, overrides \\ %{}) do
@@ -50,18 +50,18 @@ defmodule Arca.CronScheduleIndexTest do
     end
   end
 
-  test "a soft-deleted schedule releases its name", %{ctx: ctx} do
+  test "a soft-deleted schedule releases its name", %{actor: actor} do
     assert {:ok, first} = CronSchedule.create(schedule_attrs("dup-deleted"))
-    assert {:ok, _} = CronSchedule.soft_delete(ctx, first.id)
+    assert {:ok, _} = CronSchedule.soft_delete(actor, first.id)
 
     assert {:ok, _second} = CronSchedule.create(schedule_attrs("dup-deleted"))
   end
 
-  test "multiple soft-deleted namesakes coexist", %{ctx: ctx} do
+  test "multiple soft-deleted namesakes coexist", %{actor: actor} do
     assert {:ok, first} = CronSchedule.create(schedule_attrs("dup-many"))
-    assert {:ok, _} = CronSchedule.soft_delete(ctx, first.id)
+    assert {:ok, _} = CronSchedule.soft_delete(actor, first.id)
     assert {:ok, second} = CronSchedule.create(schedule_attrs("dup-many"))
-    assert {:ok, _} = CronSchedule.soft_delete(ctx, second.id)
+    assert {:ok, _} = CronSchedule.soft_delete(actor, second.id)
 
     assert {:ok, _third} = CronSchedule.create(schedule_attrs("dup-many"))
   end

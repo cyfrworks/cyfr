@@ -56,7 +56,7 @@ defmodule Aqua.ApprovalsTest do
 
     {:ok, %{capability_digest: capability}} = Compendium.AgentIndex.snapshot(ctx, "aqua")
 
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
 
     pins = %{profile_id: profile_id, consent_id: consent_id, agent_capability_digest: capability}
@@ -319,7 +319,7 @@ defmodule Aqua.ApprovalsTest do
     assert {:ok, %{status: "error"}} = Tape.approval(ctx, approval.id)
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, moved.id)
 
-    {:ok, other} = Threads.create(ctx)
+    {:ok, other} = Threads.create(Sanctum.Context.actor(ctx))
     changed = started!(ctx, other, %{pins | agent_capability_digest: "sha256:other"})
     %{approval: approval} = card!(ctx, changed, @keep)
 

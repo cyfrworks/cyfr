@@ -152,7 +152,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
 
     _released = Emissary.MCP.Bridge.release_referencing(athanor_id, names)
 
-    with {:ok, servers} <- Arca.McpServerStorage.list(ctx) do
+    with {:ok, servers} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       stop_affected(servers, names, athanor_id, entry_id, ctx)
     end
   rescue
@@ -183,7 +183,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
         )
 
         Emissary.MCP.ExternalServerSupervisor.stop(server.name, athanor_id)
-        bumped = Arca.McpServerStorage.bump_epoch(ctx, server.id)
+        bumped = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), server.id)
 
         :telemetry.execute(
           [:cyfr, :emissary, :external_server, :reconciled],

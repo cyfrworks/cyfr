@@ -453,7 +453,11 @@ defmodule Arca.VaultStorage do
          blocked_status: blocked_status
        }) do
     with :ok <- cas_binding(athanor_id, id, from_digest, changes),
-         {:ok, affected} <- Arca.ConsentStorage.head_profiles_referencing(athanor_id, id),
+         {:ok, affected} <-
+           Arca.ConsentStorage.head_profiles_referencing(
+             Cyfr.Actor.in_athanor(athanor_id),
+             id
+           ),
          :ok <- block_profiles(athanor_id, affected, blocked_status) do
       {:ok, Enum.sort(affected)}
     end
@@ -461,7 +465,11 @@ defmodule Arca.VaultStorage do
 
   defp block_profiles(athanor_id, profile_ids, blocked_status) do
     Enum.reduce_while(profile_ids, :ok, fn profile_id, :ok ->
-      case Arca.ProfileStorage.set_status(athanor_id, profile_id, blocked_status) do
+      case Arca.ProfileStorage.set_status(
+             Cyfr.Actor.in_athanor(athanor_id),
+             profile_id,
+             blocked_status
+           ) do
         :ok -> {:cont, :ok}
         {:error, _} = error -> {:halt, error}
       end

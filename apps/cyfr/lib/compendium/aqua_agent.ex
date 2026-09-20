@@ -159,7 +159,7 @@ defmodule Compendium.AquaAgent do
   """
   @spec list(Context.t()) :: {:ok, [t()], [{String.t(), term()}]} | {:error, term()}
   def list(%Context{} = ctx) do
-    case Arca.list_typed(ctx, AquaPath.roles_root()) do
+    case Arca.list_typed(Sanctum.Context.actor(ctx), AquaPath.roles_root()) do
       {:ok, entries} ->
         {roles, errors} =
           entries
@@ -250,7 +250,7 @@ defmodule Compendium.AquaAgent do
   @doc "One agent by name — the soul or a role, whichever the name is — through the overlay union."
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get(%Context{} = ctx, name) when is_binary(name) do
-    with {:ok, binary} <- Arca.get(ctx, AquaPath.agent_file(name)) do
+    with {:ok, binary} <- Arca.get(Sanctum.Context.actor(ctx), AquaPath.agent_file(name)) do
       parse(name, binary)
     end
   end

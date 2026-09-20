@@ -121,7 +121,7 @@ defmodule PrismWeb.ShellLive do
   def handle_event("refresh_tinctures", _params, socket) do
     ctx = socket.assigns.context
     lv = self()
-    scan_key = Arca.Cache.Keys.tincture_scan_running(ctx.athanor_id)
+    scan_key = Arca.Cache.Keys.tincture_scan_running(Sanctum.Context.actor(ctx))
 
     case Arca.Cache.get(scan_key) do
       {:ok, _} ->

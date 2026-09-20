@@ -108,6 +108,23 @@ defmodule Cyfr.Actor do
     %__MODULE__{athanor_id: nil, authenticated: false, scope: :platform, system: true}
   end
 
+  @doc """
+  The actor of row work inside one athanor, for a caller the control
+  plane has already established by other means than a context: a
+  MAC-verified host call naming its attempt, a schedule's own occurrence
+  row, a recovery scan already narrowed to one estate.
+
+  It carries the athanor and nothing else — `scope: :athanor`, so it
+  reads only that tenant, and `system: false`, so it may not mutate a
+  seed, global or tenant-reserved path. The server's own work uses
+  `system/0` or its documented narrowing instead, and a request's actor
+  comes from the context the identity domain established.
+  """
+  @spec in_athanor(String.t()) :: t()
+  def in_athanor(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
+    %__MODULE__{athanor_id: athanor_id, scope: :athanor, system: false}
+  end
+
   @doc "The actor as its wire map: the four wire members and nothing else."
   @spec to_wire(t()) :: %{optional(String.t()) => String.t() | boolean()}
   def to_wire(%__MODULE__{} = actor) do

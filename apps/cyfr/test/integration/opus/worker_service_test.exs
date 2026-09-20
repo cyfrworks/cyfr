@@ -397,15 +397,17 @@ defmodule Opus.WorkerServiceWireTest do
   end
 
   defp attempt_row(ctx, id),
-    do: Arca.ExecutionAttempts.get(ctx.athanor_id, row(id).current_attempt)
+    do: Arca.ExecutionAttempts.get(Sanctum.Context.actor(ctx), row(id).current_attempt)
 
   defp event_types(ctx, id) do
-    {:ok, rows} = Arca.ExecutionEvents.since(ctx.athanor_id, id, 0)
+    {:ok, rows} = Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), id, 0)
     Enum.map(rows, & &1.type)
   end
 
   defp charges(ctx, authority) do
-    {:ok, charges} = Arca.BudgetReservations.charges(ctx.athanor_id, authority.budget.id)
+    {:ok, charges} =
+      Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), authority.budget.id)
+
     charges
   end
 end

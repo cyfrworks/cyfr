@@ -6,7 +6,7 @@ defmodule Arca.McpServerStorage do
   Storage operations for external MCP server configurations.
 
   Follows the same tenant-scoped patterns as the other `Arca.*Storage`
-  modules. All queries are scoped via `where_tenant(ctx)`, except
+  modules. All queries are scoped via `where_tenant(actor)`, except
   `fenced/1`, which reads named rows across athanors for the MCP bridge
   controller and matches each row to its athanor itself.
 
@@ -33,7 +33,6 @@ defmodule Arca.McpServerStorage do
 
   alias Arca.Schemas.Athanor
   alias Arca.Schemas.McpServer
-  alias Sanctum.Context
 
   @doc """
   The decoded `config_json` of a stored row — headers, `timeout_ms`,
@@ -58,27 +57,31 @@ defmodule Arca.McpServerStorage do
   @doc """
   List all MCP server configs for the given tenant context.
   """
-  @spec list(Context.t()) :: {:ok, [McpServer.t()]} | {:error, term()}
-  def list(%Context{} = ctx) do
+  @spec list(Cyfr.Actor.t()) :: {:ok, [McpServer.t()]} | {:error, term()}
+  def list(%Cyfr.Actor{athanor_id: athanor_id} = actor)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.list", fn ->
       query =
         from(s in McpServer, order_by: [asc: s.name])
-        |> where_tenant(ctx)
+        |> where_tenant(actor)
 
       {:ok, Arca.Repo.all(query)}
     end)
   end
 
+  def list(%Cyfr.Actor{}), do: {:error, :no_athanor}
+
   @doc """
   Get a single MCP server config by name, scoped to the given tenant.
   """
-  @spec get(Context.t(), String.t()) ::
-          {:ok, McpServer.t()} | {:error, :not_found | :database_error}
-  def get(%Context{} = ctx, name) when is_binary(name) do
+  @spec get(Cyfr.Actor.t(), String.t()) ::
+          {:ok, McpServer.t()} | {:error, :no_athanor | :not_found | :database_error}
+  def get(%Cyfr.Actor{athanor_id: athanor_id} = actor, name)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(name) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.get", fn ->
       query =
         from(s in McpServer, where: s.name == ^name, limit: 1)
-        |> where_tenant(ctx)
+        |> where_tenant(actor)
 
       case Arca.Repo.one(query) do
         nil -> {:error, :not_found}
@@ -86,17 +89,20 @@ defmodule Arca.McpServerStorage do
       end
     end)
   end
+
+  def get(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   Get a single MCP server config by its row id, scoped to the given tenant.
   """
-  @spec get_by_id(Context.t(), String.t()) ::
-          {:ok, McpServer.t()} | {:error, :not_found | :database_error}
-  def get_by_id(%Context{} = ctx, id) when is_binary(id) do
+  @spec get_by_id(Cyfr.Actor.t(), String.t()) ::
+          {:ok, McpServer.t()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_by_id(%Cyfr.Actor{athanor_id: athanor_id} = actor, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.get_by_id", fn ->
       query =
         from(s in McpServer, where: s.id == ^id, limit: 1)
-        |> where_tenant(ctx)
+        |> where_tenant(actor)
 
       case Arca.Repo.one(query) do
         nil -> {:error, :not_found}
@@ -104,6 +110,8 @@ defmodule Arca.McpServerStorage do
       end
     end)
   end
+
+  def get_by_id(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc """
   Create an MCP server config, scoped to the given tenant, at epoch 1, and
@@ -115,9 +123,10 @@ defmodule Arca.McpServerStorage do
   serializes; Arca stores it verbatim). Optional: `:enabled`. The row's
   `created_by` is the context's user.
   """
-  @spec insert(Context.t(), map()) :: {:ok, McpServer.t()} | {:error, term()}
-  # arca:unscoped-ok the context's athanor is stamped onto the row below before the write.
-  def insert(%Context{user_id: user_id} = ctx, attrs) when is_binary(user_id) and is_map(attrs) do
+  @spec insert(Cyfr.Actor.t(), map()) :: {:ok, McpServer.t()} | {:error, :no_athanor | term()}
+  # arca:unscoped-ok the actor's athanor is stamped onto the row below before the write.
+  def insert(%Cyfr.Actor{athanor_id: athanor_id, user_id: user_id} = actor, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.insert", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -129,7 +138,7 @@ defmodule Arca.McpServerStorage do
         |> Map.put_new(:config_json, "{}")
         |> Map.put(:epoch, 1)
         |> Map.put(:created_by, user_id)
-        |> then(&Arca.QueryHelpers.stamp_tenant!(ctx, &1))
+        |> then(&Arca.QueryHelpers.stamp_tenant!(actor, &1))
         |> Map.put_new(:inserted_at, now)
         |> Map.put(:updated_at, now)
 
@@ -144,17 +153,20 @@ defmodule Arca.McpServerStorage do
     end)
   end
 
+  def insert(%Cyfr.Actor{}, attrs) when is_map(attrs), do: {:error, :no_athanor}
+
   @doc """
   Delete an MCP server config by name, scoped to the given tenant, and
   answer the row that was deleted.
   """
-  @spec delete(Context.t(), String.t()) ::
-          {:ok, McpServer.t()} | {:error, :not_found | :database_error}
-  def delete(%Context{} = ctx, name) when is_binary(name) do
+  @spec delete(Cyfr.Actor.t(), String.t()) ::
+          {:ok, McpServer.t()} | {:error, :no_athanor | :not_found | :database_error}
+  def delete(%Cyfr.Actor{athanor_id: athanor_id} = actor, name)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(name) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.delete", fn ->
       query =
         from(s in McpServer, where: s.name == ^name, select: s)
-        |> where_tenant(ctx)
+        |> where_tenant(actor)
 
       case Arca.Repo.delete_all(query) do
         {1, [server]} -> {:ok, server}
@@ -163,6 +175,8 @@ defmodule Arca.McpServerStorage do
     end)
   end
 
+  def delete(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+
   @doc """
   Update fields of a server config (`:transport`, `:url`, `:config_json`,
   `:enabled`) and raise its epoch, in one statement.
@@ -170,10 +184,13 @@ defmodule Arca.McpServerStorage do
   With `expected_epoch`, the write happens only while the row is still at
   that epoch; a row that moved on answers `{:error, :stale_epoch}`.
   """
-  @spec update(Context.t(), String.t(), map(), pos_integer() | nil) ::
-          {:ok, McpServer.t()} | {:error, :not_found | :stale_epoch | :database_error}
-  def update(%Context{} = ctx, name, updates, expected_epoch \\ nil)
-      when is_binary(name) and is_map(updates) do
+  @spec update(Cyfr.Actor.t(), String.t(), map(), pos_integer() | nil) ::
+          {:ok, McpServer.t()}
+          | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
+  def update(actor, name, updates, expected_epoch \\ nil)
+
+  def update(%Cyfr.Actor{athanor_id: athanor_id} = actor, name, updates, expected_epoch)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and is_map(updates) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.update", fn ->
       set =
         updates
@@ -182,24 +199,32 @@ defmodule Arca.McpServerStorage do
         |> Enum.to_list()
 
       from(s in McpServer, where: s.name == ^name, select: s)
-      |> where_tenant(ctx)
-      |> write_epoch(set, expected_epoch, fn -> get(ctx, name) end)
+      |> where_tenant(actor)
+      |> write_epoch(set, expected_epoch, fn -> get(actor, name) end)
     end)
   end
+
+  def update(%Cyfr.Actor{}, _name, _updates, _expected_epoch), do: {:error, :no_athanor}
 
   @doc """
   Raise a row's epoch, found by id, with nothing else changed. With
   `expected_epoch`, only while the row is still at that epoch.
   """
-  @spec bump_epoch(Context.t(), String.t(), pos_integer() | nil) ::
-          {:ok, McpServer.t()} | {:error, :not_found | :stale_epoch | :database_error}
-  def bump_epoch(%Context{} = ctx, id, expected_epoch \\ nil) when is_binary(id) do
+  @spec bump_epoch(Cyfr.Actor.t(), String.t(), pos_integer() | nil) ::
+          {:ok, McpServer.t()}
+          | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
+  def bump_epoch(actor, id, expected_epoch \\ nil)
+
+  def bump_epoch(%Cyfr.Actor{athanor_id: athanor_id} = actor, id, expected_epoch)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.bump_epoch", fn ->
       from(s in McpServer, where: s.id == ^id, select: s)
-      |> where_tenant(ctx)
-      |> write_epoch([updated_at: now()], expected_epoch, fn -> get_by_id(ctx, id) end)
+      |> where_tenant(actor)
+      |> write_epoch([updated_at: now()], expected_epoch, fn -> get_by_id(actor, id) end)
     end)
   end
+
+  def bump_epoch(%Cyfr.Actor{}, _id, _expected_epoch), do: {:error, :no_athanor}
 
   @doc """
   The named rows, read in one statement with the status of each row's

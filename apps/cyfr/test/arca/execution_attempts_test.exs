@@ -22,18 +22,18 @@ defmodule Arca.ExecutionAttemptsTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Sanctum.TestContext.athanor!()
-    ctx = Sanctum.TestContext.local()
-    {:ok, ctx: ctx}
+    actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+    {:ok, actor: actor}
   end
 
-  defp admit!(ctx, opts \\ []) do
+  defp admit!(actor, opts \\ []) do
     {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(
         %{
           id: "exec_att_#{System.unique_integer([:positive])}",
           reference: "catalyst:local.files:0.1.0",
-          user_id: ctx.user_id,
-          athanor_id: ctx.athanor_id,
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
           component_type: "catalyst",
           input: "{}"
         },
@@ -45,78 +45,97 @@ defmodule Arca.ExecutionAttemptsTest do
 
   defp reload(id), do: Arca.Repo.get!(Arca.Execution, id)
 
-  test "admission opens the first attempt and points the row at it", %{ctx: ctx} do
-    {execution, attempt} = admit!(ctx)
+  test "admission opens the first attempt and points the row at it", %{actor: actor} do
+    {execution, attempt} = admit!(actor)
 
     assert attempt.fence == 1
     assert attempt.state == "running"
     assert %DateTime{} = attempt.running_since
     assert execution.current_attempt == attempt.attempt
     assert reload(execution.id).current_attempt == attempt.attempt
-    assert %{attempt: a} = ExecutionAttempts.current(ctx.athanor_id, execution.id)
+    assert %{attempt: a} = ExecutionAttempts.current(actor, execution.id)
     assert a == attempt.attempt
   end
 
-  test "renewal answers only the owner", %{ctx: ctx} do
-    {_execution, attempt} = admit!(ctx)
+  test "renewal answers only the owner", %{actor: actor} do
+    {_execution, attempt} = admit!(actor)
     until = DateTime.add(DateTime.utc_now(), 300, :second)
 
     assert {:ok, ^until} = ExecutionAttempts.renew(attempt.attempt, until)
 
     assert {:ok, _ran} =
-             ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "completed", "ok")
+             ExecutionAttempts.close(
+               actor,
+               attempt.attempt,
+               "completed",
+               "ok"
+             )
 
     assert :lost = ExecutionAttempts.renew(attempt.attempt, until)
 
     assert {:error, :not_owner} =
-             ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "failed", "error")
+             ExecutionAttempts.close(
+               actor,
+               attempt.attempt,
+               "failed",
+               "error"
+             )
   end
 
   test "pause and resume account each running interval once, and close works from paused", %{
-    ctx: ctx
+    actor: actor
   } do
-    {_execution, attempt} = admit!(ctx)
+    {_execution, attempt} = admit!(actor)
     Process.sleep(20)
 
     {:ok, ran} =
-      Arca.Repo.transaction(fn -> ExecutionAttempts.pause!(ctx.athanor_id, attempt.attempt) end)
+      Arca.Repo.transaction(fn ->
+        ExecutionAttempts.pause!(actor, attempt.attempt)
+      end)
 
     assert ran >= 20
-    paused = ExecutionAttempts.get(ctx.athanor_id, attempt.attempt)
+    paused = ExecutionAttempts.get(actor, attempt.attempt)
     assert paused.state == "paused"
     assert is_nil(paused.running_since)
 
     # Not the running owner any more: a second pause moves nothing.
     assert {:ok, nil} =
              Arca.Repo.transaction(fn ->
-               ExecutionAttempts.pause!(ctx.athanor_id, attempt.attempt)
+               ExecutionAttempts.pause!(actor, attempt.attempt)
              end)
 
     until = DateTime.add(DateTime.utc_now(), 300, :second)
 
     assert {:ok, 1} =
              Arca.Repo.transaction(fn ->
-               ExecutionAttempts.resume!(ctx.athanor_id, attempt.attempt, until)
+               ExecutionAttempts.resume!(actor, attempt.attempt, until)
              end)
 
-    resumed = ExecutionAttempts.get(ctx.athanor_id, attempt.attempt)
+    resumed = ExecutionAttempts.get(actor, attempt.attempt)
     assert resumed.state == "running"
     assert %DateTime{} = resumed.running_since
     assert DateTime.compare(resumed.lease_until, until) == :eq
 
     {:ok, _} =
-      Arca.Repo.transaction(fn -> ExecutionAttempts.pause!(ctx.athanor_id, attempt.attempt) end)
+      Arca.Repo.transaction(fn ->
+        ExecutionAttempts.pause!(actor, attempt.attempt)
+      end)
 
     assert {:ok, 0} =
-             ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "cancelled", "cancelled")
+             ExecutionAttempts.close(
+               actor,
+               attempt.attempt,
+               "cancelled",
+               "cancelled"
+             )
 
     assert %{state: "cancelled", outcome: "cancelled", ended_at: %DateTime{}} =
-             ExecutionAttempts.get(ctx.athanor_id, attempt.attempt)
+             ExecutionAttempts.get(actor, attempt.attempt)
   end
 
   test "the sweeper retires an attempt on the lease it observed, and a takeover opens the successor",
-       %{ctx: ctx} do
-    {execution, attempt} = admit!(ctx)
+       %{actor: actor} do
+    {execution, attempt} = admit!(actor)
     lapsed = DateTime.add(DateTime.utc_now(), -10, :second)
 
     {1, _} =
@@ -137,14 +156,19 @@ defmodule Arca.ExecutionAttemptsTest do
     assert is_integer(ran)
 
     assert %{state: "lapsed", outcome: "uncertain"} =
-             ExecutionAttempts.get(ctx.athanor_id, attempt.attempt)
+             ExecutionAttempts.get(actor, attempt.attempt)
 
     # The stale attempt cannot complete its work.
     assert {:error, :not_owner} =
-             ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "completed", "ok")
+             ExecutionAttempts.close(
+               actor,
+               attempt.attempt,
+               "completed",
+               "ok"
+             )
 
     assert {:ok, %{previous: %{attempt: prev}, attempt: successor}} =
-             ExecutionAttempts.takeover(ctx.athanor_id, execution.id,
+             ExecutionAttempts.takeover(actor, execution.id,
                boot_id: "boot-2",
                lease_until: later
              )
@@ -158,20 +182,24 @@ defmodule Arca.ExecutionAttemptsTest do
 
     # A second takeover retires the successor and takes fence 3.
     assert {:ok, %{attempt: third}} =
-             ExecutionAttempts.takeover(ctx.athanor_id, execution.id,
+             ExecutionAttempts.takeover(actor, execution.id,
                boot_id: "boot-3",
                lease_until: later
              )
 
     assert third.fence == 3
-    assert %{state: "lapsed"} = ExecutionAttempts.get(ctx.athanor_id, successor.attempt)
+
+    assert %{state: "lapsed"} =
+             ExecutionAttempts.get(actor, successor.attempt)
   end
 
-  test "the sweep never sees a paused attempt", %{ctx: ctx} do
-    {_execution, attempt} = admit!(ctx)
+  test "the sweep never sees a paused attempt", %{actor: actor} do
+    {_execution, attempt} = admit!(actor)
 
     {:ok, _} =
-      Arca.Repo.transaction(fn -> ExecutionAttempts.pause!(ctx.athanor_id, attempt.attempt) end)
+      Arca.Repo.transaction(fn ->
+        ExecutionAttempts.pause!(actor, attempt.attempt)
+      end)
 
     lapsed = DateTime.add(DateTime.utc_now(), -10, :second)
 
@@ -184,9 +212,11 @@ defmodule Arca.ExecutionAttemptsTest do
     assert [] = ExecutionAttempts.list_stale(DateTime.utc_now())
   end
 
-  test "the hold and step barriers refuse an admission whose hold or step moved", %{ctx: ctx} do
+  test "the hold and step barriers refuse an admission whose hold or step moved", %{actor: actor} do
     {root, root_attempt} =
-      admit!(ctx, reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 2})
+      admit!(actor,
+        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 2}
+      )
 
     reservation = Arca.Repo.get_by!(Arca.Schemas.BudgetReservation, root_execution_id: root.id)
 
@@ -197,7 +227,8 @@ defmodule Arca.ExecutionAttemptsTest do
       holder_execution_id: "exec_child_1"
     }
 
-    assert :ok = Arca.BudgetReservations.charge(ctx.athanor_id, reservation.id, charge, 1)
+    assert :ok =
+             Arca.BudgetReservations.charge(actor, reservation.id, charge, 1)
 
     # The hold is stamped admitted by the barrier.
     assert {:ok, _} =
@@ -205,8 +236,8 @@ defmodule Arca.ExecutionAttemptsTest do
                %{
                  id: "exec_child_1",
                  reference: "catalyst:local.files:0.1.0",
-                 user_id: ctx.user_id,
-                 athanor_id: ctx.athanor_id,
+                 user_id: actor.user_id,
+                 athanor_id: actor.athanor_id,
                  component_type: "catalyst",
                  parent_execution_id: root.id,
                  root_execution_id: root.id
@@ -215,12 +246,12 @@ defmodule Arca.ExecutionAttemptsTest do
              )
 
     assert {:ok, [%{admitted_at: %DateTime{}}]} =
-             Arca.BudgetReservations.charges(ctx.athanor_id, reservation.id)
+             Arca.BudgetReservations.charges(actor, reservation.id)
 
     # An expired hold refuses admission.
     assert :ok =
              Arca.BudgetReservations.charge(
-               ctx.athanor_id,
+               actor,
                reservation.id,
                %{charge | id: "chg_late", holder_execution_id: "exec_child_2"},
                1
@@ -237,8 +268,8 @@ defmodule Arca.ExecutionAttemptsTest do
                %{
                  id: "exec_child_2",
                  reference: "catalyst:local.files:0.1.0",
-                 user_id: ctx.user_id,
-                 athanor_id: ctx.athanor_id,
+                 user_id: actor.user_id,
+                 athanor_id: actor.athanor_id,
                  component_type: "catalyst",
                  parent_execution_id: root.id,
                  root_execution_id: root.id
@@ -250,7 +281,7 @@ defmodule Arca.ExecutionAttemptsTest do
   end
 
   describe "a child admitted under its parent's attempt" do
-    defp admit_child(ctx, parent, parent_attempt) do
+    defp admit_child(actor, parent, parent_attempt) do
       id = "exec_child_#{System.unique_integer([:positive])}"
 
       result =
@@ -258,8 +289,8 @@ defmodule Arca.ExecutionAttemptsTest do
           %{
             id: id,
             reference: "reagent:local.child:0.1.0",
-            user_id: ctx.user_id,
-            athanor_id: ctx.athanor_id,
+            user_id: actor.user_id,
+            athanor_id: actor.athanor_id,
             component_type: "reagent",
             parent_execution_id: parent.id,
             root_execution_id: parent.id
@@ -270,20 +301,26 @@ defmodule Arca.ExecutionAttemptsTest do
       {result, id}
     end
 
-    test "is admitted while the attempt owns its running parent", %{ctx: ctx} do
-      {parent, attempt} = admit!(ctx)
+    test "is admitted while the attempt owns its running parent", %{actor: actor} do
+      {parent, attempt} = admit!(actor)
 
-      assert {{:ok, %{execution: child}}, _id} = admit_child(ctx, parent, attempt.attempt)
+      assert {{:ok, %{execution: child}}, _id} = admit_child(actor, parent, attempt.attempt)
       assert child.parent_execution_id == parent.id
 
       assert %{fence: 1, state: "running"} =
-               ExecutionAttempts.get(ctx.athanor_id, attempt.attempt)
+               ExecutionAttempts.get(actor, attempt.attempt)
     end
 
-    test "is refused once the parent closed, lapsed, was cancelled or taken over", %{ctx: ctx} do
+    test "is refused once the parent closed, lapsed, was cancelled or taken over", %{actor: actor} do
       ended = [
         fn parent, attempt ->
-          {:ok, _} = ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "completed", "ok")
+          {:ok, _} =
+            ExecutionAttempts.close(
+              actor,
+              attempt.attempt,
+              "completed",
+              "ok"
+            )
 
           {1, _} =
             Arca.Repo.update_all(from(e in Arca.Execution, where: e.id == ^parent.id),
@@ -302,11 +339,16 @@ defmodule Arca.ExecutionAttemptsTest do
         end,
         fn _parent, attempt ->
           {:ok, _} =
-            ExecutionAttempts.close(ctx.athanor_id, attempt.attempt, "cancelled", "cancelled")
+            ExecutionAttempts.close(
+              actor,
+              attempt.attempt,
+              "cancelled",
+              "cancelled"
+            )
         end,
         fn parent, _attempt ->
           {:ok, _} =
-            ExecutionAttempts.takeover(ctx.athanor_id, parent.id,
+            ExecutionAttempts.takeover(actor, parent.id,
               boot_id: Cyfr.Boot.id(),
               lease_until: ExecutionAttempts.lease_until()
             )
@@ -314,19 +356,19 @@ defmodule Arca.ExecutionAttemptsTest do
       ]
 
       for end_parent <- ended do
-        {parent, attempt} = admit!(ctx)
+        {parent, attempt} = admit!(actor)
         end_parent.(parent, attempt)
 
-        assert {{:error, :parent_ended}, id} = admit_child(ctx, parent, attempt.attempt)
+        assert {{:error, :parent_ended}, id} = admit_child(actor, parent, attempt.attempt)
         refute Arca.Repo.get(Arca.Execution, id)
       end
     end
 
-    test "is refused under an attempt of another execution", %{ctx: ctx} do
-      {parent, _attempt} = admit!(ctx)
-      {_other, other_attempt} = admit!(ctx)
+    test "is refused under an attempt of another execution", %{actor: actor} do
+      {parent, _attempt} = admit!(actor)
+      {_other, other_attempt} = admit!(actor)
 
-      assert {{:error, :parent_ended}, id} = admit_child(ctx, parent, other_attempt.attempt)
+      assert {{:error, :parent_ended}, id} = admit_child(actor, parent, other_attempt.attempt)
       refute Arca.Repo.get(Arca.Execution, id)
     end
   end

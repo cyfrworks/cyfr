@@ -26,7 +26,7 @@ defmodule Arca.TurnTapeStorageTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local()
-    {:ok, thread} = Threads.create(ctx)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, thread: thread}
   end
 
@@ -53,7 +53,7 @@ defmodule Arca.TurnTapeStorageTest do
 
   defp accept_turn!(ctx, thread, text, opts \\ []) do
     {:ok, %{message: message, turn: turn}} =
-      TurnStorage.accept_message(ctx, thread.id, %{
+      TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
         message: %{
           author: Keyword.get(opts, :author, ctx.user_id),
           content: text,
@@ -74,7 +74,7 @@ defmodule Arca.TurnTapeStorageTest do
     root = root!(ctx, turn.id)
 
     {:ok, started} =
-      TurnStorage.start(ctx, turn.id, %{
+      TurnStorage.start(Sanctum.Context.actor(ctx), turn.id, %{
         root_execution_id: root.execution.id,
         attempt: root.attempt.attempt,
         budget_id: root.budget_id,
@@ -92,14 +92,14 @@ defmodule Arca.TurnTapeStorageTest do
 
   defp respond!(ctx, turn, calls) do
     {:ok, step} =
-      TurnStorage.put_step(ctx, turn.id, %{
+      TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
         kind: "model",
         idempotency_key: "model:1",
         fence: turn.fence
       })
 
     {:ok, recorded} =
-      TurnStorage.record_response(ctx, turn.id, step.id, %{
+      TurnStorage.record_response(Sanctum.Context.actor(ctx), turn.id, step.id, %{
         fence: turn.fence,
         text: "On it.",
         usage: %{"input_tokens" => 10, "output_tokens" => 3},
@@ -131,7 +131,7 @@ defmodule Arca.TurnTapeStorageTest do
       thread: thread
     } do
       assert {:ok, %{message: post, turn: nil}} =
-               TurnStorage.accept_message(ctx, thread.id, %{
+               TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
                  message: %{author: ctx.user_id, content: "just saying"}
                })
 
@@ -142,20 +142,22 @@ defmodule Arca.TurnTapeStorageTest do
       assert turn.message_id == message.id
       assert turn.fence != ""
       assert turn.runner_id == Cyfr.Boot.id()
-      assert {:ok, %{turn_seq: 1, agent: "aqua"}} = Threads.get(ctx, thread.id)
+
+      assert {:ok, %{turn_seq: 1, agent: "aqua"}} =
+               Threads.get(Sanctum.Context.actor(ctx), thread.id)
 
       # The same client id is one acceptance: the retry finds it.
       assert {:error, :duplicate_client_id} =
-               TurnStorage.accept_message(ctx, thread.id, %{
+               TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
                  message: %{author: ctx.user_id, content: "@aqua do it", client_id: "c-1"},
                  turn: %{agent: "aqua", requested_by: ctx.user_id}
                })
 
       assert {:ok, %{message: %{id: mid}, turn: %{id: tid}}} =
-               TurnStorage.accepted(ctx, thread.id, "c-1")
+               TurnStorage.accepted(Sanctum.Context.actor(ctx), thread.id, "c-1")
 
       assert mid == message.id and tid == turn.id
-      assert {:ok, [%{id: ^tid}]} = TurnStorage.open_turns(ctx, thread.id)
+      assert {:ok, [%{id: ^tid}]} = TurnStorage.open_turns(Sanctum.Context.actor(ctx), thread.id)
     end
 
     test "a steer attaches to the live turn without opening another", %{ctx: ctx, thread: thread} do
@@ -163,14 +165,14 @@ defmodule Arca.TurnTapeStorageTest do
       {turn, _root} = start!(ctx, turn)
 
       assert {:ok, %{message: steer, turn: %{id: tid}}} =
-               TurnStorage.accept_message(ctx, thread.id, %{
+               TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
                  message: %{author: ctx.user_id, content: "also this"},
                  steer_turn_id: turn.id
                })
 
       assert tid == turn.id and steer.turn_id == turn.id
-      assert {:ok, [_]} = TurnStorage.open_turns(ctx, thread.id)
-      assert TurnStorage.steer_pending?(ctx, turn.id)
+      assert {:ok, [_]} = TurnStorage.open_turns(Sanctum.Context.actor(ctx), thread.id)
+      assert TurnStorage.steer_pending?(Sanctum.Context.actor(ctx), turn.id)
     end
 
     test "a steer to a turn that has ended is refused and writes no row", %{
@@ -179,16 +181,19 @@ defmodule Arca.TurnTapeStorageTest do
     } do
       %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, _root} = start!(ctx, turn)
-      {:ok, _} = TurnStorage.finish(ctx, turn.id, "completed", %{fence: turn.fence})
-      before = length(Threads.messages(ctx, thread.id))
+
+      {:ok, _} =
+        TurnStorage.finish(Sanctum.Context.actor(ctx), turn.id, "completed", %{fence: turn.fence})
+
+      before = length(Threads.messages(Sanctum.Context.actor(ctx), thread.id))
 
       assert {:error, :turn_over} =
-               TurnStorage.accept_message(ctx, thread.id, %{
+               TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
                  message: %{author: ctx.user_id, content: "too late"},
                  steer_turn_id: turn.id
                })
 
-      assert length(Threads.messages(ctx, thread.id)) == before
+      assert length(Threads.messages(Sanctum.Context.actor(ctx), thread.id)) == before
     end
   end
 
@@ -197,7 +202,12 @@ defmodule Arca.TurnTapeStorageTest do
       ctx: ctx,
       thread: thread
     } do
-      {:ok, _} = Threads.append(ctx, thread.id, %{author: ctx.user_id, content: "earlier"})
+      {:ok, _} =
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+          author: ctx.user_id,
+          content: "earlier"
+        })
+
       %{message: message, turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {started, root} = start!(ctx, turn)
 
@@ -209,15 +219,18 @@ defmodule Arca.TurnTapeStorageTest do
       assert started.window_upto_seq == message.seq
 
       assert {:error, :not_accepted} =
-               TurnStorage.start(ctx, turn.id, %{
+               TurnStorage.start(Sanctum.Context.actor(ctx), turn.id, %{
                  root_execution_id: root.execution.id,
                  fence: turn.fence
                })
 
       # A superseded fence writes nothing.
-      assert {:error, :superseded} = TurnStorage.pause(ctx, turn.id, %{fence: turn.fence - 1})
+      assert {:error, :superseded} =
+               TurnStorage.pause(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence - 1})
+
       # A write that names no fence writes nothing either.
-      assert {:error, :fence_required} = TurnStorage.pause(ctx, turn.id, %{})
+      assert {:error, :fence_required} =
+               TurnStorage.pause(Sanctum.Context.actor(ctx), turn.id, %{})
     end
   end
 
@@ -241,18 +254,22 @@ defmodule Arca.TurnTapeStorageTest do
       assert call_step.recovery == "replay_safe"
 
       assert {:ok, %{dispatch_state: "closed", outcome: "ok", usage: usage}} =
-               TurnStorage.step(ctx, model_step.id)
+               TurnStorage.step(Sanctum.Context.actor(ctx), model_step.id)
 
       assert usage =~ "input_tokens"
 
       assert {:ok, %{dispatch_state: "dispatched", started_at: %DateTime{}}} =
-               TurnStorage.dispatch_step(ctx, call_step.id, %{fence: turn.fence})
+               TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), call_step.id, %{
+                 fence: turn.fence
+               })
 
       assert {:error, :not_proposed} =
-               TurnStorage.dispatch_step(ctx, call_step.id, %{fence: turn.fence})
+               TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), call_step.id, %{
+                 fence: turn.fence
+               })
 
       assert {:ok, %{step: closed, result: result}} =
-               TurnStorage.close_step(ctx, call_step.id, "ok", %{
+               TurnStorage.close_step(Sanctum.Context.actor(ctx), call_step.id, "ok", %{
                  result: %{content: "line 1", payload: %{"tool_call_id" => "call_1"}},
                  execution_id: "exec_child_call_1",
                  fence: turn.fence
@@ -262,9 +279,12 @@ defmodule Arca.TurnTapeStorageTest do
       assert result.kind == "tool_result" and result.author == Message.system_author()
 
       assert {:error, :not_open} =
-               TurnStorage.close_step(ctx, call_step.id, "ok", %{fence: turn.fence})
+               TurnStorage.close_step(Sanctum.Context.actor(ctx), call_step.id, "ok", %{
+                 fence: turn.fence
+               })
 
-      assert {:ok, events} = Arca.ExecutionEvents.since(ctx.athanor_id, root.execution.id, 0)
+      assert {:ok, events} =
+               Arca.ExecutionEvents.since(Sanctum.Context.actor(ctx), root.execution.id, 0)
 
       assert Enum.map(events, & &1.type) ==
                ["execution.started", "turn.started", "model.completed", "step.closed"]
@@ -276,10 +296,14 @@ defmodule Arca.TurnTapeStorageTest do
       {turn, _root} = start!(ctx, turn)
 
       {:ok, flush} =
-        TurnStorage.put_step(ctx, turn.id, %{kind: "model", purpose: "flush", fence: turn.fence})
+        TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
+          kind: "model",
+          purpose: "flush",
+          fence: turn.fence
+        })
 
       assert {:ok, %{calls: [%{step: call}]}} =
-               TurnStorage.record_response(ctx, turn.id, flush.id, %{
+               TurnStorage.record_response(Sanctum.Context.actor(ctx), turn.id, flush.id, %{
                  fence: turn.fence,
                  tool_calls: [%{tool_call_id: "n1", name: "notes", tool: "notes", action: "keep"}]
                })
@@ -287,10 +311,13 @@ defmodule Arca.TurnTapeStorageTest do
       assert call.purpose == "flush"
 
       assert {:ok, %{purpose: "chat"}} =
-               TurnStorage.put_step(ctx, turn.id, %{kind: "model", fence: turn.fence})
+               TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
+                 kind: "model",
+                 fence: turn.fence
+               })
 
       assert {:error, {:invalid_step_purpose, "summary"}} =
-               TurnStorage.put_step(ctx, turn.id, %{
+               TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
                  kind: "model",
                  purpose: "summary",
                  fence: turn.fence
@@ -308,7 +335,7 @@ defmodule Arca.TurnTapeStorageTest do
       bind = fn gen, exec ->
         {:ok, n} =
           Arca.Repo.transaction(fn ->
-            TurnStorage.bind_child!(ctx.athanor_id, step.id, gen, exec)
+            TurnStorage.bind_child!(Sanctum.Context.actor(ctx), step.id, gen, exec)
           end)
 
         n
@@ -316,19 +343,24 @@ defmodule Arca.TurnTapeStorageTest do
 
       # Proposed, not dispatched: refused.
       assert bind.(0, "exec_child_c") == 0
-      {:ok, _} = TurnStorage.dispatch_step(ctx, step.id, %{fence: turn.fence})
+
+      {:ok, _} =
+        TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), step.id, %{fence: turn.fence})
+
       # The wrong child id and the wrong generation: refused.
       assert bind.(0, "exec_other") == 0
       assert bind.(1, "exec_child_c") == 0
       assert bind.(0, "exec_child_c") == 1
 
       # A cancel mark refuses a later admission.
-      {:ok, superseded} = TurnStorage.supersede(ctx, turn.id, %{fence: turn.fence})
+      {:ok, superseded} =
+        TurnStorage.supersede(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+
       assert bind.(0, "exec_child_c") == 0
 
       # The next generation is a fresh child id, proposed again.
       assert {:ok, next} =
-               TurnStorage.next_generation(ctx, step.id, %{
+               TurnStorage.next_generation(Sanctum.Context.actor(ctx), step.id, %{
                  child_execution_id: "exec_child_c2",
                  fence: superseded.fence
                })
@@ -349,24 +381,34 @@ defmodule Arca.TurnTapeStorageTest do
         respond!(ctx, turn, [{"a", "files", "read"}, {"b", "files", "write"}])
 
       {:ok, %{approval: approval, card: card}} =
-        TurnStorage.open_approval(ctx, s2.id, %{
+        TurnStorage.open_approval(Sanctum.Context.actor(ctx), s2.id, %{
           proposal_digest: "sha256:b",
           card: %{content: "Write a.txt?", payload: %{"intent" => %{}}},
           fence: turn.fence
         })
 
-      {:ok, _} = TurnStorage.dispatch_step(ctx, s1.id, %{fence: turn.fence})
+      {:ok, _} =
+        TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), s1.id, %{fence: turn.fence})
 
       assert {:ok, [skipped]} =
-               TurnStorage.skip_steps(ctx, turn.id, "Skipped due to a new message", %{
-                 fence: turn.fence
-               })
+               TurnStorage.skip_steps(
+                 Sanctum.Context.actor(ctx),
+                 turn.id,
+                 "Skipped due to a new message",
+                 %{
+                   fence: turn.fence
+                 }
+               )
 
       assert skipped.id == s2.id and skipped.outcome == "skipped"
-      assert {:ok, %{status: "invalidated"}} = TurnStorage.approval(ctx, approval.id)
+
+      assert {:ok, %{status: "invalidated"}} =
+               TurnStorage.approval(Sanctum.Context.actor(ctx), approval.id)
+
       assert %{status: "invalidated"} = Arca.Repo.get!(Message, card.id)
       # The dispatched step is untouched.
-      assert {:ok, %{dispatch_state: "dispatched"}} = TurnStorage.step(ctx, s1.id)
+      assert {:ok, %{dispatch_state: "dispatched"}} =
+               TurnStorage.step(Sanctum.Context.actor(ctx), s1.id)
     end
   end
 
@@ -380,20 +422,26 @@ defmodule Arca.TurnTapeStorageTest do
         respond!(ctx, turn, [{"a", "files", "write"}, {"b", "files", "delete"}])
 
       {:ok, %{approval: a1, card: card1}} =
-        TurnStorage.open_approval(ctx, s1.id, %{
+        TurnStorage.open_approval(Sanctum.Context.actor(ctx), s1.id, %{
           proposal_digest: "sha256:a",
           card: %{content: "a?"},
           fence: turn.fence
         })
 
       assert card1.approval_id == a1.id and card1.status == "pending"
-      assert {:ok, %{step_id: sid}} = TurnStorage.approval_by_message(ctx, card1.id)
+
+      assert {:ok, %{step_id: sid}} =
+               TurnStorage.approval_by_message(Sanctum.Context.actor(ctx), card1.id)
+
       assert sid == s1.id
-      assert {:ok, [%{id: aid}]} = TurnStorage.pending_approvals(ctx, turn.id)
+
+      assert {:ok, [%{id: aid}]} =
+               TurnStorage.pending_approvals(Sanctum.Context.actor(ctx), turn.id)
+
       assert aid == a1.id
 
       assert {:ok, %{approval: %{status: "approved", decided_by: who}, step: step, card: card}} =
-               TurnStorage.resolve_approval(ctx, a1.id, "approved", %{
+               TurnStorage.resolve_approval(Sanctum.Context.actor(ctx), a1.id, "approved", %{
                  fence: turn.fence,
                  decided_by: ctx.user_id,
                  scope: "once",
@@ -405,20 +453,20 @@ defmodule Arca.TurnTapeStorageTest do
                card.status == "approved"
 
       assert {:error, {:already_resolved, %{status: "approved"}}} =
-               TurnStorage.resolve_approval(ctx, a1.id, "declined", %{
+               TurnStorage.resolve_approval(Sanctum.Context.actor(ctx), a1.id, "declined", %{
                  decided_by: ctx.user_id,
                  fence: turn.fence
                })
 
       {:ok, %{approval: a2}} =
-        TurnStorage.open_approval(ctx, s2.id, %{
+        TurnStorage.open_approval(Sanctum.Context.actor(ctx), s2.id, %{
           proposal_digest: "sha256:b",
           card: %{content: "b?"},
           fence: turn.fence
         })
 
       assert {:ok, %{step: denied, approval: %{status: "declined"}}} =
-               TurnStorage.resolve_approval(ctx, a2.id, "declined", %{
+               TurnStorage.resolve_approval(Sanctum.Context.actor(ctx), a2.id, "declined", %{
                  fence: turn.fence,
                  decided_by: ctx.user_id,
                  resolution_kind: "denied",
@@ -431,7 +479,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert %{kind: "tool_result", content: "did not run: declined"} =
                Arca.Repo.get!(Message, denied.result_message_id)
 
-      assert {:ok, []} = TurnStorage.pending_approvals(ctx, turn.id)
+      assert {:ok, []} = TurnStorage.pending_approvals(Sanctum.Context.actor(ctx), turn.id)
     end
   end
 
@@ -443,11 +491,17 @@ defmodule Arca.TurnTapeStorageTest do
       Process.sleep(15)
 
       assert {:ok, paused} =
-               TurnStorage.pause(ctx, turn.id, %{reason: "approval", fence: turn.fence})
+               TurnStorage.pause(Sanctum.Context.actor(ctx), turn.id, %{
+                 reason: "approval",
+                 fence: turn.fence
+               })
 
       assert paused.status == "paused" and paused.paused_reason == "approval"
       assert paused.active_ms >= 15
-      assert %{state: "paused"} = ExecutionAttempts.get(ctx.athanor_id, root.attempt.attempt)
+
+      assert %{state: "paused"} =
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), root.attempt.attempt)
+
       assert execution(root.execution.id).status == "paused"
 
       # Neither the sweeper nor retention sees a paused root.
@@ -455,13 +509,17 @@ defmodule Arca.TurnTapeStorageTest do
                Arca.Execution.list_stale_running(DateTime.add(DateTime.utc_now(), 3600, :second))
 
       assert {:ok, []} = Arca.Execution.stale_ids(0, athanor_id: ctx.athanor_id)
-      assert {:error, :not_running} = TurnStorage.pause(ctx, turn.id, %{fence: turn.fence})
 
-      assert {:ok, resumed} = TurnStorage.resume(ctx, turn.id, %{fence: turn.fence})
+      assert {:error, :not_running} =
+               TurnStorage.pause(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+
+      assert {:ok, resumed} =
+               TurnStorage.resume(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+
       assert resumed.status == "running" and is_nil(resumed.paused_reason)
 
       assert %{state: "running", running_since: %DateTime{}} =
-               ExecutionAttempts.get(ctx.athanor_id, root.attempt.attempt)
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), root.attempt.attempt)
 
       assert execution(root.execution.id).status == "running"
     end
@@ -471,36 +529,47 @@ defmodule Arca.TurnTapeStorageTest do
       %{turn: turn} = accept_turn!(ctx, thread, "@aqua go")
       {turn, root} = start!(ctx, turn)
 
-      assert {:ok, done} = TurnStorage.finish(ctx, turn.id, "completed", %{fence: turn.fence})
+      assert {:ok, done} =
+               TurnStorage.finish(Sanctum.Context.actor(ctx), turn.id, "completed", %{
+                 fence: turn.fence
+               })
+
       assert done.status == "completed"
       assert %DateTime{} = done.ended_at
 
       assert %{state: "completed", outcome: "ok"} =
-               ExecutionAttempts.get(ctx.athanor_id, root.attempt.attempt)
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), root.attempt.attempt)
 
       assert execution(root.execution.id).status == "completed"
 
       assert %{released_at: %DateTime{}} =
-               Arca.BudgetReservations.lookup(ctx.athanor_id, root.budget_id)
+               Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), root.budget_id)
 
       assert {:error, :already_finished} =
-               TurnStorage.finish(ctx, turn.id, "failed", %{fence: turn.fence})
+               TurnStorage.finish(Sanctum.Context.actor(ctx), turn.id, "failed", %{
+                 fence: turn.fence
+               })
 
       # A turn that never started closes on its own.
       %{turn: queued} = accept_turn!(ctx, thread, "@aqua later")
 
       assert {:ok, %{status: "cancelled"}} =
-               TurnStorage.finish(ctx, queued.id, "cancelled", %{fence: queued.fence})
+               TurnStorage.finish(Sanctum.Context.actor(ctx), queued.id, "cancelled", %{
+                 fence: queued.fence
+               })
 
       # An uncertain end fails the root and marks the attempt uncertain.
       %{turn: t3} = accept_turn!(ctx, thread, "@aqua again")
       {t3, root3} = start!(ctx, t3)
 
       assert {:ok, %{status: "uncertain"}} =
-               TurnStorage.finish(ctx, t3.id, "uncertain", %{error: "restart", fence: t3.fence})
+               TurnStorage.finish(Sanctum.Context.actor(ctx), t3.id, "uncertain", %{
+                 error: "restart",
+                 fence: t3.fence
+               })
 
       assert %{state: "failed", outcome: "uncertain"} =
-               ExecutionAttempts.get(ctx.athanor_id, root3.attempt.attempt)
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), root3.attempt.attempt)
 
       assert execution(root3.execution.id).status == "failed"
     end
@@ -522,7 +591,9 @@ defmodule Arca.TurnTapeStorageTest do
 
       {:ok, _} = ExecutionAttempts.lapse(root.attempt.attempt, lapsed)
 
-      assert {:ok, taken} = TurnStorage.takeover(ctx, turn.id, %{fence: turn.fence})
+      assert {:ok, taken} =
+               TurnStorage.takeover(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+
       assert taken.fence != turn.fence
       assert taken.recovery_attempts == 1
       assert taken.attempt != root.attempt.attempt
@@ -531,17 +602,23 @@ defmodule Arca.TurnTapeStorageTest do
       assert execution(root.execution.id).status == "running"
 
       # The old fence is refused everywhere.
-      assert {:error, :superseded} = TurnStorage.pause(ctx, turn.id, %{fence: turn.fence})
+      assert {:error, :superseded} =
+               TurnStorage.pause(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
 
       # A takeover from a fence that already moved takes nothing.
-      assert {:error, :superseded} = TurnStorage.takeover(ctx, turn.id, %{fence: turn.fence})
+      assert {:error, :superseded} =
+               TurnStorage.takeover(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
 
-      {:ok, second} = TurnStorage.takeover(ctx, turn.id, %{fence: taken.fence})
-      {:ok, third} = TurnStorage.takeover(ctx, turn.id, %{fence: second.fence})
+      {:ok, second} =
+        TurnStorage.takeover(Sanctum.Context.actor(ctx), turn.id, %{fence: taken.fence})
+
+      {:ok, third} =
+        TurnStorage.takeover(Sanctum.Context.actor(ctx), turn.id, %{fence: second.fence})
+
       assert third.recovery_attempts == 3
 
       assert {:error, :recovery_exhausted} =
-               TurnStorage.takeover(ctx, turn.id, %{fence: third.fence})
+               TurnStorage.takeover(Sanctum.Context.actor(ctx), turn.id, %{fence: third.fence})
     end
 
     test "superseding renews the fence and cancel-marks every dispatched step", %{
@@ -554,15 +631,24 @@ defmodule Arca.TurnTapeStorageTest do
       {_m, %{calls: [%{step: s1}, %{step: s2}]}} =
         respond!(ctx, turn, [{"a", "files", "read"}, {"b", "files", "read"}])
 
-      {:ok, _} = TurnStorage.dispatch_step(ctx, s1.id, %{fence: turn.fence})
+      {:ok, _} =
+        TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), s1.id, %{fence: turn.fence})
 
-      assert {:ok, %{fence: fence}} = TurnStorage.supersede(ctx, turn.id, %{fence: turn.fence})
+      assert {:ok, %{fence: fence}} =
+               TurnStorage.supersede(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+
       assert fence != turn.fence
-      assert {:ok, %{cancel_requested_at: %DateTime{}}} = TurnStorage.step(ctx, s1.id)
-      assert {:ok, %{cancel_requested_at: nil}} = TurnStorage.step(ctx, s2.id)
+
+      assert {:ok, %{cancel_requested_at: %DateTime{}}} =
+               TurnStorage.step(Sanctum.Context.actor(ctx), s1.id)
+
+      assert {:ok, %{cancel_requested_at: nil}} =
+               TurnStorage.step(Sanctum.Context.actor(ctx), s2.id)
 
       assert {:error, :superseded} =
-               TurnStorage.close_step(ctx, s1.id, "ok", %{fence: turn.fence})
+               TurnStorage.close_step(Sanctum.Context.actor(ctx), s1.id, "ok", %{
+                 fence: turn.fence
+               })
     end
   end
 
@@ -570,7 +656,10 @@ defmodule Arca.TurnTapeStorageTest do
     test "a turn reads its own rows uncapped, holds an undrained steer, and never a queued member's message",
          %{ctx: ctx, thread: thread} do
       {:ok, earlier} =
-        Threads.append(ctx, thread.id, %{author: ctx.user_id, content: "earlier"})
+        Threads.append(Sanctum.Context.actor(ctx), thread.id, %{
+          author: ctx.user_id,
+          content: "earlier"
+        })
 
       %{message: message, turn: turn} = accept_turn!(ctx, thread, "@aqua read")
       {turn, _root} = start!(ctx, turn)
@@ -578,33 +667,42 @@ defmodule Arca.TurnTapeStorageTest do
       {_m, %{text: text, calls: [%{message: call, step: step}]}} =
         respond!(ctx, turn, [{"c", "files", "read"}])
 
-      {:ok, _} = TurnStorage.dispatch_step(ctx, step.id, %{fence: turn.fence})
+      {:ok, _} =
+        TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), step.id, %{fence: turn.fence})
 
       {:ok, %{result: result}} =
-        TurnStorage.close_step(ctx, step.id, "ok", %{result: %{content: "ok"}, fence: turn.fence})
+        TurnStorage.close_step(Sanctum.Context.actor(ctx), step.id, "ok", %{
+          result: %{content: "ok"},
+          fence: turn.fence
+        })
 
       # Another member queues a turn; a steer arrives from the actor.
       %{message: queued} = accept_turn!(ctx, thread, "@aqua me too", author: "usr_bob")
 
       {:ok, %{message: steer}} =
-        TurnStorage.accept_message(ctx, thread.id, %{
+        TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
           message: %{author: ctx.user_id, content: "and also"},
           steer_turn_id: turn.id
         })
 
-      assert {:ok, rows} = TurnStorage.projection(ctx, turn.id)
+      assert {:ok, rows} = TurnStorage.projection(Sanctum.Context.actor(ctx), turn.id)
       ids = Enum.map(rows, & &1.id)
       assert ids == [earlier.id, message.id, text.id, call.id, result.id]
       refute queued.id in ids
       refute steer.id in ids
 
-      assert TurnStorage.steer_pending?(ctx, turn.id)
-      assert {:ok, [drained]} = TurnStorage.drain_steer(ctx, turn.id, %{fence: turn.fence})
-      assert drained.id == steer.id
-      refute TurnStorage.steer_pending?(ctx, turn.id)
-      assert {:ok, []} = TurnStorage.drain_steer(ctx, turn.id, %{fence: turn.fence})
+      assert TurnStorage.steer_pending?(Sanctum.Context.actor(ctx), turn.id)
 
-      assert {:ok, rows} = TurnStorage.projection(ctx, turn.id)
+      assert {:ok, [drained]} =
+               TurnStorage.drain_steer(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+
+      assert drained.id == steer.id
+      refute TurnStorage.steer_pending?(Sanctum.Context.actor(ctx), turn.id)
+
+      assert {:ok, []} =
+               TurnStorage.drain_steer(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+
+      assert {:ok, rows} = TurnStorage.projection(Sanctum.Context.actor(ctx), turn.id)
 
       assert Enum.map(rows, & &1.id) == [
                earlier.id,
@@ -630,16 +728,20 @@ defmodule Arca.TurnTapeStorageTest do
       %{message: c_message} = accept_turn!(ctx, thread, "@aqua third", author: "usr_carol")
 
       {_m, %{text: a_text, calls: [%{step: step}]}} = respond!(ctx, a, [{"c", "files", "read"}])
-      {:ok, _} = TurnStorage.dispatch_step(ctx, step.id, %{fence: a.fence})
+      {:ok, _} = TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), step.id, %{fence: a.fence})
 
       {:ok, %{result: a_result}} =
-        TurnStorage.close_step(ctx, step.id, "ok", %{result: %{content: "ok"}, fence: a.fence})
+        TurnStorage.close_step(Sanctum.Context.actor(ctx), step.id, "ok", %{
+          result: %{content: "ok"},
+          fence: a.fence
+        })
 
-      {:ok, _} = TurnStorage.finish(ctx, a.id, "completed", %{fence: a.fence})
+      {:ok, _} =
+        TurnStorage.finish(Sanctum.Context.actor(ctx), a.id, "completed", %{fence: a.fence})
 
       {b, _} = start!(ctx, b)
       assert b.window_upto_seq == max(b_message.seq, a_result.seq)
-      assert {:ok, rows} = TurnStorage.projection(ctx, b.id)
+      assert {:ok, rows} = TurnStorage.projection(Sanctum.Context.actor(ctx), b.id)
       ids = Enum.map(rows, & &1.id)
       assert a_text.id in ids and a_result.id in ids and b_message.id in ids
       refute c_message.id in ids
@@ -652,9 +754,9 @@ defmodule Arca.TurnTapeStorageTest do
       %{message: message, turn: turn} = accept_turn!(ctx, thread, "@aqua hello")
       {turn, _} = start!(ctx, turn)
       assert turn.window_upto_seq == message.seq
-      assert {:ok, [%{id: id}]} = TurnStorage.projection(ctx, turn.id)
+      assert {:ok, [%{id: id}]} = TurnStorage.projection(Sanctum.Context.actor(ctx), turn.id)
       assert id == message.id
-      refute TurnStorage.steer_pending?(ctx, turn.id)
+      refute TurnStorage.steer_pending?(Sanctum.Context.actor(ctx), turn.id)
     end
 
     test "a clone reads its own rows only, and the parent sees the clone's rows not at all", %{
@@ -665,7 +767,7 @@ defmodule Arca.TurnTapeStorageTest do
       {parent, root} = start!(ctx, parent)
 
       assert {:ok, %{turn: clone, step: step, task: task}} =
-               TurnStorage.open_clone_turn(ctx, parent.id, %{
+               TurnStorage.open_clone_turn(Sanctum.Context.actor(ctx), parent.id, %{
                  role: "builder",
                  task: "make it",
                  fence: parent.fence
@@ -677,23 +779,27 @@ defmodule Arca.TurnTapeStorageTest do
       assert step.kind == "clone" and step.dispatch_state == "dispatched"
       assert task.turn_id == clone.id
 
-      assert {:ok, [%{id: tid}]} = TurnStorage.projection(ctx, clone.id)
+      assert {:ok, [%{id: tid}]} = TurnStorage.projection(Sanctum.Context.actor(ctx), clone.id)
       assert tid == task.id
-      assert {:ok, rows} = TurnStorage.projection(ctx, parent.id)
+      assert {:ok, rows} = TurnStorage.projection(Sanctum.Context.actor(ctx), parent.id)
       refute task.id in Enum.map(rows, & &1.id)
 
       assert {:error, :clone_depth} =
-               TurnStorage.open_clone_turn(ctx, clone.id, %{
+               TurnStorage.open_clone_turn(Sanctum.Context.actor(ctx), clone.id, %{
                  role: "web",
                  task: "x",
                  fence: clone.fence
                })
 
       assert {:ok, %{status: "completed"}} =
-               TurnStorage.close_clone_turn(ctx, clone.id, "completed", %{fence: clone.fence})
+               TurnStorage.close_clone_turn(Sanctum.Context.actor(ctx), clone.id, "completed", %{
+                 fence: clone.fence
+               })
 
       assert {:error, :not_a_clone} =
-               TurnStorage.close_clone_turn(ctx, parent.id, "completed", %{fence: parent.fence})
+               TurnStorage.close_clone_turn(Sanctum.Context.actor(ctx), parent.id, "completed", %{
+                 fence: parent.fence
+               })
     end
   end
 
@@ -706,7 +812,9 @@ defmodule Arca.TurnTapeStorageTest do
       |> Enum.with_index()
       |> Enum.map(fn {%{step: step}, i} ->
         if i < n do
-          {:ok, step} = TurnStorage.dispatch_step(ctx, step.id, %{fence: turn.fence})
+          {:ok, step} =
+            TurnStorage.dispatch_step(Sanctum.Context.actor(ctx), step.id, %{fence: turn.fence})
+
           step
         else
           step
@@ -720,27 +828,29 @@ defmodule Arca.TurnTapeStorageTest do
       [step] = dispatched!(ctx, turn, ["c1"], 1)
 
       assert {:error, :fence_required} =
-               TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{generation: 0})
+               TurnStorage.mark_step_uncertain(Sanctum.Context.actor(ctx), step.id, "x", %{
+                 generation: 0
+               })
 
       assert {:error, :superseded} =
-               TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{
+               TurnStorage.mark_step_uncertain(Sanctum.Context.actor(ctx), step.id, "x", %{
                  fence: turn.fence - 1,
                  generation: 0
                })
 
       assert {:error, :not_dispatched} =
-               TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{
+               TurnStorage.mark_step_uncertain(Sanctum.Context.actor(ctx), step.id, "x", %{
                  fence: turn.fence,
                  generation: 7
                })
 
       assert {:ok, %{dispatch_state: "uncertain", outcome: "uncertain", error: "x"}} =
-               TurnStorage.mark_step_uncertain(ctx, step.id, "x", %{
+               TurnStorage.mark_step_uncertain(Sanctum.Context.actor(ctx), step.id, "x", %{
                  fence: turn.fence,
                  generation: 0
                })
 
-      assert TurnStorage.restricted?(ctx, turn.id)
+      assert TurnStorage.restricted?(Sanctum.Context.actor(ctx), turn.id)
     end
 
     test "the stop is one transaction: the mark, the cancel-marks, the skips, the covering row, the boundary",
@@ -752,10 +862,13 @@ defmodule Arca.TurnTapeStorageTest do
       assert c3.dispatch_state == "proposed"
 
       assert {:error, :fence_required} =
-               TurnStorage.pause_uncertain(ctx, turn.id, %{step_id: c1.id, generation: 0})
+               TurnStorage.pause_uncertain(Sanctum.Context.actor(ctx), turn.id, %{
+                 step_id: c1.id,
+                 generation: 0
+               })
 
       assert {:ok, %{turn: paused, aborted: row}} =
-               TurnStorage.pause_uncertain(ctx, turn.id, %{
+               TurnStorage.pause_uncertain(Sanctum.Context.actor(ctx), turn.id, %{
                  fence: turn.fence,
                  step_id: c1.id,
                  generation: 0,
@@ -770,7 +883,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert Enum.sort(Enum.map(covers, & &1["step_id"])) == Enum.sort([c1.id, c2.id])
       assert Enum.all?(covers, &(&1["generation"] == 0))
 
-      {:ok, steps} = TurnStorage.steps(ctx, turn.id)
+      {:ok, steps} = TurnStorage.steps(Sanctum.Context.actor(ctx), turn.id)
 
       assert %{dispatch_state: "uncertain", error: "the worker died"} =
                Enum.find(steps, &(&1.id == c1.id))
@@ -782,31 +895,33 @@ defmodule Arca.TurnTapeStorageTest do
 
       # The root and its attempt left running with the turn.
       assert execution(root.execution.id).status == "paused"
-      assert %{state: "paused"} = ExecutionAttempts.get(ctx.athanor_id, root.attempt.attempt)
 
-      assert TurnStorage.unacknowledged_episode?(ctx, turn.id)
-      assert TurnStorage.restricted?(ctx, turn.id)
+      assert %{state: "paused"} =
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), root.attempt.attempt)
+
+      assert TurnStorage.unacknowledged_episode?(Sanctum.Context.actor(ctx), turn.id)
+      assert TurnStorage.restricted?(Sanctum.Context.actor(ctx), turn.id)
 
       # A sibling settled after the boundary is covered already: a mark, no second row.
       assert {:ok, _} =
-               TurnStorage.mark_step_uncertain(ctx, c2.id, "cancelled", %{
+               TurnStorage.mark_step_uncertain(Sanctum.Context.actor(ctx), c2.id, "cancelled", %{
                  fence: paused.fence,
                  generation: 0
                })
 
-      rows = Threads.messages(ctx, thread.id)
+      rows = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
       assert [_] = Enum.filter(rows, &(&1.kind == "turn_aborted"))
 
       # The sender's next line past the boundary acknowledges it.
       {:ok, _} =
-        TurnStorage.accept_message(ctx, thread.id, %{
+        TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
           message: %{author: ctx.user_id, content: "go on"},
           steer_turn_id: turn.id
         })
 
-      refute TurnStorage.unacknowledged_episode?(ctx, turn.id)
-      assert TurnStorage.restricted?(ctx, turn.id)
-      assert TurnStorage.steer_pending?(ctx, turn.id)
+      refute TurnStorage.unacknowledged_episode?(Sanctum.Context.actor(ctx), turn.id)
+      assert TurnStorage.restricted?(Sanctum.Context.actor(ctx), turn.id)
+      assert TurnStorage.steer_pending?(Sanctum.Context.actor(ctx), turn.id)
     end
 
     test "a running turn a dead runner left with an uncovered uncertainty is set down paused, its attempt retired",
@@ -817,9 +932,12 @@ defmodule Arca.TurnTapeStorageTest do
 
       # A mark alone, as a sibling's, with no covering row.
       {:ok, _} =
-        TurnStorage.mark_step_uncertain(ctx, c1.id, "lost", %{fence: turn.fence, generation: 0})
+        TurnStorage.mark_step_uncertain(Sanctum.Context.actor(ctx), c1.id, "lost", %{
+          fence: turn.fence,
+          generation: 0
+        })
 
-      assert TurnStorage.unacknowledged_episode?(ctx, turn.id)
+      assert TurnStorage.unacknowledged_episode?(Sanctum.Context.actor(ctx), turn.id)
 
       # The sweeper lapsed the root attempt in the meantime.
       {1, _} =
@@ -835,7 +953,7 @@ defmodule Arca.TurnTapeStorageTest do
         )
 
       assert {:ok, paused} =
-               TurnStorage.pause_recovered(ctx, turn.id, %{
+               TurnStorage.pause_recovered(Sanctum.Context.actor(ctx), turn.id, %{
                  content: "restarted",
                  fence: turn.fence
                })
@@ -843,13 +961,22 @@ defmodule Arca.TurnTapeStorageTest do
       assert paused.status == "paused" and paused.paused_reason == "uncertain"
       assert paused.attempt != root.attempt.attempt and paused.fence != turn.fence
       assert paused.recovery_attempts == turn.recovery_attempts
-      assert %{state: "paused"} = ExecutionAttempts.get(ctx.athanor_id, paused.attempt)
+
+      assert %{state: "paused"} =
+               ExecutionAttempts.get(Sanctum.Context.actor(ctx), paused.attempt)
+
       assert execution(root.execution.id).status == "paused"
 
-      {:ok, steps} = TurnStorage.steps(ctx, turn.id)
+      {:ok, steps} = TurnStorage.steps(Sanctum.Context.actor(ctx), turn.id)
       # A dispatched replay-safe read has nothing to judge: it closes, uncovered.
       assert %{dispatch_state: "closed", outcome: "error"} = Enum.find(steps, &(&1.id == c2.id))
-      [row] = Enum.filter(Threads.messages(ctx, thread.id), &(&1.kind == "turn_aborted"))
+
+      [row] =
+        Enum.filter(
+          Threads.messages(Sanctum.Context.actor(ctx), thread.id),
+          &(&1.kind == "turn_aborted")
+        )
+
       assert paused.window_upto_seq == row.seq
 
       covered =
@@ -859,7 +986,7 @@ defmodule Arca.TurnTapeStorageTest do
 
       # Resumable: the successor attempt is the paused owner.
       assert {:ok, %{status: "running"}} =
-               TurnStorage.resume(ctx, turn.id, %{fence: paused.fence})
+               TurnStorage.resume(Sanctum.Context.actor(ctx), turn.id, %{fence: paused.fence})
     end
   end
 end

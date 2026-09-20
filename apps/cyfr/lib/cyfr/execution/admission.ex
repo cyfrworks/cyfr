@@ -194,7 +194,7 @@ defmodule Cyfr.Execution.Admission do
   @spec inspect_component(Context.t(), String.t()) ::
           {:ok, String.t(), term(), map()} | {:error, String.t()}
   def inspect_component(%Context{} = ctx, reference) do
-    cache_key = Arca.Cache.Keys.component_meta(ctx.athanor_id, reference)
+    cache_key = Arca.Cache.Keys.component_meta(Sanctum.Context.actor(ctx), reference)
 
     case Arca.Cache.get(cache_key) do
       {:ok, cached} ->

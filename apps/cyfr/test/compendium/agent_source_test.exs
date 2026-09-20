@@ -43,7 +43,14 @@ defmodule Compendium.AgentSourceTest do
 
   defp write_agent!(ctx, name, fun) do
     {:ok, agent} = AquaAgent.get(ctx, name)
-    :ok = Arca.put(ctx, AquaPath.agent_file(name), AquaAgent.serialize(fun.(agent)))
+
+    :ok =
+      Arca.put(
+        Sanctum.Context.actor(ctx),
+        AquaPath.agent_file(name),
+        AquaAgent.serialize(fun.(agent))
+      )
+
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
   end
 
@@ -76,8 +83,8 @@ defmodule Compendium.AgentSourceTest do
     assert again.revision_digest == snap.revision_digest
     assert again.capability_digest == snap.capability_digest
 
-    {:ok, bytes} = Arca.AgentRevisions.get(ctx.athanor_id, snap.revision_digest)
-    assert {:ok, ^bytes} = Arca.get(ctx, AquaPath.soul_file())
+    {:ok, bytes} = Arca.AgentRevisions.get(Sanctum.Context.actor(ctx), snap.revision_digest)
+    assert {:ok, ^bytes} = Arca.get(Sanctum.Context.actor(ctx), AquaPath.soul_file())
     assert {:ok, snap.agent} == AquaAgent.parse("aqua", bytes)
   end
 
@@ -190,7 +197,7 @@ defmodule Compendium.AgentSourceTest do
     {:ok, rows} = AgentSource.rows(ctx)
     roster = MapSet.new(rows, & &1.name)
     path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit("web"), 1)
-    {:ok, bytes} = Arca.get(Sanctum.system_context(), path)
+    {:ok, bytes} = Arca.get(Cyfr.Actor.system(), path)
     assert {:ok, ^tenant} = AgentSource.shipped_row("web", bytes, roster)
   end
 
@@ -203,7 +210,7 @@ defmodule Compendium.AgentSourceTest do
     {:ok, rows} = AgentSource.rows(ctx)
     roster = MapSet.new(rows, & &1.name)
     path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit("web"), 1)
-    {:ok, bytes} = Arca.get(Sanctum.system_context(), path)
+    {:ok, bytes} = Arca.get(Cyfr.Actor.system(), path)
     assert {:ok, seed} = AgentSource.shipped_row("web", bytes, roster)
     assert seed.release_digest == before.release_digest
     refute seed.release_digest == edited.release_digest

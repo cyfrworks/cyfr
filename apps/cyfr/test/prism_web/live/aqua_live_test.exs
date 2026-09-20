@@ -65,7 +65,7 @@ defmodule PrismWeb.AquaLiveTest do
         "content" => "# Tom"
       })
 
-    refute Arca.exists?(group_ctx, Compendium.AquaPath.agent_file("tom"))
+    refute Arca.exists?(Sanctum.Context.actor(group_ctx), Compendium.AquaPath.agent_file("tom"))
 
     # The group's page: no closet picker, no personal role.
     {_view, html} = mount_athanor(conn, "/aqua", group)
@@ -86,7 +86,7 @@ defmodule PrismWeb.AquaLiveTest do
     })
 
     assert {:ok, %{"title" => "My Tom"}} = get_agent(mine_ctx, "tom")
-    refute Arca.exists?(group_ctx, Compendium.AquaPath.agent_file("tom"))
+    refute Arca.exists?(Sanctum.Context.actor(group_ctx), Compendium.AquaPath.agent_file("tom"))
   end
 
   # Point the soul at `ref`, and put it back afterwards: the agent files live

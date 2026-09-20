@@ -12,8 +12,8 @@ defmodule Arca.ConsentStorageTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Sanctum.TestContext.local()
-    {:ok, athanor: ctx.athanor_id}
+    actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+    {:ok, athanor: actor.athanor_id}
   end
 
   defp profile!(athanor, id) do
@@ -78,7 +78,9 @@ defmodule Arca.ConsentStorageTest do
       end
 
       # Nothing unverifiable was stored, and the profile has no head.
-      assert {:error, :no_head} = ConsentStorage.get_head(athanor, profile.id)
+      assert {:error, :no_head} =
+               ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
+
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
     end
   end
@@ -95,7 +97,7 @@ defmodule Arca.ConsentStorageTest do
                  nil
                )
 
-      {:ok, head, refs} = ConsentStorage.get_head(athanor, profile.id)
+      {:ok, head, refs} = ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
       assert head.id == consent.id
       assert [%{vault_entry_id: entry_id}] = refs
       assert entry_id == entry.id
@@ -114,7 +116,9 @@ defmodule Arca.ConsentStorageTest do
                  verify: fn -> {:error, :binding_went_stale} end
                )
 
-      assert {:error, :no_head} = ConsentStorage.get_head(athanor, profile.id)
+      assert {:error, :no_head} =
+               ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
+
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
       assert Arca.Repo.aggregate(Arca.Schemas.ConsentVaultRef, :count) == 0
     end
@@ -130,7 +134,7 @@ defmodule Arca.ConsentStorageTest do
       assert {:error, :head_moved} =
                ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 2), [], nil)
 
-      {:ok, head, _refs} = ConsentStorage.get_head(athanor, profile.id)
+      {:ok, head, _refs} = ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
       assert head.id == first.id
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 1
     end
@@ -145,7 +149,7 @@ defmodule Arca.ConsentStorageTest do
       assert {:error, :head_moved} =
                ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
 
-      {:ok, head, _refs} = ConsentStorage.get_head(athanor, profile.id)
+      {:ok, head, _refs} = ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
       assert head.id == first.id
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 1
     end
@@ -161,7 +165,9 @@ defmodule Arca.ConsentStorageTest do
                  nil
                )
 
-      assert {:error, :no_head} = ConsentStorage.get_head(athanor, profile.id)
+      assert {:error, :no_head} =
+               ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
+
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
     end
   end
@@ -186,7 +192,7 @@ defmodule Arca.ConsentStorageTest do
                  [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}]
                )
 
-      {:ok, profile} = ProfileStorage.get(athanor, "prof_mint_1")
+      {:ok, profile} = ProfileStorage.get(Cyfr.Actor.in_athanor(athanor), "prof_mint_1")
       assert profile.head_consent_id == consent.id
     end
 
@@ -208,7 +214,8 @@ defmodule Arca.ConsentStorageTest do
                  verify: fn -> {:error, :nope} end
                )
 
-      assert {:error, :not_found} = ProfileStorage.get(athanor, "prof_mint_2")
+      assert {:error, :not_found} =
+               ProfileStorage.get(Cyfr.Actor.in_athanor(athanor), "prof_mint_2")
     end
   end
 

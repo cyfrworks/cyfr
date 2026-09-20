@@ -211,7 +211,7 @@ defmodule Arca.ExecutionTest do
 
     test "answers the child admitted under a key for its parent, in the caller's athanor" do
       Sanctum.TestContext.athanor!()
-      ctx = Sanctum.TestContext.local()
+      actor = Sanctum.Context.actor(Sanctum.TestContext.local())
       parent = start!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
 
       child =
@@ -221,12 +221,14 @@ defmodule Arca.ExecutionTest do
           child_key: "ck_one"
         })
 
-      assert {:ok, %Execution{id: id}} = Execution.child_by_key(ctx, parent.id, "ck_one")
-      assert id == child.id
-      assert :none = Execution.child_by_key(ctx, parent.id, "ck_two")
-      assert :none = Execution.child_by_key(ctx, child.id, "ck_one")
+      assert {:ok, %Execution{id: id}} =
+               Execution.child_by_key(actor, parent.id, "ck_one")
 
-      other = %{ctx | athanor_id: "ath_other"}
+      assert id == child.id
+      assert :none = Execution.child_by_key(actor, parent.id, "ck_two")
+      assert :none = Execution.child_by_key(actor, child.id, "ck_one")
+
+      other = %{actor | athanor_id: "ath_other"}
       assert :none = Execution.child_by_key(other, parent.id, "ck_one")
     end
 
@@ -357,19 +359,21 @@ defmodule Arca.ExecutionTest do
         })
 
       # Complete the child
-      ctx =
-        Sanctum.Context.build(
-          user_id: "user_test",
-          athanor_id: @athanor,
-          permissions: [],
-          scope: :athanor,
-          auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+      actor =
+        Sanctum.Context.actor(
+          Sanctum.Context.build(
+            user_id: "user_test",
+            athanor_id: @athanor,
+            permissions: [],
+            scope: :athanor,
+            auth_method: :oidc,
+            namespace: "testns",
+            authenticated: true
+          )
         )
 
       {:ok, _} =
-        Execution.record_complete(ctx, child_id, %{
+        Execution.record_complete(actor, child_id, %{
           completed_at: now,
           duration_ms: 100,
           status: "completed"
@@ -410,16 +414,18 @@ defmodule Arca.ExecutionTest do
 
       assert count == 1
 
-      ctx =
-        Sanctum.TestContext.platform(
-          user_id: "user_test",
-          athanor_id: @athanor,
-          permissions: [:execution_read],
-          auth_method: :oidc,
-          namespace: "testns"
+      actor =
+        Sanctum.Context.actor(
+          Sanctum.TestContext.platform(
+            user_id: "user_test",
+            athanor_id: @athanor,
+            permissions: [:execution_read],
+            auth_method: :oidc,
+            namespace: "testns"
+          )
         )
 
-      updated = Execution.get_tenant(ctx, id)
+      updated = Execution.get_tenant(actor, id)
       assert updated.status == "failed"
       assert updated.error_message == "Parent terminated"
     end
@@ -440,19 +446,21 @@ defmodule Arca.ExecutionTest do
         })
 
       # Complete it first
-      ctx =
-        Sanctum.Context.build(
-          user_id: "user_test",
-          athanor_id: @athanor,
-          permissions: [],
-          scope: :athanor,
-          auth_method: :oidc,
-          namespace: "testns",
-          authenticated: true
+      actor =
+        Sanctum.Context.actor(
+          Sanctum.Context.build(
+            user_id: "user_test",
+            athanor_id: @athanor,
+            permissions: [],
+            scope: :athanor,
+            auth_method: :oidc,
+            namespace: "testns",
+            authenticated: true
+          )
         )
 
       {:ok, _} =
-        Execution.record_complete(ctx, id, %{
+        Execution.record_complete(actor, id, %{
           completed_at: now,
           duration_ms: 100,
           status: "completed"
@@ -468,7 +476,7 @@ defmodule Arca.ExecutionTest do
 
       assert count == 0
 
-      updated = Execution.get_tenant(ctx, id)
+      updated = Execution.get_tenant(actor, id)
       assert updated.status == "completed"
     end
   end
@@ -531,7 +539,7 @@ defmodule Arca.ExecutionTest do
 
       assert {:error, :not_running} =
                Execution.record_end(
-                 Sanctum.TestContext.local(),
+                 Sanctum.Context.actor(Sanctum.TestContext.local()),
                  id,
                  "completed",
                  %{completed_at: DateTime.utc_now(), duration_ms: 1},
@@ -541,14 +549,15 @@ defmodule Arca.ExecutionTest do
       # …and the live one still can, closing its attempt with the row.
       assert {:ok, _} =
                Execution.record_end(
-                 Sanctum.TestContext.local(),
+                 Sanctum.Context.actor(Sanctum.TestContext.local()),
                  id,
                  "completed",
                  %{completed_at: DateTime.utc_now(), duration_ms: 1},
                  live
                )
 
-      assert %{state: "completed", outcome: "ok"} = Arca.ExecutionAttempts.get(@athanor, live)
+      assert %{state: "completed", outcome: "ok"} =
+               Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(@athanor), live)
     end
 
     test "a renewed lease takes an execution out of the sweep" do
@@ -566,7 +575,7 @@ defmodule Arca.ExecutionTest do
       # A finished execution is not renewed.
       {:ok, _} =
         Execution.record_end(
-          Sanctum.TestContext.local(),
+          Sanctum.Context.actor(Sanctum.TestContext.local()),
           id,
           "completed",
           %{completed_at: DateTime.utc_now(), duration_ms: 1},
@@ -594,7 +603,7 @@ defmodule Arca.ExecutionTest do
                )
 
       assert %{state: "lapsed", outcome: "uncertain"} =
-               Arca.ExecutionAttempts.get(@athanor, attempt)
+               Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(@athanor), attempt)
 
       assert Arca.Repo.get!(Execution, id).status == "failed"
     end

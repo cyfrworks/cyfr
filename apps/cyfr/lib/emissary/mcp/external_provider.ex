@@ -35,7 +35,7 @@ defmodule Emissary.MCP.ExternalProvider do
   """
   @spec list_external_tools(Context.t()) :: [map()]
   def list_external_tools(%Context{} = ctx) do
-    cache_key = Arca.Cache.Keys.external_tools(ctx.athanor_id)
+    cache_key = Arca.Cache.Keys.external_tools(Sanctum.Context.actor(ctx))
 
     case Arca.Cache.get(cache_key) do
       {:ok, cached} ->
@@ -84,7 +84,7 @@ defmodule Emissary.MCP.ExternalProvider do
   """
   @spec consent_candidates(Context.t()) :: [map()]
   def consent_candidates(%Context{} = ctx) do
-    case Arca.McpServerStorage.list(ctx) do
+    case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       {:ok, servers} ->
         servers
         |> Task.async_stream(&describe_candidate(&1, ctx),
@@ -118,7 +118,7 @@ defmodule Emissary.MCP.ExternalProvider do
   @doc "The single-server candidate, used at commit to resolve a decision."
   @spec consent_candidate(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def consent_candidate(%Context{} = ctx, server_name) do
-    with {:ok, server} <- Arca.McpServerStorage.get(ctx, server_name) do
+    with {:ok, server} <- Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), server_name) do
       {:ok, describe_candidate(server, ctx)}
     end
   end
@@ -172,11 +172,11 @@ defmodule Emissary.MCP.ExternalProvider do
     # The consent-matching digest of a server is never cached: it is
     # derived from the row at every read, so a configuration change is
     # its own invalidation.
-    Arca.Cache.invalidate(Arca.Cache.Keys.external_tools(ctx.athanor_id))
+    Arca.Cache.invalidate(Arca.Cache.Keys.external_tools(Sanctum.Context.actor(ctx)))
   end
 
   defp fetch_external_tools(%Context{} = ctx) do
-    case Arca.McpServerStorage.list(ctx) do
+    case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
       {:ok, servers} ->
         servers
         |> Enum.filter(& &1.enabled)
@@ -314,7 +314,9 @@ defmodule Emissary.MCP.ExternalProvider do
   end
 
   defp server_row(_ctx, server_name, %{name: server_name} = server), do: {:ok, server}
-  defp server_row(ctx, server_name, _none), do: Arca.McpServerStorage.get(ctx, server_name)
+
+  defp server_row(ctx, server_name, _none),
+    do: Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), server_name)
 
   # Whether the server's tools may be called from the external plane (the
   # console). Absent means no — the in-chain default holds unless the row
@@ -383,7 +385,13 @@ defmodule Emissary.MCP.ExternalProvider do
   end
 
   defp stage(ctx, id, kind, value, class) do
-    case Arca.ExecutionPayloads.stage(ctx, id, kind, Jason.encode!(value), class) do
+    case Arca.ExecutionPayloads.stage(
+           Sanctum.Context.actor(ctx),
+           id,
+           kind,
+           Jason.encode!(value),
+           class
+         ) do
       {:ok, staged} -> {:ok, staged}
       {:error, reason} -> {:error, {:refused, {:payload_not_retained, reason}}}
     end
@@ -439,10 +447,10 @@ defmodule Emissary.MCP.ExternalProvider do
       duration_ms: DateTime.diff(now, started_at, :millisecond)
     }
 
-    case Arca.ExecutionPayloads.stage(ctx, id, "result", encoded, class) do
+    case Arca.ExecutionPayloads.stage(Sanctum.Context.actor(ctx), id, "result", encoded, class) do
       {:ok, staged} ->
         case Arca.Execution.record_end(
-               ctx,
+               Sanctum.Context.actor(ctx),
                id,
                "completed",
                Map.put(attrs, :payloads, [staged]),
@@ -476,7 +484,7 @@ defmodule Emissary.MCP.ExternalProvider do
       duration_ms: DateTime.diff(now, started_at, :millisecond)
     }
 
-    _ = Arca.Execution.record_end(ctx, id, "failed", attrs, attempt)
+    _ = Arca.Execution.record_end(Sanctum.Context.actor(ctx), id, "failed", attrs, attempt)
     result
   end
 
@@ -494,7 +502,7 @@ defmodule Emissary.MCP.ExternalProvider do
       duration_ms: DateTime.diff(now, started_at, :millisecond)
     }
 
-    case Arca.Execution.record_end(ctx, id, "failed", attrs, attempt) do
+    case Arca.Execution.record_end(Sanctum.Context.actor(ctx), id, "failed", attrs, attempt) do
       {:ok, _} ->
         {:error, {:result_lost, "the call answered, but its result could not be kept"}}
 

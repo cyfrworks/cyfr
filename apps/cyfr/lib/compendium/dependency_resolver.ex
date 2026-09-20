@@ -148,7 +148,7 @@ defmodule Compendium.DependencyResolver do
 
     if version == nil do
       # Versionless dep — check if any version exists
-      case Arca.ComponentStorage.list_components(ctx,
+      case Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
              name: name,
              publisher: namespace,
              component_type: component_type
@@ -157,7 +157,13 @@ defmodule Compendium.DependencyResolver do
         _ -> false
       end
     else
-      Arca.ComponentStorage.exists?(ctx, name, version, namespace, component_type)
+      Arca.ComponentStorage.exists?(
+        Sanctum.Context.actor(ctx),
+        name,
+        version,
+        namespace,
+        component_type
+      )
     end
   end
 
@@ -174,7 +180,13 @@ defmodule Compendium.DependencyResolver do
         # than whatever row the adapter happens to return first.
         Compendium.Registry.latest_row(ctx, name, namespace, component_type)
       else
-        Arca.ComponentStorage.get_component(ctx, name, version, namespace, component_type)
+        Arca.ComponentStorage.get_component(
+          Sanctum.Context.actor(ctx),
+          name,
+          version,
+          namespace,
+          component_type
+        )
       end
 
     case result do

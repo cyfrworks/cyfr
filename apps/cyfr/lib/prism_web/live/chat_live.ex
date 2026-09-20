@@ -148,7 +148,10 @@ defmodule PrismWeb.ChatLive do
          |> assign(:athanor_route, Athanors.route_slug(athanor))
          |> assign(:athanor_label, estate_label(athanor, socket.assigns.mine, ctx))
          |> assign(:threads, threads)
-         |> assign(:followed, Arca.ThreadSubscriptionStorage.followed(focus, ctx.user_id))
+         |> assign(
+           :followed,
+           Arca.ThreadSubscriptionStorage.followed(Sanctum.Context.actor(focus), ctx.user_id)
+         )
          |> update(:expanded, &MapSet.put(&1, athanor.id))
          |> select(target)
          |> sync_rail(athanors)}
@@ -217,7 +220,7 @@ defmodule PrismWeb.ChatLive do
   # A list that could not be read is an empty estate for the rail's
   # purposes — the pane says what it could not do.
   defp estate_threads(focus) do
-    case Threads.list(focus) do
+    case Threads.list(Sanctum.Context.actor(focus)) do
       list when is_list(list) -> list
       _ -> []
     end
@@ -311,7 +314,8 @@ defmodule PrismWeb.ChatLive do
           kind: estate_kind(athanor, mine),
           label: estate_label(athanor, mine, ctx),
           threads: estate_threads(focus),
-          followed: Arca.ThreadSubscriptionStorage.followed(focus, ctx.user_id)
+          followed:
+            Arca.ThreadSubscriptionStorage.followed(Sanctum.Context.actor(focus), ctx.user_id)
         }
       end
       |> Enum.sort_by(&{kind_rank(&1.kind), String.downcase(&1.label)})
@@ -625,7 +629,7 @@ defmodule PrismWeb.ChatLive do
         {:thread, id, {:message, _row}},
         %{assigns: %{thread: %{id: id}}} = socket
       ) do
-    case Threads.get(socket.assigns.focus, id) do
+    case Threads.get(Sanctum.Context.actor(socket.assigns.focus), id) do
       {:ok, thread} -> {:noreply, socket |> put_thread(thread) |> patch_row()}
       _ -> {:noreply, socket}
     end

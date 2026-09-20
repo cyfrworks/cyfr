@@ -76,7 +76,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
 
     test "an ordinary key stores no capability and reads back nil", %{ctx: ctx} do
       {:ok, _} = ApiKey.create(ctx, %{name: "plain-key"})
-      {:ok, row} = Arca.ApiKeyStorage.get_key(ctx.athanor_id, "plain-key")
+      {:ok, row} = Arca.ApiKeyStorage.get_key(Sanctum.Context.actor(ctx), "plain-key")
 
       assert row.capability == nil
       assert {:ok, nil} = ApiKey.consent_capability(ctx, row.id)
@@ -92,7 +92,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
         })
 
       {:ok, row} =
-        Arca.ApiKeyStorage.get_key(ctx.athanor_id, "cap-roundtrip")
+        Arca.ApiKeyStorage.get_key(Sanctum.Context.actor(ctx), "cap-roundtrip")
 
       {:ok, capability} = ApiKey.consent_capability(ctx, row.id)
       assert capability.commit_digest == @digest
@@ -113,7 +113,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
 
       # The refusal leaves the key exactly as it was — a refused rotation is
       # not a silent revocation.
-      {:ok, row} = Arca.ApiKeyStorage.get_key(ctx.athanor_id, "cap-rotate")
+      {:ok, row} = Arca.ApiKeyStorage.get_key(Sanctum.Context.actor(ctx), "cap-rotate")
       assert {:ok, capability} = ApiKey.consent_capability(ctx, row.id)
       assert capability.commit_digest == @digest
     end
@@ -155,7 +155,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
         })
 
       {:ok, row} =
-        Arca.ApiKeyStorage.get_key(ctx.athanor_id, "cap-walk-key")
+        Arca.ApiKeyStorage.get_key(Sanctum.Context.actor(ctx), "cap-walk-key")
 
       {:ok, capability} = ApiKey.consent_capability(ctx, row.id)
 
@@ -172,7 +172,9 @@ defmodule Sanctum.ApiKeyCapabilityTest do
                  key_capability: capability
                )
 
-      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.athanor_id, committed.profile_id)
+      {:ok, head, _refs} =
+        Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), committed.profile_id)
+
       assert head.granted_via == "scoped_key"
     end
 

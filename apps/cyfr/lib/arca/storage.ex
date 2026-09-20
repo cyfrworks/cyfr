@@ -143,7 +143,7 @@ defmodule Arca.Storage do
   Every athanor on a server shares one storage root (filesystem path or
   object-store bucket prefix); isolation comes from the athanor segment.
 
-  `Sanctum.Context.user_id` (a person's `usr_…`, or a synthetic principal
+  `Cyfr.Actor.user_id` (a person's `usr_…`, or a synthetic principal
   such as `"webhook:<slug>"`) and `namespace` are identity
   fields (attribution, display, tincture tokens) — they are *not* path
   primitives. Only `athanor_id` shapes the on-disk layout, so members of an
@@ -153,16 +153,14 @@ defmodule Arca.Storage do
 
   Services use the main `Arca` module which dispatches to the configured adapter:
 
-      ctx = Sanctum.TestContext.local()
+      actor = Cyfr.Actor.in_athanor("ath_test")
 
       # Tenant-scoped (auto-prefixed with {athanor_id}/)
-      Arca.put(ctx, ["data", "notes.txt"], content)
+      Arca.put(actor, ["data", "notes.txt"], content)
 
       # Global (no tenant prefix)
-      Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
+      Arca.put(actor, ["cache", "oci", "sha256_abc"], wasm_binary)
   """
-
-  alias Sanctum.Context
 
   @type path :: [String.t()]
 
@@ -198,7 +196,7 @@ defmodule Arca.Storage do
   # - class: `:tenant` roots live under `athanors/{athanor_id}/`;
   #   `:tenant_reserved` roots live there too but only the server's own
   #   machinery may mutate them (`Arca.Overlay`'s internal-write scope or
-  #   an `auth_method: :system` context);
+  #   a `system: true` actor);
   #   `:global` roots stay at the storage root.
   # - guest name: what a WASM guest may call the root (`nil` = host-only,
   #   invisible at the guest boundary). A guest scope is a physical
@@ -307,7 +305,7 @@ defmodule Arca.Storage do
   @doc """
   The reserved tenant roots: subtrees of the athanor's tree that only the
   overlay's internal-write scope (`Arca.Overlay.with_internal_writes/1`)
-  or an `auth_method: :system` context may mutate — `Arca.mutating/4`
+  or a `system: true` actor may mutate — `Arca.mutating/4`
   enforces it. They live and die with the tree (an athanor purge deletes
   them like any tenant bytes); only who may write them differs.
   """
@@ -565,30 +563,32 @@ defmodule Arca.Storage do
   def athanor_id_format, do: @athanor_id_format
 
   @doc """
-  Whether this context can name a tenant tree at all: a resolved
-  `athanor_id` matching the id grammar. The boundary spelling of the
-  invariant `tenant_segments/1` enforces by raising — total predicates
-  (`Arca.exists?/2`) and guest-facing refusals (`Cyfr.Execution.GuestStorage`)
-  consume this; everything else keeps the fail-closed raise.
+  Whether this actor can name a tenant tree at all: a resolved
+  `athanor_id` — neither nil nor the empty string — matching the id
+  grammar. The boundary spelling of the invariant `tenant_segments/1`
+  enforces by raising, and what `Arca`'s own gate answers
+  `{:error, :no_athanor}` on; total predicates (`Arca.exists?/2`) and
+  guest-facing refusals (`Cyfr.Execution.GuestStorage`) consume this,
+  and everything else keeps the fail-closed raise.
   """
-  @spec athanor_ready?(Context.t()) :: boolean()
-  def athanor_ready?(%Context{athanor_id: id}) when is_binary(id) and id != "",
+  @spec athanor_ready?(Cyfr.Actor.t()) :: boolean()
+  def athanor_ready?(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "",
     do: id =~ @athanor_id_format
 
-  def athanor_ready?(%Context{}), do: false
+  def athanor_ready?(%Cyfr.Actor{}), do: false
 
   @doc """
   Build the tenant segment list `[athanor_id]` used by every storage adapter
   for tenant-scoped paths.
 
-  Layout: `{athanor_id}/...`. A resolved `athanor_id` is required; a context
-  without one raises (fail closed) — naming a directory is a separate concern
-  from tenant-access control (where `:platform` legitimately bypasses): a
-  platform or system task must still carry the athanor whose files it
-  touches. `namespace` is a pure identity field and is NOT part of the path.
+  Layout: `{athanor_id}/...`. A resolved `athanor_id` is required; an
+  actor without one raises (fail closed) — naming a directory is a
+  separate concern from tenant-access control (where `scope: :platform`
+  legitimately bypasses): a platform or system task must still carry the
+  athanor whose files it touches.
   """
-  @spec tenant_segments(Context.t()) :: [String.t()]
-  def tenant_segments(%Context{athanor_id: athanor_id})
+  @spec tenant_segments(Cyfr.Actor.t()) :: [String.t()]
+  def tenant_segments(%Cyfr.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     # Defense-in-depth: athanor ids are minted by trusted code, but a
     # corrupted row or a future code path that bypasses those validations
@@ -603,11 +603,11 @@ defmodule Arca.Storage do
     [athanor_id]
   end
 
-  def tenant_segments(%Context{} = ctx) do
+  def tenant_segments(%Cyfr.Actor{} = actor) do
     raise ArgumentError,
           "Arca.Storage.tenant_segments/1: a resolved athanor_id is required " <>
-            "(user_id=#{inspect(ctx.user_id)} scope=#{inspect(ctx.scope)} " <>
-            "auth_method=#{inspect(ctx.auth_method)})"
+            "(user_id=#{inspect(actor.user_id)} scope=#{inspect(actor.scope)} " <>
+            "system=#{inspect(actor.system)})"
   end
 
   # The one physical directory every athanor tree lives under. Spelled as
@@ -641,8 +641,8 @@ defmodule Arca.Storage do
   `authorize_path/2` — so they are the fail-closed backstop for code that
   reaches an adapter directly.
   """
-  @spec physical_segments(Context.t(), path()) :: path()
-  def physical_segments(ctx, segments) do
+  @spec physical_segments(Cyfr.Actor.t(), path()) :: path()
+  def physical_segments(actor, segments) do
     case classify(segments) do
       :seed ->
         raise ArgumentError,
@@ -652,7 +652,7 @@ defmodule Arca.Storage do
         segments
 
       :tenant ->
-        [@tenant_physical_root | tenant_segments(ctx)] ++ segments
+        [@tenant_physical_root | tenant_segments(actor)] ++ segments
 
       :invalid ->
         raise ArgumentError,
@@ -662,25 +662,30 @@ defmodule Arca.Storage do
   end
 
   @doc """
-  Whether `ctx` may touch `path` at all.
+  Whether `actor` may touch `path` at all.
 
-  Every tenant path takes its athanor from the context, so there is
-  nothing cross-tenant to refuse here: a context physically cannot name
-  another athanor's tree. What this gate refuses is (a) the server's own
-  reserved vocabularies for non-system contexts — the seed media `seed/…`
-  (the shipped defaults) and the global roots `cache/` (OCI
-  blobs) and `system/` (health probes) — and (b) any first segment outside
-  the closed rosters, for everyone: an unknown root is a typo or an
-  invented subtree, never storage. `Arca` runs this before dispatching to
-  any adapter. Writability is a separate gate — seed media is read-only
-  at the `Arca` facade whatever the context.
+  Every tenant path takes its athanor from the actor, so there is nothing
+  cross-tenant to refuse here: an actor physically cannot name another
+  athanor's tree. What this gate refuses is (a) the server's own reserved
+  vocabularies for every actor that is not the system itself — the seed
+  media `seed/…` (the shipped defaults) and the global roots `cache/`
+  (OCI blobs) and `system/` (health probes) — and (b) any first segment
+  outside the closed rosters, for everyone: an unknown root is a typo or
+  an invented subtree, never storage. `Arca` runs this before dispatching
+  to any adapter. Writability is a separate gate — seed media is
+  read-only at the `Arca` facade whatever the actor.
+
+  The authority read here is `Cyfr.Actor.system`, and it is a different
+  question from `scope`: `system` opens a shared path, `scope` widens a
+  read across tenants, and neither implies the other. `system` is not a
+  wire member, so nothing a worker returns can claim it.
   """
-  @spec authorize_path(Context.t(), [String.t()]) :: :ok | {:error, :forbidden}
-  def authorize_path(%Context{} = ctx, path) do
+  @spec authorize_path(Cyfr.Actor.t(), [String.t()]) :: :ok | {:error, :forbidden}
+  def authorize_path(%Cyfr.Actor{system: system?}, path) do
     case classify(path) do
       :tenant -> :ok
       :invalid -> {:error, :forbidden}
-      _seed_or_global -> if ctx.auth_method == :system, do: :ok, else: {:error, :forbidden}
+      _seed_or_global -> if system?, do: :ok, else: {:error, :forbidden}
     end
   end
 
@@ -719,10 +724,10 @@ defmodule Arca.Storage do
   defdelegate validate_path!(segments), to: Cyfr.PathSafety, as: :validate_segments!
 
   @doc "Read content from storage"
-  @callback get(Context.t(), path()) :: {:ok, binary()} | error()
+  @callback get(Cyfr.Actor.t(), path()) :: {:ok, binary()} | error()
 
   @doc "Write content to storage (overwrites existing)"
-  @callback put(Context.t(), path(), binary()) :: :ok | error()
+  @callback put(Cyfr.Actor.t(), path(), binary()) :: :ok | error()
 
   @doc """
   Append content to storage, creating the path when it does not exist.
@@ -738,10 +743,10 @@ defmodule Arca.Storage do
   refuses an oversized object; the local filesystem's `O_APPEND` write
   has neither limit.
   """
-  @callback append(Context.t(), path(), binary()) :: :ok | error()
+  @callback append(Cyfr.Actor.t(), path(), binary()) :: :ok | error()
 
   @doc "Delete content from storage"
-  @callback delete(Context.t(), path()) :: :ok | error()
+  @callback delete(Cyfr.Actor.t(), path()) :: :ok | error()
 
   @doc """
   List the entries directly under a path prefix, each with its kind.
@@ -754,11 +759,11 @@ defmodule Arca.Storage do
   A path that is itself a file answers `{:error, :enotdir}` on every adapter;
   a path with nothing under it answers `{:ok, []}`.
   """
-  @callback list_typed(Context.t(), path()) ::
+  @callback list_typed(Cyfr.Actor.t(), path()) ::
               {:ok, [{String.t(), :file | :dir}]} | error()
 
   @doc "Check if path exists"
-  @callback exists?(Context.t(), path()) :: boolean()
+  @callback exists?(Cyfr.Actor.t(), path()) :: boolean()
 
   @doc """
   Recursively delete a directory tree at path.
@@ -767,7 +772,7 @@ defmodule Arca.Storage do
   postcondition already holds. `{:error, :not_found}` is `delete/2`'s
   answer for a missing single object, never this callback's.
   """
-  @callback delete_tree(Context.t(), path()) :: :ok | error()
+  @callback delete_tree(Cyfr.Actor.t(), path()) :: :ok | error()
 
   @doc """
   Recursively list all leaf paths under a prefix.
@@ -776,7 +781,7 @@ defmodule Arca.Storage do
   pass them straight to `get/2` without reassembly. Order is unspecified.
   Implementations must call `validate_path!/1` on the input prefix.
   """
-  @callback list_recursive(Context.t(), path()) :: {:ok, [path()]} | error()
+  @callback list_recursive(Cyfr.Actor.t(), path()) :: {:ok, [path()]} | error()
 
   @doc """
   Recursive file count and byte total at and under a path: a directory's
@@ -786,7 +791,7 @@ defmodule Arca.Storage do
   not just the top level, or a nested write evades the ceiling.
   Implementations must call `validate_path!/1` on the input prefix.
   """
-  @callback usage(Context.t(), path()) ::
+  @callback usage(Cyfr.Actor.t(), path()) ::
               {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | error()
 
   @doc """
@@ -796,7 +801,7 @@ defmodule Arca.Storage do
   `:ok` without a request — a folder there exists when a key sits under
   it. Idempotent.
   """
-  @callback ensure_dir(Context.t(), path()) :: :ok | error()
+  @callback ensure_dir(Cyfr.Actor.t(), path()) :: :ok | error()
 
   @doc """
   Read a whole subtree through any adapter, as `{relative_path, binary}`
@@ -819,13 +824,13 @@ defmodule Arca.Storage do
   `{:error, {:subtree_read_failed, leaf, reason}}` — never an exit in the
   caller.
   """
-  @spec read_subtree_via(module(), Context.t(), path(), keyword()) ::
+  @spec read_subtree_via(module(), Cyfr.Actor.t(), path(), keyword()) ::
           {:ok, [{path(), binary()}]} | error()
-  def read_subtree_via(adapter, %Context{} = ctx, path, opts \\ []) do
-    with {:ok, leaf_segments} <- adapter.list_recursive(ctx, path) do
+  def read_subtree_via(adapter, %Cyfr.Actor{} = actor, path, opts \\ []) do
+    with {:ok, leaf_segments} <- adapter.list_recursive(actor, path) do
       case leaf_segments do
         [] ->
-          case adapter.list_typed(ctx, path) do
+          case adapter.list_typed(actor, path) do
             {:error, :enotdir} -> {:error, :enotdir}
             _directory_or_missing -> {:ok, []}
           end
@@ -840,7 +845,7 @@ defmodule Arca.Storage do
           # killing the caller — the contract promises a tuple, and the
           # callers of a bulk read are request handlers, not supervisors.
           leaves
-          |> Task.async_stream(fn segs -> {segs, adapter.get(ctx, segs)} end,
+          |> Task.async_stream(fn segs -> {segs, adapter.get(actor, segs)} end,
             max_concurrency: concurrency,
             timeout: Keyword.get(opts, :timeout, 30_000),
             on_timeout: :kill_task,
@@ -879,7 +884,7 @@ defmodule Arca.Storage do
   """
   @callback serve_to_conn(
               Plug.Conn.t(),
-              Context.t(),
+              Cyfr.Actor.t(),
               path(),
               opts :: keyword()
             ) :: {:ok, Plug.Conn.t()} | {:error, term()}
@@ -937,7 +942,7 @@ defmodule Arca.Storage do
   Implementations must validate every path through their one path
   builder, as for any other callback.
   """
-  @callback replace_tree(Context.t(), path(), [tree_file()]) :: :ok | error()
+  @callback replace_tree(Cyfr.Actor.t(), path(), [tree_file()]) :: :ok | error()
 
   @typedoc """
   An adapter's proof of the object version a conditional write saw — an
@@ -965,7 +970,7 @@ defmodule Arca.Storage do
   last-writer-wins overwrite. An adapter whose store cannot make the
   create conditional answers `{:error, :unsupported}` and writes nothing.
   """
-  @callback put_if_none_match(Context.t(), path(), iodata()) ::
+  @callback put_if_none_match(Cyfr.Actor.t(), path(), iodata()) ::
               {:ok, precondition()} | {:error, :exists | :unsupported | term()}
 
   @doc """
@@ -980,7 +985,7 @@ defmodule Arca.Storage do
   rather than writing, and one whose store cannot honour preconditions at
   all answers `{:error, :unsupported}`. Never last-writer-wins.
   """
-  @callback put_if_match(Context.t(), path(), iodata(), precondition()) ::
+  @callback put_if_match(Cyfr.Actor.t(), path(), iodata(), precondition()) ::
               {:ok, precondition()}
               | {:error, :precondition_failed | :missing | :unsupported | term()}
 
@@ -997,7 +1002,7 @@ defmodule Arca.Storage do
   no proof of its version — a conditional replace of it is not possible,
   and no caller may fall back to an unconditional one.
   """
-  @callback get_for_update(Context.t(), path()) ::
+  @callback get_for_update(Cyfr.Actor.t(), path()) ::
               {:ok, binary(), precondition()} | {:error, :not_found | :unsupported | term()}
 
   @doc """
@@ -1007,7 +1012,7 @@ defmodule Arca.Storage do
   prefix that is itself one object answers that object alone, and a
   prefix with nothing under it answers `{:ok, []}`.
   """
-  @callback list_prefix(Context.t(), path()) :: {:ok, [path()]} | {:error, term()}
+  @callback list_prefix(Cyfr.Actor.t(), path()) :: {:ok, [path()]} | {:error, term()}
 
   @optional_callbacks sweep_stale_tmp: 1, replace_tree: 3
 
@@ -1017,24 +1022,26 @@ defmodule Arca.Storage do
   as `Arca.mutating/5` does for a plain write. A gated conditional write
   is `Arca.put_if_match/5`.
   """
-  @spec put_if_none_match(Context.t(), path(), iodata()) ::
+  @spec put_if_none_match(Cyfr.Actor.t(), path(), iodata()) ::
           {:ok, precondition()} | {:error, :exists | :unsupported | term()}
-  def put_if_none_match(%Context{} = ctx, path, content),
-    do: configured_adapter().put_if_none_match(ctx, path, content)
+  def put_if_none_match(%Cyfr.Actor{} = actor, path, content),
+    do: configured_adapter().put_if_none_match(actor, path, content)
 
   @doc "`c:put_if_match/4` on the configured adapter. A thin dispatch, as `put_if_none_match/3`."
-  @spec put_if_match(Context.t(), path(), iodata(), precondition()) ::
+  @spec put_if_match(Cyfr.Actor.t(), path(), iodata(), precondition()) ::
           {:ok, precondition()}
           | {:error, :precondition_failed | :missing | :unsupported | term()}
-  def put_if_match(%Context{} = ctx, path, content, precondition),
-    do: configured_adapter().put_if_match(ctx, path, content, precondition)
+  def put_if_match(%Cyfr.Actor{} = actor, path, content, precondition),
+    do: configured_adapter().put_if_match(actor, path, content, precondition)
 
   @doc "`c:get_for_update/2` on the configured adapter. A thin dispatch, as `put_if_none_match/3`."
-  @spec get_for_update(Context.t(), path()) ::
+  @spec get_for_update(Cyfr.Actor.t(), path()) ::
           {:ok, binary(), precondition()} | {:error, :not_found | :unsupported | term()}
-  def get_for_update(%Context{} = ctx, path), do: configured_adapter().get_for_update(ctx, path)
+  def get_for_update(%Cyfr.Actor{} = actor, path),
+    do: configured_adapter().get_for_update(actor, path)
 
   @doc "`c:list_prefix/2` on the configured adapter. A thin dispatch, as `put_if_none_match/3`."
-  @spec list_prefix(Context.t(), path()) :: {:ok, [path()]} | {:error, term()}
-  def list_prefix(%Context{} = ctx, prefix), do: configured_adapter().list_prefix(ctx, prefix)
+  @spec list_prefix(Cyfr.Actor.t(), path()) :: {:ok, [path()]} | {:error, term()}
+  def list_prefix(%Cyfr.Actor{} = actor, prefix),
+    do: configured_adapter().list_prefix(actor, prefix)
 end

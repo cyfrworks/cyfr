@@ -15,7 +15,8 @@ defmodule PrismWeb.McpServersLiveTest do
     {:ok, conn: conn, athanor: seated_athanor()}
   end
 
-  defp ctx(athanor), do: Sanctum.Context.internal(athanor_id: athanor.id, scope: :athanor)
+  defp ctx(athanor),
+    do: Sanctum.Context.actor(Sanctum.Context.internal(athanor_id: athanor.id, scope: :athanor))
 
   test "the stdio form refuses a malformed env line, and a server the catalog refuses",
        %{conn: conn, athanor: athanor} do
