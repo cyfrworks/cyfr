@@ -706,7 +706,9 @@ defmodule Sanctum.ContextTest do
                user_id: "user_1",
                request_id: "req_1",
                authenticated: true,
-               client_ip: "203.0.113.7"
+               client_ip: "203.0.113.7",
+               scope: :athanor,
+               system: false
              }
     end
 
@@ -748,6 +750,48 @@ defmodule Sanctum.ContextTest do
     test "the context stores no duplicate actor field" do
       refute Map.has_key?(%Context{}, :actor)
       refute Map.has_key?(Context.build(@external), :actor)
+    end
+
+    test "projects the tenancy scope and the system provenance the stores authorize on" do
+      # The server's own contexts: both authorities, so Arca reads across
+      # athanors and may mutate the seed and global paths.
+      for ctx <- [Sanctum.system_context(), Sanctum.internal_context()] do
+        actor = Context.actor(ctx)
+
+        assert actor.scope == :platform
+        assert actor.system
+      end
+
+      # An ordinary established caller has neither.
+      ordinary = Context.actor(Context.build(@external))
+
+      assert ordinary.scope == :athanor
+      refute ordinary.system
+    end
+
+    test "the scope and the system provenance project independently" do
+      # An internal task working inside one athanor: system authority, one
+      # tenant's rows.
+      inside_one =
+        Context.actor(Sanctum.internal_context(athanor_id: "ath_1", scope: :athanor))
+
+      assert inside_one.scope == :athanor
+      assert inside_one.system
+      assert inside_one.athanor_id == "ath_1"
+
+      # Cron is server-constructed and crosses no tenant, and its
+      # provenance is not `:system`: it writes no seed or global path.
+      scheduled = Context.actor(Context.for_scheduled("user_1", athanor_id: "ath_1"))
+
+      assert scheduled.scope == :athanor
+      refute scheduled.system
+
+      # Provenance alone never grants the platform read.
+      platform_scheduled =
+        Context.actor(Sanctum.internal_context(auth_method: :scheduled))
+
+      assert platform_scheduled.scope == :platform
+      refute platform_scheduled.system
     end
   end
 

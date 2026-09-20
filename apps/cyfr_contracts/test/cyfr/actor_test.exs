@@ -3,11 +3,13 @@
 
 defmodule Cyfr.ActorTest do
   @moduledoc """
-  An actor carries its tenant, plane and anonymous flag beside its four wire
-  members. The wire map carries exactly those four, round-trips through
-  JSON, omits unset members, and decodes fail-closed: an unknown, missing or
-  mistyped member, or a string member over 256 bytes, is refused. The
-  tenant, the plane and the anonymous flag never cross the wire.
+  An actor carries its tenant, plane, anonymous flag, tenancy scope and
+  system flag beside its four wire members. The wire map carries exactly
+  those four, round-trips through JSON, omits unset members, and decodes
+  fail-closed: an unknown, missing or mistyped member, or a string member
+  over 256 bytes, is refused. The tenant, the plane, the anonymous flag,
+  the scope and the system flag never cross the wire — a worker cannot
+  claim platform scope or system authority by sending one back.
   """
   use ExUnit.Case, async: true
 
@@ -29,7 +31,7 @@ defmodule Cyfr.ActorTest do
   defp tenant_resolved?(%Actor{athanor_id: id}) when is_binary(id), do: true
   defp tenant_resolved?(%Actor{}), do: false
 
-  test "defaults to no tenant, the external plane and a caller that is not anonymous" do
+  test "defaults to no tenant, the external plane, a caller that is not anonymous, its own athanor's scope and no system authority" do
     assert %Actor{} == %Actor{
              user_id: nil,
              request_id: nil,
@@ -37,7 +39,9 @@ defmodule Cyfr.ActorTest do
              client_ip: nil,
              athanor_id: nil,
              plane: :external,
-             anonymous: false
+             anonymous: false,
+             scope: :athanor,
+             system: false
            }
   end
 
@@ -63,6 +67,46 @@ defmodule Cyfr.ActorTest do
     refute untenanted.anonymous
   end
 
+  describe "system/0" do
+    test "is the server acting as itself: no tenant, no credential, both authorities" do
+      assert Actor.system() == %Actor{
+               user_id: nil,
+               request_id: nil,
+               authenticated: false,
+               client_ip: nil,
+               athanor_id: nil,
+               plane: :external,
+               anonymous: false,
+               scope: :platform,
+               system: true
+             }
+
+      # No tenant resolved, and not the anonymous caller that has one.
+      refute tenant_resolved?(Actor.system())
+      refute Actor.system().anonymous
+    end
+
+    test "an internal task inside one athanor keeps the system authority and gives up the cross-tenant read" do
+      scoped = %{Actor.system() | athanor_id: "ath_01a09fee", scope: :athanor}
+
+      assert scoped.system
+      assert scoped.scope == :athanor
+      assert tenant_resolved?(scoped)
+    end
+  end
+
+  test "the scope and the system flag are two authorities, not two spellings of one" do
+    # Every combination is a real actor: the server (both), an internal
+    # task inside one athanor (system only), a record reader crossing
+    # tenants (platform only) and an ordinary caller (neither).
+    for {scope, system} <- [{:platform, true}, {:athanor, true}, {:platform, false}] do
+      actor = %Actor{scope: scope, system: system}
+      assert {actor.scope, actor.system} == {scope, system}
+    end
+
+    assert {%Actor{}.scope, %Actor{}.system} == {:athanor, false}
+  end
+
   test "round-trips through its wire map and JSON" do
     for actor <- [@full, %Actor{}, %Actor{request_id: "req_1"}] do
       assert {:ok, ^actor} = actor |> Actor.to_wire() |> json_round_trip() |> Actor.from_wire()
@@ -82,8 +126,16 @@ defmodule Cyfr.ActorTest do
     assert {:ok, _json} = Cyfr.JCS.encode(Actor.to_wire(%Actor{user_id: "usr_1"}))
   end
 
-  test "the tenant, the plane and the anonymous flag never cross the wire" do
-    host_side = %{@full | athanor_id: "ath_01a09fee", plane: :guest, anonymous: true}
+  test "the tenant, the plane, the anonymous flag, the scope and the system flag never cross the wire" do
+    host_side = %{
+      @full
+      | athanor_id: "ath_01a09fee",
+        plane: :guest,
+        anonymous: true,
+        scope: :platform,
+        system: true
+    }
+
     wire = Actor.to_wire(host_side)
 
     assert wire == Actor.to_wire(@full)
@@ -91,10 +143,47 @@ defmodule Cyfr.ActorTest do
 
     assert {:ok, decoded} = wire |> json_round_trip() |> Actor.from_wire()
     assert decoded == @full
-    assert {decoded.athanor_id, decoded.plane, decoded.anonymous} == {nil, :external, false}
 
-    for {key, value} <- [{"athanor_id", "ath_01a09fee"}, {"plane", "guest"}, {"anonymous", true}] do
+    assert {decoded.athanor_id, decoded.plane, decoded.anonymous, decoded.scope, decoded.system} ==
+             {nil, :external, false, :athanor, false}
+
+    for {key, value} <- [
+          {"athanor_id", "ath_01a09fee"},
+          {"plane", "guest"},
+          {"anonymous", true},
+          {"scope", "platform"},
+          {"system", true}
+        ] do
       assert {:error, :invalid_actor} = Actor.from_wire(Map.put(wire, key, value)), key
+    end
+  end
+
+  test "the server's own actor comes back from the wire with neither authority" do
+    assert {:ok, decoded} =
+             Actor.system() |> Actor.to_wire() |> json_round_trip() |> Actor.from_wire()
+
+    assert decoded == %Actor{}
+    assert decoded.scope == :athanor
+    refute decoded.system
+  end
+
+  test "a worker cannot claim platform scope or system authority over the wire" do
+    wire = Actor.to_wire(@full)
+
+    claims = [
+      %{"authenticated" => true, "scope" => "platform"},
+      %{"authenticated" => true, "system" => true},
+      # Either one alongside otherwise-valid members, and both together.
+      Map.put(wire, "scope", "platform"),
+      Map.put(wire, "system", true),
+      wire |> Map.put("scope", "platform") |> Map.put("system", true),
+      # The values a decoder might be tempted to read as harmless.
+      Map.put(wire, "scope", "athanor"),
+      Map.put(wire, "system", false)
+    ]
+
+    for claim <- claims do
+      assert {:error, :invalid_actor} = Actor.from_wire(claim), inspect(claim)
     end
   end
 
