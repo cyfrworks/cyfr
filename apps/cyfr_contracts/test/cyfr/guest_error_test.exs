@@ -28,12 +28,27 @@ defmodule Cyfr.GuestErrorTest do
   test "a runner's own reasons render as the text they carry" do
     assert GuestError.render("already a sentence") == "already a sentence"
     assert GuestError.render(:lost) == "lost"
-    assert GuestError.render(:unavailable) == "unavailable"
     assert GuestError.render({:timeout, "The call timed out"}) == "The call timed out"
     assert GuestError.render({:uncertain, "The effect may have happened"}) =~ "may have"
     assert GuestError.render({:not_found, "component", "c:1"}) == "component not found: c:1"
     assert GuestError.render({:unavailable, "The registry"}) =~ "unavailable"
     assert GuestError.render({:corrupt, "The artifact"}) =~ "digest"
+  end
+
+  test "a unit commit's refusals render as the sentence the console renders" do
+    # The same words `Cyfr.Ops.Error` renders, so a guest in a chain and
+    # a person at the console are told the same thing; the parity is held
+    # by `Cyfr.Ops.ErrorRenderersTest`.
+    assert GuestError.render(:stale_writer) =~ "fifteen minutes"
+    assert GuestError.render(:stale_revision) =~ "landed first"
+    assert GuestError.render(:missing_unit) =~ "removed"
+    assert GuestError.render(:invalid_objects) =~ "nothing was published"
+    assert GuestError.render({:finish_failed, :enospc}) =~ "published"
+
+    # Named, this is a service to retry; bare, it is a call whose outcome
+    # is unknown, and the advice is to check instead.
+    assert GuestError.render({:unavailable, "The registry"}) =~ "retry shortly"
+    assert GuestError.render(:unavailable) =~ "check before asking again"
   end
 
   test "an internal term renders as nothing" do

@@ -30,9 +30,38 @@ defmodule Cyfr.GuestError do
     :failed
   ]
 
+  # What a unit commit answered, for the in-chain tools that land a unit
+  # (`component.create`, `component.fork`, the scroll writes). Each says a
+  # different thing to do about it, and the sentences are the ones
+  # `Cyfr.Ops.Error` renders on the console and the wire — a guest and a
+  # person are told the same thing. That the two vocabularies restate
+  # each other is one fault, not these six.
+  #
+  # `:unavailable` is the one with more than one producer: a commit whose
+  # store could not say what it did, and a host call CYFR refused. The
+  # sentence names neither and takes the safe direction of the two —
+  # check rather than retry, since retrying an effect that may have
+  # happened is the dangerous mistake.
+  @commit_refusals %{
+    stale_writer:
+      "Another write to this unit holds it — retry once its draft expires (up to fifteen minutes)",
+    stale_revision: "Another write to this unit landed first — read it again and retry",
+    missing_unit: "This unit was removed while it was being written",
+    invalid_objects:
+      "What was staged for this unit is not what was written — nothing was published",
+    unavailable:
+      "Unavailable — what was asked may or may not have been done; check before asking again"
+  }
+
   @doc "The client-safe sentence for `reason`, or `nil` for a term this vocabulary does not know."
   @spec render(term()) :: String.t() | nil
   def render(reason) when is_binary(reason), do: reason
+
+  def render(reason) when is_map_key(@commit_refusals, reason),
+    do: Map.fetch!(@commit_refusals, reason)
+
+  def render({:finish_failed, _reason}),
+    do: "This unit is published; serving its files did not finish and will be repaired"
 
   def render(reason) when is_atom(reason) and not is_nil(reason) and not is_boolean(reason),
     do: Atom.to_string(reason)

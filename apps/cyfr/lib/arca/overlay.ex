@@ -882,6 +882,10 @@ defmodule Arca.Overlay do
   there now, up to #{@update_attempts} attempts with a doubling,
   jittered backoff. Nothing is overwritten unseen and no edit is lost.
 
+  `fun` is therefore called once per attempt, and must be a pure rewrite
+  of the bytes it is given: an effect inside it happens once per attempt,
+  not once per update.
+
   `{:error, :conflict}` when the object was still moving after the last
   attempt: nothing was written and asking again is safe.
   `{:error, :not_found}` when nothing is at `path`,

@@ -171,4 +171,63 @@ defmodule Aqua.AquaToolEditsTest do
     {:ok, %{"content" => content}} = call(ctx, %{"action" => "get", "name" => "scout"})
     assert content =~ "Look first."
   end
+
+  @tag :capture_log
+  test "a role whose commit could not finish serving is published, and the index names it", %{
+    ctx: ctx
+  } do
+    alias Arca.PublicationContract.Faults
+
+    previous = Application.get_env(:cyfr, :storage_adapter)
+    Faults.wrap(Arca.Adapters.Local)
+    Application.put_env(:cyfr, :storage_adapter, Faults)
+
+    on_exit(fn ->
+      Faults.unwrap()
+
+      if previous,
+        do: Application.put_env(:cyfr, :storage_adapter, previous),
+        else: Application.delete_env(:cyfr, :storage_adapter)
+    end)
+
+    role = AquaPath.role_file("tracker")
+
+    # The commit lands its row and then cannot write the role where
+    # readers read: the unit is published, its bytes are not all served,
+    # and the storage sweep's repair finishes the move.
+    Faults.inject(fn op, path ->
+      if op == :put and path == role, do: {:error, :enospc}, else: :pass
+    end)
+
+    assert {:error, {:finish_failed, :enospc}} =
+             call(ctx, %{"action" => "create", "name" => "tracker"})
+
+    Faults.clear()
+
+    {root, key} = Arca.Storage.UnitLocator.unit_key(role)
+    actor = Sanctum.Context.actor(ctx)
+    assert {:ok, %{state: "committed"}} = Arca.StorageUnits.current(actor, root, key)
+    assert {:ok, [_one_commit]} = Arca.StorageUnits.journal(actor, root, key)
+
+    # The refusal is the vocabulary's, not a flattened storage failure,
+    # and it says the unit is published.
+    assert Cyfr.Ops.Error.reason?({:finish_failed, :enospc})
+    assert Cyfr.Ops.Error.message({:finish_failed, :enospc}) =~ "published"
+
+    # The resync ran rather than being skipped with the refusal: it reads
+    # the served tree, which does not hold the role's bytes yet, so it
+    # keeps what is served and names nothing more.
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    assert Enum.any?(rows, &(&1.name == "scout"))
+    refute Enum.any?(rows, &(&1.name == "tracker"))
+    refute Arca.exists?(ctx, role)
+
+    # The move is what was left: once it finishes, the published role is
+    # served and the next sync names it.
+    assert {:ok, :repaired} = Arca.Overlay.repair_unit(ctx, role)
+    assert Arca.exists?(ctx, role)
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+    {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    assert Enum.any?(rows, &(&1.name == "tracker"))
+  end
 end

@@ -131,12 +131,17 @@ defmodule Cyfr.Ops.Error do
   def message(:invalid_objects),
     do: "What was staged for this unit is not what was written — nothing was published"
 
-  # The store could not answer at all. Distinct from `{:unavailable,
-  # what}`, which names a service that was reached and gave nothing:
-  # here the call did not complete, so nothing may be assumed either way
-  # and the sentence asks the caller to look rather than to retry.
+  # A call that could not be answered at all, with no service named.
+  # More than one thing produces it — a unit commit whose store could not
+  # say what it did, a host call CYFR refused — so the sentence names
+  # none of them and takes the safe direction of the two: it asks the
+  # caller to look rather than to retry, because retrying an effect that
+  # may have happened is the dangerous mistake and looking at one that
+  # did not is only a wasted read. `{:unavailable, what}` is the other
+  # shape: a named service that was reached and gave nothing, where
+  # retrying is the right advice.
   def message(:unavailable),
-    do: "The store could not answer — what was asked may have been done; read it back first"
+    do: "Unavailable — what was asked may or may not have been done; check before asking again"
 
   # The row is committed. The unit is published; only the move of its
   # objects to where readers read did not finish, and the repair the
