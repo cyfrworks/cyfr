@@ -1,7 +1,8 @@
 # Findings the bridge and builder images cannot take a fix for, with what
-# would lift each. Read by the image scans in .github/workflows/node-ci.yml
-# (bridge), test.yml and docker.yml (builder). Every other fixable HIGH or
-# CRITICAL still fails those jobs.
+# would lift each. Read by every image scan: the four in
+# .github/workflows/test.yml, which run on every push, and the one in
+# .github/workflows/docker.yml, which runs before an image is published.
+# Every other fixable HIGH or CRITICAL still fails those jobs.
 #
 # Each entry is scoped to the path where the finding was observed, so the
 # same identifier appearing anywhere else — above all in the bridge's own
