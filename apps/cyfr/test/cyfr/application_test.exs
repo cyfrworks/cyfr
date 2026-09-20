@@ -34,6 +34,38 @@ defmodule Cyfr.ApplicationTest do
     end
   end
 
+  # The boot warns when CORS admits cross-origin callers the MCP Origin
+  # check will then refuse. origin_allowlist_divergence/3 is the pure
+  # decision seam it uses: the CORS allowlist, then the two MCP keys.
+  describe "origin_allowlist_divergence/3" do
+    test "an allowlist that admits an origin the MCP check would refuse warns" do
+      assert {:warn, msg} =
+               Cyfr.Application.origin_allowlist_divergence(["https://app.example"], nil, [])
+
+      assert msg =~ "CYFR_MCP_ALLOWED_ORIGINS"
+      assert msg =~ "https://app.example"
+    end
+
+    test "the empty allowlist admits nobody, so the shipped stack's boot says nothing" do
+      # `cyfr init` assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist:
+      # cyfr serves Prism, the API, /mcp and the tinctures from its own
+      # origin, so no browser client of the stack is cross-origin and there
+      # is no request to warn about.
+      assert :ok = Cyfr.Application.origin_allowlist_divergence([], nil, [])
+    end
+
+    test "the wildcard default is cors_enforcement/3's, not this one's" do
+      assert :ok = Cyfr.Application.origin_allowlist_divergence(["*"], nil, [])
+    end
+
+    test "an MCP allowlist of either kind answers the divergence" do
+      origins = ["https://app.example"]
+      assert :ok = Cyfr.Application.origin_allowlist_divergence(origins, origins, [])
+      assert :ok = Cyfr.Application.origin_allowlist_divergence(origins, nil, origins)
+      assert :ok = Cyfr.Application.origin_allowlist_divergence(origins, [], [])
+    end
+  end
+
   describe "supervision tiers" do
     test "root supervises exactly the infra and web tier supervisors" do
       children = Supervisor.which_children(Cyfr.Supervisor)

@@ -269,7 +269,8 @@ defmodule Cyfr.Authority do
   @doc """
   The limits governing this execution: the current node's clamped limits
   when bound, the ZeroAuthority constants when unbound. A bound Authority
-  without a blob is unrepresentable through the constructors, so there is
+  whose cursor names no node of its policy is unrepresentable — the
+  constructors never build one and `from_wire/1` refuses one — so there is
   deliberately no clause for it.
   """
   @spec limits(t()) :: Limits.t()
@@ -330,8 +331,9 @@ defmodule Cyfr.Authority do
 
   Fail-closed: a member other than the twelve, a malformed cursor, policy,
   edge or budget, an identity field that is not a non-empty string, a
-  chain or activation of the wrong shape and a depth beyond the depth cap
-  are each an error, never a looser Authority. The budget carries its id
+  chain or activation of the wrong shape, a depth beyond the depth cap and
+  a bound cursor naming no node of the policy are each an error, never a
+  looser Authority. The budget carries its id
   alone and comes back with a cap of 0, so no spawn can be charged
   through a decoded copy.
   """
@@ -345,6 +347,7 @@ defmodule Cyfr.Authority do
          {:ok, cursor} <- wire_cursor(wire["cursor"]),
          {:ok, resources} <- wire_resources(wire["resources"]),
          {:ok, budget} <- wire_budget(wire["budget"]),
+         :ok <- wire_bound_node(cursor, policy),
          :ok <- wire_chain(wire["chain"]),
          :ok <- wire_activation(wire["activation"]),
          :ok <- wire_depth(wire["depth"]) do
@@ -465,6 +468,24 @@ defmodule Cyfr.Authority do
   defp wire_cursor("unbound"), do: {:ok, :unbound}
   defp wire_cursor(%{"bound" => ref}) when is_binary(ref) and ref != "", do: {:ok, {:bound, ref}}
   defp wire_cursor(other), do: {:error, {:invalid_wire_cursor, other}}
+
+  # A bound cursor stands on a node of the policy: `limits/1` answers from
+  # the blob and has no clause for a bound Authority that carries none, so
+  # the pairing is refused here rather than raising at the first read of
+  # what the wire handed back. The constructors cannot build either shape —
+  # a root fetches its source node from the blob, an unbound child drops the
+  # cursor with the policy — so nothing is lost by refusing them.
+  defp wire_bound_node(:unbound, _policy), do: :ok
+
+  defp wire_bound_node({:bound, ref}, %Blob{} = blob) do
+    case Blob.node_limits(blob, ref) do
+      {:ok, _limits} -> :ok
+      {:error, :unknown_node} -> {:error, {:invalid_wire_cursor, {:unknown_node, ref}}}
+    end
+  end
+
+  defp wire_bound_node({:bound, ref}, :none),
+    do: {:error, {:invalid_wire_cursor, {:bound_without_policy, ref}}}
 
   defp wire_resources(nil), do: {:ok, :none}
 

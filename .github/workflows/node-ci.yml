@@ -1,8 +1,11 @@
 name: Node CI (mcp-bridge)
 
-# Test the MCP bridge and its process helper (cyfr-spawn), prove the image
-# isolates backends from each other and from the bridge and refuses every
-# request it cannot attribute, and report npm dependency advisories.
+# Test the MCP bridge and its process helper (cyfr-spawn), and report npm
+# dependency advisories. The image's own proofs — that it isolates backends
+# from each other and from the bridge, refuses every request it cannot
+# attribute, and leaves no residue across a uid's reuse — are a D15 row, so
+# they run in test.yml beside the worker and builder image suites, which the
+# tag's `verify` calls; here they gated nothing at the tag.
 
 on:
   push:
@@ -14,10 +17,8 @@ on:
       - 'tests/fixtures/bridge_auth.json'
       - 'tests/fixtures/spawn_protocol.json'
       - 'tests/fixtures/residue-canary.go'
+      # The image suites' sources, which the syntax check below reads.
       - 'tests/bridge-image/**'
-      - 'Dockerfile.node'
-      # The isolation test runs the image with the mcp-bridge service's settings.
-      - 'docker-compose.yml'
       - '.github/workflows/node-ci.yml'
   pull_request:
     paths:
@@ -27,8 +28,6 @@ on:
       - 'tests/fixtures/spawn_protocol.json'
       - 'tests/fixtures/residue-canary.go'
       - 'tests/bridge-image/**'
-      - 'Dockerfile.node'
-      - 'docker-compose.yml'
       - '.github/workflows/node-ci.yml'
 
 permissions:
@@ -135,68 +134,3 @@ jobs:
 
       - name: Static build
         run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-spawn" .
-
-  # Build the MCP bridge image shipped by Compose, run it as Compose does to
-  # prove backend isolation and its refusals, and scan it.
-  image:
-    name: Build, isolate + scan image (mcp-bridge)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-
-      - name: Build the image compose would build
-        run: docker build -f Dockerfile.node --target mcp-bridge -t cyfr-mcp-bridge:ci .
-
-      # Two owners' probe backends under the mcp-bridge service's own
-      # settings, driven by requests signed as CYFR signs them
-      # (tests/bridge-image/controller.mjs): each runs under its own pooled
-      # uid (never 0 or the bridge's), neither can read the other's home or
-      # /proc environ or signal it, the spawner holds exactly
-      # SETUID|SETGID|KILL (CapEff 0xe0) and no inet socket, the bridge holds
-      # no capability, the root is read-only, and releasing an owner leaves no
-      # process of its uid, a setsid daemon ignoring SIGTERM included, and no
-      # home. Also: the refused boot without a valid key, the spawner's
-      # refusal of Docker's default capabilities, and retirement on loss and
-      # on stop.
-      - name: Backend isolation
-        env:
-          BRIDGE_IMAGE: cyfr-mcp-bridge:ci
-        run: node --test tests/bridge-image/isolation.test.mjs
-
-      # A forged MAC, a timestamp outside the window, a control message below
-      # the high-water mark, a stale or future epoch, a replayed nonce and a
-      # captured invoke sent again after `docker restart` are refused, and a
-      # sync the uid pool cannot hold spawns nothing.
-      - name: Refusals
-        env:
-          BRIDGE_IMAGE: cyfr-mcp-bridge:ci
-        run: node --test tests/bridge-image/refusals.test.mjs
-
-      # With a pool of one uid: a backend can write outside its home only
-      # into the home root; the entries it leaves there, a directory tree it
-      # made unwritable, System V shared memory, semaphores and message
-      # queues and a POSIX message queue (tests/fixtures/residue-canary.go)
-      # are gone before the next owner runs under the same uid. The spawner
-      # refuses a writable root, a shared /tmp and Docker's default /dev/shm.
-      - name: Residue across uid reuse
-        env:
-          BRIDGE_IMAGE: cyfr-mcp-bridge:ci
-        run: node --test tests/bridge-image/residue.test.mjs
-
-      - name: Scan the image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: cyfr-mcp-bridge:ci
-          format: table
-          exit-code: '1'
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          # Findings with no fix in any distribution, each scoped to the
-          # path it was observed at, with its reason and what would lift it.
-          # Everything else fixable still fails, including the same id in
-          # the bridge's own dependency tree.
-          trivyignores: .trivyignore.yaml

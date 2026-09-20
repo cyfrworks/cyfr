@@ -156,9 +156,8 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :opus, :execution, :unreaped_kill] => %{
       consumers: [:operator],
       note:
-        "a timeout kill left a native thread spinning (no wasmex epoch interruption) — " <>
-          "the one signal that a node is quietly losing cores; the execution slots refuse " <>
-          "the tenant past a threshold"
+        "a run was killed whose native work may still be running, counted against its " <>
+          "tenant; the execution slots refuse the tenant past a threshold"
     },
     [:cyfr, :execution, :child, :admission] => %{
       consumers: [:operator],
