@@ -329,4 +329,68 @@ defmodule Sanctum.DoorTest do
       assert Store.requests() == []
     end
   end
+
+  describe "a door that cannot be read" do
+    # Absent data, denied access and unavailable infrastructure are three
+    # answers, and the door is where the difference decides who gets in.
+    # Dropping the table inside the sandbox transaction is the one way to
+    # make the store fail the way it would in an outage; Postgres aborts
+    # the transaction on the first such failure, so each case here reads
+    # the door and then stops rather than asserting on other tables.
+    defp drop_door do
+      Arca.Repo.query!("DROP TABLE server_allowlist")
+    end
+
+    test "refuses as :unavailable — not as :denied, and not as :not_allowed" do
+      drop_door()
+
+      assert {:error, :unavailable} = Door.admit(uid(50), "stranger@example.com", true)
+    end
+
+    test "the operator list still admits, because it needs no store" do
+      drop_door()
+
+      assert {:ok, :admin} = Door.admit(uid(51), "ops@example.com", true)
+    end
+
+    test "a provider's refusal carries :unavailable and queues no request" do
+      handler = "door-outage-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :sanctum, :door, :refused],
+        fn _e, _m, meta, _c -> send(parent, {:refused, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      drop_door()
+
+      assert {:error, {:door, :unavailable}} =
+               Door.admit_identity(uid(52), %{email: "stranger@example.com", verified: true})
+
+      # Only `:not_allowed` queues a request. An outage is not an answer to
+      # record, and writing one would be a write into the same dead store.
+      assert_receive {:refused, %{reason: :unavailable}}
+    end
+
+    test "an invite is not admitted through an unreadable door" do
+      drop_door()
+
+      refute Door.email_admitted?("stranger@example.com")
+    end
+
+    test "reconcile ejects nobody it could not ask about" do
+      known_person(53)
+      drop_door()
+
+      # The walk reads the users rows first and the door per person, so the
+      # refusal it sees is `:unavailable` — which is not a refusal. Ejecting
+      # on it would take every session and key on the server the first time
+      # the store blinked.
+      assert {:ok, 0} = Door.reconcile()
+    end
+  end
 end
