@@ -11,7 +11,7 @@ defmodule Arca.SanctumSurfaceTest do
   Apache-2.0 and `lib/sanctum` FSL. It is closed: the roster below is
   empty, and this test is what keeps it that way.
 
-  Same shape as `Opus.HostSurfaceTest`: the roster is pinned in both
+  Same shape as the island rosters in `Cyfr.Boundaries`: pinned in both
   directions. A new Arca→Sanctum reach fails here until someone decides it
   belongs on the list; a namespace Arca stops reaching into must leave it.
   With an empty roster the first half is the whole test.
@@ -47,6 +47,16 @@ defmodule Arca.SanctumSurfaceTest do
   end
 
   test "the storage layer reaches only into the Sanctum namespaces this surface names" do
+    # The roster is empty, so a scan that read nothing would pass this case
+    # having checked nothing. The same reader, over the same tree, has to
+    # come back with code.
+    read =
+      for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/arca/lib/arca/**/*.ex")),
+          line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
+          do: line
+
+    assert length(read) > 100, "the scan read no code line under lib/arca — it is not reading"
+
     extra = reached() |> MapSet.difference(MapSet.new(@surface)) |> Enum.sort()
 
     assert extra == [],

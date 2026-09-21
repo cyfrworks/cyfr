@@ -166,13 +166,13 @@ defmodule Emissary.MCP.Router do
                 {:error, Sanctum.Unauthorized.code(reason),
                  Sanctum.Unauthorized.message(reason, ctx.auth_method)}
               else
-                {:error, :invalid_params, Cyfr.Ops.Error.message(reason)}
+                {:error, :invalid_params, Cyfr.Refusal.message(reason)}
               end
 
             :ok ->
               case Catalog.validate_arguments(name, arguments) do
                 {:error, reason} ->
-                  {:error, :invalid_params, Cyfr.Ops.Error.message(reason)}
+                  {:error, :invalid_params, Cyfr.Refusal.message(reason)}
 
                 {:ok, arguments} ->
                   has_output_schema = Map.has_key?(tool_def, "outputSchema")
@@ -315,8 +315,8 @@ defmodule Emissary.MCP.Router do
             {:error, :internal_error, "Failed to read resource: the store could not answer"}
 
           # A typed tool refusal renders through its vocabulary.
-          Cyfr.Ops.Error.reason?(reason) ->
-            {:error, :resource_not_found, Cyfr.Ops.Error.message(reason)}
+          Cyfr.Refusal.reason?(reason) ->
+            {:error, :resource_not_found, Cyfr.Refusal.message(reason)}
 
           # A binary reason is a handler's crafted, client-safe diagnosis
           # ("Invalid URI format: …", "No provider found for scheme …").
@@ -336,8 +336,8 @@ defmodule Emissary.MCP.Router do
   defp format_error_reason(reason) when is_binary(reason), do: reason
 
   defp format_error_reason(reason) do
-    # One renderer for every typed vocabulary (`Cyfr.Ops.Error.render/1`
-    # — Unauthorized, the tool reasons, OCI errors); `nil` means the term is
+    # One renderer for every typed vocabulary (`Cyfr.Ops.Error.render/2`
+    # — Unauthorized, `Cyfr.Refusal`, OCI errors); `nil` means the term is
     # internal and must not be reflected.
     case Cyfr.Ops.Error.render(reason) do
       nil ->

@@ -19,6 +19,8 @@ defmodule Cyfr.Test.SourceTree do
   copies of their own and do not create it.
   """
 
+  alias Cyfr.Test.CodeLines
+
   @table :cyfr_test_source_tree
 
   @doc false
@@ -96,6 +98,44 @@ defmodule Cyfr.Test.SourceTree do
             source = File.read!(path)
             :ets.insert(@table, {path, source})
             source
+        end
+    end
+  end
+
+  @doc """
+  `Cyfr.Test.CodeLines.code_lines/1` over a file, memoized beside its
+  source.
+
+  Classifying a file costs a tokenize, and the architecture rosters read
+  the same trees several times over; the memo makes the second read free.
+  Falls back to classifying on the spot when the table is absent.
+  """
+  @spec code_lines(Path.t()) :: [{String.t(), pos_integer()}]
+  def code_lines(path), do: memo({:code_lines, path}, fn -> CodeLines.code_lines(read(path)) end)
+
+  @doc """
+  `Cyfr.Test.CodeLines.aliases/1` over a file, memoized beside its source.
+
+  Every module name the file names, with its line — the view the
+  architecture rosters read.
+  """
+  @spec aliases(Path.t()) :: [{String.t(), pos_integer()}]
+  def aliases(path), do: memo({:aliases, path}, fn -> CodeLines.aliases(read(path)) end)
+
+  defp memo(key, compute) do
+    case :ets.whereis(@table) do
+      :undefined ->
+        compute.()
+
+      _ ->
+        case :ets.lookup(@table, key) do
+          [{^key, value}] ->
+            value
+
+          [] ->
+            value = compute.()
+            :ets.insert(@table, {key, value})
+            value
         end
     end
   end

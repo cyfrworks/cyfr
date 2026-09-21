@@ -448,13 +448,16 @@ defmodule Cyfr.Schedules.Provider do
     {:error, "Missing required argument: schedule_id"}
   end
 
-  # Invalid/missing action
+  # Invalid/missing action, in the one refusal vocabulary: this provider
+  # answered both as bare sentences, which is why the action-coverage
+  # case had to recognise two shapes of catch-all and checked only the
+  # provider that used the bare one.
   def handle("schedule", _ctx, %{"action" => action}) do
-    {:error, "Invalid schedule action: #{action}"}
+    {:error, {:invalid_argument, "Invalid schedule action: #{action}"}}
   end
 
   def handle("schedule", _ctx, _args) do
-    {:error, "Missing required argument: action"}
+    {:error, :action_missing}
   end
 
   def handle(tool, _ctx, _args) do

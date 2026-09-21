@@ -23,7 +23,7 @@ defmodule Cyfr.Files do
     * `:read` (`notes/`, `threads/`) — listed, read and downloaded;
       written only by their own surfaces.
 
-  Every operation answers the typed refusals `Cyfr.Ops.Error` renders,
+  Every operation answers the typed refusals `Cyfr.Refusal` names,
   so the `file` tool, the Files page and the download route speak one
   vocabulary.
   """

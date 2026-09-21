@@ -16,7 +16,7 @@ defmodule Compendium.SignInSyncTest do
   forbids, so a CLI sign-in reports `probe: :skipped` and records nothing.
 
   What holds that is structural rather than a case here: the device flow
-  completes inside `lib/sanctum`, and `Compendium.ReverseSurfaceTest`
+  completes inside `lib/sanctum`, and `Cyfr.BoundariesTest`
   asserts that nothing in `lib/sanctum` names a Compendium module at all.
   A probe reintroduced on that path would have to name one, and would
   fail that roster. There is no end-to-end case because completion needs

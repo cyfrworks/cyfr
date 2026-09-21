@@ -1385,7 +1385,7 @@ defmodule Cyfr.Ops.Catalog do
 
           # The tuple carries only the tool's name — the exception's own
           # message can hold a query, a path, or the offending bytes, and
-          # this tuple renders verbatim on the wire (`Cyfr.Ops.Error.message/1`).
+          # this tuple renders verbatim on the wire (`Cyfr.Refusal.message/1`).
           if uncertain?,
             do: {:error, {:uncertain, "Tool #{name} crashed; its outcome is unknown"}},
             else: {:error, {:crashed, "Tool #{name} crashed"}}

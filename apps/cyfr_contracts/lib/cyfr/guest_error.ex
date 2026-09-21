@@ -4,68 +4,39 @@
 defmodule Cyfr.GuestError do
   @moduledoc """
   The sentence a runner hands its guest for a refusal, rendered from data
-  alone. A refusal reaches a runner over the wire as an answer
+  alone.
+
+  A refusal reaches a runner over the wire as an answer
   (`Cyfr.WorkerWire`): a guest error's `type` and `message`, a `failed`
-  message, a `setup_required` payload, or a refusal name. This renders
-  those, the `Cyfr.HostAPI` tuples a host client answers them as, and the
-  reasons a runner produces itself. Nothing here names a product module:
-  a sentence CYFR wants a guest to see crosses the wire already rendered.
+  message, a `setup_required` payload, or a refusal of the one vocabulary.
+  This renders those, the `Cyfr.HostAPI` tuples a host client answers them
+  as, and the reasons a runner produces itself. Nothing here names a
+  product module: a sentence CYFR wants a guest to see crosses the wire
+  already rendered.
+
+  What a refusal *means* is `Cyfr.Refusal`'s, and this module holds no
+  sentence of its own for one. That is the whole point: a guest in a chain
+  and a person at the console are told the same thing, because there is
+  one place the thing is said. Before, two vocabularies restated each
+  other and seven refusals were in only one of them — `:busy`,
+  `:not_member`, `:archived`, `:no_agent`, `:control_plane_lost`,
+  `:not_provisioned`, `:message_too_long` — so a guest hitting any of them
+  was handed the atom's own name where a sentence belonged.
 
   `render/1` answers `nil` for a term it does not know, so a caller logs
   the term where it was produced and hands the guest a generic sentence
-  instead of `inspect/1`'s spelling of it.
+  instead of `inspect/1`'s spelling of it. An unrecognised atom is such a
+  term: an internal name is not a sentence, and echoing it is how internal
+  vocabulary reaches a guest-visible surface.
   """
-
-  # Tags whose second element is a client-safe sentence by construction:
-  # the tuple carries only what its producer already chose to say.
-  @sentence_tags [
-    :invalid_argument,
-    :conflict,
-    :crashed,
-    :exit,
-    :timeout,
-    :uncertain,
-    :result_lost,
-    :not_recorded,
-    :failed
-  ]
-
-  # What a unit commit answered, for the in-chain tools that land a unit
-  # (`component.create`, `component.fork`, the scroll writes). Each says a
-  # different thing to do about it, and the sentences are the ones
-  # `Cyfr.Ops.Error` renders on the console and the wire — a guest and a
-  # person are told the same thing. That the two vocabularies restate
-  # each other is one fault, not these six.
-  #
-  # `:unavailable` is the one with more than one producer: a commit whose
-  # store could not say what it did, and a host call CYFR refused. The
-  # sentence names neither and takes the safe direction of the two —
-  # check rather than retry, since retrying an effect that may have
-  # happened is the dangerous mistake.
-  @commit_refusals %{
-    stale_writer:
-      "Another write to this unit holds it — retry once its draft expires (up to fifteen minutes)",
-    stale_revision: "Another write to this unit landed first — read it again and retry",
-    missing_unit: "This unit was removed while it was being written",
-    invalid_objects:
-      "What was staged for this unit is not what was written — nothing was published",
-    unavailable:
-      "Unavailable — what was asked may or may not have been done; check before asking again"
-  }
 
   @doc "The client-safe sentence for `reason`, or `nil` for a term this vocabulary does not know."
   @spec render(term()) :: String.t() | nil
   def render(reason) when is_binary(reason), do: reason
 
-  def render(reason) when is_map_key(@commit_refusals, reason),
-    do: Map.fetch!(@commit_refusals, reason)
-
-  def render({:finish_failed, _reason}),
-    do: "This unit is published; serving its files did not finish and will be repaired"
-
-  def render(reason) when is_atom(reason) and not is_nil(reason) and not is_boolean(reason),
-    do: Atom.to_string(reason)
-
+  # What a runner's own wire carries, which is not a refusal of the shared
+  # vocabulary: an answer already rendered on the other side, and the two
+  # shapes a host call ends in.
   def render(%{"type" => type, "message" => message})
       when is_binary(type) and is_binary(message),
       do: message
@@ -80,16 +51,18 @@ defmodule Cyfr.GuestError do
   def render({:setup_required, %{} = _payload}),
     do: "The call needs setup before it can run"
 
-  def render({:not_found, resource, id}) when is_binary(resource) and is_binary(id),
-    do: "#{resource} not found: #{id}"
+  def render({:failed, message}) when is_binary(message), do: message
 
-  def render({:unavailable, what}) when is_binary(what),
-    do: "#{what} is unavailable — retry shortly"
+  # A host call CYFR could not answer at all. Distinct from
+  # `{:unavailable, what}`, which names a service that was reached and
+  # gave nothing: this one asks the caller to check rather than retry,
+  # because retrying an effect that may have happened is the dangerous
+  # mistake.
+  def render(:lost),
+    do:
+      "The call was lost — what was asked may or may not have been done; check before asking again"
 
-  def render({:corrupt, what}) when is_binary(what),
-    do: "#{what} does not match its recorded digest and was not served"
-
-  def render({tag, message}) when tag in @sentence_tags and is_binary(message), do: message
-
-  def render(_reason), do: nil
+  def render(reason) do
+    if Cyfr.Refusal.reason?(reason), do: Cyfr.Refusal.message(reason)
+  end
 end

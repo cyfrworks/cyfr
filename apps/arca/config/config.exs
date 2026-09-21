@@ -42,9 +42,6 @@ config :arca,
   base_path: Path.expand("data"),
   seed_path: Path.expand("seed")
 
-# Recursive file and byte ceilings for public-profile guest writes.
-config :arca, :public_storage_quota, %{max_bytes: 26_214_400, max_files: 200}
-
 # Concurrent object reads in the shared subtree dump
 # (`Arca.Storage.read_subtree_via/4`) — bounded so a wide tree cannot open
 # unbounded connections on the object-store path.
@@ -54,10 +51,6 @@ config :arca, :read_subtree_concurrency, 10
 # compiled components pinned (count).
 config :arca, :cache_max_binary_bytes, 256 * 1024 * 1024
 config :arca, :cache_max_compiled_components, 32
-
-# Ships with the console sink; a deployment adds SIEM or object-store
-# sinks through its release runtime configuration.
-config :arca, :audit_sinks, [Arca.AuditSinks.Console]
 
 if config_env() == :test do
   # A sandboxed pool over a database keyed by checkout, out of the

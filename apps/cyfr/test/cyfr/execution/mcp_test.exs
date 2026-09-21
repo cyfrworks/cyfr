@@ -355,7 +355,7 @@ defmodule Cyfr.Execution.MCPTest do
         })
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
-      assert Cyfr.Ops.Error.message(reason) =~ "not found"
+      assert Cyfr.Refusal.message(reason) =~ "not found"
     end
   end
 
@@ -377,7 +377,7 @@ defmodule Cyfr.Execution.MCPTest do
         })
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
-      assert Cyfr.Ops.Error.message(reason) =~ "not found"
+      assert Cyfr.Refusal.message(reason) =~ "not found"
     end
 
     test "returns error for failed execution", %{ctx: ctx, ref: ref} do
@@ -890,7 +890,7 @@ defmodule Cyfr.Execution.MCPTest do
       {:error, reason} = MCP.read(ctx, uri)
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
-      assert Cyfr.Ops.Error.message(reason) =~ "not found"
+      assert Cyfr.Refusal.message(reason) =~ "not found"
     end
 
     test "parses execution ID correctly", %{ctx: ctx, ref: ref} do
@@ -945,7 +945,7 @@ defmodule Cyfr.Execution.MCPTest do
       {:error, reason} = MCP.read(ctx, uri)
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
-      assert Cyfr.Ops.Error.message(reason) =~ "not found"
+      assert Cyfr.Refusal.message(reason) =~ "not found"
     end
 
     test "includes error in logs for failed execution", %{ctx: ctx} do

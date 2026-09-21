@@ -10,7 +10,22 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.Error
+  alias Cyfr.Refusal
+
+  # The seven a guest used to be handed by name. Each had a sentence in
+  # the console's vocabulary and none in the runner's, and the runner
+  # rendered an atom it did not know by spelling it — so a send that met a
+  # full turn queue read "busy" to a guest and read the sentence below to
+  # a person at the page.
+  @named_by_the_atom [
+    :busy,
+    :not_member,
+    :archived,
+    :no_agent,
+    :control_plane_lost,
+    :not_provisioned,
+    :message_too_long
+  ]
 
   @crash_vocabulary [
     {:crashed, "Tool x crashed: boom"},
@@ -32,24 +47,24 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
   describe "a unit commit's refusals" do
     test "are part of the typed roster, and say what to do about each" do
       for reason <- @commit_vocabulary do
-        assert Error.reason?(reason), "#{inspect(reason)} is not recognised"
-        assert is_binary(Error.message(reason))
+        assert Refusal.reason?(reason), "#{inspect(reason)} is not recognised"
+        assert is_binary(Refusal.message(reason))
       end
 
       # A writer that died holding a draft blocks the unit until the
       # draft expires, so the sentence says how long rather than "retry
       # shortly".
-      assert Error.message(:stale_writer) =~ "fifteen minutes"
+      assert Refusal.message(:stale_writer) =~ "fifteen minutes"
 
       # The two that do not mean "nothing was written": one says the
       # unit is published, the other that nothing may be assumed — so
       # neither tells the caller to simply retry.
-      assert Error.message({:finish_failed, :enospc}) =~ "published"
-      assert Error.message(:unavailable) =~ "check before asking again"
-      refute Error.message(:unavailable) =~ "retry"
+      assert Refusal.message({:finish_failed, :enospc}) =~ "published"
+      assert Refusal.message(:unavailable) =~ "check before asking again"
+      refute Refusal.message(:unavailable) =~ "retry"
 
       # And the one that does: another commit landed first.
-      assert Error.message(:stale_revision) =~ "landed first"
+      assert Refusal.message(:stale_revision) =~ "landed first"
     end
 
     # `component.create`, `component.fork` and the scroll writes are
@@ -58,7 +73,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
     # this case is what holds the two together.
     test "render the same sentence on all three surfaces" do
       for reason <- @commit_vocabulary do
-        expected = Error.message(reason)
+        expected = Refusal.message(reason)
 
         assert PrismWeb.Ops.error_message(reason) == expected,
                "the console disagrees about #{inspect(reason)}"
@@ -69,22 +84,22 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
     end
 
     test "a bare :unavailable is not the named-service one" do
-      refute Error.message(:unavailable) == Error.message({:unavailable, "Storage"})
-      assert Error.message({:unavailable, "Storage"}) =~ "retry shortly"
+      refute Refusal.message(:unavailable) == Refusal.message({:unavailable, "Storage"})
+      assert Refusal.message({:unavailable, "Storage"}) =~ "retry shortly"
     end
   end
 
   describe "the crash vocabulary" do
     test "is part of the typed roster" do
       for reason <- @crash_vocabulary do
-        assert Error.reason?(reason), "#{inspect(reason)} is not recognised"
-        assert is_binary(Error.message(reason))
+        assert Refusal.reason?(reason), "#{inspect(reason)} is not recognised"
+        assert is_binary(Refusal.message(reason))
       end
     end
 
     test "renders the same sentence on all three surfaces" do
       for reason <- @crash_vocabulary do
-        expected = Error.message(reason)
+        expected = Refusal.message(reason)
 
         assert PrismWeb.Ops.error_message(reason) == expected,
                "the console disagrees about #{inspect(reason)}"
@@ -104,6 +119,35 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
     end
   end
 
+  describe "the refusals a guest used to be handed by name" do
+    test "each is one sentence, and the guest reads it as the console does" do
+      for reason <- @named_by_the_atom do
+        expected = Refusal.message(reason)
+
+        assert is_binary(expected) and String.length(expected) > 20,
+               "#{inspect(reason)} has no sentence"
+
+        refute expected == Atom.to_string(reason),
+               "#{inspect(reason)} renders as its own name"
+
+        assert Cyfr.GuestError.render(reason) == expected,
+               "the runner's vocabulary disagrees about #{inspect(reason)}"
+
+        assert Opus.FormulaHandler.render_reason(reason) == expected,
+               "the in-chain guest view disagrees about #{inspect(reason)}"
+
+        assert PrismWeb.Ops.error_message(reason) == expected,
+               "the console disagrees about #{inspect(reason)}"
+      end
+    end
+
+    test "an atom outside the vocabulary is internal, and is not spelled out" do
+      # What the runner's renderer did to every atom it did not know.
+      assert Opus.FormulaHandler.render_reason(:some_internal_state) == "The call failed."
+      assert Cyfr.GuestError.render(:some_internal_state) == nil
+    end
+  end
+
   describe "the guest never sees an internal term" do
     test "an unknown reason renders as a generic sentence, not inspect output" do
       rendered = Opus.FormulaHandler.render_reason({:some_internal, %{"secret" => "leak"}})
@@ -120,7 +164,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
 
     test "the other typed vocabularies render through their own module" do
       assert Opus.FormulaHandler.render_reason({:not_found, "component", "x"}) ==
-               Error.message({:not_found, "component", "x"})
+               Refusal.message({:not_found, "component", "x"})
 
       # Opus renders from contract data alone (`Cyfr.GuestError`): a Sanctum
       # refusal reaches a guest only once CYFR has rendered it into the wire

@@ -11,7 +11,7 @@ defmodule Aqua.Ops do
   Two deliberate exceptions live outside this module: `Emissary.PubSub`
   used as a process NAME (the application's one supervised PubSub), and
   `Aqua.Intents`' read of the console route table, rostered in
-  `Cyfr.NamespaceDirectionTest`.
+  `Cyfr.Boundaries`.
   """
 
   @doc "Call a tool on the external plane under `ctx`."

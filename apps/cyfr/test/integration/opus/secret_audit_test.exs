@@ -1,23 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.SecretAuditTest.Sink do
-  @moduledoc false
-  @behaviour Arca.AuditSink
-
-  # Hands every audited event to the test process set under this module's
-  # key, as a deployment's own sink would store it.
-  @impl true
-  def handle_audit_event(%Arca.Audit.Event{} = event) do
-    case Application.get_env(:cyfr, __MODULE__) do
-      pid when is_pid(pid) -> send(pid, {:audited, event})
-      _ -> :ok
-    end
-
-    :ok
-  end
-end
-
 defmodule Opus.SecretAuditTest do
   @moduledoc """
   What a runner does with a credential reaches the audit trail, which lives
@@ -38,8 +21,9 @@ defmodule Opus.SecretAuditTest do
   The guest is `test_wasm/hostile/vault_probe` of Opus's suite, run by the
   Opus service in a runner over the suite's wire (`Cyfr.Test.TwoServices`);
   its vault entry holds three fields, and its projection grants two. The
-  audit trail is read as a deployment's sink receives it
-  (`Arca.AuditSink`).
+  audit trail is read the way a deployment's own reads it: by attaching to
+  `[:cyfr, :audit, :recorded]`, the one event `Arca.AuditHandler` emits per
+  entry, already sanitized.
   """
 
   use ExUnit.Case, async: false
@@ -72,11 +56,25 @@ defmodule Opus.SecretAuditTest do
     TwoServices.watch!()
 
     run_dir = Path.join(System.tmp_dir!(), "secret_audit_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :audit_sinks, cyfr: Opus.SecretAuditTest.Sink]
+    keys = [arca: :base_path]
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.fetch_env(app, key)} end)
     Application.put_env(:arca, :base_path, run_dir)
-    Application.put_env(:arca, :audit_sinks, [Opus.SecretAuditTest.Sink])
-    Application.put_env(:cyfr, Opus.SecretAuditTest.Sink, self())
+
+    # Every entry the audit trail records while this case runs, as a
+    # deployment's own attach receives it.
+    test = self()
+    attach_id = "secret-audit-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      attach_id,
+      [:cyfr, :audit, :recorded],
+      fn _event, _measurements, %{audited: audited}, _config ->
+        send(test, {:audited, audited})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(attach_id) end)
 
     ctx = Sanctum.TestContext.local()
 

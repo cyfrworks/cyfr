@@ -224,8 +224,8 @@ defmodule EmissaryWeb.Router do
   scope "/auth", EmissaryWeb do
     pipe_through [:api, :auth_api_throttle]
 
-    delete "/logout", AuthController, :logout
-    get "/whoami", AuthController, :whoami
+    delete "/logout", AuthController, :logout, metadata: %{auth: :handler_auth}
+    get "/whoami", AuthController, :whoami, metadata: %{auth: :handler_auth}
   end
 
   # OAuth callback for catalyst OAuth providers (not user auth)
@@ -233,7 +233,7 @@ defmodule EmissaryWeb.Router do
   scope "/auth/oauth", EmissaryWeb do
     pipe_through [:oauth_callback, :oauth_callback_throttle]
 
-    get "/callback", OAuthCallbackController, :callback
+    get "/callback", OAuthCallbackController, :callback, metadata: %{auth: :public_oauth_state}
   end
 
   # Sign-in routes. GitHub/Google sign in by device flow on `/login`;
@@ -242,24 +242,27 @@ defmodule EmissaryWeb.Router do
   scope "/auth", EmissaryWeb do
     pipe_through :browser
 
-    get "/post-legal-accept", AuthController, :post_legal_accept
+    get "/post-legal-accept", AuthController, :post_legal_accept,
+      metadata: %{auth: :browser_oauth_flow}
 
     scope "/" do
       pipe_through :device_complete_throttle
 
-      get "/device/complete/:ticket", AuthController, :device_complete
+      get "/device/complete/:ticket", AuthController, :device_complete,
+        metadata: %{auth: :browser_oauth_flow}
     end
 
     scope "/" do
       pipe_through :oauth_start_throttle
 
-      get "/:provider", AuthController, :request
+      get "/:provider", AuthController, :request, metadata: %{auth: :browser_oauth_start}
     end
 
     scope "/" do
       pipe_through :oauth_callback_throttle
 
-      get "/:provider/callback", AuthController, :callback
+      get "/:provider/callback", AuthController, :callback,
+        metadata: %{auth: :browser_oauth_callback}
     end
   end
 
@@ -269,13 +272,13 @@ defmodule EmissaryWeb.Router do
   scope "/claim-namespace", PrismWeb do
     pipe_through :browser
 
-    get "/", ClaimNamespaceController, :show
+    get "/", ClaimNamespaceController, :show, metadata: %{auth: :browser_claim_gate}
 
     # Submit is the only write endpoint; throttle it, not the form render.
     scope "/" do
       pipe_through :claim_submit_throttle
 
-      post "/submit", ClaimNamespaceController, :submit
+      post "/submit", ClaimNamespaceController, :submit, metadata: %{auth: :browser_claim_gate}
     end
   end
 
@@ -285,8 +288,8 @@ defmodule EmissaryWeb.Router do
   scope "/legal/accept", PrismWeb do
     pipe_through [:browser, :legal_accept_throttle]
 
-    get "/", LegalAcceptController, :show
-    post "/submit", LegalAcceptController, :submit
+    get "/", LegalAcceptController, :show, metadata: %{auth: :browser_public_legal}
+    post "/submit", LegalAcceptController, :submit, metadata: %{auth: :browser_public_legal}
   end
 
   # MCP endpoint. POST is the only verb this revision defines: a request's own
@@ -295,39 +298,50 @@ defmodule EmissaryWeb.Router do
   scope "/mcp", EmissaryWeb do
     pipe_through :mcp
 
-    post "/", MCPController, :handle
-    get "/", MCPController, :method_not_allowed
-    delete "/", MCPController, :method_not_allowed
+    post "/", MCPController, :handle, metadata: %{auth: :authenticate_plug}
+    get "/", MCPController, :method_not_allowed, metadata: %{auth: :authenticate_plug}
+    delete "/", MCPController, :method_not_allowed, metadata: %{auth: :authenticate_plug}
   end
 
   scope "/t", EmissaryWeb do
     pipe_through :tincture_invoke
     # Cross-origin token mint: session/Bearer header → short-lived ?_t=.
-    get "/access-token", TinctureController, :access_token
-    match :options, "/access-token", TinctureController, :access_token
-    post "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke
+    get "/access-token", TinctureController, :access_token,
+      metadata: %{auth: :tincture_handler_auth}
+
+    match :options, "/access-token", TinctureController, :access_token,
+      metadata: %{auth: :tincture_handler_auth}
+
+    post "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke,
+      metadata: %{auth: :tincture_handler_auth}
+
     # OPTIONS preflight — CORS plug intercepts and sends 204 before reaching controller.
     # Required because sandboxed iframes (opaque origin) + POST with JSON content-type
     # triggers CORS preflight from the browser.
-    match :options, "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke
+    match :options, "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke,
+      metadata: %{auth: :tincture_handler_auth}
   end
 
   scope "/t", EmissaryWeb do
     pipe_through :tincture
-    get "/:athanor/:publisher/:tincture_name", TinctureController, :index
+
+    get "/:athanor/:publisher/:tincture_name", TinctureController, :index,
+      metadata: %{auth: :tincture_handler_auth}
   end
 
   scope "/t", EmissaryWeb do
     pipe_through :tincture_asset
-    get "/:athanor/:publisher/:tincture_name/*path", TinctureController, :asset
+
+    get "/:athanor/:publisher/:tincture_name/*path", TinctureController, :asset,
+      metadata: %{auth: :tincture_handler_auth}
   end
 
   # Health check endpoint
   scope "/api", EmissaryWeb do
     pipe_through [:api, :health_throttle]
 
-    get "/health", HealthController, :check
-    get "/health/ready", HealthController, :ready
+    get "/health", HealthController, :check, metadata: %{auth: :public_health}
+    get "/health/ready", HealthController, :ready, metadata: %{auth: :public_health}
   end
 
   # Execution event SSE stream. Ownership is verified in the controller, on the
@@ -335,12 +349,13 @@ defmodule EmissaryWeb.Router do
   scope "/api", EmissaryWeb do
     pipe_through :authenticated_api
 
-    get "/executions/:id/events", ExecutionEventsController, :stream
+    get "/executions/:id/events", ExecutionEventsController, :stream,
+      metadata: %{auth: :authenticate_plug}
   end
 
   scope "/hooks", EmissaryWeb do
     pipe_through :webhook
-    post "/:slug", WebhookController, :invoke
+    post "/:slug", WebhookController, :invoke, metadata: %{auth: :webhook_hmac}
   end
 
   # ==========================================================================
@@ -353,17 +368,19 @@ defmodule EmissaryWeb.Router do
   scope "/", PrismWeb do
     pipe_through :browser
 
-    live "/login", LoginLive, :login
+    live "/login", LoginLive, :login, metadata: %{auth: :browser_public_login}
     # POST, never GET: signing someone out must not be one <img src> away
     # — the browser pipeline's CSRF token guards the state change.
-    post "/auth/logout", SessionController, :logout
+    post "/auth/logout", SessionController, :logout, metadata: %{auth: :browser_public_auth}
   end
 
   scope "/a/:athanor", PrismWeb do
     pipe_through [:attachment, :attachment_throttle]
 
-    get "/attachments/:message_id/:filename", AttachmentController, :show
-    get "/files/download/*path", FileController, :show
+    get "/attachments/:message_id/:filename", AttachmentController, :show,
+      metadata: %{auth: :browser_focus_handler}
+
+    get "/files/download/*path", FileController, :show, metadata: %{auth: :browser_focus_handler}
   end
 
   # Opening an estate is a link. `PrismWeb.Focus` resolves the segment and narrows
@@ -377,42 +394,45 @@ defmodule EmissaryWeb.Router do
         {PrismWeb.Focus, :assign},
         {PrismWeb.ActiveContext, :assign}
       ] do
-      live "/", RootRedirectLive, :index
-      live "/a", RootRedirectLive, :index
+      live "/", RootRedirectLive, :index, metadata: %{auth: :browser_authenticated}
+      live "/a", RootRedirectLive, :index, metadata: %{auth: :browser_authenticated}
       # The chat is one zone across every estate the person belongs to; it
       # names its estate in the query, not the path, and mounts under the
       # session's default (`PrismWeb.Focus` passes a bare mount through).
-      live "/chat", ChatLive, :index
+      live "/chat", ChatLive, :index, metadata: %{auth: :browser_authenticated}
 
       scope "/a/:athanor" do
         # Forward to /chat with the athanor selected.
-        live "/", ChatRedirectLive, :index
-        live "/aqua", AquaLive, :index
-        live "/files", FilesLive, :index
+        live "/", ChatRedirectLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/aqua", AquaLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/files", FilesLive, :index, metadata: %{auth: :browser_authenticated}
         # /activities: unified activities feed (mcp_log + execution fan-out).
-        live "/activities", ActivitiesLive, :index
+        live "/activities", ActivitiesLive, :index, metadata: %{auth: :browser_authenticated}
         # /enforcements: live policy-decision feed (Arca.PolicyLog rows from
         # Cyfr.Execution.Admission + HTTP egress + tincture rate limiter). Click-through
         # to /activities?request_id=… for the request-anchored causal chain.
-        live "/enforcements", EnforcementsLive, :index
+        live "/enforcements", EnforcementsLive, :index, metadata: %{auth: :browser_authenticated}
         # /executions: dedicated Opus execution monitor (parent_execution_id
         # tree, component_digest, host_policy, WASI trace). Distinct from
         # /activities which is request-anchored.
-        live "/executions", ExecutionsLive, :index
-        live "/components", ComponentsLive, :index
-        live "/components/:ref", ComponentDetailLive, :show
-        live "/registry", RegistryLive, :index
-        live "/reports", MyReportsLive, :index
-        live "/builds", BuildsLive, :index
-        live "/vault", VaultLive, :index
-        live "/api-keys", ApiKeysLive, :index
-        live "/members", MembersLive, :index
-        live "/webhooks", WebhooksLive, :index
-        live "/schedules", SchedulesLive, :index
-        live "/settings", SettingsLive, :index
-        live "/mcp-servers", McpServersLive, :index
-        live "/tinctures", ShellLive, :index
-        live "/legal", LegalLive, :index
+        live "/executions", ExecutionsLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/components", ComponentsLive, :index, metadata: %{auth: :browser_authenticated}
+
+        live "/components/:ref", ComponentDetailLive, :show,
+          metadata: %{auth: :browser_authenticated}
+
+        live "/registry", RegistryLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/reports", MyReportsLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/builds", BuildsLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/vault", VaultLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/api-keys", ApiKeysLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/members", MembersLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/webhooks", WebhooksLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/schedules", SchedulesLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/settings", SettingsLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/mcp-servers", McpServersLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/tinctures", ShellLive, :index, metadata: %{auth: :browser_authenticated}
+        live "/legal", LegalLive, :index, metadata: %{auth: :browser_authenticated}
       end
     end
   end

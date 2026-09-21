@@ -11,9 +11,9 @@ defmodule Aqua.ToolSeamTest do
 
   Outside its scope, deliberately: `Emissary.PubSub` used as a process
   NAME (the application's one supervised PubSub, the posture
-  `Cyfr.EmissarySurfaceTest` rosters for sanctum), and `Aqua.Intents`'
+  `Cyfr.Boundaries` rosters for sanctum), and `Aqua.Intents`'
   read of the console route table, rostered in
-  `Cyfr.NamespaceDirectionTest`.
+  `Cyfr.Boundaries`.
   """
 
   use ExUnit.Case, async: true

@@ -211,8 +211,8 @@ defmodule Aqua.AquaToolEditsTest do
 
     # The refusal is the vocabulary's, not a flattened storage failure,
     # and it says the unit is published.
-    assert Cyfr.Ops.Error.reason?({:finish_failed, :enospc})
-    assert Cyfr.Ops.Error.message({:finish_failed, :enospc}) =~ "published"
+    assert Cyfr.Refusal.reason?({:finish_failed, :enospc})
+    assert Cyfr.Refusal.message({:finish_failed, :enospc}) =~ "published"
 
     # The resync ran rather than being skipped with the refusal: it reads
     # the served tree, which does not hold the role's bytes yet, so it
@@ -222,11 +222,16 @@ defmodule Aqua.AquaToolEditsTest do
     refute Enum.any?(rows, &(&1.name == "tracker"))
     refute Arca.exists?(Sanctum.Context.actor(ctx), role)
 
-    # The move is what was left: once it finishes, the published role is
-    # served and the next sync names it.
-    assert {:ok, :repaired} = Arca.Overlay.repair_unit(Sanctum.Context.actor(ctx), role)
+    # The move is what was left, and the storage sweep is the only thing
+    # that finishes it. It re-derives the index too: the three writers of
+    # the index are the aqua tool, `Cyfr.Files` and provisioning, and none
+    # of them runs because a sweep repaired something — so without that,
+    # a role published by this commit stays out of the index until the
+    # next write to the tree, which may be days away or never.
+    # No grace, so the move this commit left is overdue at once.
+    assert {:ok, _collected} = Cyfr.Retention.StagedRevisions.prune(ctx, 0, false)
     assert Arca.exists?(Sanctum.Context.actor(ctx), role)
-    {:ok, _} = Compendium.AgentIndex.sync(ctx)
+
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
     assert Enum.any?(rows, &(&1.name == "tracker"))
   end

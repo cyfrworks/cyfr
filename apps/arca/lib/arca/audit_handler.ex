@@ -3,20 +3,23 @@
 
 defmodule Arca.AuditHandler do
   @moduledoc """
-  Telemetry consumer that dispatches security-relevant events to audit sinks.
+  Telemetry consumer that records security-relevant events as the audit
+  trail.
 
-  Attaches to existing telemetry events at startup and forwards them to
-  all configured `Arca.AuditSink` implementations. Each sink is wrapped
-  in try/rescue for fault isolation — a failing sink cannot break other
-  sinks or the telemetry pipeline.
+  Attaches to the events the telemetry catalog names for audit, builds one
+  `Arca.Audit.Event` per entry with the emitter's metadata sanitized, and
+  records it two ways: a structured log line, which is the trail a
+  deployment gets with no configuration at all, and one
+  `[:cyfr, :audit, :recorded]` telemetry event carrying the same struct,
+  which is where a deployment's own SIEM or object-store trail attaches.
 
-  ## Configuration
-
-      # config.exs (default):
-      config :arca, :audit_sinks, [Arca.AuditSinks.Console]
-
-      # With an additional SIEM sink configured:
-      # config :arca, :audit_sinks, [Arca.AuditSinks.Console, Arca.AuditSinks.SIEM]
+  That second way is the extension point. What stood here before was a
+  behaviour and a list of modules in configuration, with one
+  implementation shipped, and a fan-out, a per-sink rescue and an
+  all-sinks-failed alarm around it. An audit trail's readers are consumers
+  of a telemetry event, and this repository declares and drift-checks its
+  telemetry consumers in one place, so they are consumers of one there
+  now.
 
   ## Monitored Events
 
@@ -41,7 +44,7 @@ defmodule Arca.AuditHandler do
     scope was constructed
 
   This list names the shapes, not every entry: the full roster is the one
-  the boot hands `start_link/1`. Each event reaches the sinks as one
+  the boot hands `start_link/1`. Each event is recorded as one
   `Arca.Audit.Event` with the emitter's metadata sanitized.
 
   ## The roster
@@ -62,7 +65,9 @@ defmodule Arca.AuditHandler do
   (The catalog's notes say why each entry earns its place, including why
   `:platform_context` is safe to subscribe: this handler constructs no
   context of its own, so the emit inside the platform-scope constructor
-  cannot recurse through here.)
+  cannot recurse through here. `[:cyfr, :audit, :recorded]` is outside the
+  audit roster for the same reason — recording an entry must not produce
+  another.)
   """
 
   use GenServer
@@ -111,11 +116,13 @@ defmodule Arca.AuditHandler do
   # `:telemetry` runs handlers in the emitting process and permanently
   # DETACHES any handler that fails — a raise, an exit (a store call timing
   # out arrives as one), a throw — so a failure anywhere in here ends
-  # auditing for that event, for the life of the node, silently. The
-  # per-sink rescue below covers the sinks; this covers everything else,
-  # every class (context construction most of all, which validates and
-  # can raise). `Cyfr.OtelTenantHandler` and `Prism.TelemetryBridge` take
-  # the same precaution for the same reason.
+  # auditing for that event, for the life of the node, silently. This
+  # covers every class of it: sanitizing the emitter's metadata, building
+  # the entry and writing the line. A deployment's own attach on
+  # `[:cyfr, :audit, :recorded]` is telemetry's to catch and detach, not
+  # this handler's, though it runs in this process and on this path.
+  # `Cyfr.OtelTenantHandler` and `Prism.TelemetryBridge` take the same
+  # precaution for the same reason.
   def handle_event(event_name, measurements, metadata, config) do
     do_handle_event(event_name, measurements, metadata, config)
   catch
@@ -136,14 +143,11 @@ defmodule Arca.AuditHandler do
   end
 
   defp do_handle_event(event_name, measurements, metadata, _config) do
-    sinks = Application.get_env(:arca, :audit_sinks, [Arca.AuditSinks.Console])
-
-    # One struct per event, metadata sanitized on the way out — an
-    # operator-added SIEM sink must never see a credential that rode an
+    # One entry per event, metadata sanitized on the way out — a
+    # deployment's own trail must never see a credential that rode an
     # emitter's metadata. Identity fields are audit content and survive.
     # No Sanctum context is constructed here (see the roster note on
-    # :platform_context — doing so would recurse), and none is needed:
-    # no sink read one.
+    # :platform_context — doing so would recurse), and none is needed.
     event = %Arca.Audit.Event{
       name: event_name,
       measurements: measurements,
@@ -152,31 +156,35 @@ defmodule Arca.AuditHandler do
       athanor_id: metadata[:athanor_id]
     }
 
-    failure_count =
-      Enum.count(sinks, fn sink ->
-        try do
-          sink.handle_audit_event(event)
-          false
-        rescue
-          e ->
-            Logger.warning("[AuditHandler] Sink #{inspect(sink)} failed: #{Exception.message(e)}")
-            true
-        end
-      end)
-
-    if failure_count == length(sinks) and sinks != [] do
-      Logger.error(
-        "[AuditHandler] All #{failure_count} audit sinks failed for #{inspect(event_name)}"
-      )
-
-      :telemetry.execute(
-        [:cyfr, :audit, :pipeline_failure],
-        %{count: 1},
-        %{event: event_name}
-      )
-    end
-
+    record(event)
     :ok
+  end
+
+  # The shipped trail: what the emitter actually sent, already sanitized.
+  # A fixed key set would print a sign-in with every field blank and drop
+  # a door refusal's reason, so it renders what is there.
+  #
+  # `user_id` and `athanor_id` are Logger metadata; with
+  # `CYFR_LOG_FORMAT=json`, `Cyfr.JsonFormatter` emits them as structured
+  # fields for filtering by caller and athanor. The line goes out at
+  # `:info`, so a node whose level is raised to `:warning` keeps its
+  # operational logging and loses this trail — which is why a deployment
+  # that must keep one attaches to `[:cyfr, :audit, :recorded]` and writes
+  # it where it wants.
+  defp record(%Arca.Audit.Event{} = event) do
+    detail =
+      event.metadata
+      |> Map.drop([:user_id, :athanor_id])
+      |> inspect(limit: 50, printable_limit: 500)
+
+    Logger.info(
+      "[Audit] #{Arca.Audit.Event.name_string(event)} " <>
+        "measurements=#{inspect(event.measurements)} metadata=#{detail}",
+      user_id: event.user_id,
+      athanor_id: event.athanor_id
+    )
+
+    :telemetry.execute([:cyfr, :audit, :recorded], %{count: 1}, %{audited: event})
   end
 
   @impl true

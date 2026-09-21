@@ -272,10 +272,6 @@ config :cyfr, :prometheus_metrics_enabled, false
 # Sanctum Configuration
 # Auth provider is set in runtime.exs based on environment variables
 
-# Audit sink configuration. Ships with the Console sink; a deployment can add
-# SIEM/object-store sinks via release runtime config.
-config :arca, :audit_sinks, [Arca.AuditSinks.Console]
-
 # Prism esbuild configuration
 config :esbuild,
   version: "0.25.0",

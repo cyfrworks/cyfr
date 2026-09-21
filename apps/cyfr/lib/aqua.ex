@@ -38,6 +38,6 @@ defmodule Aqua do
 
   This is domain, not console: it drives `PrismWeb`'s chat through PubSub
   broadcasts and rows, and never names the console back (pinned by
-  `Cyfr.NamespaceDirectionTest`).
+  `Cyfr.Boundaries`).
   """
 end

@@ -73,7 +73,7 @@ defmodule Aqua.Notes do
           execution: String.t() | nil
         }
   @typedoc """
-  What a call can refuse with — `Cyfr.Ops.Error`'s vocabulary, so
+  What a call can refuse with — `Cyfr.Refusal`'s vocabulary, so
   every surface renders it as a sentence. A storage fault is folded in at
   this boundary (`storage_refusal/1`): the adapter's term goes to the log, the wire
   gets the one word every storage-backed tool answers with, and the

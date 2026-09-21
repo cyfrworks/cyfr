@@ -125,7 +125,7 @@ defmodule Cyfr.Ops.TypedDispatchTest do
       assert {:error, reason} = PrismWeb.Ops.call_tool(ctx, "typed_probe", args)
       assert {:error, ^reason} = chain(ctx, args, authority)
       assert {:error, :invalid_params, message} = wire(ctx, args)
-      assert message == Cyfr.Ops.Error.message(reason)
+      assert message == Cyfr.Refusal.message(reason)
     end
   end
 
