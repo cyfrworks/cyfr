@@ -43,6 +43,10 @@ defmodule Aqua.Tape do
   @spec terminal?(turn()) :: boolean()
   def terminal?(%{status: status}), do: status in TurnStorage.terminal_statuses()
 
+  @doc "How many automatic recoveries a turn gets before it ends `uncertain`."
+  @spec recovery_cap() :: pos_integer()
+  def recovery_cap, do: TurnStorage.recovery_cap()
+
   # ---------------------------------------------------------------------------
   # Acceptance
   # ---------------------------------------------------------------------------

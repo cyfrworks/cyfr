@@ -205,7 +205,7 @@ defmodule Arca.ThreadStorage do
 
       case claimed do
         {1, _} -> get(actor, thread_id)
-        {0, _} -> claim_refused(actor, thread_id, turn_id, turn_seq)
+        {0, _} -> claim_refused(actor, thread_id, turn_id)
       end
     end)
   end
@@ -214,13 +214,22 @@ defmodule Arca.ThreadStorage do
 
   # Why the one statement wrote nothing. A read, so it decides nothing and
   # cannot be raced into admitting anything.
-  defp claim_refused(actor, thread_id, turn_id, turn_seq) do
+  defp claim_refused(actor, thread_id, turn_id) do
     case get(actor, thread_id) do
-      {:ok, %Thread{active_turn_id: ^turn_id} = thread} -> {:ok, thread}
-      {:ok, %Thread{active_turn_id: nil, turn_seq: seq}} when seq != turn_seq -> {:error, :stale}
-      {:ok, %Thread{active_turn_id: nil}} -> {:error, :stale}
-      {:ok, %Thread{active_turn_id: held}} -> {:error, {:busy, held}}
-      other -> other
+      {:ok, %Thread{active_turn_id: ^turn_id} = thread} ->
+        {:ok, thread}
+
+      {:ok, %Thread{active_turn_id: held}} when is_binary(held) ->
+        {:error, {:busy, held}}
+
+      # Nobody holds it now, so the sequence is what refused the claim —
+      # or a release landed between the statement and this read. Both say
+      # the same thing to the claimant: read the thread again.
+      {:ok, %Thread{}} ->
+        {:error, :stale}
+
+      other ->
+        other
     end
   end
 

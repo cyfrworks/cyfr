@@ -280,10 +280,13 @@ defmodule Emissary.MCP.ThreadToolTest do
           athanor_id: ctx.athanor_id
         )
 
-      card = fn intent -> card!(ctx, thread, intent) end
+      # One turn holds a thread at a time — that is what the thread's claim
+      # means — so each card is raised in a thread of its own, the first in
+      # the setup's and the second in one opened here.
+      {:ok, second} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
       destructive =
-        card.(%{
+        card!(ctx, thread, %{
           "kind" => "request_approval",
           "title" => "Wipe it",
           "action_kind" => "destructive",
@@ -301,7 +304,7 @@ defmodule Emissary.MCP.ThreadToolTest do
       assert msg == Aqua.ToolGrants.refusal_message({:scope_not_permitted, "destructive"})
 
       one_click =
-        card.(%{
+        card!(ctx, second, %{
           "kind" => "request_approval",
           "title" => "Pin it",
           "action_kind" => "write",
@@ -312,7 +315,7 @@ defmodule Emissary.MCP.ThreadToolTest do
       assert {:error, {:invalid_argument, msg}} =
                call(ctx, %{
                  "action" => "approve",
-                 "thread" => thread.id,
+                 "thread" => second.id,
                  "message_id" => one_click.id,
                  "scope" => "thread"
                })

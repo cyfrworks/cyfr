@@ -2338,10 +2338,13 @@ defmodule Arca.TurnStorage do
       {1, _} ->
         :ok
 
+      # Read the row again before saying why: a peer's claim may have
+      # committed between the read above and this statement, which is
+      # exactly the race the statement is here to lose.
       {0, _} ->
-        case thread do
-          %Thread{turn_seq: seq} when seq != expected -> Arca.Repo.rollback(:stale)
-          %Thread{active_turn_id: held} -> Arca.Repo.rollback({:busy, held})
+        case thread!(athanor_id, turn.thread_id) do
+          %Thread{active_turn_id: held} when is_binary(held) -> Arca.Repo.rollback({:busy, held})
+          %Thread{} -> Arca.Repo.rollback(:stale)
         end
     end
   end
