@@ -257,6 +257,100 @@ jobs:
           mix compile --warnings-as-errors
           mix test
 
+  arca-independence:
+    name: Arca compiles and tests from its declared apps alone
+    runs-on: ubuntu-latest
+    env:
+      CYFR_DATABASE: sqlite
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '29'
+          elixir-version: '1.20.3'
+      - name: Cache deps
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-arca-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-arca-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Install dependencies
+        run: mix deps.get
+      # Persistence holds nothing of the layers above it: a checkout with
+      # only the lock, the contracts, Arca, the fetched deps and the one
+      # CYFR_DATABASE parse its configuration shares with the umbrella root
+      # (config/database_choice.exs) compiles it with warnings as errors and
+      # runs its suite against a database it migrates itself.
+      - name: Compile and test Arca from its declared apps alone
+        run: |
+          set -euo pipefail
+          island="$RUNNER_TEMP/arca-island"
+          mkdir -p "$island/apps" "$island/config"
+          cp mix.lock "$island/"
+          cp -R apps/cyfr_contracts apps/arca "$island/apps/"
+          cp -R deps "$island/"
+          cp config/database_choice.exs "$island/config/"
+          cd "$island/apps/arca"
+          mix compile --warnings-as-errors
+          mix test
+
+  sanctum-independence:
+    name: Sanctum compiles and tests from its declared apps alone
+    runs-on: ubuntu-latest
+    env:
+      CYFR_DATABASE: sqlite
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '29'
+          elixir-version: '1.20.3'
+      - name: Cache deps
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-sanctum-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-sanctum-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Install dependencies
+        run: mix deps.get
+      # The auth domain holds nothing of the domains and surfaces above it:
+      # a checkout with only the lock, the contracts, Arca, Sanctum, the
+      # fetched deps and the CYFR_DATABASE parse compiles it with warnings
+      # as errors and runs its suite. Zero Ecto of its own — every row it
+      # reads it reads through an Arca facade — which is what the declared
+      # dependency list below makes checkable.
+      - name: Compile and test Sanctum from its declared apps alone
+        run: |
+          set -euo pipefail
+          island="$RUNNER_TEMP/sanctum-island"
+          mkdir -p "$island/apps" "$island/config"
+          cp mix.lock "$island/"
+          cp -R apps/cyfr_contracts apps/arca apps/sanctum "$island/apps/"
+          cp -R deps "$island/"
+          cp config/database_choice.exs "$island/config/"
+          cd "$island/apps/sanctum"
+          mix compile --warnings-as-errors
+          mix test
+      # What each island may name in the umbrella, so a new dependency is a
+      # decision and not a drift.
+      - name: Assert the declared umbrella dependencies
+        run: |
+          set -uo pipefail
+          fail=0
+          arca_deps="$(grep -oE '\{:[a-z_]+, in_umbrella: true' apps/arca/mix.exs | sed -E 's/^\{:([a-z_]+).*/\1/' | sort -u | tr '\n' ' ')"
+          if [ "$arca_deps" != "cyfr_contracts " ]; then
+            echo "::error file=apps/arca/mix.exs::arca may depend in the umbrella on cyfr_contracts alone, found: ${arca_deps:-nothing}"
+            fail=1
+          fi
+          sanctum_deps="$(grep -oE '\{:[a-z_]+, in_umbrella: true' apps/sanctum/mix.exs | sed -E 's/^\{:([a-z_]+).*/\1/' | sort -u | tr '\n' ' ')"
+          if [ "$sanctum_deps" != "arca cyfr_contracts " ]; then
+            echo "::error file=apps/sanctum/mix.exs::sanctum may depend in the umbrella on cyfr_contracts and arca alone, found: ${sanctum_deps:-nothing}"
+            fail=1
+          fi
+          exit "$fail"
+
   locus-independence:
     name: Locus compiles and tests from its declared apps alone
     runs-on: ubuntu-latest
