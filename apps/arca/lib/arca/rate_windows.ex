@@ -58,13 +58,24 @@ defmodule Arca.RateWindows do
 
   ## Two members, one bucket
 
-  A claim reads the row and writes it back under a compare-and-set on
-  everything it read — the window, its width and both counts. The write
-  lands only while the row still reads as the admission was decided on,
-  so two members claiming in the same instant cannot both increment from
-  the same count: one lands, the other reads again and decides again, for
-  a bounded number of rounds. Past that the claim is refused without a
-  verdict, never admitted.
+  A claim reads the row to know which window it is in, and then counts
+  itself in one statement that carries the admission with it: the count
+  is weighed against the cap and raised by one together, against the row
+  as it stands when the store applies it. Two members claiming in the
+  same instant are two such statements applied one after the other, each
+  weighed against what the one before it left — never two increments of
+  one count, and never one admitted on a count another member had
+  already spent.
+
+  A statement the condition refuses changes nothing; its claim reads the
+  row again and decides again, where it is either refused by the ceiling
+  or counted into the window that has since rotated. Opening a bucket and
+  rotating its window are the two writes that cannot be expressed that
+  way: the first is an insert the unique index decides, the second a
+  compare-and-set on the row as it was read. Both are rare — once per
+  bucket, once per window — and a member that loses either reads again.
+  Past a bounded number of rounds a claim is refused without a verdict,
+  never admitted.
 
   ## The clock
 
@@ -97,10 +108,13 @@ defmodule Arca.RateWindows do
 
   alias Arca.Schemas.RateWindow
 
-  # A claim that loses its compare-and-set reads the row and decides
-  # again. Eight rounds is far past what a contended bucket needs on
-  # either adapter; a claim that still cannot settle is refused without a
-  # verdict rather than admitted on a count it did not write.
+  # A claim whose write the row would not take reads it and decides
+  # again. Eight rounds is far past what a bucket needs on either
+  # adapter — a round is spent only on an insert, a rotation or a
+  # ceiling another member reached first, and the reread after it
+  # usually settles the claim outright. One that still cannot settle is
+  # refused without a verdict rather than admitted on a count it did not
+  # write.
   @rounds 8
 
   @type refusal :: {:error, :no_athanor | :contended | :database_error}
