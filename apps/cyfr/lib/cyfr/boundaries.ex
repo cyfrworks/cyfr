@@ -506,74 +506,119 @@ defmodule Cyfr.Boundaries do
   # ---------------------------------------------------------------------------
 
   @route_postures %{
-    authenticate_plug:
-      "a bearer-credential plug on the pipeline resolves the caller before the controller",
-    webhook_hmac: "the sender's HMAC over the raw body, verified on the pipeline",
-    handler_auth: "the controller self-gates, answering 401 or 400 without a token",
-    tincture_handler_auth:
-      "a signed `?_t=` token or an Authorization bearer, resolved in the tincture " <>
-        "controller's helper; no session cookie, because a tincture page is embeddable",
-    public_oauth_state: "public: the OAuth state token in the callback is the credential",
-    browser_oauth_start: "public: starts an IdP round trip and carries nothing of the caller",
-    browser_oauth_callback: "public: the IdP's callback, gated by the state it carries",
-    browser_oauth_flow: "public: a device-flow ticket or a post-acceptance hop, each single-use",
-    browser_claim_gate: "public: the publisher-namespace claim page and its throttled submit",
-    browser_public_legal: "public: renders the bundled policies and relays an acceptance",
-    public_health: "public by design: a load balancer's probe, throttled per address",
-    browser_public_auth: "public: the CSRF-guarded sign-out post",
-    browser_public_login: "public: the sign-in page, which is what an anonymous caller comes for",
-    browser_focus_handler:
-      "the session cookie for who, the URL's athanor for where, focused in the " <>
-        "controller exactly as a LiveView mount focuses it",
-    browser_authenticated:
-      "the `:athanor` live_session's on_mount pair: `PrismWeb.LiveAuth` requires a " <>
-        "session and `PrismWeb.Focus` narrows the context to the URL's athanor"
+    authenticate_plug: %{
+      admits: :credential,
+      why: "a bearer-credential plug on the pipeline resolves the caller before the controller"
+    },
+    webhook_hmac: %{
+      admits: :credential,
+      why: "the sender's HMAC over the raw body, verified on the pipeline"
+    },
+    handler_auth: %{
+      admits: :credential,
+      why: "the controller self-gates, answering 401 or 400 without a token"
+    },
+    tincture_handler_auth: %{
+      admits: :credential,
+      why:
+        "a signed `?_t=` token or an Authorization bearer, resolved in the tincture " <>
+          "controller's helper. No session cookie: a tincture page is embeddable " <>
+          "cross-origin, and an ambient cookie credential on a cross-origin surface is " <>
+          "the CSRF food the design refuses"
+    },
+    browser_authenticated: %{
+      admits: :session,
+      why:
+        "the `:athanor` live_session's on_mount pair: `PrismWeb.LiveAuth` requires a " <>
+          "session and `PrismWeb.Focus` narrows the context to the URL's athanor"
+    },
+    browser_focus_handler: %{
+      admits: :session,
+      why:
+        "the session cookie for who, the URL's athanor for where, focused in the " <>
+          "controller exactly as a LiveView mount focuses it"
+    },
+    public_oauth_state: %{
+      admits: :flow_state,
+      why: "the OAuth state token the callback carries is the credential"
+    },
+    browser_oauth_callback: %{
+      admits: :flow_state,
+      why: "the IdP's callback, gated by the state token the kickoff issued"
+    },
+    browser_oauth_flow: %{
+      admits: :flow_state,
+      why: "a device-flow ticket or a post-acceptance hop, each single-use and consumed on lookup"
+    },
+    browser_claim_gate: %{
+      admits: :flow_state,
+      why:
+        "the publisher-namespace claim page and its throttled submit, gated by the " <>
+          "pending sign-in probe the session holds — expired, the page says so and " <>
+          "sends the caller back to sign in"
+    },
+    browser_public_legal: %{
+      admits: :flow_state,
+      why:
+        "renders the bundled policies and relays an acceptance, under the same " <>
+          "pending sign-in the claim gate reads"
+    },
+    public_health: %{
+      admits: :nothing,
+      why: "a load balancer's probe, throttled per address"
+    },
+    browser_public_login: %{
+      admits: :nothing,
+      why: "the sign-in page, which is what an anonymous caller comes for"
+    },
+    browser_public_auth: %{
+      admits: :nothing,
+      why:
+        "the sign-out post drops whatever session the browser has and needs none to " <>
+          "be told to; POST and not GET, so the browser pipeline's CSRF token guards it"
+    },
+    browser_oauth_start: %{
+      admits: :nothing,
+      why: "starts an IdP round trip and carries nothing of the caller into it"
+    }
   }
-
-  # Which postures admit a caller who presented no credential at all.
-  @public_postures ~w(
-    public_oauth_state browser_oauth_start browser_oauth_callback browser_oauth_flow
-    browser_claim_gate browser_public_legal public_health browser_public_auth
-    browser_public_login
-  )a
 
   @public_routes [
     {:get, "/api/health"},
     {:get, "/api/health/ready"},
-    {:get, "/auth/oauth/callback"},
     {:get, "/auth/:provider"},
-    {:get, "/auth/:provider/callback"},
-    {:get, "/auth/device/complete/:ticket"},
-    {:get, "/auth/post-legal-accept"},
-    {:get, "/claim-namespace"},
-    {:post, "/claim-namespace/submit"},
-    {:get, "/legal/accept"},
-    {:post, "/legal/accept/submit"},
     {:post, "/auth/logout"},
     {:get, "/login"}
   ]
 
   @doc """
-  Every auth posture a route may declare, and what it means.
+  Every auth posture a route may declare, what admits a caller to it, and
+  why.
 
   The posture itself is declared where the route is
-  (`metadata: %{auth: …}` in `EmissaryWeb.Router`), so it travels with
-  the route and a deleted route takes its posture with it. What lives
-  here is the vocabulary, and the roster of routes that admit a caller
-  with no credential.
+  (`metadata: %{auth: …}` in `EmissaryWeb.Router`), so it travels with the
+  route and a deleted route takes its posture with it. What lives here is
+  the vocabulary.
+
+  `admits` is the tier: `:credential`, a token or signature the caller
+  presented; `:session`, the browser's own cookie; `:flow_state`, a
+  single-use token or pending sign-in the server itself issued, which
+  authenticates the step and nothing else; and `:nothing`, a route
+  reachable by anyone, whose routes are rostered one by one in
+  `public_routes/0`.
   """
-  @spec route_postures() :: %{atom() => String.t()}
+  @spec route_postures() :: %{atom() => %{admits: atom(), why: String.t()}}
   def route_postures, do: @route_postures
 
-  @doc "The postures that admit a caller who presented no credential."
+  @doc "The postures that admit a caller who presented nothing at all."
   @spec public_postures() :: [atom()]
-  def public_postures, do: @public_postures
+  def public_postures, do: for({p, %{admits: :nothing}} <- @route_postures, do: p)
 
   @doc """
-  Every route that is public by design, as `{verb, path}`.
+  Every route anyone can reach, as `{verb, path}`.
 
   A new one fails `Cyfr.BoundariesTest` until it is named here: a route
-  must not become reachable without a credential by inheriting a pipeline.
+  must not become reachable by anyone through inheriting a pipeline.
   """
   @spec public_routes() :: [{atom(), String.t()}]
   def public_routes, do: @public_routes
@@ -593,7 +638,7 @@ defmodule Cyfr.Boundaries do
           ["#{where}: no declared auth posture (add `metadata: %{auth: …}`)"]
 
         posture when is_map_key(@route_postures, posture) ->
-          if posture in @public_postures and {route.verb, route.path} not in @public_routes,
+          if posture in public_postures() and {route.verb, route.path} not in @public_routes,
             do: ["#{where}: declares the public posture #{inspect(posture)} and is not rostered"],
             else: []
 

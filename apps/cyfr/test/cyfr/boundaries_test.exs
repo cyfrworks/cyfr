@@ -412,11 +412,31 @@ defmodule Cyfr.BoundariesTest do
              "these postures are in the vocabulary and no route declares them: #{inspect(unused)}"
     end
 
-    test "every posture says what authenticates the route" do
-      for {posture, sentence} <- Boundaries.route_postures() do
-        assert is_binary(sentence) and String.length(sentence) > 20,
+    test "every posture says what admits a caller to it, and why" do
+      for {posture, row} <- Boundaries.route_postures() do
+        assert row.admits in [:credential, :session, :flow_state, :nothing],
+               "the posture #{inspect(posture)} admits #{inspect(row.admits)}, which is no tier"
+
+        assert is_binary(row.why) and String.length(row.why) > 20,
                "the posture #{inspect(posture)} carries no sentence"
       end
+    end
+
+    test "the rostered routes are exactly the ones whose posture admits nothing" do
+      anyone =
+        EmissaryWeb.Router.__routes__()
+        |> Enum.filter(&(&1.metadata[:auth] in Boundaries.public_postures()))
+        |> Enum.map(&{&1.verb, &1.path})
+        |> Enum.sort()
+
+      assert anyone == Enum.sort(Boundaries.public_routes()),
+             """
+             The routes whose posture admits nothing are #{inspect(anyone)}; the
+             roster names #{inspect(Enum.sort(Boundaries.public_routes()))}.
+
+             A route anyone can reach is named one by one, so widening the tier
+             of a posture cannot quietly open every route that declares it.
+             """
     end
   end
 
@@ -918,8 +938,10 @@ defmodule Cyfr.BoundariesTest do
     end
 
     test "the builder's suite names nothing of the control plane" do
-      # This test file plants control-plane names on purpose, and so does
-      # the catalog; the builder's own suite may name none.
+      # Read from here rather than from Locus's own suite, which used to
+      # hold it: the builder's suite runs in a checkout with nothing of
+      # the control plane in it, so a roster that names what it may not
+      # name cannot live there without naming it.
       allowed = Boundaries.reachable_layers(:locus)
       contracts = contracts_modules()
 
