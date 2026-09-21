@@ -171,7 +171,7 @@ defmodule Emissary.MCP.ThreadToolTest do
       assert {:error, :message_too_long} =
                call(ctx, %{"action" => "send", "thread" => thread.id, "message" => long})
 
-      assert Cyfr.Ops.Error.message(:message_too_long) =~ "32 KiB"
+      assert Cyfr.Refusal.message(:message_too_long) =~ "32 KiB"
     end
   end
 

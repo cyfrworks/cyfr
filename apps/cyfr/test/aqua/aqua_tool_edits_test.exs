@@ -211,8 +211,8 @@ defmodule Aqua.AquaToolEditsTest do
 
     # The refusal is the vocabulary's, not a flattened storage failure,
     # and it says the unit is published.
-    assert Cyfr.Ops.Error.reason?({:finish_failed, :enospc})
-    assert Cyfr.Ops.Error.message({:finish_failed, :enospc}) =~ "published"
+    assert Cyfr.Refusal.reason?({:finish_failed, :enospc})
+    assert Cyfr.Refusal.message({:finish_failed, :enospc}) =~ "published"
 
     # The resync ran rather than being skipped with the refusal: it reads
     # the served tree, which does not hold the role's bytes yet, so it

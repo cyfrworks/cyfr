@@ -969,14 +969,14 @@ defmodule Opus.FormulaHandler do
 
   defp stringify_reason(reason), do: render_reason(reason)
 
-  # Guest-facing reason text below the `Cyfr.GuestError` vocabulary: a
-  # crafted binary passes, a bare reason atom names itself verbatim, and
-  # anything structured renders through the shared vocabulary or is logged
-  # and generalized — never `inspect/1`, which would hand the guest whatever
-  # the term carried.
+  # Guest-facing reason text, through the one vocabulary: a crafted binary
+  # passes, and everything else renders through `Cyfr.GuestError` or is
+  # logged and generalized — never `inspect/1`, and never an atom's own
+  # name. Spelling an unrecognised atom was how `:busy` and `:archived`
+  # reached a guest as internal vocabulary; a refusal either has a
+  # sentence in the vocabulary or it is internal, and there is no third
+  # case.
   defp guest_reason(reason) when is_binary(reason), do: reason
-
-  defp guest_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp guest_reason(reason) do
     case Cyfr.GuestError.render(reason) do

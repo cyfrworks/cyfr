@@ -193,7 +193,7 @@ defmodule Compendium.Registry do
         unverifiable
 
       {:error, reason} = refusal ->
-        if Cyfr.Ops.Error.reason?(reason),
+        if Cyfr.Refusal.reason?(reason),
           do: refusal,
           else: {:error, {write_failure, reason}}
     end

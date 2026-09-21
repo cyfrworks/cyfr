@@ -659,7 +659,7 @@ defmodule Compendium.MCP.RegistryTool do
   # already typed is the caller's answer as-is; everything else — an
   # `OCI.Errors` struct above all — keeps the shared registry sentence.
   defp refuse(reason) do
-    if Cyfr.Ops.Error.reason?(reason),
+    if Cyfr.Refusal.reason?(reason),
       do: {:error, reason},
       else: {:error, Shared.to_error_string(reason)}
   end

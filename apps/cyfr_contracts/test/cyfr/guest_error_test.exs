@@ -27,7 +27,9 @@ defmodule Cyfr.GuestErrorTest do
 
   test "a runner's own reasons render as the text they carry" do
     assert GuestError.render("already a sentence") == "already a sentence"
-    assert GuestError.render(:lost) == "lost"
+    # A host call CYFR could not answer. It read as the atom's own name
+    # until there was one vocabulary to render it from.
+    assert GuestError.render(:lost) =~ "check before asking again"
     assert GuestError.render({:timeout, "The call timed out"}) == "The call timed out"
     assert GuestError.render({:uncertain, "The effect may have happened"}) =~ "may have"
     assert GuestError.render({:not_found, "component", "c:1"}) == "component not found: c:1"
@@ -36,7 +38,7 @@ defmodule Cyfr.GuestErrorTest do
   end
 
   test "a unit commit's refusals render as the sentence the console renders" do
-    # The same words `Cyfr.Ops.Error` renders, so a guest in a chain and
+    # The same words the console renders, so a guest in a chain and
     # a person at the console are told the same thing; the parity is held
     # by `Cyfr.Ops.ErrorRenderersTest`.
     assert GuestError.render(:stale_writer) =~ "fifteen minutes"
@@ -53,6 +55,10 @@ defmodule Cyfr.GuestErrorTest do
 
   test "an internal term renders as nothing" do
     for internal <- [
+          # An atom that is not a refusal of the vocabulary: an internal
+          # name is not a sentence, and spelling it is how internal
+          # vocabulary reaches a guest-visible surface.
+          :some_internal_state,
           nil,
           true,
           false,

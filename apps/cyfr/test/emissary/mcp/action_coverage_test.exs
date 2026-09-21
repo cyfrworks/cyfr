@@ -69,13 +69,16 @@ defmodule Emissary.MCP.ActionCoverageTest do
     end
   end
 
-  # A provider's catch-all clause answers "Invalid <tool> action", as a
-  # sentence (`Cyfr.Schedules.Provider`) or inside a typed invalid-argument
-  # refusal (every other provider); an action that reached a clause of its
+  # A provider's catch-all clause answers "Invalid <tool> action" inside a
+  # typed invalid-argument refusal; an action that reached a clause of its
   # own is refused in some other way, or not at all.
-  defp catch_all?({:invalid_argument, message}), do: catch_all?(message)
-
-  defp catch_all?(message) when is_binary(message), do: message =~ ~r/Invalid .* action/
+  #
+  # One clause, because there is one refusal vocabulary. This case read
+  # two, and its bare-sentence arm was the only one any provider answered
+  # — so the four providers that were already typed fell through it
+  # unchecked, and it tested one provider of five.
+  defp catch_all?({:invalid_argument, message}) when is_binary(message),
+    do: message =~ ~r/Invalid .* action/
 
   defp catch_all?(_refusal), do: false
 end

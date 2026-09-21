@@ -89,7 +89,7 @@ defmodule Compendium.Scaffold do
         # — so they are answered as themselves; anything else is a
         # storage term, said in words.
         {:error, reason} = refusal ->
-          if Cyfr.Ops.Error.reason?(reason),
+          if Cyfr.Refusal.reason?(reason),
             do: refusal,
             else: {:error, "Failed to write scaffold files: #{inspect(reason)}"}
       end

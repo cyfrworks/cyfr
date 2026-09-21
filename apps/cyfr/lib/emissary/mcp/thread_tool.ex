@@ -821,7 +821,7 @@ defmodule Emissary.MCP.ThreadTool do
   # catch-all passes anything it does not name through untouched, a
   # reason already in the vocabulary included; what it does name is this
   # domain's spelling and wins over a shared one — `:unavailable` here is
-  # the thread store, not the storage-unit outcome `Cyfr.Ops.Error` maps.
+  # the thread store, not the storage-unit outcome `Cyfr.Refusal` maps.
   defp refusal(reason, id), do: translate(reason, id)
 
   defp translate(:not_found, id), do: {:not_found, "thread", id}
