@@ -511,7 +511,11 @@ defmodule Cyfr.BoundariesTest do
       declared = MapSet.new(declared_config_pairs(), &elem(&1, 1))
 
       stale =
-        for {key, _reason} <- Boundaries.config_keys_read_by_name(),
+        for {key, _reason} <-
+              Map.merge(
+                Boundaries.config_keys_read_by_name(),
+                Boundaries.config_keys_read_outside_lib()
+              ),
             not MapSet.member?(declared, key),
             do: key
 
@@ -544,50 +548,50 @@ defmodule Cyfr.BoundariesTest do
     for lib <- SourceTree.app_libs(root()), source <- scan(lib <> "/**/*.ex"), do: source
   end
 
-  # `config :<app>, :key, …` and the multi-key `config :<app>,\n  key: …`
-  # form, for each application the schema covers.
-  defp declared_config_keys do
+  # Every declaration a configuration file makes for one of the schema's
+  # three applications, as `{file, app, key}` — the single-key form and
+  # the multi-key `config :app,\n  key: …` form, parsed once so the two
+  # views below cannot read them differently. The applications' own files
+  # are read as well as the root's, because an application's own build
+  # reads its own.
+  defp config_declarations do
     apps = Enum.map_join(Boundaries.config_applications(), "|", &to_string/1)
-    single = Regex.compile!("config :(?:#{apps}),\\s*:([a-z_0-9]+)")
-    block = Regex.compile!("^config :(?:#{apps}),\\s*$((?:\\n[ \\t]+.*)+)", "m")
-
-    for path <- SourceTree.files!(Path.join(root(), "config/*.exs")),
-        source = File.read!(path),
-        key <- keys_in(source, single) ++ block_keys_in(source, block),
-        reduce: %{} do
-      acc -> Map.update(acc, key, [Path.basename(path)], &[Path.basename(path) | &1])
-    end
-  end
-
-  # Every `{application, key}` a configuration file sets, this repository's
-  # three applications only — the app's own files as well as the root's,
-  # because an application's build reads its own.
-  defp declared_config_pairs do
-    apps = Enum.map_join(Boundaries.config_applications(), "|", &to_string/1)
-    pattern = Regex.compile!("config :(#{apps}),\\s*:([a-z_0-9]+)")
+    single = Regex.compile!("config :(#{apps}),\\s*:([a-z_0-9]+)")
+    block = Regex.compile!("^config :(#{apps}),\\s*$((?:\\n[ \\t]+.*)+)", "m")
+    member = ~r/^\s{2,}([a-z_0-9]+):/m
 
     files =
       SourceTree.files!(Path.join(root(), "config/*.exs")) ++
         SourceTree.files!(Path.join(root(), "apps/*/config/*.exs"))
 
-    for path <- files,
-        [app, key] <- Regex.scan(pattern, File.read!(path), capture: :all_but_first),
-        uniq: true,
-        do: {String.to_atom(app), String.to_atom(key)}
+    for path <- files, source = File.read!(path), reduce: [] do
+      acc ->
+        rows =
+          for [app, key] <- Regex.scan(single, source, capture: :all_but_first),
+              do: {path, String.to_atom(app), String.to_atom(key)}
+
+        members =
+          for [app, body] <- Regex.scan(block, source, capture: :all_but_first),
+              [key] <- Regex.scan(member, body, capture: :all_but_first),
+              do: {path, String.to_atom(app), String.to_atom(key)}
+
+        acc ++ rows ++ members
+    end
   end
 
-  defp keys_in(source, pattern) do
-    pattern
-    |> Regex.scan(source, capture: :all_but_first)
-    |> List.flatten()
-    |> Enum.map(&String.to_atom/1)
+  # Which of the root's configuration files declare each key, by name.
+  # The root's alone: these are the files the umbrella build reads.
+  defp declared_config_keys do
+    for {path, _app, key} <- config_declarations(),
+        Path.dirname(path) == Path.join(root(), "config"),
+        reduce: %{} do
+      acc -> Map.update(acc, key, [Path.basename(path)], &[Path.basename(path) | &1])
+    end
   end
 
-  defp block_keys_in(source, pattern) do
-    pattern
-    |> Regex.scan(source, capture: :all_but_first)
-    |> List.flatten()
-    |> Enum.flat_map(&keys_in(&1, ~r/^\s{2,}([a-z_0-9]+):/m))
+  # Every `{application, key}` a configuration file sets, wherever it sets it.
+  defp declared_config_pairs do
+    config_declarations() |> Enum.map(fn {_path, app, key} -> {app, key} end) |> Enum.uniq()
   end
 
   # ---------------------------------------------------------------------------

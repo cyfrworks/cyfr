@@ -44,9 +44,12 @@ defmodule Cyfr.Boundaries do
       Opus module, and why.
 
   Every check here takes a tree already read through
-  `Cyfr.Test.CodeLines`, the one line filter, so a name in prose is never
-  taken for a dependency. The rules live here; the filter is the reader's,
-  which is what keeps a catalog that ships in `lib` off the test support.
+  `Cyfr.Test.CodeLines`: the module names a file names, for the namespace
+  rows, and its code lines for the rest. A name is read from the token
+  stream rather than matched in a line, so a module named in a log
+  sentence or a tool description is not a dependency and a call on a root
+  module is. The rules live here; the filter is the reader's, which is
+  what keeps a catalog that ships in `lib` off the test support.
   """
 
   # ---------------------------------------------------------------------------
@@ -240,7 +243,7 @@ defmodule Cyfr.Boundaries do
   @surfaces [
     # --- the auth domain's callers, each crossing the licence boundary ---
     %{
-      from: ["apps/cyfr/lib/aqua/**/*.ex"],
+      from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum",
       allow: ~w(Sanctum Sanctum.Context Sanctum.Notify Sanctum.Provisioning Sanctum.Tenancy),
       reason:
@@ -251,7 +254,7 @@ defmodule Cyfr.Boundaries do
           "authority in it."
     },
     %{
-      from: ["apps/cyfr/lib/compendium/**/*.ex"],
+      from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Sanctum",
       allow: ~w(
         Sanctum Sanctum.Cipher Sanctum.CipherAAD Sanctum.Consent Sanctum.Context
@@ -324,7 +327,7 @@ defmodule Cyfr.Boundaries do
           "the anonymous device flows it starts."
     },
     %{
-      from: ["apps/cyfr/lib/compendium/**/*.ex"],
+      from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Sanctum.Consent",
       depth: 3,
       allow: ~w(Sanctum.Consent.Components Sanctum.Consent.ShapeDerivation),
@@ -383,8 +386,10 @@ defmodule Cyfr.Boundaries do
         "apps/locus/lib/**/*.ex",
         "apps/arca/lib/**/*.ex",
         "apps/cyfr/lib/compendium/**/*.ex",
+        "apps/cyfr/lib/compendium.ex",
         "apps/sanctum/lib/**/*.ex",
-        "apps/cyfr/lib/aqua/**/*.ex"
+        "apps/cyfr/lib/aqua/**/*.ex",
+        "apps/cyfr/lib/aqua.ex"
       ],
       into: "Prism",
       allow: [],
@@ -398,9 +403,29 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr_contracts/lib/**/*.ex",
         "apps/opus/lib/**/*.ex",
         "apps/locus/lib/**/*.ex",
+        "apps/arca/lib/**/*.ex",
+        "apps/cyfr/lib/compendium/**/*.ex",
+        "apps/cyfr/lib/compendium.ex",
         "apps/sanctum/lib/**/*.ex",
         "apps/cyfr/lib/aqua/**/*.ex",
-        "apps/cyfr/lib/compendium/**/*.ex"
+        "apps/cyfr/lib/aqua.ex"
+      ],
+      into: "PrismWeb",
+      allow: [],
+      reason:
+        "the console is two namespaces and an engine may name neither: `Prism` is " <>
+          "its domain and `PrismWeb` its LiveViews, layouts and hooks."
+    },
+    %{
+      from: [
+        "apps/cyfr_contracts/lib/**/*.ex",
+        "apps/opus/lib/**/*.ex",
+        "apps/locus/lib/**/*.ex",
+        "apps/sanctum/lib/**/*.ex",
+        "apps/cyfr/lib/aqua/**/*.ex",
+        "apps/cyfr/lib/aqua.ex",
+        "apps/cyfr/lib/compendium/**/*.ex",
+        "apps/cyfr/lib/compendium.ex"
       ],
       into: "EmissaryWeb",
       allow: [],
@@ -681,6 +706,14 @@ defmodule Cyfr.Boundaries do
     mcp_subscription_max_ms: "handed to `EmissaryWeb.SSE.deadline/1` as the key to read"
   }
 
+  @config_keys_read_outside_lib %{
+    default_test_namespace:
+      "read by `Sanctum.TestContext`, a test-support fixture. The schema reads each " <>
+        "application's `lib` alone: widening it to test support would change what it " <>
+        "means — keys the application reads becomes keys anything reads — and pull " <>
+        "in every fixture's own reads with it."
+  }
+
   @doc """
   The keys no code reads by a literal `Application.get_env(:app, :key)` —
   each is read under a key the caller computes, and a scan of the source
@@ -689,6 +722,13 @@ defmodule Cyfr.Boundaries do
   """
   @spec config_keys_read_by_name() :: %{atom() => String.t()}
   def config_keys_read_by_name, do: @config_keys_read_by_name
+
+  @doc """
+  The keys a configuration file sets that nothing under any `lib` reads,
+  and why each is set anyway.
+  """
+  @spec config_keys_read_outside_lib() :: %{atom() => String.t()}
+  def config_keys_read_outside_lib, do: @config_keys_read_outside_lib
 
   @doc """
   The keys `declared` names under an application that `scanned` never
@@ -705,7 +745,10 @@ defmodule Cyfr.Boundaries do
     read = config_pairs_read(scanned)
 
     declared
-    |> Enum.reject(fn {_app, key} -> Map.has_key?(@config_keys_read_by_name, key) end)
+    |> Enum.reject(fn {_app, key} ->
+      Map.has_key?(@config_keys_read_by_name, key) or
+        Map.has_key?(@config_keys_read_outside_lib, key)
+    end)
     |> Enum.reject(&MapSet.member?(read, &1))
     |> Enum.sort()
   end
