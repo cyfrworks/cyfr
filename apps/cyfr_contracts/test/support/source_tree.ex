@@ -19,6 +19,8 @@ defmodule Cyfr.Test.SourceTree do
   copies of their own and do not create it.
   """
 
+  alias Cyfr.Test.CodeLines
+
   @table :cyfr_test_source_tree
 
   @doc false
@@ -109,22 +111,31 @@ defmodule Cyfr.Test.SourceTree do
   Falls back to classifying on the spot when the table is absent.
   """
   @spec code_lines(Path.t()) :: [{String.t(), pos_integer()}]
-  def code_lines(path) do
-    key = {:code_lines, path}
+  def code_lines(path), do: memo({:code_lines, path}, fn -> CodeLines.code_lines(read(path)) end)
 
+  @doc """
+  `Cyfr.Test.CodeLines.aliases/1` over a file, memoized beside its source.
+
+  Every module name the file names, with its line — the view the
+  architecture rosters read.
+  """
+  @spec aliases(Path.t()) :: [{String.t(), pos_integer()}]
+  def aliases(path), do: memo({:aliases, path}, fn -> CodeLines.aliases(read(path)) end)
+
+  defp memo(key, compute) do
     case :ets.whereis(@table) do
       :undefined ->
-        Cyfr.Test.CodeLines.code_lines(read(path))
+        compute.()
 
       _ ->
         case :ets.lookup(@table, key) do
-          [{^key, lines}] ->
-            lines
+          [{^key, value}] ->
+            value
 
           [] ->
-            lines = Cyfr.Test.CodeLines.code_lines(read(path))
-            :ets.insert(@table, {key, lines})
-            lines
+            value = compute.()
+            :ets.insert(@table, {key, value})
+            value
         end
     end
   end

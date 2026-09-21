@@ -319,8 +319,9 @@ jobs:
       # a checkout with only the lock, the contracts, Arca, Sanctum, the
       # fetched deps and the CYFR_DATABASE parse compiles it with warnings
       # as errors and runs its suite. Zero Ecto of its own — every row it
-      # reads it reads through an Arca facade — which is what the declared
-      # dependency list below makes checkable.
+      # reads it reads through an Arca facade. What each island may declare
+      # in the umbrella is a row of `Cyfr.Boundaries`, asserted against
+      # each mix.exs by `Cyfr.BoundariesTest` in the main suite.
       - name: Compile and test Sanctum from its declared apps alone
         run: |
           set -euo pipefail
@@ -333,23 +334,6 @@ jobs:
           cd "$island/apps/sanctum"
           mix compile --warnings-as-errors
           mix test
-      # What each island may name in the umbrella, so a new dependency is a
-      # decision and not a drift.
-      - name: Assert the declared umbrella dependencies
-        run: |
-          set -uo pipefail
-          fail=0
-          arca_deps="$(grep -oE '\{:[a-z_]+, in_umbrella: true' apps/arca/mix.exs | sed -E 's/^\{:([a-z_]+).*/\1/' | sort -u | tr '\n' ' ')"
-          if [ "$arca_deps" != "cyfr_contracts " ]; then
-            echo "::error file=apps/arca/mix.exs::arca may depend in the umbrella on cyfr_contracts alone, found: ${arca_deps:-nothing}"
-            fail=1
-          fi
-          sanctum_deps="$(grep -oE '\{:[a-z_]+, in_umbrella: true' apps/sanctum/mix.exs | sed -E 's/^\{:([a-z_]+).*/\1/' | sort -u | tr '\n' ' ')"
-          if [ "$sanctum_deps" != "arca cyfr_contracts " ]; then
-            echo "::error file=apps/sanctum/mix.exs::sanctum may depend in the umbrella on cyfr_contracts and arca alone, found: ${sanctum_deps:-nothing}"
-            fail=1
-          fi
-          exit "$fail"
 
   locus-independence:
     name: Locus compiles and tests from its declared apps alone

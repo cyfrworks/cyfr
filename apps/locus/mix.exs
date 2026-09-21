@@ -30,7 +30,7 @@ defmodule Locus.MixProject do
   end
 
   # The builder: the shared contracts, its own listener, and nothing of the
-  # control plane (`Locus.HostSurfaceTest` keeps it so). It reads no `.env`
+  # control plane (`Cyfr.Boundaries` keeps it so). It reads no `.env`
   # file: the `locus` release takes `LOCUS_BUILDS_*` from its process
   # environment alone (`config/locus_runtime.exs`).
   defp deps do

@@ -67,6 +67,66 @@ defmodule Locus.Test.CodeLines do
     end)
   end
 
+  @doc """
+  Every module name the source NAMES, with the line it names it on.
+
+  Read from the token stream rather than from the text, which is what
+  makes it exact: a name written inside a string or a comment is prose and
+  is not here, a name written inside an interpolation is code and
+  is, and `alias Foo.{A, B}` is spelled out as `Foo.A` and `Foo.B`. A call
+  on a root module (`EmissaryWeb.static_paths/0`) yields the root, because
+  naming it is reaching for it.
+
+  This is what the architecture rosters read. `code_lines/1` is the other
+  view, for the scans that look for a sentence rather than a name.
+  """
+  @spec aliases(String.t()) :: [{String.t(), pos_integer()}]
+  def aliases(source) do
+    {tokens, _comments} = tokenize!(source)
+    tokens |> Enum.flat_map(&[&1 | interpolated(&1)]) |> collect([])
+  end
+
+  defp collect([{:alias, {line, _column, _extra}, name} | rest], acc) do
+    {segments, rest} = dotted(rest, [Atom.to_string(name)])
+    base = segments |> Enum.reverse() |> Enum.join(".")
+
+    case rest do
+      [{:., _meta}, {:"{", _brace} | inside] ->
+        {members, rest} = brace_members(inside, [], [])
+        collect(rest, Enum.reduce(members, acc, &[{base <> "." <> &1, line} | &2]))
+
+      _ ->
+        collect(rest, [{base, line} | acc])
+    end
+  end
+
+  defp collect([_token | rest], acc), do: collect(rest, acc)
+  defp collect([], acc), do: acc |> Enum.reverse() |> Enum.uniq()
+
+  defp dotted([{:., _meta}, {:alias, _pos, name} | rest], acc),
+    do: dotted(rest, [Atom.to_string(name) | acc])
+
+  defp dotted(rest, acc), do: {acc, rest}
+
+  # The body of `Foo.{A, B.C}`: each member is a dotted name of its own.
+  defp brace_members([{:"}", _meta} | rest], current, members),
+    do: {Enum.reverse(add_member(current, members)), rest}
+
+  defp brace_members([{:",", _meta} | rest], current, members),
+    do: brace_members(rest, [], add_member(current, members))
+
+  defp brace_members([{:alias, _meta, name} | rest], current, members),
+    do: brace_members(rest, [Atom.to_string(name) | current], members)
+
+  defp brace_members([_token | rest], current, members),
+    do: brace_members(rest, current, members)
+
+  defp brace_members([], current, members),
+    do: {Enum.reverse(add_member(current, members)), []}
+
+  defp add_member([], members), do: members
+  defp add_member(current, members), do: [current |> Enum.reverse() |> Enum.join(".") | members]
+
   @doc "Just the kept code lines, in file order."
   @spec lines(String.t()) :: [String.t()]
   def lines(source), do: source |> code_lines() |> Enum.map(&elem(&1, 0))

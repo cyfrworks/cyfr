@@ -61,7 +61,7 @@ defmodule Opus.MixProject do
   # runtime, its own listener and its client of CYFR's host API, and the
   # `.env` reader the `opus` release's `config/runtime.exs` takes its
   # `OPUS_*` settings through. Nothing of the control plane:
-  # `Opus.HostSurfaceTest` keeps it so.
+  # `Cyfr.Boundaries` keeps it so.
   defp deps do
     [
       {:wasmex, "~> 0.13.0"},
