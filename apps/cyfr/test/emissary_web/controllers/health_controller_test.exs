@@ -79,6 +79,31 @@ defmodule EmissaryWeb.HealthControllerTest do
       assert response["checks"]["database"] == "failed"
     end
 
+    test "a member that holds no slot in the cell is 503 not_ready, and says so", %{conn: conn} do
+      # The readiness probe is how a member that lost its standing leaves
+      # rotation: the endpoint answers 503 to everything but this probe
+      # until the claim is won back, and the probe must not answer "ready"
+      # meanwhile. It reads the cached standing, so it costs no query.
+      Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+      Arca.ControlPlane.record(:lost)
+
+      on_exit(fn ->
+        Arca.ControlPlane.record(:unclaimed)
+        Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+      end)
+
+      response = json_response(get(conn, "/api/health/ready"), 503)
+      assert response["status"] == "not_ready"
+      assert response["checks"]["control_plane"] == "failed"
+
+      Arca.ControlPlane.record(:unclaimed)
+      Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+
+      response = json_response(get(conn, "/api/health/ready"), 200)
+      assert response["status"] == "ready"
+      assert response["checks"]["control_plane"] == "ok"
+    end
+
     test "a stranded probe key is overwritten, not accumulated", %{conn: conn} do
       # The probe writes ONE fixed key and deletes it — a past failed
       # delete strands at most one object, reclaimed by the next probe's

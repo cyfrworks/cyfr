@@ -263,15 +263,13 @@ defmodule Cyfr.Execution.Admission do
   def admit(%Context{} = ctx, reference, input, opts)
       when is_binary(reference) and is_map(input) and is_list(opts) do
     # Every road into the engine — root, child, cron, webhook — is admitted
-    # here, so a boot that lost the control plane admits nothing.
-    case Cyfr.ControlPlane.assert_owner() do
-      :ok ->
-        ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Cyfr.UUID7.request_id()}
-        admit_owned(ctx, reference, input, opts)
-
-      {:error, :control_plane_lost} ->
-        {:error,
-         "control plane ownership lost; execution refused until this node reclaims the database"}
+    # here, so a member that holds no slot in the cell admits nothing.
+    if Arca.ControlPlane.held?() do
+      ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Cyfr.UUID7.request_id()}
+      admit_owned(ctx, reference, input, opts)
+    else
+      {:error,
+       "control plane ownership lost; execution refused until this node reclaims the database"}
     end
   end
 

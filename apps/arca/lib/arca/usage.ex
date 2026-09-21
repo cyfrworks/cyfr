@@ -21,9 +21,48 @@ defmodule Arca.Usage do
 
   `Arca.Cache.Keys` spells the key shapes; this module is their only
   reader and writer.
+
+  ## What a second member of the cell sees, and for how long
+
+  These counters are node-local, and the bump is the member's own: a write
+  admitted on one member raises that member's copy and no peer's. So a
+  peer's `athanor_bytes/1` reads a total that is short by whatever its
+  peers have written since the peer last walked the tree, and the athanor
+  byte cap it feeds (`Cyfr.Caps`, the port) can admit a write it would
+  have refused. The direction is over-admission, not over-refusal, and it
+  is not a stale number in a report: it is the estate growing past a cap a
+  tenant consented to.
+
+  **The bound is `ttl_ms/0` — five minutes.** An entry is never extended:
+  `Arca.Cache.bump_existing/2` raises a total without touching its TTL, so
+  every entry expires `ttl_ms/0` after the walk that made it, and the next
+  read walks the whole tree and counts every member's writes. A member can
+  therefore be short of the truth for at most one TTL, by at most what its
+  peers wrote inside it.
+
+  Nothing about this fails open by accident. An unresolved tenant is
+  `{:error, :no_athanor}` and never `{:ok, 0}` — a zero would read an
+  unresolved tenant as an empty estate and admit the write the cap was
+  asked about — and a walk that cannot answer is returned raw and never
+  cached, which the cap maps to `:storage_unverifiable` and refuses.
+
+  What shortens the bound to one broadcast is a cell-wide invalidation:
+  the member that admitted the write announces it, and every member drops
+  its entry. This module does not broadcast it — a foundation below the
+  host emits `:telemetry` and never touches PubSub, and the topics live in
+  `Cyfr.Bus` — so the announcement is the host's to carry.
+  `invalidate/1` is the landing point every member calls when it hears one,
+  and the TTL above is what holds when a broadcast is lost.
   """
 
   @ttl_ms :timer.minutes(5)
+
+  @doc """
+  How long a cached counter stands: the ceiling on how far behind its
+  peers' writes one member's copy can be. See the module doc.
+  """
+  @spec ttl_ms() :: pos_integer()
+  def ttl_ms, do: @ttl_ms
 
   @doc """
   Account one facade write against the cached counters — bump on a
@@ -135,8 +174,13 @@ defmodule Arca.Usage do
 
   @doc """
   Drop every cached counter for one athanor — the whole-tree total and
-  all its scope pairs. Maintenance and test hygiene; the write path
-  keeps itself coherent through `account/4`.
+  all its scope pairs.
+
+  This is also where a cell-wide invalidation lands: a member that hears
+  that a peer wrote to this athanor's estate drops its copy, and its next
+  read walks the tree and counts the peer's write. Without one, `ttl_ms/0`
+  is the bound (see the module doc). On one member it is maintenance and
+  test hygiene; the write path keeps itself coherent through `account/4`.
   """
   @spec invalidate(Cyfr.Actor.t()) :: :ok | {:error, :no_athanor}
   def invalidate(%Cyfr.Actor{athanor_id: athanor_id} = actor)

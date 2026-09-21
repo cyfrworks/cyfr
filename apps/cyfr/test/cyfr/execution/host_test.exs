@@ -473,7 +473,7 @@ defmodule Cyfr.Execution.HostTest do
 
   describe "a boot that does not hold the control plane" do
     setup do
-      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
       :ok
     end
 
@@ -485,7 +485,7 @@ defmodule Cyfr.Execution.HostTest do
           vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
         )
 
-      Cyfr.ControlPlane.mark(:lost)
+      Arca.ControlPlane.record(:lost)
 
       assert %{"error" => "lost"} = attach(fixture)
 
@@ -516,7 +516,7 @@ defmodule Cyfr.Execution.HostTest do
         AttemptFixtures.attached!(vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}})
 
       :ok = Cyfr.Execution.Events.subscribe(fixture.execution_id, fixture.ctx)
-      Cyfr.ControlPlane.mark(:lost)
+      Arca.ControlPlane.record(:lost)
 
       assert %{"error" => "lost"} = push(fixture, %{"type" => "note", "text" => "late"})
       assert %{"error" => "lost"} = renew(fixture)
@@ -530,14 +530,14 @@ defmodule Cyfr.Execution.HostTest do
       assert live_events() == []
       assert terminal_events(fixture) == []
 
-      Cyfr.ControlPlane.mark(:unclaimed)
+      Arca.ControlPlane.record(:unclaimed)
       assert %{"error" => "lost"} = complete(fixture, %{"said" => "done"})
       assert %{status: "running"} = row(fixture)
     end
 
     test "an open attempt stops on its own within a second, without closing its run" do
       fixture = AttemptFixtures.attached!()
-      Cyfr.ControlPlane.mark(:lost)
+      Arca.ControlPlane.record(:lost)
 
       wait_until(fn -> not Process.alive?(fixture.pid) end, 3_000)
       assert %{status: "running"} = row(fixture)
@@ -546,7 +546,7 @@ defmodule Cyfr.Execution.HostTest do
 
     test "a run refused before its runner started is left for the holder, not closed" do
       fixture = AttemptFixtures.attached!(attach: false)
-      Cyfr.ControlPlane.mark(:lost)
+      Arca.ControlPlane.record(:lost)
 
       assert :closed = Cyfr.Execution.Attempt.refuse(fixture.pid, "not started")
       refute Process.alive?(fixture.pid)
@@ -557,7 +557,7 @@ defmodule Cyfr.Execution.HostTest do
     @tag :capture_log
     test "a runner exit report lapses nothing" do
       fixture = AttemptFixtures.attached!(service_id: @service)
-      Cyfr.ControlPlane.mark(:lost)
+      Arca.ControlPlane.record(:lost)
 
       assert %{"error" => "unavailable"} = report(fixture)
 

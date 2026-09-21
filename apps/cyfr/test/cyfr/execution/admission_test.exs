@@ -412,6 +412,27 @@ defmodule Cyfr.Execution.AdmissionTest do
     end
   end
 
+  describe "the cell's standing" do
+    test "a member that holds no slot admits nothing, and asking costs no query", %{ctx: ctx} do
+      Arca.ControlPlane.record(:lost)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+      # Every road into the engine passes here, so the check that refuses
+      # is a term read: it must not put a query in front of every start.
+      assert {:error, "control plane ownership lost" <> _} =
+               Arca.Test.QueryCounter.assert_queries(0, fn ->
+                 Admission.admit(ctx, "reagent:local.chain-root:0.1.0", %{}, [])
+               end)
+
+      # With the standing back, admission is past this gate and refuses
+      # for its own reasons, not the cell's.
+      Arca.ControlPlane.record(:unclaimed)
+
+      assert {:error, refusal} = Admission.admit(ctx, "reagent:local.chain-root:0.1.0", %{}, [])
+      refute refusal =~ "control plane ownership lost"
+    end
+  end
+
   defp cached?(ctx, reference) do
     case Arca.Cache.get(Arca.Cache.Keys.component_meta(Sanctum.Context.actor(ctx), reference)) do
       {:ok, _} -> {:ok, :cached}

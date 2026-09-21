@@ -263,10 +263,10 @@ defmodule Aqua.Loop do
     guest = Context.enter_guest(ctx)
     holder = holder(turn.id)
 
-    with :ok <- Cyfr.ControlPlane.assert_owner(),
+    with :ok <- held(),
          {:ok, superseded} <- Tape.supersede(guest, turn),
          :ok <- stop_aborted(stop, holder),
-         :ok <- Cyfr.ControlPlane.assert_owner(),
+         :ok <- held(),
          {:ok, clones} <- Tape.open_clones(guest, superseded),
          :ok <- settle_clones(ctx, clones, reason),
          :ok <- settle_aborted(ctx, superseded, reason),
@@ -302,7 +302,7 @@ defmodule Aqua.Loop do
   defp settle_aborted(ctx, turn, reason) do
     guest = Context.enter_guest(ctx)
 
-    with :ok <- Cyfr.ControlPlane.assert_owner(),
+    with :ok <- held(),
          {:ok, steps} <- Tape.steps(guest, turn),
          :ok <- settle_aborted_steps(ctx, turn, steps, reason),
          {:ok, _} <- Tape.skip_steps(guest, turn, reason) do
@@ -314,7 +314,7 @@ defmodule Aqua.Loop do
     steps
     |> Enum.filter(&(&1.dispatch_state == "dispatched"))
     |> Enum.reduce_while(:ok, fn step, :ok ->
-      with :ok <- Cyfr.ControlPlane.assert_owner(),
+      with :ok <- held(),
            :ok <- cancel_aborted_child(ctx, step.child_execution_id) do
         Aqua.Ops.cancel_call(handle(turn, step))
         guest = Context.enter_guest(ctx)
@@ -2177,6 +2177,14 @@ defmodule Aqua.Loop do
   defp describe(reason) when is_binary(reason), do: reason
   defp describe(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp describe(reason), do: Aqua.Ops.render_refusal(reason)
+
+  # This member still holds its slot in the cell. Asked again at each point
+  # of the abort that would write, never once for the whole of it: a
+  # member that lost its slot between two writes must not take the second,
+  # and the rows are the holder's to settle.
+  defp held do
+    if Arca.ControlPlane.held?(), do: :ok, else: {:error, :control_plane_lost}
+  end
 
   defp guest(%State{spec: %Turn{guest: guest}}), do: guest
   defp ctx(%State{spec: %Turn{ctx: ctx}}), do: ctx

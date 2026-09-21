@@ -82,7 +82,7 @@ defmodule EmissaryWeb.HealthController do
       # A boot that lost its control-plane lease is not ready: the endpoint
       # answers 503 to everything but this probe until the claim is won back.
       control_plane:
-        if(Cyfr.ControlPlane.owner?(), do: :ok, else: {:error, "control plane ownership lost"}),
+        if(Arca.ControlPlane.held?(), do: :ok, else: {:error, "control plane ownership lost"}),
       # Degrading, never failing: a control-plane node without the engine
       # still serves everything else, and the probe says so instead of
       # flapping the container.

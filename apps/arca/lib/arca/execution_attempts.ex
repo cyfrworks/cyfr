@@ -266,9 +266,12 @@ defmodule Arca.ExecutionAttempts do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) and
              is_binary(boot_id) and
              is_binary(runner) do
-    until = lease_until()
-
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.renew_held", fn ->
+      # Inside the rescue: the lease now reads the cell's clock, and a
+      # store that cannot answer it is the `{:error, :database_error}`
+      # this function's contract already names, never a raise.
+      until = lease_until()
+
       held =
         from(a in ExecutionAttempt,
           where: a.athanor_id == ^athanor_id and a.attempt == ^attempt,
@@ -610,7 +613,12 @@ defmodule Arca.ExecutionAttempts do
   # arca:db-raise-ok inside the caller's transaction
   def takeover!(%Cyfr.Actor{athanor_id: athanor_id}, execution_id, opts)
       when is_binary(athanor_id) and athanor_id != "" do
-    now = DateTime.utc_now()
+    # The cell's clock, so the interval this retires is measured against
+    # the same clock the lease it replaces was written on: `upto` below
+    # is derived from the predecessor's `lease_until`, which is database
+    # time, and reading `now` off the member would fold its own skew into
+    # the running time it accounts.
+    now = Arca.ServerMetaStorage.now!()
 
     previous =
       Arca.Repo.one(
@@ -718,6 +726,10 @@ defmodule Arca.ExecutionAttempts do
   Running attempts whose lease lapsed before `now` (the sweep). Spans
   every tenant: the sweeper reaps what a crashed runner left when no
   tenant can be reconstructed. System-internal only.
+
+  `now` is the cell's clock, `Arca.ServerMetaStorage.now!/0`, never the
+  calling member's: a member whose own clock runs fast would otherwise
+  list attempts a peer is still renewing, and lapse live work.
   """
   @spec list_stale(DateTime.t(), pos_integer()) :: [ExecutionAttempt.t()]
   def list_stale(%DateTime{} = now, limit \\ 50) do
@@ -737,8 +749,17 @@ defmodule Arca.ExecutionAttempts do
   @doc "How long one lease is good for, in seconds."
   def lease_seconds, do: 180
 
-  @doc "A fresh lease expiry from now."
-  def lease_until, do: DateTime.add(DateTime.utc_now(), lease_seconds(), :second)
+  @doc """
+  A fresh lease expiry, on the cell's clock.
+
+  Two members could disagree about whether an attempt's lease has run out,
+  and the disagreement would let both take it over, so the instant comes
+  from `Arca.ServerMetaStorage.now!/0` and not from whichever member is
+  writing. Raises when the store cannot answer it: a lease decision taken
+  on a clock that could not be read is the one thing that must not happen
+  quietly.
+  """
+  def lease_until, do: DateTime.add(Arca.ServerMetaStorage.now!(), lease_seconds(), :second)
 
   # Close the running interval of the owner attempt in `from_states`,
   # moving it to `to` with `outcome` (nil keeps the column) and
@@ -901,7 +922,10 @@ defmodule Arca.ExecutionAttempts do
   # until the caller's transaction ends.
   # arca:db-raise-ok inside the caller's transaction
   defp lock_held!(%{athanor_id: athanor_id, attempt: attempt, fence: fence, runner: runner}) do
-    now = DateTime.utc_now()
+    # The cell's clock: whether the hold still stands is a question two
+    # members could answer differently, and both would then let a write
+    # land. Never this member's own.
+    now = Arca.ServerMetaStorage.now!()
 
     {count, _} =
       from(a in running_owner(athanor_id, attempt, fence),

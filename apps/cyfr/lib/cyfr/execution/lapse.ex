@@ -19,7 +19,7 @@ defmodule Cyfr.Execution.Lapse do
   (`Cyfr.Execution.WorkerWatch`); and an attempt whose waiter exited, by
   its own id (`Cyfr.Execution.Attempt`).
 
-  A boot that does not hold the control plane (`Cyfr.ControlPlane.owner?/0`)
+  A boot that does not hold the control plane (`Arca.ControlPlane.held?/0`)
   lapses nothing: the rows are the holder's to settle.
   """
 
@@ -36,7 +36,7 @@ defmodule Cyfr.Execution.Lapse do
   """
   @spec lapse(map()) :: boolean()
   def lapse(record) do
-    Cyfr.ControlPlane.owner?() and lapse_owned(record)
+    Arca.ControlPlane.held?() and lapse_owned(record)
   end
 
   defp lapse_owned(record) do

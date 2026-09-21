@@ -53,6 +53,19 @@ defmodule Cyfr.Execution.KeysTest do
     assert generation > 0
   end
 
+  test "the generation is read from the cell's cached standing, at no query" do
+    # Every assignment issued and every host call verified reads this, so
+    # it must stay a term read. `Arca.ControlPlane` answers it from a
+    # persistent term; nothing on this path may put a query behind it.
+    on_exit(fn -> Arca.ControlPlane.forget_generation() end)
+
+    :ok = Arca.ControlPlane.record_generation(:none)
+    assert {:ok, 1} = Arca.Test.QueryCounter.assert_queries(0, fn -> Keys.generation() end)
+
+    :ok = Arca.ControlPlane.record_generation(9)
+    assert {:ok, 9} = Arca.Test.QueryCounter.assert_queries(0, fn -> Keys.generation() end)
+  end
+
   test "without one, each boot mints a root of its own" do
     Application.delete_env(:cyfr, :worker_key)
 

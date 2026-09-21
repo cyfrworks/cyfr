@@ -6,6 +6,10 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
   A runner that died mid-execution leaves an attempt whose lease lapses:
   the sweeper retires it and fails the row, its late result is refused by
   the fence, and a successor opens with the next fence and the pointer.
+
+  The lease is written and read on the cell's clock, never the sweeping
+  member's: two members could disagree about whether it has run out, and
+  the disagreement would let both take the attempt over.
   """
 
   use ExUnit.Case, async: false
@@ -62,6 +66,58 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
     assert {:ok, _} = Record.renew_lease(record.id, successor.attempt)
   end
 
+  test "an attempt's lease is written and read on the cell's clock, never the member's", %{
+    ctx: ctx
+  } do
+    record = Record.new(ctx, "catalyst:local.test:1.0.0", %{"x" => 1}, component_type: :catalyst)
+    :ok = Record.write_started(record)
+
+    # The lease a member writes is `lease_seconds` past the CELL's clock.
+    # A member reading its own would fold its drift from the database into
+    # every lease it issued, and a member whose clock runs slow would go on
+    # believing it held a row that had already become takeable.
+    now = Arca.ServerMetaStorage.now!()
+    until = ExecutionAttempts.lease_until()
+
+    assert_in_delta DateTime.diff(until, now, :millisecond),
+                    ExecutionAttempts.lease_seconds() * 1000,
+                    2_000
+
+    # A lease that stands on the cell's clock is not takeable...
+    assert ExecutionAttempts.list_stale(Arca.ServerMetaStorage.now!())
+           |> Enum.find(&(&1.attempt == record.attempt)) == nil
+
+    assert Arca.Execution.list_stale_running(Arca.ServerMetaStorage.now!())
+           |> Enum.find(&(&1.id == record.id)) == nil
+
+    assert :ok = Cyfr.Execution.Sweeper.sweep()
+    assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, record.id)
+
+    # ...and a member whose own clock ran fast would find it takeable,
+    # which is the disagreement the cell's clock exists to prevent: the
+    # same scan, an instant past the lease, lists live work.
+    skewed = DateTime.add(now, ExecutionAttempts.lease_seconds() + 60, :second)
+
+    assert %{attempt: _} =
+             Enum.find(ExecutionAttempts.list_stale(skewed), &(&1.attempt == record.attempt))
+
+    # A lease that has run out on the cell's clock is takeable.
+    {1, _} =
+      Arca.Repo.update_all(
+        from(a in Arca.Schemas.ExecutionAttempt, where: a.attempt == ^record.attempt),
+        set: [lease_until: DateTime.add(Arca.ServerMetaStorage.now!(), -1, :second)]
+      )
+
+    assert %{attempt: _} =
+             Enum.find(
+               ExecutionAttempts.list_stale(Arca.ServerMetaStorage.now!()),
+               &(&1.attempt == record.attempt)
+             )
+
+    assert :ok = Cyfr.Execution.Sweeper.sweep()
+    assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, record.id)
+  end
+
   test "the sweep tick of a boot that does not own the control plane marks nothing", %{ctx: ctx} do
     record =
       Record.new(ctx, "catalyst:local.test:1.0.0", %{"x" => 1}, component_type: :catalyst)
@@ -77,13 +133,13 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
         ]
       )
 
-    Cyfr.ControlPlane.mark(:lost)
-    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+    Arca.ControlPlane.record(:lost)
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
 
     assert {:noreply, %{}} = Cyfr.Execution.Sweeper.handle_info(:sweep, %{})
     assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, record.id)
 
-    Cyfr.ControlPlane.mark(:unclaimed)
+    Arca.ControlPlane.record(:unclaimed)
     assert {:noreply, %{}} = Cyfr.Execution.Sweeper.handle_info(:sweep, %{})
     assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, record.id)
   end

@@ -12,9 +12,10 @@ defmodule PrismWeb.LoginLive do
   A refused sign-in never reaches a session — the door answers on the
   poll; a signed-in person who has no athanor yet is told so.
 
-  A boot that does not own the control plane (`Cyfr.ControlPlane`) signs
-  nobody in: a flow is not started, and a flow already waiting stops at
-  its next poll without asking the provider.
+  A member that does not hold its slot in the cell
+  (`Arca.ControlPlane.held?/0`) signs nobody in: a flow is not started,
+  and a flow already waiting stops at its next poll without asking the
+  provider.
   """
 
   use PrismWeb, :live_view
@@ -70,7 +71,7 @@ defmodule PrismWeb.LoginLive do
       is_integer(last) and now - last < 2_000 ->
         {:noreply, socket}
 
-      not Cyfr.ControlPlane.owner?() ->
+      not Arca.ControlPlane.held?() ->
         {:noreply, assign(socket, :error, @not_owner)}
 
       true ->
@@ -137,7 +138,7 @@ defmodule PrismWeb.LoginLive do
   end
 
   defp poll(socket) do
-    if Cyfr.ControlPlane.owner?() do
+    if Arca.ControlPlane.held?() do
       finish_poll(
         socket,
         DeviceFlow.impl().poll_for_session(

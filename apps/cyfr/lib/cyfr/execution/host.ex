@@ -19,7 +19,7 @@ defmodule Cyfr.Execution.Host do
 
   ## Checks, in order
 
-    0. This boot holds the control plane (`Cyfr.ControlPlane.owner?/0`). A
+    0. This boot holds the control plane (`Arca.ControlPlane.held?/0`). A
        boot that does not has no attempt to answer for: its open attempts
        stop without closing their runs (`Cyfr.Execution.Attempt`), and the
        rows are the holder's to write.
@@ -172,7 +172,7 @@ defmodule Cyfr.Execution.Host do
   end
 
   defp owner(refusal) do
-    if Cyfr.ControlPlane.owner?() do
+    if Arca.ControlPlane.held?() do
       :ok
     else
       Logger.warning("[Cyfr.Execution.Host] refused: this boot does not hold the control plane")
