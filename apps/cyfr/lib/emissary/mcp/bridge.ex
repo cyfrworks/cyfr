@@ -10,9 +10,51 @@ defmodule Emissary.MCP.Bridge do
   An **owner** is one stdio server row of one athanor — the pair
   `(athanor_id, mcp_servers.id)` — served by one
   `Emissary.MCP.ExternalServer`. The bridge runs an owner's backends at a
-  version `(g, e)`: `g` is this boot's control-plane generation
-  (`Cyfr.ControlPlane.generation/0`; a boot that holds no claim speaks
+  version `(g, e)`: `g` is this member's control-plane generation
+  (`Arca.ControlPlane.generation/0`; a member that holds no claim speaks
   generation 1) and `e` is the row's epoch.
+
+  ## One claimed controller per backend
+
+  A **backend** is the pair without its epoch, and exactly one member of
+  the cell runs it: the `job_claims` row of kind `mcp_backend` under the
+  key `"<athanor_id>:<mcp_servers.id>"` (`Arca.JobClaims`, 30 s, renewed
+  every tick). A sync takes the row before it reads the store, resolves an
+  env template or sends anything, so a member that does not hold it runs
+  no backend, asks the vault for nothing, and refuses its server process
+  `:claimed_elsewhere` — distinct from `:claim_unavailable`, which is the
+  row failing to answer at all. Where a backend *should* run is not
+  decided here: the cell proposes an owner and this row disposes, so two
+  members proposing the same backend cost one wasted conditional update.
+
+  Four checks decide whether this controller may act for a backend, and
+  each answers a different question:
+
+    * the claim's **fence** — has the row been written since this
+      controller read it? Every write is a compare-and-set on it, so a
+      renew that lands is proof no peer has interleaved;
+    * the claim's **owner**, this member's boot id (`Cyfr.Boot.id/0`) —
+      whose the row is. A member that restarted, or that lost and won its
+      slot back, does not inherit its predecessor's claim, and the same
+      fence number means nothing across two owners;
+    * the row's **epoch** (`mcp_servers.epoch`) — is the configuration the
+      backend runs under still the stored one? A config change, a disable
+      and a vault reconcile all raise it, and a controller whose owner
+      fails that fence releases the backend and stops its process;
+    * this member's **generation** — is the authority the grants were
+      issued under still current? It rises only when this member's slot is
+      taken over, so a member that won its slot back greets the bridge
+      again and re-syncs, and nothing is sent under a generation that is
+      not this member's now.
+
+  A renewal round is put ahead of everything else queued, so a claim a
+  peer has taken is found before a renewal or a release goes out under it.
+  A controller that finds its claim taken **stands down**: it stops the
+  backend's server process here, forgets the claim and drops any release
+  still pending for it, because the owner on the bridge is the peer's to
+  renew and to release now. A claim that merely lapsed — the row still
+  this member's, its lease run out — is asked for again, and only a peer
+  that got there first turns it into a stand-down.
 
   ## Messages
 
@@ -59,10 +101,11 @@ defmodule Emissary.MCP.Bridge do
   the idle period (`:mcp_bridge_idle_ms`, `CYFR_MCP_BRIDGE_IDLE_MS`: 15
   minutes unless set) and to start it again for its next call.
 
-  Nothing is sent while this boot does not own the control plane
-  (`Cyfr.ControlPlane.owner?/0`), or while its generation cannot be read:
-  `sync/1` refuses, queued messages are dropped, and leases lapse on the
-  bridge until a tick finds both again.
+  Nothing is sent, and no claim renewed, while this member does not hold
+  its slot in the cell (`Arca.ControlPlane.held?/0`), or while its
+  generation cannot be read: `sync/1` refuses, queued messages are
+  dropped, and both the bridge's leases and the claim rows lapse until a
+  tick finds both again.
 
   ## Grants and readiness
 
@@ -89,10 +132,15 @@ defmodule Emissary.MCP.Bridge do
 
   require Logger
 
+  alias Arca.JobClaims
   alias Cyfr.BridgeAuth
   alias Emissary.MCP.BackendDefinition
   alias Emissary.MCP.StatusRedaction
   alias Emissary.MCP.VaultRef
+
+  # The cell's claim on one backend. Its key carries no epoch: a restart at
+  # a new epoch is the same backend, and the claim carries across it.
+  @claim_kind "mcp_backend"
 
   @default_lease_ms 30_000
   @default_idle_ms 900_000
@@ -140,12 +188,17 @@ defmodule Emissary.MCP.Bridge do
       :pool_size,
       :inflight,
       :poll_timer,
-      generation_source: &Cyfr.ControlPlane.generation/0,
+      generation_source: &Arca.ControlPlane.generation/0,
       lease_ms: 30_000,
       idle_ms: 900_000,
       tick_ms: 10_000,
       ready_wait_ms: 15_000,
       owners: %{},
+      # The `mcp_backend` claim this controller holds for each backend, and
+      # the keys whose claims it is giving up once the bridge has released
+      # their owner.
+      claims: %{},
+      releasing: %{},
       releases: %{},
       release_waiters: %{},
       # Lease maintenance, sent first; then syncs and status reads.
@@ -169,7 +222,12 @@ defmodule Emissary.MCP.Bridge do
   (default a third of the lease), `:ready_wait_ms` how long a sync's
   caller waits for its backends (default 15 s) and `:generation` the
   zero-arity function the control-plane generation is read from (default
-  `Cyfr.ControlPlane.generation/0`).
+  `Arca.ControlPlane.generation/0`).
+
+  `:lease_ms` is also the lease each backend claim asks for, and the tick
+  is what renews it: a third of the lease by default, so the claim stands
+  while the bridge lease it goes with does, and a member that stops
+  ticking gives up both together.
   """
   def start_link(opts \\ []) do
     url = Keyword.get(opts, :url, Application.get_env(:cyfr, :mcp_bridge_url))
@@ -193,10 +251,12 @@ defmodule Emissary.MCP.Bridge do
   @doc """
   Ask the bridge to run `owner` for the calling server process, and answer
   its grant once its backends are ready or failed, or the readiness wait
-  passed. Refused with a reason when the row no longer passes the fence, an
-  env template does not resolve, the athanor or the row's creator would
-  hold more than their share of the pool, the pool is full, this boot does
-  not own the control plane, or the bridge cannot be reached.
+  passed. Refused with a reason when another member of the cell holds the
+  backend's claim (`:claimed_elsewhere`) or the claim row cannot be read
+  (`:claim_unavailable`), when the row no longer passes the fence, an env
+  template does not resolve, the athanor or the row's creator would hold
+  more than their share of the pool, the pool is full, this member does
+  not hold its slot in the cell, or the bridge cannot be reached.
   """
   @spec sync(owner()) :: {:ok, grant()} | {:error, term()}
   def sync(owner),
@@ -312,22 +372,34 @@ defmodule Emissary.MCP.Bridge do
     end
   end
 
+  # The server process is stopping, so unless a newer one has registered in
+  # its place this member stops running the backend: the claim is given up
+  # with the owner, and the next member may take it.
   def handle_call({:release, owner}, from, state) do
     key = {owner.athanor_id, owner.server_id}
     epoch = owner.epoch
 
-    state =
+    {state, last?} =
       case state.owners[key] do
-        %{epoch: registered} when registered <= epoch -> drop_owner(state, key)
-        _ -> state
+        nil -> {state, true}
+        %{epoch: registered} when registered <= epoch -> {drop_owner(state, key), true}
+        _newer -> {state, false}
       end
 
-    state = %{
-      pend_release(state, key, epoch)
-      | release_waiters: Map.update(state.release_waiters, key, [from], &[from | &1])
-    }
+    state = if last?, do: give_up_claim(state, key), else: state
+    state = pend_release(state, key, epoch)
 
-    {:noreply, state |> enqueue({:release}) |> dispatch()}
+    if Map.has_key?(state.releases, key) do
+      state = %{
+        state
+        | release_waiters: Map.update(state.release_waiters, key, [from], &[from | &1])
+      }
+
+      {:noreply, state |> enqueue({:release}) |> dispatch()}
+    else
+      # Nothing of this backend is this controller's to end.
+      {:reply, :ok, dispatch(state)}
+    end
   end
 
   def handle_call({:status, key}, from, state) do
@@ -359,7 +431,8 @@ defmodule Emissary.MCP.Bridge do
           state = check_generation(state, generation)
           state = if state.boot == nil, do: enqueue(state, {:hello}), else: state
           state = if live_keys(state) != [], do: enqueue(state, {:renew}), else: state
-          enqueue_release(state)
+          state = enqueue_release(state)
+          renew_claims(state)
 
         :not_owner ->
           state
@@ -396,11 +469,14 @@ defmodule Emissary.MCP.Bridge do
      %{state | inflight: nil} |> settle(job, spec, result) |> dispatch() |> schedule_poll()}
   end
 
-  # A server process that exits, however it exits, has its owner released.
+  # A server process that exits, however it exits, has its owner released
+  # and this member's claim on its backend given up.
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     case Enum.find(state.owners, fn {_key, entry} -> entry.ref == ref end) do
       {key, entry} ->
-        state = state |> drop_owner(key) |> pend_release(key, entry.epoch)
+        state =
+          state |> drop_owner(key) |> pend_release(key, entry.epoch) |> give_up_claim(key)
+
         {:noreply, state |> enqueue_release() |> dispatch()}
 
       nil ->
@@ -475,15 +551,99 @@ defmodule Emissary.MCP.Bridge do
     end
   end
 
-  defp pend_release(state, key, epoch),
-    do: %{state | releases: Map.update(state.releases, key, epoch, &max(&1, epoch))}
+  # A release names a version this controller ran, and it is this
+  # controller's to send only while it holds the backend's claim. A member
+  # that stood down writes nothing more for the backend — not even the
+  # release its own server process asks for on the way out — because the
+  # owner on the bridge belongs to the peer that took the row.
+  defp pend_release(state, key, epoch) do
+    if Map.has_key?(state.claims, key),
+      do: %{state | releases: Map.update(state.releases, key, epoch, &max(&1, epoch))},
+      else: state
+  end
 
-  defp enqueue_release(%State{releases: releases} = state) when releases == %{}, do: state
+  defp enqueue_release(%State{releases: releases, releasing: releasing} = state)
+       when releases == %{} and releasing == %{},
+       do: state
+
   defp enqueue_release(state), do: enqueue(state, {:release})
 
+  # ============================================================================
+  # The backend claims
+  # ============================================================================
+
+  # The `job_claims` key of one backend: the pair that names it, without
+  # its epoch.
+  defp claim_key({athanor_id, server_id}), do: athanor_id <> ":" <> server_id
+
+  defp hold_claim(state, key, claim), do: %{state | claims: Map.put(state.claims, key, claim)}
+
+  # Give the backend up, so the next member may take it. The row is written
+  # only once the bridge has released the owner running under it, which is
+  # why the two travel in one job: a claim given up while a release may not
+  # have arrived would let a peer take the backend and then be ended by
+  # this controller's retry.
+  defp give_up_claim(state, key) do
+    if Map.has_key?(state.claims, key),
+      do: enqueue_release(%{state | releasing: Map.put(state.releasing, key, true)}),
+      else: state
+  end
+
+  defp forget_claims(state, keys) do
+    %{state | claims: Map.drop(state.claims, keys), releasing: Map.drop(state.releasing, keys)}
+  end
+
+  # The claims whose backends this controller is giving up, each with the
+  # freshest row it has read for them.
+  defp giving_up(state) do
+    Enum.reduce(state.releasing, %{}, fn {key, _true}, acc ->
+      case state.claims[key] do
+        nil -> acc
+        claim -> Map.put(acc, key, claim)
+      end
+    end)
+  end
+
+  # A renewal round goes ahead of everything else queued: what may be sent
+  # for a backend is decided by its row, and a claim a peer has taken must
+  # be found before a renewal or a release goes out under it.
+  defp renew_claims(%State{claims: claims} = state) when claims == %{}, do: state
+  defp renew_claims(state), do: enqueue_front(state, {:claims})
+
+  # The row is a peer's now. Stop the backend here — its process, and with
+  # it the grant that process holds — forget the claim, and drop any
+  # release still pending for it: the owner on the bridge is the peer's to
+  # renew and to release, and a release sent from here would end a backend
+  # this controller no longer runs.
+  defp stand_down(state, {_athanor, server} = key) do
+    Logger.warning(
+      "[MCP.Bridge] the claim on #{server} is held elsewhere; standing down without releasing it"
+    )
+
+    state =
+      case state.owners[key] do
+        nil ->
+          state
+
+        entry ->
+          stop_process(entry.pid)
+          Enum.each(entry.waiters, &GenServer.reply(&1, {:error, :claimed_elsewhere}))
+          state |> put_owner(key, %{entry | waiters: []}) |> drop_owner(key)
+      end
+
+    state
+    |> forget_claims([key])
+    |> Map.update!(:releases, &Map.delete(&1, key))
+    |> reply_release_waiters([key])
+  end
+
   # A sync the bridge acknowledged at `epoch` replaces any version of the
-  # owner at or below it, so a release still pending for one is moot.
+  # owner at or below it, so a release still pending for one is moot — and
+  # so is giving the backend's claim up, which this controller is running
+  # again.
   defp supersede_release(state, key, epoch) do
+    state = %{state | releasing: Map.delete(state.releasing, key)}
+
     case state.releases do
       %{^key => pending} when pending <= epoch ->
         reply_release_waiters(%{state | releases: Map.delete(state.releases, key)}, [key])
@@ -497,14 +657,17 @@ defmodule Emissary.MCP.Bridge do
   # bridge, and the process stopped. The stop runs in another process,
   # because the server's terminate/2 asks this one to release.
   defp revoke(state, key) do
-    case state.owners[key] do
-      nil ->
-        state
+    state =
+      case state.owners[key] do
+        nil ->
+          state
 
-      entry ->
-        stop_process(entry.pid)
-        state |> drop_owner(key) |> pend_release(key, entry.epoch)
-    end
+        entry ->
+          stop_process(entry.pid)
+          state |> drop_owner(key) |> pend_release(key, entry.epoch)
+      end
+
+    give_up_claim(state, key)
   end
 
   defp stop_process(pid) do
@@ -609,11 +772,12 @@ defmodule Emissary.MCP.Bridge do
   # Lifetimes and generations
   # ============================================================================
 
-  # The generation this boot speaks while it owns the control plane — 1 for
-  # a boot that has claimed nothing — or `:not_owner` while it does not, or
-  # while its generation cannot be read. Nothing is sent without one.
+  # The generation this member speaks while it holds its slot in the cell —
+  # 1 for a member that has claimed nothing — or `:not_owner` while it does
+  # not, or while its generation cannot be read. Nothing is sent, and no
+  # claim renewed, without one.
   defp plane_generation(state) do
-    if Cyfr.ControlPlane.owner?() do
+    if Arca.ControlPlane.held?() do
       case state.generation_source.() do
         {:ok, generation} when is_integer(generation) and generation > 0 -> {:ok, generation}
         :none -> {:ok, 1}
@@ -750,7 +914,7 @@ defmodule Emissary.MCP.Bridge do
       %{waiters: [_ | _] = waiters} = entry ->
         Enum.each(waiters, &GenServer.reply(&1, {:error, reason}))
         state = put_owner(state, key, %{entry | waiters: []})
-        if entry.live?, do: state, else: drop_owner(state, key)
+        if entry.live?, do: state, else: state |> drop_owner(key) |> give_up_claim(key)
 
       _other ->
         state
@@ -829,10 +993,17 @@ defmodule Emissary.MCP.Bridge do
             athanor_backends: athanor_backends,
             person_backends: person_backends
           })
+          |> claim_spec(state)
 
         {:send, spec}
     end
   end
+
+  defp prepare({:claims}, %State{claims: claims}) when claims == %{}, do: :skip
+
+  defp prepare({:claims}, state),
+    do:
+      {:send, state |> base_spec(:claims) |> Map.put(:claims, state.claims) |> claim_spec(state)}
 
   defp prepare({:renew}, state) do
     case live_keys(state) do
@@ -845,22 +1016,27 @@ defmodule Emissary.MCP.Bridge do
     end
   end
 
-  defp prepare({:release}, %State{releases: releases}) when releases == %{}, do: :skip
-
   defp prepare({:release}, state) do
-    owners =
-      for {{athanor, server}, epoch} <- state.releases,
-          do: %{"athanor" => athanor, "server" => server, "e" => epoch}
+    giving_up = giving_up(state)
 
-    spec =
-      state
-      |> base_spec(:release)
-      |> Map.merge(%{
-        releases: state.releases,
-        body: %{"type" => "release", "owners" => owners}
-      })
+    if state.releases == %{} and giving_up == %{} do
+      :skip
+    else
+      owners =
+        for {{athanor, server}, epoch} <- state.releases,
+            do: %{"athanor" => athanor, "server" => server, "e" => epoch}
 
-    {:send, spec}
+      spec =
+        state
+        |> base_spec(:release)
+        |> Map.merge(%{
+          releases: state.releases,
+          giving_up: giving_up,
+          body: %{"type" => "release", "owners" => owners}
+        })
+
+      {:send, spec}
+    end
   end
 
   defp prepare({:status, {athanor, server}, from}, state) do
@@ -873,6 +1049,12 @@ defmodule Emissary.MCP.Bridge do
         :skip
     end
   end
+
+  # What a task needs to write a claim row: who this member is, and the
+  # lease the row is asked for, which is the bridge lease the claim stands
+  # for.
+  defp claim_spec(spec, state),
+    do: Map.merge(spec, %{claim_owner: state.cyfr_boot, claim_lease_ms: state.lease_ms})
 
   # A status names no more owners than the bridge answers for; one that
   # would is refused here, as the bridge would refuse it, and never sent.
@@ -899,7 +1081,53 @@ defmodule Emissary.MCP.Bridge do
     kind, _reason -> {:error, {:crashed, kind}}
   end
 
+  # The row comes first: a member that does not hold the backend's claim
+  # reads no configuration, resolves no env template and sends nothing.
+  # `claim/4` answers a live claim of this same member unchanged, so a
+  # controller already running the backend asks again without taking the
+  # row from itself, and reads back the fence it must write under.
   defp do_perform(%{kind: :sync} = spec, keys) do
+    case claim_backend(spec) do
+      {:ok, claim} -> {:claimed, claim, sync_claimed(spec, keys)}
+      refused -> refused
+    end
+  end
+
+  defp do_perform(%{kind: :claims} = spec, _keys) do
+    {:claims_held, Map.new(spec.claims, &{elem(&1, 0), keep_claim(&1, spec)})}
+  end
+
+  defp do_perform(%{kind: :renew} = spec, keys) do
+    pairs = Map.keys(spec.owners)
+
+    case Arca.McpServerStorage.fenced(pairs) do
+      {:ok, rows} ->
+        {kept, fenced_out} =
+          Enum.split_with(pairs, fn key -> passes_fence?(rows[key], spec.owners[key]) end)
+
+        answer = if kept == [], do: :nothing_to_renew, else: renew(spec, keys.control, kept)
+        {:renewed, answer, fenced_out}
+
+      {:error, _} ->
+        {:error, :store_unavailable}
+    end
+  end
+
+  # The bridge is told first and the rows only then, so a claim is given up
+  # with nothing of its backend left running under this member's version.
+  # A release that may not have arrived keeps its claim and is retried.
+  defp do_perform(%{kind: :release} = spec, keys) do
+    answer =
+      if spec.releases == %{},
+        do: :nothing_to_release,
+        else: post(spec, keys.control, spec.body)
+
+    {:released, answer, released_claims(spec, answer)}
+  end
+
+  defp do_perform(spec, keys), do: post(spec, keys.control, spec.body)
+
+  defp sync_claimed(spec, keys) do
     owner = %{athanor_id: spec.athanor_id, server_id: spec.server_id, epoch: spec.epoch}
 
     with {:ok, row} <- fence_one(owner),
@@ -928,23 +1156,57 @@ defmodule Emissary.MCP.Bridge do
     end
   end
 
-  defp do_perform(%{kind: :renew} = spec, keys) do
-    pairs = Map.keys(spec.owners)
-
-    case Arca.McpServerStorage.fenced(pairs) do
-      {:ok, rows} ->
-        {kept, fenced_out} =
-          Enum.split_with(pairs, fn key -> passes_fence?(rows[key], spec.owners[key]) end)
-
-        answer = if kept == [], do: :nothing_to_renew, else: renew(spec, keys.control, kept)
-        {:renewed, answer, fenced_out}
-
-      {:error, _} ->
-        {:error, :store_unavailable}
+  defp claim_backend(spec) do
+    case JobClaims.claim(
+           @claim_kind,
+           claim_key({spec.athanor_id, spec.server_id}),
+           spec.claim_owner,
+           spec.claim_lease_ms
+         ) do
+      {:ok, claim} -> {:ok, claim}
+      {:busy, _peers} -> {:error, :claimed_elsewhere}
+      {:error, :database_error} -> {:error, :claim_unavailable}
     end
   end
 
-  defp do_perform(spec, keys), do: post(spec, keys.control, spec.body)
+  # Renewing is an act of authority, so a lease that has run out is asked
+  # for again rather than extended, and a row a peer holds is not written
+  # at all. `:taken` and losing the race for a lapsed row are one verdict
+  # here — the backend is a peer's — while a store that cannot answer
+  # leaves the claim where it is, to be asked again on the next tick.
+  defp keep_claim({key, claim}, spec) do
+    case JobClaims.renew(claim, spec.claim_lease_ms) do
+      {:ok, renewed} -> {:ok, renewed}
+      :taken -> :lost
+      :lapsed -> retake_claim(key, spec)
+      {:error, :database_error} -> :unverified
+    end
+  end
+
+  defp retake_claim(key, spec) do
+    case JobClaims.claim(@claim_kind, claim_key(key), spec.claim_owner, spec.claim_lease_ms) do
+      {:ok, claim} -> {:ok, claim}
+      {:busy, _peers} -> :lost
+      {:error, :database_error} -> :unverified
+    end
+  end
+
+  # A claim is given up once nothing of its backend is left on the bridge:
+  # the release landed, or this controller had no owner there to release.
+  # `release/1` is itself fenced, so a claim a peer has taken meanwhile is
+  # refused rather than reset.
+  defp released_claims(spec, answer) do
+    landed? = match?({:http, 200, _boot, _body}, answer) or answer == :nothing_to_release
+
+    Enum.flat_map(spec.giving_up, fn {key, claim} ->
+      if landed? or not Map.has_key?(spec.releases, key) do
+        _ = JobClaims.release(claim)
+        [key]
+      else
+        []
+      end
+    end)
+  end
 
   # An owner the bridge no longer knows lapsed there: its epoch is raised,
   # so the grant its process holds names a version nothing will run again.
@@ -1131,6 +1393,8 @@ defmodule Emissary.MCP.Bridge do
   defp answer_boot({:http, _status, boot, _body}), do: boot
   defp answer_boot({:synced, answer, _names, _count, _person}), do: answer_boot(answer)
   defp answer_boot({:renewed, answer, _fenced_out}), do: answer_boot(answer)
+  defp answer_boot({:claimed, _claim, result}), do: answer_boot(result)
+  defp answer_boot({:released, answer, _given_up}), do: answer_boot(answer)
   defp answer_boot(_result), do: nil
 
   defp settle_job(state, {:hello}, spec, {:http, 200, _boot, %{"boot" => boot} = body})
@@ -1172,6 +1436,25 @@ defmodule Emissary.MCP.Bridge do
 
   defp settle_job(state, {:reconcile}, _spec, result) do
     log_failure("reconcile", result)
+    state
+  end
+
+  # A sync's answer carries the claim its task took, so what this
+  # controller holds is recorded before the answer is read: a sync that
+  # then fails still gives the row up rather than leaving it standing.
+  defp settle_job(state, {:sync, key} = job, spec, {:claimed, claim, result}),
+    do: state |> hold_claim(key, claim) |> settle_job(job, spec, result)
+
+  defp settle_job(state, {:claims}, _spec, {:claims_held, verdicts}) do
+    Enum.reduce(verdicts, state, fn
+      {key, {:ok, claim}}, acc -> hold_claim(acc, key, claim)
+      {key, :lost}, acc -> stand_down(acc, key)
+      {_key, :unverified}, acc -> acc
+    end)
+  end
+
+  defp settle_job(state, {:claims}, _spec, result) do
+    log_failure("claims", result)
     state
   end
 
@@ -1218,11 +1501,13 @@ defmodule Emissary.MCP.Bridge do
     reason = refusal(result)
 
     case state.owners[key] do
+      # A newer registration holds the backend here: its own sync keeps
+      # the claim, so only the version this one named is released.
       %{epoch: epoch} when epoch != spec.epoch ->
         release_unanswered(state, key, spec, result)
 
       nil ->
-        release_unanswered(state, key, spec, result)
+        state |> give_up_claim(key) |> release_unanswered(key, spec, result)
 
       _entry when reason == :stale_boot ->
         enqueue(state, {:sync, key})
@@ -1237,6 +1522,7 @@ defmodule Emissary.MCP.Bridge do
         state
         |> put_owner(key, %{entry | waiters: []})
         |> drop_owner(key)
+        |> give_up_claim(key)
         |> release_unanswered(key, spec, result)
     end
   end
@@ -1266,6 +1552,12 @@ defmodule Emissary.MCP.Bridge do
     log_failure("renew", result)
     state
   end
+
+  defp settle_job(state, {:release} = job, spec, {:released, answer, given_up}),
+    do: state |> forget_claims(given_up) |> settle_job(job, spec, answer)
+
+  defp settle_job(state, {:release}, spec, :nothing_to_release),
+    do: reply_release_waiters(state, Map.keys(spec.releases))
 
   defp settle_job(state, {:release}, spec, {:http, 200, _boot, _body}) do
     releases =
@@ -1359,6 +1651,8 @@ defmodule Emissary.MCP.Bridge do
 
   defp refusal({:synced, answer, _names, _count, _person}), do: refusal(answer)
   defp refusal({:renewed, answer, _fenced_out}), do: refusal(answer)
+  defp refusal({:claimed, _claim, result}), do: refusal(result)
+  defp refusal({:released, answer, _given_up}), do: refusal(answer)
   defp refusal({:http, 401, _boot, _body}), do: :bridge_refused_signature
 
   defp refusal({:http, status, _boot, %{"error" => code}})
@@ -1376,6 +1670,10 @@ defmodule Emissary.MCP.Bridge do
 
   defp log_failure(what, result) do
     case refusal(result) do
+      # Not a failure of this controller: the backend is another member's.
+      :claimed_elsewhere ->
+        Logger.info("[MCP.Bridge] #{what} refused: another member of the cell holds the backend")
+
       :bridge_refused_signature ->
         Logger.error(
           "[MCP.Bridge] the bridge refused the #{what} signature — CYFR_MCP_BRIDGE_KEY must " <>

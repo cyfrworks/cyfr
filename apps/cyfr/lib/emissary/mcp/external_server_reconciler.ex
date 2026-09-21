@@ -114,8 +114,12 @@ defmodule Emissary.MCP.ExternalServerReconciler do
     {:noreply, state}
   end
 
+  # A reconcile stops server processes and raises epochs, which is work a
+  # member admits, so it runs only while this member holds its cell slot
+  # (`Arca.ControlPlane.held?/0`) and is asked on every attempt rather than
+  # once: a member that loses the slot mid-retry stops here.
   defp attempt(state, {athanor_id, entry_id} = key, meta, attempt_no) do
-    case Cyfr.ControlPlane.when_owner(fn -> reconcile(athanor_id, entry_id, meta) end) do
+    case while_held(fn -> reconcile(athanor_id, entry_id, meta) end) do
       # Kept pending: the next sweep asks again.
       :not_owner ->
         %{state | pending: Map.put(state.pending, key, %{attempts: attempt_no, meta: meta})}
@@ -144,6 +148,8 @@ defmodule Emissary.MCP.ExternalServerReconciler do
         %{state | pending: Map.put(state.pending, key, %{attempts: attempt_no + 1, meta: meta})}
     end
   end
+
+  defp while_held(fun), do: if(Arca.ControlPlane.held?(), do: fun.(), else: :not_owner)
 
   @spec reconcile(String.t(), String.t(), map()) :: :ok | {:error, term()}
   defp reconcile(athanor_id, entry_id, meta) do

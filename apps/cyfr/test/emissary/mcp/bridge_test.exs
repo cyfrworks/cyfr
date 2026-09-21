@@ -7,23 +7,28 @@ defmodule Emissary.MCP.BridgeTest do
   a fake bridge that verifies every signature the way the bridge does:
   the controller greets the bridge and reconciles at start; a stdio server
   syncs its owner with its env sealed for its version and the bridge's
-  lifetime and signs every request with its owner key; a sync's caller
-  waits for its backends while every other owner's lease is renewed, and a
-  catalogue that changes later is listed again; every stop path releases
-  the owner; renewal fences each owner against its row; a restarted bridge
-  and a new generation are greeted and live owners synced again; nothing
-  is sent without the control plane; refusals of a call are answered as
-  their kind requires; a status names no more owners than the bridge
-  answers for and is read no further than the control limit, each refusal
-  of it its own typed result; an athanor, and the person who created the
-  rows — the server's synthetic principal being one such person — each
-  hold at most a quarter of the pool; no key reaches a status or a crash
-  report.
+  lifetime and signs every request with its owner key; one member of the
+  cell holds each backend's claim and the losers of a proposal start
+  nothing, a member that loses a claim stands down without revoking what
+  a peer now runs, and a claim that only lapsed is asked for again; a
+  sync's caller waits for its backends while every other owner's lease is
+  renewed, and a catalogue that changes later is listed again; every stop
+  path releases the owner; renewal fences each owner against its row; a
+  restarted bridge and a new generation are greeted and live owners synced
+  again; nothing is sent and no claim written without the control plane;
+  refusals of a call are answered as their kind requires; a status names
+  no more owners than the bridge answers for and is read no further than
+  the control limit, each refusal of it its own typed result; an athanor,
+  and the person who created the rows — the server's synthetic principal
+  being one such person — each hold at most a quarter of the pool; no key
+  reaches a status or a crash report.
   """
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
+  alias Arca.JobClaims
+  alias Arca.Schemas.JobClaim
   alias Cyfr.BridgeAuth
   alias Emissary.MCP.Bridge
   alias Emissary.MCP.ExternalServers
@@ -33,6 +38,10 @@ defmodule Emissary.MCP.BridgeTest do
   @secret "ghp_bridge-test-secret-0123456789"
   @generation_key {Arca.ControlPlane, :generation}
   @project_root Path.expand("../../../../..", __DIR__)
+  # A member of the cell that is not this one. Every claim assertion below
+  # reads the one row of a freshly inserted server id, so it measures this
+  # test's own delta on a key nothing else in the suite writes.
+  @peer "peer@cell#boot_0199a000-0000-7000-8000-00000000cell"
 
   defmodule FakeBridge do
     @moduledoc false
@@ -357,7 +366,7 @@ defmodule Emissary.MCP.BridgeTest do
 
     on_exit(fn ->
       :persistent_term.erase(@generation_key)
-      Cyfr.ControlPlane.mark(:unclaimed)
+      Arca.ControlPlane.record(:unclaimed)
     end)
 
     {:ok, ctx: ctx, fake: fake}
@@ -392,9 +401,11 @@ defmodule Emissary.MCP.BridgeTest do
     eventually(
       fn ->
         state = :sys.get_state(Bridge)
-        state.owners == %{} and state.releases == %{} and idle?(state)
+
+        state.owners == %{} and state.releases == %{} and state.claims == %{} and
+          state.releasing == %{} and idle?(state)
       end,
-      "the controller to run no owner and have nothing left to send"
+      "the controller to run no owner, hold no claim and have nothing left to send"
     )
   end
 
@@ -503,6 +514,21 @@ defmodule Emissary.MCP.BridgeTest do
   defp rendered(key),
     do: inspect(binary_part(key, 0, 8), binaries: :as_binaries) |> String.trim_trailing(">>")
 
+  defp claim_key(ctx, row), do: ctx.athanor_id <> ":" <> row.id
+
+  # The one `job_claims` row of this backend, as it reads now.
+  defp claim_row(ctx, row) do
+    assert {:ok, %JobClaim{} = claim} = JobClaims.read("mcp_backend", claim_key(ctx, row))
+    claim
+  end
+
+  defp claimed_by_peer(ctx, row) do
+    assert {:ok, %JobClaim{} = peer} =
+             JobClaims.claim("mcp_backend", claim_key(ctx, row), @peer, 30_000)
+
+    peer
+  end
+
   test "at start the controller greets the bridge under generation 1 and keeps nothing", %{
     fake: fake
   } do
@@ -608,6 +634,231 @@ defmodule Emissary.MCP.BridgeTest do
 
       assert {:ok, [%{"name" => "github__search"}]} =
                Emissary.MCP.ExternalServer.get_tools("late", ctx.athanor_id)
+    end
+  end
+
+  describe "one claimed controller per backend" do
+    test "the row admits one of two members proposing a backend, and the loser can tell which case it is",
+         %{ctx: ctx, fake: fake} do
+      start_bridge(fake)
+      vault_entry(ctx)
+      row = stdio_row(ctx, "contended")
+      peer = claimed_by_peer(ctx, row)
+
+      assert {:error, :claimed_elsewhere} =
+               Bridge.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+
+      # Nothing was sent, and nothing read: the row comes before the store
+      # and before the vault, so a member that holds no claim resolves no
+      # env template.
+      refute_receive {:control, "sync", _sync, _fields}, 200
+      refute_received {:sealed_env, _server, _env}
+      assert %JobClaim{owner: @peer, fence: fence} = claim_row(ctx, row)
+      assert fence == peer.fence
+
+      # The peer gives it up and this member takes it: one backend, one row.
+      assert :ok = JobClaims.release(peer)
+
+      assert {:ok, %{epoch: 1}} =
+               Bridge.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+
+      assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
+      assert %JobClaim{owner: owner} = taken = claim_row(ctx, row)
+      assert owner == Cyfr.Boot.id()
+      assert JobClaims.live?(taken)
+
+      # And giving the owner up here gives the row up with it, lease run
+      # out, so the next member takes the backend at once.
+      Bridge.release(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+      given_up = claim_row(ctx, row)
+      refute JobClaims.live?(given_up)
+      assert given_up.fence > taken.fence
+    end
+
+    test "a backend's claim is leased for the bridge lease and renewed on the tick, so a successor waits out lease plus tick",
+         %{ctx: ctx, fake: fake} do
+      bridge = supervise_bridge(url: fake.url, root: @root)
+      assert_receive {:control, "hello", _hello, _fields}, 2_000
+      assert %{lease_ms: 30_000, tick_ms: 10_000} = :sys.get_state(bridge)
+
+      vault_entry(ctx)
+      row = stdio_row(ctx, "leased-claim")
+      connect(ctx, row)
+      claim = claim_row(ctx, row)
+
+      # Every write sets the two together, so the lease a successor waits
+      # out is the bridge lease, and the tick that renews it a third of it.
+      assert DateTime.diff(claim.lease_until, claim.updated_at, :millisecond) == 30_000
+
+      # A crash report prints the state, claim rows and all: they survive
+      # the redaction whole, holding nothing that has to be redacted.
+      {:status, _pid, _module, items} = :sys.get_status(bridge)
+      assert %Bridge.State{claims: held} = status_state(items, Bridge.State)
+      assert [%JobClaim{owner: owner}] = Map.values(held)
+      assert owner == Cyfr.Boot.id()
+    end
+
+    test "a member that loses its claim stops the backend here and revokes nothing a peer now runs",
+         %{ctx: ctx, fake: fake} do
+      bridge = start_bridge(fake, lease_ms: 300)
+      vault_entry(ctx)
+      row = stdio_row(ctx, "handed-over")
+      pid = connect(ctx, row)
+      assert_receive {:control, "sync", _sync, _fields}, 2_000
+      watched = Process.monitor(pid)
+      held = claim_row(ctx, row)
+
+      # The lease runs out where this member cannot renew it, and a peer
+      # takes the row over at a fence this member has never read.
+      eventually(fn -> not JobClaims.live?(held) end, "the backend claim to run out")
+      peer = claimed_by_peer(ctx, row)
+
+      tick(bridge)
+
+      assert_receive {:DOWN, ^watched, :process, ^pid, _reason}, 2_000
+      refute_received {:control, "release", _release, _fields}
+      state = await_idle(bridge)
+      assert state.owners == %{}
+      assert state.claims == %{}
+      assert state.releases == %{}
+
+      # The peer's row is untouched by the member that stood down, and what
+      # that member still holds writes nothing: the fence refuses it.
+      assert %JobClaim{owner: @peer, fence: fence} = claim_row(ctx, row)
+      assert fence == peer.fence
+      assert :taken = JobClaims.release(held)
+      refute_receive {:control, "release", _release, _fields}, 200
+    end
+
+    test "a claim that only lapsed is asked for again, and the backend runs on",
+         %{ctx: ctx, fake: fake} do
+      bridge = start_bridge(fake, lease_ms: 300)
+      vault_entry(ctx)
+      row = stdio_row(ctx, "lapsing")
+      pid = connect(ctx, row)
+      assert_receive {:control, "sync", _sync, _fields}, 2_000
+      held = claim_row(ctx, row)
+
+      eventually(fn -> not JobClaims.live?(held) end, "the backend claim to run out")
+      tick(bridge)
+
+      assert %JobClaim{owner: owner, fence: fence} = retaken = claim_row(ctx, row)
+      assert owner == Cyfr.Boot.id()
+      assert fence > held.fence
+      assert JobClaims.live?(retaken)
+      assert Process.alive?(pid)
+      refute_received {:control, "release", _release, _fields}
+      assert_receive {:control, "renew", %{"owners" => [%{"e" => 1}]}, _fields}, 2_000
+    end
+
+    test "an epoch bump gives the backend up here, and the new configuration takes it again",
+         %{ctx: ctx, fake: fake} do
+      bridge = start_bridge(fake)
+      vault_entry(ctx)
+      row = stdio_row(ctx, "reconfigured")
+      pid = connect(ctx, row)
+      assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
+      first = claim_row(ctx, row)
+      assert first.owner == Cyfr.Boot.id()
+
+      watched = Process.monitor(pid)
+      {:ok, _} = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), row.id)
+      tick(bridge)
+
+      assert_receive {:DOWN, ^watched, :process, ^pid, _reason}, 2_000
+      assert_released(row, 1)
+
+      given_up = claim_row(ctx, row)
+      assert given_up.owner == Cyfr.Boot.id()
+      assert given_up.fence > first.fence
+      refute JobClaims.live?(given_up)
+
+      assert {:ok, %{epoch: 2} = moved} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "reconfigured")
+
+      connect(ctx, moved)
+      assert_receive {:control, "sync", %{"e" => 2}, _fields}, 2_000
+      taken = claim_row(ctx, row)
+      assert taken.owner == Cyfr.Boot.id()
+      assert taken.fence > given_up.fence
+      assert JobClaims.live?(taken)
+    end
+
+    test "a member that does not hold the control plane renews no claim and sends nothing",
+         %{ctx: ctx, fake: fake} do
+      bridge = start_bridge(fake)
+      vault_entry(ctx)
+      row = stdio_row(ctx, "headless-claim")
+      connect(ctx, row)
+      assert_receive {:control, "sync", _sync, _fields}, 2_000
+      before = claim_row(ctx, row)
+
+      Arca.ControlPlane.record(:lost)
+      tick(bridge)
+
+      refute_receive {:control, _type, _message, _fields}, 200
+      assert claim_row(ctx, row).fence == before.fence
+
+      # And the tick that finds the slot again renews both.
+      Arca.ControlPlane.record(:unclaimed)
+      tick(bridge)
+      assert_receive {:control, "renew", _renew, _fields}, 2_000
+      assert claim_row(ctx, row).fence > before.fence
+    end
+
+    test "a controller whose generation cannot be read renews no claim and admits no sync",
+         %{ctx: ctx, fake: fake} do
+      reading = start_supervised!({Agent, fn -> :none end}, id: :claim_generation)
+      bridge = start_bridge(fake, generation: fn -> Agent.get(reading, & &1) end)
+      vault_entry(ctx)
+      row = stdio_row(ctx, "ungenerated")
+      connect(ctx, row)
+      assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
+      before = claim_row(ctx, row)
+
+      Agent.update(reading, fn _ -> {:error, :unavailable} end)
+      tick(bridge)
+
+      refute_receive {:control, _type, _message, _fields}, 200
+      assert claim_row(ctx, row).fence == before.fence
+
+      other = stdio_row(ctx, "ungenerated-too", %{"NODE_ENV" => "production"})
+
+      assert {:error, :control_plane_lost} =
+               Bridge.sync(%{athanor_id: ctx.athanor_id, server_id: other.id, epoch: 1})
+
+      assert {:error, :not_found} = JobClaims.read("mcp_backend", claim_key(ctx, other))
+      assert claim_row(ctx, row).fence == before.fence
+
+      # And the tick that reads a generation again renews the claim.
+      Agent.update(reading, fn _ -> :none end)
+      tick(bridge)
+      assert_receive {:control, "renew", _renew, %{generation: 1}}, 2_000
+      assert claim_row(ctx, row).fence > before.fence
+    end
+
+    test "a generation of this member's own keeps the backend's claim, and sends nothing under the old one",
+         %{ctx: ctx, fake: fake} do
+      bridge = start_bridge(fake)
+      vault_entry(ctx)
+      row = stdio_row(ctx, "regenerated")
+      pid = connect(ctx, row)
+      assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
+      before = claim_row(ctx, row)
+
+      :persistent_term.put(@generation_key, 2)
+      tick(bridge)
+
+      assert_receive {:control, "hello", %{"g" => 2}, %{generation: 2}}, 2_000
+      refute_received {:control, "renew", _renew, %{generation: 1}}
+      assert_receive {:control, "sync", %{"e" => 1}, %{generation: 2}}, 2_000
+      await_grant(pid, &(&1.generation == 2))
+
+      # The claim is the member's and not the generation's: the same member
+      # goes on holding the backend across its own generation change.
+      after_change = claim_row(ctx, row)
+      assert after_change.owner == before.owner
+      assert JobClaims.live?(after_change)
     end
   end
 
@@ -810,7 +1061,7 @@ defmodule Emissary.MCP.BridgeTest do
        %{ctx: ctx, fake: fake} do
     bridge = start_bridge(fake)
     row = stdio_row(ctx, "headless", %{"NODE_ENV" => "production"})
-    Cyfr.ControlPlane.mark(:lost)
+    Arca.ControlPlane.record(:lost)
 
     assert {:error, :control_plane_lost} =
              Bridge.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
