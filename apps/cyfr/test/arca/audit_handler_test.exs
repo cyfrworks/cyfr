@@ -2,118 +2,95 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Arca.AuditHandlerTest do
+  @moduledoc """
+  What reaches the audit trail, and what a failure writing it does.
+
+  The trail is read here the way a deployment's own reads it: by attaching
+  to `[:cyfr, :audit, :recorded]`, the one event `Arca.AuditHandler` emits
+  per entry, carrying the `Arca.Audit.Event` it built with the emitter's
+  metadata sanitized. That attach is the extension point a list of sink
+  modules in configuration used to be.
+  """
+
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
-  setup do
-    original_sinks = Application.get_env(:arca, :audit_sinks)
+  # Every entry the handler records while `fun` runs.
+  defp recorded(fun) do
+    test = self()
+    id = "audit-handler-test-#{System.unique_integer([:positive])}"
 
-    on_exit(fn ->
-      if original_sinks,
-        do: Application.put_env(:arca, :audit_sinks, original_sinks),
-        else: Application.delete_env(:arca, :audit_sinks)
-    end)
+    :telemetry.attach(
+      id,
+      [:cyfr, :audit, :recorded],
+      fn _event, measurements, %{audited: audited}, _config ->
+        send(test, {:recorded, audited, measurements})
+      end,
+      nil
+    )
 
-    :ok
+    try do
+      fun.()
+    after
+      :telemetry.detach(id)
+    end
   end
 
+  defp emit(name, measurements, metadata),
+    do: Arca.AuditHandler.handle_event(name, measurements, metadata, nil)
+
   describe "handle_event/4" do
-    test "dispatches to configured sinks" do
-      test_pid = self()
+    test "an audited event reaches the trail, named, with its measurements" do
+      recorded(fn -> emit([:cyfr, :sanctum, :auth], %{count: 1}, %{user_id: "u1"}) end)
 
-      defmodule TestSink do
-        @behaviour Arca.AuditSink
-
-        @impl true
-        def handle_audit_event(%Arca.Audit.Event{} = event) do
-          send(event.metadata[:test_pid], {:audit, event.name, event.measurements})
-          :ok
-        end
-      end
-
-      Application.put_env(:arca, :audit_sinks, [TestSink])
-
-      Arca.AuditHandler.handle_event(
-        [:cyfr, :sanctum, :auth],
-        %{count: 1},
-        %{test_pid: test_pid, user_id: "u1"},
-        nil
-      )
-
-      assert_receive {:audit, [:cyfr, :sanctum, :auth], %{count: 1}}
+      assert_receive {:recorded, %Arca.Audit.Event{name: [:cyfr, :sanctum, :auth]}, %{count: 1}}
     end
 
-    test "error isolation — one sink fails, others still called" do
-      test_pid = self()
-
-      defmodule FailingSink do
-        @behaviour Arca.AuditSink
-
-        @impl true
-        def handle_audit_event(_event) do
-          raise "boom"
-        end
-      end
-
-      defmodule GoodSink do
-        @behaviour Arca.AuditSink
-
-        @impl true
-        def handle_audit_event(%Arca.Audit.Event{} = event) do
-          send(event.metadata[:test_pid], {:good_sink, event.name})
-          :ok
-        end
-      end
-
-      Application.put_env(:arca, :audit_sinks, [FailingSink, GoodSink])
+    test "the shipped trail is a log line, for a deployment that attaches nothing" do
+      # The trail goes out at :info and the suite runs at :warning, which
+      # is the property the line itself documents: a node that raises its
+      # level keeps its operational logging and loses this trail.
+      previous = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous) end)
 
       log =
         capture_log(fn ->
-          Arca.AuditHandler.handle_event(
-            [:cyfr, :sanctum, :auth],
-            %{count: 1},
-            %{test_pid: test_pid, user_id: "u1"},
-            nil
-          )
+          emit([:cyfr, :sanctum, :auth], %{count: 1}, %{user_id: "u1", reason: "bad_password"})
         end)
 
-      assert_receive {:good_sink, [:cyfr, :sanctum, :auth]}
-      assert log =~ "FailingSink"
-      assert log =~ "failed"
+      assert log =~ "[Audit] cyfr.sanctum.auth"
+      assert log =~ "bad_password"
     end
 
     test "sanitizes metadata and constructs no context" do
-      test_pid = self()
+      recorded(fn ->
+        emit(
+          [:cyfr, :sanctum, :auth],
+          %{count: 1},
+          %{user_id: "test_user", access_token: "gho_secret"}
+        )
+      end)
 
-      defmodule StructCheckSink do
-        @behaviour Arca.AuditSink
-
-        @impl true
-        def handle_audit_event(%Arca.Audit.Event{} = event) do
-          send(event.metadata[:test_pid], {:event, event})
-          :ok
-        end
-      end
-
-      Application.put_env(:arca, :audit_sinks, [StructCheckSink])
-
-      Arca.AuditHandler.handle_event(
-        [:cyfr, :sanctum, :auth],
-        %{count: 1},
-        %{test_pid: test_pid, user_id: "test_user", access_token: "gho_secret"},
-        nil
-      )
-
-      assert_receive {:event, %Arca.Audit.Event{} = event}
+      assert_receive {:recorded, %Arca.Audit.Event{} = event, _measurements}
       assert event.user_id == "test_user"
-      # A credential riding the emitter's metadata never reaches a sink…
+      # A credential riding the emitter's metadata never reaches the trail…
       assert event.metadata[:access_token] == "[REDACTED]"
       # Audit handling must not construct a context and recursively emit another audit event.
       refute Map.has_key?(event.metadata, :context)
     end
 
-    test "emits pipeline_failure telemetry when all sinks fail" do
+    test "recording an entry is not itself audited" do
+      # `[:cyfr, :audit, :recorded]` is outside the audit roster, so the
+      # handler cannot be attached to what it emits.
+      refute [:cyfr, :audit, :recorded] in Cyfr.Telemetry.Catalog.consumed_by(:audit)
+    end
+
+    # :telemetry detaches a handler that raises, permanently and silently —
+    # so anything escaping handle_event/4 would end auditing for that event
+    # for the life of the node.
+    test "a failure writing the trail does not escape the handler, nor detach it" do
       test_pid = self()
 
       :telemetry.attach(
@@ -125,51 +102,26 @@ defmodule Arca.AuditHandlerTest do
         nil
       )
 
-      defmodule AllFailSink do
-        @behaviour Arca.AuditSink
+      on_exit(fn -> :telemetry.detach("test-pipeline-failure") end)
 
-        @impl true
-        def handle_audit_event(_event) do
-          raise "total failure"
-        end
-      end
-
-      Application.put_env(:arca, :audit_sinks, [AllFailSink])
-
-      capture_log(fn ->
-        Arca.AuditHandler.handle_event(
-          [:cyfr, :sanctum, :auth],
-          %{count: 1},
-          %{user_id: "u1"},
-          nil
-        )
-      end)
-
-      assert_receive {:pipeline_failure, [:cyfr, :audit, :pipeline_failure], %{count: 1},
-                      %{event: [:cyfr, :sanctum, :auth]}}
-
-      :telemetry.detach("test-pipeline-failure")
-    end
-
-    # :telemetry detaches a handler that raises, permanently and silently —
-    # so anything escaping handle_event/4 would end auditing for that event
-    # for the life of the node. The per-sink rescue does not cover the work
-    # around the sinks.
-    test "a failure outside the sinks does not escape the handler, nor detach it" do
-      # A sink list that is not a list of modules makes the dispatch itself
-      # raise, outside the per-sink try/rescue. Emitted through
-      # `:telemetry.execute/3` — the path that detaches a handler that
-      # fails in any class — and the handler must still be attached after.
-      Application.put_env(:arca, :audit_sinks, :not_a_list)
+      # A value that looks like a struct of a module this node does not
+      # have makes the sanitizer raise, which is a failure with nothing
+      # around it to rescue. Emitted through `:telemetry.execute/3` — the
+      # path that detaches a handler that fails in any class — and the
+      # handler must still be attached after.
       event = [:cyfr, :sanctum, :auth]
       before = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
       ours = &Arca.AuditHandler.handle_event/4
       assert Enum.any?(:telemetry.list_handlers(event), &(&1.function == ours))
 
-      log = capture_log(fn -> :telemetry.execute(event, %{count: 1}, %{user_id: "u1"}) end)
+      metadata = %{user_id: "u1", detail: %{__struct__: Arca.AuditHandlerTest.NoSuchStruct, a: 1}}
+      log = capture_log(fn -> :telemetry.execute(event, %{count: 1}, metadata) end)
 
       assert log =~ "handler failed"
       assert event |> :telemetry.list_handlers() |> Enum.map(& &1.id) == before
+
+      assert_receive {:pipeline_failure, [:cyfr, :audit, :pipeline_failure], %{count: 1},
+                      %{event: [:cyfr, :sanctum, :auth]}}
     end
   end
 
@@ -208,49 +160,15 @@ defmodule Arca.AuditHandlerTest do
 
   describe "monitored events" do
     test "a credential dispensed to a runner, and one a runner reports refused, are audited" do
-      test_pid = self()
-
-      defmodule SecretSink do
-        @behaviour Arca.AuditSink
-
-        @impl true
-        def handle_audit_event(%Arca.Audit.Event{} = event) do
-          send(event.metadata[:test_pid], {:audit, event.name, event.measurements})
-          :ok
-        end
-      end
-
-      Application.put_env(:arca, :audit_sinks, [SecretSink])
-
       for event <- [[:cyfr, :opus, :secret, :dispensed], [:cyfr, :opus, :secret, :denied]] do
-        Arca.AuditHandler.handle_event(
-          event,
-          %{count: 1},
-          %{test_pid: test_pid, user_id: "u1"},
-          nil
-        )
+        recorded(fn -> emit(event, %{count: 1}, %{user_id: "u1"}) end)
 
-        assert_receive {:audit, ^event, %{count: 1}}
+        assert_receive {:recorded, %Arca.Audit.Event{name: ^event}, %{count: 1}}
       end
     end
 
-    test "a secret entry reaches the sinks naming its field and its attempt, the name unredacted" do
-      test_pid = self()
-
-      defmodule FieldSink do
-        @behaviour Arca.AuditSink
-
-        @impl true
-        def handle_audit_event(%Arca.Audit.Event{} = event) do
-          send(event.metadata[:test_pid], {:event, event})
-          :ok
-        end
-      end
-
-      Application.put_env(:arca, :audit_sinks, [FieldSink])
-
+    test "a secret entry reaches the trail naming its field and its attempt, the name unredacted" do
       identity = %{
-        test_pid: test_pid,
         athanor_id: "ath_1",
         user_id: "usr_1",
         execution_id: "exec_1",
@@ -264,11 +182,11 @@ defmodule Arca.AuditHandlerTest do
       }
 
       for event <- [[:cyfr, :opus, :secret, :dispensed], [:cyfr, :opus, :secret, :denied]] do
-        Arca.AuditHandler.handle_event(event, %{system_time: 1}, identity, nil)
+        recorded(fn -> emit(event, %{system_time: 1}, identity) end)
 
-        assert_receive {:event, %Arca.Audit.Event{name: ^event} = audited}
+        assert_receive {:recorded, %Arca.Audit.Event{name: ^event} = audited, _measurements}
         assert audited.athanor_id == "ath_1" and audited.user_id == "usr_1"
-        assert Map.delete(audited.metadata, :test_pid) == Map.delete(identity, :test_pid)
+        assert audited.metadata == identity
       end
     end
 

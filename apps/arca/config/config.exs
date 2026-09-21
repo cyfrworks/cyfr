@@ -55,10 +55,6 @@ config :arca, :read_subtree_concurrency, 10
 config :arca, :cache_max_binary_bytes, 256 * 1024 * 1024
 config :arca, :cache_max_compiled_components, 32
 
-# Ships with the console sink; a deployment adds SIEM or object-store
-# sinks through its release runtime configuration.
-config :arca, :audit_sinks, [Arca.AuditSinks.Console]
-
 if config_env() == :test do
   # A sandboxed pool over a database keyed by checkout, out of the
   # repository's own tree: a run that dies mid-suite must not leave a

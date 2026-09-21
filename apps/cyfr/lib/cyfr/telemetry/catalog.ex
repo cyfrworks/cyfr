@@ -42,11 +42,18 @@ defmodule Cyfr.Telemetry.Catalog do
 
   @catalog %{
     # ——— audit plane ———
+    [:cyfr, :audit, :recorded] => %{
+      consumers: [:operator],
+      note:
+        "one entry of the audit trail, sanitized, as `Arca.Audit.Event`: where a " <>
+          "deployment's own SIEM or object-store trail attaches. Deliberately " <>
+          "OUTSIDE the audit roster — recording an entry must not produce another"
+    },
     [:cyfr, :audit, :pipeline_failure] => %{
       consumers: [:operator],
       note:
         "the audit plane's own alarm — deliberately OUTSIDE its own pipeline: " <>
-          "auditing it would recurse when every sink is down"
+          "auditing it would recurse when the trail cannot be written"
     },
     [:cyfr, :opus, :audit_error] => %{
       consumers: [:audit],
