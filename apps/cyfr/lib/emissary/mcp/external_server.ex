@@ -112,9 +112,10 @@ defmodule Emissary.MCP.ExternalServer do
   Get cached tool definitions from the external server.
   Triggers initialization if not yet connected.
   """
+  @spec get_tools(String.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def get_tools(name, athanor_id) do
     case lookup(name, athanor_id) do
-      {:ok, pid} -> GenServer.call(pid, :get_tools, @connect_call_timeout_ms)
+      {:ok, pid} -> call_server(pid, :get_tools, @connect_call_timeout_ms)
       {:error, _} = err -> err
     end
   end
@@ -131,11 +132,8 @@ defmodule Emissary.MCP.ExternalServer do
 
   @doc "Call a tool on the server process a caller already holds."
   @spec call_tool(pid(), String.t(), map()) :: {:ok, term()} | {:error, term()}
-  def call_tool(pid, tool_name, arguments) when is_pid(pid) do
-    GenServer.call(pid, {:call_tool, tool_name, arguments}, @call_timeout_ms)
-  catch
-    :exit, reason -> {:error, {:server_exited, reason}}
-  end
+  def call_tool(pid, tool_name, arguments) when is_pid(pid),
+    do: call_server(pid, {:call_tool, tool_name, arguments}, @call_timeout_ms)
 
   @doc """
   Get the connection status of the external server.
@@ -153,11 +151,28 @@ defmodule Emissary.MCP.ExternalServer do
   @doc """
   Reinitialize the connection (e.g., after config change).
   """
+  @spec reinitialize(String.t(), String.t()) :: {:ok, atom()} | {:error, term()}
   def reinitialize(name, athanor_id) do
     case lookup(name, athanor_id) do
-      {:ok, pid} -> GenServer.call(pid, :reinitialize, @connect_call_timeout_ms)
+      {:ok, pid} -> call_server(pid, :reinitialize, @connect_call_timeout_ms)
       {:error, _} = err -> err
     end
+  end
+
+  # Every call into a server process is answered, never carried out as an
+  # exit of the caller. A server is stopped from outside it — a vault
+  # revocation and an archived athanor stop it through
+  # `Emissary.MCP.ExternalServerReconciler`, and a changed row through
+  # `Emissary.MCP.ExternalServerSupervisor.ensure_started/1` — so a call in
+  # flight when one of those lands sees its process go. The contract of
+  # `get_tools/2`, `call_tool/3` and `reinitialize/2`, and of
+  # `Emissary.MCP.ExternalServers.ensure_started/2` above them, is a typed
+  # error; an exit here would instead take down whoever asked, which for
+  # `ensure_started/2` is a tool listing, a console read or a dispatch.
+  defp call_server(pid, message, timeout) do
+    GenServer.call(pid, message, timeout)
+  catch
+    :exit, reason -> {:error, {:server_exited, reason}}
   end
 
   defp lookup(name, athanor_id) do

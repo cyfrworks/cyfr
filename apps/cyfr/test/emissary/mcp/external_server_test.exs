@@ -388,6 +388,124 @@ defmodule Emissary.MCP.ExternalServerTest do
     end
   end
 
+  # Each of the three ways a server process is stopped from outside it,
+  # with a call already in flight. The call is made to sit unanswered in
+  # the process's mailbox by suspending the process first: `:sys`' suspended
+  # loop answers a parent exit itself, so the shutdown the supervisor sends
+  # ends the process with the call still queued behind it — which is the
+  # shape a stop racing a call takes in production, made deterministic.
+  describe "a server stopped while a call is in flight" do
+    setup do
+      Cyfr.Test.Sandbox.setup!()
+      Arca.Cache.init()
+
+      ctx = Sanctum.TestContext.local()
+      suffix = System.unique_integer([:positive])
+      entry_name = "stop-race-#{suffix}"
+
+      {:ok, entry} =
+        Sanctum.Vault.create(ctx, %{
+          name: entry_name,
+          kind: "api_key",
+          fields: %{"token" => "ghp_stop_race_0123456789"}
+        })
+
+      {:ok, row} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          name: "stop-race-srv-#{suffix}",
+          url: "https://127.0.0.1:9/mcp",
+          config_json:
+            Jason.encode!(%{
+              "headers" => %{"authorization" => "vault:#{entry_name}"},
+              "timeout_ms" => 1_000
+            })
+        })
+
+      Application.put_env(:cyfr, :external_server_reconciler_enabled, true)
+      on_exit(fn -> Application.put_env(:cyfr, :external_server_reconciler_enabled, false) end)
+      start_supervised!(Emissary.MCP.ExternalServerReconciler)
+
+      {:ok, ctx: ctx, entry: entry, row: row}
+    end
+
+    for {cause, told} <- [
+          {:vault, "a vault revocation"},
+          {:archived, "an archived athanor"},
+          {:restart, "a restart on a config change"}
+        ],
+        called <- [:get_tools, :reinitialize] do
+      test "#{called}/2 answers a typed error, and exits nobody, when #{told} stops the server",
+           context do
+        assert {:error, {:server_exited, reason}} =
+                 answered_after_stop(context, unquote(called), unquote(cause))
+
+        assert {:shutdown, {GenServer, :call, [_pid, _message, _timeout]}} = reason
+      end
+    end
+
+    defp answered_after_stop(context, called, cause) do
+      %{ctx: ctx, row: row} = context
+
+      {:ok, pid} =
+        Emissary.MCP.ExternalServerSupervisor.ensure_started(
+          Emissary.MCP.ExternalServers.server_config(row, ctx)
+        )
+
+      :ok = :sys.suspend(pid)
+
+      test = self()
+      name = row.name
+      athanor_id = ctx.athanor_id
+
+      {caller, ref} =
+        spawn_monitor(fn ->
+          send(test, {:answered, apply(ExternalServer, called, [name, athanor_id])})
+        end)
+
+      wait_until(fn -> queued?(pid) end)
+      stop_cause(cause, context)
+
+      receive do
+        {:answered, answer} ->
+          answer
+
+        {:DOWN, ^ref, :process, ^caller, reason} ->
+          flunk("the caller was exited with #{inspect(reason)} instead of being answered")
+      after
+        10_000 -> flunk("the caller was never answered")
+      end
+    end
+
+    defp queued?(pid),
+      do:
+        match?(
+          {:message_queue_len, queued} when queued > 0,
+          Process.info(pid, :message_queue_len)
+        )
+
+    defp stop_cause(:vault, %{ctx: ctx, entry: entry}) do
+      {:ok, _} = Sanctum.Vault.revoke(ctx, entry.id)
+      :sys.get_state(Emissary.MCP.ExternalServerReconciler)
+    end
+
+    defp stop_cause(:archived, %{ctx: ctx}) do
+      Phoenix.PubSub.broadcast(
+        Emissary.PubSub,
+        Cyfr.Bus.athanor_archived_global(),
+        {:athanor_archived_global, ctx.athanor_id}
+      )
+
+      :sys.get_state(Emissary.MCP.ExternalServerReconciler)
+    end
+
+    defp stop_cause(:restart, %{ctx: ctx, row: row}) do
+      {:ok, _replacement} =
+        Emissary.MCP.ExternalServerSupervisor.ensure_started(
+          Emissary.MCP.ExternalServers.server_config(%{row | epoch: row.epoch + 1}, ctx)
+        )
+    end
+  end
+
   describe "crash-report redaction" do
     # OTP prints `inspect(state)` in every GenServer crash/exit report. The
     # state holds resolved plaintext credentials in `headers` (and possibly
