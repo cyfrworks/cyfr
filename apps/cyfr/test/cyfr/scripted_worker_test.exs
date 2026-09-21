@@ -316,6 +316,14 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     athanor_id = ctx.athanor_id
     watch_unreaped!()
 
+    # `Cyfr.Slots`'s unreaped map is node-global and keyed by athanor, and
+    # this suite runs under the well-known `ath_test` that thirty test files
+    # share. Asking whether the key is absent asks whether any test anywhere
+    # in the run has noted an unreaped kill for it, which is a fact about
+    # the suite's order and not about this run. What this case means is that
+    # *this* run added nothing, so it reads the count before and after.
+    unreaped_before = unreaped_count(athanor_id)
+
     task =
       Task.async(fn ->
         Dispatch.run(ctx, "#{@scripted}:1.0.0", %{},
@@ -343,7 +351,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     # The athanor carries no note for it, and nothing was killed, because
     # nothing was left to kill.
     refute_received {:unreaped_kill, ^id, _count}
-    refute Map.has_key?(Cyfr.Slots.status(Cyfr.Execution.Slots).unreaped, athanor_id)
+    assert unreaped_count(athanor_id) == unreaped_before
     refute id in ScriptedWorker.kills()
 
     # And the worker service answers a kill of that run as the contract
@@ -381,6 +389,11 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   end
 
   # Every unreaped kill noted from here on, forwarded to this process.
+  defp unreaped_count(athanor_id) do
+    Cyfr.Slots.status(Cyfr.Execution.Slots).unreaped
+    |> Map.get(athanor_id, 0)
+  end
+
   defp watch_unreaped! do
     handler = "scripted-unreaped-#{System.unique_integer([:positive])}"
     test = self()
