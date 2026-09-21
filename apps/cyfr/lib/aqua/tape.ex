@@ -20,6 +20,14 @@ defmodule Aqua.Tape do
   (`Cyfr.Execution.pause_turn_root/3`, `resume_turn_root/3`): they move
   the rows with the root's slot and lease, which only the process holding
   them can do.
+
+  ## The thread's claim
+
+  Which turn may run at all is `threads.active_turn_id`, not a process on
+  any member. `start_turn/3` takes it, `finish/4` and `suspend/3` give it
+  up, `bump_recovery/2` and `recover/2` take it from a turn whose holder
+  is not a live member, and `claim_holder/2` reads it. An approval pause
+  keeps it.
   """
 
   alias Arca.ThreadStorage, as: Threads
@@ -164,11 +172,77 @@ defmodule Aqua.Tape do
   # Lifecycle
   # ---------------------------------------------------------------------------
 
-  @doc "Start an accepted turn with its root, attempt, budget and pins (`TurnStorage.start/3`)."
+  @doc """
+  Start an accepted turn with its root, attempt, budget and pins
+  (`TurnStorage.start/3`), taking the thread's claim with it.
+
+  The claim names the consumed sequence read here, a moment before the
+  statement that compares it: that read and that write are the
+  compare-and-set which decides, between two members planning from the
+  same thread, whose turn runs. A sequence that moved under the read is
+  not a refusal — a peer accepted the next message, which changes nothing
+  about this turn's right to run — so the thread is read again, a bounded
+  number of times. A thread another turn holds is
+  `{:error, {:busy, turn_id}}` and is the caller's to queue behind.
+  """
   @spec start_turn(Context.t(), turn(), map()) :: {:ok, turn()} | {:error, term()}
-  def start_turn(%Context{} = ctx, turn, attrs) when is_map(attrs) do
-    TurnStorage.start(Sanctum.Context.actor(ctx), turn.id, Map.put_new(attrs, :fence, turn.fence))
+  def start_turn(%Context{} = ctx, turn, attrs) when is_map(attrs),
+    do: start_turn(ctx, turn, attrs, 3)
+
+  defp start_turn(_ctx, _turn, _attrs, 0), do: {:error, :stale}
+
+  defp start_turn(%Context{} = ctx, turn, attrs, tries) do
+    actor = Sanctum.Context.actor(ctx)
+
+    attrs =
+      case Threads.get(actor, turn.thread_id) do
+        {:ok, thread} -> Map.put(attrs, :turn_seq, thread.turn_seq || 0)
+        {:error, _} -> attrs
+      end
+
+    case TurnStorage.start(actor, turn.id, Map.put_new(attrs, :fence, turn.fence)) do
+      {:error, :stale} -> start_turn(ctx, turn, Map.delete(attrs, :turn_seq), tries - 1)
+      other -> other
+    end
   end
+
+  @doc """
+  Set a running or paused turn down, its rows kept and the thread's claim
+  given up, so any member may pick it up (`TurnStorage.suspend/3`). The
+  caller stops the turn's runtime; this is the durable half.
+  """
+  @spec suspend(Context.t(), turn(), String.t() | nil) :: {:ok, turn()} | {:error, term()}
+  def suspend(%Context{} = ctx, turn, reason \\ nil) do
+    with {:ok, suspended} <-
+           TurnStorage.suspend(Sanctum.Context.actor(ctx), turn.id, %{
+             fence: turn.fence,
+             reason: reason
+           }) do
+      broadcast(ctx, turn.thread_id, {:turn_suspended, turn.id})
+      {:ok, suspended}
+    end
+  end
+
+  @doc """
+  Take the thread's claim for an open turn no live member runs and count
+  the recovery, in one transaction (`TurnStorage.recover/3`), from the
+  fence `turn` was read with. Refused past the cap, and `{:error, :busy}`
+  for a thread a live peer holds.
+  """
+  @spec recover(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
+  def recover(%Context{} = ctx, turn),
+    do: TurnStorage.recover(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+
+  @doc """
+  Which turn holds the thread, and whether a live peer runs it
+  (`Arca.ThreadStorage.claim_holder/2`) — the row's answer to "is anybody
+  working this thread", which a local registry cannot give.
+  """
+  @spec claim_holder(Context.t(), String.t()) ::
+          {:ok, %{turn_id: String.t() | nil, runner_id: String.t() | nil, live_peer?: boolean()}}
+          | {:error, term()}
+  def claim_holder(%Context{} = ctx, thread_id),
+    do: Threads.claim_holder(Sanctum.Context.actor(ctx), thread_id)
 
   @doc "End a turn: the one terminal transaction (`TurnStorage.finish/4`)."
   @spec finish(Context.t(), turn(), String.t(), map()) :: {:ok, turn()} | {:error, term()}

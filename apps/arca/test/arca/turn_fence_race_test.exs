@@ -3,12 +3,15 @@
 
 defmodule Arca.TurnFenceRaceTest do
   @moduledoc """
-  The fence under real concurrency. These run outside the sandbox, on
-  connections of their own: inside it one shared connection would serialize
-  the writers the test is about. A runner-owned write holds the turn row
-  until it commits, so a host transition waits behind it; once the fence has
-  moved, the runner that held it writes nothing more; and of two transitions
-  that read the same fence, only one lands.
+  The fence and the thread claim under real concurrency. These run
+  outside the sandbox, on connections of their own: inside it one shared
+  connection would serialize the writers the test is about. A
+  runner-owned write holds the turn row until it commits, so a host
+  transition waits behind it; once the fence has moved, the runner that
+  held it writes nothing more; of two transitions that read the same
+  fence, only one lands; and of two members claiming one thread for the
+  same consumed sequence, only one claim lands, the loser reading either
+  the holder or a sequence that moved.
   """
 
   use ExUnit.Case, async: false
@@ -37,7 +40,7 @@ defmodule Arca.TurnFenceRaceTest do
       end)
 
     on_exit(fn -> unboxed(fn -> delete_thread!(actor.athanor_id, thread.id) end) end)
-    {:ok, actor: actor, turn: turn}
+    {:ok, actor: actor, thread: thread, turn: turn}
   end
 
   test "a takeover waits behind a runner's write, lands after it, and the runner writes nothing more",
@@ -89,6 +92,47 @@ defmodule Arca.TurnFenceRaceTest do
              end)
 
     assert [^step_id] = unboxed(fn -> step_ids(actor.athanor_id, turn.id) end)
+  end
+
+  test "of two members claiming one thread for the same consumed sequence, one lands", %{
+    actor: actor,
+    thread: thread
+  } do
+    {:ok, read} = unboxed(fn -> Threads.get(actor, thread.id) end)
+
+    results =
+      ["trn_claim_a", "trn_claim_b"]
+      |> Enum.map(fn turn_id ->
+        Task.async(fn ->
+          unboxed(fn -> Threads.claim(actor, thread.id, turn_id, read.turn_seq) end)
+        end)
+      end)
+      |> Enum.map(&Task.await(&1, 25_000))
+
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert [{:error, {:busy, held}}] = Enum.filter(results, &match?({:error, _}, &1))
+
+    {:ok, after_claim} = unboxed(fn -> Threads.get(actor, thread.id) end)
+    assert after_claim.active_turn_id == held
+
+    # And the other way a claim loses: the sequence moved under the read
+    # because a peer accepted the next message first. The loser is told
+    # that, so it reads the thread again rather than retrying blind.
+    assert :ok = unboxed(fn -> Threads.release(actor, thread.id, held) end)
+
+    {:ok, _} =
+      unboxed(fn ->
+        TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: actor.user_id, content: "@aqua again"},
+          turn: %{agent: "aqua", requested_by: actor.user_id}
+        })
+      end)
+
+    assert {:error, :stale} =
+             unboxed(fn -> Threads.claim(actor, thread.id, "trn_claim_late", read.turn_seq) end)
+
+    {:ok, unheld} = unboxed(fn -> Threads.get(actor, thread.id) end)
+    assert unheld.active_turn_id == nil
   end
 
   test "of two transitions that read the same fence, one lands", %{actor: actor, turn: turn} do
