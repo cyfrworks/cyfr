@@ -219,6 +219,52 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
+  describe "the read side answers the actor's own tenant" do
+    # The two reads the consent domain used to reach through a swappable
+    # source now come from here, actor-first. Another tenant's actor holding
+    # the right ids is the case that proves the scope is the actor's and not
+    # the argument's: a profile id and a source ref are guessable strings.
+    test "another tenant's actor sees no profile, no head and no decoded consent",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_cross_tenant")
+      entry = entry!(athanor)
+
+      {:ok, _consent} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, profile.id, 1),
+          [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}],
+          nil
+        )
+
+      mine = Cyfr.Actor.in_athanor(athanor)
+      theirs = Cyfr.Actor.in_athanor(Arca.Test.Actor.athanor!("ath_other").id)
+
+      assert {:ok, [_ | _]} = ConsentStorage.profiles(mine, "reagent:local.storage-test")
+      assert {:ok, %{revision: 1}} = ConsentStorage.head_consent(mine, profile.id)
+      assert {:ok, _head, _refs} = ConsentStorage.get_head(mine, profile.id)
+
+      # `:not_found`, not `:no_head`: the profile row is not this tenant's at
+      # all, which is a different fact from a profile of its own that has yet
+      # to be granted, and the two must stay tellable apart.
+      assert {:ok, []} = ConsentStorage.profiles(theirs, "reagent:local.storage-test")
+      assert {:error, :not_found} = ConsentStorage.head_consent(theirs, profile.id)
+      assert {:error, :not_found} = ConsentStorage.get_head(theirs, profile.id)
+    end
+
+    test "an actor with no athanor is refused, never answered with nothing",
+         %{athanor: athanor} do
+      profile = profile!(athanor, "prof_no_athanor")
+
+      {:ok, _consent} =
+        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+
+      nobody = %Cyfr.Actor{}
+
+      assert {:error, :no_athanor} = ConsentStorage.profiles(nobody, "reagent:local.storage-test")
+      assert {:error, :no_athanor} = ConsentStorage.head_consent(nobody, profile.id)
+    end
+  end
+
   describe "insert-only surface" do
     test "the module still exports no update function" do
       exported =
