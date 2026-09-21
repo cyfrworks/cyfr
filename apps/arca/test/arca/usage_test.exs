@@ -7,6 +7,12 @@ defmodule Arca.UsageTest do
   reads walk once and cache, invalidate/1 clears an athanor whole. The
   two enforcement surfaces (the byte cap, the public scope quota) read
   through this module, so the discipline holds for both by construction.
+
+  The counters are node-local, so a peer's copy is short by whatever this
+  member wrote since the peer walked the tree, and the byte cap it feeds
+  can admit past its ceiling for that long. The bound is stated here:
+  `ttl_ms/0`, never extended by a bump, and dropped at once by the
+  invalidation a cell-wide announcement lands on.
   """
 
   use ExUnit.Case, async: false
@@ -68,6 +74,40 @@ defmodule Arca.UsageTest do
 
     assert {:ok, %{files: 1, bytes: 4}} =
              Arca.Usage.scope_usage(actor, "data")
+  end
+
+  test "a peer's copy is short by what this member wrote, bounded by a TTL no bump extends",
+       %{actor: actor} do
+    key = Arca.Cache.Keys.athanor_usage(actor)
+
+    :ok = Arca.put(actor, ["data", "a.txt"], "aaaa")
+    assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
+    peers_copy = 4
+
+    # The bump is the writing member's own, so a peer's copy does not
+    # move with it.
+    :ok = Arca.put(actor, ["data", "b.txt"], "bbbbbb")
+    assert {:ok, 10} = Arca.Usage.athanor_bytes(actor)
+
+    # A peer, standing in: its entry still reads the total it walked, so
+    # the byte cap it feeds decides against 4 while 10 are stored. That is
+    # an over-admission, not a stale number in a report.
+    Arca.Cache.put(key, peers_copy, Arca.Usage.ttl_ms())
+    assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
+
+    # The bound: the entry expires one TTL after the walk that made it,
+    # and a bump raises the total without touching that expiry. So the
+    # walk that counts every member's writes is at most `ttl_ms/0` away,
+    # and that is what holds when an announcement is lost.
+    assert Arca.Usage.ttl_ms() == :timer.minutes(5)
+    [{^key, 4, expires_at}] = :ets.lookup(Arca.Cache.table_name(), key)
+    :ok = Arca.put(actor, ["data", "c.txt"], "cc")
+    assert [{^key, 6, ^expires_at}] = :ets.lookup(Arca.Cache.table_name(), key)
+
+    # And the invalidation a cell-wide announcement lands on drops it at
+    # once: the next read walks the tree and counts every member's write.
+    Arca.Usage.invalidate(actor)
+    assert {:ok, 12} = Arca.Usage.athanor_bytes(actor)
   end
 
   test "an actor with no athanor names no tree, and that is a refusal, not zero",
