@@ -126,7 +126,7 @@ defmodule Cyfr.SharedLimitsTest do
     assert length(ScriptedWorker.calls()) == 5
 
     assert {:ok, 10, 0, _window_ms} =
-             Rates.status(ctx.athanor_id, @stub_ref, %{rate_limit: @rate})
+             Rates.status(Sanctum.Context.actor(ctx), @stub_ref, %{rate_limit: @rate})
 
     # A refused invocation is recorded failed, and no runner claims it.
     for service <- [@local, @other] do
@@ -142,7 +142,7 @@ defmodule Cyfr.SharedLimitsTest do
     wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
 
     assert {:ok, 10, 0, _window_ms} =
-             Rates.status(ctx.athanor_id, @stub_ref, %{rate_limit: @rate})
+             Rates.status(Sanctum.Context.actor(ctx), @stub_ref, %{rate_limit: @rate})
   end
 
   # ---------------------------------------------------------------------------
@@ -578,7 +578,7 @@ defmodule Cyfr.SharedLimitsTest do
 
   defp fresh_limits!(ctx) do
     for bucket <- [@stub_ref, "oauth:" <> @stub_ref],
-        do: :ok = Rates.reset(ctx.athanor_id, bucket)
+        do: :ok = Rates.reset(Sanctum.Context.actor(ctx), bucket)
 
     Slots.forgive_unreaped(@slots, ctx.athanor_id)
   end

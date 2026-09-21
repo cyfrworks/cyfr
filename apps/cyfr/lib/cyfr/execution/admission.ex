@@ -610,24 +610,12 @@ defmodule Cyfr.Execution.Admission do
   defp check_public_rate_buckets(_run, _authority, _limits), do: :ok
 
   # Buckets key on the {athanor, bucket} pair, so members of an athanor
-  # share them. A limiter that cannot answer refuses: a configured limit
-  # must be enforceable. A refusal of the limit is recorded as a policy
-  # denial.
+  # share them — and so do the members of the cell, which is where the
+  # count lives. A rate authority that cannot answer refuses: a configured
+  # limit must be enforceable. A refusal of the limit is recorded as a
+  # policy denial.
   defp check_rate(ctx, bucket, %Cyfr.Limits{} = limits) do
-    result =
-      try do
-        Cyfr.Execution.Rates.check(ctx.athanor_id, bucket, %{rate_limit: limits.rate_limit})
-      catch
-        :exit, reason ->
-          Logger.error(
-            "[Cyfr.Execution.Admission] Cyfr.Execution.Rates unavailable (#{inspect(reason)}) — " <>
-              "failing CLOSED (denying) for #{bucket}."
-          )
-
-          {:error, :rate_limited}
-      end
-
-    case result do
+    case Cyfr.Execution.Rates.check(Context.actor(ctx), bucket, %{rate_limit: limits.rate_limit}) do
       {:ok, _remaining} ->
         :ok
 
@@ -635,10 +623,16 @@ defmodule Cyfr.Execution.Admission do
         record_rate_denial(ctx, bucket, "rate limit exceeded (retry in #{retry_after}ms)")
         {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
 
-      {:error, reason} ->
-        if reason == :rate_limited,
-          do: record_rate_denial(ctx, bucket, "rate limiter unavailable (fail closed)")
+      {:error, :unavailable} ->
+        Logger.error(
+          "[Cyfr.Execution.Admission] the rate authority could not answer — " <>
+            "failing CLOSED (denying) for #{bucket}."
+        )
 
+        record_rate_denial(ctx, bucket, "rate authority unavailable (fail closed)")
+        {:error, "Rate limit check failed for #{bucket}: :unavailable."}
+
+      {:error, reason} ->
         {:error, "Rate limit check failed for #{bucket}: #{inspect(reason)}."}
     end
   end

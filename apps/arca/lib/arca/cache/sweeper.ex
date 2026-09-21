@@ -6,7 +6,7 @@ defmodule Arca.Cache.Sweeper do
   Periodic sweeper that removes expired entries from the Arca.Cache ETS table.
 
   Sweeps expired cache entries every 60 seconds.
-  `Cyfr.Execution.Rates` owns its separate table and sweeper.
+  `Cyfr.RateLimiter` owns its separate table and sweeper.
   """
 
   use GenServer

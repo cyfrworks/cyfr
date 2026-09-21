@@ -121,9 +121,10 @@ defmodule Cyfr.Application do
       # says one is no longer good. Right after PubSub, and before
       # anything that establishes a caller.
       Cyfr.StandingWatch,
-      # Execution admission: the sliding-window counters consented rate
-      # limits are checked against, and the execution slots.
-      Cyfr.Execution.Rates,
+      # Execution admission: the slots a member's own work holds. The
+      # consented rate has no child here — its window is a row every
+      # member of the cell claims in (`Arca.RateWindows`), so there is
+      # nothing in this boot to start, own or lose.
       execution_slots(),
       # Execution bookkeeping, after PubSub (the buffers broadcast on it):
       # the execution_id → driving-process registry, the per-execution

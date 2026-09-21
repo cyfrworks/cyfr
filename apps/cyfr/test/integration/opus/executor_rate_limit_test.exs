@@ -14,15 +14,6 @@ defmodule Opus.ExecutorRateLimitTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    # Start the rate limiter if not already running
-    case GenServer.whereis(Cyfr.Execution.Rates) do
-      nil ->
-        {:ok, _pid} = Cyfr.Execution.Rates.start_link([])
-
-      _pid ->
-        :ok
-    end
-
     # Use a test-specific base path to avoid state leaking between tests
     test_path = Path.join(System.tmp_dir!(), "opus_rate_limit_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -114,16 +105,16 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # First request should succeed
       assert {:ok, _} =
-               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref, limit_source)
+               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref, limit_source)
 
       # Second request should be rate limited
       assert {:error, :rate_limited, retry_after} =
-               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref, limit_source)
+               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref, limit_source)
 
       assert retry_after > 0
 
       # Clean up
-      Cyfr.Execution.Rates.reset(ctx.athanor_id, component_ref)
+      Cyfr.Execution.Rates.reset(Context.actor(ctx), component_ref)
     end
 
     test "rate limiter tracks per athanor and component", %{ctx: ctx} do
@@ -134,19 +125,19 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # Request to component A
       assert {:ok, _} =
-               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref_a, limit_source)
+               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref_a, limit_source)
 
       # Request to component B should still work (different component)
       assert {:ok, _} =
-               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref_b, limit_source)
+               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref_b, limit_source)
 
       # Second request to component A should be rate limited
       assert {:error, :rate_limited, _} =
-               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref_a, limit_source)
+               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref_a, limit_source)
 
       # Clean up
-      Cyfr.Execution.Rates.reset(ctx.athanor_id, component_ref_a)
-      Cyfr.Execution.Rates.reset(ctx.athanor_id, component_ref_b)
+      Cyfr.Execution.Rates.reset(Context.actor(ctx), component_ref_a)
+      Cyfr.Execution.Rates.reset(Context.actor(ctx), component_ref_b)
     end
 
     test "unlimited requests when no rate limit configured", %{ctx: ctx} do
@@ -157,7 +148,7 @@ defmodule Opus.ExecutorRateLimitTest do
       # Should return :unlimited for all requests
       for _ <- 1..10 do
         assert {:ok, :unlimited} =
-                 Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref, limit_source)
+                 Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref, limit_source)
       end
     end
 
@@ -168,18 +159,18 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # Check initial status
       assert {:ok, 0, 5, _window} =
-               Cyfr.Execution.Rates.status(ctx.athanor_id, component_ref, limit_source)
+               Cyfr.Execution.Rates.status(Context.actor(ctx), component_ref, limit_source)
 
       # Make a request
       assert {:ok, 4} =
-               Cyfr.Execution.Rates.check(ctx.athanor_id, component_ref, limit_source)
+               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref, limit_source)
 
       # Check status again
       assert {:ok, 1, 4, _window} =
-               Cyfr.Execution.Rates.status(ctx.athanor_id, component_ref, limit_source)
+               Cyfr.Execution.Rates.status(Context.actor(ctx), component_ref, limit_source)
 
       # Clean up
-      Cyfr.Execution.Rates.reset(ctx.athanor_id, component_ref)
+      Cyfr.Execution.Rates.reset(Context.actor(ctx), component_ref)
     end
   end
 end
