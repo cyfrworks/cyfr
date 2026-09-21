@@ -185,8 +185,8 @@ defmodule Sanctum.Tenancy.Caps do
   # Read-then-write without a lock (the cached total, then the caller's
   # write): N concurrent writes can each pass before any lands, so the cap
   # can overshoot by at most (per-tenant execution slots × max write size)
-  # — bounded and accepted, the same call Cyfr.Execution.Rates documents for
-  # its window.
+  # — bounded and accepted, the same call Cyfr.RateLimiter documents for
+  # its ingress buckets.
   def check_storage(%Cyfr.Actor{} = actor, incoming) when is_integer(incoming) do
     case get(:athanor_storage_bytes) do
       nil ->

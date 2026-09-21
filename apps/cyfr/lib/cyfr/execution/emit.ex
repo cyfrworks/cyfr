@@ -206,15 +206,17 @@ defmodule Cyfr.Execution.Emit do
   defp check_size(json_event, max_size) when byte_size(json_event) <= max_size, do: :ok
   defp check_size(_json_event, _max_size), do: {:error, :event_too_large}
 
+  # An unreachable rate authority denies: the budget must be enforceable.
   defp check_budget(%__MODULE__{ctx: ctx, budget_id: budget_id}) do
-    case Cyfr.Execution.Rates.check(ctx.athanor_id, "emit:" <> budget_id, %{rate_limit: @budget}) do
+    case Cyfr.Execution.Rates.check(
+           Sanctum.Context.actor(ctx),
+           "emit:" <> budget_id,
+           %{rate_limit: @budget}
+         ) do
       {:ok, _remaining} -> :ok
       {:error, :rate_limited, _retry_after} -> {:error, :emit_rate_limited}
-      {:error, :missing_tenant} -> {:error, :emit_rate_limited}
+      {:error, _reason} -> {:error, :emit_rate_limited}
     end
-  catch
-    # An unreachable limiter denies: the budget must be enforceable.
-    :exit, _reason -> {:error, :emit_rate_limited}
   end
 
   defp decode(json_event) do

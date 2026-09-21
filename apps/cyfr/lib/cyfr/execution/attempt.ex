@@ -1361,10 +1361,10 @@ defmodule Cyfr.Execution.Attempt do
     end
   end
 
-  # Each HTTP request draws on the node's `http:` bucket under its consented
-  # limit; a limiter that cannot answer refuses.
+  # Each HTTP request draws on the athanor's `http:` bucket under its
+  # consented limit; a rate authority that cannot answer refuses.
   defp take_rate(state, "http:" <> ref = bucket) when ref == state.component_ref do
-    case Cyfr.Execution.Rates.check(state.ctx.athanor_id, bucket, %{
+    case Cyfr.Execution.Rates.check(Context.actor(state.ctx), bucket, %{
            rate_limit: state.limits.rate_limit
          }) do
       {:ok, _remaining} ->
@@ -1375,9 +1375,10 @@ defmodule Cyfr.Execution.Attempt do
 
       {:error, :missing_tenant} ->
         rate_refusal("HTTP egress refused: no resolved athanor")
+
+      {:error, :unavailable} ->
+        rate_refusal("HTTP egress refused: rate limiter unavailable")
     end
-  catch
-    :exit, _reason -> rate_refusal("HTTP egress refused: rate limiter unavailable")
   end
 
   defp take_rate(_state, _bucket),
@@ -1388,10 +1389,10 @@ defmodule Cyfr.Execution.Attempt do
   defp oauth_refusal(message), do: {:error, {:guest_error, "oauth_error", message}}
 
   # Token requests are metered under their own `oauth:` bucket, apart from
-  # HTTP egress; a limiter that cannot answer refuses the dispense.
+  # HTTP egress; a rate authority that cannot answer refuses the dispense.
   defp check_dispense_rate(state) do
     case Cyfr.Execution.Rates.check(
-           state.ctx.athanor_id,
+           Context.actor(state.ctx),
            "oauth:" <> state.component_ref,
            %{rate_limit: state.limits.rate_limit}
          ) do
@@ -1403,9 +1404,10 @@ defmodule Cyfr.Execution.Attempt do
 
       {:error, :missing_tenant} ->
         {:error, "token dispense refused: no resolved athanor"}
+
+      {:error, :unavailable} ->
+        {:error, "token dispense refused: rate limiter unavailable"}
     end
-  catch
-    :exit, _reason -> {:error, "token dispense refused: rate limiter unavailable"}
   end
 
   defp dispense(state, provider) do

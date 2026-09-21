@@ -121,13 +121,17 @@ defmodule Cyfr.ApplicationTest do
       assert is_pid(Process.whereis(Sanctum.Auth.Finch))
     end
 
-    test "execution rates, slots, event streams and attempts start under the infra tier after PubSub" do
+    test "execution slots, event streams and attempts start under the infra tier after PubSub" do
       # `which_children/1` lists the most recently started child first.
       started = Cyfr.InfraSupervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
       pubsub = Enum.find_index(started, &(&1 in [Emissary.PubSub, Phoenix.PubSub.Supervisor]))
 
-      for id <- [Cyfr.Execution.Rates, Cyfr.Execution.Slots, Cyfr.Execution.Tree] do
+      # The consented rate is not among them: its window is a shared row,
+      # so this boot starts nothing for it.
+      refute Cyfr.Execution.Rates in started
+
+      for id <- [Cyfr.Execution.Slots, Cyfr.Execution.Tree] do
         assert is_integer(at.(id)) and at.(id) > pubsub,
                "#{inspect(id)} must start under the infra tier after PubSub"
       end

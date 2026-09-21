@@ -9,6 +9,36 @@ defmodule Cyfr.RateLimiter do
   plane starts one in its supervision tree, beside the rest of its
   infrastructure — and holding nothing of any product's state.
 
+  ## What this is, and what it is not
+
+  **Advisory, and node-local by design.** Its buckets are ingress
+  defence in depth: a per-address budget on sign-in, MCP, tincture and
+  webhook traffic, a per-user budget on build validation, and the
+  device flow's per-address and deployment-wide breakers. Each is one
+  member's own count, so a cell of N members admits N times what one
+  bucket names. That is stated rather than hidden, for two reasons: the
+  ceiling that actually bounds a cell's ingress is the reverse proxy's,
+  which sees every member's traffic where no member does; and nothing
+  here is anyone's consent. A caller cannot buy authority by getting
+  past a bucket, and a bucket that forgets everything on restart gives
+  none away.
+
+  **Nothing consented is enforced here.** An athanor's consented
+  invocation rate is claimed in a row every member shares
+  (`Arca.RateWindows`, through `Cyfr.Execution.Rates`), where two
+  members cannot admit it twice and a restart forgets nothing. A limit
+  someone agreed to belongs there; a flood control in front of a
+  transport belongs here. A later reader wanting a cell-wide ceiling on
+  one of these buckets is asking for the first of those, not for this
+  table to be shared.
+
+  The deployment-wide arms of the device flow (`{:device_init, :all}`,
+  `{:device_poll, :all}`) are the closest thing here to a real ceiling —
+  they guard the identity provider's opinion of one client id, which is
+  a whole deployment's to spend — and they too are counted once per
+  member, so a cell admits N times their maximum before the breaker
+  trips everywhere.
+
   Kept separate from `Arca.Cache` on purpose: rate-limit keys are
   client-IP-derived, so their cardinality is **attacker-controlled**. Sharing a
   bounded table with sessions, OAuth CSRF state and tool metadata let a flood of
@@ -21,9 +51,9 @@ defmodule Cyfr.RateLimiter do
 
   `check/3` is a read-then-count without a lock: N concurrent boundary
   requests can each pass the `count >= max` read before any increments, so
-  the overshoot is off-by-concurrency, not off-by-one. Acceptable for a
-  rate limit (not a security boundary); the storage/authority caps make
-  the same call explicitly at their own sites.
+  the overshoot is off-by-concurrency, not off-by-one. Acceptable for an
+  advisory limit (not a security boundary); the storage/authority caps
+  make the same call explicitly at their own sites.
 
   The transport plugs (`EmissaryWeb.Plugs.*RateLimit`) all share `check/3`:
 
@@ -32,8 +62,9 @@ defmodule Cyfr.RateLimiter do
         {:deny, retry_after_seconds} -> reject(conn, retry_after_seconds)
       end
 
-  Counters are node-local (single-node deployment; the same clustering caveat as
-  the rest of the ETS-backed state). An unavailable table fails CLOSED: this
+  A counter is this member's, and its window starts again when this
+  member does — losing a count is looser, never stricter, which is what
+  an advisory bucket is allowed to be. An unavailable table fails CLOSED: this
   limiter fronts login brute-force, MCP, tincture and webhook ingress, and the
   table exists from boot — it is only missing while the supervision tree is
   dying, which is not the moment to wave throttled surfaces through. That
