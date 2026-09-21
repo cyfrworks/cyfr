@@ -12,6 +12,21 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
 
   alias Cyfr.Refusal
 
+  # The seven a guest used to be handed by name. Each had a sentence in
+  # the console's vocabulary and none in the runner's, and the runner
+  # rendered an atom it did not know by spelling it — so a send that met a
+  # full turn queue read "busy" to a guest and read the sentence below to
+  # a person at the page.
+  @named_by_the_atom [
+    :busy,
+    :not_member,
+    :archived,
+    :no_agent,
+    :control_plane_lost,
+    :not_provisioned,
+    :message_too_long
+  ]
+
   @crash_vocabulary [
     {:crashed, "Tool x crashed: boom"},
     {:exit, "Tool x exited unexpectedly"},
@@ -101,6 +116,35 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
       assert timeout =~ "timed out"
       assert crash =~ "crashed"
       refute timeout == crash
+    end
+  end
+
+  describe "the refusals a guest used to be handed by name" do
+    test "each is one sentence, and the guest reads it as the console does" do
+      for reason <- @named_by_the_atom do
+        expected = Refusal.message(reason)
+
+        assert is_binary(expected) and String.length(expected) > 20,
+               "#{inspect(reason)} has no sentence"
+
+        refute expected == Atom.to_string(reason),
+               "#{inspect(reason)} renders as its own name"
+
+        assert Cyfr.GuestError.render(reason) == expected,
+               "the runner's vocabulary disagrees about #{inspect(reason)}"
+
+        assert Opus.FormulaHandler.render_reason(reason) == expected,
+               "the in-chain guest view disagrees about #{inspect(reason)}"
+
+        assert PrismWeb.Ops.error_message(reason) == expected,
+               "the console disagrees about #{inspect(reason)}"
+      end
+    end
+
+    test "an atom outside the vocabulary is internal, and is not spelled out" do
+      # What the runner's renderer did to every atom it did not know.
+      assert Opus.FormulaHandler.render_reason(:some_internal_state) == "The call failed."
+      assert Cyfr.GuestError.render(:some_internal_state) == nil
     end
   end
 

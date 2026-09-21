@@ -735,8 +735,6 @@ defmodule Cyfr.Boundaries do
   @spec config_applications() :: [atom()]
   def config_applications, do: [:arca, :cyfr, :sanctum]
 
-  @config_read ~r/Application\.(?:get_env|fetch_env!?|compile_env!?)\(\s*:(?:cyfr|arca|sanctum),\s*:([a-z_0-9]+)/
-
   @config_keys_read_by_name %{
     api_rate_limit_max:
       "the `:api` bucket's own budget, read by `EmissaryWeb.Plugs.MCPRateLimit` " <>
@@ -810,14 +808,13 @@ defmodule Cyfr.Boundaries do
         do: {String.to_atom(app), String.to_atom(key)}
   end
 
-  @doc "Every application key `scanned` reads, as atoms."
+  @doc "Every key of this repository's three applications that `scanned` reads."
   @spec config_keys_read(scanned()) :: MapSet.t(atom())
   def config_keys_read(scanned) do
-    for {_path, lines} <- scanned,
-        code = lines |> Enum.map_join("\n", &elem(&1, 0)),
-        [_, key] <- Regex.scan(@config_read, code),
+    for {app, key} <- config_pairs_read(scanned),
+        app in config_applications(),
         into: MapSet.new(),
-        do: String.to_atom(key)
+        do: key
   end
 
   @doc """
