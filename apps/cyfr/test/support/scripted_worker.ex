@@ -175,7 +175,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   def fresh_limits!(%Sanctum.Context{} = ctx, refs) when is_list(refs) do
     for ref <- refs do
       {:ok, pinned, _resolution} = Compendium.Resolver.resolve(ctx, ref)
-      :ok = Cyfr.Execution.Rates.reset(ctx.athanor_id, pinned)
+      :ok = Cyfr.Execution.Rates.reset(Sanctum.Context.actor(ctx), pinned)
     end
 
     :ok = Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)

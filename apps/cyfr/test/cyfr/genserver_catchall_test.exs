@@ -26,7 +26,6 @@ defmodule Cyfr.GenServerCatchallTest do
     {Prism.TinctureRegistry, "TinctureRegistry"},
     {Arca.RecordSink, "RecordSink"},
     {Cyfr.RateLimiter, "RateLimiter"},
-    {Cyfr.Execution.Rates, "Rates"},
     {Cyfr.Execution.Slots, "Slots"},
     {Cyfr.Execution.Events.Sequence, "Events.Sequence"},
     {Compendium.Provisioning, "Provisioning"}

@@ -18,6 +18,25 @@ defmodule Cyfr.Execution.Emit do
   numbered under the stream's last durable event. A refusal is answered to
   the guest and never stops the run.
 
+  ## Where the emit budget is counted
+
+  In this member's memory (`Cyfr.RateLimiter`), and that is the right
+  place for it. A root execution runs on exactly one member — every
+  execution under it reports to the attempt that member holds — so its
+  events are counted where they are produced and there is no second
+  count anywhere to disagree with. It bounds one member's own work,
+  which makes it advisory: nothing multiplies across the cell, and a
+  member's restart ends the root whose budget it forgot. A root recovered
+  on another member starts a fresh budget, which is looser and grants
+  nothing.
+
+  That is a different question from the consented invocation rate, which
+  two members really can admit twice and which therefore lives in a row
+  they share (`Arca.RateWindows`, through `Cyfr.Execution.Rates`). This
+  budget is a flood guard on the delta path — up to fifty events a second
+  per root — and a database round trip per delta would buy a guarantee
+  the topology already gives.
+
   Streamed text is masked across event boundaries. Each logical stream —
   the answer's `text.delta` text, and each index's `tool_call.delta`
   arguments — holds back only the tail that could begin a credential's
@@ -35,7 +54,8 @@ defmodule Cyfr.Execution.Emit do
   alias Cyfr.Execution.{Events, StepSpans, Telemetry}
   alias Cyfr.SecretMasker
 
-  @budget %{requests: 3000, window: "1m"}
+  @budget_max 3000
+  @budget_window_ms :timer.minutes(1)
 
   # The held text is guest text not yet masked whole.
   @derive {Inspect, except: [:held]}
@@ -206,15 +226,25 @@ defmodule Cyfr.Execution.Emit do
   defp check_size(json_event, max_size) when byte_size(json_event) <= max_size, do: :ok
   defp check_size(_json_event, _max_size), do: {:error, :event_too_large}
 
+  # The root's own budget, counted on this member. A producer whose
+  # athanor was never resolved is refused before it is counted, as the
+  # event itself would be; a counter that cannot answer denies, because
+  # the budget must be enforceable.
   defp check_budget(%__MODULE__{ctx: ctx, budget_id: budget_id}) do
-    case Cyfr.Execution.Rates.check(ctx.athanor_id, "emit:" <> budget_id, %{rate_limit: @budget}) do
-      {:ok, _remaining} -> :ok
-      {:error, :rate_limited, _retry_after} -> {:error, :emit_rate_limited}
-      {:error, :missing_tenant} -> {:error, :emit_rate_limited}
+    case ctx.athanor_id do
+      athanor_id when is_binary(athanor_id) and athanor_id != "" ->
+        spend({:emit, athanor_id, budget_id})
+
+      _unresolved ->
+        {:error, :emit_rate_limited}
     end
-  catch
-    # An unreachable limiter denies: the budget must be enforceable.
-    :exit, _reason -> {:error, :emit_rate_limited}
+  end
+
+  defp spend(bucket) do
+    case Cyfr.RateLimiter.check(bucket, @budget_max, @budget_window_ms) do
+      :ok -> :ok
+      {:deny, _retry_after_s} -> {:error, :emit_rate_limited}
+    end
   end
 
   defp decode(json_event) do
