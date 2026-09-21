@@ -117,7 +117,7 @@ defmodule Cyfr.Execution.Attempt do
   ## A boot that does not hold the control plane
 
   An attempt writes only while its boot holds the control plane
-  (`Cyfr.ControlPlane.owner?/0`). Once it does not, the attempt stops
+  (`Arca.ControlPlane.held?/0`). Once it does not, the attempt stops
   without closing its run and gives back what the run held: at its next
   call, before any close would write, and within a second on its own. It
   unseals nothing, dispenses nothing and lapses nothing, and its waiter's
@@ -714,7 +714,7 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   defp owned(message, state) do
-    if Cyfr.ControlPlane.owner?(),
+    if Arca.ControlPlane.held?(),
       do: handle_owned(message, state),
       else: stop_unowned({:error, :lost}, state)
   end
@@ -790,7 +790,7 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   def handle_info(:owner_check, state) do
-    if Cyfr.ControlPlane.owner?() do
+    if Arca.ControlPlane.held?() do
       Process.send_after(self(), :owner_check, @owner_check_ms)
       {:noreply, state}
     else
@@ -932,7 +932,7 @@ defmodule Cyfr.Execution.Attempt do
   # run was queued (a cancel, its parent's cascade, a lapse) is read here,
   # before `take_slot/3` is answered `:ok`.
   defp granted(%__MODULE__{slot: {:waiting, holder, from}} = state) do
-    case Cyfr.ControlPlane.owner?() and row_live(state) do
+    case Arca.ControlPlane.held?() and row_live(state) do
       true ->
         GenServer.reply(from, :ok)
         {:noreply, %{state | slot: {:held, holder}}}
@@ -1262,7 +1262,7 @@ defmodule Cyfr.Execution.Attempt do
   # the waiter hears the result, and the waiter hears it before the runner
   # is answered and the attempt stops.
   defp close_run(state, answer, close, unowned \\ {:error, :lost}) do
-    if Cyfr.ControlPlane.owner?(),
+    if Arca.ControlPlane.held?(),
       do: close_owned(state, answer, close),
       else: stop_unowned(unowned, state)
   end

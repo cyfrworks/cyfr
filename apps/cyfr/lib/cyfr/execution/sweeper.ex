@@ -14,9 +14,18 @@ defmodule Cyfr.Execution.Sweeper do
   process still open for it is stopped (`Cyfr.Execution.Attempt.stop_unclosed/2`),
   so its waiter answers the lapsed row.
 
-  A tick sweeps only while this boot owns the control plane
-  (`Cyfr.ControlPlane.when_owner/1`). The process starts only when
+  A tick sweeps only while this member holds its slot in the cell
+  (`Arca.ControlPlane.held?/0`). The process starts only when
   `config :cyfr, :execution_sweeper_enabled` is true (the default).
+
+  The sweep needs no claim of its own. Its authority is the attempt row:
+  `Arca.ExecutionAttempts.lapse/2` matches the exact `lease_until` the
+  scan observed, so two members sweeping one attempt produce one lapse
+  and one no-op. What it does need is the cell's clock
+  (`Arca.ServerMetaStorage.now!/0`) for "the lease has run out", because
+  two members could disagree about that and both would lapse: a member
+  whose own clock runs fast would lapse attempts a peer is still
+  renewing.
   """
 
   use GenServer
@@ -46,7 +55,7 @@ defmodule Cyfr.Execution.Sweeper do
 
   @impl true
   def handle_info(:sweep, state) do
-    _ = Cyfr.ControlPlane.when_owner(&sweep/0)
+    if Arca.ControlPlane.held?(), do: sweep()
     schedule_sweep()
     {:noreply, state}
   end
@@ -64,7 +73,11 @@ defmodule Cyfr.Execution.Sweeper do
   def sweep do
     stale =
       try do
-        Arca.Execution.list_stale_running(DateTime.utc_now())
+        # Database time, not this member's: see the module doc. `now!/0`
+        # raises when the store cannot answer, which the rescue below
+        # turns into an empty sweep — a lease decision taken on a clock
+        # that could not be read is the one thing that must not happen.
+        Arca.Execution.list_stale_running(Arca.ServerMetaStorage.now!())
       rescue
         e ->
           Logger.error(

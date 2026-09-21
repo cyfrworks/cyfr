@@ -195,8 +195,8 @@ defmodule PrismWeb.LoginLiveTest do
       |> element("button[phx-click=start][phx-value-provider=github]")
       |> render_click()
 
-      Cyfr.ControlPlane.mark(:lost)
-      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
       Application.delete_env(:sanctum, :device_flow_last_ip)
       on_exit(fn -> Application.delete_env(:sanctum, :device_flow_last_ip) end)
 
@@ -208,7 +208,7 @@ defmodule PrismWeb.LoginLiveTest do
       assert Application.get_env(:sanctum, :device_flow_last_ip) == nil
 
       # Stopped: a later tick asks nothing either, owner again or not.
-      Cyfr.ControlPlane.mark(:unclaimed)
+      Arca.ControlPlane.record(:unclaimed)
       send(view.pid, :login_poll)
       _ = render(view)
       assert Application.get_env(:sanctum, :device_flow_last_ip) == nil
@@ -217,8 +217,8 @@ defmodule PrismWeb.LoginLiveTest do
     test "a page open on a boot that lost the control plane starts no sign-in", %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/login")
 
-      Cyfr.ControlPlane.mark(:lost)
-      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
       Application.delete_env(:sanctum, :device_flow_last_ip)
       on_exit(fn -> Application.delete_env(:sanctum, :device_flow_last_ip) end)
 

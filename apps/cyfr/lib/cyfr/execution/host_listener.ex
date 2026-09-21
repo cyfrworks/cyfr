@@ -14,7 +14,7 @@ defmodule Cyfr.Execution.HostListener do
   the body is read:
 
     1. the route is a host route and the method is `POST`, else `404`;
-    2. this boot holds the control plane (`Cyfr.ControlPlane.owner?/0`),
+    2. this boot holds the control plane (`Arca.ControlPlane.held?/0`),
        else `503`, answered as `Cyfr.Execution.Host` would refuse it;
     3. the `x-cyfr-auth` header is present once and verifies over its
        fields and the body hash it names — a host call under the call key
@@ -123,7 +123,7 @@ defmodule Cyfr.Execution.HostListener do
   # `Host` refuses with the same word, so it is answered before the body
   # is read.
   defp owned(callback) do
-    if Cyfr.ControlPlane.owner?() do
+    if Arca.ControlPlane.held?() do
       :ok
     else
       Logger.warning(

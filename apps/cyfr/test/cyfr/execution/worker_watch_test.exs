@@ -234,8 +234,8 @@ defmodule Cyfr.Execution.WorkerWatchTest do
     } do
       fixture = attached!(ctx, "boot_1")
       endpoint = serve!([@not_a_status])
-      Cyfr.ControlPlane.mark(:lost)
-      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
       watch = watch!(endpoint)
 
       refute_receive {:status_asked, _answer}, 6 * @poll_ms
@@ -243,7 +243,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
       assert %{status: "running"} = row(fixture)
 
       # Ownership regained, the next tick polls.
-      Cyfr.ControlPlane.mark(:unclaimed)
+      Arca.ControlPlane.record(:unclaimed)
       assert_receive {:status_asked, _answer}, 1_000
     end
   end
@@ -381,8 +381,8 @@ defmodule Cyfr.Execution.WorkerWatchTest do
       # A boot heard longer ago than one poll interval is asked for again.
       :ok = stop_supervised(WorkerWatch)
       watch!(endpoint, name: WorkerWatch, poll_ms: 60)
-      Cyfr.ControlPlane.mark(:lost)
-      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
       wait_until(fn -> WorkerWatch.fresh_boot(endpoint) == :unknown end, 1_000)
       assert {:ok, %{boot: "boot_1"}} = Dispatch.worker()
       assert_receive {:status_asked, _answer}, 1_000

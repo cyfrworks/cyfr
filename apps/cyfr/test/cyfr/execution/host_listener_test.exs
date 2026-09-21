@@ -331,8 +331,8 @@ defmodule Cyfr.Execution.HostListenerTest do
     @tag :capture_log
     test "a boot that does not hold the control plane refuses every route", %{url: url} do
       fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
-      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
-      Cyfr.ControlPlane.mark(:lost)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
 
       assert {503, %{"error" => "lost"}} = attach(url, fixture)
       assert {503, %{"error" => "unavailable"}} = report(url, fixture)

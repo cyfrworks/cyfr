@@ -42,7 +42,7 @@ defmodule Cyfr.Execution.WorkerWatch do
   change until the old boot's attempts are lapsed.
 
   A tick polls only while this boot owns the control plane
-  (`Cyfr.ControlPlane.owner?/0`), and an answer landing after ownership
+  (`Arca.ControlPlane.held?/0`), and an answer landing after ownership
   lapsed counts for nothing: the rows are the holder's to settle.
 
   Started by `Cyfr.Application` with no options, the watch reads its
@@ -152,7 +152,7 @@ defmodule Cyfr.Execution.WorkerWatch do
 
   @impl true
   def handle_info(:poll, state) do
-    state = if Cyfr.ControlPlane.owner?(), do: poll(state), else: state
+    state = if Arca.ControlPlane.held?(), do: poll(state), else: state
     Process.send_after(self(), :poll, state.poll_ms)
     {:noreply, state}
   end
@@ -207,7 +207,7 @@ defmodule Cyfr.Execution.WorkerWatch do
 
   defp landed(state, id, answer) do
     cond do
-      not Cyfr.ControlPlane.owner?() -> state
+      not Arca.ControlPlane.held?() -> state
       heard?(answer, id) -> heard(state, id, elem(answer, 1))
       true -> missed(state, id)
     end

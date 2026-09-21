@@ -15,7 +15,7 @@ defmodule Cyfr.Execution.Keys do
 
   `generation/0` is the control-plane generation assignments are issued
   under and host calls are checked against: the generation of the claim
-  this boot holds (`Cyfr.ControlPlane.generation/0`), or `1` for a boot
+  this boot holds (`Arca.ControlPlane.generation/0`), or `1` for a boot
   that claims no control plane (a cluster node, or claiming switched off).
   A generation the control plane cannot answer is a refusal, never `1`:
   no assignment is issued and no host call verifies under it.
@@ -74,10 +74,10 @@ defmodule Cyfr.Execution.Keys do
   (`generation/1` of the control plane's answer).
   """
   @spec generation() :: {:ok, pos_integer()} | {:error, :unavailable}
-  def generation, do: generation(Cyfr.ControlPlane.generation())
+  def generation, do: generation(Arca.ControlPlane.generation())
 
   @doc """
-  The generation a control-plane answer (`Cyfr.ControlPlane.generation/0`)
+  The generation a control-plane answer (`Arca.ControlPlane.generation/0`)
   issues and checks keys under: the claim's own, `1` for `:none` (a boot
   that claims no control plane), and `{:error, :unavailable}` for anything
   else, a refusal to read the claim included.

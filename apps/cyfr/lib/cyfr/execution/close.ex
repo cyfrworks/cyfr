@@ -157,14 +157,14 @@ defmodule Cyfr.Execution.Close do
   written, no failure telemetry fires and no child is failed, and the
   answer is the row's: its result when it completed, its error when it
   failed or was cancelled, and the fixed message otherwise. A boot that
-  does not hold the control plane (`Cyfr.ControlPlane.owner?/0`) writes
+  does not hold the control plane (`Arca.ControlPlane.held?/0`) writes
   nothing and answers the same way.
   """
   @spec lost(t()) :: {:ok, map()} | {:error, String.t()}
   def lost(%__MODULE__{record: record} = close) do
     message = "Execution attempt ended before it closed"
 
-    if Cyfr.ControlPlane.owner?() do
+    if Arca.ControlPlane.held?() do
       failed_record = Record.fail(record, message)
 
       case Record.write_failed(failed_record) do

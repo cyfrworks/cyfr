@@ -8,9 +8,10 @@ defmodule Cyfr.Retention.StagedRevisions do
   sweep finishes the committed moves that never finished.
 
   Collection deletes objects a successor boot may be staging against, so
-  it runs only on the boot that owns the control plane: anywhere else it
-  refuses as `{:error, :control_plane_lost}`. One sweep collects at most
-  `limit/0` prefixes per athanor; the next takes up where it stopped.
+  it runs only on a member that holds its slot in the cell
+  (`Arca.ControlPlane.held?/0`): anywhere else it refuses as
+  `{:error, :control_plane_lost}`. One sweep collects at most `limit/0`
+  prefixes per athanor; the next takes up where it stopped.
 
   A sweep that finished a move re-derives the estate's agent index. The
   index is derived from what the overlay SERVES of the `aqua/` tree, and
@@ -41,9 +42,16 @@ defmodule Cyfr.Retention.StagedRevisions do
   def limit,
     do: Keyword.get(Application.get_env(:cyfr, Cyfr.Retention, []), :staging_sweep_limit, 200)
 
+  # The collection is this member's only while it holds its slot; a member
+  # that does not refuses rather than deleting objects a successor may be
+  # staging against.
+  defp held do
+    if Arca.ControlPlane.held?(), do: :ok, else: {:error, :control_plane_lost}
+  end
+
   @impl true
   def prune(ctx, days, dry_run) do
-    with :ok <- Cyfr.ControlPlane.assert_owner(),
+    with :ok <- held(),
          {:ok, report} <-
            Arca.StorageGC.sweep(Sanctum.Context.actor(ctx),
              grace_ms: days * 86_400_000,

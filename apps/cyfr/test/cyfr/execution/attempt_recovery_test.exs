@@ -77,13 +77,13 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
         ]
       )
 
-    Cyfr.ControlPlane.mark(:lost)
-    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+    Arca.ControlPlane.record(:lost)
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
 
     assert {:noreply, %{}} = Cyfr.Execution.Sweeper.handle_info(:sweep, %{})
     assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, record.id)
 
-    Cyfr.ControlPlane.mark(:unclaimed)
+    Arca.ControlPlane.record(:unclaimed)
     assert {:noreply, %{}} = Cyfr.Execution.Sweeper.handle_info(:sweep, %{})
     assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, record.id)
   end

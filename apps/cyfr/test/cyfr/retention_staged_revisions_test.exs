@@ -11,7 +11,7 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
   use ExUnit.Case, async: false
 
   alias Arca.Storage.UnitLocator
-  alias Cyfr.ControlPlane
+  alias Arca.ControlPlane
   alias Cyfr.Retention.StagedRevisions
 
   @sentinel "cyfr-manifest.json"
@@ -25,7 +25,7 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
     Application.put_env(:arca, :base_path, Path.join(base, "data"))
 
     on_exit(fn ->
-      ControlPlane.mark(:unclaimed)
+      ControlPlane.record(:unclaimed)
       Application.put_env(:arca, :base_path, prev_base)
       File.rm_rf!(base)
     end)
@@ -129,7 +129,7 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
   test "refuses on a boot that does not own the control plane", %{ctx: ctx, unit: unit} do
     old = lay_orphan(ctx, unit, 3)
 
-    ControlPlane.mark(:lost)
+    ControlPlane.record(:lost)
     assert {:error, :control_plane_lost} = Cyfr.Retention.cleanup(ctx, "staging_days")
     assert {:error, :control_plane_lost} = StagedRevisions.prune(ctx, 1, true)
     assert staged(ctx, unit) == [old]
@@ -142,11 +142,11 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
     old = lay_orphan(ctx, unit, 3)
     state = %{interval: :timer.hours(999)}
 
-    ControlPlane.mark(:lost)
+    ControlPlane.record(:lost)
     assert {:noreply, ^state} = Cyfr.RetentionScheduler.handle_info(:run_cleanup, state)
     assert staged(ctx, unit) == [old]
 
-    ControlPlane.mark(:unclaimed)
+    ControlPlane.record(:unclaimed)
     assert {:noreply, ^state} = Cyfr.RetentionScheduler.handle_info(:run_cleanup, state)
     assert staged(ctx, unit) == []
   end
