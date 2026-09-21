@@ -3,19 +3,34 @@
 
 defmodule Arca.ServerMetaStorage do
   @moduledoc """
-  The server's own facts, one row per key (`Arca.Schemas.ServerMeta`).
+  The server's own facts, one row per key (`Arca.Schemas.ServerMeta`), and
+  the clock every lease in this database is compared against.
 
   No tenant and no cache: every reader wants the row as it is now, and
-  the two writers that matter — the keyring fingerprint at boot, the
-  control-plane claim — need the write to be conditional. `put_new/2`
-  records a fact only if nobody has; `compare_and_put/3` replaces it only
-  if it still reads what the caller saw. Both are one statement, so two
-  boots racing the same row cannot both believe they wrote it.
+  the writers that matter — the schema and keyring fingerprints at boot —
+  need the write to be conditional. `put_new/2` records a fact only if
+  nobody has; `compare_and_put/3` replaces it only if it still reads what
+  the caller saw. Both are one statement, so two boots racing the same row
+  cannot both believe they wrote it.
+
+  ## The lease clock
+
+  `now!/0` is the one clock a lease decision in this cell is taken on.
+  Every member of a cell reads the same instant from it, so a member whose
+  own clock has drifted cannot decide that a peer's live lease has run out,
+  nor keep believing in its own after it has. Members' local clocks are for
+  bounded local timers — how long a node waits before asking again, how
+  long it goes on believing an answer it already has — and for nothing that
+  decides who holds a row.
   """
 
   import Ecto.Query
 
   alias Arca.Schemas.ServerMeta
+
+  # config:compile-runtime-ok — must match what `Arca.Repo` compiled
+  # against, exactly as `Arca.ProvisioningClaims` and `Arca.TenantTables` do.
+  @adapter Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3)
 
   @doc "The value under `key`, or `{:error, :not_found}`."
   @spec get(String.t()) :: {:ok, String.t()} | {:error, :not_found | :database_error}
@@ -55,5 +70,31 @@ defmodule Arca.ServerMetaStorage do
 
       if count == 1, do: :ok, else: {:error, :stale}
     end)
+  end
+
+  @doc """
+  The cell's lease clock: the instant every member agrees on.
+
+  Postgres answers its own `clock_timestamp()` — the wall clock, where
+  `now()` stands still for the length of a transaction — so every member
+  sharing the database reads one clock however its own has drifted. SQLite
+  has no server and one writer, so the BEAM's clock is the database's and
+  the answer costs nothing.
+
+  Raises when the store cannot answer, so the caller's transaction rolls
+  back and its `Arca.Repo.Errors.with_db_rescue/2` reports the refusal: a
+  lease decision taken on a clock that could not be read is the one thing
+  that must not happen quietly.
+  """
+  @spec now!() :: DateTime.t()
+  if @adapter == Ecto.Adapters.Postgres do
+    # arca:unscoped-ok reads the database server's clock; no table, no tenant.
+    # arca:db-raise-ok raising IS the contract, see the doc above.
+    def now! do
+      %{rows: [[now]]} = Arca.Repo.query!("SELECT clock_timestamp()")
+      now
+    end
+  else
+    def now!, do: DateTime.utc_now()
   end
 end
