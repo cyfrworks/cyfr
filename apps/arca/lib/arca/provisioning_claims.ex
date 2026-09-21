@@ -25,20 +25,19 @@ defmodule Arca.ProvisioningClaims do
 
   ## The lease clock
 
-  A lease is compared against one clock, `now/0`: Postgres answers its own
+  A lease is compared against the cell's one clock,
+  `Arca.ServerMetaStorage.now!/0`: Postgres answers its own
   `clock_timestamp()` — the wall clock, where `now()` stands still for the
-  length of a transaction — so every boot sharing the database reads the
-  same time; SQLite has no server, so the BEAM's clock is the database's.
-  Leases compared on database time everywhere is a change of that one
-  function.
+  length of a transaction — so every member sharing the database reads the
+  same instant however its own clock has drifted; SQLite has no server and
+  one writer, so the BEAM's clock is the database's. It is the same
+  function every other lease in the cell is decided on, and this module
+  keeps no copy of it.
   """
 
   import Ecto.Query
 
   alias Arca.Schemas.ProvisioningClaim
-
-  # config:compile-runtime-ok — must match what `Arca.Repo` compiled against.
-  @adapter Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3)
 
   # A takeover that loses its compare-and-set re-reads the row; past this
   # many rounds whoever keeps winning holds it.
@@ -248,13 +247,8 @@ defmodule Arca.ProvisioningClaims do
 
   defp lease_end(now, lease_ms), do: DateTime.add(now, lease_ms, :millisecond)
 
-  if @adapter == Ecto.Adapters.Postgres do
-    # arca:unscoped-ok reads the database server's clock; no table, no tenant.
-    defp now do
-      %{rows: [[now]]} = Arca.Repo.query!("SELECT clock_timestamp()")
-      now
-    end
-  else
-    defp now, do: DateTime.utc_now()
-  end
+  # The cell's lease clock, shared with every other row a member holds.
+  # It raises when the store cannot answer, which each entry point's
+  # `with_db_rescue` turns into this module's own refusal.
+  defp now, do: Arca.ServerMetaStorage.now!()
 end
