@@ -19,13 +19,13 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimitTest do
       Cyfr.RateLimiter.reset()
 
       restore = fn
-        _key, nil -> :ok
-        key, value -> Application.put_env(:cyfr, key, value)
+        _app, _key, nil -> :ok
+        app, key, value -> Application.put_env(app, key, value)
       end
 
       Application.delete_env(:sanctum, :trust_x_forwarded_for)
-      restore.(:tincture_rate_limit_max, original_max)
-      restore.(:trust_x_forwarded_for, original_trust)
+      restore.(:cyfr, :tincture_rate_limit_max, original_max)
+      restore.(:sanctum, :trust_x_forwarded_for, original_trust)
     end)
 
     :ok

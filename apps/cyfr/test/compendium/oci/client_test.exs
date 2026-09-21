@@ -170,11 +170,16 @@ defmodule Compendium.OCI.ClientTest do
     setup do
       test_dir = Path.join(System.tmp_dir!(), "cyfr_client_test_#{:rand.uniform(100_000)}")
       File.mkdir_p!(test_dir)
+      previous_base = Application.get_env(:arca, :base_path)
       Application.put_env(:arca, :base_path, test_dir)
 
       ctx = Sanctum.TestContext.local()
 
       on_exit(fn ->
+        if previous_base,
+          do: Application.put_env(:arca, :base_path, previous_base),
+          else: Application.delete_env(:arca, :base_path)
+
         File.rm_rf!(test_dir)
       end)
 

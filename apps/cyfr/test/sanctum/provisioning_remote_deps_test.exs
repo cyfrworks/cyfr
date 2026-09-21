@@ -103,15 +103,15 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 
     keys = [
-      :base_path,
-      :seed_path,
-      :oci_registry_url,
-      :registry_url,
-      :sigstore,
-      :provisioning_required_pull_budget_ms
+      arca: :base_path,
+      arca: :seed_path,
+      cyfr: :oci_registry_url,
+      cyfr: :registry_url,
+      cyfr: :sigstore,
+      cyfr: :provisioning_required_pull_budget_ms
     ]
 
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
+    prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
 
     Application.put_env(:arca, :base_path, test_dir)
     Application.put_env(:arca, :seed_path, seed_dir)
@@ -123,10 +123,10 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     Application.put_env(:cyfr, :provisioning_required_pull_budget_ms, @budget_ms)
 
     on_exit(fn ->
-      for {key, value} <- prev do
+      for {{app, key}, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
 
       File.rm_rf!(test_dir)

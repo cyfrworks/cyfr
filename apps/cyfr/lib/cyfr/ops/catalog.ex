@@ -1175,9 +1175,13 @@ defmodule Cyfr.Ops.Catalog do
                 Enum.join(lines, "\n")
     end
 
+    # Watched before the catalogue is written, for the reason `handle_info
+    # (:rebuild_cache, …)` gives: an owner lost mid-load must leave a
+    # `:DOWN` in the mailbox, not a live monitor over a half-written table.
+    state = watch_cache_owner(%{})
     load_providers()
     schedule_refresh()
-    {:ok, watch_cache_owner(%{})}
+    {:ok, state}
   end
 
   # The catalogue lives in `Arca.Cache`, whose table dies with its owner,
@@ -1237,12 +1241,20 @@ defmodule Cyfr.Ops.Catalog do
     # writing a catalogue into a table about to be replaced.
     case Arca.Cache.Sweeper.ensure_table() do
       :ok ->
+        # Watch the replacement owner BEFORE writing the catalogue into its
+        # table. An owner killed while `load_providers/0` is halfway through
+        # takes the entries written so far with it; the rest land in the
+        # next owner's table, and a monitor armed AFTERWARDS finds that
+        # owner alive and waits for a `:DOWN` that will never come, leaving
+        # the catalogue permanently short. Armed first, the `:DOWN` is
+        # already queued and the rebuild runs again as soon as this returns.
+        state = watch_cache_owner(state)
         load_providers()
         # The memo is built from the table, so one taken while the rebuild
         # was in flight describes a partial catalog; drop it rather than
         # serve it out for the next minute.
         Arca.Cache.invalidate(:mcp_tool_list)
-        {:noreply, watch_cache_owner(state)}
+        {:noreply, state}
 
       {:error, :cache_unavailable} ->
         Process.send_after(self(), :rebuild_cache, @cache_owner_retry_ms)

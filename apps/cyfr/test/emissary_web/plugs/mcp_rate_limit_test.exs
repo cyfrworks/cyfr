@@ -18,16 +18,16 @@ defmodule EmissaryWeb.Plugs.MCPRateLimitTest do
 
     on_exit(fn ->
       restore = fn
-        _key, nil -> :ok
-        key, value -> Application.put_env(:cyfr, key, value)
+        _app, _key, nil -> :ok
+        app, key, value -> Application.put_env(app, key, value)
       end
 
       Application.delete_env(:cyfr, :mcp_rate_limit_max)
       Application.delete_env(:cyfr, :mcp_rate_limit_window_ms)
       Application.delete_env(:sanctum, :trust_x_forwarded_for)
-      restore.(:mcp_rate_limit_max, original_max)
-      restore.(:mcp_rate_limit_window_ms, original_window)
-      restore.(:trust_x_forwarded_for, original_trust)
+      restore.(:cyfr, :mcp_rate_limit_max, original_max)
+      restore.(:cyfr, :mcp_rate_limit_window_ms, original_window)
+      restore.(:sanctum, :trust_x_forwarded_for, original_trust)
       Cyfr.RateLimiter.reset()
     end)
 

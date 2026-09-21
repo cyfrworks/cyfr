@@ -118,10 +118,14 @@ defmodule Emissary.MCP.ResourceRegistry do
     # `:resource_providers` key was set by nothing anywhere and fell back
     # to a second, shorter hardcoded list.
     providers = resource_providers()
+    # Watched before the catalogue is written, for the reason `handle_info
+    # (:rebuild_cache, …)` gives: an owner lost mid-load must leave a
+    # `:DOWN` in the mailbox, not a live monitor over a half-written table.
+    state = watch_cache_owner(%{providers: providers})
     register_providers(providers)
     schedule_refresh()
 
-    {:ok, watch_cache_owner(%{providers: providers})}
+    {:ok, state}
   end
 
   # The catalogue lives in `Arca.Cache`, whose table dies with its owner,
@@ -164,8 +168,16 @@ defmodule Emissary.MCP.ResourceRegistry do
     # writing a catalogue into a table about to be replaced.
     case Arca.Cache.Sweeper.ensure_table() do
       :ok ->
+        # Watch the replacement owner BEFORE writing the catalogue into its
+        # table. An owner killed while `register_providers/1` is halfway
+        # through takes the entries written so far with it; the rest land in
+        # the next owner's table, and a monitor armed AFTERWARDS finds that
+        # owner alive and waits for a `:DOWN` that will never come, leaving
+        # the catalogue permanently short. Armed first, the `:DOWN` is
+        # already queued and the rebuild runs again as soon as this returns.
+        state = watch_cache_owner(state)
         register_providers(providers)
-        {:noreply, watch_cache_owner(state)}
+        {:noreply, state}
 
       {:error, :cache_unavailable} ->
         Process.send_after(self(), :rebuild_cache, @cache_owner_retry_ms)
