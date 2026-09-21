@@ -25,11 +25,17 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
   # A registry of two fixture catalysts: `someone/catalysts/elsewhere`,
   # which the bundle requires, and `someone/catalysts/below`, which
-  # `elsewhere` requires. While the stall agent names a repository, that
-  # repository's manifest request is accepted and never answered, and the
-  # observer is told it arrived.
+  # `elsewhere` requires. Every manifest request tells the observer it
+  # arrived, so a case can count who pulled. While the stall agent names a
+  # repository, that repository's manifest request is accepted and held
+  # until the agent stops naming it — a case that clears the stall lets
+  # the pull it parked go on and finish.
   defmodule OCIRegistry do
     @behaviour Plug
+
+    # The ceiling on a held request, well past any budget a case sets.
+    @stall_ms :timer.minutes(2)
+    @stall_poll_ms 25
 
     @impl true
     def init(opts), do: opts
@@ -41,9 +47,11 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
           json(conn, 200, %{"name" => repo, "tags" => ["1.0.0"]})
 
         [_, repo, "manifests/" <> _tag] when is_map_key(fixtures, repo) ->
+          send(opts.observer, {:manifest, repo})
+
           if Agent.get(stall, & &1) == repo do
             send(opts.observer, {:stalled, repo})
-            Process.sleep(:timer.minutes(2))
+            hold(stall, repo, 0)
           end
 
           %{manifest: manifest, manifest_digest: digest} = fixtures[repo]
@@ -62,6 +70,25 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
         _ ->
           json(conn, 404, %{"errors" => [%{"code" => "NAME_UNKNOWN", "message" => path}]})
       end
+    end
+
+    defp hold(_stall, _repo, waited) when waited >= @stall_ms, do: :ok
+
+    defp hold(stall, repo, waited) do
+      if stalled?(stall, repo) do
+        Process.sleep(@stall_poll_ms)
+        hold(stall, repo, waited + @stall_poll_ms)
+      else
+        :ok
+      end
+    end
+
+    # A case that ends while a request is held takes its stall agent with
+    # it; the hold ends with the case rather than outliving it.
+    defp stalled?(stall, repo) do
+      Agent.get(stall, & &1) == repo
+    catch
+      :exit, _gone -> false
     end
 
     defp json(conn, status, body) do
@@ -218,6 +245,38 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     assert {:ok, _} = Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
   end
 
+  test "two members on one athanor's first touch: one fills it, the other pulls nothing and is told which case it is",
+       %{ctx: ctx, group: group, stall: stall} do
+    actor = %Cyfr.Actor{athanor_id: group.id}
+
+    # The first member's attempt holds the estate's claim and is parked in
+    # its required pull. It runs in a process of its own so the second
+    # member's touch happens beside it, as two members' would.
+    Agent.update(stall, fn _ -> "someone/catalysts/elsewhere" end)
+    first = Task.async(fn -> Provisioning.provision(group, ctx) end)
+    assert_receive {:stalled, "someone/catalysts/elsewhere"}, 10_000
+    drain_manifests()
+
+    # The second member's first touch of the same estate. It is told the
+    # estate is being filled — not that it failed, and not silence — and
+    # it asks the registry for nothing: one claim, one closure walk.
+    assert {:error, :provisioning_busy} = Provisioning.provision(group, ctx)
+    assert Provisioning.status(ctx) == :filling
+    assert {:ok, %{fence: 1, outcome: nil}} = Claims.current(actor)
+    refute_receive {:manifest, _repo}, 300
+
+    # And the difference matters to the caller: busy is not the typed
+    # failure a fill that ran and stopped would have answered.
+    assert {:error, :not_provisioned} =
+             Sanctum.MCP.AthanorTool.handle(ctx, %{"action" => "provision"})
+
+    # The first member goes on and fills it, under the claim it never lost.
+    Agent.update(stall, fn _ -> nil end)
+    assert {:ok, %{provisioned_at: %DateTime{}}} = Task.await(first, 60_000)
+    assert {:ok, %{fence: 1, outcome: "ready"}} = Claims.current(actor)
+    assert {:ok, _} = Compendium.Registry.get_latest(ctx, "below", "someone", "catalyst")
+  end
+
   test "an explicit retry that meets a running attempt is told it is in progress, at once",
        %{ctx: ctx, group: group} do
     # Another caller's attempt holds the claim — a background fill in
@@ -316,9 +375,10 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
       assert {:ok, %{fence: 1, outcome: "failed"}} = Claims.current(actor)
     end
 
-    test "an attempt killed where it stands is released by its keeper, and the next claim succeeds",
+    test "an attempt killed where it stands is released by its keeper, once its pull has stopped",
          %{ctx: ctx, group: group} do
       actor = %Cyfr.Actor{athanor_id: group.id}
+      before = MapSet.new(Task.Supervisor.children(Compendium.ProvisioningSupervisor))
 
       # An explicit attempt, so the process to kill is known: it stalls in
       # its required pull, holding the claim.
@@ -332,25 +392,69 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
       # killed inside one takes the shared sandbox connection with it.
       assert_receive {:stalled, "someone/catalysts/elsewhere"}, 5_000
 
+      # The pull runs beside the attempt, not inside it — unlinked, so its
+      # crash stays its own — which is exactly what could outlive the
+      # attempt and go on writing into an estate a successor holds.
+      wait_until(fn -> started_beside(before) != nil end, 5_000, "the pull to be running")
+      pull = started_beside(before)
+
       # Killed: no `after` runs, so nothing in the attempt lets go.
+      killed_at = System.monotonic_time(:millisecond)
       Process.exit(attempt, :kill)
 
       wait_until(
         fn -> match?({:ok, %{outcome: "released"}}, Claims.current(actor)) end,
-        5_000,
+        10_000,
         "the keeper to release the dead attempt's claim"
       )
 
-      # Nothing was marked or recorded for it, and the estate is free: the
-      # next claim is a new attempt at the next fence, and the dead one's
-      # writes would be stale.
+      # The claim came back only once the pull had stopped: a successor
+      # taking the estate now is not racing a predecessor still writing to
+      # it. And it came back on the keeper's watch, far inside the minute
+      # the lease would otherwise have taken.
+      refute Process.alive?(pull)
+      assert System.monotonic_time(:millisecond) - killed_at < 10_000
+
+      # Nothing was marked or recorded for it, and nothing half-landed:
+      # the estate is unfilled, not partly filled.
       {:ok, row} = Athanors.get(group.id)
       refute row.provisioned_at
       refute Athanors.provisioning_failure(row)
       assert Provisioning.status(ctx) == :unfilled
 
+      assert {:ok, []} =
+               Arca.ProfileStorage.list_for_source(
+                 Cyfr.Actor.in_athanor(group.id),
+                 "catalyst:local.foo"
+               )
+
+      # The estate is free: the next claim is a new attempt at the next
+      # fence, and the dead one's writes would be stale.
       assert {:ok, %{fence: 2}} = Claims.claim(actor, "boot_elsewhere/next", "provision", 1_000)
       assert :stale = Claims.settle(actor, held.owner, held.fence, "ready", nil)
+    end
+
+    # The one process the attempt started beside itself, measured as a
+    # delta: the supervisor is shared, and an absolute reading would be
+    # about whatever else the suite left running.
+    defp started_beside(before) do
+      Compendium.ProvisioningSupervisor
+      |> Task.Supervisor.children()
+      |> Enum.reject(&MapSet.member?(before, &1))
+      |> case do
+        [pid] -> pid
+        _none_or_several -> nil
+      end
+    end
+  end
+
+  # Manifest requests the case has already accounted for. A `refute` about
+  # who pulled next must not read a pull that has already been asserted.
+  defp drain_manifests do
+    receive do
+      {:manifest, _repo} -> drain_manifests()
+    after
+      0 -> :ok
     end
   end
 

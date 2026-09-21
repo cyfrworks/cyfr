@@ -35,7 +35,9 @@ defmodule Compendium.Provisioning do
   shorter fixed one. A walk cut short stops where it is: what landed stays
   registered, the failure is recorded on the row, and the next attempt
   finds what is still missing by reading every installed component's
-  manifest.
+  manifest. A pull runs beside the attempt rather than inside it, so it is
+  started and stopped by the estate's claim
+  (`Sanctum.Provisioning.bounded_work/3`) and never outlives it.
   """
 
   use GenServer
@@ -627,19 +629,18 @@ defmodule Compendium.Provisioning do
   # lists what is installed, so the next attempt finds what is still
   # missing below them. A task that exits is reported, never the caller's
   # crash: a seed sync at boot must not take the server down.
+  #
+  # The task is the estate's claim's (`Sanctum.Provisioning.bounded_work/3`),
+  # not this process's: unlinked so its crash stays its own, it would
+  # otherwise outlive an attempt killed where it stands and go on writing
+  # into an estate a successor already holds. The claim's keeper starts it
+  # and stops it before the claim goes back.
   defp bounded_pull(_ctx, [], _budget_ms), do: {:ok, %{pulled: [], failed: [], present: []}}
 
   defp bounded_pull(ctx, refs, budget_ms) do
-    task =
-      Task.Supervisor.async_nolink(Compendium.ProvisioningSupervisor, fn ->
-        Pull.ensure_published_deps(ctx, refs)
-      end)
-
-    case Task.yield(task, budget_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, outcome} -> {:ok, outcome}
-      {:exit, reason} -> {:exit, reason}
-      nil -> :timeout
-    end
+    Estate.bounded_work(Compendium.ProvisioningSupervisor, budget_ms, fn ->
+      Pull.ensure_published_deps(ctx, refs)
+    end)
   end
 
   # Every static dependency the athanor's components declare that is not
