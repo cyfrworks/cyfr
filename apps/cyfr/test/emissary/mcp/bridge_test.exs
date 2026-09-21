@@ -689,6 +689,13 @@ defmodule Emissary.MCP.BridgeTest do
       # Every write sets the two together, so the lease a successor waits
       # out is the bridge lease, and the tick that renews it a third of it.
       assert DateTime.diff(claim.lease_until, claim.updated_at, :millisecond) == 30_000
+
+      # A crash report prints the state, claim rows and all: they survive
+      # the redaction whole, holding nothing that has to be redacted.
+      {:status, _pid, _module, items} = :sys.get_status(bridge)
+      assert %Bridge.State{claims: held} = status_state(items, Bridge.State)
+      assert [%JobClaim{owner: owner}] = Map.values(held)
+      assert owner == Cyfr.Boot.id()
     end
 
     test "a member that loses its claim stops the backend here and revokes nothing a peer now runs",

@@ -56,6 +56,11 @@ defmodule Emissary.MCP.ExternalServers do
 
   @doc """
   Start the server if it is not running, and return its tool catalogue.
+
+  Always a typed answer: a server stopped between the two halves — a vault
+  revocation, an archived athanor, a restart on a config change, or a
+  stdio backend whose claim moved to another member of the cell — is
+  `{:error, {:server_exited, reason}}` and never an exit of this caller.
   """
   @spec ensure_started(map(), Context.t()) :: {:ok, [map()]} | {:error, term()}
   def ensure_started(server, %Context{} = ctx) do
