@@ -15,12 +15,11 @@ defmodule Opus.SecurityTest do
   setup do
     # Use a test-specific base path to avoid state leaking between tests
     test_path = Path.join(System.tmp_dir!(), "opus_security_test_#{:rand.uniform(100_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     # Every execution roots under a profile's consent: bootstrap mints one
     # through the production DB source, and the loader reads it back.
-    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
 
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -58,11 +57,10 @@ defmodule Opus.SecurityTest do
 
     on_exit(fn ->
       File.rm_rf!(test_path)
-      Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.Memory)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}

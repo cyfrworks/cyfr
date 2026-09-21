@@ -75,7 +75,7 @@ defmodule Cyfr.Execution.TurnRoot do
              ctx,
              Keyword.get(opts, :profile, :default),
              agent_ref,
-             Keyword.take(opts, [:consent_source, :ceiling, :live_shape_digest])
+             Keyword.take(opts, [:ceiling, :live_shape_digest])
            ),
          record = build_record(ctx, agent_ref, authority, stamp, opts),
          :ok <- Record.write_started(record),

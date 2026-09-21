@@ -30,26 +30,26 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     # One more than the tool carried before: the concurrency argument's
     # own refusal, a sentence about the value offered.
     "apps/cyfr/lib/cyfr/schedules/provider.ex" => 20,
-    "apps/cyfr/lib/sanctum/mcp/webhook_tool.ex" => 18,
+    "apps/sanctum/lib/sanctum/mcp/webhook_tool.ex" => 18,
     "apps/cyfr/lib/cyfr/execution/mcp.ex" => 14,
     "apps/cyfr/lib/emissary/mcp/tools/system_provider.ex" => 12,
-    "apps/cyfr/lib/sanctum/mcp/key_tool.ex" => 11,
-    "apps/cyfr/lib/sanctum/mcp/profile_tool.ex" => 7,
+    "apps/sanctum/lib/sanctum/mcp/key_tool.ex" => 11,
+    "apps/sanctum/lib/sanctum/mcp/profile_tool.ex" => 7,
     "apps/cyfr/lib/compendium/mcp/component_tool.ex" => 7,
     "apps/cyfr/lib/compendium/mcp.ex" => 7,
     "apps/cyfr/lib/emissary/mcp/tools/records_provider.ex" => 6,
     "apps/cyfr/lib/emissary/mcp/mcp_servers_tool.ex" => 6,
-    "apps/cyfr/lib/sanctum/mcp/oauth_tool.ex" => 3,
-    "apps/cyfr/lib/sanctum/mcp.ex" => 2,
+    "apps/sanctum/lib/sanctum/mcp/oauth_tool.ex" => 3,
+    "apps/sanctum/lib/sanctum/mcp.ex" => 2,
     # A tool this provider does not define, and the validation rate a
     # caller reached, with the seconds to wait.
     "apps/cyfr/lib/compendium/builds/provider.ex" => 2,
-    "apps/cyfr/lib/sanctum/mcp/tincture_visibility_tool.ex" => 1,
+    "apps/sanctum/lib/sanctum/mcp/tincture_visibility_tool.ex" => 1,
     # Two of the three are the capacity refusals a poller sees when the
     # server will not mint them an athanor: remediation prose (wait, or ask
     # the operator), not a resource that is missing or briefly away.
-    "apps/cyfr/lib/sanctum/mcp/session_tool.ex" => 3,
-    "apps/cyfr/lib/sanctum/mcp/athanor_tool.ex" => 1
+    "apps/sanctum/lib/sanctum/mcp/session_tool.ex" => 3,
+    "apps/sanctum/lib/sanctum/mcp/athanor_tool.ex" => 1
   }
 
   defp root, do: Path.expand("../../../../..", __DIR__)

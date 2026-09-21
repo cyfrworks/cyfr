@@ -25,8 +25,8 @@ defmodule Cyfr.Schedules.ProviderTest do
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_cron_mcp_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
-    prev_base = Application.fetch_env!(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
+    prev_base = Application.fetch_env!(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_dir)
 
     ctx = Sanctum.TestContext.local()
 
@@ -40,14 +40,13 @@ defmodule Cyfr.Schedules.ProviderTest do
 
     # A schedule binds a consented profile at create; seed one owner
     # profile for the target these tests point at.
-    Sanctum.Test.ConsentFixtures.start_source!()
 
     Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.test",
       profile_id: "prof-cron"
     )
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
+      Application.put_env(:arca, :base_path, prev_base)
       File.rm_rf!(test_dir)
     end)
 

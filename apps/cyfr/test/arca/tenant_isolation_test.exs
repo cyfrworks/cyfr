@@ -4,7 +4,7 @@
 defmodule Arca.TenantIsolationTest do
   use ExUnit.Case, async: false
 
-  alias Arca.TenantTestHelper
+  alias Sanctum.TestContext
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -12,11 +12,11 @@ defmodule Arca.TenantIsolationTest do
 
     test_dir = Path.join(System.tmp_dir!(), "tenant_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
-    prev_base = Application.fetch_env!(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
+    prev_base = Application.fetch_env!(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_dir)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
+      Application.put_env(:arca, :base_path, prev_base)
       File.rm_rf!(test_dir)
     end)
 
@@ -29,7 +29,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "ComponentStorage tenant isolation" do
     test "create as A, B cannot see" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       attrs = %{
         id: "comp_tenant_test_1",
@@ -83,7 +83,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "exists? respects tenant boundary" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       attrs = %{
         id: "comp_exists_test",
@@ -114,7 +114,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "delete respects tenant boundary" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       attrs = %{
         id: "comp_delete_test",
@@ -158,7 +158,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "Execution get_tenant/2 tenant isolation" do
     test "cross-tenant get returns nil" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.Execution.record_start(%{
@@ -180,7 +180,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "platform scope bypasses tenant check" do
-      {ctx_a, _ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, _ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.Execution.record_start(%{
@@ -211,7 +211,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "Execution tenant filtering" do
     test "list filters by athanor_id" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.Execution.record_start(%{
@@ -253,7 +253,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "CronSchedule tenant isolation" do
     test "list scoped to tenant" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.CronSchedule.create(%{
@@ -285,7 +285,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "count_active scoped to tenant" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.CronSchedule.create(%{
@@ -302,7 +302,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "get_by_id_or_name scoped to tenant" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, sched} =
         Arca.CronSchedule.create(%{
@@ -330,7 +330,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "Component ID includes tenant fields" do
     test "two tenants registering same component get different IDs" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
       now = DateTime.utc_now()
 
       attrs_a = %{
@@ -402,7 +402,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "MCP log retention tenant isolation" do
     test "cleanup for one tenant doesn't affect another" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       old_time = DateTime.utc_now() |> DateTime.add(-60 * 86_400, :second)
 
@@ -441,7 +441,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "dry_run scoped to tenant" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       old_time = DateTime.utc_now() |> DateTime.add(-60 * 86_400, :second)
 
@@ -474,7 +474,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "Execution retention tenant isolation" do
     test "cleanup for one tenant doesn't affect another" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       # Create 5 executions for each tenant
       for i <- 1..5 do
@@ -519,7 +519,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "execution cleanup scoped to tenant" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       for i <- 1..4 do
         {:ok, _} =
@@ -556,7 +556,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "dry_run scoped to tenant" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       for i <- 1..3 do
         {:ok, _} =
@@ -596,7 +596,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "McpLog.get_tenant/2 tenant isolation" do
     test "cross-tenant get returns nil" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.McpLog.record(%{
@@ -618,7 +618,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "platform scope bypasses tenant check" do
-      {ctx_a, _ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, _ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.McpLog.record(%{
@@ -648,7 +648,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "PolicyLog.get_tenant/2 tenant isolation" do
     test "cross-tenant get returns nil" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.PolicyLog.record(%{
@@ -669,7 +669,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "platform scope bypasses tenant check" do
-      {ctx_a, _ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, _ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.PolicyLog.record(%{
@@ -698,7 +698,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "PolicyLog.get_by_request_id_tenant/2 tenant isolation" do
     test "cross-tenant returns nil" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.PolicyLog.record(%{
@@ -726,7 +726,7 @@ defmodule Arca.TenantIsolationTest do
     end
 
     test "platform scope bypasses tenant check" do
-      {ctx_a, _ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, _ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
         Arca.PolicyLog.record(%{
@@ -760,7 +760,7 @@ defmodule Arca.TenantIsolationTest do
 
   describe "McpLog.stats tenant scoping" do
     test "stats scoped to tenant" do
-      {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
+      {ctx_a, ctx_b} = TestContext.two_contexts()
 
       now = DateTime.utc_now()
 

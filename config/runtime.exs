@@ -371,7 +371,7 @@ if config_env() != :test do
     # Whether the server migrates the database on boot (default: true). Several
     # nodes on one Postgres, or an operator who runs the schema step by hand
     # (`bin/cyfr eval "Cyfr.Release.migrate()"`), turn it off.
-    config :cyfr, :auto_migrate, env_bool.("CYFR_AUTO_MIGRATE", true)
+    config :arca, :auto_migrate, env_bool.("CYFR_AUTO_MIGRATE", true)
 
     # Whether a pull refuses a component whose OCI signature cannot be
     # verified (default: false — the component is stored as unverified and
@@ -474,7 +474,7 @@ if config_env() != :test do
     # facing a drifting sender had no answer short of turning the header off.
     if skew = env_int.("CYFR_WEBHOOK_MAX_SKEW_SECONDS", nil) do
       if skew <= 0, do: raise("CYFR_WEBHOOK_MAX_SKEW_SECONDS must be > 0")
-      config :cyfr, :webhook_max_skew_seconds, skew
+      config :sanctum, :webhook_max_skew_seconds, skew
     end
 
     # How long delivered webhook idempotency keys are kept (default 86_400s).
@@ -501,7 +501,7 @@ if config_env() != :test do
         raise "CYFR_SESSION_TTL_HOURS must be >= 0 (0 = infinite, minimum non-zero is 1)"
       end
 
-      config :cyfr, :session_ttl_hours, ttl_hours
+      config :sanctum, :session_ttl_hours, ttl_hours
     end
 
     # CYFR_SECRET_KEY_BASE overrides the configured key. Required and nonblank
@@ -509,7 +509,7 @@ if config_env() != :test do
     env_key_base = env_str.("CYFR_SECRET_KEY_BASE", nil)
 
     if env_key_base do
-      config :cyfr, :secret_key_base, env_key_base
+      config :sanctum, :secret_key_base, env_key_base
     end
 
     # Apply origin and proxy settings in every environment. Extra MCP origins
@@ -524,13 +524,13 @@ if config_env() != :test do
       # Caddy) the default of 1 hop is correct; stacking more layers requires
       # raising CYFR_TRUSTED_PROXY_HOPS to match, or listing the proxies in
       # CYFR_TRUSTED_PROXY_CIDRS (comma-separated IPs/CIDRs, takes precedence).
-      config :cyfr, :trust_x_forwarded_for, true
+      config :sanctum, :trust_x_forwarded_for, true
 
-      config :cyfr, :trusted_proxy_hops, env_int.("CYFR_TRUSTED_PROXY_HOPS", 1)
+      config :sanctum, :trusted_proxy_hops, env_int.("CYFR_TRUSTED_PROXY_HOPS", 1)
 
       case env_list.("CYFR_TRUSTED_PROXY_CIDRS") do
         [] -> :ok
-        cidrs -> config :cyfr, :trusted_proxy_cidrs, cidrs
+        cidrs -> config :sanctum, :trusted_proxy_cidrs, cidrs
       end
     end
 
@@ -636,8 +636,8 @@ if config_env() != :test do
         {:error, message} -> raise message
       end
 
-    config :cyfr, :base_path, paths.base_path
-    config :cyfr, :seed_path, paths.seed_path
+    config :arca, :base_path, paths.base_path
+    config :arca, :seed_path, paths.seed_path
 
     # Reject .env adapter settings that disagree with the compile-time CYFR_DATABASE choice.
     built_adapter = Cyfr.RuntimeConfig.repo_adapter()
@@ -686,7 +686,7 @@ if config_env() != :test do
             {:error, message} -> raise message
           end
 
-        config :cyfr, Arca.Repo,
+        config :arca, Arca.Repo,
           database: paths.database_path,
           pool_size: pool_size,
           journal_mode: :wal,
@@ -699,7 +699,7 @@ if config_env() != :test do
         # `opus` release skips this whole block: it starts no Repo and must
         # not be handed database credentials at all.)
         case Cyfr.RuntimeConfig.resolve_postgres(getenv) do
-          {:ok, repo_opts} -> config :cyfr, Arca.Repo, repo_opts
+          {:ok, repo_opts} -> config :arca, Arca.Repo, repo_opts
           {:error, message} -> raise message
         end
     end
@@ -740,11 +740,11 @@ if config_env() != :test do
     # is sent only on the token exchange (required per Google OAuth spec for
     # all device-flow clients).
     if google_id do
-      config :cyfr, :google_client_id, google_id
+      config :sanctum, :google_client_id, google_id
     end
 
     if google_secret do
-      config :cyfr, :google_client_secret, google_secret
+      config :sanctum, :google_client_secret, google_secret
     end
 
     # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).
@@ -777,18 +777,18 @@ if config_env() != :test do
 
     # GitHub device flow needs only its client ID (read above).
     if github_id do
-      config :cyfr, :github_client_id, github_id
+      config :sanctum, :github_client_id, github_id
     end
 
     # Platform-admin email allowlist. Addresses are normalized to lowercase before matching.
     platform_admins =
       "CYFR_PLATFORM_ADMIN_EMAILS" |> env_list.() |> Enum.map(&String.downcase/1)
 
-    config :cyfr, :platform_admin_emails, platform_admins
+    config :sanctum, :platform_admin_emails, platform_admins
 
     # Account caps: unset disables limits except groups (50 per person),
     # pairs (200) and threads (1000); 0 disables those defaults.
-    config :cyfr, :caps,
+    config :sanctum, :caps,
       max_athanors: env_int.("CYFR_MAX_ATHANORS", nil),
       max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", 50),
       max_pairs_per_person: env_int.("CYFR_MAX_PAIRS_PER_PERSON", 200),
@@ -846,8 +846,8 @@ if config_env() != :test do
         :ok
 
       {:ok, {:s3, s3_opts}} ->
-        config :cyfr, :storage_adapter, Arca.Adapters.S3
-        config :cyfr, :s3, s3_opts
+        config :arca, :storage_adapter, Arca.Adapters.S3
+        config :arca, :s3, s3_opts
 
       {:error, message} ->
         raise message

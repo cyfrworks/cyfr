@@ -41,15 +41,15 @@ defmodule Cyfr.Execution.GuestStorageTest do
       Path.join(System.tmp_dir!(), "guest_storage_test_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(test_dir)
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_dir)
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local(), test_dir: test_dir}
@@ -426,13 +426,13 @@ defmodule Cyfr.Execution.GuestStorageTest do
       File.write!(Path.join(bundle, "cyfr-manifest.json"), ~s({"type":"catalyst"}))
       File.write!(Path.join(bundle, "config.json"), ~s({"seeded":true}))
 
-      prev_seed = Application.get_env(:cyfr, :seed_path)
-      Application.put_env(:cyfr, :seed_path, seed)
+      prev_seed = Application.get_env(:arca, :seed_path)
+      Application.put_env(:arca, :seed_path, seed)
 
       on_exit(fn ->
         if prev_seed,
-          do: Application.put_env(:cyfr, :seed_path, prev_seed),
-          else: Application.delete_env(:cyfr, :seed_path)
+          do: Application.put_env(:arca, :seed_path, prev_seed),
+          else: Application.delete_env(:arca, :seed_path)
       end)
 
       :ok
@@ -635,13 +635,13 @@ defmodule Cyfr.Execution.GuestStorageTest do
 
     @tag :capture_log
     test "an unreadable usage refuses the public write", %{ctx: ctx} do
-      original = Application.get_env(:cyfr, :storage_adapter)
-      Application.put_env(:cyfr, :storage_adapter, UnreadableUsageAdapter)
+      original = Application.get_env(:arca, :storage_adapter)
+      Application.put_env(:arca, :storage_adapter, UnreadableUsageAdapter)
 
       on_exit(fn ->
         if original,
-          do: Application.put_env(:cyfr, :storage_adapter, original),
-          else: Application.delete_env(:cyfr, :storage_adapter)
+          do: Application.put_env(:arca, :storage_adapter, original),
+          else: Application.delete_env(:arca, :storage_adapter)
       end)
 
       assert {"storage_quota_exceeded", message} =

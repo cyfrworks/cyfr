@@ -32,12 +32,12 @@ config :phoenix, :stacktrace_depth, 20
 config :phoenix, :plug_init_mode, :runtime
 
 # Add development connection options; runtime.exs resolves the database path.
-config :cyfr, Arca.Repo,
+config :arca, Arca.Repo,
   database: Path.expand("data/cyfr.db"),
   show_sensitive_data_on_connection_error: true
 
 # Sanctum dev configuration
-config :cyfr,
+config :sanctum,
   secret_key_base: "dev_secret_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
 # Omit timestamps in development logs; retain request, user and athanor metadata.

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.Consent.ShapeDerivationTest do
@@ -7,7 +7,6 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.ShapeDerivation
-  alias Sanctum.Consent.Source
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
@@ -17,16 +16,16 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "shape_derivation_#{:rand.uniform(1_000_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
     Cyfr.Test.SeedBundle.isolate!()
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}
@@ -58,8 +57,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
   end
 
   defp head!(ctx, source_ref) do
-    {:ok, [profile]} = Source.DB.profiles(ctx, source_ref)
-    {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+    {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), source_ref)
+    {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
     {profile, consent}
   end
 
@@ -111,7 +110,6 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
     assert {:ok, _authority, stamp} =
              Loader.load_root(ctx, profile,
-               source: Source.DB,
                live: {:ok, live},
                live_shape_digest: digest
              )
@@ -146,8 +144,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     end
 
     defp formula_head!(ctx, source_ref) do
-      {:ok, [profile]} = Source.DB.profiles(ctx, source_ref)
-      {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), source_ref)
+      {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
       {profile, consent}
     end
 
@@ -170,7 +168,6 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
       assert {:error, {:consent_required, payload}} =
                Loader.load_root(ctx, profile,
-                 source: Source.DB,
                  live: {:ok, live},
                  live_shape_digest: digest
                )
@@ -204,7 +201,6 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
       assert {:ok, _authority, stamp} =
                Loader.load_root(ctx, profile,
-                 source: Source.DB,
                  live: {:ok, live},
                  live_shape_digest: digest
                )
@@ -221,10 +217,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     publish!(ctx, "shape-dark", "1.0.1", %{manifest: Jason.encode!(roll_manifest("reworded"))})
 
     assert {:error, {:consent_required, payload}} =
-             Loader.load_root(ctx, profile,
-               source: Source.DB,
-               live: {:ok, live!(ctx, "shape-dark")}
-             )
+             Loader.load_root(ctx, profile, live: {:ok, live!(ctx, "shape-dark")})
 
     assert payload.profile_id == profile.id
   end
@@ -246,7 +239,6 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
     assert {:error, {:consent_required, %{current_revision: 1}}} =
              Loader.load_root(ctx, profile,
-               source: Source.DB,
                live: {:ok, live!(ctx, "shape-chg")},
                live_shape_digest: live_digest
              )
@@ -355,7 +347,6 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
       assert {:ok, authority, _stamp} =
                Loader.load_root(ctx, profile,
-                 source: Source.DB,
                  live: {:ok, live!(ctx, "shape-caps-load")},
                  live_shape_digest: live_shape
                )

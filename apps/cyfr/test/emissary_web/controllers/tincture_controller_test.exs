@@ -13,8 +13,8 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   setup do
     base = Path.join(System.tmp_dir!(), "tincture_ctrl_#{:rand.uniform(1_000_000)}")
-    original = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, base)
+    original = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, base)
 
     # ── Private tincture (auth-dash) ─────────────────────────────────
     private_dir = tincture_dir("auth-dash")
@@ -158,8 +158,6 @@ defmodule EmissaryWeb.TinctureControllerTest do
     # Public-ness is a published profile now, not a policy bit. Both
     # public fixtures get an active public profile; the pre-dispatch
     # policy rate limiter is gone (rates ride the authority path).
-    original_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
 
     for name <- ["pub-dash", "rl-dash", "nl-dash", "built-dash"] do
       {:ok, _} =
@@ -174,14 +172,10 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
 
     on_exit(fn ->
-      if original_source,
-        do: Application.put_env(:cyfr, :consent_source, original_source),
-        else: Application.delete_env(:cyfr, :consent_source)
-
       if original do
-        Application.put_env(:cyfr, :base_path, original)
+        Application.put_env(:arca, :base_path, original)
       else
-        Application.delete_env(:cyfr, :base_path)
+        Application.delete_env(:arca, :base_path)
       end
 
       File.rm_rf!(base)

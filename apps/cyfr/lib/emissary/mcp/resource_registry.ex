@@ -118,10 +118,71 @@ defmodule Emissary.MCP.ResourceRegistry do
     # `:resource_providers` key was set by nothing anywhere and fell back
     # to a second, shorter hardcoded list.
     providers = resource_providers()
+    # Watched before the catalogue is written, for the reason `handle_info
+    # (:rebuild_cache, …)` gives: an owner lost mid-load must leave a
+    # `:DOWN` in the mailbox, not a live monitor over a half-written table.
+    state = watch_cache_owner(%{providers: providers})
     register_providers(providers)
     schedule_refresh()
 
-    {:ok, %{providers: providers}}
+    {:ok, state}
+  end
+
+  # The catalogue lives in `Arca.Cache`, whose table dies with its owner,
+  # `Arca.Cache.Sweeper`. That owner is started by the `arca` application,
+  # one app below this one, so no supervisor here can hold both it and
+  # this registry — the `:rest_for_one` group that used to restart the two
+  # together cannot span two applications. A monitor keeps the same
+  # guarantee: when the owner goes, the catalogue goes with it, and this
+  # rebuilds into the table the replacement owner creates rather than
+  # answering an empty catalogue until the next refresh, a day later.
+  @cache_owner_retry_ms 100
+
+  defp watch_cache_owner(state) do
+    case Arca.Cache.monitor_owner() do
+      nil ->
+        # No table to watch: it is gone, or not created yet. Come back and
+        # REBUILD rather than only re-arm — an owner that died while this
+        # was repopulating leaves nothing to monitor, and a monitor alone
+        # would wait for a `:DOWN` that has already happened while the
+        # catalogue stayed lost.
+        Process.send_after(self(), :rebuild_cache, @cache_owner_retry_ms)
+        Map.put(state, :cache_owner, nil)
+
+      ref ->
+        Map.put(state, :cache_owner, ref)
+    end
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{cache_owner: ref} = state) do
+    send(self(), :rebuild_cache)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:rebuild_cache, %{providers: providers} = state) do
+    # `ensure_table/0` is a call on the table's owner, so it answers only
+    # once the supervisor has restarted it and the table is back. Until
+    # then it says the cache is unavailable, and this waits rather than
+    # writing a catalogue into a table about to be replaced.
+    case Arca.Cache.Sweeper.ensure_table() do
+      :ok ->
+        # Watch the replacement owner BEFORE writing the catalogue into its
+        # table. An owner killed while `register_providers/1` is halfway
+        # through takes the entries written so far with it; the rest land in
+        # the next owner's table, and a monitor armed AFTERWARDS finds that
+        # owner alive and waits for a `:DOWN` that will never come, leaving
+        # the catalogue permanently short. Armed first, the `:DOWN` is
+        # already queued and the rebuild runs again as soon as this returns.
+        state = watch_cache_owner(state)
+        register_providers(providers)
+        {:noreply, state}
+
+      {:error, :cache_unavailable} ->
+        Process.send_after(self(), :rebuild_cache, @cache_owner_retry_ms)
+        {:noreply, state}
+    end
   end
 
   @impl true

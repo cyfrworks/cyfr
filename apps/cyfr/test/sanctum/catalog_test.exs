@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.CatalogTest do
@@ -41,7 +41,9 @@ defmodule Sanctum.CatalogTest do
 
     reaches =
       for file <-
-            Cyfr.Test.SourceTree.files!(Path.join(root, "apps/cyfr/lib/sanctum/consent/**/*.ex")),
+            Cyfr.Test.SourceTree.files!(
+              Path.join(root, "apps/sanctum/lib/sanctum/consent/**/*.ex")
+            ),
           line <- file |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
           line =~ ~r/\bEmissary\./,
           do: "#{Path.relative_to(file, root)}: #{String.trim(line)}"

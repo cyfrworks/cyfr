@@ -40,13 +40,13 @@ defmodule Compendium.RegistryTest do
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_registry_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
-    prev_base = Application.fetch_env!(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
+    prev_base = Application.fetch_env!(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_dir)
 
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
+      Application.put_env(:arca, :base_path, prev_base)
       File.rm_rf!(test_dir)
     end)
 
@@ -1151,14 +1151,14 @@ defmodule Compendium.RegistryTest do
 
   describe "publish_tincture_archive/4 — athanor storage cap" do
     test "refuses when the extracted tree would pass the athanor cap", %{ctx: ctx} do
-      prev_caps = Application.get_env(:cyfr, :caps)
-      Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1)
+      prev_caps = Application.get_env(:sanctum, :caps)
+      Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1)
       Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
 
       on_exit(fn ->
         if prev_caps,
-          do: Application.put_env(:cyfr, :caps, prev_caps),
-          else: Application.delete_env(:cyfr, :caps)
+          do: Application.put_env(:sanctum, :caps, prev_caps),
+          else: Application.delete_env(:sanctum, :caps)
       end)
 
       archive =
@@ -1348,13 +1348,13 @@ defmodule Compendium.RegistryTest do
 
   describe "publish_tincture_archive/4 — partial storage failure" do
     test "a failed file write aborts registration and cleans up partial files", %{ctx: ctx} do
-      original = Application.get_env(:cyfr, :storage_adapter)
-      Application.put_env(:cyfr, :storage_adapter, Compendium.RegistryTest.FailingPutAdapter)
+      original = Application.get_env(:arca, :storage_adapter)
+      Application.put_env(:arca, :storage_adapter, Compendium.RegistryTest.FailingPutAdapter)
 
       on_exit(fn ->
         if original,
-          do: Application.put_env(:cyfr, :storage_adapter, original),
-          else: Application.delete_env(:cyfr, :storage_adapter)
+          do: Application.put_env(:arca, :storage_adapter, original),
+          else: Application.delete_env(:arca, :storage_adapter)
       end)
 
       archive =

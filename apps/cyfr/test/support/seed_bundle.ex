@@ -16,13 +16,13 @@ defmodule Cyfr.Test.SeedBundle do
   def isolate! do
     dir = Path.join(System.tmp_dir!(), "seed_isolate_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
-    previous = Application.get_env(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :seed_path, dir)
+    previous = Application.get_env(:arca, :seed_path)
+    Application.put_env(:arca, :seed_path, dir)
 
     ExUnit.Callbacks.on_exit(fn ->
       if previous,
-        do: Application.put_env(:cyfr, :seed_path, previous),
-        else: Application.delete_env(:cyfr, :seed_path)
+        do: Application.put_env(:arca, :seed_path, previous),
+        else: Application.delete_env(:arca, :seed_path)
 
       File.rm_rf!(dir)
     end)
@@ -35,13 +35,13 @@ defmodule Cyfr.Test.SeedBundle do
   def isolate_from!(source) when is_binary(source) do
     dir = Path.join(System.tmp_dir!(), "seed_isolate_#{System.unique_integer([:positive])}")
     File.cp_r!(source, dir)
-    previous = Application.get_env(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :seed_path, dir)
+    previous = Application.get_env(:arca, :seed_path)
+    Application.put_env(:arca, :seed_path, dir)
 
     ExUnit.Callbacks.on_exit(fn ->
       if previous,
-        do: Application.put_env(:cyfr, :seed_path, previous),
-        else: Application.delete_env(:cyfr, :seed_path)
+        do: Application.put_env(:arca, :seed_path, previous),
+        else: Application.delete_env(:arca, :seed_path)
 
       File.rm_rf!(dir)
     end)
@@ -141,13 +141,13 @@ defmodule Cyfr.Test.SeedBundle do
       copy_unit!(src, dest)
     end
 
-    previous = Application.get_env(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :seed_path, dir)
+    previous = Application.get_env(:arca, :seed_path)
+    Application.put_env(:arca, :seed_path, dir)
 
     ExUnit.Callbacks.on_exit(fn ->
       if previous,
-        do: Application.put_env(:cyfr, :seed_path, previous),
-        else: Application.delete_env(:cyfr, :seed_path)
+        do: Application.put_env(:arca, :seed_path, previous),
+        else: Application.delete_env(:arca, :seed_path)
 
       File.rm_rf!(dir)
     end)

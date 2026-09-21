@@ -14,7 +14,6 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
   alias Cyfr.Test.TwoServices
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.Bootstrap
-  alias Sanctum.Consent.Source
 
   @moduletag timeout: 120_000
 
@@ -26,12 +25,11 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     TwoServices.watch!()
 
     test_path = Path.join(System.tmp_dir!(), "authority_char_#{:rand.uniform(1_000_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     # The production source, not the Memory fixture: bootstrap writes real
     # rows and the loader reads them back.
-    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     ctx = Sanctum.TestContext.local()
     :ok = Probe.publish_probe!(ctx)
@@ -40,11 +38,10 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
     on_exit(fn ->
       File.rm_rf!(test_path)
-      Application.put_env(:cyfr, :consent_source, Source.Memory)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()

@@ -13,15 +13,15 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     # Use a test-specific base path to avoid polluting real config
     test_path = Path.join(System.tmp_dir!(), "arca_mcp_test_#{:rand.uniform(100_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local(), test_path: test_path}
@@ -933,7 +933,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   # against, as `Arca.TenantTables` does: the adapter is bound at compile
   # time, so a runtime branch on `__adapter__/0` is one the compiler
   # proves dead.
-  @drop_executions (case Application.compile_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3) do
+  @drop_executions (case Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3) do
                       Ecto.Adapters.Postgres -> "DROP TABLE executions CASCADE"
                       _sqlite -> "DROP TABLE executions"
                     end)

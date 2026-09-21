@@ -3,8 +3,14 @@
 
 defmodule Cyfr.ConfigKeyRosterTest do
   @moduledoc """
-  Classifies every :cyfr application key read by the code.
-  Unclassified keys fail the roster check.
+  Classifies every application key the code reads. Unclassified keys fail
+  the roster check.
+
+  Three applications own keys: `:cyfr` the host's, `:arca` the
+  persistence layer's and `:sanctum` the auth domain's. A key name is
+  unique across the three, so the classes below are keyed by the name
+  alone and the scans read all three prefixes — a key that moves between
+  applications keeps its class and its comment.
 
   The classes:
 
@@ -54,6 +60,13 @@ defmodule Cyfr.ConfigKeyRosterTest do
     database_checks_enabled: :default,
     telemetry_console_enabled: :default,
 
+    # The at-rest keyring: `Cyfr.Application` resolves it at boot, from
+    # `CYFR_CRYPTO_KEYRING` (which `runtime.exs` reads into
+    # `:cyfr, :crypto_keyring_json`) or derived from the master secret, and
+    # writes it here. A real lever, reached through the boot rather than a
+    # config file, which is why no file declares it.
+    crypto_keyring: :operator,
+
     # Operator-shaped, with nothing to set them from. Each has a sensible
     # in-code default, so this is a gap in reach, not a broken deployment.
     oci_max_blob_bytes: :missing_lever,
@@ -84,8 +97,9 @@ defmodule Cyfr.ConfigKeyRosterTest do
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
-  # `Application.get_env/fetch_env/compile_env` on `:cyfr`, ignoring
-  # comments so a key named in prose is not mistaken for a read.
+  # `Application.get_env/fetch_env/compile_env` on any of the three
+  # applications, ignoring comments so a key named in prose is not
+  # mistaken for a read.
   defp keys_read do
     for lib <- Cyfr.Test.SourceTree.app_libs(root()),
         path <- Cyfr.Test.SourceTree.files!(Path.join([root(), lib, "**/*.ex"])),
@@ -93,14 +107,15 @@ defmodule Cyfr.ConfigKeyRosterTest do
         code = source |> Cyfr.Test.CodeLines.lines() |> Enum.join("\n"),
         [_, key] <-
           Regex.scan(
-            ~r/Application\.(?:get_env|fetch_env!?|compile_env!?)\(\s*:cyfr,\s*:([a-z_0-9]+)/,
+            ~r/Application\.(?:get_env|fetch_env!?|compile_env!?)\(\s*:(?:cyfr|arca|sanctum),\s*:([a-z_0-9]+)/,
             code
           ),
         into: MapSet.new(),
         do: String.to_atom(key)
   end
 
-  # `config :cyfr, :key, …` and the multi-key `config :cyfr,\n  key: …` form.
+  # `config :<app>, :key, …` and the multi-key `config :<app>,\n  key: …`
+  # form, for each of the three applications.
   defp keys_declared do
     for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "config/*.exs")),
         source = File.read!(path),
@@ -111,13 +126,13 @@ defmodule Cyfr.ConfigKeyRosterTest do
   end
 
   defp single_keys(source) do
-    ~r/config :cyfr,\s*:([a-z_0-9]+)/
+    ~r/config :(?:cyfr|arca|sanctum),\s*:([a-z_0-9]+)/
     |> Regex.scan(source)
     |> Enum.map(fn [_, k] -> String.to_atom(k) end)
   end
 
   defp block_keys(source) do
-    ~r/^config :cyfr,\s*$((?:\n[ \t]+.*)+)/m
+    ~r/^config :(?:cyfr|arca|sanctum),\s*$((?:\n[ \t]+.*)+)/m
     |> Regex.scan(source)
     |> Enum.flat_map(fn [_, block] ->
       ~r/^\s{2,}([a-z_0-9]+):/m
@@ -137,7 +152,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
 
     assert unclassified == [],
            """
-           These `:cyfr` keys are read by the code and set by no config file:
+           These application keys are read by the code and set by no config file:
 
            #{Enum.map_join(Enum.sort(unclassified), "\n", &"  #{inspect(&1)}")}
 
@@ -161,7 +176,7 @@ defmodule Cyfr.ConfigKeyRosterTest do
 
     assert unclassified == [],
            """
-           These `:cyfr` keys are read in `lib/` and set only by the suite:
+           These application keys are read in `lib/` and set only by the suite:
 
            #{Enum.map_join(Enum.sort(unclassified), "\n", &"  #{inspect(&1)}")}
 

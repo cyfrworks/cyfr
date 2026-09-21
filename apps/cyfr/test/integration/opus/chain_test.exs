@@ -15,8 +15,8 @@ defmodule Opus.ChainTest do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob
   alias Cyfr.Test.TwoServices
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
+  alias Sanctum.Test.ConsentFixtures
   alias Cyfr.JCS
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
@@ -29,11 +29,10 @@ defmodule Opus.ChainTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
     TwoServices.watch!()
-    start_supervised!(Source.Memory)
 
     test_path = Path.join(System.tmp_dir!(), "opus_chain_test_#{:rand.uniform(100_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     ctx = %Context{
       user_id: "chain_test_user_#{:rand.uniform(100_000)}",
@@ -74,8 +73,8 @@ defmodule Opus.ChainTest do
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
@@ -173,8 +172,7 @@ defmodule Opus.ChainTest do
   end
 
   defp seed(ctx, profile, consent) do
-    :ok = Source.Memory.put_profile(ctx, profile)
-    :ok = Source.Memory.put_head_consent(ctx, profile.id, consent)
+    :ok = ConsentFixtures.seed_head!(ctx, profile, consent)
   end
 
   # A formula's attempt under `auth`, attached by a runner of the worker
@@ -241,17 +239,16 @@ defmodule Opus.ChainTest do
     setup %{ctx: ctx, root: root} do
       blob_with_edge = blob_json(%{@target_node => %{}})
 
-      :ok =
-        Source.Memory.put_profile(ctx, %{
-          id: "prof-route-pub",
-          kind: :public,
-          source_ref: @root_node,
-          label: "public",
-          status: :active
-        })
+      profile = %{
+        id: "prof-route-pub",
+        kind: :public,
+        source_ref: @root_node,
+        label: "public",
+        status: :active
+      }
 
       :ok =
-        Source.Memory.put_head_consent(ctx, "prof-route-pub", %{
+        ConsentFixtures.seed_head!(ctx, profile, %{
           id: "consent-route-pub",
           revision: 1,
           scope: :versionless,

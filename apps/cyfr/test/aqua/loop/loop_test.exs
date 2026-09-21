@@ -19,7 +19,7 @@ defmodule Aqua.LoopTest do
   alias Aqua.{Approvals, Tape}
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Test.ScriptedWorker
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -30,19 +30,18 @@ defmodule Aqua.LoopTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "loop_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :workers]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :seed_path, @seed_root)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    Application.put_env(:arca, :base_path, test_path)
+    Application.put_env(:arca, :seed_path, @seed_root)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
-      for {key, value} <- prev do
+      for {{app, key}, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
     end)
 

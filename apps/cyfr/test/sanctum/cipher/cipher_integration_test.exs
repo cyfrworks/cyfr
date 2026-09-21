@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.CipherIntegrationTest do
@@ -53,7 +53,6 @@ defmodule Sanctum.CipherIntegrationTest do
     test "create → verify; rotate → old (grace) + new both verify; tenant-mismatch fails closed",
          %{ctx: ctx} do
       Sanctum.Test.ComponentHelpers.register_test_component("x", "1.0.0", "catalyst", %{}, ctx)
-      Sanctum.Test.ConsentFixtures.start_source!()
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "catalyst:local.x:1.0.0")
 
       {:ok, %{secret: secret, slug: slug}} =

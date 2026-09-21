@@ -32,7 +32,7 @@ defmodule Cyfr.Release do
   is the old key safe to drop from the keyring.
   """
 
-  @app :cyfr
+  @app :arca
 
   @doc """
   Run every pending migration, refuse a database built from a different
@@ -113,7 +113,11 @@ defmodule Cyfr.Release do
   defp repos, do: Application.fetch_env!(@app, :ecto_repos)
 
   defp load_app do
-    Application.ensure_loaded(@app)
+    # The repositories are the `arca` application's and the key rotation is
+    # the `sanctum` application's; both are loaded so their configuration
+    # is readable without starting either.
+    Application.ensure_loaded(:arca)
+    Application.ensure_loaded(:sanctum)
     Application.ensure_all_started(:ssl)
   end
 end

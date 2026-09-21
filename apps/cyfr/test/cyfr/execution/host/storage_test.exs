@@ -91,16 +91,16 @@ defmodule Cyfr.Execution.Host.StorageTest do
       Path.join(System.tmp_dir!(), "host_storage_test_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(test_dir)
-    previous = Map.new([:base_path, :storage_adapter], &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, test_dir)
+    previous = Map.new([:base_path, :storage_adapter], &{&1, Application.get_env(:arca, &1)})
+    Application.put_env(:arca, :base_path, test_dir)
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
 
       for {key, value} <- previous do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(:arca, key, value),
+          else: Application.delete_env(:arca, key)
       end
     end)
 
@@ -117,7 +117,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
 
   defp storage(fixture, args), do: AttemptFixtures.call(fixture, "storage", args)
 
-  defp gated_adapter, do: Application.put_env(:cyfr, :storage_adapter, GatedAdapter)
+  defp gated_adapter, do: Application.put_env(:arca, :storage_adapter, GatedAdapter)
 
   defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
 
@@ -293,7 +293,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
     @tag :capture_log
     test "a store that cannot say, one that refused and an append that kept losing are told apart" do
       fixture = attached(["data/"])
-      Application.put_env(:cyfr, :storage_adapter, AnsweringAdapter)
+      Application.put_env(:arca, :storage_adapter, AnsweringAdapter)
       append = &%{"action" => "append", "path" => &1, "content" => Base.encode64("x")}
 
       assert %{"error" => "guest_error", "type" => "storage_uncertain"} =

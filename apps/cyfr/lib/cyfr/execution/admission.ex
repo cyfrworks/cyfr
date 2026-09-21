@@ -39,7 +39,6 @@ defmodule Cyfr.Execution.Admission do
   alias Cyfr.Authority.RootSelect
   alias Cyfr.Execution.{Artifacts, Assignments, Attempt, Attestation, Close, Delegation}
   alias Cyfr.Execution.{Record, Telemetry}
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
 
   @typedoc "The decision produced for one in-chain invocation."
@@ -85,7 +84,7 @@ defmodule Cyfr.Execution.Admission do
 
   - `:route` — `:public` or `:protected` for routed ingresses; public
     selection ignores authentication entirely and the selector is unused.
-  - `:consent_source`, `:ceiling`, `:live_shape_digest`, `:budget_id` —
+  - `:ceiling`, `:live_shape_digest`, `:budget_id` —
     see `Sanctum.Consent.Loader.load_root/3`.
   """
   @spec authority_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
@@ -850,13 +849,13 @@ defmodule Cyfr.Execution.Admission do
   end
 
   defp load(ctx, reference, select, opts) do
-    source = Keyword.get(opts, :consent_source, Source.impl())
+    actor = Context.actor(ctx)
 
     with {:ok, name_ref} <- name_level(reference),
-         {:ok, candidates} <- source.profiles(ctx, name_ref),
+         {:ok, candidates} <- Arca.ConsentStorage.profiles(actor, name_ref),
          {:ok, profile} <- select.(candidates),
          {:ok, _ref, _type, component} <- inspect_component(ctx, reference),
-         {:ok, authority, stamp} <- load_authority(ctx, profile, component, source, opts) do
+         {:ok, authority, stamp} <- load_authority(ctx, profile, component, opts) do
       {:ok, %{authority: authority, stamp: stamp, profile: profile}}
     end
   end
@@ -884,7 +883,7 @@ defmodule Cyfr.Execution.Admission do
 
   defp validate_need(other), do: {:error, {:invalid_need, other}}
 
-  defp load_authority(ctx, profile, component, source, opts) do
+  defp load_authority(ctx, profile, component, opts) do
     live =
       case Compendium.Activation.resolve_verified(ctx, component) do
         {:ok, _} = ok -> ok
@@ -905,16 +904,16 @@ defmodule Cyfr.Execution.Admission do
     Sanctum.Consent.Loader.load_root(
       ctx,
       profile,
-      [live: live, source: source, shape_diff: shape_diff_fn(ctx, profile, source)] ++
+      [live: live, shape_diff: shape_diff_fn(ctx, profile)] ++
         Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id])
     )
   end
 
   # Only called when the loader has already decided re-consent is needed,
   # so the delta sheet can show what changed rather than the whole grant.
-  defp shape_diff_fn(ctx, profile, source) do
+  defp shape_diff_fn(ctx, profile) do
     fn ->
-      with {:ok, consent} <- source.head_consent(ctx, profile.id) do
+      with {:ok, consent} <- Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
         Sanctum.Consent.ShapeDiff.compute(ctx, profile.source_ref, consent.resolved_policy)
       else
         _ -> []

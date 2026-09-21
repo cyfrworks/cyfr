@@ -19,8 +19,6 @@ defmodule PrismWeb.SchedulesLiveTest do
         description: "Schedule target"
       })
 
-    :ok = Sanctum.Test.ConsentFixtures.start_source!()
-
     profile_id =
       Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.schedule-target")
 

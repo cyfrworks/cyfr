@@ -27,15 +27,15 @@ defmodule Compendium.RegisterMintsNothingTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "register_no_mint_#{:rand.uniform(1_000_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}
@@ -85,14 +85,14 @@ defmodule Compendium.RegisterMintsNothingTest do
       ref = "reagent:local.no-mint-please"
 
       # Nothing has consented yet — the component exists, and is inert.
-      assert {:ok, []} = Sanctum.Consent.Source.DB.profiles(ctx, ref)
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
 
       # Now run the action itself. This is the whole point: the scanner
       # sees a local component with no profile and must leave it that way.
       {:ok, result} = Compendium.MCP.handle("component", ctx, %{"action" => "register"})
       assert result.status == "scanned"
 
-      assert {:ok, []} = Sanctum.Consent.Source.DB.profiles(ctx, ref),
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref),
              "component.register must not mint an owner profile"
 
       # The response must not advertise bootstrapped consent.
@@ -155,14 +155,14 @@ defmodule Compendium.RegisterMintsNothingTest do
         )
 
       ref = "reagent:local.self-served"
-      assert {:ok, []} = Sanctum.Consent.Source.DB.profiles(ctx, ref)
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
 
       # The scanner runs and indexes it — that is its job.
       {:ok, _} = Compendium.MCP.handle("component", ctx, %{"action" => "register"})
 
       # But it consents to nothing. An `egress.domains: ["*"]` a catalyst
       # wrote for itself is exactly what must not arrive pre-approved.
-      assert {:ok, []} = Sanctum.Consent.Source.DB.profiles(ctx, ref),
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref),
              "bytes a catalyst could have written earned an owner consent"
     end
   end

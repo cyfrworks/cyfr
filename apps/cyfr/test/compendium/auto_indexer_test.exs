@@ -37,13 +37,13 @@ defmodule Compendium.AutoIndexerTest do
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_autoindexer_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
-    prev_base = Application.fetch_env!(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
+    prev_base = Application.fetch_env!(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_dir)
 
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
+      Application.put_env(:arca, :base_path, prev_base)
       File.rm_rf!(test_dir)
     end)
 
@@ -164,7 +164,7 @@ defmodule Compendium.AutoIndexerTest do
 
     test "handles missing component directories gracefully", %{ctx: ctx} do
       # Point the storage root at a directory that doesn't exist.
-      Application.put_env(:cyfr, :base_path, "/nonexistent/scan/path")
+      Application.put_env(:arca, :base_path, "/nonexistent/scan/path")
 
       {:ok, result} = AutoIndexer.scan(ctx: ctx)
 
@@ -217,10 +217,10 @@ defmodule Compendium.AutoIndexerTest do
       test_dir: test_dir
     } do
       # A seed fixture of this test's own — never the suite-shared seed tree.
-      prev_seed = Application.get_env(:cyfr, :seed_path)
+      prev_seed = Application.get_env(:arca, :seed_path)
       seed_dir = Path.join(test_dir, "seed_fixture")
-      Application.put_env(:cyfr, :seed_path, seed_dir)
-      on_exit(fn -> Application.put_env(:cyfr, :seed_path, prev_seed) end)
+      Application.put_env(:arca, :seed_path, seed_dir)
+      on_exit(fn -> Application.put_env(:arca, :seed_path, prev_seed) end)
 
       bundle_dir = Path.join([seed_dir, "components", "catalysts", "local", "bundled", "0.1.0"])
       File.mkdir_p!(bundle_dir)
@@ -298,13 +298,13 @@ defmodule Compendium.AutoIndexerTest do
       create_component("catalyst", "local", "outage-survivor", "1.0.0")
       assert {:ok, %{registered: 1}} = AutoIndexer.scan(ctx: ctx)
 
-      prev = Application.get_env(:cyfr, :storage_adapter)
-      Application.put_env(:cyfr, :storage_adapter, Compendium.AutoIndexerTest.OutageAdapter)
+      prev = Application.get_env(:arca, :storage_adapter)
+      Application.put_env(:arca, :storage_adapter, Compendium.AutoIndexerTest.OutageAdapter)
 
       on_exit(fn ->
         if prev,
-          do: Application.put_env(:cyfr, :storage_adapter, prev),
-          else: Application.delete_env(:cyfr, :storage_adapter)
+          do: Application.put_env(:arca, :storage_adapter, prev),
+          else: Application.delete_env(:arca, :storage_adapter)
       end)
 
       # An unreadable tree is an outage and must not trigger registry pruning.
@@ -316,8 +316,8 @@ defmodule Compendium.AutoIndexerTest do
       assert log =~ "Discovery failed"
 
       if prev,
-        do: Application.put_env(:cyfr, :storage_adapter, prev),
-        else: Application.delete_env(:cyfr, :storage_adapter)
+        do: Application.put_env(:arca, :storage_adapter, prev),
+        else: Application.delete_env(:arca, :storage_adapter)
 
       assert {:ok, %{name: "outage-survivor"}} =
                Arca.ComponentStorage.get_component(

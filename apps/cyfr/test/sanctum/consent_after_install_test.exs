@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.ConsentAfterInstallTest do
@@ -56,7 +56,6 @@ defmodule Sanctum.ConsentAfterInstallTest do
     end
   end
 
-  alias Sanctum.Consent.Source
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
@@ -82,20 +81,26 @@ defmodule Sanctum.ConsentAfterInstallTest do
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 
-    keys = [:base_path, :seed_path, :oci_registry_url, :registry_url, :sigstore, :consent_source]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
+    keys = [
+      arca: :base_path,
+      arca: :seed_path,
+      cyfr: :oci_registry_url,
+      cyfr: :registry_url,
+      cyfr: :sigstore
+    ]
 
-    Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :seed_path, seed_dir)
+    prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+
+    Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:arca, :seed_path, seed_dir)
     # A cosign on PATH would try to verify; point it at nothing so it fails fast.
     Application.put_env(:cyfr, :sigstore, verification: :keyed, key_path: "/nonexistent")
-    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     on_exit(fn ->
-      for {key, value} <- prev do
+      for {{app, key}, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
 
       File.rm_rf!(test_dir)

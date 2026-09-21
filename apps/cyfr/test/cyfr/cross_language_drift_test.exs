@@ -146,7 +146,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # and data (mcp.ConsentError). A tag or code renamed on one side
     # silently stops being explained (Go) or stops crossing the boundary —
     # this pins every roster.
-    consent = read!("apps/cyfr/lib/sanctum/consent.ex")
+    consent = read!("apps/sanctum/lib/sanctum/consent.ex")
     execution_mcp = read!("apps/cyfr/lib/cyfr/execution/mcp.ex")
     signal = read!("apps/cyfr/lib/emissary/mcp/consent_signal.ex")
     message = read!("apps/cyfr/lib/emissary/mcp/message.ex")

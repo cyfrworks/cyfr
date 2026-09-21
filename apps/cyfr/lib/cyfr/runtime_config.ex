@@ -98,12 +98,12 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  The compiled repo adapter (`config :cyfr, :repo_adapter`, set at compile
+  The compiled repo adapter (`config :arca, :repo_adapter`, set at compile
   time from CYFR_DATABASE). One accessor with one default so runtime.exs and
   the application's DB setup cannot disagree about what was built.
   """
   @spec repo_adapter() :: module()
-  def repo_adapter, do: Application.get_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3)
+  defdelegate repo_adapter(), to: Arca.Repo, as: :adapter
 
   @doc """
   The configured auth provider module, or `nil` when the deployment runs
@@ -269,7 +269,7 @@ defmodule Cyfr.RuntimeConfig do
   boot-time PRAGMA — one constant so the two mechanisms stay in step.
   """
   @spec sqlite_busy_timeout_ms() :: pos_integer()
-  def sqlite_busy_timeout_ms, do: 5_000
+  defdelegate sqlite_busy_timeout_ms(), to: Arca.Repo, as: :busy_timeout_ms
 
   @doc """
   Returns the default per-window tincture invocation budget. HTTP uses
@@ -338,7 +338,7 @@ defmodule Cyfr.RuntimeConfig do
   Resolve the storage backend from `CYFR_STORAGE` (`local` default | `s3`).
 
   Returns `{:ok, :local}`, `{:ok, {:s3, opts}}` (a keyword list shaped for
-  `config :cyfr, :s3`), or `{:error, _}`.
+  `config :arca, :s3`), or `{:error, _}`.
   """
   @spec resolve_storage(getenv) ::
           {:ok, :local} | {:ok, {:s3, keyword()}} | {:error, String.t()}
@@ -356,7 +356,7 @@ defmodule Cyfr.RuntimeConfig do
 
   Required: bucket, region, access key id, secret access key. Optional:
   endpoint, key prefix, path-style addressing. Keys match what
-  `Arca.Adapters.S3` reads from `config :cyfr, :s3`.
+  `Arca.Adapters.S3` reads from `config :arca, :s3`.
 
   > #### Secret handling {: .warning}
   >
@@ -402,7 +402,7 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve Postgres connection options for `config :cyfr, Arca.Repo`.
+  Resolve Postgres connection options for `config :arca, Arca.Repo`.
 
   Postgres builds carry no connection config from `config.exs`, so a
   `CYFR_DATABASE_URL` is required — its absence is a hard error rather than a

@@ -20,7 +20,7 @@ defmodule Aqua.Loop.CloneTest do
   alias Arca.ThreadStorage, as: Threads
   alias Compendium.{AgentIndex, AgentSource, AquaPath}
   alias Cyfr.Test.ScriptedWorker
-  alias Sanctum.Consent.{Bootstrap, Commit, Plan, Source}
+  alias Sanctum.Consent.{Bootstrap, Commit, Plan}
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -31,19 +31,18 @@ defmodule Aqua.Loop.CloneTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "clone_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :workers]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :seed_path, @seed_root)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    Application.put_env(:arca, :base_path, test_path)
+    Application.put_env(:arca, :seed_path, @seed_root)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
-      for {key, value} <- prev do
+      for {{app, key}, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
     end)
 
@@ -417,7 +416,7 @@ defmodule Aqua.Loop.CloneTest do
     task = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
     assert_receive {:scripted_probe, worker, _}, 30_000
 
-    {:ok, [soul_profile]} = Source.DB.profiles(ctx, @soul)
+    {:ok, [soul_profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @soul)
     :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), soul_profile.id, "revoked")
     send(worker, :continue)
 
@@ -445,7 +444,9 @@ defmodule Aqua.Loop.CloneTest do
 
     {:ok, %{minted: [], skipped: skipped}} = Bootstrap.run(ctx)
     assert {"agent:local.scout", :not_vouched} in skipped
-    assert {:ok, []} = Source.DB.profiles(ctx, "agent:local.scout")
+
+    assert {:ok, []} =
+             Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.scout")
 
     bind_claude!(ctx, name: "claude key", key: "sk-test")
     consent!(ctx, %{ref: @soul, selections: [%{dep: @model, label: "default"}]})
@@ -467,7 +468,10 @@ defmodule Aqua.Loop.CloneTest do
     [clone] = clones_of(turn)
     assert clone.agent == "scout" and clone.status == "completed"
     assert clone.profile_id == parent.profile_id
-    assert {:ok, []} = Source.DB.profiles(ctx, "agent:local.scout")
+
+    assert {:ok, []} =
+             Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.scout")
+
     assert %{authority: %{chain: [@soul, "agent:local.scout", @model]}} = call_under("scout")
   end
 end

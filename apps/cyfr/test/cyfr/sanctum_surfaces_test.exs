@@ -73,9 +73,8 @@ defmodule Cyfr.SanctumSurfacesTest do
     # through its attempt (Cyfr.Execution.Host.Storage, Sanctum.Policy).
     "cyfr" => ~w(
       Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
-      Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.OAuth
-      Sanctum.Policy Sanctum.ProvisioningSupervisor
-      Sanctum.PubSub Sanctum.Session
+      Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
+      Sanctum.Policy Sanctum.PubSub Sanctum.Session
       Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
       Sanctum.UnauthorizedError Sanctum.VaultReader
     ),
@@ -102,7 +101,7 @@ defmodule Cyfr.SanctumSurfacesTest do
     # (`LoginLive`, `RegistryLive`). Assembling `connect_info` is a web
     # concern; the hop rules stay in the auth domain, spelled once.
     "prism_web" => ~w(
-      Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
+      Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp
       Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.Session Sanctum.SignIn
       Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Webhook
     )

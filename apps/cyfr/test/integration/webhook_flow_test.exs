@@ -58,7 +58,6 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
     # execution fails cleanly, which is the path these tests observe.
     comp = "wh-target-#{System.unique_integer([:positive])}"
     Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
-    Sanctum.Test.ConsentFixtures.start_source!()
     profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{comp}")
 
     {:ok, result} =

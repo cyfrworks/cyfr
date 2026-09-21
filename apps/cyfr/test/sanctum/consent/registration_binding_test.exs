@@ -1,12 +1,12 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.RegistrationBindingTest do
   # Binding a webhook or schedule requires consent authority and a profile matching its target.
   use ExUnit.Case, async: false
 
   alias Sanctum.Consent.RegistrationBinding
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
+  alias Sanctum.Test.ConsentFixtures
 
   @target "reagent:local.bind-target"
 
@@ -14,7 +14,6 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
     Arca.Cache.init()
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    start_supervised!(Source.Memory)
 
     ctx = %Context{
       user_id: "bind_user",
@@ -25,17 +24,16 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       auth_method: :oidc
     }
 
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: "prof-bind",
-        kind: :owner,
-        source_ref: @target,
-        label: "default",
-        status: :active
-      })
+    profile = %{
+      id: "prof-bind",
+      kind: :owner,
+      source_ref: @target,
+      label: "default",
+      status: :active
+    }
 
     :ok =
-      Source.Memory.put_head_consent(ctx, "prof-bind", %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-bind",
         revision: 1,
         scope: :versionless,
@@ -77,7 +75,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
 
   test "a profile without a head consent cannot be bound", %{ctx: ctx} do
     :ok =
-      Source.Memory.put_profile(ctx, %{
+      ConsentFixtures.seed_profile!(ctx, %{
         id: "prof-headless",
         kind: :owner,
         source_ref: @target,
@@ -116,8 +114,8 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
   describe "write-surface gates" do
     setup %{ctx: ctx} do
       test_path = Path.join(System.tmp_dir!(), "reg_bind_#{:rand.uniform(1_000_000)}")
-      original_base_path = Application.get_env(:cyfr, :base_path)
-      Application.put_env(:cyfr, :base_path, test_path)
+      original_base_path = Application.get_env(:arca, :base_path)
+      Application.put_env(:arca, :base_path, test_path)
 
       admin_ctx = Sanctum.TestContext.local()
 
@@ -131,8 +129,8 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
         File.rm_rf!(test_path)
 
         if original_base_path,
-          do: Application.put_env(:cyfr, :base_path, original_base_path),
-          else: Application.delete_env(:cyfr, :base_path)
+          do: Application.put_env(:arca, :base_path, original_base_path),
+          else: Application.delete_env(:arca, :base_path)
       end)
 
       {:ok, ctx: ctx}

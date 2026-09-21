@@ -24,7 +24,7 @@ defmodule Cyfr.App.MixProject do
 
   defp package do
     [
-      licenses: ["Apache-2.0", "FSL-1.1-Apache-2.0"],
+      licenses: ["Apache-2.0"],
       links: %{
         "GitHub" => "https://github.com/cyfrworks/cyfr",
         "License Q&A" => "https://github.com/cyfrworks/cyfr/blob/main/FAIR_SOURCE.md"
@@ -51,27 +51,26 @@ defmodule Cyfr.App.MixProject do
   defp deps do
     [
       {:cyfr_contracts, in_umbrella: true},
-      # Sanctum deps
-      {:ueberauth, "~> 0.10.8"},
+      # Persistence and the auth domain, each its own application: Arca
+      # owns every row, blob and lease; Sanctum owns identity, tenancy,
+      # authority, consent and the vault, and reaches Arca downward.
+      {:arca, in_umbrella: true},
+      {:sanctum, in_umbrella: true},
       {:jason, "~> 1.4"},
       # AQUA agent/skill frontmatter (Compendium.AquaAgent)
       {:yaml_elixir, "~> 2.12"},
       {:plug, "~> 1.14"},
       {:phoenix_pubsub, "~> 2.1"},
-      # Arca storage/DB deps. Both DB drivers ship in every build; the single
-      # switch is CYFR_DATABASE, which flips :repo_adapter at compile time
-      # (SQLite is the default, Postgres is opt-in / bring-your-own). The S3
-      # object-store adapter (req + aws_signature, below) ships but is opt-in
-      # via :storage_adapter — the local filesystem adapter is the default.
+      # The Ueberauth route table the web face builds from the configured
+      # providers (`EmissaryWeb.Plugs.ConfiguredUeberauth`); the strategies
+      # themselves are Sanctum's.
+      {:ueberauth, "~> 0.10.8"},
+      # Ecto, for the errors the surfaces rescue and the sandbox the suite
+      # runs on. The adapters and the drivers are Arca's.
       {:ecto_sql, "~> 3.12"},
-      {:ecto_sqlite3, "~> 0.22.0"},
-      {:exqlite, "~> 0.22"},
-      {:postgrex, "~> 0.21"},
-      # Req is used by Opus HTTP host functions (apps/opus) and the S3
-      # storage adapter (apps/cyfr/lib/arca/adapters/s3.ex).
+      # Req is used by Opus HTTP host functions (apps/opus) and by
+      # `Cyfr.Egress`.
       {:req, "~> 0.5"},
-      # SigV4 signing for the S3 storage adapter (opt-in via :storage_adapter).
-      {:aws_signature, "~> 0.3"},
       # Emissary deps
       {:phoenix, "~> 1.8.6"},
       {:telemetry_metrics, "~> 1.0"},
@@ -85,8 +84,6 @@ defmodule Cyfr.App.MixProject do
       {:opentelemetry_bandit, "~> 0.2"},
       {:bandit, "~> 1.11"},
       {:finch, "~> 0.19"},
-      # OIDC strategy (used by the OIDC auth provider)
-      {:ueberauth_oidcc, "~> 0.4.2"},
       # Prism deps
       {:phoenix_html, "~> 4.2"},
       {:phoenix_live_view, "~> 1.1.33"},

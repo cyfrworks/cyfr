@@ -34,7 +34,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   alias Cyfr.Test.TwoServices
   alias Opus.Test.NestedExecution, as: Probe
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @moduletag timeout: 120_000
 
@@ -52,11 +52,10 @@ defmodule Opus.ExecutorMaskedOutputTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "masked_output_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source]
-    previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, Path.join(run_dir, "data"))
-    Application.put_env(:cyfr, :seed_path, lay_seed!(Path.join(run_dir, "seed")))
-    Application.put_env(:cyfr, :consent_source, Source.DB)
+    keys = [:base_path, :seed_path]
+    previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
+    Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
+    Application.put_env(:arca, :seed_path, lay_seed!(Path.join(run_dir, "seed")))
 
     ctx = Sanctum.TestContext.local()
 
@@ -65,8 +64,8 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
       for {key, value} <- previous do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(:arca, key, value),
+          else: Application.delete_env(:arca, key)
       end
 
       File.rm_rf!(run_dir)

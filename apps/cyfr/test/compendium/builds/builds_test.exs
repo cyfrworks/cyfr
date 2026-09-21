@@ -40,11 +40,11 @@ defmodule Compendium.BuildsTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     dir = Path.join(System.tmp_dir!(), "builds_#{System.unique_integer([:positive])}")
-    prev = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, dir)
+    prev = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, dir)
 
     on_exit(fn ->
-      if prev, do: Application.put_env(:cyfr, :base_path, prev)
+      if prev, do: Application.put_env(:arca, :base_path, prev)
       File.rm_rf!(dir)
     end)
 
@@ -394,13 +394,13 @@ defmodule Compendium.BuildsTest do
     } do
       ScriptedBuilder.script([{:stream, [{:result, component()}]}])
 
-      prev = Application.get_env(:cyfr, :storage_adapter)
-      Application.put_env(:cyfr, :storage_adapter, Compendium.BuildsTest.RefusingStore)
+      prev = Application.get_env(:arca, :storage_adapter)
+      Application.put_env(:arca, :storage_adapter, Compendium.BuildsTest.RefusingStore)
 
       on_exit(fn ->
         if prev,
-          do: Application.put_env(:cyfr, :storage_adapter, prev),
-          else: Application.delete_env(:cyfr, :storage_adapter)
+          do: Application.put_env(:arca, :storage_adapter, prev),
+          else: Application.delete_env(:arca, :storage_adapter)
       end)
 
       log =

@@ -4,6 +4,8 @@
 defmodule EmissaryWeb.WebhookControllerTest do
   use EmissaryWeb.ConnCase, async: false
 
+  require Arca.Repo.Errors
+
   alias Sanctum.Webhook
 
   setup do
@@ -36,7 +38,6 @@ defmodule EmissaryWeb.WebhookControllerTest do
   defp create_hook!(ctx, name, opts \\ %{}) do
     comp = "wh-target-#{System.unique_integer([:positive])}"
     Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
-    Sanctum.Test.ConsentFixtures.start_source!()
     profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{comp}")
 
     {:ok, result} =
@@ -109,7 +110,6 @@ defmodule EmissaryWeb.WebhookControllerTest do
         in_group
       )
 
-      Sanctum.Test.ConsentFixtures.start_source!()
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(in_group, "f:local.#{comp}")
 
       {:ok, %{slug: slug, secret: secret}} =
@@ -260,13 +260,14 @@ defmodule EmissaryWeb.WebhookControllerTest do
       # column is NOT NULL — even a raw write cannot mint an unbound row.
       %{slug: slug} = create_hook!(ctx, "unbound")
 
-      # Adapter-portable NOT NULL assertion (Exqlite.Error vs Postgrex.Error).
+      # Adapter-portable NOT NULL assertion: the storage layer owns which
+      # driver's error a constraint violation arrives as.
       message =
         try do
           Arca.Repo.update_all(unbind_query(slug), set: [profile_id: nil])
           flunk("expected the unbind to violate the NOT NULL constraint")
         rescue
-          e in [Exqlite.Error, Postgrex.Error] -> Exception.message(e)
+          e in Arca.Repo.Errors.db_errors() -> Exception.message(e)
         end
 
       assert message =~ ~r/not.?null/i

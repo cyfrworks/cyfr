@@ -20,7 +20,7 @@ defmodule Aqua.RunnerTest do
   alias Aqua.{Approvals, Runner, Tape}
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Test.ScriptedWorker
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   @seed_root Path.expand("../../../../seed", __DIR__)
@@ -32,19 +32,18 @@ defmodule Aqua.RunnerTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "runner_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :workers]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :seed_path, @seed_root)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    Application.put_env(:arca, :base_path, test_path)
+    Application.put_env(:arca, :seed_path, @seed_root)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
-      for {key, value} <- prev do
+      for {{app, key}, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
     end)
 
@@ -598,7 +597,9 @@ defmodule Aqua.RunnerTest do
 
     assert_receive {:thread, _, {:turn_finished}}, 60_000
 
-    {:ok, [planner_profile]} = Source.DB.profiles(ctx, "agent:local.planner")
+    {:ok, [planner_profile]} =
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.planner")
+
     {:ok, turn} = Tape.turn(ctx, turn_id)
     assert turn.status == "completed" and turn.agent == "planner"
     assert turn.profile_id == planner_profile.id

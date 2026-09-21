@@ -21,15 +21,15 @@ defmodule Arca.IntegrationTest do
   setup do
     rand_id = :rand.uniform(100_000)
     test_path = Path.join(System.tmp_dir!(), "arca_integration_#{rand_id}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     # Checkout Ecto sandbox for SQLite-based operations
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     # Retention settings live on the athanor row, so the athanor must exist.
-    Arca.TenantTestHelper.ensure_athanor_row("ath_integration_#{rand_id}")
+    Arca.Test.Actor.ensure_athanor_row("ath_integration_#{rand_id}")
 
     # Use a unique athanor per test: execution retention/listing is
     # per-athanor, so a unique id isolates each test from shared-state pollution.
@@ -50,8 +50,8 @@ defmodule Arca.IntegrationTest do
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: ctx, actor: actor, test_path: test_path}

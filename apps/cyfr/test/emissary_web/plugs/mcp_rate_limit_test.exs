@@ -11,23 +11,23 @@ defmodule EmissaryWeb.Plugs.MCPRateLimitTest do
 
     original_max = Application.get_env(:cyfr, :mcp_rate_limit_max)
     original_window = Application.get_env(:cyfr, :mcp_rate_limit_window_ms)
-    original_trust = Application.get_env(:cyfr, :trust_x_forwarded_for)
+    original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)
 
     Application.put_env(:cyfr, :mcp_rate_limit_max, 3)
     Application.put_env(:cyfr, :mcp_rate_limit_window_ms, 60_000)
 
     on_exit(fn ->
       restore = fn
-        _key, nil -> :ok
-        key, value -> Application.put_env(:cyfr, key, value)
+        _app, _key, nil -> :ok
+        app, key, value -> Application.put_env(app, key, value)
       end
 
       Application.delete_env(:cyfr, :mcp_rate_limit_max)
       Application.delete_env(:cyfr, :mcp_rate_limit_window_ms)
-      Application.delete_env(:cyfr, :trust_x_forwarded_for)
-      restore.(:mcp_rate_limit_max, original_max)
-      restore.(:mcp_rate_limit_window_ms, original_window)
-      restore.(:trust_x_forwarded_for, original_trust)
+      Application.delete_env(:sanctum, :trust_x_forwarded_for)
+      restore.(:cyfr, :mcp_rate_limit_max, original_max)
+      restore.(:cyfr, :mcp_rate_limit_window_ms, original_window)
+      restore.(:sanctum, :trust_x_forwarded_for, original_trust)
       Cyfr.RateLimiter.reset()
     end)
 
@@ -88,7 +88,7 @@ defmodule EmissaryWeb.Plugs.MCPRateLimitTest do
   test "keying honors the XFF trust boundary (spoofed leftmost shares the socket bucket)" do
     # Trust OFF: XFF is ignored, so varying spoofed XFF values all land in
     # the socket-IP bucket and the limit still binds.
-    Application.delete_env(:cyfr, :trust_x_forwarded_for)
+    Application.delete_env(:sanctum, :trust_x_forwarded_for)
     ip = {127, 0, 0, 15}
 
     for i <- 1..3 do

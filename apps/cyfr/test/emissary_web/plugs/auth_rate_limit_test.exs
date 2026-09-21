@@ -10,14 +10,14 @@ defmodule EmissaryWeb.Plugs.AuthRateLimitTest do
     # Counters live in Cyfr.RateLimiter's own table; start each test clean.
     Cyfr.RateLimiter.reset()
 
-    original_trust = Application.get_env(:cyfr, :trust_x_forwarded_for)
+    original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)
 
     on_exit(fn ->
       Cyfr.RateLimiter.reset()
 
       case original_trust do
-        nil -> Application.delete_env(:cyfr, :trust_x_forwarded_for)
-        value -> Application.put_env(:cyfr, :trust_x_forwarded_for, value)
+        nil -> Application.delete_env(:sanctum, :trust_x_forwarded_for)
+        value -> Application.put_env(:sanctum, :trust_x_forwarded_for, value)
       end
     end)
 
@@ -107,7 +107,7 @@ defmodule EmissaryWeb.Plugs.AuthRateLimitTest do
 
   describe "XFF trust boundary" do
     test "trust off (default): spoofed XFF is ignored, socket bucket binds" do
-      Application.delete_env(:cyfr, :trust_x_forwarded_for)
+      Application.delete_env(:sanctum, :trust_x_forwarded_for)
       opts = opts()
       ip = {127, 0, 0, 21}
 
@@ -129,7 +129,7 @@ defmodule EmissaryWeb.Plugs.AuthRateLimitTest do
     end
 
     test "trust on: forwarded clients get independent buckets behind the proxy" do
-      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
       opts = opts()
       proxy_ip = {127, 0, 0, 22}
 

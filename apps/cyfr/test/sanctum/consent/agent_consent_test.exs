@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.Consent.AgentConsentTest do
@@ -16,7 +16,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
   alias Compendium.{AquaAgent, AquaPath}
   alias Cyfr.Authority.Blob
-  alias Sanctum.Consent.{Bootstrap, Commit, Plan, ShapeDerivation, Source}
+  alias Sanctum.Consent.{Bootstrap, Commit, Plan, ShapeDerivation}
 
   @soul "agent:local.aqua"
 
@@ -24,21 +24,15 @@ defmodule Sanctum.Consent.AgentConsentTest do
     test_path =
       Path.join(System.tmp_dir!(), "agent_consent_#{System.unique_integer([:positive])}")
 
-    original = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
-    original_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
+    original = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original,
-        do: Application.put_env(:cyfr, :base_path, original),
-        else: Application.delete_env(:cyfr, :base_path)
-
-      if original_source,
-        do: Application.put_env(:cyfr, :consent_source, original_source),
-        else: Application.delete_env(:cyfr, :consent_source)
+        do: Application.put_env(:arca, :base_path, original),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     Arca.Cache.init()
@@ -54,7 +48,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
   end
 
   defp head!(ctx, ref) do
-    {:ok, [profile]} = Source.DB.profiles(ctx, ref)
+    {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
     {:ok, row, refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
     {profile, row, refs}
   end
@@ -222,7 +216,9 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)
     assert {"agent:local.scout", :not_vouched} in skipped
     assert {@soul, :shape_moved} in skipped
-    assert {:ok, []} = Source.DB.profiles(ctx, "agent:local.scout")
+
+    assert {:ok, []} =
+             Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.scout")
 
     # The walk: the role consents as any source does.
     {:ok, plan} = Plan.plan(ctx, %{ref: "agent:local.scout"})
@@ -238,7 +234,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
                expected_consent_revision: plan.expected_consent_revision
              })
 
-    {:ok, [scout]} = Source.DB.profiles(ctx, "agent:local.scout")
+    {:ok, [scout]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.scout")
     assert scout.id == profile_id
 
     # And the soul, whose closure the member widened: it selects the key
@@ -279,16 +275,18 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert {"agent:local.web", :shape_moved} in skipped
     {_, still, _} = head!(ctx, "agent:local.web")
     assert still.revision == first.revision
-    assert {:ok, []} = Source.DB.profiles(ctx, "agent:local.nobody")
+
+    assert {:ok, []} =
+             Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.nobody")
   end
 
   test "a prose-only soul edit still re-mints under a seed bump", %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     {_, first, _} = head!(ctx, @soul)
     write_agent!(ctx, "aqua", &%{&1 | prompt: &1.prompt <> "\n\nBe brief."})
-    Cyfr.Test.SeedBundle.isolate_from!(Application.get_env(:cyfr, :seed_path))
+    Cyfr.Test.SeedBundle.isolate_from!(Application.get_env(:arca, :seed_path))
 
-    seed_dir = Application.get_env(:cyfr, :seed_path)
+    seed_dir = Application.get_env(:arca, :seed_path)
 
     current =
       [seed_dir, "components", "catalysts", "local", "claude", "*"]

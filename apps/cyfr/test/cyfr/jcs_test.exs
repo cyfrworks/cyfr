@@ -198,7 +198,10 @@ defmodule Cyfr.JCSTest do
 
   test "the resolved-policy golden fixture canonicalizes and is stable" do
     fixture =
-      [__DIR__, "../support/fixtures/authority/resolved_policy_golden.json"]
+      [
+        __DIR__,
+        "../../../cyfr_contracts/test/support/fixtures/authority/resolved_policy_golden.json"
+      ]
       |> Path.join()
       |> File.read!()
       |> Jason.decode!()

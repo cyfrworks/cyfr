@@ -68,9 +68,6 @@ config :sanctum, :consent_components, Compendium.ConsentFacts
 # per-environment ports, which override this value.
 config :sanctum, :fallback_origin, "http://localhost:4000"
 
-# Store consent revisions in the database; tests override this with the Memory adapter.
-config :cyfr, :consent_source, Sanctum.Consent.Source.DB
-
 # Configures the endpoint
 # The one endpoint: the API, the MCP transport, tinctures, and the Prism
 # LiveViews all answer on it — one origin, one cookie, one login.
@@ -117,7 +114,7 @@ config :opus,
 
 # The byte store behind retained execution payloads
 # (`Arca.ExecutionPayloads.Store`): the athanor's own tree by default.
-config :cyfr, :execution_payload_store, Arca.ExecutionPayloads.Store.Overlay
+config :arca, :execution_payload_store, Arca.ExecutionPayloads.Store.Overlay
 
 # Inbound request-param redaction (:filter_parameters) is set at boot by
 # Cyfr.Application from Cyfr.Sanitizer.filter_parameters/0 — the one
@@ -134,12 +131,12 @@ Code.require_file("database_choice.exs", __DIR__)
 
 case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
   :sqlite ->
-    config :cyfr, :repo_adapter, Ecto.Adapters.SQLite3
+    config :arca, :repo_adapter, Ecto.Adapters.SQLite3
 
     # Every transaction takes the write lock at BEGIN. A deferred transaction
     # that reads and then writes fails with SQLITE_BUSY_SNAPSHOT when another
     # write committed in between, which would surface as a lost write.
-    config :cyfr, Arca.Repo,
+    config :arca, Arca.Repo,
       database: Path.expand("data/cyfr.db"),
       pool_size: 20,
       journal_mode: :wal,
@@ -147,11 +144,11 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
       default_transaction_mode: :immediate
 
   :postgres ->
-    config :cyfr, :repo_adapter, Ecto.Adapters.Postgres
-    config :cyfr, Arca.Repo, []
+    config :arca, :repo_adapter, Ecto.Adapters.Postgres
+    config :arca, Arca.Repo, []
 end
 
-config :cyfr, ecto_repos: [Arca.Repo]
+config :arca, ecto_repos: [Arca.Repo]
 
 # Arca Storage Configuration
 # Paths are expanded to absolute at config time so they don't depend on runtime CWD,
@@ -161,14 +158,14 @@ config :cyfr, ecto_repos: [Arca.Repo]
 # In dev and prod these are compile-time placeholders only — runtime.exs
 # re-resolves both through Cyfr.RuntimeConfig.resolve_paths/1 (CWD-anchored
 # defaults; run dev from the umbrella root). Test pins its own tmp roots.
-config :cyfr,
+config :arca,
   storage_adapter: Arca.Adapters.Local,
   base_path: Path.expand("./data"),
   seed_path: Path.expand("../seed", __DIR__)
 
 # Map each overlaid root to its unit locator. Every overlay root requires
 # a locator defining its unit boundaries.
-config :cyfr, :overlay_locators, %{
+config :arca, :overlay_locators, %{
   "aqua" => Compendium.AquaPath,
   "components" => Compendium.ComponentPath
 }
@@ -180,7 +177,7 @@ config :cyfr, :public_storage_quota, %{max_bytes: 26_214_400, max_files: 200}
 # Concurrent object reads in the shared subtree dump
 # (Arca.Storage.read_subtree_via/4) — bounded so a wide tree cannot open
 # unbounded connections on the object-store path.
-config :cyfr, :read_subtree_concurrency, 10
+config :arca, :read_subtree_concurrency, 10
 
 # Decompression ceiling for published tincture archives (zip-bomb guard).
 config :cyfr, :tincture_max_decompressed_bytes, 256 * 1024 * 1024
@@ -188,8 +185,8 @@ config :cyfr, :tincture_max_decompressed_bytes, 256 * 1024 * 1024
 # The shared-cache sweeper's budgets: raw binaries held (bytes) and
 # compiled components pinned (count) — how much a node may hold in the one
 # ETS table (`Arca.Cache.Sweeper`).
-config :cyfr, :cache_max_binary_bytes, 256 * 1024 * 1024
-config :cyfr, :cache_max_compiled_components, 32
+config :arca, :cache_max_binary_bytes, 256 * 1024 * 1024
+config :arca, :cache_max_compiled_components, 32
 
 # External MCP server connections per athanor, concurrent in-flight calls
 # one server process admits before refusing (`Emissary.MCP`), and the
@@ -277,7 +274,7 @@ config :cyfr, :prometheus_metrics_enabled, false
 
 # Audit sink configuration. Ships with the Console sink; a deployment can add
 # SIEM/object-store sinks via release runtime config.
-config :cyfr, :audit_sinks, [Arca.AuditSinks.Console]
+config :arca, :audit_sinks, [Arca.AuditSinks.Console]
 
 # Prism esbuild configuration
 config :esbuild,

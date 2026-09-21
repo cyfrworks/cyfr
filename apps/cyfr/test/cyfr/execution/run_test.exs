@@ -10,8 +10,8 @@ defmodule Cyfr.Execution.RunTest do
 
   use ExUnit.Case, async: false
 
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
+  alias Sanctum.Test.ConsentFixtures
 
   @math_wasm_path Path.join([__DIR__, "../../support/test_wasm/math.wasm"])
   @test_ref "reagent:local.test-math:0.1.0"
@@ -19,13 +19,12 @@ defmodule Cyfr.Execution.RunTest do
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "run_test_#{:rand.uniform(100_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    start_supervised!(Source.Memory)
 
     rand_id = :rand.uniform(100_000)
 
@@ -53,17 +52,16 @@ defmodule Cyfr.Execution.RunTest do
 
     # Every execution roots under a consent: seed the in-memory source
     # with an owner profile whose blob is the policy for the test node.
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: "prof-opus-test",
-        kind: :owner,
-        source_ref: @test_node,
-        label: "default",
-        status: :active
-      })
+    profile = %{
+      id: "prof-opus-test",
+      kind: :owner,
+      source_ref: @test_node,
+      label: "default",
+      status: :active
+    }
 
     :ok =
-      Source.Memory.put_head_consent(ctx, "prof-opus-test", %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-opus-test",
         revision: 1,
         scope: :versionless,
@@ -97,15 +95,15 @@ defmodule Cyfr.Execution.RunTest do
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: ctx, ref: @test_ref}
   end
 
   defp run_consented(ctx, input) do
-    Cyfr.Execution.run_root(ctx, :default, @test_ref, input, consent_source: Source.Memory)
+    Cyfr.Execution.run_root(ctx, :default, @test_ref, input)
   end
 
   describe "run_root/5" do
@@ -124,14 +122,12 @@ defmodule Cyfr.Execution.RunTest do
 
     test "refuses an unconsented component instead of guessing", %{ctx: ctx} do
       assert {:error, :no_profile} =
-               Cyfr.Execution.run_root(ctx, :default, "reagent:local.nonexistent:0.1.0", %{},
-                 consent_source: Source.Memory
-               )
+               Cyfr.Execution.run_root(ctx, :default, "reagent:local.nonexistent:0.1.0", %{})
     end
 
     test "returns error for empty reference", %{ctx: ctx} do
       assert {:error, {:invalid_reference, _reason}} =
-               Cyfr.Execution.run_root(ctx, :default, "", %{}, consent_source: Source.Memory)
+               Cyfr.Execution.run_root(ctx, :default, "", %{})
     end
   end
 

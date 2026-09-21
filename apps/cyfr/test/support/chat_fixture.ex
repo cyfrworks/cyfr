@@ -364,7 +364,7 @@ defmodule Cyfr.Test.ChatFixture do
           do: {:table, table, column}
 
     in_files =
-      for path <- files(Application.fetch_env!(:cyfr, :base_path)),
+      for path <- files(Application.fetch_env!(:arca, :base_path)),
           shows?.(File.read!(path)),
           do: {:file, path}
 

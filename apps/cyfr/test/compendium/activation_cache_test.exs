@@ -8,14 +8,14 @@ defmodule Compendium.ActivationCacheTest do
 
   alias Compendium.Activation
   alias Compendium.Registry
-  alias Cyfr.Test.QueryCounter
+  alias Arca.Test.QueryCounter
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "activation_cache_#{:rand.uniform(1_000_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -24,8 +24,8 @@ defmodule Compendium.ActivationCacheTest do
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     ctx = Sanctum.TestContext.local()

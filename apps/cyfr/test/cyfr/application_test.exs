@@ -80,36 +80,45 @@ defmodule Cyfr.ApplicationTest do
         |> Supervisor.which_children()
         |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
 
-      assert Arca.Repo in ids
-
       assert Phoenix.PubSub.Supervisor in ids or
                Enum.any?(ids, fn id -> id == Emissary.PubSub end)
 
-      # The tool registry rides the cache-tree group: it restarts with the
-      # sweeper whose table it populates.
-      cache_tree_ids =
-        Arca.Cache.TreeSupervisor
-        |> Supervisor.which_children()
-        |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
-
-      assert Arca.Cache.TreeSupervisor in ids
-      assert Arca.Cache.Sweeper in cache_tree_ids
-      assert Cyfr.Ops.Catalog in cache_tree_ids
+      # The repo is the `arca` application's now, and so is the cache
+      # table's owner; this tier holds the registries that write
+      # catalogues into that table and reaches the repo by name.
+      assert Cyfr.Ops.Catalog in ids
+      assert Emissary.MCP.ResourceRegistry in ids
+      refute Arca.Repo in ids
       refute EmissaryWeb.Endpoint in ids
     end
 
-    # Shutdown is reverse start order, so "after the repo" is what makes
-    # the bookkeeping sink stop BEFORE it: the rows `terminate/2` drains
-    # are written through a pool that is still open. Started the other way
+    # The persistence layer's own tree: the pool, the write-behind that
+    # drains through it, and the shared cache table's owner. Shutdown is
+    # reverse start order, so "after the repo" is what makes the
+    # bookkeeping sink stop BEFORE it: the rows `terminate/2` drains are
+    # written through a pool that is still open. Started the other way
     # round, every row buffered at shutdown would be lost silently.
-    test "the bookkeeping sink starts after the repo, so its drain outlives nothing it needs" do
-      started = Cyfr.InfraSupervisor |> started_ids()
+    test "the repo, its write-behind and the cache owner live under the arca tree" do
+      started = Arca.Supervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
 
+      assert is_integer(at.(Arca.Repo))
       assert is_integer(at.(Arca.RecordSink))
+      assert is_integer(at.(Arca.Cache.Sweeper))
 
       assert at.(Arca.RecordSink) > at.(Arca.Repo),
              "the record sink must start after Arca.Repo so it drains before the repo goes down"
+    end
+
+    # The auth domain's own tree: what outlives a request that charged a
+    # budget, the sliver's HTTP pool, and the single-flight registry.
+    test "the invoke-budget guard and the auth pool live under the sanctum tree" do
+      started = Sanctum.Supervisor |> started_ids()
+
+      assert Sanctum.Authority.BudgetGuard in started
+      assert Sanctum.OAuth.RefreshTree in started
+      assert Sanctum.ProvisioningSupervisor in started
+      assert is_pid(Process.whereis(Sanctum.Auth.Finch))
     end
 
     test "execution rates, slots, event streams and attempts start under the infra tier after PubSub" do
@@ -159,7 +168,7 @@ defmodule Cyfr.ApplicationTest do
       pubsub = Enum.find_index(started, &(&1 in [Emissary.PubSub, Phoenix.PubSub.Supervisor]))
       assert builds > pubsub
 
-      for id <- [Arca.Cache.TreeSupervisor, Arca.RecordSink] do
+      for id <- [Cyfr.Ops.Catalog, Emissary.MCP.ResourceRegistry] do
         assert builds > at.(id), "#{inspect(id)} must start before the builds' supervisor"
       end
 

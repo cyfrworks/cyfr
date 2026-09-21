@@ -16,8 +16,8 @@ defmodule Cyfr.TinctureHelpersTest do
     # storage root (`:base_path`) at a tmp dir gives us an isolated sandbox.
     # Component reads are pinned per athanor, so the fixture files live in
     # the test context's athanor's components subtree.
-    prev = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, root)
+    prev = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, root)
 
     ctx = Sanctum.TestContext.local()
     base = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), ["components"])
@@ -38,7 +38,7 @@ defmodule Cyfr.TinctureHelpersTest do
 
     on_exit(fn ->
       File.rm_rf!(root)
-      if prev, do: Application.put_env(:cyfr, :base_path, prev), else: :ok
+      if prev, do: Application.put_env(:arca, :base_path, prev), else: :ok
     end)
 
     # Asset routing: `["components" | rest]` resolves inside the context's

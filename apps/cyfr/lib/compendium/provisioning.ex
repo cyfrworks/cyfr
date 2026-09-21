@@ -170,7 +170,7 @@ defmodule Compendium.Provisioning do
         not_started.()
         :ok
 
-      Application.get_env(:cyfr, :provisioning_inline, false) ->
+      Application.get_env(:sanctum, :provisioning_inline, false) ->
         fun.()
         :ok
 

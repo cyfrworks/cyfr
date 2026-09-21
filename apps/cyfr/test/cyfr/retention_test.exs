@@ -13,15 +13,15 @@ defmodule Cyfr.RetentionTest do
     # Use a test-specific base path for file-based operations (blobs)
     rand_id = :rand.uniform(100_000)
     test_path = Path.join(System.tmp_dir!(), "retention_test_#{rand_id}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     # Checkout Ecto sandbox for SQLite-based operations
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     # Retention settings live on the athanor row, so the athanor must exist.
-    Arca.TenantTestHelper.ensure_athanor_row("ath_retention_#{rand_id}")
+    Arca.Test.Actor.ensure_athanor_row("ath_retention_#{rand_id}")
 
     # Use a unique athanor per test: execution retention is per-athanor, so
     # a unique id isolates each test's executions from cross-test pollution.
@@ -40,8 +40,8 @@ defmodule Cyfr.RetentionTest do
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: ctx, test_path: test_path}

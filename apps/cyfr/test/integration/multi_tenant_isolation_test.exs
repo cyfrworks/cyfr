@@ -59,22 +59,23 @@ defmodule MultiTenantIsolationTest do
     # profile, seeded per athanor (the consent source partitions by athanor).
     Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{}, ctx_a)
     Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{}, ctx_b)
-    Sanctum.Test.ConsentFixtures.start_source!()
-    Sanctum.Test.ConsentFixtures.bindable_profile(ctx_a, "f:local.h", profile_id: "prof-h")
-    Sanctum.Test.ConsentFixtures.bindable_profile(ctx_b, "f:local.h", profile_id: "prof-h")
+    # A profile id is a primary key: each athanor's profile is its own row
+    # with its own id, and a webhook names the one in its own tenant.
+    prof_a = Sanctum.Test.ConsentFixtures.bindable_profile(ctx_a, "f:local.h")
+    prof_b = Sanctum.Test.ConsentFixtures.bindable_profile(ctx_b, "f:local.h")
 
-    {:ok, a: ctx_a, b: ctx_b}
+    {:ok, a: ctx_a, b: ctx_b, prof_a: prof_a, prof_b: prof_b}
   end
 
   describe "Sanctum.Webhook isolation" do
     test "list/1 from athanor A does not return webhooks created in athanor B",
-         %{a: ctx_a, b: ctx_b} do
+         %{a: ctx_a, b: ctx_b, prof_a: prof_a, prof_b: prof_b} do
       {:ok, _} =
         Sanctum.Webhook.create(ctx_a, %{
           name: "hk_a",
           replay_protection: "none",
           target_ref: "f:local.h",
-          profile_id: "prof-h"
+          profile_id: prof_a
         })
 
       {:ok, _} =
@@ -82,7 +83,7 @@ defmodule MultiTenantIsolationTest do
           name: "hk_b",
           replay_protection: "none",
           target_ref: "f:local.h",
-          profile_id: "prof-h"
+          profile_id: prof_b
         })
 
       {:ok, list_a} = Sanctum.Webhook.list(ctx_a)
@@ -99,26 +100,26 @@ defmodule MultiTenantIsolationTest do
     end
 
     test "get/2 from athanor A returns :not_found for athanor B's webhook",
-         %{a: ctx_a, b: ctx_b} do
+         %{a: ctx_a, b: ctx_b, prof_b: prof_b} do
       {:ok, _} =
         Sanctum.Webhook.create(ctx_b, %{
           name: "private",
           replay_protection: "none",
           target_ref: "f:local.h",
-          profile_id: "prof-h"
+          profile_id: prof_b
         })
 
       assert {:error, :not_found} = Sanctum.Webhook.get(ctx_a, "private")
     end
 
     test "the same name in two athanors is allowed and the two never collide",
-         %{a: ctx_a, b: ctx_b} do
+         %{a: ctx_a, b: ctx_b, prof_a: prof_a, prof_b: prof_b} do
       assert {:ok, %{slug: slug_a}} =
                Sanctum.Webhook.create(ctx_a, %{
                  name: "shared",
                  replay_protection: "none",
                  target_ref: "f:local.h",
-                 profile_id: "prof-h"
+                 profile_id: prof_a
                })
 
       assert {:ok, %{slug: slug_b}} =
@@ -126,7 +127,7 @@ defmodule MultiTenantIsolationTest do
                  name: "shared",
                  replay_protection: "none",
                  target_ref: "f:local.h",
-                 profile_id: "prof-h"
+                 profile_id: prof_b
                })
 
       refute slug_a == slug_b

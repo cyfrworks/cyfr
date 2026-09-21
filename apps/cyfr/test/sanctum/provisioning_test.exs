@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.ProvisioningTest do
@@ -33,10 +33,10 @@ defmodule Sanctum.ProvisioningTest do
     File.mkdir_p!(bundle_dir)
     # Provisioning also copies the AQUA template out of the seed tree.
     File.cp_r!(Path.expand("../../../../seed/aqua", __DIR__), Path.join(seed_dir, "aqua"))
-    prev_base = Application.get_env(:cyfr, :base_path)
-    prev_seed = Application.get_env(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :seed_path, seed_dir)
+    prev_base = Application.get_env(:arca, :base_path)
+    prev_seed = Application.get_env(:arca, :seed_path)
+    Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:arca, :seed_path, seed_dir)
 
     # The registry is unreachable in this suite: a bundle that needs a pull
     # cannot be provisioned, which is the failure path under test.
@@ -44,8 +44,8 @@ defmodule Sanctum.ProvisioningTest do
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :seed_path, prev_seed)
+      Application.put_env(:arca, :base_path, prev_base)
+      Application.put_env(:arca, :seed_path, prev_seed)
 
       if prev_registry,
         do: Application.put_env(:cyfr, :registry_url, prev_registry),
@@ -432,8 +432,8 @@ defmodule Sanctum.ProvisioningTest do
     # The suite runs provisioning inline so its assertions can read rows
     # straight after the call; this one is about the real path, where the
     # fill is a task and the caller does not await it.
-    Application.put_env(:cyfr, :provisioning_inline, false)
-    on_exit(fn -> Application.put_env(:cyfr, :provisioning_inline, true) end)
+    Application.put_env(:sanctum, :provisioning_inline, false)
+    on_exit(fn -> Application.put_env(:sanctum, :provisioning_inline, true) end)
 
     n = System.unique_integer([:positive])
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}

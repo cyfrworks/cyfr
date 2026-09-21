@@ -362,10 +362,10 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       File.mkdir_p!(test_dir)
 
       # Store original configs
-      original_base_path = Application.get_env(:cyfr, :base_path)
+      original_base_path = Application.get_env(:arca, :base_path)
       original_auth = Application.get_env(:sanctum, :auth_provider)
 
-      Application.put_env(:cyfr, :base_path, test_dir)
+      Application.put_env(:arca, :base_path, test_dir)
       # Use an athanor-bearing provider so the session-fallback path resolves a tenant.
       Application.put_env(:sanctum, :auth_provider, __MODULE__.StubAuthProvider)
 
@@ -382,9 +382,9 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
         File.rm_rf!(test_dir)
 
         if original_base_path do
-          Application.put_env(:cyfr, :base_path, original_base_path)
+          Application.put_env(:arca, :base_path, original_base_path)
         else
-          Application.delete_env(:cyfr, :base_path)
+          Application.delete_env(:arca, :base_path)
         end
 
         if original_auth do
@@ -642,12 +642,12 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
   describe "membership resolution error handling" do
     setup do
       original_auth = Application.get_env(:sanctum, :auth_provider)
-      original_resolver = Application.get_env(:cyfr, :tenancy_resolver_override)
+      original_resolver = Application.get_env(:sanctum, :tenancy_resolver_override)
 
       Application.put_env(:sanctum, :auth_provider, __MODULE__.NoAthanorAuthProvider)
       # Inject a resolver that errors so the plug's "no resolved athanor → 403"
       # branch is exercised.
-      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.FailingResolver)
+      Application.put_env(:sanctum, :tenancy_resolver_override, Sanctum.Test.FailingResolver)
 
       on_exit(fn ->
         if original_auth do
@@ -657,9 +657,9 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
         end
 
         if original_resolver do
-          Application.put_env(:cyfr, :tenancy_resolver_override, original_resolver)
+          Application.put_env(:sanctum, :tenancy_resolver_override, original_resolver)
         else
-          Application.delete_env(:cyfr, :tenancy_resolver_override)
+          Application.delete_env(:sanctum, :tenancy_resolver_override)
         end
       end)
 

@@ -33,7 +33,7 @@ defmodule Opus.FormulaHandlerTest do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob
   alias Cyfr.Test.TwoServices
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @moduletag :capture_log
 
@@ -46,8 +46,8 @@ defmodule Opus.FormulaHandlerTest do
 
   setup tags do
     test_path = Path.join(System.tmp_dir!(), "formula_handler_test_#{:rand.uniform(100_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     Cyfr.Test.Sandbox.setup!(tags)
     TwoServices.watch!()
@@ -69,8 +69,8 @@ defmodule Opus.FormulaHandlerTest do
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
@@ -591,13 +591,8 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "a formula's tasks, run in its runner" do
     setup %{ctx: ctx} do
-      previous = Application.get_env(:cyfr, :consent_source)
-      Application.put_env(:cyfr, :consent_source, Source.DB)
-
       on_exit(fn ->
-        if previous,
-          do: Application.put_env(:cyfr, :consent_source, previous),
-          else: Application.delete_env(:cyfr, :consent_source)
+        nil
       end)
 
       :ok = Probe.publish_probe!(ctx)

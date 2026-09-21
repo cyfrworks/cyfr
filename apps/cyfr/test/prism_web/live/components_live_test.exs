@@ -34,11 +34,11 @@ defmodule PrismWeb.ComponentsLiveTest do
 
     File.write!(Path.join(shipped, "reagent.wasm"), @valid_wasm)
 
-    prev_seed = Application.fetch_env!(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :seed_path, seed)
+    prev_seed = Application.fetch_env!(:arca, :seed_path)
+    Application.put_env(:arca, :seed_path, seed)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :seed_path, prev_seed)
+      Application.put_env(:arca, :seed_path, prev_seed)
       File.rm_rf!(base)
     end)
 

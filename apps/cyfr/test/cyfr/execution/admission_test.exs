@@ -15,8 +15,8 @@ defmodule Cyfr.Execution.AdmissionTest do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob
   alias Cyfr.Execution.Admission
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
+  alias Sanctum.Test.ConsentFixtures
 
   @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
   @root_node "reagent:local.chain-root"
@@ -26,13 +26,12 @@ defmodule Cyfr.Execution.AdmissionTest do
     Arca.Cache.init()
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    start_supervised!(Source.Memory)
 
     test_path =
       Path.join(System.tmp_dir!(), "admission_test_#{System.unique_integer([:positive])}")
 
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     ctx = %Context{
       user_id: "admission_test_user_#{System.unique_integer([:positive])}",
@@ -73,8 +72,8 @@ defmodule Cyfr.Execution.AdmissionTest do
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: ctx, root: root_component}
@@ -145,8 +144,7 @@ defmodule Cyfr.Execution.AdmissionTest do
   end
 
   defp seed(ctx, profile, consent) do
-    :ok = Source.Memory.put_profile(ctx, profile)
-    :ok = Source.Memory.put_head_consent(ctx, profile.id, consent)
+    :ok = ConsentFixtures.seed_head!(ctx, profile, consent)
   end
 
   defp authority_with_edges(edges) do
@@ -188,7 +186,14 @@ defmodule Cyfr.Execution.AdmissionTest do
 
     test "two active owner profiles are ambiguous without a selector", %{ctx: ctx, root: root} do
       seed(ctx, profile_summary(), consent(root))
-      seed(ctx, profile_summary(%{id: "prof-chain-2", label: "work"}), consent(root))
+
+      # Its own consent id: a revision is a row with a primary key, so the
+      # second profile's head cannot be the first's.
+      seed(
+        ctx,
+        profile_summary(%{id: "prof-chain-2", label: "work"}),
+        consent(root, %{id: "consent-chain-2"})
+      )
 
       assert {:error, {:ambiguous, ids}} =
                Admission.authority_for(ctx, :default, "#{@root_node}:0.1.0")

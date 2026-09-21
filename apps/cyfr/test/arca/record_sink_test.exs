@@ -13,8 +13,8 @@ defmodule Arca.RecordSinkTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    Application.put_env(:cyfr, :record_sink_inline, false)
-    on_exit(fn -> Application.put_env(:cyfr, :record_sink_inline, true) end)
+    Application.put_env(:arca, :record_sink_inline, false)
+    on_exit(fn -> Application.put_env(:arca, :record_sink_inline, true) end)
     :ok
   end
 
@@ -93,7 +93,7 @@ defmodule Arca.RecordSinkTest do
   end
 
   test "inline mode writes in the caller" do
-    Application.put_env(:cyfr, :record_sink_inline, true)
+    Application.put_env(:arca, :record_sink_inline, true)
     id = Cyfr.UUID7.generate_id("plog")
     :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: id})})
     assert {:ok, sink_rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)

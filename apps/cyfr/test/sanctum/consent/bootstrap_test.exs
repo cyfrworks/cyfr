@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.BootstrapTest do
   use ExUnit.Case, async: false
@@ -7,7 +7,6 @@ defmodule Sanctum.Consent.BootstrapTest do
   alias Cyfr.Authority.Blob
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
-  alias Sanctum.Consent.Source
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
@@ -17,16 +16,16 @@ defmodule Sanctum.Consent.BootstrapTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "consent_bootstrap_#{:rand.uniform(1_000_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
     Cyfr.Test.SeedBundle.isolate!()
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}
@@ -56,12 +55,12 @@ defmodule Sanctum.Consent.BootstrapTest do
 
     # The minted rows load through the real DB source into an Authority.
     {:ok, [profile]} =
-      Source.DB.profiles(ctx, "reagent:local.boot-plain")
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.boot-plain")
 
     assert profile.kind == :owner
     assert profile.status == :active
 
-    {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+    {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
     assert consent.revision == 1
     assert consent.scope == :versionless
 
@@ -72,7 +71,7 @@ defmodule Sanctum.Consent.BootstrapTest do
     {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
 
     assert {:ok, %Authority{} = auth, _stamp} =
-             Loader.load_root(ctx, profile, source: Source.DB, live: {:ok, live})
+             Loader.load_root(ctx, profile, live: {:ok, live})
 
     assert auth.cursor == {:bound, "reagent:local.boot-plain"}
   end
@@ -135,8 +134,10 @@ defmodule Sanctum.Consent.BootstrapTest do
     ship!(ctx, "boot-cas", "reagent")
     {:ok, _} = Bootstrap.run(ctx)
 
-    {:ok, [profile]} = Source.DB.profiles(ctx, "reagent:local.boot-cas")
-    {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+    {:ok, [profile]} =
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.boot-cas")
+
+    {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
 
     # A stale expectation cannot advance the head.
     assert {:error, :head_moved} =

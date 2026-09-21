@@ -37,7 +37,7 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
   alias Cyfr.Execution.{Attempt, Dispatch, Record}
   alias Cyfr.Slots
   alias Cyfr.Test.{AttemptFixtures, AuthorityFixtures, ScriptedWorker, ScriptedWorkerListener}
-  alias Sanctum.Consent.Source
+  alias Sanctum.Test.ConsentFixtures
 
   @moduletag :capture_log
 
@@ -122,18 +122,18 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "slot_wait_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :workers]
-    previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, run_dir)
+    keys = [arca: :base_path, cyfr: :workers]
+    previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    Application.put_env(:arca, :base_path, run_dir)
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       Slots.forgive_unreaped(@slots, ctx.athanor_id)
 
-      for {key, value} <- previous do
+      for {{app, key}, value} <- previous do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
 
       File.rm_rf!(run_dir)
@@ -462,7 +462,6 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
     setup %{ctx: ctx, component: component} do
       answer = %{"content" => [%{"type" => "text", "text" => "ran"}]}
       serve!([answer])
-      start_supervised!(Source.Memory)
       consent!(ctx, component)
       :ok
     end
@@ -559,24 +558,22 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
   defp background(ctx, id) do
     Cyfr.Execution.run_root(ctx, :default, @ref, input(),
       execution_id: id,
-      class: :background,
-      consent_source: Source.Memory
+      class: :background
     )
   end
 
   # An owner profile whose consent admits the node at ingress.
   defp consent!(ctx, component) do
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: "prof-slot-wait",
-        kind: :owner,
-        source_ref: @node,
-        label: "default",
-        status: :active
-      })
+    profile = %{
+      id: "prof-slot-wait",
+      kind: :owner,
+      source_ref: @node,
+      label: "default",
+      status: :active
+    }
 
     :ok =
-      Source.Memory.put_head_consent(ctx, "prof-slot-wait", %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-slot-wait",
         revision: 1,
         scope: :versionless,

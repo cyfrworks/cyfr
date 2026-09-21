@@ -90,15 +90,15 @@ defmodule Aqua.PromptTest do
   describe "the estate's notes" do
     setup do
       test_path = Path.join(System.tmp_dir!(), "prompt_notes_#{:rand.uniform(1_000_000)}")
-      original = Application.get_env(:cyfr, :base_path)
-      Application.put_env(:cyfr, :base_path, test_path)
+      original = Application.get_env(:arca, :base_path)
+      Application.put_env(:arca, :base_path, test_path)
 
       on_exit(fn ->
         File.rm_rf!(test_path)
 
         if original,
-          do: Application.put_env(:cyfr, :base_path, original),
-          else: Application.delete_env(:cyfr, :base_path)
+          do: Application.put_env(:arca, :base_path, original),
+          else: Application.delete_env(:arca, :base_path)
       end)
 
       n = System.unique_integer([:positive])

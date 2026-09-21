@@ -69,16 +69,20 @@ defmodule Cyfr.Execution.StartRefusalTest do
     test_path =
       Path.join(System.tmp_dir!(), "start_refusal_#{System.unique_integer([:positive])}")
 
-    previous = Map.new([:base_path, :workers], &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, test_path)
+    previous =
+      Map.new([arca: :base_path, cyfr: :workers], fn {app, key} ->
+        {{app, key}, Application.get_env(app, key)}
+      end)
+
+    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
-      for {key, value} <- previous do
+      for {{app, key}, value} <- previous do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
     end)
 

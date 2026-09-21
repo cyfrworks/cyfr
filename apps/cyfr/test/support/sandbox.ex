@@ -78,9 +78,9 @@ defmodule Cyfr.Test.Sandbox do
   @spec setup!(map()) :: pid()
   def setup!(tags \\ %{}) do
     shared? = not Map.get(tags, :async, false)
-    owner = Ecto.Adapters.SQL.Sandbox.start_owner!(Arca.Repo, shared: shared?)
-    ExUnit.Callbacks.on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(owner) end)
-    unless shared?, do: Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, self())
+    # The owner protocol is the persistence layer's; what this adds is the
+    # lending to the supervisors above it and the sweep of their children.
+    owner = Arca.Test.Sandbox.start_owner!(tags)
 
     for name <- @supervisors, pid = Process.whereis(name), is_pid(pid) do
       Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, pid)

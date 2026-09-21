@@ -21,12 +21,12 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     base = Path.join(System.tmp_dir!(), "retention_staged_#{System.unique_integer([:positive])}")
-    prev_base = Application.fetch_env!(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, Path.join(base, "data"))
+    prev_base = Application.fetch_env!(:arca, :base_path)
+    Application.put_env(:arca, :base_path, Path.join(base, "data"))
 
     on_exit(fn ->
       ControlPlane.mark(:unclaimed)
-      Application.put_env(:cyfr, :base_path, prev_base)
+      Application.put_env(:arca, :base_path, prev_base)
       File.rm_rf!(base)
     end)
 

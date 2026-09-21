@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
@@ -17,9 +17,9 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    original = Application.get_env(:cyfr, :platform_admin_emails, [])
-    Application.put_env(:cyfr, :platform_admin_emails, ["ops@example.com"])
-    on_exit(fn -> Application.put_env(:cyfr, :platform_admin_emails, original) end)
+    original = Application.get_env(:sanctum, :platform_admin_emails, [])
+    Application.put_env(:sanctum, :platform_admin_emails, ["ops@example.com"])
+    on_exit(fn -> Application.put_env(:sanctum, :platform_admin_emails, original) end)
 
     n = System.unique_integer([:positive])
     alice = "github|https://github.com|alice-#{n}"

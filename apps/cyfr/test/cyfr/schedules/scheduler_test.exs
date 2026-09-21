@@ -11,7 +11,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
   alias Arca.{CronSchedule, ScheduleOccurrences}
   alias Cyfr.Schedules.Scheduler
   alias Cyfr.Test.{AuthorityFixtures, ScriptedWorker}
-  alias Sanctum.Consent.Source
+  alias Sanctum.Test.ConsentFixtures
 
   @reference "reagent:local.test"
   @profile_id "prof_test"
@@ -22,27 +22,32 @@ defmodule Cyfr.Schedules.SchedulerTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "scheduler_#{System.unique_integer([:positive])}")
-    keys = [:cron_scheduler_enabled, :workers, :base_path]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
+    keys = [cyfr: :cron_scheduler_enabled, cyfr: :workers, arca: :base_path]
+    prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:cyfr, :cron_scheduler_enabled, true)
-    Application.put_env(:cyfr, :workers, ScriptedWorker.workers(@reference, prev[:workers]))
-    Application.put_env(:cyfr, :base_path, test_path)
+
+    Application.put_env(
+      :cyfr,
+      :workers,
+      ScriptedWorker.workers(@reference, prev[{:cyfr, :workers}])
+    )
+
+    Application.put_env(:arca, :base_path, test_path)
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
-      for {key, value} <- prev do
+      for {{app, key}, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    Sanctum.Test.ConsentFixtures.start_source!()
     consented!(ctx)
     {:ok, ctx: ctx}
   end
@@ -57,17 +62,16 @@ defmodule Cyfr.Schedules.SchedulerTest do
         type: "reagent"
       })
 
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: @profile_id,
-        kind: :owner,
-        source_ref: @reference,
-        label: "default",
-        status: :active
-      })
+    profile = %{
+      id: @profile_id,
+      kind: :owner,
+      source_ref: @reference,
+      label: "default",
+      status: :active
+    }
 
     :ok =
-      Source.Memory.put_head_consent(ctx, @profile_id, %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-#{@profile_id}",
         revision: 1,
         scope: :versionless,

@@ -35,7 +35,7 @@ defmodule Cyfr.SharedLimitsTest do
   alias Cyfr.Test.{OpusService, ScriptedWorker}
   alias Cyfr.Test.TwoServices.Wire
   alias Cyfr.{WorkerAuth, WorkerWire}
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @moduletag timeout: 180_000
   @moduletag :capture_log
@@ -54,20 +54,19 @@ defmodule Cyfr.SharedLimitsTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "shared_limits_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :workers]
-    previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, Path.join(run_dir, "data"))
-    Application.put_env(:cyfr, :consent_source, Source.DB)
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
 
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       fresh_limits!(ctx)
 
-      for {key, value} <- previous do
+      for {{app, key}, value} <- previous do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
 
       File.rm_rf!(run_dir)
@@ -84,7 +83,7 @@ defmodule Cyfr.SharedLimitsTest do
         }
       )
 
-    Application.put_env(:cyfr, :seed_path, seed)
+    Application.put_env(:arca, :seed_path, seed)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)

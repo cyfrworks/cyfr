@@ -26,22 +26,22 @@ defmodule Cyfr.ContextSwapTest do
     "apps/cyfr/lib/emissary/mcp/thread_tool.ex",
     "apps/cyfr/lib/emissary/mcp/notes_tool.ex",
     "apps/cyfr/lib/prism_web",
-    "apps/cyfr/lib/sanctum"
+    "apps/sanctum/lib/sanctum"
   ]
 
   # Raw swaps that stay, by file and exact count.
   @allowlisted %{
     # focus/2's two admitting arms and refocus/2's system arm.
-    "apps/cyfr/lib/sanctum/context.ex" => 3,
+    "apps/sanctum/lib/sanctum/context.ex" => 3,
     # The tenancy-resolver override exists only when compiled with
     # `:allow_tenancy_resolver_override` (test builds); production
     # compiles the branch out entirely.
-    "apps/cyfr/lib/sanctum/tenancy.ex" => 1,
+    "apps/sanctum/lib/sanctum/tenancy.ex" => 1,
     # `resolve/3` narrows through `focus/2`; the one swap left is its
     # open of an ARCHIVED athanor for `get`/`unarchive`, hand-built under
     # the same two admissions (membership, or the operator's audited open)
     # because `focus/2` rightly refuses an archived athanor.
-    "apps/cyfr/lib/sanctum/mcp/athanor_tool.ex" => 1
+    "apps/sanctum/lib/sanctum/mcp/athanor_tool.ex" => 1
   }
 
   @pattern ~r/%\{\s*[\w.]+\s*\|\s*athanor_id:/

@@ -19,14 +19,14 @@ defmodule Cyfr.BootstrapTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    prev = Application.get_env(:cyfr, :platform_admin_emails, [])
+    prev = Application.get_env(:sanctum, :platform_admin_emails, [])
 
     # The suite disables the boot task (a write before any sandbox checkout);
     # these tests are about what it does, so they turn it back on.
     Application.put_env(:cyfr, :provisioning_boot_enabled, true)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :platform_admin_emails, prev)
+      Application.put_env(:sanctum, :platform_admin_emails, prev)
       Application.put_env(:cyfr, :provisioning_boot_enabled, false)
     end)
 
@@ -64,7 +64,7 @@ defmodule Cyfr.BootstrapTest do
         )
       )
 
-    Application.put_env(:cyfr, :platform_admin_emails, ["kept#{n}@example.com"])
+    Application.put_env(:sanctum, :platform_admin_emails, ["kept#{n}@example.com"])
     :ok = Cyfr.Bootstrap.run()
 
     assert {:ok, kept_rows} = Members.list_by_user(kept.id)
@@ -81,7 +81,7 @@ defmodule Cyfr.BootstrapTest do
     test "start_link does its work before returning, and leaves nothing behind" do
       me = self()
 
-      Application.put_env(:cyfr, :platform_admin_emails, [])
+      Application.put_env(:sanctum, :platform_admin_emails, [])
 
       # `:ignore` is the one-shot answer: the work already happened inside
       # `init/1`, so there is no process for the supervisor to hold.
@@ -95,7 +95,7 @@ defmodule Cyfr.BootstrapTest do
 
     test "a raise inside the boot work does not take the server down with it" do
       # A bootstrap failure must not prevent the server from starting.
-      Application.put_env(:cyfr, :platform_admin_emails, :not_a_list)
+      Application.put_env(:sanctum, :platform_admin_emails, :not_a_list)
 
       assert :ignore = Cyfr.Bootstrap.start_link([])
     end

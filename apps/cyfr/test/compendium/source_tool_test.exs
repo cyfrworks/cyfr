@@ -33,11 +33,11 @@ defmodule Compendium.MCP.SourceToolTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     base = Path.join(System.tmp_dir!(), "source_tool_#{System.unique_integer([:positive])}")
-    prev = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, base)
+    prev = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, base)
 
     on_exit(fn ->
-      if prev, do: Application.put_env(:cyfr, :base_path, prev)
+      if prev, do: Application.put_env(:arca, :base_path, prev)
       File.rm_rf!(base)
     end)
 

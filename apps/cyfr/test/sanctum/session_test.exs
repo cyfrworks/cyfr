@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.SessionTest do
@@ -48,8 +48,8 @@ defmodule Sanctum.SessionTest do
     end
 
     test "respects CYFR_SESSION_TTL_HOURS override", %{ctx: ctx} do
-      Application.put_env(:cyfr, :session_ttl_hours, 1)
-      on_exit(fn -> Application.delete_env(:cyfr, :session_ttl_hours) end)
+      Application.put_env(:sanctum, :session_ttl_hours, 1)
+      on_exit(fn -> Application.delete_env(:sanctum, :session_ttl_hours) end)
 
       {:ok, session} = Session.create(ctx)
       {:ok, expires_at, _} = DateTime.from_iso8601(session.expires_at)
@@ -236,8 +236,8 @@ defmodule Sanctum.SessionTest do
 
     test "no-ops when TTL is infinite", %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
-      Application.put_env(:cyfr, :session_ttl_hours, 0)
-      on_exit(fn -> Application.delete_env(:cyfr, :session_ttl_hours) end)
+      Application.put_env(:sanctum, :session_ttl_hours, 0)
+      on_exit(fn -> Application.delete_env(:sanctum, :session_ttl_hours) end)
 
       assert :ok = Session.refresh_if_stale(session.token)
     end

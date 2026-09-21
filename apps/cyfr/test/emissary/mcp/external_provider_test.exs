@@ -319,7 +319,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
   describe "an outbound call's payloads and identity" do
     setup %{ctx: ctx} do
-      on_exit(fn -> Application.delete_env(:cyfr, :execution_payload_store) end)
+      on_exit(fn -> Application.delete_env(:arca, :execution_payload_store) end)
 
       {:ok, server} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
@@ -384,7 +384,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "an input the store cannot keep admits nothing", %{ctx: ctx} do
-      Application.put_env(:cyfr, :execution_payload_store, __MODULE__.RefusingStore)
+      Application.put_env(:arca, :execution_payload_store, __MODULE__.RefusingStore)
 
       assert {:error, {:refused, why}} =
                ExternalProvider.try_handle("kept:probe", ctx, %{"x" => 1}, :in_chain)
@@ -424,7 +424,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
          %{ctx: ctx, server: server} do
       {:ok, pid} = __MODULE__.AnsweringServer.start(ctx, server, %{"content" => []})
       __MODULE__.OnceStore.reset()
-      Application.put_env(:cyfr, :execution_payload_store, __MODULE__.OnceStore)
+      Application.put_env(:arca, :execution_payload_store, __MODULE__.OnceStore)
       id = Cyfr.UUID7.execution_id()
 
       assert {:error, {:result_lost, _}} =

@@ -5,12 +5,17 @@ defmodule Cyfr.Application do
   @moduledoc false
 
   require Logger
-  require Arca.Repo.Errors
 
   use Application
 
   @impl true
   def start(_type, _args) do
+    # The storage and counted cap port's one write, before every domain
+    # this application starts. A capped write asks it on the first tenant
+    # byte, and an uninstalled port refuses rather than reading as a
+    # server with no ceilings (`Cyfr.Caps.NotInstalledError`).
+    Cyfr.Caps.install!(Sanctum.Tenancy.Caps)
+
     # One redaction vocabulary: Phoenix's inbound request-param filter is
     # fed from its owner (config/config.exs deliberately does not spell a
     # list — config files run before this module exists).
@@ -22,28 +27,25 @@ defmodule Cyfr.Application do
     Cyfr.Boot.mint()
     Cyfr.Execution.Keys.mint()
 
-    # Resolve the at-rest cipher keyring before the database opens: the
-    # migration step below compares it with the keyring the database was
-    # sealed with, and refuses a different one. Explicit `CYFR_CRYPTO_KEYRING`
-    # (JSON) wins; otherwise derive a single-key keyring from
-    # `:secret_key_base` so single-user deployments work zero-config.
-    # Rotating `:secret_key_base` invalidates every blob encrypted under the
-    # derived key — platform deployments should set an explicit keyring.
+    # Resolve the at-rest cipher keyring before anything seals a row. The
+    # `arca` application has already opened the database and run the
+    # migrations by now — neither seals anything — and
+    # `Cyfr.KeyringFingerprint.Check` below still compares this keyring
+    # with the one the database was sealed under before any work runs.
+    # Explicit `CYFR_CRYPTO_KEYRING` (JSON) wins; otherwise derive a
+    # single-key keyring from `:sanctum, :secret_key_base` so single-user
+    # deployments work zero-config. Rotating that secret invalidates every
+    # blob encrypted under the derived key — platform deployments should
+    # set an explicit keyring.
     resolve_crypto_keyring!()
 
-    # Arca storage setup
-    ensure_db_directory!()
-    # Overlay wiring fails loud here — before Bootstrap or the tincture
-    # registry scan the union — not on the first touch of whichever
-    # overlaid root was left without a locator.
+    # Port 5's wiring: every overlaid root is mapped to the locator that
+    # knows its unit boundaries. It fails loud here — before Bootstrap or
+    # the tincture registry scan the union — not on the first touch of
+    # whichever overlaid root was left without one. The locators are
+    # Compendium's and the roster is this application's, which is why the
+    # install is here and not in `Arca.Supervisor`.
     Arca.Storage.install_locators!()
-    maybe_migrate_before_pool()
-    # The invoke-budget counters, owned by the application master so they
-    # outlive every request that charges them. The Arca.Cache table is
-    # deliberately NOT owned here: it is a disposable read-through cache,
-    # created and re-created by its one supervised owner
-    # (`Arca.Cache.Sweeper`) — a sweeper crash flushes it, harmlessly.
-    Sanctum.Authority.BudgetCounter.ensure_table()
 
     # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
@@ -78,32 +80,25 @@ defmodule Cyfr.Application do
     Cyfr.ScheduleNotes.attach()
 
     infra_children = [
-      # Arca storage layer
-      Arca.Repo,
       # The database is the one this release's schema built, its tenant
       # roster covers the schema, and its keyring is the one this boot
       # resolved — before any worker reads a row or seals one under a
-      # different key wearing the same label. Runs whether or not this boot
-      # migrated.
+      # different key wearing the same label. The `arca` application
+      # opened the pool and migrated before this one started; these read
+      # through it and run whether or not this boot migrated.
       database_checks(),
-      # Who owns this database's control plane — claimed right after the repo
-      # is up, before anything that assumes it is the only one.
+      # Who owns this database's control plane — claimed before anything
+      # that assumes it is the only one.
       control_plane_claim(),
-      # The cache table's one owner, grouped :rest_for_one with the two
-      # registries that write catalogues into it: when the sweeper dies the
-      # table dies with it, and the writers restart and repopulate instead
-      # of answering "Unknown tool" until a 23-hour refresh (this retires
-      # their hand-rolled :rebuild_cache recovery). Before anything that
-      # might read through the cache.
-      group(Arca.Cache.TreeSupervisor, [
-        Arca.Cache.Sweeper,
-        Cyfr.Ops.Catalog,
-        Emissary.MCP.ResourceRegistry
-      ]),
-      # The write-behind for bookkeeping rows (allowed policy lines, MCP log
-      # completions, vault last-used); right after the repo so it drains
-      # before the repo goes down.
-      Arca.RecordSink,
+      # The two registries that write catalogues into `Arca.Cache`. The
+      # table dies with its owner, `Arca.Cache.Sweeper`, which the `arca`
+      # application starts — one app below, so no supervisor of this one
+      # can hold both. Each registry monitors the owner instead and
+      # rebuilds its catalogue when it goes, rather than answering
+      # "Unknown tool" until a 23-hour refresh. Before anything that might
+      # read through the cache.
+      Cyfr.Ops.Catalog,
+      Emissary.MCP.ResourceRegistry,
       Cyfr.RetentionScheduler,
       # Recurring component executions: the runs the scheduler fires are
       # tasks of their own, monitored by it.
@@ -116,9 +111,6 @@ defmodule Cyfr.Application do
       # `:audit` among its consumers. The storage layer holds the handler
       # and the sinks; naming the catalog is the host's part.
       {Arca.AuditHandler, events: Cyfr.Telemetry.Catalog.consumed_by(:audit)},
-      # Releases a charged invoke-budget slot when its holder dies without
-      # running its `after` (the brutal-kill cancel/timeout paths).
-      Sanctum.Authority.BudgetGuard,
       # Request rate-limit counters — own table, isolated from Arca.Cache so an
       # attacker-cardinality flood cannot evict sessions or OAuth state.
       Cyfr.RateLimiter,
@@ -191,22 +183,6 @@ defmodule Cyfr.Application do
       # publishes nothing.
       {Task.Supervisor, name: Compendium.Builds.TaskSupervisor},
       Emissary.MCP.RunningTasks,
-      # Sanctum auth sliver — its own Finch pool for IdP OAuth Device-Flow
-      # HTTP calls (GitHub / Google). Compendium's registry and OCI traffic
-      # goes through `Cyfr.Egress.pinned_request/5`, which owns its own
-      # connections; this pool keeps OAuth userinfo HTTP off that path and
-      # reinforces the sliver boundary at the supervision level.
-      {Finch, name: Sanctum.Auth.Finch},
-      # OAuth refresh single-flight (see Sanctum.OAuth.RefreshLock): the
-      # registry and the task pool whose leaders register in it restart
-      # together.
-      group(Sanctum.OAuth.RefreshTree, [
-        {Registry, keys: :unique, name: Sanctum.OAuth.RefreshRegistry},
-        {Task.Supervisor, name: Sanctum.OAuth.RefreshTaskSupervisor}
-      ]),
-      # Provisioning retries that must not ride a sign-in (registry pulls),
-      # and the keepers that renew their claims' leases.
-      {Task.Supervisor, name: Sanctum.ProvisioningSupervisor},
       # Filling an athanor's component estate: the background fills the
       # first-need hook and a sign-in ask for, and the registry pulls each
       # attempt runs under its own deadline.
@@ -214,11 +190,6 @@ defmodule Cyfr.Application do
       # The estate filler itself — it reacts to the identity domain's
       # announcement that an athanor needs filling.
       Compendium.Provisioning,
-      # Single-use consent authorizations. The shipped store is the DB
-      # (config.exs pins Proof.DB); the in-memory GenServer starts only
-      # when a deployment explicitly configures it, so production does not
-      # carry a live, never-called singleton.
-      maybe_proof_memory(),
       # Prism dashboard
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
@@ -258,8 +229,10 @@ defmodule Cyfr.Application do
     # a crash-looping endpoint exhausts only the web tier (infra keeps running,
     # then the root restarts just the web tier), while an infra collapse
     # restarts infra AND the web tier so endpoints rebind to fresh
-    # Repo/PubSub/registries instead of holding dead references. Shutdown is
-    # reverse start order: endpoints drain before infra goes down.
+    # PubSub and registries instead of holding dead references. The repo is
+    # the `arca` application's and restarts under its own supervisor;
+    # everything here reaches it by name. Shutdown is reverse start order:
+    # endpoints drain before infra goes down.
     children = [
       tier(Cyfr.InfraSupervisor, infra_children),
       tier(Cyfr.WebSupervisor, web_children)
@@ -337,13 +310,6 @@ defmodule Cyfr.Application do
     end
   end
 
-  defp maybe_proof_memory do
-    case Cyfr.RuntimeConfig.consent_proof_store() do
-      Sanctum.Consent.Proof.Memory -> [Sanctum.Consent.Proof.Memory]
-      _ -> []
-    end
-  end
-
   # A registry and the processes that hold references into it restart
   # together: :rest_for_one from the registry (or table owner) down, so a
   # restart never leaves dependents holding a name that resolves to
@@ -379,35 +345,6 @@ defmodule Cyfr.Application do
     :ok
   end
 
-  defp ensure_db_directory! do
-    config = Application.get_env(:cyfr, Arca.Repo, [])
-
-    if db_path = config[:database] do
-      # arca:bypass-ok=B — pre-Arca bootstrap; runs before Arca.Repo starts.
-      # SQLite-only path; Postgres builds skip this branch (db_path is nil).
-      db_path |> Path.dirname() |> File.mkdir_p!()
-    end
-  end
-
-  # Run migrations before the connection pool starts to avoid concurrent
-  # DDL and database-lock errors. CYFR_AUTO_MIGRATE=false leaves migration
-  # to the operator via Cyfr.Release.migrate/0; either way the boot's
-  # database checks run once the pool is up.
-  defp maybe_migrate_before_pool do
-    if Application.get_env(:cyfr, :auto_migrate, true) do
-      config = Application.get_env(:cyfr, Arca.Repo, [])
-      verify_db_writable!(config[:database])
-      # A temporary repo just for migrations, of two connections: on
-      # Postgres the migrator holds its lock on one and migrates on the
-      # other, and refuses a pool of one.
-      {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 2))
-      Ecto.Migrator.run(Arca.Repo, migrations_path(), :up, all: true)
-      configure_database()
-      # Stop the temporary repo so the supervisor can start the real one
-      Supervisor.stop(repo_pid)
-    end
-  end
-
   # One-shot checks that read the repo at boot, outside any test's
   # sandbox; the suite turns them off and exercises `Arca.SchemaFingerprint`
   # and `Cyfr.KeyringFingerprint` directly.
@@ -424,53 +361,6 @@ defmodule Cyfr.Application do
     if Application.get_env(:cyfr, :control_plane_claim_enabled, true),
       do: [Cyfr.ControlPlane],
       else: []
-  end
-
-  defp verify_db_writable!(nil), do: :ok
-
-  defp verify_db_writable!(path) do
-    dir = Path.dirname(path)
-    test_file = Path.join(dir, ".cyfr_write_test")
-
-    # arca:bypass-ok=B — pre-Arca bootstrap probe used to surface friendly
-    # Docker UID errors before the Repo pool tries to open the DB.
-    case File.touch(test_file) do
-      :ok ->
-        File.rm(test_file)
-
-      {:error, reason} ->
-        {uid, 0} = System.cmd("id", ["-u"])
-        uid = String.trim(uid)
-
-        raise """
-        [Arca] Cannot write to database directory: #{dir} (#{reason})
-
-        If running in Docker with bind mounts (e.g. ./data:/app/data),
-        the host directory must be writable by the container user (UID #{uid}).
-
-        Fix: on the host, run:
-          sudo chown -R #{uid} #{dir}
-        """
-    end
-  end
-
-  defp configure_database do
-    case Cyfr.RuntimeConfig.repo_adapter() do
-      Ecto.Adapters.SQLite3 ->
-        Arca.Repo.query!("PRAGMA journal_mode=WAL")
-        Arca.Repo.query!("PRAGMA busy_timeout=#{Cyfr.RuntimeConfig.sqlite_busy_timeout_ms()}")
-
-      _ ->
-        :ok
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.warning("[Arca] Database configuration failed: #{Exception.message(e)}")
-      :ok
-  end
-
-  defp migrations_path do
-    Application.app_dir(:cyfr, "priv/repo/migrations")
   end
 
   defp attach_webhook_verify_failed_logger do
@@ -704,7 +594,7 @@ defmodule Cyfr.Application do
   end
 
   defp derive_keyring_from_secret_key_base! do
-    case Application.get_env(:cyfr, :secret_key_base) do
+    case Application.get_env(:sanctum, :secret_key_base) do
       key when is_binary(key) and byte_size(key) >= 32 ->
         # A supported zero-config posture — but in a release the operator
         # should know their ciphertexts are keyed to the Phoenix secret:

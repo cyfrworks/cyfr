@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.WebhookMCPTest do
@@ -18,7 +18,6 @@ defmodule Sanctum.WebhookMCPTest do
 
     # A webhook binds a consented profile at create; seed one per target.
     ctx = Sanctum.TestContext.local()
-    Sanctum.Test.ConsentFixtures.start_source!()
 
     for name <- ["handler", "original", "updated"] do
       Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{name}",

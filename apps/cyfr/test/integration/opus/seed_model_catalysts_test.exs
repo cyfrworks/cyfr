@@ -17,7 +17,7 @@ defmodule Opus.SeedModelCatalystsTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Execution.MCP
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   # Each catalyst's key field, and where a named model's window comes
@@ -36,20 +36,19 @@ defmodule Opus.SeedModelCatalystsTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "seed_models_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, test_path)
+    keys = [:base_path, :seed_path]
+    prev = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
+    Application.put_env(:arca, :base_path, test_path)
     # The real tracked bundle, served in place through the seed overlay.
-    Application.put_env(:cyfr, :seed_path, @seed_root)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
+    Application.put_env(:arca, :seed_path, @seed_root)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       for {key, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(:arca, key, value),
+          else: Application.delete_env(:arca, key)
       end
     end)
 
@@ -227,7 +226,9 @@ defmodule Opus.SeedModelCatalystsTest do
              Cyfr.Execution.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
 
     # Revoking the catalyst's profile cuts the assistant off at the next load.
-    {:ok, [claude_profile]} = Source.DB.profiles(ctx, "catalyst:local.claude")
+    {:ok, [claude_profile]} =
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.claude")
+
     :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), claude_profile.id, "revoked")
     {:ok, revoked} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
 

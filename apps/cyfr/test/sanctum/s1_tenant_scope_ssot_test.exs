@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.S1TenantScopeSSOTTest do
@@ -59,7 +59,6 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
 
     test "Webhook create/get/list still work", %{ctx: ctx} do
       Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{}, ctx)
-      Sanctum.Test.ConsentFixtures.start_source!()
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.h")
 
       {:ok, %{name: "h1"}} =

@@ -25,7 +25,7 @@ defmodule Cyfr.Test.StepBench do
   """
 
   alias Aqua.Tape
-  alias Sanctum.Consent.{Bootstrap, Commit, Plan, Source}
+  alias Sanctum.Consent.{Bootstrap, Commit, Plan}
 
   @stub_wasm Path.expand("test_wasm/step_stub/step_stub.wasm", __DIR__)
   @stub_name "step-stub"
@@ -145,20 +145,19 @@ defmodule Cyfr.Test.StepBench do
 
   defp with_estate_env(fun) do
     run_dir = Path.join(System.tmp_dir!(), "step_bench_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source]
-    previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
+    keys = [:base_path, :seed_path]
+    previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
 
     try do
-      Application.put_env(:cyfr, :base_path, Path.join(run_dir, "data"))
-      Application.put_env(:cyfr, :seed_path, lay_seed!(Path.join(run_dir, "seed")))
-      Application.put_env(:cyfr, :consent_source, Source.DB)
+      Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
+      Application.put_env(:arca, :seed_path, lay_seed!(Path.join(run_dir, "seed")))
       Arca.Cache.init()
       fun.()
     after
       for {key, value} <- previous do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(:arca, key, value),
+          else: Application.delete_env(:arca, key)
       end
 
       File.rm_rf!(run_dir)

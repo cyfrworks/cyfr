@@ -15,15 +15,15 @@ defmodule Aqua.AquaToolEditsTest do
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "aqua_tool_edits_#{:rand.uniform(1_000_000)}")
-    original = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original,
-        do: Application.put_env(:cyfr, :base_path, original),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     # The tool's door logs to the database; the runner it may reach does too.
@@ -178,16 +178,16 @@ defmodule Aqua.AquaToolEditsTest do
   } do
     alias Arca.PublicationContract.Faults
 
-    previous = Application.get_env(:cyfr, :storage_adapter)
+    previous = Application.get_env(:arca, :storage_adapter)
     Faults.wrap(Arca.Adapters.Local)
-    Application.put_env(:cyfr, :storage_adapter, Faults)
+    Application.put_env(:arca, :storage_adapter, Faults)
 
     on_exit(fn ->
       Faults.unwrap()
 
       if previous,
-        do: Application.put_env(:cyfr, :storage_adapter, previous),
-        else: Application.delete_env(:cyfr, :storage_adapter)
+        do: Application.put_env(:arca, :storage_adapter, previous),
+        else: Application.delete_env(:arca, :storage_adapter)
     end)
 
     role = AquaPath.role_file("tracker")

@@ -28,10 +28,10 @@ defmodule Cyfr.FilesTest do
     base = Path.join(System.tmp_dir!(), "files_#{System.unique_integer([:positive])}")
     seed = Path.join(base, "seed")
 
-    prev_base = Application.fetch_env!(:cyfr, :base_path)
-    prev_seed = Application.fetch_env!(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :base_path, Path.join(base, "data"))
-    Application.put_env(:cyfr, :seed_path, seed)
+    prev_base = Application.fetch_env!(:arca, :base_path)
+    prev_seed = Application.fetch_env!(:arca, :seed_path)
+    Application.put_env(:arca, :base_path, Path.join(base, "data"))
+    Application.put_env(:arca, :seed_path, seed)
 
     Arca.Test.UnitFixtures.seed_component!("reagent", "local", "shelf", "1.0.0",
       manifest: %{"type" => "reagent", "version" => "1.0.0", "description" => "shipped"},
@@ -44,8 +44,8 @@ defmodule Cyfr.FilesTest do
     File.write!(Path.join(roles, "scribe.md"), "---\ntitle: Scribe\n---\n\nscribe\n")
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :seed_path, prev_seed)
+      Application.put_env(:arca, :base_path, prev_base)
+      Application.put_env(:arca, :seed_path, prev_seed)
       File.rm_rf!(base)
     end)
 

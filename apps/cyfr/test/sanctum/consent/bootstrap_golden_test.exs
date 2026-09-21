@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.Consent.BootstrapGoldenTest do
@@ -16,7 +16,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   """
   use ExUnit.Case, async: false
 
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @repo_root Path.expand("../../../../..", __DIR__)
   @bundle Path.join(@repo_root, "seed/components")
@@ -32,14 +32,14 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     copy_bundle!(bundle_dir)
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    prev_base = Application.get_env(:cyfr, :base_path)
-    prev_seed = Application.get_env(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :seed_path, seed_dir)
+    prev_base = Application.get_env(:arca, :base_path)
+    prev_seed = Application.get_env(:arca, :seed_path)
+    Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:arca, :seed_path, seed_dir)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :seed_path, prev_seed)
+      Application.put_env(:arca, :base_path, prev_base)
+      Application.put_env(:arca, :seed_path, prev_seed)
       File.rm_rf!(test_dir)
     end)
 
@@ -70,10 +70,10 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
 
     blobs =
       Map.new(minted, fn ref ->
-        {:ok, [profile]} = Source.DB.profiles(ctx, ref)
+        {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
         {:ok, row, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
         assert row.granted_by == "system:bootstrap"
-        {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+        {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
         assert is_map(consent.activation) and consent.activation != %{}
         assert is_binary(consent.shape_digest) and consent.shape_digest != ""
         {ref, consent.resolved_policy}

@@ -36,16 +36,22 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     test_path =
       Path.join(System.tmp_dir!(), "scripted_worker_#{System.unique_integer([:positive])}")
 
-    keys = [:base_path, :workers]
-    previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :workers, ScriptedWorker.workers(@scripted, previous[:workers]))
+    keys = [arca: :base_path, cyfr: :workers]
+    previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    Application.put_env(:arca, :base_path, test_path)
+
+    Application.put_env(
+      :cyfr,
+      :workers,
+      ScriptedWorker.workers(@scripted, previous[{:cyfr, :workers}])
+    )
+
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
-      for {key, value} <- previous, do: Application.put_env(:cyfr, key, value)
+      for {{app, key}, value} <- previous, do: Application.put_env(app, key, value)
     end)
 
     {:ok, _} =

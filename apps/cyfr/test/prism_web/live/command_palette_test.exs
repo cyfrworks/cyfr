@@ -15,8 +15,8 @@ defmodule PrismWeb.CommandPaletteTest do
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "palette_#{:rand.uniform(1_000_000)}")
-    original = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       # A turn the test left finishing may still write under the path; the
@@ -24,8 +24,8 @@ defmodule PrismWeb.CommandPaletteTest do
       File.rm_rf(test_path)
 
       if original,
-        do: Application.put_env(:cyfr, :base_path, original),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     :ok

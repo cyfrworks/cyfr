@@ -80,7 +80,7 @@ defmodule Compendium.ReverseSurfaceTest do
            "the scan read no Compendium reach anywhere — it is not reading"
 
     extra =
-      "apps/cyfr/lib/arca/**/*.ex"
+      "apps/arca/lib/arca/**/*.ex"
       |> reached()
       |> MapSet.difference(MapSet.new(@arca_surface))
       |> Enum.sort()
@@ -100,7 +100,7 @@ defmodule Compendium.ReverseSurfaceTest do
 
   test "the auth domain reaches only into the Compendium namespaces this surface names" do
     extra =
-      "apps/cyfr/lib/sanctum/**/*.ex"
+      "apps/sanctum/lib/sanctum/**/*.ex"
       |> reached()
       |> MapSet.difference(MapSet.new(@sanctum_surface))
       |> Enum.sort()
@@ -119,8 +119,8 @@ defmodule Compendium.ReverseSurfaceTest do
 
   test "neither surface names something that is no longer reached" do
     for {label, glob, surface} <- [
-          {"lib/arca", "apps/cyfr/lib/arca/**/*.ex", @arca_surface},
-          {"lib/sanctum", "apps/cyfr/lib/sanctum/**/*.ex", @sanctum_surface}
+          {"lib/arca", "apps/arca/lib/arca/**/*.ex", @arca_surface},
+          {"lib/sanctum", "apps/sanctum/lib/sanctum/**/*.ex", @sanctum_surface}
         ] do
       stale = surface |> MapSet.new() |> MapSet.difference(reached(glob)) |> Enum.sort()
 

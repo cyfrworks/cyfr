@@ -340,9 +340,9 @@ defmodule Emissary.MCP.ThreadToolTest do
 
     test "the estate's thread count is held to the operator's cap", %{ctx: ctx} do
       # The setup already minted one thread; a cap of one refuses the next.
-      original = Application.get_env(:cyfr, :caps, [])
-      Application.put_env(:cyfr, :caps, Keyword.put(original, :max_threads_per_athanor, 1))
-      on_exit(fn -> Application.put_env(:cyfr, :caps, original) end)
+      original = Application.get_env(:sanctum, :caps, [])
+      Application.put_env(:sanctum, :caps, Keyword.put(original, :max_threads_per_athanor, 1))
+      on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
 
       assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
                call(ctx, %{"action" => "create", "title" => "One too many"})
@@ -387,15 +387,15 @@ defmodule Emissary.MCP.ThreadToolTest do
   describe "aloud on the wire" do
     setup %{ctx: ctx} do
       test_path = Path.join(System.tmp_dir!(), "thread_tool_aloud_#{:rand.uniform(1_000_000)}")
-      original = Application.get_env(:cyfr, :base_path)
-      Application.put_env(:cyfr, :base_path, test_path)
+      original = Application.get_env(:arca, :base_path)
+      Application.put_env(:arca, :base_path, test_path)
 
       on_exit(fn ->
         File.rm_rf!(test_path)
 
         if original,
-          do: Application.put_env(:cyfr, :base_path, original),
-          else: Application.delete_env(:cyfr, :base_path)
+          do: Application.put_env(:arca, :base_path, original),
+          else: Application.delete_env(:arca, :base_path)
       end)
 
       n = System.unique_integer([:positive])

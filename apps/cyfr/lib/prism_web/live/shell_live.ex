@@ -321,7 +321,7 @@ defmodule PrismWeb.ShellLive do
         ref = Cyfr.ComponentRef.build("tincture", t.publisher, t.name)
 
         public =
-          case Sanctum.Consent.Source.impl().profiles(ctx, ref) do
+          case Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref) do
             {:ok, profiles} ->
               Enum.any?(profiles, &(&1.kind == :public and &1.status == :active))
 
