@@ -176,8 +176,14 @@ defmodule Arca.UnscopedQuerySeamTest do
       "how an IdP names a person — keyed by the identity key and the person's id, no tenant",
     "Arca.Schemas.RegistryToken" => "keyed by user_id — the identity plane, not a tenant's",
     "Arca.Schemas.ServerAllowlistEntry" => "the door: who may sign in at all, before any tenant",
+    "Arca.Schemas.CellLease" =>
+      "a member slot of the cell, keyed by the node holding it — the deployment's shape, " <>
+        "and a cell has no estate",
+    "Arca.Schemas.JobClaim" =>
+      "a mutual-exclusion token for one of the cell's singleton jobs, keyed by (kind, key); " <>
+        "several kinds have no athanor at all, and a key naming one grants no reach into it",
     "Arca.Schemas.ServerMeta" =>
-      "the server's own facts (keyring fingerprint, control-plane owner) — one row per key, no tenant",
+      "the server's own facts (the schema and keyring fingerprints) — one row per key, no tenant",
     "Arca.Schemas.WebhookDelivery" =>
       "an idempotency claim keyed by a webhooks FK (on_delete: :delete_all), so it is " <>
         "reachable only through its tenant-owned parent and cascade-deleted with it; the " <>

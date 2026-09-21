@@ -5,6 +5,13 @@ defmodule Arca.Schemas.Turn do
   @moduledoc """
   A turn: accepted work in a thread and its state. Owned by the athanor; written by the runner for now and by
   the loop that will own the turn.
+
+  `fence` is the turn's: every runner-owned write names it, and a host
+  transition that takes the turn from its holder raises it, so a member
+  that lost the turn writes nothing afterwards. Which turn may run at all
+  is the thread's claim (`threads.active_turn_id`), not a process on some
+  node — a running turn whose holder is not local belongs to a peer, not to
+  recovery.
   """
 
   use Ecto.Schema

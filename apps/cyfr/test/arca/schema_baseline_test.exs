@@ -13,6 +13,12 @@ defmodule Arca.SchemaBaselineTest do
   `sessions` may leave it null, and the tables without it are the ones the
   roster names as not athanor-scoped or reached through a parent, the
   athanors themselves, and the server's people and door.
+
+  The cases that exercise a claim — the cell's member slots, its job
+  claims, a thread's active turn — are about rows this case made, under
+  keys nothing else in the suite uses. A shared, cross-node table is
+  measured by its own delta and never by an absolute count, or the case
+  would be testing the order the suite happened to run in.
   """
 
   use ExUnit.Case, async: false
@@ -290,7 +296,10 @@ defmodule Arca.SchemaBaselineTest do
           Arca.Schemas.StorageUnit,
           Arca.Schemas.StorageCommit,
           Arca.Schemas.ProvisioningClaim,
-          Arca.Schemas.StorageWriteIntent
+          Arca.Schemas.StorageWriteIntent,
+          Arca.Schemas.CellLease,
+          Arca.Schemas.JobClaim,
+          Arca.Schemas.RateWindow
         ] do
       table = schema.__schema__(:source)
       fields = schema.__schema__(:fields) |> Enum.map(&Atom.to_string/1) |> Enum.sort()
@@ -298,6 +307,122 @@ defmodule Arca.SchemaBaselineTest do
       assert fields == Enum.sort(Map.keys(declared[table])),
              "#{inspect(schema)} drifts from the #{table} table"
     end
+  end
+
+  test "the recorded fingerprint is the digest of the migration sources on disk" do
+    digest =
+      @migration
+      |> Cyfr.Test.SourceTree.files!()
+      |> Enum.sort()
+      |> Enum.map_join(fn path ->
+        Path.basename(path) <> "\n" <> Cyfr.Test.SourceTree.read(path)
+      end)
+      |> Cyfr.Digest.sha256_hex()
+
+    # The baseline is edited in place and records this digest as it builds
+    # the schema, so every edit of it — this slice's columns included —
+    # leaves a database built from the version before carrying a
+    # fingerprint that is no longer this release's.
+    # `Arca.SchemaFingerprintTest` covers the refusal that follows; this
+    # covers what makes the refusal fire at all.
+    assert Arca.SchemaFingerprint.current() == digest
+    assert {:ok, ^digest} = Arca.ServerMetaStorage.get(Arca.SchemaFingerprint.key())
+  end
+
+  test "a cell slot is one member's while its lease stands, and a takeover fences its predecessor" do
+    columns = Map.new(columns("cell_leases"), &{&1.name, &1})
+
+    for column <- ~w(owner generation fence lease_until taken_at),
+        do: assert(columns[column].not_null?)
+
+    node = "cell-#{System.unique_integer([:positive])}@test"
+    assert :ok = insert_row("cell_leases", lease_row(node, "boot_a", 60))
+
+    # The slot is the node's, not a boot's: a second row for the same node
+    # is refused, so a member takes its predecessor's row over instead of
+    # opening a second one beside it.
+    assert :refused = insert_row("cell_leases", lease_row(node, "boot_b", 60))
+
+    # A live lease is nobody else's to take.
+    assert took_over(node, "boot_b") == 0
+    assert %{owner: "boot_a", generation: 1, fence: 1} = lease(node)
+
+    expire(node)
+    assert took_over(node, "boot_b") == 1
+
+    # The take raises both: the generation the successor stamps outward,
+    # and the row's write token.
+    assert %{owner: "boot_b", generation: 2, fence: 2} = lease(node)
+
+    # The predecessor still believes it holds, and writes nothing: its
+    # renew names the fence it read.
+    assert renewed(node, "boot_a", 1) == 0
+    assert renewed(node, "boot_b", 2) == 1
+    assert %{owner: "boot_b", generation: 2, fence: 3} = lease(node)
+  end
+
+  test "a job claim is one per kind and key, taken over and never duplicated" do
+    columns = Map.new(columns("job_claims"), &{&1.name, &1})
+
+    for column <- ~w(kind key owner lease_until fence), do: assert(columns[column].not_null?)
+    refute columns["detail"].not_null?
+
+    key = "svc-#{System.unique_integer([:positive])}"
+    claim = job_claim_row("worker_watch", key)
+    assert :ok = insert_row("job_claims", claim)
+
+    # One claim per job, whoever takes it.
+    assert :refused =
+             insert_row("job_claims", %{claim | id: "jcl_twice", owner: "boot_b", fence: 2})
+
+    # The same key under another kind is another job.
+    assert :ok = insert_row("job_claims", %{claim | id: "jcl_other", kind: "seed_release"})
+
+    assert "worker_watch" in Arca.Schemas.JobClaim.kinds()
+  end
+
+  test "a rate window is one row per athanor and bucket, and is the athanor's to erase" do
+    columns = Map.new(columns("rate_windows"), &{&1.name, &1})
+
+    for column <- ~w(athanor_id bucket window_start window_ms count prior_count),
+        do: assert(columns[column].not_null?)
+
+    bucket = "reagents/local/rate/#{System.unique_integer([:positive])}"
+    window = rate_window_row("ath_schema", bucket)
+    assert :ok = insert_row("rate_windows", window)
+    assert :refused = insert_row("rate_windows", %{window | id: "rw_twice"})
+
+    # The bucket is the athanor's: another estate's window of the same name
+    # is a different row, and the roster says whose it is to delete.
+    assert :ok =
+             insert_row("rate_windows", %{window | id: "rw_theirs", athanor_id: "ath_theirs"})
+
+    assert "rate_windows" in Arca.TenantTables.roster()
+  end
+
+  test "a thread claim lands once, and only on the consumed sequence the claimant read" do
+    thread = thread_row()
+    assert :ok = insert_row("threads", thread)
+
+    # The claim names the turn AND the sequence it read.
+    assert claimed(thread.id, "trn_first", 0) == 1
+    assert %{active_turn_id: "trn_first", turn_seq: 0} = thread_state(thread.id)
+
+    # A second member reading the same row claims nothing: the thread is
+    # held, and holding it is not something a peer takes over.
+    assert claimed(thread.id, "trn_second", 0) == 0
+
+    assert released(thread.id, "trn_first") == 1
+    assert %{active_turn_id: nil} = thread_state(thread.id)
+
+    # Another member accepted the next message while this one was deciding:
+    # the sequence moved, so the claim it had prepared writes nothing.
+    consume(thread.id, 1)
+    assert claimed(thread.id, "trn_stale", 0) == 0
+    assert %{active_turn_id: nil, turn_seq: 1} = thread_state(thread.id)
+
+    assert claimed(thread.id, "trn_fresh", 1) == 1
+    assert %{active_turn_id: "trn_fresh", turn_seq: 1} = thread_state(thread.id)
   end
 
   # --------------------------------------------------------------------------
@@ -447,6 +572,154 @@ defmodule Arca.SchemaBaselineTest do
       inserted_at: now,
       updated_at: now
     }
+  end
+
+  defp lease_row(node, owner, lease_seconds) do
+    now = NaiveDateTime.utc_now()
+
+    %{
+      node: node,
+      owner: owner,
+      generation: 1,
+      fence: 1,
+      lease_until: NaiveDateTime.add(now, lease_seconds, :second),
+      taken_at: now,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp lease(node) do
+    [[owner, generation, fence]] =
+      query("SELECT owner, generation, fence FROM cell_leases WHERE node = ?", [node]).rows
+
+    %{owner: owner, generation: generation, fence: fence}
+  end
+
+  defp expire(node) do
+    past = NaiveDateTime.add(NaiveDateTime.utc_now(), -1, :second)
+    query("UPDATE cell_leases SET lease_until = ? WHERE node = ?", [past, node])
+  end
+
+  # The take: only past the lease, and it raises both numbers at once.
+  defp took_over(node, owner) do
+    now = NaiveDateTime.utc_now()
+
+    query(
+      """
+      UPDATE cell_leases
+         SET owner = ?, generation = generation + 1, fence = fence + 1,
+             lease_until = ?, taken_at = ?, updated_at = ?
+       WHERE node = ? AND lease_until <= ?
+      """,
+      [owner, NaiveDateTime.add(now, 60, :second), now, now, node, now]
+    ).num_rows
+  end
+
+  # The renew: the fence the caller read is what admits it.
+  defp renewed(node, owner, fence) do
+    now = NaiveDateTime.utc_now()
+
+    query(
+      """
+      UPDATE cell_leases
+         SET lease_until = ?, fence = fence + 1, updated_at = ?
+       WHERE node = ? AND owner = ? AND fence = ?
+      """,
+      [NaiveDateTime.add(now, 60, :second), now, node, owner, fence]
+    ).num_rows
+  end
+
+  defp job_claim_row(kind, key) do
+    now = NaiveDateTime.utc_now()
+
+    %{
+      id: "jcl_#{System.unique_integer([:positive])}",
+      kind: kind,
+      key: key,
+      owner: "boot_a",
+      lease_until: NaiveDateTime.add(now, 60, :second),
+      fence: 1,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp rate_window_row(athanor_id, bucket) do
+    now = NaiveDateTime.utc_now()
+
+    %{
+      id: "rw_#{System.unique_integer([:positive])}",
+      athanor_id: athanor_id,
+      bucket: bucket,
+      window_start: now,
+      window_ms: 60_000,
+      count: 1,
+      prior_count: 0,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp thread_row do
+    now = NaiveDateTime.utc_now()
+
+    %{
+      id: "thr_#{System.unique_integer([:positive])}",
+      athanor_id: "ath_schema",
+      title: "Claimed",
+      created_by: "usr_schema",
+      turn_seq: 0,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  defp thread_state(thread_id) do
+    [[active, seq]] =
+      query("SELECT active_turn_id, turn_seq FROM threads WHERE id = ?", [thread_id]).rows
+
+    %{active_turn_id: active, turn_seq: seq}
+  end
+
+  # The thread claim: one statement naming the turn and the consumed
+  # sequence the claimant read.
+  defp claimed(thread_id, turn_id, expected_seq) do
+    query(
+      """
+      UPDATE threads SET active_turn_id = ?
+       WHERE id = ? AND athanor_id = ? AND active_turn_id IS NULL AND turn_seq = ?
+      """,
+      [turn_id, thread_id, "ath_schema", expected_seq]
+    ).num_rows
+  end
+
+  defp released(thread_id, turn_id) do
+    query(
+      "UPDATE threads SET active_turn_id = NULL WHERE id = ? AND active_turn_id = ?",
+      [thread_id, turn_id]
+    ).num_rows
+  end
+
+  defp consume(thread_id, seq) do
+    query("UPDATE threads SET turn_seq = ? WHERE id = ?", [seq, thread_id])
+  end
+
+  # One statement in the dialect this build speaks: `?` placeholders on
+  # SQLite, `$n` on Postgres.
+  defp query(sql, params) do
+    sql =
+      if sqlite?() do
+        sql
+      else
+        params
+        |> Enum.with_index(1)
+        |> Enum.reduce(sql, fn {_param, n}, acc ->
+          String.replace(acc, "?", "$#{n}", global: false)
+        end)
+      end
+
+    Arca.Repo.query!(sql, params)
   end
 
   # One row inside its own savepoint, so a refused insert leaves the
