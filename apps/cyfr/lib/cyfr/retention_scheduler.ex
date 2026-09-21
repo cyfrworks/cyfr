@@ -81,6 +81,7 @@ defmodule Cyfr.RetentionScheduler do
     {"retention", "retention cleanup"},
     {"sessions", "expired session sweep"},
     {"webhooks", "webhook delivery sweep"},
+    {"rates", "rate window sweep"},
     {"tmp", "stale tmp sweep"},
     {"blobs", "thread blob orphan sweep"}
   ]
@@ -381,8 +382,26 @@ defmodule Cyfr.RetentionScheduler do
 
   defp step_fun("sessions"), do: &sweep_expired_sessions/0
   defp step_fun("webhooks"), do: &sweep_webhook_deliveries/0
+  defp step_fun("rates"), do: &sweep_rate_windows/0
   defp step_fun("tmp"), do: &sweep_stale_tmp_files/0
   defp step_fun("blobs"), do: &sweep_thread_blob_orphans/0
+
+  # The rate-window rows whose window and prior window are both past —
+  # the buckets nobody claims any more. It is not housekeeping: a bucket
+  # is whatever a caller names, and `Cyfr.Execution.Admission` names one
+  # per client address, so the rows an athanor can open are as wide as
+  # the addresses that reach it. A claim that opens a new bucket already
+  # reclaims its own athanor's dead rows, which bounds a tenant that is
+  # still claiming; this is the same delete across every athanor and
+  # width, and it is what covers one that has gone quiet and left rows
+  # behind. Cell-wide work, so it runs under the cell's claim like every
+  # other step rather than on every member at once.
+  defp sweep_rate_windows do
+    case Arca.RateWindows.purge_expired() do
+      0 -> :ok
+      count -> Logger.info("[RetentionScheduler] Removed #{count} expired rate window(s)")
+    end
+  end
 
   # Sweep expired sessions; authentication reads independently enforce expiry.
   defp sweep_expired_sessions do

@@ -108,6 +108,25 @@ defmodule Cyfr.RetentionSchedulerTest do
       refute JobClaims.live?(done)
       assert %{"step" => nil} = Jason.decode!(done.detail)
     end
+
+    test "the cycle reclaims the rate-window rows nobody claims any more", %{key: key} do
+      # A bucket is whatever a caller names and admission names one per
+      # client address, so the rows an athanor can open are as wide as the
+      # addresses that reach it. This is the sweep that covers a tenant
+      # which stopped claiming and left them behind.
+      actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+      bucket = "retention-sweep-#{System.unique_integer([:positive])}"
+
+      assert {:ok, _remaining} = Arca.RateWindows.claim(actor, bucket, 10, 1)
+      assert rows(bucket) == 1
+
+      # Two widths past its start, which is when the row decides nothing.
+      Process.sleep(10)
+
+      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+      assert "rates" in summary.steps
+      assert rows(bucket) == 0
+    end
   end
 
   describe "losing the claim mid-cycle" do
@@ -226,6 +245,12 @@ defmodule Cyfr.RetentionSchedulerTest do
 
   defp active_ids,
     do: Sanctum.Tenancy.Athanors.list_active() |> Enum.map(& &1.id) |> Enum.sort()
+
+  # This case's own bucket, counted rather than the table's size: the
+  # rate windows are cell-wide rows other files write too.
+  defp rows(bucket),
+    do:
+      Arca.Repo.aggregate(from(w in Arca.Schemas.RateWindow, where: w.bucket == ^bucket), :count)
 
   # `[:cyfr, :storage_gc, :sweep]` fires inside the staged-revision
   # retention kind, synchronously in the sweeping process, once per
