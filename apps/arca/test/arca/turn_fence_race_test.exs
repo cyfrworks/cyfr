@@ -135,6 +135,28 @@ defmodule Arca.TurnFenceRaceTest do
     assert unheld.active_turn_id == nil
   end
 
+  # The fence's own property, with the interleaving made rather than hoped
+  # for: both transitions hold the fence they read, the first moves it, and
+  # the second is refused by the fence itself. Sequential on purpose — this
+  # is the case that says `:superseded` is the answer, and it must not be
+  # able to arrive at it by a store's writer lock instead.
+  test "a transition holding a fence a later one moved is superseded", %{
+    actor: actor,
+    turn: turn
+  } do
+    held = %{fence: turn.fence}
+
+    assert {:ok, _} = unboxed(fn -> TurnStorage.supersede(actor, turn.id, held) end)
+    assert {:error, :superseded} = unboxed(fn -> TurnStorage.supersede(actor, turn.id, held) end)
+  end
+
+  # And under real concurrency, that exactly one lands. The loser's answer
+  # is deliberately not pinned here: on SQLite the store serializes writers,
+  # so the second transaction can be refused for the write lock before it
+  # ever reads the fence, and asserting `:superseded` made this case depend
+  # on which of the two refusals the adapter reached first — it passed alone
+  # and failed in a full leg. What must hold either way is that the loser
+  # did not land.
   test "of two transitions that read the same fence, one lands", %{actor: actor, turn: turn} do
     results =
       1..2
@@ -148,7 +170,7 @@ defmodule Arca.TurnFenceRaceTest do
       |> Enum.map(&Task.await(&1, 25_000))
 
     assert Enum.count(results, &match?({:ok, _}, &1)) == 1
-    assert Enum.count(results, &(&1 == {:error, :superseded})) == 1
+    assert Enum.count(results, &match?({:error, _}, &1)) == 1
   end
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
