@@ -346,7 +346,7 @@ defmodule Compendium.Provenance do
 
       true ->
         key =
-          {:seed_release_digest, Application.get_env(:cyfr, :seed_path), type, publisher, name,
+          {:seed_release_digest, Application.get_env(:arca, :seed_path), type, publisher, name,
            version}
 
         case Arca.Cache.get(key) do

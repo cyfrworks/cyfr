@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.Consent.BootstrapSelectionTest do
@@ -34,14 +34,14 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     copy_bundle!(Path.join(seed_dir, "components"))
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    prev_base = Application.get_env(:cyfr, :base_path)
-    prev_seed = Application.get_env(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :seed_path, seed_dir)
+    prev_base = Application.get_env(:arca, :base_path)
+    prev_seed = Application.get_env(:arca, :seed_path)
+    Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:arca, :seed_path, seed_dir)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :seed_path, prev_seed)
+      Application.put_env(:arca, :base_path, prev_base)
+      Application.put_env(:arca, :seed_path, prev_seed)
       File.rm_rf!(test_dir)
     end)
 
@@ -160,7 +160,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     # new one. Until the estate takes the new version, its copy of the old
     # one is no longer a shipped path — but it is unchanged and the head
     # names it, so the selection stays and nothing is re-minted.
-    seed_dir = Application.get_env(:cyfr, :seed_path)
+    seed_dir = Application.get_env(:arca, :seed_path)
     current = shipped_version("catalysts", "claude")
     ship_version!(seed_dir, "claude", current, "9.0.0")
     File.rm_rf!(Path.join([seed_dir, "components", "catalysts", "local", "claude", current]))

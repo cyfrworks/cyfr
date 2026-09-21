@@ -5,7 +5,7 @@ import Config
 # We don't run a server during test
 # The establish memo is a per-request convenience; tests assert on the
 # uncached pipeline.
-config :cyfr, :establish_cache_ms, 0
+config :sanctum, :establish_cache_ms, 0
 
 config :cyfr, EmissaryWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
@@ -57,7 +57,7 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
     # (so two worktrees never share a file) — but OUT of the repo's data/:
     # a run that dies mid-suite must not leave a database that poisons the
     # next one inside the working tree.
-    config :cyfr, Arca.Repo,
+    config :arca, Arca.Repo,
       database:
         Path.join([
           System.tmp_dir!(),
@@ -74,7 +74,7 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
       busy_timeout: 20_000
 
   :postgres ->
-    config :cyfr, Arca.Repo,
+    config :arca, Arca.Repo,
       url:
         System.get_env("CYFR_DATABASE_URL") ||
           "postgres://cyfr:cyfr@localhost:5432/cyfr_test",
@@ -86,7 +86,7 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
 end
 
 # Disable auto-migration in tests — mix aliases handle ecto.migrate
-config :cyfr, auto_migrate: false
+config :arca, auto_migrate: false
 
 # The suite's fake servers (Bypass, a local registry) live on loopback; the
 # operator's private-egress allowlist names them, as it would name a real
@@ -96,7 +96,7 @@ config :cyfr, private_egress_targets: ["localhost", "127.0.0.1/8", "::1"]
 # Allow tests to inject a membership-resolution override (Sanctum.Tenancy).
 # Compile-time gate: production releases compile this to false and never honor
 # the override. See Sanctum.Tenancy "Test overrides".
-config :cyfr, allow_tenancy_resolver_override: true
+config :sanctum, allow_tenancy_resolver_override: true
 
 # One app's tests run without the sibling apps' providers; the catalog
 # boots leniently here and refuses to elsewhere.
@@ -127,10 +127,10 @@ config :cyfr, thread_recovery: false
 
 # Bookkeeping rows are written in the caller: the sandbox connection is the
 # test's, and every assertion reads the row right after the call.
-config :cyfr, record_sink_inline: true
+config :arca, record_sink_inline: true
 
 # Same for the provisioning retries a sign-in kicks off.
-config :cyfr, provisioning_inline: true
+config :sanctum, provisioning_inline: true
 
 # The stale-execution sweeper has the same shape (permanent named GenServer
 # querying on a 60s timer) and the same sandbox hazard; its own suite
@@ -167,12 +167,12 @@ config :cyfr, database_checks_enabled: false
 # through the overlay. test_helper.exs removes both roots after the suite.
 test_run = "cyfr_test_#{System.system_time(:millisecond)}"
 
-config :cyfr,
+config :arca,
   base_path: Path.join(System.tmp_dir!(), "#{test_run}_data"),
   seed_path: Path.join(System.tmp_dir!(), "#{test_run}_seed")
 
 # Sanctum test configuration
-config :cyfr,
+config :sanctum,
   secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!",
   # Namespace populated on Context.local() / Context.fixture-shaped contexts.
   # Production contexts should never use this — they get namespace from
@@ -212,7 +212,7 @@ config :logger, level: :warning
 # The namespace read is cached per person for a minute in production; a
 # sandbox rollback is a write no invalidation ever sees, so tests read the
 # users row every time.
-config :cyfr, :namespace_cache_ttl_ms, 0
+config :sanctum, :namespace_cache_ttl_ms, 0
 
 # A subscription stream is long-lived by design, so a test that opens one would
 # otherwise block until the production bound. Short enough that the graceful

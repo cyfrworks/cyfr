@@ -27,22 +27,22 @@ defmodule Arca.DbRescueSeamTest do
   @allowed %{
     # The helper's own home: the moduledoc shows the raw rescue shape once,
     # as documentation of what the roster is for.
-    "apps/cyfr/lib/arca/repo/errors.ex" => 1,
+    "apps/arca/lib/arca/repo/errors.ex" => 1,
     # create_key: the rescue distinguishes a unique-constraint violation
     # (`{:error, :already_exists}`) from an outage — logic the helper
     # deliberately does not carry.
-    "apps/cyfr/lib/arca/api_key_storage.ex" => 1,
+    "apps/arca/lib/arca/api_key_storage.ex" => 1,
     # create_webhook: same constraint-vs-outage branch as create_key.
-    "apps/cyfr/lib/arca/webhook_storage.ex" => 1,
+    "apps/arca/lib/arca/webhook_storage.ex" => 1,
     # configure_database: a failed boot-time PRAGMA is tolerated at
     # `Logger.warning` and answers `:ok` — neither the helper's error-level
     # log nor a refusal fits a tuning step the server must boot past.
-    "apps/cyfr/lib/cyfr/application.ex" => 1,
+    "apps/arca/lib/arca/supervisor.ex" => 1,
     # write/1 + write_single/1: the write-behind's own fallback logic — a
     # failed batch retries per item, so the rescue cannot answer the one
     # constant the helper returns. DB errors only: a structurally-bad
     # queued item must crash, never be dropped with :ok.
-    "apps/cyfr/lib/arca/record_sink.ex" => 2,
+    "apps/arca/lib/arca/record_sink.ex" => 2,
     # Two boot steps (the platform reconcile and the seed sync) that tolerate
     # a database outage with their own step-specific log lines and keep the
     # remaining steps running — a bug still crashes the one-shot task loudly.

@@ -29,23 +29,23 @@ defmodule Opus.BootstrapFirstRunTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "first_run_#{:rand.uniform(1_000_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     # The REAL tracked bundle as the seed tree — what a fill copies from.
-    original_seed_path = Application.get_env(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :seed_path, @seed_root)
+    original_seed_path = Application.get_env(:arca, :seed_path)
+    Application.put_env(:arca, :seed_path, @seed_root)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
 
       if original_seed_path,
-        do: Application.put_env(:cyfr, :seed_path, original_seed_path),
-        else: Application.delete_env(:cyfr, :seed_path)
+        do: Application.put_env(:arca, :seed_path, original_seed_path),
+        else: Application.delete_env(:arca, :seed_path)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}
@@ -149,7 +149,7 @@ defmodule Opus.BootstrapFirstRunTest do
       }
     }
 
-    Cyfr.Test.SeedBundle.isolate_from!(Application.get_env(:cyfr, :seed_path))
+    Cyfr.Test.SeedBundle.isolate_from!(Application.get_env(:arca, :seed_path))
 
     {:ok, _} =
       Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm, %{

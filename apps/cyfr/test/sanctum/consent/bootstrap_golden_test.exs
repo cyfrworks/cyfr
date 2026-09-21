@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.Consent.BootstrapGoldenTest do
@@ -32,14 +32,14 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     copy_bundle!(bundle_dir)
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    prev_base = Application.get_env(:cyfr, :base_path)
-    prev_seed = Application.get_env(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :seed_path, seed_dir)
+    prev_base = Application.get_env(:arca, :base_path)
+    prev_seed = Application.get_env(:arca, :seed_path)
+    Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:arca, :seed_path, seed_dir)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :seed_path, prev_seed)
+      Application.put_env(:arca, :base_path, prev_base)
+      Application.put_env(:arca, :seed_path, prev_seed)
       File.rm_rf!(test_dir)
     end)
 

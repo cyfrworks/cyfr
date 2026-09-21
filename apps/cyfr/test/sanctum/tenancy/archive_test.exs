@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.Tenancy.ArchiveTest do
@@ -35,18 +35,24 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "archive_#{System.unique_integer([:positive])}")
-    keys = [:workers, :base_path]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :workers, ScriptedWorker.workers(@reference, prev[:workers]))
-    Application.put_env(:cyfr, :base_path, test_path)
+    keys = [cyfr: :workers, arca: :base_path]
+    prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+
+    Application.put_env(
+      :cyfr,
+      :workers,
+      ScriptedWorker.workers(@reference, prev[{:cyfr, :workers}])
+    )
+
+    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
-      for {key, value} <- prev do
+      for {{app, key}, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
     end)
 
@@ -172,15 +178,15 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     # AUTHORIZATION decision, not of a display: the status gates that
     # refuse an archived athanor run on the NEXT establish, which is
     # exactly what a memo hit skips.
-    original = Application.get_env(:cyfr, :establish_cache_ms)
-    Application.put_env(:cyfr, :establish_cache_ms, 60_000)
+    original = Application.get_env(:sanctum, :establish_cache_ms)
+    Application.put_env(:sanctum, :establish_cache_ms, 60_000)
 
     on_exit(fn ->
       Arca.Cache.delete_match({:established, :_, :_, :_})
 
       if original,
-        do: Application.put_env(:cyfr, :establish_cache_ms, original),
-        else: Application.delete_env(:cyfr, :establish_cache_ms)
+        do: Application.put_env(:sanctum, :establish_cache_ms, original),
+        else: Application.delete_env(:sanctum, :establish_cache_ms)
     end)
 
     n = System.unique_integer([:positive])

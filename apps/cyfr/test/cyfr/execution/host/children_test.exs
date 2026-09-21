@@ -41,8 +41,8 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
     test_path =
       Path.join(System.tmp_dir!(), "host_children_#{System.unique_integer([:positive])}")
 
-    previous = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    previous = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
@@ -50,8 +50,8 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       File.rm_rf!(test_path)
 
       if previous,
-        do: Application.put_env(:cyfr, :base_path, previous),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, previous),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     wasm = File.read!(@math_wasm_path)

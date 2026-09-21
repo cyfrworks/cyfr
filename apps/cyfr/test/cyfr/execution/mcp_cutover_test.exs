@@ -23,8 +23,8 @@ defmodule Cyfr.Execution.MCPCutoverTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "mcp_cutover_#{:rand.uniform(100_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     ctx = %Context{
       user_id: "cutover_user_#{:rand.uniform(100_000)}",
@@ -49,8 +49,8 @@ defmodule Cyfr.Execution.MCPCutoverTest do
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()

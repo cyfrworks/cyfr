@@ -6,7 +6,7 @@ defmodule Cyfr.MixProject do
   def project do
     [
       apps_path: "apps",
-      apps: [:cyfr_contracts, :cyfr, :locus, :opus],
+      apps: [:cyfr_contracts, :arca, :sanctum, :cyfr, :locus, :opus],
       version: "0.5.8",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -63,6 +63,8 @@ defmodule Cyfr.MixProject do
       cyfr: [
         applications: [
           cyfr_contracts: :permanent,
+          arca: :permanent,
+          sanctum: :permanent,
           cyfr: :permanent
         ]
       ],

@@ -35,15 +35,15 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       Path.join(System.tmp_dir!(), "attempt_write_test_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(test_dir)
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_dir)
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     ctx = Sanctum.TestContext.local()

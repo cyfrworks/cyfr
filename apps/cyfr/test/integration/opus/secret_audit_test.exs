@@ -74,8 +74,8 @@ defmodule Opus.SecretAuditTest do
     run_dir = Path.join(System.tmp_dir!(), "secret_audit_#{System.unique_integer([:positive])}")
     keys = [:base_path, :audit_sinks, Opus.SecretAuditTest.Sink]
     previous = Map.new(keys, &{&1, Application.fetch_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, run_dir)
-    Application.put_env(:cyfr, :audit_sinks, [Opus.SecretAuditTest.Sink])
+    Application.put_env(:arca, :base_path, run_dir)
+    Application.put_env(:arca, :audit_sinks, [Opus.SecretAuditTest.Sink])
     Application.put_env(:cyfr, Opus.SecretAuditTest.Sink, self())
 
     ctx = Sanctum.TestContext.local()

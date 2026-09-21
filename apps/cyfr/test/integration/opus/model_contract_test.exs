@@ -41,19 +41,19 @@ defmodule Opus.ModelContractTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "model_contract_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :registry_url]
-    previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :registry_url]
+    previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     seed = Fixture.lay_seed!(Path.join(run_dir, "seed"), limits: Map.get(tags, :limits, %{}))
-    Application.put_env(:cyfr, :base_path, Path.join(run_dir, "data"))
-    Application.put_env(:cyfr, :seed_path, seed)
+    Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
+    Application.put_env(:arca, :seed_path, seed)
     # The seed names no published component, and nothing may be dialled.
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 
     on_exit(fn ->
-      for {key, value} <- previous do
+      for {{app, key}, value} <- previous do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
 
       File.rm_rf!(run_dir)

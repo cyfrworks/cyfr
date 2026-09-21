@@ -37,8 +37,8 @@ defmodule Opus.MemoryBoundTest do
     TwoServices.watch!()
 
     run_dir = Path.join(System.tmp_dir!(), "memory_bound_#{System.unique_integer([:positive])}")
-    previous = Application.fetch_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, run_dir)
+    previous = Application.fetch_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, run_dir)
 
     unique = System.unique_integer([:positive])
 
@@ -59,8 +59,8 @@ defmodule Opus.MemoryBoundTest do
       File.rm_rf!(run_dir)
 
       case previous do
-        {:ok, value} -> Application.put_env(:cyfr, :base_path, value)
-        :error -> Application.delete_env(:cyfr, :base_path)
+        {:ok, value} -> Application.put_env(:arca, :base_path, value)
+        :error -> Application.delete_env(:arca, :base_path)
       end
     end)
 

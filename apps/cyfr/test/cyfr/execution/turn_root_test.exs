@@ -32,17 +32,17 @@ defmodule Cyfr.Execution.TurnRootTest do
 
     test_path = Path.join(System.tmp_dir!(), "turn_root_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :seed_path, @seed_root)
+    prev = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
+    Application.put_env(:arca, :base_path, test_path)
+    Application.put_env(:arca, :seed_path, @seed_root)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       for {key, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(:arca, key, value),
+          else: Application.delete_env(:arca, key)
       end
     end)
 

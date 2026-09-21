@@ -23,8 +23,8 @@ defmodule PrismWeb.ShellLiveIframePayloadTest do
     estate = seated_athanor()
 
     base = Path.join(System.tmp_dir!(), "shell_payload_#{System.unique_integer([:positive])}")
-    original_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, base)
+    original_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, base)
 
     dir =
       Arca.Adapters.Local.build_path(
@@ -51,7 +51,7 @@ defmodule PrismWeb.ShellLiveIframePayloadTest do
     Prism.TinctureRegistry.reload_athanor(estate.id)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, original_path)
+      Application.put_env(:arca, :base_path, original_path)
       File.rm_rf(base)
       Prism.TinctureRegistry.reload()
     end)

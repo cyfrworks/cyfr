@@ -84,7 +84,7 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
   # against, as `Arca.TenantTables` does: the adapter is bound at compile
   # time, so a runtime branch on `__adapter__/0` is one the compiler
   # proves dead.
-  @drop_executions (case Application.compile_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3) do
+  @drop_executions (case Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3) do
                       Ecto.Adapters.Postgres -> "DROP TABLE executions CASCADE"
                       _sqlite -> "DROP TABLE executions"
                     end)

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.Consent.AgentConsentTest do
@@ -24,15 +24,15 @@ defmodule Sanctum.Consent.AgentConsentTest do
     test_path =
       Path.join(System.tmp_dir!(), "agent_consent_#{System.unique_integer([:positive])}")
 
-    original = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original,
-        do: Application.put_env(:cyfr, :base_path, original),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     Arca.Cache.init()
@@ -284,9 +284,9 @@ defmodule Sanctum.Consent.AgentConsentTest do
     {:ok, _} = Bootstrap.run(ctx)
     {_, first, _} = head!(ctx, @soul)
     write_agent!(ctx, "aqua", &%{&1 | prompt: &1.prompt <> "\n\nBe brief."})
-    Cyfr.Test.SeedBundle.isolate_from!(Application.get_env(:cyfr, :seed_path))
+    Cyfr.Test.SeedBundle.isolate_from!(Application.get_env(:arca, :seed_path))
 
-    seed_dir = Application.get_env(:cyfr, :seed_path)
+    seed_dir = Application.get_env(:arca, :seed_path)
 
     current =
       [seed_dir, "components", "catalysts", "local", "claude", "*"]

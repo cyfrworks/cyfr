@@ -19,7 +19,7 @@ defmodule Arca.SchemaBaselineTest do
 
   require Arca.Repo.Errors
 
-  @migration Path.expand("../../priv/repo/migrations/*_baseline.exs", __DIR__)
+  @migration Path.expand("../../../arca/priv/repo/migrations/*_baseline.exs", __DIR__)
 
   # The retired vocabularies, spelled split so the vocabulary gate does not
   # trip on the assertions that prove they are gone.

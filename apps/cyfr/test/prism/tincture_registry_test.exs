@@ -16,8 +16,8 @@ defmodule Prism.TinctureRegistryTest do
 
     # Create a temp tincture structure under an isolated storage root
     base = Path.join(System.tmp_dir!(), "tincture_reg_test_#{:rand.uniform(1_000_000)}")
-    original_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, base)
+    original_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, base)
 
     tincture_dir = fixture_dir(athanor.id, "local", "test-dash", "1.0.0")
     File.mkdir_p!(tincture_dir)
@@ -45,9 +45,9 @@ defmodule Prism.TinctureRegistryTest do
 
     on_exit(fn ->
       if original_path do
-        Application.put_env(:cyfr, :base_path, original_path)
+        Application.put_env(:arca, :base_path, original_path)
       else
-        Application.delete_env(:cyfr, :base_path)
+        Application.delete_env(:arca, :base_path)
       end
 
       File.rm_rf!(base)
@@ -370,9 +370,9 @@ defmodule Prism.TinctureRegistryTest do
       # scanned: the roster walk only enumerates athanor rows.
       seed_dir = Path.join(base, "seed_fixture")
       bundle_dir = Path.join(seed_dir, "components")
-      prev_seed = Application.get_env(:cyfr, :seed_path)
-      Application.put_env(:cyfr, :seed_path, seed_dir)
-      on_exit(fn -> Application.put_env(:cyfr, :seed_path, prev_seed) end)
+      prev_seed = Application.get_env(:arca, :seed_path)
+      Application.put_env(:arca, :seed_path, seed_dir)
+      on_exit(fn -> Application.put_env(:arca, :seed_path, prev_seed) end)
 
       dir = Path.join([bundle_dir, "tinctures", "local", "bundled", "0.1.0"])
       File.mkdir_p!(dir)

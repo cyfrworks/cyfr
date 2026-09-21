@@ -48,6 +48,10 @@ defmodule Cyfr.GenServerCatchallTest do
     Sanctum.Authority.BudgetGuard => "guards live invoke budgets"
   }
 
+  # The libs the control plane's release holds. Opus's and Locus's adopters
+  # run in their own VMs and are rostered by their own suites.
+  @release_libs ~w(apps/cyfr/lib apps/arca/lib apps/sanctum/lib)
+
   # Classify GenServers requiring fixture setup before catch-all probing.
 
   describe "catch-all handle_info/2" do
@@ -139,7 +143,7 @@ defmodule Cyfr.GenServerCatchallTest do
     # They read the whole tree concurrently under a full-suite run and the
     # default 60s deadline is a file-IO race, not a property of the check.
     @tag timeout: :infinity
-    test "every named cyfr-app adopter is probed or excused" do
+    test "every named adopter of the helper is probed or excused" do
       root = Path.expand("../../../..", __DIR__)
 
       rostered =
@@ -149,7 +153,8 @@ defmodule Cyfr.GenServerCatchallTest do
         )
 
       adopters =
-        for path <- Cyfr.Test.SourceTree.files!(Path.join(root, "apps/cyfr/lib/**/*.ex")),
+        for dir <- @release_libs,
+            path <- Cyfr.Test.SourceTree.files!(Path.join([root, dir, "**/*.ex"])),
             source = Cyfr.Test.SourceTree.read(path),
             String.contains?(source, "Cyfr.UnexpectedMessage.log(__MODULE__"),
             # Two spellings register the app-wide name, and matching only the

@@ -42,7 +42,7 @@ defmodule Arca.Test.UnitFixtures do
   the overlay reads through. Same options as `tenant_component!/6`.
   """
   def seed_component!(type, publisher, name, version, opts \\ []) do
-    seed = Application.fetch_env!(:cyfr, :seed_path)
+    seed = Application.fetch_env!(:arca, :seed_path)
     dir = Path.join([seed | ComponentPath.version_dir(type, publisher, name, version)])
     write_unit!(dir, type, publisher, name, version, opts)
     dir

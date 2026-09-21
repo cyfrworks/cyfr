@@ -28,20 +28,20 @@ defmodule Aqua.AttachmentsTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "attachments_#{:rand.uniform(1_000_000)}")
-    prev = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
-    prev_caps = Application.get_env(:cyfr, :caps)
+    prev = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
+    prev_caps = Application.get_env(:sanctum, :caps)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if prev,
-        do: Application.put_env(:cyfr, :base_path, prev),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, prev),
+        else: Application.delete_env(:arca, :base_path)
 
       if prev_caps,
-        do: Application.put_env(:cyfr, :caps, prev_caps),
-        else: Application.delete_env(:cyfr, :caps)
+        do: Application.put_env(:sanctum, :caps, prev_caps),
+        else: Application.delete_env(:sanctum, :caps)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}
@@ -122,13 +122,13 @@ defmodule Aqua.AttachmentsTest do
   test "a failed write mid-batch removes the earlier blobs and returns an error", %{ctx: ctx} do
     # The adapter seam is the designed swap point: fail the write whose
     # content says so, after earlier files already landed.
-    original = Application.get_env(:cyfr, :storage_adapter)
-    Application.put_env(:cyfr, :storage_adapter, Aqua.AttachmentsTest.FailingAdapter)
+    original = Application.get_env(:arca, :storage_adapter)
+    Application.put_env(:arca, :storage_adapter, Aqua.AttachmentsTest.FailingAdapter)
 
     on_exit(fn ->
       if original,
-        do: Application.put_env(:cyfr, :storage_adapter, original),
-        else: Application.delete_env(:cyfr, :storage_adapter)
+        do: Application.put_env(:arca, :storage_adapter, original),
+        else: Application.delete_env(:arca, :storage_adapter)
     end)
 
     files = [
@@ -152,7 +152,7 @@ defmodule Aqua.AttachmentsTest do
     big = [%{"filename" => "big", "media_type" => "x", "bytes" => :binary.copy("a", 20_000_001)}]
     assert {:error, :attachment_too_large} = Attachments.store(ctx, "c", "m", big)
 
-    Application.put_env(:cyfr, :caps, athanor_storage_bytes: 10)
+    Application.put_env(:sanctum, :caps, athanor_storage_bytes: 10)
     # The usage cache is suite-shared per athanor and now survives writes
     # (bumped, not dropped) — start this cap check from a fresh walk.
     Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
@@ -167,16 +167,16 @@ defmodule Aqua.AttachmentsTest do
     # With a cap configured and the walk unreadable, the cap layer fails
     # CLOSED with :storage_unverifiable — the member must see the honest,
     # transient message, not \"storing failed\".
-    Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1_000_000)
+    Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1_000_000)
     Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
 
-    prev = Application.get_env(:cyfr, :storage_adapter)
-    Application.put_env(:cyfr, :storage_adapter, Aqua.AttachmentsTest.UnverifiableUsageAdapter)
+    prev = Application.get_env(:arca, :storage_adapter)
+    Application.put_env(:arca, :storage_adapter, Aqua.AttachmentsTest.UnverifiableUsageAdapter)
 
     on_exit(fn ->
       if prev,
-        do: Application.put_env(:cyfr, :storage_adapter, prev),
-        else: Application.delete_env(:cyfr, :storage_adapter)
+        do: Application.put_env(:arca, :storage_adapter, prev),
+        else: Application.delete_env(:arca, :storage_adapter)
     end)
 
     files = [%{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => "12345"}]

@@ -108,8 +108,8 @@ defmodule Compendium.MCPTest do
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_mcp_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
-    original_base_path = Application.fetch_env!(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
+    original_base_path = Application.fetch_env!(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_dir)
 
     # The estate holds the shipped tree, as a fill leaves it; the fixture
     # then edits every shipped agent.
@@ -126,7 +126,7 @@ defmodule Compendium.MCPTest do
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
-      Application.put_env(:cyfr, :base_path, original_base_path)
+      Application.put_env(:arca, :base_path, original_base_path)
 
       if original_registry_url,
         do: Application.put_env(:cyfr, :registry_url, original_registry_url),

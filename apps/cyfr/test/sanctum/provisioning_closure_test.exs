@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.ProvisioningClosureTest do
@@ -30,16 +30,16 @@ defmodule Sanctum.ProvisioningClosureTest do
     copy_bundle!(Path.join(seed_dir, "components"))
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    keys = [:base_path, :seed_path, :oci_registry_url, :registry_url]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :seed_path, seed_dir)
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :oci_registry_url, cyfr: :registry_url]
+    prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:arca, :seed_path, seed_dir)
 
     on_exit(fn ->
-      for {key, value} <- prev do
+      for {{app, key}, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
 
       File.rm_rf!(test_dir)

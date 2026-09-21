@@ -30,7 +30,7 @@ defmodule Cyfr.DigestSSOTTest do
   defp scanned do
     Cyfr.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex")) ++
       Cyfr.Test.SourceTree.files!(
-        Path.join(@umbrella_root, "apps/cyfr/priv/repo/migrations/*.exs")
+        Path.join(@umbrella_root, "apps/arca/priv/repo/migrations/*.exs")
       )
   end
 

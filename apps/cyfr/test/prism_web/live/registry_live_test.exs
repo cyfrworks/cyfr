@@ -41,15 +41,15 @@ defmodule PrismWeb.RegistryLiveTest do
   end
 
   setup %{conn: conn} do
-    original = Application.get_env(:cyfr, :device_flow)
-    Application.put_env(:cyfr, :device_flow, FakeDeviceFlow)
+    original = Application.get_env(:sanctum, :device_flow)
+    Application.put_env(:sanctum, :device_flow, FakeDeviceFlow)
 
     on_exit(fn ->
       Application.delete_env(:cyfr, :device_flow_poll_result)
 
       if original,
-        do: Application.put_env(:cyfr, :device_flow, original),
-        else: Application.delete_env(:cyfr, :device_flow)
+        do: Application.put_env(:sanctum, :device_flow, original),
+        else: Application.delete_env(:sanctum, :device_flow)
     end)
 
     {view, _html} = conn |> log_in_user(test_user()) |> mount_athanor("/registry")

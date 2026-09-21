@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.BootstrapTest do
   use ExUnit.Case, async: false
@@ -16,16 +16,16 @@ defmodule Sanctum.Consent.BootstrapTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "consent_bootstrap_#{:rand.uniform(1_000_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
     Cyfr.Test.SeedBundle.isolate!()
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}

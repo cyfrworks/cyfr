@@ -122,18 +122,18 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "slot_wait_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :workers]
-    previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, run_dir)
+    keys = [arca: :base_path, cyfr: :workers]
+    previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    Application.put_env(:arca, :base_path, run_dir)
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       Slots.forgive_unreaped(@slots, ctx.athanor_id)
 
-      for {key, value} <- previous do
+      for {{app, key}, value} <- previous do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
       end
 
       File.rm_rf!(run_dir)

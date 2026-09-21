@@ -28,7 +28,7 @@ defmodule Cyfr.VocabularyDriftTest do
   # or as a field — by file and exact count, none.
   @retired_word "orch" <> "estrator"
   @retired_word_allowed %{}
-  @baseline "apps/cyfr/priv/repo/migrations/*_baseline.exs"
+  @baseline "apps/arca/priv/repo/migrations/*_baseline.exs"
 
   @type_value ~r/"(?:soul|role)"/
   @type_key ~r/\["(?:soul|role)"\]|"(?:soul|role)"\s*=>|Arg\.new\("(?:soul|role)",/

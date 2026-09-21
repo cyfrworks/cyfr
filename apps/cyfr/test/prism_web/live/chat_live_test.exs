@@ -13,8 +13,8 @@ defmodule PrismWeb.ChatLiveTest do
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "thread_live_#{:rand.uniform(1_000_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       # A turn the test left finishing may still write under the path; the
@@ -22,8 +22,8 @@ defmodule PrismWeb.ChatLiveTest do
       File.rm_rf(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     # The estate most of these tests chat in. A group, because no estate is
@@ -538,7 +538,7 @@ defmodule PrismWeb.ChatLiveTest do
     # a bare group row: created, never provisioned — and no bundle to fill
     # it from, so the fill fails and says so
     Application.put_env(
-      :cyfr,
+      :arca,
       :seed_path,
       Path.join(System.tmp_dir!(), "no_seed_#{alice.namespace}")
     )
@@ -575,8 +575,8 @@ defmodule PrismWeb.ChatLiveTest do
 
   test "a message sent while the estate is prepared is held, offered back after a reload, and accepted once",
        %{conn: conn} do
-    Application.put_env(:cyfr, :provisioning_inline, false)
-    on_exit(fn -> Application.put_env(:cyfr, :provisioning_inline, true) end)
+    Application.put_env(:sanctum, :provisioning_inline, false)
+    on_exit(fn -> Application.put_env(:sanctum, :provisioning_inline, true) end)
 
     alice = test_user()
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Held #{alice.namespace}")
@@ -671,8 +671,8 @@ defmodule PrismWeb.ChatLiveTest do
     # The real path: the fill is a task nothing awaits, so a mount cannot be
     # held open by it. The suite otherwise fills inline so its assertions can
     # read rows straight after the call.
-    Application.put_env(:cyfr, :provisioning_inline, false)
-    on_exit(fn -> Application.put_env(:cyfr, :provisioning_inline, true) end)
+    Application.put_env(:sanctum, :provisioning_inline, false)
+    on_exit(fn -> Application.put_env(:sanctum, :provisioning_inline, true) end)
 
     alice = test_user()
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Slow #{alice.namespace}")

@@ -12,13 +12,13 @@ defmodule Compendium.ScaffoldTest do
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_scaffold_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
-    prev_base = Application.fetch_env!(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_dir)
+    prev_base = Application.fetch_env!(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_dir)
 
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
+      Application.put_env(:arca, :base_path, prev_base)
       File.rm_rf!(test_dir)
     end)
 
@@ -112,11 +112,11 @@ defmodule Compendium.ScaffoldTest do
       File.mkdir_p!(shipped)
       File.write!(Path.join(shipped, "cyfr-manifest.json"), ~s({"type":"catalyst"}))
 
-      prev_seed = Application.fetch_env!(:cyfr, :seed_path)
-      Application.put_env(:cyfr, :seed_path, seed)
+      prev_seed = Application.fetch_env!(:arca, :seed_path)
+      Application.put_env(:arca, :seed_path, seed)
 
       on_exit(fn ->
-        Application.put_env(:cyfr, :seed_path, prev_seed)
+        Application.put_env(:arca, :seed_path, prev_seed)
         File.rm_rf!(seed)
       end)
 

@@ -23,9 +23,9 @@ defmodule Cyfr.NamespaceDirectionTest do
     # The domain inside cyfr holds the same rule: storage, components and
     # identity never name the console (glue under lib/cyfr and the
     # transport under lib/emissary* are out of scope here).
-    "apps/cyfr/lib/arca",
+    "apps/arca/lib/arca",
     "apps/cyfr/lib/compendium",
-    "apps/cyfr/lib/sanctum",
+    "apps/sanctum/lib/sanctum",
     # The agent-orchestration domain: it drives the console's chat, but
     # through PubSub and rows — never by naming the console.
     "apps/cyfr/lib/aqua"
@@ -107,7 +107,7 @@ defmodule Cyfr.NamespaceDirectionTest do
   # where someone decided they should. This is the same shape as the engine
   # rule above, one level in: a NEW domain→web reach fails here until it is
   # argued, rather than accruing quietly the way these two did.
-  @domain_dirs ["apps/cyfr/lib/sanctum", "apps/cyfr/lib/aqua", "apps/cyfr/lib/compendium"]
+  @domain_dirs ["apps/sanctum/lib/sanctum", "apps/cyfr/lib/aqua", "apps/cyfr/lib/compendium"]
 
   # Empty: the assistant's navigation intents name a page by shape, and
   # `PrismWeb.Nav.page?/1` maps them to the route table on the web side.

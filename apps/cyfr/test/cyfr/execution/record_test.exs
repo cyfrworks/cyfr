@@ -10,8 +10,8 @@ defmodule Cyfr.Execution.RecordTest do
   setup do
     # Use a test-specific base path to avoid state leaking between tests
     test_path = Path.join(System.tmp_dir!(), "exec_record_test_#{:rand.uniform(100_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -36,8 +36,8 @@ defmodule Cyfr.Execution.RecordTest do
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     {:ok, ctx: ctx, test_path: test_path}
@@ -364,8 +364,8 @@ defmodule Cyfr.Execution.RecordTest do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
       :ok = Record.write_started(record)
 
-      Application.put_env(:cyfr, :execution_payload_store, __MODULE__.RefusingStore)
-      on_exit(fn -> Application.delete_env(:cyfr, :execution_payload_store) end)
+      Application.put_env(:arca, :execution_payload_store, __MODULE__.RefusingStore)
+      on_exit(fn -> Application.delete_env(:arca, :execution_payload_store) end)
 
       assert {:error, {:result_lost, :disk_full}} =
                Record.write_completed(Record.complete(record, %{"sum" => 2}))
@@ -711,8 +711,8 @@ defmodule Cyfr.Execution.RecordTest do
 
       lost = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :ok = Record.write_started(lost)
-      Application.put_env(:cyfr, :execution_payload_store, __MODULE__.RefusingStore)
-      on_exit(fn -> Application.delete_env(:cyfr, :execution_payload_store) end)
+      Application.put_env(:arca, :execution_payload_store, __MODULE__.RefusingStore)
+      on_exit(fn -> Application.delete_env(:arca, :execution_payload_store) end)
 
       {:error, {:result_lost, _}} =
         Record.write_completed(Record.complete(lost, %{"sum" => 2}))

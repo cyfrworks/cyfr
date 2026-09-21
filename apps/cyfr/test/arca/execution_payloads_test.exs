@@ -13,15 +13,15 @@ defmodule Arca.ExecutionPayloadsTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "payloads_#{:rand.uniform(1_000_000)}")
-    original = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original,
-        do: Application.put_env(:cyfr, :base_path, original),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     Sanctum.TestContext.athanor!()

@@ -15,7 +15,7 @@ defmodule PrismWeb.LoginLiveTest do
     # only per-address bound this surface has — a `nil` here would compile,
     # run, and silently leave sign-in exhaustible by one caller again.
     def init_device_flow(provider, client_ip) when provider in [:github, :google] do
-      Application.put_env(:cyfr, :device_flow_last_ip, client_ip)
+      Application.put_env(:sanctum, :device_flow_last_ip, client_ip)
 
       {:ok,
        %{
@@ -28,26 +28,26 @@ defmodule PrismWeb.LoginLiveTest do
     end
 
     def poll_for_session(_provider, _code, client_ip) do
-      Application.put_env(:cyfr, :device_flow_last_ip, client_ip)
-      Application.get_env(:cyfr, :device_flow_poll_result, {:ok, %{status: "pending"}})
+      Application.put_env(:sanctum, :device_flow_last_ip, client_ip)
+      Application.get_env(:sanctum, :device_flow_poll_result, {:ok, %{status: "pending"}})
     end
   end
 
   setup do
     originals = %{
-      github_id: Application.get_env(:cyfr, :github_client_id),
-      google_id: Application.get_env(:cyfr, :google_client_id),
-      google_secret: Application.get_env(:cyfr, :google_client_secret),
+      github_id: Application.get_env(:sanctum, :github_client_id),
+      google_id: Application.get_env(:sanctum, :google_client_id),
+      google_secret: Application.get_env(:sanctum, :google_client_secret),
       auth_provider: Application.get_env(:sanctum, :auth_provider),
-      device_flow: Application.get_env(:cyfr, :device_flow),
-      poll_result: Application.get_env(:cyfr, :device_flow_poll_result)
+      device_flow: Application.get_env(:sanctum, :device_flow),
+      poll_result: Application.get_env(:sanctum, :device_flow_poll_result)
     }
 
     on_exit(fn ->
       restore(:github_client_id, originals.github_id)
       restore(:google_client_id, originals.google_id)
       restore(:google_client_secret, originals.google_secret)
-      restore(:sanctum, :auth_provider, originals.auth_provider)
+      restore(:auth_provider, originals.auth_provider)
       restore(:device_flow, originals.device_flow)
       restore(:device_flow_poll_result, originals.poll_result)
     end)
@@ -55,20 +55,20 @@ defmodule PrismWeb.LoginLiveTest do
     :ok
   end
 
-  defp restore(key, value), do: restore(:cyfr, key, value)
+  defp restore(key, value), do: restore(:sanctum, key, value)
 
-  # The provider selection is the identity domain's key; everything else
-  # here is the host's. Restoring the wrong application leaves a provider
-  # set for every test that runs after this one.
+  # Every key this case swaps is the identity domain's, the fake flow's own
+  # two among them. Restoring the wrong application leaves a fake provider
+  # installed for every test that runs after this one.
   defp restore(app, key, nil), do: Application.delete_env(app, key)
   defp restore(app, key, value), do: Application.put_env(app, key, value)
 
   describe "provider buttons" do
     test "GitHub and Google start device flow on this page, not /auth/:provider",
          %{conn: conn} do
-      Application.put_env(:cyfr, :github_client_id, "github-device-id")
-      Application.put_env(:cyfr, :google_client_id, "google-device-id")
-      Application.put_env(:cyfr, :google_client_secret, "google-device-secret")
+      Application.put_env(:sanctum, :github_client_id, "github-device-id")
+      Application.put_env(:sanctum, :google_client_id, "google-device-id")
+      Application.put_env(:sanctum, :google_client_secret, "google-device-secret")
       Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
 
       {:ok, view, html} = live(conn, ~p"/login")
@@ -93,9 +93,9 @@ defmodule PrismWeb.LoginLiveTest do
 
   describe "device flow" do
     setup do
-      Application.put_env(:cyfr, :github_client_id, "github-device-id")
+      Application.put_env(:sanctum, :github_client_id, "github-device-id")
       Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
-      Application.put_env(:cyfr, :device_flow, FakeDeviceFlow)
+      Application.put_env(:sanctum, :device_flow, FakeDeviceFlow)
       :ok
     end
 
@@ -113,8 +113,8 @@ defmodule PrismWeb.LoginLiveTest do
     end
 
     test "the flow is budgeted against a resolved client address", %{conn: conn} do
-      Application.delete_env(:cyfr, :device_flow_last_ip)
-      on_exit(fn -> Application.delete_env(:cyfr, :device_flow_last_ip) end)
+      Application.delete_env(:sanctum, :device_flow_last_ip)
+      on_exit(fn -> Application.delete_env(:sanctum, :device_flow_last_ip) end)
 
       {:ok, view, _} = live(conn, ~p"/login")
 
@@ -131,7 +131,7 @@ defmodule PrismWeb.LoginLiveTest do
       # socket declaration, so removing `:peer_data` from the endpoint
       # would NOT fail here — that half is pinned in
       # `EmissaryWeb.EndpointSocketTest`.
-      ip = Application.get_env(:cyfr, :device_flow_last_ip)
+      ip = Application.get_env(:sanctum, :device_flow_last_ip)
 
       assert is_binary(ip), "the LiveView must budget the device flow by client address"
 
@@ -156,7 +156,7 @@ defmodule PrismWeb.LoginLiveTest do
       {:ok, session} = Sanctum.Session.create(ctx)
 
       Application.put_env(
-        :cyfr,
+        :sanctum,
         :device_flow_poll_result,
         {:ok,
          %{
@@ -197,21 +197,21 @@ defmodule PrismWeb.LoginLiveTest do
 
       Cyfr.ControlPlane.mark(:lost)
       on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
-      Application.delete_env(:cyfr, :device_flow_last_ip)
-      on_exit(fn -> Application.delete_env(:cyfr, :device_flow_last_ip) end)
+      Application.delete_env(:sanctum, :device_flow_last_ip)
+      on_exit(fn -> Application.delete_env(:sanctum, :device_flow_last_ip) end)
 
       send(view.pid, :login_poll)
       html = render(view)
 
       assert html =~ "not accepting sign-ins"
       refute html =~ "Waiting for authorization"
-      assert Application.get_env(:cyfr, :device_flow_last_ip) == nil
+      assert Application.get_env(:sanctum, :device_flow_last_ip) == nil
 
       # Stopped: a later tick asks nothing either, owner again or not.
       Cyfr.ControlPlane.mark(:unclaimed)
       send(view.pid, :login_poll)
       _ = render(view)
-      assert Application.get_env(:cyfr, :device_flow_last_ip) == nil
+      assert Application.get_env(:sanctum, :device_flow_last_ip) == nil
     end
 
     test "a page open on a boot that lost the control plane starts no sign-in", %{conn: conn} do
@@ -219,8 +219,8 @@ defmodule PrismWeb.LoginLiveTest do
 
       Cyfr.ControlPlane.mark(:lost)
       on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
-      Application.delete_env(:cyfr, :device_flow_last_ip)
-      on_exit(fn -> Application.delete_env(:cyfr, :device_flow_last_ip) end)
+      Application.delete_env(:sanctum, :device_flow_last_ip)
+      on_exit(fn -> Application.delete_env(:sanctum, :device_flow_last_ip) end)
 
       html =
         view
@@ -229,7 +229,7 @@ defmodule PrismWeb.LoginLiveTest do
 
       assert html =~ "not accepting sign-ins"
       refute html =~ "WXYZ-1234"
-      assert Application.get_env(:cyfr, :device_flow_last_ip) == nil
+      assert Application.get_env(:sanctum, :device_flow_last_ip) == nil
     end
 
     test "a missing device-complete ticket returns to login", %{conn: conn} do

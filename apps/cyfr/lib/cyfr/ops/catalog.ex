@@ -80,6 +80,12 @@ defmodule Cyfr.Ops.Catalog do
   over the whole shared cache on every `tools/list` request; the catalog
   changes only at registration/refresh (which invalidates the memo), so
   the short TTL is a backstop, not the freshness mechanism.
+
+  An empty build is never memoized. A server with no tools is not a state
+  this catalog reaches — it refuses to boot without its providers — so an
+  empty scan means the table is gone or its rebuild is in flight, and
+  caching that answer for a minute is the "Unknown tool" window the
+  rebuild exists to close.
   """
   def list_tools do
     case Arca.Cache.get(:mcp_tool_list) do
@@ -87,9 +93,14 @@ defmodule Cyfr.Ops.Catalog do
         tools
 
       :miss ->
-        tools = build_tool_list()
-        Arca.Cache.put(:mcp_tool_list, tools, :timer.seconds(60))
-        tools
+        case build_tool_list() do
+          [] ->
+            []
+
+          tools ->
+            Arca.Cache.put(:mcp_tool_list, tools, :timer.seconds(60))
+            tools
+        end
     end
   end
 
@@ -1166,7 +1177,33 @@ defmodule Cyfr.Ops.Catalog do
 
     load_providers()
     schedule_refresh()
-    {:ok, %{}}
+    {:ok, watch_cache_owner(%{})}
+  end
+
+  # The catalogue lives in `Arca.Cache`, whose table dies with its owner,
+  # `Arca.Cache.Sweeper`. That owner is started by the `arca` application,
+  # one app below this one, so no supervisor here can hold both it and
+  # this registry — the `:rest_for_one` group that used to restart the two
+  # together cannot span two applications. A monitor keeps the same
+  # guarantee: when the owner goes, the catalogue goes with it, and this
+  # rebuilds into the table the replacement owner creates rather than
+  # answering an empty catalogue until the next refresh, a day later.
+  @cache_owner_retry_ms 100
+
+  defp watch_cache_owner(state) do
+    case Arca.Cache.monitor_owner() do
+      nil ->
+        # No table to watch: it is gone, or not created yet. Come back and
+        # REBUILD rather than only re-arm — an owner that died while this
+        # was repopulating leaves nothing to monitor, and a monitor alone
+        # would wait for a `:DOWN` that has already happened while the
+        # catalogue stayed lost.
+        Process.send_after(self(), :rebuild_cache, @cache_owner_retry_ms)
+        Map.put(state, :cache_owner, nil)
+
+      ref ->
+        Map.put(state, :cache_owner, ref)
+    end
   end
 
   @impl true
@@ -1184,6 +1221,33 @@ defmodule Cyfr.Ops.Catalog do
     stale = old_tools -- new_tools
     for name <- stale, do: unregister_tool(name)
     {:reply, {:ok, count}, state}
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{cache_owner: ref} = state) do
+    send(self(), :rebuild_cache)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:rebuild_cache, state) do
+    # `ensure_table/0` is a call on the table's owner, so it answers only
+    # once the supervisor has restarted it and the table is back. Until
+    # then it says the cache is unavailable, and this waits rather than
+    # writing a catalogue into a table about to be replaced.
+    case Arca.Cache.Sweeper.ensure_table() do
+      :ok ->
+        load_providers()
+        # The memo is built from the table, so one taken while the rebuild
+        # was in flight describes a partial catalog; drop it rather than
+        # serve it out for the next minute.
+        Arca.Cache.invalidate(:mcp_tool_list)
+        {:noreply, watch_cache_owner(state)}
+
+      {:error, :cache_unavailable} ->
+        Process.send_after(self(), :rebuild_cache, @cache_owner_retry_ms)
+        {:noreply, state}
+    end
   end
 
   @impl true

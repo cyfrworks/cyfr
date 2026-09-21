@@ -61,7 +61,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "and supplies connection config for the adapter that was built" do
       with_env(%{"CYFR_DATABASE" => nil}, fn ->
-        repo_config = read_prod_config!() |> get_in([:cyfr, Arca.Repo])
+        repo_config = read_prod_config!() |> get_in([:arca, Arca.Repo])
 
         assert is_list(repo_config)
 

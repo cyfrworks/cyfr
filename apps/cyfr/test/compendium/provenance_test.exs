@@ -28,10 +28,10 @@ defmodule Compendium.ProvenanceTest do
 
     base = Path.join(System.tmp_dir!(), "provenance_#{System.unique_integer([:positive])}")
 
-    prev_base = Application.fetch_env!(:cyfr, :base_path)
-    prev_seed = Application.fetch_env!(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :base_path, Path.join(base, "data"))
-    Application.put_env(:cyfr, :seed_path, Path.join(base, "seed"))
+    prev_base = Application.fetch_env!(:arca, :base_path)
+    prev_seed = Application.fetch_env!(:arca, :seed_path)
+    Application.put_env(:arca, :base_path, Path.join(base, "data"))
+    Application.put_env(:arca, :seed_path, Path.join(base, "seed"))
 
     Arca.Test.UnitFixtures.seed_component!("reagent", "local", "bundled-tool", "1.0.0",
       manifest: %{"type" => "reagent", "version" => "1.0.0", "description" => "shipped"},
@@ -39,8 +39,8 @@ defmodule Compendium.ProvenanceTest do
     )
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :seed_path, prev_seed)
+      Application.put_env(:arca, :base_path, prev_base)
+      Application.put_env(:arca, :seed_path, prev_seed)
       File.rm_rf!(base)
     end)
 

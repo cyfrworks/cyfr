@@ -7,7 +7,10 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   in the VM that emits it, and `Cyfr.Telemetry.Catalog` says which VM that
   is. Every consumer but `:operator` attaches in the control plane's VM:
   an event one of them consumes (the audit trail and the console bridge
-  among them) is emitted by a module under `apps/cyfr/lib`. An event
+  among them) is emitted by a module the control plane's release holds:
+  the host's own (`apps/cyfr/lib`) or one of the two applications below it
+  (`apps/arca/lib`, `apps/sanctum/lib`), which start in the same VM. An
+  event
   emitted under `apps/opus/lib` runs in a runner, the OS process that runs
   a guest, and is rostered as the worker's (`emitter: :worker`), for the
   operator alone; one rostered so is emitted there and nowhere in the
@@ -31,7 +34,11 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   # apps/cyfr/test/cyfr/telemetry -> umbrella root
   @root Path.expand("../../../../..", __DIR__)
 
-  @control_plane "apps/cyfr/lib"
+  # The three libs the control plane's release holds; telemetry does not
+  # cross a process boundary, and these three share one VM.
+  @control_plane ["apps/cyfr/lib", "apps/arca/lib", "apps/sanctum/lib"]
+  # Where a planted control-plane emission goes, when a case needs one.
+  @host "apps/cyfr/lib"
   @worker "apps/opus/lib"
   @emitting [:execute, :span]
 
@@ -42,7 +49,11 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   # `emitted` maps each app lib directory to the set of events its code
   # emits. Answers every breach of the rule, empty when it holds.
   defp violations(catalog, emitted) do
-    control_plane = Map.get(emitted, @control_plane, MapSet.new())
+    control_plane =
+      @control_plane
+      |> Enum.map(&Map.get(emitted, &1, MapSet.new()))
+      |> Enum.reduce(MapSet.new(), &MapSet.union/2)
+
     worker = Map.get(emitted, @worker, MapSet.new())
     rostered = for {event, entry} <- catalog, Map.get(entry, :emitter) == :worker, do: event
 
@@ -76,7 +87,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
 
     elsewhere =
       for {lib, events} <- emitted,
-          lib not in [@control_plane, @worker],
+          lib not in [@worker | @control_plane],
           event <- events,
           do: {:emitted_outside_the_control_plane_and_a_runner, lib, event}
 
@@ -178,7 +189,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
     assert Catalog.emitted_by(:worker) -- Catalog.consumed_by(:operator) == []
 
     for event <- Catalog.consumed_by(:audit) ++ Catalog.consumed_by(:bridge) do
-      assert MapSet.member?(emitted[@control_plane], event), inspect(event)
+      assert Enum.any?(@control_plane, &MapSet.member?(emitted[&1], event)), inspect(event)
       refute MapSet.member?(emitted[@worker], event), inspect(event)
     end
 
@@ -257,7 +268,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
 
   test "an audited event the control plane stops emitting is refused" do
     emitted =
-      Map.update!(emitted_by_tree(), @control_plane, fn events ->
+      Map.update!(emitted_by_tree(), @host, fn events ->
         MapSet.delete(events, [:cyfr, :opus, :secret, :dispensed])
       end)
 
@@ -305,7 +316,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
              {:rostered_as_the_workers_but_not_emitted_in_a_runner, event}
            ]
 
-    both = Map.update!(emitted_by_tree(), @control_plane, &MapSet.put(&1, event))
+    both = Map.update!(emitted_by_tree(), @host, &MapSet.put(&1, event))
 
     assert violations(Catalog.all(), both) == [
              {:rostered_as_the_workers_but_emitted_by_the_control_plane, event}

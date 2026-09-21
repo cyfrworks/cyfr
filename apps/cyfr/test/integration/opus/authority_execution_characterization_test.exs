@@ -25,8 +25,8 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     TwoServices.watch!()
 
     test_path = Path.join(System.tmp_dir!(), "authority_char_#{:rand.uniform(1_000_000)}")
-    original_base_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, test_path)
+    original_base_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, test_path)
 
     # The production source, not the Memory fixture: bootstrap writes real
     # rows and the loader reads them back.
@@ -40,8 +40,8 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
       File.rm_rf!(test_path)
 
       if original_base_path,
-        do: Application.put_env(:cyfr, :base_path, original_base_path),
-        else: Application.delete_env(:cyfr, :base_path)
+        do: Application.put_env(:arca, :base_path, original_base_path),
+        else: Application.delete_env(:arca, :base_path)
     end)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()

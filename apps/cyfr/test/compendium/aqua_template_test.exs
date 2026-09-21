@@ -26,14 +26,14 @@ defmodule Compendium.AquaTemplateTest do
     seed = Path.join(base, "seed")
     template = Path.join(seed, "aqua")
 
-    prev_base = Application.fetch_env!(:cyfr, :base_path)
-    prev_seed = Application.fetch_env!(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :base_path, Path.join(base, "data"))
-    Application.put_env(:cyfr, :seed_path, seed)
+    prev_base = Application.fetch_env!(:arca, :base_path)
+    prev_seed = Application.fetch_env!(:arca, :seed_path)
+    Application.put_env(:arca, :base_path, Path.join(base, "data"))
+    Application.put_env(:arca, :seed_path, seed)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :seed_path, prev_seed)
+      Application.put_env(:arca, :base_path, prev_base)
+      Application.put_env(:arca, :seed_path, prev_seed)
       File.rm_rf!(base)
     end)
 

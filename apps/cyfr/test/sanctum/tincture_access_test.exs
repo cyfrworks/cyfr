@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.TinctureAccessTest do
@@ -19,8 +19,8 @@ defmodule Sanctum.TinctureAccessTest do
     # Create temp tincture structure with one public and one private tincture,
     # under an isolated storage root.
     base = Path.join(System.tmp_dir!(), "tincture_access_test_#{:rand.uniform(1_000_000)}")
-    original_path = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, base)
+    original_path = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, base)
 
     # Public tincture
     pub_dir = tincture_dir("public-dash")
@@ -138,9 +138,9 @@ defmodule Sanctum.TinctureAccessTest do
 
     on_exit(fn ->
       if original_path do
-        Application.put_env(:cyfr, :base_path, original_path)
+        Application.put_env(:arca, :base_path, original_path)
       else
-        Application.delete_env(:cyfr, :base_path)
+        Application.delete_env(:arca, :base_path)
       end
 
       File.rm_rf!(base)

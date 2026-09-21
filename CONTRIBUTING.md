@@ -9,9 +9,8 @@ CYFR uses **mixed per-file licensing** (see [`LICENSE`](LICENSE) and
 [`FAIR_SOURCE.md`](FAIR_SOURCE.md)). Contributions are accepted under the
 license of the **file being changed**:
 
-- Files under `apps/cyfr/lib/sanctum/**` and `apps/cyfr/test/sanctum/**` are
-  **FSL-1.1-Apache-2.0**. Contributions to those files are made under
-  FSL-1.1-Apache-2.0.
+- Files under `apps/sanctum/**` are **FSL-1.1-Apache-2.0**. Contributions
+  to those files are made under FSL-1.1-Apache-2.0.
 - Every other file is **Apache-2.0**. Contributions to those files are made
   under Apache-2.0.
 
@@ -29,7 +28,7 @@ in, following the existing convention:
 # Copyright 2026 CYFR Works Inc.
 ```
 
-(use `FSL-1.1-Apache-2.0` only for files inside the two Sanctum directories).
+(use `FSL-1.1-Apache-2.0` only for files inside `apps/sanctum/`).
 
 The `license-lint` workflow enforces this boundary on every pull request — a
 missing or wrong header fails CI.

@@ -11,21 +11,31 @@ defmodule PrismWeb.OperatorDelistLiveTest do
 
   alias Sanctum.Tenancy.Members
 
-  @keys [:platform_admin_emails, :provisioning_boot_enabled, :establish_cache_ms]
+  # The platform roster and the establish memo are the identity domain's;
+  # the boot switch is the host's.
+  @keys [
+    sanctum: :platform_admin_emails,
+    cyfr: :provisioning_boot_enabled,
+    sanctum: :establish_cache_ms
+  ]
 
   setup do
-    prev = Map.new(@keys, &{&1, Application.get_env(:cyfr, &1)})
+    prev = Map.new(@keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
 
     Application.put_env(:cyfr, :provisioning_boot_enabled, true)
     # The suite keeps the establish memo off; primed here, so the
     # revocation has cached state to invalidate.
-    Application.put_env(:cyfr, :establish_cache_ms, :timer.minutes(1))
+    Application.put_env(:sanctum, :establish_cache_ms, :timer.minutes(1))
 
     on_exit(fn ->
-      for {key, value} <- prev do
+      # The memos this case primed are the node's, not its own: left
+      # behind they make a neighbour's "no caller is memoized" read false.
+      Arca.Cache.delete_match({:established, :_, :_, :_})
+
+      for {{app, key}, value} <- prev do
         if is_nil(value),
-          do: Application.delete_env(:cyfr, key),
-          else: Application.put_env(:cyfr, key, value)
+          do: Application.delete_env(app, key),
+          else: Application.put_env(app, key, value)
       end
     end)
 
@@ -35,7 +45,7 @@ defmodule PrismWeb.OperatorDelistLiveTest do
   test "de-listing an operator ends their connected console and their primed caller memo",
        %{conn: conn} do
     operator = test_user()
-    Application.put_env(:cyfr, :platform_admin_emails, [operator.email])
+    Application.put_env(:sanctum, :platform_admin_emails, [operator.email])
     {:ok, _} = Members.ensure_platform(operator.user_id)
 
     conn = log_in_user(conn, operator)
@@ -47,7 +57,7 @@ defmodule PrismWeb.OperatorDelistLiveTest do
     assert user_id == operator.user_id
 
     # The environment no longer names them; the boot reconciles.
-    Application.put_env(:cyfr, :platform_admin_emails, [])
+    Application.put_env(:sanctum, :platform_admin_emails, [])
     :ok = Cyfr.Bootstrap.run()
 
     # The connected console lets go, and the memo keeps no earlier answer.

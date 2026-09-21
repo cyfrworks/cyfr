@@ -97,14 +97,14 @@ defmodule Arca.OverlayTest do
     File.write!(Path.join(bundle_version, "src/lib.rs"), "fn main() {}")
     File.write!(Path.join(bundle_version, "src/target/junk.o"), "DROPPINGS")
 
-    prev_base = Application.fetch_env!(:cyfr, :base_path)
-    prev_seed = Application.fetch_env!(:cyfr, :seed_path)
-    Application.put_env(:cyfr, :base_path, Path.join(base, "data"))
-    Application.put_env(:cyfr, :seed_path, seed)
+    prev_base = Application.fetch_env!(:arca, :base_path)
+    prev_seed = Application.fetch_env!(:arca, :seed_path)
+    Application.put_env(:arca, :base_path, Path.join(base, "data"))
+    Application.put_env(:arca, :seed_path, seed)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :base_path, prev_base)
-      Application.put_env(:cyfr, :seed_path, prev_seed)
+      Application.put_env(:arca, :base_path, prev_base)
+      Application.put_env(:arca, :seed_path, prev_seed)
       File.rm_rf!(base)
     end)
 
@@ -142,11 +142,11 @@ defmodule Arca.OverlayTest do
 
   # Park the next commit while it stages (`GatedStagingAdapter`).
   defp gate_staging! do
-    Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.GatedStagingAdapter)
+    Application.put_env(:arca, :storage_adapter, Arca.OverlayTest.GatedStagingAdapter)
 
     on_exit(fn ->
       Arca.OverlayTest.GatedStagingAdapter.disarm()
-      Application.put_env(:cyfr, :storage_adapter, Arca.Adapters.Local)
+      Application.put_env(:arca, :storage_adapter, Arca.Adapters.Local)
     end)
 
     Arca.OverlayTest.GatedStagingAdapter.arm(self())
@@ -233,13 +233,13 @@ defmodule Arca.OverlayTest do
   describe "pulling what ships" do
     test "pull_shipped/2 copies the unit whole — droppings excluded, sentinel last, uncapped",
          %{actor: actor} do
-      prev = Application.get_env(:cyfr, :caps)
-      Application.put_env(:cyfr, :caps, athanor_storage_bytes: 5)
+      prev = Application.get_env(:sanctum, :caps)
+      Application.put_env(:sanctum, :caps, athanor_storage_bytes: 5)
 
       on_exit(fn ->
         if prev,
-          do: Application.put_env(:cyfr, :caps, prev),
-          else: Application.delete_env(:cyfr, :caps)
+          do: Application.put_env(:sanctum, :caps, prev),
+          else: Application.delete_env(:sanctum, :caps)
 
         Arca.Cache.delete_match({:athanor_usage, :_, :_})
       end)
@@ -343,13 +343,13 @@ defmodule Arca.OverlayTest do
     end
 
     test "a failed copy rolls back — nothing lingers, and the healed pull lands", %{actor: actor} do
-      original = Application.get_env(:cyfr, :storage_adapter)
-      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.FailingCopyAdapter)
+      original = Application.get_env(:arca, :storage_adapter)
+      Application.put_env(:arca, :storage_adapter, Arca.OverlayTest.FailingCopyAdapter)
 
       on_exit(fn ->
         if original,
-          do: Application.put_env(:cyfr, :storage_adapter, original),
-          else: Application.delete_env(:cyfr, :storage_adapter)
+          do: Application.put_env(:arca, :storage_adapter, original),
+          else: Application.delete_env(:arca, :storage_adapter)
       end)
 
       assert {:error, :enospc} =
@@ -363,7 +363,7 @@ defmodule Arca.OverlayTest do
       assert Arca.Overlay.unit_status(actor, @version_dir) ==
                {:ok, :available}
 
-      Application.put_env(:cyfr, :storage_adapter, original || Arca.Adapters.Local)
+      Application.put_env(:arca, :storage_adapter, original || Arca.Adapters.Local)
       assert :ok = Arca.Overlay.pull_shipped(actor, @version_dir)
       assert Arca.Overlay.unit_status(actor, @version_dir) == {:ok, :shipped}
     end
@@ -950,13 +950,13 @@ defmodule Arca.OverlayTest do
     end
 
     test "configuring the overlay as the adapter raises instead of recursing", %{actor: actor} do
-      original = Application.get_env(:cyfr, :storage_adapter)
-      Application.put_env(:cyfr, :storage_adapter, Arca.Overlay)
+      original = Application.get_env(:arca, :storage_adapter)
+      Application.put_env(:arca, :storage_adapter, Arca.Overlay)
 
       on_exit(fn ->
         if original,
-          do: Application.put_env(:cyfr, :storage_adapter, original),
-          else: Application.delete_env(:cyfr, :storage_adapter)
+          do: Application.put_env(:arca, :storage_adapter, original),
+          else: Application.delete_env(:arca, :storage_adapter)
       end)
 
       assert_raise ArgumentError, ~r/decorator/, fn ->
@@ -1406,13 +1406,13 @@ defmodule Arca.OverlayTest do
     end
 
     test "an adapter that cannot swap a tree publishes the subtree all the same", %{actor: actor} do
-      original = Application.get_env(:cyfr, :storage_adapter)
-      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.NoSwapAdapter)
+      original = Application.get_env(:arca, :storage_adapter)
+      Application.put_env(:arca, :storage_adapter, Arca.OverlayTest.NoSwapAdapter)
 
       on_exit(fn ->
         if original,
-          do: Application.put_env(:cyfr, :storage_adapter, original),
-          else: Application.delete_env(:cyfr, :storage_adapter)
+          do: Application.put_env(:arca, :storage_adapter, original),
+          else: Application.delete_env(:arca, :storage_adapter)
       end)
 
       assert :ok =
@@ -1587,7 +1587,7 @@ defmodule Arca.OverlayTest do
           end)
         end)
         # The definition itself, which names the option rather than passing it.
-        |> Enum.reject(&String.starts_with?(&1, "apps/cyfr/lib/arca/overlay.ex"))
+        |> Enum.reject(&String.starts_with?(&1, "apps/arca/lib/arca/overlay.ex"))
 
       assert offenders == [], "commit_unit called with no cap: #{inspect(offenders)}"
     end
@@ -1637,13 +1637,13 @@ defmodule Arca.OverlayTest do
     end
 
     test "cap refuses before the first write", %{actor: actor} do
-      prev = Application.get_env(:cyfr, :caps)
-      Application.put_env(:cyfr, :caps, athanor_storage_bytes: 1)
+      prev = Application.get_env(:sanctum, :caps)
+      Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1)
 
       on_exit(fn ->
         if prev,
-          do: Application.put_env(:cyfr, :caps, prev),
-          else: Application.delete_env(:cyfr, :caps)
+          do: Application.put_env(:sanctum, :caps, prev),
+          else: Application.delete_env(:sanctum, :caps)
 
         Arca.Cache.delete_match({:athanor_usage, :_, :_})
       end)
@@ -1750,13 +1750,13 @@ defmodule Arca.OverlayTest do
       :ok = Arca.put(actor, @version_dir ++ ["notes.txt"], "edited")
       assert Arca.Overlay.unit_status(actor, @version_dir) == {:ok, :shipped}
 
-      original = Application.get_env(:cyfr, :storage_adapter)
-      Application.put_env(:cyfr, :storage_adapter, Arca.OverlayTest.DownAdapter)
+      original = Application.get_env(:arca, :storage_adapter)
+      Application.put_env(:arca, :storage_adapter, Arca.OverlayTest.DownAdapter)
 
       on_exit(fn ->
         if original,
-          do: Application.put_env(:cyfr, :storage_adapter, original),
-          else: Application.delete_env(:cyfr, :storage_adapter)
+          do: Application.put_env(:arca, :storage_adapter, original),
+          else: Application.delete_env(:arca, :storage_adapter)
       end)
 
       :ok

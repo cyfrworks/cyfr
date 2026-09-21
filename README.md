@@ -435,7 +435,7 @@ Builds are on after `cyfr init`: it writes both settings into `.env`, and `cyfr 
 
 ### Operator notes for shared and open-door servers
 
-- **The seed `local.http` catalyst asks for wildcard egress** (`domains: ["*"]`, http+https; private IPs stay denied) and first-run provisioning consents the bundle automatically — on a server whose allowlist is `*`, that is a consented HTTP relay per signed-in stranger. The minted grant is pinned byte-for-byte by `test/sanctum/consent/bootstrap_golden_test.exs`, so widening or narrowing it is always a reviewed diff; narrow the seed manifest before opening the door if that posture is too generous for your deployment.
+- **The seed `local.http` catalyst asks for wildcard egress** (`domains: ["*"]`, http+https; private IPs stay denied) and first-run provisioning consents the bundle automatically — on a server whose allowlist is `*`, that is a consented HTTP relay per signed-in stranger. The minted grant is pinned byte-for-byte by `apps/cyfr/test/sanctum/consent/bootstrap_golden_test.exs`, so widening or narrowing it is always a reviewed diff; narrow the seed manifest before opening the door if that posture is too generous for your deployment.
 - **Audit sinks receive identity fields, email included.** The door's refusal telemetry carries the attempted email (that is the audit content — who was turned away), and `Cyfr.Sanitizer` deliberately does not redact identity fields on the audit plane. Point `config :cyfr, :audit_sinks` at a SIEM only if it may hold PII.
 - **A first sign-in needs cyfr.run reachable once** (to find or claim the person's namespace) and pulls the AQUA formula's provider catalysts from the registry. On an air-gapped or registry-unreachable install the athanor is created but left unprovisioned — retried on the next sign-in, with the cause in the server log and the `[:cyfr, :sanctum, :provisioning, :failed]` telemetry event. AQUA stays unavailable until a retry succeeds.
 
@@ -825,10 +825,9 @@ cosign verify-blob \
 ## License
 
 CYFR is **Fair Source** — mixed-licensed per file via `SPDX-License-Identifier`
-headers. The boundary is one subsystem: everything under
-`apps/cyfr/lib/sanctum/` (Sanctum — the auth, policy, audit, and tenancy
-layer) and its tests under `apps/cyfr/test/sanctum/` is licensed under the
-**Functional Source License 1.1** with **Apache 2.0** as the Change License
+headers. The boundary is one application: everything under
+`apps/sanctum/` (Sanctum — the auth, policy, audit and tenancy layer, with
+its own tests) is licensed under the **Functional Source License 1.1** with **Apache 2.0** as the Change License
 ([`FSL-1.1-Apache-2.0`](LICENSES/FSL-1.1-Apache-2.0.txt)). Everything
 else is **[Apache License 2.0](LICENSES/Apache-2.0.txt)**. See
 [`LICENSE`](LICENSE) for the top-level pointer and

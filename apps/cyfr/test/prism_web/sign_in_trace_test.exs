@@ -38,29 +38,41 @@ defmodule PrismWeb.SignInTraceTest do
     File.cp_r!(Path.join(@repo_root, "seed/components"), Path.join(seed_dir, "components"))
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
-    env = [
-      base_path: test_dir,
-      seed_path: seed_dir,
+    # The storage roots are the persistence layer's; the registry endpoints
+    # are the host's; the provider selection, the issuer, the client id,
+    # the flow's endpoints and the inline provisioning are the identity
+    # domain's. Restoring one under another application's name leaves a
+    # provider set for every test that runs after this one.
+    arca_env = [base_path: test_dir, seed_path: seed_dir]
+
+    cyfr_env = [
       # Both endpoints, because they are separate settings and a pull dials
       # the OCI one.
       registry_url: "none",
-      oci_registry_url: "none",
-      provisioning_inline: false
+      oci_registry_url: "none"
     ]
 
-    # The provider selection and the issuer are the identity domain's keys
-    # (`:sanctum`), the rest the host's: restoring the wrong application
-    # leaves a provider set for every test that runs after this one.
-    restore =
-      restore_env(:cyfr, Keyword.keys(env) ++ [:github_client_id, :device_flow_endpoints])
+    sanctum_env = [provisioning_inline: false]
 
-    restore_sanctum = restore_env(:sanctum, [:auth_provider, :oidc_issuer])
+    restore_arca = restore_env(:arca, Keyword.keys(arca_env))
+    restore_cyfr = restore_env(:cyfr, Keyword.keys(cyfr_env))
+
+    restore_sanctum =
+      restore_env(
+        :sanctum,
+        Keyword.keys(sanctum_env) ++
+          [:auth_provider, :oidc_issuer, :github_client_id, :device_flow_endpoints]
+      )
 
     prev_ueberauth = Application.get_env(:ueberauth, Ueberauth)
-    for {key, value} <- env, do: Application.put_env(:cyfr, key, value)
+
+    for {app, env} <- [arca: arca_env, cyfr: cyfr_env, sanctum: sanctum_env],
+        {key, value} <- env,
+        do: Application.put_env(app, key, value)
 
     on_exit(fn ->
-      restore.()
+      restore_arca.()
+      restore_cyfr.()
       restore_sanctum.()
       Application.put_env(:ueberauth, Ueberauth, prev_ueberauth)
       File.rm_rf!(test_dir)
@@ -176,9 +188,9 @@ defmodule PrismWeb.SignInTraceTest do
     base = "http://localhost:#{bypass.port}"
     {:ok, polls} = Agent.start_link(fn -> 0 end)
 
-    Application.put_env(:cyfr, :github_client_id, "trace-client")
+    Application.put_env(:sanctum, :github_client_id, "trace-client")
 
-    Application.put_env(:cyfr, :device_flow_endpoints, %{
+    Application.put_env(:sanctum, :device_flow_endpoints, %{
       github: %{
         device: base <> "/login/device/code",
         token: base <> "/login/oauth/access_token",

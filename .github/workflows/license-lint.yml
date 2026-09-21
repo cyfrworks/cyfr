@@ -1,6 +1,6 @@
 name: License Lint
 
-# Check directory-based licensing: lib/sanctum and test/sanctum use
+# Check directory-based licensing: the `apps/sanctum` application uses
 # FSL-1.1-Apache-2.0; all other source uses Apache-2.0. The builder and
 # worker images are Apache-2.0 alone, so the apps they release reach no FSL
 # file.
@@ -54,8 +54,7 @@ jobs:
 
           is_fsl_zone() {
             case "$1" in
-              apps/cyfr/lib/sanctum/*) return 0 ;;
-              apps/cyfr/test/sanctum/*) return 0 ;;
+              apps/sanctum/*) return 0 ;;
             esac
             return 1
           }

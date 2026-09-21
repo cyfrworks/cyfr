@@ -23,11 +23,11 @@ defmodule Compendium.Builds.BuildRefusalsTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     dir = Path.join(System.tmp_dir!(), "build_refusals_#{System.unique_integer([:positive])}")
-    prev = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, dir)
+    prev = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, dir)
 
     on_exit(fn ->
-      if prev, do: Application.put_env(:cyfr, :base_path, prev)
+      if prev, do: Application.put_env(:arca, :base_path, prev)
       File.rm_rf!(dir)
     end)
 

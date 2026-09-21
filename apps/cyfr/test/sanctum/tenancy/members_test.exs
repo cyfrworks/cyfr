@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.Tenancy.MembersTest do
@@ -160,13 +160,13 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
 
     test "the member cap counts invitations as seats", %{athanor: athanor} do
-      prev = Application.get_env(:cyfr, :caps)
-      Application.put_env(:cyfr, :caps, max_members_per_group: 2)
+      prev = Application.get_env(:sanctum, :caps)
+      Application.put_env(:sanctum, :caps, max_members_per_group: 2)
 
       on_exit(fn ->
         if prev,
-          do: Application.put_env(:cyfr, :caps, prev),
-          else: Application.delete_env(:cyfr, :caps)
+          do: Application.put_env(:sanctum, :caps, prev),
+          else: Application.delete_env(:sanctum, :caps)
       end)
 
       n = System.unique_integer([:positive])

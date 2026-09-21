@@ -45,8 +45,8 @@ defmodule Opus.CancelCascadeCharacterizationTest do
       Path.join(System.tmp_dir!(), "cancel_cascade_#{System.unique_integer([:positive])}")
 
     keys = [:base_path]
-    previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :base_path, test_path)
+    previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
+    Application.put_env(:arca, :base_path, test_path)
 
     ctx = Sanctum.TestContext.local()
 
@@ -56,8 +56,8 @@ defmodule Opus.CancelCascadeCharacterizationTest do
 
       for {key, value} <- previous do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(:arca, key, value),
+          else: Application.delete_env(:arca, key)
       end
     end)
 

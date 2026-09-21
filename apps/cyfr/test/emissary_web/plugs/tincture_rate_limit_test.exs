@@ -12,7 +12,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimitTest do
     # config/test.exs disables the limit globally (1_000_000); exercise the
     # real per-pipeline limits here by removing the override.
     original_max = Application.get_env(:cyfr, :tincture_rate_limit_max)
-    original_trust = Application.get_env(:cyfr, :trust_x_forwarded_for)
+    original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)
     Application.delete_env(:cyfr, :tincture_rate_limit_max)
 
     on_exit(fn ->
@@ -23,7 +23,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimitTest do
         key, value -> Application.put_env(:cyfr, key, value)
       end
 
-      Application.delete_env(:cyfr, :trust_x_forwarded_for)
+      Application.delete_env(:sanctum, :trust_x_forwarded_for)
       restore.(:tincture_rate_limit_max, original_max)
       restore.(:trust_x_forwarded_for, original_trust)
     end)
@@ -143,7 +143,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimitTest do
     end
 
     test "trust on: forwarded clients get independent buckets behind the proxy" do
-      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
       proxy_ip = {127, 0, 0, 7}
 
       for _ <- 1..3 do

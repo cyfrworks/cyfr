@@ -65,14 +65,14 @@ defmodule PrismWeb.ConnCase do
   # the repository's own seed; restored on exit.
   defp turn_env! do
     keys = [:seed_path]
-    prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
-    Application.put_env(:cyfr, :seed_path, Path.expand("../../../../seed", __DIR__))
+    prev = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
+    Application.put_env(:arca, :seed_path, Path.expand("../../../../seed", __DIR__))
 
     ExUnit.Callbacks.on_exit(fn ->
       for {key, value} <- prev do
         if value,
-          do: Application.put_env(:cyfr, key, value),
-          else: Application.delete_env(:cyfr, key)
+          do: Application.put_env(:arca, key, value),
+          else: Application.delete_env(:arca, key)
       end
     end)
   end

@@ -353,9 +353,9 @@ defmodule EmissaryWeb.AuthControllerTest do
       # Nothing is shared server-wide for a refused mint to fall back on, so
       # admitting the person without an athanor would hand them a session
       # with nowhere to work. The door says so instead.
-      previous = Application.get_env(:cyfr, :caps, [])
-      Application.put_env(:cyfr, :caps, max_athanors: 1)
-      on_exit(fn -> Application.put_env(:cyfr, :caps, previous) end)
+      previous = Application.get_env(:sanctum, :caps, [])
+      Application.put_env(:sanctum, :caps, max_athanors: 1)
+      on_exit(fn -> Application.put_env(:sanctum, :caps, previous) end)
 
       n = System.unique_integer([:positive])
       conn = callback(conn, verified_oidcc_auth("full_#{n}", email: "full#{n}@example.com"))
@@ -371,9 +371,9 @@ defmodule EmissaryWeb.AuthControllerTest do
       n = System.unique_integer([:positive])
       uid = "auth_cb_ops_#{n}"
       email = "ops#{n}@example.com"
-      prev = Application.get_env(:cyfr, :platform_admin_emails, [])
-      Application.put_env(:cyfr, :platform_admin_emails, [email])
-      on_exit(fn -> Application.put_env(:cyfr, :platform_admin_emails, prev) end)
+      prev = Application.get_env(:sanctum, :platform_admin_emails, [])
+      Application.put_env(:sanctum, :platform_admin_emails, [email])
+      on_exit(fn -> Application.put_env(:sanctum, :platform_admin_emails, prev) end)
 
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
         json_resp(c, 200, %{

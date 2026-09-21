@@ -1,0 +1,681 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Sanctum.ApiKeyTest do
+  use ExUnit.Case, async: false
+
+  alias Sanctum.ApiKey
+  alias Sanctum.Context
+
+  @public_prefix "cyfr_pk_"
+  @secret_prefix "cyfr_sk_"
+  @admin_prefix "cyfr_ak_"
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    {:ok, ctx: Sanctum.TestContext.local()}
+  end
+
+  describe "create/2" do
+    test "creates a new API key with proper format (default public type)", %{ctx: ctx} do
+      {:ok, result} = ApiKey.create(ctx, %{name: "test-key"})
+
+      assert result.name == "test-key"
+      assert result.type == :application
+      assert String.starts_with?(result.api_key, @public_prefix)
+      assert result.scope == ["execute", "component_read", "storage_read"]
+      assert result.created_at != nil
+    end
+
+    test "creates public key with explicit type", %{ctx: ctx} do
+      {:ok, result} = ApiKey.create(ctx, %{name: "public-key", type: :application, scope: []})
+
+      assert result.type == :application
+      assert String.starts_with?(result.api_key, @public_prefix)
+    end
+
+    test "creates secret key", %{ctx: ctx} do
+      {:ok, result} = ApiKey.create(ctx, %{name: "secret-key", type: :service, scope: []})
+
+      assert result.type == :service
+      assert String.starts_with?(result.api_key, @secret_prefix)
+    end
+
+    test "creates admin key", %{ctx: ctx} do
+      {:ok, result} = ApiKey.create(ctx, %{name: "admin-key", type: :admin, scope: []})
+
+      assert result.type == :admin
+      assert String.starts_with?(result.api_key, @admin_prefix)
+    end
+
+    test "returns error for invalid key type", %{ctx: ctx} do
+      assert {:error, {:invalid_key_type, :invalid}} =
+               ApiKey.create(ctx, %{name: "bad-key", type: :invalid, scope: []})
+    end
+
+    test "generates unique keys", %{ctx: ctx} do
+      {:ok, r1} = ApiKey.create(ctx, %{name: "key1", scope: []})
+      {:ok, r2} = ApiKey.create(ctx, %{name: "key2", scope: []})
+
+      assert r1.api_key != r2.api_key
+    end
+
+    test "returns error for duplicate name", %{ctx: ctx} do
+      {:ok, _} = ApiKey.create(ctx, %{name: "duplicate", scope: []})
+      assert {:error, :already_exists} = ApiKey.create(ctx, %{name: "duplicate", scope: []})
+    end
+
+    test "returns error without name", %{ctx: ctx} do
+      assert {:error, "name is required"} = ApiKey.create(ctx, %{scope: []})
+    end
+
+    test "creates key with rate limit", %{ctx: ctx} do
+      {:ok, result} =
+        ApiKey.create(ctx, %{
+          name: "limited-key",
+          type: :service,
+          scope: ["vault_read"],
+          rate_limit: "100/1m"
+        })
+
+      assert result.name == "limited-key"
+    end
+  end
+
+  describe "get/2" do
+    test "retrieves key by name with redacted value", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "test-key"})
+      {:ok, retrieved} = ApiKey.get(ctx, "test-key")
+
+      assert retrieved.name == "test-key"
+      assert retrieved.type == :application
+      assert String.ends_with?(retrieved.key_prefix, "...")
+      assert String.starts_with?(retrieved.key_prefix, @public_prefix)
+      # Full key should not be returned
+      refute retrieved.key_prefix == created.api_key
+    end
+
+    test "retrieves secret key with correct type", %{ctx: ctx} do
+      {:ok, _created} = ApiKey.create(ctx, %{name: "secret-key", type: :service, scope: []})
+      {:ok, retrieved} = ApiKey.get(ctx, "secret-key")
+
+      assert retrieved.type == :service
+      assert String.starts_with?(retrieved.key_prefix, @secret_prefix)
+    end
+
+    test "returns error for non-existent key", %{ctx: ctx} do
+      assert {:error, :not_found} = ApiKey.get(ctx, "nonexistent")
+    end
+  end
+
+  describe "list/1" do
+    test "returns empty list when no keys exist", %{ctx: ctx} do
+      {:ok, keys} = ApiKey.list(ctx)
+      assert keys == []
+    end
+
+    test "returns all non-revoked keys", %{ctx: ctx} do
+      ApiKey.create(ctx, %{name: "key1", scope: []})
+      ApiKey.create(ctx, %{name: "key2", scope: []})
+      ApiKey.create(ctx, %{name: "key3", scope: []})
+
+      {:ok, keys} = ApiKey.list(ctx)
+
+      assert length(keys) == 3
+      names = Enum.map(keys, & &1.name)
+      assert "key1" in names
+      assert "key2" in names
+      assert "key3" in names
+    end
+
+    test "excludes revoked keys", %{ctx: ctx} do
+      ApiKey.create(ctx, %{name: "active", scope: []})
+      ApiKey.create(ctx, %{name: "revoked", scope: []})
+      ApiKey.revoke(ctx, "revoked")
+
+      {:ok, keys} = ApiKey.list(ctx)
+
+      assert length(keys) == 1
+      assert hd(keys).name == "active"
+    end
+
+    test "returns keys sorted by creation time", %{ctx: ctx} do
+      ApiKey.create(ctx, %{name: "first", scope: []})
+      :timer.sleep(10)
+      ApiKey.create(ctx, %{name: "second", scope: []})
+
+      {:ok, keys} = ApiKey.list(ctx)
+
+      names = Enum.map(keys, & &1.name)
+      assert names == ["first", "second"]
+    end
+  end
+
+  describe "revoke/2" do
+    test "revokes an existing key", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "to-revoke", scope: []})
+
+      assert :ok = ApiKey.revoke(ctx, "to-revoke")
+
+      # Validate should fail
+      assert {:error, :revoked} = ApiKey.validate(created.api_key)
+    end
+
+    test "returns error for non-existent key", %{ctx: ctx} do
+      assert {:error, :not_found} = ApiKey.revoke(ctx, "nonexistent")
+    end
+
+    test "a revoked key's name can be reused", %{ctx: ctx} do
+      {:ok, first} = ApiKey.create(ctx, %{name: "reusable", scope: ["execute"]})
+      :ok = ApiKey.revoke(ctx, "reusable")
+
+      assert {:ok, second} =
+               ApiKey.create(ctx, %{name: "reusable", scope: ["execute", "storage_read"]})
+
+      refute second.api_key == first.api_key
+
+      # The old credential stays dead; the new one works
+      assert {:error, :revoked} = ApiKey.validate(first.api_key)
+      assert {:ok, _} = ApiKey.validate(second.api_key)
+    end
+
+    test "an active key still blocks duplicate names", %{ctx: ctx} do
+      {:ok, _} = ApiKey.create(ctx, %{name: "occupied", scope: ["execute"]})
+
+      assert {:error, :already_exists} =
+               ApiKey.create(ctx, %{name: "occupied", scope: ["execute"]})
+    end
+
+    test "multiple revoked keys with the same name coexist", %{ctx: ctx} do
+      {:ok, _} = ApiKey.create(ctx, %{name: "recycled", scope: ["execute"]})
+      :ok = ApiKey.revoke(ctx, "recycled")
+      {:ok, _} = ApiKey.create(ctx, %{name: "recycled", scope: ["execute"]})
+      :ok = ApiKey.revoke(ctx, "recycled")
+
+      assert {:ok, third} = ApiKey.create(ctx, %{name: "recycled", scope: ["execute"]})
+      assert {:ok, _} = ApiKey.validate(third.api_key)
+    end
+
+    test "revoke by name targets the active row, not a revoked namesake", %{ctx: ctx} do
+      {:ok, _} = ApiKey.create(ctx, %{name: "target", scope: ["execute"]})
+      :ok = ApiKey.revoke(ctx, "target")
+      {:ok, active} = ApiKey.create(ctx, %{name: "target", scope: ["execute"]})
+
+      assert :ok = ApiKey.revoke(ctx, "target")
+      assert {:error, :revoked} = ApiKey.validate(active.api_key)
+    end
+
+    # Warm validation before revocation; the immediately following request must reject the key.
+    test "a validated key fails on the very next request after revoke", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "warm-then-revoke", scope: []})
+
+      # Warm: a successful validation (would populate any future cache).
+      assert {:ok, _} = ApiKey.validate(created.api_key)
+
+      assert :ok = ApiKey.revoke(ctx, "warm-then-revoke")
+
+      # Immediately after — no sleep, no TTL window.
+      assert {:error, :revoked} = ApiKey.validate(created.api_key)
+    end
+
+    test "a validated key fails immediately after rotate (old secret dies)", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "warm-then-rotate", scope: []})
+      assert {:ok, _} = ApiKey.validate(created.api_key)
+
+      assert {:ok, %{api_key: new_key}} = ApiKey.rotate(ctx, "warm-then-rotate")
+      refute new_key == created.api_key
+
+      assert {:error, :invalid_key} = ApiKey.validate(created.api_key)
+      assert {:ok, _} = ApiKey.validate(new_key)
+    end
+  end
+
+  describe "rotate/2" do
+    test "generates new key value preserving type", %{ctx: ctx} do
+      {:ok, original} = ApiKey.create(ctx, %{name: "rotating"})
+      {:ok, rotated} = ApiKey.rotate(ctx, "rotating")
+
+      assert rotated.name == "rotating"
+      assert rotated.type == :application
+      assert rotated.api_key != original.api_key
+      assert String.starts_with?(rotated.api_key, @public_prefix)
+      assert rotated.rotated_at != nil
+    end
+
+    test "preserves secret key type on rotation", %{ctx: ctx} do
+      {:ok, _original} = ApiKey.create(ctx, %{name: "secret-rotating", type: :service, scope: []})
+      {:ok, rotated} = ApiKey.rotate(ctx, "secret-rotating")
+
+      assert rotated.type == :service
+      assert String.starts_with?(rotated.api_key, @secret_prefix)
+    end
+
+    test "preserves admin key type on rotation", %{ctx: ctx} do
+      {:ok, _original} = ApiKey.create(ctx, %{name: "admin-rotating", type: :admin, scope: []})
+      {:ok, rotated} = ApiKey.rotate(ctx, "admin-rotating")
+
+      assert rotated.type == :admin
+      assert String.starts_with?(rotated.api_key, @admin_prefix)
+    end
+
+    test "old key no longer works after rotation", %{ctx: ctx} do
+      {:ok, original} = ApiKey.create(ctx, %{name: "rotating", scope: []})
+      {:ok, _rotated} = ApiKey.rotate(ctx, "rotating")
+
+      assert {:error, :invalid_key} = ApiKey.validate(original.api_key)
+    end
+
+    test "new key works after rotation", %{ctx: ctx} do
+      {:ok, _original} =
+        ApiKey.create(ctx, %{name: "rotating", type: :service, scope: ["vault_read"]})
+
+      {:ok, rotated} = ApiKey.rotate(ctx, "rotating")
+
+      {:ok, validated} = ApiKey.validate(rotated.api_key)
+      assert validated.name == "rotating"
+      assert validated.scope == ["vault_read"]
+    end
+
+    test "returns error for non-existent key", %{ctx: ctx} do
+      assert {:error, :not_found} = ApiKey.rotate(ctx, "nonexistent")
+    end
+  end
+
+  describe "validate/1" do
+    test "validates active key and returns metadata with type", %{ctx: ctx} do
+      {:ok, created} =
+        ApiKey.create(ctx, %{
+          name: "valid-key",
+          type: :service,
+          scope: ["vault_read", "component_manage"],
+          rate_limit: "50/1m"
+        })
+
+      {:ok, validated} = ApiKey.validate(created.api_key)
+
+      assert validated.name == "valid-key"
+      assert validated.type == :service
+      assert validated.scope == ["vault_read", "component_manage"]
+      assert validated.rate_limit == "50/1m"
+    end
+
+    test "validates secret key and returns correct type", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "secret-valid", type: :service, scope: []})
+
+      {:ok, validated} = ApiKey.validate(created.api_key)
+
+      assert validated.type == :service
+    end
+
+    test "validates admin key and returns correct type", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "admin-valid", type: :admin, scope: []})
+
+      {:ok, validated} = ApiKey.validate(created.api_key)
+
+      assert validated.type == :admin
+    end
+
+    test "detects key type from prefix", %{ctx: ctx} do
+      {:ok, pk} = ApiKey.create(ctx, %{name: "pk", type: :application, scope: []})
+      {:ok, sk} = ApiKey.create(ctx, %{name: "sk", type: :service, scope: []})
+      {:ok, ak} = ApiKey.create(ctx, %{name: "ak", type: :admin, scope: []})
+
+      {:ok, pk_val} = ApiKey.validate(pk.api_key)
+      {:ok, sk_val} = ApiKey.validate(sk.api_key)
+      {:ok, ak_val} = ApiKey.validate(ak.api_key)
+
+      assert pk_val.type == :application
+      assert sk_val.type == :service
+      assert ak_val.type == :admin
+    end
+
+    test "returns error for invalid key format", %{ctx: _ctx} do
+      assert {:error, :invalid_key_format} = ApiKey.validate("invalid_key")
+    end
+
+    test "returns error for key with unknown prefix", %{ctx: _ctx} do
+      assert {:error, :invalid_key_format} = ApiKey.validate("cyfr_zz_abc123456789012345678901")
+    end
+
+    test "returns error for non-existent key", %{ctx: _ctx} do
+      fake_key = @public_prefix <> "nonexistent12345678901234"
+      assert {:error, :invalid_key} = ApiKey.validate(fake_key)
+    end
+
+    test "returns error for revoked key", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "revoked-key", scope: []})
+      ApiKey.revoke(ctx, "revoked-key")
+
+      assert {:error, :revoked} = ApiKey.validate(created.api_key)
+    end
+  end
+
+  describe "IP allowlist" do
+    test "creates key with IP allowlist", %{ctx: ctx} do
+      {:ok, result} =
+        ApiKey.create(ctx, %{
+          name: "admin-with-ip",
+          type: :admin,
+          scope: [],
+          ip_allowlist: ["192.168.1.0/24", "10.0.0.1"]
+        })
+
+      assert result.name == "admin-with-ip"
+      assert result.type == :admin
+    end
+
+    test "validate allows key without IP check when no allowlist", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "no-ip-key", scope: []})
+
+      {:ok, validated} = ApiKey.validate(created.api_key)
+      assert validated.name == "no-ip-key"
+
+      # Also works with explicit IP
+      {:ok, validated2} = ApiKey.validate(created.api_key, client_ip: "1.2.3.4")
+      assert validated2.name == "no-ip-key"
+    end
+
+    test "validate allows matching IP in allowlist", %{ctx: ctx} do
+      {:ok, created} =
+        ApiKey.create(ctx, %{
+          name: "ip-allowed-key",
+          type: :admin,
+          scope: [],
+          ip_allowlist: ["192.168.1.10", "10.0.0.0/8"]
+        })
+
+      # Exact match
+      {:ok, validated1} = ApiKey.validate(created.api_key, client_ip: "192.168.1.10")
+      assert validated1.name == "ip-allowed-key"
+
+      # CIDR match
+      {:ok, validated2} = ApiKey.validate(created.api_key, client_ip: "10.255.255.255")
+      assert validated2.name == "ip-allowed-key"
+    end
+
+    test "validate rejects non-matching IP", %{ctx: ctx} do
+      {:ok, created} =
+        ApiKey.create(ctx, %{
+          name: "ip-restricted-key",
+          type: :admin,
+          scope: [],
+          ip_allowlist: ["192.168.1.0/24"]
+        })
+
+      assert {:error, :ip_not_allowed} = ApiKey.validate(created.api_key, client_ip: "10.0.0.1")
+    end
+
+    test "validate without client_ip fails closed for an allowlisted key", %{ctx: ctx} do
+      {:ok, created} =
+        ApiKey.create(ctx, %{
+          name: "ip-key-no-check",
+          type: :admin,
+          scope: [],
+          ip_allowlist: ["192.168.1.0/24"]
+        })
+
+      # No caller-supplied IP is not proof the restriction is satisfied.
+      assert {:error, :ip_not_allowed} = ApiKey.validate(created.api_key)
+    end
+
+    test "ip_allowlist is included in list output", %{ctx: ctx} do
+      ApiKey.create(ctx, %{
+        name: "key-with-ips",
+        scope: [],
+        ip_allowlist: ["192.168.1.0/24"]
+      })
+
+      {:ok, keys} = ApiKey.list(ctx)
+      key = Enum.find(keys, &(&1.name == "key-with-ips"))
+
+      assert key.ip_allowlist == ["192.168.1.0/24"]
+    end
+  end
+
+  describe "ip_allowed?/2" do
+    test "exact IP match" do
+      assert ApiKey.ip_allowed?("192.168.1.10", ["192.168.1.10"])
+      refute ApiKey.ip_allowed?("192.168.1.11", ["192.168.1.10"])
+    end
+
+    test "CIDR /24 match" do
+      assert ApiKey.ip_allowed?("192.168.1.0", ["192.168.1.0/24"])
+      assert ApiKey.ip_allowed?("192.168.1.255", ["192.168.1.0/24"])
+      refute ApiKey.ip_allowed?("192.168.2.1", ["192.168.1.0/24"])
+    end
+
+    test "CIDR /8 match" do
+      assert ApiKey.ip_allowed?("10.0.0.1", ["10.0.0.0/8"])
+      assert ApiKey.ip_allowed?("10.255.255.255", ["10.0.0.0/8"])
+      refute ApiKey.ip_allowed?("11.0.0.1", ["10.0.0.0/8"])
+    end
+
+    test "CIDR /32 match (single IP)" do
+      assert ApiKey.ip_allowed?("192.168.1.10", ["192.168.1.10/32"])
+      refute ApiKey.ip_allowed?("192.168.1.11", ["192.168.1.10/32"])
+    end
+
+    test "multiple patterns in allowlist" do
+      allowlist = ["192.168.1.0/24", "10.0.0.0/8", "172.16.0.1"]
+
+      assert ApiKey.ip_allowed?("192.168.1.50", allowlist)
+      assert ApiKey.ip_allowed?("10.20.30.40", allowlist)
+      assert ApiKey.ip_allowed?("172.16.0.1", allowlist)
+      refute ApiKey.ip_allowed?("8.8.8.8", allowlist)
+    end
+
+    test "empty allowlist rejects all" do
+      refute ApiKey.ip_allowed?("192.168.1.10", [])
+    end
+
+    test "IPv6 exact match" do
+      assert ApiKey.ip_allowed?("2001:db8::1", ["2001:db8::1"])
+      refute ApiKey.ip_allowed?("2001:db8::2", ["2001:db8::1"])
+    end
+
+    test "IPv6 CIDR /64 match" do
+      assert ApiKey.ip_allowed?("2001:db8:85a3::1", ["2001:db8:85a3::/64"])
+      assert ApiKey.ip_allowed?("2001:db8:85a3::ffff:ffff:ffff:ffff", ["2001:db8:85a3::/64"])
+      refute ApiKey.ip_allowed?("2001:db8:85a4::1", ["2001:db8:85a3::/64"])
+    end
+
+    test "IPv6 CIDR /48 match" do
+      assert ApiKey.ip_allowed?("2001:db8:abcd::1", ["2001:db8:abcd::/48"])
+      assert ApiKey.ip_allowed?("2001:db8:abcd:ffff::1", ["2001:db8:abcd::/48"])
+      refute ApiKey.ip_allowed?("2001:db8:abce::1", ["2001:db8:abcd::/48"])
+    end
+
+    test "IPv6 loopback" do
+      assert ApiKey.ip_allowed?("::1", ["::1"])
+      refute ApiKey.ip_allowed?("::2", ["::1"])
+    end
+
+    test "mixed IPv4 and IPv6 allowlist" do
+      allowlist = ["192.168.1.0/24", "2001:db8::/32"]
+
+      assert ApiKey.ip_allowed?("192.168.1.50", allowlist)
+      assert ApiKey.ip_allowed?("2001:db8:abcd::1", allowlist)
+      refute ApiKey.ip_allowed?("10.0.0.1", allowlist)
+      refute ApiKey.ip_allowed?("2001:db9::1", allowlist)
+    end
+
+    # Malformed or out-of-range CIDR prefixes must match no address, including the network address.
+    test "malformed CIDR fails closed (no fail-open / allowlist widening)" do
+      for bad <- [
+            "192.168.1.0/99",
+            "192.168.1.0/33",
+            "192.168.1.0/-1",
+            "192.168.1.0/64",
+            "192.168.1.0/abc",
+            "192.168.1.0/",
+            "not-an-ip/24",
+            "2001:db8::/129",
+            "2001:db8::/-1"
+          ] do
+        refute ApiKey.ip_allowed?("8.8.8.8", [bad]),
+               "#{bad} must not match an arbitrary IP"
+
+        refute ApiKey.ip_allowed?("192.168.1.0", [bad]),
+               "#{bad} must not even match its own network address"
+
+        refute ApiKey.ip_allowed?("2001:db8::1", [bad]),
+               "#{bad} must not match an arbitrary IPv6"
+      end
+    end
+
+    test "a malformed entry does not disable a valid sibling entry" do
+      allowlist = ["192.168.1.0/99", "10.0.0.0/8"]
+      assert ApiKey.ip_allowed?("10.1.2.3", allowlist)
+      refute ApiKey.ip_allowed?("8.8.8.8", allowlist)
+    end
+  end
+
+  # ACCEPTED-RISK DESIGN (do not "fix" this into the inverse): an API key is an
+  # athanor credential. The 192-bit hash IS the credential; athanor_id is read
+  # back from the stored key row, never from the request, and the tenant is
+  # enforced on the resulting Context via Sanctum.TenantPolicy.require_athanor/1
+  # (see Sanctum.ApiKey.context_from_metadata/1 and
+  # EmissaryWeb.Plugs.MCPRequestMetadata). Key validity is intentionally
+  # DECOUPLED from the creator's *current* athanor membership — revocation is
+  # the control. The consequence (an offboarded OIDC user's key keeps athanor
+  # access until the key is revoked) is the deliberate model, not an oversight.
+  # Cross-tenant isolation for keys is proved separately in the cross-tenant
+  # proof suite.
+  describe "a key is a standing channel of its athanor" do
+    test "it stops when the athanor is archived, and when its creator is denied", %{ctx: ctx} do
+      n = System.unique_integer([:positive])
+      # The creator is a person this server knows, named by their own id.
+      {ctx, creator} = Sanctum.TestContext.person!(ctx, %{email: "keys#{n}@example.com"})
+      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Keys #{n}")
+      in_group = %{ctx | athanor_id: group.id}
+      {:ok, %{api_key: key}} = ApiKey.create(in_group, %{name: "chan-#{n}"})
+      assert {:ok, _} = ApiKey.validate(key, [])
+
+      # archiving revokes the athanor's keys for good — reopening the
+      # athanor does not bring a revoked credential back
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
+      assert {:error, :revoked} = ApiKey.validate(key, [])
+      {:ok, _} = Sanctum.Tenancy.Athanors.unarchive(group)
+      assert {:error, :revoked} = ApiKey.validate(key, [])
+
+      # a key minted in the reopened athanor works while a member remains,
+      # even after its creator leaves the group
+      other = "github|https://github.com|other-#{n}"
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(other, scope: "athanor", athanor_id: group.id)
+      {:ok, %{api_key: key}} = ApiKey.create(in_group, %{name: "chan2-#{n}"})
+      assert {:ok, _} = ApiKey.validate(key, [])
+      :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: ctx.user_id)
+      assert {:ok, _} = ApiKey.validate(key, [])
+
+      # the creator being denied on this server does
+      {:ok, _} = Sanctum.Tenancy.Users.deny(creator)
+      assert {:error, :revoked} = ApiKey.validate(key, [])
+    end
+  end
+
+  describe "validate without a pre-supplied athanor" do
+    test "validate derives the athanor from the DB record", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "ext-validate-key", scope: []})
+
+      {:ok, validated} = ApiKey.validate(created.api_key)
+      assert validated.name == "ext-validate-key"
+      assert validated.athanor_id == ctx.athanor_id
+    end
+  end
+
+  describe "API-key athanor scoping" do
+    # API keys are ATHANOR credentials. `validate/2` resolves a key by its
+    # globally-unique hash and returns the key's OWN athanor_id from the stored
+    # row — it takes no caller athanor and cannot be steered by one. A key
+    # minted in athanor A therefore always resolves to a context bound to
+    # athanor A and can never be "used as" athanor B. Two keys with the same
+    # name in different athanors coexist (no unique-constraint collision).
+
+    setup do
+      ctx_a = %Context{
+        user_id: "user_x",
+        athanor_id: "ath_a",
+        permissions: MapSet.new([:*]),
+        scope: :athanor,
+        auth_method: :oidc,
+        api_key_type: nil,
+        request_id: nil
+      }
+
+      ctx_b = %{ctx_a | athanor_id: "ath_b"}
+
+      {:ok, ctx_a: ctx_a, ctx_b: ctx_b}
+    end
+
+    test "key resolves to its own creation athanor, never the caller's (cannot be used as athanor B)",
+         %{ctx_a: ctx_a, ctx_b: _ctx_b} do
+      {:ok, created} =
+        ApiKey.create(ctx_a, %{name: "scoped-key", scope: []})
+
+      # validate/2 takes no caller athanor: it returns the key's OWN athanor
+      # straight from the stored row — authoritative.
+      assert {:ok, meta} = ApiKey.validate(created.api_key)
+      assert meta.athanor_id == "ath_a"
+
+      # The shared builder binds the context to the KEY's athanor (ath_a), not
+      # to any caller/request context — so the key cannot operate as athanor
+      # B even though an attacker controls the request.
+      ctx = ApiKey.context_from_metadata(meta)
+      assert ctx.athanor_id == "ath_a"
+      assert ctx.scope == :athanor
+      assert ctx.auth_method == :api_key
+    end
+
+    test "context_from_metadata binds to the key row, ignoring the tenancy resolver",
+         %{ctx_a: ctx_a} do
+      # A key-derived context must never be re-resolved from the creating
+      # user's *current* membership. Point the tenancy resolver at a different
+      # athanor and assert the key-derived context is unaffected (the athanor
+      # comes from the row).
+      original_resolver = Application.get_env(:sanctum, :tenancy_resolver_override)
+
+      Application.put_env(
+        :sanctum,
+        :tenancy_resolver_override,
+        Sanctum.Test.OtherAthanorResolver
+      )
+
+      on_exit(fn ->
+        if original_resolver,
+          do: Application.put_env(:sanctum, :tenancy_resolver_override, original_resolver),
+          else: Application.delete_env(:sanctum, :tenancy_resolver_override)
+      end)
+
+      {:ok, created} = ApiKey.create(ctx_a, %{name: "no-override-key", scope: []})
+      {:ok, meta} = ApiKey.validate(created.api_key)
+
+      ctx = ApiKey.context_from_metadata(meta)
+      assert ctx.athanor_id == "ath_a"
+    end
+
+    test "two keys with the same name in different athanors coexist",
+         %{ctx_a: ctx_a, ctx_b: ctx_b} do
+      assert {:ok, _} = ApiKey.create(ctx_a, %{name: "dup-name", scope: []})
+
+      # Same name in a different athanor is NOT a unique-constraint violation.
+      assert {:ok, _} = ApiKey.create(ctx_b, %{name: "dup-name", scope: []})
+    end
+  end
+
+  describe "sequential operations" do
+    test "sequential key operations succeed", %{ctx: ctx} do
+      for i <- 1..3 do
+        {:ok, _} = ApiKey.create(ctx, %{name: "seq-key-#{i}", scope: []})
+      end
+
+      {:ok, keys} = ApiKey.list(ctx)
+      names = Enum.map(keys, & &1.name)
+
+      for i <- 1..3 do
+        assert "seq-key-#{i}" in names
+      end
+    end
+  end
+end

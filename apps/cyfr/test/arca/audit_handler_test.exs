@@ -7,12 +7,12 @@ defmodule Arca.AuditHandlerTest do
   import ExUnit.CaptureLog
 
   setup do
-    original_sinks = Application.get_env(:cyfr, :audit_sinks)
+    original_sinks = Application.get_env(:arca, :audit_sinks)
 
     on_exit(fn ->
       if original_sinks,
-        do: Application.put_env(:cyfr, :audit_sinks, original_sinks),
-        else: Application.delete_env(:cyfr, :audit_sinks)
+        do: Application.put_env(:arca, :audit_sinks, original_sinks),
+        else: Application.delete_env(:arca, :audit_sinks)
     end)
 
     :ok
@@ -32,7 +32,7 @@ defmodule Arca.AuditHandlerTest do
         end
       end
 
-      Application.put_env(:cyfr, :audit_sinks, [TestSink])
+      Application.put_env(:arca, :audit_sinks, [TestSink])
 
       Arca.AuditHandler.handle_event(
         [:cyfr, :sanctum, :auth],
@@ -66,7 +66,7 @@ defmodule Arca.AuditHandlerTest do
         end
       end
 
-      Application.put_env(:cyfr, :audit_sinks, [FailingSink, GoodSink])
+      Application.put_env(:arca, :audit_sinks, [FailingSink, GoodSink])
 
       log =
         capture_log(fn ->
@@ -96,7 +96,7 @@ defmodule Arca.AuditHandlerTest do
         end
       end
 
-      Application.put_env(:cyfr, :audit_sinks, [StructCheckSink])
+      Application.put_env(:arca, :audit_sinks, [StructCheckSink])
 
       Arca.AuditHandler.handle_event(
         [:cyfr, :sanctum, :auth],
@@ -134,7 +134,7 @@ defmodule Arca.AuditHandlerTest do
         end
       end
 
-      Application.put_env(:cyfr, :audit_sinks, [AllFailSink])
+      Application.put_env(:arca, :audit_sinks, [AllFailSink])
 
       capture_log(fn ->
         Arca.AuditHandler.handle_event(
@@ -160,7 +160,7 @@ defmodule Arca.AuditHandlerTest do
       # raise, outside the per-sink try/rescue. Emitted through
       # `:telemetry.execute/3` — the path that detaches a handler that
       # fails in any class — and the handler must still be attached after.
-      Application.put_env(:cyfr, :audit_sinks, :not_a_list)
+      Application.put_env(:arca, :audit_sinks, :not_a_list)
       event = [:cyfr, :sanctum, :auth]
       before = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
       ours = &Arca.AuditHandler.handle_event/4
@@ -220,7 +220,7 @@ defmodule Arca.AuditHandlerTest do
         end
       end
 
-      Application.put_env(:cyfr, :audit_sinks, [SecretSink])
+      Application.put_env(:arca, :audit_sinks, [SecretSink])
 
       for event <- [[:cyfr, :opus, :secret, :dispensed], [:cyfr, :opus, :secret, :denied]] do
         Arca.AuditHandler.handle_event(
@@ -247,7 +247,7 @@ defmodule Arca.AuditHandlerTest do
         end
       end
 
-      Application.put_env(:cyfr, :audit_sinks, [FieldSink])
+      Application.put_env(:arca, :audit_sinks, [FieldSink])
 
       identity = %{
         test_pid: test_pid,

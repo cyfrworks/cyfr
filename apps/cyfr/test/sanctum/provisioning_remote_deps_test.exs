@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.ProvisioningRemoteDepsTest do
@@ -113,8 +113,8 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
 
-    Application.put_env(:cyfr, :base_path, test_dir)
-    Application.put_env(:cyfr, :seed_path, seed_dir)
+    Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:arca, :seed_path, seed_dir)
     # `localhost:` is the one host the OCI reference layer maps to http.
     Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
@@ -240,9 +240,9 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     # pull stalls on the registry until the attempt's deadline — long enough
     # to race it.
     setup %{stall: stall} do
-      Application.put_env(:cyfr, :provisioning_inline, false)
+      Application.put_env(:sanctum, :provisioning_inline, false)
       Application.put_env(:cyfr, :provisioning_required_pull_budget_ms, 3_000)
-      on_exit(fn -> Application.put_env(:cyfr, :provisioning_inline, true) end)
+      on_exit(fn -> Application.put_env(:sanctum, :provisioning_inline, true) end)
 
       # A fill or a pull still running when the paths are restored would
       # work against the repository's own trees.

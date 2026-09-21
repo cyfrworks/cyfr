@@ -42,12 +42,12 @@ defmodule Cyfr.EgressInventoryTest do
     # way under the operator's private-egress allowlist. The auth domain
     # owns the few lines rather than reaching up to the host's transport;
     # the decision is still `Cyfr.Network.pin/2`'s.
-    "apps/cyfr/lib/sanctum/vault/oauth.ex" => :pinned_token_exchange,
+    "apps/sanctum/lib/sanctum/vault/oauth.ex" => :pinned_token_exchange,
     # S3-compatible object store — operator-configured endpoint, SigV4.
-    "apps/cyfr/lib/arca/adapters/s3.ex" => :object_store,
+    "apps/arca/lib/arca/adapters/s3.ex" => :object_store,
     # The IdP OAuth device-flow sliver: GitHub/Google fixed hosts, its own
     # Finch pool, budgeted by the device-poll rate limits.
-    "apps/cyfr/lib/sanctum/auth/device_flow.ex" => :idp_sliver,
+    "apps/sanctum/lib/sanctum/auth/device_flow.ex" => :idp_sliver,
     # Guest HTTP (cyfr:http/fetch) — consented edges, pinned opts, bounded
     # while streaming.
     "apps/opus/lib/opus/http_handler.ex" => :guest_fetch,

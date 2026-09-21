@@ -13,8 +13,8 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   setup do
     base = Path.join(System.tmp_dir!(), "tincture_ctrl_#{:rand.uniform(1_000_000)}")
-    original = Application.get_env(:cyfr, :base_path)
-    Application.put_env(:cyfr, :base_path, base)
+    original = Application.get_env(:arca, :base_path)
+    Application.put_env(:arca, :base_path, base)
 
     # ── Private tincture (auth-dash) ─────────────────────────────────
     private_dir = tincture_dir("auth-dash")
@@ -173,9 +173,9 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
     on_exit(fn ->
       if original do
-        Application.put_env(:cyfr, :base_path, original)
+        Application.put_env(:arca, :base_path, original)
       else
-        Application.delete_env(:cyfr, :base_path)
+        Application.delete_env(:arca, :base_path)
       end
 
       File.rm_rf!(base)

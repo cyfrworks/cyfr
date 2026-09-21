@@ -187,18 +187,18 @@ defmodule Arca.ThreadStorageTest do
     blob = Threads.blob_root(thread.id) ++ [msg.id, "0-a.txt"]
     :ok = Arca.put(ctx, blob, "bytes")
 
-    prev = Application.get_env(:cyfr, :storage_adapter)
+    prev = Application.get_env(:arca, :storage_adapter)
 
     Application.put_env(
-      :cyfr,
+      :arca,
       :storage_adapter,
       Arca.ThreadStorageTest.FailingDeleteAdapter
     )
 
     on_exit(fn ->
       if prev,
-        do: Application.put_env(:cyfr, :storage_adapter, prev),
-        else: Application.delete_env(:cyfr, :storage_adapter)
+        do: Application.put_env(:arca, :storage_adapter, prev),
+        else: Application.delete_env(:arca, :storage_adapter)
     end)
 
     # The DB never claims a deletion the tree didn't make.
@@ -209,7 +209,7 @@ defmodule Arca.ThreadStorageTest do
     assert [_] = Threads.messages(ctx, thread.id)
 
     # Healed adapter: the retry completes rows and bytes together.
-    Application.put_env(:cyfr, :storage_adapter, prev || Arca.Adapters.Local)
+    Application.put_env(:arca, :storage_adapter, prev || Arca.Adapters.Local)
     assert :ok = Threads.delete(ctx, thread.id)
     refute Arca.exists?(ctx, blob)
   end
@@ -335,9 +335,9 @@ defmodule Arca.ThreadStorageTest do
     {:ok, _first} = Threads.create(ctx, %{title: "One"})
     before = Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
 
-    original = Application.get_env(:cyfr, :caps, [])
-    Application.put_env(:cyfr, :caps, Keyword.put(original, :max_threads_per_athanor, 1))
-    on_exit(fn -> Application.put_env(:cyfr, :caps, original) end)
+    original = Application.get_env(:sanctum, :caps, [])
+    Application.put_env(:sanctum, :caps, Keyword.put(original, :max_threads_per_athanor, 1))
+    on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
 
     # The refusal is the port's vocabulary (`Cyfr.Caps`), not the tenancy
     # domain named from below it, and the row it refused is not there.

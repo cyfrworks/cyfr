@@ -32,25 +32,18 @@ ExUnit.after_suite(fn _ -> Cyfr.Test.LocusService.stop!() end)
 # Owned by the test-runner process so it outlives every test and no two
 # tests race to create it. `Cyfr.Test.SourceTree` fills it lazily; see that
 # module for why the architecture tests need to stop re-reading the tree.
-:ets.new(Cyfr.Test.SourceTree.table(), [:named_table, :public, :set, read_concurrency: true])
+Cyfr.Test.SourceTree.ensure_table()
 
 # The tmp storage roots configured in config/test.exs: the tenant root, and
 # the seed tree with an empty bundle plus a copy of the shipped AQUA
 # template (template reads stay real without the suite touching the repo's
 # own seed/).
-base_path = Application.fetch_env!(:cyfr, :base_path)
+base_path = Application.fetch_env!(:arca, :base_path)
 File.mkdir_p!(base_path)
 
-seed_path = Application.fetch_env!(:cyfr, :seed_path)
+seed_path = Application.fetch_env!(:arca, :seed_path)
 File.mkdir_p!(Path.join(seed_path, "components"))
 File.cp_r!(Path.expand("../../../seed/aqua", __DIR__), Path.join(seed_path, "aqua"))
-
-# The cap port every capped write asks, which raises while nothing is
-# installed rather than reading an uninstalled port as a server with no
-# caps. The boot write belongs in `Cyfr.Application` and lands with the
-# app split; until it does, the suite installs the one implementation
-# here, before the first test that writes a tenant byte.
-Cyfr.Caps.install!(Sanctum.Tenancy.Caps)
 
 # A suite database built from a different schema would run stale, since the
 # baseline still reads as applied; refuse it before any test touches it.
