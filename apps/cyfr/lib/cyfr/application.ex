@@ -117,6 +117,10 @@ defmodule Cyfr.Application do
       # Emissary web layer
       EmissaryWeb.Telemetry,
       {Phoenix.PubSub, name: Emissary.PubSub},
+      # Drops this member's cached authorization decisions when any member
+      # says one is no longer good. Right after PubSub, and before
+      # anything that establishes a caller.
+      Cyfr.StandingWatch,
       # Execution admission: the slots a member's own work holds. The
       # consented rate has no child here — its window is a row every
       # member of the cell claims in (`Arca.RateWindows`), so there is

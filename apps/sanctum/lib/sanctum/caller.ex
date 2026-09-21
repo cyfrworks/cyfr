@@ -110,7 +110,11 @@ defmodule Sanctum.Caller do
       # (`Session.destroy/1`, `destroy_by_hash/1`, `use_athanor/2`,
       # `revoke_all_for_user/1`) calls `invalidate_hash/1`, so a revoked
       # or repointed session misses on its very next establish — the TTL
-      # only bounds reads that race the mutation itself.
+      # only bounds reads that race the mutation itself, and, on a peer,
+      # an announcement the bus did not deliver. What is cached is an
+      # AUTHORIZATION decision, so the TTL is a security bound and not a
+      # tuning knob: it is how long a revoked authority may outlive its
+      # revocation anywhere in the cell.
       key = memo_key(token, opts)
 
       case Arca.Cache.get(key) do
@@ -310,16 +314,41 @@ defmodule Sanctum.Caller do
   end
 
   @doc """
-  Drop every established-context memo for a session row key.
+  Drop every established-context memo for a session row key, on this
+  member and on every other.
 
   Called by the session mutations (`Sanctum.Session.destroy/1`,
-  `destroy_by_hash/1`, `use_athanor/2`, `revoke_all_for_user/1`) so a
-  revoked or repointed session is a next-request fact rather than a
+  `destroy_by_hash/1`, `use_athanor/2`, `revoke_all_for_user/1`,
+  `invalidate_memo_for_user/1` — which is what archiving an athanor uses)
+  so a revoked or repointed session is a next-request fact rather than a
   TTL-bounded one — the same invalidate-on-write discipline
   `Sanctum.Namespace.invalidate/1` applies to its cache.
+
+  The memo table is each member's own, so this member's copy goes first
+  and synchronously, before this returns: the caller is usually mid-way
+  through an authorization change and must not depend on a round trip.
+  The rest of the cell is reached by announcement — a foundation below
+  the host emits telemetry and the host puts it on the bus
+  (`Cyfr.StandingWatch`). A delivery that never arrives leaves a peer
+  serving its memo for the rest of its TTL and no longer: the TTL is the
+  bound, the announcement is what makes the usual case immediate.
   """
   @spec invalidate_hash(binary()) :: :ok
   def invalidate_hash(hash) when is_binary(hash) do
+    drop_memo(hash)
+    Sanctum.Telemetry.caller_invalidated(hash)
+  end
+
+  @doc """
+  Drop this member's established-context memos for a session row key,
+  announcing nothing.
+
+  What a member does when it HEARS an invalidation
+  (`Cyfr.StandingWatch`), and the first half of `invalidate_hash/1`. Kept
+  apart from it so hearing an announcement cannot make another.
+  """
+  @spec drop_memo(binary()) :: :ok
+  def drop_memo(hash) when is_binary(hash) do
     Arca.Cache.delete_match(Arca.Cache.Keys.match_established(hash))
     :ok
   end

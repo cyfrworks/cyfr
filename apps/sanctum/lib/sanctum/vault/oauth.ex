@@ -16,9 +16,17 @@ defmodule Sanctum.Vault.OAuth do
   Refresh is single-flighted per **vault entry** on
   `{:vault_oauth_refresh, athanor_id, entry_id}` — the entry is the only route
   to a material bundle, so entry grain is exactly one lock per stored
-  refresh token. The athanor in the key, in every read and write below and
-  in the AEAD AAD is the CALLER's, carried on the actor; a row never names
-  the tenant that may act on it.
+  refresh token. `Sanctum.OAuth.RefreshLock` serializes the cell on that
+  key, not just this member. The athanor in the key, in every read and
+  write below and in the AEAD AAD is the CALLER's, carried on the actor; a
+  row never names the tenant that may act on it.
+
+  The lock serializes the provider call. What decides the *write* is the
+  compare-and-set on `payload_rev` in `write_back/4`: a refresh whose
+  write lands after a newer binding finds a revision it did not read,
+  loses, and is reconciled against what stands. That is what keeps an old
+  refresh from replacing a newer binding even when both members refreshed
+  at once.
 
   INVARIANT: no database transaction is held across the provider HTTP
   call — the POST and the CAS write-back are sequential; serialization

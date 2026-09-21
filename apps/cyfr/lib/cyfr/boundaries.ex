@@ -270,7 +270,8 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/cyfr/**/*.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Catalog Sanctum.Cipher
+        Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller
+        Sanctum.Catalog Sanctum.Cipher
         Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
         Sanctum.Policy Sanctum.PubSub Sanctum.Session
         Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
@@ -284,7 +285,11 @@ defmodule Cyfr.Boundaries do
           "the server's own work runs under, `auth_configured?/0` says whether this " <>
           "deployment has sign-in, and `build_tincture_context/2` is the tincture " <>
           "surface's. A call on the root is a reach like any other and is rostered " <>
-          "like one; no roster before this one could see it."
+          "like one; no roster before this one could see it. `Sanctum.Caller` is " <>
+          "here for `drop_memo/1` alone: the identity domain announces that an " <>
+          "established-caller memo is no longer good and never broadcasts, so the " <>
+          "host's own watch (`Cyfr.StandingWatch`) is what carries the drop to " <>
+          "every member and calls back down to make it."
     },
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],

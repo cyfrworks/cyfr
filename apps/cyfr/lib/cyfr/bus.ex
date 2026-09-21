@@ -29,7 +29,7 @@ defmodule Cyfr.Bus do
 
   ## Global topics
 
-  Six topics are deliberately unscoped, and each is listed in `global/0` with
+  Seven topics are deliberately unscoped, and each is listed in `global/0` with
   the reason. They carry no tenant payload, or they are the signal that a
   tenant boundary just moved — `sanctum:vault_changed` exists precisely so a
   reconciler outside any one athanor learns that a credential changed.
@@ -239,6 +239,19 @@ defmodule Cyfr.Bus do
   def athanor_archived_global, do: "sanctum:athanor_archived"
 
   @doc """
+  An established-caller memo is no longer good anywhere in the cell.
+  Messages: `{:caller_invalidated, token_hash}`.
+
+  Unscoped on purpose: the subject is a session row key, and the memo it
+  addresses is a cached AUTHORIZATION decision held in each member's own
+  table. `Cyfr.StandingWatch` on every member drops it. The memo's TTL
+  (`:sanctum, :establish_cache_ms`, 2 s) is what bounds a delivery that
+  never arrives; this topic is what makes the usual case immediate.
+  """
+  @spec caller_invalidated_global() :: String.t()
+  def caller_invalidated_global, do: "sanctum:caller_invalidated"
+
+  @doc """
   Session lifecycle. Messages: `{:sessions_revoked, user_id}`,
   `{:session_created, ...}`.
 
@@ -294,6 +307,7 @@ defmodule Cyfr.Bus do
     [
       {"sanctum:vault_changed", "server-wide credential reconciliation"},
       {"sanctum:athanor_archived", "stops the processes serving an archived athanor"},
+      {"sanctum:caller_invalidated", "drops a cached authorization decision on every member"},
       {"sanctum:sessions", "internal auth signal, keyed by person"},
       {"sanctum:memberships:<user_id>", "subject is the person, not an athanor"},
       {"platform:notify", "audience is the operator, outside any athanor"},

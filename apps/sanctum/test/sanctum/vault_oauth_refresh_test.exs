@@ -287,5 +287,41 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       assert stored["oauth"]["access_token"] == "tok-rotate"
       assert stored["oauth"]["refresh_token"] == "rt-9"
     end
+
+    test "an older refresh that finishes later cannot replace a newer binding", %{ctx: ctx} do
+      # What the cell's `oauth_refresh` claim exists to prevent, happening
+      # anyway: two members refreshed this entry, and the one that read the
+      # row first is the one that finishes last. The claim serializes the
+      # provider call; this compare-and-set is what decides the write, and
+      # it names the revision rather than the lock.
+      {entry, _resource} = mint_oauth_entry(ctx, @expired)
+
+      # The newer refresh lands while the older one is still at the provider.
+      newer = %{
+        "access_token" => "tok-newer",
+        "refresh_token" => "rt-newer",
+        "expires_at" =>
+          DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.to_iso8601(),
+        "token_type" => "bearer"
+      }
+
+      rotate_behind!(ctx, entry, %{}, newer)
+
+      older =
+        Sanctum.Vault.OAuth.apply_refresh_response(
+          %{"fields" => %{}, "oauth" => @expired},
+          @expired,
+          %{"access_token" => "tok-older", "refresh_token" => "rt-older", "expires_in" => 3600}
+        )
+
+      # `entry` still carries the payload_rev the older refresh read, so its
+      # write loses and it is answered the binding that stands.
+      assert {:ok, "tok-newer"} =
+               Sanctum.Vault.OAuth.write_back(actor(ctx), entry, older, @expired)
+
+      stored = unseal!(ctx, entry.id)
+      assert stored["oauth"]["access_token"] == "tok-newer"
+      assert stored["oauth"]["refresh_token"] == "rt-newer"
+    end
   end
 end

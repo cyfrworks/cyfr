@@ -205,19 +205,39 @@ defmodule Cyfr.Retention do
     athanors = Sanctum.Tenancy.Athanors.list_active()
 
     {deleted, errors} =
-      Enum.reduce(athanors, {Map.new(@kinds, &{&1.key(), 0}), []}, fn athanor, acc ->
-        ctx = athanor_ctx(athanor.id)
+      Enum.reduce(athanors, {empty_tally(), []}, fn athanor, {deleted, errors} ->
+        {:ok, one} = cleanup_athanor(athanor.id, opts)
 
-        Enum.reduce(@kinds, acc, fn kind, {deleted, errors} ->
-          case cleanup(ctx, kind.key(), opts) do
-            {:ok, count} -> {Map.update!(deleted, kind.key(), &(&1 + count)), errors}
-            {:error, reason} -> {deleted, [{athanor.id, kind.key(), reason} | errors]}
-          end
-        end)
+        {Map.merge(deleted, one.deleted, fn _key, a, b -> a + b end), errors ++ one.errors}
       end)
 
-    {:ok, %{tenants: length(athanors), deleted: deleted, errors: Enum.reverse(errors)}}
+    {:ok, %{tenants: length(athanors), deleted: deleted, errors: errors}}
   end
+
+  @doc """
+  Every kind's policy inside ONE athanor, under that athanor's own
+  settings — the unit `cleanup_all/1` repeats, and the unit
+  `Cyfr.RetentionScheduler` walks so its claim's cursor can name where a
+  sweep had reached. Answers the same per-kind totals and
+  `{athanor_id, key, reason}` triples for one tenant; a kind that failed
+  never stops the rest.
+  """
+  @spec cleanup_athanor(String.t(), keyword()) :: {:ok, map()}
+  def cleanup_athanor(athanor_id, opts \\ []) when is_binary(athanor_id) do
+    ctx = athanor_ctx(athanor_id)
+
+    {deleted, errors} =
+      Enum.reduce(@kinds, {empty_tally(), []}, fn kind, {deleted, errors} ->
+        case cleanup(ctx, kind.key(), opts) do
+          {:ok, count} -> {Map.update!(deleted, kind.key(), &(&1 + count)), errors}
+          {:error, reason} -> {deleted, [{athanor_id, kind.key(), reason} | errors]}
+        end
+      end)
+
+    {:ok, %{deleted: deleted, errors: Enum.reverse(errors)}}
+  end
+
+  defp empty_tally, do: Map.new(@kinds, &{&1.key(), 0})
 
   @doc """
   Reclaim orphaned thread blob directories across every active

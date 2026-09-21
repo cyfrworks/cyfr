@@ -82,6 +82,12 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:bridge],
       note: "the tray fan-in: what an estate's members, or the operator, see happened"
     },
+    [:cyfr, :sanctum, :caller, :invalidated] => %{
+      consumers: [:bridge],
+      note:
+        "an established-caller memo — a cached authorization decision — is no longer " <>
+          "good; every member drops the memos it holds for that session row key"
+    },
     [:cyfr, :sanctum, :session, :created] => %{
       consumers: [:bridge],
       note: "a session was minted; no token travels, a subscriber adopts its own"

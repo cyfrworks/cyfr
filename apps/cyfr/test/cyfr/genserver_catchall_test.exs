@@ -22,6 +22,7 @@ defmodule Cyfr.GenServerCatchallTest do
     {Emissary.MCP.ResourceRegistry, "ResourceRegistry"},
     {Arca.Cache.Sweeper, "Sweeper"},
     {Prism.TelemetryBridge, "TelemetryBridge"},
+    {Cyfr.StandingWatch, "StandingWatch"},
     {Arca.AuditHandler, "AuditHandler"},
     {Prism.TinctureRegistry, "TinctureRegistry"},
     {Arca.RecordSink, "RecordSink"},

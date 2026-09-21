@@ -85,6 +85,7 @@ defmodule Cyfr.BusTest do
       for topic <- [
             Bus.vault_changed_global(),
             Bus.athanor_archived_global(),
+            Bus.caller_invalidated_global(),
             Bus.sessions(),
             Bus.memberships("user_1"),
             Bus.platform_notify(),
@@ -100,6 +101,7 @@ defmodule Cyfr.BusTest do
       assert listed == [
                "sanctum:vault_changed",
                "sanctum:athanor_archived",
+               "sanctum:caller_invalidated",
                "sanctum:sessions",
                "sanctum:memberships:<user_id>",
                "platform:notify",
