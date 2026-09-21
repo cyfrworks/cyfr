@@ -64,10 +64,9 @@ defmodule PrismWeb.ConnCase do
   # A turn pins the consent the fill minted into the durable source, from
   # the repository's own seed; restored on exit.
   defp turn_env! do
-    keys = [:seed_path, :consent_source]
+    keys = [:seed_path]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :seed_path, Path.expand("../../../../seed", __DIR__))
-    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
 
     ExUnit.Callbacks.on_exit(fn ->
       for {key, value} <- prev do

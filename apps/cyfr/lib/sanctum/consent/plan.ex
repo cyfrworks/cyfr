@@ -33,7 +33,6 @@ defmodule Sanctum.Consent.Plan do
   alias Sanctum.Consent.Proof
   alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.ShapeDigest
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
 
   # Ten minutes: an operator reads candidates and decides. The commit
@@ -101,13 +100,13 @@ defmodule Sanctum.Consent.Plan do
   # revise, and the revision the caller must expect. A needs_consent
   # profile is a first-class target — re-consent is how it unblocks.
   def locate_profile(ctx, source_ref, label, kind) do
-    with {:ok, profiles} <- Source.impl().profiles(ctx, source_ref) do
+    with {:ok, profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), source_ref) do
       case Enum.find(profiles, fn p -> p.label == label and p.kind == kind end) do
         nil ->
           {:ok, nil, 0}
 
         profile ->
-          case Source.impl().head_consent(ctx, profile.id) do
+          case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
             {:ok, consent} -> {:ok, profile.id, consent.revision}
             {:error, :no_head} -> {:ok, profile.id, 0}
             {:error, reason} -> {:error, reason}
@@ -259,10 +258,10 @@ defmodule Sanctum.Consent.Plan do
 
   # The dependency's active owner profiles whose head binds a usable entry.
   defp lender_candidates(ctx, dep) do
-    case Source.impl().profiles(ctx, dep) do
+    case Arca.ConsentStorage.profiles(Context.actor(ctx), dep) do
       {:ok, profiles} ->
         for %{kind: :owner, status: :active} = profile <- profiles,
-            {:ok, head} <- [Source.impl().head_consent(ctx, profile.id)],
+            {:ok, head} <- [Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)],
             {:ok, blob} <- [Cyfr.Authority.Blob.parse(head.resolved_policy)],
             {:ok, ingress} <- [Cyfr.Authority.Blob.ingress(blob, dep)],
             Cyfr.Authority.Blob.bound_vault?(ingress.vault),

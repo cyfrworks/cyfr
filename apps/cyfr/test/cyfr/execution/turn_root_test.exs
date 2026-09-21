@@ -19,7 +19,7 @@ defmodule Cyfr.Execution.TurnRootTest do
   alias Arca.TurnStorage
   alias Cyfr.Execution.{LeaseWatch, TurnRoot}
   alias Cyfr.Slots
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -31,11 +31,10 @@ defmodule Cyfr.Execution.TurnRootTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "turn_root_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source]
+    keys = [:base_path, :seed_path]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     on_exit(fn ->
       File.rm_rf!(test_path)

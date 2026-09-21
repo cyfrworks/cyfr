@@ -25,7 +25,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
   alias Cyfr.Slots
   alias Cyfr.Test.TwoServices
   alias Opus.Test.NestedExecution, as: Probe
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @moduletag timeout: 180_000
 
@@ -40,10 +40,9 @@ defmodule Opus.ExecutorCancelPenaltyTest do
     test_path =
       Path.join(System.tmp_dir!(), "cancel_penalty_#{System.unique_integer([:positive])}")
 
-    keys = [:base_path, :consent_source]
+    keys = [:base_path]
     previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     ctx = Sanctum.TestContext.local()
 

@@ -6,7 +6,6 @@ defmodule Compendium.ConsentSetupPlanTest do
 
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
-  alias Sanctum.Consent.Source
   alias Sanctum.Vault
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
@@ -20,19 +19,12 @@ defmodule Compendium.ConsentSetupPlanTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
-    original_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
-
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
-
-      if original_source,
-        do: Application.put_env(:cyfr, :consent_source, original_source),
-        else: Application.delete_env(:cyfr, :consent_source)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}

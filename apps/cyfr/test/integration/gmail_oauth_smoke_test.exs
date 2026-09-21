@@ -20,7 +20,6 @@ defmodule Cyfr.GmailOAuthSmokeTest do
   alias Sanctum.CipherAAD
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
-  alias Sanctum.Consent.Source
   alias Sanctum.Vault
   alias Sanctum.VaultReader
 
@@ -36,19 +35,12 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
-    original_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
-
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
-
-      if original_source,
-        do: Application.put_env(:cyfr, :consent_source, original_source),
-        else: Application.delete_env(:cyfr, :consent_source)
     end)
 
     ctx = Sanctum.TestContext.local()
@@ -124,7 +116,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
   end
 
   defp edge_resource!(ctx, profile_id) do
-    {:ok, consent} = Source.DB.head_consent(ctx, profile_id)
+    {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
     {:ok, blob} = Cyfr.Authority.Blob.parse(consent.resolved_policy)
     {:ok, edge} = Cyfr.Authority.Blob.ingress(blob, "catalyst:local.gmail")
     edge.vault

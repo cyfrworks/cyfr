@@ -18,7 +18,6 @@ defmodule Sanctum.WebhookMCPTest do
 
     # A webhook binds a consented profile at create; seed one per target.
     ctx = Sanctum.TestContext.local()
-    Sanctum.Test.ConsentFixtures.start_source!()
 
     for name <- ["handler", "original", "updated"] do
       Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{name}",

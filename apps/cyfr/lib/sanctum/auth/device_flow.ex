@@ -98,7 +98,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   A test seam, not an operator knob: suites stand in a fake flow rather
   than reach a provider over the network. Deliberately undeclared in
   config — declaring it would publish a module-swap hook as a supported
-  setting. Same shape as `Sanctum.Consent.Source.impl/0`.
+  setting.
 
   Resolves the configured device-flow implementation for start and poll calls.
   """

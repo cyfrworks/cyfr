@@ -5,8 +5,8 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.Consent.RegistrationBinding
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
+  alias Sanctum.Test.ConsentFixtures
 
   @target "reagent:local.bind-target"
 
@@ -14,7 +14,6 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
     Arca.Cache.init()
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    start_supervised!(Source.Memory)
 
     ctx = %Context{
       user_id: "bind_user",
@@ -25,17 +24,16 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       auth_method: :oidc
     }
 
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: "prof-bind",
-        kind: :owner,
-        source_ref: @target,
-        label: "default",
-        status: :active
-      })
+    profile = %{
+      id: "prof-bind",
+      kind: :owner,
+      source_ref: @target,
+      label: "default",
+      status: :active
+    }
 
     :ok =
-      Source.Memory.put_head_consent(ctx, "prof-bind", %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-bind",
         revision: 1,
         scope: :versionless,
@@ -77,7 +75,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
 
   test "a profile without a head consent cannot be bound", %{ctx: ctx} do
     :ok =
-      Source.Memory.put_profile(ctx, %{
+      ConsentFixtures.seed_profile!(ctx, %{
         id: "prof-headless",
         kind: :owner,
         source_ref: @target,

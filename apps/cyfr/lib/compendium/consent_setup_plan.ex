@@ -14,7 +14,6 @@ defmodule Compendium.ConsentSetupPlan do
   state is the only thing that answers "is this component set up".
   """
 
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
   alias Sanctum.VaultReader
 
@@ -25,7 +24,7 @@ defmodule Compendium.ConsentSetupPlan do
   @spec section(Context.t(), String.t()) :: map() | nil
   def section(%Context{} = ctx, source_ref) do
     with {:ok, name_ref} <- name_ref(source_ref),
-         {:ok, [_ | _] = profiles} <- Source.impl().profiles(ctx, name_ref),
+         {:ok, [_ | _] = profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), name_ref),
          profile <- pick_profile(profiles) do
       describe(ctx, profile)
     else
@@ -47,7 +46,7 @@ defmodule Compendium.ConsentSetupPlan do
   end
 
   defp describe(ctx, profile) do
-    case Source.impl().head_consent(ctx, profile.id) do
+    case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
       {:ok, consent} ->
         bound = check_needs(ctx, consent)
         needs = bound ++ unbound_required(ctx, profile.source_ref, bound)

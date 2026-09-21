@@ -33,7 +33,7 @@ defmodule Opus.FormulaHandlerTest do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob
   alias Cyfr.Test.TwoServices
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @moduletag :capture_log
 
@@ -591,13 +591,8 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "a formula's tasks, run in its runner" do
     setup %{ctx: ctx} do
-      previous = Application.get_env(:cyfr, :consent_source)
-      Application.put_env(:cyfr, :consent_source, Source.DB)
-
       on_exit(fn ->
-        if previous,
-          do: Application.put_env(:cyfr, :consent_source, previous),
-          else: Application.delete_env(:cyfr, :consent_source)
+        nil
       end)
 
       :ok = Probe.publish_probe!(ctx)

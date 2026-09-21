@@ -36,7 +36,6 @@ defmodule EmissaryWeb.WebhookControllerTest do
   defp create_hook!(ctx, name, opts \\ %{}) do
     comp = "wh-target-#{System.unique_integer([:positive])}"
     Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
-    Sanctum.Test.ConsentFixtures.start_source!()
     profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{comp}")
 
     {:ok, result} =
@@ -109,7 +108,6 @@ defmodule EmissaryWeb.WebhookControllerTest do
         in_group
       )
 
-      Sanctum.Test.ConsentFixtures.start_source!()
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(in_group, "f:local.#{comp}")
 
       {:ok, %{slug: slug, secret: secret}} =

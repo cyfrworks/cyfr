@@ -380,13 +380,8 @@ defmodule Sanctum.MCPTest do
     end
 
     test "reports public when an active public profile exists", %{ctx: ctx} do
-      original = Application.get_env(:cyfr, :consent_source)
-      Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
-
       on_exit(fn ->
-        if original,
-          do: Application.put_env(:cyfr, :consent_source, original),
-          else: Application.delete_env(:cyfr, :consent_source)
+        nil
       end)
 
       {:ok, _} =

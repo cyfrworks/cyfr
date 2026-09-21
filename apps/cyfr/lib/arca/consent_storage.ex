@@ -10,12 +10,47 @@ defmodule Arca.ConsentStorage do
   vault references and the profile's head advance commit in one
   transaction — a consent that exists but is not the head is history, and
   a head pointing at a missing revision is unrepresentable.
+
+  `profiles/2` and `head_consent/2` are the read side the consent decision
+  logic (`Sanctum.Consent.Loader` and the walk around it) sees. They decode
+  strictly and fail closed: a stored kind, status, scope or invoke mode
+  outside the closed vocabulary, or an activation blob that does not parse,
+  drops the profile or refuses the consent rather than guessing. Rows can
+  only get that way through a bug or a hand edit, and neither may root an
+  execution.
   """
 
   import Ecto.Query
 
   alias Arca.Schemas.Consent
   alias Arca.Schemas.ConsentVaultRef
+
+  @typedoc """
+  One immutable consent revision, decoded.
+
+  `vault_refs` carries the derived reverse-index rows for the revision —
+  the consent decision's blob/refs equality check needs both sides, and
+  delivering them together keeps the check atomic with the read.
+
+  The atoms are spelled here rather than borrowed from the layer above:
+  this is the closed vocabulary the column holds, and the decision layer's
+  own types are defined against the same words.
+  """
+  @type consent :: %{
+          required(:id) => String.t(),
+          required(:revision) => non_neg_integer(),
+          required(:scope) => :versionless | :pinned,
+          required(:pinned_version) => String.t(),
+          required(:invoke_mode) => :open_inert | :edge_only,
+          required(:shape_digest) => String.t(),
+          required(:commit_digest) => String.t(),
+          required(:blob_digest) => String.t() | nil,
+          required(:resolved_policy) => String.t(),
+          required(:activation) => %{String.t() => String.t()},
+          required(:vault_refs) => [
+            %{vault_entry_id: String.t(), binding_digest: String.t()}
+          ]
+        }
 
   @doc """
   Insert one revision with its vault refs and advance the profile head,
@@ -212,4 +247,103 @@ defmodule Arca.ConsentStorage do
   end
 
   def head_profiles_referencing(%Cyfr.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
+
+  @doc """
+  Candidate profiles for a name-level source ref within the actor's tenant,
+  decoded into the selection vocabulary.
+
+  A row whose stored kind or status is outside the closed vocabulary is
+  dropped rather than guessed at: it cannot be selected, and a selection
+  that silently admitted it would root an execution on a value no writer
+  of this table can produce.
+  """
+  @spec profiles(Cyfr.Actor.t(), String.t()) ::
+          {:ok, [Cyfr.Authority.RootSelect.profile_summary()]} | {:error, term()}
+  def profiles(%Cyfr.Actor{} = actor, source_ref) do
+    with {:ok, rows} <- Arca.ProfileStorage.list_for_source(actor, source_ref) do
+      {:ok, rows |> Enum.map(&profile_summary/1) |> Enum.reject(&is_nil/1)}
+    end
+  end
+
+  @doc """
+  The head consent revision of a profile, fully decoded with its vault refs.
+
+  Decoding fails closed — a stored scope or invoke mode outside the closed
+  vocabulary, or an activation blob that does not parse, refuses the
+  consent. `resolved_policy` stays a string: `Cyfr.Authority.Blob.parse/1`
+  is the single fail-closed entry for those bytes and this is not it.
+  """
+  @spec head_consent(Cyfr.Actor.t(), String.t()) ::
+          {:ok, consent()} | {:error, :no_athanor | :not_found | :no_head | term()}
+  def head_consent(%Cyfr.Actor{} = actor, profile_id) do
+    with {:ok, consent, refs} <- get_head(actor, profile_id) do
+      decode_consent(consent, refs)
+    end
+  end
+
+  defp profile_summary(row) do
+    with {:ok, kind} <- decode_enum(row.kind, %{"owner" => :owner, "public" => :public}),
+         {:ok, status} <-
+           decode_enum(row.status, %{
+             "active" => :active,
+             "needs_consent" => :needs_consent,
+             "revoked" => :revoked
+           }) do
+      %{id: row.id, kind: kind, source_ref: row.source_ref, label: row.label, status: status}
+    else
+      _ -> nil
+    end
+  end
+
+  defp decode_consent(consent, refs) do
+    with {:ok, scope} <-
+           decode_enum(consent.scope, %{"versionless" => :versionless, "pinned" => :pinned}),
+         {:ok, invoke_mode} <-
+           decode_enum(consent.invoke_mode, %{
+             "open_inert" => :open_inert,
+             "edge_only" => :edge_only
+           }),
+         {:ok, activation} <- decode_activation(consent.activation) do
+      {:ok,
+       %{
+         id: consent.id,
+         revision: consent.revision,
+         scope: scope,
+         pinned_version: consent.pinned_version,
+         invoke_mode: invoke_mode,
+         shape_digest: consent.shape_digest,
+         commit_digest: consent.commit_digest,
+         blob_digest: consent.blob_digest,
+         resolved_policy: consent.resolved_policy,
+         activation: activation,
+         vault_refs:
+           Enum.map(refs, fn r ->
+             %{vault_entry_id: r.vault_entry_id, binding_digest: r.binding_digest}
+           end)
+       }}
+    end
+  end
+
+  defp decode_enum(value, mapping) do
+    case Map.fetch(mapping, value) do
+      {:ok, atom} -> {:ok, atom}
+      :error -> {:error, {:invalid_stored_value, value}}
+    end
+  end
+
+  defp decode_activation(binary) when is_binary(binary) do
+    case Jason.decode(binary) do
+      {:ok, %{} = graph} ->
+        if Enum.all?(graph, fn {k, v} -> is_binary(k) and is_binary(v) end) do
+          {:ok, graph}
+        else
+          {:error, {:invalid_stored_value, :activation}}
+        end
+
+      _ ->
+        {:error, {:invalid_stored_value, :activation}}
+    end
+  end
+
+  defp decode_activation(_), do: {:error, {:invalid_stored_value, :activation}}
 end

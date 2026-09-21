@@ -11,13 +11,9 @@ defmodule Sanctum.TinctureAccessTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     # Public-ness reads the profiles table now; point the source at it.
-    original_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
 
     on_exit(fn ->
-      if original_source,
-        do: Application.put_env(:cyfr, :consent_source, original_source),
-        else: Application.delete_env(:cyfr, :consent_source)
+      nil
     end)
 
     # Create temp tincture structure with one public and one private tincture,

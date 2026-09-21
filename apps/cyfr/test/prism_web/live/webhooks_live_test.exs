@@ -42,7 +42,6 @@ defmodule PrismWeb.WebhooksLiveTest do
           description: "webhook target"
         })
 
-      :ok = Sanctum.Test.ConsentFixtures.start_source!()
       profile_id = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.hook-target")
 
       {view, _html} = mount_athanor(conn, "/webhooks")

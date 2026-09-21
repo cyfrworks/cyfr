@@ -15,7 +15,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   use ExUnit.Case, async: false
 
   alias Arca.ConsentStorage
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @repo_root Path.expand("../../../../..", __DIR__)
   @bundle Path.join(@repo_root, "seed/components")
@@ -63,7 +63,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   end
 
   defp head!(ctx, ref) do
-    {:ok, [profile]} = Source.DB.profiles(ctx, ref)
+    {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
     {:ok, row, refs} = ConsentStorage.get_head(Sanctum.Context.actor(ctx), profile.id)
     {profile, row, refs}
   end
@@ -122,7 +122,9 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     {:ok, %{minted: minted, skipped: skipped}} = Bootstrap.run(ctx)
     refute "formula:local.mine" in minted
     assert {"formula:local.mine", :not_vouched} in skipped
-    assert {:ok, []} = Source.DB.profiles(ctx, "formula:local.mine")
+
+    assert {:ok, []} =
+             Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "formula:local.mine")
   end
 
   test "an edited shipped component is not re-minted", %{ctx: ctx} do

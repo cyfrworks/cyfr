@@ -28,7 +28,6 @@ defmodule Sanctum.Consent.Commit do
   alias Sanctum.Consent.Proof
   alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.ShapeDigest
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
   alias Cyfr.Authority.RootSelect
   alias Sanctum.Consent.Components
@@ -143,7 +142,7 @@ defmodule Sanctum.Consent.Commit do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, profile} <- Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id),
          :ok <- check_grantable_profile(profile),
-         {:ok, head} <- Source.impl().head_consent(ctx, profile_id),
+         {:ok, head} <- Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id),
          :ok <- check_no_tool_servers(head, profile.source_ref),
          decisions = grant_decisions(profile, head, Map.get(params, :bindings, [])),
          {:ok, prep} <- prepare(ctx, decisions),
@@ -278,7 +277,8 @@ defmodule Sanctum.Consent.Commit do
     with {:ok, owner_profile} <-
            Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), owner_profile_id),
          :ok <- check_owner_profile(owner_profile),
-         {:ok, owner_consent} <- Source.impl().head_consent(ctx, owner_profile_id),
+         {:ok, owner_consent} <-
+           Arca.ConsentStorage.head_consent(Context.actor(ctx), owner_profile_id),
          {:ok, published} <-
            publish_nodes(ctx, owner_consent, decisions, owner_profile.source_ref) do
       prepare_with_blob(
@@ -535,7 +535,7 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp lender_profile(ctx, dep, label) when is_binary(label) do
-    with {:ok, profiles} <- Source.impl().profiles(ctx, dep),
+    with {:ok, profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), dep),
          %{status: :active} = profile <-
            Enum.find(profiles, &(&1.label == label and &1.kind == :owner)) do
       {:ok, profile}
@@ -548,7 +548,7 @@ defmodule Sanctum.Consent.Commit do
     do: {:error, {:selection_profile_unavailable, dep, label}}
 
   defp lender_binding(ctx, profile) do
-    with {:ok, head} <- Source.impl().head_consent(ctx, profile.id),
+    with {:ok, head} <- Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id),
          {:ok, blob} <- Cyfr.Authority.Blob.parse(head.resolved_policy),
          {:ok, ingress} <- Cyfr.Authority.Blob.ingress(blob, profile.source_ref),
          true <- Cyfr.Authority.Blob.bound_vault?(ingress.vault) do

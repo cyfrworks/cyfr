@@ -9,7 +9,6 @@ defmodule Opus.ActivationStampingTest do
 
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.Bootstrap
-  alias Sanctum.Consent.Source
 
   @moduletag timeout: 120_000
 
@@ -19,7 +18,6 @@ defmodule Opus.ActivationStampingTest do
     test_path = Path.join(System.tmp_dir!(), "activation_stamp_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -31,7 +29,6 @@ defmodule Opus.ActivationStampingTest do
 
     on_exit(fn ->
       File.rm_rf!(test_path)
-      Application.put_env(:cyfr, :consent_source, Source.Memory)
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),

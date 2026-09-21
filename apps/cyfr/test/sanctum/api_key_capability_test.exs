@@ -7,7 +7,6 @@ defmodule Sanctum.ApiKeyCapabilityTest do
   alias Sanctum.ApiKey
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
-  alias Sanctum.Consent.Source
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
   @digest "sha256:" <> String.duplicate("ab", 32)
@@ -21,19 +20,12 @@ defmodule Sanctum.ApiKeyCapabilityTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
-    original_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
-
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
-
-      if original_source,
-        do: Application.put_env(:cyfr, :consent_source, original_source),
-        else: Application.delete_env(:cyfr, :consent_source)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}

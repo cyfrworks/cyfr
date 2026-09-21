@@ -40,7 +40,6 @@ defmodule Sanctum.Consent.Loader do
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob
   alias Sanctum.Consent.Loader.Decision
-  alias Sanctum.Consent.Source
   alias Cyfr.ComponentRef
   alias Sanctum.Context
   alias Cyfr.JCS
@@ -73,20 +72,19 @@ defmodule Sanctum.Consent.Loader do
   - `:ceiling` — override the platform ceiling (tests only)
   - `:budget_id` — the reservation the authority's budget names (a turn
     resumed or taken over charges the one it was admitted with)
-  - `:source` — override the configured `Sanctum.Consent.Source` (tests only)
   """
   @spec load_root(Context.t(), map(), keyword()) ::
           {:ok, Authority.t(), stamp()} | {:error, load_error()}
   def load_root(%Context{} = ctx, profile, opts \\ []) when is_map(profile) do
-    source = Keyword.get(opts, :source, Source.impl())
+    actor = Context.actor(ctx)
 
     with :ok <- check_profile_status(profile),
-         {:ok, consent} <- fetch_head(source, ctx, profile),
+         {:ok, consent} <- fetch_head(actor, profile),
          :ok <- check_consent_validity(consent),
          :ok <- check_blob_digest(consent),
          {:ok, blob} <- parse_blob(consent),
          :ok <- check_blob_refs_equality(blob, consent),
-         blob = resolve_selections(ctx, source, blob),
+         blob = resolve_selections(actor, blob),
          :ok <- check_entry_digest_conflicts(blob),
          {:ok, running} <- evaluate_activation(ctx, profile, consent, opts),
          {:ok, authority} <- build_root(profile, consent, blob, running, opts) do
@@ -98,8 +96,8 @@ defmodule Sanctum.Consent.Loader do
   defp check_profile_status(%{status: status}), do: {:error, {:profile_unavailable, status}}
   defp check_profile_status(_), do: {:error, {:invalid_profile, :status}}
 
-  defp fetch_head(source, ctx, profile) do
-    case source.head_consent(ctx, profile.id) do
+  defp fetch_head(actor, profile) do
+    case Arca.ConsentStorage.head_consent(actor, profile.id) do
       {:ok, consent} -> {:ok, consent}
       {:error, _} -> {:error, {:no_head_consent, profile.id}}
     end
@@ -194,11 +192,11 @@ defmodule Sanctum.Consent.Loader do
   # pinned one when the selection pinned it. The bound entry then rides
   # the edge, projected to what both the selection and the ingress allow.
   # Anything else leaves the selection in place, which no run can unseal.
-  defp resolve_selections(ctx, source, %Blob{} = blob) do
+  defp resolve_selections(actor, %Blob{} = blob) do
     Blob.map_edges(blob, fn _node_ref, key, edge ->
       case {edge.vault, Blob.edge_target(key)} do
         {%{via: via, projection: projection}, {:ok, target}} ->
-          case resolve_selection(ctx, source, target, via, projection) do
+          case resolve_selection(actor, target, via, projection) do
             {:ok, vault} ->
               %{edge | vault: vault}
 
@@ -216,9 +214,9 @@ defmodule Sanctum.Consent.Loader do
     end)
   end
 
-  defp resolve_selection(ctx, source, target, via, projection) do
-    with {:ok, profile} <- selected_profile(ctx, source, target, via.label),
-         {:ok, consent} <- fetch_head(source, ctx, profile),
+  defp resolve_selection(actor, target, via, projection) do
+    with {:ok, profile} <- selected_profile(actor, target, via.label),
+         {:ok, consent} <- fetch_head(actor, profile),
          :ok <- check_blob_digest(consent),
          {:ok, target_blob} <- parse_blob(consent),
          {:ok, ingress} <- ingress_edge(target_blob, target),
@@ -292,8 +290,8 @@ defmodule Sanctum.Consent.Loader do
     Enum.uniq(from_resources ++ from_policy)
   end
 
-  defp selected_profile(ctx, source, target, label) do
-    with {:ok, profiles} <- source.profiles(ctx, target) do
+  defp selected_profile(actor, target, label) do
+    with {:ok, profiles} <- Arca.ConsentStorage.profiles(actor, target) do
       case Enum.find(profiles, &(&1.label == label and &1.kind == :owner)) do
         %{status: :active} = profile -> {:ok, profile}
         %{status: status} -> {:error, {:profile_unavailable, status}}

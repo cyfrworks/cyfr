@@ -90,7 +90,7 @@ defmodule Sanctum.TinctureAccess do
   defp tincture_public?(ctx, publisher, tincture_name) do
     ref = Cyfr.ComponentRef.build("tincture", publisher, tincture_name)
 
-    case Sanctum.Consent.Source.impl().profiles(ctx, ref) do
+    case Arca.ConsentStorage.profiles(Context.actor(ctx), ref) do
       {:ok, profiles} ->
         Enum.any?(profiles, &(&1.kind == :public and &1.status == :active))
 

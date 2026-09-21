@@ -21,19 +21,12 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
-    original_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
-
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
-
-      if original_source,
-        do: Application.put_env(:cyfr, :consent_source, original_source),
-        else: Application.delete_env(:cyfr, :consent_source)
     end)
 
     ctx = Sanctum.TestContext.local()
@@ -405,7 +398,9 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert after_entry.binding_digest != digest_before
       assert Jason.decode!(after_entry.oauth_scopes) |> Enum.sort() == Enum.sort(wider)
 
-      {:ok, [profile]} = Sanctum.Consent.Source.DB.profiles(ctx, "reagent:local.grant-bound")
+      {:ok, [profile]} =
+        Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.grant-bound")
+
       assert profile.status == :needs_consent
     end
   end

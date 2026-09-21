@@ -46,7 +46,6 @@ defmodule PrismWeb.SecretRevealTest do
       })
 
     # A webhook fires under a bound profile's consent, so it needs one.
-    :ok = Sanctum.Test.ConsentFixtures.start_source!()
     profile_id = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.reveal-echo")
 
     {:ok, _} =

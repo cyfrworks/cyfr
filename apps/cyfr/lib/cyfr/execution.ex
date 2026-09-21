@@ -63,8 +63,8 @@ defmodule Cyfr.Execution do
   Root an execution chain under a profile's consent and run `reference`
   with `input` under the authority it grants.
 
-  `profile_selector` and the options `:route`, `:consent_source`,
-  `:ceiling` and `:live_shape_digest` are
+  `profile_selector` and the options `:route`, `:ceiling` and
+  `:live_shape_digest` are
   `Cyfr.Execution.Admission.authority_for/4`'s. Remaining options pass
   through to `Cyfr.Execution.Dispatch.run/4`.
   """
@@ -78,7 +78,7 @@ defmodule Cyfr.Execution do
            Admission.authority_and_stamp_for(ctx, profile_selector, reference, opts) do
       exec_opts =
         opts
-        |> Keyword.drop([:consent_source, :route, :ceiling, :live_shape_digest])
+        |> Keyword.drop([:route, :ceiling, :live_shape_digest])
         |> Keyword.merge(
           authority: authority,
           activation_stamp: stamp,

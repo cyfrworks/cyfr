@@ -13,7 +13,7 @@ defmodule Opus.ModelsCatalogueTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Test.SeedBundle
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
 
@@ -23,11 +23,10 @@ defmodule Opus.ModelsCatalogueTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "models_cat_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source]
+    keys = [:base_path, :seed_path]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     on_exit(fn ->
       File.rm_rf!(test_path)

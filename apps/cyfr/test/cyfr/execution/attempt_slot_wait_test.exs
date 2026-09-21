@@ -37,7 +37,7 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
   alias Cyfr.Execution.{Attempt, Dispatch, Record}
   alias Cyfr.Slots
   alias Cyfr.Test.{AttemptFixtures, AuthorityFixtures, ScriptedWorker, ScriptedWorkerListener}
-  alias Sanctum.Consent.Source
+  alias Sanctum.Test.ConsentFixtures
 
   @moduletag :capture_log
 
@@ -462,7 +462,6 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
     setup %{ctx: ctx, component: component} do
       answer = %{"content" => [%{"type" => "text", "text" => "ran"}]}
       serve!([answer])
-      start_supervised!(Source.Memory)
       consent!(ctx, component)
       :ok
     end
@@ -559,24 +558,22 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
   defp background(ctx, id) do
     Cyfr.Execution.run_root(ctx, :default, @ref, input(),
       execution_id: id,
-      class: :background,
-      consent_source: Source.Memory
+      class: :background
     )
   end
 
   # An owner profile whose consent admits the node at ingress.
   defp consent!(ctx, component) do
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: "prof-slot-wait",
-        kind: :owner,
-        source_ref: @node,
-        label: "default",
-        status: :active
-      })
+    profile = %{
+      id: "prof-slot-wait",
+      kind: :owner,
+      source_ref: @node,
+      label: "default",
+      status: :active
+    }
 
     :ok =
-      Source.Memory.put_head_consent(ctx, "prof-slot-wait", %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-slot-wait",
         revision: 1,
         scope: :versionless,

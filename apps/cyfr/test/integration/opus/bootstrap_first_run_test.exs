@@ -20,7 +20,6 @@ defmodule Opus.BootstrapFirstRunTest do
   alias Cyfr.Test.SeedBundle
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
-  alias Sanctum.Consent.Source
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
 
@@ -37,9 +36,6 @@ defmodule Opus.BootstrapFirstRunTest do
     original_seed_path = Application.get_env(:cyfr, :seed_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
 
-    original_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
-
     on_exit(fn ->
       File.rm_rf!(test_path)
 
@@ -50,10 +46,6 @@ defmodule Opus.BootstrapFirstRunTest do
       if original_seed_path,
         do: Application.put_env(:cyfr, :seed_path, original_seed_path),
         else: Application.delete_env(:cyfr, :seed_path)
-
-      if original_source,
-        do: Application.put_env(:cyfr, :consent_source, original_source),
-        else: Application.delete_env(:cyfr, :consent_source)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}
@@ -88,8 +80,11 @@ defmodule Opus.BootstrapFirstRunTest do
 
     # list-models invokes the providers its manifest names, and those
     # units ship: its activation is itself plus those declared refs.
-    {:ok, [list_models_profile]} = Source.DB.profiles(ctx, list_models.ref)
-    {:ok, list_models_consent} = Source.DB.head_consent(ctx, list_models_profile.id)
+    {:ok, [list_models_profile]} =
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), list_models.ref)
+
+    {:ok, list_models_consent} =
+      Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), list_models_profile.id)
 
     declared =
       list_models.manifest
@@ -103,24 +98,28 @@ defmodule Opus.BootstrapFirstRunTest do
 
     # Each minted consent loads through the production source, and the
     # blob's ingress edge carries the manifest's declared ask.
-    {:ok, [files_profile]} = Source.DB.profiles(ctx, "catalyst:local.files")
+    {:ok, [files_profile]} =
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.files")
+
     {:ok, files_component} = Compendium.Registry.get_latest(ctx, "files", "local", "catalyst")
     {:ok, files_live} = Compendium.Activation.resolve_verified(ctx, files_component)
 
     assert {:ok, files_auth, _} =
-             Loader.load_root(ctx, files_profile, source: Source.DB, live: {:ok, files_live})
+             Loader.load_root(ctx, files_profile, live: {:ok, files_live})
 
     # The shipped grant is data/ only — components/ is an explicit, rare
     # capability, not a file tool's default reach.
     assert files_auth.resources.storage.paths == ["data/"]
     assert "write" in files_auth.resources.storage.actions
 
-    {:ok, [http_profile]} = Source.DB.profiles(ctx, "catalyst:local.http")
+    {:ok, [http_profile]} =
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.http")
+
     {:ok, http_component} = Compendium.Registry.get_latest(ctx, "http", "local", "catalyst")
     {:ok, http_live} = Compendium.Activation.resolve_verified(ctx, http_component)
 
     assert {:ok, http_auth, _} =
-             Loader.load_root(ctx, http_profile, source: Source.DB, live: {:ok, http_live})
+             Loader.load_root(ctx, http_profile, live: {:ok, http_live})
 
     assert http_auth.resources.egress.domains == ["*"]
     # The one component allowed plaintext says so explicitly.
@@ -192,12 +191,14 @@ defmodule Opus.BootstrapFirstRunTest do
     assert plan.ready
 
     # And the projected field dispenses through the vault path.
-    {:ok, [profile]} = Source.DB.profiles(ctx, "catalyst:local.llm")
+    {:ok, [profile]} =
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.llm")
+
     {:ok, component} = Compendium.Registry.get_latest(ctx, "llm", "local", "catalyst")
     {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
 
     assert {:ok, auth, _} =
-             Loader.load_root(ctx, profile, source: Source.DB, live: {:ok, live})
+             Loader.load_root(ctx, profile, live: {:ok, live})
 
     assert {:ok, secrets} = Sanctum.VaultReader.fetch(ctx, auth.resources.vault)
     assert secrets == %{"ANTHROPIC_API_KEY" => "sk-first-run"}

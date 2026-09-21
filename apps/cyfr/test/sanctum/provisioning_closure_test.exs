@@ -15,7 +15,6 @@ defmodule Sanctum.ProvisioningClosureTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Test.SeedBundle
-  alias Sanctum.Consent.Source
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
@@ -88,12 +87,11 @@ defmodule Sanctum.ProvisioningClosureTest do
       end
 
       # The soul is consented and loads: its whole closure is the local seed.
-      assert {:ok, [_profile]} = Source.DB.profiles(in_group, "agent:local.aqua")
+      assert {:ok, [_profile]} =
+               Arca.ConsentStorage.profiles(Sanctum.Context.actor(in_group), "agent:local.aqua")
 
       assert {:ok, %Cyfr.Authority{} = auth} =
-               Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua",
-                 consent_source: Source.DB
-               )
+               Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua")
 
       assert auth.cursor == {:bound, "agent:local.aqua"}
 

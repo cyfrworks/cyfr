@@ -16,8 +16,8 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   alias Cyfr.Authority.Blob
   alias Cyfr.Authority.Transition
   alias Sanctum.Consent.Loader
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
+  alias Sanctum.Test.ConsentFixtures
   alias Cyfr.JCS
   alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
@@ -31,7 +31,8 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   }
 
   setup do
-    start_supervised!(Source.Memory)
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = %Context{
       user_id: "loader_selection_user",
@@ -49,14 +50,13 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     vault = Keyword.get(opts, :vault, @key_vault)
     source_ref = Keyword.get(opts, :source_ref, @catalyst)
 
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: "prof-claude",
-        kind: Keyword.get(opts, :kind, :owner),
-        source_ref: source_ref,
-        label: "default",
-        status: status
-      })
+    profile = %{
+      id: "prof-claude",
+      kind: Keyword.get(opts, :kind, :owner),
+      source_ref: source_ref,
+      label: "default",
+      status: status
+    }
 
     ingress = if vault, do: %{"vault" => vault}, else: %{}
 
@@ -74,7 +74,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         else: []
 
     :ok =
-      Source.Memory.put_head_consent(ctx, "prof-claude", %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-claude",
         revision: 1,
         scope: :versionless,
@@ -91,14 +91,13 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
   # The formula's profile: its edge to the catalyst selects the profile above.
   defp put_formula!(ctx, selection) do
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: "prof-aqua",
-        kind: :owner,
-        source_ref: @formula,
-        label: "default",
-        status: :active
-      })
+    profile = %{
+      id: "prof-aqua",
+      kind: :owner,
+      source_ref: @formula,
+      label: "default",
+      status: :active
+    }
 
     policy =
       Jason.encode!(%{
@@ -119,7 +118,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
       })
 
     :ok =
-      Source.Memory.put_head_consent(ctx, "prof-aqua", %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-aqua",
         revision: 1,
         scope: :versionless,
@@ -133,7 +132,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         vault_refs: []
       })
 
-    %{id: "prof-aqua", kind: :owner, source_ref: @formula, label: "default", status: :active}
+    profile
   end
 
   defp load!(ctx, profile) do
@@ -148,7 +147,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
        }}
 
     {:ok, authority, _stamp} =
-      Loader.load_root(ctx, profile, source: Source.Memory, live: live, live_shape_digest: nil)
+      Loader.load_root(ctx, profile, live: live, live_shape_digest: nil)
 
     authority
   end
@@ -272,14 +271,26 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   test "the same entry with two binding digests is refused", %{ctx: ctx} do
     role = "agent:local.web"
 
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: "prof-aqua",
-        kind: :owner,
-        source_ref: @formula,
-        label: "default",
-        status: :active
-      })
+    # The catalyst's own profile binds the entry under a digest that is not
+    # the one the formula's bound edge carries. The conflict arrives
+    # through resolution rather than through the stored refs, which is the
+    # only way it can arrive at all: one consent cannot hold two reference
+    # rows for one entry.
+    put_catalyst!(ctx,
+      vault: %{
+        "entry_id" => "vault-anthropic",
+        "binding_digest" => "sha256:other",
+        "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]}
+      }
+    )
+
+    profile = %{
+      id: "prof-aqua",
+      kind: :owner,
+      source_ref: @formula,
+      label: "default",
+      status: :active
+    }
 
     policy =
       Jason.encode!(%{
@@ -303,8 +314,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
             "edges" => %{
               @catalyst => %{
                 "vault" => %{
-                  "entry_id" => "vault-anthropic",
-                  "binding_digest" => "sha256:other",
+                  "via" => %{"label" => "default"},
                   "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]}
                 }
               }
@@ -315,7 +325,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
       })
 
     :ok =
-      Source.Memory.put_head_consent(ctx, "prof-aqua", %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-aqua",
         revision: 1,
         scope: :versionless,
@@ -327,18 +337,9 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         resolved_policy: policy,
         activation: Map.put(@activation, role, "sha256:act-r"),
         vault_refs: [
-          %{vault_entry_id: "vault-anthropic", binding_digest: "sha256:anthropic"},
-          %{vault_entry_id: "vault-anthropic", binding_digest: "sha256:other"}
+          %{vault_entry_id: "vault-anthropic", binding_digest: "sha256:anthropic"}
         ]
       })
-
-    profile = %{
-      id: "prof-aqua",
-      kind: :owner,
-      source_ref: @formula,
-      label: "default",
-      status: :active
-    }
 
     graph = Map.put(@activation, role, "sha256:act-r")
     {:ok, digest} = JCS.hash(graph)
@@ -353,7 +354,6 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
     assert {:error, {:inconsistent_binding_digest, "vault-anthropic"}} =
              Loader.load_root(ctx, profile,
-               source: Source.Memory,
                live: live,
                live_shape_digest: nil
              )

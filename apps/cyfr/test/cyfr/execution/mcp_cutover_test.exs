@@ -12,8 +12,8 @@ defmodule Cyfr.Execution.MCPCutoverTest do
   import Cyfr.Test.Wait
 
   alias Cyfr.Test.TwoServices
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
+  alias Sanctum.Test.ConsentFixtures
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @node "reagent:local.cutover-math"
@@ -21,7 +21,6 @@ defmodule Cyfr.Execution.MCPCutoverTest do
   setup do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!()
-    start_supervised!(Source.Memory)
 
     test_path = Path.join(System.tmp_dir!(), "mcp_cutover_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:cyfr, :base_path)
@@ -90,17 +89,16 @@ defmodule Cyfr.Execution.MCPCutoverTest do
         }
       })
 
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: profile_id,
-        kind: :owner,
-        source_ref: @node,
-        label: label,
-        status: :active
-      })
+    profile = %{
+      id: profile_id,
+      kind: :owner,
+      source_ref: @node,
+      label: label,
+      status: :active
+    }
 
     :ok =
-      Source.Memory.put_head_consent(ctx, profile_id, %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-#{profile_id}",
         revision: 1,
         scope: :versionless,

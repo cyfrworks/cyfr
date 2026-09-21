@@ -29,7 +29,7 @@ defmodule Opus.RunnerReuseTest do
   alias Cyfr.Execution.WorkerClient
   alias Cyfr.Test.{OpusService, TwoServices}
   alias Opus.Test.NestedExecution, as: Probe
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @moduletag timeout: 120_000
 
@@ -41,10 +41,9 @@ defmodule Opus.RunnerReuseTest do
     TwoServices.watch!()
 
     test_path = Path.join(System.tmp_dir!(), "runner_reuse_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :consent_source]
+    keys = [:base_path]
     previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     unique = System.unique_integer([:positive])
 

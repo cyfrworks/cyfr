@@ -17,7 +17,7 @@ defmodule Aqua.Loop.FlushTest do
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Test.ScriptedWorker
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -31,11 +31,10 @@ defmodule Aqua.Loop.FlushTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "flush_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :workers]
+    keys = [:base_path, :seed_path, :workers]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, test_path)
     Application.put_env(:cyfr, :seed_path, @seed_root)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     on_exit(fn ->
       File.rm_rf!(test_path)

@@ -7,7 +7,6 @@ defmodule Sanctum.Consent.BootstrapTest do
   alias Cyfr.Authority.Blob
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
-  alias Sanctum.Consent.Source
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
@@ -56,12 +55,12 @@ defmodule Sanctum.Consent.BootstrapTest do
 
     # The minted rows load through the real DB source into an Authority.
     {:ok, [profile]} =
-      Source.DB.profiles(ctx, "reagent:local.boot-plain")
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.boot-plain")
 
     assert profile.kind == :owner
     assert profile.status == :active
 
-    {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+    {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
     assert consent.revision == 1
     assert consent.scope == :versionless
 
@@ -72,7 +71,7 @@ defmodule Sanctum.Consent.BootstrapTest do
     {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
 
     assert {:ok, %Authority{} = auth, _stamp} =
-             Loader.load_root(ctx, profile, source: Source.DB, live: {:ok, live})
+             Loader.load_root(ctx, profile, live: {:ok, live})
 
     assert auth.cursor == {:bound, "reagent:local.boot-plain"}
   end
@@ -135,8 +134,10 @@ defmodule Sanctum.Consent.BootstrapTest do
     ship!(ctx, "boot-cas", "reagent")
     {:ok, _} = Bootstrap.run(ctx)
 
-    {:ok, [profile]} = Source.DB.profiles(ctx, "reagent:local.boot-cas")
-    {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+    {:ok, [profile]} =
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.boot-cas")
+
+    {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
 
     # A stale expectation cannot advance the head.
     assert {:error, :head_moved} =

@@ -68,9 +68,6 @@ config :sanctum, :consent_components, Compendium.ConsentFacts
 # per-environment ports, which override this value.
 config :sanctum, :fallback_origin, "http://localhost:4000"
 
-# Store consent revisions in the database; tests override this with the Memory adapter.
-config :cyfr, :consent_source, Sanctum.Consent.Source.DB
-
 # Configures the endpoint
 # The one endpoint: the API, the MCP transport, tinctures, and the Prism
 # LiveViews all answer on it — one origin, one cookie, one login.

@@ -20,7 +20,6 @@ defmodule Sanctum.Consent.RegistrationBinding do
   """
 
   alias Sanctum.Consent.Authz
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
 
   @type error ::
@@ -33,12 +32,12 @@ defmodule Sanctum.Consent.RegistrationBinding do
   @spec authorize(Context.t(), String.t(), String.t()) :: :ok | {:error, error()}
   def authorize(%Context{} = ctx, target_ref, profile_id)
       when is_binary(target_ref) and is_binary(profile_id) do
-    source = Source.impl()
+    actor = Context.actor(ctx)
 
     with {:ok, name_ref} <- name_level(target_ref),
-         {:ok, candidates} <- source.profiles(ctx, name_ref),
+         {:ok, candidates} <- Arca.ConsentStorage.profiles(actor, name_ref),
          :ok <- check_profile_for_target(candidates, profile_id),
-         {:ok, consent} <- head_consent(source, ctx, profile_id),
+         {:ok, consent} <- head_consent(actor, profile_id),
          {:ok, _via} <-
            check_authz(ctx, %Authz.Request{commit_digest: consent.commit_digest}) do
       :ok
@@ -60,8 +59,8 @@ defmodule Sanctum.Consent.RegistrationBinding do
     end
   end
 
-  defp head_consent(source, ctx, profile_id) do
-    case source.head_consent(ctx, profile_id) do
+  defp head_consent(actor, profile_id) do
+    case Arca.ConsentStorage.head_consent(actor, profile_id) do
       {:ok, consent} -> {:ok, consent}
       {:error, _} -> {:error, {:no_head_consent, profile_id}}
     end

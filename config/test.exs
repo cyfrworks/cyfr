@@ -20,10 +20,6 @@ config :sanctum, :fallback_origin, "http://localhost:4002"
 # MCPRateLimitTest overrides this per-test to exercise the limiter itself.
 config :cyfr, :mcp_rate_limit_max, 1_000_000
 
-# Consent fixtures are seeded in-memory per test; the DB adapter has its
-# own dedicated suite.
-config :cyfr, :consent_source, Sanctum.Consent.Source.Memory
-
 # Proofs likewise: unit tests run on the ETS store; proof_db_test.exs
 # exercises the durable adapter directly.
 config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory

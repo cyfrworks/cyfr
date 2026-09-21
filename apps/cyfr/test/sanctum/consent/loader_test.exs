@@ -5,13 +5,14 @@ defmodule Sanctum.Consent.LoaderTest do
 
   alias Cyfr.Authority
   alias Sanctum.Consent.Loader
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
+  alias Sanctum.Test.ConsentFixtures
   alias Cyfr.JCS
   alias Cyfr.Test.AuthorityFixtures, as: Fixtures
 
   setup do
-    start_supervised!(Source.Memory)
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = %Context{
       user_id: "loader_test_user",
@@ -80,8 +81,7 @@ defmodule Sanctum.Consent.LoaderTest do
   end
 
   defp seed(ctx, profile, consent) do
-    :ok = Source.Memory.put_profile(ctx, profile)
-    :ok = Source.Memory.put_head_consent(ctx, profile.id, consent)
+    :ok = ConsentFixtures.seed_head!(ctx, profile, consent)
   end
 
   test "loads a matching consent into a root Authority with its stamp", %{ctx: ctx} do
@@ -113,7 +113,7 @@ defmodule Sanctum.Consent.LoaderTest do
 
   test "a profile without a head consent is refused", %{ctx: ctx} do
     profile = profile_summary()
-    :ok = Source.Memory.put_profile(ctx, profile)
+    :ok = ConsentFixtures.seed_profile!(ctx, profile)
 
     assert {:error, {:no_head_consent, "prof-1"}} =
              Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
@@ -163,11 +163,24 @@ defmodule Sanctum.Consent.LoaderTest do
              Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
   end
 
-  test "a consent with no blob digest at all fails closed", %{ctx: ctx} do
+  test "a consent with no blob digest at all never reaches a load", %{ctx: ctx} do
     profile = profile_summary()
-    seed(ctx, profile, consent(%{blob_digest: nil}))
 
-    assert {:error, {:invalid_consent, :blob_digest}} =
+    # The loader's `{:invalid_consent, :blob_digest}` arm is the last of
+    # three guards on one fact, and the two below it are why nothing
+    # reaches it: the column is NOT NULL, and the one writer refuses a
+    # blank digest before the insert rather than storing a revision whose
+    # policy nothing can be checked against.
+    assert_raise ArgumentError, fn -> seed(ctx, profile, consent(%{blob_digest: nil})) end
+    assert_raise ArgumentError, fn -> seed(ctx, profile, consent(%{blob_digest: ""})) end
+
+    # Blanked after the fact — past every writer, straight onto the column
+    # — it is a mismatch and not a load: a hash of nothing is not the hash
+    # of these bytes.
+    seed(ctx, profile, consent())
+    :ok = ConsentFixtures.hand_edit_head!(ctx, profile.id, blob_digest: "")
+
+    assert {:error, {:blob_digest_mismatch, ""}} =
              Loader.load_root(ctx, profile, live: live_for(Fixtures.activation()))
   end
 

@@ -11,7 +11,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
   alias Arca.{CronSchedule, ScheduleOccurrences}
   alias Cyfr.Schedules.Scheduler
   alias Cyfr.Test.{AuthorityFixtures, ScriptedWorker}
-  alias Sanctum.Consent.Source
+  alias Sanctum.Test.ConsentFixtures
 
   @reference "reagent:local.test"
   @profile_id "prof_test"
@@ -42,7 +42,6 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    Sanctum.Test.ConsentFixtures.start_source!()
     consented!(ctx)
     {:ok, ctx: ctx}
   end
@@ -57,17 +56,16 @@ defmodule Cyfr.Schedules.SchedulerTest do
         type: "reagent"
       })
 
-    :ok =
-      Source.Memory.put_profile(ctx, %{
-        id: @profile_id,
-        kind: :owner,
-        source_ref: @reference,
-        label: "default",
-        status: :active
-      })
+    profile = %{
+      id: @profile_id,
+      kind: :owner,
+      source_ref: @reference,
+      label: "default",
+      status: :active
+    }
 
     :ok =
-      Source.Memory.put_head_consent(ctx, @profile_id, %{
+      ConsentFixtures.seed_head!(ctx, profile, %{
         id: "consent-#{@profile_id}",
         revision: 1,
         scope: :versionless,

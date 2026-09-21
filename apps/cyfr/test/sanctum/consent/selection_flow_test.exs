@@ -16,7 +16,6 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   alias Cyfr.Authority.Transition
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
-  alias Sanctum.Consent.Source
   alias Sanctum.MCP.ProfileTool
   alias Cyfr.Test.AuthorityFixtures, as: Fixtures
   alias Sanctum.Vault
@@ -36,19 +35,12 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
-    original_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
-
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
-
-      if original_source,
-        do: Application.put_env(:cyfr, :consent_source, original_source),
-        else: Application.delete_env(:cyfr, :consent_source)
     end)
 
     ctx = Sanctum.TestContext.local()
@@ -199,8 +191,10 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
     # The stored blob carries the selection, pinned, and references no entry
     # of its own.
-    {:ok, [profile]} = Source.DB.profiles(ctx, "reagent:local.sel-source")
-    {:ok, head} = Source.DB.head_consent(ctx, profile.id)
+    {:ok, [profile]} =
+      Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.sel-source")
+
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
     assert head.vault_refs == []
     {:ok, blob} = Blob.parse(head.resolved_policy)
     {:ok, edge} = Blob.lookup_edge(blob, "reagent:local.sel-source", @dep, "")

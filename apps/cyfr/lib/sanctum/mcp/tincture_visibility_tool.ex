@@ -11,7 +11,6 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   and unpublishing is `profile.revoke` of the public profile.
   """
 
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
 
   @doc false
@@ -54,7 +53,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
     with :ok <- Context.tenant_ok(ctx) do
       ref = Cyfr.ComponentRef.build("tincture", publisher, name)
 
-      case Source.impl().profiles(ctx, ref) do
+      case Arca.ConsentStorage.profiles(Context.actor(ctx), ref) do
         {:ok, profiles} ->
           public =
             Enum.find(profiles, &(&1.kind == :public and &1.status == :active))

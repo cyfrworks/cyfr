@@ -102,7 +102,7 @@ defmodule Cyfr.SanctumSurfacesTest do
     # (`LoginLive`, `RegistryLive`). Assembling `connect_info` is a web
     # concern; the hop rules stay in the auth domain, spelled once.
     "prism_web" => ~w(
-      Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
+      Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp
       Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.Session Sanctum.SignIn
       Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Webhook
     )

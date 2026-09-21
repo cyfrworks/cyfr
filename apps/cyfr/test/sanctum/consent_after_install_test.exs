@@ -56,7 +56,6 @@ defmodule Sanctum.ConsentAfterInstallTest do
     end
   end
 
-  alias Sanctum.Consent.Source
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
@@ -82,14 +81,13 @@ defmodule Sanctum.ConsentAfterInstallTest do
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 
-    keys = [:base_path, :seed_path, :oci_registry_url, :registry_url, :sigstore, :consent_source]
+    keys = [:base_path, :seed_path, :oci_registry_url, :registry_url, :sigstore]
     prev = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
 
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :seed_path, seed_dir)
     # A cosign on PATH would try to verify; point it at nothing so it fails fast.
     Application.put_env(:cyfr, :sigstore, verification: :keyed, key_path: "/nonexistent")
-    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     on_exit(fn ->
       for {key, value} <- prev do

@@ -8,7 +8,6 @@ defmodule Sanctum.Consent.FlowTest do
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Plan
-  alias Sanctum.Consent.Source
   alias Sanctum.MCP.ProfileTool
   alias Sanctum.Vault
 
@@ -23,19 +22,12 @@ defmodule Sanctum.Consent.FlowTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 
-    original_source = Application.get_env(:cyfr, :consent_source)
-    Application.put_env(:cyfr, :consent_source, Source.DB)
-
     on_exit(fn ->
       File.rm_rf!(test_path)
 
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
-
-      if original_source,
-        do: Application.put_env(:cyfr, :consent_source, original_source),
-        else: Application.delete_env(:cyfr, :consent_source)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}
@@ -98,7 +90,7 @@ defmodule Sanctum.Consent.FlowTest do
 
       assert {:ok, %{profile_id: ^profile_id, revision: 2}} = Commit.grant(ctx, grant)
 
-      {:ok, head} = Source.DB.head_consent(ctx, profile_id)
+      {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
       assert head.revision == 2
       assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
 
@@ -166,19 +158,21 @@ defmodule Sanctum.Consent.FlowTest do
 
       # The revision loads through the production source into an Authority
       # whose ingress edge carries the bound vault resource, projected.
-      {:ok, [profile]} = Source.DB.profiles(ctx, "reagent:local.flow-happy")
+      {:ok, [profile]} =
+        Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.flow-happy")
+
       assert profile.status == :active
 
       {:ok, component} = Compendium.Registry.get_latest(ctx, "flow-happy", "local", "reagent")
       {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
 
       assert {:ok, %Authority{} = auth, _stamp} =
-               Loader.load_root(ctx, profile, source: Source.DB, live: {:ok, live})
+               Loader.load_root(ctx, profile, live: {:ok, live})
 
       assert auth.resources.vault.entry_id == entry.id
       assert auth.resources.vault.projection.fields == ["anon_key", "url"]
 
-      {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+      {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
 
       assert consent.vault_refs == [
                %{vault_entry_id: entry.id, binding_digest: auth.resources.vault.binding_digest}
@@ -193,7 +187,7 @@ defmodule Sanctum.Consent.FlowTest do
       assert {:ok, %{revision: 2, profile_id: profile_id}} =
                walk!(ctx, "reagent:local.flow-delta")
 
-      {:ok, consent} = Source.DB.head_consent(ctx, profile_id)
+      {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
       assert consent.revision == 2
     end
 
@@ -232,7 +226,7 @@ defmodule Sanctum.Consent.FlowTest do
                  expected_consent_revision: plan.expected_consent_revision
                })
 
-      assert {:ok, []} = Source.DB.profiles(ctx, ref)
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
     end
   end
 
@@ -496,7 +490,9 @@ defmodule Sanctum.Consent.FlowTest do
       assert Enum.all?(actions, &(&1 in ["read", "list", "exists"]))
       assert ingress["vault"]["entry_id"] == entry.id
 
-      {:ok, profiles} = Source.DB.profiles(ctx, "reagent:local.flow-pub")
+      {:ok, profiles} =
+        Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.flow-pub")
+
       public = Enum.find(profiles, &(&1.kind == :public))
       assert public.id == public_id
     end
@@ -554,7 +550,9 @@ defmodule Sanctum.Consent.FlowTest do
       assert {:ok, %{revision: 1}} = publish_walk!(ctx, restaged)
 
       # The approved read-only grant is what actually landed.
-      {:ok, profiles} = Source.DB.profiles(ctx, "reagent:local.flow-pub-widen")
+      {:ok, profiles} =
+        Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.flow-pub-widen")
+
       public = Enum.find(profiles, &(&1.kind == :public))
       {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), public.id)
 
@@ -745,13 +743,13 @@ defmodule Sanctum.Consent.FlowTest do
           "expected_consent_revision" => plan.expected_consent_revision
         })
 
-      {:ok, [profile]} = Source.DB.profiles(ctx, ref)
+      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
 
       {:ok, component} =
         Compendium.Registry.get_latest(ctx, "flow-needs-wire", "local", "reagent")
 
       {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
-      {:ok, auth, _} = Loader.load_root(ctx, profile, source: Source.DB, live: {:ok, live})
+      {:ok, auth, _} = Loader.load_root(ctx, profile, live: {:ok, live})
 
       # The manifest's declared subset, NOT every field of the entry.
       assert auth.resources.vault.projection.fields == ["ANTHROPIC_API_KEY"]
@@ -767,7 +765,8 @@ defmodule Sanctum.Consent.FlowTest do
                  bindings: [%{need: "api_key", entry_id: entry.id}]
                })
 
-      {:ok, [profile]} = Source.DB.profiles(ctx, "reagent:local.flow-needs-bind")
+      {:ok, [profile]} =
+        Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "reagent:local.flow-needs-bind")
 
       {:ok, component} =
         Compendium.Registry.get_latest(ctx, "flow-needs-bind", "local", "reagent")
@@ -775,7 +774,7 @@ defmodule Sanctum.Consent.FlowTest do
       {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
 
       assert {:ok, auth, _stamp} =
-               Loader.load_root(ctx, profile, source: Source.DB, live: {:ok, live})
+               Loader.load_root(ctx, profile, live: {:ok, live})
 
       assert auth.resources.vault.entry_id == entry.id
       # The projection defaulted to the need's declared fields.
@@ -916,8 +915,8 @@ defmodule Sanctum.Consent.FlowTest do
       assert "reagent:local.flow-machine" in minted
 
       for ref <- ["reagent:local.flow-walked", "reagent:local.flow-machine"] do
-        {:ok, [profile]} = Source.DB.profiles(ctx, ref)
-        {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+        {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+        {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
 
         assert is_binary(consent.blob_digest) and consent.blob_digest != "",
                "#{ref} was minted without a blob digest"

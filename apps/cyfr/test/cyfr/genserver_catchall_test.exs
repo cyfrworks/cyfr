@@ -45,7 +45,6 @@ defmodule Cyfr.GenServerCatchallTest do
     Emissary.MCP.Bridge => "started only when an MCP bridge URL and key are configured",
     Emissary.MCP.RunningTasks => "probing would race real request tracking",
     Sanctum.Consent.Proof.Memory => "started only when the memory proof store is configured",
-    Sanctum.Consent.Source.Memory => "never supervised — a test starts it per case",
     Sanctum.Authority.BudgetGuard => "guards live invoke budgets"
   }
 

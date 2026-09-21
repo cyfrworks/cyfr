@@ -13,7 +13,6 @@ defmodule Sanctum.MCP.ProfileTool do
 
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
-  alias Sanctum.Consent.Source
   alias Sanctum.Context
 
   @doc false
@@ -311,11 +310,11 @@ defmodule Sanctum.MCP.ProfileTool do
     # callers of the handler.
     with :ok <- Sanctum.Consent.Authz.authorize_staging(ctx),
          {:ok, source_ref} <- Plan.name_ref(ref),
-         {:ok, profiles} <- Source.impl().profiles(ctx, source_ref) do
+         {:ok, profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), source_ref) do
       enriched =
         Enum.map(profiles, fn profile ->
           revision =
-            case Source.impl().head_consent(ctx, profile.id) do
+            case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
               {:ok, consent} -> consent.revision
               _ -> nil
             end

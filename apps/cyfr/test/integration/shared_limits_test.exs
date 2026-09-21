@@ -35,7 +35,7 @@ defmodule Cyfr.SharedLimitsTest do
   alias Cyfr.Test.{OpusService, ScriptedWorker}
   alias Cyfr.Test.TwoServices.Wire
   alias Cyfr.{WorkerAuth, WorkerWire}
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @moduletag timeout: 180_000
   @moduletag :capture_log
@@ -54,10 +54,9 @@ defmodule Cyfr.SharedLimitsTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "shared_limits_#{System.unique_integer([:positive])}")
-    keys = [:base_path, :seed_path, :consent_source, :workers]
+    keys = [:base_path, :seed_path, :workers]
     previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
     Application.put_env(:cyfr, :base_path, Path.join(run_dir, "data"))
-    Application.put_env(:cyfr, :consent_source, Source.DB)
 
     ctx = Sanctum.TestContext.local()
 

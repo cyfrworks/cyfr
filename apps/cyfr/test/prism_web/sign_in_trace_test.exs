@@ -154,7 +154,8 @@ defmodule PrismWeb.SignInTraceTest do
              "#{unit.ref} is not registered after the fill"
     end
 
-    assert {:ok, [_profile]} = Sanctum.Consent.Source.DB.profiles(reader, "agent:local.aqua")
+    assert {:ok, [_profile]} =
+             Arca.ConsentStorage.profiles(Sanctum.Context.actor(reader), "agent:local.aqua")
 
     # `/` lands the person in their own estate — the redirect naming it is
     # itself the claim — and the page there is not the preparing state.

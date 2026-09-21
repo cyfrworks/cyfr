@@ -17,7 +17,7 @@ defmodule Cyfr.Test.SandboxTest do
 
   alias Cyfr.Test.{Sandbox, TwoServices}
   alias Opus.Test.NestedExecution, as: Probe
-  alias Sanctum.Consent.{Bootstrap, Source}
+  alias Sanctum.Consent.{Bootstrap}
 
   @apps_root Path.expand("../../..", __DIR__) <> "/"
 
@@ -84,10 +84,9 @@ defmodule Cyfr.Test.SandboxTest do
       test_path =
         Path.join(System.tmp_dir!(), "sandbox_runners_#{System.unique_integer([:positive])}")
 
-      keys = [:base_path, :consent_source]
+      keys = [:base_path]
       previous = Map.new(keys, &{&1, Application.get_env(:cyfr, &1)})
       Application.put_env(:cyfr, :base_path, test_path)
-      Application.put_env(:cyfr, :consent_source, Source.DB)
 
       on_exit(fn ->
         File.rm_rf!(test_path)

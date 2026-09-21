@@ -19,7 +19,6 @@ defmodule Sanctum.WebhookTest do
     # A webhook binds a consented profile at create; these tests focus on
     # other behaviour, so seed one owner profile per target.
     ctx = Sanctum.TestContext.local()
-    ConsentFixtures.start_source!()
     ConsentFixtures.bindable_profile(ctx, "f:local.handler", profile_id: "prof-handler")
     ConsentFixtures.bindable_profile(ctx, "f:local.h", profile_id: "prof-h")
 
