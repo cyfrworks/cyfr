@@ -143,6 +143,13 @@ defmodule Aqua.RunnerTest do
     }
   end
 
+  # The one turn whose recovery count a case spends by hand, to stand at
+  # the cap without three real interruptions.
+  defp spend_recoveries(turn_id) do
+    import Ecto.Query, only: [from: 2]
+    from(t in Arca.Schemas.Turn, where: t.id == ^turn_id)
+  end
+
   defp await_retired(runner, ref) do
     assert_receive {:DOWN, ^ref, :process, ^runner, :normal}, 5_000
     _ = :sys.get_state(Aqua.RunnerSupervisor)
@@ -746,6 +753,140 @@ defmodule Aqua.RunnerTest do
     rows = Threads.messages(Sanctum.Context.actor(ctx), other_thread.id)
     assert Enum.any?(rows, &(&1.kind == "turn_aborted"))
     assert Enum.any?(rows, &(&1.content == "taken over"))
+  end
+
+  describe "suspend and recover" do
+    test "a suspend keeps every row, releases the thread's claim, and a recover carries the turn on",
+         %{ctx: ctx, thread: thread} do
+      script!([{:probe, self()}, reply("carried on")])
+
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua go")
+      pids = running!(thread)
+
+      {:ok, held} = Tape.turn(ctx, turn_id)
+      before_rows = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
+      assert {:ok, %{active_turn_id: ^turn_id}} = Tape.thread(ctx, thread.id)
+
+      assert {:ok, %{suspended: true, turn: ^turn_id}} =
+               Runner.suspend_turn(ctx, thread.id, turn: turn_id, reason: "stepping away")
+
+      # The turn is down, its runtime released and the thread free for any
+      # member — which an approval pause would not have done.
+      assert {:ok, %{status: "paused", paused_reason: "suspended"} = down} =
+               Tape.turn(ctx, turn_id)
+
+      assert {:ok, %{active_turn_id: nil}} = Tape.thread(ctx, thread.id)
+      assert down.fence > held.fence
+
+      # Every row the turn wrote is still there; the set-down only added.
+      kept = MapSet.new(before_rows, & &1.id)
+      now = MapSet.new(Threads.messages(Sanctum.Context.actor(ctx), thread.id), & &1.id)
+      assert MapSet.subset?(kept, now)
+
+      # A write carrying the fence the holder had is refused.
+      assert {:error, :superseded} = Tape.record_model_intent(ctx, held, %{})
+
+      # The abandoned call answers nobody.
+      send(pids.call, :continue)
+
+      # Recovery names its turn and carries it on under a new fence.
+      assert {:ok, %{recovered: true, turn: ^turn_id}} =
+               Runner.recover_turn(ctx, thread.id, turn_id)
+
+      assert_receive {:thread, _, {:turn_finished}}, 60_000
+      assert {:ok, %{status: "completed"} = done} = Tape.turn(ctx, turn_id)
+      assert done.fence > down.fence
+      assert {:ok, %{active_turn_id: nil}} = Tape.thread(ctx, thread.id)
+    end
+
+    test "an approval pause keeps the thread's claim where a suspend releases it", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      script!([call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"})])
+
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua keep it")
+      wait_until(fn -> match?({:ok, %{status: "paused"}}, Tape.turn(ctx, turn_id)) end, 60_000)
+
+      # Paused on a card: still this member's work, so still its thread.
+      assert {:ok, %{status: "paused"} = paused} = Tape.turn(ctx, turn_id)
+      refute paused.paused_reason == "suspended"
+      assert {:ok, %{active_turn_id: ^turn_id}} = Tape.thread(ctx, thread.id)
+
+      # Suspending the same turn gives the claim up. That is the whole
+      # difference between the two.
+      assert {:ok, %{suspended: true}} = Runner.suspend_turn(ctx, thread.id, turn: turn_id)
+      assert {:ok, %{active_turn_id: nil}} = Tape.thread(ctx, thread.id)
+    end
+
+    test "recovery names a turn of the caller's own estate, and anything else is absent", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      script!([{:probe, self()}, reply("never")])
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua go")
+      pids = running!(thread)
+
+      # A turn that is running here is not suspended, and saying so is not
+      # a takeover.
+      assert {:error, :not_suspended} = Runner.recover_turn(ctx, thread.id, turn_id)
+
+      # Another estate's caller is told the turn does not exist — the same
+      # answer an id nobody minted gets, so an id cannot be probed for.
+      {:ok, other} =
+        Athanors.create_group(ctx.user_id, "Other #{System.unique_integer([:positive])}")
+
+      {:ok, _} = Members.ensure(ctx.user_id, scope: "athanor", athanor_id: other.id)
+      {:ok, other_ctx} = Sanctum.Context.focus(ctx, other.id)
+
+      assert {:error, :not_found} = Runner.recover_turn(other_ctx, thread.id, turn_id)
+      assert {:error, :not_found} = Runner.recover_turn(ctx, thread.id, "trn_never_minted")
+
+      # And a turn of another thread of the same estate is absent too: the
+      # pair has to agree.
+      {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(ctx))
+      assert {:error, :not_found} = Runner.recover_turn(ctx, elsewhere.id, turn_id)
+
+      send(pids.call, :continue)
+      assert_receive {:thread, _, {:turn_finished}}, 60_000
+    end
+
+    test "a suspend on a thread nobody is running here is refused, not started", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      assert nil == Runner.whereis(thread.id)
+      assert {:error, :not_running} = Runner.suspend_turn(ctx, thread.id)
+      assert nil == Runner.whereis(thread.id)
+    end
+
+    test "past the recovery cap the turn ends uncertain and the next attempt is refused", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      script!([{:probe, self()}, reply("never")])
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua go")
+      pids = running!(thread)
+
+      assert {:ok, _} = Runner.suspend_turn(ctx, thread.id, turn: turn_id)
+      send(pids.call, :continue)
+
+      # The cap is the turn's own count, so spend it on the row and ask
+      # again: the answer is the refusal, and the turn is ended rather
+      # than carried on under a recovery nobody may spend.
+      {1, _} =
+        Arca.Repo.update_all(
+          spend_recoveries(turn_id),
+          set: [recovery_attempts: Tape.recovery_cap()]
+        )
+
+      assert {:error, :recovery_exhausted} = Runner.recover_turn(ctx, thread.id, turn_id)
+      assert {:ok, %{status: "uncertain"}} = Tape.turn(ctx, turn_id)
+      assert {:ok, %{active_turn_id: nil}} = Tape.thread(ctx, thread.id)
+
+      # And a turn that is over is not recovered at all.
+      assert {:error, :not_open} = Runner.recover_turn(ctx, thread.id, turn_id)
+    end
   end
 
   describe "a runner that dies" do

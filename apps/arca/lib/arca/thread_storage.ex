@@ -18,6 +18,17 @@ defmodule Arca.ThreadStorage do
   safe — the loser retries with the next number. Approval rows move through
   `resolve_approval/4`, a compare-and-set on `status`, so two members
   clicking the same card cannot both run it.
+
+  ## The claim
+
+  `active_turn_id` is which turn holds the thread, and it is the only
+  evidence of that: a runner process on some member is a lookup, never
+  ownership. `claim/4` takes it in one statement naming the turn and the
+  consumed sequence the claimant read, `release/3` gives it up, and
+  `take_claim!/3` is the takeover a recovery makes inside its own
+  transaction — admitted only for a thread nobody holds or one whose
+  holder is not a live peer (`claim_holder/2`). The claim has no lease of
+  its own: it is alive while its holder's member is.
   """
 
   import Ecto.Query
@@ -156,6 +167,226 @@ defmodule Arca.ThreadStorage do
   end
 
   def update(%Cyfr.Actor{}, _id, _attrs), do: {:error, :no_athanor}
+
+  # ---------------------------------------------------------------------------
+  # The thread claim
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Take the thread for `turn_id`, naming the consumed sequence the claimant
+  read.
+
+  One statement, and it has to be: the claim and the sequence check
+  together are what stop two members from both believing they run the
+  thread. It lands only on a thread nobody holds whose `turn_seq` still
+  reads what the claimant read, so of two members planning from the same
+  read exactly one write matches.
+
+  A claim that wrote nothing is told which of the two conditions refused
+  it, from a second read that decides nothing: `{:error, :stale}` when a
+  peer accepted the next message first — re-read, because which turn is
+  next may have changed — and `{:error, {:busy, turn_id}}` when another
+  turn holds it. A thread this turn already holds answers `{:ok, thread}`,
+  so a claimant that lost track of its own claim may ask again.
+  """
+  @spec claim(Cyfr.Actor.t(), String.t(), String.t(), non_neg_integer()) ::
+          {:ok, Thread.t()}
+          | {:error, :no_athanor | :not_found | :stale | {:busy, String.t()} | :database_error}
+  def claim(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id, turn_id, turn_seq)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
+             is_binary(turn_id) and is_integer(turn_seq) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.claim", fn ->
+      claimed =
+        from(c in Thread,
+          where: c.id == ^thread_id and c.athanor_id == ^athanor_id,
+          where: c.turn_seq == ^turn_seq and is_nil(c.active_turn_id)
+        )
+        |> Repo.update_all(set: [active_turn_id: turn_id])
+
+      case claimed do
+        {1, _} -> get(actor, thread_id)
+        {0, _} -> claim_refused(actor, thread_id, turn_id)
+      end
+    end)
+  end
+
+  def claim(%Cyfr.Actor{}, _thread_id, _turn_id, _turn_seq), do: {:error, :no_athanor}
+
+  # Why the one statement wrote nothing. A read, so it decides nothing and
+  # cannot be raced into admitting anything.
+  defp claim_refused(actor, thread_id, turn_id) do
+    case get(actor, thread_id) do
+      {:ok, %Thread{active_turn_id: ^turn_id} = thread} ->
+        {:ok, thread}
+
+      {:ok, %Thread{active_turn_id: held}} when is_binary(held) ->
+        {:error, {:busy, held}}
+
+      # Nobody holds it now, so the sequence is what refused the claim —
+      # or a release landed between the statement and this read. Both say
+      # the same thing to the claimant: read the thread again.
+      {:ok, %Thread{}} ->
+        {:error, :stale}
+
+      other ->
+        other
+    end
+  end
+
+  @doc """
+  Give the thread's claim up, if this turn still holds it: one statement,
+  so a turn whose claim a successor already took releases nothing of its
+  successor's.
+
+  An approval pause keeps the claim — the turn is still this member's
+  work, waiting on a person. `turn.suspend` and every terminal transition
+  release it.
+  """
+  @spec release(Cyfr.Actor.t(), String.t(), String.t()) ::
+          :ok | {:error, :no_athanor | :not_held | :database_error}
+  def release(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
+             is_binary(turn_id) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.release", fn ->
+      case release_all!(actor, thread_id, turn_id) do
+        {1, _} -> :ok
+        {0, _} -> {:error, :not_held}
+      end
+    end)
+  end
+
+  def release(%Cyfr.Actor{}, _thread_id, _turn_id), do: {:error, :no_athanor}
+
+  @doc """
+  `release/3` for a caller that owns the transaction: the count is the
+  caller's to read, and a release that matched nothing is not an error
+  there — a terminal turn that never held the claim releases nothing.
+  """
+  @spec release_all!(Cyfr.Actor.t(), String.t(), String.t()) ::
+          {non_neg_integer(), nil | [term()]}
+  # arca:db-raise-ok inside the caller's transaction
+  def release_all!(%Cyfr.Actor{athanor_id: athanor_id}, thread_id, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
+             is_binary(turn_id) do
+    from(c in Thread,
+      where: c.id == ^thread_id and c.athanor_id == ^athanor_id,
+      where: c.active_turn_id == ^turn_id
+    )
+    |> Repo.update_all(set: [active_turn_id: nil])
+  end
+
+  def release_all!(%Cyfr.Actor{}, _thread_id, _turn_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.release_all!/3")
+
+  @doc """
+  Take the claim for `turn_id` inside the caller's transaction — the one
+  place a claim may be taken from a turn that already holds it, and so
+  the one place a recovery is admitted.
+
+  The row admits the take only when the thread is free, or held by a turn
+  whose runner is not a LIVE PEER: a member reads no registry and infers
+  nothing from "the holder is not on my node". The liveness test is a
+  subquery of the same statement, so a peer that renews its cell slot
+  between a caller's read and its write cannot lose its turn to that
+  caller, and a caller that rolls back spends nothing.
+
+  The turn being taken is not itself an exception. A member that finds
+  the thread already naming the turn it wants still has to pass the
+  liveness test, or a peer's running turn would be recoverable by the
+  first member to name it. A member's own turns are its own — a
+  `runner_id` equal to this boot is never a live peer — so a member picks
+  up what it left behind without waiting for anything. Rolls the caller's
+  transaction back with `:busy` when a live peer holds the thread.
+  """
+  @spec take_claim!(Cyfr.Actor.t(), String.t(), String.t()) :: :ok
+  # arca:db-raise-ok inside the caller's transaction
+  def take_claim!(%Cyfr.Actor{athanor_id: athanor_id}, thread_id, turn_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
+             is_binary(turn_id) do
+    taken =
+      from(c in Thread,
+        where: c.id == ^thread_id and c.athanor_id == ^athanor_id,
+        where:
+          is_nil(c.active_turn_id) or
+            c.active_turn_id not in subquery(live_peer_turns(athanor_id))
+      )
+      |> Repo.update_all(set: [active_turn_id: turn_id])
+
+    case taken do
+      {1, _} -> :ok
+      {0, _} -> Repo.rollback(:busy)
+    end
+  end
+
+  def take_claim!(%Cyfr.Actor{}, _thread_id, _turn_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ThreadStorage.take_claim!/3")
+
+  @doc """
+  Which turn holds the thread, and whether a live peer is running it.
+
+  The one question a member asks before it recovers anything: absence from
+  a local registry is never evidence, and this read is the row's answer.
+  `live_peer?` is true only for a holder whose `runner_id` is another
+  member's boot with a cell slot that has not lapsed on database time.
+  """
+  @spec claim_holder(Cyfr.Actor.t(), String.t()) ::
+          {:ok,
+           %{
+             turn_id: String.t() | nil,
+             runner_id: String.t() | nil,
+             live_peer?: boolean()
+           }}
+          | {:error, :no_athanor | :not_found | :database_error}
+  def claim_holder(%Cyfr.Actor{athanor_id: athanor_id} = actor, thread_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
+    Arca.Repo.Errors.with_db_rescue("ThreadStorage.claim_holder", fn ->
+      with {:ok, thread} <- get(actor, thread_id) do
+        {:ok, holder_of(athanor_id, thread)}
+      end
+    end)
+  end
+
+  def claim_holder(%Cyfr.Actor{}, _thread_id), do: {:error, :no_athanor}
+
+  defp holder_of(_athanor_id, %Thread{active_turn_id: nil}),
+    do: %{turn_id: nil, runner_id: nil, live_peer?: false}
+
+  defp holder_of(athanor_id, %Thread{active_turn_id: turn_id}) do
+    runner_id =
+      Repo.one(
+        from(t in Arca.Schemas.Turn,
+          where: t.athanor_id == ^athanor_id and t.id == ^turn_id,
+          select: t.runner_id
+        )
+      )
+
+    live? = Repo.exists?(from(t in live_peer_turns(athanor_id), where: t.id == ^turn_id))
+    %{turn_id: turn_id, runner_id: runner_id, live_peer?: live?}
+  end
+
+  # The turns of this athanor a live PEER holds: a turn whose `runner_id`
+  # is some other member's boot and whose member's slot in `cell_leases`
+  # has not lapsed on the cell's clock (`Arca.ServerMetaStorage.now!/0`).
+  #
+  # The instant is read from the database and compared inside the
+  # statement, so every member decides liveness against one clock. Reading
+  # it a moment before the write can only make a lapsed peer look live,
+  # which refuses a take; it can never make a live peer look lapsed.
+  defp live_peer_turns(athanor_id) do
+    me = Cyfr.Boot.id()
+
+    live_owners =
+      from(l in Arca.Schemas.CellLease,
+        where: l.lease_until > ^Arca.ServerMetaStorage.now!(),
+        select: l.owner
+      )
+
+    from(t in Arca.Schemas.Turn,
+      where: t.athanor_id == ^athanor_id and t.runner_id != ^me,
+      where: t.runner_id in subquery(live_owners),
+      select: t.id
+    )
+  end
 
   @doc """
   Delete a thread, its messages and its attachment blobs

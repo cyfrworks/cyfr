@@ -28,6 +28,17 @@ defmodule Arca.TurnStorage do
   the transaction and the whole transaction is retried, since a retry
   inside an aborted Postgres transaction cannot land.
 
+  ## The thread claim
+
+  Which root turn may run at all is the thread's, not the turn's:
+  `threads.active_turn_id` (`Arca.ThreadStorage`). `start/3` takes it in
+  the transaction that moves the turn to `running`, naming the consumed
+  sequence the caller read; `finish/4` and `suspend/3` give it up;
+  `takeover/3`, `recover/3` and `pause_recovered/3` take it from a turn
+  whose holder is not a live member, in the same transaction that counts
+  the recovery — so a member that did not take the claim cannot spend one.
+  An approval pause keeps the claim: the turn is still this member's work.
+  Clone turns hold no claim; the root they run under does.
   """
 
   import Ecto.Query
@@ -207,6 +218,15 @@ defmodule Arca.TurnStorage do
   `:budget_id`, `:profile_id`, `:consent_id`, `:agent_revision_digest`,
   `:agent_capability_digest`), and the consumption boundary set to the
   highest seq the turn may read now. Event `turn.started`.
+
+  The thread's claim is taken in the same transaction, naming the
+  consumed sequence in `:turn_seq` — the value the caller read before it
+  decided this turn runs next. A claim refused because a peer accepted
+  the next message first answers `{:error, :stale}`, and the caller reads
+  the thread again; one refused because another turn holds the thread
+  answers `{:error, {:busy, turn_id}}`. Without `:turn_seq` the sequence
+  the transaction reads is used, which checks the holder and not the
+  caller's view of the thread.
   """
   @spec start(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
   def start(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
@@ -214,6 +234,7 @@ defmodule Arca.TurnStorage do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.start", fn ->
       Arca.Repo.transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
+        claim_thread!(athanor_id, turn, attrs)
         window = boundary(athanor_id, turn)
 
         sets = [
@@ -459,6 +480,15 @@ defmodule Arca.TurnStorage do
             ]
           )
 
+        # A turn that is over holds nothing: the claim goes back before the
+        # commit, in the same transaction, so the thread is free the moment
+        # the end is visible and no second statement can be lost.
+        Arca.ThreadStorage.release_all!(
+          Cyfr.Actor.in_athanor(athanor_id),
+          turn.thread_id,
+          turn_id
+        )
+
         turn = turn!(athanor_id, turn_id)
         event!(athanor_id, turn, "turn." <> status, nil, %{"error" => Map.get(attrs, :error)})
         turn
@@ -469,13 +499,142 @@ defmodule Arca.TurnStorage do
   def finish(%Cyfr.Actor{}, _turn_id, _status, _attrs), do: {:error, :no_athanor}
 
   @doc """
+  Set a running or paused turn down, keeping every row it has written and
+  giving up the thread's claim, so any member may pick it up
+  (`turn.suspend`). `attrs`: `:fence` (the one the caller read) and
+  `:reason`.
+
+  The fence is raised first, so the runner that held the turn writes
+  nothing afterwards. A running turn's root attempt and root execution
+  leave `running` with it and its open running interval is added to
+  `active_ms`, exactly as an approval pause does. What suspending adds to
+  a pause is the release: an approval pause keeps `active_turn_id`
+  because the turn is still this member's work, while a suspended turn is
+  nobody's until a member recovers it. Event `turn.paused`, reason
+  `suspended`.
+  """
+  @spec suspend(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def suspend(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.suspend", fn ->
+      Arca.Repo.transaction(fn ->
+        turn = take!(athanor_id, turn_id, attrs)
+        if turn.status not in ["running", "paused"], do: Arca.Repo.rollback(:not_running)
+        now = DateTime.utc_now()
+
+        ran =
+          if turn.status == "running" do
+            ran =
+              Arca.ExecutionAttempts.pause!(Cyfr.Actor.in_athanor(athanor_id), turn.attempt) || 0
+
+            execution_status!(athanor_id, turn.root_execution_id, "running", "paused")
+            ran
+          else
+            0
+          end
+
+        {1, _} =
+          from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+          |> Arca.Repo.update_all(
+            set: [
+              status: "paused",
+              paused_at: now,
+              paused_reason: "suspended",
+              launch_step_id: nil,
+              active_ms: turn.active_ms + ran
+            ]
+          )
+
+        Arca.ThreadStorage.release_all!(
+          Cyfr.Actor.in_athanor(athanor_id),
+          turn.thread_id,
+          turn_id
+        )
+
+        turn = turn!(athanor_id, turn_id)
+
+        event!(athanor_id, turn, "turn.paused", nil, %{
+          "reason" => "suspended",
+          "detail" => Map.get(attrs, :reason)
+        })
+
+        turn
+      end)
+    end)
+  end
+
+  def suspend(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
+  @doc """
+  Take an open turn no live member is running and carry it on
+  (`turn.recover`): the thread's claim and the recovery count in one
+  transaction, so a member that did not take the claim cannot spend a
+  recovery. `attrs`: `:fence` (the one the caller read) and
+  `:lease_until`.
+
+  The fence is compared and raised first. The claim is admitted only by a
+  thread nobody holds, one this turn already holds, or one whose holder's
+  boot is no longer a live member — never by a live peer's, which is
+  `{:error, :busy}`. A running turn is adopted as `takeover/3` adopts
+  one: the predecessor attempt retired, a successor opened, the
+  predecessor's unaccounted interval added. A paused turn keeps the
+  attempt its pause left; the loop that continues it resumes that one.
+  Refused `{:error, :recovery_exhausted}` past the cap and
+  `{:error, :not_open}` for a turn that is over.
+  """
+  @spec recover(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
+  def recover(actor, turn_id, attrs \\ %{})
+
+  def recover(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.recover", fn ->
+      Arca.Repo.transaction(fn ->
+        turn = take!(athanor_id, turn_id, attrs)
+        if turn.status not in @open, do: Arca.Repo.rollback(:not_open)
+        if turn.recovery_attempts >= @recovery_cap, do: Arca.Repo.rollback(:recovery_exhausted)
+        if turn.parent_turn_id, do: Arca.Repo.rollback(:clone)
+
+        thread = thread!(athanor_id, turn.thread_id)
+        Arca.ThreadStorage.take_claim!(Cyfr.Actor.in_athanor(athanor_id), thread.id, turn_id)
+
+        adopted =
+          if turn.status == "running" and turn.root_execution_id,
+            do: adopt_root!(athanor_id, turn, attrs),
+            else: %{sets: [], ran_ms: 0, attempt: nil}
+
+        {1, _} =
+          from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
+          |> Arca.Repo.update_all(
+            set:
+              adopted.sets ++
+                [
+                  runner_id: Cyfr.Boot.id(),
+                  recovery_attempts: turn.recovery_attempts + 1,
+                  active_ms: turn.active_ms + adopted.ran_ms
+                ]
+          )
+
+        turn = turn!(athanor_id, turn_id)
+        event!(athanor_id, turn, "turn.recovered", nil, %{"attempt" => adopted.attempt})
+        turn
+      end)
+    end)
+  end
+
+  def recover(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
+  @doc """
   Take over a running turn another runner lost: the one place a
   successor attempt is opened. `attrs`: `:fence` (the one the caller read)
   and `:lease_until`. The turn's fence is compared and renewed first, then
-  the predecessor is retired, the successor opened with the next fence and
-  the pointer moved, `recovery_attempts` counted and the predecessor's
-  unaccounted running interval added. Refused `{:error, :recovery_exhausted}` past
-  the cap and `{:error, :not_open}` for a turn that is over.
+  the thread's claim is taken — never from a live peer, which is
+  `{:error, :busy}` — the predecessor is retired, the successor opened
+  with the next fence and the pointer moved, `recovery_attempts` counted
+  and the predecessor's unaccounted running interval added. The claim and
+  the count are the one transaction, so a member that did not take the
+  claim cannot spend a recovery. Refused
+  `{:error, :recovery_exhausted}` past the cap and `{:error, :not_open}`
+  for a turn that is over.
   """
   @spec takeover(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
   def takeover(actor, turn_id, attrs \\ %{})
@@ -489,44 +648,65 @@ defmodule Arca.TurnStorage do
         if turn.recovery_attempts >= @recovery_cap, do: Arca.Repo.rollback(:recovery_exhausted)
         if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
 
-        %{attempt: successor, ran_ms: ran} =
-          Arca.ExecutionAttempts.takeover!(
-            Cyfr.Actor.in_athanor(athanor_id),
-            turn.root_execution_id,
-            boot_id: Cyfr.Boot.id(),
-            lease_until: Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until()
-          )
+        thread = thread!(athanor_id, turn.thread_id)
+        Arca.ThreadStorage.take_claim!(Cyfr.Actor.in_athanor(athanor_id), thread.id, turn_id)
 
-        execution_status!(
-          athanor_id,
-          turn.root_execution_id,
-          ["running", "paused", "failed"],
-          "running"
-        )
+        %{sets: sets, ran_ms: ran, attempt: attempt} = adopt_root!(athanor_id, turn, attrs)
 
         {1, _} =
           from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
           |> Arca.Repo.update_all(
-            set: [
-              status: "running",
-              attempt: successor.attempt,
-              runner_id: Cyfr.Boot.id(),
-              recovery_attempts: turn.recovery_attempts + 1,
-              active_ms: turn.active_ms + ran,
-              paused_at: nil,
-              paused_reason: nil,
-              launch_step_id: nil
-            ]
+            set:
+              sets ++
+                [
+                  runner_id: Cyfr.Boot.id(),
+                  recovery_attempts: turn.recovery_attempts + 1,
+                  active_ms: turn.active_ms + ran
+                ]
           )
 
         turn = turn!(athanor_id, turn_id)
-        event!(athanor_id, turn, "turn.recovered", nil, %{"attempt" => successor.attempt})
+        event!(athanor_id, turn, "turn.recovered", nil, %{"attempt" => attempt})
         turn
       end)
     end)
   end
 
   def takeover(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
+
+  # The attempt half of a takeover: the predecessor retired, a successor
+  # opened under this boot, the root execution back to `running`. Answers
+  # what the turn row must be set to with it, the predecessor's
+  # unaccounted interval, and the successor's id.
+  # arca:db-raise-ok inside the caller's transaction
+  defp adopt_root!(athanor_id, %Turn{} = turn, attrs) do
+    %{attempt: successor, ran_ms: ran} =
+      Arca.ExecutionAttempts.takeover!(
+        Cyfr.Actor.in_athanor(athanor_id),
+        turn.root_execution_id,
+        boot_id: Cyfr.Boot.id(),
+        lease_until: Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until()
+      )
+
+    execution_status!(
+      athanor_id,
+      turn.root_execution_id,
+      ["running", "paused", "failed"],
+      "running"
+    )
+
+    %{
+      sets: [
+        status: "running",
+        attempt: successor.attempt,
+        paused_at: nil,
+        paused_reason: nil,
+        launch_step_id: nil
+      ],
+      ran_ms: ran,
+      attempt: successor.attempt
+    }
+  end
 
   @doc """
   Raise the fence of the turn and of its open clones, and mark every step
@@ -660,6 +840,12 @@ defmodule Arca.TurnStorage do
           turn = take!(athanor_id, turn_id, attrs)
           if turn.status != "running", do: Arca.Repo.rollback(:not_running)
           if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
+
+          # Setting a turn down is recovery, so it is admitted by the same
+          # row: never from a live peer, and in this transaction.
+          thread = thread!(athanor_id, turn.thread_id)
+          Arca.ThreadStorage.take_claim!(Cyfr.Actor.in_athanor(athanor_id), thread.id, turn_id)
+
           now = DateTime.utc_now()
 
           %{attempt: successor, ran_ms: ran} =
@@ -2121,6 +2307,45 @@ defmodule Arca.TurnStorage do
          |> Arca.Repo.update_all(set: [fence: fence]) do
       {1, _} -> turn!(athanor_id, turn_id)
       {0, _} -> Arca.Repo.rollback(:superseded)
+    end
+  end
+
+  # The thread's claim, taken for a root turn that is starting. One
+  # statement naming the turn and the consumed sequence the caller read,
+  # so of two members starting a turn on one thread exactly one write
+  # matches; a claimant that reads no sequence of its own is held only to
+  # the holder. A thread this turn already holds is answered, so a start
+  # retried after a crash claims what it already had.
+  #
+  # Clone turns never hold the thread: the root they run under does.
+  # arca:db-raise-ok inside the caller's transaction
+  defp claim_thread!(_athanor_id, %Turn{parent_turn_id: parent}, _attrs) when is_binary(parent),
+    do: :ok
+
+  defp claim_thread!(athanor_id, %Turn{} = turn, attrs) do
+    thread = thread!(athanor_id, turn.thread_id)
+    expected = Map.get(attrs, :turn_seq) || thread.turn_seq || 0
+
+    claimed =
+      from(c in Thread,
+        where: c.id == ^turn.thread_id and c.athanor_id == ^athanor_id,
+        where: c.turn_seq == ^expected,
+        where: is_nil(c.active_turn_id) or c.active_turn_id == ^turn.id
+      )
+      |> Arca.Repo.update_all(set: [active_turn_id: turn.id])
+
+    case claimed do
+      {1, _} ->
+        :ok
+
+      # Read the row again before saying why: a peer's claim may have
+      # committed between the read above and this statement, which is
+      # exactly the race the statement is here to lose.
+      {0, _} ->
+        case thread!(athanor_id, turn.thread_id) do
+          %Thread{active_turn_id: held} when is_binary(held) -> Arca.Repo.rollback({:busy, held})
+          %Thread{} -> Arca.Repo.rollback(:stale)
+        end
     end
   end
 

@@ -88,6 +88,58 @@ defmodule Arca.TurnTapeStorageTest do
     {started, root}
   end
 
+  # `start!/2` with the claim's own arguments in the caller's hands: the
+  # consumed sequence it names, and nothing else changed.
+  defp start_with(actor, turn, opts) do
+    root = root!(actor, turn.id)
+
+    TurnStorage.start(
+      actor,
+      turn.id,
+      Enum.into(opts, %{
+        root_execution_id: root.execution.id,
+        attempt: root.attempt.attempt,
+        budget_id: root.budget_id,
+        fence: turn.fence
+      })
+    )
+  end
+
+  defp reread(actor, thread) do
+    {:ok, row} = Threads.get(actor, thread.id)
+    row
+  end
+
+  # One live member of the cell that is not this boot, under a node name
+  # nothing else writes: the row's own slot, so the case measures its own
+  # delta rather than whatever the suite left in a shared table.
+  defp peer_member!(lease_ms \\ 60_000) do
+    node = "h1-peer-#{System.unique_integer([:positive])}@test"
+    owner = "#{node}#boot_#{System.unique_integer([:positive])}"
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.CellLease, [
+        %{
+          node: node,
+          owner: owner,
+          generation: 1,
+          fence: 1,
+          lease_until: DateTime.add(DateTime.utc_now(), lease_ms, :millisecond),
+          taken_at: DateTime.utc_now(),
+          inserted_at: DateTime.utc_now(),
+          updated_at: DateTime.utc_now()
+        }
+      ])
+
+    on_exit(fn ->
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fn ->
+        Arca.Repo.delete_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node))
+      end)
+    end)
+
+    %{node: node, owner: owner}
+  end
+
   defp execution(id), do: Arca.Repo.get!(Arca.Execution, id)
 
   defp respond!(actor, turn, calls) do
@@ -232,6 +284,194 @@ defmodule Arca.TurnTapeStorageTest do
 
       # A write that names no fence writes nothing either.
       assert {:error, :fence_required} = TurnStorage.pause(actor, turn.id, %{})
+    end
+  end
+
+  describe "the thread claim" do
+    test "starting takes the thread for the turn, and the sequence the caller read decides", %{
+      actor: actor,
+      thread: thread
+    } do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      assert %{active_turn_id: nil, turn_seq: seq} = reread(actor, thread)
+
+      # The consumed sequence the claimant read, and only that one.
+      assert {:error, :stale} = start_with(actor, turn, turn_seq: seq + 1)
+      assert %{active_turn_id: nil} = reread(actor, thread)
+
+      {started, _root} = start!(actor, turn)
+      assert %{active_turn_id: held} = reread(actor, thread)
+      assert held == turn.id
+
+      # Another member's turn on the same thread claims nothing while this
+      # one holds it: the claim is not something a peer takes over.
+      %{turn: second} = accept_turn!(actor, thread, "@aqua again")
+      assert {:error, {:busy, ^held}} = start_with(actor, second, [])
+      assert %{active_turn_id: ^held} = reread(actor, thread)
+
+      # The turn that is over holds nothing.
+      {:ok, _} = TurnStorage.finish(actor, turn.id, "completed", %{fence: started.fence})
+      assert %{active_turn_id: nil} = reread(actor, thread)
+
+      # And the one behind it may now take the thread.
+      {_, _} = start!(actor, second)
+      assert %{active_turn_id: taken} = reread(actor, thread)
+      assert taken == second.id
+    end
+
+    test "an approval pause keeps the claim where a suspend releases it", %{
+      actor: actor,
+      thread: thread
+    } do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      {started, root} = start!(actor, turn)
+      assert %{active_turn_id: held} = reread(actor, thread)
+      assert held == turn.id
+
+      # The pause a card raises: still this member's work, still its thread.
+      {:ok, paused} = TurnStorage.pause(actor, turn.id, %{fence: started.fence})
+      assert paused.paused_reason == "approval"
+      assert %{active_turn_id: ^held} = reread(actor, thread)
+
+      {:ok, resumed} = TurnStorage.resume(actor, turn.id, %{fence: paused.fence})
+      assert %{active_turn_id: ^held} = reread(actor, thread)
+
+      # Suspending gives it up, so any member may pick the turn up.
+      assert {:ok, suspended} =
+               TurnStorage.suspend(actor, turn.id, %{
+                 fence: resumed.fence,
+                 reason: "the operator set it down"
+               })
+
+      assert suspended.status == "paused"
+      assert suspended.paused_reason == "suspended"
+      assert suspended.fence != resumed.fence
+      assert %{active_turn_id: nil} = reread(actor, thread)
+
+      # The runtime went with it: the root attempt and execution are paused.
+      assert %{state: "paused"} = ExecutionAttempts.get(actor, suspended.attempt)
+      assert execution(root.execution.id).status == "paused"
+
+      # The fence the holder had is refused afterwards.
+      assert {:error, :superseded} =
+               TurnStorage.put_step(actor, turn.id, %{kind: "model", fence: resumed.fence})
+    end
+
+    test "a suspend keeps every row the turn has written", %{actor: actor, thread: thread} do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      {started, _root} = start!(actor, turn)
+      {_m, %{calls: [%{step: call}]}} = respond!(actor, started, [{"a", "files", "read"}])
+      {:ok, _} = TurnStorage.dispatch_step(actor, call.id, %{fence: started.fence})
+
+      before_rows = Threads.messages(actor, thread.id)
+      {:ok, before_steps} = TurnStorage.steps(actor, turn.id)
+
+      assert {:ok, _} = TurnStorage.suspend(actor, turn.id, %{fence: started.fence})
+
+      assert Enum.map(Threads.messages(actor, thread.id), & &1.id) ==
+               Enum.map(before_rows, & &1.id)
+
+      {:ok, after_steps} = TurnStorage.steps(actor, turn.id)
+      assert Enum.map(after_steps, & &1.id) == Enum.map(before_steps, & &1.id)
+
+      assert Enum.map(after_steps, & &1.dispatch_state) ==
+               Enum.map(before_steps, & &1.dispatch_state)
+    end
+
+    test "a suspended turn is recovered under a new fence, and the old fence writes nothing", %{
+      actor: actor,
+      thread: thread
+    } do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      {started, _root} = start!(actor, turn)
+      {:ok, suspended} = TurnStorage.suspend(actor, turn.id, %{fence: started.fence})
+
+      assert {:ok, recovered} = TurnStorage.recover(actor, turn.id, %{fence: suspended.fence})
+
+      assert recovered.fence != suspended.fence
+      assert recovered.recovery_attempts == 1
+      # A paused turn keeps the attempt its pause left; the resume re-opens it.
+      assert recovered.attempt == suspended.attempt
+      assert recovered.status == "paused"
+      assert %{active_turn_id: held} = reread(actor, thread)
+      assert held == turn.id
+
+      assert {:error, :superseded} =
+               TurnStorage.put_step(actor, turn.id, %{kind: "model", fence: suspended.fence})
+
+      # The cap is three, and the fourth attempt is refused rather than continuing.
+      {:ok, second} = TurnStorage.recover(actor, turn.id, %{fence: recovered.fence})
+      {:ok, third} = TurnStorage.recover(actor, turn.id, %{fence: second.fence})
+      assert third.recovery_attempts == 3
+
+      assert {:error, :recovery_exhausted} =
+               TurnStorage.recover(actor, turn.id, %{fence: third.fence})
+
+      assert Arca.Repo.get!(Arca.Schemas.Turn, turn.id).recovery_attempts == 3
+    end
+
+    test "a turn a live peer holds is not taken over, and no recovery is spent", %{
+      actor: actor,
+      thread: thread
+    } do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      {started, _root} = start!(actor, turn)
+
+      # The turn moves to a peer: its boot, and a cell slot of that peer's
+      # own that has not lapsed. The slot is keyed by a node name nothing
+      # else in the suite writes, and the delta is this turn's alone.
+      peer = peer_member!()
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [runner_id: peer.owner]
+        )
+
+      before_count = Arca.Repo.get!(Arca.Schemas.Turn, turn.id).recovery_attempts
+
+      assert {:ok, %{turn_id: holder, runner_id: runner, live_peer?: true}} =
+               Threads.claim_holder(actor, thread.id)
+
+      assert holder == turn.id
+      assert runner == peer.owner
+
+      assert {:error, :busy} = TurnStorage.recover(actor, turn.id, %{fence: started.fence})
+      assert {:error, :busy} = TurnStorage.takeover(actor, turn.id, %{fence: started.fence})
+
+      after_count = Arca.Repo.get!(Arca.Schemas.Turn, turn.id).recovery_attempts
+      assert after_count == before_count
+
+      # Once the peer's slot has lapsed the same turn is recoverable, which
+      # is what makes the refusal above the liveness of the slot and not the
+      # name in the row.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(l in Arca.Schemas.CellLease, where: l.node == ^peer.node),
+          set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
+        )
+
+      assert {:ok, %{live_peer?: false}} = Threads.claim_holder(actor, thread.id)
+      assert {:ok, taken} = TurnStorage.recover(actor, turn.id, %{fence: started.fence})
+      assert taken.recovery_attempts == before_count + 1
+    end
+
+    test "a clone turn holds no thread claim of its own", %{actor: actor, thread: thread} do
+      %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
+      {started, _root} = start!(actor, turn)
+
+      {:ok, %{turn: clone}} =
+        TurnStorage.open_clone_turn(actor, turn.id, %{
+          role: "role:scout",
+          task: "look",
+          fence: started.fence
+        })
+
+      assert clone.parent_turn_id == turn.id
+      assert %{active_turn_id: held} = reread(actor, thread)
+      assert held == turn.id
+
+      assert {:error, :clone} = TurnStorage.recover(actor, clone.id, %{fence: clone.fence})
     end
   end
 

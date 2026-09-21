@@ -38,20 +38,33 @@ defmodule Aqua.Runner do
 
   ## Recovery
 
-  A runner starts only on a boot that owns the control plane
-  (`Cyfr.ControlPlane`) — started on demand or restarted after a crash
-  alike — and finds the thread's open turns and does what their rows say
-  (`Aqua.Runner.RecoveryTable`), taking a turn only from the fence it read
-  it with. A turn another process on this boot still holds
-  (`Aqua.Loop.holder/1`) — the loop of a runner that just died, until its
-  kill lands — is not taken: the runner waits for that process to end,
-  holds the turns behind it, and recovers the turn then, while the boot
-  still owns the control plane.
+  A runner starts only on a member that holds its slot in the cell
+  (`Arca.ControlPlane.held?/0`) — started on demand or restarted after a
+  crash alike — and only for a thread the row says nobody else is
+  running. Finding no local runner is not finding no runner: the thread
+  row is read, and a thread whose claim belongs to a turn a live peer
+  holds is that peer's, so no runner is started for it, nothing is
+  recovered and no recovery is counted against it. Three members joining
+  in turn used to end one healthy turn `uncertain` that way.
 
-  Every loop result, notification and timer checks ownership again. If
-  ownership is lost or expired, the runner stops its loop and exits
-  without changing the tape or advancing queued turns. An owning runner
-  recovers the open work from its durable rows.
+  A runner that does start finds the thread's open turns and does what
+  their rows say (`Aqua.Runner.RecoveryTable`), taking a turn only from
+  the fence it read it with and only through the thread claim, which is
+  taken in the same transaction as the recovery count. A turn another
+  process on this boot still holds (`Aqua.Loop.holder/1`) — the loop of a
+  runner that just died, until its kill lands — is not taken: the runner
+  waits for that process to end, holds the turns behind it, and recovers
+  the turn then, while the member still holds its slot.
+
+  `suspend` sets a turn down with every row kept, its runtime released
+  and the thread's claim given up, so any member may pick it up;
+  `recover` takes a suspended or abandoned turn back, under a new fence
+  and against the recovery cap.
+
+  Every loop result, notification and timer checks the slot again. If it
+  is lost or has expired, the runner stops its loop and exits without
+  changing the tape or advancing queued turns. A holding runner recovers
+  the open work from its durable rows.
 
   ## Broadcasts — `{:thread, thread_id, event}`
 
@@ -105,8 +118,10 @@ defmodule Aqua.Runner do
   defp via(thread_id), do: {:via, Registry, {@registry, thread_id}}
 
   @doc """
-  The runner for a thread, started if it is not running. A boot that does
-  not own the control plane starts none: `{:error, :control_plane_lost}`.
+  The runner for a thread, started if it is not running. A member that
+  holds no cell slot starts none (`{:error, :control_plane_lost}`), and
+  neither does one whose thread row says a live peer is running a turn
+  there (`{:error, :busy}`).
   """
   @spec ensure(String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
   def ensure(thread_id, athanor_id)
@@ -116,10 +131,39 @@ defmodule Aqua.Runner do
         {:ok, pid}
 
       [] ->
-        with :ok <- Cyfr.ControlPlane.assert_owner(),
+        with :ok <- held(),
+             :ok <- not_a_peers(thread_id, athanor_id),
              do: start_runner(thread_id, athanor_id)
     end
   end
+
+  # Does this member hold its slot in the cell? A term read and an integer
+  # comparison (`Arca.ControlPlane.held?/0`), asked again on every entry,
+  # every loop result and every timer.
+  defp held, do: if(Arca.ControlPlane.held?(), do: :ok, else: {:error, :control_plane_lost})
+
+  # The rule that makes a join harmless to a running turn. A member that
+  # finds no local runner has found NOTHING: absence from a registry is
+  # never evidence, and "the holder is not on my node" is never evidence
+  # that there is no holder. It reads the thread row instead, and a thread
+  # whose claim is held by a live peer's turn is that peer's: this member
+  # starts no runner for it, so it recovers nothing, counts no recovery
+  # against it and does not fence out a turn that is running perfectly
+  # well. A thread the row says nobody holds is this member's to pick up.
+  #
+  # A store that cannot answer admits nothing: the claim is the authority
+  # and an unread authority is not a free one.
+  defp not_a_peers(thread_id, athanor_id) do
+    case Tape.claim_holder(internal_context(athanor_id), thread_id) do
+      {:ok, %{live_peer?: false}} -> :ok
+      {:ok, %{live_peer?: true}} -> {:error, :busy}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp internal_context(athanor_id),
+    do: Sanctum.internal_context(user_id: "_threads", athanor_id: athanor_id, scope: :athanor)
 
   # A runner that declines to start answers why: the plane was lost in
   # between, or the thread is not an active estate's.
@@ -130,7 +174,7 @@ defmodule Aqua.Runner do
          ) do
       {:ok, pid} -> {:ok, pid}
       {:error, {:already_started, pid}} -> {:ok, pid}
-      :ignore -> with :ok <- Cyfr.ControlPlane.assert_owner(), do: {:error, :not_found}
+      :ignore -> with :ok <- held(), do: {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -144,12 +188,20 @@ defmodule Aqua.Runner do
     end
   end
 
-  @doc "Whether a turn is running in this thread right now, for a viewer of its estate."
+  @doc """
+  Whether a turn is running in this thread right now, for a viewer of its
+  estate.
+
+  No local runner is not "no turn": the thread row is asked, and a claim
+  a live peer's turn holds is a turn that is running, on another member.
+  A caller that acts on this — `thread.delete` refusing under a running
+  turn — must be told the truth wherever the turn is.
+  """
   @spec turn_running?(Context.t(), String.t()) :: boolean()
-  def turn_running?(%Context{athanor_id: athanor_id}, thread_id) do
+  def turn_running?(%Context{athanor_id: athanor_id} = ctx, thread_id) do
     case whereis(thread_id) do
       nil ->
-        false
+        match?({:ok, %{live_peer?: true}}, Tape.claim_holder(ctx, thread_id))
 
       pid ->
         answer = GenServer.call(pid, :state)
@@ -205,7 +257,7 @@ defmodule Aqua.Runner do
   @spec send_message(Context.t(), String.t(), String.t(), keyword()) ::
           {:ok, send_result()} | {:error, term()}
   def send_message(%Context{} = ctx, thread_id, text, opts \\ []) do
-    with :ok <- Cyfr.ControlPlane.assert_owner() do
+    with :ok <- held() do
       opts = Keyword.put_new_lazy(opts, :agents, fn -> Aqua.Roster.roster(ctx) end)
       call(ctx, thread_id, {:send, ctx, text, opts})
     end
@@ -227,14 +279,140 @@ defmodule Aqua.Runner do
   def restart_for_consent(%Context{} = ctx, thread_id, result) when is_map(result),
     do: call(ctx, thread_id, {:restart_for_consent, ctx, result})
 
+  @doc """
+  Set the thread's turn down: every row it has written kept, its runtime
+  capacity released and the thread's claim given up, so any member may
+  pick it up (`turn.suspend`). `opts`: `:turn` — the exact turn the
+  caller read, so a caller never suspends its successor — and `:reason`,
+  which is recorded on the turn and shown in the transcript.
+
+  A thread with no runner here is not this member's to set down: a turn a
+  live peer runs is `{:error, :busy}` and anything else is already down,
+  `{:error, :not_running}`.
+  """
+  @spec suspend_turn(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def suspend_turn(%Context{} = ctx, thread_id, opts \\ []) do
+    request = {:suspend, ctx, Keyword.get(opts, :turn), Keyword.get(opts, :reason)}
+
+    with :ok <- held(),
+         {:ok, thread} <- Tape.thread(ctx, thread_id),
+         :ok <- open?(thread.athanor_id) do
+      case whereis(thread_id) do
+        nil -> nothing_to_suspend(ctx, thread_id)
+        pid -> safe_call(pid, request)
+      end
+    end
+  end
+
+  defp nothing_to_suspend(ctx, thread_id) do
+    case Tape.claim_holder(ctx, thread_id) do
+      {:ok, %{live_peer?: true}} -> {:error, :busy}
+      {:ok, _free_or_ours} -> {:error, :not_running}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Take a suspended or abandoned turn and carry it on (`turn.recover`):
+  the turn is named, never "whatever is there now".
+
+  What the rows call for is the recovery table's to say, and the take is
+  the thread's claim — refused for a turn a live peer runs
+  (`{:error, :busy}`) and for one still running here
+  (`{:error, :not_suspended}`). The turn's pinned consent head and
+  capability identity are read again first: a recovery asked for by hand
+  is a fresh admission of old work. Past the recovery cap the turn ends
+  `uncertain` and the call answers `{:error, :recovery_exhausted}`.
+  """
+  @spec recover_turn(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def recover_turn(%Context{} = ctx, thread_id, turn_id)
+      when is_binary(thread_id) and is_binary(turn_id) do
+    with :ok <- held(),
+         {:ok, thread} <- Tape.thread(ctx, thread_id),
+         :ok <- open?(thread.athanor_id),
+         {:ok, turn} <- turn_of(ctx, thread, turn_id),
+         :ok <- recoverable?(ctx, thread, turn),
+         :ok <- RecoveryTable.pins_hold(ctx, turn) do
+      case whereis(thread_id) do
+        # No runner here yet: starting one IS the recovery. It reads the
+        # thread's open turns and does what their rows say, taking each
+        # only through its thread claim and counting each take there.
+        nil ->
+          with {:ok, _pid} <- ensure(thread_id, thread.athanor_id),
+               do: recovered(ctx, turn_id)
+
+        pid ->
+          safe_call(pid, {:recover, ctx, turn_id})
+      end
+    end
+  end
+
+  # The named turn, and it has to be this thread's: a turn of another
+  # thread — or of another tenant, which the scoped read already refused —
+  # is absent, never denied, so an id cannot be probed for.
+  defp turn_of(ctx, thread, turn_id) do
+    case Tape.turn(ctx, turn_id) do
+      {:ok, %{thread_id: id} = turn} when id == thread.id -> {:ok, turn}
+      {:ok, _elsewhere} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # A turn that is over has nothing to carry on; one a live peer is
+  # running is that peer's; one a process here still holds is running, and
+  # running is not suspended.
+  defp recoverable?(ctx, thread, turn) do
+    cond do
+      Tape.terminal?(turn) ->
+        {:error, :not_open}
+
+      Aqua.Loop.holder(turn.id) ->
+        {:error, :not_suspended}
+
+      match?({:ok, %{live_peer?: true}}, Tape.claim_holder(ctx, thread.id)) ->
+        {:error, :busy}
+
+      true ->
+        :ok
+    end
+  end
+
+  # What a freshly started runner made of the turn: the row, read again. A
+  # turn it gave up on because the cap was spent is `uncertain` with the
+  # cap's own count, which is the cap answering; `uncertain` for any other
+  # reason is reported as the status it is.
+  defp recovered(ctx, turn_id) do
+    cap = Tape.recovery_cap()
+
+    case Tape.turn(ctx, turn_id) do
+      {:ok, %{status: "uncertain", recovery_attempts: spent}} when spent >= cap ->
+        {:error, :recovery_exhausted}
+
+      {:ok, turn} ->
+        {:ok, report_row(turn)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp report_row(turn) do
+    %{
+      recovered: true,
+      turn: turn.id,
+      status: turn.status,
+      running: Aqua.Loop.holder(turn.id) != nil
+    }
+  end
+
   @doc "Start a runner for every thread holding an open turn, while this boot owns the control plane."
   @spec recover_all() :: :ok
   def recover_all do
-    Cyfr.ControlPlane.when_owner(fn ->
+    if Arca.ControlPlane.held?() do
       Enum.each(Tape.with_open_turns(), fn {athanor_id, thread_id} ->
         ensure(thread_id, athanor_id)
       end)
-    end)
+    end
 
     :ok
   rescue
@@ -270,10 +448,9 @@ defmodule Aqua.Runner do
   def init({thread_id, athanor_id}) do
     Process.flag(:trap_exit, true)
 
-    ctx =
-      Sanctum.internal_context(user_id: "_threads", athanor_id: athanor_id, scope: :athanor)
+    ctx = internal_context(athanor_id)
 
-    with :ok <- Cyfr.ControlPlane.assert_owner(),
+    with :ok <- held(),
          {:ok, thread} <- Tape.thread(ctx, thread_id),
          {:ok, %{status: "active"}} <- Athanors.get(athanor_id) do
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor_id))
@@ -317,7 +494,7 @@ defmodule Aqua.Runner do
   def handle_call(:state, _from, state), do: {:reply, public_state(state), state}
 
   def handle_call(request, from, state) do
-    if Cyfr.ControlPlane.owner?(),
+    if Arca.ControlPlane.held?(),
       do: handle_owned_call(request, from, state),
       else: {:stop, :normal, {:error, :control_plane_lost}, retire_runtime(state)}
   end
@@ -373,6 +550,26 @@ defmodule Aqua.Runner do
 
       refusal ->
         {:reply, refusal, state}
+    end
+  end
+
+  defp handle_owned_call({:suspend, ctx, turn_id, reason}, _from, state) do
+    case Admission.standing(ctx, state.athanor_id) do
+      :ok ->
+        case target_turn(state, turn_id) do
+          nil -> {:reply, {:error, :not_running}, state}
+          id -> suspend_work(state, id, reason)
+        end
+
+      refusal ->
+        {:reply, refusal, state}
+    end
+  end
+
+  defp handle_owned_call({:recover, ctx, turn_id}, _from, state) do
+    case Admission.standing(ctx, state.athanor_id) do
+      :ok -> recover_named(state, turn_id)
+      refusal -> {:reply, refusal, state}
     end
   end
 
@@ -635,7 +832,7 @@ defmodule Aqua.Runner do
 
   @impl true
   def handle_info(message, state) do
-    if Cyfr.ControlPlane.owner?() do
+    if Arca.ControlPlane.held?() do
       handle_owned_info(message, state)
     else
       # Stop local work without aborting or settling its durable turn. The
@@ -910,7 +1107,7 @@ defmodule Aqua.Runner do
   end
 
   defp cancel_turn(state, id, reason, status) do
-    with :ok <- Cyfr.ControlPlane.assert_owner(),
+    with :ok <- held(),
          {:ok, turn} <- Tape.turn(state.ctx, id) do
       if Tape.terminal?(turn) do
         Aqua.Loop.Worker.stop(local_holder(state, id) || Aqua.Loop.holder(id))
@@ -919,7 +1116,7 @@ defmodule Aqua.Runner do
                Aqua.Loop.abort(state.ctx, turn, reason, fn ->
                  Aqua.Loop.Worker.stop(local_holder(state, id))
                end),
-             :ok <- Cyfr.ControlPlane.assert_owner(),
+             :ok <- held(),
              {:ok, _} <- Tape.finish(state.ctx, aborted, status, %{error: reason}) do
           :ok
         else
@@ -944,6 +1141,97 @@ defmodule Aqua.Runner do
 
   defp local_holder(%{live: %{turn_id: id, task: task}}, id), do: task.pid
   defp local_holder(state, id), do: get_in(state.held, [id, :pid])
+
+  # ---------------------------------------------------------------------------
+  # Setting a turn down, and picking one up
+  # ---------------------------------------------------------------------------
+
+  # Which turn a suspend names: the one the caller read, when this runner
+  # is working it, and otherwise the one it is working now. A caller that
+  # read a turn never sets its successor down by accident.
+  defp target_turn(state, nil),
+    do: (state.live || state.paused) && (state.live || state.paused).turn_id
+
+  defp target_turn(state, id) do
+    known =
+      Enum.flat_map([state.live, state.paused], fn
+        nil -> []
+        entry -> [entry.turn_id]
+      end) ++ Map.keys(state.held) ++ Enum.map(state.queue, & &1.turn_id)
+
+    if id in known, do: id, else: nil
+  end
+
+  # The turn is taken from its holder first — the fence raised, the loop
+  # and every worker under it stopped, its children cancelled and its
+  # steps settled — so nothing it had in flight lands afterwards. Only
+  # then is it set down durably, with the thread's claim released. Every
+  # row written along the way stays: this ends no turn.
+  defp suspend_work(state, id, reason) do
+    text = reason || "the turn was suspended"
+
+    with :ok <- held(),
+         {:ok, turn} <- Tape.turn(state.ctx, id),
+         false <- Tape.terminal?(turn),
+         {:ok, aborted} <-
+           Aqua.Loop.abort(state.ctx, turn, text, fn ->
+             Aqua.Loop.Worker.stop(local_holder(state, id))
+           end),
+         {:ok, suspended} <- Tape.suspend(state.ctx, aborted, reason) do
+      state = state |> retire_turn(id) |> start_next()
+
+      {:reply, {:ok, %{suspended: true, turn: suspended.id, reason: reason}}, state}
+    else
+      true -> {:reply, {:error, :not_open}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  # A turn this runner already holds was recovered by the runner's own
+  # start, which reads the same rows and takes the same claim: the call is
+  # answered with what that made of it, and no second recovery is spent.
+  # A turn it does not hold is taken now — the claim and the count in one
+  # transaction — and carried out by the action its rows call for.
+  defp recover_named(state, turn_id) do
+    if target_turn(state, turn_id) do
+      {:reply, {:ok, report(state, turn_id)}, state}
+    else
+      case Tape.turn(state.ctx, turn_id) do
+        {:ok, turn} -> recover_unheld(state, turn)
+        {:error, reason} -> {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
+  defp recover_unheld(state, turn) do
+    if Tape.terminal?(turn) do
+      {:reply, {:error, :not_open}, state}
+    else
+      case Tape.recover(state.ctx, turn) do
+        {:ok, recovered} ->
+          state =
+            RecoveryTable.claimed(state.ctx, recovered)
+            |> List.wrap()
+            |> Enum.reduce(state, &recover_one/2)
+
+          {:reply, {:ok, report(state, turn.id)}, touch(state)}
+
+        {:error, :recovery_exhausted} ->
+          state = give_up(state, turn, "the turn was interrupted too many times")
+          {:reply, {:error, :recovery_exhausted}, state}
+
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
+  defp report(state, turn_id) do
+    case Tape.turn(state.ctx, turn_id) do
+      {:ok, turn} -> report_row(turn)
+      _ -> %{recovered: true, turn: turn_id, status: nil, running: false}
+    end
+  end
 
   defp retire_turn(state, id) do
     if match?(%{turn_id: ^id}, state.live), do: Process.demonitor(state.live.task.ref, [:flush])

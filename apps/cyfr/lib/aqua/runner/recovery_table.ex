@@ -6,7 +6,9 @@ defmodule Aqua.Runner.RecoveryTable do
   What a runner does with each open turn it finds when it starts, from
   the rows alone: an accepted turn waits its turn again; a turn paused on
   a card waits for the decision while any card is pending and continues
-  once none is; a turn paused on a call whose outcome is unknown waits
+  once none is; a turn set down by `turn.suspend` continues on the same
+  terms, since what it was paused on is a person's decision and not an
+  unknown outcome; a turn paused on a call whose outcome is unknown waits
   for its sender's next line, and continues once one is on the tape; a
   turn paused around a launch that never closed is stopped the same way,
   its launch step the unknown outcome; a running turn a dead runner left
@@ -19,6 +21,14 @@ defmodule Aqua.Runner.RecoveryTable do
   take is made from the fence the turn was read with; a turn whose fence
   moved, or which left the state it was read in, belongs to whoever moved
   it and has no action.
+
+  Every take here goes through the thread's claim, in the transaction
+  that counts the recovery (`Aqua.Tape.bump_recovery/2`,
+  `pause_recovered/3`, `recover/2`), so a member that did not take the
+  claim cannot spend a recovery against a turn a live peer is running.
+  `claimed/2` is the same table for a turn whose claim this member has
+  already taken and whose recovery it has already counted — `turn.recover`
+  — and takes nothing itself.
   """
 
   alias Aqua.Tape
@@ -57,6 +67,87 @@ defmodule Aqua.Runner.RecoveryTable do
        |> Enum.filter(&(is_nil(&1.parent_turn_id) and wanted?.(&1)))
        |> Enum.flat_map(&List.wrap(action(ctx, &1)))}
     end
+  end
+
+  @doc """
+  The action for a turn whose thread claim this member has already taken
+  and whose recovery it has already counted, in the one transaction that
+  did both (`Aqua.Tape.recover/2`) — the wire's `turn.recover`.
+
+  Nothing is taken here: a running turn is already this member's, with
+  its successor attempt open, so it is adopted rather than taken over
+  again. A running turn holding an uncertainty nobody has acknowledged is
+  still set down instead, because continuing past an unknown outcome is
+  not something a recovery may decide.
+  """
+  @spec claimed(Context.t(), Tape.turn()) :: action() | nil
+  def claimed(%Context{} = ctx, turn) do
+    case Aqua.Loop.holder(turn.id) do
+      nil -> classify_claimed(ctx, turn)
+      holder -> {:held, turn, holder}
+    end
+  end
+
+  defp classify_claimed(ctx, %{status: "running"} = turn) do
+    if Tape.unacknowledged_episode?(ctx, turn),
+      do: set_down(ctx, turn),
+      else: {:adopt, turn}
+  end
+
+  defp classify_claimed(ctx, turn), do: classify(ctx, turn)
+
+  @doc """
+  Whether the authority the turn pinned still stands: the profile's head
+  is still at the consent the turn ran under, and the agent still hashes
+  to the capability identity the turn was checked against.
+
+  A recovery asked for by hand is a fresh admission of old work, so both
+  are read again rather than trusted from the row — a consent that has
+  moved or an agent that has changed since is a different thing to run.
+  """
+  @spec pins_hold(Context.t(), Tape.turn()) :: :ok | {:error, {:superseded, String.t()}}
+  def pins_hold(%Context{} = ctx, turn) do
+    with :ok <- consent_holds(ctx, turn),
+         :ok <- capability_holds(ctx, turn) do
+      :ok
+    else
+      {:error, why} -> {:error, {:superseded, why}}
+    end
+  end
+
+  # A turn that never pinned a profile pinned no consent either: there is
+  # nothing to have moved.
+  defp consent_holds(_ctx, %{profile_id: nil}), do: :ok
+
+  defp consent_holds(ctx, turn) do
+    case Cyfr.Execution.authority_for(ctx, {:id, turn.profile_id}, source_ref(turn)) do
+      {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id ->
+        :ok
+
+      {:ok, _moved} ->
+        {:error, "the consent the turn ran under has moved"}
+
+      {:error, reason} ->
+        {:error, "the turn's consent could not be loaded: #{Aqua.Ops.render_refusal(reason)}"}
+    end
+  end
+
+  defp capability_holds(_ctx, %{agent_capability_digest: nil}), do: :ok
+
+  defp capability_holds(ctx, %{agent: name, agent_capability_digest: pinned}) do
+    with {:ok, agent} <- Compendium.AquaAgent.get(ctx, name),
+         {:ok, ^pinned} <- Compendium.AquaAgent.capability_digest(agent) do
+      :ok
+    else
+      {:ok, _other} -> {:error, "#{name} changed since the turn started"}
+      {:error, _} -> {:error, "#{name} is no longer on the roster"}
+    end
+  end
+
+  defp source_ref(%{agent: name}) do
+    if Compendium.AgentSource.soul?(name),
+      do: Compendium.AgentSource.soul_ref(),
+      else: Compendium.AgentSource.ref(name)
   end
 
   defp action(ctx, turn) do

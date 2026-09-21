@@ -84,6 +84,89 @@ defmodule Emissary.MCP.ThreadToolTest do
     card
   end
 
+  describe "the turn tool" do
+    test "suspend and recover are declared once, and every derived view follows" do
+      annotations =
+        Tool.turn_definition()
+        |> Cyfr.Ops.Annotations.actions_of()
+
+      assert Map.keys(annotations) |> Enum.sort() == ["recover", "suspend"]
+
+      for {action, annotation} <- annotations do
+        assert annotation.kind == :write, "#{action}: not a write"
+
+        assert annotation.planes == [:external],
+               "#{action}: a running agent must not reach it"
+
+        assert annotation.consent == :interactive,
+               "#{action}: a standing credential must not move a person's work"
+
+        assert annotation.standing == false, "#{action}: every call is a click"
+      end
+
+      # Recovery is never itself replay-safe.
+      assert Cyfr.Ops.Annotations.recovery(Tool.turn_definition(), "recover") == nil
+      assert Cyfr.Ops.Annotations.recovery(Tool.turn_definition(), "suspend") == nil
+
+      # A turn to recover is named; a turn to suspend need not be.
+      schema = Tool.turn_definition().input_schema
+      assert "thread" in schema["required"]
+      refute "turn" in schema["required"]
+
+      # And the catalog serves both, under the provider's one service.
+      served = MapSet.new(Catalog.tool_actions())
+      assert MapSet.member?(served, "turn.suspend")
+      assert MapSet.member?(served, "turn.recover")
+      assert Cyfr.Ops.Services.service_name(Tool) == "thread"
+    end
+
+    test "an API key cannot set a person's turn down, and is not shown the tool", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
+
+      assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
+               Catalog.call_external("turn", star, %{
+                 "action" => "suspend",
+                 "thread" => thread.id
+               })
+
+      shown = Visibility.filter_for_context(Catalog.list_tools(), star)
+      refute Enum.any?(shown, &(&1["name"] == "turn"))
+
+      assert Enum.any?(
+               Visibility.filter_for_context(Catalog.list_tools(), ctx),
+               &(&1["name"] == "turn")
+             )
+    end
+
+    test "the wire says what happened in sentences, not the runner's atoms", %{
+      ctx: ctx,
+      thread: thread
+    } do
+      # Nothing is running here, so there is nothing to set down.
+      assert {:error, {:conflict, message}} =
+               Tool.handle("turn", ctx, %{"action" => "suspend", "thread" => thread.id})
+
+      assert message =~ "No turn is running"
+
+      # A turn nobody minted is absent, never denied.
+      assert {:error, {:not_found, "thread", _}} =
+               Tool.handle("turn", ctx, %{
+                 "action" => "recover",
+                 "thread" => thread.id,
+                 "turn" => "trn_never_minted"
+               })
+
+      assert {:error, {:invalid_argument, _}} =
+               Tool.handle("turn", ctx, %{"action" => "recover", "thread" => thread.id})
+
+      assert {:error, {:unknown_action, "turn.stop"}} =
+               Tool.handle("turn", ctx, %{"action" => "stop", "thread" => thread.id})
+    end
+  end
+
   describe "gates" do
     # The surface gate is the `consent: :interactive` declaration on every
     # action, so it is asserted through the REGISTRY — the handler no
@@ -280,10 +363,13 @@ defmodule Emissary.MCP.ThreadToolTest do
           athanor_id: ctx.athanor_id
         )
 
-      card = fn intent -> card!(ctx, thread, intent) end
+      # One turn holds a thread at a time — that is what the thread's claim
+      # means — so each card is raised in a thread of its own, the first in
+      # the setup's and the second in one opened here.
+      {:ok, second} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
       destructive =
-        card.(%{
+        card!(ctx, thread, %{
           "kind" => "request_approval",
           "title" => "Wipe it",
           "action_kind" => "destructive",
@@ -301,7 +387,7 @@ defmodule Emissary.MCP.ThreadToolTest do
       assert msg == Aqua.ToolGrants.refusal_message({:scope_not_permitted, "destructive"})
 
       one_click =
-        card.(%{
+        card!(ctx, second, %{
           "kind" => "request_approval",
           "title" => "Pin it",
           "action_kind" => "write",
@@ -312,7 +398,7 @@ defmodule Emissary.MCP.ThreadToolTest do
       assert {:error, {:invalid_argument, msg}} =
                call(ctx, %{
                  "action" => "approve",
-                 "thread" => thread.id,
+                 "thread" => second.id,
                  "message_id" => one_click.id,
                  "scope" => "thread"
                })
