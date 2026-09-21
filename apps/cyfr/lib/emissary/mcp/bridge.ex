@@ -10,8 +10,8 @@ defmodule Emissary.MCP.Bridge do
   An **owner** is one stdio server row of one athanor — the pair
   `(athanor_id, mcp_servers.id)` — served by one
   `Emissary.MCP.ExternalServer`. The bridge runs an owner's backends at a
-  version `(g, e)`: `g` is this boot's control-plane generation
-  (`Cyfr.ControlPlane.generation/0`; a boot that holds no claim speaks
+  version `(g, e)`: `g` is this member's control-plane generation
+  (`Arca.ControlPlane.generation/0`; a member that holds no claim speaks
   generation 1) and `e` is the row's epoch.
 
   ## Messages
@@ -59,8 +59,8 @@ defmodule Emissary.MCP.Bridge do
   the idle period (`:mcp_bridge_idle_ms`, `CYFR_MCP_BRIDGE_IDLE_MS`: 15
   minutes unless set) and to start it again for its next call.
 
-  Nothing is sent while this boot does not own the control plane
-  (`Cyfr.ControlPlane.owner?/0`), or while its generation cannot be read:
+  Nothing is sent while this member does not hold its slot in the cell
+  (`Arca.ControlPlane.held?/0`), or while its generation cannot be read:
   `sync/1` refuses, queued messages are dropped, and leases lapse on the
   bridge until a tick finds both again.
 
@@ -140,7 +140,7 @@ defmodule Emissary.MCP.Bridge do
       :pool_size,
       :inflight,
       :poll_timer,
-      generation_source: &Cyfr.ControlPlane.generation/0,
+      generation_source: &Arca.ControlPlane.generation/0,
       lease_ms: 30_000,
       idle_ms: 900_000,
       tick_ms: 10_000,
@@ -169,7 +169,7 @@ defmodule Emissary.MCP.Bridge do
   (default a third of the lease), `:ready_wait_ms` how long a sync's
   caller waits for its backends (default 15 s) and `:generation` the
   zero-arity function the control-plane generation is read from (default
-  `Cyfr.ControlPlane.generation/0`).
+  `Arca.ControlPlane.generation/0`).
   """
   def start_link(opts \\ []) do
     url = Keyword.get(opts, :url, Application.get_env(:cyfr, :mcp_bridge_url))
@@ -287,7 +287,7 @@ defmodule Emissary.MCP.Bridge do
         ),
       tick_ms: Keyword.get(opts, :tick_ms, div(lease_ms, 3)),
       ready_wait_ms: Keyword.get(opts, :ready_wait_ms, @ready_wait_ms),
-      generation_source: Keyword.get(opts, :generation, &Cyfr.ControlPlane.generation/0)
+      generation_source: Keyword.get(opts, :generation, &Arca.ControlPlane.generation/0)
     }
 
     send(self(), :tick)
@@ -609,11 +609,11 @@ defmodule Emissary.MCP.Bridge do
   # Lifetimes and generations
   # ============================================================================
 
-  # The generation this boot speaks while it owns the control plane — 1 for
-  # a boot that has claimed nothing — or `:not_owner` while it does not, or
-  # while its generation cannot be read. Nothing is sent without one.
+  # The generation this member speaks while it holds its slot in the cell —
+  # 1 for a member that has claimed nothing — or `:not_owner` while it does
+  # not, or while its generation cannot be read. Nothing is sent without one.
   defp plane_generation(state) do
-    if Cyfr.ControlPlane.owner?() do
+    if Arca.ControlPlane.held?() do
       case state.generation_source.() do
         {:ok, generation} when is_integer(generation) and generation > 0 -> {:ok, generation}
         :none -> {:ok, 1}

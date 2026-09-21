@@ -357,7 +357,7 @@ defmodule Emissary.MCP.BridgeTest do
 
     on_exit(fn ->
       :persistent_term.erase(@generation_key)
-      Cyfr.ControlPlane.mark(:unclaimed)
+      Arca.ControlPlane.record(:unclaimed)
     end)
 
     {:ok, ctx: ctx, fake: fake}
@@ -810,7 +810,7 @@ defmodule Emissary.MCP.BridgeTest do
        %{ctx: ctx, fake: fake} do
     bridge = start_bridge(fake)
     row = stdio_row(ctx, "headless", %{"NODE_ENV" => "production"})
-    Cyfr.ControlPlane.mark(:lost)
+    Arca.ControlPlane.record(:lost)
 
     assert {:error, :control_plane_lost} =
              Bridge.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
