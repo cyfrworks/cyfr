@@ -40,9 +40,9 @@ defmodule Cyfr.ControlPlaneWorkersTest do
   end
 
   test "an unavailable generation cannot authorize work even if ownership is marked held" do
-    previous = Application.fetch_env!(:cyfr, :control_plane_claim_enabled)
-    Application.put_env(:cyfr, :control_plane_claim_enabled, true)
-    on_exit(fn -> Application.put_env(:cyfr, :control_plane_claim_enabled, previous) end)
+    previous = Application.fetch_env!(:arca, :control_plane_claim_enabled)
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    on_exit(fn -> Application.put_env(:arca, :control_plane_claim_enabled, previous) end)
     ControlPlane.mark({:held, :forever})
     assert {:error, :unavailable} = ControlPlane.generation()
     assert ControlPlane.when_owner(ControlPlane.generation(), fn -> :ran end) == :not_owner

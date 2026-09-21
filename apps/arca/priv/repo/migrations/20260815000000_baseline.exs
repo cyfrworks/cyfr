@@ -19,8 +19,10 @@ defmodule Arca.Repo.Migrations.Baseline do
 
   The two nullable `athanor_id` columns are `memberships` (a platform
   assignment has no athanor) and `sessions` (a session exists before its
-  athanor is resolved). `server_meta`, `registry_tokens` and
-  `external_identities` are not athanor-scoped.
+  athanor is resolved). `server_meta`, `registry_tokens`,
+  `external_identities`, `cell_leases` and `job_claims` are not
+  athanor-scoped: the first three are the server's own facts and the last
+  two the cell's, and a cell has no estate.
 
   This file is the schema's single source: a change edits it, and
   `Arca.SchemaFingerprint` refuses a database built from a different
@@ -35,6 +37,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     provisioning()
     identity()
     server()
+    cell()
     components()
     storage_units()
     agents()
@@ -296,14 +299,112 @@ defmodule Arca.Repo.Migrations.Baseline do
   # Server-wide facts
   # ==========================================================================
 
-  # Keyed by name: the schema and keyring fingerprints and the control-plane
-  # owner. Shared by every node using this database.
+  # Keyed by name: the schema and keyring fingerprints. Shared by every node
+  # using this database.
   defp server do
     create table(:server_meta, primary_key: false) do
       add :key, :string, primary_key: true
       add :value, :string, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
+  end
+
+  # ==========================================================================
+  # The cell
+  # ==========================================================================
+
+  # One database is one cell, and these three tables are what its members
+  # share. None is an athanor's to the same degree: `cell_leases` and
+  # `job_claims` describe the deployment, `rate_windows` an athanor's
+  # consented allowance. Every lease here is compared against DATABASE time
+  # (`Arca.ServerMetaStorage.now/0`), never a member's own clock, so two
+  # members with skewed clocks still agree which lease stands.
+  defp cell do
+    # One row per member slot, keyed by the node's distribution name rather
+    # than by a boot: a restarted node takes its own slot over instead of
+    # opening a second one beside it, and its generation carries on from
+    # where its predecessor left off. The row is kept after a release so a
+    # returning node can never reissue a generation a worker already
+    # retired.
+    create table(:cell_leases, primary_key: false) do
+      add :node, :string, primary_key: true
+      # The boot holding the slot (`Cyfr.Boot.id/0`).
+      add :owner, :string, null: false
+      # What this member stamps on what it issues outward — worker
+      # assignments, host-call bindings, bridge grants. Raised by one on
+      # every take of THIS slot, and by no other member's join or leave.
+      add :generation, :integer, null: false
+      # The row's write token, raised by every write to it. A renew names
+      # the fence it read, so a renew from an owner that was taken over
+      # cannot land even within the deadline it still believes in.
+      add :fence, :integer, null: false
+      # Database time. The member holds while this stands; past it the slot
+      # is takeable by anyone, which is what raises the generation.
+      add :lease_until, :utc_datetime_usec, null: false
+      # When the current owner took the slot, which is what a recovery-time
+      # bound is measured from.
+      add :taken_at, :utc_datetime_usec, null: false
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create index(:cell_leases, [:lease_until])
+
+    # The cell's singleton jobs: retention, the boot reconciliation, the
+    # seed release, an OAuth refresh, a worker's watch, a backend's bridge
+    # controller. A claim is a mutual-exclusion token and authorizes
+    # NOTHING — its holder still
+    # reads and writes through the tenant-scoped facade under its own
+    # actor, so a key naming an athanor grants no reach into it.
+    create table(:job_claims, primary_key: false) do
+      add :id, :string, primary_key: true
+      # The job (`Arca.Schemas.JobClaim.kinds/0`).
+      add :kind, :string, null: false
+      # What is claimed within the kind: a worker service id, an athanor's
+      # credential, or "cell" for a job the cell has exactly one of.
+      add :key, :string, null: false
+      # The boot holding the claim.
+      add :owner, :string, null: false
+      add :lease_until, :utc_datetime_usec, null: false
+      # 1 on the first claim, raised by one on every take.
+      add :fence, :integer, null: false
+      # The job's progress, carried across takeovers under the fence: the
+      # worker watch's consecutive misses and the worker boot it last
+      # heard, a sweep's cursor. Evidence, never authority.
+      add :detail, :text
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:job_claims, [:kind, :key])
+    create index(:job_claims, [:lease_until])
+
+    # The consented invocation rate, one row per bucket, shared by every
+    # member: N members admit the consented rate once, not N times. Two
+    # adjacent windows, so a claim costs one statement and no row per
+    # request; the admission decision weights the prior window by how much
+    # of it is still in view.
+    create table(:rate_windows, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      # The bucket within the athanor: a component reference, or a platform
+      # bucket's name.
+      add :bucket, :string, null: false
+      # The current window's start on database time, and the width the
+      # claim that opened it consented to. A claim carrying a different
+      # width opens a new window at its own: a rescaled allowance is never
+      # counted against a window of another size.
+      add :window_start, :utc_datetime_usec, null: false
+      add :window_ms, :integer, null: false
+      # Claims admitted in the current window, and in the one before it.
+      add :count, :integer, null: false, default: 0
+      add :prior_count, :integer, null: false, default: 0
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:rate_windows, [:athanor_id, :bucket])
+    create index(:rate_windows, [:window_start])
   end
 
   # ==========================================================================
@@ -1098,8 +1199,16 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :created_by, :string, null: false
       # The agent the last turn addressed.
       add :agent, :string
-      # `seq` of the last human message a turn has taken up.
+      # `seq` of the last human message a turn has taken up: the consumed
+      # message sequence, and the value a thread claim compares against.
       add :turn_seq, :integer, null: false, default: 0
+      # The turn holding the thread, null when none does. Claiming is one
+      # statement: it names the turn AND the `turn_seq` the claimant read,
+      # so a claim whose sequence moved under it — another member accepted
+      # the next message first — writes nothing. A plain string, not a
+      # reference: `turns.thread_id` already points the other way, and a
+      # second edge back would be a cycle no adapter deletes cleanly.
+      add :active_turn_id, :string
       add :last_message_at, :utc_datetime_usec
 
       timestamps(type: :utc_datetime_usec)
@@ -1107,6 +1216,10 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create unique_index(:threads, [:id, :athanor_id])
     create index(:threads, [:athanor_id, :last_message_at])
+
+    # One turn holds at most one thread. Partial, so the null of a thread
+    # nobody is working costs nothing and does not collide.
+    create unique_index(:threads, [:active_turn_id], where: "active_turn_id IS NOT NULL")
 
     create table(:messages, primary_key: false) do
       add :id, :string, primary_key: true

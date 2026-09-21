@@ -35,6 +35,7 @@ defmodule Arca.TenantTables do
   # fails the boot rather than surviving erasure silently.
   @roster [
     "execution_events",
+    "rate_windows",
     "budget_charges",
     "budget_reservations",
     "storage_write_intents",
@@ -102,9 +103,15 @@ defmodule Arca.TenantTables do
   # keyed `(user_id, registry, namespace_slug)`. It outlives any one
   # athanor, exactly as an API key outlives its creator's membership.
   #
-  # `server_meta` is the server's own facts — the keyring fingerprint, the
-  # control-plane owner — one row per key and no tenant at all.
-  @not_athanor_scoped ["registry_tokens", "server_meta"]
+  # `server_meta` is the server's own facts — the schema and keyring
+  # fingerprints — one row per key and no tenant at all.
+  #
+  # `cell_leases` and `job_claims` are the cell's: which node holds a member
+  # slot, and who is running one of the cell's singleton jobs. A cell has no
+  # estate, and several job kinds have no athanor at all; a claim naming an
+  # athanor's credential in its `key` is a mutual-exclusion token and grants
+  # no reach into that athanor, so it is not the athanor's row to delete.
+  @not_athanor_scoped ["registry_tokens", "server_meta", "cell_leases", "job_claims"]
 
   @doc "The closed roster, children first."
   @spec roster() :: [String.t()]

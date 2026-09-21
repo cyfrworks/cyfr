@@ -20,9 +20,9 @@ defmodule Cyfr.ControlPlaneTest do
   defp me, do: Cyfr.Boot.id()
 
   defp claim_enabled(enabled) do
-    previous = Application.get_env(:cyfr, :control_plane_claim_enabled)
-    Application.put_env(:cyfr, :control_plane_claim_enabled, enabled)
-    on_exit(fn -> Application.put_env(:cyfr, :control_plane_claim_enabled, previous) end)
+    previous = Application.get_env(:arca, :control_plane_claim_enabled)
+    Application.put_env(:arca, :control_plane_claim_enabled, enabled)
+    on_exit(fn -> Application.put_env(:arca, :control_plane_claim_enabled, previous) end)
   end
 
   test "a boot claims the plane at start and releases it at stop" do

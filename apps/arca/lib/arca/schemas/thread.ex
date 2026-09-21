@@ -10,6 +10,12 @@ defmodule Arca.Schemas.Thread do
   its turns are their own rows (`Arca.TurnStorage`). `agent` is
   the one the last turn addressed, `turn_seq` the cursor of the last
   human row a turn took up.
+
+  `active_turn_id` is the thread's claim: which turn holds it, or nil.
+  It is taken in one statement that also names the `turn_seq` the claimant
+  read, so of two members reading the same thread at the same moment only
+  one claim lands. The claim is the authority; a runner process on some
+  node is a lookup, never evidence of ownership.
   """
 
   use Ecto.Schema
@@ -25,6 +31,7 @@ defmodule Arca.Schemas.Thread do
     field :created_by, :string
     field :agent, :string
     field :turn_seq, :integer, default: 0
+    field :active_turn_id, :string
     field :last_message_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)
   end
@@ -36,6 +43,7 @@ defmodule Arca.Schemas.Thread do
     :created_by,
     :agent,
     :turn_seq,
+    :active_turn_id,
     :last_message_at
   ]
 

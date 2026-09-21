@@ -15,7 +15,13 @@ defmodule Cyfr.ControlPlane do
     the endpoint returns 503, readiness reports the loss, and turn,
     execution, and catalog admission stop until ownership is restored.
   * Before claiming, the boot owns nothing. Setting
-    `control_plane_claim_enabled: false` disables these ownership checks.
+    `config :arca, :control_plane_claim_enabled, false` disables these
+    ownership checks.
+
+  What this boot holds is kept by `Arca.ControlPlane`, beside the lease it
+  stands for: this module is the claimant, and every gate reads the
+  standing it records. A claimant keeps no second copy — what it wrote is
+  what it reads back.
   """
 
   use GenServer
@@ -29,8 +35,6 @@ defmodule Cyfr.ControlPlane do
   # How much longer than a dead holder's own deadline a boot waits for it,
   # and the ceiling on that wait relative to this boot's lease.
   @wait_slack_ms 250
-  @ownership_key {__MODULE__, :ownership}
-  @generation_key {__MODULE__, :generation}
 
   @typedoc """
   What this boot holds: a lease until a deadline, the plane outright (a
@@ -40,14 +44,7 @@ defmodule Cyfr.ControlPlane do
 
   @doc "Whether this boot currently owns the control plane."
   @spec owner?() :: boolean()
-  def owner? do
-    case :persistent_term.get(@ownership_key, :unclaimed) do
-      {:held, :forever} -> true
-      {:held, %DateTime{} = until} -> DateTime.compare(DateTime.utc_now(), until) == :lt
-      :lost -> false
-      :unclaimed -> not claim_enabled?()
-    end
-  end
+  defdelegate owner?(), to: Arca.ControlPlane, as: :held?
 
   @doc """
   The generation of the claim this boot last won (`Cyfr.ControlPlane.Claim`).
@@ -61,13 +58,7 @@ defmodule Cyfr.ControlPlane do
   known, so nothing may be issued or checked under one.
   """
   @spec generation() :: {:ok, pos_integer()} | :none | {:error, :unavailable}
-  def generation do
-    case :persistent_term.get(@generation_key, nil) do
-      generation when is_integer(generation) -> {:ok, generation}
-      :none -> :none
-      nil -> if claim_enabled?(), do: {:error, :unavailable}, else: :none
-    end
-  end
+  defdelegate generation(), to: Arca.ControlPlane
 
   @doc """
   Run one unit of background work only while this boot owns the control
@@ -97,8 +88,20 @@ defmodule Cyfr.ControlPlane do
   @doc false
   # The process-wide ownership record. Public so a test can put a boot in a
   # given state without a lease; the server is its only production writer.
+  #
+  # A deadline is handed on as the time LEFT of the lease, never as an
+  # instant: `Arca.ControlPlane` counts it down on the monotonic clock, so
+  # a wall-clock step cannot extend what this boot believes it holds.
   @spec mark(ownership()) :: :ok
-  def mark(ownership), do: :persistent_term.put(@ownership_key, ownership)
+  def mark({:held, :forever}), do: Arca.ControlPlane.record({:held, :indefinitely})
+
+  def mark({:held, %DateTime{} = until}) do
+    left = DateTime.diff(until, DateTime.utc_now(), :millisecond)
+    Arca.ControlPlane.record({:held, max(left, 0)})
+  end
+
+  def mark(ownership) when ownership in [:lost, :unclaimed],
+    do: Arca.ControlPlane.record(ownership)
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -122,14 +125,14 @@ defmodule Cyfr.ControlPlane do
 
     cond do
       cluster? ->
-        :persistent_term.put(@generation_key, :none)
+        Arca.ControlPlane.record_generation(:none)
         mark({:held, :forever})
         {:ok, state}
 
       true ->
         case claim_or_wait(me, lease_ms) do
           {:ok, expires_at, generation} ->
-            :persistent_term.put(@generation_key, generation)
+            Arca.ControlPlane.record_generation(generation)
             mark({:held, expires_at})
             Process.send_after(self(), :renew, renew_ms)
             {:ok, %{state | expires_at: expires_at}}
@@ -191,7 +194,7 @@ defmodule Cyfr.ControlPlane do
 
   def terminate(_reason, state) do
     mark(:lost)
-    :persistent_term.erase(@generation_key)
+    Arca.ControlPlane.forget_generation()
 
     case Claim.release(state.me) do
       :ok ->
@@ -243,7 +246,7 @@ defmodule Cyfr.ControlPlane do
     case Claim.claim(state.me, state.lease_ms) do
       {:ok, expires_at, generation} ->
         Logger.warning("[Cyfr.ControlPlane] ownership regained")
-        :persistent_term.put(@generation_key, generation)
+        Arca.ControlPlane.record_generation(generation)
         mark({:held, expires_at})
         %{state | expires_at: expires_at}
 
@@ -251,8 +254,6 @@ defmodule Cyfr.ControlPlane do
         state
     end
   end
-
-  defp claim_enabled?, do: Application.get_env(:cyfr, :control_plane_claim_enabled, true)
 
   defp refuse_foreign_nodes!(true), do: :ok
 
