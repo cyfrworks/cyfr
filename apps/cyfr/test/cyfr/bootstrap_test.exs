@@ -158,5 +158,13 @@ defmodule Cyfr.BootstrapTest do
 
       assert :ignore = Cyfr.Bootstrap.start_link([])
     end
+
+    test "a boot that holds no slot in the cell asks the store nothing" do
+      Arca.ControlPlane.record(:lost)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+      assert :ignore =
+               Arca.Test.QueryCounter.assert_queries(0, fn -> Cyfr.Bootstrap.start_link([]) end)
+    end
   end
 end
