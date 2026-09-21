@@ -150,7 +150,9 @@ config :cyfr, worker_watch_enabled: false
 
 # The control-plane claim is the same shape again (a permanent GenServer
 # renewing a DB lease); `Cyfr.ControlPlane.Claim` is exercised directly.
-config :cyfr, control_plane_claim_enabled: false
+# The key is Arca's, beside the lease row and the cached standing
+# `Arca.ControlPlane` answers from when no claimant runs.
+config :arca, control_plane_claim_enabled: false
 
 # The boot's database checks (schema fingerprint, tenant roster, keyring
 # fingerprint) read and write server rows outside any sandbox; the suite

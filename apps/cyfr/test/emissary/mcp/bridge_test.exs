@@ -31,7 +31,7 @@ defmodule Emissary.MCP.BridgeTest do
 
   @root :crypto.strong_rand_bytes(32)
   @secret "ghp_bridge-test-secret-0123456789"
-  @generation_key {Cyfr.ControlPlane, :generation}
+  @generation_key {Arca.ControlPlane, :generation}
   @project_root Path.expand("../../../../..", __DIR__)
 
   defmodule FakeBridge do

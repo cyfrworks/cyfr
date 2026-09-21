@@ -358,7 +358,7 @@ defmodule Cyfr.Application do
   # sandbox cannot lend it a connection, so the suite turns it off and
   # exercises `Cyfr.ControlPlane.Claim` directly.
   defp control_plane_claim do
-    if Application.get_env(:cyfr, :control_plane_claim_enabled, true),
+    if Application.get_env(:arca, :control_plane_claim_enabled, true),
       do: [Cyfr.ControlPlane],
       else: []
   end
