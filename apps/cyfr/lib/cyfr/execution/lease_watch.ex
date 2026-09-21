@@ -22,6 +22,8 @@ defmodule Cyfr.Execution.LeaseWatch do
   keeper keeps its pid throughout.
   """
 
+  require Logger
+
   alias Cyfr.Execution.Record
 
   @tick_ms 60_000
@@ -41,7 +43,7 @@ defmodule Cyfr.Execution.LeaseWatch do
       tick: Keyword.get(opts, :tick_ms, @tick_ms)
     }
 
-    until = Keyword.get(opts, :until) || Record.lease_until()
+    until = Keyword.get(opts, :until) || initial_until(execution_id)
 
     pid =
       spawn_link(fn ->
@@ -85,6 +87,28 @@ defmodule Cyfr.Execution.LeaseWatch do
     Process.unlink(pid)
     Process.exit(pid, :kill)
     :ok
+  end
+
+  # When the lease's end is not handed in, it is read from the store, which
+  # since the cell's clock landed is a database read like any other. A
+  # store that cannot answer is the same condition `renew/2` already
+  # tolerates below, and it must be tolerated here for the same reason: a
+  # keeper that refuses to start kills the run it was meant to watch over,
+  # which is a harsher answer than the outage deserves. The fallback is the
+  # local clock and the same lease length -- exactly what this read was
+  # before the clock moved -- and the first renewal that reaches the store
+  # replaces it with the authoritative expiry.
+  defp initial_until(execution_id) do
+    Record.lease_until()
+  rescue
+    e ->
+      Logger.warning(
+        "[Cyfr.Execution.LeaseWatch] lease start for #{execution_id} could not read the " <>
+          "store's clock (#{Exception.message(e)}); watching on the local clock until a " <>
+          "renewal answers"
+      )
+
+      DateTime.add(DateTime.utc_now(), Arca.ExecutionAttempts.lease_seconds(), :second)
   end
 
   defp loop(watch, until) do
