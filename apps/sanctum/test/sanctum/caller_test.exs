@@ -265,5 +265,77 @@ defmodule Sanctum.CallerTest do
       assert Arca.Cache.match({:established, :_, :_, :_}) == [],
              "the removed member's cached context survived the removal"
     end
+
+    test "an invalidation announces the row key, so every member drops what it holds" do
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+      hash = Session.token_hash(session.token)
+
+      assert {:ok, _ctx} = Caller.establish(session.token)
+      announced!()
+
+      :ok = Session.destroy(session.token)
+
+      # The member that revoked dropped its own copy synchronously; this
+      # is what reaches the rest of the cell.
+      assert_receive {:caller_invalidated, ^hash}
+      assert Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) == []
+    end
+
+    test "hearing an announcement drops this member's memo and makes no second one" do
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+      hash = Session.token_hash(session.token)
+
+      assert {:ok, _ctx} = Caller.establish(session.token)
+      announced!()
+
+      assert :ok = Caller.drop_memo(hash)
+
+      assert Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) == []
+      refute_receive {:caller_invalidated, _}, 100
+    end
+
+    test "a memo no announcement reached is served for its TTL and no longer" do
+      # The announcement is the mechanism; the TTL is the bound. A peer
+      # whose delivery is lost must not go on serving a revoked authority
+      # past it, so the case revokes the row the way a peer would and
+      # never delivers anything here.
+      Application.put_env(:sanctum, :establish_cache_ms, 150)
+
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+      hash = Session.token_hash(session.token)
+
+      assert {:ok, _ctx} = Caller.establish(session.token)
+
+      :ok = Arca.SessionStorage.delete_session(hash)
+
+      # The window the TTL exists to bound: the row is gone and this
+      # member has heard nothing.
+      assert {:ok, _stale} = Caller.establish(session.token)
+
+      Process.sleep(200)
+      assert {:error, :unauthenticated} = Caller.establish(session.token)
+    end
+  end
+
+  # Every `invalidate_hash/1`, as the host's bridge hears it before
+  # putting it on the bus.
+  defp announced! do
+    test = self()
+    handler = "caller-invalidated-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:cyfr, :sanctum, :caller, :invalidated],
+      fn _event, _measurements, %{hash: hash}, _config ->
+        send(test, {:caller_invalidated, hash})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    :ok
   end
 end

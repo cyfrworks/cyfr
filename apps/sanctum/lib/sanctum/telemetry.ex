@@ -45,6 +45,7 @@ defmodule Sanctum.Telemetry do
   # the one place an event becomes a bus message
   # (`Cyfr.Telemetry.Catalog` lists each with its consumer).
   @notify_event [:cyfr, :sanctum, :notify]
+  @caller_invalidated_event [:cyfr, :sanctum, :caller, :invalidated]
   @session_created_event [:cyfr, :sanctum, :session, :created]
   @sessions_revoked_event [:cyfr, :sanctum, :sessions, :revoked]
   @membership_event [:cyfr, :sanctum, :membership, :changed]
@@ -106,6 +107,18 @@ defmodule Sanctum.Telemetry do
       payload: payload
     })
   end
+
+  @doc """
+  The established-context memo of one session row key is no longer good.
+
+  What travels is the session row's key — its SHA-256, which is what the
+  sessions table is addressed by — and never the token itself. Every
+  member drops the memos it holds for that key; the one that announced
+  has already dropped its own, synchronously, before this fires.
+  """
+  @spec caller_invalidated(binary()) :: :ok
+  def caller_invalidated(hash) when is_binary(hash),
+    do: :telemetry.execute(@caller_invalidated_event, %{count: 1}, %{hash: hash})
 
   @doc "A session was minted. No token travels — a subscriber adopts its own."
   @spec session_created() :: :ok

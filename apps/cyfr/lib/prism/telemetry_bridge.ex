@@ -23,8 +23,9 @@ defmodule Prism.TelemetryBridge do
 
   A foundation below the host emits `:telemetry` and never broadcasts, so
   every announcement `Sanctum.Telemetry` makes — a tray notification, a
-  session minted or revoked, a membership, a vault entry, an archive, the
-  API key and webhook rosters — becomes its bus message here. The topic
+  session minted or revoked, a dropped caller memo, a membership, a vault
+  entry, an archive, the API key and webhook rosters — becomes its bus
+  message here. The topic
   strings are still the domain's own (`Cyfr.Bus` delegates to them), and
   the message shapes are unchanged from when Sanctum broadcast them
   itself; what moved is who puts them on the bus.
@@ -97,6 +98,7 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :emissary, :tincture, :invoke, :start], :tincture_invoke_start},
       {[:cyfr, :emissary, :tincture, :invoke, :stop], :tincture_invoke_stop},
       {[:cyfr, :sanctum, :notify], :sanctum_notify},
+      {[:cyfr, :sanctum, :caller, :invalidated], :sanctum_caller_invalidated},
       {[:cyfr, :sanctum, :session, :created], :sanctum_session_created},
       {[:cyfr, :sanctum, :sessions, :revoked], :sanctum_sessions_revoked},
       {[:cyfr, :sanctum, :membership, :changed], :sanctum_membership_changed},
@@ -207,6 +209,17 @@ defmodule Prism.TelemetryBridge do
       _platform ->
         safe_topic_broadcast(Bus.platform_notify(), {:notify, :platform, kind, payload})
     end
+  end
+
+  # The memo is a cached authorization decision held in each member's own
+  # table, so the announcement is global: every member drops what it holds
+  # for that session row key. The member that announced dropped its own
+  # before the event fired; this is what reaches the rest.
+  def handle_event([:cyfr, :sanctum, :caller, :invalidated], _measurements, metadata, _config) do
+    safe_topic_broadcast(
+      Bus.caller_invalidated_global(),
+      {:caller_invalidated, metadata[:hash]}
+    )
   end
 
   def handle_event([:cyfr, :sanctum, :session, :created], _measurements, _metadata, _config) do
