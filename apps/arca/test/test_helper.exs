@@ -19,7 +19,19 @@ File.mkdir_p!(Path.join(seed_path, "components"))
 # The cap port every capped write asks. Nothing above this app implements
 # it here, so the suite installs its own admitting double — the ceilings
 # are the tenancy domain's, and a case about a refusal needs that domain.
-Cyfr.Caps.install!(Arca.Test.Caps)
+#
+# Only when nothing has installed one, exactly as the locators below. The
+# port is one process-wide term and this file runs in the same VM as every
+# other app's suite, so installing unconditionally replaced the real
+# implementation `Cyfr.Application` had already put there: the cap
+# refusals under `apps/cyfr/test/arca` then asked the double and were
+# admitted, which is how `mix test apps/arca/test apps/cyfr/test/arca`
+# found three of them failing.
+try do
+  Cyfr.Caps.impl()
+rescue
+  Cyfr.Caps.NotInstalledError -> Cyfr.Caps.install!(Arca.Test.Caps)
+end
 
 # Port 5's wiring, likewise: the overlaid roots' unit boundaries are the
 # component domain's to spell. An umbrella run is configured with that
