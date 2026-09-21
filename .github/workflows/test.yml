@@ -289,7 +289,7 @@ jobs:
           mkdir -p "$island/apps" "$island/config"
           cp mix.lock "$island/"
           cp -R apps/cyfr_contracts apps/arca "$island/apps/"
-          cp -R deps "$island/"
+          cp -R deps wit "$island/"
           cp config/database_choice.exs "$island/config/"
           cd "$island/apps/arca"
           mix compile --warnings-as-errors
@@ -328,7 +328,7 @@ jobs:
           mkdir -p "$island/apps" "$island/config"
           cp mix.lock "$island/"
           cp -R apps/cyfr_contracts apps/arca apps/sanctum "$island/apps/"
-          cp -R deps "$island/"
+          cp -R deps wit "$island/"
           cp config/database_choice.exs "$island/config/"
           cd "$island/apps/sanctum"
           mix compile --warnings-as-errors

@@ -50,6 +50,7 @@ defmodule Sanctum.Consent.Plan do
           caps: map(),
           limits: map(),
           candidates: [map()],
+          tool_server_candidates: [Sanctum.Catalog.tool_server_candidate()],
           warnings: [String.t()],
           defaults: map()
         }
