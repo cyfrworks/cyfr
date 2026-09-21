@@ -12,37 +12,55 @@ defmodule Cyfr.Test.CodeLines do
   Source inventory matchers can then detect fully qualified names in
   both plain and braced aliases.
 
-  Other apps load this module through `Code.require_file` for per-app tests.
+  Other apps load this module through `Code.require_file` for per-app tests;
+  `apps/locus/test/support/code_lines.ex` is its one copy, drift-checked
+  against this file body for body.
   """
 
   # `Foo.Bar.{A, B}` → the base and the brace body. Members are split on the
   # comma so a nested `Foo.{A.B, C}` expands to `Foo.A.B` and `Foo.C`.
   @multi_alias ~r/\b([A-Z]\w*(?:\.[A-Z]\w*)*)\.\{([^}]*)\}/
 
-  @doc "The kept code lines with their 1-based numbers: `[{line, n}]`."
+  # A documentation attribute whose value is prose. The whole opening line
+  # goes: for a heredoc nothing but the delimiter is on it, and for a
+  # one-liner the sentence is the line.
+  @doc_attributes [:doc, :moduledoc, :typedoc, :shortdoc]
+
+  # The tokens whose body is text rather than code. Interpolation inside
+  # one is code, and is reached through the parts below.
+  @text_tokens [:bin_string, :list_string, :bin_heredoc, :list_heredoc, :sigil]
+
+  @doc """
+  The kept code lines with their 1-based numbers: `[{line, n}]`.
+
+  A line is code when Elixir's own tokenizer starts a token on it. That
+  one rule is what excludes a heredoc's body, a charlist heredoc's body
+  and a multi-line sigil's body — none of them carries a token start —
+  and what excludes a comment line, which the tokenizer skips. A trailing
+  comment is cut at the column the tokenizer reports it at, because a
+  mention in a comment is prose and not a dependency.
+
+  A string's text on a line that also carries code stays, because scans
+  read it: the string-error ratchet counts `{:error, "…"}` sites and the
+  environment-reading roster refuses a switch compared as `"true"`. Only
+  a line a text body has to itself is dropped.
+
+  Raises when the source does not tokenize, so a scan cannot pass by
+  reading a file it could not parse.
+  """
   @spec code_lines(String.t()) :: [{String.t(), pos_integer()}]
   def code_lines(source) do
+    {tokens, comments} = tokenize!(source)
+    code = code_line_numbers(tokens)
+    prose = doc_line_numbers(tokens)
+
     source
     |> String.split("\n")
     |> Enum.with_index(1)
-    |> Enum.reduce({[], false}, fn {line, n}, {kept, in_heredoc?} ->
-      toggles =
-        line
-        |> String.graphemes()
-        |> Enum.chunk_every(3, 1, :discard)
-        |> Enum.count(&(&1 == ["\"", "\"", "\""]))
-
-      now_inside? = if rem(toggles, 2) == 1, do: not in_heredoc?, else: in_heredoc?
-
-      keep? =
-        not in_heredoc? and not now_inside? and
-          not String.match?(line, ~r/^\s*#/) and
-          not String.match?(line, ~r/^\s*@(module)?doc\s+"/)
-
-      {if(keep?, do: [{expand_multi_alias(line), n} | kept], else: kept), now_inside?}
+    |> Enum.filter(fn {_line, n} -> MapSet.member?(code, n) and not MapSet.member?(prose, n) end)
+    |> Enum.map(fn {line, n} ->
+      {line |> cut_comment(Map.get(comments, n)) |> expand_multi_alias(), n}
     end)
-    |> elem(0)
-    |> Enum.reverse()
   end
 
   @doc "`Foo.{A, B}` spelled out as `Foo.A Foo.B`, so a regex can see both."
@@ -60,4 +78,95 @@ defmodule Cyfr.Test.CodeLines do
   @doc "Just the kept code lines, in file order."
   @spec lines(String.t()) :: [String.t()]
   def lines(source), do: source |> code_lines() |> Enum.map(&elem(&1, 0))
+
+  # The tokens in file order, and the first comment column on each line.
+  # `preserve_comments` is how the tokenizer reports a comment it would
+  # otherwise drop; the accumulator is a process-dictionary key of this
+  # call alone, so two scans in one process cannot see each other's.
+  defp tokenize!(source) do
+    key = {__MODULE__, make_ref()}
+    Process.put(key, %{})
+
+    collect = fn line, column, _tokens, _comment, _rest ->
+      Process.put(key, Map.put_new(Process.get(key), line, column))
+      :ok
+    end
+
+    result = :elixir_tokenizer.tokenize(String.to_charlist(source), 1, preserve_comments: collect)
+    comments = Process.delete(key)
+
+    case result do
+      {:ok, _line, _column, _warnings, tokens, _terminators} -> {Enum.reverse(tokens), comments}
+      other -> raise "source does not tokenize: #{inspect(other, limit: 5)}"
+    end
+  end
+
+  defp code_line_numbers(tokens) do
+    tokens
+    |> Enum.reduce(MapSet.new(), fn token, acc ->
+      case line_of(token) do
+        nil -> acc
+        line -> acc |> MapSet.put(line) |> MapSet.union(code_line_numbers(interpolated(token)))
+      end
+    end)
+  end
+
+  # `:eol` is the newline that ends a construct, not a token on the line
+  # it is reported at: a heredoc's closing delimiter carries one and is
+  # not code.
+  defp line_of({:eol, _meta}), do: nil
+
+  defp line_of(token) when is_tuple(token) and tuple_size(token) >= 2 do
+    case elem(token, 1) do
+      {line, _column, _extra} when is_integer(line) -> line
+      _ -> nil
+    end
+  end
+
+  defp line_of(_token), do: nil
+
+  # The tokens of every `#{…}` inside a text token, which are code on
+  # whatever line they are written.
+  defp interpolated(token) when is_tuple(token) and tuple_size(token) >= 3 do
+    if elem(token, 0) in @text_tokens do
+      token
+      |> parts()
+      |> Enum.flat_map(fn
+        {_start, _stop, tokens} when is_list(tokens) -> tokens
+        _literal -> []
+      end)
+    else
+      []
+    end
+  end
+
+  defp interpolated(_token), do: []
+
+  defp parts({:bin_string, _meta, parts}), do: parts
+  defp parts({:list_string, _meta, parts}), do: parts
+  defp parts({:bin_heredoc, _meta, _indent, parts}), do: parts
+  defp parts({:list_heredoc, _meta, _indent, parts}), do: parts
+  defp parts({:sigil, _meta, _name, parts, _modifiers, _indent, _delimiter}), do: parts
+  defp parts(_token), do: []
+
+  # `@doc`, `@moduledoc`, `@typedoc` and `@shortdoc` followed by text, all
+  # on one line: the attribute's own line is prose whether the text ends
+  # there or opens a heredoc.
+  defp doc_line_numbers(tokens) do
+    tokens
+    |> Enum.chunk_every(3, 1, :discard)
+    |> Enum.reduce(MapSet.new(), fn
+      [{:at_op, {line, _, _}, :@}, {:identifier, {line, _, _}, name}, text], acc
+      when name in @doc_attributes ->
+        if is_tuple(text) and elem(text, 0) in @text_tokens and line_of(text) == line,
+          do: MapSet.put(acc, line),
+          else: acc
+
+      _chunk, acc ->
+        acc
+    end)
+  end
+
+  defp cut_comment(line, nil), do: line
+  defp cut_comment(line, column), do: String.slice(line, 0, column - 1)
 end

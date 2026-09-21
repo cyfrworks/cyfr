@@ -100,6 +100,35 @@ defmodule Cyfr.Test.SourceTree do
     end
   end
 
+  @doc """
+  `Cyfr.Test.CodeLines.code_lines/1` over a file, memoized beside its
+  source.
+
+  Classifying a file costs a tokenize, and the architecture rosters read
+  the same trees several times over; the memo makes the second read free.
+  Falls back to classifying on the spot when the table is absent.
+  """
+  @spec code_lines(Path.t()) :: [{String.t(), pos_integer()}]
+  def code_lines(path) do
+    key = {:code_lines, path}
+
+    case :ets.whereis(@table) do
+      :undefined ->
+        Cyfr.Test.CodeLines.code_lines(read(path))
+
+      _ ->
+        case :ets.lookup(@table, key) do
+          [{^key, lines}] ->
+            lines
+
+          [] ->
+            lines = Cyfr.Test.CodeLines.code_lines(read(path))
+            :ets.insert(@table, {key, lines})
+            lines
+        end
+    end
+  end
+
   @doc "Every `{path, source}` under `glob`, each file read at most once."
   @spec sources(String.t()) :: [{Path.t(), String.t()}]
   def sources(glob) do
