@@ -61,6 +61,11 @@ defmodule Cyfr.App.MixProject do
       {:yaml_elixir, "~> 2.12"},
       {:plug, "~> 1.14"},
       {:phoenix_pubsub, "~> 2.1"},
+      # How the members of a cell find each other. Declared here, in wave 0
+      # of the multi-node work, so the shared lock is settled before the
+      # targets that use it run side by side; `Cyfr.Cell` starts the
+      # supervisor and `config/runtime.exs` carries the topology.
+      {:libcluster, "~> 3.5"},
       # The Ueberauth route table the web face builds from the configured
       # providers (`EmissaryWeb.Plugs.ConfiguredUeberauth`); the strategies
       # themselves are Sanctum's.
