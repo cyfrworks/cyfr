@@ -27,6 +27,11 @@ defmodule Emissary.MCP.ExternalServer do
   fresh nonce and timestamp. The process holds the owner key and never an
   env value: the bridge masks backend credentials in what it answers.
 
+  One member of the cell runs a backend, and the controller that answers
+  `sync/1` is the one holding its claim; a member that holds none refuses
+  the connection rather than starting a second copy, and says which case
+  it is.
+
   A call the bridge refuses before running it is answered as follows:
   `stale_boot`, `epoch_ahead`, `unknown_owner` and `lapsed` sync again and
   retry the call once; `stale_epoch` re-reads the row, and a row whose epoch
@@ -162,9 +167,10 @@ defmodule Emissary.MCP.ExternalServer do
   # Every call into a server process is answered, never carried out as an
   # exit of the caller. A server is stopped from outside it — a vault
   # revocation and an archived athanor stop it through
-  # `Emissary.MCP.ExternalServerReconciler`, and a changed row through
-  # `Emissary.MCP.ExternalServerSupervisor.ensure_started/1` — so a call in
-  # flight when one of those lands sees its process go. The contract of
+  # `Emissary.MCP.ExternalServerReconciler`, a changed row through
+  # `Emissary.MCP.ExternalServerSupervisor.ensure_started/1`, and in a cell
+  # a backend whose claim moved through `Emissary.MCP.Bridge` — so a call
+  # in flight when one of those lands sees its process go. The contract of
   # `get_tools/2`, `call_tool/3` and `reinitialize/2`, and of
   # `Emissary.MCP.ExternalServers.ensure_started/2` above them, is a typed
   # error; an exit here would instead take down whoever asked, which for
@@ -737,6 +743,12 @@ defmodule Emissary.MCP.ExternalServer do
   defp bridge_reason(:bridge_unavailable), do: "the MCP bridge is unavailable"
   defp bridge_reason(:control_plane_lost), do: "this server does not own its control plane"
   defp bridge_reason(:capacity), do: "the MCP bridge has no free backend slots"
+
+  defp bridge_reason(:claimed_elsewhere),
+    do: "another member of the cell holds this server's backends"
+
+  defp bridge_reason(:claim_unavailable),
+    do: "which member holds this server's backends could not be read"
 
   defp bridge_reason({:pool_share, limit}),
     do: "this athanor already runs its share of the MCP bridge (#{limit} backends)"
