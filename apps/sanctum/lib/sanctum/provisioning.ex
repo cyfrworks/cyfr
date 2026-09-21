@@ -63,9 +63,21 @@ defmodule Sanctum.Provisioning do
   settled `failed`, and the consent mint and the agent index check the
   claim still reads this owner and fence before they write. An attempt
   whose lease ran out and whose claim a successor took writes none of
-  them and answers `{:error, :provisioning_busy}`. An attempt that dies
-  is released by its keeper, which monitors it; with the keeper gone too,
-  the lease runs out.
+  them and answers `{:error, :provisioning_busy}`.
+
+  ## Giving the estate back
+
+  A claim is given back by the attempt that holds it, or — for an attempt
+  killed where it stands, which runs no `after` — by its keeper, which
+  monitors it. With the keeper gone too nothing releases it and the lease
+  is the bound: one minute from the write that last stood for it.
+
+  Either releaser stops what the attempt started beside itself first, and
+  waits for it to have stopped (`bounded_work/3`). A release is never what
+  discovers that a pull is still running: an estate handed to a successor
+  while its predecessor still writes to it is the race the claim exists to
+  prevent, so work that will not stop leaves the claim to its lease
+  instead.
   """
 
   require Logger
@@ -75,9 +87,23 @@ defmodule Sanctum.Provisioning do
   alias Sanctum.Tenancy.{Athanors, Caps, Members, Users}
 
   # How long a claim stands without its keeper renewing it, and how often
-  # the keeper does.
+  # the keeper does. A claim nobody renews is takeable one lease after the
+  # write that last stood for it, which is the bound on an estate whose
+  # attempt died with its keeper.
   @lease_ms 60_000
   @renew_ms 20_000
+
+  # How long the keeper waits for work the attempt started beside itself
+  # to stop. Past it the claim is NOT given back: a successor taking an
+  # estate its predecessor may still be writing to is the one outcome a
+  # release must never cause, and the lease is the honest bound.
+  @quiesce_ms 10_000
+
+  # The keeper this process's attempt answers to. Process-local because
+  # the attempt is: one task fills several estates in turn, each under a
+  # claim of its own, and a keeper is that claim's for the length of its
+  # own `fun`.
+  @keeper_key {__MODULE__, :keeper}
 
   @typedoc "The claim an attempt holds while it fills an estate."
   @type claim :: Arca.Schemas.ProvisioningClaim.t()
@@ -418,31 +444,155 @@ defmodule Sanctum.Provisioning do
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
+  @doc """
+  Run `fun` beside the attempt, cut at `budget_ms`, as a child of
+  `supervisor` — work the estate's claim answers for.
+
+  An attempt's own process is what a caller holds open, so work that may
+  stall — a registry pull — runs elsewhere and is cut at a budget. Such
+  work is deliberately not linked to the attempt: a pull that crashes or
+  is cut must take down neither the fill nor a boot's seed sync. That
+  leaves it able to outlive the attempt, and a pull still writing into an
+  estate a successor already holds is the race a claim exists to prevent.
+
+  So the claim's **keeper** starts it. The keeper knows of the work from
+  the instant it exists, rather than from a message a dying attempt might
+  never have sent, and it stops it and waits for it to have stopped
+  before it gives the claim back. Answers `{:ok, result}`, `:timeout` past
+  the budget, or `{:exit, reason}` for work that ended by itself.
+
+  Called by a process holding no claim — no keeper was started — the work
+  runs from here under the same budget. Nothing renews or releases such a
+  claim either, so its lease is what bounds both.
+  """
+  @spec bounded_work(atom(), pos_integer(), (-> result)) ::
+          {:ok, result} | :timeout | {:exit, term()}
+        when result: term()
+  def bounded_work(supervisor, budget_ms, fun)
+      when is_atom(supervisor) and is_integer(budget_ms) and budget_ms > 0 and
+             is_function(fun, 0) do
+    run_bounded(Process.get(@keeper_key), supervisor, budget_ms, fun)
+  end
+
+  defp run_bounded(keeper, supervisor, budget_ms, fun) when is_pid(keeper) do
+    tag = make_ref()
+    keeper_ref = Process.monitor(keeper)
+    send(keeper, {:start_work, self(), tag, supervisor, fun})
+
+    receive do
+      {^tag, :started, worker} ->
+        Process.demonitor(keeper_ref, [:flush])
+        await_work(tag, worker, budget_ms)
+
+      {^tag, :not_started, reason} ->
+        Process.demonitor(keeper_ref, [:flush])
+        {:exit, reason}
+
+      {:DOWN, ^keeper_ref, :process, ^keeper, _reason} ->
+        # The keeper is gone, so this attempt no longer answers for the
+        # estate and has nothing to start work under.
+        {:exit, :claim_lost}
+    end
+  end
+
+  defp run_bounded(_no_keeper, supervisor, budget_ms, fun) do
+    task = Task.Supervisor.async_nolink(supervisor, fun)
+
+    case Task.yield(task, budget_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> {:ok, result}
+      {:exit, reason} -> {:exit, reason}
+      nil -> :timeout
+    end
+  end
+
+  # The attempt waits for its work, and past the budget cuts it and waits
+  # for the cut to land: the step after this one must not run beside work
+  # this one gave up on.
+  defp await_work(tag, worker, budget_ms) do
+    ref = Process.monitor(worker)
+
+    receive do
+      {^tag, :result, result} ->
+        Process.demonitor(ref, [:flush])
+        {:ok, result}
+
+      {:DOWN, ^ref, :process, ^worker, reason} ->
+        {:exit, reason}
+    after
+      budget_ms ->
+        Process.exit(worker, :kill)
+        _ = await_down(%{ref => worker}, now_ms() + @quiesce_ms)
+        Process.demonitor(ref, [:flush])
+        cut_result(tag)
+    end
+  end
+
+  # A result that landed while the cut was in flight is still this
+  # attempt's answer; anything else is the budget's verdict.
+  defp cut_result(tag) do
+    receive do
+      {^tag, :result, result} -> {:ok, result}
+    after
+      0 -> :timeout
+    end
+  end
+
   # Run `fun` under a claim this process now answers for: a keeper renews
   # the lease while it runs, and whatever `fun` did not settle is released
   # when it ends — when the attempt ends, not when the process does, since
   # one task fills several estates in turn (a sign-in retries a person's
   # groups).
+  #
+  # The keeper is stopped before the release, and stopping it is what
+  # quiesces whatever the attempt started beside itself, so the release
+  # never discovers work still running: by then there is none.
   defp held(actor, claim, fun) do
     keeper = keep(actor, claim)
+    previous = Process.put(@keeper_key, keeper)
 
     try do
       fun.(claim)
     after
-      if keeper, do: send(keeper, :stop)
-      Claims.release(actor, claim.owner, claim.fence)
+      restore_keeper(previous)
+
+      case stop_keeper(keeper) do
+        :ok ->
+          Claims.release(actor, claim.owner, claim.fence)
+
+        :timeout ->
+          Logger.error(
+            "[Provisioning] #{claim.athanor_id}: work this attempt started has not stopped; " <>
+              "the claim is left to its lease rather than given back"
+          )
+      end
     end
   end
 
-  # The keeper renews the lease on a tick and watches the attempt: an
-  # attempt killed where it stands runs no `after`, so the keeper is what
-  # releases its claim. A renewal refused as stale means a successor holds
-  # the estate, and the keeper has nothing left to keep.
+  defp restore_keeper(nil) do
+    Process.delete(@keeper_key)
+    :ok
+  end
+
+  defp restore_keeper(keeper) do
+    Process.put(@keeper_key, keeper)
+    :ok
+  end
+
+  # The keeper renews the lease on a tick, holds what the attempt started
+  # beside itself, and watches the attempt: an attempt killed where it
+  # stands runs no `after`, so the keeper is what stops that work and
+  # releases the claim — in that order, and only in that order. A renewal
+  # refused as stale means a successor holds the estate: what this attempt
+  # started must stop writing to it, and there is nothing left to keep.
   defp keep(actor, claim) do
     attempt = self()
 
     case Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fn ->
-           keep_loop(actor, claim, Process.monitor(attempt))
+           # A timer, not a receive timeout: the renewal is due when the
+           # lease says, and a message the attempt sends must not put it
+           # off.
+           Process.send_after(self(), :renew, @renew_ms)
+           keep_loop(actor, claim, Process.monitor(attempt), [])
          end) do
       {:ok, keeper} ->
         keeper
@@ -453,19 +603,101 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  defp keep_loop(actor, claim, ref) do
+  defp keep_loop(actor, claim, ref, started) do
     receive do
-      :stop ->
+      :renew ->
+        case Claims.renew(actor, claim.owner, claim.fence, @lease_ms) do
+          :ok ->
+            Process.send_after(self(), :renew, @renew_ms)
+            keep_loop(actor, claim, ref, started)
+
+          _stale_or_unreadable ->
+            stop_started(started)
+        end
+
+      {:stop, attempt} ->
+        # The attempt finished on its own feet and is waiting to release:
+        # it is answered once what it started has stopped, and not before.
+        answer = stop_started(started)
+        send(attempt, {:stopped, self(), answer})
         :ok
 
+      {:start_work, attempt, tag, supervisor, fun} ->
+        keep_loop(actor, claim, ref, start_work(attempt, tag, supervisor, fun, started))
+
       {:DOWN, ^ref, :process, _attempt, _reason} ->
-        Claims.release(actor, claim.owner, claim.fence)
-    after
-      @renew_ms ->
-        case Claims.renew(actor, claim.owner, claim.fence, @lease_ms) do
-          :ok -> keep_loop(actor, claim, ref)
-          _ -> :ok
+        case stop_started(started) do
+          :ok ->
+            Claims.release(actor, claim.owner, claim.fence)
+
+          :timeout ->
+            Logger.error(
+              "[Provisioning] #{claim.athanor_id}: work the dead attempt started has not " <>
+                "stopped; the claim is left to its lease rather than given back"
+            )
         end
+    end
+  end
+
+  defp start_work(attempt, tag, supervisor, fun, started) do
+    case Task.Supervisor.start_child(supervisor, fn -> send(attempt, {tag, :result, fun.()}) end) do
+      {:ok, worker} ->
+        send(attempt, {tag, :started, worker})
+        [worker | started]
+
+      {:error, reason} ->
+        send(attempt, {tag, :not_started, reason})
+        started
+    end
+  end
+
+  # Stop every process this attempt started beside itself, and wait for
+  # each to have stopped. Work that already ended answers at once: a
+  # monitor on a process that is gone reports it immediately.
+  defp stop_started([]), do: :ok
+
+  defp stop_started(workers) do
+    refs =
+      Map.new(workers, fn worker ->
+        ref = Process.monitor(worker)
+        Process.exit(worker, :kill)
+        {ref, worker}
+      end)
+
+    await_down(refs, now_ms() + @quiesce_ms)
+  end
+
+  defp await_down(refs, _deadline) when map_size(refs) == 0, do: :ok
+
+  defp await_down(refs, deadline) do
+    receive do
+      {:DOWN, ref, :process, _worker, _reason} when is_map_key(refs, ref) ->
+        await_down(Map.delete(refs, ref), deadline)
+    after
+      max(deadline - now_ms(), 0) -> :timeout
+    end
+  end
+
+  # The attempt's side of the same handshake. A keeper that has already
+  # stopped stopped its attempt's work with it, so its absence is an
+  # answer.
+  defp stop_keeper(nil), do: :ok
+
+  defp stop_keeper(keeper) do
+    ref = Process.monitor(keeper)
+    send(keeper, {:stop, self()})
+
+    receive do
+      {:stopped, ^keeper, answer} ->
+        Process.demonitor(ref, [:flush])
+        answer
+
+      {:DOWN, ^ref, :process, ^keeper, _reason} ->
+        :ok
+    after
+      @quiesce_ms ->
+        Process.demonitor(ref, [:flush])
+        :timeout
     end
   end
 

@@ -52,7 +52,10 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert :ok = Provisioning.ready(ctx)
   end
 
-  test "a turn on an estate still being filled says so", %{ctx: ctx, group: group} do
+  test "an addressed send to an unready estate refuses before acceptance", %{
+    ctx: ctx,
+    group: group
+  } do
     {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: group.id)
     {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 
@@ -62,6 +65,8 @@ defmodule Sanctum.ProvisioningReadinessTest do
                agents: [%{"name" => "aqua", "title" => "AQUA"}]
              )
 
+    # Before acceptance: the thread holds no message, so nothing was taken
+    # in and left to fail later.
     assert [] = Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id)
 
     # And the refusal has a sentence every surface renders the same way.
@@ -241,15 +246,18 @@ defmodule Sanctum.ProvisioningReadinessTest do
     end
   end
 
-  test "a boot that does not own the control plane starts no fill", %{ctx: ctx, group: group} do
-    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+  test "a member that holds no slot in the cell starts no fill", %{ctx: ctx, group: group} do
+    # The standing is read from `Arca.ControlPlane`, which answers from a
+    # term and a monotonic countdown: no query, so a reader's path pays
+    # nothing for asking on the way in.
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
 
-    Cyfr.ControlPlane.mark(:lost)
+    Arca.ControlPlane.record(:lost)
     assert {:error, :not_provisioned} = Provisioning.ready(ctx)
     {:ok, untouched} = Athanors.get(group.id)
     refute untouched.provisioned_at || Athanors.provisioning_failure(untouched)
 
-    Cyfr.ControlPlane.mark(:unclaimed)
+    Arca.ControlPlane.record(:unclaimed)
     assert {:error, :not_provisioned} = Provisioning.ready(ctx)
     {:ok, attempted} = Athanors.get(group.id)
     assert attempted.provisioned_at || Athanors.provisioning_failure(attempted)

@@ -61,6 +61,32 @@ defmodule Arca.ProvisioningClaimsTest do
     assert_received :queried
   end
 
+  test "a lease is compared on the cell's one clock, and this module keeps no copy of it", %{
+    actor: actor
+  } do
+    # The lease `claim/4` wrote is bracketed by two readings of the shared
+    # clock, so it was taken on that clock and on no other. A member whose
+    # own clock had drifted would land outside the bracket.
+    before = Arca.ServerMetaStorage.now!()
+    assert {:ok, claim} = Claims.claim(actor, "boot_1/a", "first_need", @lease_ms)
+    later = Arca.ServerMetaStorage.now!()
+
+    assert DateTime.compare(claim.lease_until, DateTime.add(before, @lease_ms, :millisecond)) !=
+             :lt
+
+    assert DateTime.compare(claim.lease_until, DateTime.add(later, @lease_ms, :millisecond)) != :gt
+
+    # `age_ms/1` is measured on the same clock: the row was written between
+    # the two readings, so its age cannot exceed the span between them.
+    assert Claims.age_ms(claim) <= DateTime.diff(Arca.ServerMetaStorage.now!(), before, :millisecond)
+
+    # And the clock is read, not reimplemented: a second copy of it here
+    # is a second answer to which member holds a row.
+    source = File.read!(Path.expand("../../lib/arca/provisioning_claims.ex", __DIR__))
+    assert source =~ "Arca.ServerMetaStorage.now!()"
+    refute source =~ "Arca.Repo.query!"
+  end
+
   test "the first claim is fence 1, and reads back as the athanor's current claim", %{
     actor: actor,
     athanor_id: athanor_id

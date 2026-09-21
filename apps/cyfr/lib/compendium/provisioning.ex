@@ -35,7 +35,9 @@ defmodule Compendium.Provisioning do
   shorter fixed one. A walk cut short stops where it is: what landed stays
   registered, the failure is recorded on the row, and the next attempt
   finds what is still missing by reading every installed component's
-  manifest.
+  manifest. A pull runs beside the attempt rather than inside it, so it is
+  started and stopped by the estate's claim
+  (`Sanctum.Provisioning.bounded_work/3`) and never outlives it.
   """
 
   use GenServer
@@ -136,11 +138,11 @@ defmodule Compendium.Provisioning do
   # The claim is taken before the task starts, so a reader arriving with
   # the session already finds the estate being filled; the task is what
   # holds it, and `not_started` gives it back when the work will not run.
-  # Ownership is asked first: a boot that will not fill must not take the
-  # estate even briefly, or a reader on the boot that would fill it sees
-  # an attempt in progress that is not one.
+  # The member's standing is asked first: one that will not fill must not
+  # take the estate even briefly, or a reader on the member that would
+  # fill it sees an attempt in progress that is not one.
   defp claim_then_background(athanor, ctx) do
-    if Cyfr.ControlPlane.owner?(), do: claim_then_fill(athanor, ctx), else: :ok
+    if Arca.ControlPlane.held?(), do: claim_then_fill(athanor, ctx), else: :ok
   end
 
   defp claim_then_fill(%{id: athanor_id} = athanor, ctx) do
@@ -158,15 +160,16 @@ defmodule Compendium.Provisioning do
     :ok
   end
 
-  # Run `fun` off the caller's process, on the boot that owns the control
-  # plane. Elsewhere it is not started, and the next read on the owner asks
-  # again. Under test the sandbox owns the connection, so background work
-  # runs inline (the tests assert on rows right after the call).
-  # `not_started` runs when the work will not: what a caller took for it
-  # beforehand is given back.
+  # Run `fun` off the caller's process, on the member that holds its slot
+  # in the cell (`Arca.ControlPlane.held?/0`, a term read and a monotonic
+  # comparison — no query, so it is safe on this path). Elsewhere it is
+  # not started, and the next read on a holder asks again. Under test the
+  # sandbox owns the connection, so background work runs inline (the tests
+  # assert on rows right after the call). `not_started` runs when the work
+  # will not: what a caller took for it beforehand is given back.
   defp background(fun, not_started \\ fn -> :ok end) do
     cond do
-      not Cyfr.ControlPlane.owner?() ->
+      not Arca.ControlPlane.held?() ->
         not_started.()
         :ok
 
@@ -626,19 +629,18 @@ defmodule Compendium.Provisioning do
   # lists what is installed, so the next attempt finds what is still
   # missing below them. A task that exits is reported, never the caller's
   # crash: a seed sync at boot must not take the server down.
+  #
+  # The task is the estate's claim's (`Sanctum.Provisioning.bounded_work/3`),
+  # not this process's: unlinked so its crash stays its own, it would
+  # otherwise outlive an attempt killed where it stands and go on writing
+  # into an estate a successor already holds. The claim's keeper starts it
+  # and stops it before the claim goes back.
   defp bounded_pull(_ctx, [], _budget_ms), do: {:ok, %{pulled: [], failed: [], present: []}}
 
   defp bounded_pull(ctx, refs, budget_ms) do
-    task =
-      Task.Supervisor.async_nolink(Compendium.ProvisioningSupervisor, fn ->
-        Pull.ensure_published_deps(ctx, refs)
-      end)
-
-    case Task.yield(task, budget_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, outcome} -> {:ok, outcome}
-      {:exit, reason} -> {:exit, reason}
-      nil -> :timeout
-    end
+    Estate.bounded_work(Compendium.ProvisioningSupervisor, budget_ms, fn ->
+      Pull.ensure_published_deps(ctx, refs)
+    end)
   end
 
   # Every static dependency the athanor's components declare that is not

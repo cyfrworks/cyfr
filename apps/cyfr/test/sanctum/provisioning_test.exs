@@ -486,9 +486,12 @@ defmodule Sanctum.ProvisioningTest do
       {actor, stale, successor}
     end
 
-    test "marks no readiness, mints no consent and replaces no agent index", %{
-      bundle_dir: bundle_dir
-    } do
+    # The four writes an attempt makes on the estate's behalf — readiness,
+    # failure, consent, agent index — each get a case of their own, because
+    # each carries the claim's `(owner, fence)` by its own means and a
+    # fence lost from one of them is not lost from the others.
+
+    test "stamps no provisioned_at", %{bundle_dir: bundle_dir} do
       write_bundle!(bundle_dir)
       n = System.unique_integer([:positive])
       ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|stale-#{n}"}
@@ -496,50 +499,77 @@ defmodule Sanctum.ProvisioningTest do
       in_group = %{ctx | athanor_id: group.id}
       {actor, stale, successor} = overtaken!(group.id)
 
-      # The whole fill would succeed — the same bundle fills a group in the
-      # first test of this module. Run under the claim it lost, it is told
-      # the estate is another attempt's, in progress.
+      # The verdict that precedes the mark cannot land under the lost fence.
+      assert {:error, :claim_lost} = Provisioning.settle(group.id, stale, "ready", nil)
+
+      # And the whole fill would succeed — the same bundle fills a group in
+      # the first test of this module. Run under the claim it lost, it is
+      # told the estate is another attempt's, in progress.
       assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
 
       {:ok, row} = Athanors.get(group.id)
       refute row.provisioned_at
-      refute Athanors.provisioning_failure(row)
 
-      assert {:ok, []} =
-               Arca.ProfileStorage.list_for_source(
-                 Cyfr.Actor.in_athanor(group.id),
-                 "catalyst:local.foo"
-               )
-
-      assert {:ok, []} = Arca.AgentStorage.list(Cyfr.Actor.in_athanor(group.id))
-
-      # The mint refuses the lost claim on its own, whoever calls it.
-      assert {:error, :claim_lost} = Sanctum.Consent.Bootstrap.run(in_group, stale)
-
-      assert {:ok, []} =
-               Arca.ProfileStorage.list_for_source(
-                 Cyfr.Actor.in_athanor(group.id),
-                 "catalyst:local.foo"
-               )
-
-      # The successor's claim is as it took it, and its own fill lands.
+      # The successor's claim is as it took it, and its own fill marks it.
       assert {:ok, %{owner: owner, fence: fence, outcome: nil}} = Claims.current(actor)
       assert {owner, fence} == {successor.owner, successor.fence}
 
       assert {:ok, %{provisioned_at: %DateTime{}}} = Filler.fill(successor, group, in_group)
       assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
 
-      assert {:ok, [_profile]} =
+      # Settled, the late one is still stale: it cannot turn ready to failed.
+      assert :stale = Claims.settle(actor, stale.owner, stale.fence, "failed", "late")
+      assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
+    end
+
+    test "mints no consent", %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir)
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|stalemint-#{n}"}
+      {:ok, group} = Athanors.create_group(ctx.user_id, "Stale mint #{n}")
+      in_group = %{ctx | athanor_id: group.id}
+      {_actor, stale, successor} = overtaken!(group.id)
+
+      # The walk refuses the lost claim on its own, whoever calls it, and
+      # it is the only door to a machine mint.
+      assert {:error, :claim_lost} = Provisioning.bootstrap_consents(in_group, stale)
+      assert {:error, :claim_lost} = Sanctum.Consent.Bootstrap.run(in_group, stale)
+      assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
+
+      assert {:ok, []} =
                Arca.ProfileStorage.list_for_source(
                  Cyfr.Actor.in_athanor(group.id),
                  "catalyst:local.foo"
                )
 
-      assert {:ok, [_ | _]} = Arca.AgentStorage.list(Cyfr.Actor.in_athanor(group.id))
+      # The successor's mint lands: nothing about the bundle stopped it.
+      assert {:ok, %{provisioned_at: %DateTime{}}} = Filler.fill(successor, group, in_group)
 
-      # Settled, the late one is still stale: it cannot turn ready to failed.
-      assert :stale = Claims.settle(actor, stale.owner, stale.fence, "failed", "late")
-      assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
+      assert {:ok, [_profile]} =
+               Arca.ProfileStorage.list_for_source(
+                 Cyfr.Actor.in_athanor(group.id),
+                 "catalyst:local.foo"
+               )
+    end
+
+    test "publishes no agent index", %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir)
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|staleidx-#{n}"}
+      {:ok, group} = Athanors.create_group(ctx.user_id, "Stale index #{n}")
+      in_group = %{ctx | athanor_id: group.id}
+      {_actor, stale, successor} = overtaken!(group.id)
+
+      # The index rewrites the estate's rows wholesale, so it is asked for
+      # the fence last thing before it runs.
+      assert {:error, :claim_lost} = Provisioning.holding(group.id, stale)
+      assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
+      assert {:ok, []} = Arca.AgentStorage.list(Cyfr.Actor.in_athanor(group.id))
+
+      # The successor's index lands: the tree the seed lays is the same one.
+      assert :ok = Provisioning.holding(group.id, successor)
+      assert {:ok, %{provisioned_at: %DateTime{}}} = Filler.fill(successor, group, in_group)
+      assert {:ok, [_ | _]} = Arca.AgentStorage.list(Cyfr.Actor.in_athanor(group.id))
     end
 
     test "records no failure over its successor's" do
@@ -637,6 +667,48 @@ defmodule Sanctum.ProvisioningTest do
     assert {:ok, %{provisioned_at: ^at}} = Athanors.get(group.id)
     assert :ok = Provisioning.ready(in_group)
     assert Provisioning.status(in_group) == :ready
+  end
+
+  test "the estate's half of provisioning names nothing above Sanctum" do
+    # The split is the point: identity keeps the claim, the readiness and
+    # failure writes, the consent bootstrap and the tenancy writes, and
+    # announces that an estate needs filling; the component domain reacts
+    # and calls down. Sanctum declares neither the host nor the component
+    # domain as a dependency, so a name reaching up here is an undefined
+    # module in the standalone Sanctum suite — and the seam between the
+    # halves would be a call rather than an announcement.
+    path = Path.expand("../../../sanctum/lib/sanctum/provisioning.ex", __DIR__)
+    named = Cyfr.Test.SourceTree.aliases(path)
+    file = Path.relative_to_cwd(path)
+
+    # The scan read code before its answer is believed: a moved file would
+    # otherwise pass by naming nothing at all.
+    assert length(named) > 20
+
+    contracts =
+      :cyfr_contracts
+      |> Application.app_dir("ebin")
+      |> Path.join("*.beam")
+      |> Path.wildcard()
+      |> MapSet.new(&(&1 |> Path.basename(".beam") |> String.replace_prefix("Elixir.", "")))
+
+    assert Cyfr.Boundaries.dependency_violations(:sanctum, [{file, named}], contracts) == []
+
+    # And the check reports: the module this one announces to, planted in
+    # the same scan, is named as the reach it would be.
+    assert [reported] =
+             Cyfr.Boundaries.dependency_violations(
+               :sanctum,
+               [{file, [{"Compendium.Provisioning", 1} | named]}],
+               contracts
+             )
+
+    assert reported =~ "Compendium.Provisioning"
+
+    # And the other half of the split: the component domain is reached by
+    # the announcement alone.
+    assert Sanctum.Provisioning.fill_event() ==
+             [:cyfr, :sanctum, :provisioning, :fill_requested]
   end
 
   test "Compendium.Pull.oci_reference_for refuses local refs and resolves published ones" do
