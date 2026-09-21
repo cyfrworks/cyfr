@@ -616,7 +616,9 @@ defmodule Cyfr.Boundaries do
     # `CYFR_CRYPTO_KEYRING` (which `runtime.exs` reads into
     # `:cyfr, :crypto_keyring_json`) or derived from the master secret, and
     # writes it here. A real lever, reached through the boot rather than a
-    # config file, which is why no file declares it.
+    # config file, which is why no file the umbrella reads declares it —
+    # the standalone Sanctum suite, which has no host to resolve one,
+    # carries a keyring of its own.
     crypto_keyring: :operator,
 
     # Operator-shaped, with nothing to set them from. Each has a sensible
@@ -664,6 +666,61 @@ defmodule Cyfr.Boundaries do
   def config_applications, do: [:arca, :cyfr, :sanctum]
 
   @config_read ~r/Application\.(?:get_env|fetch_env!?|compile_env!?)\(\s*:(?:cyfr|arca|sanctum),\s*:([a-z_0-9]+)/
+
+  @config_keys_read_by_name %{
+    api_rate_limit_max:
+      "the `:api` bucket's own budget, read by `EmissaryWeb.Plugs.MCPRateLimit` " <>
+        "under a key it builds from the bucket's name",
+    api_rate_limit_window_ms: "the same bucket's window, built the same way",
+    execution_events_max_concurrent:
+      "handed to `EmissaryWeb.SSE.claim_slot/3` as the key to read, so the two SSE " <>
+        "surfaces share one reader",
+    execution_events_max_ms: "handed to `EmissaryWeb.SSE.deadline/1` as the key to read",
+    mcp_subscription_max_concurrent:
+      "handed to `EmissaryWeb.SSE.claim_slot/3` as the key to read",
+    mcp_subscription_max_ms: "handed to `EmissaryWeb.SSE.deadline/1` as the key to read"
+  }
+
+  @doc """
+  The keys no code reads by a literal `Application.get_env(:app, :key)` —
+  each is read under a key the caller computes, and a scan of the source
+  cannot see it. The honest record of them, so a key nothing reads at all
+  is not mistaken for one of these.
+  """
+  @spec config_keys_read_by_name() :: %{atom() => String.t()}
+  def config_keys_read_by_name, do: @config_keys_read_by_name
+
+  @doc """
+  The keys `declared` names under an application that `scanned` never
+  reads under that application.
+
+  A configuration file that sets `:arca, :some_key` while the code reads
+  `:cyfr, :some_key` sets nothing: the umbrella build reads the root
+  file, an application's own build reads its own, and a key in the wrong
+  one of them is inert in both. A name-keyed roster cannot see it, because
+  by name the key is declared.
+  """
+  @spec unread_config_keys(named_keys :: [{atom(), atom()}], scanned()) :: [{atom(), atom()}]
+  def unread_config_keys(declared, scanned) do
+    read = config_pairs_read(scanned)
+
+    declared
+    |> Enum.reject(fn {_app, key} -> Map.has_key?(@config_keys_read_by_name, key) end)
+    |> Enum.reject(&MapSet.member?(read, &1))
+    |> Enum.sort()
+  end
+
+  @config_pair ~r/Application\.(?:get_env|fetch_env!?|compile_env!?)\(\s*:([a-z_]+),\s*:([a-z_0-9]+)/
+
+  @doc "Every `{application, key}` pair `scanned` reads by a literal name."
+  @spec config_pairs_read(scanned()) :: MapSet.t({atom(), atom()})
+  def config_pairs_read(scanned) do
+    for {_path, lines} <- scanned,
+        code = Enum.map_join(lines, "\n", &elem(&1, 0)),
+        [app, key] <- Regex.scan(@config_pair, code, capture: :all_but_first),
+        into: MapSet.new(),
+        do: {String.to_atom(app), String.to_atom(key)}
+  end
 
   @doc "Every application key `scanned` reads, as atoms."
   @spec config_keys_read(scanned()) :: MapSet.t(atom())

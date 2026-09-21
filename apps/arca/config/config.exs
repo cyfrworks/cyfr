@@ -42,9 +42,6 @@ config :arca,
   base_path: Path.expand("data"),
   seed_path: Path.expand("seed")
 
-# Recursive file and byte ceilings for public-profile guest writes.
-config :arca, :public_storage_quota, %{max_bytes: 26_214_400, max_files: 200}
-
 # Concurrent object reads in the shared subtree dump
 # (`Arca.Storage.read_subtree_via/4`) — bounded so a wide tree cannot open
 # unbounded connections on the object-store path.

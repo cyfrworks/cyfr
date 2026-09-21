@@ -489,6 +489,37 @@ defmodule Cyfr.BoundariesTest do
              """
     end
 
+    test "no configuration file sets a key under an application that never reads it" do
+      unread = Boundaries.unread_config_keys(declared_config_pairs(), application_sources())
+
+      assert unread == [],
+             """
+             These keys are set under an application no code reads them under:
+
+             #{Enum.map_join(unread, "\n", fn {app, key} -> "  config :#{app}, #{inspect(key)}" end)}
+
+             A file that sets `:arca, :some_key` while the code reads
+             `:cyfr, :some_key` sets nothing: the umbrella build reads the root
+             file, an application's own build reads its own, and a key in the
+             wrong one of them is inert in both. If the key really is read under
+             a name a caller computes, say so in
+             `Cyfr.Boundaries.config_keys_read_by_name/0`.
+             """
+    end
+
+    test "every key said to be read by a computed name is still declared somewhere" do
+      declared = MapSet.new(declared_config_pairs(), &elem(&1, 1))
+
+      stale =
+        for {key, _reason} <- Boundaries.config_keys_read_by_name(),
+            not MapSet.member?(declared, key),
+            do: key
+
+      assert stale == [],
+             "these keys are named as read by a computed name and nothing sets them: " <>
+               inspect(stale)
+    end
+
     test "the gaps are named, so they are a decision and not an oversight" do
       gaps =
         Boundaries.config_key_classes()
@@ -526,6 +557,23 @@ defmodule Cyfr.BoundariesTest do
         reduce: %{} do
       acc -> Map.update(acc, key, [Path.basename(path)], &[Path.basename(path) | &1])
     end
+  end
+
+  # Every `{application, key}` a configuration file sets, this repository's
+  # three applications only — the app's own files as well as the root's,
+  # because an application's build reads its own.
+  defp declared_config_pairs do
+    apps = Enum.map_join(Boundaries.config_applications(), "|", &to_string/1)
+    pattern = Regex.compile!("config :(#{apps}),\\s*:([a-z_0-9]+)")
+
+    files =
+      SourceTree.files!(Path.join(root(), "config/*.exs")) ++
+        SourceTree.files!(Path.join(root(), "apps/*/config/*.exs"))
+
+    for path <- files,
+        [app, key] <- Regex.scan(pattern, File.read!(path), capture: :all_but_first),
+        uniq: true,
+        do: {String.to_atom(app), String.to_atom(key)}
   end
 
   defp keys_in(source, pattern) do
