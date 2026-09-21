@@ -127,12 +127,18 @@ defmodule Cyfr.BoundariesTest do
       end
     end
 
-    test "every surface row reads code where it says it looks" do
+    test "every surface row reads code, and names, where it says it looks" do
       for row <- Boundaries.surfaces() do
-        read = lines_read(scan(row.from))
+        where = "the surface #{row.into} <- #{inspect(row.from)}"
+        lines = lines_read(scan(row.from))
+        named = Enum.sum(for {_path, names} <- names(row.from), do: length(names))
 
-        assert read > 0,
-               "the surface #{row.into} <- #{inspect(row.from)} read no code line"
+        assert lines > 100, "#{where} read #{lines} code lines — it is not reading"
+
+        # Most of these rosters are empty and stay empty, so the reader
+        # that finds nothing and the reader that reads nothing look alike.
+        # The names view is the one the roster is compared against.
+        assert named > 100, "#{where} found #{named} module names — it is not reading"
       end
     end
   end
