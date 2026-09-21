@@ -23,14 +23,23 @@ defmodule Cyfr.RateLimiter do
   past a bucket, and a bucket that forgets everything on restart gives
   none away.
 
+  One bucket is node-local for a stronger reason than the rest: a root
+  execution's emit budget (`Cyfr.Execution.Emit`) counts the events one
+  guest run produces, and a root runs on exactly one member, so there is
+  no second count in the cell for its own to disagree with. It is
+  counted here because this is where it happens, and because it sits on
+  the delta path — up to fifty events a second per root — where a
+  round trip to a shared row would buy nothing the topology does not
+  already give.
+
   **Nothing consented is enforced here.** An athanor's consented
   invocation rate is claimed in a row every member shares
   (`Arca.RateWindows`, through `Cyfr.Execution.Rates`), where two
   members cannot admit it twice and a restart forgets nothing. A limit
-  someone agreed to belongs there; a flood control in front of a
-  transport belongs here. A later reader wanting a cell-wide ceiling on
-  one of these buckets is asking for the first of those, not for this
-  table to be shared.
+  someone agreed to belongs there; a flood control on a transport, or on
+  work one member is already doing, belongs here. A later reader wanting
+  a cell-wide ceiling on one of these buckets is asking for the first of
+  those, not for this table to be shared.
 
   The deployment-wide arms of the device flow (`{:device_init, :all}`,
   `{:device_poll, :all}`) are the closest thing here to a real ceiling —

@@ -13,6 +13,8 @@ defmodule Cyfr.Execution.EmitTest do
 
   use ExUnit.Case, async: false
 
+  import Ecto.Query
+
   alias Cyfr.Execution.Emit
 
   @secret "sk-live-0123456789abcdef"
@@ -50,6 +52,12 @@ defmodule Cyfr.Execution.EmitTest do
     after
       200 -> []
     end
+  end
+
+  # The consented rate's rows for this caller's athanor — the table an
+  # emit must not touch.
+  defp rate_windows(ctx) do
+    from(w in Arca.Schemas.RateWindow, where: w.athanor_id == ^ctx.athanor_id)
   end
 
   test "a credential split across two text deltas is masked whole, and the tail goes out before stop",
@@ -203,6 +211,28 @@ defmodule Cyfr.Execution.EmitTest do
     assert {%{"sequence" => _}, second} = emit(second, %{"type" => "usage"})
     assert {%{"error" => %{"type" => "resource_limit"}}, _} = emit(second, %{"type" => "usage"})
     assert {%{"error" => %{"type" => "resource_limit"}}, _} = emit(first, %{"type" => "usage"})
+  end
+
+  test "the budget is this member's count, not a row the cell shares", %{
+    ctx: ctx,
+    stream_id: stream_id
+  } do
+    root = "exec_root_#{System.unique_integer([:positive])}"
+    windows = fn -> Arca.Repo.aggregate(rate_windows(ctx), :count) end
+    before = windows.()
+
+    {_reply, _emitter} =
+      emit(new(ctx, stream_id, budget_id: root), List.duplicate(%{"type" => "usage"}, 5))
+
+    # A root runs on one member, so its events are counted where they are
+    # produced: the delta path takes no round trip to the consented rate's
+    # row, and this case's own delta over that table is nothing.
+    assert windows.() == before
+
+    # The count is the limiter's, and it is spent: against a cap of five,
+    # this member's bucket has nothing left.
+    assert {:deny, _retry_after_s} =
+             Cyfr.RateLimiter.check({:emit, ctx.athanor_id, root}, 5, :timer.minutes(1))
   end
 
   test "an oversized or malformed event is refused", %{ctx: ctx, stream_id: stream_id} do

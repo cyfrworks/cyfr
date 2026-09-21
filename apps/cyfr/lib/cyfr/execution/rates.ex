@@ -19,10 +19,15 @@ defmodule Cyfr.Execution.Rates do
   A bucket is one `{athanor, bucket}` pair, and members of an athanor
   share it. The name is the caller's: a pinned component reference for an
   invocation, `http:`/`oauth:` for a running guest's egress and token
-  dispense, `emit:` for a root's event budget, `pub:` for a public
-  profile's runs. Its cap and window come from the consent the caller
-  passes on every claim and are never stored as policy, so a consent
-  revised downward takes effect on the next claim.
+  dispense, `pub:` for a public profile's runs. Its cap and window come
+  from the consent the caller passes on every claim and are never stored
+  as policy, so a consent revised downward takes effect on the next claim.
+
+  Every bucket here is one two members could otherwise admit twice. A
+  budget that bounds a member's own work — the events one root emits,
+  the slots one member runs at once — is counted in that member's memory
+  instead (`Cyfr.RateLimiter`, `Cyfr.Slots`), where losing the count on a
+  restart is looser and never stricter.
 
   Rate allowance is distinct from the execution slots
   `Cyfr.Execution.Slots` holds (`Cyfr.Slots`): nothing here holds,
