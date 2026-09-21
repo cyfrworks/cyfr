@@ -450,6 +450,6 @@ defmodule Cyfr.Execution do
   (default 20) and `:status` (`:running`, `:completed`, `:failed` or
   `:all`).
   """
-  @spec list(Context.t(), keyword()) :: {:ok, [Record.t()]}
+  @spec list(Context.t(), keyword()) :: {:ok, [Record.t()]} | {:error, term()}
   defdelegate list(ctx, opts \\ []), to: Record
 end

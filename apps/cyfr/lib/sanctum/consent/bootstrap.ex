@@ -96,7 +96,11 @@ defmodule Sanctum.Consent.Bootstrap do
   would skip every source as unvouched and report a clean, empty mint, so
   it refuses instead, in a word no missing component and no denial shares.
   """
-  @spec run(Context.t(), %{owner: String.t(), fence: pos_integer()} | nil) ::
+  # The claim is the row `Arca.ProvisioningClaims` hands back, not a map
+  # shaped like one: `holding/2` matches it structurally, which a struct
+  # satisfies, but the spec has to name what actually arrives or every
+  # caller that passes a real claim reads as a call that cannot succeed.
+  @spec run(Context.t(), Arca.Schemas.ProvisioningClaim.t() | nil) ::
           {:ok, result()} | {:error, :claim_lost | {:component_facts, term()}}
   def run(%Context{} = ctx, claim \\ nil) do
     with :ok <- holding(ctx, claim),

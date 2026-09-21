@@ -651,8 +651,19 @@ defmodule Cyfr.Execution.Record do
         do: Keyword.put(opts, :status, to_string(status_filter)),
         else: opts
 
-    records = Arca.Execution.list(opts)
-    {:ok, Enum.map(records, fn r -> from_mcp_result(execution_to_map(r)) end)}
+    # `Arca.Execution.list/1` runs under `with_db_rescue`, so an outage
+    # comes back as a refusal rather than rows. Mapping over it raised
+    # (a two-tuple is not enumerable), which made this function's own
+    # `{:error, term()}` arm unreachable and every caller's error branch
+    # dead — `Cyfr.Execution.ArchiveWatch` has one written for exactly
+    # this case. The refusal travels now.
+    case Arca.Execution.list(opts) do
+      {:error, reason} ->
+        {:error, reason}
+
+      records ->
+        {:ok, Enum.map(records, fn r -> from_mcp_result(execution_to_map(r)) end)}
+    end
   end
 
   # ===========================================================================

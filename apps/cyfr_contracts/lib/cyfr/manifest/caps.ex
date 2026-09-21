@@ -129,7 +129,7 @@ defmodule Cyfr.Manifest.Caps do
   Every key present with its empty default, so a consent sheet renders
   the same shape whether or not a manifest carried a `caps` block.
   """
-  @spec empty() :: map()
+  @spec empty() :: map() | nil
   def empty, do: from_manifest(%{"caps" => %{}}, fn _path -> true end)
 
   # ---------------------------------------------------------------------------

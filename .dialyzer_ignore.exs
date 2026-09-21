@@ -20,10 +20,8 @@
   {"lib/compendium/registry/credential_store.ex", :pattern_match_cov},
   {"lib/cyfr/egress.ex", :pattern_match_cov},
   {"lib/cyfr/execution/events/sequence.ex", :missing_range},
-  {"lib/cyfr/execution/record.ex", :extra_range},
   {"lib/cyfr/json_formatter.ex", :unknown_type},
   {"lib/cyfr/retention_scheduler.ex", :pattern_match},
-  {"lib/cyfr/runtime_config.ex", :missing_range},
   {"lib/emissary/mcp/tools/records_provider.ex", :guard_fail},
   {"lib/emissary/mcp/tools/records_provider.ex", :pattern_match},
   {"lib/emissary/mcp/tools/system_provider.ex", :pattern_match_cov},
@@ -52,10 +50,8 @@
   {"lib/sanctum/mcp/session_tool.ex", :guard_fail},
   {"lib/sanctum/mcp/webhook_tool.ex", :pattern_match},
   {"lib/sanctum/mcp/webhook_tool.ex", :pattern_match_cov},
-  {"lib/sanctum/notify.ex", :missing_range},
   {"lib/sanctum/session.ex", :extra_range},
   {"lib/sanctum/sign_in.ex", :missing_range},
-  {"lib/sanctum/sign_in.ex", :pattern_match},
   # Three opaque-term warnings dialyxir cannot classify: its own formatter
   # raises on them (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
   # dialyzer text, so a `{file, kind}` filter never sees a kind to match.
@@ -70,5 +66,4 @@
   # types a private function once, over every caller, so it reads that `:ok`
   # into the two entry points whose closures cannot answer it. Matched by
   # function, so any other missing range in the file still reports.
-  ~r{lib/sanctum/provisioning\.ex:\d+:missing_range .*Sanctum\.Provisioning\.(install_shipped|provision)/2}
 ]

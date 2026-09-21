@@ -138,7 +138,7 @@ defmodule Arca.Usage do
   all its scope pairs. Maintenance and test hygiene; the write path
   keeps itself coherent through `account/4`.
   """
-  @spec invalidate(Cyfr.Actor.t()) :: :ok
+  @spec invalidate(Cyfr.Actor.t()) :: :ok | {:error, :no_athanor}
   def invalidate(%Cyfr.Actor{athanor_id: athanor_id} = actor)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(actor))
