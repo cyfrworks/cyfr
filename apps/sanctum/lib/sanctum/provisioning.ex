@@ -517,25 +517,23 @@ defmodule Sanctum.Provisioning do
         {:ok, result}
 
       {:DOWN, ^ref, :process, ^worker, reason} ->
-        flush(tag)
         {:exit, reason}
     after
       budget_ms ->
         Process.exit(worker, :kill)
         _ = await_down(%{ref => worker}, now_ms() + @quiesce_ms)
         Process.demonitor(ref, [:flush])
-        flush(tag)
-        :timeout
+        cut_result(tag)
     end
   end
 
-  # A result the cut raced into the mailbox names a work item nobody will
-  # read again; the attempt's process outlives this call.
-  defp flush(tag) do
+  # A result that landed while the cut was in flight is still this
+  # attempt's answer; anything else is the budget's verdict.
+  defp cut_result(tag) do
     receive do
-      {^tag, :result, _result} -> :ok
+      {^tag, :result, result} -> {:ok, result}
     after
-      0 -> :ok
+      0 -> :timeout
     end
   end
 
@@ -590,6 +588,10 @@ defmodule Sanctum.Provisioning do
     attempt = self()
 
     case Task.Supervisor.start_child(Sanctum.ProvisioningSupervisor, fn ->
+           # A timer, not a receive timeout: the renewal is due when the
+           # lease says, and a message the attempt sends must not put it
+           # off.
+           Process.send_after(self(), :renew, @renew_ms)
            keep_loop(actor, claim, Process.monitor(attempt), [])
          end) do
       {:ok, keeper} ->
@@ -603,6 +605,16 @@ defmodule Sanctum.Provisioning do
 
   defp keep_loop(actor, claim, ref, started) do
     receive do
+      :renew ->
+        case Claims.renew(actor, claim.owner, claim.fence, @lease_ms) do
+          :ok ->
+            Process.send_after(self(), :renew, @renew_ms)
+            keep_loop(actor, claim, ref, started)
+
+          _stale_or_unreadable ->
+            stop_started(started)
+        end
+
       {:stop, attempt} ->
         # The attempt finished on its own feet and is waiting to release:
         # it is answered once what it started has stopped, and not before.
@@ -623,12 +635,6 @@ defmodule Sanctum.Provisioning do
               "[Provisioning] #{claim.athanor_id}: work the dead attempt started has not " <>
                 "stopped; the claim is left to its lease rather than given back"
             )
-        end
-    after
-      @renew_ms ->
-        case Claims.renew(actor, claim.owner, claim.fence, @lease_ms) do
-          :ok -> keep_loop(actor, claim, ref, started)
-          _ -> stop_started(started)
         end
     end
   end

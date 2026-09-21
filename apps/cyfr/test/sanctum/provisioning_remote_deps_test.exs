@@ -49,7 +49,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
         [_, repo, "manifests/" <> _tag] when is_map_key(fixtures, repo) ->
           send(opts.observer, {:manifest, repo})
 
-          if Agent.get(stall, & &1) == repo do
+          if stalled?(stall, repo) do
             send(opts.observer, {:stalled, repo})
             hold(stall, repo, 0)
           end
