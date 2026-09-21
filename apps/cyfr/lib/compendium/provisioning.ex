@@ -136,11 +136,11 @@ defmodule Compendium.Provisioning do
   # The claim is taken before the task starts, so a reader arriving with
   # the session already finds the estate being filled; the task is what
   # holds it, and `not_started` gives it back when the work will not run.
-  # Ownership is asked first: a boot that will not fill must not take the
-  # estate even briefly, or a reader on the boot that would fill it sees
-  # an attempt in progress that is not one.
+  # The member's standing is asked first: one that will not fill must not
+  # take the estate even briefly, or a reader on the member that would
+  # fill it sees an attempt in progress that is not one.
   defp claim_then_background(athanor, ctx) do
-    if Cyfr.ControlPlane.owner?(), do: claim_then_fill(athanor, ctx), else: :ok
+    if Arca.ControlPlane.held?(), do: claim_then_fill(athanor, ctx), else: :ok
   end
 
   defp claim_then_fill(%{id: athanor_id} = athanor, ctx) do
@@ -158,15 +158,16 @@ defmodule Compendium.Provisioning do
     :ok
   end
 
-  # Run `fun` off the caller's process, on the boot that owns the control
-  # plane. Elsewhere it is not started, and the next read on the owner asks
-  # again. Under test the sandbox owns the connection, so background work
-  # runs inline (the tests assert on rows right after the call).
-  # `not_started` runs when the work will not: what a caller took for it
-  # beforehand is given back.
+  # Run `fun` off the caller's process, on the member that holds its slot
+  # in the cell (`Arca.ControlPlane.held?/0`, a term read and a monotonic
+  # comparison — no query, so it is safe on this path). Elsewhere it is
+  # not started, and the next read on a holder asks again. Under test the
+  # sandbox owns the connection, so background work runs inline (the tests
+  # assert on rows right after the call). `not_started` runs when the work
+  # will not: what a caller took for it beforehand is given back.
   defp background(fun, not_started \\ fn -> :ok end) do
     cond do
-      not Cyfr.ControlPlane.owner?() ->
+      not Arca.ControlPlane.held?() ->
         not_started.()
         :ok
 
