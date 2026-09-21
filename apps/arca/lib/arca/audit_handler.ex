@@ -118,10 +118,11 @@ defmodule Arca.AuditHandler do
   # out arrives as one), a throw — so a failure anywhere in here ends
   # auditing for that event, for the life of the node, silently. This
   # covers every class of it: sanitizing the emitter's metadata, building
-  # the entry, writing the line, and whatever a deployment's own attach on
-  # `[:cyfr, :audit, :recorded]` does, since telemetry runs that in this
-  # process too. `Cyfr.OtelTenantHandler` and `Prism.TelemetryBridge` take
-  # the same precaution for the same reason.
+  # the entry and writing the line. A deployment's own attach on
+  # `[:cyfr, :audit, :recorded]` is telemetry's to catch and detach, not
+  # this handler's, though it runs in this process and on this path.
+  # `Cyfr.OtelTenantHandler` and `Prism.TelemetryBridge` take the same
+  # precaution for the same reason.
   def handle_event(event_name, measurements, metadata, config) do
     do_handle_event(event_name, measurements, metadata, config)
   catch
