@@ -586,6 +586,65 @@ or an operator who wants that step in their own hands, set
 bin/cyfr eval "Cyfr.Release.migrate()"
 ```
 
+### Several members on one database (a cell)
+
+One server per database is the default, and a second one pointed at the
+same database refuses to boot rather than quietly running every sweep
+twice. A **cell** is the deliberate alternative: one deployment — one
+database, one object store, one set of workers — served by several
+control-plane **members**, each holding its own slot in `cell_leases` and
+taking a peer's work only after that peer's lease has run out on the
+database's clock.
+
+`CYFR_CLUSTER=1` turns it on, and the flag alone is not a cell. A member
+boots only with all six of:
+
+- **Postgres** (`CYFR_DATABASE=postgres`). SQLite is one file with one
+  writer and no server clock, so members could not agree which lease
+  stands.
+- **Shared object storage** (`CYFR_STORAGE=s3`). Local storage is one
+  member's filesystem; two members would each hold half of every estate.
+- **TLS distribution** — `-proto_dist inet_tls` with an
+  `-ssl_dist_optfile` naming the member's certificate, key and CA. Plain
+  distribution between control planes is an unauthenticated remote shell
+  onto the database.
+- **A cell-only cookie** — `CYFR_CELL_COOKIE`, at least 32 characters,
+  the same value on every member and the value each member's BEAM
+  actually runs under (`RELEASE_COOKIE`, or `-setcookie`). An ambient
+  `~/.erlang.cookie` is the machine's, not the cell's.
+- **A discovery topology** — `CYFR_CLUSTER_NODES` naming the members, or
+  `CYFR_CLUSTER_DNS_QUERY` with `CYFR_CLUSTER_NODE_BASENAME` for a
+  headless service.
+- **A shared worker root** — `CYFR_WORKER_KEY`, identical on every
+  member. Unset it is random per boot, so a worker's report to a peer
+  fails verification.
+
+Each missing one is a named refusal at boot, saying what it found and what
+to change.
+
+What a cell gives up and what it keeps:
+
+- Work is not routed. A turn runs on the member that accepted it and an
+  execution on the member that admitted it; ownership is settled after
+  the fact by a claim row. Put the members behind any load balancer.
+- A member's lease is 15 s, renewed every 5 s, so a member that stops
+  without releasing is taken over within **20 s**. A clean stop releases
+  at once.
+- Each member needs a **worker service of its own**, named in that
+  member's `CYFR_WORKERS`, with its `OPUS_HOST_URL` pointing at that
+  member's host API. A worker posts every host call and exit report to
+  the one address its credentials name, so a worker shared between
+  members would answer one member's runs and lose the other's.
+- Stdio MCP servers are not available in a cell.
+- Per-member ceilings multiply: `CYFR_MAX_CONCURRENT_EXECUTIONS` and its
+  per-tenant cap, and the per-credential stream cap, are each member's.
+  The tenant's durable ceilings — its consented invocation rate and its
+  budget — are rows, and hold for the cell.
+
+`mix test --only cluster apps/cyfr/test/cluster` is the suite that proves
+this: two real nodes, one Postgres, one object store, with both process
+death and a live partitioned owner.
+
 ### Headless nodes
 
 `CYFR_HEADLESS=true` makes a node Codex-only: `/mcp`, `/api` and public
