@@ -415,7 +415,7 @@ How it holds together:
 Components run on a worker service, not in `cyfr`: the `opus` container runs the WASM engine, and `cyfr` reaches it over HTTP to start and kill runs while its runners reach `cyfr`'s host API for everything a run needs (its attempt, its credentials, its stream, its children). Every request and host call is authenticated with keys derived from one root, which only `cyfr` holds.
 
 - **Two keys.** `CYFR_WORKER_KEY` (32 random bytes as 64 hex digits) is the root, in `.env` and read by `cyfr` alone. `OPUS_SERVICE_KEY` is the key derived from it for the worker's service id, `OPUS_SERVICE_ID` (`wrk_opus` by default; another id is named in `CYFR_WORKERS` too), and compose hands the id and the key to `opus` alone, from `.env`. `cyfr init` mints the root and derives the key; by hand, the root is `openssl rand -hex 32`, and `CYFR_WORKER_KEY=… mix cyfr.worker.key wrk_opus` prints the key from a source checkout, or `printf 'cyfr-worker/v1/worker\nwrk_opus' | openssl dgst -sha256 -mac HMAC -macopt hexkey:$CYFR_WORKER_KEY` is the same HMAC without one. The worker never sees the root, the keyring or the database; it refuses to start with any of them in its environment. Changing the root ends every run in flight and needs every service key derived again: remove `OPUS_SERVICE_KEY` beside the new root and `cyfr init` derives it.
-- **Who is where.** `CYFR_WORKERS` lists the worker services `cyfr` dispatches to as `<service_id>=<url>` entries, tried in order; compose sets `wrk_opus=http://opus:4200`. `cyfr`'s host API listens at `CYFR_HOST_API_BIND:CYFR_HOST_API_PORT` (default `127.0.0.1:4300`; compose binds every interface, since it is reached over the internal `worker` network alone) and `OPUS_HOST_URL` tells the worker where that is. `cyfr` asks each worker for its status every `CYFR_WORKER_WATCH_POLL_MS` and, after `CYFR_WORKER_WATCH_MISSES` misses in a row or when a worker comes back as a new boot, closes the runs that boot held as lapsed. The worker's own settings are in `.env.opus` (copy `.env.opus.example`).
+- **Who is where.** `CYFR_WORKERS` lists the worker services `cyfr` dispatches to as `<service_id>=<url>` entries, tried in order; compose sets `wrk_opus=http://opus:4200`. `cyfr`'s host API listens at `CYFR_HOST_API_BIND:CYFR_HOST_API_PORT` (default `127.0.0.1:4300`; compose binds every interface, since it is reached over the internal `worker` network alone) and `OPUS_HOST_URL` tells the worker where that is. An attempt's host calls go to the member that admitted it: the assignment carries that member's address, `CYFR_HOST_API_URL`, and the worker posts them there. With one member the address is the worker's own `OPUS_HOST_URL` and nothing more is set. `cyfr` asks each worker for its status every `CYFR_WORKER_WATCH_POLL_MS` and, after `CYFR_WORKER_WATCH_MISSES` misses in a row or when a worker comes back as a new boot, closes the runs that boot held as lapsed. The worker's own settings are in `.env.opus` (copy `.env.opus.example`).
 - **Runners.** Inside `opus`, `cyfr-spawn` — the keeper binary the builder and the bridge also run under — starts the service as the `opus` user with no capability and runs every subtree in a runner: a VM of its own under a pooled uid (`opus-runner01`…`08`) with a private home on a tmpfs, holding no key, reached by the service alone over a control channel. The service keeps `OPUS_POOL_SIZE` runners spawned ahead; a runner that completes cleanly is kept idle for its athanor for `OPUS_IDLE_TTL_MS`; one that was killed, lost a host answer or exited with attempts open is tainted, never assigned again, and retired — every process of its uid killed and its home scrubbed before the uid is reused — with `OPUS_RELEASE_GRACE_MS` to report what it held; a guest that ignores its deadline is halted by the runner's watchdog `OPUS_WATCHDOG_GRACE_MS` past it. `tests/worker-image/` runs each of these against the shipped image.
 - **Memory.** Every runner is held to `OPUS_RUNNER_MEMORY_BYTES` (384 MiB by default; 16 MiB to 1 TiB): its VM, every guest's linear memory, its home and the kernel memory charged to it, together. A runner that reaches it is ended whole by the kernel, the runs it held are reported, and it is never reused; a sibling is untouched. The container's limit, `OPUS_MEMORY_LIMIT` in `.env` (4G), holds all eight runner uids at their bound and the service beside them — raise it with the bound. The bound needs the [Docker requirement](#prerequisites) above.
 - **Nothing on disk.** The worker keeps no state. A run's identity, budget, credentials and output live in `cyfr`; the worker holds only what it was assigned, sealed for its key, and reports a runner that exits. A worker restart ends its runs, which `cyfr` closes as lapsed.
@@ -597,7 +597,7 @@ taking a peer's work only after that peer's lease has run out on the
 database's clock.
 
 `CYFR_CLUSTER=1` turns it on, and the flag alone is not a cell. A member
-boots only with all six of:
+boots only with all seven of:
 
 - **Postgres** (`CYFR_DATABASE=postgres`). SQLite is one file with one
   writer and no server clock, so members could not agree which lease
@@ -618,6 +618,12 @@ boots only with all six of:
 - **A shared worker root** — `CYFR_WORKER_KEY`, identical on every
   member. Unset it is random per boot, so a worker's report to a peer
   fails verification.
+- **This member's own address** — `CYFR_HOST_API_URL`, the address a
+  worker service reaches this member's host API at. Every assignment a
+  member issues carries its own address, and a worker posts that
+  attempt's host calls there; with no address the worker falls back to
+  the one address it was configured with, and whichever member that is
+  answers every other member's runs.
 
 Each missing one is a named refusal at boot, saying what it found and what
 to change.
@@ -630,11 +636,16 @@ What a cell gives up and what it keeps:
 - A member's lease is 15 s, renewed every 5 s, so a member that stops
   without releasing is taken over within **20 s**. A clean stop releases
   at once.
-- Each member needs a **worker service of its own**, named in that
-  member's `CYFR_WORKERS`, with its `OPUS_HOST_URL` pointing at that
-  member's host API. A worker posts every host call and exit report to
-  the one address its credentials name, so a worker shared between
-  members would answer one member's runs and lose the other's.
+- Each member sets **`CYFR_HOST_API_URL` to its own host API**, and a
+  cell refuses to boot without it. Every assignment a member issues
+  carries that address and that member's boot, so a worker posts an
+  attempt's host calls to the member holding it and names that member in
+  every header. A member that is not the one named refuses the call —
+  including a lease renewal it could have written from the rows — so a
+  misrouted worker loses the call loudly rather than keeping a peer's
+  lease alive while its work goes nowhere. One worker service may serve
+  several members; each member still lists the workers it dispatches to
+  in its own `CYFR_WORKERS`.
 - Stdio MCP servers are not available in a cell.
 - Per-member ceilings multiply: `CYFR_MAX_CONCURRENT_EXECUTIONS` and its
   per-tenant cap, and the per-credential stream cap, are each member's.

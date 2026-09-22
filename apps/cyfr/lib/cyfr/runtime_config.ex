@@ -566,17 +566,45 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve where CYFR's host API listener binds (`Cyfr.Execution.HostListener`):
-  `CYFR_HOST_API_BIND`, an IPv4 or IPv6 address (default `127.0.0.1`), and
-  `CYFR_HOST_API_PORT`, a port from 1 to 65535 (default 4300). Set-or-default:
-  a set value that is neither is an error naming it.
+  Resolve where CYFR's host API listener binds (`Cyfr.Execution.HostListener`)
+  and the address this member is reached at: `CYFR_HOST_API_BIND`, an IPv4
+  or IPv6 address (default `127.0.0.1`), `CYFR_HOST_API_PORT`, a port from
+  1 to 65535 (default 4300), and `CYFR_HOST_API_URL`, the base URL a
+  worker service reaches this member's host API at. Set-or-default: a set
+  value that is none of those is an error naming it.
+
+  `CYFR_HOST_API_URL` has no default, because a member cannot discover the
+  name a worker reaches it by: a bind address says which interfaces it
+  answers on, never which address anything else routes to. Unset, the
+  assignments this member issues carry no address and a worker posts their
+  host calls to the address it is configured with (`OPUS_HOST_URL`) — one
+  member, one address, which is what a single-member deployment has. A
+  cell refuses to boot without it (`Cyfr.Cell.refusals/1`), because there
+  the configured address names one member and the others lose their work.
   """
   @spec resolve_host_api(getenv) ::
-          {:ok, %{bind: :inet.ip_address(), port: :inet.port_number()}} | {:error, String.t()}
+          {:ok, %{bind: :inet.ip_address(), port: :inet.port_number(), url: String.t() | nil}}
+          | {:error, String.t()}
   def resolve_host_api(getenv) when is_function(getenv, 1) do
     with {:ok, bind} <- host_api_bind(blank_to_nil(getenv.("CYFR_HOST_API_BIND"))),
-         {:ok, port} <- host_api_port(blank_to_nil(getenv.("CYFR_HOST_API_PORT"))) do
-      {:ok, %{bind: bind, port: port}}
+         {:ok, port} <- host_api_port(blank_to_nil(getenv.("CYFR_HOST_API_PORT"))),
+         {:ok, url} <- host_api_url(blank_to_nil(getenv.("CYFR_HOST_API_URL"))) do
+      {:ok, %{bind: bind, port: port, url: url}}
+    end
+  end
+
+  defp host_api_url(nil), do: {:ok, nil}
+
+  defp host_api_url(text) do
+    case Cyfr.WorkerWire.base_url(text) do
+      {:ok, url} ->
+        {:ok, url}
+
+      :error ->
+        {:error,
+         "CYFR_HOST_API_URL=#{inspect(text)} is not an http or https URL with a host and " <>
+           "no path (the address a worker service reaches this member's host API at, such " <>
+           "as http://cyfr:4300)."}
     end
   end
 
@@ -671,6 +699,14 @@ defmodule Cyfr.RuntimeConfig do
   """
   @spec host_api_port() :: :inet.port_number()
   def host_api_port, do: Application.get_env(:cyfr, :host_api_port, @default_host_api_port)
+
+  @doc """
+  The base URL a worker service reaches this member's host API at
+  (`CYFR_HOST_API_URL`), which every assignment this member issues names,
+  or `nil` when the deployment has not been told one.
+  """
+  @spec host_api_url() :: String.t() | nil
+  def host_api_url, do: Application.get_env(:cyfr, :host_api_url)
 
   # ── helpers ────────────────────────────────────────────────────────────────
 

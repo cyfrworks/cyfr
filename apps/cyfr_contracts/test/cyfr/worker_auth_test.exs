@@ -7,10 +7,13 @@ defmodule Cyfr.WorkerAuthTest do
   sealed value and assignment token reproduces the shared vectors
   (`tests/fixtures/worker_auth.json`). Every derived key is distinct per
   label, per worker service and per attempt field. A host call verifies
-  against the root at the current generation and is refused, in order, when
-  its timestamp is outside the 30-second window, when its MAC is forged or
-  made with any key but its attempt's call key, and when its generation is
-  not current. A worker service's keys are its own: its reports verify only
+  against the root at the verifying member's standing and is refused, in
+  order, when its timestamp is outside the 30-second window, when its MAC
+  is forged or made with any key but its attempt's call key, when its
+  generation is not that member's current one, and when it names another
+  member — the call belongs to the member that issued its attempt, and a
+  peer answers none of it, not even a renewal it could write from the
+  rows. A worker service's keys are its own: its reports verify only
   as its own, and attempt keys sealed for it open only under its seal key,
   as the attempt they name. A sealed host call body or answer opens only as
   the direction and the call it was sealed for.
@@ -28,6 +31,8 @@ defmodule Cyfr.WorkerAuthTest do
   @body ~s({"attempts":["att_1"]})
   @service "wrk_4f3c2a1e9d8b7c6a"
   @boot "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"
+  @member "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708"
+  @peer "cyfr@10.0.0.2#boot_01a09fee-6e8f-7091-a2b3-c4d5e6f70819"
 
   @attempt %{
     athanor_id: "ath_01a09fee-045b-770b-b745-a62792bb8798",
@@ -43,7 +48,13 @@ defmodule Cyfr.WorkerAuthTest do
 
   defp call(overrides \\ %{}) do
     @attempt
-    |> Map.merge(%{boot: @boot, runner: "run_4f3c2a1e", ts: @now, nonce: "n_7d3e9a"})
+    |> Map.merge(%{
+      boot: @boot,
+      runner: "run_4f3c2a1e",
+      member: @member,
+      ts: @now,
+      nonce: "n_7d3e9a"
+    })
     |> Map.merge(overrides)
   end
 
@@ -76,8 +87,15 @@ defmodule Cyfr.WorkerAuthTest do
       header,
       Keyword.get(opts, :body, @body),
       Keyword.get(opts, :now, @now),
-      Keyword.get(opts, :generation, 7)
+      standing(opts)
     )
+  end
+
+  defp standing(opts \\ []) do
+    %{
+      generation: Keyword.get(opts, :generation, 7),
+      member: Keyword.get(opts, :member, @member)
+    }
   end
 
   describe "the shared vectors" do
@@ -109,7 +127,13 @@ defmodule Cyfr.WorkerAuthTest do
       c = v["call"]
 
       call =
-        Map.merge(attempt, %{boot: v["boot"], runner: c["runner"], ts: c["ts"], nonce: c["nonce"]})
+        Map.merge(attempt, %{
+          boot: v["boot"],
+          runner: c["runner"],
+          member: v["member"],
+          ts: c["ts"],
+          nonce: c["nonce"]
+        })
 
       call_key = unhex(v["keys"]["attempt_call_hex"])
 
@@ -117,14 +141,17 @@ defmodule Cyfr.WorkerAuthTest do
       assert_mac(call_key, c["canonical"], c["header"])
       assert c["canonical"] =~ Cyfr.Digest.sha256_hex(c["body"])
 
+      root = unhex(v["root_hex"])
+      standing = %{generation: attempt.generation, member: v["member"]}
+
       assert {:ok, ^call} =
-               WorkerAuth.verify_host_call(
-                 unhex(v["root_hex"]),
-                 c["header"],
-                 c["body"],
-                 c["ts"],
-                 attempt.generation
-               )
+               WorkerAuth.verify_host_call(root, c["header"], c["body"], c["ts"], standing)
+
+      assert {:error, :member_mismatch} =
+               WorkerAuth.verify_host_call(root, c["header"], c["body"], c["ts"], %{
+                 standing
+                 | member: @peer
+               })
     end
 
     test "a report's and a request's canonical strings, headers and MACs match",
@@ -165,7 +192,13 @@ defmodule Cyfr.WorkerAuthTest do
       c = v["call"]
 
       call =
-        Map.merge(attempt, %{boot: v["boot"], runner: c["runner"], ts: c["ts"], nonce: c["nonce"]})
+        Map.merge(attempt, %{
+          boot: v["boot"],
+          runner: c["runner"],
+          member: v["member"],
+          ts: c["ts"],
+          nonce: c["nonce"]
+        })
 
       sc = v["sealed_call"]
 
@@ -190,6 +223,8 @@ defmodule Cyfr.WorkerAuthTest do
     test "the assignment token is its payload MAC'd with the assign key", %{v: v, root: root} do
       a = v["assignment"]
       assign_key = WorkerAuth.assign_key(root)
+      member = v["member"]
+      host_url = v["host_url"]
 
       assert Base.url_encode64(:crypto.mac(:hmac, :sha256, assign_key, a["payload"]),
                padding: false
@@ -198,6 +233,10 @@ defmodule Cyfr.WorkerAuthTest do
       assert a["token"] == Base.url_encode64(a["payload"], padding: false) <> "." <> a["mac"]
       assert {:ok, assignment} = Assignment.verify(a["token"], assign_key, a["now"])
       assert {:ok, a["token"]} == Assignment.sign(assignment, assign_key)
+
+      # The member a host call names is the member its assignment was
+      # issued by, and the address is inside the same MAC.
+      assert %Assignment{member: ^member, host_url: ^host_url} = assignment
       assert {:ok, a["payload"]} == Cyfr.JCS.encode(Jason.decode!(a["payload"]))
     end
 
@@ -290,7 +329,7 @@ defmodule Cyfr.WorkerAuthTest do
       header = call_header!(call)
 
       assert header =~
-               ~r/\Av1 kind=call athanor_id=ath_\S+ execution_id=\S+ attempt=\S+ fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_4f3c2a1e ts=1789305249602 nonce=n_7d3e9a body=[0-9a-f]{64} mac=\S+\z/
+               ~r/\Av1 kind=call athanor_id=ath_\S+ execution_id=\S+ attempt=\S+ fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_4f3c2a1e member=\S+ ts=1789305249602 nonce=n_7d3e9a body=[0-9a-f]{64} mac=\S+\z/
 
       assert {:ok, ^call} = verify(header)
     end
@@ -321,6 +360,7 @@ defmodule Cyfr.WorkerAuthTest do
                verify(String.replace(header, "service=#{@service}", "service=wrk_other"))
 
       assert {:error, :bad_mac} = verify(String.replace(header, "nonce=n_7d3e9a", "nonce=n_x"))
+      assert {:error, :bad_mac} = verify(String.replace(header, @member, @peer))
 
       assert {:error, :bad_mac} =
                verify(String.replace(header, "ts=1789305249602", "ts=1789305249603"))
@@ -358,11 +398,30 @@ defmodule Cyfr.WorkerAuthTest do
       assert {:error, :generation_mismatch} = verify(call_header!(call()), generation: 8)
     end
 
-    test "checks the window before the MAC, and the MAC before the generation" do
+    test "is refused by a member it does not name, whatever it asks for" do
+      # The same signed call, verified by two members. A peer at the same
+      # generation — which every member of a freshly formed cell is —
+      # refuses it, so a renewal it could have written from the rows is
+      # refused with everything else.
+      header = call_header!(call())
+
+      assert {:ok, _} = verify(header)
+      assert {:error, :member_mismatch} = verify(header, member: @peer)
+
+      # And a call addressed to the peer is not answered here either.
+      assert {:error, :member_mismatch} = verify(call_header!(call(%{member: @peer})))
+    end
+
+    test "checks the window before the MAC, the MAC before the generation, and the generation before the member" do
       forged = call_header!(call(%{generation: 6}), WorkerAuth.assign_key(@root))
 
       assert {:error, :outside_window} = verify(forged, now: @now + 60_000)
       assert {:error, :bad_mac} = verify(forged)
+
+      # A stale generation of this member reads as the stale call it is,
+      # not as a misrouted one.
+      assert {:error, :generation_mismatch} =
+               verify(call_header!(call(%{generation: 6, member: @peer})), generation: 6 + 1)
     end
 
     test "is refused when the header is not one well-formed host-call header" do
@@ -374,6 +433,7 @@ defmodule Cyfr.WorkerAuthTest do
       assert {:error, :malformed} = verify(String.replace(header, "fence=2", "fence=02"))
       assert {:error, :malformed} = verify(String.replace(header, " runner=run_4f3c2a1e", ""))
       assert {:error, :malformed} = verify(String.replace(header, " service=#{@service}", ""))
+      assert {:error, :malformed} = verify(String.replace(header, " member=#{@member}", ""))
       assert {:error, :malformed} = verify(header <> " nonce=n_again")
     end
   end
@@ -467,7 +527,12 @@ defmodule Cyfr.WorkerAuthTest do
       assert {:error, :unsealable} = WorkerAuth.open_call(seal, :body, call, answer)
       assert {:error, :unsealable} = WorkerAuth.open_call(call_key, :body, call, body)
 
-      for other <- [call(%{nonce: "n_other"}), call(%{ts: @now + 1}), call(%{runner: "run_x"})] do
+      for other <- [
+            call(%{nonce: "n_other"}),
+            call(%{ts: @now + 1}),
+            call(%{runner: "run_x"}),
+            call(%{member: @peer})
+          ] do
         assert {:error, :unsealable} = WorkerAuth.open_call(seal, :body, other, body)
       end
 
@@ -540,7 +605,10 @@ defmodule Cyfr.WorkerAuthTest do
       hash = Cyfr.Digest.sha256_hex(@body)
 
       assert header =~ " body=#{hash} mac="
-      assert {:ok, ^call, ^hash} = WorkerAuth.verify_host_call_header(@root, header, @now, 7)
+
+      assert {:ok, ^call, ^hash} =
+               WorkerAuth.verify_host_call_header(@root, header, @now, standing())
+
       assert :ok = WorkerAuth.verify_body(hash, @body)
       assert {:error, :bad_mac} = WorkerAuth.verify_body(hash, "{}")
       assert {:ok, ^call} = verify(header)
@@ -551,21 +619,28 @@ defmodule Cyfr.WorkerAuthTest do
       call = call()
       header = call_header!(call)
 
-      assert {:error, :malformed} = WorkerAuth.verify_host_call_header(@root, "v1", @now, 7)
+      assert {:error, :malformed} =
+               WorkerAuth.verify_host_call_header(@root, "v1", @now, standing())
 
       assert {:error, :outside_window} =
-               WorkerAuth.verify_host_call_header(@root, header, @now + 30_001, 7)
+               WorkerAuth.verify_host_call_header(@root, header, @now + 30_001, standing())
 
       forged = String.replace(header, "runner=run_4f3c2a1e", "runner=run_other")
-      assert {:error, :bad_mac} = WorkerAuth.verify_host_call_header(@root, forged, @now, 7)
+
+      assert {:error, :bad_mac} =
+               WorkerAuth.verify_host_call_header(@root, forged, @now, standing())
 
       other_body =
         String.replace(header, Cyfr.Digest.sha256_hex(@body), String.duplicate("0", 64))
 
-      assert {:error, :bad_mac} = WorkerAuth.verify_host_call_header(@root, other_body, @now, 7)
+      assert {:error, :bad_mac} =
+               WorkerAuth.verify_host_call_header(@root, other_body, @now, standing())
 
       assert {:error, :generation_mismatch} =
-               WorkerAuth.verify_host_call_header(@root, header, @now, 8)
+               WorkerAuth.verify_host_call_header(@root, header, @now, standing(generation: 8))
+
+      assert {:error, :member_mismatch} =
+               WorkerAuth.verify_host_call_header(@root, header, @now, standing(member: @peer))
     end
 
     test "a request and a report verify header-first under their own keys" do

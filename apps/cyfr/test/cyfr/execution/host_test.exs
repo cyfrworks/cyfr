@@ -582,6 +582,7 @@ defmodule Cyfr.Execution.HostTest do
 
       body =
         AttemptFixtures.body("runner_exited", %{
+          "member" => Keyword.get(opts, :member, fixture.member),
           "runner" => runner,
           "attempts" => [fixture.attempt]
         })

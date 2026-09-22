@@ -38,6 +38,7 @@ defmodule Opus.Test.ScriptedHost do
           url: String.t(),
           root: binary(),
           generation: pos_integer(),
+          member: String.t(),
           service: String.t(),
           agent: pid()
         }
@@ -53,6 +54,7 @@ defmodule Opus.Test.ScriptedHost do
   @doc """
   Serve a scripted host for the calling test, stopped when the test ends.
   Options: `:root` (default `root/0`), `:generation` (default 1),
+  `:member` (the boot id this host answers as, default a fresh one),
   `:service` (default `service/0`), `:script` (a map of operation name to
   answers, as `script/3` takes them).
   """
@@ -60,6 +62,10 @@ defmodule Opus.Test.ScriptedHost do
   def start!(opts \\ []) do
     root = Keyword.get(opts, :root, @root)
     generation = Keyword.get(opts, :generation, @generation)
+
+    member =
+      Keyword.get_lazy(opts, :member, fn -> "host@test#" <> Cyfr.UUID7.generate_id("boot") end)
+
     service = Keyword.get(opts, :service, @service)
     unique = System.unique_integer([:positive])
 
@@ -71,6 +77,7 @@ defmodule Opus.Test.ScriptedHost do
              %{
                root: root,
                generation: generation,
+               member: member,
                script: Keyword.get(opts, :script, %{}),
                requests: []
              }
@@ -94,6 +101,7 @@ defmodule Opus.Test.ScriptedHost do
       url: "http://127.0.0.1:#{port}",
       root: root,
       generation: generation,
+      member: member,
       service: service,
       agent: agent
     }
@@ -185,6 +193,8 @@ defmodule Opus.Test.ScriptedHost do
       generation: host.generation,
       service: service,
       boot: boot,
+      member: Keyword.get(opts, :member, host.member),
+      host_url: Keyword.get(opts, :host_url, host.url),
       issued_at: now,
       claim_by: now + Assignment.claim_window_ms(),
       execution_id: execution_id,
@@ -222,7 +232,10 @@ defmodule Opus.Test.ScriptedHost do
       input: input_json,
       component_ref: component_ref,
       digest: digest,
-      client: Opus.HostClient.new(keys, runner, boot, host.url)
+      # As a runner builds its client: at the member the assignment names,
+      # falling back to the address this worker service is configured
+      # with when the assignment names none.
+      client: Opus.HostClient.new(keys, runner, boot, Opus.HostClient.at(assignment, host.url))
     })
   end
 
@@ -297,13 +310,20 @@ defmodule Opus.Test.ScriptedHost do
       {:ok, body, conn} = read_body(conn, length: 50_000_000)
       header = conn |> get_req_header(WorkerWire.auth_header()) |> List.first()
       now = System.system_time(:millisecond)
-      %{root: root, generation: generation} = Agent.get(agent, & &1)
+      %{root: root, generation: generation, member: member} = Agent.get(agent, & &1)
 
       case WorkerWire.host_callback(conn.request_path) do
         {:ok, callback} ->
           op = Atom.to_string(callback)
 
-          case verify(callback, root, generation, header, body, now) do
+          case verify(
+                 callback,
+                 root,
+                 %{generation: generation, member: member},
+                 header,
+                 body,
+                 now
+               ) do
             {:ok, caller, plain, seal} ->
               args = args(plain, callback)
               request = %{op: op, args: args, caller: caller, header: header, body: plain}
@@ -322,13 +342,13 @@ defmodule Opus.Test.ScriptedHost do
 
     # A report is plain; a host call's body opens under the attempt's seal
     # key as the call the header names, and its answer seals the same way.
-    defp verify(:runner_exited, root, _generation, header, body, now) do
+    defp verify(:runner_exited, root, _standing, header, body, now) do
       with {:ok, report} <- WorkerAuth.verify_report(root, header, body, now),
            do: {:ok, report, body, nil}
     end
 
-    defp verify(_callback, root, generation, header, sealed, now) do
-      with {:ok, caller} <- WorkerAuth.verify_host_call(root, header, sealed, now, generation),
+    defp verify(_callback, root, standing, header, sealed, now) do
+      with {:ok, caller} <- WorkerAuth.verify_host_call(root, header, sealed, now, standing),
            {:ok, seal} <- WorkerAuth.attempt_seal_key(root, caller),
            {:ok, plain} <- WorkerAuth.open_call(seal, :body, caller, sealed) do
         {:ok, caller, plain, {seal, caller}}

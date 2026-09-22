@@ -588,12 +588,16 @@ defmodule Cyfr.SharedLimitsTest do
   # ---------------------------------------------------------------------------
 
   # A runner exit report to the host listener, signed as `service` signs
-  # it for its `boot`, naming `runner` and `attempts`.
+  # it for its `boot`, naming this member, `runner` and `attempts`.
   defp exit_report(service, boot, runner, attempts) do
     body =
       Jason.encode!(%{
         "op" => "runner_exited",
-        "args" => %{"runner" => runner, "attempts" => attempts}
+        "args" => %{
+          "member" => Keys.member(),
+          "runner" => runner,
+          "attempts" => attempts
+        }
       })
 
     fields = %{

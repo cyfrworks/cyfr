@@ -18,8 +18,10 @@ defmodule Cyfr.Execution.HostListener do
        else `503`, answered as `Cyfr.Execution.Host` would refuse it;
     3. the `x-cyfr-auth` header is present once and verifies over its
        fields and the body hash it names — a host call under the call key
-       of the attempt it names and the current generation
-       (`Cyfr.WorkerAuth.verify_host_call_header/4`), a report under the
+       of the attempt it names, at this member's standing
+       (`Cyfr.Execution.Keys.standing/0`: its generation and its own boot,
+       so a call addressed to a peer is refused here,
+       `Cyfr.WorkerAuth.verify_host_call_header/4`), a report under the
        dispatch key of the worker service it names
        (`Cyfr.WorkerAuth.verify_report_header/3`) — within the timestamp
        window, else `401`;
@@ -151,9 +153,10 @@ defmodule Cyfr.Execution.HostListener do
   end
 
   # A report verifies under the dispatch key of the service it names; a
-  # host call under the call key of the attempt it names, at the current
-  # generation. A generation the control plane cannot answer verifies
-  # nothing.
+  # host call under the call key of the attempt it names, at this
+  # member's standing. A generation the control plane cannot answer
+  # verifies nothing, and a call naming another member is refused before
+  # its body is read.
   defp verify_header(:runner_exited, header, now) do
     case WorkerAuth.verify_report_header(Keys.root(), header, now) do
       {:ok, fields, body_hash} -> {:ok, fields, body_hash}
@@ -162,9 +165,9 @@ defmodule Cyfr.Execution.HostListener do
   end
 
   defp verify_header(callback, header, now) do
-    with {:ok, generation} <- Keys.generation(),
+    with {:ok, standing} <- Keys.standing(),
          {:ok, fields, body_hash} <-
-           WorkerAuth.verify_host_call_header(Keys.root(), header, now, generation) do
+           WorkerAuth.verify_host_call_header(Keys.root(), header, now, standing) do
       {:ok, fields, body_hash}
     else
       {:error, :unavailable} ->

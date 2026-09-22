@@ -7,12 +7,15 @@ defmodule Cyfr.AssignmentTest do
   the assign key only. A token is refused when its MAC or payload was
   changed, when it was MAC'd with a worker service's dispatch key (a worker
   cannot mint one), when its claim deadline has passed, when its version is unknown,
-  and when its payload has an unknown, missing or mistyped member: an
+  and when its payload has an unknown, missing or mistyped field: an
   authority `Cyfr.Authority.from_wire/1` refuses, a component reference
   that is not canonical, of another type or unbounded, a need or an
-  intercepted action outside its grammar, or a list or actor member over
-  its bound. A worker reads a token without the assign key, and reading
-  grants nothing.
+  intercepted action outside its grammar, an address that is not a base
+  URL a route appends to, or a list or actor field over its bound. The
+  member that issued an assignment and the address its host calls go to
+  are inside the MAC like every other field, so neither can be pointed
+  somewhere else by anything but the holder of the assign key. A worker
+  reads a token without the assign key, and reading grants nothing.
   """
   use ExUnit.Case, async: true
 
@@ -39,6 +42,8 @@ defmodule Cyfr.AssignmentTest do
           generation: 7,
           service: "wrk_1",
           boot: "boot_1",
+          member: "cyfr@10.0.0.1#boot_01a09fee-0000-7000-8000-00000000000a",
+          host_url: "http://cyfr-1:4300",
           issued_at: @now,
           claim_by: @now + 30_000,
           execution_id: "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
@@ -155,6 +160,14 @@ defmodule Cyfr.AssignmentTest do
         %{generation: nil},
         %{service: ""},
         %{boot: ""},
+        %{member: ""},
+        %{member: nil},
+        %{host_url: "cyfr-1:4300"},
+        %{host_url: "http://cyfr-1:4300/"},
+        %{host_url: "http://cyfr-1:4300/host"},
+        %{host_url: "ftp://cyfr-1:4300"},
+        %{host_url: "http://"},
+        %{host_url: 4300},
         %{attempt: "att 1"},
         %{input_digest: "sha256:ABC"},
         %{step: %{id: "stp_1"}},
@@ -250,6 +263,9 @@ defmodule Cyfr.AssignmentTest do
         &Map.put(&1, "priority", 1),
         &Map.delete(&1, "athanor_id"),
         &Map.delete(&1, "claim_by"),
+        &Map.delete(&1, "member"),
+        &Map.put(&1, "member", nil),
+        &Map.put(&1, "host_url", nil),
         &Map.delete(&1, "authority"),
         &Map.put(&1, "fence", "1"),
         &Map.put(&1, "timeout_ms", 1.5),
@@ -310,7 +326,10 @@ defmodule Cyfr.AssignmentTest do
         &put_in(&1, ["component", "declared_needs"], List.duplicate("source", 257)),
         &Map.put(&1, "intercepted", ["execution." <> long]),
         &Map.put(&1, "intercepted", List.duplicate("execution.run", 257)),
-        &put_in(&1, ["actor", "client_ip"], long)
+        &put_in(&1, ["actor", "client_ip"], long),
+        &Map.put(&1, "host_url", "http://cyfr-1:4300/"),
+        &Map.put(&1, "host_url", "https://cyfr-1/host/v1"),
+        &Map.put(&1, "host_url", "cyfr-1:4300")
       ]
 
       for change <- changes do
@@ -320,12 +339,37 @@ defmodule Cyfr.AssignmentTest do
       end
     end
 
-    test "decodes an absent optional member as nil", %{assign_key: key, authority: authority} do
+    test "decodes an absent optional field as nil", %{assign_key: key, authority: authority} do
       token = sign!(assignment(authority), key)
-      unparented = resigned(token, key, &Map.drop(&1, ["parent_execution_id", "step"]))
 
-      assert {:ok, %Assignment{parent_execution_id: nil, step: nil}} =
+      unparented =
+        resigned(token, key, &Map.drop(&1, ["parent_execution_id", "step", "host_url"]))
+
+      assert {:ok, %Assignment{parent_execution_id: nil, step: nil, host_url: nil}} =
                Assignment.verify(unparented, key, @now)
+    end
+
+    test "cannot have its member or its address moved without the assign key",
+         %{assign_key: key, authority: authority} do
+      token = sign!(assignment(authority), key)
+      peer = "cyfr@10.0.0.2#boot_01a09fee-0000-7000-8000-00000000000b"
+
+      # An attacker who can rewrite the unsigned part rewrites nothing: the
+      # payload is what the MAC covers, so a redirected assignment is
+      # `:bad_mac` before a single call is made to the address it names.
+      for change <- [
+            &Map.put(&1, "host_url", "http://attacker.example"),
+            &Map.put(&1, "member", peer)
+          ] do
+        redirected = resigned(token, "a worker's key", change)
+        assert {:error, :bad_mac} = Assignment.verify(redirected, key, @now)
+      end
+
+      # And one the assign key did sign reads back as itself, so a member
+      # can compare what it issued with what a runner presents.
+      moved = sign!(assignment(authority, %{member: peer}), key)
+      assert {:ok, %Assignment{member: ^peer}} = Assignment.verify(moved, key, @now)
+      assert moved != token
     end
   end
 end

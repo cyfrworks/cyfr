@@ -18,6 +18,16 @@ defmodule Cyfr.WorkerWire do
       `Cyfr.HostAPI` (`host_route/1`); a worker service's report goes to
       `/host/v1/runner_exited` like any other. A WorkerAPI request's route
       is `/worker/v1/<callback>` (`worker_route/1`).
+    * The base URL a host call is posted to is the one its attempt's
+      assignment names (`Cyfr.Assignment`'s `host_url`), and its header
+      names that member (`Cyfr.WorkerAuth`'s `member`), so an attempt's
+      calls reach the one member holding it. An assignment naming no
+      address is posted to the address the worker service is configured
+      with, which is the whole deployment in a cell of one; a call that
+      lands on another member is refused whatever it asked for. A worker
+      service's exit report carries the same member in its `args` and is
+      posted the same way, since every attempt one runner holds was
+      issued by one member.
     * A request body is the JSON `{"op": <callback>, "args": {...}}`
       (`request_body/2`, `read_request_body/1`), sealed as
       `Cyfr.WorkerAuth.seal_call/5` seals a host call's body. The route and

@@ -31,14 +31,13 @@ defmodule Opus.OAuthHandlerTest do
   defp token_fn(opts) do
     attempt = AttemptFixtures.attached!(opts)
 
-    {fun_of(
-       Opus.HostClient.new(
-         attempt.keys,
-         attempt.runner,
-         attempt.boot,
-         Cyfr.Test.OpusService.host_url()
-       )
-     ), attempt}
+    client =
+      Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{
+        member: attempt.member,
+        host_url: Cyfr.Test.OpusService.host_url()
+      })
+
+    {fun_of(client), attempt}
   end
 
   defp fun_of(host) do

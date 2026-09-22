@@ -40,6 +40,16 @@ defmodule Cyfr.WorkerAuth do
     * the **runner** id — the runner presenting a host call, which claimed
       the attempt; a formula's children present their parent's.
 
+  One identity names the control-plane side: the **member** id, the boot
+  of the member that issued the attempt's assignment (`Cyfr.Boot.id/0`,
+  `"<node>#boot_<uuid7>"`). A host call names it, so the one member that
+  holds the attempt's process is the one member that answers its calls;
+  every other member refuses it, whether the call needs that process or
+  could have been answered from the rows. It is compared, never derived
+  over: a member that has restarted holds a new boot id and a higher
+  generation, and either refuses the calls of the attempts its
+  predecessor issued.
+
   A worker service's keys are its own: holding them signs nothing another
   worker service would accept, reports no other worker service's runners
   and opens no attempt started on another worker service. An attempt is its
@@ -72,11 +82,12 @@ defmodule Cyfr.WorkerAuth do
 
   A host call's header (`host_call_header/3`) is signed with the attempt's
   call key over the attempt's fields, the boot and the runner presenting
-  it, the timestamp (Unix milliseconds), a nonce and the body. A WorkerAPI
-  request's header (`request_header/3`) and a worker service's report
-  header (`report_header/3`) are signed with that worker service's
-  dispatch key over its service id, its boot, the timestamp, a nonce and
-  the body; the two kinds never verify as each other. Every header names
+  it, the member it is addressed to, the timestamp (Unix milliseconds), a
+  nonce and the body. A WorkerAPI request's header (`request_header/3`)
+  and a worker service's report header (`report_header/3`) are signed with
+  that worker service's dispatch key over its service id, its boot, the
+  timestamp, a nonce and the body; the two kinds never verify as each
+  other. Every header names
   its body's hex SHA-256 (`body=`), which is what the MAC covers in the
   body's place, so a listener verifies the header before it reads the body
   and refuses an unauthenticated caller without reading what it sent.
@@ -92,8 +103,13 @@ defmodule Cyfr.WorkerAuth do
        either side;
     3. `:bad_mac` — the MAC is not the call key's of the attempt the header
        names, over the header's fields and the body;
-    4. `:generation_mismatch` — the header's generation is not the current
-       one.
+    4. `:generation_mismatch` — the header's generation is not the verifying
+       member's current one;
+    5. `:member_mismatch` — the header names another member. The call
+       belongs to the member that issued its attempt's assignment, and no
+       other answers it: an operation that needs the attempt's process
+       would be lost on a peer, and one a peer could answer from the rows
+       — a lease renewal — would be answered for work it does not hold.
 
   `verify_report/4` checks the first three with the dispatch key of the
   worker service the report names, derived from the root, and
@@ -134,7 +150,15 @@ defmodule Cyfr.WorkerAuth do
   @call %MacEnvelope{
     prefix: "cyfr-worker/v1",
     kind: "call",
-    fields: @attempt_fields ++ [boot: :string, runner: :string, ts: :integer, nonce: :string],
+    fields:
+      @attempt_fields ++
+        [
+          boot: :string,
+          runner: :string,
+          member: :string,
+          ts: :integer,
+          nonce: :string
+        ],
     body_hash_in_header: true
   }
 
@@ -170,7 +194,8 @@ defmodule Cyfr.WorkerAuth do
 
   @typedoc """
   A host call's header fields: the attempt's, the boot and the runner
-  presenting it, `ts` in Unix ms and a nonce.
+  presenting it, the member it is addressed to, `ts` in Unix ms and a
+  nonce.
   """
   @type host_call :: %{
           athanor_id: String.t(),
@@ -181,9 +206,18 @@ defmodule Cyfr.WorkerAuth do
           service: String.t(),
           boot: String.t(),
           runner: String.t(),
+          member: String.t(),
           ts: non_neg_integer(),
           nonce: String.t()
         }
+
+  @typedoc """
+  What the member verifying a host call holds: the generation it issues
+  and checks under, and its own boot id (`Cyfr.Boot.id/0`). A call is
+  answered only by the member it names, at that member's current
+  generation.
+  """
+  @type standing :: %{generation: pos_integer(), member: String.t()}
 
   @typedoc """
   A WorkerAPI request's or report's header fields: the worker service's id
@@ -200,7 +234,7 @@ defmodule Cyfr.WorkerAuth do
   @type direction :: :body | :answer
 
   @type dispatch_refusal :: :malformed | :outside_window | :bad_mac
-  @type call_refusal :: dispatch_refusal() | :generation_mismatch
+  @type call_refusal :: dispatch_refusal() | :generation_mismatch | :member_mismatch
 
   @typedoc """
   The hex SHA-256 a verified header names as its body's, which
@@ -371,17 +405,16 @@ defmodule Cyfr.WorkerAuth do
   @doc """
   A host call's authenticated fields, re-deriving its attempt's call key
   from `root`. `now` is the current time in Unix milliseconds and
-  `generation` the current control-plane generation.
+  `standing` what the verifying member holds (`t:standing/0`).
   """
-  @spec verify_host_call(binary(), term(), binary(), integer(), pos_integer()) ::
+  @spec verify_host_call(binary(), term(), binary(), integer(), standing()) ::
           {:ok, host_call()} | {:error, call_refusal()}
-  def verify_host_call(root, header, body, now, generation)
-      when byte_size(root) == 32 and is_binary(body) and is_integer(now) and
-             is_integer(generation) do
+  def verify_host_call(root, header, body, now, %{} = standing)
+      when byte_size(root) == 32 and is_binary(body) and is_integer(now) do
     with {:ok, call, mac} <- MacEnvelope.parse(@call, header),
          :ok <- within_window(call.ts, now),
          :ok <- authentic(@call, derived(&attempt_call_key(root, &1), call), call, mac, body),
-         :ok <- same_generation(call.generation, generation) do
+         :ok <- addressed_here(call, standing) do
       {:ok, fields(call)}
     end
   end
@@ -393,14 +426,14 @@ defmodule Cyfr.WorkerAuth do
   caller then reads the body, bounded, and checks it with `verify_body/2`;
   together the two answer exactly what `verify_host_call/5` does.
   """
-  @spec verify_host_call_header(binary(), term(), integer(), pos_integer()) ::
+  @spec verify_host_call_header(binary(), term(), integer(), standing()) ::
           {:ok, host_call(), body_hash()} | {:error, call_refusal()}
-  def verify_host_call_header(root, header, now, generation)
-      when byte_size(root) == 32 and is_integer(now) and is_integer(generation) do
+  def verify_host_call_header(root, header, now, %{} = standing)
+      when byte_size(root) == 32 and is_integer(now) do
     with {:ok, call, mac} <- MacEnvelope.parse(@call, header),
          :ok <- within_window(call.ts, now),
          :ok <- authentic_header(@call, derived(&attempt_call_key(root, &1), call), call, mac),
-         :ok <- same_generation(call.generation, generation) do
+         :ok <- addressed_here(call, standing) do
       {:ok, fields(call), call.body_hash}
     end
   end
@@ -536,6 +569,15 @@ defmodule Cyfr.WorkerAuth do
   # it names is framing, answered beside them by the header-first verifiers.
   defp fields(parsed), do: Map.delete(parsed, :body_hash)
 
-  defp same_generation(generation, generation), do: :ok
-  defp same_generation(_presented, _current), do: {:error, :generation_mismatch}
+  # The generation before the member, so a call from a retired generation
+  # of this member reads as the stale call it is rather than as a
+  # misrouted one.
+  defp addressed_here(call, %{generation: generation, member: member})
+       when is_integer(generation) and is_binary(member) do
+    cond do
+      call.generation != generation -> {:error, :generation_mismatch}
+      call.member != member -> {:error, :member_mismatch}
+      true -> :ok
+    end
+  end
 end

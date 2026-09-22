@@ -19,6 +19,15 @@ defmodule Cyfr.Execution.Keys do
   that claims no control plane (a cluster node, or claiming switched off).
   A generation the control plane cannot answer is a refusal, never `1`:
   no assignment is issued and no host call verifies under it.
+
+  `member/0` is this member's identity in the cell, `Cyfr.Boot.id/0`.
+  Every assignment carries it and every host call of that assignment's
+  attempt presents it, so the calls of an attempt reach the one member
+  holding it: `standing/0` pairs it with the generation, and that pair is
+  what a host call is verified against (`Cyfr.WorkerAuth.verify_host_call/5`).
+  The generation alone cannot do this work — it is each member's own, and
+  in a freshly formed cell every member holds generation 1 — so a peer
+  would answer from the rows a call it holds no process for.
   """
 
   alias Cyfr.WorkerAuth
@@ -88,4 +97,22 @@ defmodule Cyfr.Execution.Keys do
 
   def generation(:none), do: {:ok, 1}
   def generation(_unknown), do: {:error, :unavailable}
+
+  @doc """
+  This member's identity in the cell: the boot every assignment it issues
+  names, and the one a host call of that attempt must present.
+  """
+  @spec member() :: String.t()
+  def member, do: Cyfr.Boot.id()
+
+  @doc """
+  What this member holds, as a host call is verified against
+  (`t:Cyfr.WorkerAuth.standing/0`): its generation and its own boot.
+  Refused exactly as `generation/0` is.
+  """
+  @spec standing() :: {:ok, WorkerAuth.standing()} | {:error, :unavailable}
+  def standing do
+    with {:ok, generation} <- generation(),
+         do: {:ok, %{generation: generation, member: member()}}
+  end
 end

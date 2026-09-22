@@ -4,7 +4,7 @@
 defmodule Cyfr.CellTest do
   @moduledoc """
   This member's place in the cell: the claimant of its `cell_leases` slot,
-  the rendezvous proposal over the live roster, and the six conditions
+  the rendezvous proposal over the live roster, and the seven conditions
   `CYFR_CLUSTER=1` boots only under.
 
   The claimant writes the process-wide standing record, so this file runs
@@ -370,10 +370,11 @@ defmodule Cyfr.CellTest do
       cell_cookie: String.duplicate("c", 40),
       node_cookie: String.duplicate("c", 40),
       topologies: [cyfr: [strategy: Cluster.Strategy.Epmd, config: [hosts: [:a@h]]]],
-      worker_key: :crypto.strong_rand_bytes(32)
+      worker_key: :crypto.strong_rand_bytes(32),
+      host_api_url: "http://member-1:4300"
     }
 
-    test "a deployment that satisfies all six is refused nothing" do
+    test "a deployment that satisfies all seven is refused nothing" do
       assert Cell.refusals(@cell_facts) == []
     end
 
@@ -438,7 +439,14 @@ defmodule Cyfr.CellTest do
       assert [_short] = Cell.refusals(%{@cell_facts | worker_key: <<1, 2, 3>>})
     end
 
-    test "each refusal fires on its own, and all of them together name all six" do
+    test "a member with no address of its own is refused, naming what a worker falls back to" do
+      assert [message] = Cell.refusals(%{@cell_facts | host_api_url: nil})
+      assert message =~ "CYFR_HOST_API_URL"
+      assert message =~ "THIS member"
+      assert message =~ "falls back"
+    end
+
+    test "each refusal fires on its own, and all of them together name all seven" do
       broken = %{
         repo_adapter: Ecto.Adapters.SQLite3,
         storage_adapter: Arca.Adapters.Local,
@@ -447,10 +455,11 @@ defmodule Cyfr.CellTest do
         cell_cookie: nil,
         node_cookie: nil,
         topologies: [],
-        worker_key: nil
+        worker_key: nil,
+        host_api_url: nil
       }
 
-      assert length(Cell.refusals(broken)) == 6
+      assert length(Cell.refusals(broken)) == 7
     end
 
     test "a cluster member boots once every condition holds", %{node: node} do

@@ -30,7 +30,10 @@ defmodule Cyfr.HostAPI do
   `c:runner_exited/3` answers a worker service. The report is signed with
   that worker service's own dispatch key (`Cyfr.WorkerAuth.report_header/3`)
   and verified with `Cyfr.WorkerAuth.verify_report/4`, so it speaks only
-  for the runners of the worker service it names.
+  for the runners of the worker service it names. Its `args` name the
+  member the runner's attempts were issued by, beside the runner and the
+  attempts, and a member that is not the one named lapses nothing: the
+  attempts belong to the member holding them, as a host call's do.
 
   ## Retrying a lost answer
 
@@ -349,7 +352,8 @@ defmodule Cyfr.HostAPI do
   each of them that was dispatched to the reporting service and boot, is
   claimed by that runner and is still running, and stops what it holds
   for each. A report speaks for its own boot only: another boot of the
-  same service lapses nothing.
+  same service lapses nothing, and neither does a member the report's
+  `member` does not name.
   """
   @callback runner_exited(
               report :: WorkerAuth.dispatch(),

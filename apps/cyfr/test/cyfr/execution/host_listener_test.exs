@@ -95,6 +95,7 @@ defmodule Cyfr.Execution.HostListenerTest do
       service: Keyword.get(opts, :service, fixture.service),
       boot: Keyword.get(opts, :boot, fixture.boot),
       runner: Keyword.get(opts, :runner, fixture.runner),
+      member: Keyword.get(opts, :member, fixture.member),
       ts: Keyword.get_lazy(opts, :ts, &now/0),
       nonce: Keyword.get_lazy(opts, :nonce, fn -> "n_#{System.unique_integer([:positive])}" end)
     }
@@ -123,6 +124,7 @@ defmodule Cyfr.Execution.HostListenerTest do
   defp report(url, fixture, opts \\ []) do
     body =
       AttemptFixtures.body("runner_exited", %{
+        "member" => fixture.member,
         "runner" => fixture.runner,
         "attempts" => [fixture.attempt]
       })
@@ -308,6 +310,7 @@ defmodule Cyfr.Execution.HostListenerTest do
 
       body =
         AttemptFixtures.body("runner_exited", %{
+          "member" => fixture.member,
           "runner" => fixture.runner,
           "attempts" => [fixture.attempt]
         })

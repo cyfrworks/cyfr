@@ -25,12 +25,15 @@ defmodule Cyfr.Execution.Host do
        rows are the holder's to write.
     1. The header verifies (`Cyfr.WorkerAuth.verify_host_call/5`) under the
        call key of the attempt it names, derived from the worker root, and
-       the current generation (`Cyfr.Execution.Keys.generation/0`; one the
-       control plane cannot answer refuses every call), and the body is a
-       known operation with well-formed arguments.
+       names this member's standing (`Cyfr.Execution.Keys.standing/0`: its
+       current generation, which the control plane must be able to answer,
+       and its own boot), and the body is a known operation with
+       well-formed arguments. A call addressed to another member is `lost`
+       here, whether or not this member could have answered it from the
+       rows: the attempt's process is the member's that issued it.
     2. `attach`: the assignment verifies (`Cyfr.Assignment.verify/3`), it
-       names the header's athanor, execution, attempt, fence and
-       generation, it is addressed to the header's worker service and
+       names the header's athanor, execution, attempt, fence, generation
+       and member, it is addressed to the header's worker service and
        boot, and the attempt row is claimed for the header's runner
        (`Arca.ExecutionAttempts.claim/4`). The attempt then unseals the
        run's vault edge and audits each field it hands over, once, at the
@@ -52,9 +55,10 @@ defmodule Cyfr.Execution.Host do
   `{"ok": value}` on success. A refusal is `{"error": name}`:
 
     * `lost` — this boot does not hold the control plane, the header does
-      not verify, the body is not an operation, the nonce was presented
-      before, or the attempt is not open, current, running, at the header's
-      fence and claimed by its runner;
+      not verify, the header names another member, the body is not an
+      operation, the nonce was presented before, or the attempt is not
+      open, current, running, at the header's fence and claimed by its
+      runner;
     * `unavailable` — the store could not answer;
     * at attach, `malformed`, `bad_mac`, `unknown_version` or
       `claim_expired` for an assignment that does not verify, `replayed`
@@ -89,20 +93,24 @@ defmodule Cyfr.Execution.Host do
   ## A worker service's report
 
   `runner_exited/2` takes a report's header (`Cyfr.WorkerAuth.report_header/3`)
-  and its JSON body,
-  `{"op": "runner_exited", "args": {"runner": id, "attempts": [ids]}}`, and
-  answers JSON. The header must verify under the dispatch key of the
-  worker service it names (`Cyfr.WorkerAuth.verify_report/4`), which only
-  that worker service holds; a report is idempotent, so its nonce is not
-  checked. Each named attempt dispatched to the reporting service on the
+  and its JSON body, `{"op": "runner_exited", "args": {"member": boot,
+  "runner": id, "attempts": [ids]}}`, and answers JSON. The header must
+  verify under the dispatch key of the worker service it names
+  (`Cyfr.WorkerAuth.verify_report/4`), which only that worker service
+  holds, and its `member` must be this member's boot, since every attempt
+  one runner holds was issued here; a report is idempotent, so its nonce
+  is not checked. A report naming another member lapses nothing: the
+  attempts are that member's to lapse and the processes open for them are
+  its to stop. Each named attempt dispatched to the reporting service on the
   reporting boot, claimed by the named runner, that still owns its running
   execution is lapsed (`Cyfr.Execution.Lapse`), and the attempt process
   open for each is stopped without closing its run
   (`Cyfr.Execution.Attempt.stop_unclosed/2`). A report from another boot
   of the same service lapses nothing.
   It answers `{"ok": true}`, `{"error": "lost"}` for a report that does not
-  verify, and `{"error": "unavailable"}` when this boot does not hold the
-  control plane (nothing is lapsed) or the store cannot list the attempts.
+  verify or names another member, and `{"error": "unavailable"}` when this
+  boot does not hold the control plane (nothing is lapsed) or the store
+  cannot list the attempts.
   """
 
   require Logger
@@ -111,7 +119,7 @@ defmodule Cyfr.Execution.Host do
   alias Cyfr.Execution.{Attempt, Keys, Lapse, Outcome}
   alias Cyfr.Execution.Host.Children
 
-  @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
+  @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :member]
   @refusals [
     :lost,
     :unavailable,
@@ -154,9 +162,10 @@ defmodule Cyfr.Execution.Host do
     answer =
       with :ok <- owner(:unavailable),
            {:ok, report} <- verify_report(header, body, now),
-           {:ok, runner, attempts} <- reported_attempts(body),
-           :ok <- Lapse.dispatched(report.service, report.boot, runner, attempts) do
-        holder = %{service_id: report.service, boot_id: report.boot, runner: runner}
+           {:ok, reporter, attempts} <- reported_attempts(body),
+           :ok <- reported_here(reporter),
+           :ok <- Lapse.dispatched(report.service, report.boot, reporter.runner, attempts) do
+        holder = %{service_id: report.service, boot_id: report.boot, runner: reporter.runner}
         Enum.each(attempts, &Attempt.stop_unclosed(&1, holder))
       end
 
@@ -192,20 +201,35 @@ defmodule Cyfr.Execution.Host do
   end
 
   defp reported_attempts(body) do
-    with {:ok,
-          %{"op" => "runner_exited", "args" => %{"runner" => runner, "attempts" => attempts}}}
-         when is_binary(runner) and runner != "" and is_list(attempts) <- Jason.decode(body),
+    with {:ok, %{"op" => "runner_exited", "args" => args}} <- Jason.decode(body),
+         %{"member" => member, "runner" => runner, "attempts" => attempts} <- args,
+         true <- is_binary(member) and member != "",
+         true <- is_binary(runner) and runner != "" and is_list(attempts),
          true <- Enum.all?(attempts, &(is_binary(&1) and &1 != "")) do
-      {:ok, runner, Enum.uniq(attempts)}
+      {:ok, %{member: member, runner: runner}, Enum.uniq(attempts)}
     else
       _ -> {:error, :lost}
     end
   end
 
-  # A generation the control plane cannot answer verifies nothing.
+  # Every attempt one runner holds was issued by one member, so the report
+  # of its exit belongs to that member: the rows are its to lapse and the
+  # attempt processes open for them are its to stop.
+  defp reported_here(%{member: member}) do
+    if member == Keys.member() do
+      :ok
+    else
+      Logger.warning("[Cyfr.Execution.Host] runner exit report refused: it names another member")
+      {:error, :lost}
+    end
+  end
+
+  # A generation the control plane cannot answer verifies nothing, and a
+  # call addressed to another member is refused here rather than answered
+  # from rows whose work this member does not hold.
   defp verify(header, body, now) do
-    with {:ok, generation} <- Keys.generation(),
-         {:ok, caller} <- WorkerAuth.verify_host_call(Keys.root(), header, body, now, generation) do
+    with {:ok, standing} <- Keys.standing(),
+         {:ok, caller} <- WorkerAuth.verify_host_call(Keys.root(), header, body, now, standing) do
       {:ok, caller}
     else
       {:error, reason} ->

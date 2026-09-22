@@ -18,6 +18,13 @@ defmodule Cyfr.Execution.Assignments do
   subtree deadline admission settled, and its lease runs one lease period
   from issue. Its attempt's keys are bound to that worker
   service as well as to the attempt, its fence and its generation.
+
+  It also carries **this member**: `Cyfr.Execution.Keys.member/0`, and the
+  address a worker reaches this member's host API at
+  (`Cyfr.RuntimeConfig.host_api_url/0`), or no address where the
+  deployment has not been told one. The attempt has one process, on this
+  member, so its host calls belong here: the address is where they are
+  posted and the member is what every other member refuses them by.
   """
 
   alias Cyfr.{Actor, Assignment, Authority}
@@ -80,6 +87,8 @@ defmodule Cyfr.Execution.Assignments do
       generation: attempt.generation,
       service: admitted.service,
       boot: admitted.boot,
+      member: Keys.member(),
+      host_url: Cyfr.RuntimeConfig.host_api_url(),
       issued_at: now,
       claim_by: now + Assignment.claim_window_ms(),
       execution_id: record.id,

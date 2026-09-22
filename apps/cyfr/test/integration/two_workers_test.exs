@@ -252,7 +252,13 @@ defmodule Cyfr.TwoWorkersTest do
       # A renewal is asked again as it was; a denial's record is not, and ends
       # uncertain; a child is asked for again under the same key, and is one child.
       fixture = attached!(ctx)
-      client = Opus.HostClient.new(fixture.keys, fixture.runner, fixture.boot, wire.url)
+
+      client =
+        Opus.HostClient.new(fixture.keys, fixture.runner, fixture.boot, %{
+          member: fixture.member,
+          host_url: wire.url
+        })
+
       attempt = fixture.attempt
 
       Wire.plan(wire, WorkerWire.host_route(:renew), [:forward_then_drop])
@@ -275,7 +281,12 @@ defmodule Cyfr.TwoWorkersTest do
           component_ref: "formula:local.two-workers-parent:0.1.0"
         )
 
-      parent_client = Opus.HostClient.new(parent.keys, parent.runner, parent.boot, wire.url)
+      parent_client =
+        Opus.HostClient.new(parent.keys, parent.runner, parent.boot, %{
+          member: parent.member,
+          host_url: wire.url
+        })
+
       Wire.plan(wire, WorkerWire.host_route(:admit_child), [:forward_then_drop])
 
       assert {:ok, child} =
@@ -523,12 +534,17 @@ defmodule Cyfr.TwoWorkersTest do
   end
 
   # A runner exit report to the host listener, signed with the dispatch key
-  # of `worker_key` for `service` and `boot`, naming `runner` and `attempts`.
+  # of `worker_key` for `service` and `boot`, naming this member, `runner`
+  # and `attempts`.
   defp report(worker_key, service, boot, runner, attempts) do
     body =
       Jason.encode!(%{
         "op" => "runner_exited",
-        "args" => %{"runner" => runner, "attempts" => attempts}
+        "args" => %{
+          "member" => Cyfr.Execution.Keys.member(),
+          "runner" => runner,
+          "attempts" => attempts
+        }
       })
 
     fields = %{service: service, boot: boot, ts: System.system_time(:millisecond), nonce: nonce()}

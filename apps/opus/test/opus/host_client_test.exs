@@ -16,7 +16,7 @@ defmodule Opus.HostClientTest do
 
   import ExUnit.CaptureLog
 
-  alias Cyfr.WorkerWire
+  alias Cyfr.{Assignment, WorkerWire}
   alias Opus.HostClient
   alias Opus.Test.ScriptedHost
 
@@ -283,21 +283,92 @@ defmodule Opus.HostClientTest do
         port: 0
       )
 
-    assert :ok = HostClient.runner_exited(credentials, "boot_x", "runner_1", ["att_1"])
+    at = %{member: host.member, host_url: host.url}
+    assert :ok = HostClient.runner_exited(credentials, at, "boot_x", "runner_1", ["att_1"])
 
     assert [%{op: "runner_exited", args: args, caller: report, header: header}] =
              ScriptedHost.requests(host)
 
-    assert args == %{"runner" => "runner_1", "attempts" => ["att_1"]}
+    # The report names the member whose attempts the runner held, so a
+    # member it was not posted to lapses nothing.
+    assert args == %{
+             "member" => host.member,
+             "runner" => "runner_1",
+             "attempts" => ["att_1"]
+           }
+
     assert %{service: "wrk_local", boot: "boot_x"} = report
     assert String.starts_with?(header, "v1 kind=report ")
 
     # A stranger's report is refused by the host, once more on the retry.
     stranger = %{credentials | dispatch_key: :crypto.strong_rand_bytes(32)}
-    assert {:error, :lost} = HostClient.runner_exited(stranger, "boot_x", "runner_1", ["att_1"])
+
+    assert {:error, :lost} =
+             HostClient.runner_exited(stranger, at, "boot_x", "runner_1", ["att_1"])
 
     assert [_, {:refused, "runner_exited", :bad_mac}, {:refused, "runner_exited", :bad_mac}] =
              ScriptedHost.requests(host)
+  end
+
+  describe "where an attempt's calls go" do
+    test "is the member its assignment names, not the address the service is configured with",
+         %{host: issuer} do
+      # Two members of one cell: the same worker root, so either verifies
+      # any attempt's key schedule, and a boot and an address of its own.
+      peer = ScriptedHost.start!(root: issuer.root)
+      attempt = ScriptedHost.attempt!(issuer)
+      {:ok, assignment} = Assignment.read(attempt.assignment)
+
+      # The worker service is configured with the peer's address. The
+      # assignment wins: it is the only one of the two that knows which
+      # member issued the work.
+      at = HostClient.at(assignment, peer.url)
+      assert at == %{member: issuer.member, host_url: issuer.url}
+
+      client = HostClient.new(attempt.keys, attempt.runner, attempt.boot, at)
+      assert {:ok, %{}} = HostClient.renew(client, [attempt.attempt])
+      assert [%{caller: caller}] = ScriptedHost.requests(issuer, "renew")
+      assert caller.member == issuer.member
+      assert ScriptedHost.requests(peer) == []
+    end
+
+    test "is the configured address when the assignment names none", %{host: host} do
+      attempt = ScriptedHost.attempt!(host, host_url: nil)
+      {:ok, assignment} = Assignment.read(attempt.assignment)
+
+      assert assignment.host_url == nil
+      assert HostClient.at(assignment, host.url) == %{member: host.member, host_url: host.url}
+
+      # A deployment of one member that was never told its own address:
+      # the worker posts where its credentials say, and the member it
+      # names is still the member that issued the work.
+      assert attempt.client.host_url == host.url
+      assert attempt.client.member == host.member
+      assert {:ok, %{}} = HostClient.renew(attempt.client, [attempt.attempt])
+    end
+
+    test "is refused by a member the call does not name, twice over", %{host: issuer} do
+      peer = ScriptedHost.start!(root: issuer.root)
+      attempt = ScriptedHost.attempt!(issuer, member: peer.member, host_url: peer.url)
+
+      # The call names the peer and is posted at the peer, so the issuer
+      # sees none of it — and a call naming the issuer that reached the
+      # peer would be refused there. Either way one member answers.
+      client =
+        HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{
+          member: issuer.member,
+          host_url: peer.url
+        })
+
+      assert {:error, :lost} = HostClient.renew(client, [attempt.attempt])
+
+      # Idempotent, so the lost answer is asked once more, and refused
+      # again: a member that does not hold the attempt never answers it.
+      assert [
+               {:refused, "renew", :member_mismatch},
+               {:refused, "renew", :member_mismatch}
+             ] = ScriptedHost.requests(peer)
+    end
   end
 
   test "a client's inspection names its attempt and host, and never its keys", %{
