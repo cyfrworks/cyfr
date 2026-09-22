@@ -119,11 +119,11 @@ defmodule Aqua.RunnerTest do
     ownership =
       case loss do
         :lost -> :lost
-        :expired -> {:held, DateTime.add(DateTime.utc_now(), -1, :second)}
+        :expired -> {:held, 0}
       end
 
-    Cyfr.ControlPlane.mark(ownership)
-    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+    Arca.ControlPlane.record(ownership)
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
     Cyfr.Test.Sandbox.stop_work_on_exit()
   end
 
@@ -964,8 +964,8 @@ defmodule Aqua.RunnerTest do
       {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua go")
       pids = running!(thread)
 
-      Cyfr.ControlPlane.mark(:lost)
-      on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
       :ok = kill_and_await!(pids)
 
       assert nil == Runner.whereis(thread.id)
@@ -981,7 +981,7 @@ defmodule Aqua.RunnerTest do
                &(&1.kind == "turn_aborted")
              )
 
-      Cyfr.ControlPlane.mark(:unclaimed)
+      Arca.ControlPlane.record(:unclaimed)
       {:ok, _runner} = Runner.ensure(thread.id, ctx.athanor_id)
       assert_receive {:thread, _, {:turn_finished}}, 60_000
       assert {:ok, %{status: "completed", recovery_attempts: 1}} = Tape.turn(ctx, turn_id)
@@ -1033,7 +1033,7 @@ defmodule Aqua.RunnerTest do
         assert ScriptedWorker.calls() == calls
         assert {:error, :control_plane_lost} = Runner.ensure(thread.id, ctx.athanor_id)
 
-        Cyfr.ControlPlane.mark(:unclaimed)
+        Arca.ControlPlane.record(:unclaimed)
         assert {:ok, successor} = Runner.ensure(thread.id, ctx.athanor_id)
         refute successor == pids.runner
 
@@ -1098,7 +1098,7 @@ defmodule Aqua.RunnerTest do
         assert tape_snapshot(ctx, thread.id, [first, second], [approval.id]) == before
         assert ScriptedWorker.calls() == calls
 
-        Cyfr.ControlPlane.mark(:unclaimed)
+        Arca.ControlPlane.record(:unclaimed)
         assert {:ok, _successor} = Runner.ensure(thread.id, ctx.athanor_id)
 
         wait_until(
@@ -1143,7 +1143,7 @@ defmodule Aqua.RunnerTest do
         assert tape_snapshot(ctx, thread.id, [turn_id]) == before
         assert ScriptedWorker.calls() == calls
 
-        Cyfr.ControlPlane.mark(:unclaimed)
+        Arca.ControlPlane.record(:unclaimed)
         {:ok, _successor} = Runner.ensure(thread.id, ctx.athanor_id)
         assert_receive {:thread, _, {:turn_paused, ^turn_id, :uncertain}}, 60_000
 
@@ -1447,7 +1447,7 @@ defmodule Aqua.RunnerTest do
 
     assert tape_snapshot(ctx, thread.id, [turn.id, second]) == before
 
-    Cyfr.ControlPlane.mark(:unclaimed)
+    Arca.ControlPlane.record(:unclaimed)
     {:ok, successor} = Runner.ensure(thread.id, ctx.athanor_id)
     refute successor == runner
 

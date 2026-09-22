@@ -472,6 +472,100 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
+  Resolve the `libcluster` topology the cell's members find each other
+  through, for `CYFR_CLUSTER=1`. Two shapes, and nothing else:
+
+    * `CYFR_CLUSTER_NODES` — a comma-separated list of the members' node
+      names (`cyfr@10.0.0.1,cyfr@10.0.0.2`), polled over EPMD.
+    * `CYFR_CLUSTER_DNS_QUERY` with `CYFR_CLUSTER_NODE_BASENAME` — the
+      headless service whose A records are the members, and the name every
+      member's node is `<basename>@<address>`.
+
+  `{:ok, []}` when neither is set, which `Cyfr.Cell` refuses under the
+  cluster flag: a cell that never forms is a set of members that each
+  believe they are a cell. A half-set DNS pair is an error naming the
+  missing half, never a topology that discovers nothing.
+  """
+  @spec resolve_cluster_topology(getenv) :: {:ok, keyword()} | {:error, String.t()}
+  def resolve_cluster_topology(getenv) when is_function(getenv, 1) do
+    nodes = blank_to_nil(getenv.("CYFR_CLUSTER_NODES"))
+    query = blank_to_nil(getenv.("CYFR_CLUSTER_DNS_QUERY"))
+    basename = blank_to_nil(getenv.("CYFR_CLUSTER_NODE_BASENAME"))
+
+    cond do
+      nodes && (query || basename) ->
+        {:error,
+         "CYFR_CLUSTER_NODES and CYFR_CLUSTER_DNS_QUERY name two ways to find the same " <>
+           "cell; set one."}
+
+      nodes ->
+        case node_names(nodes) do
+          [] ->
+            {:error, "CYFR_CLUSTER_NODES is set but names no node."}
+
+          hosts ->
+            {:ok, [cyfr: [strategy: Cluster.Strategy.Epmd, config: [hosts: hosts]]]}
+        end
+
+      query && basename ->
+        {:ok,
+         [
+           cyfr: [
+             strategy: Cluster.Strategy.DNSPoll,
+             config: [polling_interval: 5_000, query: query, node_basename: basename]
+           ]
+         ]}
+
+      query ->
+        {:error,
+         "CYFR_CLUSTER_DNS_QUERY is set without CYFR_CLUSTER_NODE_BASENAME; a member's " <>
+           "node name is <basename>@<address> and discovery cannot guess the basename."}
+
+      basename ->
+        {:error,
+         "CYFR_CLUSTER_NODE_BASENAME is set without CYFR_CLUSTER_DNS_QUERY; there is no " <>
+           "service to resolve the members from."}
+
+      true ->
+        {:ok, []}
+    end
+  end
+
+  defp node_names(text) do
+    text
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(&String.to_atom/1)
+  end
+
+  @doc """
+  Resolve the cell's own distribution cookie from `CYFR_CELL_COOKIE`:
+  `{:ok, nil}` when unset, `{:ok, cookie}` at 32 characters or more, and
+  an error naming its length below that.
+
+  A cookie bounds exactly one cell, and 32 characters is the point below
+  which it is guessable. An ambient `~/.erlang.cookie` is the machine's,
+  not the cell's, which is why `Cyfr.Cell` also refuses a member whose
+  distribution cookie is not this one.
+  """
+  @spec resolve_cell_cookie(getenv) :: {:ok, String.t() | nil} | {:error, String.t()}
+  def resolve_cell_cookie(getenv) when is_function(getenv, 1) do
+    case blank_to_nil(getenv.("CYFR_CELL_COOKIE")) do
+      nil ->
+        {:ok, nil}
+
+      cookie when byte_size(cookie) >= 32 ->
+        {:ok, cookie}
+
+      short ->
+        {:error,
+         "CYFR_CELL_COOKIE is #{byte_size(short)} characters; a cell cookie is at least " <>
+           "32. Generate one with `openssl rand -hex 32`."}
+    end
+  end
+
+  @doc """
   Resolve where CYFR's host API listener binds (`Cyfr.Execution.HostListener`):
   `CYFR_HOST_API_BIND`, an IPv4 or IPv6 address (default `127.0.0.1`), and
   `CYFR_HOST_API_PORT`, a port from 1 to 65535 (default 4300). Set-or-default:

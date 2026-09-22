@@ -126,6 +126,37 @@ defmodule Arca.ProvisioningClaims do
 
   def current(%Cyfr.Actor{}), do: {:error, :no_athanor}
 
+  @doc """
+  Hold the athanor's claim for the rest of the caller's transaction:
+  `true` while the row still reads `owner` at `fence` and carries no
+  outcome, `false` otherwise, and in either case nothing about the claim
+  changes but the instant it was last touched.
+
+  It is a conditional WRITE and not a read on purpose. A read inside a
+  transaction is a check-then-act: a takeover landing between it and the
+  work it guards leaves the work written under a claim its owner has
+  lost. A write takes the claim row for the length of the transaction, so
+  a racing takeover either lands first — and this answers `false` — or
+  waits behind the commit, which is the ordering the guard needs.
+
+  Called from inside `Arca.Repo.transaction/1`, which is where its
+  guarantee lives; it raises like anything else there, and the caller's
+  `Arca.Repo.Errors.with_db_rescue/2` reports it.
+  """
+  @spec hold?(Cyfr.Actor.t(), String.t(), pos_integer()) :: boolean()
+  # arca:db-raise-ok inside the caller's transaction
+  def hold?(%Cyfr.Actor{athanor_id: athanor_id}, owner, fence)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) do
+    athanor_id
+    |> held(owner, fence)
+    |> Arca.Repo.update_all(set: [updated_at: now()])
+    |> landed()
+    |> Kernel.==(:ok)
+  end
+
+  def hold?(%Cyfr.Actor{}, _owner, _fence),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ProvisioningClaims.hold?/3")
+
   @doc "Whether `claim` still stands on the lease clock: unsettled, its lease not run out."
   @spec live?(ProvisioningClaim.t()) :: boolean()
   def live?(%ProvisioningClaim{} = claim) do

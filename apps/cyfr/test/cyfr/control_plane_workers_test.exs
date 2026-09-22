@@ -3,52 +3,27 @@
 
 defmodule Cyfr.ControlPlaneWorkersTest do
   @moduledoc """
-  Background work runs only while this boot owns the control plane, and is
-  asked on every tick: once ownership lapses under a running worker, its
-  next tick writes nothing, and once ownership is regained the work goes
+  Background work runs only while this member holds its cell slot, and is
+  asked on every tick: once the slot lapses under a running worker, its
+  next tick writes nothing, and once the slot is won back the work goes
   on.
   """
 
-  # Flips the process-wide ownership record.
+  # Flips the process-wide standing record.
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
 
-  alias Cyfr.ControlPlane
+  alias Arca.ControlPlane
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    on_exit(fn -> ControlPlane.mark(:unclaimed) end)
+    on_exit(fn -> ControlPlane.record(:unclaimed) end)
     :ok
   end
 
-  test "work runs for the owner alone" do
-    assert ControlPlane.when_owner(fn -> :ran end) == :ran
-    ControlPlane.mark(:lost)
-    assert ControlPlane.when_owner(fn -> :ran end) == :not_owner
-    ControlPlane.mark({:held, DateTime.add(DateTime.utc_now(), -1, :second)})
-    assert ControlPlane.when_owner(fn -> :ran end) == :not_owner
-  end
-
-  test "a captured generation must still match before work runs" do
-    stamp = ControlPlane.generation()
-    assert ControlPlane.when_owner(stamp, fn -> :ran end) == :ran
-    assert ControlPlane.when_owner({:ok, 999_999}, fn -> :ran end) == :not_owner
-    ControlPlane.mark(:lost)
-    assert ControlPlane.when_owner(stamp, fn -> :ran end) == :not_owner
-  end
-
-  test "an unavailable generation cannot authorize work even if ownership is marked held" do
-    previous = Application.fetch_env!(:arca, :control_plane_claim_enabled)
-    Application.put_env(:arca, :control_plane_claim_enabled, true)
-    on_exit(fn -> Application.put_env(:arca, :control_plane_claim_enabled, previous) end)
-    ControlPlane.mark({:held, :forever})
-    assert {:error, :unavailable} = ControlPlane.generation()
-    assert ControlPlane.when_owner(ControlPlane.generation(), fn -> :ran end) == :not_owner
-  end
-
-  test "the retention tick deletes nothing without ownership, and sweeps once it is regained" do
+  test "the retention tick deletes nothing without the slot, and sweeps once it is regained" do
     hash = :crypto.hash(:sha256, "expired-#{System.unique_integer([:positive])}")
 
     :ok =
@@ -63,24 +38,24 @@ defmodule Cyfr.ControlPlaneWorkersTest do
 
     state = %{interval: :timer.hours(999)}
 
-    ControlPlane.mark(:lost)
+    ControlPlane.record(:lost)
     assert {:noreply, ^state} = Cyfr.RetentionScheduler.handle_info(:run_cleanup, state)
     assert sessions(hash) == 1
 
-    ControlPlane.mark(:unclaimed)
+    ControlPlane.record(:unclaimed)
     assert {:noreply, ^state} = Cyfr.RetentionScheduler.handle_info(:run_cleanup, state)
     assert sessions(hash) == 0
   end
 
   for loss <- [:lost, :expired] do
-    test "no runner starts when ownership is #{loss}" do
-      ownership =
+    test "no runner starts when the slot is #{loss}" do
+      standing =
         case unquote(loss) do
           :lost -> :lost
-          :expired -> {:held, DateTime.add(DateTime.utc_now(), -1, :second)}
+          :expired -> {:held, 0}
         end
 
-      ControlPlane.mark(ownership)
+      ControlPlane.record(standing)
       thread_id = "thr_#{System.unique_integer([:positive])}"
 
       assert {:error, :control_plane_lost} = Aqua.Runner.ensure(thread_id, "ath_test")

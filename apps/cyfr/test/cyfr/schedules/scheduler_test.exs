@@ -138,10 +138,10 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
   defp lose_ownership(loss) do
     value =
-      if loss == :lost, do: :lost, else: {:held, DateTime.add(DateTime.utc_now(), -1, :second)}
+      if loss == :lost, do: :lost, else: {:held, 0}
 
-    Cyfr.ControlPlane.mark(value)
-    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+    Arca.ControlPlane.record(value)
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
     Cyfr.Test.Sandbox.stop_work_on_exit()
   end
 
@@ -212,7 +212,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
       refute_received {:schedule_outcome, _}
 
       if unquote(event) == :completion do
-        Cyfr.ControlPlane.mark(:unclaimed)
+        Arca.ControlPlane.record(:unclaimed)
         send(scheduler, :recover_occurrences)
         wait_until(fn -> match?([%{state: "uncertain"}], occurrences(ctx, schedule)) end)
         assert [%{execution_id: ^execution_id}] = ScriptedWorker.calls()
@@ -242,7 +242,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
       assert ScriptedWorker.calls() == []
       refute_received {:schedule_outcome, _}
 
-      Cyfr.ControlPlane.mark(:unclaimed)
+      Arca.ControlPlane.record(:unclaimed)
       send(scheduler, :recover_occurrences)
       wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
       assert [_] = ScriptedWorker.calls()
@@ -297,8 +297,8 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
   test "a boot that does not own the control plane claims no occurrence, and fires once it does",
        %{ctx: ctx} do
-    Cyfr.ControlPlane.mark(:lost)
-    on_exit(fn -> Cyfr.ControlPlane.mark(:unclaimed) end)
+    Arca.ControlPlane.record(:lost)
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
 
     script!([%{"ran" => true}])
     schedule = due!(create_schedule(ctx))
@@ -311,7 +311,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
     assert occurrences(ctx, schedule) == []
     assert ScriptedWorker.calls() == []
 
-    Cyfr.ControlPlane.mark(:unclaimed)
+    Arca.ControlPlane.record(:unclaimed)
     send(pid, {:fire, schedule.id})
     wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
   end
@@ -401,6 +401,39 @@ defmodule Cyfr.Schedules.SchedulerTest do
     assert [%{execution_id: ^execution_id}] = ScriptedWorker.calls()
     # The cursor is untouched: recovery re-runs a claim, it never claims anew.
     assert [_, _] = occurrences(ctx, schedule)
+  end
+
+  test "a live peer's freshly claimed occurrence is left where it is", %{ctx: ctx} do
+    script!([%{"ran" => true}])
+    schedule = create_schedule(ctx)
+
+    # A peer holding a slot of this cell, and an occurrence it claimed a
+    # moment ago. The slot is this case's own node name, so nothing else
+    # in the suite writes the row it measures.
+    peer_node = "peer-#{System.unique_integer([:positive])}@cell"
+    peer_boot = peer_node <> "#boot_a"
+    assert {:ok, _} = Arca.ControlPlane.take(peer_node, peer_boot, 60_000)
+    Arca.ControlPlane.record(:unclaimed)
+    Arca.ControlPlane.forget()
+
+    Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+      id: "occ_peers",
+      athanor_id: ctx.athanor_id,
+      schedule_id: schedule.id,
+      scheduled_for: DateTime.add(DateTime.utc_now(), -120, :second),
+      state: "claimed",
+      claimed_by: peer_boot,
+      claimed_at: Arca.ServerMetaStorage.now!()
+    })
+
+    pid = scheduler!()
+    # The boot recovery pass has run by the time the server answers.
+    _ = :sys.get_state(pid)
+
+    assert {:ok, %{state: "claimed", claimed_by: ^peer_boot}} =
+             ScheduleOccurrences.get(Sanctum.Context.actor(ctx), "occ_peers")
+
+    assert ScriptedWorker.calls() == []
   end
 
   test "forbid leaves a due occurrence unclaimed while another is open; allow takes it", %{

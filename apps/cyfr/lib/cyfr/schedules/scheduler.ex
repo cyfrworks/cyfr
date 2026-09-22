@@ -7,10 +7,13 @@ defmodule Cyfr.Schedules.Scheduler do
   schedule (`Process.send_after/3`), each firing claiming one occurrence
   and running it as a root (`Cyfr.Execution.run_root/5`).
 
-  Each occurrence fires at most once across the cluster:
+  Each occurrence fires at most once across the cell:
   `Arca.ScheduleOccurrences.claim/3` advances the schedule's cursor and
-  inserts the occurrence row in one transaction, and the loser is told
-  `:held`. The occurrence row is then the run's record — `started` by the
+  inserts the occurrence row in one transaction, on the cell's clock, and
+  the loser is told `:held`. The occurrence is claimed for this BOOT, so
+  it is held while this member is live and recoverable once it is not.
+
+  The occurrence row is then the run's record — `started` by the
   execution's own admission (`Arca.Execution.admit/2` moves it inside
   the transaction that admits the row), `completed` or `failed` when the
   run answers, `uncertain` when the runner died with a started
@@ -18,10 +21,21 @@ defmodule Cyfr.Schedules.Scheduler do
   a due occurrence unclaimed while another is open and checks again
   shortly; `allow` claims it regardless.
 
-  A scheduler that starts recovers what the last one left: an
-  occurrence claimed and never invoked runs once, a started one whose
-  execution ended or was swept while the occurrence stayed open is
-  `uncertain`. A due time in the past fires at once, once.
+  A scheduler recovers what a member that is no longer live left, and
+  never a peer's work in hand: `Arca.ScheduleOccurrences.recoverable/1`
+  answers only the occurrences whose claimant has dropped out of the
+  cell's roster or that were claimed more than two ticks ago, and the
+  re-run is admitted by a compare-and-set on the occurrence, so two
+  recoverers produce one re-run. An occurrence claimed and never invoked
+  runs once, a started one whose execution ended or was swept while the
+  occurrence stayed open is `uncertain`. A due time in the past fires at
+  once, once.
+
+  Every write this scheduler makes is gated twice: on the member holding
+  its cell slot (`Arca.ControlPlane.held?/0`) and on the generation it
+  captured when the work began. A member taken over raises its successor's
+  generation, so a task that outlived the take-over stops where it stands
+  instead of writing after the successor has begun.
   """
 
   use GenServer
@@ -67,7 +81,7 @@ defmodule Cyfr.Schedules.Scheduler do
 
   @impl true
   def handle_continue(:load_schedules, state) do
-    {:noreply, state |> load_all_schedules() |> recover_when_owner()}
+    {:noreply, state |> load_all_schedules() |> recover_if_held()}
   end
 
   @impl true
@@ -87,29 +101,27 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   @impl true
-  # A boot that does not own the control plane claims no occurrence: the
+  # A member that does not hold its cell slot claims no occurrence: the
   # schedule is asked again at the recheck.
   def handle_info({:fire, schedule_id}, state) do
     state = %{state | timers: Map.delete(state.timers, schedule_id)}
 
-    case Cyfr.ControlPlane.when_owner(fn -> fire_schedule(schedule_id, state) end) do
-      :not_owner -> {:noreply, recheck_later(schedule_id, state)}
-      fired -> {:noreply, fired}
-    end
+    if Arca.ControlPlane.held?(),
+      do: {:noreply, fire_schedule(schedule_id, state)},
+      else: {:noreply, recheck_later(schedule_id, state)}
   end
 
   def handle_info(:recover_occurrences, state) do
     if state.recovery_ref, do: Process.cancel_timer(state.recovery_ref)
-    {:noreply, recover_when_owner(%{state | recovery_ref: nil})}
+    {:noreply, recover_if_held(%{state | recovery_ref: nil})}
   end
 
   def handle_info({:recheck, schedule_id}, state) do
     state = %{state | timers: Map.delete(state.timers, schedule_id)}
 
-    case Cyfr.ControlPlane.when_owner(fn -> schedule_timer(schedule_id, state) end) do
-      :not_owner -> {:noreply, recheck_later(schedule_id, state)}
-      scheduled -> {:noreply, scheduled}
-    end
+    if Arca.ControlPlane.held?(),
+      do: {:noreply, schedule_timer(schedule_id, state)},
+      else: {:noreply, recheck_later(schedule_id, state)}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
@@ -117,13 +129,12 @@ defmodule Cyfr.Schedules.Scheduler do
       {schedule_id, task} ->
         state = %{state | tasks: Map.delete(state.tasks, schedule_id)}
 
-        case Cyfr.ControlPlane.when_owner(task.generation, fn ->
-               if failed_run?(reason), do: runner_died(schedule_id, task, reason)
-               broadcast_update(task.ctx)
-               schedule_timer(schedule_id, state)
-             end) do
-          :not_owner -> {:noreply, defer_occurrence(schedule_id, state)}
-          scheduled -> {:noreply, scheduled}
+        if still_ours?(task.generation) do
+          if failed_run?(reason), do: runner_died(schedule_id, task, reason)
+          broadcast_update(task.ctx)
+          {:noreply, schedule_timer(schedule_id, state)}
+        else
+          {:noreply, defer_occurrence(schedule_id, state)}
         end
 
       nil ->
@@ -243,16 +254,21 @@ defmodule Cyfr.Schedules.Scheduler do
       acc
   end
 
-  defp recover_when_owner(state) do
-    generation = Cyfr.ControlPlane.generation()
+  defp recover_if_held(state) do
+    generation = Arca.ControlPlane.generation()
 
-    case Cyfr.ControlPlane.when_owner(generation, fn -> recover_occurrences(state, generation) end) do
-      :not_owner ->
-        recover_later(state)
+    if still_ours?(generation),
+      do: recover_occurrences(state, generation),
+      else: recover_later(state)
+  end
 
-      recovered ->
-        recovered
-    end
+  # This member still holds its cell slot, under the generation the work
+  # was started with. Both halves matter: the slot answers "may I act at
+  # all", the generation answers "is what I issued still the current
+  # holder's". A generation this member could not read authorizes nothing.
+  defp still_ours?(expected) do
+    known? = expected == :none or match?({:ok, n} when is_integer(n) and n > 0, expected)
+    known? and Arca.ControlPlane.held?() and Arca.ControlPlane.generation() == expected
   end
 
   defp recover_later(%{recovery_ref: ref} = state) when is_reference(ref), do: state
@@ -262,29 +278,33 @@ defmodule Cyfr.Schedules.Scheduler do
 
   defp defer_occurrence(schedule_id, state), do: recheck_later(schedule_id, recover_later(state))
 
-  # What the last scheduler left open: a claimed occurrence was never
-  # invoked and runs once; a started one whose execution is gone is
-  # uncertain.
+  # What a member that is no longer live left open: a claimed occurrence
+  # was never invoked and runs once; a started one whose execution is gone
+  # is uncertain. A peer's fresh claim is not here to be taken — the cutoff
+  # is the cell's clock less two of this scheduler's own ticks, so only a
+  # claimant that has dropped out of the roster or stopped making progress
+  # is recovered.
   defp recover_occurrences(state, generation) do
-    case ScheduleOccurrences.recoverable() do
+    case ScheduleOccurrences.recoverable(abandoned_before()) do
       {:ok, %{never_invoked: never_invoked, lapsed: lapsed}} ->
         state =
           Enum.reduce(lapsed, state, fn occurrence, acc ->
-            case Cyfr.ControlPlane.when_owner(generation, fn ->
-                   Logger.warning(
-                     "[Schedules] occurrence #{occurrence.id} of #{occurrence.schedule_id} started " <>
-                       "and its execution ended without it: uncertain"
-                   )
+            if still_ours?(generation) do
+              Logger.warning(
+                "[Schedules] occurrence #{occurrence.id} of #{occurrence.schedule_id} started " <>
+                  "and its execution ended without it: uncertain"
+              )
 
-                   ScheduleOccurrences.finish(
+              case ScheduleOccurrences.finish(
                      Cyfr.Actor.in_athanor(occurrence.athanor_id),
                      occurrence.id,
                      "uncertain"
-                   )
-                 end) do
-              :not_owner -> recover_later(acc)
-              {:error, :database_error} -> recover_later(acc)
-              _ -> acc
+                   ) do
+                {:error, :database_error} -> recover_later(acc)
+                _ -> acc
+              end
+            else
+              recover_later(acc)
             end
           end)
 
@@ -307,8 +327,22 @@ defmodule Cyfr.Schedules.Scheduler do
       state
   end
 
+  # The occurrence is taken from its abandoned claimant in one statement
+  # before anything is run under it: of two recoverers reading the same
+  # row, one takes it and the other is told `:held` and does nothing.
+  #
+  # The slot is asked again for each occurrence, not once for the pass: a
+  # member whose slot lapsed part-way through a recovery writes nothing
+  # more, take included.
   defp rerun_claimed(occurrence, state, generation) do
-    with {:ok, %{status: "active"} = schedule} <-
+    if still_ours?(generation),
+      do: take_and_rerun(occurrence, state, generation),
+      else: recover_later(state)
+  end
+
+  defp take_and_rerun(occurrence, state, generation) do
+    with :ok <- take_over(occurrence),
+         {:ok, %{status: "active"} = schedule} <-
            CronSchedule.get_for_daemon(occurrence.schedule_id),
          {:ok, exec_reference, input} <- runnable(schedule) do
       ctx = context_of(schedule)
@@ -319,21 +353,41 @@ defmodule Cyfr.Schedules.Scheduler do
 
       run_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation)
     else
+      :held ->
+        # A peer took the occurrence between this member's read and its
+        # take: theirs to run, and nothing is written here.
+        state
+
       {:error, :database_error} ->
         recover_later(state)
 
       _ ->
-        Cyfr.ControlPlane.when_owner(generation, fn ->
+        if still_ours?(generation) do
           ScheduleOccurrences.finish(
             Cyfr.Actor.in_athanor(occurrence.athanor_id),
             occurrence.id,
             "failed"
           )
-        end)
+        end
 
         state
     end
   end
+
+  defp take_over(occurrence) do
+    ScheduleOccurrences.recover(
+      Cyfr.Actor.in_athanor(occurrence.athanor_id),
+      occurrence.id,
+      occurrence.claimed_by,
+      claimant()
+    )
+  end
+
+  # An occurrence claimed before this instant is abandoned whoever claimed
+  # it: two of this scheduler's own ticks, which is long enough that a
+  # claimant still making progress has moved the row on.
+  defp abandoned_before,
+    do: DateTime.add(Arca.ServerMetaStorage.now!(), -2 * @recheck_ms, :millisecond)
 
   # ---------------------------------------------------------------------------
   # Firing
@@ -449,7 +503,7 @@ defmodule Cyfr.Schedules.Scheduler do
   defp claim(schedule) do
     case compute_next_run(schedule.cron_expression) do
       {:ok, next_run} ->
-        ScheduleOccurrences.claim(schedule, node_name(), next_run)
+        ScheduleOccurrences.claim(schedule, claimant(), next_run)
 
       _unparseable ->
         Logger.warning(
@@ -467,14 +521,11 @@ defmodule Cyfr.Schedules.Scheduler do
          exec_reference,
          input,
          state,
-         generation \\ Cyfr.ControlPlane.generation()
+         generation \\ Arca.ControlPlane.generation()
        ) do
-    case Cyfr.ControlPlane.when_owner(generation, fn ->
-           start_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation)
-         end) do
-      :not_owner -> defer_occurrence(schedule.id, state)
-      started -> started
-    end
+    if still_ours?(generation),
+      do: start_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation),
+      else: defer_occurrence(schedule.id, state)
   end
 
   defp start_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation) do
@@ -483,13 +534,12 @@ defmodule Cyfr.Schedules.Scheduler do
     case Task.Supervisor.start_child(Cyfr.Schedules.TaskSupervisor, fn ->
            Cyfr.LoggerContext.restore(logger_metadata)
 
-           Cyfr.ControlPlane.when_owner(generation, fn ->
-             run(schedule, occurrence, ctx, exec_reference, input, generation)
-           end)
+           if still_ours?(generation),
+             do: run(schedule, occurrence, ctx, exec_reference, input, generation)
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
-        Cyfr.ControlPlane.when_owner(generation, fn -> broadcast_update(ctx) end)
+        if still_ours?(generation), do: broadcast_update(ctx)
 
         task = %{
           ref: ref,
@@ -502,24 +552,23 @@ defmodule Cyfr.Schedules.Scheduler do
         %{state | tasks: Map.put(state.tasks, schedule.id, task)}
 
       {:error, reason} ->
-        case Cyfr.ControlPlane.when_owner(generation, fn ->
-               Logger.error(
-                 "[Schedules] failed to spawn task for schedule #{schedule.id}: #{inspect(reason)}"
-               )
+        if still_ours?(generation) do
+          Logger.error(
+            "[Schedules] failed to spawn task for schedule #{schedule.id}: #{inspect(reason)}"
+          )
 
-               _ =
-                 ScheduleOccurrences.finish(
-                   Cyfr.Actor.in_athanor(occurrence.athanor_id),
-                   occurrence.id,
-                   "failed"
-                 )
+          _ =
+            ScheduleOccurrences.finish(
+              Cyfr.Actor.in_athanor(occurrence.athanor_id),
+              occurrence.id,
+              "failed"
+            )
 
-               emit_schedule_failed(schedule.id, ctx, {:spawn_failed, reason})
-               record_error(ctx, schedule.id, "spawn_failed: #{inspect(reason)}")
-               schedule_timer(schedule.id, state)
-             end) do
-          :not_owner -> defer_occurrence(schedule.id, state)
-          failed -> failed
+          emit_schedule_failed(schedule.id, ctx, {:spawn_failed, reason})
+          record_error(ctx, schedule.id, "spawn_failed: #{inspect(reason)}")
+          schedule_timer(schedule.id, state)
+        else
+          defer_occurrence(schedule.id, state)
         end
     end
   end
@@ -569,7 +618,7 @@ defmodule Cyfr.Schedules.Scheduler do
     duration_ms =
       System.convert_time_unit(System.monotonic_time() - start_native, :native, :millisecond)
 
-    Cyfr.ControlPlane.when_owner(generation, fn ->
+    if still_ours?(generation) do
       case run_result do
         {:ok, result} ->
           output = Map.get(result, :output, result)
@@ -632,7 +681,7 @@ defmodule Cyfr.Schedules.Scheduler do
           emit_schedule_failed(schedule.id, ctx, reason, execution_id)
           record_error(ctx, schedule.id, inspect(reason))
       end
-    end)
+    end
   end
 
   # The runner died without answering: the occurrence it held ends as
@@ -716,7 +765,10 @@ defmodule Cyfr.Schedules.Scheduler do
     end
   end
 
-  defp node_name, do: Atom.to_string(node())
+  # The occurrence is this BOOT's, not this node's: it is held while this
+  # member is live in the cell, and a restarted node is a different boot
+  # whose abandoned occurrences a successor may take.
+  defp claimant, do: Cyfr.Boot.id()
 
   # The timer for the row's cursor. A cursor in the past fires at once;
   # one beyond the longest timer is looked at again later.

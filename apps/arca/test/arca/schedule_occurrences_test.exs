@@ -8,9 +8,29 @@ defmodule Arca.ScheduleOccurrencesTest do
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
 
+  # Taking a cell slot for a stand-in member writes this VM's one standing
+  # record, which every gate in the suite reads: each case puts back what
+  # it found rather than deciding another file's run.
+  @standing_keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    saved = for key <- @standing_keys, do: {key, :persistent_term.get(key, :absent)}
+
+    on_exit(fn ->
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+    end)
+
     {:ok, actor: Arca.Test.Actor.local()}
   end
 
@@ -54,6 +74,21 @@ defmodule Arca.ScheduleOccurrencesTest do
   end
 
   defp next_occurrence, do: DateTime.add(DateTime.utc_now(), 300, :second)
+
+  defp now, do: Arca.ServerMetaStorage.now!()
+
+  # A member's slot put past its lease on the cell's clock: the one
+  # condition that takes it off the roster, made rather than waited for.
+  defp expire(member) do
+    past = DateTime.add(now(), -1_000, :millisecond)
+
+    {1, _} =
+      Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^member),
+        set: [lease_until: past]
+      )
+
+    :ok
+  end
 
   defp cursor!(id) do
     {:ok, row} = CronSchedule.get_for_daemon(id)
@@ -209,7 +244,7 @@ defmodule Arca.ScheduleOccurrencesTest do
 
     # Still running: not recoverable.
     assert {:ok, %{never_invoked: [%{id: claimed_id}], lapsed: []}} =
-             ScheduleOccurrences.recoverable()
+             ScheduleOccurrences.recoverable(now())
 
     assert claimed_id == claimed.id
 
@@ -222,8 +257,74 @@ defmodule Arca.ScheduleOccurrencesTest do
         attempt.attempt
       )
 
-    assert {:ok, %{lapsed: [%{id: started_id}]}} = ScheduleOccurrences.recoverable()
+    assert {:ok, %{lapsed: [%{id: started_id}]}} = ScheduleOccurrences.recoverable(now())
     assert started_id == started.id
+  end
+
+  test "a live member's freshly claimed occurrence is nobody else's to recover", %{actor: actor} do
+    member = "node-live-#{System.unique_integer([:positive])}"
+    boot = member <> "#boot_a"
+    assert {:ok, _} = Arca.ControlPlane.take(member, boot, 60_000)
+
+    schedule = due!(actor)
+    {:ok, fresh} = ScheduleOccurrences.claim(schedule, boot, next_occurrence())
+
+    # The cutoff is behind the claim, and the claimant is on the roster:
+    # the occurrence is that member's work in hand.
+    cutoff = DateTime.add(now(), -60_000, :millisecond)
+    assert {:ok, %{never_invoked: never_invoked}} = ScheduleOccurrences.recoverable(cutoff)
+    refute fresh.id in Enum.map(never_invoked, & &1.id)
+
+    # The member drops out of the cell, and the same row is recoverable
+    # without the cutoff moving at all.
+    expire(member)
+    assert {:ok, %{never_invoked: never_invoked}} = ScheduleOccurrences.recoverable(cutoff)
+    assert fresh.id in Enum.map(never_invoked, & &1.id)
+  end
+
+  test "a claimant still on the roster but past the cutoff is recoverable", %{actor: actor} do
+    member = "node-stuck-#{System.unique_integer([:positive])}"
+    boot = member <> "#boot_a"
+    assert {:ok, _} = Arca.ControlPlane.take(member, boot, 60_000)
+
+    schedule = due!(actor)
+    {:ok, stuck} = ScheduleOccurrences.claim(schedule, boot, next_occurrence())
+
+    assert {:ok, %{never_invoked: never_invoked}} =
+             ScheduleOccurrences.recoverable(DateTime.add(now(), 1_000, :millisecond))
+
+    assert stuck.id in Enum.map(never_invoked, & &1.id)
+  end
+
+  test "of two recoverers of one abandoned occurrence, exactly one re-runs it", %{actor: actor} do
+    schedule = due!(actor)
+    {:ok, abandoned} = ScheduleOccurrences.claim(schedule, "boot-gone", next_occurrence())
+
+    # Both read the same row and both take it from the same claimant; the
+    # statement names the claimant it was read under, so the second
+    # matches nothing.
+    assert :ok = ScheduleOccurrences.recover(actor, abandoned.id, "boot-gone", "boot-a")
+    assert :held = ScheduleOccurrences.recover(actor, abandoned.id, "boot-gone", "boot-b")
+
+    assert {:ok, %{claimed_by: "boot-a", state: "claimed"} = row} =
+             ScheduleOccurrences.get(actor, abandoned.id)
+
+    # And the winner's own claim is fresh, so the next pass does not take
+    # it away again.
+    assert DateTime.compare(row.claimed_at, abandoned.claimed_at) != :lt
+
+    # A started occurrence is not re-run by this door at all.
+    assert 1 = ScheduleOccurrences.start!(actor, abandoned.id, "exec_started")
+    assert :held = ScheduleOccurrences.recover(actor, abandoned.id, "boot-a", "boot-c")
+
+    # Nor is another estate's.
+    assert :held =
+             ScheduleOccurrences.recover(
+               %{actor | athanor_id: "ath_elsewhere"},
+               abandoned.id,
+               "boot-a",
+               "boot-c"
+             )
   end
 
   test "an execution admitted for an occurrence nobody claimed is refused", %{actor: actor} do

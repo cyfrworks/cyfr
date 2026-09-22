@@ -246,8 +246,7 @@ defmodule Compendium.Provisioning do
     with :ok <- Arca.ensure_roots(Context.actor(Estate.seed_ctx(athanor_id))),
          {:ok, _scan} <- register_bundle(athanor_id),
          :ok <- aqua_definitions(athanor_id),
-         :ok <- Estate.holding(athanor_id, claim),
-         :ok <- index_agents(ctx),
+         :ok <- index_agents(ctx, claim),
          {:ok, closure} <- pull_required_deps(ctx),
          optional <- pull_optional_deps(ctx),
          {:ok, bootstrap} <- Estate.bootstrap_consents(ctx, claim),
@@ -403,11 +402,14 @@ defmodule Compendium.Provisioning do
     _ = pull_optional_deps(ctx)
 
     # The index and the mint speak for the estate, so they are this sync's
-    # only while the claim is.
-    case Estate.holding(athanor.id, claim) do
+    # only while the claim is. The index says so in the transaction that
+    # writes it; the mint asks first, which is as close as it gets.
+    case index_agents(ctx, claim) do
       :ok ->
-        index_agents(ctx)
-        bootstrap_synced(ctx, claim, athanor.id)
+        case Estate.holding(athanor.id, claim) do
+          :ok -> bootstrap_synced(ctx, claim, athanor.id)
+          {:error, :claim_lost} -> Estate.lost(athanor.id)
+        end
 
       {:error, :claim_lost} ->
         Estate.lost(athanor.id)
@@ -552,14 +554,23 @@ defmodule Compendium.Provisioning do
   end
 
   # The estate's agents as rows, derived from the tree the seed just
-  # filled or the release just moved. Never provisioning's failure.
-  defp index_agents(ctx) do
-    case Compendium.AgentIndex.sync(ctx) do
+  # filled or the release just moved, written in the same transaction that
+  # holds the claim: an attempt a successor took over publishes no index,
+  # and that is the one failure here that IS provisioning's, since the
+  # successor owns the estate from that moment. Anything else — a file
+  # that would not parse, a tree that could not be read — leaves the rows
+  # as they were and is reported.
+  defp index_agents(ctx, claim) do
+    case Compendium.AgentIndex.sync(ctx, claim: %{owner: claim.owner, fence: claim.fence}) do
       {:ok, _} ->
         :ok
 
+      {:error, :claim_lost} ->
+        {:error, :claim_lost}
+
       {:error, reason} ->
         Logger.warning("[Provisioning] agent index not synced: #{inspect(reason)}")
+        :ok
     end
   end
 

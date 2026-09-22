@@ -25,12 +25,22 @@ defmodule Compendium.AgentIndex do
   alias Compendium.{AquaAgent, AquaPath}
   alias Sanctum.Context
 
-  @doc "Rewrite the athanor's rows from its tree."
-  @spec sync(Context.t()) :: {:ok, [Agent.t()]} | {:error, term()}
-  def sync(%Context{} = ctx) do
+  @doc """
+  Rewrite the athanor's rows from its tree.
+
+  `:claim` in `opts` is the provisioning claim the rewrite is made under,
+  and then the rows are written in the same transaction that holds it
+  (`Arca.AgentStorage.replace_all/3`): a sync whose claim a successor took
+  publishes nothing and answers `{:error, :claim_lost}`. A sync with no
+  claim — a person editing a role — has none to lose.
+  """
+  @spec sync(Context.t(), keyword()) :: {:ok, [Agent.t()]} | {:error, term()}
+  def sync(ctx, opts \\ [])
+
+  def sync(%Context{} = ctx, opts) when is_list(opts) do
     with {:ok, agents, _errors} <- AquaAgent.list(ctx),
          {:ok, rows} <- rows_for(ctx, agents),
-         {:ok, replaced} <- Arca.AgentStorage.replace_all(Context.actor(ctx), rows) do
+         {:ok, replaced} <- Arca.AgentStorage.replace_all(Context.actor(ctx), rows, opts) do
       Compendium.Registry.invalidate_executor_caches(ctx)
       {:ok, replaced}
     end

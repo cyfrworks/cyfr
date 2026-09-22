@@ -279,9 +279,26 @@ if config_env() != :test do
            env_str.("CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT", nil)
 
     # Several control planes share this database by design (a cell of
-    # nodes). Off, a second live claimant refuses to boot
-    # (`Cyfr.ControlPlane`).
+    # members). Off, a member that finds a live peer refuses to boot
+    # (`Cyfr.Cell`); on, it boots only when every condition in
+    # `Cyfr.Cell.refusals/1` holds — Postgres, shared object storage, TLS
+    # distribution, a cell-only cookie, a discovery topology and a shared
+    # worker root.
     config :cyfr, :cluster, env_bool.("CYFR_CLUSTER", false)
+
+    # The cookie that bounds this cell, and the topology its members find
+    # each other through. Both are resolved whatever the flag says, so a
+    # half-configured cell is refused where it is written rather than at
+    # the first member that cannot find a peer.
+    case Cyfr.RuntimeConfig.resolve_cell_cookie(getenv) do
+      {:ok, cell_cookie} -> config :cyfr, :cell_cookie, cell_cookie
+      {:error, message} -> raise "[Cyfr] FATAL: " <> message
+    end
+
+    case Cyfr.RuntimeConfig.resolve_cluster_topology(getenv) do
+      {:ok, topologies} -> config :libcluster, :topologies, topologies
+      {:error, message} -> raise "[Cyfr] FATAL: " <> message
+    end
 
     # The MCP bridge that runs stdio MCP servers (`Emissary.MCP.Bridge`):
     # its base URL (compose: http://mcp-bridge:8001) and the root key this
