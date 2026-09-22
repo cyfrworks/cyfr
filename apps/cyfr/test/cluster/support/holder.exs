@@ -51,6 +51,14 @@ defmodule Cyfr.Cluster.Holder do
   def call(label, op, args, opts \\ []),
     do: GenServer.call(ensure(), {:call, label, op, args, opts}, 60_000)
 
+  @doc """
+  Complete `label`'s run as its runner would: the outcome is written and
+  the attempt closed, all through a signed host call.
+  """
+  @spec complete(atom(), map()) :: map()
+  def complete(label, data \\ %{"ok" => true}),
+    do: GenServer.call(ensure(), {:complete, label, data}, 60_000)
+
   @doc "Forget everything this holder holds, ending the attempts with it."
   @spec release!() :: :ok
   def release! do
@@ -93,6 +101,24 @@ defmodule Cyfr.Cluster.Holder do
     fixture = Map.fetch!(held, label)
     {:reply, Cyfr.Test.AttemptFixtures.call(fixture, op, args, opts), held}
   end
+
+  def handle_call({:complete, label, data}, _from, held) do
+    fixture = Map.fetch!(held, label)
+
+    outcome =
+      Cyfr.Test.AttemptFixtures.outcome(fixture, "completed", %{
+        "output" => Jason.encode!(data),
+        "duration_ms" => 1
+      })
+
+    answer = Cyfr.Test.AttemptFixtures.call(fixture, "complete", %{"outcome" => outcome})
+    {:reply, answer, held}
+  end
+
+  # An attempt answers its waiter — this process — when its run ends.
+  # Nothing here reads that: the case reads the rows.
+  @impl true
+  def handle_info(_message, held), do: {:noreply, held}
 
   # Only what crosses the control channel: identifiers and the assignment,
   # never the pid or the structs, which mean nothing off the member that

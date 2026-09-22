@@ -135,6 +135,67 @@ defmodule Cyfr.Cluster.Boot do
     :ok
   end
 
+  @doc """
+  Watch an execution's event stream from this member, keeping what
+  arrives so a case can read it back (`stream_heard/0`).
+
+  A stream's topic is the cell's, not a member's: a reader attached here
+  follows an execution running on a peer. The watcher is a named process
+  rather than the calling one, because the call that starts it returns.
+  """
+  @spec watch_stream!(String.t(), String.t()) :: :ok
+  def watch_stream!(athanor_id, execution_id) do
+    _ =
+      case Process.whereis(:cyfr_cluster_stream_watch) do
+        nil -> :ok
+        pid -> Process.exit(pid, :kill)
+      end
+
+    watcher =
+      spawn(fn ->
+        :ok =
+          Cyfr.Execution.subscribe_events(execution_id, %{athanor_id: athanor_id})
+
+        collect([])
+      end)
+
+    Process.register(watcher, :cyfr_cluster_stream_watch)
+    :ok
+  end
+
+  @doc "The sequences this member's stream watcher has heard, in arrival order."
+  @spec stream_heard() :: [String.t()]
+  def stream_heard do
+    send(:cyfr_cluster_stream_watch, {:heard, self()})
+
+    receive do
+      {:heard, seen} -> seen
+    after
+      5_000 -> []
+    end
+  end
+
+  defp collect(seen) do
+    receive do
+      {:execution_event, %{sequence: sequence}} ->
+        collect(seen ++ [sequence])
+
+      {:heard, from} ->
+        send(from, {:heard, seen})
+        collect(seen)
+
+      _other ->
+        collect(seen)
+    end
+  end
+
+  @doc """
+  Run one sweep of the stale-attempt pass on this member, as its own timer
+  would (`Cyfr.Execution.Sweeper.sweep/0`).
+  """
+  @spec sweep() :: :ok
+  def sweep, do: Cyfr.Execution.Sweeper.sweep()
+
   @doc "Stop the application cleanly, releasing the slot and every claim."
   @spec stop!() :: :ok
   def stop! do

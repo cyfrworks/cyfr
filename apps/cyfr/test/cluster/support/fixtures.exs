@@ -338,6 +338,22 @@ defmodule Cyfr.Cluster.Fixtures do
     %{id: execution.id, athanor_id: athanor_id, seqs: seqs}
   end
 
+  @doc "Append and publish `n` more durable events on `execution_id`, answering their sequences."
+  @spec stream_more!(String.t(), String.t(), pos_integer()) :: [non_neg_integer()]
+  def stream_more!(athanor_id, execution_id, n) do
+    execution = Arca.Execution.get_tenant(actor(athanor_id), execution_id)
+
+    for i <- 1..n do
+      {:ok, row} =
+        Arca.ExecutionEvents.append(actor(athanor_id), execution_id, "step.closed",
+          data: %{"more" => i}
+        )
+
+      :ok = Cyfr.Execution.Events.publish(execution_id, execution, "step.closed", row.seq, %{})
+      row.seq
+    end
+  end
+
   @doc "The event ids this member would replay to a reader whose cursor is `after_seq`."
   @spec replay(String.t(), String.t(), non_neg_integer()) :: [String.t()]
   def replay(athanor_id, execution_id, after_seq) do
