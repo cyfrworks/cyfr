@@ -65,7 +65,8 @@ defmodule Cyfr.Cluster.Boot do
   @spec start_worker!(keyword()) :: map()
   def start_worker!(opts) do
     stop_worker!()
-    {:ok, _pid} = Cyfr.Test.ScriptedWorker.start_link(opts)
+    {:ok, pid} = Cyfr.Test.ScriptedWorker.start_link(opts)
+    detach(pid)
     Cyfr.Test.ScriptedWorker.endpoint()
   end
 
@@ -195,6 +196,70 @@ defmodule Cyfr.Cluster.Boot do
   """
   @spec sweep() :: :ok
   def sweep, do: Cyfr.Execution.Sweeper.sweep()
+
+  # ---------------------------------------------------------------------------
+  # The worker watch
+  # ---------------------------------------------------------------------------
+
+  @watch :cyfr_cluster_worker_watch
+
+  @doc """
+  Watch `endpoint` from this member, on a watch of this case's own.
+
+  The boot's own watch is started with no workers, so it polls nothing and
+  writes nothing; this one names a service and a URL, which is how a case
+  gives two members **different paths to one worker service** — the only
+  way to tell a member that cannot hear a worker from a worker that is
+  gone.
+  """
+  @spec watch_worker!(map(), keyword()) :: :ok
+  def watch_worker!(endpoint, opts) do
+    stop_watch!()
+
+    {:ok, pid} =
+      Cyfr.Execution.WorkerWatch.start_link(
+        Keyword.merge(
+          [
+            name: @watch,
+            workers: [endpoint],
+            poll_ms: 1_000,
+            misses: 3,
+            lease_ms: 2_000
+          ],
+          opts
+        )
+      )
+
+    detach(pid)
+    :ok
+  end
+
+  # Everything a case starts on a member is started from inside a `:peer`
+  # call, and that call runs in a process that exits the moment it
+  # answers. A linked child would go with it, leaving the case watching a
+  # worker service or a watch that stopped before the first assertion.
+  defp detach(pid) do
+    Process.unlink(pid)
+    :ok
+  end
+
+  @doc "What this member's case watch has seen of each service."
+  @spec watch_seen() :: map()
+  def watch_seen do
+    case Process.whereis(@watch) do
+      nil -> %{}
+      pid -> GenServer.call(pid, :seen)
+    end
+  end
+
+  @doc "Stop this member's case watch, giving up every claim it holds."
+  @spec stop_watch!() :: :ok
+  def stop_watch! do
+    case Process.whereis(@watch) do
+      nil -> :ok
+      pid -> GenServer.stop(pid)
+    end
+  end
 
   @doc "Stop the application cleanly, releasing the slot and every claim."
   @spec stop!() :: :ok

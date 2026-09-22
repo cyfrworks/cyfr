@@ -15,7 +15,10 @@ defmodule Cyfr.Cluster.Wire do
   It runs on the control node, so cutting a member's wire survives killing
   that member, and a member cut off from a worker keeps its database and
   keeps acting — which is what makes it a *live partitioned owner* rather
-  than a dead one.
+  than a dead one. A cut refuses the connection outright rather than
+  hanging it, because a member whose requests time out and a member whose
+  requests are refused are the same failure to the watch and the first
+  costs the case a timeout per poll.
   """
 
   use GenServer
@@ -72,8 +75,12 @@ defmodule Cyfr.Cluster.Wire do
       :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true])
 
     {:ok, {_ip, listen_port}} = :inet.sockname(listener)
-    acceptor = spawn_link(fn -> accept(listener, self()) end)
-    send(acceptor, {:owner, self()})
+
+    # The owner is this process, named before the acceptor is spawned: a
+    # `self()` evaluated inside the spawned function is the acceptor's own
+    # pid, and an acceptor that called itself would answer nothing.
+    owner = self()
+    spawn_link(fn -> accept(listener, owner) end)
 
     {:ok,
      %{
@@ -82,7 +89,7 @@ defmodule Cyfr.Cluster.Wire do
        host: host,
        remote: port,
        cut: false,
-       sockets: []
+       pumps: []
      }}
   end
 
@@ -90,8 +97,8 @@ defmodule Cyfr.Cluster.Wire do
   def handle_call(:port, _from, state), do: {:reply, state.port, state}
 
   def handle_call(:cut, _from, state) do
-    for socket <- state.sockets, do: :gen_tcp.close(socket)
-    {:reply, :ok, %{state | cut: true, sockets: []}}
+    for pump <- state.pumps, do: Process.exit(pump, :kill)
+    {:reply, :ok, %{state | cut: true, pumps: []}}
   end
 
   def handle_call(:restore, _from, state), do: {:reply, :ok, %{state | cut: false}}
@@ -104,10 +111,10 @@ defmodule Cyfr.Cluster.Wire do
       case :gen_tcp.connect(state.host, state.remote, [:binary, active: false], 5_000) do
         {:ok, upstream} ->
           pump = spawn(fn -> pump(socket, upstream) end)
-          :gen_tcp.controlling_process(socket, pump)
-          :gen_tcp.controlling_process(upstream, pump)
+          :ok = :gen_tcp.controlling_process(socket, pump)
+          :ok = :gen_tcp.controlling_process(upstream, pump)
           send(pump, :go)
-          {:reply, :ok, %{state | sockets: [socket, upstream | state.sockets]}}
+          {:reply, :ok, %{state | pumps: [pump | Enum.filter(state.pumps, &Process.alive?/1)]}}
 
         {:error, _reason} ->
           :gen_tcp.close(socket)
@@ -122,20 +129,14 @@ defmodule Cyfr.Cluster.Wire do
   @impl true
   def terminate(_reason, state) do
     :gen_tcp.close(state.listener)
-    for socket <- state.sockets, do: :gen_tcp.close(socket)
+    for pump <- state.pumps, do: Process.exit(pump, :kill)
     :ok
   end
 
   defp accept(listener, owner) do
-    receive do
-      {:owner, ^owner} -> :ok
-    after
-      0 -> :ok
-    end
-
     case :gen_tcp.accept(listener) do
       {:ok, socket} ->
-        :gen_tcp.controlling_process(socket, owner)
+        :ok = :gen_tcp.controlling_process(socket, owner)
         GenServer.call(owner, {:accepted, socket})
         accept(listener, owner)
 
@@ -144,8 +145,9 @@ defmodule Cyfr.Cluster.Wire do
     end
   end
 
-  # Two halves of one connection, each copying until either end closes. A
-  # cut closes both sockets from the owner, which ends both halves.
+  # Two halves of one connection, each copying until either end closes.
+  # Killing the pump is what a cut does, and it takes both sockets with
+  # it: they are the pump's, so its exit closes them.
   defp pump(a, b) do
     receive do
       :go -> :ok
@@ -153,7 +155,7 @@ defmodule Cyfr.Cluster.Wire do
       5_000 -> :ok
     end
 
-    half = spawn(fn -> copy(b, a) end)
+    half = spawn_link(fn -> copy(b, a) end)
     copy(a, b)
     Process.exit(half, :kill)
     :gen_tcp.close(a)
