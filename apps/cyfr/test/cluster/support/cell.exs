@@ -291,9 +291,7 @@ defmodule Cyfr.Cluster.Cell do
         if alive?(member), do: member, else: boot(%{member | peer: nil})
       end)
 
-    for member <- members, other <- members, member.id != other.id do
-      restore_cookie(member)
-    end
+    restore_cookies(members)
 
     for member <- members, do: await_slot!(member)
     formed!(members)
@@ -303,7 +301,18 @@ defmodule Cyfr.Cluster.Cell do
 
   def handle_call({:stop, id}, _from, state) do
     member = find!(state, id)
-    if member.peer, do: :peer.stop(member.peer)
+
+    if member.peer do
+      # The application is shut down before the node is: `:peer.stop/1`
+      # ends the operating-system process, and a member whose VM
+      # disappears has released nothing. A clean stop is the application
+      # stopping — its supervision tree unwinds, `Cyfr.Cell.terminate/2`
+      # gives the slot back and every claim with it — and that is the
+      # failure this distinguishes from `kill/1`.
+      safe_call(member, Cyfr.Cluster.Boot, :stop!, [], @boot_timeout_ms)
+      :peer.stop(member.peer)
+    end
+
     {:reply, :ok, put_member(state, %{member | peer: nil})}
   end
 
@@ -346,11 +355,9 @@ defmodule Cyfr.Cluster.Cell do
   end
 
   def handle_call({:heal, a, b}, _from, state) do
-    one = find!(state, a)
-    other = find!(state, b)
-    restore_cookie(one)
-    restore_cookie(other)
-    reconnect([one, other])
+    members = [find!(state, a), find!(state, b)]
+    restore_cookies(members)
+    reconnect(members)
     {:reply, :ok, state}
   end
 
@@ -573,17 +580,22 @@ defmodule Cyfr.Cluster.Cell do
       match?({:ok, true}, safe_call(member, :erlang, :is_alive, []))
   end
 
-  defp safe_call(%{peer: peer} = _member, module, function, args) when is_pid(peer) do
-    {:ok, :peer.call(peer, module, function, args, 5_000)}
+  # A call to a member that may be dead, or dying, or unreachable:
+  # answered `:error` rather than raising, because every caller here is
+  # either healing the cell or asking whether a member is still there.
+  defp safe_call(member, module, function, args, timeout \\ 5_000)
+
+  defp safe_call(%{peer: peer}, module, function, args, timeout) when is_pid(peer) do
+    {:ok, :peer.call(peer, module, function, args, timeout)}
   catch
     _kind, _reason -> :error
   end
 
-  defp safe_call(_member, _module, _function, _args), do: :error
+  defp safe_call(_member, _module, _function, _args, _timeout), do: :error
 
-  defp restore_cookie(member) do
-    for other <- Cyfr.Cluster.Cell.nodes(), other != member.node do
-      safe_call(member, :erlang, :set_cookie, [other, String.to_atom(cookie())])
+  defp restore_cookies(members) do
+    for one <- members, other <- members, one.node != other.node do
+      safe_call(one, :erlang, :set_cookie, [other.node, String.to_atom(cookie())])
     end
 
     :ok

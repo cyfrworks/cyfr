@@ -15,14 +15,24 @@ defmodule Cyfr.RetentionScheduler do
   growth. Every step runs behind one crash barrier: a fault in one is
   logged and the cycle moves on.
 
-  ## Only a current claimant acts
+  ## Only a current claimant acts, and only the proposed one asks
 
   A tick does nothing unless this member holds its slot in the cell
-  (`Arca.ControlPlane.held?/0` — a term read, no query) *and* wins the
-  claim row. A member that finds a live peer holding it answers
-  `{:busy, owner}` and does nothing; it does not take a live claim. The
-  claim is leased for five minutes and renewed about once a minute, so a
-  member that dies mid-cycle is succeeded within a lease and one tick.
+  (`Arca.ControlPlane.held?/0` — a term read, no query), is the cell's
+  rendezvous owner of `retention:<key>` (`Cyfr.Cell.mine?/1` — a term
+  read too) *and* wins the claim row. A member that finds a live peer
+  holding it answers `{:busy, owner}` and does nothing; it does not take
+  a live claim. The claim is leased for five minutes and renewed about
+  once a minute, so a member that dies mid-cycle is succeeded within a
+  lease and one tick.
+
+  The proposal is what keeps the row uncontended: a member that is not
+  the argmax writes nothing at all, rather than losing a conditional
+  update every tick. It decides nothing — two members proposing
+  themselves from different roster copies cost one wasted update, never a
+  second cycle — and a member with no roster follows `mine?/1`'s own
+  fail-closed rule, which is also why a deployment of one member, whose
+  roster names itself, is unchanged.
 
   Losing the claim stops the cycle where it stands rather than letting it
   finish under a claim somebody else holds. The two ways to lose mean
@@ -172,15 +182,25 @@ defmodule Cyfr.RetentionScheduler do
   # ---------------------------------------------------------------------------
 
   defp tick(state) do
-    if Arca.ControlPlane.held?() do
-      opts =
-        state
-        |> Map.get(:job, [])
-        |> Keyword.put_new(:interval, Map.get(state, :interval, @default_interval_ms))
+    opts =
+      state
+      |> Map.get(:job, [])
+      |> Keyword.put_new(:interval, Map.get(state, :interval, @default_interval_ms))
 
+    if Arca.ControlPlane.held?() and mine?(Keyword.get(opts, :key, JobClaim.cell_key())) do
       report(cycle(opts))
     end
   end
+
+  # Where the cycle should run is a proposal; what runs it is the claim
+  # row, which admits one holder whatever two members propose. A member
+  # that is not the rendezvous owner of this subject does not ask for the
+  # row at all, so in a healthy cell exactly one member writes per tick
+  # and the rest write nothing — which is the whole of what the proposal
+  # buys, and why losing it costs a wasted update rather than a second
+  # owner. `cycle/1` itself is ungated: an operator or a test asking for a
+  # cycle is asking this member for one.
+  defp mine?(key), do: Cyfr.Cell.mine?(@kind <> ":" <> key)
 
   defp open(claim, opts, lease_ms) do
     case cell_now() do

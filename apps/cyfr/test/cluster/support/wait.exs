@@ -82,18 +82,22 @@ defmodule Cyfr.Cluster.Wait do
   naming when the condition first held.
   """
   @spec never!((-> as_boolean(term())), String.t(), pos_integer()) :: :ok
-  def never!(condition, message, ms) do
-    deadline = System.monotonic_time(:millisecond) + ms
+  def never!(condition, message, ms),
+    do: hold(condition, message, System.monotonic_time(:millisecond) + ms)
 
-    Stream.repeatedly(fn ->
+  defp hold(condition, message, deadline) do
+    if System.monotonic_time(:millisecond) >= deadline do
+      :ok
+    else
       case run(condition) do
-        value when value not in [nil, false] -> raise message
-        _still_false -> Process.sleep(@poll_ms)
-      end
-    end)
-    |> Enum.take_while(fn _ -> System.monotonic_time(:millisecond) < deadline end)
+        value when value not in [nil, false] ->
+          raise message
 
-    :ok
+        _still_false ->
+          Process.sleep(@poll_ms)
+          hold(condition, message, deadline)
+      end
+    end
   end
 
   @doc """

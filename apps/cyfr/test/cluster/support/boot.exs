@@ -32,11 +32,30 @@ defmodule Cyfr.Cluster.Boot do
   @spec start!(String.t()) :: :ok | {:error, term()}
   def start!(_worker_service) do
     case Application.ensure_all_started(:cyfr) do
-      {:ok, _started} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:ok, _started} ->
+        settle()
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   catch
     kind, reason -> {:error, {kind, reason, __STACKTRACE__}}
+  end
+
+  # A boot's own background work finishes before the member is handed to
+  # a case. `Cyfr.RetentionScheduler` runs a cycle from
+  # `handle_continue(:first_run, …)`, which is a boot of the product doing
+  # exactly what it should — and a case that started beside it would be
+  # racing a claim nobody asked for. `:sys.get_state/1` is the wait: the
+  # scheduler answers it only once the continue has returned.
+  defp settle do
+    case Process.whereis(Cyfr.RetentionScheduler) do
+      nil -> :ok
+      pid -> :sys.get_state(pid, 120_000)
+    end
+
+    :ok
   end
 
   @doc """
@@ -97,6 +116,23 @@ defmodule Cyfr.Cluster.Boot do
       mine: Cyfr.Cell.mine?(subject),
       owner: Cyfr.Cell.owner_of(subject)
     }
+  end
+
+  @doc """
+  Run one retention tick on this member, exactly as its own timer would,
+  and answer once it has finished.
+
+  The tick is the gated path — it asks the cell whether this member is the
+  proposed owner before it asks for the claim row — and it is private, so
+  it is driven through the message its timer sends. `:sys.get_state/1`
+  after it is what makes this synchronous: the scheduler handles messages
+  in order, so a reply to the second is proof the first has returned.
+  """
+  @spec retention_tick() :: :ok
+  def retention_tick do
+    send(Cyfr.RetentionScheduler, :run_cleanup)
+    _settled = :sys.get_state(Cyfr.RetentionScheduler)
+    :ok
   end
 
   @doc "Stop the application cleanly, releasing the slot and every claim."

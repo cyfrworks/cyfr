@@ -14,6 +14,12 @@ defmodule Cyfr.App.MixProject do
       lockfile: "../../mix.lock",
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
+      # The two-node suite's own modules (`test/cluster/support`) are
+      # `.exs` files on no `elixirc_paths`: they are compiled by the first
+      # cluster case and pushed to the member nodes, which have no beam to
+      # load them from. They are not test files and Mix must not look for
+      # cases in them.
+      test_ignore_filters: [&String.starts_with?(&1, "test/cluster/support/")],
       start_permanent: Mix.env() == :prod,
       package: package(),
       aliases: aliases(),

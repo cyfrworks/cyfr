@@ -70,6 +70,21 @@ defmodule Cyfr.Cluster.Case do
     quote do
       alias Cyfr.Cluster.{Barrier, Cell, Fixtures, Observer, Wait, Wire}
 
+      # This suite's own modules are compiled by `setup_all` rather than
+      # by the compiler, so at the moment a case is compiled none of them
+      # exists yet. The one that would catch a typo is the case's own
+      # first run, which is where every other mistake in it shows too.
+      @compile {:no_warn_undefined,
+                [
+                  Cyfr.Cluster.Barrier,
+                  Cyfr.Cluster.Boot,
+                  Cyfr.Cluster.Cell,
+                  Cyfr.Cluster.Fixtures,
+                  Cyfr.Cluster.Observer,
+                  Cyfr.Cluster.Wait,
+                  Cyfr.Cluster.Wire
+                ]}
+
       @moduletag :cluster
       @moduletag timeout: 300_000
     end
