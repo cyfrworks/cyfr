@@ -301,8 +301,29 @@ defmodule Cyfr.RuntimeConfigTest do
   end
 
   describe "resolve_host_api/1 — where the host API listens" do
-    test "unset => loopback, 4300" do
-      assert {:ok, %{bind: {127, 0, 0, 1}, port: 4300}} = RuntimeConfig.resolve_host_api(env(%{}))
+    test "unset => loopback, 4300, and no address of this member's own" do
+      assert {:ok, %{bind: {127, 0, 0, 1}, port: 4300, url: nil}} =
+               RuntimeConfig.resolve_host_api(env(%{}))
+    end
+
+    test "CYFR_HOST_API_URL is the address this member's assignments carry" do
+      assert {:ok, %{url: "http://cyfr-1:4300"}} =
+               RuntimeConfig.resolve_host_api(env(%{"CYFR_HOST_API_URL" => "http://cyfr-1:4300"}))
+
+      # A route is appended to it as it is, so the trailing slash goes.
+      assert {:ok, %{url: "https://member-2.internal"}} =
+               RuntimeConfig.resolve_host_api(
+                 env(%{"CYFR_HOST_API_URL" => "https://member-2.internal/"})
+               )
+    end
+
+    test "an address that is not a base URL a route appends to refuses the boot naming it" do
+      for bad <- ["cyfr:4300", "ftp://cyfr:4300", "http://", "http://cyfr/host/v1", "/host/v1"] do
+        assert {:error, message} =
+                 RuntimeConfig.resolve_host_api(env(%{"CYFR_HOST_API_URL" => bad}))
+
+        assert message =~ "CYFR_HOST_API_URL"
+      end
     end
 
     test "an IPv4 or IPv6 address and a port from 1 to 65535" do

@@ -45,11 +45,18 @@ defmodule Cyfr.Cluster.Fixtures do
               Sanctum.Tenancy.Users
             ]}
 
-  @doc "An athanor of this case's own, created on the member this runs on."
+  @doc """
+  An athanor of this case's own, created on the member this runs on.
+
+  The slug is taken from the athanor's own id rather than from
+  `System.unique_integer/1`: a member's VM starts that counter again from
+  the bottom, and this database outlives the run, so a second run of the
+  suite against it would collide with the first run's rows.
+  """
   @spec athanor!(String.t()) :: map()
   def athanor!(label) do
     id = Cyfr.UUID7.generate_id("ath")
-    slug = "cell-#{label}-#{System.unique_integer([:positive])}"
+    slug = "cell-#{label}-#{unique_of(id)}"
 
     {:ok, athanor} =
       Arca.Athanors.insert(Cyfr.Actor.system(), %{
@@ -61,6 +68,10 @@ defmodule Cyfr.Cluster.Fixtures do
       })
 
     %{id: athanor.id, slug: athanor.slug}
+  end
+
+  defp unique_of(id) do
+    id |> String.split("_") |> List.last() |> String.replace("-", "") |> String.slice(0, 20)
   end
 
   @doc "An actor in `athanor_id`, as every fixture here writes under."

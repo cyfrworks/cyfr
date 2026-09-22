@@ -10,6 +10,17 @@ defmodule Opus.Credentials do
   CYFR's host API (`:host_url`), and the address its own listener binds
   (`:bind`, `:port`).
 
+  `:host_url` (`OPUS_HOST_URL`) is the address this worker service is
+  configured to reach CYFR at, and it is where an attempt's host calls
+  and a runner's exit report go only when the attempt's assignment names
+  no member address of its own. An assignment that names one wins for
+  that attempt, always: it is the only one of the two that knows which
+  member issued the work, and only that member holds the attempt's
+  process. A deployment of more than one member gives every member an
+  address (`CYFR_HOST_API_URL`) and refuses to boot without it, so this
+  value is the fallback of a deployment with exactly one member to fall
+  back to.
+
   The worker key is the one secret a worker service holds. Its dispatch
   key signs the requests CYFR sends it and the reports it sends CYFR, and
   its dispatch seal key opens the keys of the attempts CYFR starts on it

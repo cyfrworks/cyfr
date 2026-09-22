@@ -383,9 +383,9 @@ defmodule Cyfr.Test.TwoServices do
     end
 
     defp open(_callback, header, body) do
-      with {:ok, generation} <- Keys.generation(),
+      with {:ok, standing} <- Keys.standing(),
            {:ok, fields, _hash} <-
-             WorkerAuth.verify_host_call_header(Keys.root(), header, now(), generation),
+             WorkerAuth.verify_host_call_header(Keys.root(), header, now(), standing),
            {:ok, seal_key} <- WorkerAuth.attempt_seal_key(Keys.root(), fields),
            {:ok, json} <- WorkerAuth.open_call(seal_key, :body, fields, body),
            {:ok, %{"args" => args}} <- Jason.decode(json) do

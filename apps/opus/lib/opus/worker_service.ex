@@ -35,10 +35,12 @@ defmodule Opus.WorkerService do
   subtree with its formula children and reports `complete`, clean or
   not, or `exit` with the attempts still open. A runner that reports
   `exit`, or whose channel closes or process ends with the subtree still
-  assigned, is reported to CYFR at once, naming the runner and signed
-  with the service's dispatch key (`Opus.HostClient.runner_exited/4`); a
-  runner is reported once. A report runs beside the service, which never
-  waits on CYFR, and `await_reports/1` answers once none is in flight. A
+  assigned, is reported at once to the member that assigned its subtree —
+  every attempt one runner holds was issued by one member, and no other
+  lapses them — naming that member and the runner, and signed with the
+  service's dispatch key (`Opus.HostClient.runner_exited/5`); a runner is
+  reported once. A report runs beside the service, which never waits on
+  CYFR, and `await_reports/1` answers once none is in flight. A
   `start` no runner can be found for answers `{:error, :unavailable}`,
   and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
   with the keeper's account of why; the listener refuses either `503`,
@@ -96,7 +98,7 @@ defmodule Opus.WorkerService do
 
   @doc """
   Answer once every runner exit this service is reporting has been
-  answered by CYFR or given up on (`Opus.HostClient.runner_exited/4`
+  answered by CYFR or given up on (`Opus.HostClient.runner_exited/5`
   bounds each); at once when none is in flight. For a caller that must
   know no report of the runners it ended still lands after it moved on,
   as a test's end does. Exits if that takes longer than `timeout_ms`.
@@ -266,6 +268,7 @@ defmodule Opus.WorkerService do
                 execution_id: execution_id,
                 attempt: assignment.attempt,
                 athanor: assignment.athanor_id,
+                at: HostClient.at(assignment, state.credentials.host_url),
                 children: %{},
                 callers: caller.callers,
                 logger: caller.logger
@@ -393,7 +396,7 @@ defmodule Opus.WorkerService do
         Process.put(:"$callers", context.callers)
         Cyfr.LoggerContext.restore(context.logger)
 
-        case HostClient.runner_exited(credentials, boot, runner, attempts) do
+        case HostClient.runner_exited(credentials, context.at, boot, runner, attempts) do
           :ok ->
             :ok
 

@@ -140,8 +140,10 @@ if config_env() != :test do
 
   # Where CYFR's host API listener binds (`Cyfr.Execution.HostListener`):
   # the address and port the worker services post their host calls and
-  # exit reports to. Default loopback, port 4300; a set value that is not
-  # an address, or not a port, refuses the boot.
+  # exit reports to, and CYFR_HOST_API_URL, the address a worker reaches
+  # this member at, which every assignment it issues carries. Default
+  # loopback, port 4300 and no address; a set value that is not an
+  # address, not a port or not a base URL refuses the boot.
   host_api =
     if cyfr_boot? do
       case Cyfr.RuntimeConfig.resolve_host_api(getenv) do
@@ -339,9 +341,11 @@ if config_env() != :test do
       {:error, message} -> raise "[Cyfr] FATAL: #{message}"
     end
 
-    # Where the host API listener binds, resolved above.
+    # Where the host API listener binds and how a worker reaches it,
+    # resolved above.
     config :cyfr, :host_api_bind, host_api.bind
     config :cyfr, :host_api_port, host_api.port
+    config :cyfr, :host_api_url, host_api.url
 
     # How the worker watch (`Cyfr.Execution.WorkerWatch`) hears from each
     # worker service: CYFR_WORKER_WATCH_POLL_MS, the interval between its

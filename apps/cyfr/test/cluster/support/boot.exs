@@ -143,25 +143,50 @@ defmodule Cyfr.Cluster.Boot do
   A stream's topic is the cell's, not a member's: a reader attached here
   follows an execution running on a peer. The watcher is a named process
   rather than the calling one, because the call that starts it returns.
+
+  It answers only once that process has **subscribed**, and only once any
+  watcher it replaced is gone: the subscription is made inside the
+  watcher, so a case that published as soon as this returned would be
+  waiting on events nobody was listening for yet.
   """
   @spec watch_stream!(String.t(), String.t()) :: :ok
   def watch_stream!(athanor_id, execution_id) do
-    _ =
-      case Process.whereis(:cyfr_cluster_stream_watch) do
-        nil -> :ok
-        pid -> Process.exit(pid, :kill)
-      end
+    stop_stream_watch!()
+    caller = self()
 
     watcher =
       spawn(fn ->
-        :ok =
-          Cyfr.Execution.subscribe_events(execution_id, %{athanor_id: athanor_id})
-
+        :ok = Cyfr.Execution.subscribe_events(execution_id, %{athanor_id: athanor_id})
+        send(caller, {:subscribed, self()})
         collect([])
       end)
 
     Process.register(watcher, :cyfr_cluster_stream_watch)
-    :ok
+
+    receive do
+      {:subscribed, ^watcher} -> :ok
+    after
+      10_000 -> raise "the stream watcher never subscribed to #{execution_id}"
+    end
+  end
+
+  # The name is one process's, and `Process.exit/2` is asynchronous, so a
+  # replacement registered before the old watcher died would raise.
+  defp stop_stream_watch! do
+    case Process.whereis(:cyfr_cluster_stream_watch) do
+      nil ->
+        :ok
+
+      pid ->
+        reference = Process.monitor(pid)
+        Process.exit(pid, :kill)
+
+        receive do
+          {:DOWN, ^reference, :process, ^pid, _reason} -> :ok
+        after
+          5_000 -> :ok
+        end
+    end
   end
 
   @doc "The sequences this member's stream watcher has heard, in arrival order."

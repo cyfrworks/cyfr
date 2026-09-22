@@ -51,6 +51,19 @@ defmodule Cyfr.Cell do
   conditional update, never a second owner. The copy is refreshed on this
   member's own renew tick, so it is at most one tick stale.
 
+  ## One thing that is routed: an attempt's host calls
+
+  An execution runs on the member that admitted it, and only that member
+  holds its attempt's process. So the assignment it issues carries its own
+  address (`CYFR_HOST_API_URL`) and its own boot, and the worker posts
+  that attempt's host calls there and names that member in every header
+  (`Cyfr.Execution.Assignments`, `Cyfr.WorkerAuth`). This is not placement
+  — nothing decided where the work would run — but the return path of work
+  already placed. A member that is not the one named refuses the call,
+  including a lease renewal it could have written from the rows, so a
+  worker reaching the wrong member loses the call loudly instead of
+  keeping a peer's lease alive while its work goes nowhere.
+
   ## The cluster flag
 
   `CYFR_CLUSTER=1` used to lift the exclusive claim without replacing it.
@@ -146,13 +159,14 @@ defmodule Cyfr.Cell do
       &tls_distribution/1,
       &cell_cookie/1,
       &topology/1,
-      &worker_key/1
+      &worker_key/1,
+      &host_api_url/1
     ]
     |> Enum.flat_map(fn check -> List.wrap(check.(facts)) end)
   end
 
   @doc """
-  What this member can see of the six conditions, for `refusals/1`.
+  What this member can see of the seven conditions, for `refusals/1`.
   """
   @spec facts() :: map()
   def facts do
@@ -164,7 +178,8 @@ defmodule Cyfr.Cell do
       cell_cookie: Application.get_env(:cyfr, :cell_cookie),
       node_cookie: node_cookie(),
       topologies: Application.get_env(:libcluster, :topologies, []),
-      worker_key: Application.get_env(:cyfr, :worker_key)
+      worker_key: Application.get_env(:cyfr, :worker_key),
+      host_api_url: Cyfr.RuntimeConfig.host_api_url()
     }
   end
 
@@ -265,6 +280,21 @@ defmodule Cyfr.Cell do
     peer fails MAC verification and its assignment is refused. Generate one \
     with `openssl rand -hex 32` and set the same value on every member, or \
     unset CYFR_CLUSTER.\
+    """
+  end
+
+  defp host_api_url(%{host_api_url: url}) when is_binary(url), do: []
+
+  defp host_api_url(_facts) do
+    """
+    CYFR_CLUSTER=1 needs CYFR_HOST_API_URL, the address a worker service \
+    reaches THIS member's host API at, and it is not set. Every assignment \
+    a member issues carries its own address, and a worker posts that \
+    attempt's host calls there; with no address the worker falls back to \
+    the single address it was configured with, and whichever member that \
+    is answers every other member's runs. Set CYFR_HOST_API_URL on each \
+    member to that member's own host API (http://member-1:4300), or unset \
+    CYFR_CLUSTER.\
     """
   end
 

@@ -51,7 +51,10 @@ unless Code.ensure_loaded?(Opus.Test.FormulaHost) do
       Map.put(
         fixture,
         :host,
-        Opus.HostClient.new(fixture.keys, fixture.runner, fixture.boot, TwoServices.wire().url)
+        Opus.HostClient.new(fixture.keys, fixture.runner, fixture.boot, %{
+          member: fixture.member,
+          host_url: TwoServices.wire().url
+        })
       )
     end
 
@@ -63,12 +66,10 @@ unless Code.ensure_loaded?(Opus.Test.FormulaHost) do
     def current!(athanor_id, execution_id) do
       attempt = AttemptFixtures.current!(athanor_id, execution_id)
 
-      Opus.HostClient.new(
-        attempt.keys,
-        attempt.runner,
-        attempt.boot,
-        TwoServices.wire().url
-      )
+      Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{
+        member: attempt.member,
+        host_url: TwoServices.wire().url
+      })
     end
 
     @doc "The actions an assignment names as a formula's host's to run."

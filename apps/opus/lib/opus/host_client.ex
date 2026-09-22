@@ -8,8 +8,15 @@ defmodule Opus.HostClient do
 
   A client names the attempt (its athanor, execution, attempt id, fence,
   generation and worker service), the runner presenting it, the attempt's
-  keys CYFR issued with the assignment and the base URL of CYFR's host
-  API. Every call is one `POST` to the callback's route
+  keys CYFR issued with the assignment, and **the member that issued that
+  assignment**: its boot id and the base URL of its host API, both read
+  from the assignment (`Cyfr.Assignment`). An attempt has one process, on
+  that member, so its calls are posted at that member's address and name
+  it in every header; a member that is not the one named refuses them,
+  and an assignment naming no address is posted to the address this
+  worker service is configured with (`Opus.Credentials`), which is the
+  whole deployment where only one member issues. Every call is one `POST`
+  to the callback's route
   (`Cyfr.WorkerWire.host_route/1`): its body is the JSON
   `{"op": name, "args": {...}}` sealed with the attempt's seal key to the
   call's fields (`Cyfr.WorkerAuth.seal_call/5`), and its `x-cyfr-auth`
@@ -56,6 +63,7 @@ defmodule Opus.HostClient do
     :service,
     :boot,
     :runner,
+    :member,
     :call_key,
     :seal_key,
     :host_url
@@ -71,6 +79,7 @@ defmodule Opus.HostClient do
           service: String.t(),
           boot: String.t(),
           runner: String.t(),
+          member: String.t(),
           call_key: binary(),
           seal_key: binary(),
           host_url: String.t()
@@ -107,15 +116,26 @@ defmodule Opus.HostClient do
 
   @doc """
   A client for the attempt `keys` name (`t:Cyfr.WorkerAuth.attempt_keys/0`),
-  signing with its call key and posting to the host API at `host_url`.
-  `runner` names the runner presenting the calls (a fresh runner id is
-  minted when it is nil) and `boot` the worker service boot it presents
-  from.
+  signing with its call key and posting to the member `at` names: its
+  `member` boot id, which every header presents, and the `host_url` its
+  host API answers at. `runner` names the runner presenting the calls (a
+  fresh runner id is minted when it is nil) and `boot` the worker service
+  boot it presents from.
   """
-  @spec new(Cyfr.WorkerAuth.attempt_keys(), String.t() | nil, String.t(), String.t()) :: t()
-  def new(%{attempt: attempt, call: call_key, seal: seal_key}, runner, boot, host_url)
+  @spec new(
+          Cyfr.WorkerAuth.attempt_keys(),
+          String.t() | nil,
+          String.t(),
+          %{member: String.t(), host_url: String.t()}
+        ) :: t()
+  def new(
+        %{attempt: attempt, call: call_key, seal: seal_key},
+        runner,
+        boot,
+        %{member: member, host_url: host_url}
+      )
       when is_map(attempt) and is_binary(call_key) and is_binary(seal_key) and is_binary(boot) and
-             is_binary(host_url) do
+             is_binary(member) and is_binary(host_url) do
     %__MODULE__{
       athanor_id: Map.fetch!(attempt, :athanor_id),
       execution_id: Map.fetch!(attempt, :execution_id),
@@ -125,11 +145,22 @@ defmodule Opus.HostClient do
       service: Map.fetch!(attempt, :service),
       boot: boot,
       runner: runner || Cyfr.UUID7.generate_id("runner"),
+      member: member,
       call_key: call_key,
       seal_key: seal_key,
       host_url: host_url
     }
   end
+
+  @doc """
+  Where an attempt's host calls go: the member `assignment` was issued by
+  and the address that member is reached at, which is the assignment's own
+  unless it names none, and then `fallback` — the address this worker
+  service was configured with.
+  """
+  @spec at(Assignment.t(), String.t()) :: %{member: String.t(), host_url: String.t()}
+  def at(%Assignment{} = assignment, fallback) when is_binary(fallback),
+    do: %{member: assignment.member, host_url: assignment.host_url || fallback}
 
   @doc "Attach with the assignment `token`, answering the run's vault fields."
   @spec attach(t(), String.t()) :: {:ok, %{optional(String.t()) => String.t()}} | {:error, term()}
@@ -299,7 +330,7 @@ defmodule Opus.HostClient do
            token: token,
            assignment: assignment,
            input: admitted_input,
-           client: new(keys, client.runner, client.boot, client.host_url),
+           client: new(keys, client.runner, client.boot, at(client)),
            secrets: secrets
          }}
       else
@@ -348,17 +379,28 @@ defmodule Opus.HostClient do
 
   @doc """
   Report, for the worker service `credentials` name on its boot `boot`,
-  that its runner `runner` exited while it held `attempts`. The report is
-  signed with the service's dispatch key and posted to the host API the
-  credentials name. Answers `:ok`, or `{:error, :lost | :unavailable}`.
+  that its runner `runner` exited while it held `attempts`. Every attempt
+  one runner holds was issued by one member, so the report names that
+  member (`at`) and is posted at its address; a member that is not the one
+  named lapses nothing. The report is signed with the service's dispatch
+  key. Answers `:ok`, or `{:error, :lost | :unavailable}`.
   """
-  @spec runner_exited(Opus.Credentials.t(), String.t(), String.t(), [String.t()]) ::
-          :ok | {:error, term()}
-  def runner_exited(%Opus.Credentials{} = credentials, boot, runner, attempts)
+  @spec runner_exited(
+          Opus.Credentials.t(),
+          %{member: String.t(), host_url: String.t()},
+          String.t(),
+          String.t(),
+          [String.t()]
+        ) :: :ok | {:error, term()}
+  def runner_exited(%Opus.Credentials{} = credentials, at, boot, runner, attempts)
       when is_binary(boot) and is_binary(runner) and is_list(attempts) do
     body =
       Jason.encode!(
-        WorkerWire.request_body(:runner_exited, %{"runner" => runner, "attempts" => attempts})
+        WorkerWire.request_body(:runner_exited, %{
+          "member" => at.member,
+          "runner" => runner,
+          "attempts" => attempts
+        })
       )
 
     try = fn ->
@@ -373,7 +415,7 @@ defmodule Opus.HostClient do
            do: {:ok, header, body, &{:ok, &1}}
     end
 
-    case call(credentials.host_url, :runner_exited, try) do
+    case call(at.host_url, :runner_exited, try) do
       {:ok, true} -> :ok
       {:ok, _other} -> {:error, :lost}
       {:error, reason} -> {:error, reason}
@@ -482,19 +524,25 @@ defmodule Opus.HostClient do
       service: client.service,
       boot: client.boot,
       runner: client.runner,
+      member: client.member,
       ts: System.system_time(:millisecond),
       nonce: nonce()
     }
   end
 
+  defp at(%__MODULE__{} = client), do: %{member: client.member, host_url: client.host_url}
+
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
   # A child's assignment must name the attempt its keys open as, on this
-  # client's worker service and boot.
+  # client's worker service and boot, and be issued by the member its
+  # parent's is: a child is admitted through the parent's host call, so a
+  # child of another member's is a child this runner cannot reach.
   defp names_attempt?(%Assignment{} = assignment, attempt, %__MODULE__{} = client) do
     Map.take(assignment, @attempt_fields) == Map.take(attempt, @attempt_fields) and
       assignment.service == client.service and assignment.boot == client.boot and
-      attempt.service == client.service
+      attempt.service == client.service and assignment.member == client.member and
+      (assignment.host_url == nil or assignment.host_url == client.host_url)
   end
 
   defp outcome(client, status, fields) do

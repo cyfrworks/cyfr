@@ -287,6 +287,7 @@ defmodule Cyfr.Test.ScriptedWorker do
           execution_id: assignment.execution_id,
           attempt: assignment.attempt,
           boot: state.boot,
+          member: assignment.member,
           runner: runner.runner,
           callers: runner.callers
         })
@@ -419,7 +420,11 @@ defmodule Cyfr.Test.ScriptedWorker do
       body =
         Jason.encode!(%{
           "op" => "runner_exited",
-          "args" => %{"runner" => runner.runner, "attempts" => [runner.attempt]}
+          "args" => %{
+            "member" => runner.member,
+            "runner" => runner.runner,
+            "attempts" => [runner.attempt]
+          }
         })
 
       fields = %{
@@ -627,6 +632,7 @@ defmodule Cyfr.Test.ScriptedWorker do
       Map.merge(runner.keys.attempt, %{
         boot: runner.boot,
         runner: runner.runner,
+        member: runner.assignment.member,
         ts: System.system_time(:millisecond),
         nonce: nonce()
       })

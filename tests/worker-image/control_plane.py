@@ -60,6 +60,10 @@ class ControlPlane:
         self.dispatch_key = auth.dispatch_key(self.worker_key)
         self.dispatch_seal_key = auth.dispatch_seal_key(self.worker_key)
         self.boot = auth.new_id("boot")  # CYFR's own boot, as its requests present it
+        # This control plane as a cell member: what every assignment it
+        # issues names, what its address is, and what every host call of
+        # those attempts must present to be answered here.
+        self.member = "cyfr@test#" + self.boot
         self.port = port
         self.lock = threading.Condition()
         self.requests = []
@@ -212,7 +216,7 @@ class ControlPlane:
             entry["answered_t"] = self.elapsed()
             return self.answer_plain(handler, 200, answer)
 
-        call, refusal = auth.verify_host_call(self.root, header, body, now, self.generation)
+        call, refusal = auth.verify_host_call(self.root, header, body, now, self.generation, self.member)
         if refusal:
             self.record({"op": op, "refused": refusal})
             return self.answer_plain(handler, 401, {"error": "lost"})
@@ -326,6 +330,8 @@ class ControlPlane:
             "generation": self.generation,
             "service": self.service,
             "boot": boot,
+            "member": self.member,
+            "host_url": self.container_url,
             "issued_at": now,
             "claim_by": now + auth.CLAIM_WINDOW_MS,
             "execution_id": execution_id,

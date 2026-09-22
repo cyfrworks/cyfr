@@ -26,7 +26,7 @@ import time
 
 PREFIX = "cyfr-worker/v1"
 ATTEMPT_FIELDS = ("athanor_id", "execution_id", "attempt", "fence", "generation", "service")
-CALL_FIELDS = ATTEMPT_FIELDS + ("boot", "runner", "ts", "nonce")
+CALL_FIELDS = ATTEMPT_FIELDS + ("boot", "runner", "member", "ts", "nonce")
 DISPATCH_FIELDS = ("service", "boot", "ts", "nonce")
 INTEGER_FIELDS = {"fence", "generation", "ts"}
 WINDOW_MS = 30_000
@@ -204,8 +204,10 @@ def report_header(dkey, report, body):
     return header("report", DISPATCH_FIELDS, dkey, report, body)
 
 
-def verify_host_call(root, text, body, now, generation):
-    """The call's fields, or the refusal name, in the contract's order."""
+def verify_host_call(root, text, body, now, generation, member):
+    """The call's fields, or the refusal name, in the contract's order. A
+    call names the member it is addressed to — the one that issued its
+    attempt's assignment — and no other member answers it."""
     parsed = parse("call", CALL_FIELDS, text)
     if parsed is None:
         return None, "malformed"
@@ -218,6 +220,8 @@ def verify_host_call(root, text, body, now, generation):
         return None, "bad_mac"
     if call["generation"] != generation:
         return None, "generation_mismatch"
+    if call["member"] != member:
+        return None, "member_mismatch"
     return call, None
 
 
@@ -473,7 +477,7 @@ def check_vectors(path):
     for text in v["root_text"]["invalid"]:
         assert decode_root(text) is None, f"root text {text!r} should be refused"
 
-    service, attempt, boot = v["service"], v["attempt"], v["boot"]
+    service, attempt, boot, member = v["service"], v["attempt"], v["boot"], v["member"]
     keys = v["keys"]
     assert assign_key(root).hex() == keys["assign_hex"], "assign key"
     wkey = worker_key(root, service)
@@ -484,15 +488,17 @@ def check_vectors(path):
     assert ckey.hex() == keys["attempt_call_hex"], "attempt call key"
     assert skey.hex() == keys["attempt_seal_hex"], "attempt seal key"
 
-    call = dict(attempt, boot=boot, runner=v["call"]["runner"], ts=v["call"]["ts"], nonce=v["call"]["nonce"])
+    call = dict(attempt, boot=boot, runner=v["call"]["runner"], member=member, ts=v["call"]["ts"], nonce=v["call"]["nonce"])
     body = v["call"]["body"].encode()
+    generation, ts, header_text = attempt["generation"], v["call"]["ts"], v["call"]["header"]
     assert canonical("call", CALL_FIELDS, call, sha256_hex(body)) == v["call"]["canonical"], "call canonical"
-    assert host_call_header(ckey, call, body) == v["call"]["header"], "call header"
-    verified, refusal = verify_host_call(root, v["call"]["header"], body, v["call"]["ts"], attempt["generation"])
+    assert host_call_header(ckey, call, body) == header_text, "call header"
+    verified, refusal = verify_host_call(root, header_text, body, ts, generation, member)
     assert refusal is None and verified == call, f"call verifies ({refusal})"
-    assert verify_host_call(root, v["call"]["header"], body, v["call"]["ts"], attempt["generation"] + 1)[1] == "generation_mismatch"
-    assert verify_host_call(root, v["call"]["header"], body + b" ", v["call"]["ts"], attempt["generation"])[1] == "bad_mac"
-    assert verify_host_call(root, v["call"]["header"], body, v["call"]["ts"] + WINDOW_MS + 1, attempt["generation"])[1] == "outside_window"
+    assert verify_host_call(root, header_text, body, ts, generation + 1, member)[1] == "generation_mismatch"
+    assert verify_host_call(root, header_text, body, ts, generation, member + "x")[1] == "member_mismatch"
+    assert verify_host_call(root, header_text, body + b" ", ts, generation, member)[1] == "bad_mac"
+    assert verify_host_call(root, header_text, body, ts + WINDOW_MS + 1, generation, member)[1] == "outside_window"
 
     for kind, fn in (("request", request_header), ("report", report_header)):
         vec = v[kind]
@@ -502,6 +508,10 @@ def check_vectors(path):
         assert fn(dispatch_key(wkey), fields, vbody) == vec["header"], f"{kind} header"
     report, refusal = verify_report(root, v["report"]["header"], v["report"]["body"].encode(), v["report"]["ts"])
     assert refusal is None and report["service"] == service, "report verifies"
+    # A report names the member whose attempts its runner held in its
+    # args rather than its header: the header's kind is shared with the
+    # requests CYFR sends a worker, which name no member.
+    assert json.loads(v["report"]["body"])["args"]["member"] == member, "the report names its member"
 
     sealed = seal_attempt_keys(dispatch_seal_key(wkey), attempt, ckey, skey, bytes.fromhex(v["sealed_attempt_keys"]["iv_hex"]))
     assert sealed == v["sealed_attempt_keys"]["sealed"], "sealed attempt keys"
@@ -518,6 +528,8 @@ def check_vectors(path):
 
     a = v["assignment"]
     wire = json.loads(a["payload"])
+    assert wire["member"] == member, "the assignment names its member"
+    assert wire["host_url"] == v["host_url"], "the assignment names its member's address"
     assert jcs(wire) == a["payload"], "assignment JCS"
     assert sign_assignment(wire, assign_key(root)) == a["token"], "assignment token"
     assert read_assignment(a["token"]) == wire, "assignment reads"

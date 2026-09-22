@@ -241,7 +241,14 @@ defmodule Opus.Runner do
     with {:ok, assignment} <- Assignment.read(token),
          true <- assignment.service == settings.service_id and assignment.boot == settings.boot,
          {:ok, %{} = decoded} <- Jason.decode(input) do
-      client = HostClient.new(keys, settings.runner_id, settings.boot, settings.host_url)
+      client =
+        HostClient.new(
+          keys,
+          settings.runner_id,
+          settings.boot,
+          HostClient.at(assignment, settings.host_url)
+        )
+
       start = %{token: token, assignment: assignment, input: decoded, client: client}
       caller = %{callers: [self()], logger: Cyfr.LoggerContext.capture()}
 

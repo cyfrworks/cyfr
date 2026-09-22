@@ -21,6 +21,14 @@ defmodule Cyfr.Assignment do
     * `service` — the id of the worker service it is dispatched to;
       `boot` — the boot of that worker service dispatch selected, which
       another boot of it refuses.
+    * `member` — the boot of the control-plane member that issued it
+      (`Cyfr.Boot.id/0`). It is the one member that holds this attempt's
+      process and the one member that answers its host calls: every host
+      call of this attempt names it in its header, and a member that is
+      not the one named refuses the call. `host_url` — the base URL of
+      that member's host API, where those calls are posted, or nil for a
+      deployment that has not been told the address it is reached at,
+      whose worker posts to the address it is configured with.
     * `issued_at`, `claim_by` — when it was issued, and the latest time a
       runner may claim it.
     * `execution_id`, `attempt`, `fence` — the attempt it runs.
@@ -32,8 +40,8 @@ defmodule Cyfr.Assignment do
     * `actor` — who it runs for (`Cyfr.Actor`).
     * `authority` — its authority as `Cyfr.Authority.to_wire/1`'s map, which
       `Cyfr.Authority.from_wire/1` must accept. The encoding carries no
-      null: a member whose value is nil is omitted at any depth, so a
-      verified assignment's authority lacks those members.
+      null: a key whose value is nil is omitted at any depth, so a
+      verified assignment's authority lacks those keys.
     * `component` — its `ref` (a canonical component reference,
       `Cyfr.ComponentRef`, of its `type`), its `type` (one of
       `Cyfr.ComponentRef.valid_types/0`), the `digest` of its artifact, the
@@ -62,13 +70,14 @@ defmodule Cyfr.Assignment do
     3. `:unknown_version` — the payload is an object whose `v` is an
        integer other than `1`;
     4. `:malformed` — the payload is not a v1 assignment: not a JSON
-       object, or a member unknown, missing or of the wrong type, which is
+       object, or a field unknown, missing or of the wrong type, which is
        refused, never defaulted;
     5. `:claim_expired` — `now` is past `claim_by`.
 
   The rest of a claim is the caller's: that the service and boot are the
-  presenting worker service's, that the generation is current, and that
-  the attempt row is running at this fence and unclaimed.
+  presenting worker service's, that the generation and the member are
+  this member's, and that the attempt row is running at this fence and
+  unclaimed.
 
   ## Reading
 
@@ -85,6 +94,7 @@ defmodule Cyfr.Assignment do
     :generation,
     :service,
     :boot,
+    :member,
     :issued_at,
     :claim_by,
     :execution_id,
@@ -101,7 +111,7 @@ defmodule Cyfr.Assignment do
     :lease_until,
     :intercepted
   ]
-  defstruct @enforce_keys ++ [v: 1, parent_execution_id: nil, step: nil]
+  defstruct @enforce_keys ++ [v: 1, parent_execution_id: nil, step: nil, host_url: nil]
 
   @typedoc "Unix milliseconds."
   @type time :: non_neg_integer()
@@ -121,6 +131,8 @@ defmodule Cyfr.Assignment do
           generation: pos_integer(),
           service: String.t(),
           boot: String.t(),
+          member: String.t(),
+          host_url: String.t() | nil,
           issued_at: time(),
           claim_by: time(),
           execution_id: String.t(),
@@ -150,6 +162,8 @@ defmodule Cyfr.Assignment do
     generation: :pos_integer,
     service: :id,
     boot: :id,
+    member: :id,
+    host_url: {:optional, :base_url},
     issued_at: :time,
     claim_by: :time,
     execution_id: :id,
@@ -334,6 +348,14 @@ defmodule Cyfr.Assignment do
   defp read(:pos_integer, value) when is_integer(value) and value > 0, do: {:ok, value}
   defp read(:time, value) when is_integer(value) and value >= 0, do: {:ok, value}
   defp read(:id, value) when is_binary(value), do: matching(@id, value)
+
+  # The address is carried exactly as a route is appended to it, so the
+  # only form that verifies is the one `Cyfr.WorkerWire.base_url/1`
+  # answers: a trailing slash or a path is refused rather than trimmed.
+  defp read(:base_url, value) do
+    if Cyfr.WorkerWire.base_url(value) == {:ok, value}, do: {:ok, value}, else: :error
+  end
+
   defp read(:digest, value) when is_binary(value), do: matching(@digest, value)
 
   defp read(:step, %{"id" => id, "generation" => generation} = step)

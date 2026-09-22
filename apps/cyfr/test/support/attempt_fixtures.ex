@@ -10,9 +10,10 @@ defmodule Cyfr.Test.AttemptFixtures do
 
   The attached map carries what a runner's client needs (the attempt's
   `athanor_id`, `execution_id`, `attempt`, `fence`, `generation` and
-  `service`, the `boot` and `runner` presenting its calls, the attempt's
-  `keys` as `Cyfr.WorkerAuth.attempt_keys/2` answers them and its
-  `call_key`)
+  `service`, the `boot` and `runner` presenting its calls, the `member`
+  its assignment was issued by and every call is addressed to, the
+  attempt's `keys` as `Cyfr.WorkerAuth.attempt_keys/2` answers them and
+  its `call_key`)
   together with the row's `record`, its `close` state, the attempt `pid`,
   the `ctx`, `authority` and `component_ref` it runs under, its `input`,
   the signed `assignment` and the `secrets` attach answered.
@@ -129,6 +130,7 @@ defmodule Cyfr.Test.AttemptFixtures do
     fixture =
       Map.merge(issued.attempt_keys.attempt, %{
         boot: boot_id,
+        member: Keys.member(),
         deadline: deadline,
         runner: Keyword.get_lazy(opts, :runner, fn -> Cyfr.UUID7.generate_id("runner") end),
         keys: issued.attempt_keys,
@@ -156,8 +158,8 @@ defmodule Cyfr.Test.AttemptFixtures do
   @doc """
   Sign and send one host call for `fixture`'s attempt, answering the decoded
   JSON. Options override the header's fields (`:runner`, `:boot`, `:nonce`,
-  `:ts`, `:generation`, `:fence`, `:service`) or the `:call_key` it is
-  signed with (default the fixture's); `:body` sends that exact body.
+  `:ts`, `:generation`, `:member`, `:fence`, `:service`) or the `:call_key`
+  it is signed with (default the fixture's); `:body` sends that exact body.
   """
   @spec call(map(), String.t(), map(), keyword()) :: map()
   def call(fixture, op, args, opts \\ []) do
@@ -181,6 +183,7 @@ defmodule Cyfr.Test.AttemptFixtures do
       service: Keyword.get(opts, :service, fixture.service),
       boot: Keyword.get(opts, :boot, fixture.boot),
       runner: Keyword.get(opts, :runner, fixture.runner),
+      member: Keyword.get(opts, :member, fixture.member),
       ts: Keyword.get_lazy(opts, :ts, fn -> System.system_time(:millisecond) end),
       nonce: Keyword.get_lazy(opts, :nonce, &nonce/0)
     }
@@ -202,7 +205,8 @@ defmodule Cyfr.Test.AttemptFixtures do
       :generation,
       :service,
       :boot,
-      :runner
+      :runner,
+      :member
     ])
     |> Map.merge(%{ts: System.system_time(:millisecond), nonce: nonce()})
   end
@@ -234,6 +238,7 @@ defmodule Cyfr.Test.AttemptFixtures do
 
     Map.merge(keys.attempt, %{
       boot: row.boot_id,
+      member: Keys.member(),
       runner: row.claimed_by,
       keys: keys,
       call_key: keys.call

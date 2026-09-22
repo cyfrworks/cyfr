@@ -27,12 +27,10 @@ defmodule Opus.HttpHandlerEnforcementTest do
     attempt = AttemptFixtures.attached!(component_ref: component_ref)
 
     {attempt,
-     Opus.HostClient.new(
-       attempt.keys,
-       attempt.runner,
-       attempt.boot,
-       Cyfr.Test.OpusService.host_url()
-     )}
+     Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{
+       member: attempt.member,
+       host_url: Cyfr.Test.OpusService.host_url()
+     })}
   end
 
   defp rows_for(attempt) do

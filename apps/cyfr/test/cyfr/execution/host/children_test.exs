@@ -152,7 +152,13 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
     assert Cyfr.Digest.sha256(input) == assignment.input_digest
 
     keys.attempt
-    |> Map.merge(%{boot: fixture.boot, runner: fixture.runner, keys: keys, call_key: keys.call})
+    |> Map.merge(%{
+      boot: fixture.boot,
+      runner: fixture.runner,
+      member: assignment.member,
+      keys: keys,
+      call_key: keys.call
+    })
     |> Map.merge(%{assignment: assignment, input: Jason.decode!(input)})
   end
 

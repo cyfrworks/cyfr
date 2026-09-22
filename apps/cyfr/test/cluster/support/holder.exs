@@ -14,13 +14,14 @@ defmodule Cyfr.Cluster.Holder do
   its row and a runner attached to it.
 
   One holder per member, started on demand. It keeps fixtures by label and
-  answers three things about one:
+  answers two things about one:
 
-    * `fixture/1` — the identifiers a case reads rows by;
-    * `sign/4` — a signed host-call header and its body, which a case may
-      then deliver to **either** member's host surface. That is what makes
-      the host-routing case possible: the same call, verified against two
-      different members' standing;
+    * `fixture/1` — the identifiers a case reads rows by, and the signed
+      assignment. Both cross the control channel, and between them a case
+      on the control node can make that attempt's host calls itself: its
+      keys derive from the shared worker root and those identifiers, and
+      the assignment names the member they belong to and the address they
+      are posted at (`host_routing_test.exs`);
     * `call/4` — sign and deliver on this member, the ordinary path.
   """
 
@@ -38,14 +39,6 @@ defmodule Cyfr.Cluster.Holder do
   @spec fixture(atom()) :: map()
   def fixture(label), do: GenServer.call(ensure(), {:fixture, label}, 30_000)
 
-  @doc """
-  A signed host call for `label`'s attempt: `{header, body}`, ready to be
-  answered by `Cyfr.Execution.Host.call/2` on any member.
-  """
-  @spec sign(atom(), String.t(), map(), keyword()) :: {String.t(), String.t()}
-  def sign(label, op, args, opts \\ []),
-    do: GenServer.call(ensure(), {:sign, label, op, args, opts}, 30_000)
-
   @doc "Sign and answer a host call for `label` on this member."
   @spec call(atom(), String.t(), map(), keyword()) :: map()
   def call(label, op, args, opts \\ []),
@@ -58,15 +51,6 @@ defmodule Cyfr.Cluster.Holder do
   @spec complete(atom(), map()) :: map()
   def complete(label, data \\ %{"ok" => true}),
     do: GenServer.call(ensure(), {:complete, label, data}, 60_000)
-
-  @doc """
-  A signed completion for `label`'s run, `{header, body}`, ready to be
-  delivered to either member. The outcome names the execution, the attempt
-  and the fence it belongs to, as a runner's does.
-  """
-  @spec sign_complete(atom(), map()) :: {String.t(), String.t()}
-  def sign_complete(label, data \\ %{"ok" => true}),
-    do: GenServer.call(ensure(), {:sign_complete, label, data}, 60_000)
 
   @doc "Forget everything this holder holds, ending the attempts with it."
   @spec release!() :: :ok
@@ -100,12 +84,6 @@ defmodule Cyfr.Cluster.Holder do
   def handle_call({:fixture, label}, _from, held),
     do: {:reply, identifiers(Map.fetch!(held, label)), held}
 
-  def handle_call({:sign, label, op, args, opts}, _from, held) do
-    fixture = Map.fetch!(held, label)
-    body = Cyfr.Test.AttemptFixtures.body(op, args)
-    {:reply, {Cyfr.Test.AttemptFixtures.header(fixture, body, opts), body}, held}
-  end
-
   def handle_call({:call, label, op, args, opts}, _from, held) do
     fixture = Map.fetch!(held, label)
     {:reply, Cyfr.Test.AttemptFixtures.call(fixture, op, args, opts), held}
@@ -115,12 +93,6 @@ defmodule Cyfr.Cluster.Holder do
     fixture = Map.fetch!(held, label)
     args = %{"outcome" => completion(fixture, data)}
     {:reply, Cyfr.Test.AttemptFixtures.call(fixture, "complete", args), held}
-  end
-
-  def handle_call({:sign_complete, label, data}, _from, held) do
-    fixture = Map.fetch!(held, label)
-    body = Cyfr.Test.AttemptFixtures.body("complete", %{"outcome" => completion(fixture, data)})
-    {:reply, {Cyfr.Test.AttemptFixtures.header(fixture, body), body}, held}
   end
 
   defp completion(fixture, data) do
@@ -135,9 +107,12 @@ defmodule Cyfr.Cluster.Holder do
   @impl true
   def handle_info(_message, held), do: {:noreply, held}
 
-  # Only what crosses the control channel: identifiers and the assignment,
-  # never the pid or the structs, which mean nothing off the member that
-  # made them.
+  # Only what crosses the control channel: identifiers and the signed
+  # assignment, never the pid or the structs, which mean nothing off the
+  # member that made them. `member` and the address inside the assignment
+  # are what a case reads to post this attempt's host calls where they
+  # belong; its keys are not carried, since they derive from the shared
+  # root and the identifiers above.
   defp identifiers(fixture) do
     Map.take(fixture, [
       :athanor_id,
@@ -147,7 +122,9 @@ defmodule Cyfr.Cluster.Holder do
       :generation,
       :service,
       :boot,
-      :runner
+      :runner,
+      :member,
+      :assignment
     ])
   end
 end

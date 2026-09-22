@@ -310,17 +310,23 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
           assert cyfr[:host_api_bind] == {127, 0, 0, 1}
           assert cyfr[:host_api_port] == 4300
+
+          # No address of its own: a deployment that was not told one
+          # issues assignments naming none, and its worker posts to the
+          # single address it was configured with.
+          assert cyfr[:host_api_url] == nil
           refute Keyword.has_key?(read_prod_config!(), :opus)
         end
       )
     end
 
-    test "CYFR_WORKERS, CYFR_HOST_API_BIND and CYFR_HOST_API_PORT are taken as set" do
+    test "CYFR_WORKERS, CYFR_HOST_API_BIND, _PORT and _URL are taken as set" do
       with_env(
         %{
           "CYFR_WORKERS" => "wrk_opus=http://opus:4200, wrk_b=https://b.internal/",
           "CYFR_HOST_API_BIND" => "0.0.0.0",
-          "CYFR_HOST_API_PORT" => "4301"
+          "CYFR_HOST_API_PORT" => "4301",
+          "CYFR_HOST_API_URL" => "http://cyfr-1:4301"
         },
         fn ->
           cyfr = read_prod_config!()[:cyfr]
@@ -332,6 +338,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
           assert cyfr[:host_api_bind] == {0, 0, 0, 0}
           assert cyfr[:host_api_port] == 4301
+          assert cyfr[:host_api_url] == "http://cyfr-1:4301"
         end
       )
     end
