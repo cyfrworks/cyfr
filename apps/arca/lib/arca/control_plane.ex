@@ -453,7 +453,7 @@ defmodule Arca.ControlPlane do
             {:busy, row}
 
           take_over(row, owner, lease_ms, now) ->
-            {:ok, %{pushed(row, lease_ms, now) | owner: owner, generation: row.generation + 1}}
+            {:ok, taken(row, owner, lease_ms, now)}
 
           true ->
             do_take(node, owner, lease_ms, rounds - 1)
@@ -469,6 +469,15 @@ defmodule Arca.ControlPlane do
       fence: 1,
       lease_until: lease_end(now, lease_ms),
       taken_at: now
+    }
+  end
+
+  defp taken(%CellLease{} = row, owner, lease_ms, now) do
+    %CellLease{
+      pushed(row, lease_ms, now)
+      | owner: owner,
+        generation: row.generation + 1,
+        taken_at: now
     }
   end
 
