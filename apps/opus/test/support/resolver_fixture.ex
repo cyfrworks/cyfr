@@ -28,8 +28,8 @@ defmodule Opus.Test.Resolver do
 
   Injected through the `:resolver` option of `Opus.Egress.pin/2`, or
   `config :opus, :resolver` for the guest-facing entry points, which
-  take no options. `Cyfr.Test.Resolver` is this table for CYFR's suite,
-  which injects it into `Cyfr.Network.pin/2` as well.
+  take no options. `Sanctum.Test.Resolver` is this table for CYFR's suite,
+  which injects it into `Sanctum.Network.pin/2` as well.
   """
 
   @table %{

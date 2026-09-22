@@ -1,7 +1,7 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Test.Resolver do
+defmodule Sanctum.Test.Resolver do
   @moduledoc """
   A resolver of fixed answers, for a test of what the host decides about
   an address. It answers `getaddr/2` as `:inet` does, from the table
@@ -26,7 +26,7 @@ defmodule Cyfr.Test.Resolver do
   `:inet.getaddr/2` follows one inside the resolver, and the code under
   test sees only the address it ends at.
 
-  Injected through the `:resolver` option of `Cyfr.Network.pin/2` and
+  Injected through the `:resolver` option of `Sanctum.Network.pin/2` and
   `Opus.Egress.pin/2`, or `config :opus, :resolver` for the guest-facing
   entry points, which take no options. `Opus.Test.Resolver` is this
   table for Opus's own suite, which runs without CYFR.

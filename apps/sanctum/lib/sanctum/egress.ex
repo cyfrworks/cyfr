@@ -1,29 +1,13 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Egress do
+defmodule Sanctum.Egress do
   @moduledoc """
-  The control plane's outbound arm: a request issued to the address
-  `Cyfr.Network.pin/2` validated, and nowhere else.
+  Bounded control-plane HTTP transport over `Sanctum.Network.pin/2`.
 
-  The decision is not here. Scheme, DNS resolution, the private and
-  metadata address classes, the operator's private-egress allowlist, the
-  `:resolver` seam and the fail-closed transport policy (no redirect, no
-  retry, no compression, no body decoding) are all `Cyfr.Network`'s, in
-  the contracts, where a layer with no HTTP client can still ask whether
-  a destination is allowed. What is here is the dozen lines that take
-  `pin/2`'s answer, add the caller's method, headers and body, and hand
-  it to `Req` — no branch in them that a compromised destination could
-  turn.
-
-  It is that way round on purpose. `Cyfr.Network` is reached by
-  everything, including the builder island, which declares four
-  dependencies and no HTTP client; putting `Req` behind it would put an
-  HTTP client in the release whose whole job is to run other people's
-  build tooling in a sandbox. `Opus.Egress` splits the same way for the
-  guest, and `Sanctum.Vault.OAuth` keeps its own for the token endpoint —
-  three sites, each in the app that already speaks HTTP, all deciding
-  through one `pin/2`. `Cyfr.EgressInventoryTest` is their roster.
+  Every request connects to the validated address with the original TLS
+  hostname and Host identity. Redirects, retries and content decoding remain
+  disabled; callers validate and pin any subsequent destination themselves.
   """
 
   import Cyfr.MapUtil, only: [put_unless_nil: 3]
@@ -31,7 +15,7 @@ defmodule Cyfr.Egress do
   @doc """
   Issue an HTTP request with SSRF protection AND DNS-rebinding protection.
 
-  Resolves and validates the host once (`Cyfr.Network.pin/2`), then connects
+  Resolves and validates the host once (`Sanctum.Network.pin/2`), then connects
   to that validated IP while preserving the original hostname for SNI / cert
   verification / `Host` (no second DNS resolution → no rebinding window). The
   body is returned raw (no decompression/decoding) and redirects are NOT
@@ -42,8 +26,8 @@ defmodule Cyfr.Egress do
 
   ## Options
 
-    * `:private_policy` — see `Cyfr.Network.pin/2` (default `:deny`)
-    * `:resolver` — see `Cyfr.Network.pin/2` (default `:inet`)
+    * `:private_policy` — see `Sanctum.Network.pin/2` (default `:deny`)
+    * `:resolver` — see `Sanctum.Network.pin/2` (default `:inet`)
     * `:receive_timeout` — ms (default 30_000)
     * `:protocols` — Mint protocols list (e.g. `[:http1]`)
     * `:transport_opts` — extra Mint transport opts
@@ -59,7 +43,7 @@ defmodule Cyfr.Egress do
     # (OCI digest verification hashes the body as received), no redirects,
     # no Req-level retry — `pin/2` bakes exactly that policy in, and this
     # adds only the method, the headers, the body and the ceiling.
-    case Cyfr.Network.pin(url, opts) do
+    case Sanctum.Network.pin(url, opts) do
       {:ok, %{req_opts: req_opts}} ->
         max_bytes = Keyword.get(opts, :max_response_bytes)
 
@@ -95,6 +79,4 @@ defmodule Cyfr.Egress do
       Enum.map(List.wrap(vs), &{to_string(k), to_string(&1)})
     end)
   end
-
-  defp flatten_headers(headers) when is_list(headers), do: headers
 end

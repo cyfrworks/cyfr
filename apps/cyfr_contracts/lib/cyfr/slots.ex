@@ -3,6 +3,8 @@
 
 defmodule Cyfr.Slots do
   @moduledoc """
+  Shared runtime primitive, with each process instance owned by its application.
+
   Held concurrency: a supervised count of slots that processes take, hold
   and give back, with a total cap, a cap per key, a reserve for child work
   and waiter queues served in class order. One implementation, configured

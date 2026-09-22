@@ -26,15 +26,11 @@ defmodule CyfrContracts.MixProject do
     [extra_applications: [:logger, :crypto]]
   end
 
-  # The pure primitives every app shares — the control plane, the execution
-  # worker and the builder. No database, no process, no configuration read.
-  #
-  # No HTTP client either, deliberately: `Cyfr.Network` decides where an
-  # outbound request may connect and answers the options that connect
-  # there, and each app that actually speaks HTTP issues the request with
-  # its own `req`. The builder island depends on these contracts and on
-  # three other packages; an HTTP client reaching its release through here
-  # would be one more thing a compromised build service has to hand.
+  # Pure contracts and the finite shared runtime primitive roster: Boot,
+  # RateLimiter, LoggerContext, JsonFormatter, Slots and Caps. This app starts
+  # no process; applications own process instances and install the Caps port.
+  # Network only parses URLs, checks supplied addresses and builds options:
+  # DNS/configuration and HTTP stay in the applications that own those effects.
   defp deps do
     [{:jason, "~> 1.4"}]
   end

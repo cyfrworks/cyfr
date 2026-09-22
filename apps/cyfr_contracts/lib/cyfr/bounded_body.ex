@@ -9,7 +9,7 @@ defmodule Cyfr.BoundedBody do
   accumulated body exceeds its ceiling, so a hostile or misconfigured server
   cannot make the host buffer an arbitrarily large binary before a post-hoc
   size check runs. `read/2` answers what it collected. The pinned transport
-  (`Cyfr.Egress.pinned_request/5`), the guest HTTP handler and the builder
+  (`Sanctum.Egress.pinned_request/5`), the guest HTTP handler and the builder
   client bound their responses through it.
 
   The collector's state lives in the response's `private` map, so it works

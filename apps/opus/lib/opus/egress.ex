@@ -28,12 +28,7 @@ defmodule Opus.Egress do
   fail-closed transport policy (no redirect, no retry, no compression, no
   body decoding), ready for the caller's method, headers and body.
   """
-  @type pinned :: %{
-          ip: String.t(),
-          ip_tuple: :inet.ip_address(),
-          uri: URI.t(),
-          req_opts: keyword()
-        }
+  @type pinned :: Cyfr.Network.pinned()
 
   @type refusal :: :invalid_url | :dns_error | :private_ip_blocked
 
@@ -58,42 +53,19 @@ defmodule Opus.Egress do
   """
   @spec pin(String.t(), keyword()) :: {:ok, pinned()} | {:error, refusal(), String.t()}
   def pin(url, opts \\ []) when is_binary(url) and is_list(opts) do
-    uri = URI.parse(url)
-    policy = Keyword.get(opts, :private_policy, :deny)
+    policy =
+      case Keyword.get(opts, :private_policy, :deny) do
+        {:fun, fun} when is_function(fun, 1) -> {:fun, fn ip -> fun.(ip) == true end}
+        _ -> :deny
+      end
+
     resolver = Keyword.get_lazy(opts, :resolver, &default_resolver/0)
 
-    with :ok <- check_scheme(uri.scheme),
-         :ok <- check_host(uri.host),
-         {:ok, ip_tuple} <- resolve(uri.host, resolver),
-         :ok <- check_ip(ip_tuple, uri.host, policy) do
-      ip = format_ip(ip_tuple)
-
-      connect_options =
-        [hostname: uri.host]
-        |> put_unless_nil(:protocols, Keyword.get(opts, :protocols))
-        |> put_unless_nil(:transport_opts, Keyword.get(opts, :transport_opts))
-
-      req_opts = [
-        url: URI.to_string(%{uri | host: ip}),
-        compressed: false,
-        decode_body: false,
-        redirect: false,
-        retry: false,
-        connect_options: connect_options,
-        receive_timeout: Keyword.get(opts, :receive_timeout, 30_000)
-      ]
-
-      {:ok, %{ip: ip, ip_tuple: ip_tuple, uri: uri, req_opts: req_opts}}
+    with {:ok, uri} <- Cyfr.Network.parse_url(url),
+         {:ok, ip} <- resolve(uri.host, resolver) do
+      Cyfr.Network.pin(uri, ip, Keyword.put(opts, :private_policy, policy))
     end
   end
-
-  defp check_scheme(scheme) when scheme in ["http", "https"], do: :ok
-  defp check_scheme(nil), do: {:error, :invalid_url, "missing URL scheme"}
-  defp check_scheme(scheme), do: {:error, :invalid_url, "blocked URL scheme: #{scheme}"}
-
-  defp check_host(nil), do: {:error, :invalid_url, "missing hostname"}
-  defp check_host(""), do: {:error, :invalid_url, "missing hostname"}
-  defp check_host(_host), do: :ok
 
   # IPv4 first, IPv6 only when no A record resolves: a dual-stack host is
   # pinned to its v4 address, and its AAAA record is never resolved or
@@ -123,32 +95,4 @@ defmodule Opus.Egress do
   # options of their own; no deployment sets it, and the host is resolved
   # through `:inet`.
   defp default_resolver, do: Application.get_env(:opus, :resolver, :inet)
-
-  # A metadata address is refused before the private classification or
-  # any policy is consulted.
-  defp check_ip(ip_tuple, hostname, policy) do
-    cond do
-      Cyfr.Cidr.metadata?(ip_tuple) ->
-        {:error, :private_ip_blocked,
-         "metadata IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
-
-      not Cyfr.Cidr.private_ip?(ip_tuple) ->
-        :ok
-
-      private_permitted?(policy, ip_tuple) ->
-        :ok
-
-      true ->
-        {:error, :private_ip_blocked,
-         "private IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
-    end
-  end
-
-  defp private_permitted?({:fun, fun}, ip) when is_function(fun, 1), do: fun.(ip) == true
-  defp private_permitted?(_policy, _ip), do: false
-
-  defp put_unless_nil(keyword, _key, nil), do: keyword
-  defp put_unless_nil(keyword, key, value), do: Keyword.put(keyword, key, value)
-
-  defp format_ip(ip_tuple), do: ip_tuple |> :inet.ntoa() |> to_string()
 end

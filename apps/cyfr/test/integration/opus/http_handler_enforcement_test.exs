@@ -96,7 +96,7 @@ defmodule Opus.HttpHandlerEnforcementTest do
     malformed = HttpHandler.execute("not json", edge, EdgeFixtures.limits(), host, "ref")
     assert %{"error" => %{"type" => "invalid_json"}} = Jason.decode!(malformed)
 
-    resolve_through(Cyfr.Test.Resolver)
+    resolve_through(Sanctum.Test.Resolver)
     request = Jason.encode!(%{"method" => "GET", "url" => "https://nonexistent.test/data"})
 
     result =

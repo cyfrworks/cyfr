@@ -1345,7 +1345,7 @@ defmodule Emissary.MCP.Bridge do
         max_response_bytes: @max_response_bytes
       ]
 
-      case Cyfr.Egress.pinned_request(:post, spec.url <> "/control", headers, body, opts) do
+      case Sanctum.Egress.pinned_request(:post, spec.url <> "/control", headers, body, opts) do
         {:ok, status, resp_headers, resp_body} ->
           {:http, status, boot_header(resp_headers), decode(resp_body)}
 

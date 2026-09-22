@@ -3,7 +3,8 @@
 
 defmodule Cyfr.LoggerContext do
   @moduledoc """
-  Sets Logger.metadata for structured logging with tenant context.
+  Shared runtime helpers for Logger process metadata and its key vocabulary.
+  Lower applications and trust islands call these helpers without a Host edge.
 
   Metadata is propagated via the process dictionary, so all downstream
   Logger calls in the same process automatically include it. Inject at

@@ -65,7 +65,7 @@ defmodule Cyfr.Boundaries do
       layer: :contracts,
       lib: "apps/cyfr_contracts/lib",
       umbrella_deps: [],
-      note: "pure contracts: wire shapes, behaviours, primitives, the actor"
+      note: "pure contracts and the explicit shared runtime primitives; no owned processes"
     },
     %{
       app: :arca,
@@ -258,13 +258,15 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum Sanctum.Cipher Sanctum.CipherAAD Sanctum.Consent Sanctum.Context
-        Sanctum.Namespace Sanctum.Provisioning Sanctum.SignIn Sanctum.VaultReader
+        Sanctum.Egress Sanctum.Network Sanctum.Namespace Sanctum.Provisioning Sanctum.SignIn
+        Sanctum.VaultReader
       ),
       reason:
         "`Sanctum.Provisioning` is the first-need hook and the half of filling an " <>
           "estate that is identity's: the claim it runs under, the baseline consents, " <>
           "the readiness and failure writes on the row. `Compendium.Provisioning` owns " <>
-          "the component work and calls down into it."
+          "the component work and calls down into it. OCI and registry transports " <>
+          "use Sanctum.Network and Sanctum.Egress for validated outbound requests."
     },
     %{
       from: ["apps/cyfr/lib/cyfr/**/*.ex"],
@@ -295,10 +297,12 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Context Sanctum.ToolServerDigest Sanctum.Unauthorized
-        Sanctum.VaultReader
+        Sanctum Sanctum.Context Sanctum.Egress Sanctum.Network Sanctum.ToolServerDigest
+        Sanctum.Unauthorized Sanctum.VaultReader
       ),
-      reason: "the MCP transport carries the tenancy and reads a server's vault edge"
+      reason:
+        "the MCP transport carries tenancy, reads a server's vault edge, and uses " <>
+          "Sanctum.Network/Egress for external servers, the bridge and system probes"
     },
     %{
       from: ["apps/cyfr/lib/emissary_web/**/*.ex", "apps/cyfr/lib/emissary_web.ex"],

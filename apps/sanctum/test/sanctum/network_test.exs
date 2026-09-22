@@ -1,11 +1,11 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.NetworkTest do
+defmodule Sanctum.NetworkTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.Network
-  alias Cyfr.Test.Resolver
+  alias Sanctum.Network
+  alias Sanctum.Test.Resolver
 
   # Every name below resolves through the fixture's table, never the
   # network; an address literal needs no lookup, and `localhost` is the

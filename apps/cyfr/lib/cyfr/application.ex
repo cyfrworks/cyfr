@@ -115,9 +115,6 @@ defmodule Cyfr.Application do
       # `:audit` among its consumers. The storage layer holds the handler
       # and the sinks; naming the catalog is the host's part.
       {Arca.AuditHandler, events: Cyfr.Telemetry.Catalog.consumed_by(:audit)},
-      # Request rate-limit counters — own table, isolated from Arca.Cache so an
-      # attacker-cardinality flood cannot evict sessions or OAuth state.
-      Cyfr.RateLimiter,
       # Emissary web layer
       EmissaryWeb.Telemetry,
       {Phoenix.PubSub, name: Emissary.PubSub},

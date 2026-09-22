@@ -453,7 +453,7 @@ defmodule Emissary.MCP.McpServersTool do
   end
 
   defp validate_create_url(url) do
-    case Cyfr.Network.validate_redirect_url(url, private_policy: :operator) do
+    case Sanctum.Network.validate_redirect_url(url, private_policy: :operator) do
       :ok -> :ok
       {:error, reason} -> {:error, {:invalid_argument, "Invalid URL: #{reason}"}}
     end

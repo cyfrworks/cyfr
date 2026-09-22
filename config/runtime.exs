@@ -748,7 +748,7 @@ if config_env() != :test do
     # its consent's `egress.private_ips` (`Opus.EdgeGuard.allows_private_ip?/2`)
     # and nothing else, so a LAN device is reachable from a chain only as an
     # MCP server on this list, never as a URL the bundled http catalyst fetches.
-    config :cyfr, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
+    config :sanctum, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
 
     # GitHub and Google sign in by device flow (CLI and Prism). GitHub needs
     # only a client ID; Google needs a client ID and secret.

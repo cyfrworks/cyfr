@@ -80,7 +80,7 @@ defmodule Cyfr.App.MixProject do
       # runs on. The adapters and the drivers are Arca's.
       {:ecto_sql, "~> 3.12"},
       # Req is used by Opus HTTP host functions (apps/opus) and by
-      # `Cyfr.Egress`.
+      # `Sanctum.Egress`.
       {:req, "~> 0.5"},
       # Emissary deps
       {:phoenix, "~> 1.8.6"},

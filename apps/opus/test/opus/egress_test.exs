@@ -20,6 +20,24 @@ defmodule Opus.EgressTest do
 
   @resolver [resolver: Resolver]
 
+  test "sharing the pure policy does not admit control-plane overrides or truthy callbacks" do
+    for policy <- [
+          :allow_all,
+          :operator,
+          {:allowlist, ["10.0.0.0/8"]},
+          {:fun, fn _ -> :truthy end}
+        ] do
+      assert {:error, :private_ip_blocked, _} =
+               Egress.pin("http://private.test/", resolver: Resolver, private_policy: policy)
+    end
+
+    assert {:ok, _} =
+             Egress.pin("http://private.test/",
+               resolver: Resolver,
+               private_policy: {:fun, fn _ -> true end}
+             )
+  end
+
   test "a public address pins with the hostname kept and the transport policy closed" do
     assert {:ok, pinned} = Egress.pin("https://public.test:8443/path?q=1", @resolver)
 

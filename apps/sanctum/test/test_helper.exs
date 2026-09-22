@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# Independent app suites have no Host. Preserve an umbrella boot's identity.
+try do
+  Cyfr.Boot.id()
+rescue
+  Cyfr.Boot.NotInitializedError -> Cyfr.Boot.mint()
+end
+
 # Owned by the test-runner process so it outlives every test and no two
 # tests race to create it. `Cyfr.Test.SourceTree` fills it lazily.
 Cyfr.Test.SourceTree.ensure_table()
@@ -27,15 +34,6 @@ if Application.get_env(:arca, :overlay_locators) in [nil, %{}] do
 end
 
 Arca.Storage.install_locators!()
-
-# The request-budget counters the anonymous sign-in flows are bounded by.
-# `Cyfr.RateLimiter` is a contracts primitive, started by whichever
-# application needs it: in a deployment and in an umbrella run that is the
-# host, and in a build that holds this application alone it is the suite.
-case Cyfr.RateLimiter.start_link([]) do
-  {:ok, _pid} -> :ok
-  {:error, {:already_started, _pid}} -> :ok
-end
 
 # The one redaction vocabulary, which the host feeds Phoenix at boot.
 # Nothing boots here, so the suite does what the boot does, before any

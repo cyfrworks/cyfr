@@ -7,8 +7,10 @@ defmodule Cyfr.RateLimiterTest do
   #
   # `Cyfr.RateLimiter` is a shared contract, but this suite stays here:
   # the isolation case below reads `Arca.Cache`'s table, and every case
-  # needs the limiter started, which the control plane's boot does.
+  # needs the limiter started by Sanctum's application tree.
   use ExUnit.Case, async: false
+
+  import ExUnit.CaptureLog
 
   setup do
     Cyfr.RateLimiter.reset()
@@ -55,5 +57,26 @@ defmodule Cyfr.RateLimiterTest do
     # The flood populated Cyfr.RateLimiter, not the shared cache.
     assert :ets.info(Cyfr.RateLimiter.table_name(), :size) >= 50
     assert :ets.info(Arca.Cache.table_name(), :size) == before
+  end
+
+  test "Sanctum owns the single limiter and its unavailable table refuses requests" do
+    pid = Process.whereis(Cyfr.RateLimiter)
+    assert is_pid(pid)
+
+    assert {Cyfr.RateLimiter, pid, :worker, [Cyfr.RateLimiter]} in Supervisor.which_children(
+             Sanctum.Supervisor
+           )
+
+    assert {:error, {:already_started, ^pid}} = Cyfr.RateLimiter.start_link()
+
+    :ok = Supervisor.terminate_child(Sanctum.Supervisor, Cyfr.RateLimiter)
+
+    try do
+      assert capture_log(fn ->
+               assert {:deny, 1} = Cyfr.RateLimiter.check(:unavailable, 1, 1_000)
+             end) =~ "table unavailable"
+    after
+      {:ok, _} = Supervisor.restart_child(Sanctum.Supervisor, Cyfr.RateLimiter)
+    end
   end
 end

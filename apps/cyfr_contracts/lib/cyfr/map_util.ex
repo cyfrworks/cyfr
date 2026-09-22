@@ -22,11 +22,8 @@ defmodule Cyfr.MapUtil do
   @doc """
   The keyword twin: append `key` only when `value` is not `nil`.
 
-  Lives here rather than in `Arca.QueryHelpers` because the callers building
-  option lists are not building queries. `Cyfr.Network` — the SSOT for
-  outbound HTTP — imported it from the row plane's fail-closed tenant-scoping
-  helpers to assemble Req options, which gave the network seam a compile-time
-  edge into storage for three lines of `Keyword.put`.
+  Pure network and transport option builders share this helper without a
+  dependency on the persistence query layer.
 
   Unlike `put_present/3`, `""` is kept: a keyword option list is not a wire
   shape, and an empty string can be a deliberate value there.

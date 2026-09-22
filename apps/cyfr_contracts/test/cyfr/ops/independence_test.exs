@@ -13,9 +13,8 @@ defmodule Cyfr.Ops.IndependenceTest do
     refute deps =~ ":sanctum"
     refute deps =~ ":locus"
     refute deps =~ ":opus"
-    # No HTTP client: `Cyfr.Network` decides, and each app that speaks
-    # HTTP issues the request with its own. The builder island carries
-    # these contracts and would carry anything added here.
+    # The network contract takes resolved addresses; applications own DNS,
+    # configuration and HTTP. Islands carry only the pure network policy.
     refute deps =~ ":req"
   end
 

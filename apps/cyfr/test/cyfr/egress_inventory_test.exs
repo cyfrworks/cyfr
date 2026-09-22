@@ -13,36 +13,23 @@ defmodule Cyfr.EgressInventoryTest do
   A new `Req`/`Finch`/`httpc` call fails here until someone classifies
   it — the fail-closed direction.
 
-  Deciding and connecting are separate, and only connecting is listed
-  here. `Cyfr.Network` (in the contracts) resolves the host once,
-  classifies the address and answers the options that connect to it with
-  redirects, retry, compression and body decoding all off; it holds no
-  HTTP client, so the layers below the host — the builder island among
-  them — can validate a destination without one in their tree. Every
-  `:pinned_*` row below is a few lines over that one decision, in the app
-  that already speaks HTTP. A row that starts deciding for itself is the
-  drift this inventory is for.
+  The pure `Cyfr.Network` policy validates a supplied address and constructs
+  pinned options. Sanctum and Opus own their DNS resolution; Sanctum.Egress
+  sends control-plane requests, and Opus owns the guest HTTP handlers.
 
   The JS bridge (`apps/mcp-bridge/server.mjs`) is its own egress arm: it
   runs stdio MCP backends, which reach the network as their commands do,
   and speaks to them only over their stdio. It ships with the server, is
   scanned by nothing here, and is called out so this inventory is honest
-  about its edge. CYFR reaches the bridge through `Cyfr.Egress`.
+  about its edge. CYFR reaches the bridge through `Sanctum.Egress`.
   """
 
   use ExUnit.Case, async: true
 
   @allowed %{
-    # The control plane's pinned transport: every OCI, registry, MCP and
-    # bridge request goes out here, to the address `Cyfr.Network.pin/2`
-    # validated, with its response bounded while it streams
-    # (`Cyfr.BoundedBody`).
-    "apps/cyfr/lib/cyfr/egress.ex" => :pinned_owner,
-    # The OAuth token POST to a caller-supplied endpoint, pinned the same
-    # way under the operator's private-egress allowlist. The auth domain
-    # owns the few lines rather than reaching up to the host's transport;
-    # the decision is still `Cyfr.Network.pin/2`'s.
-    "apps/sanctum/lib/sanctum/vault/oauth.ex" => :pinned_token_exchange,
+    # OCI, registry, MCP and OAuth token requests all connect through the
+    # address Sanctum.Network validates, with streamed response ceilings.
+    "apps/sanctum/lib/sanctum/egress.ex" => :pinned_owner,
     # S3-compatible object store — operator-configured endpoint, SigV4.
     "apps/arca/lib/arca/adapters/s3.ex" => :object_store,
     # The IdP OAuth device-flow sliver: GitHub/Google fixed hosts, its own

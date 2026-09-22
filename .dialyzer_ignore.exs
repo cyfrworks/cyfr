@@ -18,7 +18,6 @@
   {"lib/compendium/provenance.ex", :extra_range},
   {"lib/compendium/registry/client.ex", :pattern_match_cov},
   {"lib/compendium/registry/credential_store.ex", :pattern_match_cov},
-  {"lib/cyfr/egress.ex", :pattern_match_cov},
   {"lib/cyfr/execution/events/sequence.ex", :missing_range},
   {"lib/cyfr/json_formatter.ex", :unknown_type},
   {"lib/cyfr/retention_scheduler.ex", :pattern_match},

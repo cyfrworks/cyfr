@@ -8,21 +8,23 @@ defmodule Sanctum.Supervisor do
 
   @impl true
   def start(_type, _args) do
+    Sanctum.Network.private_egress_targets()
+
     # The invoke-budget counters, owned by the application master so they
     # outlive every request that charges them.
     Sanctum.Authority.BudgetCounter.ensure_table()
 
     children =
       [
+        # Advisory counters also serve identity flows before Host starts.
+        Cyfr.RateLimiter,
         # Releases a charged invoke-budget slot when its holder dies
         # without running its `after` (the brutal-kill cancel/timeout
         # paths).
         Sanctum.Authority.BudgetGuard,
         # The auth sliver's own Finch pool for IdP OAuth Device-Flow HTTP
-        # calls (GitHub / Google). Registry and OCI traffic goes through
-        # `Cyfr.Egress.pinned_request/5`, which owns its own connections;
-        # this pool keeps OAuth userinfo HTTP off that path and reinforces
-        # the sliver boundary at the supervision level.
+        # calls (GitHub / Google). Caller-selected destinations use
+        # Sanctum.Egress's pinned connections instead of this fixed-host pool.
         {Finch, name: Sanctum.Auth.Finch},
         # OAuth refresh single-flight (see `Sanctum.OAuth.RefreshLock`):
         # the registry and the task pool whose leaders register in it

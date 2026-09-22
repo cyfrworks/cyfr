@@ -194,7 +194,7 @@ defmodule Compendium.OCI.Blob do
     # Normalize relative Location URLs to absolute (some registries return relative paths)
     location = normalize_url(location, ref)
 
-    case Cyfr.Network.validate_redirect_url(location,
+    case Sanctum.Network.validate_redirect_url(location,
            private_policy: :operator
          ) do
       :ok ->
@@ -243,7 +243,7 @@ defmodule Compendium.OCI.Blob do
       max_response_bytes: max_blob_bytes()
     ]
 
-    case Cyfr.Egress.pinned_request(:get, url, [], nil, opts) do
+    case Sanctum.Egress.pinned_request(:get, url, [], nil, opts) do
       {:ok, 200, _headers, body} ->
         actual_digest = compute_digest(body)
 

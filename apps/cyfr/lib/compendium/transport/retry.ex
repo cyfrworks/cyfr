@@ -21,7 +21,7 @@ defmodule Compendium.Transport.Retry do
     * **5xx, or a timeout after the request was sent** — ambiguous: the
       server may have processed it and failed to answer. Retry only
       idempotent methods; a POST that may have minted is never replayed.
-    * **An SSRF/DNS refusal** (a binary reason from `Cyfr.Network`) or a
+    * **An SSRF/DNS refusal** (a binary reason from `Sanctum.Network`) or a
       **response over the caller's size ceiling** — a decision, not a
       fault. Never retried.
   """

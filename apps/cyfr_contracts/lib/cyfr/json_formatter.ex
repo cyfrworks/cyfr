@@ -3,7 +3,9 @@
 
 defmodule Cyfr.JsonFormatter do
   @moduledoc """
-  JSON log formatter for structured logging in production.
+  Shared runtime JSON formatter for structured logging in production.
+  Its only runtime state is the cached roster read from Logger configuration;
+  Host and Locus select this callback through their logging configuration.
 
   Activated by setting `CYFR_LOG_FORMAT=json` in the environment.
   Outputs one JSON object per log line with standard fields for

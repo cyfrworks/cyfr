@@ -7,7 +7,8 @@ defmodule Cyfr.Caps do
   them: how many rows of a kind a caller may add, and how many bytes an
   athanor may hold.
 
-  This is a port. The contract is declared here, in the layer that depends
+  This shared runtime port holds only its injected implementation term.
+  The contract is declared here, in the layer that depends
   on the answer; the one implementation is `Sanctum.Tenancy.Caps`, which
   reads the configured caps and counts the athanor's bytes; and
   `Cyfr.Application` writes it in at boot with `install!/1`. Arca asks

@@ -5,9 +5,9 @@ defmodule Cyfr.RateLimiter do
   @moduledoc """
   Fixed-window request rate limiting in a dedicated ETS table.
 
-  A shared primitive, started by the app that needs it — the control
-  plane starts one in its supervision tree, beside the rest of its
-  infrastructure — and holding nothing of any product's state.
+  A shared runtime primitive with one instance owned by Sanctum's application
+  tree. It is available to identity flows and Host callers without either
+  starting another table owner. It stores no durable authority or budget.
 
   ## What this is, and what it is not
 

@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+# Independent app suites have no Host. Preserve an umbrella boot's identity.
+try do
+  Cyfr.Boot.id()
+rescue
+  Cyfr.Boot.NotInitializedError -> Cyfr.Boot.mint()
+end
+
 # MinIO backs the :s3_integration suites; each runs only when selected.
 ExUnit.configure(exclude: [:s3_integration])
 
