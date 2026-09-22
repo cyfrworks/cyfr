@@ -114,13 +114,34 @@ defmodule Cyfr.Cluster.Fixtures do
   another turn holds the thread, `{:error, :stale}` when a peer accepted
   the next message first.
   """
-  @spec start_turn(String.t(), String.t(), non_neg_integer(), pos_integer()) ::
+  @spec start_turn(String.t(), String.t(), non_neg_integer(), pos_integer(), keyword()) ::
           {:ok, map()} | {:error, term()}
-  def start_turn(athanor_id, turn_id, turn_seq, fence) do
-    case Arca.TurnStorage.start(actor(athanor_id), turn_id, %{fence: fence, turn_seq: turn_seq}) do
+  def start_turn(athanor_id, turn_id, turn_seq, fence, opts \\ []) do
+    attrs =
+      with_root(%{fence: fence, turn_seq: turn_seq}, Keyword.get(opts, :root, false), athanor_id)
+
+    case Arca.TurnStorage.start(actor(athanor_id), turn_id, attrs) do
       {:ok, turn} -> {:ok, %{id: turn.id, status: turn.status, runner_id: turn.runner_id}}
       other -> other
     end
+  end
+
+  # A turn that will be suspended needs the root execution a real one
+  # carries: `suspend/3` closes the attempt's running interval, and a turn
+  # with no attempt has none to close.
+  defp with_root(attrs, false, _athanor_id), do: attrs
+
+  defp with_root(attrs, true, athanor_id) do
+    {:ok, %{execution: execution, attempt: attempt}} =
+      Arca.Execution.admit(%{
+        id: Cyfr.UUID7.execution_id(),
+        reference: "formula:local.cluster-turn:1.0.0",
+        user_id: "usr_cluster",
+        athanor_id: athanor_id,
+        component_type: "formula"
+      })
+
+    Map.merge(attrs, %{root_execution_id: execution.id, attempt: attempt.attempt})
   end
 
   @doc """
@@ -135,6 +156,111 @@ defmodule Cyfr.Cluster.Fixtures do
       {:ok, thread} -> {:ok, thread.active_turn_id}
       other -> other
     end
+  end
+
+  @doc """
+  Set `turn_id` down from this member (`turn.suspend`'s storage half):
+  every Tape row is preserved and the thread's claim is given up, so any
+  member may pick the turn up.
+  """
+  @spec suspend_turn(String.t(), String.t(), pos_integer(), String.t()) ::
+          {:ok, map()} | {:error, term()}
+  def suspend_turn(athanor_id, turn_id, fence, reason) do
+    case Arca.TurnStorage.suspend(actor(athanor_id), turn_id, %{fence: fence, reason: reason}) do
+      {:ok, turn} -> {:ok, turn(turn)}
+      other -> other
+    end
+  end
+
+  @doc """
+  Take `turn_id` on this member and carry it on (`turn.recover`'s storage
+  half): the thread's claim and the recovery count in one transaction, so
+  a member that did not take the claim cannot spend a recovery.
+  """
+  @spec recover_turn(String.t(), String.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
+  def recover_turn(athanor_id, turn_id, fence) do
+    case Arca.TurnStorage.recover(actor(athanor_id), turn_id, %{fence: fence}) do
+      {:ok, turn} -> {:ok, turn(turn)}
+      other -> other
+    end
+  end
+
+  @doc "The turn row as this member reads it."
+  @spec turn(String.t(), String.t()) :: map() | {:error, term()}
+  def turn(athanor_id, turn_id) do
+    case Arca.TurnStorage.get(actor(athanor_id), turn_id) do
+      {:ok, row} -> turn(row)
+      other -> other
+    end
+  end
+
+  defp turn(row) do
+    Map.take(row, [
+      :id,
+      :status,
+      :paused_reason,
+      :fence,
+      :runner_id,
+      :recovery_attempts,
+      :thread_id
+    ])
+  end
+
+  @doc "How many messages `thread_id` holds, as this member counts them."
+  @spec messages(String.t(), String.t()) :: non_neg_integer()
+  def messages(athanor_id, thread_id),
+    do: length(Arca.ThreadStorage.messages(actor(athanor_id), thread_id))
+
+  @doc "A pending approval on `thread_id`, as a row a decision is a compare-and-set on."
+  @spec approval!(String.t(), String.t()) :: String.t()
+  def approval!(athanor_id, thread_id) do
+    {:ok, thread} = Arca.ThreadStorage.get(actor(athanor_id), thread_id)
+    id = Cyfr.UUID7.generate_id("msg")
+
+    Arca.ThreadStorage.insert_message!(actor(athanor_id), thread, %{
+      id: id,
+      author: "usr_cluster",
+      kind: "approval",
+      status: "pending",
+      content: "may I?",
+      approval_id: id
+    })
+
+    id
+  end
+
+  @doc "The pending approvals of `thread_id`, as this member reads them."
+  @spec pending_approvals(String.t(), String.t()) :: [String.t()]
+  def pending_approvals(athanor_id, thread_id) do
+    athanor_id
+    |> actor()
+    |> Arca.ThreadStorage.pending_approvals(thread_id)
+    |> Enum.map(& &1.id)
+  end
+
+  @doc "Decide `approval_id` from this member — a compare-and-set on its status."
+  @spec decide(String.t(), String.t(), String.t()) :: term()
+  def decide(athanor_id, approval_id, to) do
+    case Arca.ThreadStorage.resolve_approval(actor(athanor_id), approval_id, ["pending"], to, %{
+           decided_by: "usr_cluster"
+         }) do
+      {:ok, row} -> {:ok, row.status}
+      other -> other
+    end
+  end
+
+  @doc "Spend `turn_id`'s recovery budget down to the cap, as three recoveries would."
+  @spec spend_recoveries(String.t(), String.t()) :: :ok
+  def spend_recoveries(athanor_id, turn_id) do
+    import Ecto.Query, only: [from: 2]
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(t in Arca.Schemas.Turn, where: t.id == ^turn_id and t.athanor_id == ^athanor_id),
+        set: [recovery_attempts: Arca.TurnStorage.recovery_cap()]
+      )
+
+    :ok
   end
 
   @doc "Who holds `thread_id`'s claim, as this member reads it."
