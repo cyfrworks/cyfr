@@ -89,13 +89,19 @@ defmodule Arca.VaultStorageTest do
         # neither is the athanor id on its own: both miss every head.
         not_an_actor = %{athanor_id: actor.athanor_id}
 
-        assert_raise FunctionClauseError, fn -> VaultStorage.get(not_an_actor, "vlt_x") end
-        assert_raise FunctionClauseError, fn -> VaultStorage.get(actor.athanor_id, "vlt_x") end
-        assert_raise FunctionClauseError, fn -> VaultStorage.list(not_an_actor) end
-        assert_raise FunctionClauseError, fn -> VaultStorage.list(actor.athanor_id) end
+        assert_raise FunctionClauseError, fn ->
+          apply(VaultStorage, :get, [not_an_actor, "vlt_x"])
+        end
 
         assert_raise FunctionClauseError, fn ->
-          VaultStorage.rotate_payload(actor.athanor_id, "vlt_x", 0, "sealed")
+          apply(VaultStorage, :get, [actor.athanor_id, "vlt_x"])
+        end
+
+        assert_raise FunctionClauseError, fn -> apply(VaultStorage, :list, [not_an_actor]) end
+        assert_raise FunctionClauseError, fn -> apply(VaultStorage, :list, [actor.athanor_id]) end
+
+        assert_raise FunctionClauseError, fn ->
+          apply(VaultStorage, :rotate_payload, [actor.athanor_id, "vlt_x", 0, "sealed"])
         end
 
         nil_athanor = %Cyfr.Actor{athanor_id: nil}

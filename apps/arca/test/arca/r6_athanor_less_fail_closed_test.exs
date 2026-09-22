@@ -27,13 +27,16 @@ defmodule Arca.R6AthanorLessFailClosedTest do
   describe "where_tenant/2 — actors with no athanor" do
     test "raises for an unauthenticated actor with none" do
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-        QueryHelpers.where_tenant(base_query(), %Actor{athanor_id: nil})
+        apply(QueryHelpers, :where_tenant, [base_query(), %Actor{athanor_id: nil}])
       end
     end
 
     test "raises for an authenticated actor with none" do
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-        QueryHelpers.where_tenant(base_query(), %Actor{athanor_id: nil, authenticated: true})
+        apply(QueryHelpers, :where_tenant, [
+          base_query(),
+          %Actor{athanor_id: nil, authenticated: true}
+        ])
       end
     end
 

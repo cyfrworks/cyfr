@@ -219,8 +219,12 @@ jobs:
       # --warnings-as-errors covers the .exs files `mix test` loads, which a
       # forced compile never reads: a warning in a test fails the build as
       # one in the application does.
+      - name: Verify partition infrastructure
+        run: |
+          bash tests/test-partitioned-test.sh
+          elixir tests/test-partition-env-test.exs
       - name: Run tests
-        run: mix test --warnings-as-errors
+        run: scripts/test-partitioned.sh -a "${{ matrix.db }}" -- --warnings-as-errors
 
   cluster:
     name: One cell on two members (Postgres and MinIO)
@@ -296,7 +300,7 @@ jobs:
       # --only cluster fails the job if it matches nothing, which is what
       # stops a suite that silently stopped running.
       - name: Run the two-node suite
-        run: mix test --warnings-as-errors --only cluster apps/cyfr/test/cluster
+        run: scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors --only cluster apps/cyfr/test/cluster
       - name: MinIO logs
         if: failure()
         run: docker logs minio
@@ -500,15 +504,11 @@ jobs:
           echo "MinIO did not become healthy" >&2
           docker logs minio || true
           exit 1
-      # From the umbrella root, so both suites that carry the tag run: the
-      # adapter's contract and the publication contract of a unit are the
-      # storage layer's, and the CYFR suite's boot wires the Opus worker
-      # service that its own tagged cases need. The store is read from the
-      # environment (`Arca.Test.S3Env`), whose defaults name this
-      # container, so nothing is passed here. Only a real object store
-      # proves either contract.
+      # Arca owns the tagged adapter, append-parity and publication suites.
+      # Scope the run to that app so unrelated umbrella apps with no matching
+      # tests do not fail --only. The store's defaults name this container.
       - name: Run the S3 integration suite
-        run: mix test --only s3_integration
+        run: scripts/test-partitioned.sh -n 1 -a sqlite apps/arca/test --warnings-as-errors --only s3_integration
       # What the server thought of the requests, when it refused them.
       - name: MinIO logs
         if: failure()

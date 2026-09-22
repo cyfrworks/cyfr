@@ -51,30 +51,23 @@ config :cyfr, :oci_registry_url, "127.0.0.1:19"
 # it owns, so a burst of concurrent tasks each writing an audit row queues on
 # it. The production queue drop target (50 ms) is tuned for a real pool and
 # would drop those requests under load; give the single shared connection room.
-# `mix test --partitions N` runs each partition in its own OS process, all of
-# them in this checkout, so a name keyed by the checkout alone would put every
-# partition on one database. MIX_TEST_PARTITION is set only while partitioning;
-# an unpartitioned run keeps the name it has always had.
-test_partition =
-  case System.get_env("MIX_TEST_PARTITION") do
-    nil -> ""
-    "" -> ""
-    partition -> "_p#{partition}"
-  end
+# The runner supplies one private root per checkout/run/partition. Direct
+# Mix invocations also get collision-resistant disposable roots; timestamps
+# alone collide when multiple VMs evaluate config in the same millisecond.
+test_partition = System.get_env("MIX_TEST_PARTITION", "0")
+
+test_run_root =
+  System.get_env("CYFR_TEST_RUN_ROOT") ||
+    Path.join(
+      System.tmp_dir!(),
+      "cyfr_test_#{:erlang.phash2(Path.expand("."))}_#{System.pid()}_" <>
+        "#{Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)}_p#{test_partition}"
+    )
 
 case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
   :sqlite ->
-    # Stable across runs (so migrations are reused) and keyed by checkout
-    # (so two worktrees never share a file) — but OUT of the repo's data/:
-    # a run that dies mid-suite must not leave a database that poisons the
-    # next one inside the working tree.
     config :arca, Arca.Repo,
-      database:
-        Path.join([
-          System.tmp_dir!(),
-          "cyfr_test_db_#{:erlang.phash2(Path.expand("."))}#{test_partition}",
-          "test.db"
-        ]),
+      database: Path.join(test_run_root, "test.db"),
       pool: Ecto.Adapters.SQL.Sandbox,
       pool_size: 20,
       ownership_timeout: 60_000,
@@ -90,7 +83,7 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
     config :arca, Arca.Repo,
       url:
         System.get_env("CYFR_DATABASE_URL") ||
-          "postgres://cyfr:cyfr@localhost:5432/cyfr_test#{test_partition}",
+          "postgres://cyfr:cyfr@localhost:5432/cyfr_test_p#{test_partition}",
       pool: Ecto.Adapters.SQL.Sandbox,
       pool_size: 20,
       ownership_timeout: 60_000,
@@ -180,11 +173,9 @@ config :cyfr, database_checks_enabled: false
 # write the repo's own trees. test_helper.exs copies the shipped AQUA
 # template into the throwaway seed tree — it is only ever read in place
 # through the overlay. test_helper.exs removes both roots after the suite.
-test_run = "cyfr_test_#{System.system_time(:millisecond)}"
-
 config :arca,
-  base_path: Path.join(System.tmp_dir!(), "#{test_run}_data"),
-  seed_path: Path.join(System.tmp_dir!(), "#{test_run}_seed")
+  base_path: Path.join(test_run_root, "data"),
+  seed_path: Path.join(test_run_root, "seed")
 
 # Sanctum test configuration
 config :sanctum,

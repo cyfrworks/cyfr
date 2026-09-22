@@ -335,7 +335,7 @@ defmodule MultiTenantIsolationTest do
       # And an athanor supplied as an argument is not a tenant at all —
       # neither a context, nor a bare id, nor a value smuggled in the
       # attributes selects one.
-      assert_raise FunctionClauseError, fn -> Arca.VaultStorage.put(ctx, attrs) end
+      assert_raise FunctionClauseError, fn -> apply(Arca.VaultStorage, :put, [ctx, attrs]) end
 
       assert_raise ArgumentError, fn ->
         Arca.VaultStorage.put(

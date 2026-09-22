@@ -40,7 +40,7 @@ defmodule Arca.QueryHelpersTest do
       actor = %Cyfr.Actor{athanor_id: nil, authenticated: true}
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-        QueryHelpers.where_tenant(base_query(), actor)
+        apply(QueryHelpers, :where_tenant, [base_query(), actor])
       end
     end
 
@@ -51,7 +51,7 @@ defmodule Arca.QueryHelpersTest do
       actor = %Cyfr.Actor{athanor_id: "", authenticated: true}
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-        QueryHelpers.where_tenant(base_query(), actor)
+        apply(QueryHelpers, :where_tenant, [base_query(), actor])
       end
     end
 
@@ -59,13 +59,13 @@ defmodule Arca.QueryHelpersTest do
       # Platform readers that cross athanors use where_tenant_unless_platform/2;
       # a platform task working inside one athanor carries that athanor.
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
-        QueryHelpers.where_tenant(base_query(), platform())
+        apply(QueryHelpers, :where_tenant, [base_query(), platform()])
       end
     end
 
     test "a plain map carrying an athanor is not an actor: no head matches it" do
       assert_raise FunctionClauseError, fn ->
-        QueryHelpers.where_tenant(base_query(), %{athanor_id: "ath_1", user_id: "u"})
+        apply(QueryHelpers, :where_tenant, [base_query(), %{athanor_id: "ath_1", user_id: "u"}])
       end
     end
   end
@@ -90,10 +90,10 @@ defmodule Arca.QueryHelpersTest do
 
     test "a plain map is not an actor here either, whatever scope it claims" do
       assert_raise FunctionClauseError, fn ->
-        QueryHelpers.where_tenant_unless_platform(base_query(), %{
-          athanor_id: "ath_1",
-          scope: :platform
-        })
+        apply(QueryHelpers, :where_tenant_unless_platform, [
+          base_query(),
+          %{athanor_id: "ath_1", scope: :platform}
+        ])
       end
     end
   end
