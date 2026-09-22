@@ -206,10 +206,13 @@ defmodule Cyfr.CellTest do
     test "a member that finds a live peer refuses to boot without the cluster flag", %{node: node} do
       claim_enabled(true)
       peer = node <> "-peer"
+
+      # A peer holding a lease longer than this member's own is a live
+      # server, not a predecessor to wait out: refused at once.
       assert {:ok, _} = ControlPlane.take(peer, "boot-peer", 60_000)
 
       assert {:error, {%RuntimeError{message: message}, _stack}} =
-               Cell.start_link(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
+               Cell.start_link(name: nil, node_name: node, lease_ms: 500, renew_ms: 60_000)
 
       assert message =~ "another control plane (boot-peer on #{peer})"
       assert message =~ "CYFR_CLUSTER=1"
@@ -218,6 +221,25 @@ defmodule Cyfr.CellTest do
       # it found it.
       assert {:ok, %{lease_until: until}} = ControlPlane.slot(node)
       assert DateTime.compare(until, Arca.ServerMetaStorage.now!()) != :gt
+    end
+
+    @tag :capture_log
+    test "a peer whose name changed under it is waited out, not refused", %{node: node} do
+      claim_enabled(true)
+      peer = node <> "-peer"
+
+      # The predecessor came back on a new address, so its old slot is a
+      # row nobody renews: waited out once, within a lease of our own.
+      assert {:ok, _} = ControlPlane.take(peer, "boot-gone", 300)
+
+      started = System.monotonic_time(:millisecond)
+      {:ok, pid} = Cell.start_link(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
+      waited = System.monotonic_time(:millisecond) - started
+
+      assert waited >= 250
+      assert ControlPlane.held?()
+
+      :ok = GenServer.stop(pid)
     end
 
     @tag :capture_log

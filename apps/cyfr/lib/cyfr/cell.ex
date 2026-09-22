@@ -445,23 +445,49 @@ defmodule Cyfr.Cell do
   # row as it found it.
   defp refuse_live_peers!(%{cluster?: true}), do: :ok
 
-  defp refuse_live_peers!(state) do
+  defp refuse_live_peers!(state), do: refuse_live_peers!(state, :wait)
+
+  defp refuse_live_peers!(state, wait) do
+    case peers(state) do
+      [] ->
+        :ok
+
+      [peer | _] when wait == :wait ->
+        # A peer's slot under another node name is a live server or a
+        # predecessor whose name changed under it — a host that came back
+        # on a new address, a deployment that turned distribution on — and
+        # only time tells. Wait its lease out once, never longer than a
+        # lease of our own, and look again.
+        wait_ms = DateTime.diff(peer.lease_until, Arca.ServerMetaStorage.now!(), :millisecond)
+
+        if wait_ms > 0 and wait_ms <= state.lease_ms + @wait_slack_ms do
+          Logger.warning(
+            "[Cyfr.Cell] #{peer.owner} on #{peer.node} holds this database until " <>
+              "#{DateTime.to_iso8601(peer.lease_until)}; waiting #{wait_ms} ms for it to " <>
+              "renew or lapse"
+          )
+
+          Process.sleep(wait_ms + @wait_slack_ms)
+        end
+
+        refuse_live_peers!(state, :refuse)
+
+      [peer | _] ->
+        _ = Arca.ControlPlane.release()
+
+        raise "[Cyfr] FATAL: another control plane (#{peer.owner} on #{peer.node}) holds " <>
+                "this database until #{DateTime.to_iso8601(peer.lease_until)} and is " <>
+                "renewing it. Two servers on one database each run every sweep and accept " <>
+                "every turn. Stop the other one, or set CYFR_CLUSTER=1 — which needs " <>
+                "Postgres, shared object storage, TLS distribution, a cell cookie, a " <>
+                "discovery topology and a shared worker key."
+    end
+  end
+
+  defp peers(state) do
     case Arca.ControlPlane.roster() do
       {:ok, members} ->
-        case Enum.reject(members, &(&1.node == state.slot)) do
-          [] ->
-            :ok
-
-          [peer | _] ->
-            _ = Arca.ControlPlane.release()
-
-            raise "[Cyfr] FATAL: another control plane (#{peer.owner} on #{peer.node}) holds " <>
-                    "this database until #{DateTime.to_iso8601(peer.lease_until)} and is " <>
-                    "renewing it. Two servers on one database each run every sweep and accept " <>
-                    "every turn. Stop the other one, or set CYFR_CLUSTER=1 — which needs " <>
-                    "Postgres, shared object storage, TLS distribution, a cell cookie, a " <>
-                    "discovery topology and a shared worker key."
-        end
+        Enum.reject(members, &(&1.node == state.slot))
 
       {:error, reason} ->
         _ = Arca.ControlPlane.release()
