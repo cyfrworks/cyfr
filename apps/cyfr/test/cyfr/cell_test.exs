@@ -36,6 +36,15 @@ defmodule Cyfr.CellTest do
     saved = for key <- keys(), do: {key, :persistent_term.get(key, :absent)}
     claim = Application.get_env(:arca, :control_plane_claim_enabled)
 
+    # Saving and restoring leaves this file clean behind it, which is not
+    # the same as starting clean: these four are `:persistent_term`, so any
+    # other file that recorded a standing or a generation and did not put it
+    # back is state this case inherits. "Holds no generation" then reads a
+    # neighbour's instead of nothing, and the case passes or fails on the
+    # suite's order. Each case starts from erased, and the restore still
+    # hands back whatever the run had before the file.
+    for key <- keys(), do: :persistent_term.erase(key)
+
     on_exit(fn ->
       for {key, value} <- saved, do: restore(key, value)
       Application.put_env(:arca, :control_plane_claim_enabled, claim)

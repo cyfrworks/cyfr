@@ -51,6 +51,17 @@ config :cyfr, :oci_registry_url, "127.0.0.1:19"
 # it owns, so a burst of concurrent tasks each writing an audit row queues on
 # it. The production queue drop target (50 ms) is tuned for a real pool and
 # would drop those requests under load; give the single shared connection room.
+# `mix test --partitions N` runs each partition in its own OS process, all of
+# them in this checkout, so a name keyed by the checkout alone would put every
+# partition on one database. MIX_TEST_PARTITION is set only while partitioning;
+# an unpartitioned run keeps the name it has always had.
+test_partition =
+  case System.get_env("MIX_TEST_PARTITION") do
+    nil -> ""
+    "" -> ""
+    partition -> "_p#{partition}"
+  end
+
 case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
   :sqlite ->
     # Stable across runs (so migrations are reused) and keyed by checkout
@@ -61,7 +72,7 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
       database:
         Path.join([
           System.tmp_dir!(),
-          "cyfr_test_db_#{:erlang.phash2(Path.expand("."))}",
+          "cyfr_test_db_#{:erlang.phash2(Path.expand("."))}#{test_partition}",
           "test.db"
         ]),
       pool: Ecto.Adapters.SQL.Sandbox,
@@ -74,10 +85,12 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
       busy_timeout: 20_000
 
   :postgres ->
+    # A partitioned run that names no URL still gets one database per
+    # partition; `scripts/test-partitioned.sh` names them explicitly.
     config :arca, Arca.Repo,
       url:
         System.get_env("CYFR_DATABASE_URL") ||
-          "postgres://cyfr:cyfr@localhost:5432/cyfr_test",
+          "postgres://cyfr:cyfr@localhost:5432/cyfr_test#{test_partition}",
       pool: Ecto.Adapters.SQL.Sandbox,
       pool_size: 20,
       ownership_timeout: 60_000,
