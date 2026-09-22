@@ -286,9 +286,8 @@ defmodule Arca.ScheduleOccurrences do
   # Occurrences no live member is holding: the claimant's boot is not in
   # the cell's live roster, or the claim is older than the caller's window
   # whoever made it. `claimed_by` is never null for a row `claim/3` wrote;
-  # one that is has no claimant to be alive.
-  # arca:unscoped-ok the daemon's read spans every athanor; each row is
-  # acted on under its own schedule's actor.
+  # one that is has no claimant to be alive. The query is built here and
+  # run by `recoverable/1`, which carries the tenancy marker for it.
   defp abandoned(claimed_before) do
     live_owners =
       from(l in Arca.Schemas.CellLease,

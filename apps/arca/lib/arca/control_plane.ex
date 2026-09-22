@@ -224,7 +224,16 @@ defmodule Arca.ControlPlane do
           )
           |> case do
             {1, _} ->
-              {:ok, won(read(slot.node), lease_ms, started)}
+              # What the statement set, not what a later read would see:
+              # the renew keeps this member's own generation, and a
+              # successor's must never be mistaken for it.
+              renewed = %{
+                slot
+                | fence: slot.fence + 1,
+                  lease_until: lease_end(now, lease_ms)
+              }
+
+              {:ok, won(renewed, lease_ms, started)}
 
             {0, _} ->
               lost()
@@ -388,7 +397,7 @@ defmodule Arca.ControlPlane do
   # cache cannot drift: the slot the next write names, the generation
   # stamped outward, and the time left counted from the instant BEFORE the
   # write went out.
-  defp won(%CellLease{} = row, lease_ms, started) do
+  defp won(row, lease_ms, started) do
     slot = %{
       node: row.node,
       owner: row.owner,
@@ -417,13 +426,18 @@ defmodule Arca.ControlPlane do
     end
   end
 
+  # What a write that landed is answered with is built from what the
+  # statement SET, never re-read. A read after the write could see a
+  # successor's row and hand this member a generation that is not its
+  # own — the quietest way there is to believe a fence that fences
+  # nothing.
   defp do_take(node, owner, lease_ms, rounds) do
     now = Arca.ServerMetaStorage.now!()
 
     case read(node) do
       nil ->
         if insert(node, owner, lease_ms, now),
-          do: {:ok, read(node)},
+          do: {:ok, opened(node, owner, lease_ms, now)},
           else: do_take(node, owner, lease_ms, rounds - 1)
 
       %CellLease{} = row ->
@@ -432,14 +446,14 @@ defmodule Arca.ControlPlane do
             # This boot's own slot, still standing: pushed out under the
             # same generation. A member is not its own successor.
             if push(row, lease_ms, now),
-              do: {:ok, read(node)},
+              do: {:ok, pushed(row, lease_ms, now)},
               else: do_take(node, owner, lease_ms, rounds - 1)
 
           live?(row, now) ->
             {:busy, row}
 
           take_over(row, owner, lease_ms, now) ->
-            {:ok, read(node)}
+            {:ok, %{pushed(row, lease_ms, now) | owner: owner, generation: row.generation + 1}}
 
           true ->
             do_take(node, owner, lease_ms, rounds - 1)
@@ -447,8 +461,24 @@ defmodule Arca.ControlPlane do
     end
   end
 
+  defp opened(node, owner, lease_ms, now) do
+    %CellLease{
+      node: node,
+      owner: owner,
+      generation: 1,
+      fence: 1,
+      lease_until: lease_end(now, lease_ms),
+      taken_at: now
+    }
+  end
+
+  defp pushed(%CellLease{} = row, lease_ms, now) do
+    %CellLease{row | fence: row.fence + 1, lease_until: lease_end(now, lease_ms)}
+  end
+
   # The primary key on `node` decides a race between two first takes: the
-  # loser inserts nothing and reads the winner's row.
+  # loser inserts nothing and goes round again, where it finds the
+  # winner's row.
   defp insert(node, owner, lease_ms, now) do
     row = %{
       node: node,

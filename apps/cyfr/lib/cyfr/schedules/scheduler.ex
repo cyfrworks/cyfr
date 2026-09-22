@@ -330,7 +330,17 @@ defmodule Cyfr.Schedules.Scheduler do
   # The occurrence is taken from its abandoned claimant in one statement
   # before anything is run under it: of two recoverers reading the same
   # row, one takes it and the other is told `:held` and does nothing.
+  #
+  # The slot is asked again for each occurrence, not once for the pass: a
+  # member whose slot lapsed part-way through a recovery writes nothing
+  # more, take included.
   defp rerun_claimed(occurrence, state, generation) do
+    if still_ours?(generation),
+      do: take_and_rerun(occurrence, state, generation),
+      else: recover_later(state)
+  end
+
+  defp take_and_rerun(occurrence, state, generation) do
     with :ok <- take_over(occurrence),
          {:ok, %{status: "active"} = schedule} <-
            CronSchedule.get_for_daemon(occurrence.schedule_id),

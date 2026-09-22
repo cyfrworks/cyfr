@@ -15,7 +15,11 @@ defmodule Arca.AgentStorageTest do
   Every case works in an athanor of its own, so what it counts is its own.
   """
 
-  use ExUnit.Case, async: true
+  # A claim and a whole index rewrite are two write transactions on one
+  # SQLite write lock, long enough that a neighbouring async case is told
+  # the database is busy — so this one runs alone, as the claims suite
+  # does for the same reason.
+  use ExUnit.Case, async: false
 
   alias Arca.AgentStorage
   alias Arca.ProvisioningClaims, as: Claims
