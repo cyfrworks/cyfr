@@ -125,13 +125,26 @@ defmodule Cyfr.Cluster.HostRoutingTest do
   end
 
   describe "the same signed call posted at the peer" do
-    test "is refused, and the run is still the holding member's to finish" do
+    # A freshly formed cell has every member at generation 1, since a
+    # slot's generation rises only when that slot is taken over. This
+    # database outlives the run, so the two members have drifted apart;
+    # the peer is put back at the issuer's generation for every case
+    # here, which is the state a new deployment starts in. With the
+    # generations equal there is nothing left between the peer and the
+    # rows but the member the call names — and that is the whole of this
+    # repair, so a case that let the generations differ would be proving
+    # the fence that was already there.
+    setup do
+      {:ok, generation: same_generation!()}
+    end
+
+    test "is refused, and the run is still the holding member's to finish", context do
       held = attempt(:a, :strayed)
 
       # The same call, made once, delivered to the peer. Nothing about it
       # differs; only which member is asked to answer it. The peer refuses
       # it on the header alone, before it reads the body.
-      assert {401, %{"error" => "lost"}} = post(completion(held), Cell.member(:b).host_api)
+      assert {401, %{"error" => "lost"}} = refused_by_peer!(completion(held), context.generation)
 
       # A completion an attempt's process never saw is a completion that
       # did not happen: the execution is still running, and the guest's
@@ -150,11 +163,11 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       )
     end
 
-    test "cannot attach a runner on the peer either" do
+    test "cannot attach a runner on the peer either", context do
       held = attempt(:a, :unattached, attach: false)
       attach = call(held, "attach", %{"assignment" => held.assignment})
 
-      assert {401, %{"error" => "lost"}} = post(attach, Cell.member(:b).host_api)
+      assert {401, %{"error" => "lost"}} = refused_by_peer!(attach, context.generation)
 
       # The attempt is still unclaimed, so nothing about the peer's refusal
       # left it half-held, and the member it names still claims it.
@@ -164,31 +177,12 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       assert Observer.attempt(held.attempt)["claimed_by"] == held.runner
     end
 
-    test "is refused a lease renewal it could have written from the rows" do
+    test "is refused a lease renewal it could have written from the rows", context do
       held = attempt(:a, :renewed)
-      assert {:ok, generation} = Cell.call(:a, Arca.ControlPlane, :generation, [])
-
-      # A freshly formed cell has every member at generation 1, since a
-      # slot's generation rises only when that slot is taken over. This
-      # database outlives the run, so the two members have drifted apart;
-      # the peer is put back at the issuer's generation, which is the state
-      # a new deployment starts in. With the generations equal there is
-      # nothing between the peer and the row but the member the call names,
-      # and that is the whole of this repair.
-      peer = Cell.call(:b, Arca.ControlPlane, :generation, [])
-      Cell.call(:b, Arca.ControlPlane, :record_generation, [generation])
-
-      on_exit(fn ->
-        case peer do
-          {:ok, was} -> Cell.call(:b, Arca.ControlPlane, :record_generation, [was])
-          _none -> :ok
-        end
-      end)
-
       before = Observer.attempt(held.attempt)["lease_until"]
       renew = call(held, "renew", %{"attempts" => [held.attempt]})
 
-      assert {401, %{"error" => "lost"}} = post(renew, Cell.member(:b).host_api),
+      assert {401, %{"error" => "lost"}} = refused_by_peer!(renew, context.generation),
              "the peer renewed the lease of an attempt it holds none of the work for"
 
       assert Observer.attempt(held.attempt)["lease_until"] == before
@@ -201,15 +195,17 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       assert NaiveDateTime.compare(Observer.attempt(held.attempt)["lease_until"], before) == :gt
     end
 
-    test "is refused a runner's exit report, so the peer lapses nothing" do
+    test "is refused a runner's exit report, so the peer lapses nothing", context do
       held = attempt(:a, :reported)
       before = Observer.attempt(held.attempt)["lease_until"]
       report = exit_report(held)
 
       # A report carries its member in its args rather than its header —
-      # the header's kind is shared with the requests CYFR sends a worker —
-      # so the peer reads it and refuses it, rather than refusing it unread.
-      assert {200, %{"error" => "lost"}} = post(report, Cell.member(:b).host_api)
+      # the header's kind is shared with the requests CYFR sends a worker,
+      # which name no member — so the peer reads it and refuses it, rather
+      # than refusing it unread. Its header carries no generation either,
+      # so the member is the only thing that can refuse it.
+      assert {200, %{"error" => "lost"}} = refused_by_peer!(report, context.generation)
       assert Observer.attempt(held.attempt)["state"] == "running"
       assert Observer.attempt(held.attempt)["lease_until"] == before
 
@@ -225,15 +221,13 @@ defmodule Cyfr.Cluster.HostRoutingTest do
 
   describe "a member that is gone" do
     test "fails a worker's calls differently from one that refuses, and its run is recovered" do
+      generation = same_generation!()
       held = attempt(:a, :orphaned)
 
       # A refusal is an answer: the peer is reached, verifies the call and
       # says `lost`. The worker knows CYFR heard it and said no.
       assert {401, %{"error" => "lost"}} =
-               post(
-                 call(held, "renew", %{"attempts" => [held.attempt]}),
-                 Cell.member(:b).host_api
-               )
+               refused_by_peer!(call(held, "renew", %{"attempts" => [held.attempt]}), generation)
 
       Cell.kill(:a)
 
@@ -287,6 +281,36 @@ defmodule Cyfr.Cluster.HostRoutingTest do
     :runner,
     :member
   ]
+
+  # The peer put back at the issuer's generation, and put back as it was
+  # when the case ends. A refusal measured while the generations differ
+  # would be the generation's, not the member's.
+  defp same_generation!(issuer \\ :a, peer \\ :b) do
+    assert {:ok, generation} = Cell.call(issuer, Arca.ControlPlane, :generation, [])
+    was = Cell.call(peer, Arca.ControlPlane, :generation, [])
+    Cell.call(peer, Arca.ControlPlane, :record_generation, [generation])
+
+    on_exit(fn ->
+      case was do
+        {:ok, previous} -> Cell.call(peer, Arca.ControlPlane, :record_generation, [previous])
+        _none -> :ok
+      end
+    end)
+
+    generation
+  end
+
+  # Post at the peer, with the peer's generation read on both sides of the
+  # post and asserted equal to the issuer's. A call refused while the two
+  # differ was refused by the generation, which fenced it before this
+  # repair; with them equal the only thing left to refuse it is the member
+  # the call names.
+  defp refused_by_peer!(call, generation) do
+    assert {:ok, ^generation} = Cell.call(:b, Arca.ControlPlane, :generation, [])
+    answer = post(call, Cell.member(:b).host_api)
+    assert {:ok, ^generation} = Cell.call(:b, Arca.ControlPlane, :generation, [])
+    answer
+  end
 
   # An attempt held open on `id` under `label`, with nothing of an earlier
   # case still held there.
