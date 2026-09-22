@@ -27,11 +27,22 @@ defmodule Cyfr.Cluster.Fixtures do
               Arca.ScheduleOccurrences,
               Arca.ThreadStorage,
               Arca.TurnStorage,
+              Arca.Cache,
+              Arca.Cache.Keys,
+              Arca.ExecutionEvents,
               Cyfr.Actor,
               Cyfr.Authority.Budget,
               Cyfr.Boot,
+              Cyfr.Execution,
+              Cyfr.Execution.Events,
               Cyfr.UUID7,
-              Sanctum.Authority.BudgetCounter
+              Sanctum.Authority.BudgetCounter,
+              Sanctum.Caller,
+              Sanctum.Context,
+              Sanctum.Provisioning,
+              Sanctum.Session,
+              Sanctum.Tenancy.Athanors,
+              Sanctum.Tenancy.Users
             ]}
 
   @doc "An athanor of this case's own, created on the member this runs on."
@@ -218,6 +229,121 @@ defmodule Cyfr.Cluster.Fixtures do
       })
 
     %{id: schedule.id, next_run_at: schedule.next_run_at}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Provisioning, sessions and event streams
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Take `athanor_id`'s provisioning claim on this member, for the boot-
+  scoped owner a fill runs under. `{:ok, claim}` or
+  `{:error, :provisioning_busy}` — what a second first touch is answered.
+  """
+  @spec take_estate(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def take_estate(athanor_id, entry_kind) do
+    case Sanctum.Provisioning.take_claim(athanor_id, entry_kind) do
+      {:ok, claim} -> {:ok, %{owner: claim.owner, fence: claim.fence, attempt: claim.attempt}}
+      other -> other
+    end
+  end
+
+  @doc "What this member sees of `athanor_id`'s filling: `:ready | :filling | :failed | :unfilled | :unavailable`."
+  @spec estate_status(String.t()) :: atom()
+  def estate_status(athanor_id),
+    do: Sanctum.Provisioning.status(Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor))
+
+  @doc "A person with a session of their own, and their group athanor."
+  @spec person!() :: map()
+  def person! do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|cluster-#{n}",
+        provider: "github",
+        email: "cluster#{n}@example.com",
+        verified: true,
+        name: "Cluster #{n}"
+      })
+
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.id, "Cluster #{n}")
+
+    {:ok, session} =
+      Sanctum.Session.create(%{
+        Sanctum.Context.build(
+          user_id: user.id,
+          athanor_id: group.id,
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
+        | provider: "github",
+          email: user.email
+      })
+
+    %{
+      user_id: user.id,
+      athanor_id: group.id,
+      token: session.token,
+      hash: Sanctum.Session.token_hash(session.token)
+    }
+  end
+
+  @doc "Establish a caller from `token` on this member, warming its memo."
+  @spec establish(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def establish(token) do
+    case Sanctum.Caller.establish(token) do
+      {:ok, ctx} -> {:ok, ctx.athanor_id}
+      other -> other
+    end
+  end
+
+  @doc "Whether this member still holds a memo for `hash`."
+  @spec memo?(binary()) :: boolean()
+  def memo?(hash), do: Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) != []
+
+  @doc "Archive `athanor_id` from this member, which announces the invalidation."
+  @spec archive!(String.t()) :: atom()
+  def archive!(athanor_id) do
+    {:ok, athanor} = Arca.Athanors.get(Cyfr.Actor.system(), athanor_id)
+    {:ok, archived} = Sanctum.Tenancy.Athanors.archive(athanor)
+    archived.status
+  end
+
+  @doc "An execution of `athanor_id` with `n` durable events after its start."
+  @spec stream!(String.t(), pos_integer()) :: map()
+  def stream!(athanor_id, n) do
+    {:ok, %{execution: execution}} =
+      Arca.Execution.admit(%{
+        id: Cyfr.UUID7.execution_id(),
+        reference: "reagent:local.cluster-stream:0.1.0",
+        user_id: "usr_cluster",
+        athanor_id: athanor_id,
+        component_type: "reagent"
+      })
+
+    seqs =
+      for i <- 1..n do
+        {:ok, row} =
+          Arca.ExecutionEvents.append(actor(athanor_id), execution.id, "step.closed",
+            data: %{"step" => "s#{i}"}
+          )
+
+        :ok = Cyfr.Execution.Events.publish(execution.id, execution, "step.closed", row.seq, %{})
+        row.seq
+      end
+
+    %{id: execution.id, athanor_id: athanor_id, seqs: seqs}
+  end
+
+  @doc "The event ids this member would replay to a reader whose cursor is `after_seq`."
+  @spec replay(String.t(), String.t(), non_neg_integer()) :: [String.t()]
+  def replay(athanor_id, execution_id, after_seq) do
+    execution_id
+    |> Cyfr.Execution.events_since({after_seq, 0}, athanor_id)
+    |> Enum.map(& &1.sequence)
   end
 
   @doc """

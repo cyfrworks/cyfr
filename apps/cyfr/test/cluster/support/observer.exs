@@ -34,6 +34,11 @@ defmodule Cyfr.Cluster.Observer do
         {:ok, pid} =
           Postgrex.start_link(Cyfr.Cluster.Store.url_options() ++ [name: @name, pool_size: 2])
 
+        # Unlinked from whoever asked for it. The caller is a `setup_all`
+        # process, which ExUnit ends when its module ends, and a linked
+        # connection would go with it — leaving the next file's cases
+        # reading rows through a pool that is no longer there.
+        Process.unlink(pid)
         pid
 
       pid ->

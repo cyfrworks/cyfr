@@ -497,6 +497,11 @@ defmodule Cyfr.Cluster.Cell do
         {:bind, "127.0.0.1"},
         {:keeper, :direct}
       ],
+      # The established-caller memo is off in `config/test.exs` (a
+      # per-request convenience the single-node suite asserts around). A
+      # memo that is never warm cannot show what a cell-wide invalidation
+      # is for, so a member holds one for its production-shaped TTL.
+      sanctum: [{:establish_cache_ms, 60_000}],
       logger: [{:level, :warning}]
     ]
   end
