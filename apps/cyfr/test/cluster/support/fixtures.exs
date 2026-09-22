@@ -82,7 +82,8 @@ defmodule Cyfr.Cluster.Fixtures do
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor(athanor_id), thread_id, %{
         message: %{
-          role: "user",
+          author: "usr_cluster",
+          kind: "text",
           content: text,
           client_id: "cluster-#{System.unique_integer([:positive])}"
         },
@@ -107,6 +108,20 @@ defmodule Cyfr.Cluster.Fixtures do
   def start_turn(athanor_id, turn_id, turn_seq, fence) do
     case Arca.TurnStorage.start(actor(athanor_id), turn_id, %{fence: fence, turn_seq: turn_seq}) do
       {:ok, turn} -> {:ok, %{id: turn.id, status: turn.status, runner_id: turn.runner_id}}
+      other -> other
+    end
+  end
+
+  @doc """
+  Take `thread_id`'s claim for `turn_id` against the consumed sequence
+  `turn_seq` — §4.2's statement, on its own. Two members naming one
+  sequence is the race the statement exists for.
+  """
+  @spec claim_thread(String.t(), String.t(), String.t(), non_neg_integer()) ::
+          {:ok, String.t()} | {:error, term()}
+  def claim_thread(athanor_id, thread_id, turn_id, turn_seq) do
+    case Arca.ThreadStorage.claim(actor(athanor_id), thread_id, turn_id, turn_seq) do
+      {:ok, thread} -> {:ok, thread.active_turn_id}
       other -> other
     end
   end
