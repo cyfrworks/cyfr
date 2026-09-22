@@ -87,9 +87,13 @@ defmodule Cyfr.Application do
       # opened the pool and migrated before this one started; these read
       # through it and run whether or not this boot migrated.
       database_checks(),
-      # Who owns this database's control plane — claimed before anything
-      # that assumes it is the only one.
-      control_plane_claim(),
+      # The cell forms before its members claim their slots: a member that
+      # believes it is alone because nothing connected it is precisely the
+      # failure `Cyfr.Cell`'s refusals exist to stop.
+      cluster_supervisor(),
+      # This member's slot in the cell — claimed before anything that
+      # assumes it is the only one holding this database.
+      cell_claim(),
       # The two registries that write catalogues into `Arca.Cache`. The
       # table dies with its owner, `Arca.Cache.Sweeper`, which the `arca`
       # application starts — one app below, so no supervisor of this one
@@ -359,13 +363,23 @@ defmodule Cyfr.Application do
       else: []
   end
 
-  # The claim is a permanent GenServer with a DB lease; the test suite's
-  # sandbox cannot lend it a connection, so the suite turns it off and
-  # exercises `Cyfr.ControlPlane.Claim` directly.
-  defp control_plane_claim do
+  # The claimant is a permanent GenServer with a DB lease; the test
+  # suite's sandbox cannot lend it a connection, so the suite turns it off
+  # and exercises `Arca.ControlPlane`'s writes and `Cyfr.Cell` directly.
+  defp cell_claim do
     if Application.get_env(:arca, :control_plane_claim_enabled, true),
-      do: [Cyfr.ControlPlane],
+      do: [Cyfr.Cell],
       else: []
+  end
+
+  # Discovery, when a topology is configured. `config/runtime.exs` writes
+  # one only under `CYFR_CLUSTER=1`, and `Cyfr.Cell` refuses that flag
+  # without one, so this is empty on every single-member deployment.
+  defp cluster_supervisor do
+    case Application.get_env(:libcluster, :topologies, []) do
+      [] -> []
+      topologies -> [{Cluster.Supervisor, [topologies, [name: Cyfr.ClusterSupervisor]]}]
+    end
   end
 
   defp attach_webhook_verify_failed_logger do

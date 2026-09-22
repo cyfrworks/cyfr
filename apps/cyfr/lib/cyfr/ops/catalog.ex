@@ -937,13 +937,14 @@ defmodule Cyfr.Ops.Catalog do
     opts = Keyword.put(opts, :action, action)
 
     Emissary.MCP.RequestLog.around(log_mode, ctx, call_id, started, fn ->
-      # A boot that lost its database's control plane dispatches nothing,
-      # catalogued or proxied: the endpoint's plug refuses new requests,
-      # but a connected console, an in-process caller and a running
-      # chain's next call all arrive here without passing it.
-      case Cyfr.ControlPlane.assert_owner() do
-        :ok -> route(name, ctx, args, opts, in_chain?)
-        {:error, _} = refusal -> {refusal, %{}}
+      # A member that lost its cell slot dispatches nothing, catalogued or
+      # proxied: the endpoint's plug refuses new requests, but a connected
+      # console, an in-process caller and a running chain's next call all
+      # arrive here without passing it.
+      if Arca.ControlPlane.held?() do
+        route(name, ctx, args, opts, in_chain?)
+      else
+        {{:error, :control_plane_lost}, %{}}
       end
     end)
   end

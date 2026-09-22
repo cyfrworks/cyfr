@@ -37,7 +37,7 @@ defmodule Cyfr.GenServerCatchallTest do
   @not_probed %{
     Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
     Cyfr.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
-    Cyfr.ControlPlane => "gated by :control_plane_claim_enabled",
+    Cyfr.Cell => "gated by :control_plane_claim_enabled",
     Cyfr.Execution.Sweeper => "gated by :execution_sweeper_enabled",
     Cyfr.Execution.ArchiveWatch => "gated by :execution_archive_watch_enabled",
     Cyfr.Execution.WorkerWatch => "gated by :worker_watch_enabled",

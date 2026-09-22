@@ -332,6 +332,94 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
+  describe "resolve_cluster_topology/1 — how a cell's members find each other" do
+    test "unset => no topology, which the cluster flag refuses on its own" do
+      assert {:ok, []} = RuntimeConfig.resolve_cluster_topology(env(%{}))
+
+      assert {:ok, []} =
+               RuntimeConfig.resolve_cluster_topology(env(%{"CYFR_CLUSTER_NODES" => ""}))
+    end
+
+    test "named members are polled over EPMD" do
+      assert {:ok, [cyfr: topology]} =
+               RuntimeConfig.resolve_cluster_topology(
+                 env(%{"CYFR_CLUSTER_NODES" => "cyfr@10.0.0.1, cyfr@10.0.0.2"})
+               )
+
+      assert topology[:strategy] == Cluster.Strategy.Epmd
+      assert topology[:config][:hosts] == [:"cyfr@10.0.0.1", :"cyfr@10.0.0.2"]
+    end
+
+    test "a headless service is resolved by DNS, and needs the node basename with it" do
+      assert {:ok, [cyfr: topology]} =
+               RuntimeConfig.resolve_cluster_topology(
+                 env(%{
+                   "CYFR_CLUSTER_DNS_QUERY" => "cyfr-headless.svc",
+                   "CYFR_CLUSTER_NODE_BASENAME" => "cyfr"
+                 })
+               )
+
+      assert topology[:strategy] == Cluster.Strategy.DNSPoll
+      assert topology[:config][:query] == "cyfr-headless.svc"
+      assert topology[:config][:node_basename] == "cyfr"
+
+      assert {:error, message} =
+               RuntimeConfig.resolve_cluster_topology(
+                 env(%{"CYFR_CLUSTER_DNS_QUERY" => "cyfr-headless.svc"})
+               )
+
+      assert message =~ "CYFR_CLUSTER_NODE_BASENAME"
+
+      assert {:error, message} =
+               RuntimeConfig.resolve_cluster_topology(
+                 env(%{"CYFR_CLUSTER_NODE_BASENAME" => "cyfr"})
+               )
+
+      assert message =~ "CYFR_CLUSTER_DNS_QUERY"
+    end
+
+    test "two ways to find one cell is a refusal, not a merge" do
+      assert {:error, message} =
+               RuntimeConfig.resolve_cluster_topology(
+                 env(%{
+                   "CYFR_CLUSTER_NODES" => "cyfr@10.0.0.1",
+                   "CYFR_CLUSTER_DNS_QUERY" => "cyfr-headless.svc"
+                 })
+               )
+
+      assert message =~ "set one"
+    end
+
+    test "a list that names no node is a refusal, never an empty topology" do
+      assert {:error, message} =
+               RuntimeConfig.resolve_cluster_topology(env(%{"CYFR_CLUSTER_NODES" => " , ,"}))
+
+      assert message =~ "names no node"
+    end
+  end
+
+  describe "resolve_cell_cookie/1 — the cookie that bounds one cell" do
+    test "unset => none, which the cluster flag refuses on its own" do
+      assert {:ok, nil} = RuntimeConfig.resolve_cell_cookie(env(%{}))
+      assert {:ok, nil} = RuntimeConfig.resolve_cell_cookie(env(%{"CYFR_CELL_COOKIE" => ""}))
+    end
+
+    test "32 characters or more is a cookie; less is a refusal naming its length" do
+      cookie = String.duplicate("a", 32)
+
+      assert {:ok, ^cookie} =
+               RuntimeConfig.resolve_cell_cookie(env(%{"CYFR_CELL_COOKIE" => cookie}))
+
+      assert {:error, message} =
+               RuntimeConfig.resolve_cell_cookie(
+                 env(%{"CYFR_CELL_COOKIE" => String.duplicate("a", 31)})
+               )
+
+      assert message =~ "is 31 characters"
+      assert message =~ "openssl rand -hex 32"
+    end
+  end
+
   describe "resolve_worker_watch/1 — the watch's bounds, only the set ones" do
     test "unset => nothing configured, so the code's defaults stand" do
       assert {:ok, []} = RuntimeConfig.resolve_worker_watch(env(%{}))

@@ -3,11 +3,13 @@
 
 defmodule EmissaryWeb.Plugs.ControlPlaneOwnership do
   @moduledoc """
-  Refuses every request while this boot does not own the control plane
-  (`Cyfr.ControlPlane`): a lease that lapsed unrenewed means another boot
-  may hold the database, and a request served here could accept a turn or
-  admit an execution that the owner also admits. Health stays reachable so
-  a probe can see the state instead of a bare 503.
+  Refuses every request while this member does not hold its cell slot
+  (`Arca.ControlPlane.held?/0`): a lease that lapsed unrenewed means a
+  successor may hold the row, and a request served here could accept a
+  turn or admit an execution that the successor also admits. The check is
+  a term read and an integer comparison, which is what lets it sit on
+  every request. Health stays reachable so a probe can see the state
+  instead of a bare 503.
   """
 
   @behaviour Plug
@@ -21,7 +23,7 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnership do
   def call(%Plug.Conn{path_info: ["api", "health" | _]} = conn, _opts), do: conn
 
   def call(conn, _opts) do
-    if Cyfr.ControlPlane.owner?() do
+    if Arca.ControlPlane.held?() do
       conn
     else
       conn
@@ -29,7 +31,7 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnership do
       |> EmissaryWeb.ApiError.halt(
         503,
         :control_plane_lost,
-        "control plane ownership lost; this node refuses work until it reclaims the database"
+        "control plane ownership lost; this member refuses work until it wins its cell slot back"
       )
     end
   end

@@ -347,7 +347,7 @@ defmodule Emissary.MCP.Bridge do
         ),
       tick_ms: Keyword.get(opts, :tick_ms, div(lease_ms, 3)),
       ready_wait_ms: Keyword.get(opts, :ready_wait_ms, @ready_wait_ms),
-      generation_source: Keyword.get(opts, :generation, &Cyfr.ControlPlane.generation/0)
+      generation_source: Keyword.get(opts, :generation, &Arca.ControlPlane.generation/0)
     }
 
     send(self(), :tick)

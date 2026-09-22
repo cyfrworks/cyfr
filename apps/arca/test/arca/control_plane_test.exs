@@ -3,34 +3,47 @@
 
 defmodule Arca.ControlPlaneTest do
   @moduledoc """
-  The cached standing every gate in the product reads on its way in.
+  The `cell_leases` row a member claims, and the cached standing every
+  gate in the product reads.
 
   The record is process-wide, so each case saves what it finds and puts it
   back: the suite's other cases read the same term, and a case that leaves
-  its own standing behind would be deciding theirs.
+  its own standing behind would be deciding theirs. Every case names its
+  own node slot for the same reason — nothing else writes that row, so
+  what the case measures is its own.
   """
 
-  # Writes the process-wide ownership record and the application's claim
+  # Writes the process-wide standing record and the application's claim
   # switch, so it runs alone and restores both.
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Arca.ControlPlane
+  alias Arca.Schemas.CellLease
 
   @standing_key {Arca.ControlPlane, :standing}
   @generation_key {Arca.ControlPlane, :generation}
+  @slot_key {Arca.ControlPlane, :slot}
 
-  setup do
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+
     standing = :persistent_term.get(@standing_key, :absent)
     generation = :persistent_term.get(@generation_key, :absent)
+    slot = :persistent_term.get(@slot_key, :absent)
     claim = Application.get_env(:arca, :control_plane_claim_enabled)
 
     on_exit(fn ->
       restore(@standing_key, standing)
       restore(@generation_key, generation)
+      restore(@slot_key, slot)
       Application.put_env(:arca, :control_plane_claim_enabled, claim)
     end)
 
-    :ok
+    # A slot nothing else in the suite writes, so every count and instant
+    # this case measures is its own.
+    {:ok, node: "node-#{System.unique_integer([:positive])}"}
   end
 
   describe "the hot path" do
@@ -57,6 +70,14 @@ defmodule Arca.ControlPlaneTest do
       :ok = ControlPlane.forget_generation()
       claimed_here(true)
       assert assert_queries(0, fn -> ControlPlane.generation() end) == {:error, :unavailable}
+    end
+
+    test "a slot won is still answered without a query", %{node: node} do
+      assert {:ok, _slot} = ControlPlane.take(node, "boot_a", 60_000)
+
+      assert assert_queries(0, fn -> ControlPlane.held?() end)
+      assert assert_queries(0, fn -> ControlPlane.generation() end) == {:ok, 1}
+      assert {:ok, %{node: ^node}} = assert_queries(0, fn -> ControlPlane.held() end)
     end
   end
 
@@ -142,6 +163,214 @@ defmodule Arca.ControlPlaneTest do
       :ok = ControlPlane.record_generation(:none)
       assert ControlPlane.generation() == :none
     end
+  end
+
+  describe "taking a slot" do
+    test "a slot nobody has held opens at generation 1 and fence 1", %{node: node} do
+      before = Arca.ServerMetaStorage.now!()
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+
+      assert %{node: ^node, owner: "boot_a", generation: 1, fence: 1} = slot
+      assert {:ok, row} = ControlPlane.slot(node)
+
+      # The lease is counted from the DATABASE's clock inside the write,
+      # not from anything the caller passed in.
+      assert DateTime.compare(row.lease_until, DateTime.add(before, 60_000, :millisecond)) != :lt
+      assert DateTime.compare(row.taken_at, before) != :lt
+    end
+
+    test "a second member cannot hold a slot while the first's lease stands", %{node: node} do
+      assert {:ok, %{fence: 1}} = ControlPlane.take(node, "boot_a", 60_000)
+
+      assert {:busy, row} = ControlPlane.take(node, "boot_b", 60_000)
+      assert row.owner == "boot_a"
+      assert row.generation == 1
+      assert row.fence == 1
+
+      # And nothing was written: the refused taker left the row as it
+      # found it.
+      assert {:ok, %{owner: "boot_a", generation: 1, fence: 1}} = ControlPlane.slot(node)
+    end
+
+    test "past lease_until the takeover raises the generation and the fence, and the old " <>
+           "owner's writes are refused",
+         %{node: node} do
+      assert {:ok, first} = ControlPlane.take(node, "boot_a", 60_000)
+
+      # The interleaving is made here rather than waited for: the row is
+      # put past its lease on the cell's clock, which is the one condition
+      # a takeover turns on.
+      expire(node)
+
+      assert {:ok, second} = ControlPlane.take(node, "boot_b", 60_000)
+      assert second.owner == "boot_b"
+      assert second.generation == first.generation + 1
+      assert second.fence == first.fence + 1
+
+      # The predecessor's own renew names the fence it last wrote, which
+      # the takeover moved: it writes nothing and it holds nothing.
+      :ok = ControlPlane.record_slot(first)
+      :ok = ControlPlane.record({:held, 60_000})
+
+      assert ControlPlane.renew(60_000) == :taken
+      refute ControlPlane.held?()
+      taken_at = second.generation
+      assert {:ok, %{owner: "boot_b", generation: ^taken_at}} = ControlPlane.slot(node)
+    end
+
+    test "the same boot taking its own live slot renews it: the fence rises, the generation " <>
+           "does not",
+         %{node: node} do
+      assert {:ok, first} = ControlPlane.take(node, "boot_a", 60_000)
+      assert {:ok, again} = ControlPlane.take(node, "boot_a", 60_000)
+
+      assert again.generation == first.generation
+      assert again.fence == first.fence + 1
+      assert ControlPlane.held?()
+    end
+
+    test "a slot released is takeable at once, keeping its owner and its generation", %{node: node} do
+      claimed_here(true)
+      assert {:ok, first} = ControlPlane.take(node, "boot_a", 60_000)
+      assert ControlPlane.release() == :ok
+
+      refute ControlPlane.held?()
+      assert ControlPlane.generation() == {:error, :unavailable}
+      assert ControlPlane.held() == :none
+
+      # The row is kept — never deleted — so the successor's generation
+      # carries on from its predecessor's instead of starting again at one.
+      assert {:ok, row} = ControlPlane.slot(node)
+      assert row.owner == "boot_a"
+      assert row.generation == first.generation
+
+      assert {:ok, second} = ControlPlane.take(node, "boot_b", 60_000)
+      assert second.generation == first.generation + 1
+    end
+  end
+
+  describe "renewing" do
+    test "a renew that finds a newer generation flips held?/0 to false before returning", %{
+      node: node
+    } do
+      claimed_here(true)
+      assert {:ok, mine} = ControlPlane.take(node, "boot_a", 60_000)
+      assert ControlPlane.held?()
+
+      # A successor takes the slot while this member believes it holds it.
+      expire(node)
+      assert {:ok, successor} = ControlPlane.take(node, "boot_b", 60_000)
+      assert successor.generation > mine.generation
+
+      :ok = ControlPlane.record_slot(mine)
+      :ok = ControlPlane.record({:held, 60_000})
+      assert ControlPlane.held?()
+
+      # The renew is this member's own call, so "before returning" is
+      # exactly this: nothing of this member's runs between the discovery
+      # and the answer, and the answer arrives with the standing already
+      # down.
+      assert ControlPlane.renew(60_000) == :taken
+      refute ControlPlane.held?()
+      assert ControlPlane.generation() == {:error, :unavailable}
+      assert ControlPlane.held() == :none
+    end
+
+    test "a lease that merely ran out is renewed while the row still reads this member", %{
+      node: node
+    } do
+      assert {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+      expire(node)
+      :ok = ControlPlane.record(:lost)
+
+      # Nobody took it, so it is still this member's and the renew lands.
+      assert {:ok, renewed} = ControlPlane.renew(60_000)
+      assert renewed.owner == "boot_a"
+      assert renewed.generation == 1
+      assert renewed.fence == 2
+      assert ControlPlane.held?()
+    end
+
+    test "a member holding nothing renews nothing" do
+      :ok = ControlPlane.forget()
+      assert ControlPlane.renew(60_000) == :unclaimed
+      assert ControlPlane.release() == :unclaimed
+    end
+  end
+
+  describe "the two clocks" do
+    test "a member with a clock ahead of the database cannot hold past the point its row " <>
+           "became takeable",
+         %{node: node} do
+      lease_ms = 60_000
+      assert {:ok, _slot} = ControlPlane.take(node, "boot_a", lease_ms)
+
+      # The member's own belief, and the row's own life, each measured as
+      # this case's own delta against the clock that decides it.
+      {:held, deadline} = :persistent_term.get(@standing_key)
+      believes_ms = deadline - System.monotonic_time(:millisecond)
+
+      {:ok, row} = ControlPlane.slot(node)
+      row_ms = DateTime.diff(row.lease_until, Arca.ServerMetaStorage.now!(), :millisecond)
+
+      # What the member believes runs out FIRST, by the margin it gives up
+      # for the two clocks' rate difference.
+      assert believes_ms < row_ms
+      assert row_ms - believes_ms >= ControlPlane.margin_ms() - 500
+
+      # And the belief is not read off the row. A member whose own wall
+      # clock ran an hour ahead of the database's would have written this
+      # lease for itself under the old contract; the countdown does not
+      # move, because it was never a deadline taken from the row.
+      far = DateTime.add(Arca.ServerMetaStorage.now!(), 3_600_000, :millisecond)
+      Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node), set: [lease_until: far])
+
+      {:held, unchanged} = :persistent_term.get(@standing_key)
+      assert unchanged == deadline
+    end
+  end
+
+  describe "the roster" do
+    test "the roster is the live slots, and a lapsed member is not on it", %{node: node} do
+      peer = node <> "-peer"
+      assert {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+      assert {:ok, _} = ControlPlane.take(peer, "boot_b", 60_000)
+
+      assert {:ok, members} = ControlPlane.roster()
+      nodes = Enum.map(members, & &1.node)
+      assert node in nodes
+      assert peer in nodes
+
+      expire(peer)
+      assert {:ok, members} = ControlPlane.roster()
+      nodes = Enum.map(members, & &1.node)
+      assert node in nodes
+      refute peer in nodes
+    end
+
+    test "live_member?/1 is asked of a boot, so an older boot of the same node is not live", %{
+      node: node
+    } do
+      assert {:ok, _} = ControlPlane.take(node, node <> "#boot_a", 60_000)
+      assert ControlPlane.live_member?(node <> "#boot_a")
+
+      # The node came back under a new boot id; what the old boot claimed
+      # is no longer held by anyone.
+      expire(node)
+      assert {:ok, _} = ControlPlane.take(node, node <> "#boot_b", 60_000)
+
+      assert ControlPlane.live_member?(node <> "#boot_b")
+      refute ControlPlane.live_member?(node <> "#boot_a")
+      refute ControlPlane.live_member?("")
+    end
+  end
+
+  # The row put past its lease on the cell's clock — the one condition a
+  # takeover turns on, made rather than waited for.
+  defp expire(node) do
+    past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
+    {1, _} = Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node), set: [lease_until: past])
+    :ok
   end
 
   defp claimed_here(enabled),
