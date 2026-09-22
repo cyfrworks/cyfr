@@ -150,17 +150,6 @@ defmodule Cyfr.Cluster.Cell do
   def heal(a, b), do: GenServer.call(@name, {:heal, a, b}, @boot_timeout_ms)
 
   @doc """
-  Run `fun` on `id`. The function's module must be one this suite pushed
-  to the members (`Cyfr.Cluster.Cell` pushes every module it compiled from
-  `test/cluster/support`), or the member cannot decode it.
-  """
-  @spec run(atom() | member(), (-> term())) :: term()
-  def run(id, fun) when is_atom(id), do: run(member(id), fun)
-
-  def run(%{} = member, fun) when is_function(fun, 0),
-    do: call(member, :erlang, :apply, [fun, []])
-
-  @doc """
   Call `{module, function, args}` on `id`, over that member's own control
   channel. The control node is not distributed, so this is the one way in;
   the channel multiplexes, so two processes may be inside a member at

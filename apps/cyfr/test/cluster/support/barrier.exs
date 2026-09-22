@@ -24,16 +24,22 @@ defmodule Cyfr.Cluster.Barrier do
   @compile {:no_warn_undefined, Cyfr.Cluster.Cell}
 
   @doc """
-  Run `funs` — a keyword list of `member id => zero-arity function` — one
-  on each member, released from a barrier so that every one of them has
-  finished whatever it did before the barrier when the first one passes
-  it.
+  Run `funs` — a keyword list of `member id => {module, function, args}` —
+  one on each member, released from a barrier so that every one of them
+  has finished whatever it did before the barrier when the first one
+  passes it.
 
-  Answers `[{member_id, result}]` in the order given. A function that
-  raises answers `{:error, kind, reason}` rather than taking the case down
-  with it, so a race whose loser refuses is readable.
+  What each member runs is named rather than closed over: a function term
+  is decoded only where its module exists at the same version, and a case
+  file is loaded by ExUnit on the control node alone. The module must
+  therefore be one this suite pushed to the members
+  (`Cyfr.Cluster.Support`), which in practice means `Cyfr.Cluster.Fixtures`.
+
+  Answers `[{member_id, result}]` in the order given. A call that raises
+  answers `{:error, kind, reason}` rather than taking the case down with
+  it, so a race whose loser refuses is readable.
   """
-  @spec race(keyword((-> term()))) :: keyword()
+  @spec race(keyword({module(), atom(), [term()]})) :: keyword()
   def race(funs) when is_list(funs) do
     [{host_id, _} | _] = funs
     host = Cyfr.Cluster.Cell.member(host_id).node
@@ -78,10 +84,10 @@ defmodule Cyfr.Cluster.Barrier do
 
   @doc false
   # Called on each member: arrive, wait for the last party, then act.
-  @spec run({atom(), node()}, (-> term())) :: term()
-  def run(barrier, fun) do
+  @spec run({atom(), node()}, {module(), atom(), [term()]}) :: term()
+  def run(barrier, {module, function, args}) do
     arrive(barrier)
-    fun.()
+    apply(module, function, args)
   catch
     kind, reason -> {:error, kind, reason}
   end

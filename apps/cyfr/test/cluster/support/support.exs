@@ -19,7 +19,7 @@ defmodule Cyfr.Cluster.Support do
   compiles and loads, and compiling twice would redefine every module.
   """
 
-  @files ~w(wait.exs store.exs observer.exs wire.exs barrier.exs boot.exs fixtures.exs cell.exs)
+  @files ~w(wait.exs store.exs observer.exs wire.exs barrier.exs holder.exs boot.exs fixtures.exs cell.exs)
 
   @key {__MODULE__, :modules}
 
@@ -68,7 +68,7 @@ defmodule Cyfr.Cluster.Case do
 
   using do
     quote do
-      alias Cyfr.Cluster.{Barrier, Cell, Fixtures, Observer, Wait, Wire}
+      alias Cyfr.Cluster.{Barrier, Cell, Fixtures, Holder, Observer, Wait, Wire}
 
       # This suite's own modules are compiled by `setup_all` rather than
       # by the compiler, so at the moment a case is compiled none of them
@@ -80,6 +80,7 @@ defmodule Cyfr.Cluster.Case do
                   Cyfr.Cluster.Boot,
                   Cyfr.Cluster.Cell,
                   Cyfr.Cluster.Fixtures,
+                  Cyfr.Cluster.Holder,
                   Cyfr.Cluster.Observer,
                   Cyfr.Cluster.Wait,
                   Cyfr.Cluster.Wire

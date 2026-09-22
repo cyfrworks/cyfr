@@ -135,6 +135,69 @@ defmodule Cyfr.Cluster.Observer do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Executions
+  # ---------------------------------------------------------------------------
+
+  @doc "One `executions` row."
+  @spec execution(String.t()) :: map() | nil
+  def execution(id), do: row("SELECT * FROM executions WHERE id = $1", [id])
+
+  @doc "One `execution_attempts` row."
+  @spec attempt(String.t()) :: map() | nil
+  def attempt(id), do: row("SELECT * FROM execution_attempts WHERE attempt = $1", [id])
+
+  @doc "The durable events of an execution, in `seq` order."
+  @spec events(String.t()) :: [map()]
+  def events(execution_id),
+    do:
+      rows!("SELECT * FROM execution_events WHERE execution_id = $1 ORDER BY seq", [execution_id])
+
+  @doc """
+  Move an attempt's lease into the past, as running out is the only thing
+  that makes a dead member's work takeable.
+
+  Used only where the case is about what a *successor* does with a lapsed
+  attempt and not about how long the lease is — the case that measures the
+  lease waits it out (`execution_test.exs`).
+  """
+  @spec expire_attempt!(String.t()) :: :ok
+  def expire_attempt!(id) do
+    Postgrex.query!(
+      @name,
+      "UPDATE execution_attempts SET lease_until = #{@now} - interval '1 second' WHERE attempt = $1",
+      [id]
+    )
+
+    :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # Threads, turns, rates and budgets
+  # ---------------------------------------------------------------------------
+
+  @doc "One `threads` row."
+  @spec thread(String.t()) :: map() | nil
+  def thread(id), do: row("SELECT * FROM threads WHERE id = $1", [id])
+
+  @doc "One `turns` row."
+  @spec turn(String.t()) :: map() | nil
+  def turn(id), do: row("SELECT * FROM turns WHERE id = $1", [id])
+
+  @doc "The rate window of `(athanor_id, bucket)`."
+  @spec rate_window(String.t(), String.t()) :: map() | nil
+  def rate_window(athanor_id, bucket),
+    do:
+      row("SELECT * FROM rate_windows WHERE athanor_id = $1 AND bucket = $2", [athanor_id, bucket])
+
+  @doc "The occurrences of a schedule, newest first."
+  @spec occurrences(String.t()) :: [map()]
+  def occurrences(schedule_id),
+    do:
+      rows!("SELECT * FROM schedule_occurrences WHERE schedule_id = $1 ORDER BY scheduled_for", [
+        schedule_id
+      ])
+
   @doc "Forget a claim entirely, so a case starts from a subject nobody has ever held."
   @spec forget_claim(String.t(), String.t()) :: :ok
   def forget_claim(kind, key) do
