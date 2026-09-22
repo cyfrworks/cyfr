@@ -222,6 +222,85 @@ jobs:
       - name: Run tests
         run: mix test --warnings-as-errors
 
+  cluster:
+    name: One cell on two members (Postgres and MinIO)
+    runs-on: ubuntu-latest
+    # Phase 7.4 is one cell on several members, and a cluster flag is not
+    # evidence of it. This job runs the two-node suite: two `:peer` nodes,
+    # each running the whole application against one Postgres and one
+    # object store, under every refusal CYFR_CLUSTER=1 names. Every other
+    # job in this workflow runs one node, so nothing else here can tell a
+    # claim that holds from a claim that only looks like it does.
+    services:
+      # Test-only ephemeral database, and deliberately not cyfr_test: a
+      # cluster member holds no sandbox connection, so it must not share a
+      # database with a run whose writes roll back. Credentials are
+      # non-secret CI fixtures.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cyfr
+          POSTGRES_PASSWORD: cyfr
+          POSTGRES_DB: cyfr_cluster_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CYFR_DATABASE: postgres
+      CYFR_DATABASE_URL: postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test
+      CYFR_CLUSTER_DATABASE_URL: postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test
+      CYFR_SECRET_KEY_BASE: JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '29'
+          elixir-version: '1.20.3'
+      - name: Cache deps and build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-cluster-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-cluster-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      # CYFR_CLUSTER=1 refuses local storage: two members would each hold
+      # half of every estate. The same image and credentials the s3-minio
+      # job uses, pinned by digest like every other image here.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 \
+            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            server /data
+      - name: Install dependencies
+        run: mix deps.get
+      - name: Compile with warnings as errors
+        run: mix compile --warnings-as-errors
+      - name: Wait for MinIO
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          echo "MinIO did not become healthy" >&2
+          docker logs minio || true
+          exit 1
+      # The `test` alias creates and migrates the database first, so the
+      # members find a schema rather than migrating under each other.
+      # --only cluster fails the job if it matches nothing, which is what
+      # stops a suite that silently stopped running.
+      - name: Run the two-node suite
+        run: mix test --warnings-as-errors --only cluster apps/cyfr/test/cluster
+      - name: MinIO logs
+        if: failure()
+        run: docker logs minio
+
   opus-independence:
     name: Opus compiles and tests from its declared apps alone
     runs-on: ubuntu-latest

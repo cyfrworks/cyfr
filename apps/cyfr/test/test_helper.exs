@@ -12,7 +12,11 @@ if toolchain_excludes != [] do
   IO.puts("cyfr: skipping #{inspect(toolchain_excludes)} — toolchain not found on PATH")
 end
 
-ExUnit.configure(exclude: [:s3_integration, :public_dns | toolchain_excludes])
+# :cluster is the two-node suite (`test/cluster`): two `:peer` nodes, each
+# running the whole application against one Postgres and one object store.
+# It costs two operating-system processes and a full boot each, and it
+# needs a database of its own, so it runs only when it is asked for.
+ExUnit.configure(exclude: [:cluster, :s3_integration, :public_dns | toolchain_excludes])
 
 # The suite runs from the umbrella root, where the Opus worker service is
 # up beside CYFR: its listener and CYFR's host API listener each bound a

@@ -1124,6 +1124,52 @@ not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 | `CYFR_S3_ENDPOINT` / `CYFR_S3_PREFIX` / `CYFR_S3_PATH_STYLE` | — | Optional (MinIO etc.) |
 | `CYFR_DATABASE_URL` | — | Required for a Postgres build (adapter is chosen at build time via `CYFR_DATABASE=postgres`; the published image is SQLite) |
 
+### Several members on one database (a cell)
+
+One server per database is the default: a second one pointed at the same
+database refuses to boot. A **cell** is several control-plane members
+sharing one database, one object store and one set of workers, each
+holding its own slot and taking a peer's work only after that peer's
+lease has run out on the database's clock. `CYFR_CLUSTER=1` turns it on,
+and it boots only with every condition below — each missing one is a
+named refusal at boot.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYFR_CLUSTER` | `false` | Several members share this database as one cell. Needs Postgres, `CYFR_STORAGE=s3`, TLS distribution, `CYFR_CELL_COOKIE`, a topology and `CYFR_WORKER_KEY` |
+| `CYFR_CELL_COOKIE` | — | The cookie that bounds this cell: at least 32 characters, the same on every member, and the value each member's BEAM runs under (`RELEASE_COOKIE`, or `-setcookie`). An ambient `~/.erlang.cookie` is the machine's, not the cell's |
+| `CYFR_CLUSTER_NODES` | — | The members, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`) |
+| `CYFR_CLUSTER_DNS_QUERY` / `CYFR_CLUSTER_NODE_BASENAME` | — | The alternative to the list: a headless service to resolve, and the basename each member's node name uses (`<basename>@<address>`) |
+
+Distribution must be TLS: start every member with `-proto_dist inet_tls`
+and an `-ssl_dist_optfile` naming its certificate, key and CA. A cell of
+control planes on plain distribution is an unauthenticated remote shell
+onto the database.
+
+What a cell changes for a client and an operator:
+
+- **Nothing is routed by the client.** A turn runs on the member that
+  accepted it and an execution on the member that admitted it. Put the
+  members behind any load balancer; ownership is settled by rows.
+- **A member's lease is 15 s, renewed every 5 s**, so an unclean stop is
+  taken over within 20 s and a clean one at once. An execution whose
+  member died is settled by the attempt lease (180 s) and the sweeper.
+- **One worker service per member.** A worker posts every host call and
+  every exit report to the single address its `OPUS_HOST_URL` names, so
+  give each member its own worker service, named in that member's
+  `CYFR_WORKERS`, with `OPUS_HOST_URL` pointing at that member's host
+  API. A worker shared between members answers one member's runs and
+  loses the other's.
+- **Stdio MCP servers are not available** in a cell.
+- **Per-member ceilings multiply.** `CYFR_MAX_CONCURRENT_EXECUTIONS`,
+  `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT` and the per-credential
+  stream cap on `execution.subscribe` and `notifications/listen` are each
+  member's, so N members admit N times each. The tenant's durable
+  ceilings are rows and hold for the cell: its consented invocation rate,
+  its budget reservations and charges, and its storage cap.
+- **Ingress rate limits are each member's too.** The ceiling that sees
+  the whole cell is the reverse proxy's; set it there.
+
 ### Execution workers
 
 Components run on worker services CYFR reaches over HTTP (the `opus`
