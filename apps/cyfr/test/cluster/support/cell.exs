@@ -95,11 +95,26 @@ defmodule Cyfr.Cluster.Cell do
     case Process.whereis(@name) do
       nil ->
         {:ok, _pid} = GenServer.start(__MODULE__, [], name: @name)
+        # The cell outlives every case, so the run is what ends it. Two
+        # operating-system processes left behind would hold this run's
+        # node names against the next one.
+        ExUnit.after_suite(fn _results -> shutdown() end)
         GenServer.call(@name, :members, @boot_timeout_ms)
 
       _running ->
         GenServer.call(@name, :members, @boot_timeout_ms)
     end
+  end
+
+  @doc "Stop every member and forget the cell."
+  @spec shutdown() :: :ok
+  def shutdown do
+    case Process.whereis(@name) do
+      nil -> :ok
+      pid -> GenServer.stop(pid, :normal, @boot_timeout_ms)
+    end
+  catch
+    _kind, _reason -> :ok
   end
 
   @doc """
