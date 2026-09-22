@@ -72,7 +72,11 @@ defmodule Cyfr.Cluster.Store do
     try do
       {:ok, _} = Postgrex.query(connection, "SELECT 1", [])
 
-      case Postgrex.query(connection, "SELECT value FROM server_meta WHERE key = 'schema_fingerprint'", []) do
+      case Postgrex.query(
+             connection,
+             "SELECT value FROM server_meta WHERE key = 'schema_fingerprint'",
+             []
+           ) do
         {:ok, %{rows: [[_fingerprint]]}} ->
           :ok
 

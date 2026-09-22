@@ -65,7 +65,11 @@ defmodule Cyfr.Cluster.SuspendTest do
       # The peer sees every row: the ones the turn had made, the one that
       # arrived while it was down, and the approval still waiting.
       assert Cell.call(:b, Cyfr.Cluster.Fixtures, :messages, [athanor, thread]) > before
-      assert approval in Cell.call(:b, Cyfr.Cluster.Fixtures, :pending_approvals, [athanor, thread])
+
+      assert approval in Cell.call(:b, Cyfr.Cluster.Fixtures, :pending_approvals, [
+               athanor,
+               thread
+             ])
 
       # And the peer carries the turn on: the claim is its, the runner is
       # its boot, and the recovery is counted in the same transaction.

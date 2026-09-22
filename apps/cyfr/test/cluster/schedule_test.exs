@@ -61,7 +61,8 @@ defmodule Cyfr.Cluster.ScheduleTest do
       schedule = Cell.call(:a, Cyfr.Cluster.Fixtures, :due_schedule!, [athanor.id, 60])
       next = DateTime.add(DateTime.utc_now(), 3600, :second)
 
-      assert {:ok, _} = Cell.call(:a, Cyfr.Cluster.Fixtures, :claim_occurrence, [schedule.id, next])
+      assert {:ok, _} =
+               Cell.call(:a, Cyfr.Cluster.Fixtures, :claim_occurrence, [schedule.id, next])
 
       # The cursor advanced in the same transaction as the claim, so the
       # schedule is no longer due — on the cell's clock, which is what

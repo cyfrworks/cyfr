@@ -59,6 +59,15 @@ defmodule Cyfr.Cluster.Holder do
   def complete(label, data \\ %{"ok" => true}),
     do: GenServer.call(ensure(), {:complete, label, data}, 60_000)
 
+  @doc """
+  A signed completion for `label`'s run, `{header, body}`, ready to be
+  delivered to either member. The outcome names the execution, the attempt
+  and the fence it belongs to, as a runner's does.
+  """
+  @spec sign_complete(atom(), map()) :: {String.t(), String.t()}
+  def sign_complete(label, data \\ %{"ok" => true}),
+    do: GenServer.call(ensure(), {:sign_complete, label, data}, 60_000)
+
   @doc "Forget everything this holder holds, ending the attempts with it."
   @spec release!() :: :ok
   def release! do
@@ -104,15 +113,21 @@ defmodule Cyfr.Cluster.Holder do
 
   def handle_call({:complete, label, data}, _from, held) do
     fixture = Map.fetch!(held, label)
+    args = %{"outcome" => completion(fixture, data)}
+    {:reply, Cyfr.Test.AttemptFixtures.call(fixture, "complete", args), held}
+  end
 
-    outcome =
-      Cyfr.Test.AttemptFixtures.outcome(fixture, "completed", %{
-        "output" => Jason.encode!(data),
-        "duration_ms" => 1
-      })
+  def handle_call({:sign_complete, label, data}, _from, held) do
+    fixture = Map.fetch!(held, label)
+    body = Cyfr.Test.AttemptFixtures.body("complete", %{"outcome" => completion(fixture, data)})
+    {:reply, {Cyfr.Test.AttemptFixtures.header(fixture, body), body}, held}
+  end
 
-    answer = Cyfr.Test.AttemptFixtures.call(fixture, "complete", %{"outcome" => outcome})
-    {:reply, answer, held}
+  defp completion(fixture, data) do
+    Cyfr.Test.AttemptFixtures.outcome(fixture, "completed", %{
+      "output" => Jason.encode!(data),
+      "duration_ms" => 1
+    })
   end
 
   # An attempt answers its waiter — this process — when its run ends.

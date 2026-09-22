@@ -332,7 +332,8 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "Whether this member's node-local in-flight counter admits one more of `budget_id`."
   @spec try_acquire(String.t(), pos_integer()) :: :ok | {:error, atom()}
   def try_acquire(budget_id, cap),
-    do: Sanctum.Authority.BudgetCounter.try_acquire(%Cyfr.Authority.Budget{id: budget_id, cap: cap})
+    do:
+      Sanctum.Authority.BudgetCounter.try_acquire(%Cyfr.Authority.Budget{id: budget_id, cap: cap})
 
   @doc "Claim one of `bucket`'s allowance from this member."
   @spec take_rate(String.t(), String.t(), non_neg_integer(), pos_integer()) :: term()
@@ -377,7 +378,10 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "What this member sees of `athanor_id`'s filling: `:ready | :filling | :failed | :unfilled | :unavailable`."
   @spec estate_status(String.t()) :: atom()
   def estate_status(athanor_id),
-    do: Sanctum.Provisioning.status(Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor))
+    do:
+      Sanctum.Provisioning.status(
+        Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
+      )
 
   @doc "A person with a session of their own, and their group athanor."
   @spec person!() :: map()
