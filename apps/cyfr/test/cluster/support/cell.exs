@@ -14,13 +14,14 @@ defmodule Cyfr.Cluster.Cell do
   slot. What one member believes about another it learns
   from the database or from distribution, as a deployment's members do.
 
-  ## The six refusals, met rather than bypassed
+  ## The seven refusals, met rather than bypassed
 
   `CYFR_CLUSTER=1` boots only with Postgres, shared object storage, TLS
   distribution with configured certificates, a cell-only cookie of at
-  least 32 characters that is also the node's, a discovery topology, and a
-  shared worker root. Each member here is started with all six, so the
-  cell that forms is the one the refusals describe:
+  least 32 characters that is also the node's, a discovery topology, a
+  shared worker root, and each member's own host API address. Each member
+  here is started with all seven, so the cell that forms is the one the
+  refusals describe:
 
     * Postgres and MinIO come from the environment
       (`Cyfr.Cluster.Store`);
@@ -30,7 +31,10 @@ defmodule Cyfr.Cluster.Cell do
       is both `CYFR_CELL_COOKIE` and the node's own;
     * the topology is `Cluster.Strategy.Epmd` over the members' names, so
       `libcluster` connects them as a deployment's discovery would;
-    * the worker root is the suite's, identical on both members.
+    * the worker root is the suite's, identical on both members;
+    * each member binds a host API port of its own and is told the
+      loopback address it is reached at, which is what makes an
+      assignment's address a real one a case can post to.
 
   ## The control node is not a member
 
@@ -73,12 +77,20 @@ defmodule Cyfr.Cluster.Cell do
   # a failure rather than a hang.
   @boot_timeout_ms 120_000
 
-  @typedoc "One member: its node name, the `:peer` controlling it, and the ports it serves on."
+  @typedoc """
+  One member: its node name, the `:peer` controlling it, the worker
+  service id it dispatches under, and the host API port it binds with the
+  address it is reached at — `CYFR_HOST_API_URL`, which every assignment
+  that member issues carries, so a worker posts that attempt's host calls
+  to the member holding it.
+  """
   @type member :: %{
           id: atom(),
           node: node(),
           peer: pid(),
-          worker: String.t()
+          worker: String.t(),
+          host_api: String.t(),
+          host_api_port: :inet.port_number()
         }
 
   # ---------------------------------------------------------------------------
@@ -276,7 +288,16 @@ defmodule Cyfr.Cluster.Cell do
 
     members =
       for {id, worker} <- [{:a, "wrk_cell_a"}, {:b, "wrk_cell_b"}] do
-        %{id: id, node: node_name(id), peer: nil, worker: worker}
+        port = free_port()
+
+        %{
+          id: id,
+          node: node_name(id),
+          peer: nil,
+          worker: worker,
+          host_api: "http://127.0.0.1:#{port}",
+          host_api_port: port
+        }
       end
 
     started = Enum.map(members, &boot/1)
@@ -492,8 +513,14 @@ defmodule Cyfr.Cluster.Cell do
         {:execution_archive_watch_enabled, true},
         {:external_server_reconciler_enabled, true},
         {:database_checks_enabled, true},
-        {:host_api_port, 0},
+        # A port of this member's own, and the address it advertises on
+        # every assignment it issues. Port 0 would do for a listener
+        # nobody names, but a member that cannot say where it is refuses
+        # to boot a cell, and a case that posts a host call needs the
+        # address to be the one the assignment carries.
+        {:host_api_port, member.host_api_port},
         {:host_api_bind, {127, 0, 0, 1}},
+        {:host_api_url, member.host_api},
         {:workers, []},
         {EmissaryWeb.Endpoint,
          [
@@ -627,6 +654,17 @@ defmodule Cyfr.Cluster.Cell do
   defp node_basename(id), do: "cyfr_cell_#{id}"
 
   defp node_name(id), do: :"#{node_basename(id)}@#{@host}"
+
+  # A loopback port nothing holds, for a member to bind and to advertise.
+  # The socket is closed before the member starts, which is the usual
+  # small race and is safe here: the cell is started once, serially, for
+  # the whole run.
+  defp free_port do
+    {:ok, socket} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, reuseaddr: true])
+    {:ok, {_ip, port}} = :inet.sockname(socket)
+    :ok = :gen_tcp.close(socket)
+    port
+  end
 
   defp all_nodes, do: Enum.map([:a, :b], &node_name/1)
 end
