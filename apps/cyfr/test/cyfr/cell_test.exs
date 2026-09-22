@@ -323,6 +323,14 @@ defmodule Cyfr.CellTest do
       assert Cell.roster() == []
       refute Cell.mine?(subject)
     end
+
+    test "with no claimant there is no cell to defer to, so every subject is this member's" do
+      claim_enabled(false)
+      :persistent_term.erase(@roster_key)
+
+      assert Cell.owner_of("retention:cell") == {:error, :no_roster}
+      assert Cell.mine?("retention:cell")
+    end
   end
 
   defp subjects(n), do: for(i <- 1..n, do: "subject-#{i}")

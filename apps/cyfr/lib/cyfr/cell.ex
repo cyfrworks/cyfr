@@ -107,14 +107,23 @@ defmodule Cyfr.Cell do
 
   @doc """
   Whether `subject`'s singleton is this member's to propose itself for.
-  False while the roster is unread: a member that cannot compute the
-  proposal does not claim.
+
+  With no roster read, the answer follows the same rule
+  `Arca.ControlPlane.held?/0` uses for a member that has recorded nothing:
+  where a claimant runs, a member that cannot compute the proposal does
+  not make one — the fail-closed direction, and the state of every member
+  between its start and its first roster. Where none runs there is no cell
+  and no peer to defer to, so this member is the one.
+
+  The answer is a proposal and never an admission: what runs a singleton
+  is its `job_claims` row, which admits exactly one holder whatever two
+  members propose.
   """
   @spec mine?(String.t()) :: boolean()
   def mine?(subject) when is_binary(subject) do
     case owner_of(subject) do
       {:ok, member} -> member == node_name()
-      {:error, :no_roster} -> false
+      {:error, :no_roster} -> not Application.get_env(:arca, :control_plane_claim_enabled, true)
     end
   end
 
@@ -271,14 +280,13 @@ defmodule Cyfr.Cell do
       match?({:ok, _}, :init.get_argument(:ssl_dist_opt))
   end
 
+  # A node with no distribution started has no cookie to read, which is
+  # itself a member that cannot join a cell.
   defp node_cookie do
     case Node.get_cookie() do
       :nocookie -> nil
       cookie -> Atom.to_string(cookie)
     end
-  rescue
-    # A node without distribution started has no cookie to read.
-    _ -> nil
   end
 
   # ---- the claimant ----------------------------------------------------------
@@ -363,21 +371,18 @@ defmodule Cyfr.Cell do
 
   @impl true
   def terminate(_reason, _state) do
+    # `:taken` is a successor already holding the row, and `:unclaimed` a
+    # member that never won one: both are slots this member does not have
+    # to give up.
     case Arca.ControlPlane.release() do
-      :ok ->
-        :ok
-
-      :unclaimed ->
-        :ok
-
-      :taken ->
-        :ok
-
       {:error, reason} ->
         Logger.warning(
           "[Cyfr.Cell] slot not released at stop (#{inspect(reason)}); " <>
             "a successor waits it out"
         )
+
+      _given_up ->
+        :ok
     end
 
     :persistent_term.erase(@roster_key)
