@@ -43,18 +43,31 @@ defmodule Compendium.MCP.Shared do
     do: err |> Atom.to_string() |> String.replace("_", " ")
 
   def to_error_string(err) do
-    Logger.warning("[Compendium.MCP.Shared] unrenderable error: #{inspect(err)}")
-    "The registry request failed — try again."
+    if Cyfr.Refusal.reason?(err) do
+      Cyfr.Refusal.message(err)
+    else
+      Logger.warning("[Compendium.MCP.Shared] unrenderable error: #{inspect(err)}")
+      "The registry request failed — try again."
+    end
   end
 
   # Find a bearer scoped to a specific namespace.
-  def namespace_bearer(%Context{user_id: user_id}, slug)
+  def namespace_bearer(%Context{user_id: user_id} = ctx, slug)
       when is_binary(user_id) and user_id != "" and is_binary(slug) do
     registry = Compendium.RegistryHost.canonical_host()
 
-    case Compendium.Registry.CredentialStore.get(user_id, registry, slug) do
+    case Compendium.Registry.CredentialStore.get(ctx, registry, slug) do
       {:ok, %{type: :push_token, token: token}} when is_binary(token) ->
         {:ok, token}
+
+      # A store that cannot answer, and a stored token that cannot be
+      # opened, are neither "no token": each refuses as unavailable, never
+      # as a prompt to sign in again over a credential that is there.
+      {:error, :unavailable} ->
+        {:error, {:unavailable, "Registry credentials"}}
+
+      {:error, :corrupt} ->
+        {:error, {:unavailable, "The push token stored for namespace '#{slug}'"}}
 
       _ ->
         {:error, "no push token for namespace '#{slug}' — run `cyfr login`"}

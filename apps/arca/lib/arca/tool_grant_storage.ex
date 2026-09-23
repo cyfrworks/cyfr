@@ -3,10 +3,13 @@
 
 defmodule Arca.ToolGrantStorage do
   @moduledoc """
-  Persistence mechanics for tool grants. The scope rules and the
-  composition with declared policy live in `Aqua.ToolGrants`, which is the
-  only caller. Every read and write is keyed by the owning athanor, and
-  every grant a function here answers is a plain map (`Arca.Data`).
+  Persistence mechanics for tool grants. The row shape and its tenancy
+  live in `Sanctum.ToolGrants`, the only caller above this layer, which
+  also builds the rows `Arca.TurnStorage` writes inside a decision's
+  transaction; the scope rules and the composition with declared policy
+  live in `Aqua.ToolGrants`. Every read and write is keyed by the owning
+  athanor, and every grant a function here answers is a plain map
+  (`Arca.Data`).
   """
 
   import Ecto.Query

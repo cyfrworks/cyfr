@@ -30,6 +30,10 @@ defmodule Compendium.Registry.Identity do
   namespace but holds publisher-namespace memberships has
   `personal_namespace: nil` and a non-empty `memberships` list.
 
+  A credential store that cannot be read is
+  `{:error, {:unavailable, "Registry credentials"}}` — never
+  `authenticated: false`, which would tell the person to sign in again.
+
   Consumed by `Compendium.MCP.registry.whoami`. Not exposed via
   `Sanctum.MCP.session.whoami` — that action is local-user-only, so the
   auth sliver stays Compendium-free.
@@ -49,7 +53,7 @@ defmodule Compendium.Registry.Identity do
   calls `GET /v1/namespaces/{slug}` per token to confirm the namespace still
   exists and collect `last_used_at`, then assembles personal + memberships.
   """
-  @spec identity(Sanctum.Context.t()) :: map()
+  @spec identity(Sanctum.Context.t()) :: map() | {:error, {:unavailable, String.t()}}
   def identity(%Sanctum.Context{} = ctx) do
     # OCI host keys the CredentialStore (tokens were issued for that host);
     # REST host receives the whoami confirmation call. Distinct in the default
@@ -58,6 +62,9 @@ defmodule Compendium.Registry.Identity do
     rest_host = rest_host()
 
     case list_user_credentials(ctx, oci_host) do
+      {:error, _unreadable} ->
+        {:error, {:unavailable, "Registry credentials"}}
+
       [] ->
         %{authenticated: false, user_id: ctx.user_id, personal_namespace: nil, memberships: []}
 
@@ -99,10 +106,14 @@ defmodule Compendium.Registry.Identity do
   # ============================================================================
 
   # The user's personal credentials (registry push tokens) are the only
-  # credential source; the same path serves every deployment.
-  defp list_user_credentials(%Sanctum.Context{user_id: user_id}, oci_host)
+  # credential source; the same path serves every deployment. A row that
+  # cannot be opened has no token to confirm a namespace with.
+  defp list_user_credentials(%Sanctum.Context{user_id: user_id} = ctx, oci_host)
        when is_binary(user_id) and user_id != "" do
-    CredentialStore.list_for_user(user_id, oci_host)
+    case CredentialStore.list_for_user(ctx, oci_host) do
+      {:ok, entries} -> CredentialStore.push_tokens(entries)
+      {:error, _unreadable} = unreadable -> unreadable
+    end
   end
 
   defp list_user_credentials(_ctx, _oci_host), do: []

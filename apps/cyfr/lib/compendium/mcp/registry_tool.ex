@@ -414,7 +414,10 @@ defmodule Compendium.MCP.RegistryTool do
   end
 
   def handle(%Context{} = ctx, %{"action" => "whoami"}) do
-    {:ok, Compendium.Registry.Identity.identity(ctx)}
+    case Compendium.Registry.Identity.identity(ctx) do
+      {:error, _unavailable} = refusal -> refusal
+      identity -> {:ok, identity}
+    end
   end
 
   def handle(
@@ -677,11 +680,10 @@ defmodule Compendium.MCP.RegistryTool do
 
   # Find the user's personal-namespace bearer, used for actions that require
   # a user identity proof (claim_publisher, verify_publisher).
-  defp personal_bearer(%Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
-    registry = Compendium.RegistryHost.canonical_host()
-
-    case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
-      [%{type: :push_token, token: token, namespace: slug} | _] when is_binary(token) ->
+  defp personal_bearer(%Context{user_id: user_id} = ctx)
+       when is_binary(user_id) and user_id != "" do
+    case push_tokens(ctx) do
+      {:ok, [%{token: token, namespace: slug} | _]} ->
         if String.contains?(slug, "."),
           do:
             {:error,
@@ -689,9 +691,12 @@ defmodule Compendium.MCP.RegistryTool do
               "no personal-namespace bearer found — claim your personal namespace first"}},
           else: {:ok, token}
 
-      _ ->
+      {:ok, _none} ->
         {:error,
          {:invalid_argument, "no push token available — run `cyfr login` to authenticate"}}
+
+      {:error, _unavailable} = refusal ->
+        refusal
     end
   end
 
@@ -703,7 +708,7 @@ defmodule Compendium.MCP.RegistryTool do
   # ahead of its own claim counts too — that is exactly when the CLI makes
   # it. Returns the body unchanged, or with a `"local_store_failed": true`
   # marker when the token could not be cached, so the CLI can say so.
-  defp maybe_store_personal_credential(%Context{user_id: user_id}, body)
+  defp maybe_store_personal_credential(%Context{user_id: user_id} = ctx, body)
        when is_binary(user_id) and user_id != "" do
     slug = body["slug"]
 
@@ -724,7 +729,7 @@ defmodule Compendium.MCP.RegistryTool do
       registry = Compendium.RegistryHost.canonical_host()
 
       case Compendium.Registry.CredentialStore.put_push_token(
-             user_id,
+             ctx,
              registry,
              slug,
              body["token"],
@@ -746,9 +751,9 @@ defmodule Compendium.MCP.RegistryTool do
   # the CLI's post-legal-accept re-probe and `cyfr whoami` land here.
   # Annotates the body with `"credential_store_warnings": [slugs]` when a
   # put fails — partial failure is non-fatal, each namespace is independent.
-  defp maybe_store_probe_credentials(%Context{user_id: user_id}, body)
+  defp maybe_store_probe_credentials(%Context{user_id: user_id} = ctx, body)
        when is_binary(user_id) and user_id != "" do
-    case Compendium.SignInSync.absorb_probe(user_id, body) do
+    case Compendium.SignInSync.absorb_probe(ctx, body) do
       [] -> body
       warnings -> Map.put(body, "credential_store_warnings", warnings)
     end
@@ -809,21 +814,35 @@ defmodule Compendium.MCP.RegistryTool do
 
   # First push token the caller holds — for non-namespace-scoped actions like
   # abuse-report submission. Same head-of-list heuristic used by probe.
-  defp any_push_token(%Sanctum.Context{user_id: user_id})
+  defp any_push_token(%Sanctum.Context{user_id: user_id} = ctx)
        when is_binary(user_id) and user_id != "" do
-    registry = Compendium.RegistryHost.canonical_host()
-
-    case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
-      [%{type: :push_token, token: token} | _] when is_binary(token) ->
+    case push_tokens(ctx) do
+      {:ok, [%{token: token} | _]} ->
         {:ok, token}
 
-      _ ->
+      {:ok, []} ->
         {:error,
          {:invalid_argument, "no push token available — run `cyfr login` to authenticate"}}
+
+      {:error, _unavailable} = refusal ->
+        refusal
     end
   end
 
   defp any_push_token(_), do: {:error, {:invalid_argument, "authentication required"}}
+
+  # The caller's usable push tokens, personal first — the head is the
+  # bearer the head-of-list heuristics above pick. A row that cannot be
+  # opened is skipped here; a store that cannot be read refuses.
+  defp push_tokens(ctx) do
+    registry = Compendium.RegistryHost.canonical_host()
+
+    case Compendium.Registry.CredentialStore.list_for_user(ctx, registry) do
+      {:ok, entries} -> {:ok, Compendium.Registry.CredentialStore.push_tokens(entries)}
+      {:error, _unreadable} -> {:error, {:unavailable, "Registry credentials"}}
+    end
+  end
+
   # ============================================================================
   # Gated identity mutations (dispatched from the @identity_mutations head)
   # ============================================================================

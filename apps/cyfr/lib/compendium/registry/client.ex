@@ -590,9 +590,9 @@ defmodule Compendium.Registry.Client do
   defp json_headers, do: [{"content-type", "application/json"}]
 
   defp request(method, path, extra_headers, body, ctx) do
-    url = url(path)
-    headers = auth_headers(ctx) ++ extra_headers
-    Transport.request(method, url, headers, body)
+    with {:ok, auth} <- auth_headers(ctx) do
+      Transport.request(method, url(path), auth ++ extra_headers, body)
+    end
   end
 
   defp interpret_response({:ok, status, _h, body}, op) when status in 200..299 do
@@ -666,25 +666,39 @@ defmodule Compendium.Registry.Client do
 
   # Resolves a push token from CredentialStore and emits `Bearer` for REST API
   # calls. For non-namespace-scoped endpoints (e.g. `/v1/identity/probe`,
-  # `/v1/search`), picks the head of `list_for_user/2` — which is the user's
-  # personal-namespace token when present, falling back to the first publisher
-  # membership token.
+  # `/v1/search`), picks the first usable token of `list_for_user/2` — the
+  # user's personal-namespace token when present, falling back to the first
+  # publisher membership token. A store that cannot be read refuses the
+  # request: sending it anonymously would come back as "sign in again".
   defp auth_headers(ctx) do
     registry = Compendium.RegistryHost.canonical_host()
 
     case ctx do
       %Sanctum.Context{user_id: user_id} when is_binary(user_id) and user_id != "" ->
-        case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
-          [%{type: :push_token, token: token} | _] when is_binary(token) and token != "" ->
-            [{"authorization", "Bearer #{token}"}]
+        case CredentialStore.list_for_user(ctx, registry) do
+          {:ok, entries} ->
+            case CredentialStore.push_tokens(entries) do
+              [%{token: token} | _] when token != "" -> {:ok, bearer(token)}
+              _ -> {:ok, []}
+            end
 
-          _ ->
-            []
+          {:error, _unreadable} ->
+            {:error, credentials_unavailable()}
         end
 
       _ ->
-        []
+        {:ok, []}
     end
+  end
+
+  defp credentials_unavailable do
+    %Errors{
+      reason: :registry_unavailable,
+      message: "Your registry credentials could not be read — retry shortly",
+      registry: nil,
+      status: nil,
+      detail: %{credential_store: :unavailable}
+    }
   end
 
   defp build_search_query(params) do

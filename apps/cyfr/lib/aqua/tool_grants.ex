@@ -45,15 +45,14 @@ defmodule Aqua.ToolGrants do
   the two gates cannot disagree.
   """
 
-  alias Arca.ToolGrantStorage
   alias Sanctum.Context
 
-  @scopes Arca.ToolGrantStorage.scopes()
-  @effects Arca.ToolGrantStorage.effects()
+  @scopes Sanctum.ToolGrants.scopes()
+  @effects Sanctum.ToolGrants.effects()
 
   @type key :: {tool :: String.t(), action :: String.t()}
 
-  @typedoc "One stored grant, as the plain map `Arca.ToolGrantStorage` answers."
+  @typedoc "One stored grant, as the plain map `Sanctum.ToolGrants` answers."
   @type grant :: %{required(:scope) => String.t(), optional(atom()) => term()}
 
   @typedoc "One effective decision: the mode, and whether a grant or the author made it."
@@ -211,7 +210,7 @@ defmodule Aqua.ToolGrants do
   @spec for_agents(Context.t(), String.t(), [String.t()]) ::
           {:ok, %{String.t() => [grant()]}} | {:error, unavailable()}
   def for_agents(%Context{} = ctx, thread_id, names) when is_list(names) do
-    case ToolGrantStorage.list_for_thread(Context.actor(ctx), thread_id) do
+    case Sanctum.ToolGrants.for_thread(ctx, thread_id) do
       {:ok, rows} ->
         by_name = rows |> Enum.filter(&(&1.agent_name in names)) |> Enum.group_by(& &1.agent_name)
         {:ok, Map.new(names, &{&1, Map.get(by_name, &1, [])})}
@@ -231,7 +230,7 @@ defmodule Aqua.ToolGrants do
   @spec allowed_by_agent(Context.t(), String.t()) ::
           {:ok, MapSet.t({String.t(), String.t(), String.t()})} | {:error, unavailable()}
   def allowed_by_agent(%Context{} = ctx, thread_id) do
-    case ToolGrantStorage.list_for_thread(Context.actor(ctx), thread_id) do
+    case Sanctum.ToolGrants.for_thread(ctx, thread_id) do
       {:ok, rows} ->
         {:ok,
          rows
@@ -277,25 +276,20 @@ defmodule Aqua.ToolGrants do
   @spec put(Context.t(), map()) :: {:ok, grant()} | {:error, term()}
   def put(%Context{} = ctx, %{scope: scope, effect: effect} = attrs)
       when scope in @scopes and effect in @effects do
-    with {:ok, row} <- row(ctx, attrs), do: ToolGrantStorage.put(row)
+    with :ok <- check_standing(attrs), do: Sanctum.ToolGrants.put(ctx, attrs)
   end
 
   @doc """
-  The row a decision writes, checked and not written: `put/2`'s attrs
-  with the athanor, the deciding person and the thread the scope
-  keys on, for a caller that lands it inside a transaction of its own
-  (`Arca.ToolGrantStorage.put/1`).
+  Whether a decision may stand: `:ok`, or the
+  `{:scope_not_permitted, reason}` a standing allow for this action is
+  refused with. A deny always stands. The rule `put/2` applies before it
+  writes, for a caller that has the row built
+  (`Sanctum.ToolGrants.grant_row/2`) and written in a transaction of its
+  own.
   """
-  @spec row(Context.t(), map()) :: {:ok, map()} | {:error, term()}
-  def row(%Context{} = ctx, %{scope: scope, effect: effect} = attrs)
-      when scope in @scopes and effect in @effects do
-    with :ok <- check_standing(attrs, scope, effect) do
-      {:ok,
-       attrs
-       |> Map.merge(%{athanor_id: Context.athanor!(ctx), granted_by: ctx.user_id})
-       |> Map.put(:thread_id, thread_for(scope, attrs))}
-    end
-  end
+  @spec check_standing(map()) :: :ok | {:error, {:scope_not_permitted, term()}}
+  def check_standing(%{scope: scope, effect: effect} = attrs),
+    do: check_standing(attrs, scope, effect)
 
   @doc """
   The sentence a person reads when a standing answer was refused — one per
@@ -323,12 +317,8 @@ defmodule Aqua.ToolGrants do
 
   @doc "Withdraw a decision. Idempotent — a pair nobody granted is already withdrawn."
   @spec revoke(Context.t(), map()) :: :ok | {:error, term()}
-  def revoke(%Context{} = ctx, %{scope: scope} = attrs) when scope in @scopes do
-    attrs
-    |> Map.put(:athanor_id, Context.athanor!(ctx))
-    |> Map.put(:thread_id, thread_for(scope, attrs))
-    |> ToolGrantStorage.delete()
-  end
+  def revoke(%Context{} = ctx, %{scope: scope} = attrs) when scope in @scopes,
+    do: Sanctum.ToolGrants.revoke(ctx, attrs)
 
   # ---------------------------------------------------------------------------
   # Internal
@@ -362,12 +352,6 @@ defmodule Aqua.ToolGrants do
       _ -> :ok
     end
   end
-
-  # An agent-scope row names no thread: it is the same answer in
-  # every thread, and storing the one it happened to be given in would
-  # make the key ambiguous.
-  defp thread_for("agent", _attrs), do: nil
-  defp thread_for("thread", attrs), do: Map.fetch!(attrs, :thread_id)
 
   defp key_string(%{tool: tool, action: action}), do: "#{tool}.#{action}"
 end

@@ -62,6 +62,37 @@ defmodule Compendium.MCP.RegistryToolTest do
     end
   end
 
+  describe "a push token that cannot be read" do
+    @tag :capture_log
+    test "a damaged stored token refuses as unavailable, not as 'no push token'", %{ctx: ctx} do
+      registry = Compendium.RegistryHost.canonical_host()
+      aad = Sanctum.CipherAAD.registry_token(ctx.user_id, registry, "damagedslug")
+      {:ok, ciphertext} = Sanctum.Cipher.encrypt("not json", aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: ctx.user_id,
+          registry: registry,
+          namespace_slug: "damagedslug",
+          credential_ciphertext: ciphertext
+        })
+
+      assert {:error, {:unavailable, "The push token stored for namespace 'damagedslug'"}} =
+               RegistryTool.handle(ctx, %{"action" => "tokens_list", "slug" => "damagedslug"})
+    end
+
+    @tag :capture_log
+    test "a credential store that cannot answer refuses as unavailable", %{ctx: ctx} do
+      Arca.Repo.query!("ALTER TABLE registry_tokens RENAME TO registry_tokens_unavailable")
+
+      assert {:error, {:unavailable, "Registry credentials"}} =
+               RegistryTool.handle(ctx, %{"action" => "tokens_list", "slug" => "someslug"})
+
+      assert {:error, {:unavailable, "Registry credentials"}} =
+               RegistryTool.handle(ctx, %{"action" => "whoami"})
+    end
+  end
+
   describe "gated identity mutations still refuse incomplete args" do
     test "each arg-missing arm answers its own sentence", %{ctx: ctx} do
       for {action, sentence} <- [

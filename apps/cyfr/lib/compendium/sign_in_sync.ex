@@ -35,6 +35,7 @@ defmodule Compendium.SignInSync do
   require Logger
 
   alias Compendium.Registry.CredentialStore
+  alias Sanctum.Context
   alias Sanctum.SignIn
 
   # Nobody is held at the door by a black-holed registry: the probe gets
@@ -45,26 +46,31 @@ defmodule Compendium.SignInSync do
   @doc """
   Probe cyfr.run with the IdP `access_token` and absorb what it says.
 
+  `ctx` is the admitted context of the person `user` names — the push
+  tokens the probe returns are stored as theirs by that context, never by
+  an id handed in beside it.
+
   Always `{:proceed, user, report}`; see `t:Sanctum.SignIn.report/0` for
   what each `probe` value means.
   """
   @spec complete(
+          Context.t(),
           %{required(:id) => String.t(), optional(atom()) => term()},
           String.t() | atom(),
           String.t() | nil
         ) ::
           SignIn.outcome()
-  def complete(user, _provider, access_token)
+  def complete(%Context{} = _ctx, user, _provider, access_token)
       when not is_binary(access_token) or access_token == "" do
     Logger.info("[Compendium.SignInSync] no IdP access token for #{user.id} — no probe")
     {:proceed, user, %{unsynced: [], probe: :skipped}}
   end
 
-  def complete(user, provider, access_token) do
+  def complete(%Context{} = ctx, user, provider, access_token) do
     if Compendium.RegistryHost.configured?() do
       case probe(provider, access_token) do
         {:ok, body} ->
-          absorb(user, body)
+          absorb(ctx, user, body)
 
         {:error, :invalid_access_token} ->
           {:proceed, user, %{unsynced: [], probe: :invalid_token}}
@@ -91,8 +97,8 @@ defmodule Compendium.SignInSync do
   the namespace, cache the push tokens. Returns the slugs whose tokens
   could not be cached.
   """
-  @spec absorb_probe(String.t(), map()) :: [String.t()]
-  def absorb_probe(user_id, %{} = body) when is_binary(user_id) do
+  @spec absorb_probe(Context.t(), map()) :: [String.t()]
+  def absorb_probe(%Context{user_id: user_id} = ctx, %{} = body) when is_binary(user_id) do
     personal = body["personal_namespace"]
 
     case slug_of(personal) do
@@ -109,7 +115,7 @@ defmodule Compendium.SignInSync do
         :ok
     end
 
-    store_tokens(user_id, personal, body["memberships"] || [])
+    store_tokens(ctx, personal, body["memberships"] || [])
   end
 
   defp probe(provider, access_token) do
@@ -130,7 +136,7 @@ defmodule Compendium.SignInSync do
     end
   end
 
-  defp absorb(user, body) do
+  defp absorb(ctx, user, body) do
     personal = body["personal_namespace"]
     memberships = body["memberships"] || []
 
@@ -138,7 +144,7 @@ defmodule Compendium.SignInSync do
       slug when is_binary(slug) ->
         case SignIn.record_namespace(user.id, slug) do
           {:ok, user} ->
-            {:proceed, user, report(store_tokens(user.id, personal, memberships))}
+            {:proceed, user, report(store_tokens(ctx, personal, memberships))}
 
           {:error, :namespace_owned_by_another_identity} ->
             Logger.error(
@@ -155,13 +161,13 @@ defmodule Compendium.SignInSync do
         end
 
       _ ->
-        {:proceed, user, report(store_tokens(user.id, personal, memberships))}
+        {:proceed, user, report(store_tokens(ctx, personal, memberships))}
     end
   end
 
   defp report(unsynced), do: %{unsynced: unsynced, probe: :ok}
 
-  defp store_tokens(user_id, personal, memberships) do
+  defp store_tokens(ctx, personal, memberships) do
     registry = Compendium.RegistryHost.canonical_host()
 
     entries =
@@ -171,7 +177,7 @@ defmodule Compendium.SignInSync do
       end
 
     for {slug, token, role} <- entries,
-        match?({:error, _}, CredentialStore.put_push_token(user_id, registry, slug, token, role)),
+        match?({:error, _}, CredentialStore.put_push_token(ctx, registry, slug, token, role)),
         do: slug
   end
 

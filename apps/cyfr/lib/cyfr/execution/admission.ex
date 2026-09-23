@@ -103,13 +103,14 @@ defmodule Cyfr.Execution.Admission do
   @spec authority_and_stamp_for(Context.t(), RootSelect.selector(), String.t(), keyword()) ::
           {:ok, root()} | {:error, term()}
   def authority_and_stamp_for(%Context{} = ctx, profile_selector, reference, opts \\ []) do
-    select =
-      case Keyword.get(opts, :route) do
-        nil -> &RootSelect.select(&1, profile_selector)
-        route -> &RootSelect.select_for_route(&1, route, ctx.authenticated)
+    {select, pinned} =
+      case {Keyword.get(opts, :route), profile_selector} do
+        {nil, {:id, id}} -> {&RootSelect.select(&1, profile_selector), id}
+        {nil, _selector} -> {&RootSelect.select(&1, profile_selector), nil}
+        {route, _selector} -> {&RootSelect.select_for_route(&1, route, ctx.authenticated), nil}
       end
 
-    load(ctx, reference, select, opts)
+    load(ctx, reference, select, pinned, opts)
   end
 
   @doc """
@@ -131,7 +132,13 @@ defmodule Cyfr.Execution.Admission do
     route = Keyword.fetch!(opts, :route)
 
     with {:ok, root} <-
-           load(ctx, source_ref, &RootSelect.select_for_route(&1, route, ctx.authenticated), opts),
+           load(
+             ctx,
+             source_ref,
+             &RootSelect.select_for_route(&1, route, ctx.authenticated),
+             nil,
+             opts
+           ),
          {:ok, decision} <-
            step_invoke(root.authority, reference, Keyword.get(opts, :need), ctx: ctx) do
       {:ok, %{root: root, decision: decision}}
@@ -860,15 +867,43 @@ defmodule Cyfr.Execution.Admission do
     |> Enum.sort()
   end
 
-  defp load(ctx, reference, select, opts) do
-    actor = Context.actor(ctx)
-
+  defp load(ctx, reference, select, pinned, opts) do
     with {:ok, name_ref} <- name_level(reference),
-         {:ok, candidates} <- Arca.ConsentStorage.profiles(actor, name_ref),
+         {:ok, entries} <- read_profiles(ctx, name_ref),
+         {:ok, candidates} <- decoded(entries, pinned),
          {:ok, profile} <- select.(candidates),
          {:ok, _ref, _type, component} <- inspect_component(ctx, reference),
          {:ok, authority, stamp} <- load_authority(ctx, profile, component, opts) do
       {:ok, %{authority: authority, stamp: stamp, profile: profile}}
+    end
+  end
+
+  defp read_profiles(ctx, name_ref) do
+    case Sanctum.Consent.profiles(ctx, name_ref) do
+      {:ok, entries} -> {:ok, entries}
+      {:error, :unavailable} -> {:error, {:unavailable, "Consent profiles"}}
+      {:error, _no_tenant} = refusal -> refusal
+    end
+  end
+
+  # A profile row that cannot be decoded is unavailable, never skipped: a
+  # selection by kind or label could be the one it would have answered, so
+  # it refuses every selection but a pinned id that names another profile.
+  defp decoded(entries, pinned) do
+    case Enum.filter(entries, &(&1.status == :corrupt)) do
+      [] ->
+        {:ok, entries}
+
+      damaged ->
+        bearing =
+          if is_binary(pinned),
+            do: Enum.find(damaged, &(&1.id == pinned)),
+            else: hd(damaged)
+
+        case bearing do
+          nil -> {:ok, entries -- damaged}
+          %{id: id} -> {:error, {:unavailable, "Consent profile #{id}"}}
+        end
     end
   end
 
@@ -925,7 +960,7 @@ defmodule Cyfr.Execution.Admission do
   # so the delta sheet can show what changed rather than the whole grant.
   defp shape_diff_fn(ctx, profile) do
     fn ->
-      with {:ok, consent} <- Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
+      with {:ok, consent} <- Sanctum.Consent.head_consent(ctx, profile.id) do
         Sanctum.Consent.ShapeDiff.compute(ctx, profile.source_ref, consent.resolved_policy)
       else
         _ -> []

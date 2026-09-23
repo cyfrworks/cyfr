@@ -47,7 +47,7 @@ defmodule PrismWeb.ClaimNamespaceController do
            Client.claim_personal_namespace(username, provider, access_token),
          # The registry answered after a round trip: the session is read
          # again before anything is written under it.
-         {:ok, %{user_id: user_id}} <- still_standing(popped, ctx) do
+         {:ok, %{user_id: user_id} = fresh} <- still_standing(popped, ctx) do
       conn = popped
       slug = body["slug"] || username
 
@@ -60,7 +60,7 @@ defmodule PrismWeb.ClaimNamespaceController do
 
           conn =
             case CredentialStore.put_push_token(
-                   user_id,
+                   fresh,
                    registry,
                    slug,
                    body["token"],

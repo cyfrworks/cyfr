@@ -614,15 +614,12 @@ defmodule Compendium.MCPTest do
       {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "testns")
 
       :ok =
-        Registry.CredentialStore.put(
-          ctx.user_id,
+        Registry.CredentialStore.put_push_token(
+          ctx,
           Compendium.RegistryHost.canonical_host(),
           "testns",
-          %{
-            type: :push_token,
-            token: "cyfr_pt_test",
-            namespace: "testns"
-          }
+          "cyfr_pt_test",
+          "personal"
         )
 
       {:error, msg} =

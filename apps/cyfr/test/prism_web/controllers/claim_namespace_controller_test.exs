@@ -314,7 +314,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
                Sanctum.Session.load(token, surface: :console)
 
       assert {:ok, %{token: "cyfr_pt_new"}} =
-               Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
+               Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
     end
 
     test "a session revoked with nobody told claims nothing and records nothing", %{
@@ -332,7 +332,9 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       assert conn.status == 401
       assert get_resp_header(conn, "location") == ["/login"]
       assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
-      assert :not_found = Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
+
+      assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
     end
 
     test "a session revoked while the registry answered records nothing", %{bypass: bypass} do
@@ -351,7 +353,9 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       assert conn.status == 401
       assert get_resp_header(conn, "location") == ["/login"]
       assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
-      assert :not_found = Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
+
+      assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
     end
 
     test "a claim answered without a token still records the identity", %{bypass: bypass} do
@@ -367,13 +371,19 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       assert redirected_to(conn) == "/"
       assert {:ok, %{namespace: ^slug}} = Sanctum.Tenancy.Users.get(user_id)
       assert {:ok, %{authenticated: true}} = Sanctum.Session.load(token, surface: :console)
-      assert :not_found = Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
+
+      assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
     end
   end
 
   # The submit failure pages render with varying status codes depending on the
   # branch (400 expired, 302 not-logged-in redirect, 200 form re-render); read
   # whatever body came back without pinning the status.
+  # The person a push token is stored as, as a context names them.
+  defp as(user_id),
+    do: Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+
   defp response_body(conn), do: conn.resp_body || ""
 
   # The test pipeline renders the form with a CSRF token; pull it out and

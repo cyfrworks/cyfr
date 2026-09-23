@@ -183,6 +183,43 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimitTest do
     end
   end
 
+  describe "the cached lookup" do
+    test "a refused request carries no opened secret out of the limiter", %{ctx: ctx} do
+      slug = create_webhook!(ctx, "rl-scrub-#{:rand.uniform(1_000_000)}", %{rate_limit: "1/1m"})
+      conn = build_conn(slug, {10, 0, 0, 77})
+
+      passed = WebhookRateLimit.call(conn, %{})
+      refute passed.halted
+      assert {:ok, %{enabled: true, signing_secrets: _}} = passed.assigns[:webhook_lookup]
+
+      refused = WebhookRateLimit.call(conn, %{})
+      assert refused.status == 429
+      refute Map.has_key?(refused.assigns, :webhook_lookup)
+    end
+  end
+
+  describe "the limiter opens no secret" do
+    test "a request it refuses, or passes on, has decrypted nothing", %{ctx: ctx} do
+      slug = create_webhook!(ctx, "rl-lazy-#{:rand.uniform(1_000_000)}", %{rate_limit: "1/1m"})
+      conn = build_conn(slug, {10, 0, 0, 78})
+
+      # With no keyring any decryption raises, so a limiter that opened a
+      # secret at the lookup would crash here rather than answer.
+      keyring = Application.fetch_env!(:sanctum, :crypto_keyring)
+      Application.delete_env(:sanctum, :crypto_keyring)
+      on_exit(fn -> Application.put_env(:sanctum, :crypto_keyring, keyring) end)
+
+      passed = WebhookRateLimit.call(conn, %{})
+      refute passed.halted
+      assert {:ok, %{signing_secrets: opener}} = passed.assigns[:webhook_lookup]
+      assert is_function(opener, 0)
+
+      assert WebhookRateLimit.call(conn, %{}).status == 429
+
+      Application.put_env(:sanctum, :crypto_keyring, keyring)
+    end
+  end
+
   describe "no slug" do
     test "falls back to IP scan-evasion bucket" do
       conn =

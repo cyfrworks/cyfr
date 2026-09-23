@@ -4,6 +4,8 @@
 defmodule Arca.ConsentStorageTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Arca.ConsentStorage
   alias Arca.ProfileStorage
   alias Arca.VaultStorage
@@ -262,6 +264,39 @@ defmodule Arca.ConsentStorageTest do
 
       assert {:error, :no_athanor} = ConsentStorage.profiles(nobody, "reagent:local.storage-test")
       assert {:error, :no_athanor} = ConsentStorage.head_consent(nobody, profile.id)
+    end
+  end
+
+  describe "profile_entries/2" do
+    test "keeps an undecodable profile as a corrupt marker that profiles/2 drops", %{
+      athanor: athanor
+    } do
+      _fine = profile!(athanor, "prof_entries_fine")
+
+      {:ok, _damaged} =
+        ProfileStorage.put(%{
+          id: "prof_entries_damaged",
+          athanor_id: athanor,
+          source_ref: "reagent:local.storage-test",
+          kind: "owner",
+          label: "damaged",
+          status: "active"
+        })
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(p in Arca.Schemas.Profile, where: p.id == "prof_entries_damaged"),
+          set: [status: "sideways"]
+        )
+
+      actor = %Cyfr.Actor{athanor_id: athanor}
+
+      assert {:ok, entries} = ConsentStorage.profile_entries(actor, "reagent:local.storage-test")
+      assert %{id: "prof_entries_damaged", status: :corrupt} in entries
+      assert Enum.any?(entries, &match?(%{id: "prof_entries_fine", kind: :owner}, &1))
+
+      assert {:ok, [%{id: "prof_entries_fine"}]} =
+               ConsentStorage.profiles(actor, "reagent:local.storage-test")
     end
   end
 

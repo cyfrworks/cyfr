@@ -119,36 +119,27 @@ defmodule Sanctum.CipherIntegrationTest do
     end
 
     test "CredentialStore keeps users isolated end-to-end under the cipher" do
-      cred = %{
-        type: :push_token,
-        token: "cyfr_pt_alice",
-        namespace: "alice",
-        issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-        label: "test"
-      }
+      alice = person_context("github|https://github.com|111")
+      other = person_context("github|https://github.com|222")
 
       assert :ok =
-               Compendium.Registry.CredentialStore.put(
-                 "github|https://github.com|111",
+               Compendium.Registry.CredentialStore.put_push_token(
+                 alice,
                  "reg.test",
                  "alice",
-                 cred
+                 "cyfr_pt_alice",
+                 "personal"
                )
 
       assert {:ok, %{token: "cyfr_pt_alice"}} =
-               Compendium.Registry.CredentialStore.get(
-                 "github|https://github.com|111",
-                 "reg.test",
-                 "alice"
-               )
+               Compendium.Registry.CredentialStore.get(alice, "reg.test", "alice")
 
       # A different principal cannot read it (distinct secret name → no row).
-      assert :not_found =
-               Compendium.Registry.CredentialStore.get(
-                 "github|https://github.com|222",
-                 "reg.test",
-                 "alice"
-               )
+      assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(other, "reg.test", "alice")
     end
   end
+
+  defp person_context(user_id),
+    do: Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
 end

@@ -91,7 +91,7 @@ defmodule Arca.WebhookStorage do
   > (`secret_encrypted`). Callers MUST NOT log or serialize the whole row;
   > decrypt only what is needed for signature verification.
   """
-  @spec get_by_slug(String.t()) :: {:ok, map()} | {:error, :not_found}
+  @spec get_by_slug(String.t()) :: {:ok, map()} | {:error, :not_found | :database_error}
   # arca:unscoped-ok the slug IS the public address a sender posts to; the
   # athanor is read off the row and every later step is scoped by it.
   def get_by_slug(slug) when is_binary(slug) do
@@ -235,6 +235,38 @@ defmodule Arca.WebhookStorage do
   end
 
   def set_disabled(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+
+  @doc """
+  Soft-disable the enabled webhooks among `ids` in the actor's athanor, in
+  one transaction: every one of them is disabled, or — when the store
+  fails — none is. Answers the ids it disabled; an id already disabled, or
+  not the athanor's, is skipped.
+  """
+  @spec disable_all(Cyfr.Actor.t(), [String.t()]) ::
+          {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
+  def disable_all(%Cyfr.Actor{athanor_id: athanor_id}, ids)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(ids) do
+    Arca.Repo.Errors.with_db_rescue("WebhookStorage.disable_all", fn ->
+      Arca.Repo.transaction(fn ->
+        now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+        enabled =
+          from(w in Webhook, where: w.id in ^ids and w.enabled == ^true, order_by: w.id)
+          |> where_athanor(athanor_id)
+
+        disabled = Arca.Repo.all(from(w in enabled, select: w.id))
+
+        from(w in Webhook, where: w.id in ^disabled)
+        |> where_athanor(athanor_id)
+        |> Arca.Repo.update_all(set: [enabled: false, updated_at: now])
+
+        disabled
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def disable_all(%Cyfr.Actor{}, _ids), do: {:error, :no_athanor}
 
   @doc """
   Replace the encrypted secret for an existing webhook.

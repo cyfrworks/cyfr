@@ -12,6 +12,8 @@ defmodule Cyfr.Execution.AdmissionTest do
 
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Cyfr.Authority
   alias Cyfr.Authority.Blob
   alias Cyfr.Execution.Admission
@@ -238,6 +240,50 @@ defmodule Cyfr.Execution.AdmissionTest do
       assert auth.profile_id == "prof-chain-pub"
       assert auth.profile_kind == :public
       assert auth.invoke_mode == :edge_only
+    end
+
+    test "a profile row that cannot be decoded refuses every selection it could answer", %{
+      ctx: ctx,
+      root: root
+    } do
+      seed(ctx, profile_summary(), consent(root))
+
+      seed(
+        ctx,
+        profile_summary(%{id: "prof-chain-damaged", label: "damaged"}),
+        consent(root, %{id: "consent-chain-damaged"})
+      )
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(p in Arca.Schemas.Profile,
+            where: p.athanor_id == ^ctx.athanor_id and p.id == "prof-chain-damaged"
+          ),
+          set: [status: "sideways"]
+        )
+
+      # A default or routed selection could be the damaged row's: never a guess.
+      assert {:error, {:unavailable, "Consent profile prof-chain-damaged"}} =
+               Admission.authority_for(ctx, :default, "#{@root_node}:0.1.0")
+
+      assert {:error, {:unavailable, "Consent profile prof-chain-damaged"}} =
+               Admission.authority_for(ctx, {:id, "prof-chain-damaged"}, @root_node)
+
+      # A pinned id naming another profile is not about the damaged row.
+      assert {:ok, %Authority{profile_id: "prof-chain"}} =
+               Admission.authority_for(ctx, {:id, "prof-chain"}, @root_node)
+    end
+
+    @tag :capture_log
+    test "a profile store that cannot answer is unavailable, not an absent profile", %{
+      ctx: ctx,
+      root: root
+    } do
+      seed(ctx, profile_summary(), consent(root))
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+      assert {:error, {:unavailable, "Consent profiles"}} =
+               Admission.authority_for(ctx, :default, "#{@root_node}:0.1.0")
     end
 
     test "the stamp carries the activation graph the loader verified", %{ctx: ctx, root: root} do

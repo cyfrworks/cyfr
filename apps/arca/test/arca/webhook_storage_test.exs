@@ -166,6 +166,47 @@ defmodule Arca.WebhookStorageTest do
     end
   end
 
+  describe "disable_all/2" do
+    test "disables the actor's enabled hooks among the ids, and answers them", %{
+      athanor_id: athanor_id
+    } do
+      actor = Cyfr.Actor.in_athanor(athanor_id)
+      a = wh_attrs("all-a", athanor_id)
+      b = wh_attrs("all-b", athanor_id)
+      done = wh_attrs("all-done", athanor_id)
+      kept = wh_attrs("all-kept", athanor_id)
+      theirs = wh_attrs("all-theirs", "ath_b")
+      for attrs <- [a, b, done, kept, theirs], do: :ok = WebhookStorage.create_webhook(attrs)
+      :ok = WebhookStorage.set_disabled(actor, "all-done")
+
+      ids =
+        for attrs <- [a, b, done, theirs] do
+          {:ok, row} = WebhookStorage.get_by_slug(attrs.slug)
+          row.id
+        end
+
+      assert {:ok, disabled} = WebhookStorage.disable_all(actor, ids)
+      assert Enum.sort(disabled) == Enum.sort(Enum.take(ids, 2))
+
+      assert {:ok, %{enabled: false}} = WebhookStorage.get_by_slug(a.slug)
+      assert {:ok, %{enabled: false}} = WebhookStorage.get_by_slug(b.slug)
+      assert {:ok, %{enabled: true}} = WebhookStorage.get_by_slug(kept.slug)
+      assert {:ok, %{enabled: true}} = WebhookStorage.get_by_slug(theirs.slug)
+    end
+
+    test "an actor with no athanor is refused before any query" do
+      assert {:error, :no_athanor} = WebhookStorage.disable_all(%Cyfr.Actor{}, ["whk_x"])
+    end
+
+    @tag :capture_log
+    test "a store that cannot answer is a database error", %{athanor_id: athanor_id} do
+      Arca.Repo.query!("ALTER TABLE webhooks RENAME TO webhooks_unavailable")
+
+      assert {:error, :database_error} =
+               WebhookStorage.disable_all(Cyfr.Actor.in_athanor(athanor_id), ["whk_x"])
+    end
+  end
+
   describe "rotate_secret/4" do
     test "replaces secret, retains the old one as previous within the grace window",
          %{athanor_id: athanor_id} do

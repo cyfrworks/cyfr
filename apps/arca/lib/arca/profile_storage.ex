@@ -95,6 +95,39 @@ defmodule Arca.ProfileStorage do
   def set_status(%Cyfr.Actor{}, _id, _status), do: {:error, :no_athanor}
 
   @doc """
+  Revoke every profile of a name-level source ref that is not already
+  revoked, within the actor's athanor, in one transaction. Answers the ids
+  it revoked. Consent revisions and vault entries are untouched: a revoked
+  profile keeps its history.
+  """
+  @spec revoke_for_source(Cyfr.Actor.t(), String.t()) ::
+          {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
+  def revoke_for_source(%Cyfr.Actor{athanor_id: athanor_id}, source_ref)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.revoke_for_source", fn ->
+      Arca.Repo.transaction(fn ->
+        ids =
+          from(p in Profile,
+            where: p.source_ref == ^source_ref and p.status != "revoked",
+            order_by: p.id,
+            select: p.id
+          )
+          |> Arca.QueryHelpers.where_athanor(athanor_id)
+          |> Arca.Repo.all()
+
+        from(p in Profile, where: p.id in ^ids)
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.update_all(set: [status: "revoked", updated_at: DateTime.utc_now()])
+
+        ids
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def revoke_for_source(%Cyfr.Actor{}, _source_ref), do: {:error, :no_athanor}
+
+  @doc """
   Compare-and-swap the head consent pointer. The update counts as applied
   only when the stored head still equals `expected` (or is NULL for the
   bootstrap revision) — a concurrent advance makes this return

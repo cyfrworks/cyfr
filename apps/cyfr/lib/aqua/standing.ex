@@ -59,15 +59,20 @@ defmodule Aqua.Standing do
         :never -> {"agent", "deny"}
       end
 
-    with {:ok, row} <-
-           Aqua.ToolGrants.row(ctx, %{
-             scope: grant_scope,
-             effect: effect,
-             thread_id: turn.thread_id,
-             agent_name: turn.agent,
-             tool: tool,
-             action: action
-           }) do
+    attrs = %{
+      scope: grant_scope,
+      effect: effect,
+      thread_id: turn.thread_id,
+      agent_name: turn.agent,
+      tool: tool,
+      action: action
+    }
+
+    # The rule is the assistant's; the row, its tenant and who decided are
+    # identity's, built from the context and written by the turn store in
+    # the decision's own transaction.
+    with :ok <- Aqua.ToolGrants.check_standing(attrs),
+         {:ok, row} <- Sanctum.ToolGrants.grant_row(ctx, attrs) do
       {:ok, [row]}
     end
   end

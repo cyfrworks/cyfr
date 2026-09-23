@@ -44,14 +44,14 @@ defmodule Compendium.Cascade do
 
   # Revoke profiles while retaining consent history and vault entries.
   defp revoke_profiles(ctx, name_ref) do
-    case Arca.ProfileStorage.list_for_source(Sanctum.Context.actor(ctx), name_ref) do
-      {:ok, profiles} ->
-        Enum.each(profiles, fn profile ->
-          Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), profile.id, "revoked")
-        end)
-
-      _ ->
+    case Sanctum.Consent.revoke_source(ctx, name_ref) do
+      {:ok, _revoked} ->
         :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Compendium.Cascade] profile revocation skipped for #{name_ref}: #{inspect(reason)}"
+        )
     end
   end
 
@@ -61,26 +61,15 @@ defmodule Compendium.Cascade do
   end
 
   defp disable_webhooks(ctx, name_ref) do
-    athanor_id = ctx.athanor_id
-
-    case Arca.WebhookStorage.list_webhooks(Cyfr.Actor.in_athanor(athanor_id)) do
-      {:ok, webhooks} ->
-        webhooks
-        |> Enum.filter(&targets?(&1.target_ref, name_ref))
-        |> Enum.each(fn webhook ->
-          Arca.WebhookStorage.set_disabled(Cyfr.Actor.in_athanor(athanor_id), webhook.name)
-        end)
-
-      _ ->
+    case Sanctum.Webhook.disable_for_component(ctx, name_ref) do
+      {:ok, _disabled} ->
         :ok
-    end
-  rescue
-    error ->
-      Logger.warning(
-        "[Compendium.Cascade] webhook cascade failed for #{name_ref}: #{Exception.message(error)}"
-      )
 
-      :ok
+      {:error, reason} ->
+        Logger.warning(
+          "[Compendium.Cascade] webhook cascade skipped for #{name_ref}: #{inspect(reason)}"
+        )
+    end
   end
 
   defp disable_schedules(ctx, name_ref) do

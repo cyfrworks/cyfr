@@ -19,6 +19,12 @@ defmodule Sanctum.Webhook do
     * When created (`create/2`).
     * When rotated (`rotate/2`).
   Never on `get/2` or `list/1`. The CLI/UI must surface a one-time reveal.
+  The inbound path opens them once more, inside the server:
+  `resolve_ingress/1` hands the ingress plugs a row carrying a function
+  that opens its signing secrets when it is called. Nothing is decrypted
+  at the lookup, so a delivery the rate limiter refuses costs no
+  decryption, and no inspection of the row or the connection carrying it
+  can print a secret.
 
   ## Storage
 
@@ -284,6 +290,119 @@ defmodule Sanctum.Webhook do
   end
 
   @doc """
+  Soft-disable every enabled webhook in the caller's athanor whose target
+  is the component `target_ref` names, at any version — what removing the
+  last version of a component does to the registrations that point at it.
+
+  The disable is one write: every targeted webhook is disabled, or — when
+  the store fails — none is, so an outage never leaves some of a
+  component's registrations live and others not. Answers the ids disabled;
+  one another caller disabled first is not among them. A ref that does not
+  parse names no target, so nothing is disabled.
+  """
+  @spec disable_for_component(Context.t(), String.t()) ::
+          {:ok, %{disabled: [String.t()]}} | {:error, :unavailable | :no_athanor}
+  def disable_for_component(%Context{} = ctx, target_ref) when is_binary(target_ref) do
+    actor = Context.actor(ctx)
+
+    with {:ok, name_ref} <- component_name_ref(target_ref),
+         {:ok, rows} <- enabled_webhooks(actor) do
+      ids = for row <- rows, component_name_ref(row.target_ref) == {:ok, name_ref}, do: row.id
+      disable_all(actor, ids)
+    else
+      {:error, :invalid_ref} -> {:ok, %{disabled: []}}
+      {:error, _reason} = refusal -> refusal
+    end
+  end
+
+  defp disable_all(_actor, []), do: {:ok, %{disabled: []}}
+
+  defp disable_all(actor, ids) do
+    case WebhookStorage.disable_all(actor, ids) do
+      {:ok, disabled} -> {:ok, %{disabled: disabled}}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  defp component_name_ref(ref) when is_binary(ref) do
+    case ComponentRef.to_name_ref(ref) do
+      {:ok, name_ref} -> {:ok, name_ref}
+      {:error, _} -> {:error, :invalid_ref}
+    end
+  end
+
+  defp component_name_ref(_ref), do: {:error, :invalid_ref}
+
+  defp enabled_webhooks(actor) do
+    case WebhookStorage.list_webhooks(actor) do
+      {:ok, rows} -> {:ok, rows}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  The webhook a delivery's slug names, for the ingress plugs that
+  rate-limit, verify and admit it.
+
+  An inventoried system responsibility
+  (`Cyfr.Boundaries.system_responsibilities/0`): the slug is the public
+  address a sender posts to, read before any caller is known, and the
+  athanor every later step is scoped by is the one read off the row.
+
+  An enabled row carries `:signing_secrets`, a function that — when
+  called, and not before — opens the current and, inside its grace window,
+  previous secret, answering each as a binary or `:unreadable`, for
+  `verify_with_grace/4`. The sealed columns are not carried as fields,
+  and a disabled row carries no secret at all. The plug that verifies
+  drops the function from the connection once it has.
+  """
+  @spec resolve_ingress(String.t()) :: {:ok, map()} | {:error, :not_found | :unavailable}
+  def resolve_ingress(slug) when is_binary(slug) do
+    case WebhookStorage.get_by_slug(slug) do
+      {:ok, row} -> {:ok, ingress_view(row)}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  # The closure holds the sealed bytes and the AAD they open under; it
+  # decrypts only when the verifying plug calls it, so a lookup the rate
+  # limiter refuses never touches the keyring.
+  defp ingress_view(row) do
+    view = Map.drop(row, [:secret_encrypted, :previous_secret_encrypted])
+
+    if row.enabled == true do
+      aad = webhook_aad(row)
+      current = row.secret_encrypted
+      previous = Map.get(row, :previous_secret_encrypted)
+      expires_at = Map.get(row, :previous_secret_expires_at)
+
+      Map.put(view, :signing_secrets, fn ->
+        open_signing_secrets(current, previous, expires_at, aad)
+      end)
+    else
+      view
+    end
+  end
+
+  defp open_signing_secrets(current, previous, expires_at, aad) do
+    %{
+      current: open_secret(current, aad),
+      previous:
+        if(is_binary(previous) and previous_active?(expires_at), do: open_secret(previous, aad))
+    }
+  end
+
+  defp open_secret(sealed, aad) do
+    case decrypt_secret(sealed, aad) do
+      {:ok, secret} -> secret
+      {:error, :secret_unreadable} -> :unreadable
+    end
+  end
+
+  @doc """
   Rotate the HMAC secret for a webhook. Returns the new plaintext secret
   exactly once.
 
@@ -324,66 +443,91 @@ defmodule Sanctum.Webhook do
     end
   end
 
-  defp do_verify(secret_encrypted, aad, raw_body, "sha256=" <> received_hex, nil)
-       when is_binary(secret_encrypted) and is_binary(raw_body) and is_binary(received_hex) do
-    with {:ok, secret} <- decrypt_secret(secret_encrypted, aad) do
+  # The secret is opened only once the signature (and any timestamp) is
+  # well-formed, so a malformed delivery is reported as malformed whatever
+  # the state of the stored secret.
+  defp do_verify(source, raw_body, "sha256=" <> received_hex, nil)
+       when is_binary(raw_body) and is_binary(received_hex) do
+    with {:ok, secret} <- open_source(source) do
       compare(:crypto.mac(:hmac, :sha256, secret, raw_body), received_hex)
     end
   end
 
-  defp do_verify(secret_encrypted, aad, raw_body, "sha256=" <> received_hex, timestamp)
-       when is_binary(secret_encrypted) and is_binary(raw_body) and is_binary(received_hex) and
-              is_binary(timestamp) do
+  defp do_verify(source, raw_body, "sha256=" <> received_hex, timestamp)
+       when is_binary(raw_body) and is_binary(received_hex) and is_binary(timestamp) do
     with {:ok, ts} <- parse_timestamp(timestamp),
          :ok <- check_skew(ts),
-         {:ok, secret} <- decrypt_secret(secret_encrypted, aad) do
+         {:ok, secret} <- open_source(source) do
       payload = Integer.to_string(ts) <> "." <> raw_body
       compare(:crypto.mac(:hmac, :sha256, secret, payload), received_hex)
     end
   end
 
-  defp do_verify(_secret_encrypted, _aad, _raw_body, _received, _timestamp),
+  defp do_verify(_source, _raw_body, _received, _timestamp),
     do: {:error, :malformed_signature}
+
+  # A secret an ingress row already opened, or a stored one to open now.
+  defp open_source({:opened, secret}) when is_binary(secret), do: {:ok, secret}
+  defp open_source({:opened, _unreadable}), do: {:error, :secret_unreadable}
+  defp open_source({:sealed, secret_encrypted, aad}), do: decrypt_secret(secret_encrypted, aad)
 
   # Return stored-secret decryption failures separately from signature
   # mismatches. The rotation grace path may retry with the previous secret.
-  defp decrypt_secret(secret_encrypted, aad) do
+  defp decrypt_secret(secret_encrypted, aad) when is_binary(secret_encrypted) do
     case Sanctum.Cipher.decrypt(secret_encrypted, aad) do
       {:ok, secret} -> {:ok, secret}
       {:error, _} -> {:error, :secret_unreadable}
     end
   end
 
+  defp decrypt_secret(_secret_encrypted, _aad), do: {:error, :secret_unreadable}
+
   @doc """
   Verify a signature against a webhook row, accepting the **previous** secret
   during the post-rotation grace window.
 
-  Tries the current `secret_encrypted` first; on any failure, falls back to
-  `previous_secret_encrypted` iff it is present and `previous_secret_expires_at`
-  is still in the future. After the grace window the previous secret is
-  ignored, so a rotation isn't a hard cutover. AAD is rebuilt from the row's
-  tenant tuple so the stored ciphertext is tenant-bound under any AAD-binding
-  cipher.
+  Tries the current secret first; on any failure, falls back to the
+  previous one iff it is present and `previous_secret_expires_at` is still
+  in the future. After the grace window the previous secret is ignored, so
+  a rotation isn't a hard cutover.
+
+  `webhook` is either a stored row, whose `secret_encrypted` and
+  `previous_secret_encrypted` are opened here with an AAD rebuilt from the
+  row's tenant tuple, or a `resolve_ingress/1` row, whose secrets were
+  opened under the same AAD when it was resolved. A secret that does not
+  open is `{:error, :secret_unreadable}`.
   """
   @spec verify_with_grace(map(), binary(), binary(), binary() | nil) ::
           :ok | {:error, atom()}
   def verify_with_grace(webhook, raw_body, received_signature, timestamp \\ nil)
       when is_map(webhook) do
-    aad = webhook_aad(webhook)
+    {current, previous} = secret_sources(webhook)
 
-    case do_verify(webhook.secret_encrypted, aad, raw_body, received_signature, timestamp) do
+    case do_verify(current, raw_body, received_signature, timestamp) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        prev = Map.get(webhook, :previous_secret_encrypted)
-
-        if is_binary(prev) and previous_active?(Map.get(webhook, :previous_secret_expires_at)) do
-          do_verify(prev, aad, raw_body, received_signature, timestamp)
+        if previous != nil and
+             previous_active?(Map.get(webhook, :previous_secret_expires_at)) do
+          do_verify(previous, raw_body, received_signature, timestamp)
         else
           {:error, reason}
         end
     end
+  end
+
+  defp secret_sources(%{signing_secrets: opened}) when is_function(opened, 0) do
+    %{current: current, previous: previous} = opened.()
+    {{:opened, current}, if(previous != nil, do: {:opened, previous})}
+  end
+
+  defp secret_sources(webhook) do
+    aad = webhook_aad(webhook)
+    previous = Map.get(webhook, :previous_secret_encrypted)
+
+    {{:sealed, webhook.secret_encrypted, aad},
+     if(is_binary(previous), do: {:sealed, previous, aad})}
   end
 
   # The grace window is open while previous_secret_expires_at is in the future.
@@ -713,7 +857,7 @@ defmodule Sanctum.Webhook do
     Context.actor(ctx)
   end
 
-  # AAD for verify_with_grace/4, rebuilt from the stored webhook row. The
+  # AAD for opening a stored webhook row's secrets. The
   # current and previous secret share this identity, so the rotation grace
   # window is AAD-stable; create/2 and rotate/2 build the same tuple from the
   # writing context via the single `Sanctum.CipherAAD` definition.
