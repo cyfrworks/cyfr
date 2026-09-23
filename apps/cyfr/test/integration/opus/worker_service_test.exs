@@ -92,7 +92,9 @@ defmodule Opus.WorkerServiceWireTest do
           athanor_id: ctx.athanor_id,
           component_type: "formula"
         },
-        reservation: %{budget_id: authority.budget.id, cap: 2}
+        reservation: %{budget_id: authority.budget.id, cap: 2},
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     {:ok, ctx: ctx, authority: authority, root_id: root_id, attempt: attempt.attempt}

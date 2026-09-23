@@ -109,7 +109,9 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     on_exit(fn -> Arca.Cache.delete_match({:external_tools, :_}) end)
 
     {:ok, %{tools: tools}} =
-      Catalog.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth)
+      Catalog.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth,
+        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+      )
 
     names = Enum.map(tools, & &1["name"])
 
@@ -132,7 +134,9 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:ok, %{tools: tools}} =
-      Catalog.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth)
+      Catalog.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth,
+        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+      )
 
     internal = Enum.reject(tools, &String.contains?(&1["name"], ":"))
 
@@ -173,7 +177,9 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, message} =
-      Catalog.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth)
+      Catalog.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
+        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+      )
 
     # It got PAST the authority — the failure is the unreachable upstream.
     refute message =~ "Denied by chain authority"
@@ -183,7 +189,9 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, message} =
-      Catalog.call_in_chain("ghserver:repo_get", guest(ctx), %{}, auth)
+      Catalog.call_in_chain("ghserver:repo_get", guest(ctx), %{}, auth,
+        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+      )
 
     assert message =~ "Denied by chain authority"
   end
@@ -199,7 +207,9 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, message} =
-      Catalog.call_in_chain("othersrv:issues.list", guest(ctx), %{}, auth)
+      Catalog.call_in_chain("othersrv:issues.list", guest(ctx), %{}, auth,
+        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+      )
 
     assert message =~ "Denied by chain authority"
   end
@@ -217,7 +227,9 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     Emissary.MCP.ExternalProvider.invalidate_external_tools_cache(ctx)
 
     {:error, message} =
-      Catalog.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth)
+      Catalog.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
+        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+      )
 
     assert message =~ "Denied by chain authority"
   end
@@ -226,7 +238,9 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, message} =
-      Catalog.call_in_chain("ghost:issues.list", guest(ctx), %{}, auth)
+      Catalog.call_in_chain("ghost:issues.list", guest(ctx), %{}, auth,
+        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
+      )
 
     assert message =~ "Denied by chain authority"
   end

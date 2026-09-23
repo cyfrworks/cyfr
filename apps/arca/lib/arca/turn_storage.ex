@@ -39,6 +39,17 @@ defmodule Arca.TurnStorage do
   the recovery — so a member that did not take the claim cannot spend one.
   An approval pause keeps the claim: the turn is still this member's work.
   Clone turns hold no claim; the root they run under does.
+
+  ## The root's grant
+
+  A write that resumes, recovers or ends a turn's root attempt runs under
+  that attempt's grant (`Arca.ExecutionStanding`): `attrs[:grant]` —
+  `:stored` for the stamp the root's current attempt carries — and
+  `attrs[:verify]`, the caller's check, asked first in the transaction,
+  before the turn row is taken. The attempt is written only when it
+  carries the grant's stamp. A turn with no root attempt yet needs no
+  grant; one with a root refuses a write that names none
+  (`{:error, :missing_grant}`).
   """
 
   import Ecto.Query
@@ -343,8 +354,9 @@ defmodule Arca.TurnStorage do
   def pause(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
 
   @doc """
-  Resume a paused turn with a fresh lease: the turn, its root attempt and
-  its root execution return to `running` together. Event `turn.resumed`.
+  Resume a paused turn with a fresh lease, under its root's grant (the
+  moduledoc's "The root's grant"): the turn, its root attempt and its root
+  execution return to `running` together. Event `turn.resumed`.
   """
   @spec resume(Cyfr.Actor.t(), String.t(), map()) :: {:ok, Turn.t()} | {:error, term()}
   def resume(actor, turn_id, attrs \\ %{})
@@ -352,14 +364,20 @@ defmodule Arca.TurnStorage do
   def resume(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.resume", fn ->
-      Arca.Repo.transaction(fn ->
+      Arca.Repo.locking_transaction(fn ->
+        grant = standing!(athanor_id, turn_id, attrs)
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status != "paused", do: Arca.Repo.rollback(:not_paused)
+        grant = stamp!(athanor_id, turn, grant)
 
         until = Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until()
 
-        if Arca.ExecutionAttempts.resume!(Cyfr.Actor.in_athanor(athanor_id), turn.attempt, until) !=
-             1,
+        if Arca.ExecutionAttempts.resume!(
+             Cyfr.Actor.in_athanor(athanor_id),
+             turn.attempt,
+             until,
+             grant
+           ) != 1,
            do: Arca.Repo.rollback(:attempt_not_paused)
 
         execution_status!(athanor_id, turn.root_execution_id, "paused", "running")
@@ -419,7 +437,9 @@ defmodule Arca.TurnStorage do
   over is answered `{:error, :already_finished}`; a turn with no root yet
   (still `accepted`) closes on its own. A turn with a steer past its
   boundary refuses `completed` with `{:error, :steer_pending}`: its loop
-  goes on to answer the steer. Event `turn.<status>`.
+  goes on to answer the steer. A turn with a root attempt ends under its
+  root's grant (the moduledoc's "The root's grant"). Event
+  `turn.<status>`.
   """
   @spec finish(Cyfr.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, Turn.t()} | {:error, term()}
@@ -428,7 +448,8 @@ defmodule Arca.TurnStorage do
   def finish(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, status, attrs)
       when is_binary(athanor_id) and athanor_id != "" and status in @terminal do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.finish", fn ->
-      Arca.Repo.transaction(fn ->
+      Arca.Repo.locking_transaction(fn ->
+        grant = standing!(athanor_id, turn_id, attrs)
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status in @terminal, do: Arca.Repo.rollback(:already_finished)
 
@@ -443,7 +464,8 @@ defmodule Arca.TurnStorage do
               Cyfr.Actor.in_athanor(athanor_id),
               turn.attempt,
               attempt_state,
-              outcome
+              outcome,
+              stamp!(athanor_id, turn, grant)
             ) || 0
           else
             0
@@ -588,7 +610,8 @@ defmodule Arca.TurnStorage do
   def recover(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.recover", fn ->
-      Arca.Repo.transaction(fn ->
+      Arca.Repo.locking_transaction(fn ->
+        grant = standing!(athanor_id, turn_id, attrs)
         turn = take!(athanor_id, turn_id, attrs)
         if turn.status not in @open, do: Arca.Repo.rollback(:not_open)
         if turn.recovery_attempts >= @recovery_cap, do: Arca.Repo.rollback(:recovery_exhausted)
@@ -599,7 +622,7 @@ defmodule Arca.TurnStorage do
 
         adopted =
           if turn.status == "running" and turn.root_execution_id,
-            do: adopt_root!(athanor_id, turn, attrs),
+            do: adopt_root!(athanor_id, turn, attrs, grant),
             else: %{sets: [], ran_ms: 0, attempt: nil}
 
         {1, _} =
@@ -642,7 +665,8 @@ defmodule Arca.TurnStorage do
   def takeover(%Cyfr.Actor{athanor_id: athanor_id}, turn_id, attrs)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.takeover", fn ->
-      Arca.Repo.transaction(fn ->
+      Arca.Repo.locking_transaction(fn ->
+        grant = standing!(athanor_id, turn_id, attrs)
         turn = take!(athanor_id, turn_id, attrs)
         if turn.status not in ["running", "paused"], do: Arca.Repo.rollback(:not_open)
         if turn.recovery_attempts >= @recovery_cap, do: Arca.Repo.rollback(:recovery_exhausted)
@@ -651,7 +675,8 @@ defmodule Arca.TurnStorage do
         thread = thread!(athanor_id, turn.thread_id)
         Arca.ThreadStorage.take_claim!(Cyfr.Actor.in_athanor(athanor_id), thread.id, turn_id)
 
-        %{sets: sets, ran_ms: ran, attempt: attempt} = adopt_root!(athanor_id, turn, attrs)
+        %{sets: sets, ran_ms: ran, attempt: attempt} =
+          adopt_root!(athanor_id, turn, attrs, grant)
 
         {1, _} =
           from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn_id)
@@ -675,17 +700,19 @@ defmodule Arca.TurnStorage do
   def takeover(%Cyfr.Actor{}, _turn_id, _attrs), do: {:error, :no_athanor}
 
   # The attempt half of a takeover: the predecessor retired, a successor
-  # opened under this boot, the root execution back to `running`. Answers
-  # what the turn row must be set to with it, the predecessor's
-  # unaccounted interval, and the successor's id.
+  # opened under this boot with the predecessor's stamp, the root
+  # execution back to `running`. Answers what the turn row must be set to
+  # with it, the predecessor's unaccounted interval, and the successor's
+  # id.
   # arca:db-raise-ok inside the caller's transaction
-  defp adopt_root!(athanor_id, %Turn{} = turn, attrs) do
+  defp adopt_root!(athanor_id, %Turn{} = turn, attrs, grant) do
     %{attempt: successor, ran_ms: ran} =
       Arca.ExecutionAttempts.takeover!(
         Cyfr.Actor.in_athanor(athanor_id),
         turn.root_execution_id,
         boot_id: Cyfr.Boot.id(),
-        lease_until: Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until()
+        lease_until: Map.get(attrs, :lease_until) || Arca.ExecutionAttempts.lease_until(),
+        grant: stamp!(athanor_id, turn, grant)
       )
 
     execution_status!(
@@ -836,7 +863,8 @@ defmodule Arca.TurnStorage do
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.pause_recovered", fn ->
       with_seq_retry(fn ->
-        Arca.Repo.transaction(fn ->
+        Arca.Repo.locking_transaction(fn ->
+          grant = standing!(athanor_id, turn_id, attrs)
           turn = take!(athanor_id, turn_id, attrs)
           if turn.status != "running", do: Arca.Repo.rollback(:not_running)
           if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
@@ -853,7 +881,8 @@ defmodule Arca.TurnStorage do
               Cyfr.Actor.in_athanor(athanor_id),
               turn.root_execution_id,
               boot_id: Cyfr.Boot.id(),
-              lease_until: Arca.ExecutionAttempts.lease_until()
+              lease_until: Arca.ExecutionAttempts.lease_until(),
+              grant: stamp!(athanor_id, turn, grant)
             )
 
           _ = Arca.ExecutionAttempts.pause!(Cyfr.Actor.in_athanor(athanor_id), successor.attempt)
@@ -2298,6 +2327,62 @@ defmodule Arca.TurnStorage do
   # the fence the runner holds, which takes the row's lock for the rest of
   # the transaction. A fence another process moved matches no row.
   # arca:db-raise-ok inside the caller's transaction
+  # The root's grant a turn write runs under, asked first in the caller's
+  # locking transaction, before the turn row is taken: `attrs[:grant]`
+  # (`:stored` for the stamp the root's current attempt carries) checked
+  # by `attrs[:verify]`. Nil when the write named none, or the turn has no
+  # root attempt to read a stamp from; `stamp!/3` refuses a root write
+  # without one.
+  # arca:db-raise-ok inside the caller's transaction
+  defp standing!(athanor_id, turn_id, attrs) do
+    case Arca.ExecutionStanding.inputs(attrs, fn -> root_stamp(athanor_id, turn_id) end) do
+      {:ok, %Cyfr.ExecutionGrant{athanor_id: ^athanor_id} = grant, verify} ->
+        Arca.ExecutionStanding.verify!(grant, verify)
+        grant
+
+      {:ok, nil, _verify} ->
+        nil
+
+      {:ok, %Cyfr.ExecutionGrant{}, _verify} ->
+        Arca.Repo.rollback(:not_standing)
+
+      {:error, :missing_grant} ->
+        nil
+    end
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp root_stamp(athanor_id, turn_id) do
+    case Arca.Repo.one(
+           from(t in Turn,
+             where: t.athanor_id == ^athanor_id and t.id == ^turn_id,
+             select: t.attempt
+           )
+         ) do
+      attempt when is_binary(attempt) ->
+        Arca.ExecutionStanding.stored(Cyfr.Actor.in_athanor(athanor_id), attempt)
+
+      nil ->
+        nil
+    end
+  end
+
+  # The grant the turn's root attempt is written under: the one checked
+  # first, which must be the stamp that attempt carries. A root write that
+  # named no grant is `:missing_grant`.
+  # arca:db-raise-ok inside the caller's transaction
+  defp stamp!(_athanor_id, %Turn{}, nil), do: Arca.Repo.rollback(:missing_grant)
+
+  defp stamp!(athanor_id, %Turn{attempt: attempt}, %Cyfr.ExecutionGrant{} = grant)
+       when is_binary(attempt) do
+    if Arca.ExecutionStanding.stored(Cyfr.Actor.in_athanor(athanor_id), attempt) == grant,
+      do: grant,
+      else: Arca.Repo.rollback(:not_standing)
+  end
+
+  defp stamp!(_athanor_id, %Turn{}, %Cyfr.ExecutionGrant{}),
+    do: Arca.Repo.rollback(:missing_grant)
+
   defp own!(athanor_id, turn_id, attrs) do
     fence = held_fence!(attrs)
 

@@ -178,6 +178,13 @@ defmodule Arca.SchemaBaselineTest do
     refute columns["service_id"].not_null?
   end
 
+  test "an execution attempt stores the estate standing it was admitted under, with no default" do
+    column = Enum.find(columns("execution_attempts"), &(&1.name == "athanor_generation"))
+    assert column.not_null?, "execution_attempts.athanor_generation is NOT NULL"
+    assert is_nil(column.default), "execution_attempts.athanor_generation has no default"
+    assert :athanor_generation in Arca.Schemas.ExecutionAttempt.__schema__(:fields)
+  end
+
   test "a turn is fenced and pins its catalyst release" do
     columns = Map.new(columns("turns"), &{&1.name, &1})
 
@@ -295,14 +302,17 @@ defmodule Arca.SchemaBaselineTest do
     for column <- ~w(bytes reason settled_at), do: refute(columns[column].not_null?)
 
     {:ok, %{execution: execution, attempt: attempt}} =
-      Arca.Execution.admit(%{
-        id: "exec_schema_#{System.unique_integer([:positive])}",
-        reference: "catalyst:local.schema:0.1.0",
-        user_id: "usr_schema",
-        athanor_id: "ath_schema",
-        component_type: "catalyst",
-        input: "{}"
-      })
+      Arca.Execution.admit(
+        %{
+          id: "exec_schema_#{System.unique_integer([:positive])}",
+          reference: "catalyst:local.schema:0.1.0",
+          user_id: "usr_schema",
+          athanor_id: "ath_schema",
+          component_type: "catalyst",
+          input: "{}"
+        },
+        Arca.Test.Actor.standing("ath_schema")
+      )
 
     intent = %{
       id: "swi_#{System.unique_integer([:positive])}",

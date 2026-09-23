@@ -118,12 +118,17 @@ defmodule Opus.ExecutorCascadeTest do
         )
 
       {:ok, _} =
-        Execution.record_complete(Sanctum.Context.actor(ctx), child_id, %{
-          completed_at: DateTime.utc_now(),
-          duration_ms: 100,
-          status: "completed",
-          output: ~s({"result": "ok"})
-        })
+        Execution.record_complete(
+          Sanctum.Context.actor(ctx),
+          child_id,
+          %{
+            completed_at: DateTime.utc_now(),
+            duration_ms: 100,
+            status: "completed",
+            output: ~s({"result": "ok"})
+          },
+          Cyfr.Test.AttemptFixtures.standing(Sanctum.TestContext.athanor_id())
+        )
 
       # Cascade should find no running children
       children = Execution.list_running_children(parent_id)
@@ -259,7 +264,8 @@ defmodule Opus.ExecutorCascadeTest do
             completed_at: DateTime.utc_now(),
             duration_ms: 5_000,
             output: ~s({"ok":true})
-          }
+          },
+          Cyfr.Test.AttemptFixtures.standing(Sanctum.TestContext.athanor_id())
         )
 
       # Nothing swept the child with it; it is still the streaming child's own

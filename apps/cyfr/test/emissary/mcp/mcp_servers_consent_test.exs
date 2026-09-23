@@ -183,7 +183,9 @@ defmodule Emissary.MCP.McpServersConsentTest do
       args = %{"action" => action, "name" => "wired", "config" => http_config("gh-token")}
 
       assert {:error, "Tool action 'mcp_servers." <> _} =
-               Catalog.call_in_chain("mcp_servers", guest, args, authority)
+               Catalog.call_in_chain("mcp_servers", guest, args, authority,
+                 lineage: Cyfr.Test.AttemptFixtures.lineage!(guest)
+               )
 
       assert {:error, {:guest_plane_call, "mcp_servers"}} =
                Catalog.call_external("mcp_servers", guest, args)

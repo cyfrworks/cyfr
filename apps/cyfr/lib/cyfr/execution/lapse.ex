@@ -43,13 +43,17 @@ defmodule Cyfr.Execution.Lapse do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
 
+    # A lapse retires work: it needs the attempt's stored stamp, never a
+    # grant that still stands (`Cyfr.Boundaries.system_responsibilities/0`).
     {count, event_seq} =
       Arca.Execution.mark_failed_if_running(
         record.id,
         %{completed_at: now, duration_ms: duration_ms, error_message: @message},
         attempt: record.attempt,
         lease_until: record.lease_until,
-        event: "execution.lapsed"
+        event: "execution.lapsed",
+        grant: stamp(record),
+        verify: &Sanctum.ExecutionStanding.stamp_only/1
       )
 
     if count > 0 do
@@ -79,6 +83,16 @@ defmodule Cyfr.Execution.Lapse do
       Logger.error("[Cyfr.Execution.Lapse] #{record.id} could not be lapsed: #{inspect(reason)}")
       false
   end
+
+  # The stamp the lapsing attempt carries, as the scan read it.
+  defp stamp(%{athanor_id: athanor_id, athanor_generation: generation}) do
+    case Cyfr.ExecutionGrant.new(athanor_id, generation) do
+      {:ok, grant} -> grant
+      {:error, :invalid_grant} -> :stored
+    end
+  end
+
+  defp stamp(_record), do: :stored
 
   @doc """
   Lapse each of `attempts` that was dispatched to the worker service

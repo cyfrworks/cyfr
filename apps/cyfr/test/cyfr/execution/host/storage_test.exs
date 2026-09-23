@@ -202,7 +202,9 @@ defmodule Cyfr.Execution.Host.StorageTest do
           Cyfr.Actor.in_athanor(taken.athanor_id),
           taken.execution_id,
           boot_id: Cyfr.Boot.id(),
-          lease_until: Arca.ExecutionAttempts.lease_until()
+          lease_until: Arca.ExecutionAttempts.lease_until(),
+          grant: :stored,
+          verify: &Sanctum.ExecutionStanding.verify/1
         )
 
       assert %{"error" => "lost"} = storage(taken, write("data/stale.txt", "late"))
@@ -281,7 +283,9 @@ defmodule Cyfr.Execution.Host.StorageTest do
           Cyfr.Actor.in_athanor(fixture.athanor_id),
           fixture.execution_id,
           boot_id: Cyfr.Boot.id(),
-          lease_until: Arca.ExecutionAttempts.lease_until()
+          lease_until: Arca.ExecutionAttempts.lease_until(),
+          grant: :stored,
+          verify: &Sanctum.ExecutionStanding.verify/1
         )
 
       send(putter, {:release, :host_storage_put_gate})

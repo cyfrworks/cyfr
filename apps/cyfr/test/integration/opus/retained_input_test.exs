@@ -89,7 +89,7 @@ defmodule Opus.RetainedInputTest do
              Cyfr.Execution.run_child(authority, "catalyst:local.claude", nil, sent,
                ctx: Sanctum.Context.enter_guest(ctx),
                execution_id: id,
-               parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
+               parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,
                root_execution_id: "exec_root_#{System.unique_integer([:positive])}",
                retained_input: kept
              )

@@ -171,13 +171,37 @@ defmodule Arca.QueryHelpersTest do
       assert {_sql, []} = Ecto.Adapters.SQL.to_sql(:all, Arca.Repo, locked)
     end
   end
+
+  describe "for_share/1" do
+    test "shares the rows it reads on PostgreSQL, and leaves SQLite's query untouched" do
+      query = from(c in Arca.Schemas.JobClaim, where: c.kind == "bootstrap")
+      shared = QueryHelpers.for_share(query)
+      {sql, _params} = Ecto.Adapters.SQL.to_sql(:all, Arca.Repo, shared)
+
+      case Arca.Repo.adapter() do
+        Ecto.Adapters.Postgres ->
+          assert sql =~ ~r/FOR SHARE$/
+          refute sql =~ "FOR UPDATE"
+
+        Ecto.Adapters.SQLite3 ->
+          assert shared == query
+          refute sql =~ "FOR SHARE"
+      end
+    end
+
+    test "a bare schema is a queryable it can share" do
+      shared = QueryHelpers.for_share(Arca.Schemas.JobClaim)
+      assert {_sql, []} = Ecto.Adapters.SQL.to_sql(:all, Arca.Repo, shared)
+    end
+  end
 end
 
 defmodule Arca.LockingTransactionTest do
   @moduledoc """
-  `Arca.Repo.locking_transaction/2` with `Arca.QueryHelpers.for_update/1`
-  under two real connections, outside the sandbox: inside it one shared
-  connection would serialize the two transactions the test is about.
+  `Arca.Repo.locking_transaction/2` with `Arca.QueryHelpers.for_update/1`,
+  and `Arca.Repo.read_transaction/1` with `for_share/1`, under
+  real connections, outside the sandbox: inside it one shared connection
+  would serialize the transactions the test is about.
 
   PostgreSQL's loser opens its transaction at once and waits on the row;
   SQLite's waits at its own BEGIN, since the winner's immediate
@@ -210,7 +234,8 @@ defmodule Arca.LockingTransactionTest do
   end
 
   test "answers what the function answers, and a rollback commits nothing", %{claim: claim} do
-    assert {:ok, nil} = unboxed(fn -> Arca.Repo.locking_transaction(fn -> locked_detail(claim) end) end)
+    assert {:ok, nil} =
+             unboxed(fn -> Arca.Repo.locking_transaction(fn -> locked_detail(claim) end) end)
 
     assert {:error, :refused} =
              unboxed(fn ->
@@ -220,7 +245,8 @@ defmodule Arca.LockingTransactionTest do
                end)
              end)
 
-    assert {:ok, nil} = unboxed(fn -> Arca.Repo.locking_transaction(fn -> locked_detail(claim) end) end)
+    assert {:ok, nil} =
+             unboxed(fn -> Arca.Repo.locking_transaction(fn -> locked_detail(claim) end) end)
   end
 
   test "runs a multi as the same transaction", %{claim: claim} do
@@ -289,5 +315,109 @@ defmodule Arca.LockingTransactionTest do
 
     # The loser's clock reading is its own, taken after the wait.
     assert DateTime.compare(read_at, committed_at) in [:gt, :eq]
+  end
+
+  defp shared_detail(claim) do
+    from(c in JobClaim, where: c.id == ^claim.id, select: c.detail)
+    |> QueryHelpers.for_share()
+    |> Arca.Repo.one()
+  end
+
+  test "a read transaction answers what the function answers, and writes nothing it rolls back",
+       %{claim: claim} do
+    assert {:ok, nil} =
+             unboxed(fn -> Arca.Repo.read_transaction(fn -> shared_detail(claim) end) end)
+
+    assert {:error, :refused} =
+             unboxed(fn ->
+               Arca.Repo.read_transaction(fn ->
+                 _ = shared_detail(claim)
+                 Arca.Repo.rollback(:refused)
+               end)
+             end)
+  end
+
+  test "a read transaction waits behind no other reader, and on SQLite behind no writer", %{
+    claim: claim
+  } do
+    test = self()
+
+    # A writer holding its transaction open: SQLite's immediate one holds
+    # the one write lock; PostgreSQL's holds the row it wrote.
+    writer =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            Arca.Repo.update_all(where(JobClaim, id: ^claim.id), set: [detail: "held"])
+            send(test, :writing)
+
+            receive do
+              :commit -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :writing, 5_000
+
+    # A plain read in a read transaction reads the last commit at once on
+    # both: SQLite's deferred transaction takes no write lock.
+    plain = fn ->
+      from(c in JobClaim, where: c.id == ^claim.id, select: c.detail) |> Arca.Repo.one()
+    end
+
+    reader = Task.async(fn -> unboxed(fn -> Arca.Repo.read_transaction(plain) end) end)
+    assert {:ok, nil} = Task.await(reader, 5_000)
+
+    send(writer.pid, :commit)
+    assert {:ok, :ok} = Task.await(writer, 25_000)
+  end
+
+  @tag :postgres
+  test "shared readers hold a row together, and a writer waits for every one of them", %{
+    claim: claim
+  } do
+    if Arca.Repo.adapter() == Ecto.Adapters.SQLite3 do
+      # One writer at a time and snapshot reads: there is no shared row
+      # lock to hold.
+      :ok
+    else
+      test = self()
+
+      holder = fn label ->
+        Task.async(fn ->
+          unboxed(fn ->
+            Arca.Repo.read_transaction(fn ->
+              detail = shared_detail(claim)
+              send(test, {:sharing, label})
+
+              receive do
+                :release -> detail
+              end
+            end)
+          end)
+        end)
+      end
+
+      first = holder.(:first)
+      assert_receive {:sharing, :first}, 5_000
+      second = holder.(:second)
+      assert_receive {:sharing, :second}, 5_000
+
+      writer =
+        Task.async(fn ->
+          unboxed(fn ->
+            Arca.Repo.locking_transaction(fn -> locked_detail(claim) end)
+          end)
+        end)
+
+      refute Task.yield(writer, 300), "the writer locked a row two readers shared"
+      send(first.pid, :release)
+      assert {:ok, nil} = Task.await(first, 5_000)
+      refute Task.yield(writer, 300), "the writer locked a row a reader still shared"
+      send(second.pid, :release)
+      assert {:ok, nil} = Task.await(second, 5_000)
+      assert {:ok, nil} = Task.await(writer, 25_000)
+    end
   end
 end

@@ -56,6 +56,25 @@ defmodule Arca.Repo do
   end
 
   @doc """
+  Run `fun` as a transaction for reads that must see one consistent state
+  and write nothing, beside `locking_transaction/2` for the writes.
+
+  SQLite opens a deferred transaction where every other one there is
+  immediate: it takes no write lock, waits behind no writer and reads a
+  snapshot. PostgreSQL opens an ordinary transaction, whose
+  `Arca.QueryHelpers.for_share/1` reads a writer waits for. Answers
+  `{:ok, value}`, or `{:error, reason}` for a rollback. Nested inside
+  another transaction it is a savepoint of that transaction.
+  """
+  @spec read_transaction((-> term())) :: {:ok, term()} | {:error, term()}
+  def read_transaction(fun) when is_function(fun, 0) do
+    case adapter() do
+      Ecto.Adapters.SQLite3 -> transaction(fun, mode: :deferred)
+      _postgres -> transaction(fun)
+    end
+  end
+
+  @doc """
   SQLite busy timeout, used both as the Repo connection option and in the
   boot-time PRAGMA — one constant so the two mechanisms stay in step.
   """

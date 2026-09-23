@@ -94,7 +94,10 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     refusals =
       for {tool, action} <- pairs,
-          result = Catalog.call_in_chain(tool, ctx, %{"action" => action}, auth),
+          result =
+            Catalog.call_in_chain(tool, ctx, %{"action" => action}, auth,
+              lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
+            ),
           match?({:error, msg} when is_binary(msg), result),
           {:error, msg} = result,
           msg =~ @plane_refusal,
@@ -123,7 +126,9 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     args = %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"}
 
-    case Catalog.call_in_chain("tincture_visibility", ctx, args, auth) do
+    case Catalog.call_in_chain("tincture_visibility", ctx, args, auth,
+           lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
+         ) do
       {:ok, _result} ->
         :ok
 
@@ -159,7 +164,9 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, msg} =
-             Catalog.call_in_chain("component", ctx, %{"action" => "search"}, auth)
+             Catalog.call_in_chain("component", ctx, %{"action" => "search"}, auth,
+               lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
+             )
 
     assert msg =~ "Denied by chain authority"
   end
@@ -182,7 +189,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
                "execution",
                ctx,
                %{"action" => "force_release"},
-               auth
+               auth,
+               lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
              )
 
     assert msg =~ "not reachable from a running chain"
@@ -216,7 +224,9 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     for {tool, action} <- verbs do
       assert {:error, msg} =
-               Catalog.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth)
+               Catalog.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth,
+                 lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
+               )
 
       assert msg =~ "not reachable from a running chain", "#{tool}.#{action}: #{msg}"
     end
@@ -235,7 +245,9 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     assert {:error, msg} =
-             Catalog.call_in_chain("github:create_issue", ctx, %{}, auth)
+             Catalog.call_in_chain("github:create_issue", ctx, %{}, auth,
+               lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
+             )
 
     assert msg =~ "Denied by chain authority"
   end

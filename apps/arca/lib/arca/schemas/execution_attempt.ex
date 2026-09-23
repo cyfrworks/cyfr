@@ -12,7 +12,10 @@ defmodule Arca.Schemas.ExecutionAttempt do
   the runner that attached to the attempt (`Arca.ExecutionAttempts.claim/4`)
   and stays nil until then; a turn root is never claimed. `running_since`
   is set while the attempt runs and cleared when it pauses or ends, so
-  running time is accounted once per interval. Owned by the athanor.
+  running time is accounted once per interval. `athanor_generation` is
+  the estate standing the attempt was admitted under
+  (`Cyfr.ExecutionGrant`), inherited unchanged by a successor and never
+  written after insert. Owned by the athanor.
   """
 
   use Ecto.Schema
@@ -23,6 +26,7 @@ defmodule Arca.Schemas.ExecutionAttempt do
 
   schema "execution_attempts" do
     field :athanor_id, :string
+    field :athanor_generation, :integer
     field :execution_id, :string
     field :fence, :integer
     field :service_id, :string

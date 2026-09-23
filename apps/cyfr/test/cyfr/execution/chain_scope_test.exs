@@ -167,7 +167,11 @@ defmodule Cyfr.Execution.ChainScopeTest do
             "root_execution_id" => stranger.id
           },
           authority(),
-          lineage: %{root_execution_id: root.id}
+          lineage: %{
+            parent_execution_id: root.id,
+            root_execution_id: root.id,
+            attempt: root.attempt
+          }
         )
 
       assert message =~ "not found in this chain"
@@ -184,7 +188,11 @@ defmodule Cyfr.Execution.ChainScopeTest do
           Sanctum.Context.enter_guest(ctx),
           %{"action" => "logs", "execution_id" => stranger.id},
           authority(),
-          lineage: %{root_execution_id: stranger.id}
+          lineage: %{
+            parent_execution_id: stranger.id,
+            root_execution_id: stranger.id,
+            attempt: stranger.attempt
+          }
         )
 
       assert {:not_found, "Execution", _} = message

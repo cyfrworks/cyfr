@@ -16,13 +16,16 @@ defmodule Cyfr.Execution.EventsTest do
   # An execution row, so durable events have a counter to take numbers from.
   defp execution!(athanor_id) do
     {:ok, %{execution: execution}} =
-      Arca.Execution.admit(%{
-        id: Cyfr.UUID7.execution_id(),
-        reference: "reagent:local.evt:0.1.0",
-        user_id: "usr_evt",
-        athanor_id: athanor_id,
-        component_type: "reagent"
-      })
+      Arca.Execution.admit(
+        %{
+          id: Cyfr.UUID7.execution_id(),
+          reference: "reagent:local.evt:0.1.0",
+          user_id: "usr_evt",
+          athanor_id: athanor_id,
+          component_type: "reagent"
+        },
+        Cyfr.Test.AttemptFixtures.standing(athanor_id)
+      )
 
     execution
   end

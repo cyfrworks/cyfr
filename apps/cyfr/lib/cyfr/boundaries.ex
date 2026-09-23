@@ -43,6 +43,9 @@ defmodule Cyfr.Boundaries do
       ports.
     * `actor_paths/0` — every way a `%Cyfr.Actor{}` is constructed, with
       the reason for each. Four is how you get six.
+    * `system_responsibilities/0` — every write the server makes on work
+      whose standing it does not require, with the module that makes it
+      and why: a system responsibility is rostered, never a caller's flag.
     * `opus_named_by_cyfr_tests/0` — which CYFR test files may name an
       Opus module, and why.
 
@@ -251,13 +254,17 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum",
-      allow: ~w(Sanctum Sanctum.Context Sanctum.Notify Sanctum.Provisioning Sanctum.Tenancy),
+      allow: ~w(
+        Sanctum Sanctum.Context Sanctum.ExecutionStanding Sanctum.Notify
+        Sanctum.Provisioning Sanctum.Tenancy
+      ),
       reason:
         "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s two in-process agent reads " <>
           "alone — the first-need hook: a turn reads its estate's tree in-process " <>
           "now rather than through the `aqua` tool, and the bundle a group estate " <>
           "is filled with on first read has to be there before the turn roots an " <>
-          "authority in it."
+          "authority in it. `Sanctum.ExecutionStanding` is `Aqua.Tape`'s check over " <>
+          "the grant a turn's root attempt stores, handed to the turn's writes."
     },
     %{
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
@@ -280,7 +287,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller
         Sanctum.Catalog Sanctum.Cipher
-        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Notify
+        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.ExecutionStanding Sanctum.Notify
         Sanctum.Policy Sanctum.PubSub Sanctum.Session
         Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.VaultReader
@@ -297,18 +304,22 @@ defmodule Cyfr.Boundaries do
           "here for `drop_memo/1` alone: the identity domain announces that an " <>
           "established-caller memo is no longer good and never broadcasts, so the " <>
           "host's own watch (`Cyfr.StandingWatch`) is what carries the drop to " <>
-          "every member and calls back down to make it."
+          "every member and calls back down to make it. `Sanctum.ExecutionStanding` " <>
+          "decides whether an admitted execution's grant still stands: admission, " <>
+          "every host effect, the in-chain gate and the sweep ask it."
     },
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Context Sanctum.Egress Sanctum.Network Sanctum.ToolServerDigest
-        Sanctum.Unauthorized Sanctum.VaultReader
+        Sanctum Sanctum.Context Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Network
+        Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.VaultReader
       ),
       reason:
         "the MCP transport carries tenancy, reads a server's vault edge, and uses " <>
-          "Sanctum.Network/Egress for external servers, the bridge and system probes"
+          "Sanctum.Network/Egress for external servers, the bridge and system probes. " <>
+          "An outbound call's row runs under its caller's grant, checked through " <>
+          "Sanctum.ExecutionStanding as it is admitted and closed"
     },
     %{
       from: ["apps/cyfr/lib/emissary_web/**/*.ex", "apps/cyfr/lib/emissary_web.ex"],
@@ -997,6 +1008,40 @@ defmodule Cyfr.Boundaries do
   """
   @spec actor_paths() :: [map()]
   def actor_paths, do: @actor_paths
+
+  # ---------------------------------------------------------------------------
+  # 6b. The system responsibilities
+  # ---------------------------------------------------------------------------
+
+  @system_responsibilities [
+    %{
+      responsibility: "retire execution work under its stored grant",
+      modules: ~w(
+        Sanctum.ExecutionStanding Cyfr.Execution.Record Cyfr.Execution.Lapse
+        Cyfr.Execution.Cascade Cyfr.Execution.Sweeper Cyfr.Execution.TurnRoot
+        Emissary.MCP.ExternalProvider Aqua.Tape
+      ),
+      check: "Sanctum.ExecutionStanding.stamp_only/1",
+      reason:
+        "a failure, a cancel, a lease lapse and the sweep's cancellation of an " <>
+          "archived estate's work end an admitted execution without asking whether " <>
+          "its grant still stands: the attempt must carry the grant's stored stamp " <>
+          "and be the current one, and the member must hold its slot, but retiring " <>
+          "work its estate no longer admits is exactly when these run. None of them " <>
+          "can report success, and none can write over a successor's attempt. A " <>
+          "completion, new output, a renewal, a resume and a recovery each need the " <>
+          "grant to stand (`Sanctum.ExecutionStanding.verify/1`)."
+    }
+  ]
+
+  @doc """
+  Every write the server makes on work whose standing it does not
+  require, with the modules that make it, the check they pass in place of
+  the standing one, and why. A new one is argued for here before it
+  appears.
+  """
+  @spec system_responsibilities() :: [map()]
+  def system_responsibilities, do: @system_responsibilities
 
   # ---------------------------------------------------------------------------
   # 7. What the suites may name

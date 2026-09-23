@@ -16,7 +16,9 @@ defmodule Cyfr.Test.AttemptFixtures do
   its `call_key`)
   together with the row's `record`, its `close` state, the attempt `pid`,
   the `ctx`, `authority` and `component_ref` it runs under, its `input`,
-  the signed `assignment` and the `secrets` attach answered.
+  the signed `assignment`, the `secrets` attach answered and the `grant`
+  the row was admitted under (`Sanctum.ExecutionStanding.capture/1` of
+  `ctx`, as a root's admission reads it).
   """
 
   import ExUnit.Assertions
@@ -74,11 +76,13 @@ defmodule Cyfr.Test.AttemptFixtures do
     limits = Keyword.get_lazy(opts, :limits, fn -> Authority.limits(authority) end)
     digest = Keyword.get_lazy(opts, :digest, fn -> Cyfr.Digest.sha256(component_ref) end)
     input = Keyword.get(opts, :input, %{"fixture" => true})
+    {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
 
     record =
       Record.new(ctx, component_ref, input,
         component_type: component_type,
-        reservation: reservation(authority, opts)
+        reservation: reservation(authority, opts),
+        grant: grant
       )
 
     service_id = Keyword.get(opts, :service_id, "wrk_fixture")
@@ -105,7 +109,8 @@ defmodule Cyfr.Test.AttemptFixtures do
         boot_id: boot_id,
         deadline: deadline,
         worker: Keyword.get(opts, :worker),
-        digest: digest
+        digest: digest,
+        grant: grant
       )
 
     {:ok, issued} =
@@ -144,6 +149,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         component_ref: component_ref,
         entry: entry,
         input: input,
+        grant: grant,
         secrets: nil
       })
 
@@ -153,6 +159,60 @@ defmodule Cyfr.Test.AttemptFixtures do
     else
       fixture
     end
+  end
+
+  @doc """
+  The grant options (`Arca.ExecutionStanding`) a test admits a root in
+  `athanor_id` under: the estate's standing read now
+  (`Sanctum.ExecutionStanding.capture/1`), checked as admission checks it.
+  """
+  @spec standing(String.t()) :: keyword()
+  def standing(athanor_id) when is_binary(athanor_id),
+    do: [grant: grant(athanor_id), verify: &Sanctum.ExecutionStanding.verify/1]
+
+  @doc "The grant of `athanor_id` as a root's admission reads it now."
+  @spec grant(String.t()) :: Cyfr.ExecutionGrant.t()
+  def grant(athanor_id) when is_binary(athanor_id) do
+    {:ok, grant} =
+      Sanctum.ExecutionStanding.capture(
+        Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+      )
+
+    grant
+  end
+
+  @doc """
+  The grant options a test writes an admitted execution under: the stamp
+  its attempt stores, which must still stand.
+  """
+  @spec stored() :: keyword()
+  def stored, do: [grant: :stored, verify: &Sanctum.ExecutionStanding.verify/1]
+
+  @doc """
+  The grant options of a retirement — a failure, a cancel, a lapse: the
+  stamp its attempt stores, whether or not it still stands.
+  """
+  @spec retiring() :: keyword()
+  def retiring, do: [grant: :stored, verify: &Sanctum.ExecutionStanding.stamp_only/1]
+
+  @doc """
+  The host-stamped lineage of an in-chain call from a real execution: a
+  root admitted in `ctx`'s athanor under its standing grant, answered as
+  `Cyfr.Ops.Catalog.call_in_chain/5`'s `:lineage` — the execution as
+  parent and root, and the attempt that owns it — with `extra` merged in.
+  An in-chain call is admitted only under such an attempt.
+  """
+  @spec lineage!(Sanctum.Context.t(), map()) :: map()
+  def lineage!(ctx, extra \\ %{}) do
+    record =
+      Record.new(ctx, "formula:local.lineage-fixture:0.1.0", %{}, component_type: :formula)
+
+    :ok = Record.write_started(record)
+
+    Map.merge(
+      %{parent_execution_id: record.id, root_execution_id: record.id, attempt: record.attempt},
+      extra
+    )
   end
 
   @doc """

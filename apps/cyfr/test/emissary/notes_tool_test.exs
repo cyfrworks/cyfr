@@ -101,8 +101,16 @@ defmodule Emissary.MCP.NotesToolTest do
     auth
   end
 
-  defp in_chain(ctx, args, auth, opts \\ []),
-    do: Catalog.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
+  # An in-chain call comes from a real execution's attempt, which the host
+  # names in its lineage; a lineage a case gives is stamped over it.
+  defp in_chain(ctx, args, auth, opts \\ []) do
+    caller = caller!(ctx)
+    opts = Keyword.update(opts, :lineage, caller, &Map.merge(caller, &1))
+    Catalog.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
+  end
+
+  defp caller!(ctx),
+    do: ctx |> Cyfr.Test.AttemptFixtures.lineage!() |> Map.take([:parent_execution_id, :attempt])
 
   test "a note lands in the estate you are working in, and nowhere else", %{
     ctx: ctx,
@@ -335,11 +343,14 @@ defmodule Emissary.MCP.NotesToolTest do
 
     assert kept_by == ctx.user_id
 
-    # Without host lineage the forged values are still not recorded.
+    # With no thread or root in the host's lineage the forged values are
+    # still not recorded: the execution kept is the calling one.
     assert {:ok, _} = in_chain(ctx, %{args | "name" => "bare"}, auth)
 
-    assert {:ok, %{thread: nil, execution: nil}} =
+    assert {:ok, %{thread: nil, execution: execution}} =
              in_chain(ctx, %{"action" => "read", "name" => "bare"}, auth)
+
+    assert String.starts_with?(execution, "exec_")
 
     # The thread's lineage key is `thread_id`: the retired key (spelled
     # split for the vocabulary gate) is neither stamped from lineage nor

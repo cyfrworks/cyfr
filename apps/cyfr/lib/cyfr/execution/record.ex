@@ -85,7 +85,8 @@ defmodule Cyfr.Execution.Record do
           schedule_id: String.t() | nil,
           reservation: map() | nil,
           retention_class: String.t() | nil,
-          retained_input: map() | nil
+          retained_input: map() | nil,
+          grant: Cyfr.ExecutionGrant.t() | nil
         }
 
   defstruct [
@@ -131,7 +132,12 @@ defmodule Cyfr.Execution.Record do
     # `schedule`, `system`, or `chat_step` for a turn's own dispatches.
     # Not a column — the payload rows carry it.
     :retention_class,
-    :retained_input
+    :retained_input,
+    # The standing the run was admitted under (`Cyfr.ExecutionGrant`): a
+    # root's read at admission, a child's its parent's stored stamp. Not
+    # a column of this row — its attempt stores it. Nil on a record read
+    # back, whose writes name the stored stamp instead.
+    :grant
   ]
 
   @doc """
@@ -152,6 +158,8 @@ defmodule Cyfr.Execution.Record do
   - `:retention_class` - The class the execution's payloads are kept
     under; derived from the caller when absent (`webhook` for a webhook
     identity, `system` for the server's own context, else `api`).
+  - `:grant` - The `Cyfr.ExecutionGrant` the run is admitted under; read
+    at admission when absent (`write_started/2`).
   """
   @spec new(Context.t(), String.t(), map(), keyword()) :: t()
   def new(%Context{} = ctx, reference, input, opts \\ []) do
@@ -193,7 +201,8 @@ defmodule Cyfr.Execution.Record do
       schedule_id: Keyword.get(opts, :schedule_id),
       reservation: Keyword.get(opts, :reservation),
       retention_class: Keyword.get(opts, :retention_class) || default_retention_class(ctx),
-      retained_input: Keyword.get(opts, :retained_input)
+      retained_input: Keyword.get(opts, :retained_input),
+      grant: Keyword.get(opts, :grant)
     }
   end
 
@@ -319,26 +328,71 @@ defmodule Cyfr.Execution.Record do
   when the record carries one, else the input as sent: an input that
   cannot be kept is `{:error, {:payload_not_retained, reason}}` and
   nothing is admitted.
+
+  The row is admitted under the record's grant (`grant/1` when it carries
+  none), checked in the admission transaction
+  (`Sanctum.ExecutionStanding.verify/1`): a grant that does not stand
+  admits nothing and is refused `{:error, :not_standing}`, a barrier's
+  refusal (`Arca.Execution.barrier_refusal?/1`).
   """
   @spec write_started(t(), keyword()) :: :ok | {:error, term()}
   def write_started(%__MODULE__{} = record, opts \\ []) do
     ctx = record_to_ctx(record)
 
-    case stage(ctx, record, "input", encode_json(record.retained_input || record.input || %{})) do
-      {:ok, staged} ->
-        case admit(record, opts, [staged]) do
-          :ok ->
-            :ok
+    with {:ok, grant} <- grant(record),
+         {:ok, staged} <- stage_input(ctx, record) do
+      case admit(%{record | grant: grant}, opts, [staged]) do
+        :ok ->
+          :ok
 
-          {:error, reason} ->
-            _ = Arca.ExecutionPayloads.discard(staged)
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, {:payload_not_retained, reason}}
+        {:error, reason} ->
+          _ = Arca.ExecutionPayloads.discard(staged)
+          {:error, reason}
+      end
     end
   end
+
+  defp stage_input(ctx, record) do
+    case stage(ctx, record, "input", encode_json(record.retained_input || record.input || %{})) do
+      {:ok, staged} -> {:ok, staged}
+      {:error, reason} -> {:error, {:payload_not_retained, reason}}
+    end
+  end
+
+  @doc """
+  The grant `record` is admitted under: the one it carries, else a root's
+  estate standing read now (`Sanctum.ExecutionStanding.capture/1`) or the
+  stamp its parent's current attempt stores, which a child inherits
+  unchanged. `{:error, :not_standing}` when neither stands,
+  `{:error, :unavailable}` when the store cannot answer.
+  """
+  @spec grant(t()) :: {:ok, Cyfr.ExecutionGrant.t()} | {:error, :not_standing | :unavailable}
+  def grant(%__MODULE__{grant: %Cyfr.ExecutionGrant{} = grant}), do: {:ok, grant}
+
+  def grant(%__MODULE__{parent_execution_id: nil} = record),
+    do: Sanctum.ExecutionStanding.capture(record_to_ctx(record))
+
+  def grant(%__MODULE__{athanor_id: athanor_id, parent_execution_id: parent}),
+    do: inherited_grant(athanor_id, parent)
+
+  @doc """
+  The grant a child of `parent_execution_id` in `athanor_id` inherits: the
+  stamp its parent's current attempt stores, unchanged.
+  `{:error, :not_standing}` when the parent has none, `{:error,
+  :unavailable}` when the store cannot answer.
+  """
+  @spec inherited_grant(String.t() | nil, String.t()) ::
+          {:ok, Cyfr.ExecutionGrant.t()} | {:error, :not_standing | :unavailable}
+  def inherited_grant(athanor_id, parent_execution_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(parent_execution_id) do
+    case Arca.ExecutionAttempts.grant(Cyfr.Actor.in_athanor(athanor_id), parent_execution_id) do
+      {:ok, grant} -> {:ok, grant}
+      {:error, :database_error} -> {:error, :unavailable}
+      {:error, _none} -> {:error, :not_standing}
+    end
+  end
+
+  def inherited_grant(_athanor_id, _parent_execution_id), do: {:error, :not_standing}
 
   defp admit(%__MODULE__{} = record, opts, payloads) do
     case Arca.Execution.admit(
@@ -371,7 +425,9 @@ defmodule Cyfr.Execution.Record do
                attempt: record.attempt,
                boot_id: boot_id(),
                reservation: record.reservation,
-               payloads: payloads
+               payloads: payloads,
+               grant: record.grant,
+               verify: &Sanctum.ExecutionStanding.verify/1
              ],
              Keyword.take(opts, [
                :charge,
@@ -433,16 +489,20 @@ defmodule Cyfr.Execution.Record do
   `{:ok, until}` is the new expiry the attempt now carries. `:lost` means
   the store answered and the attempt no longer owns its execution — it
   finished, was cancelled, paused, lapsed, or a successor took the row —
-  and the runner stops authorized work at once. `:unavailable` means the
-  store could not answer; the runner keeps working only while the lease it
-  last held still holds.
+  or its grant no longer stands (its estate was archived), and the runner
+  stops authorized work at once. `:unavailable` means the store could not
+  answer; the runner keeps working only while the lease it last held
+  still holds.
   """
   @spec renew_lease(String.t(), String.t() | nil) ::
           {:ok, DateTime.t()} | :lost | :unavailable
   def renew_lease(_execution_id, nil), do: :lost
 
   def renew_lease(execution_id, attempt) when is_binary(execution_id) and is_binary(attempt) do
-    Arca.ExecutionAttempts.renew(attempt, lease_until())
+    Arca.ExecutionAttempts.renew(attempt, lease_until(),
+      grant: :stored,
+      verify: &Sanctum.ExecutionStanding.verify/1
+    )
   rescue
     e ->
       Logger.warning(
@@ -459,6 +519,12 @@ defmodule Cyfr.Execution.Record do
   A result that cannot be kept closes the attempt `result_lost` and the
   row failed — durably, so nothing retries an effect that already
   happened — and answers `{:error, {:result_lost, reason}}`.
+
+  A completion commits only under a grant that stands
+  (`Sanctum.ExecutionStanding.verify/1`). One whose estate was archived
+  while the run was in flight is never recorded as a success: its attempt
+  closes `uncertain` and the row failed, since what the run did may
+  already have happened, and the answer is `{:error, :not_standing}`.
   """
   @spec write_completed(t()) :: :ok | {:error, term()}
   def write_completed(%__MODULE__{status: :completed} = record) do
@@ -477,13 +543,19 @@ defmodule Cyfr.Execution.Record do
                record.id,
                "completed",
                Map.put(close, :payloads, List.wrap(staged)),
-               record.attempt
+               record.attempt,
+               grant: record.grant || :stored,
+               verify: &Sanctum.ExecutionStanding.verify/1
              ) do
           {:ok, execution} ->
             publish(record, "execution.completed", execution.event_seq, %{
               "status" => "completed",
               "duration_ms" => record.duration_ms
             })
+
+          {:error, :not_standing} ->
+            if staged, do: Arca.ExecutionPayloads.discard(staged)
+            retired(ctx, record)
 
           {:error, {:payload_not_retained, reason}} ->
             if staged, do: Arca.ExecutionPayloads.discard(staged)
@@ -508,6 +580,40 @@ defmodule Cyfr.Execution.Record do
   defp stage_result(ctx, %__MODULE__{} = record),
     do: stage(ctx, record, "result", encode_json(record.output))
 
+  # The grant retired while the run was in flight: the run may have acted,
+  # so the attempt closes `uncertain`, never `ok`, and the output is
+  # neither kept nor published.
+  defp retired(ctx, %__MODULE__{} = record) do
+    message = "the execution's athanor is no longer active"
+
+    case Arca.Execution.record_end(
+           Sanctum.Context.actor(ctx),
+           record.id,
+           "failed",
+           %{
+             completed_at: record.completed_at,
+             duration_ms: record.duration_ms,
+             error_message: message,
+             outcome: "uncertain"
+           },
+           record.attempt,
+           grant: record.grant || :stored,
+           verify: &Sanctum.ExecutionStanding.stamp_only/1
+         ) do
+      {:ok, execution} ->
+        publish(record, "execution.failed", execution.event_seq, %{
+          "status" => "failed",
+          "error" => message,
+          "duration_ms" => record.duration_ms
+        })
+
+      _ ->
+        :ok
+    end
+
+    {:error, :not_standing}
+  end
+
   defp result_lost(ctx, %__MODULE__{} = record, reason) do
     Logger.error(
       "[Cyfr.Execution.Record] result of #{record.id} not retained: #{inspect(reason)}; " <>
@@ -524,7 +630,9 @@ defmodule Cyfr.Execution.Record do
              error_message: "result not retained",
              outcome: "result_lost"
            },
-           record.attempt
+           record.attempt,
+           grant: record.grant || :stored,
+           verify: &Sanctum.ExecutionStanding.stamp_only/1
          ) do
       {:ok, execution} ->
         publish(record, "execution.result_lost", execution.event_seq, %{
@@ -543,7 +651,9 @@ defmodule Cyfr.Execution.Record do
   @doc """
   Close the row as failed or cancelled, and publish the lifecycle event
   with `event_data` merged into what it carries (a cancel that asks for
-  a restart says so there).
+  a restart says so there). A failure and a cancel retire work, so they
+  need the attempt's stored stamp and not a grant that still stands
+  (`Sanctum.ExecutionStanding.stamp_only/1`).
   """
   @spec write_failed(t(), map()) :: :ok | {:error, term()}
   def write_failed(record, event_data \\ %{})
@@ -562,7 +672,9 @@ defmodule Cyfr.Execution.Record do
              error_message: record.error,
              event: event_data
            },
-           record.attempt
+           record.attempt,
+           grant: record.grant || :stored,
+           verify: &Sanctum.ExecutionStanding.stamp_only/1
          ) do
       {:ok, execution} ->
         data =
@@ -766,7 +878,6 @@ defmodule Cyfr.Execution.Record do
 
   defp encode_reference(ref) when is_binary(ref), do: ref
   defp encode_reference(nil), do: nil
-  defp encode_reference(other), do: inspect(other)
 
   defp encode_json(nil), do: nil
   defp encode_json(value) when is_binary(value), do: value

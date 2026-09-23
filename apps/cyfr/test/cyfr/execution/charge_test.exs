@@ -32,7 +32,9 @@ defmodule Cyfr.Execution.ChargeTest do
           athanor_id: ctx.athanor_id,
           component_type: "formula"
         },
-        reservation: %{budget_id: auth.budget.id, cap: 1}
+        reservation: %{budget_id: auth.budget.id, cap: 1},
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     {:ok, ctx: ctx, auth: auth, root_id: root_id, attempt: root_attempt.attempt}

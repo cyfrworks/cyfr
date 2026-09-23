@@ -132,7 +132,7 @@ defmodule Cyfr.Execution.Dispatch do
   In order: the run is admitted with the calling process as its waiter;
   its attempt takes a `:child` execution slot, waiting as `run/4` does; its
   assignment is signed; the attempt row is claimed for the runner
-  (`Arca.ExecutionAttempts.claim/4`) and the run's vault edge is unsealed
+  (`Arca.ExecutionAttempts.claim/5`, under the run's grant) and the run's vault edge is unsealed
   (`Cyfr.Execution.Attempt.attach/2`); and the attempt is handed to the
   runner (`Cyfr.Execution.Attempt.hand_over/1`). Answers
   `{:ok, claimed}` (`t:claimed/0`), or, when any step refuses, the refusal
@@ -456,7 +456,9 @@ defmodule Cyfr.Execution.Dispatch do
            Cyfr.Actor.in_athanor(claimant.athanor_id),
            claimant.attempt,
            claimant.fence,
-           claimant.runner
+           claimant.runner,
+           grant: admitted.close.record.grant || :stored,
+           verify: &Sanctum.ExecutionStanding.verify/1
          ) do
       :ok -> :ok
       {:error, reason} -> refuse(admitted, "the execution could not be claimed", reason)

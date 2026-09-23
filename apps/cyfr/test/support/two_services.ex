@@ -589,6 +589,7 @@ defmodule Cyfr.Test.TwoServices do
   @spec root!(Sanctum.Context.t(), Authority.t(), keyword()) :: root()
   def root!(ctx, %Authority{budget: budget}, opts \\ []) do
     root_id = "exec_two_services_root_#{System.unique_integer([:positive])}"
+    {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
 
     {:ok, %{attempt: attempt}} =
       Arca.Execution.admit(
@@ -599,7 +600,9 @@ defmodule Cyfr.Test.TwoServices do
           athanor_id: ctx.athanor_id,
           component_type: "formula"
         },
-        reservation: %{budget_id: budget.id, cap: Keyword.get(opts, :cap, budget.cap)}
+        reservation: %{budget_id: budget.id, cap: Keyword.get(opts, :cap, budget.cap)},
+        grant: grant,
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     %{id: root_id, attempt: attempt.attempt}

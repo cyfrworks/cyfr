@@ -368,11 +368,12 @@ defmodule Arca.ExecutionTest do
       }
 
       {:ok, _} =
-        Execution.record_complete(actor, child_id, %{
-          completed_at: now,
-          duration_ms: 100,
-          status: "completed"
-        })
+        Execution.record_complete(
+          actor,
+          child_id,
+          %{completed_at: now, duration_ms: 100, status: "completed"},
+          Arca.Test.Actor.standing(@athanor)
+        )
 
       children = Execution.list_running_children(parent_id)
       assert children == []
@@ -390,22 +391,25 @@ defmodule Arca.ExecutionTest do
       now = DateTime.utc_now()
 
       {:ok, _} =
-        Execution.record_start(%{
-          id: id,
-          reference: "catalyst:local.test:1.0.0",
-          user_id: "user_test",
-          athanor_id: @athanor,
-          started_at: now,
-          status: "running",
-          component_type: "catalyst"
-        })
+        Execution.admit(
+          %{
+            id: id,
+            reference: "catalyst:local.test:1.0.0",
+            user_id: "user_test",
+            athanor_id: @athanor,
+            started_at: now,
+            component_type: "catalyst"
+          },
+          Arca.Test.Actor.standing(@athanor)
+        )
 
-      {count, _} =
-        Execution.mark_failed_if_running(id, %{
-          completed_at: now,
-          duration_ms: 500,
-          error_message: "Parent terminated"
-        })
+      failure = %{completed_at: now, duration_ms: 500, error_message: "Parent terminated"}
+
+      # A failure names the stamp it retires under; one that names none
+      # fails nothing.
+      assert {0, nil} = Execution.mark_failed_if_running(id, failure)
+
+      {count, _} = Execution.mark_failed_if_running(id, failure, Arca.Test.Actor.stored())
 
       assert count == 1
 
@@ -441,19 +445,24 @@ defmodule Arca.ExecutionTest do
       }
 
       {:ok, _} =
-        Execution.record_complete(actor, id, %{
-          completed_at: now,
-          duration_ms: 100,
-          status: "completed"
-        })
+        Execution.record_complete(
+          actor,
+          id,
+          %{completed_at: now, duration_ms: 100, status: "completed"},
+          Arca.Test.Actor.standing(@athanor)
+        )
 
       # Try to mark as failed — should be a no-op
       {count, _} =
-        Execution.mark_failed_if_running(id, %{
-          completed_at: now,
-          duration_ms: 500,
-          error_message: "Parent terminated"
-        })
+        Execution.mark_failed_if_running(
+          id,
+          %{
+            completed_at: now,
+            duration_ms: 500,
+            error_message: "Parent terminated"
+          },
+          Arca.Test.Actor.stored()
+        )
 
       assert count == 0
 
@@ -477,7 +486,9 @@ defmodule Arca.ExecutionTest do
           },
           attempt: Keyword.get(opts, :attempt),
           boot_id: "node@test",
-          lease_until: lease_until
+          lease_until: lease_until,
+          grant: Arca.Test.Actor.grant(@athanor),
+          verify: &Arca.Test.Actor.admits/1
         )
 
       {id, attempt.attempt}
@@ -505,18 +516,23 @@ defmodule Arca.ExecutionTest do
       assert observed.attempt == live
 
       renewed_until = DateTime.add(DateTime.utc_now(), 180, :second)
-      assert {:ok, ^renewed_until} = Arca.ExecutionAttempts.renew(live, renewed_until)
+
+      assert {:ok, ^renewed_until} =
+               Arca.ExecutionAttempts.renew(live, renewed_until, Arca.Test.Actor.stored())
 
       assert {0, _} =
                Execution.mark_failed_if_running(
                  id,
                  %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},
                  attempt: observed.attempt,
-                 lease_until: observed.lease_until
+                 lease_until: observed.lease_until,
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1
                )
 
       # A stale attempt can neither renew nor finish the row…
-      assert :lost = Arca.ExecutionAttempts.renew("att_stale", renewed_until)
+      assert :lost =
+               Arca.ExecutionAttempts.renew("att_stale", renewed_until, Arca.Test.Actor.stored())
 
       assert {:error, :not_running} =
                Execution.record_end(
@@ -524,7 +540,8 @@ defmodule Arca.ExecutionTest do
                  id,
                  "completed",
                  %{completed_at: DateTime.utc_now(), duration_ms: 1},
-                 "att_stale"
+                 "att_stale",
+                 Arca.Test.Actor.stored()
                )
 
       # …and the live one still can, closing its attempt with the row.
@@ -534,7 +551,8 @@ defmodule Arca.ExecutionTest do
                  id,
                  "completed",
                  %{completed_at: DateTime.utc_now(), duration_ms: 1},
-                 live
+                 live,
+                 Arca.Test.Actor.stored()
                )
 
       assert %{state: "completed", outcome: "ok"} =
@@ -547,7 +565,8 @@ defmodule Arca.ExecutionTest do
       assert {:ok, _} =
                Arca.ExecutionAttempts.renew(
                  attempt,
-                 DateTime.add(DateTime.utc_now(), 180, :second)
+                 DateTime.add(DateTime.utc_now(), 180, :second),
+                 Arca.Test.Actor.stored()
                )
 
       stale_ids = Execution.list_stale_running(DateTime.utc_now()) |> Enum.map(& &1.id)
@@ -560,13 +579,15 @@ defmodule Arca.ExecutionTest do
           id,
           "completed",
           %{completed_at: DateTime.utc_now(), duration_ms: 1},
-          nil
+          nil,
+          Arca.Test.Actor.stored()
         )
 
       assert :lost =
                Arca.ExecutionAttempts.renew(
                  attempt,
-                 DateTime.add(DateTime.utc_now(), 180, :second)
+                 DateTime.add(DateTime.utc_now(), 180, :second),
+                 Arca.Test.Actor.stored()
                )
     end
 
@@ -580,7 +601,9 @@ defmodule Arca.ExecutionTest do
                  id,
                  %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stale"},
                  attempt: observed.attempt,
-                 lease_until: observed.lease_until
+                 lease_until: observed.lease_until,
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1
                )
 
       assert %{state: "lapsed", outcome: "uncertain"} =

@@ -124,6 +124,28 @@ defmodule Cyfr.Execution.Attempt do
   lost close writes nothing (`Cyfr.Execution.Close.lost/1`); the rows are
   the holder's to settle.
 
+  ## The grant
+
+  An attempt holds the grant its run was admitted under
+  (`Cyfr.ExecutionGrant`), which its row stores. Every effect a call asks
+  for is admitted only while that grant stands
+  (`Sanctum.ExecutionStanding.verify/1`), checked in the same transaction
+  as the row's hold. Three effects write no row, and are checked in a
+  read transaction that takes no write lock
+  (`Arca.Repo.read_transaction/1`): a storage read, list or exists, an
+  artifact fetch, and `take_rate` — the checkpoint of every HTTP request
+  and stream the guest opens, whatever its rate. Every other effect is
+  checked in a locking transaction (`Arca.Repo.locking_transaction/2`):
+  attach and the vault fields it projects, a keyed child's re-handed
+  fields (`admitted/2`), `complete`, `push_deltas`, `oauth_token`, storage
+  writes, appends and deletes, denials, children and catalog tools. A
+  call under a grant that no longer stands (its estate was archived,
+  whether or not anyone heard) is `lost` and stops the attempt without
+  closing its run; one whose standing cannot be read is `unavailable` and
+  does nothing. `fail` retires the run and needs only its hold. The
+  emitter's held text is published at a close only while the grant still
+  stands, and dropped otherwise.
+
   ## What it shows
 
   Its status (`:sys.get_status/1`) and a crash report of it show the
@@ -195,6 +217,7 @@ defmodule Cyfr.Execution.Attempt do
                 :slot,
                 :charge,
                 :assignment,
+                :grant,
                 declared_needs: [],
                 roster: [],
                 held_invoke: false,
@@ -259,7 +282,9 @@ defmodule Cyfr.Execution.Attempt do
   budget, which the attempt takes over), `:charge` (the charge row that
   slot holds, `%{id: charge_id}`) and `:assignment` (what the run's
   assignment is signed from, `t:Cyfr.Execution.Assignments.admitted/0`,
-  which `admitted/2` answers to the runner holding the claim).
+  which `admitted/2` answers to the runner holding the claim) and `:grant`
+  (the `Cyfr.ExecutionGrant` the run was admitted under; without one,
+  every effect is refused).
 
   Answers `{:error, {:already_started, pid}}` when the execution already
   has an open attempt.
@@ -601,6 +626,7 @@ defmodule Cyfr.Execution.Attempt do
       digest: Keyword.get(opts, :digest),
       charge: Keyword.get(opts, :charge),
       assignment: Keyword.get(opts, :assignment),
+      grant: Keyword.get(opts, :grant),
       held_invoke: take_over_invoke(Keyword.get(opts, :held_invoke, false), authority, owner)
     }
 
@@ -680,12 +706,19 @@ defmodule Cyfr.Execution.Attempt do
              Context.actor(state.ctx),
              state.attempt,
              state.fence,
-             holder.runner
+             holder.runner,
+             standing(state)
            ) do
       {:reply, {:ok, %{assignment: state.assignment, secrets: state.secrets}}, state}
     else
-      {:error, _reason} -> {:reply, {:error, :unavailable}, state}
-      false -> {:reply, {:error, :lost}, state}
+      false ->
+        {:reply, {:error, :lost}, state}
+
+      {:error, reason} when reason in [:not_standing, :missing_grant] ->
+        {:reply, {:error, :lost}, state}
+
+      {:error, _reason} ->
+        {:reply, {:error, :unavailable}, state}
     end
   end
 
@@ -719,26 +752,31 @@ defmodule Cyfr.Execution.Attempt do
       else: stop_unowned({:error, :lost}, state)
   end
 
+  # The vault fields are projected, and projected again to the runner
+  # already attached, only under a grant that stands: the claim the runner
+  # just wrote is read back with it.
   defp handle_owned({:attach, caller}, state) do
     cond do
       not names_attempt?(state, caller) ->
         {:reply, {:error, :lost}, state}
 
-      state.claimed_by == caller.runner ->
-        {:reply, {:ok, state.secrets}, state}
-
-      is_binary(state.claimed_by) ->
+      is_binary(state.claimed_by) and state.claimed_by != caller.runner ->
         {:reply, {:error, :replayed}, state}
 
       true ->
-        unseal(state, caller)
+        case held(state, caller, :attach) do
+          :ok when state.claimed_by == caller.runner -> {:reply, {:ok, state.secrets}, state}
+          :ok -> unseal(state, caller)
+          :unavailable -> {:reply, {:error, :unavailable}, state}
+          _lost -> {:stop, :normal, {:error, :lost}, release_holds(state)}
+        end
     end
   end
 
   defp handle_owned({:call, caller, op}, state) do
     with :ok <- claimant(state, caller),
          {:ok, noted} <- fresh_nonce(state, caller) do
-      case held(caller, op) do
+      case held(noted, caller, op) do
         :ok -> run(op, noted)
         :ending -> {:reply, {:error, :lost}, noted}
         :gone -> {:stop, :normal, {:error, :lost}, release_holds(noted)}
@@ -1145,20 +1183,25 @@ defmodule Cyfr.Execution.Attempt do
   # A call its guest's children and tools are decided under needs a live
   # row; one still held but ending (a cancel asked, its execution closed)
   # is refused without stopping the attempt, which its runner still closes.
-  defp held(caller, :chain) do
+  # Every effect but a failure is admitted under the run's grant, in the
+  # same transaction as the hold: a grant that no longer stands is a hold
+  # that is gone.
+  defp held(state, caller, :chain) do
     case Arca.ExecutionAttempts.live?(
            Cyfr.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
            caller.fence,
-           caller.runner
+           caller.runner,
+           standing(state)
          ) do
       true -> :ok
-      false -> with(:ok <- held(caller, nil), do: :ending)
-      {:error, _reason} -> :unavailable
+      false -> with(:ok <- held(state, caller, :hold), do: :ending)
+      refused -> refused(refused)
     end
   end
 
-  defp held(caller, _op) do
+  # A failure retires the run: it needs the hold, never a standing grant.
+  defp held(_state, caller, {:fail, _outcome}) do
     case Arca.ExecutionAttempts.held?(
            Cyfr.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
@@ -1170,6 +1213,38 @@ defmodule Cyfr.Execution.Attempt do
       {:error, _reason} -> :unavailable
     end
   end
+
+  defp held(state, caller, op) do
+    case Arca.ExecutionAttempts.held?(
+           Cyfr.Actor.in_athanor(caller.athanor_id),
+           caller.attempt,
+           caller.fence,
+           caller.runner,
+           [read_only: read_only?(op)] ++ standing(state)
+         ) do
+      true -> :ok
+      false -> :gone
+      refused -> refused(refused)
+    end
+  end
+
+  # A grant that does not stand, or that the attempt was never given, is
+  # the wire's `lost`; a check that could not answer is `unavailable`.
+  defp refused({:error, reason}) when reason in [:not_standing, :missing_grant], do: :gone
+  defp refused({:error, _reason}), do: :unavailable
+
+  # The effects that write no row of their own — a storage read, an
+  # artifact fetch, the egress checkpoint — are admitted by a check that
+  # takes no write lock (`Arca.ExecutionAttempts.held?/5`).
+  defp read_only?({:storage, action, _args}) when action in [:read, :list, :exists], do: true
+  defp read_only?({:fetch_artifact, _digest}), do: true
+  defp read_only?({:take_rate, _bucket}), do: true
+  defp read_only?(_op), do: false
+
+  # The grant contract's inputs for this attempt's effects
+  # (`Arca.ExecutionStanding`).
+  defp standing(state),
+    do: [grant: state.grant || :missing, verify: &Sanctum.ExecutionStanding.verify/1]
 
   defp run(:chain, state) do
     chain = %{
@@ -1285,7 +1360,7 @@ defmodule Cyfr.Execution.Attempt do
   defp close_owned(state, answer, close) do
     result =
       try do
-        _flushed = Emit.flush(state.emit, masking_set(state))
+        flush(state)
         close.()
       rescue
         exception ->
@@ -1299,6 +1374,30 @@ defmodule Cyfr.Execution.Attempt do
     state = release_holds(state)
     if is_pid(state.waiter), do: send(state.waiter, {__MODULE__, self(), result})
     {:stop, :normal, answer.(result), state}
+  end
+
+  # The text the emitter still holds is published only while the run's
+  # grant stands, read once for the whole drained batch; a grant that
+  # retired, or a standing that cannot be read, drops it unpublished.
+  defp flush(%__MODULE__{emit: %Emit{held: held}}) when held == %{}, do: :ok
+
+  defp flush(state) do
+    case Arca.ExecutionAttempts.standing?(
+           Context.actor(state.ctx),
+           state.attempt,
+           state.execution_id,
+           standing(state)
+         ) do
+      true ->
+        _flushed = Emit.flush(state.emit, masking_set(state))
+        :ok
+
+      _retired ->
+        Logger.warning(
+          "[Cyfr.Execution.Attempt] #{state.execution_id} closed with held text its grant " <>
+            "no longer publishes; it is dropped"
+        )
+    end
   end
 
   defp completed_answer({:ok, %{output: output}}), do: {:ok, output}
@@ -1353,16 +1452,19 @@ defmodule Cyfr.Execution.Attempt do
            state.attempt,
            state.fence,
            state.claimed_by,
-           write
+           write,
+           standing(state)
          ) do
       {:ok, result} -> {:ok, result}
-      {:error, :lost} -> {:error, :lost}
-      {:error, :database_error} -> {:error, :unavailable}
+      {:error, reason} when reason in [:lost, :not_standing, :missing_grant] -> {:error, :lost}
+      {:error, _reason} -> {:error, :unavailable}
     end
   end
 
   # Each HTTP request draws on the athanor's `http:` bucket under its
-  # consented limit; a rate authority that cannot answer refuses.
+  # consented limit; a rate authority that cannot answer refuses. The call
+  # reached here only once the run's grant was checked with its hold
+  # (`held/3`), so an unlimited rate is still a checkpoint.
   defp take_rate(state, "http:" <> ref = bucket) when ref == state.component_ref do
     case Cyfr.Execution.Rates.check(Context.actor(state.ctx), bucket, %{
            rate_limit: state.limits.rate_limit

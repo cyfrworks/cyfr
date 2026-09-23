@@ -11,13 +11,16 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
     ctx = Sanctum.TestContext.local()
 
     {:ok, %{execution: execution}} =
-      Arca.Execution.admit(%{
-        id: Cyfr.UUID7.execution_id(),
-        reference: "reagent:local.sse:0.1.0",
-        user_id: ctx.user_id,
-        athanor_id: ctx.athanor_id,
-        component_type: "reagent"
-      })
+      Arca.Execution.admit(
+        %{
+          id: Cyfr.UUID7.execution_id(),
+          reference: "reagent:local.sse:0.1.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "reagent"
+        },
+        Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+      )
 
     # The stream's own deadline, short: a test that leaves it open ends.
     prev = Application.get_env(:cyfr, :execution_events_max_ms)

@@ -145,15 +145,29 @@ defmodule Cyfr.Cluster.Fixtures do
 
   defp with_root(attrs, true, athanor_id) do
     {:ok, %{execution: execution, attempt: attempt}} =
-      Arca.Execution.admit(%{
-        id: Cyfr.UUID7.execution_id(),
-        reference: "formula:local.cluster-turn:1.0.0",
-        user_id: "usr_cluster",
-        athanor_id: athanor_id,
-        component_type: "formula"
-      })
+      Arca.Execution.admit(
+        %{
+          id: Cyfr.UUID7.execution_id(),
+          reference: "formula:local.cluster-turn:1.0.0",
+          user_id: "usr_cluster",
+          athanor_id: athanor_id,
+          component_type: "formula"
+        },
+        standing(athanor_id)
+      )
 
     Map.merge(attrs, %{root_execution_id: execution.id, attempt: attempt.attempt})
+  end
+
+  # A root's admission reads its estate's standing now and checks it again
+  # in the admission transaction, as `Cyfr.Execution.Record` does.
+  defp standing(athanor_id) do
+    {:ok, grant} =
+      Sanctum.ExecutionStanding.capture(
+        Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+      )
+
+    [grant: grant, verify: &Sanctum.ExecutionStanding.verify/1]
   end
 
   @doc """
@@ -191,7 +205,11 @@ defmodule Cyfr.Cluster.Fixtures do
   """
   @spec recover_turn(String.t(), String.t(), pos_integer()) :: {:ok, map()} | {:error, term()}
   def recover_turn(athanor_id, turn_id, fence) do
-    case Arca.TurnStorage.recover(actor(athanor_id), turn_id, %{fence: fence}) do
+    case Arca.TurnStorage.recover(actor(athanor_id), turn_id, %{
+           fence: fence,
+           grant: :stored,
+           verify: &Sanctum.ExecutionStanding.verify/1
+         }) do
       {:ok, turn} -> {:ok, turn(turn)}
       other -> other
     end
@@ -318,7 +336,7 @@ defmodule Cyfr.Cluster.Fixtures do
           athanor_id: athanor_id,
           component_type: "formula"
         },
-        reservation: %{budget_id: budget_id, cap: cap}
+        [reservation: %{budget_id: budget_id, cap: cap}] ++ standing(athanor_id)
       )
 
     %{budget_id: budget_id, root: root.id, attempt: attempt.attempt}
@@ -506,17 +524,42 @@ defmodule Cyfr.Cluster.Fixtures do
     archived.status
   end
 
+  @doc """
+  Archive `athanor_id` from this member with its announcement lost: the
+  transition commits, and no member is told.
+  """
+  @spec archive_unheard!(String.t()) :: String.t()
+  def archive_unheard!(athanor_id) do
+    {:ok, change} =
+      Arca.SecurityTransitions.archive_athanor(Cyfr.Actor.system(), athanor_id,
+        verify: fn _rows -> :ok end
+      )
+
+    change.athanors |> Enum.find(&(&1.id == athanor_id)) |> Map.fetch!(:status)
+  end
+
+  @doc "Reopen `athanor_id` from this member."
+  @spec reopen!(String.t()) :: String.t()
+  def reopen!(athanor_id) do
+    {:ok, athanor} = Arca.Athanors.get(Cyfr.Actor.system(), athanor_id)
+    {:ok, reopened} = Sanctum.Tenancy.Athanors.unarchive(athanor)
+    reopened.status
+  end
+
   @doc "An execution of `athanor_id` with `n` durable events after its start."
   @spec stream!(String.t(), pos_integer()) :: map()
   def stream!(athanor_id, n) do
     {:ok, %{execution: execution}} =
-      Arca.Execution.admit(%{
-        id: Cyfr.UUID7.execution_id(),
-        reference: "reagent:local.cluster-stream:0.1.0",
-        user_id: "usr_cluster",
-        athanor_id: athanor_id,
-        component_type: "reagent"
-      })
+      Arca.Execution.admit(
+        %{
+          id: Cyfr.UUID7.execution_id(),
+          reference: "reagent:local.cluster-stream:0.1.0",
+          user_id: "usr_cluster",
+          athanor_id: athanor_id,
+          component_type: "reagent"
+        },
+        standing(athanor_id)
+      )
 
     seqs =
       for i <- 1..n do

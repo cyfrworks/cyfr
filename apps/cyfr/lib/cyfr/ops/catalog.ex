@@ -282,11 +282,21 @@ defmodule Cyfr.Ops.Catalog do
   Call a tool from **inside a running chain** — the only entry that accepts
   an authority.
 
-  Authorization is a conjunction, in order: the action must be annotated
+  Authorization is a conjunction, in order: the calling execution's
+  grant must still stand; the action must be annotated
   in-chain-reachable; the chain's authority must grant the tool (or the
   matching tool server) through the transition relation; and the provider's
   own identity check still applies via the guest-plane permission branch.
   Guest-supplied lineage keys are discarded before dispatch.
+
+  The grant is the one the calling execution's attempt stores, found by
+  the host-stamped `opts[:lineage]`: its `attempt` must be an open attempt
+  of its `parent_execution_id` in the caller's athanor, and the grant it
+  stores must stand (`Sanctum.ExecutionStanding.verify/1`). Absent or
+  mismatched lineage, or a grant whose estate was archived, admits nothing;
+  nothing in `args` can supply it. The discovery predicates
+  (`in_chain_view/1`, `in_chain_reachable?/2`) read no lineage and admit
+  no call.
 
   A `:spawn`-shaped call charges the root invoke budget inside the
   transition step and releases it when the synchronous dispatch returns.
@@ -320,7 +330,8 @@ defmodule Cyfr.Ops.Catalog do
       args
       |> Map.drop(["parent_execution_id", "root_execution_id", "thread_id", "attempt"])
 
-    with :ok <- check_in_chain_reachable(name, args),
+    with :ok <- lineage_standing(ctx, Keyword.get(opts, :lineage)),
+         :ok <- check_in_chain_reachable(name, args),
          :ok <- authorize_declared_action(name, ctx, args, true),
          {:ok, args} <- validate_chain_arguments(name, args),
          {:ok, target, server} <- in_chain_target(ctx, name, args) do
@@ -383,6 +394,29 @@ defmodule Cyfr.Ops.Catalog do
 
   def call_in_chain(_name, %Context{}, _args, %Cyfr.Authority{}, _opts),
     do: {:error, {:invalid_argument, "Arguments must be an object"}}
+
+  # The calling execution's grant, found by the host's lineage: an open
+  # attempt of the parent execution, in the caller's own athanor, storing
+  # a grant that stands.
+  defp lineage_standing(%Context{} = ctx, %{attempt: attempt, parent_execution_id: parent})
+       when is_binary(attempt) and is_binary(parent) do
+    case Arca.ExecutionAttempts.standing?(Context.actor(ctx), attempt, parent,
+           grant: :stored,
+           verify: &Sanctum.ExecutionStanding.verify/1
+         ) do
+      true ->
+        :ok
+
+      {:error, reason} when reason in [:unavailable, :database_error] ->
+        {:error, {:unavailable, "The calling execution's standing"}}
+
+      _refused ->
+        {:error, :archived}
+    end
+  end
+
+  defp lineage_standing(_ctx, _lineage),
+    do: {:error, {:invalid_argument, "An in-chain call names the execution that makes it"}}
 
   # A spawn-shaped call charges the reservation row beside the slot. The
   # loop names the charge per dispatch; a call under a chain's attempt

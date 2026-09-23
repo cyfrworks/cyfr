@@ -73,7 +73,9 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
           athanor_id: ctx.athanor_id,
           component_type: "formula"
         },
-        reservation: %{budget_id: auth.budget.id, cap: 2}
+        reservation: %{budget_id: auth.budget.id, cap: 2},
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     child_id = Cyfr.UUID7.execution_id()

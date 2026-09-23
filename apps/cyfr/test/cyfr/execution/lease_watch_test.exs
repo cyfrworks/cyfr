@@ -12,14 +12,17 @@ defmodule Cyfr.Execution.LeaseWatchTest do
     ctx = Sanctum.TestContext.local()
 
     {:ok, %{execution: execution, attempt: attempt}} =
-      Arca.Execution.admit(%{
-        id: Cyfr.UUID7.execution_id(),
-        reference: "peer:probe",
-        user_id: ctx.user_id,
-        athanor_id: ctx.athanor_id,
-        component_type: "tool_server",
-        kind: "tool_call"
-      })
+      Arca.Execution.admit(
+        %{
+          id: Cyfr.UUID7.execution_id(),
+          reference: "peer:probe",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "tool_server",
+          kind: "tool_call"
+        },
+        Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+      )
 
     {:ok, ctx: ctx, id: execution.id, attempt: attempt.attempt}
   end
@@ -60,7 +63,8 @@ defmodule Cyfr.Execution.LeaseWatchTest do
         id,
         "failed",
         %{completed_at: DateTime.utc_now(), duration_ms: 0, error_message: "swept"},
-        attempt
+        attempt,
+        Cyfr.Test.AttemptFixtures.stored()
       )
 
     assert_receive {:DOWN, ^ref, :process, _, {:lease_lost, ^id}}, 2_000

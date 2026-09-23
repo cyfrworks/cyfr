@@ -3,7 +3,8 @@
 
 defmodule Cyfr.Execution.Sweeper do
   @moduledoc """
-  Periodic sweep that lapses running executions whose lease lapsed.
+  Periodic sweep that lapses running executions whose lease lapsed, and
+  cancels the open work of an estate that was archived.
 
   Runs every 60 seconds. A running row's attempt carries a lease
   (`execution_attempts.lease_until`) that its runner renews while the work
@@ -26,14 +27,40 @@ defmodule Cyfr.Execution.Sweeper do
   two members could disagree about that and both would lapse: a member
   whose own clock runs fast would lapse attempts a peer is still
   renewing.
+
+  ## Retired grants
+
+  An archive retires the grant of every execution admitted in the estate
+  (`Sanctum.ExecutionStanding`), and `Cyfr.Execution.ArchiveWatch`
+  cancels what is running when it hears of it. The announcement is only
+  an accelerator: each sweep also pages through every open attempt whose
+  stored grant no longer stands (`Sanctum.ExecutionStanding.retired_attempts/3`,
+  a page at a time by attempt id, `bounds/0`) and asks for its normal
+  cancellation — a turn's root ends the turn (`Arca.TurnStorage.finish/4`,
+  which closes its attempt, its root row and its reservation together),
+  any other run is cancelled as a caller's cancel is
+  (`Cyfr.Execution.Dispatch.cancel/3`). Each write is a retirement under
+  the attempt's stored stamp (`Cyfr.Boundaries.system_responsibilities/0`):
+  it never needs the grant to stand, never reports success, and matches
+  only the attempt that carries the stamp. The cursor advances only past a
+  page the sweep has acted on, a member that no longer holds its slot
+  stops at once, and every sweep starts a fresh scan, so work that a
+  failure left, or that changed while a scan ran, is found by the next.
+  Work whose runner cannot be reached stays retired — it can renew and do
+  nothing — until its lease lapses here.
   """
 
   use GenServer
   require Logger
 
-  alias Cyfr.Execution.{Attempt, Lapse}
+  alias Cyfr.Execution.{Attempt, Dispatch, Lapse}
 
   @sweep_interval_ms 60_000
+
+  # One page of the retired scan.
+  @retired_page 50
+
+  @retired_message "the execution's athanor was archived"
 
   def start_link(opts \\ []) do
     # Timer-driven DB queries from a permanent process poison the test
@@ -69,8 +96,17 @@ defmodule Cyfr.Execution.Sweeper do
     Process.send_after(self(), :sweep, @sweep_interval_ms)
   end
 
+  @doc "The configured bounds of the sweep: its interval, and one page of the retired scan."
+  @spec bounds() :: %{interval_ms: pos_integer(), retired_page: pos_integer()}
+  def bounds, do: %{interval_ms: @sweep_interval_ms, retired_page: @retired_page}
+
   @doc false
   def sweep do
+    lapse_stale()
+    retire_retired(nil)
+  end
+
+  defp lapse_stale do
     stale =
       try do
         # Database time, not this member's: see the module doc. `now!/0`
@@ -95,6 +131,92 @@ defmodule Cyfr.Execution.Sweeper do
             boot_id: record.boot_id,
             runner: nil
           })
+    end
+
+    :ok
+  end
+
+  # One page after another from `cursor`, each acted on before the cursor
+  # moves past it; a short page ends the scan. A store that cannot answer
+  # ends it too, and the next sweep scans afresh.
+  defp retire_retired(cursor) do
+    case Sanctum.ExecutionStanding.retired_attempts(Cyfr.Actor.system(), cursor, @retired_page) do
+      {:ok, []} ->
+        :ok
+
+      {:ok, page} ->
+        if Enum.all?(page, &retire/1) and length(page) == @retired_page do
+          {_execution_id, last, _athanor_id, _generation} = List.last(page)
+          retire_retired(last)
+        else
+          :ok
+        end
+
+      {:error, reason} ->
+        Logger.error(
+          "[Cyfr.Execution.Sweeper] retired attempts could not be listed: #{inspect(reason)}"
+        )
+
+        :ok
+    end
+  end
+
+  # The normal cancellation of one retired attempt, answering whether the
+  # scan may go on: false once this member no longer holds its slot.
+  defp retire({execution_id, _attempt, athanor_id, generation}) do
+    if Arca.ControlPlane.held?() do
+      {:ok, grant} = Cyfr.ExecutionGrant.new(athanor_id, generation)
+      cancel(execution_id, athanor_id, grant)
+      true
+    else
+      false
+    end
+  rescue
+    exception ->
+      Logger.error(
+        "[Cyfr.Execution.Sweeper] retired execution #{execution_id} was not cancelled: " <>
+          Exception.message(exception)
+      )
+
+      true
+  end
+
+  defp cancel(execution_id, athanor_id, grant) do
+    actor = Cyfr.Actor.in_athanor(athanor_id)
+
+    case Arca.Execution.get_tenant(actor, execution_id) do
+      %Arca.Execution{kind: "turn", turn_id: turn_id} when is_binary(turn_id) ->
+        end_turn(actor, execution_id, turn_id, grant)
+
+      %Arca.Execution{status: "running"} ->
+        ctx = Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+        _ = Dispatch.cancel(ctx, execution_id)
+        :ok
+
+      _other ->
+        :ok
+    end
+  end
+
+  # A turn's root ends with its turn, in the turn's one terminal
+  # transaction; whatever still holds the root on this member is stopped
+  # once the rows have ended.
+  defp end_turn(actor, execution_id, turn_id, grant) do
+    with {:ok, turn} <- Arca.TurnStorage.get(actor, turn_id),
+         {:ok, ended} <-
+           Arca.TurnStorage.finish(actor, turn_id, "cancelled", %{
+             fence: turn.fence,
+             error: @retired_message,
+             grant: grant,
+             verify: &Sanctum.ExecutionStanding.stamp_only/1
+           }) do
+      Logger.info("[Cyfr.Execution.Sweeper] retired turn #{ended.id} ended cancelled")
+      Dispatch.stop(execution_id, actor.athanor_id)
+    else
+      {:error, reason} ->
+        Logger.warning(
+          "[Cyfr.Execution.Sweeper] retired turn #{turn_id} was not ended: #{inspect(reason)}"
+        )
     end
 
     :ok

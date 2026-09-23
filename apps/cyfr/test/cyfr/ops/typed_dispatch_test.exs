@@ -87,9 +87,15 @@ defmodule Cyfr.Ops.TypedDispatchTest do
     })
   end
 
+  # An in-chain call comes from a real execution's attempt, which the host
+  # names in its lineage.
   defp chain(ctx, args, authority, opts \\ []) do
+    opts = Keyword.put_new_lazy(opts, :lineage, fn -> caller!(ctx) end)
     Catalog.call_in_chain("typed_probe", Sanctum.Context.enter_guest(ctx), args, authority, opts)
   end
+
+  defp caller!(ctx),
+    do: ctx |> Cyfr.Test.AttemptFixtures.lineage!() |> Map.take([:parent_execution_id, :attempt])
 
   test "console, wire and in-chain calls refuse the same invalid values", %{
     ctx: ctx,
@@ -167,7 +173,9 @@ defmodule Cyfr.Ops.TypedDispatchTest do
         ] do
       assert {:ok, normalized} = Catalog.validate_arguments("typed_probe", args)
       assert {:ok, ^normalized} = PrismWeb.Ops.call_tool(ctx, "typed_probe", args)
-      assert {:ok, ^normalized} = chain(ctx, args, authority)
+      # In a chain the host's lineage rides beside the normalized arguments.
+      assert {:ok, chained} = chain(ctx, args, authority)
+      assert Map.drop(chained, ["parent_execution_id", "attempt"]) == normalized
       assert {:ok, %{"isError" => false, "content" => [%{"text" => json}]}} = wire(ctx, args)
       assert Jason.decode!(json) === normalized
     end
@@ -197,16 +205,12 @@ defmodule Cyfr.Ops.TypedDispatchTest do
   } do
     args = %{"action" => "empty", "parent_execution_id" => "forged", "attempt" => "forged"}
 
-    lineage = %{
-      parent_execution_id: "host-parent",
-      root_execution_id: "host-root",
-      attempt: "host-attempt"
-    }
+    lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx, %{root_execution_id: "host-root"})
 
     assert {:ok, result} = chain(ctx, args, authority, lineage: lineage)
-    assert result["parent_execution_id"] == "host-parent"
+    assert result["parent_execution_id"] == lineage.parent_execution_id
     assert result["root_execution_id"] == "host-root"
-    assert result["attempt"] == "host-attempt"
+    assert result["attempt"] == lineage.attempt
     import Ecto.Query
 
     logged =
@@ -216,9 +220,9 @@ defmodule Cyfr.Ops.TypedDispatchTest do
       )
 
     input = Jason.decode!(logged.input)
-    assert input["parent_execution_id"] == "host-parent"
+    assert input["parent_execution_id"] == lineage.parent_execution_id
     assert input["root_execution_id"] == "host-root"
-    assert input["attempt"] == "host-attempt"
+    assert input["attempt"] == lineage.attempt
     assert {:error, {:invalid_argument, _}} = Catalog.call_external("typed_probe", ctx, args)
   end
 

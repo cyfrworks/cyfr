@@ -235,7 +235,12 @@ defmodule Aqua.Tape do
   """
   @spec recover(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
   def recover(%Context{} = ctx, turn),
-    do: TurnStorage.recover(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+    do:
+      TurnStorage.recover(
+        Sanctum.Context.actor(ctx),
+        turn.id,
+        standing(%{fence: turn.fence}, :current)
+      )
 
   @doc """
   Which turn holds the thread, and whether a live peer runs it
@@ -248,7 +253,12 @@ defmodule Aqua.Tape do
   def claim_holder(%Context{} = ctx, thread_id),
     do: Threads.claim_holder(Sanctum.Context.actor(ctx), thread_id)
 
-  @doc "End a turn: the one terminal transaction (`TurnStorage.finish/4`)."
+  @doc """
+  End a turn: the one terminal transaction (`TurnStorage.finish/4`),
+  under the grant its root's attempt stores. A completion needs that
+  grant to stand; a turn that fails, is cancelled or ends uncertain
+  retires work and needs only the stored stamp.
+  """
   @spec finish(Context.t(), turn(), String.t(), map()) :: {:ok, turn()} | {:error, term()}
   def finish(%Context{} = ctx, turn, status, attrs \\ %{}) do
     with {:ok, finished} <-
@@ -256,7 +266,9 @@ defmodule Aqua.Tape do
              Sanctum.Context.actor(ctx),
              turn.id,
              status,
-             Map.put_new(attrs, :fence, turn.fence)
+             attrs
+             |> Map.put_new(:fence, turn.fence)
+             |> standing(if(status == "completed", do: :current, else: :retiring))
            ) do
       broadcast(ctx, turn.thread_id, {:turn_finished})
       {:ok, finished}
@@ -270,7 +282,21 @@ defmodule Aqua.Tape do
   """
   @spec bump_recovery(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
   def bump_recovery(%Context{} = ctx, turn),
-    do: TurnStorage.takeover(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+    do:
+      TurnStorage.takeover(
+        Sanctum.Context.actor(ctx),
+        turn.id,
+        standing(%{fence: turn.fence}, :current)
+      )
+
+  # The grant a write on the turn's root attempt runs under: the stamp that
+  # attempt stores (`TurnStorage`'s "The root's grant"), which must still
+  # stand, or — for a turn that retires its work — need only be carried.
+  defp standing(attrs, :current),
+    do: Map.merge(attrs, %{grant: :stored, verify: &Sanctum.ExecutionStanding.verify/1})
+
+  defp standing(attrs, :retiring),
+    do: Map.merge(attrs, %{grant: :stored, verify: &Sanctum.ExecutionStanding.stamp_only/1})
 
   @doc "Pin the exact catalyst release the turn runs on (`TurnStorage.pin_catalyst/4`)."
   @spec pin_catalyst(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
@@ -379,10 +405,11 @@ defmodule Aqua.Tape do
   @spec pause_recovered(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
   def pause_recovered(%Context{} = ctx, turn, content) when is_binary(content),
     do:
-      TurnStorage.pause_recovered(Sanctum.Context.actor(ctx), turn.id, %{
-        content: content,
-        fence: turn.fence
-      })
+      TurnStorage.pause_recovered(
+        Sanctum.Context.actor(ctx),
+        turn.id,
+        standing(%{content: content, fence: turn.fence}, :current)
+      )
 
   @doc "Whether the turn holds an uncertainty its sender has not acknowledged."
   @spec unacknowledged_episode?(Context.t(), turn()) :: boolean()

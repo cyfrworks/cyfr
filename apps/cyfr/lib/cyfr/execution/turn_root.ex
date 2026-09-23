@@ -148,8 +148,9 @@ defmodule Cyfr.Execution.TurnRoot do
 
   @doc """
   Resume a paused turn root from the process that will hold it: the slot
-  first (a refusal leaves everything paused), then the rows, then a
-  keeper. `opts`: `:turn_id`, `:fence`, `:timeout_ms`, `:tick_ms`.
+  first (a refusal leaves everything paused), then the rows, under the
+  grant the root's attempt stores (`Arca.TurnStorage.resume/3`: a root
+  whose estate was archived since stays paused), then a keeper. `opts`: `:turn_id`, `:fence`, `:timeout_ms`, `:tick_ms`.
   Answers the claim the loop keeps.
   """
   @spec resume(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -160,7 +161,9 @@ defmodule Cyfr.Execution.TurnRoot do
 
       case Arca.TurnStorage.resume(Sanctum.Context.actor(ctx), Keyword.fetch!(opts, :turn_id), %{
              fence: Keyword.get(opts, :fence),
-             lease_until: until
+             lease_until: until,
+             grant: :stored,
+             verify: &Sanctum.ExecutionStanding.verify/1
            }) do
         {:ok, turn} ->
           {:ok, keeper} =
@@ -245,6 +248,8 @@ defmodule Cyfr.Execution.TurnRoot do
   end
 
   # A row the turn's terminal write already closed matches nothing here.
+  # A failure retires work: it needs the attempt's stored stamp, never a
+  # grant that still stands.
   defp fail_open_root(ctx, execution_id, attempt, error) do
     _ =
       Arca.Execution.record_end(
@@ -252,7 +257,9 @@ defmodule Cyfr.Execution.TurnRoot do
         execution_id,
         "failed",
         %{completed_at: DateTime.utc_now(), duration_ms: 0, error_message: error},
-        attempt
+        attempt,
+        grant: :stored,
+        verify: &Sanctum.ExecutionStanding.stamp_only/1
       )
 
     :ok

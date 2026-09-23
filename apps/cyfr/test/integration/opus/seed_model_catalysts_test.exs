@@ -179,7 +179,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
     child_opts = [
       ctx: Sanctum.Context.enter_guest(ctx),
-      parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
+      parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,
       root_execution_id: "exec_root_#{System.unique_integer([:positive])}"
     ]
 
