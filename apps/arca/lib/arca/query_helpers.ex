@@ -36,6 +36,14 @@ defmodule Arca.QueryHelpers do
   `where_athanor/2`, `no_athanor!/1` — a bug upstream, never a value).
   Retention primitives answer `{:ok, count} | {:error, term}` — never a
   raw Ecto tuple.
+
+  ## Row locks
+
+  A transition is a conditional write whose row count is its evidence.
+  Only the multi-row transitions that must read several rows and change
+  them under one view lock them, inside `Arca.Repo.locking_transaction/2`
+  and through `for_update/1`, so the adapter difference is spelled in
+  exactly those two places.
   """
 
   import Ecto.Query
@@ -141,5 +149,23 @@ defmodule Arca.QueryHelpers do
   @spec where_before(Ecto.Queryable.t(), atom(), DateTime.t()) :: Ecto.Query.t()
   def where_before(query, field, %DateTime{} = cutoff) when is_atom(field) do
     from(r in query, where: field(r, ^field) < ^cutoff)
+  end
+
+  @doc """
+  Hold the rows `query` reads until the enclosing
+  `Arca.Repo.locking_transaction/2` ends.
+
+  PostgreSQL gets `FOR UPDATE`: a second reader of the same row waits on
+  it and then reads the committed version. SQLite gets the query back
+  unchanged — its adapter raises on a lock clause, and the immediate
+  transaction around this read already holds the database's one write
+  lock. Outside a locking transaction it locks nothing on either.
+  """
+  @spec for_update(Ecto.Queryable.t()) :: Ecto.Queryable.t()
+  def for_update(query) do
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.Postgres -> lock(query, "FOR UPDATE")
+      _sqlite -> query
+    end
   end
 end

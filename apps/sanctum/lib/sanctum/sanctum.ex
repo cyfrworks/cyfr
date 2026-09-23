@@ -29,6 +29,7 @@ defmodule Sanctum do
         auth_provider: Sanctum.Auth.OAuth  # or the configured auth provider
   """
 
+  alias Arca.Schemas.JobClaim
   alias Sanctum.Context
 
   @doc """
@@ -82,6 +83,67 @@ defmodule Sanctum do
   def origin do
     public_url() || Application.get_env(:sanctum, :fallback_origin, "http://localhost:4000")
   end
+
+  @doc """
+  The boot's operator reconcile, under the `bootstrap` claim `claim`.
+
+  The operator list (`CYFR_PLATFORM_ADMIN_EMAILS`) is validated and
+  snapshotted here, once: a list of lowercased addresses, or
+  `{:error, :malformed_configuration}` before any row is read. Storage
+  then removes, in one transaction under the member slot and the claim,
+  every platform grant whose person that snapshot no longer names, with
+  all of that person's sessions (`Arca.Members.reconcile_platform/3`).
+  Only after that commit are the removed sessions' established contexts
+  dropped and their revocation announced.
+
+  `opts`: `:slot` (`Arca.ControlPlane.held/0`'s slot, or `:none` where no
+  member claims one) and `:lease_ms` (the claim lease the final renewal
+  extends). Answers the renewed claim the caller releases, or the
+  refusal; nothing is announced on a refusal, because nothing committed.
+  """
+  @spec reconcile_platform_admins(JobClaim.t(), keyword()) ::
+          {:ok, JobClaim.t()} | {:error, atom()}
+  def reconcile_platform_admins(%JobClaim{} = claim, opts) when is_list(opts) do
+    with {:ok, operators} <- operator_snapshot(),
+         {:ok, %{claim: renewed, revoked: revoked}} <-
+           Arca.Members.reconcile_platform(Cyfr.Actor.system(), claim,
+             slot: Keyword.fetch!(opts, :slot),
+             lease_ms: Keyword.fetch!(opts, :lease_ms),
+             operators: operators,
+             policy_digest: policy_digest(operators)
+           ) do
+      for %{user_id: user_id, session_hashes: hashes} <- revoked do
+        Sanctum.Session.announce_revoked(user_id, hashes)
+      end
+
+      {:ok, renewed}
+    end
+  end
+
+  # The configured list, read as configured — the key `Sanctum.Door`
+  # compares sign-ins against — and accepted only in the shape the door
+  # assumes: a list of lowercased addresses with nothing around them.
+  # Anything else is a configuration the reconcile cannot read, and
+  # reading it loosely could keep an operator the list no longer names.
+  defp operator_snapshot do
+    case Application.get_env(:sanctum, :platform_admin_emails, []) do
+      emails when is_list(emails) ->
+        if Enum.all?(emails, &operator_email?/1),
+          do: {:ok, emails |> Enum.uniq() |> Enum.sort()},
+          else: {:error, :malformed_configuration}
+
+      _malformed ->
+        {:error, :malformed_configuration}
+    end
+  end
+
+  defp operator_email?(email) when is_binary(email),
+    do: email != "" and email == email |> String.trim() |> String.downcase()
+
+  defp operator_email?(_email), do: false
+
+  defp policy_digest(operators),
+    do: Cyfr.Digest.sha256(Jason.encode!(%{version: 1, operators: operators}))
 
   @doc """
   Server-internal context for background/system operations — sweepers, health

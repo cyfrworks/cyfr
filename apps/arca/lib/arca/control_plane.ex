@@ -71,6 +71,9 @@ defmodule Arca.ControlPlane do
   The cell's claimant, and nothing else. This module keeps no timer and no
   process: `take/3`, `renew/1` and `release/0` are called from the
   claimant's own process and leave the cached standing behind them.
+  `verify_held/1` writes nothing a reader could see: it is how a security
+  transaction proves, under a row lock, that the slot it runs for is
+  still this member's.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -276,6 +279,48 @@ defmodule Arca.ControlPlane do
 
         lost()
         result
+    end
+  end
+
+  @doc """
+  Inside a caller's `Arca.Repo.locking_transaction/2`: whether `slot` —
+  node, owner and generation as `take/3` won them — still names the row,
+  under a lease that stands on the database's clock.
+
+  The statement is a conditional update that changes nothing
+  (`fence` raised by zero), so it takes the row's lock without moving the
+  fence the claimant's renew names: the claimant keeps renewing, and a
+  successor's take waits until the caller commits. The lease is read back
+  and compared with the database's clock read AFTER that lock was won, so
+  a wait behind a release or a takeover cannot pass on an instant taken
+  before it. Never touches the cached standing: `renew/1` writes that,
+  and it is not called here.
+
+  Raises outside a transaction and on a store that cannot answer, so the
+  caller's transaction rolls back.
+  """
+  @spec verify_held(slot()) :: :ok | :lost
+  # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
+  def verify_held(%{node: node, owner: owner, generation: generation})
+      when is_binary(node) and is_binary(owner) and is_integer(generation) do
+    unless Arca.Repo.in_transaction?() do
+      raise ArgumentError, "Arca.ControlPlane.verify_held/1 runs inside a locking transaction"
+    end
+
+    locked =
+      from(l in CellLease,
+        where: l.node == ^node and l.owner == ^owner and l.generation == ^generation,
+        select: l.lease_until
+      )
+
+    case Arca.Repo.update_all(locked, inc: [fence: 0]) do
+      {1, [lease_until]} ->
+        if DateTime.compare(lease_until, Arca.ServerMetaStorage.now!()) == :gt,
+          do: :ok,
+          else: :lost
+
+      {0, _} ->
+        :lost
     end
   end
 

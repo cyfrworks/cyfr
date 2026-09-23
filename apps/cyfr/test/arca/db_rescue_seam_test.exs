@@ -43,10 +43,10 @@ defmodule Arca.DbRescueSeamTest do
     # constant the helper returns. DB errors only: a structurally-bad
     # queued item must crash, never be dropped with :ok.
     "apps/arca/lib/arca/record_sink.ex" => 2,
-    # Two boot steps (the platform reconcile and the seed sync) that tolerate
-    # a database outage with their own step-specific log lines and keep the
-    # remaining steps running — a bug still crashes the one-shot task loudly.
-    "apps/cyfr/lib/cyfr/bootstrap.ex" => 2
+    # run/1: the security reconcile is fail-closed, and a raised database
+    # error refuses the boot as `:database_error`, a class of its own and
+    # distinct from any other raise (`:exception`). Nothing is tolerated.
+    "apps/cyfr/lib/cyfr/bootstrap.ex" => 1
   }
 
   test "inline db-errors rescues exist only at the enumerated exceptions" do

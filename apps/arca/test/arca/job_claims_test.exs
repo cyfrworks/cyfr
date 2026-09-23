@@ -226,4 +226,143 @@ defmodule Arca.JobClaimsTest do
       assert {:ok, %{detail: nil}} = watch(key, "boot_a")
     end
   end
+
+  describe "holding a claim inside a locking transaction" do
+    test "the held row is answered as locked, and a checked renewal records the evidence", %{
+      key: key
+    } do
+      {:ok, held} = watch(key, "boot_a")
+
+      assert {:ok, {locked, renewed}} =
+               Arca.Repo.locking_transaction(fn ->
+                 {:ok, locked} = JobClaims.hold(held)
+                 {:ok, renewed} = JobClaims.renew_held(locked, @lease_ms, detail: "complete")
+                 {locked, renewed}
+               end)
+
+      assert locked.fence == held.fence
+      assert renewed.fence == held.fence + 1
+      assert renewed.detail == "complete"
+      assert DateTime.compare(renewed.lease_until, held.lease_until) in [:gt, :eq]
+
+      # The renewed claim is the one a release names.
+      assert :taken = JobClaims.release(held)
+      assert :ok = JobClaims.release(renewed)
+    end
+
+    test "a fence another write moved is :taken, and a lease that ran out is :lapsed", %{
+      key: key
+    } do
+      {:ok, held} = watch(key, "boot_a")
+      {:ok, _moved} = JobClaims.record(held, "moved")
+      in_tx = fn fun -> Arca.Repo.locking_transaction(fun) end
+
+      assert {:ok, :taken} = in_tx.(fn -> JobClaims.hold(held) end)
+      assert {:ok, :taken} = in_tx.(fn -> JobClaims.renew_held(held, @lease_ms) end)
+
+      lapsed = lapsed!(key <> "-l", "boot_a")
+      assert {:ok, :lapsed} = in_tx.(fn -> JobClaims.hold(lapsed) end)
+      assert {:ok, :lapsed} = in_tx.(fn -> JobClaims.renew_held(lapsed, @lease_ms) end)
+    end
+
+    test "outside a transaction neither answers", %{key: key} do
+      {:ok, held} = watch(key, "boot_a")
+
+      assert_raise ArgumentError, ~r/inside a locking transaction/, fn -> JobClaims.hold(held) end
+
+      assert_raise ArgumentError, ~r/inside a locking transaction/, fn ->
+        JobClaims.renew_held(held, @lease_ms)
+      end
+    end
+  end
+end
+
+defmodule Arca.JobClaimsLockTest do
+  @moduledoc """
+  `Arca.JobClaims.hold/1` under two real connections, outside the
+  sandbox. A holder that waited for the row decides on the database's
+  clock read after the wait: a lease that ran out while it waited is
+  `:lapsed`, and a row a peer took meanwhile is `:taken`. Neither may
+  pass on a timestamp captured before the lock was won.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query
+
+  alias Arca.JobClaims
+  alias Arca.Schemas.JobClaim
+  alias Ecto.Adapters.SQL.Sandbox
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    key = "svc-lock-#{System.unique_integer([:positive])}"
+    on_exit(fn -> unboxed(fn -> Arca.Repo.delete_all(where(JobClaim, key: ^key)) end) end)
+    {:ok, key: key}
+  end
+
+  # A transaction holding the claim's row until told to write and commit.
+  defp blocker(claim, write) do
+    test = self()
+
+    Task.async(fn ->
+      unboxed(fn ->
+        Arca.Repo.locking_transaction(fn ->
+          from(c in JobClaim, where: c.id == ^claim.id)
+          |> Arca.QueryHelpers.for_update()
+          |> Arca.Repo.one()
+
+          send(test, :blocking)
+
+          receive do
+            :commit -> write.()
+          end
+        end)
+      end)
+    end)
+  end
+
+  defp holder(claim) do
+    Task.async(fn ->
+      unboxed(fn -> Arca.Repo.locking_transaction(fn -> JobClaims.hold(claim) end) end)
+    end)
+  end
+
+  test "a lease that runs out while the holder waits for the row is :lapsed", %{key: key} do
+    {:ok, claim} = unboxed(fn -> JobClaims.claim("worker_watch", key, "boot_a", 400) end)
+
+    blocking = blocker(claim, fn -> :ok end)
+    assert_receive :blocking, 5_000
+    waiting = holder(claim)
+
+    refute Task.yield(waiting, 200)
+    # Past the lease on every clock, then the lock is given up.
+    Process.sleep(400)
+    send(blocking.pid, :commit)
+    assert {:ok, :ok} = Task.await(blocking, 25_000)
+    assert {:ok, :lapsed} = Task.await(waiting, 25_000)
+  end
+
+  test "a takeover committed while the holder waits is :taken", %{key: key} do
+    {:ok, claim} = unboxed(fn -> JobClaims.claim("worker_watch", key, "boot_a", 60_000) end)
+
+    blocking =
+      blocker(claim, fn ->
+        {1, _} =
+          Arca.Repo.update_all(where(JobClaim, id: ^claim.id),
+            set: [owner: "boot_b", fence: claim.fence + 1]
+          )
+
+        :ok
+      end)
+
+    assert_receive :blocking, 5_000
+    waiting = holder(claim)
+
+    refute Task.yield(waiting, 200)
+    send(blocking.pid, :commit)
+    assert {:ok, :ok} = Task.await(blocking, 25_000)
+    assert {:ok, :taken} = Task.await(waiting, 25_000)
+  end
 end

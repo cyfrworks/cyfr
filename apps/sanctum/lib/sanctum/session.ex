@@ -355,6 +355,20 @@ defmodule Sanctum.Session do
   end
 
   @doc """
+  Announce sessions a committed transaction already removed: drop the
+  established-context memo of each token hash that transaction's DELETE
+  returned, then broadcast `{:sessions_revoked, user_id}` as
+  `revoke_all_for_user/1` does. Called only after the commit, so a
+  context re-established in between finds no row to cache.
+  """
+  @spec announce_revoked(String.t(), [binary()]) :: :ok
+  def announce_revoked(user_id, hashes) when is_binary(user_id) and is_list(hashes) do
+    Enum.each(hashes, &Sanctum.Caller.invalidate_hash/1)
+    broadcast_sessions_revoked(user_id)
+    :ok
+  end
+
+  @doc """
   Destroy a session (logout).
 
   ## Examples

@@ -684,6 +684,10 @@ defmodule Cyfr.Boundaries do
     device_flow_endpoints: :seam,
     provisioning_inline: :seam,
     record_sink_inline: :seam,
+    # Compiled in by `config/test.exs` alone; with the runtime switch off it
+    # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
+    # (`Cyfr.Application.bootstrap_skipped?/2`).
+    bootstrap_skip_permitted: :seam,
 
     # Boot switches with an in-code default; flipping one is a code change.
     cron_scheduler_enabled: :default,

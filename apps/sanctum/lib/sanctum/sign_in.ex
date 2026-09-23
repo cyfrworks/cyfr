@@ -13,6 +13,12 @@ defmodule Sanctum.SignIn do
   provisioned (`Sanctum.Provisioning.after_sign_in/1`). Admission is
   personhood: nothing here waits on a registry.
 
+  The platform grant or revoke answers to the identity facts this
+  assertion carried, checked under the person's lock, and a grant or
+  revoke that fails — or finds those facts overtaken by a later
+  assertion (`{:error, :stale_identity}`) — refuses the sign-in before
+  any session is created.
+
   `complete/3`: the one courtesy both sign-in paths (the browser callback
   and the CLI device flow) extend after the door — a budgeted probe of
   cyfr.run for the person's publisher namespace and push tokens. Whatever
@@ -60,9 +66,8 @@ defmodule Sanctum.SignIn do
   """
   @spec admitted(map(), :admin | :allowed) :: {:ok, Arca.Schemas.User.t()} | {:error, term()}
   def admitted(%{id: _identity} = user_info, verdict) when verdict in [:admin, :allowed] do
-    with {:ok, user} <- Users.upsert_from_provider(user_info) do
+    with {:ok, user} <- identify(user_info, verdict) do
       user_id = user.id
-      apply_platform(user_id, verdict)
 
       # Log invitation activation failures without refusing sign-in.
       # Pending invitations can activate on the next sign-in.
@@ -86,6 +91,57 @@ defmodule Sanctum.SignIn do
         _ -> Users.get(user_id)
       end
     end
+  end
+
+  @doc false
+  # The identity half of `admitted/2`, which runs it first: the person's
+  # row written from this assertion, then the platform grant reconciled
+  # against exactly the facts this assertion carried — before the rest of
+  # the sign-in, and before any session. Public so the interleaving tests
+  # can race it without the provisioning that follows.
+  #
+  # The facts are this assertion's, never another's: a concurrent first
+  # sign-in that lost the race to mint the person is answered the winner's
+  # row, and that row must not become what this sign-in expects. So the
+  # upsert's answer is checked against them too, and the grant or revoke
+  # checks them again under the person's lock. `{:error, :stale_identity}`
+  # is this assertion having been overtaken; the person signs in again.
+  @spec identify(map(), :admin | :allowed) :: {:ok, User.t()} | {:error, term()}
+  def identify(user_info, verdict) when verdict in [:admin, :allowed] do
+    with {:ok, user} <- Users.upsert_from_provider(user_info) do
+      expected = expected_identity(user_info, user)
+
+      cond do
+        user.email != expected.email or user.email_verified != expected.email_verified ->
+          {:error, :stale_identity}
+
+        true ->
+          with :ok <- apply_platform(user.id, verdict, expected), do: {:ok, user}
+      end
+    end
+  end
+
+  @doc false
+  # What one admitted assertion says about the person, as the `users` row
+  # stores it: the supplied email lowercased — the row's own only when the
+  # assertion carried none, since an absent claim leaves the stored one in
+  # place — and the verification claim as `true`, `false`, or `nil` for
+  # anything else.
+  @spec expected_identity(map(), User.t()) :: Arca.Members.identity()
+  def expected_identity(user_info, %User{} = user) do
+    email =
+      case Map.get(user_info, :email) do
+        email when is_binary(email) and email != "" -> String.downcase(email)
+        _absent -> user.email
+      end
+
+    verified =
+      case Map.get(user_info, :verified) do
+        claim when is_boolean(claim) -> claim
+        _unknown -> nil
+      end
+
+    %{email: email, email_verified: verified}
   end
 
   @doc """
@@ -170,48 +226,49 @@ defmodule Sanctum.SignIn do
   # An operator's first sign-in mints the platform row: the out-of-the-box
   # install is one admin with one athanor, their own. Removing an email from
   # CYFR_PLATFORM_ADMIN_EMAILS revokes the platform row on the next sign-in.
-  defp apply_platform(user_id, :admin) do
-    already? = platform_admin?(user_id)
-
-    case Members.ensure_platform(user_id) do
-      {:ok, _} ->
-        unless already? do
-          emit_platform_bootstrap(user_id)
-          # A freshly granted operator bit reaches this person's already
-          # mounted views: LiveAuth re-establishes on membership_changed.
-          Members.broadcast_change(user_id, nil, :platform_granted)
-        end
-
+  # A grant that cannot be written refuses the sign-in: the person would
+  # otherwise hold a session without the standing the door decided on.
+  defp apply_platform(user_id, :admin, expected) do
+    case Members.grant_platform(user_id, expected) do
+      {:ok, :granted} ->
+        emit_platform_bootstrap(user_id)
+        # A freshly granted operator bit reaches this person's already
+        # mounted views: LiveAuth re-establishes on membership_changed.
+        Members.broadcast_change(user_id, nil, :platform_granted)
         :ok
 
-      {:error, reason} ->
+      {:ok, :held} ->
+        :ok
+
+      {:error, reason} = refusal ->
         Logger.error(
-          "[Sanctum.SignIn] platform admin bootstrap failed for #{user_id}: #{inspect(reason)}"
+          "[Sanctum.SignIn] platform admin grant refused for #{user_id}: #{inspect(reason)}"
         )
+
+        refusal
     end
   end
 
   # An email dropped from CYFR_PLATFORM_ADMIN_EMAILS loses the operator bit
-  # here: the revoke removes the row and revokes the person's other
-  # sessions, so no established context keeps the capability. A revoke
-  # that fails leaves an operator who should not be one — never silent.
-  defp apply_platform(user_id, :allowed) do
-    case Members.revoke_platform(user_id) do
+  # here: the revoke removes the row and the person's sessions together, so
+  # no established context keeps the capability. A revoke that fails
+  # leaves an operator who should not be one — never silent, and the
+  # sign-in is refused rather than minting a session beside it.
+  defp apply_platform(user_id, :allowed, expected) do
+    case Members.revoke_platform(user_id, expected_identity: expected) do
       :ok ->
         :ok
 
-      {:error, reason} ->
+      {:error, reason} = refusal ->
         Logger.error("[Sanctum.SignIn] platform revoke failed for #{user_id}: #{inspect(reason)}")
 
         :telemetry.execute([:cyfr, :sanctum, :door, :revoke_failed], %{count: 1}, %{
           user_id: user_id
         })
 
-        :ok
+        refusal
     end
   end
-
-  defdelegate platform_admin?(user_id), to: Sanctum.Tenancy
 
   # The widest grant in the system, and its only input is an email address —
   # under a generic OIDC issuer `email_verified` may legitimately be absent,
