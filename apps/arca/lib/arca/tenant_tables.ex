@@ -174,12 +174,10 @@ defmodule Arca.TenantTables do
   @doc """
   Every table the live schema says carries `athanor_id`.
 
-  Asked of the database rather than derived from the schema modules: the
-  athanor-scoped tables are declared in four different places (a
-  `schemas/` module for most, an inline `use Ecto.Schema` in
-  `Arca.Execution`, `Arca.McpLog`, `Arca.PolicyLog` and
-  `Arca.CronSchedule`), so a module scan would answer for the modules it
-  happened to find. The column is the fact.
+  Asked of the database rather than derived from the schema modules: a
+  module scan would answer for the modules it happened to find, and a
+  table can carry the column with no schema at all. The column is the
+  fact.
   """
   @spec athanor_scoped_tables() :: [String.t()]
   # arca:unscoped-ok a boot-time schema read over the catalog, not tenant

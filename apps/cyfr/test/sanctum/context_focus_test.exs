@@ -57,6 +57,37 @@ defmodule Sanctum.ContextFocusTest do
     assert {:error, :archived} = Context.focus(ctx.(alice, nil, false), archived)
   end
 
+  test "a stale copy of the row is read for its id alone: focus rereads the standing",
+       %{a: a, alice: alice, ctx: ctx} do
+    {:ok, before_archive} = Athanors.get(a.id)
+    {:ok, _} = Athanors.archive(a)
+
+    # The copy still says active; the row it names does not.
+    assert before_archive.status == "active"
+    assert {:error, :archived} = Context.focus(ctx.(alice, nil, false), before_archive)
+
+    # A map that only names the id is as good as the id, and a forged
+    # status on it decides nothing.
+    assert {:error, :archived} =
+             Context.focus(ctx.(alice, nil, false), %{id: a.id, status: "active"})
+  end
+
+  test "a store that cannot answer is unavailable, never an absence or a refusal",
+       %{a: a, alice: alice, ctx: ctx} do
+    c = ctx.(alice, nil, false)
+
+    Arca.Repo.query!("ALTER TABLE memberships RENAME TO memberships_unavailable")
+    assert {:error, :unavailable} = Context.focus(c, a.id)
+    Arca.Repo.query!("ALTER TABLE memberships_unavailable RENAME TO memberships")
+
+    Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unavailable")
+    assert {:error, :unavailable} = Context.focus(c, a.id)
+    assert {:error, :unavailable} = Context.focus(c, a)
+
+    sys = Sanctum.internal_context(user_id: "_test", athanor_id: a.id, scope: :athanor)
+    assert {:error, :unavailable} = Context.refocus(sys, a.id)
+  end
+
   test "refocus is focus for a person, and an archive-checked crossing for the system plane",
        %{a: a, b: b, alice: alice, ctx: ctx} do
     # A person's refocus IS focus: member in, non-member out.
@@ -123,7 +154,12 @@ defmodule Sanctum.ContextFocusTest do
     assert {:error, _} = Context.authorize(focused, :read, {:tenant, %{athanor_id: b.id}})
     assert {:error, _} = Sanctum.TenantPolicy.verify(focused, %{athanor_id: b.id})
 
-    query = Arca.QueryHelpers.where_tenant_unless_platform(Arca.Execution, Context.actor(focused))
+    query =
+      Arca.QueryHelpers.where_tenant_unless_platform(
+        Arca.Schemas.Execution,
+        Context.actor(focused)
+      )
+
     assert inspect(query) =~ "athanor_id"
   end
 

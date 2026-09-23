@@ -48,7 +48,7 @@ defmodule Opus.ExecutionProvenanceTest do
       )
 
     assert result.status == :completed
-    row = Arca.Repo.get(Arca.Execution, result.metadata.execution_id)
+    row = Arca.Repo.get(Arca.Schemas.Execution, result.metadata.execution_id)
     {row, Jason.decode!(row.output)}
   end
 

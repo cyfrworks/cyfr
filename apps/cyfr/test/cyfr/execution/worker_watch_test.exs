@@ -156,7 +156,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
   defp attached!(ctx, boot),
     do: AttemptFixtures.attached!(ctx: ctx, service_id: @service, boot_id: boot)
 
-  defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
+  defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 
   defp attempt_row(fixture),
     do: Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(fixture.athanor_id), fixture.attempt)

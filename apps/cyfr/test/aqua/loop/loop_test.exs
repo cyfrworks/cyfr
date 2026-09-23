@@ -241,13 +241,13 @@ defmodule Aqua.LoopTest do
     assert {:ok, [%{kind: "model", dispatch_state: "closed", outcome: "ok"}]} =
              Tape.steps(ctx, turn)
 
-    assert %{status: "completed"} = Arca.Repo.get(Arca.Execution, root)
+    assert %{status: "completed"} = Arca.Repo.get(Arca.Schemas.Execution, root)
 
     assert [%{execution_id: child}] =
              Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
 
     assert %{status: "completed", parent_execution_id: ^root} =
-             Arca.Repo.get(Arca.Execution, child)
+             Arca.Repo.get(Arca.Schemas.Execution, child)
   end
 
   # The files hand is not scripted: it runs on the opus worker service.
@@ -287,7 +287,7 @@ defmodule Aqua.LoopTest do
       assert is_binary(step.child_execution_id)
 
       assert %{status: "completed", parent_execution_id: root} =
-               Arca.Repo.get(Arca.Execution, step.child_execution_id)
+               Arca.Repo.get(Arca.Schemas.Execution, step.child_execution_id)
 
       assert root == turn_root(ctx, turn)
     end
@@ -334,7 +334,7 @@ defmodule Aqua.LoopTest do
              Tape.turn(ctx, turn.id)
 
     assert roots() == before
-    assert %{status: "paused"} = Arca.Repo.get(Arca.Execution, root)
+    assert %{status: "paused"} = Arca.Repo.get(Arca.Schemas.Execution, root)
     assert {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
     {:ok, steps} = Tape.steps(ctx, paused)
 

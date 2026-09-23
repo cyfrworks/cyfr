@@ -169,7 +169,7 @@ defmodule Cyfr.Execution.StartRefusalTest do
         execution_id: id
       )
 
-    {result, Arca.Repo.get!(Arca.Execution, id), id}
+    {result, Arca.Repo.get!(Arca.Schemas.Execution, id), id}
   end
 
   @tag :capture_log

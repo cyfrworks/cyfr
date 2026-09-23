@@ -162,7 +162,9 @@ defmodule Arca.SecurityTransitions do
   # `:database_error`; a set that moved between planning and locking runs
   # the whole transaction again, `@attempts` times at most.
   defp run(tag, body) do
-    Arca.Repo.Errors.with_db_rescue(tag, fn -> attempt(body, @attempts) end)
+    tag
+    |> Arca.Repo.Errors.with_db_rescue(fn -> attempt(body, @attempts) end)
+    |> Arca.Data.project()
   end
 
   defp attempt(_body, 0), do: {:error, :conflict}

@@ -96,7 +96,7 @@ defmodule Sanctum.Policy.EnforcementTest do
       import Ecto.Query
 
       Arca.Repo.update_all(
-        from(l in Arca.PolicyLog, where: l.id == ^row.id),
+        from(l in Arca.Schemas.PolicyLog, where: l.id == ^row.id),
         set: [timestamp: old_ts]
       )
 

@@ -6,9 +6,10 @@ defmodule Arca.ComponentStorage do
   Storage operations for component registry metadata.
 
   Provides CRUD operations for the `components` table via the
-  `Arca.Schemas.Component` schema. Reads return `%Arca.Schemas.Component{}`
-  structs; the `Compendium` layer normalizes them into its own document
-  representation (which it also builds from remote-registry responses).
+  `Arca.Schemas.Component` schema. Reads return each row as a plain map
+  (`Arca.Data`); the `Compendium` layer normalizes them into its own
+  document representation (which it also builds from remote-registry
+  responses).
 
   All public functions take a `%Cyfr.Actor{}` as the first argument
   to enforce tenant isolation via `where_tenant/3`.
@@ -364,7 +365,11 @@ defmodule Arca.ComponentStorage do
   # the operation's name and answer `{:error, :database_error}`
   # (`has_remaining_versions?/3` uses the default-returning variant — its
   # fallback is `true`, not an error tuple).
+  # Every entry point answers through here, so a row leaves as the plain
+  # map `Arca.Data` projects.
   defp rescuing_db(op, fun) do
-    Arca.Repo.Errors.with_db_rescue("ComponentStorage.#{op}", fun)
+    "ComponentStorage.#{op}"
+    |> Arca.Repo.Errors.with_db_rescue(fun)
+    |> Arca.Data.project()
   end
 end

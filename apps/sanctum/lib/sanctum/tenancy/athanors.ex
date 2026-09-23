@@ -28,8 +28,10 @@ defmodule Sanctum.Tenancy.Athanors do
 
   require Logger
 
-  alias Arca.Schemas.Athanor
   alias Sanctum.Tenancy.Caps
+
+  @typedoc "An athanor's row, as the plain map `Arca.Athanors` answers."
+  @type athanor :: %{required(:id) => String.t(), optional(atom()) => term()}
 
   @slug_attempts 3
 
@@ -38,7 +40,7 @@ defmodule Sanctum.Tenancy.Athanors do
   `:created_by`; a person athanor also `:owner_user_id`. `:id` defaults to a
   fresh `ath_` id. The server-wide cap on athanors applies.
   """
-  @spec create(map()) :: {:ok, Athanor.t()} | {:error, term()}
+  @spec create(map()) :: {:ok, athanor()} | {:error, term()}
   def create(attrs) do
     with :ok <- Caps.check_counted(:max_athanors, &count/0) do
       Arca.Athanors.insert(server(), Map.new(attrs))
@@ -55,7 +57,7 @@ defmodule Sanctum.Tenancy.Athanors do
   server at capacity must still admit the person who can act on it. Every
   other mint goes through `create/1` and is capped.
   """
-  @spec create_for_operator(map()) :: {:ok, Athanor.t()} | {:error, term()}
+  @spec create_for_operator(map()) :: {:ok, athanor()} | {:error, term()}
   def create_for_operator(attrs) when is_map(attrs),
     do: Arca.Athanors.insert(server(), Map.new(attrs))
 
@@ -65,7 +67,7 @@ defmodule Sanctum.Tenancy.Athanors do
   The per-person cap on groups applies. All of it lands or none does.
   """
   @spec create_group(String.t(), String.t(), keyword()) ::
-          {:ok, Athanor.t()} | {:error, term()}
+          {:ok, athanor()} | {:error, term()}
   def create_group(creator_user_id, name, opts \\ [])
       when is_binary(creator_user_id) and is_binary(name) do
     name = String.trim(name)
@@ -145,7 +147,7 @@ defmodule Sanctum.Tenancy.Athanors do
   at first need instead, so clicking a name opens a chat immediately
   instead of waiting on the network.
   """
-  @spec create_pair(String.t(), String.t()) :: {:ok, Athanor.t()} | {:error, term()}
+  @spec create_pair(String.t(), String.t()) :: {:ok, athanor()} | {:error, term()}
   def create_pair(user_a, user_b)
       when is_binary(user_a) and is_binary(user_b) and user_a != user_b do
     key = pair_key(user_a, user_b)
@@ -185,7 +187,7 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   @doc "The active frozen estate with this canonical key, if there is one."
-  @spec get_by_pair_key(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | :database_error}
+  @spec get_by_pair_key(String.t()) :: {:ok, athanor()} | {:error, :not_found | :database_error}
   def get_by_pair_key(key) when is_binary(key),
     do: Arca.Athanors.get_by_pair_key(server(), key)
 
@@ -276,8 +278,8 @@ defmodule Sanctum.Tenancy.Athanors do
   name stands in when the other seat cannot be read (an ended pair holds
   one member).
   """
-  @spec pair_label(Athanor.t(), String.t() | nil) :: String.t()
-  def pair_label(%Athanor{roster: "frozen", id: id, name: name}, user_id)
+  @spec pair_label(athanor(), String.t() | nil) :: String.t()
+  def pair_label(%{roster: "frozen", id: id, name: name}, user_id)
       when is_binary(user_id) do
     with {:ok, rows} <- Sanctum.Tenancy.Members.list_by_athanor(id),
          %{user_id: other} <- Enum.find(rows, &other_seat?(&1, user_id)) do
@@ -287,27 +289,27 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  def pair_label(%Athanor{name: name}, _user_id), do: name
+  def pair_label(%{name: name}, _user_id), do: name
 
   defp other_seat?(%{user_id: other, status: "active"}, user_id) when is_binary(other),
     do: other != user_id
 
   defp other_seat?(_row, _user_id), do: false
 
-  @spec get(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | :database_error}
+  @spec get(String.t()) :: {:ok, athanor()} | {:error, :not_found | :database_error}
   def get(id) when is_binary(id), do: Arca.Athanors.get(server(), id)
 
   @doc """
   A person's own athanor, by its owner. At most one exists per person
   (a partial unique index on `owner_user_id` where `kind = 'person'`).
   """
-  @spec get_by_owner(String.t()) :: {:ok, Athanor.t()} | {:error, :not_found | term()}
+  @spec get_by_owner(String.t()) :: {:ok, athanor()} | {:error, :not_found | term()}
   def get_by_owner(user_id) when is_binary(user_id),
     do: Arca.Athanors.get_by_owner(server(), user_id)
 
   @doc "Find an athanor by kind and slug."
   @spec get_by_slug(String.t(), String.t()) ::
-          {:ok, Athanor.t()} | {:error, :not_found | :database_error}
+          {:ok, athanor()} | {:error, :not_found | :database_error}
   def get_by_slug(kind, slug) when is_binary(kind) and is_binary(slug),
     do: Arca.Athanors.get_by_slug(server(), kind, slug)
 
@@ -317,7 +319,7 @@ defmodule Sanctum.Tenancy.Athanors do
   `include_archived: true` (a read that must still see an archived row —
   `athanor.get`, `unarchive`).
   """
-  @spec by_route_slug(String.t(), keyword()) :: {:ok, Athanor.t()} | {:error, :not_found}
+  @spec by_route_slug(String.t(), keyword()) :: {:ok, athanor()} | {:error, :not_found}
   def by_route_slug(segment, opts \\ [])
 
   def by_route_slug("@" <> namespace, opts) when namespace != "" do
@@ -331,16 +333,16 @@ defmodule Sanctum.Tenancy.Athanors do
   def by_route_slug(_, _opts), do: {:error, :not_found}
 
   @doc "The route segment for an athanor: `@<slug>` for a person, the slug for a group."
-  @spec route_slug(Athanor.t()) :: String.t()
-  def route_slug(%Athanor{kind: "person", slug: slug}), do: "@" <> slug
-  def route_slug(%Athanor{slug: slug}), do: slug
+  @spec route_slug(athanor()) :: String.t()
+  def route_slug(%{kind: "person", slug: slug}), do: "@" <> slug
+  def route_slug(%{slug: slug}), do: slug
 
-  @spec update(Athanor.t(), map()) :: {:ok, Athanor.t()} | {:error, term()}
-  def update(%Athanor{id: id}, attrs), do: Arca.Athanors.update(in_athanor(id), Map.new(attrs))
+  @spec update(athanor(), map()) :: {:ok, athanor()} | {:error, term()}
+  def update(%{id: id}, attrs), do: Arca.Athanors.update(in_athanor(id), Map.new(attrs))
 
   @doc "Rename an athanor. The slug stays: it is an address."
-  @spec rename(Athanor.t(), String.t()) :: {:ok, Athanor.t()} | {:error, term()}
-  def rename(%Athanor{} = athanor, name) when is_binary(name) do
+  @spec rename(athanor(), String.t()) :: {:ok, athanor()} | {:error, term()}
+  def rename(%{id: _} = athanor, name) when is_binary(name) do
     name = String.trim(name)
 
     with :ok <- validate_name(name) do
@@ -363,8 +365,8 @@ defmodule Sanctum.Tenancy.Athanors do
   its archival announced again, so a retry reaches whatever a lost
   announcement did not.
   """
-  @spec archive(Athanor.t(), keyword()) :: {:ok, Athanor.t()} | {:error, term()}
-  def archive(%Athanor{id: id} = athanor, opts \\ []) do
+  @spec archive(athanor(), keyword()) :: {:ok, athanor()} | {:error, term()}
+  def archive(%{id: id} = athanor, opts \\ []) do
     force? = Keyword.get(opts, :force, false)
 
     verify = fn
@@ -410,7 +412,7 @@ defmodule Sanctum.Tenancy.Athanors do
   # The row the caller named, as the transition left it: reread after
   # commit, and — should that read fail — the caller's copy carrying the
   # standing the commit returned, never an error for what did commit.
-  defp committed(%Athanor{id: id} = athanor, change) do
+  defp committed(%{id: id} = athanor, change) do
     case get(id) do
       {:ok, current} ->
         current
@@ -439,8 +441,8 @@ defmodule Sanctum.Tenancy.Athanors do
   athanor is archived, and a purged athanor that later reopens comes back
   with empty storage (its rows are untouched — this deletes blobs only).
   """
-  @spec purge_storage(Athanor.t()) :: :ok | {:error, term()}
-  def purge_storage(%Athanor{} = athanor) do
+  @spec purge_storage(athanor()) :: :ok | {:error, term()}
+  def purge_storage(%{id: _} = athanor) do
     with {:ok, current} <- get(athanor.id) do
       if current.status == "archived" do
         ctx = Sanctum.internal_context(athanor_id: current.id, scope: :athanor)
@@ -487,8 +489,8 @@ defmodule Sanctum.Tenancy.Athanors do
   does: archiving is the reviewable step that precedes the irreversible
   one.
   """
-  @spec destroy(Athanor.t()) :: {:ok, map()} | {:error, term()}
-  def destroy(%Athanor{} = athanor) do
+  @spec destroy(athanor()) :: {:ok, map()} | {:error, term()}
+  def destroy(%{id: _} = athanor) do
     with {:ok, current} <- get(athanor.id),
          :ok <- check_destroyable(current),
          :ok <- Arca.delete_tree(internal_actor(current), []),
@@ -504,10 +506,10 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  defp check_destroyable(%Athanor{status: status}) when status != "archived",
+  defp check_destroyable(%{status: status}) when status != "archived",
     do: {:error, :not_archived}
 
-  defp check_destroyable(%Athanor{id: id}) do
+  defp check_destroyable(%{id: id}) do
     if Sanctum.Tenancy.Users.personal_athanor?(id) do
       {:error, :personal_athanor}
     else
@@ -518,7 +520,7 @@ defmodule Sanctum.Tenancy.Athanors do
   # The server's own actor narrowed to this athanor: `system: true` is
   # what lets the purge reach the whole tree, `scope: :athanor` is what
   # keeps it inside this one estate.
-  defp internal_actor(%Athanor{id: id}),
+  defp internal_actor(%{id: id}),
     do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
 
   @doc """
@@ -531,8 +533,8 @@ defmodule Sanctum.Tenancy.Athanors do
   person alone in a second You. Clicking the name again mints a new pair
   instead.
   """
-  @spec unarchive(Athanor.t()) :: {:ok, Athanor.t()} | {:error, term()}
-  def unarchive(%Athanor{id: id} = athanor) do
+  @spec unarchive(athanor()) :: {:ok, athanor()} | {:error, term()}
+  def unarchive(%{id: id} = athanor) do
     with {:ok, change} <-
            Arca.SecurityTransitions.unarchive_athanor(server(), id, verify: &reopenable/1) do
       {:ok, committed(athanor, change)}
@@ -554,8 +556,8 @@ defmodule Sanctum.Tenancy.Athanors do
   Record that provisioning (seed + consents) completed — and forget any
   earlier failure recorded on the row.
   """
-  @spec mark_provisioned(Athanor.t()) :: {:ok, Athanor.t()} | {:error, term()}
-  def mark_provisioned(%Athanor{} = athanor) do
+  @spec mark_provisioned(athanor()) :: {:ok, athanor()} | {:error, term()}
+  def mark_provisioned(%{id: _} = athanor) do
     now = DateTime.utc_now()
 
     set_provisioning(athanor,
@@ -571,9 +573,9 @@ defmodule Sanctum.Tenancy.Athanors do
   record is the server's own — no settings patch writes or clears it — and
   a completed fill clears it. Members' open views hear of the change.
   """
-  @spec record_provisioning_failure(Athanor.t(), atom() | String.t(), String.t()) ::
-          {:ok, Athanor.t()} | {:error, term()}
-  def record_provisioning_failure(%Athanor{} = athanor, step, detail) when is_binary(detail) do
+  @spec record_provisioning_failure(athanor(), atom() | String.t(), String.t()) ::
+          {:ok, athanor()} | {:error, term()}
+  def record_provisioning_failure(%{id: _} = athanor, step, detail) when is_binary(detail) do
     now = DateTime.utc_now()
 
     set_provisioning(athanor,
@@ -584,18 +586,18 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   @doc "The last failed fill on the row, or nil: `%{step, detail, at}`."
-  @spec provisioning_failure(Athanor.t()) ::
+  @spec provisioning_failure(athanor()) ::
           %{step: String.t(), detail: String.t(), at: DateTime.t()} | nil
-  def provisioning_failure(%Athanor{provisioning_failed_at: %DateTime{} = at} = athanor) do
+  def provisioning_failure(%{provisioning_failed_at: %DateTime{} = at} = athanor) do
     case Jason.decode(athanor.provisioning_failure || "") do
       {:ok, %{"step" => step, "detail" => detail}} -> %{step: step, detail: detail, at: at}
       _ -> %{step: "unknown", detail: "", at: at}
     end
   end
 
-  def provisioning_failure(%Athanor{}), do: nil
+  def provisioning_failure(%{}), do: nil
 
-  defp set_provisioning(%Athanor{id: id}, set) do
+  defp set_provisioning(%{id: id}, set) do
     with :ok <- Arca.Athanors.set(in_athanor(id), set),
          {:ok, updated} <- get(id) do
       Sanctum.Notify.broadcast(id, :athanor_changed, %{name: updated.name})
@@ -603,7 +605,7 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  @spec list_by_ids([String.t()]) :: [Athanor.t()]
+  @spec list_by_ids([String.t()]) :: [athanor()]
   def list_by_ids([]), do: []
 
   def list_by_ids(ids) when is_list(ids) do
@@ -617,7 +619,7 @@ defmodule Sanctum.Tenancy.Athanors do
   scans walk (the tincture registry rebuilds itself from it). Uncapped: this
   is the server's own tenant roster, not a user page.
   """
-  @spec list_active() :: [Athanor.t()]
+  @spec list_active() :: [athanor()]
   def list_active do
     # Deliberate default: the roster scan's read — a scan that sees [] this
     # cadence walks the full roster on the next one; nothing is deleted on it.
@@ -629,7 +631,7 @@ defmodule Sanctum.Tenancy.Athanors do
   active membership grants, oldest first. Uncapped — a person's memberships
   are few, and a truncated list would hide a chat.
   """
-  @spec list_for_user(String.t()) :: [Athanor.t()]
+  @spec list_for_user(String.t()) :: [athanor()]
   def list_for_user(user_id) when is_binary(user_id) do
     # Deliberate default: a person's sidebar roster — an outage shows fewer
     # rooms, never more; entering one still resolves membership strictly.
@@ -640,7 +642,7 @@ defmodule Sanctum.Tenancy.Athanors do
   @spec active?(String.t() | nil) :: boolean()
   def active?(id) when is_binary(id) and id != "" do
     case get(id) do
-      {:ok, %Athanor{status: "active"}} -> true
+      {:ok, %{status: "active"}} -> true
       _ -> false
     end
   end
@@ -667,10 +669,10 @@ defmodule Sanctum.Tenancy.Athanors do
   def count, do: Arca.Athanors.count_active(server())
 
   @doc "The athanor's settings document (JSON on the row), as a map."
-  @spec settings(Athanor.t()) :: map()
-  def settings(%Athanor{settings: nil}), do: %{}
+  @spec settings(athanor()) :: map()
+  def settings(%{settings: nil}), do: %{}
 
-  def settings(%Athanor{settings: json}) when is_binary(json) do
+  def settings(%{settings: json}) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, map} when is_map(map) -> map
       _ -> %{}
@@ -685,14 +687,14 @@ defmodule Sanctum.Tenancy.Athanors do
   Every member's open views hear of the change on the athanor's notify
   topic.
   """
-  @spec put_settings(Athanor.t(), map()) :: {:ok, Athanor.t()} | {:error, term()}
-  def put_settings(%Athanor{} = athanor, patch) when is_map(patch) do
+  @spec put_settings(athanor(), map()) :: {:ok, athanor()} | {:error, term()}
+  def put_settings(%{id: _} = athanor, patch) when is_map(patch) do
     put_settings_cas(athanor, patch, 3)
   end
 
   defp put_settings_cas(_athanor, _patch, 0), do: {:error, :settings_conflict}
 
-  defp put_settings_cas(%Athanor{} = athanor, patch, attempts) do
+  defp put_settings_cas(%{id: _} = athanor, patch, attempts) do
     # Merge against the current row with compare-and-set to avoid lost updates.
     # If the read fails, fall back to the caller's copy.
     current =
@@ -752,9 +754,9 @@ defmodule Sanctum.Tenancy.Athanors do
   defp rows_or_empty({:ok, rows}), do: rows
   defp rows_or_empty({:error, _}), do: []
 
-  defp status_gate({:ok, %Athanor{status: "active"} = athanor}, _opts), do: {:ok, athanor}
+  defp status_gate({:ok, %{status: "active"} = athanor}, _opts), do: {:ok, athanor}
 
-  defp status_gate({:ok, %Athanor{} = athanor}, opts) do
+  defp status_gate({:ok, %{id: _} = athanor}, opts) do
     if Keyword.get(opts, :include_archived, false),
       do: {:ok, athanor},
       else: {:error, :not_found}

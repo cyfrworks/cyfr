@@ -55,13 +55,14 @@ defmodule Arca.BuildRecords do
   blank its result.
   """
   @spec record_started(Cyfr.Actor.t(), String.t(), String.t()) ::
-          :ok | {:error, :not_found | :invalid | Ecto.Changeset.t()} | refusal()
+          :ok | {:error, :not_found | :invalid | {:invalid, map()}} | refusal()
   def record_started(%Cyfr.Actor{athanor_id: athanor_id} = actor, build_id, reference)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(build_id) and
              is_binary(reference) do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.record_started", fn ->
       start_row(athanor_id, actor.user_id, build_id, reference, DateTime.utc_now())
     end)
+    |> Arca.Data.project()
   end
 
   def record_started(%Cyfr.Actor{}, _build_id, _reference), do: {:error, :no_athanor}
@@ -141,6 +142,7 @@ defmodule Arca.BuildRecords do
 
       if count == 1, do: :ok, else: {:error, :not_found}
     end)
+    |> Arca.Data.project()
   end
 
   def record_finished(%Cyfr.Actor{}, _build_id, status, _outcome)
@@ -161,6 +163,7 @@ defmodule Arca.BuildRecords do
         record -> {:ok, to_map(record)}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, _build_id), do: {:error, :no_athanor}
@@ -185,6 +188,7 @@ defmodule Arca.BuildRecords do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.record_registration", fn ->
       patch_registration(athanor_id, build_id, outcome, attempts)
     end)
+    |> Arca.Data.project()
   end
 
   def record_registration(%Cyfr.Actor{athanor_id: athanor_id}, _build_id, _outcome, _attempts)
@@ -273,6 +277,7 @@ defmodule Arca.BuildRecords do
         {:ok, count}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def prune(%Cyfr.Actor{}, keep, _opts) when is_integer(keep) and keep >= 0,

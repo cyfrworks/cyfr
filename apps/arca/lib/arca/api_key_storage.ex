@@ -140,7 +140,7 @@ defmodule Arca.ApiKeyStorage do
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
   @spec get_key(Cyfr.Actor.t(), String.t()) ::
-          {:ok, ApiKey.t()} | {:error, :no_athanor | :not_found | :database_error}
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
   def get_key(%Cyfr.Actor{athanor_id: athanor_id}, name)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key", fn ->
@@ -157,6 +157,7 @@ defmodule Arca.ApiKeyStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get_key(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
@@ -166,7 +167,7 @@ defmodule Arca.ApiKeyStorage do
   key-authenticated context uses to read its own key's attributes.
   """
   @spec get_key_by_id(Cyfr.Actor.t(), String.t()) ::
-          {:ok, ApiKey.t()} | {:error, :no_athanor | :not_found | :database_error}
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
   def get_key_by_id(%Cyfr.Actor{athanor_id: athanor_id}, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key_by_id", fn ->
@@ -179,6 +180,7 @@ defmodule Arca.ApiKeyStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get_key_by_id(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
@@ -194,7 +196,7 @@ defmodule Arca.ApiKeyStorage do
   192-bit globally-unique credential, so this single untenanted lookup is the
   correct and authoritative path regardless of how the deployment is configured.
   """
-  @spec get_key_by_hash(binary()) :: {:ok, ApiKey.t()} | {:error, :not_found | :database_error}
+  @spec get_key_by_hash(binary()) :: {:ok, map()} | {:error, :not_found | :database_error}
   # arca:unscoped-ok a key hash is a 192-bit globally-unique credential; the
   # athanor comes FROM the row, so there is no context to scope by yet.
   def get_key_by_hash(key_hash) do
@@ -211,12 +213,13 @@ defmodule Arca.ApiKeyStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
   List all non-revoked keys of an athanor, sorted by inserted_at.
   """
-  @spec list_keys(Cyfr.Actor.t()) :: {:ok, [ApiKey.t()]} | {:error, :no_athanor | :database_error}
+  @spec list_keys(Cyfr.Actor.t()) :: {:ok, [map()]} | {:error, :no_athanor | :database_error}
   def list_keys(%Cyfr.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.list_keys", fn ->
@@ -230,6 +233,7 @@ defmodule Arca.ApiKeyStorage do
 
       {:ok, Arca.Repo.all(query)}
     end)
+    |> Arca.Data.project()
   end
 
   def list_keys(%Cyfr.Actor{}), do: {:error, :no_athanor}

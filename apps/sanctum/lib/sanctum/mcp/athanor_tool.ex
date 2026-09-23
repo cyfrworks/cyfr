@@ -442,6 +442,7 @@ defmodule Sanctum.MCP.AthanorTool do
       case Context.focus(ctx, athanor) do
         {:ok, focused} -> {:ok, athanor, focused}
         {:error, :archived} -> open_archived(ctx, athanor)
+        {:error, :unavailable} -> {:error, {:unavailable, "Storage"}}
         {:error, _} -> not_a_member()
       end
     end

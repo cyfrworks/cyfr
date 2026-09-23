@@ -215,7 +215,7 @@ defmodule Cyfr.Ops.TypedDispatchTest do
 
     logged =
       Arca.Repo.one!(
-        from log in Arca.McpLog,
+        from log in Arca.Schemas.McpLog,
           where: log.athanor_id == ^ctx.athanor_id and log.tool == "typed_probe"
       )
 

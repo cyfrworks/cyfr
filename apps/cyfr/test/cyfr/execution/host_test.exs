@@ -63,7 +63,7 @@ defmodule Cyfr.Execution.HostTest do
     )
   end
 
-  defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
+  defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 
   defp live_events do
     receive do
@@ -416,7 +416,7 @@ defmodule Cyfr.Execution.HostTest do
       assert %{"error" => "lost"} =
                AttemptFixtures.call(fixture, "take_rate", %{"bucket" => "http:agent:local.aqua"})
 
-      assert Arca.Repo.get!(Arca.Execution, execution.id).status == "running"
+      assert Arca.Repo.get!(Arca.Schemas.Execution, execution.id).status == "running"
     end
   end
 
@@ -471,7 +471,7 @@ defmodule Cyfr.Execution.HostTest do
       assert {:ok, %{status: :completed, output: %{"done" => true}}} = Close.lost(fixture.close)
 
       assert row(fixture).status == "completed"
-      assert Arca.Repo.get!(Arca.Execution, child).status == "running"
+      assert Arca.Repo.get!(Arca.Schemas.Execution, child).status == "running"
       refute_received {:exception, _}
     end
   end
@@ -635,7 +635,9 @@ defmodule Cyfr.Execution.HostTest do
 
       assert "execution.lapsed" in Enum.map(events, & &1.type)
 
-      assert %{status: "failed", error_message: message} = Arca.Repo.get!(Arca.Execution, child)
+      assert %{status: "failed", error_message: message} =
+               Arca.Repo.get!(Arca.Schemas.Execution, child)
+
       assert message == "Parent execution (#{fixture.execution_id}) terminated"
     end
 

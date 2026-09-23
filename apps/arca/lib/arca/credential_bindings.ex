@@ -65,6 +65,7 @@ defmodule Arca.CredentialBindings do
         {:error, reason} -> {:error, reason}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def check(%Cyfr.Actor{}, _binding, _opts), do: {:error, :cross_tenant}

@@ -95,7 +95,7 @@ defmodule Sanctum.ToolServerDigest do
     tool["inputSchema"] || tool["parameters"] || %{}
   end
 
-  @doc "The digest for a stored `Arca.Schemas.McpServer` row."
+  @doc "The digest for a stored server row (`Arca.McpServerStorage`)."
   @spec from_server(map()) :: {:ok, String.t()} | {:error, term()}
   def from_server(server) do
     config = Arca.McpServerStorage.config(server)

@@ -25,8 +25,6 @@ defmodule Aqua.Loop.Planner do
   it, so measuring the whole of it would compact again every turn.
   """
 
-  alias Arca.Schemas.Message
-
   @margin_tokens 8_000
   @fill_ratio 0.85
   @keep_ratio 0.25
@@ -70,7 +68,7 @@ defmodule Aqua.Loop.Planner do
   `:new_bytes` (the bytes of rows appended since that response),
   `:request_bytes` and `:max_request_size` (the consented request cap).
   """
-  @spec plan([Message.t()], keyword()) :: :fit | {:compact, boundary()}
+  @spec plan([Aqua.Tape.row()], keyword()) :: :fit | {:compact, boundary()}
   def plan(rows, opts) when is_list(rows) do
     caps = Keyword.fetch!(opts, :capabilities)
     max_tokens = Keyword.fetch!(opts, :max_tokens)
@@ -119,7 +117,7 @@ defmodule Aqua.Loop.Planner do
   step that produced them, and the boundary is the start of the oldest
   group that still fits — at least the newest group, always.
   """
-  @spec boundary([Message.t()], pos_integer()) :: boundary()
+  @spec boundary([Aqua.Tape.row()], pos_integer()) :: boundary()
   def boundary(rows, keep_tokens) when is_list(rows) and rows != [] do
     groups = rows |> Enum.sort_by(& &1.seq) |> group()
 
@@ -173,7 +171,7 @@ defmodule Aqua.Loop.Planner do
     end
   end
 
-  defp call_id(%Message{payload: payload}) do
+  defp call_id(%{payload: payload}) do
     case payload do
       %{"tool_call_id" => id} when is_binary(id) -> id
       json when is_binary(json) -> decoded_call_id(json)
@@ -194,12 +192,12 @@ defmodule Aqua.Loop.Planner do
   `#{@truncated_result_chars}` characters of its content. Canonical rows
   are never changed.
   """
-  @spec prune([Message.t()]) :: [Message.t()]
+  @spec prune([Aqua.Tape.row()]) :: [Aqua.Tape.row()]
   def prune(rows) when is_list(rows) do
     {old, recent} = Enum.split(rows, max(length(rows) - @preserve_recent, 0))
 
     Enum.map(old, fn
-      %Message{kind: "tool_result", content: content} = row
+      %{kind: "tool_result", content: content} = row
       when is_binary(content) and byte_size(content) > @truncated_result_chars ->
         %{row | content: String.slice(content, 0, @truncated_result_chars) <> "\n…[truncated]"}
 
@@ -268,7 +266,7 @@ defmodule Aqua.Loop.Planner do
   boundary, with that compaction standing in for what came before it. The
   summary row is kept, because it is sent and it costs tokens.
   """
-  @spec readable([Message.t()]) :: [Message.t()]
+  @spec readable([Aqua.Tape.row()]) :: [Aqua.Tape.row()]
   def readable(rows) do
     case rows |> Enum.filter(&(&1.kind == "compaction")) |> List.last() do
       nil ->
@@ -280,7 +278,7 @@ defmodule Aqua.Loop.Planner do
     end
   end
 
-  defp first_kept_seq(%Message{payload: payload}) do
+  defp first_kept_seq(%{payload: payload}) do
     case payload do
       %{"first_kept_seq" => seq} when is_integer(seq) -> seq
       json when is_binary(json) -> decoded_first_kept(json)
@@ -325,7 +323,7 @@ defmodule Aqua.Loop.Planner do
     |> Enum.reject(&(&1 == []))
   end
 
-  defp step_of(%Message{kind: kind} = row) when kind in ["text", "tool_call", "tool_result"] do
+  defp step_of(%{kind: kind} = row) when kind in ["text", "tool_call", "tool_result"] do
     case row.payload do
       json when is_binary(json) ->
         case Jason.decode(json) do
@@ -343,7 +341,7 @@ defmodule Aqua.Loop.Planner do
 
   defp step_of(_row), do: nil
 
-  defp row_bytes(%Message{content: content, payload: payload}) do
+  defp row_bytes(%{content: content, payload: payload}) do
     byte_size(content || "") + byte_size(if(is_binary(payload), do: payload, else: ""))
   end
 

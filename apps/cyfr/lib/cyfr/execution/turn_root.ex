@@ -309,7 +309,7 @@ defmodule Cyfr.Execution.TurnRoot do
   # cannot be read is refused `:unavailable`, the slot given back.
   defp hold_live(ctx, execution_id, attempt, token) do
     case Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), execution_id) do
-      %Arca.Schemas.ExecutionAttempt{attempt: ^attempt, state: "running"} ->
+      %{attempt: ^attempt, state: "running"} ->
         {:ok, token}
 
       {:error, _reason} ->

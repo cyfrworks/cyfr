@@ -572,7 +572,7 @@ defmodule Cyfr.TwoWorkersTest do
 
   defp chat, do: %{"operation" => "chat", "params" => %{}}
 
-  defp row(id), do: Arca.Repo.get!(Arca.Execution, id)
+  defp row(id), do: Arca.Repo.get!(Arca.Schemas.Execution, id)
 
   # The runner that claimed the run's attempt, as its host calls present it.
   defp runner_of(ctx, id),
@@ -587,7 +587,7 @@ defmodule Cyfr.TwoWorkersTest do
   end
 
   defp children_of(parent_id),
-    do: from(e in Arca.Execution, where: e.parent_execution_id == ^parent_id)
+    do: from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^parent_id)
 
   defp live_events do
     receive do

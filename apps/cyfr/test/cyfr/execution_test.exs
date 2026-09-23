@@ -65,7 +65,7 @@ defmodule Cyfr.ExecutionTest do
 
     refute Cyfr.Execution.available?()
     assert {:error, :execution_unavailable} = run(ctx)
-    assert Arca.Repo.all(Arca.Execution) == []
+    assert Arca.Repo.all(Arca.Schemas.Execution) == []
     assert Cyfr.Execution.events_since("exec_1", {0, 0}, ctx.athanor_id) == []
   end
 
@@ -76,8 +76,8 @@ defmodule Cyfr.ExecutionTest do
     assert {:error, :execution_unavailable} =
              Cyfr.Execution.run_root(ctx, :default, "reagent:local.off-graph:1.0.0", %{})
 
-    assert Arca.Repo.all(Arca.Execution) == []
-    assert Arca.Repo.all(Arca.PolicyLog) == []
+    assert Arca.Repo.all(Arca.Schemas.Execution) == []
+    assert Arca.Repo.all(Arca.Schemas.PolicyLog) == []
   end
 
   test "a configured worker service that does not answer leaves execution unavailable", %{

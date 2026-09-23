@@ -5,12 +5,21 @@ defmodule Arca.ToolGrantStorage do
   @moduledoc """
   Persistence mechanics for tool grants. The scope rules and the
   composition with declared policy live in `Aqua.ToolGrants`, which is the
-  only caller. Every read and write is keyed by the owning athanor.
+  only caller. Every read and write is keyed by the owning athanor, and
+  every grant a function here answers is a plain map (`Arca.Data`).
   """
 
   import Ecto.Query
 
   alias Arca.Schemas.ToolGrant
+
+  @doc "The scopes a grant may carry."
+  @spec scopes() :: [String.t()]
+  def scopes, do: ToolGrant.scopes()
+
+  @doc "The effects a grant may carry."
+  @spec effects() :: [String.t()]
+  def effects, do: ToolGrant.effects()
 
   @doc """
   Record a decision, replacing whatever the same key already said.
@@ -21,7 +30,7 @@ defmodule Arca.ToolGrantStorage do
   carries no thread, and a nullable column in a composite unique
   index constrains nothing.
   """
-  @spec put(map()) :: {:ok, ToolGrant.t()} | {:error, term()}
+  @spec put(map()) :: {:ok, map()} | {:error, term()}
   # arca:unscoped-ok the athanor arrives in attrs and its absence fails loudly below.
   def put(attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.put", fn ->
@@ -46,6 +55,7 @@ defmodule Arca.ToolGrantStorage do
         end
       end)
     end)
+    |> Arca.Data.project()
   end
 
   @doc false
@@ -72,6 +82,7 @@ defmodule Arca.ToolGrantStorage do
       _ = Map.fetch!(attrs, :athanor_id)
       delete_matching(attrs)
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -82,7 +93,7 @@ defmodule Arca.ToolGrantStorage do
   grants, and one indexed read beats a query per agent per turn.
   """
   @spec list_for_thread(Cyfr.Actor.t(), String.t()) ::
-          {:ok, [ToolGrant.t()]} | {:error, term()}
+          {:ok, [map()]} | {:error, term()}
   def list_for_thread(%Cyfr.Actor{athanor_id: athanor_id}, thread_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
     # A read that cannot reach the store is an ERROR, never an empty list:
@@ -99,6 +110,7 @@ defmodule Arca.ToolGrantStorage do
        )
        |> Arca.Repo.all()}
     end)
+    |> Arca.Data.project()
   end
 
   def list_for_thread(%Cyfr.Actor{}, _thread_id), do: {:error, :no_athanor}

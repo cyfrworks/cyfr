@@ -281,7 +281,7 @@ defmodule Cyfr.Test.AttemptFixtures do
   """
   @spec current!(String.t(), String.t()) :: map()
   def current!(athanor_id, execution_id) do
-    %Arca.Schemas.ExecutionAttempt{} =
+    %{attempt: _} =
       row = Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), execution_id)
 
     {:ok, generation} = Keys.generation()

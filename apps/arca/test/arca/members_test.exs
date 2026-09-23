@@ -114,7 +114,7 @@ defmodule Arca.MembersTest do
       assert {:error, :cross_tenant} = Members.grant_platform(member, %{user_id: "usr_1"})
       assert {:error, :cross_tenant} = Members.get(member, "mem_x")
       assert {:error, :cross_tenant} = Members.find_platform(member, "usr_1")
-      assert {:error, :cross_tenant} = Members.delete(member, row)
+      assert {:error, :cross_tenant} = Members.delete(member, row.id)
       assert {:error, :cross_tenant} = Members.list_platform(member)
       assert {:error, :cross_tenant} = Members.list_active_for_user(member, "usr_1")
       assert {:error, :cross_tenant} = Members.shared_estate?(member, "usr_1", "usr_2")
@@ -239,6 +239,22 @@ defmodule Arca.MembersTest do
 
       assert {:ok, %{removed: 1, session_hashes: []}} = Members.revoke_platform(server(), user)
       assert {:error, :not_found} = Members.find_platform(server(), user)
+    end
+
+    test "a delete is addressed by id and rereads the row; an id with no row writes nothing" do
+      user = person_id()
+      {:ok, row} = Members.grant_platform(server(), %{user_id: user, added_by: "system"})
+      {:ok, before_rows} = Members.list_platform(server())
+
+      assert {:error, :not_found} = Members.delete(server(), "mem_nobody")
+      assert {:ok, ^before_rows} = Members.list_platform(server())
+      assert {:ok, %{id: id}} = Members.get(server(), row.id)
+      assert id == row.id
+
+      # The row that goes is the one the id names, as it reads now.
+      assert {:ok, %{id: ^id, user_id: ^user, scope: "platform"}} = Members.delete(server(), id)
+      assert {:error, :not_found} = Members.get(server(), id)
+      assert {:error, :not_found} = Members.delete(server(), id)
     end
 
     test "a person's rows are read across every athanor they sat in" do
@@ -549,7 +565,7 @@ defmodule Arca.MembersTest do
   defp facts(user), do: %{email: user.email, email_verified: user.email_verified}
 
   defp moved!(user, changes) do
-    {:ok, _} = Arca.Users.update(server(), reload(user), Map.new(changes))
+    {:ok, _} = Arca.Users.update(server(), reload(user).id, Map.new(changes))
     :ok
   end
 

@@ -83,7 +83,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
     run =
       Arca.Repo.all(
-        from(e in Arca.Execution, where: e.root_execution_id == ^root_id, select: e.id)
+        from(e in Arca.Schemas.Execution, where: e.root_execution_id == ^root_id, select: e.id)
       )
 
     # Root plus two self-invoked descendants, all bound to the same node
@@ -102,13 +102,13 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
     # Every descendant row carries the root's activation digest; only the
     # root row carries the graph.
-    root_row = Arca.Repo.get(Arca.Execution, run_result.metadata.execution_id)
+    root_row = Arca.Repo.get(Arca.Schemas.Execution, run_result.metadata.execution_id)
     assert root_row.activation_digest
     assert root_row.activation_graph
 
     children =
       Arca.Repo.all(
-        from(e in Arca.Execution,
+        from(e in Arca.Schemas.Execution,
           where: e.parent_execution_id == ^run_result.metadata.execution_id
         )
       )

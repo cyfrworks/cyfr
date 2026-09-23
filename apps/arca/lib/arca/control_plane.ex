@@ -172,7 +172,7 @@ defmodule Arca.ControlPlane do
   its compare-and-set rather than both replacing the same row.
   """
   @spec take(String.t(), String.t(), pos_integer()) ::
-          {:ok, slot()} | {:busy, CellLease.t()} | {:error, :database_error}
+          {:ok, slot()} | {:busy, map()} | {:error, :database_error}
   def take(node, owner, lease_ms)
       when is_binary(node) and node != "" and is_binary(owner) and owner != "" and
              is_integer(lease_ms) and lease_ms > 0 do
@@ -184,6 +184,7 @@ defmodule Arca.ControlPlane do
         other -> other
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -334,7 +335,7 @@ defmodule Arca.ControlPlane do
   most one tick stale, and staleness only ever affects a PROPOSAL — where
   a singleton should run. What actually runs it is a claim row.
   """
-  @spec roster() :: {:ok, [CellLease.t()]} | {:error, :database_error}
+  @spec roster() :: {:ok, [map()]} | {:error, :database_error}
   def roster do
     Arca.Repo.Errors.with_db_rescue("Arca.ControlPlane.roster", fn ->
       now = Arca.ServerMetaStorage.now!()
@@ -347,6 +348,7 @@ defmodule Arca.ControlPlane do
          )
        )}
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -372,7 +374,7 @@ defmodule Arca.ControlPlane do
   def live_member?(_boot), do: false
 
   @doc "The slot row for `node` as it reads now, for diagnostics and tests."
-  @spec slot(String.t()) :: {:ok, CellLease.t()} | {:error, :not_found | :database_error}
+  @spec slot(String.t()) :: {:ok, map()} | {:error, :not_found | :database_error}
   def slot(node) when is_binary(node) do
     Arca.Repo.Errors.with_db_rescue("Arca.ControlPlane.slot", fn ->
       case read(node) do
@@ -380,6 +382,7 @@ defmodule Arca.ControlPlane do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   # ---- the cache -------------------------------------------------------------

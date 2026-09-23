@@ -86,7 +86,7 @@ defmodule Opus.OrphanChildrenTest do
       {root_id, authority, row} = held_root!(ctx)
 
       assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root_id)
-      assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Execution, root_id)
+      assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Schemas.Execution, root_id)
 
       refute_orphans_admitted(root_id, authority, row)
     end
@@ -96,7 +96,7 @@ defmodule Opus.OrphanChildrenTest do
 
       TwoServices.release!(row.close)
       assert_receive {:root, {:ok, %{status: :completed}}}, 30_000
-      assert %{status: "completed"} = Arca.Repo.get!(Arca.Execution, root_id)
+      assert %{status: "completed"} = Arca.Repo.get!(Arca.Schemas.Execution, root_id)
 
       refute_orphans_admitted(root_id, authority, row)
     end
@@ -118,7 +118,12 @@ defmodule Opus.OrphanChildrenTest do
              charges(ctx, authority)
 
     TwoServices.release!(stream)
-    wait_until(fn -> Arca.Repo.get!(Arca.Execution, stream_id).status == "completed" end, 30_000)
+
+    wait_until(
+      fn -> Arca.Repo.get!(Arca.Schemas.Execution, stream_id).status == "completed" end,
+      30_000
+    )
+
     wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
     wait_until(fn -> charges(ctx, authority) == [] end)
 
@@ -153,7 +158,7 @@ defmodule Opus.OrphanChildrenTest do
     authority = TwoServices.entered(root_id)
 
     wait_until(
-      fn -> Enum.all?(held, &(Arca.Repo.get!(Arca.Execution, &1).status == "failed")) end,
+      fn -> Enum.all?(held, &(Arca.Repo.get!(Arca.Schemas.Execution, &1).status == "failed")) end,
       15_000
     )
 
@@ -164,7 +169,7 @@ defmodule Opus.OrphanChildrenTest do
     timeout = ~r/^Execution timeout after (\d+)ms$/
 
     for id <- held do
-      assert %{error_message: message} = Arca.Repo.get!(Arca.Execution, id)
+      assert %{error_message: message} = Arca.Repo.get!(Arca.Schemas.Execution, id)
       assert [_, ms] = Regex.run(timeout, message)
       assert String.to_integer(ms) in 1..1000
       wait_until(fn -> Cyfr.Execution.Attempt.whereis(id) == nil end)
@@ -256,7 +261,9 @@ defmodule Opus.OrphanChildrenTest do
     assert %{"error" => %{"message" => @ended}} = Jason.decode!(spawn_fn.(request_json("run")))
     Opus.FormulaHandler.cleanup_registry(tracker)
 
-    children = from(e in Arca.Execution, where: e.parent_execution_id == ^root_id, select: e.id)
+    children =
+      from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^root_id, select: e.id)
+
     assert Arca.Repo.all(children) == []
     assert Sanctum.Authority.budget(authority).in_flight == 0
     assert charges(Sanctum.TestContext.local(), authority) == []

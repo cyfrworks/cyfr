@@ -32,9 +32,11 @@ defmodule Sanctum.Tenancy.Members do
   name a person across every athanor, run as the server itself.
   """
 
-  alias Arca.Schemas.{Membership, User}
   alias Sanctum.Door
   alias Sanctum.Tenancy.{Athanors, Caps, Users}
+
+  @typedoc "A membership row, as the plain map `Arca.Members` answers."
+  @type membership :: %{required(:id) => String.t(), optional(atom()) => term()}
 
   @topic_prefix "sanctum:memberships:"
 
@@ -43,7 +45,7 @@ defmodule Sanctum.Tenancy.Members do
   an invited row `:email`; `:athanor_id` is required for the `"athanor"`
   scope and must name an existing athanor.
   """
-  @spec create(map(), keyword()) :: {:ok, Membership.t()} | {:error, term()}
+  @spec create(map(), keyword()) :: {:ok, membership()} | {:error, term()}
   def create(attrs, opts \\ []) do
     attrs = Map.new(attrs)
 
@@ -81,7 +83,7 @@ defmodule Sanctum.Tenancy.Members do
   sign-ins — a unique-constraint conflict resolves to a re-read of the
   existing row.
   """
-  @spec ensure(String.t(), keyword()) :: {:ok, Membership.t()} | {:error, term()}
+  @spec ensure(String.t(), keyword()) :: {:ok, membership()} | {:error, term()}
   def ensure(user_id, opts) when is_binary(user_id) do
     scope = Keyword.fetch!(opts, :scope)
     athanor_id = Keyword.get(opts, :athanor_id)
@@ -111,7 +113,7 @@ defmodule Sanctum.Tenancy.Members do
   end
 
   @doc "Ensure the platform-admin row for `user_id`."
-  @spec ensure_platform(String.t()) :: {:ok, Membership.t()} | {:error, term()}
+  @spec ensure_platform(String.t()) :: {:ok, membership()} | {:error, term()}
   def ensure_platform(user_id), do: ensure(user_id, scope: "platform")
 
   @doc """
@@ -135,7 +137,7 @@ defmodule Sanctum.Tenancy.Members do
   end
 
   @doc "Every platform-admin row — the server's operators, as the rows say."
-  @spec list_platform() :: {:ok, [Membership.t()]} | {:error, :database_error}
+  @spec list_platform() :: {:ok, [membership()]} | {:error, :database_error}
   def list_platform, do: Arca.Members.list_platform(server())
 
   @doc """
@@ -170,7 +172,7 @@ defmodule Sanctum.Tenancy.Members do
     end
   end
 
-  @spec get(String.t()) :: {:ok, Membership.t()} | {:error, :not_found | :database_error}
+  @spec get(String.t()) :: {:ok, membership()} | {:error, :not_found | :database_error}
   def get(id), do: Arca.Members.get(server(), id)
 
   @doc "Is `user_id` an active member of the athanor?"
@@ -184,11 +186,11 @@ defmodule Sanctum.Tenancy.Members do
   (`t:Sanctum.Context.credential_binding/0`).
   """
   @spec active_seat(String.t() | nil, String.t() | nil) ::
-          {:ok, Membership.t()} | :none | {:error, term()}
+          {:ok, membership()} | :none | {:error, term()}
   def active_seat(user_id, athanor_id) when is_binary(user_id) and is_binary(athanor_id) do
     case find(user_id, "athanor", athanor_id) do
-      {:ok, %Membership{status: "active"} = row} -> {:ok, row}
-      {:ok, %Membership{}} -> :none
+      {:ok, %{status: "active"} = row} -> {:ok, row}
+      {:ok, %{}} -> :none
       {:error, :not_found} -> :none
       {:error, _} = err -> err
     end
@@ -197,11 +199,11 @@ defmodule Sanctum.Tenancy.Members do
   def active_seat(_user_id, _athanor_id), do: :none
 
   @doc "The person's platform row, as `active_seat/2` answers: `{:ok, row}`, `:none` or `{:error, reason}`."
-  @spec platform_seat(String.t() | nil) :: {:ok, Membership.t()} | :none | {:error, term()}
+  @spec platform_seat(String.t() | nil) :: {:ok, membership()} | :none | {:error, term()}
   def platform_seat(user_id) when is_binary(user_id) do
     case find(user_id, "platform", nil) do
-      {:ok, %Membership{status: "active"} = row} -> {:ok, row}
-      {:ok, %Membership{}} -> :none
+      {:ok, %{status: "active"} = row} -> {:ok, row}
+      {:ok, %{}} -> :none
       {:error, :not_found} -> :none
       {:error, _} = err -> err
     end
@@ -223,7 +225,11 @@ defmodule Sanctum.Tenancy.Members do
   applies. A person's own athanor has exactly one member — its owner — on
   every path, not only in the UI.
   """
-  @spec add(Arca.Schemas.Athanor.t(), [user_id: String.t()] | [email: String.t()], String.t()) ::
+  @spec add(
+          Sanctum.Tenancy.Athanors.athanor(),
+          [user_id: String.t()] | [email: String.t()],
+          String.t()
+        ) ::
           {:ok, :added | :invited} | {:error, term()}
   def add(athanor, target, added_by)
 
@@ -246,14 +252,14 @@ defmodule Sanctum.Tenancy.Members do
     # has since denied, is refused. (Unlike the email arm, a verified email
     # is not required — a person admitted by a `user_id` door entry may
     # have none.)
-    with {:ok, %User{status: "active", id: user_id}} <- find_person(user_id),
+    with {:ok, %{status: "active", id: user_id}} <- find_person(user_id),
          :ok <- member_cap(athanor_id),
          {:ok, _} <- ensure(user_id, opts) do
       broadcast_change(user_id, athanor.id, :joined)
       Sanctum.Notify.member_changed(athanor.id)
       {:ok, :added}
     else
-      {:ok, %User{}} -> {:error, :unknown_user}
+      {:ok, %{}} -> {:error, :unknown_user}
       {:error, :not_found} -> {:error, :unknown_user}
       other -> other
     end
@@ -268,7 +274,7 @@ defmodule Sanctum.Tenancy.Members do
       known = Users.list_by_email(email)
 
       case Enum.filter(known, &known_and_active?/1) do
-        [%User{id: user_id}] ->
+        [%{id: user_id}] ->
           add(athanor, [user_id: user_id], added_by)
 
         [_, _ | _] ->
@@ -311,7 +317,7 @@ defmodule Sanctum.Tenancy.Members do
   # Seat by email only when the provider verifies it. Unknown verification
   # creates an invitation pending a verified sign-in; explicit false refuses.
   # Use user_id for providers that omit email verification.
-  defp known_and_active?(%User{} = user),
+  defp known_and_active?(%{} = user),
     do: user.email_verified == true and user.status == "active"
 
   defp find_person(id) do
@@ -356,8 +362,9 @@ defmodule Sanctum.Tenancy.Members do
   athanor). An invitation already activated, or already withdrawn, is not
   there to find and produces no second membership. Returns how many activated.
   """
-  @spec activate_invited(User.t()) :: {:ok, non_neg_integer()} | {:error, :database_error}
-  def activate_invited(%User{email: email, email_verified: true, id: user_id})
+  @spec activate_invited(Sanctum.Tenancy.Users.user()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
+  def activate_invited(%{email: email, email_verified: true, id: user_id})
       when is_binary(email) do
     with {:ok, athanor_ids} <-
            Arca.Members.activate_invited(server(), user_id, email, DateTime.utc_now()) do
@@ -401,8 +408,8 @@ defmodule Sanctum.Tenancy.Members do
 
   def withdraw_invites_for_email(_), do: 0
 
-  @spec remove(Membership.t()) :: {:ok, Membership.t()} | {:error, term()}
-  def remove(%Membership{} = membership), do: Arca.Members.delete(server(), membership)
+  @spec remove(membership()) :: {:ok, membership()} | {:error, term()}
+  def remove(%{id: id}) when is_binary(id), do: Arca.Members.delete(server(), id)
 
   @doc """
   Remove a person from an athanor (or a pending invite by email). The last
@@ -414,7 +421,10 @@ defmodule Sanctum.Tenancy.Members do
   left behind would resume the moment they are re-added, so a returning
   member starts unfollowed like a new one.
   """
-  @spec remove_member(Arca.Schemas.Athanor.t(), [user_id: String.t()] | [email: String.t()]) ::
+  @spec remove_member(
+          Sanctum.Tenancy.Athanors.athanor(),
+          [user_id: String.t()] | [email: String.t()]
+        ) ::
           :ok | {:error, term()}
   def remove_member(%{kind: "person"}, _target), do: {:error, :person_athanor}
 
@@ -475,7 +485,7 @@ defmodule Sanctum.Tenancy.Members do
     do: Arca.Members.list(in_athanor(athanor_id), opts)
 
   @doc "Every row of a person: platform and athanor, active only. Uncapped."
-  @spec list_by_user(String.t()) :: {:ok, [Membership.t()]} | {:error, :database_error}
+  @spec list_by_user(String.t()) :: {:ok, [membership()]} | {:error, :database_error}
   def list_by_user(user_id), do: Arca.Members.list_active_for_user(server(), user_id)
 
   @doc """

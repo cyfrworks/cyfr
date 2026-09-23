@@ -60,7 +60,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
 
     assert [%{"text" => "#{@redacted} #{@redacted}"}] = emitted(live_events())
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "completed"
     refute_unmasked(row)
 
@@ -102,7 +102,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     live = live_events()
     assert Enum.map(emitted(live), & &1["text"]) == ["partial ", "ya29.tok"]
     assert [_, _, %{type: "execution.failed"}] = live
-    assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, id)
+    assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, id)
   end
 
   test "a failure message is masked in the row, its event and the answer",
@@ -114,7 +114,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert message == "upstream said #{@redacted} for #{@redacted}"
     assert answered == message
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "failed" and row.error_message == message
     refute_unmasked(row)
 
@@ -142,7 +142,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert %{"ok" => %{"said" => @redacted}} = Task.await(closing)
     assert %{"error" => "lost"} = Task.await(after_close)
     assert {:ok, %{output: %{"said" => @redacted}}} = Dispatch.await(attempt, fixture.close)
-    refute_unmasked(Arca.Repo.get!(Arca.Execution, id))
+    refute_unmasked(Arca.Repo.get!(Arca.Schemas.Execution, id))
   end
 
   test "an attempt that ends before it closes its run leaves nothing unmasked",
@@ -163,7 +163,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
     assert {:error, "Execution attempt ended before it closed"} =
              Dispatch.await(attempt, fixture.close)
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "failed"
     refute_unmasked(row)
     refute_unmasked(live_events())
@@ -192,7 +192,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
 
     assert Enum.map(emitted(live), & &1["text"]) == ["held "]
     assert %{"error" => "lost"} = push(fixture, %{"type" => "note"})
-    assert Arca.Repo.get!(Arca.Execution, fixture.execution_id).status == "running"
+    assert Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id).status == "running"
   end
 
   test "its status names the attempt and its claim, and nothing it masks or holds back",

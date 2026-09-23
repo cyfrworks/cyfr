@@ -188,6 +188,40 @@ defmodule PrismWeb.ChatLiveTest do
     refute carol.user_id in Enum.map(people, & &1.user_id)
   end
 
+  test "a seat the store cannot read says try again shortly, never no estate or not a member",
+       %{conn: conn} do
+    # The context the page holds stays fresh for the whole test, so the
+    # guard lets each action through to the focus it asks for: what is
+    # checked is the page's own answer to an outage, not the guard's.
+    ttl = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+    Application.put_env(:sanctum, :caller_memo_ttl_ms, 600_000)
+
+    on_exit(fn ->
+      if ttl,
+        do: Application.put_env(:sanctum, :caller_memo_ttl_ms, ttl),
+        else: Application.delete_env(:sanctum, :caller_memo_ttl_ms)
+    end)
+
+    alice = test_user()
+    conn = log_in_user(conn, alice, athanor_id: estate().id)
+    {view, _html} = mount_chat(conn)
+
+    # The seat read fails; the estate listing, which selects no membership
+    # column, still answers.
+    Arca.Repo.query!("ALTER TABLE memberships DROP COLUMN added_by")
+
+    # No estate named: the default's seat cannot be read.
+    html = render_patch(view, PrismWeb.ChatLive.chat_path(nil))
+    assert html =~ "That estate cannot be opened just now. Try again shortly."
+    refute html =~ "Your session could not be checked"
+
+    # The read-aloud picker's estate cannot be opened either.
+    html = render_click(view, "aloud_pick_estate", %{"athanor" => estate().id})
+    assert html =~ "That estate cannot be opened just now. Try again shortly."
+    refute html =~ "You are not a member of that estate."
+    refute html =~ "Your session could not be checked"
+  end
+
   test "a thread the estate does not hold is refused by name, and the estate's own opens",
        %{conn: conn} do
     alice = test_user()

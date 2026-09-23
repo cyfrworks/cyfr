@@ -551,6 +551,17 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
       assert focused.athanor_id == group.id
       assert focused.scope == :athanor
     end
+
+    test "a seat the store cannot read is unavailable, never not-a-member",
+         %{alice: alice, ctx: ctx, n: n} do
+      a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+      assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Down #{n}"})
+
+      Arca.Repo.query!("ALTER TABLE memberships RENAME TO memberships_unavailable")
+
+      assert {:error, {:unavailable, "Storage"}} =
+               Sanctum.MCP.AthanorTool.resolve(a, %{"athanor" => group.id})
+    end
   end
 
   defp rows!({:ok, rows}), do: rows

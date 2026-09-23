@@ -126,7 +126,7 @@ defmodule Arca.ExecutionStanding do
   defp retired_page(cursor, limit) do
     query =
       from(a in ExecutionAttempt,
-        join: e in Arca.Execution,
+        join: e in Arca.Schemas.Execution,
         on: e.id == a.execution_id and e.current_attempt == a.attempt,
         left_join: t in Athanor,
         on: t.id == a.athanor_id,
@@ -194,7 +194,7 @@ defmodule Arca.ExecutionStanding do
   def stored(%Cyfr.Actor{athanor_id: athanor_id}, attempt)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) do
     from(a in ExecutionAttempt,
-      join: e in Arca.Execution,
+      join: e in Arca.Schemas.Execution,
       on: e.id == a.execution_id and e.athanor_id == a.athanor_id,
       where: a.athanor_id == ^athanor_id and a.attempt == ^attempt,
       select: {a.athanor_id, a.athanor_generation}
@@ -208,7 +208,7 @@ defmodule Arca.ExecutionStanding do
   # arca:db-raise-ok called inside its caller's rescue.
   def stored(:any, attempt) when is_binary(attempt) do
     from(a in ExecutionAttempt,
-      join: e in Arca.Execution,
+      join: e in Arca.Schemas.Execution,
       on: e.id == a.execution_id and e.athanor_id == a.athanor_id,
       where: a.attempt == ^attempt,
       select: {a.athanor_id, a.athanor_generation}
@@ -225,7 +225,7 @@ defmodule Arca.ExecutionStanding do
   def stored_of_execution(%Cyfr.Actor{athanor_id: athanor_id}, execution_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(execution_id) do
     from(a in ExecutionAttempt,
-      join: e in Arca.Execution,
+      join: e in Arca.Schemas.Execution,
       on: e.id == a.execution_id and e.current_attempt == a.attempt,
       where: a.athanor_id == ^athanor_id and e.athanor_id == ^athanor_id,
       where: e.id == ^execution_id,

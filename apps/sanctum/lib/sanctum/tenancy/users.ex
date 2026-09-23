@@ -3,7 +3,8 @@
 
 defmodule Sanctum.Tenancy.Users do
   @moduledoc """
-  The people this server knows (`Arca.Schemas.User`).
+  The people this server knows: each person is the plain map
+  `Arca.Users` answers for their row.
 
   A row is written on the first admitted sign-in and touched on every later
   one; the door, invited memberships and per-person preferences key off it.
@@ -26,9 +27,11 @@ defmodule Sanctum.Tenancy.Users do
   what `Arca.Users` requires and says why.
   """
 
-  alias Arca.Schemas.{ExternalIdentity, User}
   alias Sanctum.Auth.Identity
   alias Sanctum.Tenancy.{Athanors, Members}
+
+  @typedoc "A person's row, as the plain map `Arca.Users` answers."
+  @type user :: %{required(:id) => String.t(), optional(atom()) => term()}
 
   @typedoc """
   What the door admitted: `id` is the IdP identity key
@@ -54,7 +57,7 @@ defmodule Sanctum.Tenancy.Users do
 
   An absent provider claim preserves the stored value, including name and email verification.
   """
-  @spec upsert_from_provider(provider_info()) :: {:ok, User.t()} | {:error, term()}
+  @spec upsert_from_provider(provider_info()) :: {:ok, user()} | {:error, term()}
   def upsert_from_provider(%{id: key, provider: provider} = info) when is_binary(key) do
     now = DateTime.utc_now()
 
@@ -71,7 +74,7 @@ defmodule Sanctum.Tenancy.Users do
     case get_by_identity(key) do
       {:ok, user} ->
         Arca.Users.touch_identity(server(), key, now)
-        Arca.Users.update(server(), user, seen)
+        update(user, seen)
 
       {:error, :not_found} ->
         first_sign_in(key, seen, now)
@@ -106,18 +109,18 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc "The person an IdP identity key names, if any."
-  @spec get_by_identity(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
+  @spec get_by_identity(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
   def get_by_identity(key), do: Arca.Users.get_by_identity(server(), key)
 
   @doc "Every IdP identity that names this person, oldest first."
-  @spec identities(String.t()) :: [ExternalIdentity.t()]
+  @spec identities(String.t()) :: [map()]
   def identities(user_id) when is_binary(user_id) do
     # Deliberate default: a display read of how a person has signed in —
     # an outage shows fewer providers, it grants nothing.
     rows_or_empty(Arca.Users.identities(server(), user_id))
   end
 
-  @spec get(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
+  @spec get(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
   def get(id), do: Arca.Users.get(server(), id)
 
   @doc """
@@ -141,7 +144,7 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc "Every identity that signed in with this (lowercased) email."
-  @spec list_by_email(String.t()) :: [User.t()]
+  @spec list_by_email(String.t()) :: [user()]
   def list_by_email(email) when is_binary(email) do
     # Deliberate default: an unanswerable read means "no identity known for
     # this address" — callers then take the invite path, which grants nothing.
@@ -204,7 +207,7 @@ defmodule Sanctum.Tenancy.Users do
   def own_athanor?(_user_id, _athanor_id), do: false
 
   @doc "The identity whose cyfr.run namespace this is, if any."
-  @spec get_by_namespace(String.t()) :: {:ok, User.t()} | {:error, :not_found | :database_error}
+  @spec get_by_namespace(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
   def get_by_namespace(namespace) when is_binary(namespace) and namespace != "",
     do: Arca.Users.get_by_namespace(server(), namespace)
 
@@ -212,7 +215,7 @@ defmodule Sanctum.Tenancy.Users do
   Everyone the server knows, newest first. A platform view, paged with
   `limit:` (default and ceiling `Arca.Users.max_page/0`) and `offset:`.
   """
-  @spec list(keyword()) :: [User.t()]
+  @spec list(keyword()) :: [user()]
   def list(opts \\ []) do
     # Deliberate default: the operator's people page — a display read that
     # decides nothing; an outage renders an empty page, not a refusal.
@@ -224,10 +227,10 @@ defmodule Sanctum.Tenancy.Users do
   every request reads for it (`Sanctum.Namespace`), so the write drops the
   cached slug.
   """
-  @spec set_namespace(User.t(), String.t()) :: {:ok, User.t()} | {:error, term()}
-  def set_namespace(%User{namespace: ns} = user, ns), do: {:ok, user}
+  @spec set_namespace(user(), String.t()) :: {:ok, user()} | {:error, term()}
+  def set_namespace(%{namespace: ns} = user, ns), do: {:ok, user}
 
-  def set_namespace(%User{} = user, namespace) when is_binary(namespace) do
+  def set_namespace(%{id: _} = user, namespace) when is_binary(namespace) do
     with {:ok, updated} <- update(user, %{namespace: namespace}) do
       Sanctum.Namespace.invalidate(updated.id)
       {:ok, updated}
@@ -235,16 +238,16 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc "Record the person's own athanor once minted."
-  @spec set_personal_athanor(User.t(), String.t()) :: {:ok, User.t()} | {:error, term()}
-  def set_personal_athanor(%User{} = user, athanor_id) when is_binary(athanor_id) do
+  @spec set_personal_athanor(user(), String.t()) :: {:ok, user()} | {:error, term()}
+  def set_personal_athanor(%{id: _} = user, athanor_id) when is_binary(athanor_id) do
     update(user, %{personal_athanor_id: athanor_id})
   end
 
   @doc "The person's preferences document (`mode`, `theme`), as a map."
-  @spec prefs(User.t()) :: map()
-  def prefs(%User{prefs: nil}), do: %{}
+  @spec prefs(user()) :: map()
+  def prefs(%{prefs: nil}), do: %{}
 
-  def prefs(%User{prefs: json}) when is_binary(json) do
+  def prefs(%{prefs: json}) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, map} when is_map(map) -> map
       _ -> %{}
@@ -252,8 +255,8 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc "Merge `patch` into the person's preferences."
-  @spec put_prefs(User.t(), map()) :: {:ok, User.t()} | {:error, term()}
-  def put_prefs(%User{} = user, patch) when is_map(patch) do
+  @spec put_prefs(user(), map()) :: {:ok, user()} | {:error, term()}
+  def put_prefs(%{id: _} = user, patch) when is_map(patch) do
     update(user, %{prefs: Jason.encode!(Map.merge(prefs(user), patch))})
   end
 
@@ -274,8 +277,8 @@ defmodule Sanctum.Tenancy.Users do
   archival is announced, and every roster the denial changed is told.
   Denying a person already denied re-runs the retirement and checks it.
   """
-  @spec deny(User.t()) :: {:ok, User.t()} | {:error, term()}
-  def deny(%User{id: user_id} = user) do
+  @spec deny(user()) :: {:ok, user()} | {:error, term()}
+  def deny(%{id: user_id} = user) do
     with {:ok, change} <-
            Arca.SecurityTransitions.deny_user(server(), user_id, verify: fn _rows -> :ok end) do
       Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes)
@@ -302,8 +305,8 @@ defmodule Sanctum.Tenancy.Users do
   cannot issue a credential after this: the person's generation moved
   twice.
   """
-  @spec allow(User.t()) :: {:ok, User.t()} | {:error, term()}
-  def allow(%User{id: user_id} = user) do
+  @spec allow(user()) :: {:ok, user()} | {:error, term()}
+  def allow(%{id: user_id} = user) do
     # The deny swept every membership by user id, their own seat included;
     # the transition re-seats them, because reopening the furnace without
     # its owner would leave them locked out of it until their next sign-in
@@ -322,8 +325,8 @@ defmodule Sanctum.Tenancy.Users do
 
   defp restorable(_rows), do: :ok
 
-  # The caller's struct, carrying the standing the transition committed.
-  defp standing(%User{} = user, %{} = committed) do
+  # The caller's person, carrying the standing the transition committed.
+  defp standing(%{} = user, %{} = committed) do
     %{
       user
       | status: committed.status,
@@ -339,7 +342,9 @@ defmodule Sanctum.Tenancy.Users do
   defp verified_claim(false), do: false
   defp verified_claim(_), do: nil
 
-  defp update(%User{} = user, attrs), do: Arca.Users.update(server(), user, attrs)
+  # The row the person's id names is reread below and written as it
+  # stands: nothing else the caller's map carries reaches the write.
+  defp update(%{id: user_id}, attrs), do: Arca.Users.update(server(), user_id, attrs)
 
   # A person is not a row inside an athanor: the row is written before any
   # athanor exists and read from every one the person sits in.

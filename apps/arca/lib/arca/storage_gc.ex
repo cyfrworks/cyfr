@@ -158,7 +158,7 @@ defmodule Arca.StorageGC do
 
       with :ok <- internally(fn -> Arca.put(inner, path, pin_body(holder), cap: :exempt) end) do
         case StorageUnits.current(actor, root, key) do
-          {:ok, %StorageUnit{current_revision: ^revision}} ->
+          {:ok, %{current_revision: ^revision}} ->
             :ok
 
           {:ok, _moved_on} ->

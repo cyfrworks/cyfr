@@ -3,90 +3,27 @@
 
 defmodule Arca.PolicyLog do
   @moduledoc """
-  Ecto schema for policy consultation logs.
-
-  Stores complete policy consultation records including policy snapshots
-  and decision reasons.
-
-  ## Schema
-
-  - `id` (PK) - Auto-generated ID
-  - `request_id` - MCP request ID for correlation
-  - `execution_id` - Execution ID if triggered by an execution
-  - `user_id` - User whose policy was consulted
-  - `timestamp` - When the consultation occurred
-  - `event_type` - policy_consultation/denied/violation
-  - `component_ref` - Component being evaluated
-  - `component_type` - catalyst/reagent/formula
-  - `decision` - allowed/denied/default
-  - `host_policy_snapshot` - JSON-encoded policy snapshot
-  - `decision_reason` - Reason for the policy decision
+  The policy consultation log: recording a consultation, the
+  tenant-scoped readers and the retention primitives over
+  `Arca.Schemas.PolicyLog`. Every row a function here answers is a plain
+  map (`Arca.Data`).
   """
 
-  use Ecto.Schema
-  import Ecto.Changeset
   import Ecto.Query
 
-  @primary_key {:id, :string, autogenerate: false}
-  @timestamps_opts []
-
-  schema "policy_logs" do
-    field :request_id, :string
-    field :execution_id, :string
-    field :user_id, :string
-    field :athanor_id, :string
-    field :timestamp, :utc_datetime_usec
-    field :event_type, :string
-    field :component_ref, :string
-    field :component_type, :string
-    field :decision, :string
-    field :host_policy_snapshot, :string
-    field :decision_reason, :string
-    field :consent_id, :string
-    field :activation_digest, :string
-    field :dep_ref, :string
-    field :need, :string
-    field :cursor_state, :string
-    field :chain, :string
-    field :value_source, :string
-  end
-
-  @required_fields [:id, :user_id, :athanor_id, :timestamp, :event_type]
-  @optional_fields [
-    :request_id,
-    :execution_id,
-    :component_ref,
-    :component_type,
-    :decision,
-    :host_policy_snapshot,
-    :decision_reason,
-    :consent_id,
-    :activation_digest,
-    :dep_ref,
-    :need,
-    :cursor_state,
-    :chain,
-    :value_source
-  ]
-
-  @doc """
-  Creates a changeset for inserting a new policy log entry.
-  """
-  def create_changeset(attrs) do
-    %__MODULE__{}
-    |> cast(attrs, @required_fields ++ @optional_fields)
-    |> validate_required(@required_fields)
-  end
+  alias Arca.Schemas.PolicyLog, as: Row
 
   @doc """
   Inserts a new policy log entry.
   """
+  @spec record(map()) :: {:ok, map()} | {:error, term()}
   def record(attrs) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.record", fn ->
       attrs
-      |> create_changeset()
+      |> Row.create_changeset()
       |> Arca.Repo.insert()
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -102,6 +39,7 @@ defmodule Arca.PolicyLog do
   @spec list(keyword()) :: {:ok, [map()]} | {:error, :database_error}
   def list(opts) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.list", fn -> {:ok, do_list(opts)} end)
+    |> Arca.Data.project()
   end
 
   defp do_list(opts) do
@@ -113,10 +51,11 @@ defmodule Arca.PolicyLog do
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     query =
-      from l in __MODULE__,
+      from(l in Row,
         where: l.athanor_id == ^athanor_id,
         order_by: [desc: l.timestamp],
         limit: ^limit
+      )
 
     query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
     query = if request_id, do: where(query, [l], l.request_id == ^request_id), else: query
@@ -179,7 +118,7 @@ defmodule Arca.PolicyLog do
 
     Arca.Repo.Errors.with_db_rescue("Arca.PolicyLog.delete_before", fn ->
       {count, _} =
-        __MODULE__
+        Row
         |> Arca.QueryHelpers.where_athanor(athanor_id)
         |> Arca.QueryHelpers.where_before(:timestamp, datetime)
         |> Arca.Repo.delete_all()
@@ -196,7 +135,7 @@ defmodule Arca.PolicyLog do
 
     Arca.Repo.Errors.with_db_rescue("Arca.PolicyLog.count_before", fn ->
       count =
-        __MODULE__
+        Row
         |> Arca.QueryHelpers.where_athanor(athanor_id)
         |> Arca.QueryHelpers.where_before(:timestamp, datetime)
         |> Arca.Repo.aggregate(:count)
@@ -210,14 +149,14 @@ defmodule Arca.PolicyLog do
 
   Platform scope bypasses tenant filtering.
   """
-  @spec get_tenant(Cyfr.Actor.t(), String.t()) ::
-          %__MODULE__{} | nil | {:error, :database_error}
+  @spec get_tenant(Cyfr.Actor.t(), String.t()) :: map() | nil | {:error, :database_error}
   def get_tenant(%Cyfr.Actor{} = actor, id) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.get_tenant", fn ->
-      from(l in __MODULE__, where: l.id == ^id)
+      from(l in Row, where: l.id == ^id)
       |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
       |> Arca.Repo.one()
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -226,12 +165,13 @@ defmodule Arca.PolicyLog do
   Platform scope bypasses tenant filtering.
   """
   @spec get_by_request_id_tenant(Cyfr.Actor.t(), String.t()) ::
-          %__MODULE__{} | nil | {:error, :database_error}
+          map() | nil | {:error, :database_error}
   def get_by_request_id_tenant(%Cyfr.Actor{} = actor, request_id) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.get_by_request_id_tenant", fn ->
-      from(l in __MODULE__, where: l.request_id == ^request_id, limit: 1)
+      from(l in Row, where: l.request_id == ^request_id, limit: 1)
       |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
       |> Arca.Repo.one()
     end)
+    |> Arca.Data.project()
   end
 end

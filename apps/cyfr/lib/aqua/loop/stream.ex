@@ -197,7 +197,7 @@ defmodule Aqua.Loop.Stream do
   def add(%__MODULE__{} = kept, _stale), do: kept
 
   @doc "What is kept once `row` landed: a step's text row replaces the answer that streamed for it."
-  @spec landed(t(), Arca.Schemas.Message.t()) :: t()
+  @spec landed(t(), Aqua.Tape.row()) :: t()
   def landed(%__MODULE__{} = kept, %{kind: "text"} = row) do
     case Tape.payload(row)["step_id"] do
       step_id when is_binary(step_id) -> settle(kept, step_id)

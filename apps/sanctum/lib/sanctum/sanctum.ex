@@ -29,7 +29,6 @@ defmodule Sanctum do
         auth_provider: Sanctum.Auth.OAuth  # or the configured auth provider
   """
 
-  alias Arca.Schemas.JobClaim
   alias Sanctum.Context
 
   @doc """
@@ -101,9 +100,10 @@ defmodule Sanctum do
   extends). Answers the renewed claim the caller releases, or the
   refusal; nothing is announced on a refusal, because nothing committed.
   """
-  @spec reconcile_platform_admins(JobClaim.t(), keyword()) ::
-          {:ok, JobClaim.t()} | {:error, atom()}
-  def reconcile_platform_admins(%JobClaim{} = claim, opts) when is_list(opts) do
+  @spec reconcile_platform_admins(Arca.JobClaims.held(), keyword()) ::
+          {:ok, map()} | {:error, atom()}
+  def reconcile_platform_admins(%{kind: _, key: _, owner: _, fence: _} = claim, opts)
+      when is_list(opts) do
     with {:ok, operators} <- operator_snapshot(),
          {:ok, %{claim: renewed, revoked: revoked}} <-
            Arca.Members.reconcile_platform(Cyfr.Actor.system(), claim,

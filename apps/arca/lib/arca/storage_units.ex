@@ -157,7 +157,7 @@ defmodule Arca.StorageUnits do
   `{:error, :not_found}`: readers see no unit.
   """
   @spec current(Cyfr.Actor.t(), String.t(), String.t()) ::
-          {:ok, StorageUnit.t()} | {:error, :not_found} | refusal()
+          {:ok, map()} | {:error, :not_found} | refusal()
   def current(%Cyfr.Actor{} = actor, root, unit_key)
       when is_binary(root) and is_binary(unit_key) do
     with {:ok, athanor} <- tenant(actor) do
@@ -168,15 +168,17 @@ defmodule Arca.StorageUnits do
         end
       end)
     end
+    |> Arca.Data.project()
   end
 
   @doc "Every committed pointer under a root, by unit key — the batch form of `current/3`."
   @spec current_under(Cyfr.Actor.t(), String.t()) ::
-          {:ok, %{String.t() => StorageUnit.t()}} | refusal()
+          {:ok, %{String.t() => map()}} | refusal()
   def current_under(%Cyfr.Actor{} = actor, root) when is_binary(root) do
     with {:ok, athanor} <- tenant(actor) do
       rescuing_db("current_under", fn -> {:ok, committed_under(athanor, root)} end)
     end
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -199,7 +201,7 @@ defmodule Arca.StorageUnits do
   for a unit with no row; a retired unit keeps its journal.
   """
   @spec journal(Cyfr.Actor.t(), String.t(), String.t()) ::
-          {:ok, [StorageCommit.t()]} | {:error, :not_found} | refusal()
+          {:ok, [map()]} | {:error, :not_found} | refusal()
   def journal(%Cyfr.Actor{} = actor, root, unit_key)
       when is_binary(root) and is_binary(unit_key) do
     with {:ok, athanor} <- tenant(actor) do
@@ -210,6 +212,7 @@ defmodule Arca.StorageUnits do
         end
       end)
     end
+    |> Arca.Data.project()
   end
 
   # ---------------------------------------------------------------------------

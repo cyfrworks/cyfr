@@ -577,36 +577,50 @@ defmodule Sanctum.Context do
   athanor — an audited act (`Sanctum.Telemetry.platform_context_event/1`),
   never a widened scope: the result works inside that athanor exactly as a
   member's context does. An archived athanor cannot be focused by anyone.
+
+  The athanor is named by its id, or by a map carrying it (`:id`), and
+  only the id is read: its row, its standing and the seat are read again
+  here, so a caller's stale copy of a row cannot focus an estate that has
+  since been archived or bind the context to a generation it no longer
+  has. A store that cannot answer either read is `{:error, :unavailable}`,
+  never an absence.
   """
-  @spec focus(t(), Arca.Schemas.Athanor.t() | String.t()) ::
-          {:ok, t()} | {:error, :not_found | :archived | :not_member}
+  @spec focus(t(), String.t() | %{required(:id) => String.t(), optional(atom()) => term()}) ::
+          {:ok, t()} | {:error, :not_found | :archived | :not_member | :unavailable}
+  def focus(%__MODULE__{} = ctx, %{id: athanor_id}) when is_binary(athanor_id),
+    do: focus(ctx, athanor_id)
+
   def focus(%__MODULE__{} = ctx, athanor_id) when is_binary(athanor_id) do
     case Sanctum.Tenancy.Athanors.get(athanor_id) do
-      {:ok, athanor} -> focus(ctx, athanor)
+      {:ok, %{status: "archived"}} -> {:error, :archived}
+      {:ok, %{id: ^athanor_id} = athanor} -> seated(ctx, athanor)
       {:error, :not_found} -> {:error, :not_found}
-      {:error, _} -> {:error, :not_found}
+      {:error, _unreadable} -> {:error, :unavailable}
     end
   end
 
-  def focus(%__MODULE__{}, %Arca.Schemas.Athanor{status: "archived"}), do: {:error, :archived}
-
-  def focus(%__MODULE__{} = ctx, %Arca.Schemas.Athanor{id: id} = athanor) do
+  defp seated(ctx, %{id: id} = athanor) do
     case Sanctum.Tenancy.Members.active_seat(ctx.user_id, id) do
       {:ok, seat} ->
         {:ok, refocused(ctx, athanor, seat.id)}
 
       :none when ctx.platform_admin ->
-        Sanctum.Telemetry.platform_context_event(%{
-          caller: :focus,
-          user_id: ctx.user_id,
-          athanor_id: id,
-          auth_method: ctx.auth_method
-        })
+        with {:ok, basis} <- platform_basis(ctx) do
+          Sanctum.Telemetry.platform_context_event(%{
+            caller: :focus,
+            user_id: ctx.user_id,
+            athanor_id: id,
+            auth_method: ctx.auth_method
+          })
 
-        {:ok, refocused(ctx, athanor, platform_basis(ctx))}
+          {:ok, refocused(ctx, athanor, basis)}
+        end
 
-      _none_or_unreadable ->
+      :none ->
         {:error, :not_member}
+
+      {:error, _unreadable} ->
+        {:error, :unavailable}
     end
   end
 
@@ -631,12 +645,13 @@ defmodule Sanctum.Context do
     }
   end
 
-  defp platform_basis(%__MODULE__{credential_binding: nil}), do: nil
+  defp platform_basis(%__MODULE__{credential_binding: nil}), do: {:ok, nil}
 
   defp platform_basis(%__MODULE__{user_id: user_id}) do
     case Sanctum.Tenancy.Members.platform_seat(user_id) do
-      {:ok, seat} -> seat.id
-      _none -> nil
+      {:ok, seat} -> {:ok, seat.id}
+      :none -> {:ok, nil}
+      {:error, _unreadable} -> {:error, :unavailable}
     end
   end
 
@@ -653,13 +668,14 @@ defmodule Sanctum.Context do
   a closed furnace either.
   """
   @spec refocus(t(), String.t()) ::
-          {:ok, t()} | {:error, :not_found | :archived | :not_member}
+          {:ok, t()} | {:error, :not_found | :archived | :not_member | :unavailable}
   def refocus(%__MODULE__{auth_method: :system} = ctx, athanor_id)
       when is_binary(athanor_id) do
     case Sanctum.Tenancy.Athanors.get(athanor_id) do
       {:ok, %{status: "archived"}} -> {:error, :archived}
       {:ok, _} -> {:ok, %{ctx | athanor_id: athanor_id, scope: :athanor}}
-      {:error, _} -> {:error, :not_found}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, _unreadable} -> {:error, :unavailable}
     end
   end
 

@@ -21,7 +21,7 @@ defmodule Emissary.MCP.RequestLogTest do
 
   # Helper to fetch an MCP log directly from the database
   defp get_log!(request_id) do
-    Arca.Repo.get(Arca.McpLog, request_id)
+    Arca.Repo.get(Arca.Schemas.McpLog, request_id)
   end
 
   defp decode_json(nil), do: nil
@@ -223,7 +223,7 @@ defmodule Emissary.MCP.RequestLogTest do
 
   describe "direct log lookup" do
     test "returns nil for non-existent log" do
-      assert is_nil(Arca.Repo.get(Arca.McpLog, "req_nonexistent_123"))
+      assert is_nil(Arca.Repo.get(Arca.Schemas.McpLog, "req_nonexistent_123"))
     end
   end
 
@@ -398,7 +398,7 @@ defmodule Emissary.MCP.RequestLogTest do
       :ok = Arca.RecordSink.flush()
 
       assert %{status: "success", routed_to: "here", tool: "t"} =
-               Arca.Repo.get(Arca.McpLog, ok_id)
+               Arca.Repo.get(Arca.Schemas.McpLog, ok_id)
 
       err_id = "call_#{System.unique_integer([:positive])}"
 
@@ -414,7 +414,9 @@ defmodule Emissary.MCP.RequestLogTest do
                )
 
       :ok = Arca.RecordSink.flush()
-      assert %{status: "error", error_code: -1, error: "no"} = Arca.Repo.get(Arca.McpLog, err_id)
+
+      assert %{status: "error", error_code: -1, error: "no"} =
+               Arca.Repo.get(Arca.Schemas.McpLog, err_id)
     end
   end
 end

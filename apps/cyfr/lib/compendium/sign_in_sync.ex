@@ -48,7 +48,11 @@ defmodule Compendium.SignInSync do
   Always `{:proceed, user, report}`; see `t:Sanctum.SignIn.report/0` for
   what each `probe` value means.
   """
-  @spec complete(Arca.Schemas.User.t(), String.t() | atom(), String.t() | nil) ::
+  @spec complete(
+          %{required(:id) => String.t(), optional(atom()) => term()},
+          String.t() | atom(),
+          String.t() | nil
+        ) ::
           SignIn.outcome()
   def complete(user, _provider, access_token)
       when not is_binary(access_token) or access_token == "" do

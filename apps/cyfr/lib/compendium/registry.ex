@@ -1152,13 +1152,9 @@ defmodule Compendium.Registry do
     Enum.map(rows, &decode_row_json_fields/1)
   end
 
-  # Local components arrive as `%Arca.Schemas.Component{}` structs; normalize
-  # to the plain, atom-keyed map the document model uses (remote components
-  # already arrive as maps), then decode the JSON-text columns.
-  defp decode_row_json_fields(%Arca.Schemas.Component{} = row) do
-    row |> Map.from_struct() |> Map.delete(:__meta__) |> decode_row_json_fields()
-  end
-
+  # Local components arrive as the plain, atom-keyed rows
+  # `Arca.ComponentStorage` answers and remote components as maps; either
+  # has its JSON-text columns decoded here.
   defp decode_row_json_fields(row) when is_map(row) do
     row
     |> Map.update(:tags, [], &decode_json/1)

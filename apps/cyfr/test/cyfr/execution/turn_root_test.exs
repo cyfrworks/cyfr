@@ -74,7 +74,7 @@ defmodule Cyfr.Execution.TurnRootTest do
 
   defp registered(execution_id), do: Registry.lookup(Cyfr.Execution.Registry, execution_id)
 
-  defp execution(id), do: Arca.Repo.get!(Arca.Execution, id)
+  defp execution(id), do: Arca.Repo.get!(Arca.Schemas.Execution, id)
 
   # A process holding one `:root` slot for `tenant` on the live instance
   # until told to release, linked so a failing test takes it down.
@@ -193,7 +193,7 @@ defmodule Cyfr.Execution.TurnRootTest do
 
     # The row the claim would have held says so, and nothing is held or
     # registered for it.
-    assert [row] = Arca.Repo.all(from(e in Arca.Execution, where: e.turn_id == ^turn.id))
+    assert [row] = Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.turn_id == ^turn.id))
     assert row.status == "failed"
     assert row.error_message == sentence
     assert [] = registered(row.id)
@@ -553,7 +553,7 @@ defmodule Cyfr.Execution.TurnRootTest do
       # Admitted before it queued: its row runs, and nothing holds a slot
       # for it or is registered under it.
       assert [%{status: "running"} = root] =
-               Arca.Repo.all(from(e in Arca.Execution, where: e.turn_id == ^turn.id))
+               Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.turn_id == ^turn.id))
 
       assert [] = registered(root.id)
       {:ok, filler: filler, claimer: claimer, root: root}

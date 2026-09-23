@@ -27,15 +27,15 @@ defmodule Arca.ScheduleOccurrences do
   matches it in its head; an actor whose athanor is nil or the empty
   string is refused before any query, as `{:error, :no_athanor}` from an
   entry point and as a raise from `start!/3`, which runs inside
-  admission's transaction. `claim/3` takes the schedule row it advances
-  and `recoverable/1` is the daemon's read across every athanor.
+  admission's transaction. `claim/3` takes the schedule it advances and
+  `recoverable/1` is the daemon's read across every athanor. Every row a
+  function here answers is a plain map (`Arca.Data`).
   """
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.CronSchedule
   alias Arca.Repo.Errors
-  alias Arca.Schemas.ScheduleOccurrence
+  alias Arca.Schemas.{CronSchedule, ScheduleOccurrence}
 
   @open ["claimed", "started"]
   @terminal ["completed", "failed", "uncertain"]
@@ -50,39 +50,51 @@ defmodule Arca.ScheduleOccurrences do
   advanced the cursor first, `:overlapping` when the schedule forbids
   concurrency and an occurrence of it is still open.
 
-  Due is decided on the cell's clock, so a member whose own clock runs
-  fast cannot fire a schedule before it is due for its peers.
+  `schedule` is read for its `id`, its `athanor_id` and the
+  `next_run_at` the caller saw, which is the cursor the write compares
+  against; everything else the claim decides on, concurrency included,
+  is read from the row as it stands. Due is decided on the cell's clock,
+  so a member whose own clock runs fast cannot fire a schedule before it
+  is due for its peers.
   """
-  @spec claim(CronSchedule.t(), String.t(), DateTime.t()) ::
-          {:ok, ScheduleOccurrence.t()} | :held | :overlapping | {:error, :database_error}
-  def claim(%CronSchedule{next_run_at: nil}, _claimant, _next_run), do: :held
+  @spec claim(map(), String.t(), DateTime.t()) ::
+          {:ok, map()} | :held | :overlapping | {:error, :database_error}
+  def claim(%{next_run_at: nil}, _claimant, _next_run), do: :held
 
-  def claim(%CronSchedule{} = schedule, claimant, %DateTime{} = next_run)
-      when is_binary(claimant) do
+  def claim(
+        %{id: id, next_run_at: %DateTime{} = due_for} = schedule,
+        claimant,
+        %DateTime{} = next_run
+      )
+      when is_binary(id) and is_binary(claimant) do
+    athanor_id = Map.fetch!(schedule, :athanor_id)
+
     Errors.with_db_rescue("ScheduleOccurrences.claim", fn ->
       now = Arca.ServerMetaStorage.now!()
-      due_for = schedule.next_run_at
 
       Arca.Repo.transaction(fn ->
         {count, _} =
           from(s in CronSchedule,
-            where: s.id == ^schedule.id and s.athanor_id == ^schedule.athanor_id,
+            where: s.id == ^id and s.athanor_id == ^athanor_id,
             where: s.status == "active" and s.next_run_at == ^due_for and s.next_run_at <= ^now
           )
           |> Arca.Repo.update_all(set: [next_run_at: next_run])
 
         if count != 1, do: Arca.Repo.rollback(:held)
 
+        concurrency =
+          Arca.Repo.one(from(s in CronSchedule, where: s.id == ^id, select: s.concurrency))
+
         # Due and won, but another occurrence of the schedule is still
         # open: the cursor stays where it was, and the occurrence waits.
-        if schedule.concurrency == "forbid" and open?(schedule.athanor_id, schedule.id),
+        if concurrency == "forbid" and open?(athanor_id, id),
           do: Arca.Repo.rollback(:overlapping)
 
         %ScheduleOccurrence{}
         |> ScheduleOccurrence.changeset(%{
           id: Cyfr.UUID7.generate_id("occ"),
-          athanor_id: schedule.athanor_id,
-          schedule_id: schedule.id,
+          athanor_id: athanor_id,
+          schedule_id: id,
           scheduled_for: due_for,
           state: "claimed",
           claimed_by: claimant,
@@ -101,6 +113,7 @@ defmodule Arca.ScheduleOccurrences do
         {:error, other} -> {:error, other}
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -174,7 +187,7 @@ defmodule Arca.ScheduleOccurrences do
 
   @doc "The occurrence, by id, within the actor's athanor."
   @spec get(Cyfr.Actor.t(), String.t()) ::
-          {:ok, ScheduleOccurrence.t()} | {:error, :no_athanor | :not_found | :database_error}
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
   def get(%Cyfr.Actor{athanor_id: athanor_id}, id)
       when is_binary(athanor_id) and athanor_id != "" do
     Errors.with_db_rescue("ScheduleOccurrences.get", fn ->
@@ -183,13 +196,14 @@ defmodule Arca.ScheduleOccurrences do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc "The schedule's occurrences within the actor's athanor, newest first."
   @spec list(Cyfr.Actor.t(), String.t(), keyword()) ::
-          {:ok, [ScheduleOccurrence.t()]} | {:error, :no_athanor | :database_error}
+          {:ok, [map()]} | {:error, :no_athanor | :database_error}
   def list(actor, schedule_id, opts \\ [])
 
   def list(%Cyfr.Actor{athanor_id: athanor_id}, schedule_id, opts)
@@ -206,6 +220,7 @@ defmodule Arca.ScheduleOccurrences do
          )
        )}
     end)
+    |> Arca.Data.project()
   end
 
   def list(%Cyfr.Actor{}, _schedule_id, _opts), do: {:error, :no_athanor}
@@ -229,7 +244,7 @@ defmodule Arca.ScheduleOccurrences do
   database time, so two members recovering at once see the same roster.
   """
   @spec recoverable(DateTime.t()) ::
-          {:ok, %{never_invoked: [ScheduleOccurrence.t()], lapsed: [ScheduleOccurrence.t()]}}
+          {:ok, %{never_invoked: [map()], lapsed: [map()]}}
           | {:error, :database_error}
   # arca:unscoped-ok the daemon's read spans every athanor; each row is
   # acted on under its own schedule's actor.
@@ -242,7 +257,7 @@ defmodule Arca.ScheduleOccurrences do
       lapsed =
         Arca.Repo.all(
           from(o in abandoned,
-            left_join: e in Arca.Execution,
+            left_join: e in Arca.Schemas.Execution,
             on: e.id == o.execution_id and e.athanor_id == o.athanor_id,
             where: o.state == "started",
             where: is_nil(e.id) or e.status not in ["running", "paused"],
@@ -252,6 +267,7 @@ defmodule Arca.ScheduleOccurrences do
 
       {:ok, %{never_invoked: never_invoked, lapsed: lapsed}}
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -273,7 +289,9 @@ defmodule Arca.ScheduleOccurrences do
         where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id,
         where: o.state == "claimed" and o.claimed_by == ^previous
       )
-      |> Arca.Repo.update_all(set: [claimed_by: claimant, claimed_at: Arca.ServerMetaStorage.now!()])
+      |> Arca.Repo.update_all(
+        set: [claimed_by: claimant, claimed_at: Arca.ServerMetaStorage.now!()]
+      )
       |> case do
         {1, _} -> :ok
         {0, _} -> :held

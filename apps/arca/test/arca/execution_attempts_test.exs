@@ -43,7 +43,7 @@ defmodule Arca.ExecutionAttemptsTest do
     {execution, attempt}
   end
 
-  defp reload(id), do: Arca.Repo.get!(Arca.Execution, id)
+  defp reload(id), do: Arca.Repo.get!(Arca.Schemas.Execution, id)
 
   test "admission opens the first attempt and points the row at it", %{actor: actor} do
     {execution, attempt} = admit!(actor)
@@ -295,7 +295,7 @@ defmodule Arca.ExecutionAttemptsTest do
                verify: &Arca.Test.Actor.admits/1
              )
 
-    refute Arca.Repo.get(Arca.Execution, "exec_child_2")
+    refute Arca.Repo.get(Arca.Schemas.Execution, "exec_child_2")
   end
 
   describe "a child admitted under its parent's attempt" do
@@ -344,7 +344,7 @@ defmodule Arca.ExecutionAttemptsTest do
             )
 
           {1, _} =
-            Arca.Repo.update_all(from(e in Arca.Execution, where: e.id == ^parent.id),
+            Arca.Repo.update_all(from(e in Arca.Schemas.Execution, where: e.id == ^parent.id),
               set: [status: "completed"]
             )
         end,
@@ -386,7 +386,7 @@ defmodule Arca.ExecutionAttemptsTest do
         end_parent.(parent, attempt)
 
         assert {{:error, :parent_ended}, id} = admit_child(actor, parent, attempt.attempt)
-        refute Arca.Repo.get(Arca.Execution, id)
+        refute Arca.Repo.get(Arca.Schemas.Execution, id)
       end
     end
 
@@ -395,7 +395,7 @@ defmodule Arca.ExecutionAttemptsTest do
       {_other, other_attempt} = admit!(actor)
 
       assert {{:error, :parent_ended}, id} = admit_child(actor, parent, other_attempt.attempt)
-      refute Arca.Repo.get(Arca.Execution, id)
+      refute Arca.Repo.get(Arca.Schemas.Execution, id)
     end
   end
 end

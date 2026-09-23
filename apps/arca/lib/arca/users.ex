@@ -24,7 +24,8 @@ defmodule Arca.Users do
   resolution act as. Who may see a person, and which of these rows they
   may act on, is decided above this layer.
 
-  Nothing that belongs to Ecto crosses the boundary. A refusal is
+  Nothing that belongs to Ecto crosses the boundary: a person or an
+  identity is answered as a plain map (`Arca.Data`). A refusal is
   `:conflict` (a unique index — a concurrent first sign-in won it, so the
   loser re-reads), `{:invalid, %{field => [message]}}`, `:not_found`,
   `:cross_tenant` or `:database_error`.
@@ -45,9 +46,10 @@ defmodule Arca.Users do
   def max_page, do: @max_page
 
   @doc "The person this id names."
-  @spec get(Cyfr.Actor.t(), String.t()) :: {:ok, User.t()} | {:error, :not_found} | refusal()
+  @spec get(Cyfr.Actor.t(), String.t()) :: {:ok, map()} | {:error, :not_found} | refusal()
   def get(%Cyfr.Actor{scope: :platform}, id) when is_binary(id) and id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.Users.get", fn -> found(Arca.Repo.get(User, id)) end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{scope: :platform}, _id), do: {:error, :not_found}
@@ -55,7 +57,7 @@ defmodule Arca.Users do
 
   @doc "The person an IdP identity key names, if any."
   @spec get_by_identity(Cyfr.Actor.t(), String.t()) ::
-          {:ok, User.t()} | {:error, :not_found} | refusal()
+          {:ok, map()} | {:error, :not_found} | refusal()
   def get_by_identity(%Cyfr.Actor{scope: :platform}, key) when is_binary(key) and key != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.Users.get_by_identity", fn ->
       found(
@@ -68,6 +70,7 @@ defmodule Arca.Users do
         )
       )
     end)
+    |> Arca.Data.project()
   end
 
   def get_by_identity(%Cyfr.Actor{scope: :platform}, _key), do: {:error, :not_found}
@@ -75,23 +78,25 @@ defmodule Arca.Users do
 
   @doc "The person whose cyfr.run namespace this is, if any."
   @spec get_by_namespace(Cyfr.Actor.t(), String.t()) ::
-          {:ok, User.t()} | {:error, :not_found} | refusal()
+          {:ok, map()} | {:error, :not_found} | refusal()
   def get_by_namespace(%Cyfr.Actor{scope: :platform}, namespace)
       when is_binary(namespace) and namespace != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.Users.get_by_namespace", fn ->
       found(Arca.Repo.get_by(User, namespace: namespace))
     end)
+    |> Arca.Data.project()
   end
 
   def get_by_namespace(%Cyfr.Actor{}, _namespace), do: {:error, :cross_tenant}
 
   @doc "Every person who signed in with this (already lowercased) address, oldest first."
-  @spec list_by_email(Cyfr.Actor.t(), String.t()) :: {:ok, [User.t()]} | refusal()
+  @spec list_by_email(Cyfr.Actor.t(), String.t()) :: {:ok, [map()]} | refusal()
   def list_by_email(%Cyfr.Actor{scope: :platform}, email) when is_binary(email) do
     Arca.Repo.Errors.with_db_rescue("Arca.Users.list_by_email", fn ->
       {:ok,
        Arca.Repo.all(from(u in User, where: u.email == ^email, order_by: [asc: u.first_seen_at]))}
     end)
+    |> Arca.Data.project()
   end
 
   def list_by_email(%Cyfr.Actor{}, _email), do: {:error, :cross_tenant}
@@ -100,7 +105,7 @@ defmodule Arca.Users do
   Everyone the server knows, newest first. Paged with `limit:` (default
   and ceiling `max_page/0`) and `offset:`.
   """
-  @spec list(Cyfr.Actor.t(), keyword()) :: {:ok, [User.t()]} | refusal()
+  @spec list(Cyfr.Actor.t(), keyword()) :: {:ok, [map()]} | refusal()
   def list(actor, opts \\ [])
 
   def list(%Cyfr.Actor{scope: :platform}, opts) when is_list(opts) do
@@ -117,12 +122,13 @@ defmodule Arca.Users do
          )
        )}
     end)
+    |> Arca.Data.project()
   end
 
   def list(%Cyfr.Actor{}, _opts), do: {:error, :cross_tenant}
 
   @doc "Every IdP identity that names this person, oldest first."
-  @spec identities(Cyfr.Actor.t(), String.t()) :: {:ok, [ExternalIdentity.t()]} | refusal()
+  @spec identities(Cyfr.Actor.t(), String.t()) :: {:ok, [map()]} | refusal()
   def identities(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Users.identities", fn ->
       {:ok,
@@ -133,6 +139,7 @@ defmodule Arca.Users do
          )
        )}
     end)
+    |> Arca.Data.project()
   end
 
   def identities(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
@@ -163,22 +170,28 @@ defmodule Arca.Users do
   def touch_identity(%Cyfr.Actor{}, _key, _now), do: {:error, :cross_tenant}
 
   @doc """
-  Write `attrs` over a person's row. `updated_at` is stamped here. The
-  standing columns (`status`, `denied_at`, `security_generation`) are
-  refused as read-only: `Arca.SecurityTransitions` alone moves them.
+  Write `attrs` over the person `user_id` names, as the row reads now.
+  `updated_at` is stamped here. The standing columns (`status`,
+  `denied_at`, `security_generation`) are refused as read-only:
+  `Arca.SecurityTransitions` alone moves them.
   """
-  @spec update(Cyfr.Actor.t(), User.t(), map()) ::
-          {:ok, User.t()} | refusal() | write_refusal()
-  def update(%Cyfr.Actor{scope: :platform}, %User{} = user, attrs) when is_map(attrs) do
+  @spec update(Cyfr.Actor.t(), String.t(), map()) ::
+          {:ok, map()} | {:error, :not_found} | refusal() | write_refusal()
+  def update(%Cyfr.Actor{scope: :platform}, user_id, attrs)
+      when is_binary(user_id) and user_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Users.update", fn ->
-      user
-      |> User.update_changeset(Map.put(Map.new(attrs), :updated_at, DateTime.utc_now()))
-      |> Arca.Repo.update()
-      |> settled()
+      with {:ok, user} <- found(Arca.Repo.get(User, user_id)) do
+        user
+        |> User.update_changeset(Map.put(Map.new(attrs), :updated_at, DateTime.utc_now()))
+        |> Arca.Repo.update()
+        |> settled()
+      end
     end)
+    |> Arca.Data.project()
   end
 
-  def update(%Cyfr.Actor{}, %User{}, _attrs), do: {:error, :cross_tenant}
+  def update(%Cyfr.Actor{scope: :platform}, _user_id, _attrs), do: {:error, :not_found}
+  def update(%Cyfr.Actor{}, _user_id, _attrs), do: {:error, :cross_tenant}
 
   @doc """
   Mint a person and the IdP identity that names them, as ONE transaction:
@@ -189,7 +202,7 @@ defmodule Arca.Users do
   the loser rolls back and reads the person the winner minted, so both
   answer the same row rather than one of them reporting a conflict.
   """
-  @spec mint(Cyfr.Actor.t(), map(), map()) :: {:ok, User.t()} | refusal() | write_refusal()
+  @spec mint(Cyfr.Actor.t(), map(), map()) :: {:ok, map()} | refusal() | write_refusal()
   def mint(%Cyfr.Actor{scope: :platform} = actor, user_attrs, identity_attrs)
       when is_map(user_attrs) and is_map(identity_attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Users.mint", fn ->
@@ -210,6 +223,7 @@ defmodule Arca.Users do
         {:error, reason} -> lost_the_race(actor, identity_attrs[:key], reason)
       end
     end)
+    |> Arca.Data.project()
   end
 
   def mint(%Cyfr.Actor{}, _user_attrs, _identity_attrs), do: {:error, :cross_tenant}
@@ -245,18 +259,10 @@ defmodule Arca.Users do
   defp settled({:error, %Ecto.Changeset{} = changeset}), do: {:error, refusal(changeset)}
 
   defp refusal(%Ecto.Changeset{errors: errors} = changeset) do
-    if unique?(errors), do: :conflict, else: {:invalid, messages(changeset)}
+    if unique?(errors), do: :conflict, else: Arca.Data.invalid(changeset)
   end
 
   defp unique?(errors) do
     Enum.any?(errors, fn {_field, {_message, meta}} -> meta[:constraint] == :unique end)
-  end
-
-  defp messages(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
-      Regex.replace(~r"%{(\w+)}", message, fn _whole, key ->
-        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-      end)
-    end)
   end
 end

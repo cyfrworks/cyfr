@@ -186,7 +186,10 @@ defmodule PrismWeb.ChatLive do
 
   # No estate named: the session's default, or — when that seat is gone —
   # the first estate the person still holds one in. Never a patch back to
-  # the default, which is how a lost seat would loop.
+  # the default, which is how a lost seat would loop. A store that cannot
+  # answer stops the walk as unavailable: it says nothing about a seat,
+  # and read as "no estate" it would show a person with seats an empty
+  # page.
   defp focus_on(ctx, default_id, route, athanors) when route in [nil, ""] do
     default =
       case default_id && Athanors.get(default_id) do
@@ -194,10 +197,11 @@ defmodule PrismWeb.ChatLive do
         _ -> []
       end
 
-    Enum.find_value(default ++ athanors, {:error, :no_estate}, fn athanor ->
+    Enum.reduce_while(default ++ athanors, {:error, :no_estate}, fn athanor, none ->
       case Sanctum.Context.focus(ctx, athanor) do
-        {:ok, focus} -> {:ok, focus, athanor}
-        {:error, _} -> nil
+        {:ok, focus} -> {:halt, {:ok, focus, athanor}}
+        {:error, :unavailable} = unavailable -> {:halt, unavailable}
+        {:error, _refused} -> {:cont, none}
       end
     end)
   end
@@ -536,6 +540,10 @@ defmodule PrismWeb.ChatLive do
          socket
          |> assign(:aloud_estate, athanor_id)
          |> assign(:aloud_threads, estate_threads(focused))}
+
+      {:error, :unavailable} ->
+        {:noreply,
+         put_flash(socket, :error, "That estate cannot be opened just now. Try again shortly.")}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "You are not a member of that estate.")}

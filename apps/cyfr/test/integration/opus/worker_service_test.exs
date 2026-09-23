@@ -380,7 +380,7 @@ defmodule Opus.WorkerServiceWireTest do
     key
   end
 
-  defp row(id), do: Arca.Repo.get!(Arca.Execution, id)
+  defp row(id), do: Arca.Repo.get!(Arca.Schemas.Execution, id)
 
   # An authority naming the invocation reservation a root was admitted
   # with, for reading its budget.

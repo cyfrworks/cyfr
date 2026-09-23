@@ -35,7 +35,7 @@ defmodule Arca.ExecutionPayloadsTest do
     now = DateTime.utc_now()
 
     {1, _} =
-      Arca.Repo.insert_all(Arca.Execution, [
+      Arca.Repo.insert_all(Arca.Schemas.Execution, [
         %{
           id: id,
           athanor_id: actor.athanor_id,
@@ -52,7 +52,7 @@ defmodule Arca.ExecutionPayloadsTest do
 
   defp move_attempt!(exec, attempt) do
     {1, _} =
-      Arca.Repo.update_all(from(e in Arca.Execution, where: e.id == ^exec),
+      Arca.Repo.update_all(from(e in Arca.Schemas.Execution, where: e.id == ^exec),
         set: [current_attempt: attempt]
       )
 
@@ -164,14 +164,15 @@ defmodule Arca.ExecutionPayloadsTest do
       ExecutionPayloads.stage(actor, exec, "input", "given", "api")
 
     {:ok, row} = Arca.Repo.transaction(fn -> ExecutionPayloads.commit!(staged, "att_#{exec}") end)
-    assert {:ok, ^row, "given"} = ExecutionPayloads.get(actor, exec, "input")
+    projected = Arca.Data.project(row)
+    assert {:ok, ^projected, "given"} = ExecutionPayloads.get(actor, exec, "input")
 
     # Discarding a stage whose object a row already names keeps the object.
     {:ok, again} =
       ExecutionPayloads.stage(actor, exec, "input", "given", "api")
 
     assert :ok = ExecutionPayloads.discard(again)
-    assert {:ok, ^row, "given"} = ExecutionPayloads.get(actor, exec, "input")
+    assert {:ok, ^projected, "given"} = ExecutionPayloads.get(actor, exec, "input")
 
     # A second commit for the same execution, kind and attempt raises, and
     # its transaction rolls back.
@@ -346,7 +347,7 @@ defmodule Arca.ExecutionPayloadsTest do
     # An execution whose payload is still held cannot be deleted underneath it.
     refused =
       try do
-        Arca.Repo.delete_all(from(e in Arca.Execution, where: e.id == ^b))
+        Arca.Repo.delete_all(from(e in Arca.Schemas.Execution, where: e.id == ^b))
         :deleted
       rescue
         _ -> :refused

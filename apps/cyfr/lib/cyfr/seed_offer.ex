@@ -25,7 +25,6 @@ defmodule Cyfr.SeedOffer do
   require Logger
 
   alias Arca.JobClaims
-  alias Arca.Schemas.JobClaim
 
   @lease_ms :timer.minutes(5)
 
@@ -51,7 +50,7 @@ defmodule Cyfr.SeedOffer do
   """
   @spec run(keyword()) :: :ok | :skipped | {:error, :database_error | :exception}
   def run(opts \\ []) when is_list(opts) do
-    key = Keyword.get(opts, :key, JobClaim.cell_key())
+    key = Keyword.get(opts, :key, JobClaims.cell_key())
     owner = Keyword.get(opts, :owner, Cyfr.Boot.id())
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
     sync = Keyword.get(opts, :sync, &Compendium.Provisioning.sync_seeds/0)
@@ -65,7 +64,7 @@ defmodule Cyfr.SeedOffer do
           JobClaims.release(claim)
         end
 
-      {:busy, %JobClaim{owner: peer}} ->
+      {:busy, %{owner: peer}} ->
         Logger.info("[Cyfr.SeedOffer] the seed offer is #{peer}'s this boot")
         :skipped
 

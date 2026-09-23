@@ -350,8 +350,8 @@ defmodule Cyfr.RetentionTest do
 
       assert {:ok, 2} = Retention.cleanup(ctx, "mcp_log_days", value: 30)
 
-      assert Arca.Repo.get(Arca.McpLog, "recent_log_1") != nil
-      assert Arca.Repo.get(Arca.McpLog, "old_log_1") == nil
+      assert Arca.Repo.get(Arca.Schemas.McpLog, "recent_log_1") != nil
+      assert Arca.Repo.get(Arca.Schemas.McpLog, "old_log_1") == nil
     end
 
     test "dry_run counts without deleting", %{ctx: ctx} do
@@ -361,8 +361,8 @@ defmodule Cyfr.RetentionTest do
 
       assert {:ok, 2} = Retention.cleanup(ctx, "mcp_log_days", value: 30, dry_run: true)
 
-      assert Arca.Repo.get(Arca.McpLog, "dry_log_1") != nil
-      assert Arca.Repo.get(Arca.McpLog, "dry_log_2") != nil
+      assert Arca.Repo.get(Arca.Schemas.McpLog, "dry_log_1") != nil
+      assert Arca.Repo.get(Arca.Schemas.McpLog, "dry_log_2") != nil
     end
   end
 

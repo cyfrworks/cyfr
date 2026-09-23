@@ -89,7 +89,7 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
     {waiter, fixture}
   end
 
-  defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
+  defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 
   test "a stop after the waiter exited, before its exit was handled, kills the runner and lapses the row",
        %{endpoint: endpoint} do

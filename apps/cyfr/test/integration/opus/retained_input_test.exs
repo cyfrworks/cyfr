@@ -100,7 +100,7 @@ defmodule Opus.RetainedInputTest do
     refute bytes =~ "SENT-ONLY"
     assert Jason.decode!(bytes) == kept
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.input_hash == Arca.Execution.hash_input(sent)
   end
 end

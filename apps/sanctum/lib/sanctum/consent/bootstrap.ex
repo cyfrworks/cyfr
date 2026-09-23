@@ -100,7 +100,7 @@ defmodule Sanctum.Consent.Bootstrap do
   # shaped like one: `holding/2` matches it structurally, which a struct
   # satisfies, but the spec has to name what actually arrives or every
   # caller that passes a real claim reads as a call that cannot succeed.
-  @spec run(Context.t(), Arca.Schemas.ProvisioningClaim.t() | nil) ::
+  @spec run(Context.t(), Sanctum.Provisioning.claim() | nil) ::
           {:ok, result()} | {:error, :claim_lost | {:component_facts, term()}}
   def run(%Context{} = ctx, claim \\ nil) do
     with :ok <- holding(ctx, claim),

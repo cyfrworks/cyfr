@@ -96,7 +96,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     assert text == "The #{@redacted} #{@redacted}."
     refute_unmasked(result, secrets)
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "completed"
     refute_unmasked(row, secrets)
 
@@ -129,7 +129,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
     assert message == "the #{@redacted} #{@redacted}, models and chat"
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "failed" and row.error_message == message
     refute_unmasked(row, secrets)
 
@@ -154,7 +154,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
     assert message =~ ~r/^#{Regex.escape(@redacted)} #{Regex.escape(@redacted)} \d+ms$/
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "failed" and row.error_message == message
     refute_unmasked(row, secrets)
 
@@ -189,7 +189,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     assert %{"data" => %{"content" => [%{"text" => text}]}} = envelope
     assert text == "The #{@redacted} #{@redacted}."
     refute_unmasked(handed, secrets)
-    refute_unmasked(Arca.Repo.get!(Arca.Execution, parent_id), secrets)
+    refute_unmasked(Arca.Repo.get!(Arca.Schemas.Execution, parent_id), secrets)
 
     assert [child] = Arca.Repo.all(children_of(parent_id))
     refute_unmasked(child, secrets)
@@ -227,7 +227,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     assert {:error, message} = Task.await(run, 60_000)
     assert message == "Execution attempt ended before it closed"
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "failed" and row.error_message == message
     refute_unmasked(row, secrets)
     refute_unmasked(live_events(), secrets)
@@ -357,7 +357,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   defp children_of(parent_id) do
     import Ecto.Query, only: [from: 2]
-    from(e in Arca.Execution, where: e.parent_execution_id == ^parent_id)
+    from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^parent_id)
   end
 
   defp refute_unmasked(term, secrets) do

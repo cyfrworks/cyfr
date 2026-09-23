@@ -122,7 +122,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
   describe "a write its attempt holds throughout" do
     test "records its intent before the store is touched and confirms it after", test do
       io = fn ->
-        assert [%StorageWriteIntent{} = intent] = intents(test)
+        assert [%{id: _} = intent] = intents(test)
         assert intent.state == "pending"
         assert intent.attempt == test.attempt
         assert intent.execution_id == test.execution.id

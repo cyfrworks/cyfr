@@ -45,14 +45,16 @@ defmodule Aqua.ToolGrants do
   the two gates cannot disagree.
   """
 
-  alias Arca.Schemas.ToolGrant
   alias Arca.ToolGrantStorage
   alias Sanctum.Context
 
-  @scopes ToolGrant.scopes()
-  @effects ToolGrant.effects()
+  @scopes Arca.ToolGrantStorage.scopes()
+  @effects Arca.ToolGrantStorage.effects()
 
   @type key :: {tool :: String.t(), action :: String.t()}
+
+  @typedoc "One stored grant, as the plain map `Arca.ToolGrantStorage` answers."
+  @type grant :: %{required(:scope) => String.t(), optional(atom()) => term()}
 
   @typedoc "One effective decision: the mode, and whether a grant or the author made it."
   @type decision :: {:auto | :ask | :deny, :authored | :grant}
@@ -62,7 +64,7 @@ defmodule Aqua.ToolGrants do
   projected to `"auto" | "ask" | "deny"`. The only thing that should ever
   be handed to a turn — the soul's or a role's — as its policy.
   """
-  @spec resolve(map(), [Arca.Schemas.ToolGrant.t()]) :: map()
+  @spec resolve(map(), [grant()]) :: map()
   def resolve(declared, grants) when is_map(declared) and is_list(grants) do
     declared |> effective(grants) |> to_guest()
   end
@@ -88,7 +90,7 @@ defmodule Aqua.ToolGrants do
   tool does not have is dropped. A hand-edited file reaches the guest
   already within the rule.
   """
-  @spec effective(map(), [Arca.Schemas.ToolGrant.t()]) :: %{String.t() => decision()}
+  @spec effective(map(), [grant()]) :: %{String.t() => decision()}
   def effective(authored, grants) when is_map(authored) and is_list(grants) do
     {denied, allowed} = Enum.split_with(grants, &(&1.effect == "deny"))
 
@@ -193,7 +195,7 @@ defmodule Aqua.ToolGrants do
   `auto` automatic — an outage must stop the turn, not widen it.
   """
   @spec for_thread(Context.t(), String.t(), String.t()) ::
-          {:ok, [ToolGrant.t()]} | {:error, unavailable()}
+          {:ok, [grant()]} | {:error, unavailable()}
   def for_thread(%Context{} = ctx, thread_id, agent_name) do
     with {:ok, by_agent} <- for_agents(ctx, thread_id, [agent_name]) do
       {:ok, Map.get(by_agent, agent_name, [])}
@@ -207,7 +209,7 @@ defmodule Aqua.ToolGrants do
   that agent, with no read per role. Fails closed like it.
   """
   @spec for_agents(Context.t(), String.t(), [String.t()]) ::
-          {:ok, %{String.t() => [ToolGrant.t()]}} | {:error, unavailable()}
+          {:ok, %{String.t() => [grant()]}} | {:error, unavailable()}
   def for_agents(%Context{} = ctx, thread_id, names) when is_list(names) do
     case ToolGrantStorage.list_for_thread(Context.actor(ctx), thread_id) do
       {:ok, rows} ->
@@ -252,7 +254,7 @@ defmodule Aqua.ToolGrants do
   pair a person refused cannot be auto on the fast path while denied in
   the policy.
   """
-  @spec allowed_keys([Arca.Schemas.ToolGrant.t()]) :: MapSet.t(key())
+  @spec allowed_keys([grant()]) :: MapSet.t(key())
   def allowed_keys(grants) when is_list(grants) do
     denied = grants |> Enum.filter(&(&1.effect == "deny")) |> MapSet.new(&{&1.tool, &1.action})
 
@@ -272,7 +274,7 @@ defmodule Aqua.ToolGrants do
   `"allow"` or `"deny"`. A standing allow for a destructive or external
   action is refused outright at either scope; a deny is always recordable.
   """
-  @spec put(Context.t(), map()) :: {:ok, ToolGrant.t()} | {:error, term()}
+  @spec put(Context.t(), map()) :: {:ok, grant()} | {:error, term()}
   def put(%Context{} = ctx, %{scope: scope, effect: effect} = attrs)
       when scope in @scopes and effect in @effects do
     with {:ok, row} <- row(ctx, attrs), do: ToolGrantStorage.put(row)

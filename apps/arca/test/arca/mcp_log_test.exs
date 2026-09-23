@@ -39,14 +39,13 @@ defmodule Arca.McpLogTest do
     end
 
     test "validates status inclusion" do
-      assert {:error, changeset} = McpLog.record(log_attrs(%{status: "bogus"}))
-      refute changeset.valid?
-      assert {"is invalid", _} = changeset.errors[:status]
+      assert {:error, {:invalid, errors}} = McpLog.record(log_attrs(%{status: "bogus"}))
+      assert ["is invalid"] = errors[:status]
     end
 
     test "rejects missing required fields" do
-      assert {:error, changeset} = McpLog.record(%{})
-      refute changeset.valid?
+      assert {:error, {:invalid, errors}} = McpLog.record(%{})
+      assert errors != %{}
     end
   end
 
@@ -178,7 +177,7 @@ defmodule Arca.McpLogTest do
 
       platform = Arca.Test.Actor.platform(user_id: "admin")
 
-      assert %McpLog{id: "req_plat"} = McpLog.get_tenant(platform, log.id)
+      assert %{id: "req_plat"} = McpLog.get_tenant(platform, log.id)
     end
 
     test "athanor scope filters by tenant" do
@@ -194,7 +193,7 @@ defmodule Arca.McpLogTest do
 
       miss = %{match | athanor_id: "ath_b"}
 
-      assert %McpLog{} = McpLog.get_tenant(match, "req_t1")
+      assert %{id: _} = McpLog.get_tenant(match, "req_t1")
       assert is_nil(McpLog.get_tenant(miss, "req_t1"))
     end
   end
@@ -212,7 +211,7 @@ defmodule Arca.McpLogTest do
       platform = Arca.Test.Actor.platform(user_id: "admin")
 
       assert is_nil(McpLog.get_tenant(platform, "req_del1"))
-      assert %McpLog{} = McpLog.get_tenant(platform, "req_del2")
+      assert %{id: _} = McpLog.get_tenant(platform, "req_del2")
     end
 
     test "respects tenant scoping" do
@@ -245,7 +244,7 @@ defmodule Arca.McpLogTest do
       # ath_a record deleted
       assert is_nil(McpLog.get_tenant(platform, "req_delt1"))
       # ath_b record untouched
-      assert %McpLog{} = McpLog.get_tenant(platform, "req_delt2")
+      assert %{id: _} = McpLog.get_tenant(platform, "req_delt2")
     end
   end
 

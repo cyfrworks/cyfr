@@ -389,7 +389,7 @@ defmodule Aqua.ApprovalsTest do
 
     launched =
       Arca.Repo.all(
-        from(e in Arca.Execution,
+        from(e in Arca.Schemas.Execution,
           where:
             e.athanor_id == ^ctx.athanor_id and
               like(e.reference, "formula:local.list-models%")

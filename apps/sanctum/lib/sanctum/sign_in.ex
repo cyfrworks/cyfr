@@ -37,7 +37,6 @@ defmodule Sanctum.SignIn do
 
   require Logger
 
-  alias Arca.Schemas.User
   alias Sanctum.Slug
   alias Sanctum.Tenancy.{Members, Users}
 
@@ -58,13 +57,14 @@ defmodule Sanctum.SignIn do
   @type probe ::
           :ok | :skipped | :failed | :invalid_token | :legal_required | :namespace_conflict
   @type report :: %{unsynced: [String.t()], probe: probe()}
-  @type outcome :: {:proceed, User.t(), report()}
+  @type outcome :: {:proceed, Sanctum.Tenancy.Users.user(), report()}
 
   @doc """
   Record the admitted sign-in. `user_info` carries `id`, `provider`,
   `email`, `verified` (`true | false | :unknown`) and `name`.
   """
-  @spec admitted(map(), :admin | :allowed) :: {:ok, Arca.Schemas.User.t()} | {:error, term()}
+  @spec admitted(map(), :admin | :allowed) ::
+          {:ok, Sanctum.Tenancy.Users.user()} | {:error, term()}
   def admitted(%{id: _identity} = user_info, verdict) when verdict in [:admin, :allowed] do
     with {:ok, user} <- identify(user_info, verdict) do
       user_id = user.id
@@ -106,7 +106,8 @@ defmodule Sanctum.SignIn do
   # upsert's answer is checked against them too, and the grant or revoke
   # checks them again under the person's lock. `{:error, :stale_identity}`
   # is this assertion having been overtaken; the person signs in again.
-  @spec identify(map(), :admin | :allowed) :: {:ok, User.t()} | {:error, term()}
+  @spec identify(map(), :admin | :allowed) ::
+          {:ok, Sanctum.Tenancy.Users.user()} | {:error, term()}
   def identify(user_info, verdict) when verdict in [:admin, :allowed] do
     with {:ok, user} <- Users.upsert_from_provider(user_info) do
       expected = expected_identity(user_info, user)
@@ -127,8 +128,8 @@ defmodule Sanctum.SignIn do
   # assertion carried none, since an absent claim leaves the stored one in
   # place — and the verification claim as `true`, `false`, or `nil` for
   # anything else.
-  @spec expected_identity(map(), User.t()) :: Arca.Members.identity()
-  def expected_identity(user_info, %User{} = user) do
+  @spec expected_identity(map(), Sanctum.Tenancy.Users.user()) :: Arca.Members.identity()
+  def expected_identity(user_info, %{id: _} = user) do
     email =
       case Map.get(user_info, :email) do
         email when is_binary(email) and email != "" -> String.downcase(email)
@@ -153,7 +154,7 @@ defmodule Sanctum.SignIn do
   registry, not this server, would have to say which is right).
   """
   @spec record_namespace(String.t(), String.t()) ::
-          {:ok, User.t()}
+          {:ok, Sanctum.Tenancy.Users.user()}
           | {:error, :not_found | :invalid_slug | :namespace_owned_by_another_identity | term()}
   def record_namespace(user_id, slug) when is_binary(user_id) and is_binary(slug) do
     with true <- Cyfr.ComponentRef.valid_personal_slug?(slug) || {:error, :invalid_slug},
@@ -184,7 +185,7 @@ defmodule Sanctum.SignIn do
 
         true ->
           case Users.get_by_namespace(slug) do
-            {:ok, %User{id: other}} when other != user_id ->
+            {:ok, %{id: other}} when other != user_id ->
               {:error, :namespace_owned_by_another_identity}
 
             {:error, :database_error} = err ->
@@ -207,8 +208,8 @@ defmodule Sanctum.SignIn do
   screen name, else the address's local part, else a provider-flavoured
   placeholder.
   """
-  @spec suggested_slug(User.t(), String.t() | atom()) :: String.t() | nil
-  def suggested_slug(%User{display_name: name, email: email}, provider) do
+  @spec suggested_slug(Sanctum.Tenancy.Users.user(), String.t() | atom()) :: String.t() | nil
+  def suggested_slug(%{display_name: name, email: email}, provider) do
     Slug.from_name(name) || Slug.from_email(email) || Slug.from_name("user-#{provider}")
   end
 

@@ -136,6 +136,7 @@ defmodule Arca.RateWindows do
     Arca.Repo.Errors.with_db_rescue("Arca.RateWindows.claim", fn ->
       claim_at(actor, bucket, cap, window_ms, Arca.ServerMetaStorage.now!())
     end)
+    |> Arca.Data.project()
   end
 
   def claim(%Cyfr.Actor{}, _bucket, _cap, _window_ms), do: {:error, :no_athanor}
@@ -156,6 +157,7 @@ defmodule Arca.RateWindows do
         do: {:refused, window_ms},
         else: take(facts(athanor_id, bucket, cap, window_ms, now), @rounds)
     end)
+    |> Arca.Data.project()
   end
 
   def claim_at(%Cyfr.Actor{}, _bucket, _cap, _window_ms, _now), do: {:error, :no_athanor}
@@ -179,6 +181,7 @@ defmodule Arca.RateWindows do
       used = div(prior * (window_ms - elapsed) + count * window_ms, window_ms)
       {:ok, used, remaining(prior, count, elapsed, window_ms, cap), window_ms}
     end)
+    |> Arca.Data.project()
   end
 
   def estimate(%Cyfr.Actor{}, _bucket, _cap, _window_ms), do: {:error, :no_athanor}
@@ -198,6 +201,7 @@ defmodule Arca.RateWindows do
 
       :ok
     end)
+    |> Arca.Data.project()
   end
 
   def clear(%Cyfr.Actor{}, _bucket), do: {:error, :no_athanor}
@@ -218,6 +222,7 @@ defmodule Arca.RateWindows do
       now = Arca.ServerMetaStorage.now!()
       Enum.sum(Enum.map(widths(), &purge_width(&1, now)))
     end)
+    |> Arca.Data.project()
   end
 
   # ---- internal --------------------------------------------------------------

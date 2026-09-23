@@ -608,31 +608,48 @@ defmodule Aqua.Notes do
 
   # The estate a locator names, as the reader may open it: a seat they do
   # not hold, or an archived estate, reads as no such note — the locator
-  # is not a way to learn which estates exist.
+  # is not a way to learn which estates exist. A store that cannot answer
+  # is unavailable, never an absence.
   defp locate(ctx, athanor_id) do
     case Context.focus(ctx, athanor_id) do
       {:ok, focused} -> {:ok, focused}
+      {:error, :unavailable} -> {:error, {:unavailable, "Storage"}}
       {:error, _} -> {:error, {:not_found, "estate", athanor_id}}
     end
   end
 
   # Every seat the person holds, the focus first. An estate the focus can
   # no longer open (archived between the listing and the read) is skipped,
-  # not an error — the answer is what can be read now.
+  # not an error — the answer is what can be read now. A store that cannot
+  # answer refuses the whole read: an estate skipped for an outage would
+  # read as one holding no notes.
   defp contexts(%Context{} = ctx, "everywhere") do
-    with :ok <- guest_may_cross(ctx) do
-      others =
-        for athanor <- Enum.sort_by(Sanctum.Tenancy.list_athanors(ctx), & &1.id),
-            athanor.id != ctx.athanor_id,
-            {:ok, focused} <- [Context.focus(ctx, athanor)],
-            do: focused
-
+    with :ok <- guest_may_cross(ctx),
+         {:ok, others} <- other_seats(ctx) do
       {:ok, [ctx | others]}
     end
   end
 
   defp contexts(ctx, scope) do
     with {:ok, one} <- read_context(ctx, scope, nil), do: {:ok, [one]}
+  end
+
+  defp other_seats(ctx) do
+    ctx
+    |> Sanctum.Tenancy.list_athanors()
+    |> Enum.sort_by(& &1.id)
+    |> Enum.reject(&(&1.id == ctx.athanor_id))
+    |> Enum.reduce_while({:ok, []}, fn athanor, {:ok, focused} ->
+      case Context.focus(ctx, athanor) do
+        {:ok, one} -> {:cont, {:ok, [one | focused]}}
+        {:error, :unavailable} -> {:halt, {:error, {:unavailable, "Storage"}}}
+        {:error, _refused} -> {:cont, {:ok, focused}}
+      end
+    end)
+    |> case do
+      {:ok, focused} -> {:ok, Enum.reverse(focused)}
+      refused -> refused
+    end
   end
 
   # A running chain reads across estates only from the person's own
@@ -664,6 +681,9 @@ defmodule Aqua.Notes do
     else
       :none ->
         {:error, {:invalid_argument, "you have no personal athanor"}}
+
+      {:error, :unavailable} ->
+        {:error, {:unavailable, "Storage"}}
 
       {:error, reason} ->
         {:error, {:invalid_argument, "your personal athanor cannot be opened (#{reason})"}}

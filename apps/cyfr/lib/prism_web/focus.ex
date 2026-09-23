@@ -110,7 +110,7 @@ defmodule PrismWeb.Focus do
   def route_of(_), do: nil
 
   @doc "The page path for an athanor: `/a/<route>` + `suffix`."
-  @spec path(Arca.Schemas.Athanor.t() | String.t(), String.t()) :: String.t()
+  @spec path(Sanctum.Tenancy.Athanors.athanor() | String.t(), String.t()) :: String.t()
   def path(%{} = athanor, suffix), do: path(Athanors.route_slug(athanor), suffix)
   def path(route, suffix) when is_binary(route), do: "/a/" <> route <> suffix
   # A page rendered before focus (no athanor yet) links to the root, which

@@ -729,7 +729,7 @@ defmodule Opus.ModelContractTest do
     # call's arguments, the whole request: none of it is the run's error,
     # which the rows below, the thread and the log all carry.
     assert error =~ ~r/^Component call failed for .*wasm trap/
-    assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Execution, id)
+    assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert %{error: turn_error} = played.turn
     told = Enum.find(played.rows, &(&1.content =~ "The model could not be reached"))
     assert %{author: "system"} = told
@@ -756,7 +756,10 @@ defmodule Opus.ModelContractTest do
              for({:delta_abandoned, marker} <- played.seen.thread, do: marker)
 
     assert {:turn_finished} in played.seen.thread
-    assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, played.turn.root_execution_id)
+
+    assert %{status: "failed"} =
+             Arca.Repo.get!(Arca.Schemas.Execution, played.turn.root_execution_id)
+
     assert [] = key_leaks(ctx, played)
 
     # The thread takes the next turn, which a script of its own plays.
@@ -782,7 +785,7 @@ defmodule Opus.ModelContractTest do
              played.steps
 
     assert error =~ ~r/^Execution timeout after \d+ms$/
-    assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Execution, id)
+    assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert %{type: "execution.failed"} = List.last(Map.fetch!(played.seen.streams, id))
     assert [] = agent_rows(played)
     assert {:turn_finished} in played.seen.thread
@@ -994,7 +997,7 @@ defmodule Opus.ModelContractTest do
 
   # The usage an execution's row keeps in its output's envelope.
   defp execution_usage(execution_id) do
-    Arca.Execution
+    Arca.Schemas.Execution
     |> Arca.Repo.get!(execution_id)
     |> Map.fetch!(:output)
     |> Jason.decode!()
@@ -1062,7 +1065,7 @@ defmodule Opus.ModelContractTest do
 
     ids =
       Arca.Repo.all(
-        from(e in Arca.Execution, where: e.athanor_id == ^ctx.athanor_id, select: e.id)
+        from(e in Arca.Schemas.Execution, where: e.athanor_id == ^ctx.athanor_id, select: e.id)
       )
 
     for id <- ids,

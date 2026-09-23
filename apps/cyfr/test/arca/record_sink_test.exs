@@ -208,13 +208,13 @@ defmodule Arca.RecordSinkTest do
       :ok = Arca.RecordSink.flush()
 
       assert %{status: "success", duration_ms: 3, tool: "athanor"} =
-               Arca.Repo.get(Arca.McpLog, id)
+               Arca.Repo.get(Arca.Schemas.McpLog, id)
 
       # The start, shed or late, does not reopen the row.
       Arca.RecordSink.enqueue({:mcp_log_started, started_row(id)})
       :ok = Arca.RecordSink.flush()
-      assert %{status: "success", duration_ms: 3} = Arca.Repo.get(Arca.McpLog, id)
-      assert 1 == Arca.Repo.aggregate(from(l in Arca.McpLog, where: l.id == ^id), :count)
+      assert %{status: "success", duration_ms: 3} = Arca.Repo.get(Arca.Schemas.McpLog, id)
+      assert 1 == Arca.Repo.aggregate(from(l in Arca.Schemas.McpLog, where: l.id == ^id), :count)
     end
 
     test "a start then its close, in one batch or two, is the same row" do
@@ -226,7 +226,9 @@ defmodule Arca.RecordSinkTest do
       )
 
       :ok = Arca.RecordSink.flush()
-      assert %{status: "error", error_code: -1, error: "no"} = Arca.Repo.get(Arca.McpLog, id)
+
+      assert %{status: "error", error_code: -1, error: "no"} =
+               Arca.Repo.get(Arca.Schemas.McpLog, id)
     end
   end
 end

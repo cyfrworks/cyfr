@@ -119,11 +119,11 @@ defmodule Opus.CancelCascadeCharacterizationTest do
 
     assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root_id)
 
-    assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Execution, root_id)
+    assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Schemas.Execution, root_id)
     assert ["execution.cancelled"] = terminal_events(ctx, root_id)
 
     for child_id <- [spawned_id, stream_id] do
-      child = Arca.Repo.get!(Arca.Execution, child_id)
+      child = Arca.Repo.get!(Arca.Schemas.Execution, child_id)
       assert child.status == "failed"
       assert child.error_message == "Parent execution (#{root_id}) terminated"
       assert child.parent_execution_id == root_id
@@ -144,15 +144,15 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     assert %{charged: 0} =
              Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), authority.budget.id)
 
-    assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Execution, root_id)
+    assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Schemas.Execution, root_id)
     assert ["execution.cancelled"] = terminal_events(ctx, root_id)
 
     for child_id <- [spawned_id, stream_id] do
-      assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, child_id)
+      assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, child_id)
       assert ["execution.failed"] = terminal_events(ctx, child_id)
     end
 
-    run = from(e in Arca.Execution, where: e.root_execution_id == ^root_id, select: e.id)
+    run = from(e in Arca.Schemas.Execution, where: e.root_execution_id == ^root_id, select: e.id)
     assert Enum.sort(Arca.Repo.all(run)) == Enum.sort([root_id, spawned_id, stream_id])
   end
 
@@ -178,7 +178,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
       assert_receive {:cancelled, cancel}, 30_000
       wait_until(fn -> not Process.alive?(root) end, 30_000)
 
-      row = Arca.Repo.get!(Arca.Execution, root_id)
+      row = Arca.Repo.get!(Arca.Schemas.Execution, root_id)
       assert [terminal] = terminal_events(ctx, root_id)
 
       case row.status do

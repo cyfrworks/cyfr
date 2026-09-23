@@ -61,7 +61,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
         created_by: user.id
       })
 
-    {:ok, user} = Arca.Users.update(server(), user, %{personal_athanor_id: estate.id})
+    {:ok, user} = Arca.Users.update(server(), user.id, %{personal_athanor_id: estate.id})
     seat!(estate.id, user.id)
     {user, estate}
   end
@@ -287,7 +287,7 @@ defmodule Arca.SecurityTransitionsTest do
                SecurityTransitions.deny_user(server(), plain.id, verify: admit())
 
       dangling = person!()
-      {:ok, _} = Arca.Users.update(server(), dangling, %{personal_athanor_id: "ath_nowhere"})
+      {:ok, _} = Arca.Users.update(server(), dangling.id, %{personal_athanor_id: "ath_nowhere"})
       session = session!(dangling.id)
 
       assert {:error, :dangling_personal_athanor} =
@@ -503,10 +503,10 @@ defmodule Arca.SecurityTransitionsTest do
       user = person!()
 
       assert {:error, {:invalid, %{security_generation: ["is read-only"]}}} =
-               Arca.Users.update(server(), user, %{security_generation: 9})
+               Arca.Users.update(server(), user.id, %{security_generation: 9})
 
       assert {:error, {:invalid, %{status: ["is read-only"]}}} =
-               Arca.Users.update(server(), user, %{status: "denied"})
+               Arca.Users.update(server(), user.id, %{status: "denied"})
 
       group = group!()
 

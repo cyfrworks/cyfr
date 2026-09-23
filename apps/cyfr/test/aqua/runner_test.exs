@@ -567,7 +567,8 @@ defmodule Aqua.RunnerTest do
 
     # The root the claim admitted is closed, not left running under a
     # released slot.
-    assert %{status: "failed", kind: "turn"} = Arca.Repo.get_by(Arca.Execution, turn_id: turn.id)
+    assert %{status: "failed", kind: "turn"} =
+             Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
   end
 
   test "a turn addressed to a source with no consent claims no root and asks for setup", %{
@@ -585,7 +586,7 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "failed", root_execution_id: nil, profile_id: nil}} =
              Tape.turn(ctx, turn.id)
 
-    assert nil == Arca.Repo.get_by(Arca.Execution, turn_id: turn.id)
+    assert nil == Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
     user = ctx.user_id
     assert_receive {:thread, _, {:consent_required, "agent:local.ghost", ^user}}, 5_000
   end
@@ -1347,7 +1348,10 @@ defmodule Aqua.RunnerTest do
       send(pids.runner, {:"$gen_call", {self(), tag}, {:stop, caller}})
 
       if unquote(standing) == :denied_person do
-        user |> Ecto.Changeset.change(status: "denied") |> Arca.Repo.update!()
+        Arca.Schemas.User
+        |> Arca.Repo.get!(user.id)
+        |> Ecto.Changeset.change(status: "denied")
+        |> Arca.Repo.update!()
       end
 
       :ok = :sys.resume(pids.runner)

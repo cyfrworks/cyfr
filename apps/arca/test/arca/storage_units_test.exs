@@ -11,7 +11,7 @@ defmodule Arca.StorageUnitsTest do
 
   use ExUnit.Case, async: false
 
-  alias Arca.Schemas.{StorageCommit, StorageUnit}
+  alias Arca.Schemas.StorageUnit
   alias Arca.StorageUnits
 
   @root "components"
@@ -159,7 +159,7 @@ defmodule Arca.StorageUnitsTest do
       assert {:ok, %{state: "committed", current_revision: "rev_1", draft_writer_token: nil}} =
                StorageUnits.current(actor, @root, key)
 
-      assert {:ok, [%StorageCommit{} = commit]} = StorageUnits.journal(actor, @root, key)
+      assert {:ok, [%{id: _} = commit]} = StorageUnits.journal(actor, @root, key)
 
       assert %{
                athanor_id: "ath_a",

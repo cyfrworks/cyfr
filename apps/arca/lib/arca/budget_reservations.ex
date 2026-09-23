@@ -70,12 +70,13 @@ defmodule Arca.BudgetReservations do
 
   @doc "Entry-point form of `mint!/4`."
   @spec mint(Cyfr.Actor.t(), String.t(), String.t(), pos_integer()) ::
-          {:ok, BudgetReservation.t()} | {:error, term()}
+          {:ok, map()} | {:error, term()}
   def mint(%Cyfr.Actor{athanor_id: athanor_id} = actor, root_execution_id, budget_id, cap)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.mint", fn ->
       Arca.Repo.transaction(fn -> mint!(actor, root_execution_id, budget_id, cap) end)
     end)
+    |> Arca.Data.project()
   end
 
   def mint(%Cyfr.Actor{}, _root_execution_id, _budget_id, _cap), do: {:error, :no_athanor}
@@ -166,6 +167,7 @@ defmodule Arca.BudgetReservations do
         other -> other
       end
     end)
+    |> Arca.Data.project()
   end
 
   def charge(%Cyfr.Actor{}, _reservation_id, _charge, _n, _opts), do: {:error, :no_athanor}
@@ -185,6 +187,7 @@ defmodule Arca.BudgetReservations do
         other -> other
       end
     end)
+    |> Arca.Data.project()
   end
 
   def release(%Cyfr.Actor{}, _reservation_id, _id), do: {:error, :no_athanor}
@@ -235,7 +238,7 @@ defmodule Arca.BudgetReservations do
   A reservation by its id alone — the identity an Authority carries over
   the wire, whose row names the athanor it belongs to.
   """
-  @spec fetch(String.t()) :: {:ok, BudgetReservation.t()} | {:error, :not_found | term()}
+  @spec fetch(String.t()) :: {:ok, map()} | {:error, :not_found | term()}
   # arca:unscoped-ok the id is the wire's identity of one root's
   # reservation; the row answers with its own athanor.
   def fetch(id) when is_binary(id) do
@@ -245,10 +248,11 @@ defmodule Arca.BudgetReservations do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc "A reservation by its id, within the athanor."
-  @spec lookup(Cyfr.Actor.t(), String.t()) :: BudgetReservation.t() | nil | {:error, term()}
+  @spec lookup(Cyfr.Actor.t(), String.t()) :: map() | nil | {:error, term()}
   def lookup(%Cyfr.Actor{athanor_id: athanor_id}, id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.lookup", fn ->
@@ -256,12 +260,13 @@ defmodule Arca.BudgetReservations do
         from(r in BudgetReservation, where: r.athanor_id == ^athanor_id and r.id == ^id)
       )
     end)
+    |> Arca.Data.project()
   end
 
   def lookup(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc "The live charges of a reservation."
-  @spec charges(Cyfr.Actor.t(), String.t()) :: {:ok, [BudgetCharge.t()]} | {:error, term()}
+  @spec charges(Cyfr.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def charges(%Cyfr.Actor{athanor_id: athanor_id}, reservation_id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.charges", fn ->
@@ -273,6 +278,7 @@ defmodule Arca.BudgetReservations do
          )
        )}
     end)
+    |> Arca.Data.project()
   end
 
   def charges(%Cyfr.Actor{}, _reservation_id), do: {:error, :no_athanor}
@@ -295,7 +301,7 @@ defmodule Arca.BudgetReservations do
 
         dead_holders =
           from(a in ExecutionAttempt,
-            join: e in Arca.Execution,
+            join: e in Arca.Schemas.Execution,
             on: e.current_attempt == a.attempt,
             where: a.athanor_id == ^athanor_id and a.state in ^terminal,
             select: e.id
@@ -328,6 +334,7 @@ defmodule Arca.BudgetReservations do
         length(rows)
       end)
     end)
+    |> Arca.Data.project()
   end
 
   def sweep(%Cyfr.Actor{}), do: {:error, :no_athanor}
@@ -395,7 +402,7 @@ defmodule Arca.BudgetReservations do
   defp attempt_owns?(athanor_id, attempt) do
     Arca.Repo.exists?(
       from(a in ExecutionAttempt,
-        join: e in Arca.Execution,
+        join: e in Arca.Schemas.Execution,
         on: e.id == a.execution_id,
         where: a.athanor_id == ^athanor_id and a.attempt == ^attempt,
         where: e.current_attempt == ^attempt and a.state in ["running", "paused"]

@@ -87,7 +87,7 @@ defmodule Sanctum.Caller do
           {:session, String.t() | nil}
           | {:api_key, String.t()}
           | {:tincture_token, String.t()}
-          | {:webhook, Arca.Schemas.Webhook.t()}
+          | {:webhook, %{required(:slug) => String.t(), optional(atom()) => term()}}
 
   @doc """
   Establish the caller behind a session token.
@@ -180,7 +180,7 @@ defmodule Sanctum.Caller do
     end
   end
 
-  def establish({:webhook, %Arca.Schemas.Webhook{} = webhook}, opts) do
+  def establish({:webhook, %{slug: slug} = webhook}, opts) when is_binary(slug) do
     # The stored row must not remain a standing execution channel once its
     # athanor is archived or its creator denied here.
     if Sanctum.Tenancy.channel_active?(webhook.athanor_id, webhook.created_by) do
@@ -694,6 +694,7 @@ defmodule Sanctum.Caller do
   defp refocus(rebuilt, athanor_id) do
     case Context.focus(rebuilt, athanor_id) do
       {:ok, focused} -> {:ok, focused}
+      {:error, :unavailable} -> {:error, :unavailable}
       {:error, _refused} -> {:error, :not_member}
     end
   end

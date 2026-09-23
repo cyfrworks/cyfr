@@ -40,8 +40,8 @@ defmodule Arca.PolicyLogTest do
     end
 
     test "rejects missing required fields" do
-      assert {:error, changeset} = PolicyLog.record(%{})
-      refute changeset.valid?
+      assert {:error, {:invalid, errors}} = PolicyLog.record(%{})
+      assert errors != %{}
     end
   end
 
@@ -115,7 +115,7 @@ defmodule Arca.PolicyLogTest do
 
       platform_actor = Arca.Test.Actor.platform(user_id: "admin")
 
-      assert %PolicyLog{id: "pl_plat"} = PolicyLog.get_tenant(platform_actor, log.id)
+      assert %{id: "pl_plat"} = PolicyLog.get_tenant(platform_actor, log.id)
     end
 
     test "athanor scope filters by tenant" do
@@ -132,7 +132,7 @@ defmodule Arca.PolicyLogTest do
 
       actor_miss = %{actor_match | athanor_id: "ath_b"}
 
-      assert %PolicyLog{} = PolicyLog.get_tenant(actor_match, "pl_t1")
+      assert %{id: _} = PolicyLog.get_tenant(actor_match, "pl_t1")
       assert is_nil(PolicyLog.get_tenant(actor_miss, "pl_t1"))
     end
   end
@@ -143,7 +143,7 @@ defmodule Arca.PolicyLogTest do
 
       platform_actor = Arca.Test.Actor.platform(user_id: "admin")
 
-      assert %PolicyLog{request_id: "req_plat"} =
+      assert %{request_id: "req_plat"} =
                PolicyLog.get_by_request_id_tenant(platform_actor, "req_plat")
     end
 
@@ -167,7 +167,7 @@ defmodule Arca.PolicyLogTest do
 
       actor_miss = %{actor_match | athanor_id: "ath_b"}
 
-      assert %PolicyLog{} = PolicyLog.get_by_request_id_tenant(actor_match, "req_scoped")
+      assert %{id: _} = PolicyLog.get_by_request_id_tenant(actor_match, "req_scoped")
       assert is_nil(PolicyLog.get_by_request_id_tenant(actor_miss, "req_scoped"))
     end
   end

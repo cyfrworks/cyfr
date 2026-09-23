@@ -4,83 +4,38 @@
 defmodule Arca.SecurityTransitions.Projection do
   @moduledoc false
   # The plain maps a transition's or an issuance's `verify:` callback is
-  # handed: the locked rows, field by field, and nothing that belongs to
-  # Ecto. A callback decides on what these say and never receives a
-  # changeset or a row it could write back.
+  # handed: the locked rows projected (`Arca.Data`) and narrowed to the
+  # fields a standing decision reads. A callback decides on what these say
+  # and never receives a changeset, a row it could write back, or a
+  # credential's hash — the session's token hash and a key's hash are the
+  # lookup keys the caller already holds, and a callback has no use for
+  # them.
 
   alias Arca.Schemas.{ApiKey, Athanor, Membership, Session, User}
 
-  @spec user(User.t() | nil) :: map() | nil
-  def user(nil), do: nil
+  @user ~w(id email email_verified status denied_at personal_athanor_id security_generation)a
+  @athanor ~w(id kind roster name owner_user_id created_by status archived_at security_generation)a
+  @membership ~w(id user_id email athanor_id scope status)a
+  @session ~w(id user_id athanor_id expires_at)a
+  @api_key ~w(id name athanor_id created_by revoked ip_allowlist)a
 
-  def user(%User{} = user) do
-    %{
-      id: user.id,
-      email: user.email,
-      email_verified: user.email_verified,
-      status: user.status,
-      denied_at: user.denied_at,
-      personal_athanor_id: user.personal_athanor_id,
-      security_generation: user.security_generation
-    }
-  end
+  @spec user(User.t() | nil) :: map() | nil
+  def user(row), do: narrowed(row, User, @user)
 
   @spec athanor(Athanor.t() | nil) :: map() | nil
-  def athanor(nil), do: nil
-
-  def athanor(%Athanor{} = athanor) do
-    %{
-      id: athanor.id,
-      kind: athanor.kind,
-      roster: athanor.roster,
-      name: athanor.name,
-      owner_user_id: athanor.owner_user_id,
-      created_by: athanor.created_by,
-      status: athanor.status,
-      archived_at: athanor.archived_at,
-      security_generation: athanor.security_generation
-    }
-  end
+  def athanor(row), do: narrowed(row, Athanor, @athanor)
 
   @spec membership(Membership.t() | nil) :: map() | nil
-  def membership(nil), do: nil
+  def membership(row), do: narrowed(row, Membership, @membership)
 
-  def membership(%Membership{} = membership) do
-    %{
-      id: membership.id,
-      user_id: membership.user_id,
-      email: membership.email,
-      athanor_id: membership.athanor_id,
-      scope: membership.scope,
-      status: membership.status
-    }
-  end
-
-  # The session row without its token hash: the hash is the lookup key the
-  # caller already holds, and a callback has no use for it.
   @spec session(Session.t() | nil) :: map() | nil
-  def session(nil), do: nil
-
-  def session(%Session{} = session) do
-    %{
-      id: session.id,
-      user_id: session.user_id,
-      athanor_id: session.athanor_id,
-      expires_at: session.expires_at
-    }
-  end
+  def session(row), do: narrowed(row, Session, @session)
 
   @spec api_key(ApiKey.t() | nil) :: map() | nil
-  def api_key(nil), do: nil
+  def api_key(row), do: narrowed(row, ApiKey, @api_key)
 
-  def api_key(%ApiKey{} = key) do
-    %{
-      id: key.id,
-      name: key.name,
-      athanor_id: key.athanor_id,
-      created_by: key.created_by,
-      revoked: key.revoked,
-      ip_allowlist: key.ip_allowlist
-    }
-  end
+  defp narrowed(nil, _schema, _fields), do: nil
+
+  defp narrowed(%schema{} = row, schema, fields),
+    do: row |> Arca.Data.project() |> Map.take(fields)
 end

@@ -295,7 +295,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       # Logging is synchronous — no wait needed
 
       # Verify log was created
-      log = Arca.Repo.get(Arca.McpLog, request_id)
+      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
 
       assert log.id == request_id
       assert log.method == "server/discover"
@@ -325,7 +325,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       # Logging is synchronous — no wait needed
 
-      log = Arca.Repo.get(Arca.McpLog, request_id)
+      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
 
       assert log.method == "tools/call"
       assert log.tool == "system"
@@ -838,7 +838,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         [request_id] = get_resp_header(tool_conn, "x-request-id")
 
         # Logging is synchronous — no wait needed
-        log = Arca.Repo.get(Arca.McpLog, request_id)
+        log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
         assert log.routed_to == @expected_service
 
         # Cleanup
@@ -868,7 +868,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         [request_id] = get_resp_header(tool_conn, "x-request-id")
 
         # Logging is synchronous — no wait needed
-        log = Arca.Repo.get(Arca.McpLog, request_id)
+        log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
         assert log.routed_to == @expected_service
 
         # Cleanup
@@ -895,7 +895,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       # Logging is synchronous — no wait needed
 
-      log = Arca.Repo.get(Arca.McpLog, request_id)
+      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
       assert log.routed_to == "emissary"
 
       # Cleanup

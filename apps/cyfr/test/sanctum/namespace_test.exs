@@ -28,7 +28,11 @@ defmodule Sanctum.NamespaceTest do
 
     if is_binary(namespace) do
       # Written straight to the row: the rule is re-checked on read.
-      {:ok, _} = user |> Ecto.Changeset.change(namespace: namespace) |> Arca.Repo.update()
+      {:ok, _} =
+        Arca.Schemas.User
+        |> Arca.Repo.get!(user.id)
+        |> Ecto.Changeset.change(namespace: namespace)
+        |> Arca.Repo.update()
     end
 
     user.id

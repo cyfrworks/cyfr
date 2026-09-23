@@ -48,6 +48,9 @@ defmodule Compendium.Provisioning do
   alias Sanctum.Context
   alias Sanctum.Provisioning, as: Estate
 
+  @typedoc "An athanor's row, as the plain map the tenancy facade answers."
+  @type athanor :: %{required(:id) => String.t(), optional(atom()) => term()}
+
   # How long a boot's seed sync waits for an estate another attempt holds.
   @sync_wait_ms 30_000
   @sync_poll_ms 250
@@ -211,8 +214,8 @@ defmodule Compendium.Provisioning do
   pull is not free, so two callers finding a fresh estate at once would
   each walk it.
   """
-  @spec provision(Arca.Schemas.Athanor.t(), Context.t() | nil) ::
-          {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
+  @spec provision(athanor(), Context.t() | nil) ::
+          {:ok, athanor()} | {:error, term()}
   def provision(%{provisioned_at: %DateTime{}} = athanor, _ctx), do: {:ok, athanor}
 
   def provision(athanor, acting_ctx), do: attempt(athanor, acting_ctx, "provision")
@@ -225,8 +228,8 @@ defmodule Compendium.Provisioning do
   # One attempt under a claim already taken — what every filling entry
   # point runs once it holds the estate. Public so a test can run an
   # attempt under a claim it took, and lost, itself.
-  @spec fill(Estate.claim(), Arca.Schemas.Athanor.t(), Context.t() | nil) ::
-          {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
+  @spec fill(Estate.claim(), athanor(), Context.t() | nil) ::
+          {:ok, athanor()} | {:error, term()}
   def fill(claim, %{id: athanor_id} = athanor, acting_ctx) do
     # Re-read under the claim: the attempt that just held it may have been
     # filling this very athanor.
