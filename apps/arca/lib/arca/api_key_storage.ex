@@ -273,10 +273,14 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Rotate a key: update key_hash, key_prefix, and rotated_at, in the
-  issuance transaction (`Arca.SecurityTransitions.Issuance`) under the
-  rotating caller's `lock:` and `verify:`. The key rotated is locked last,
-  by the statement that rotates it.
+  Rotate a key, in the issuance transaction
+  (`Arca.SecurityTransitions.Issuance`) under the rotating caller's
+  `lock:` and `verify:`: the key's row is locked last and retired —
+  revoked, its hash replaced so the old secret matches no row — and a new
+  row with the same name and settings carries the new secret. A rotation
+  is a new credential: anything bound to the old row's id (a tincture
+  token derived from it) is retired with it, and no row that follows can
+  take that id back.
   """
   @spec rotate_key(Cyfr.Actor.t(), String.t(), binary(), String.t(), keyword()) ::
           :ok | {:error, term()}
@@ -302,20 +306,50 @@ defmodule Arca.ApiKeyStorage do
   defp rotate_row(athanor_id, name, new_key_hash, new_key_prefix) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    query =
+    current =
       from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
       |> where_athanor(athanor_id)
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.one()
 
-    case Arca.Repo.update_all(query,
-           set: [
-             key_hash: new_key_hash,
-             key_prefix: new_key_prefix,
-             rotated_at: now,
-             updated_at: now
-           ]
-         ) do
-      {0, _} -> {:error, :not_found}
-      {_, _} -> {:ok, :rotated}
+    case current do
+      nil ->
+        {:error, :not_found}
+
+      %ApiKey{} = old ->
+        # Retired before its successor is written: the name is unique among
+        # unrevoked keys, and the old secret must match no row at all.
+        {1, _} =
+          from(k in ApiKey, where: k.id == ^old.id and k.athanor_id == ^athanor_id)
+          |> Arca.Repo.update_all(
+            set: [
+              revoked: true,
+              key_hash: :crypto.hash(:sha256, "rotated:" <> old.key_hash),
+              updated_at: now
+            ]
+          )
+
+        Arca.Repo.insert_all(ApiKey, [
+          %{
+            id: Cyfr.UUID7.generate_id("key"),
+            name: old.name,
+            key_hash: new_key_hash,
+            key_prefix: new_key_prefix,
+            type: old.type,
+            scope: old.scope,
+            rate_limit: old.rate_limit,
+            ip_allowlist: old.ip_allowlist,
+            capability: old.capability,
+            revoked: false,
+            created_by: old.created_by,
+            rotated_at: now,
+            athanor_id: athanor_id,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+        {:ok, :rotated}
     end
   end
 end

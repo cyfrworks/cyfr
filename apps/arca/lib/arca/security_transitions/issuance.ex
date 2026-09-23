@@ -10,7 +10,7 @@ defmodule Arca.SecurityTransitions.Issuance do
   issuance rereads its result, or waits for the credential and then
   retires it.
 
-  `lock` names the rows: the person (`:user_id`), the estate the
+  `targets` names the rows: the person (`:user_id`), the estate the
   credential works in (`:athanor_id`, or nil), the membership that
   authorized the caller's focus (`:membership_id`, or nil) and the
   credential the caller holds (`:source`: `{:session, token_hash}`,
@@ -40,28 +40,17 @@ defmodule Arca.SecurityTransitions.Issuance do
           required(:source) => source()
         }
 
-  @doc "Lock `lock`'s rows, ask `verify`, then `write`, in one locking transaction."
+  @doc "Lock `targets`' rows, ask `verify`, then `write`, in one locking transaction."
   @spec run(
           targets(),
           (map() -> :ok | {:error, term()}),
           (map() -> {:ok, term()} | {:error, term()})
         ) :: {:ok, term()} | {:error, term()}
   # arca:db-raise-ok a transaction step: every caller (`Arca.SessionStorage`, `Arca.ApiKeyStorage`) rescues around it.
-  def run(%{user_id: user_id} = lock, verify, write)
+  def run(%{user_id: user_id} = targets, verify, write)
       when is_binary(user_id) and is_function(verify, 1) and is_function(write, 1) do
     fn ->
-      user = lock_user(user_id)
-      athanor = lock_athanor(Map.get(lock, :athanor_id))
-      membership = lock_membership(Map.get(lock, :membership_id))
-      source = lock_source(Map.get(lock, :source))
-
-      projection = %{
-        user: Projection.user(user),
-        athanor: Projection.athanor(athanor),
-        membership: Projection.membership(membership),
-        source: source,
-        now: Arca.ServerMetaStorage.now!()
-      }
+      projection = locked(targets)
 
       with :ok <- verify.(projection),
            {:ok, result} <- write.(projection) do
@@ -75,6 +64,23 @@ defmodule Arca.SecurityTransitions.Issuance do
       {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  @doc false
+  # The rows `targets` names, locked in the standing order and projected,
+  # with the database's own time read after every lock was won. Runs
+  # inside the caller's locking transaction; `Arca.CredentialBindings`
+  # reads a derived credential's rows through it too.
+  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
+  @spec locked(targets()) :: map()
+  def locked(%{user_id: user_id} = targets) when is_binary(user_id) do
+    %{
+      user: Projection.user(lock_user(user_id)),
+      athanor: Projection.athanor(lock_athanor(Map.get(targets, :athanor_id))),
+      membership: Projection.membership(lock_membership(Map.get(targets, :membership_id))),
+      source: lock_source(Map.get(targets, :source)),
+      now: Arca.ServerMetaStorage.now!()
+    }
   end
 
   defp lock_user(user_id) do

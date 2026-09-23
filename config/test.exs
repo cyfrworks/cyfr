@@ -129,6 +129,13 @@ config :cyfr, cron_scheduler_enabled: false
 # without the permission — every release — starts the gate whatever the
 # switch says (`Cyfr.Application.bootstrap_skipped?/2`).
 config :cyfr, bootstrap_skip_permitted: true
+
+# Fixtures that build an issuing context by hand pass the generations its
+# rows stand at (`Sanctum.TestContext.snapshot!/1`) as `generation_snapshot:`
+# to `Sanctum.Session.create/2` and `Sanctum.ApiKey.create/3`. Compiled in
+# here alone: every release refuses the option as a context with no
+# generations (`Sanctum.Issuance`).
+config :sanctum, issuance_snapshot_permitted: true
 config :cyfr, provisioning_boot_enabled: false
 
 # Likewise the thread-runner boot recovery reads the repo before any

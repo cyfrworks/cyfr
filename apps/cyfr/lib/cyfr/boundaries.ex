@@ -688,6 +688,12 @@ defmodule Cyfr.Boundaries do
     # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
     # (`Cyfr.Application.bootstrap_skipped?/2`).
     bootstrap_skip_permitted: :seam,
+    # Compiled in by the test configurations alone — `config/test.exs` and,
+    # for the standalone build, `apps/sanctum/config/config.exs` — as
+    # `:allow_tenancy_resolver_override` is; it lets a fixture hand an
+    # issuance a generation snapshot read from the rows (`Sanctum.Issuance`),
+    # which every release refuses.
+    issuance_snapshot_permitted: :seam,
 
     # Boot switches with an in-code default; flipping one is a code change.
     cron_scheduler_enabled: :default,

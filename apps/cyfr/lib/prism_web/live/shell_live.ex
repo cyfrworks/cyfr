@@ -319,6 +319,7 @@ defmodule PrismWeb.ShellLive do
       Prism.TinctureRegistry.list_tinctures(ctx)
       |> Enum.map(fn t ->
         ref = Cyfr.ComponentRef.build("tincture", t.publisher, t.name)
+        access = mint_access(socket, t)
 
         public =
           case Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref) do
@@ -339,13 +340,14 @@ defmodule PrismWeb.ShellLive do
           title: t.title,
           tagline: t.tagline,
           icon: t.icon,
-          icon_url: build_asset_url(socket, t, t.media_icon),
+          icon_url: build_asset_url(access, t, t.media_icon),
           icon_emoji: emoji_from_hint(t.icon),
           preview_urls:
             t.media_previews
-            |> Enum.map(&build_asset_url(socket, t, &1))
+            |> Enum.map(&build_asset_url(access, t, &1))
             |> Enum.reject(&is_nil/1),
-          url: build_tincture_url(socket, t),
+          url: build_tincture_url(access, t),
+          url_refusal: refusal(access),
           manifest: t.manifest,
           public: public
         }
@@ -360,17 +362,27 @@ defmodule PrismWeb.ShellLive do
     |> assign(:current_preview_index, 0)
   end
 
+  # One short-lived, single-purpose access token per tincture instead of
+  # the raw session token — a credential must never travel in a
+  # URL/query string — scoped to this tincture, because the sandboxed frame
+  # can read it back out of its own location and send it wherever its
+  # manifest allows. The page, its icon and its previews share it.
+  defp mint_access(socket, t),
+    do: Sanctum.TinctureAuth.issue_access_token(socket.assigns.context, t.publisher, t.name)
+
+  # A mint that did not happen renders as a state, never as a URL.
+  defp refusal({:ok, _token}), do: nil
+  defp refusal({:error, reason}) when reason in [:unavailable, :not_owner], do: :unavailable
+  defp refusal({:error, _reason}), do: :refused
+
   # Same origin as the shell itself: a relative path, so the iframe is
   # never cross-origin whatever hostname or proxy the browser came in through.
-  defp build_tincture_url(socket, t) do
+  defp build_tincture_url({:ok, token}, t) do
     base = Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name)
-
-    # Short-lived, single-purpose access token instead of the raw session
-    # token — a credential must never travel in a URL/query string — and
-    # scoped to this tincture, because the sandboxed frame can read it back
-    # out of its own location and send it wherever its manifest allows.
-    "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context, t.publisher, t.name)}"
+    "#{base}?_t=#{token}"
   end
+
+  defp build_tincture_url({:error, _reason}, _t), do: nil
 
   # Build a same-origin asset URL for icons/previews. Returns nil for missing
   # paths or non-image extensions — server-side validators in
@@ -380,10 +392,10 @@ defmodule PrismWeb.ShellLive do
   # server-side validators answer from one roster.
   @image_extensions Cyfr.TinctureHelpers.image_extensions()
 
-  defp build_asset_url(_socket, _tincture, nil), do: nil
-  defp build_asset_url(_socket, _tincture, ""), do: nil
+  defp build_asset_url(_access, _tincture, nil), do: nil
+  defp build_asset_url(_access, _tincture, ""), do: nil
 
-  defp build_asset_url(socket, t, path) when is_binary(path) do
+  defp build_asset_url({:ok, token}, t, path) when is_binary(path) do
     if safe_asset_path?(path) do
       encoded = path |> String.split("/") |> Enum.map_join("/", &URI.encode/1)
 
@@ -391,11 +403,11 @@ defmodule PrismWeb.ShellLive do
         Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name) <>
           "/" <> encoded
 
-      "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context, t.publisher, t.name)}"
+      "#{base}?_t=#{token}"
     end
   end
 
-  defp build_asset_url(_socket, _tincture, _), do: nil
+  defp build_asset_url(_access, _tincture, _), do: nil
 
   defp safe_asset_path?(path) do
     ext = path |> Path.extname() |> String.downcase()
@@ -645,6 +657,7 @@ defmodule PrismWeb.ShellLive do
           ]}
         >
           <iframe
+            :if={tincture.url}
             id={"iframe_#{tincture_id}"}
             src={tincture.url}
             sandbox="allow-scripts"
@@ -652,6 +665,16 @@ defmodule PrismWeb.ShellLive do
             phx-hook="IframeBridge"
             data-window-id={tincture_id}
           />
+          <div
+            :if={is_nil(tincture.url)}
+            id={"tincture_state_#{tincture_id}"}
+            data-tincture-state={tincture.url_refusal}
+            class="flex h-full w-full items-center justify-center text-sm text-text-muted"
+          >
+            {if tincture.url_refusal == :unavailable,
+              do: "This tincture can't be opened right now. Try again shortly.",
+              else: "Your session can no longer open this tincture. Sign in again."}
+          </div>
           <.iframe_capsule />
         </div>
       <% end %>

@@ -28,6 +28,9 @@ defmodule Sanctum.S7TinctureTokenTest do
         verified: true
       })
 
+    # The namespace a token's context shows is reread from this row.
+    {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "ns-1")
+
     {:ok, _} =
       Sanctum.Tenancy.Members.ensure(person_id(), scope: "athanor", athanor_id: "ath_acme")
 
@@ -66,19 +69,28 @@ defmodule Sanctum.S7TinctureTokenTest do
     }
   end
 
-  defp token_for(publisher \\ "acme", name \\ "dash"),
-    do: TinctureAuth.issue_access_token(authed_ctx(), publisher, name)
+  defp token_for(publisher \\ "acme", name \\ "dash") do
+    {:ok, token} = TinctureAuth.issue_access_token(authed_ctx(), publisher, name)
+    token
+  end
 
+  # A token is minted from a primary credential: the person's session in
+  # the athanor, established as a request would establish it.
   defp authed_ctx do
-    Context.build(
-      user_id: person_id(),
-      namespace: "ns-1",
-      athanor_id: "ath_acme",
-      permissions: [:read, :write],
-      scope: :athanor,
-      auth_method: :oidc,
-      authenticated: true
-    )
+    ctx =
+      Context.build(
+        user_id: person_id(),
+        provider: "github",
+        athanor_id: "ath_acme",
+        permissions: [:read, :write],
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    {:ok, session} = Sanctum.TestContext.create_session(ctx)
+    {:ok, established} = Sanctum.Caller.establish(session.token, focus: "ath_acme")
+    established
   end
 
   describe "issue_access_token/1 + ?_t= round-trip" do
@@ -104,12 +116,12 @@ defmodule Sanctum.S7TinctureTokenTest do
       :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: person_id())
       assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :not_standing}
 
-      # Back in, and the same token works again — the check is standing, not
-      # a revocation list.
+      # Back in, and the token stays dead: it was bound to the seat that was
+      # removed, and a rejoin is a new seat.
       {:ok, _} =
         Sanctum.Tenancy.Members.ensure(person_id(), scope: "athanor", athanor_id: "ath_acme")
 
-      assert {:ok, %Context{}} = TinctureAuth.authenticate(conn("_t=#{token}"))
+      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :not_standing}
 
       # ...and a person the door has denied opens nothing at all.
       {:ok, user} = Sanctum.Tenancy.Users.get(person_id())
@@ -123,8 +135,8 @@ defmodule Sanctum.S7TinctureTokenTest do
     end
 
     test "?_t= still flows through the tenant gate" do
-      # An athanor-less context's token must not authenticate: the token
-      # carries no athanor, and the rebuilt context fails tenant_ok/1.
+      # An athanor-less context has no estate to bind a token to, so none is
+      # minted for it: the gate now closes at the mint.
       unresolved =
         Context.build(
           user_id: "u-2",
@@ -136,8 +148,8 @@ defmodule Sanctum.S7TinctureTokenTest do
           authenticated: true
         )
 
-      token = TinctureAuth.issue_access_token(unresolved, "acme", "dash")
-      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :no_athanor}
+      assert {:error, :missing_generation} =
+               TinctureAuth.issue_access_token(unresolved, "acme", "dash")
     end
   end
 

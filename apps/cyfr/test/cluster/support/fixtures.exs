@@ -107,7 +107,8 @@ defmodule Cyfr.Cluster.Fixtures do
           author: "usr_cluster",
           kind: "text",
           content: text,
-          client_id: "cluster-#{System.unique_integer([:positive])}"
+          # Unique across the cell: the counter restarts on every member.
+          client_id: "cluster-#{node()}-#{System.unique_integer([:positive])}"
         },
         turn: %{agent: "agent:local.aqua", requested_by: "system", model: nil, options: %{}}
       })
@@ -474,6 +475,25 @@ defmodule Cyfr.Cluster.Fixtures do
   def issue_key(ctx) do
     case Sanctum.ApiKey.create(ctx, %{name: "cluster-#{System.unique_integer([:positive])}"}) do
       {:ok, %{api_key: key}} -> {:ok, key}
+      other -> other
+    end
+  end
+
+  @doc "Mint an access token from `ctx` on this member, for one tincture of its estate."
+  @spec mint_access(Sanctum.Context.t()) :: {:ok, String.t()} | {:error, term()}
+  def mint_access(ctx), do: Sanctum.TinctureAuth.issue_access_token(ctx, "local", "cluster-dash")
+
+  @doc "What `token` opens on this member: the context's athanor, or the refusal."
+  @spec open_access(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def open_access(token) do
+    conn = %Plug.Conn{
+      query_string: "_t=#{token}",
+      remote_ip: {127, 0, 0, 1},
+      path_params: %{"publisher" => "local", "tincture_name" => "cluster-dash"}
+    }
+
+    case Sanctum.TinctureAuth.authenticate(conn) do
+      {:ok, ctx} -> {:ok, ctx.athanor_id}
       other -> other
     end
   end
