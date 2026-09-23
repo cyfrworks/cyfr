@@ -153,7 +153,7 @@ defmodule PrismWeb.LoginLiveTest do
           authenticated: true
         )
 
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.Session.create(Sanctum.TestContext.issuer!(ctx))
 
       Application.put_env(
         :sanctum,

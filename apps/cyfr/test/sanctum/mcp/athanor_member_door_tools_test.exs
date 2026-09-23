@@ -329,7 +329,7 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
     {:ok, _} =
       Members.ensure(alice, scope: "athanor", athanor_id: Sanctum.TestContext.athanor_id())
 
-    {:ok, session} = Sanctum.Session.create(a)
+    {:ok, session} = Sanctum.TestContext.create_session(a)
     {:ok, loaded} = Sanctum.Session.load(session.token, surface: :console)
     with_hash = %{a | session_token_hash: Sanctum.Session.token_hash(session.token)}
 

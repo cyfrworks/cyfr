@@ -165,17 +165,19 @@ defmodule Sanctum.Auth.OIDCTest do
     end
 
     test "sessions and keys are the server's credentials, established before the provider is asked" do
-      ctx =
+      {ctx, _user} =
         Context.build(
-          user_id: "usr_oidc_bearer",
+          user_id: "github|https://github.com|oidc-bearer",
           email: "test@example.com",
           provider: "github",
           permissions: [],
           namespace: "testns",
           authenticated: true
         )
+        |> Sanctum.TestContext.person!()
 
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} =
+        Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
 
       conn =
         Plug.Test.conn(:get, "/")

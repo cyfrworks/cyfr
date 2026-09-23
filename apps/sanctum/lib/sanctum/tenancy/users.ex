@@ -154,7 +154,7 @@ defmodule Sanctum.Tenancy.Users do
   `Athanors.destroy/1` refuses one. `personal_athanor_id` is not an
   athanor-scoped column, so erasure would leave it naming a tombstone:
   the unique index would block minting a replacement, and
-  `unarchive_personal/1` would try to reopen a wiped shell.
+  `allow/1` would try to reopen a wiped shell.
 
   Fail-CLOSED on an unanswerable read — the default is `true`, so a
   database fault refuses an irreversible delete rather than permitting it.
@@ -258,88 +258,79 @@ defmodule Sanctum.Tenancy.Users do
   end
 
   @doc """
-  Eject a person from this server: mark them denied, revoke every session
-  and API key they created, archive their own athanor and remove their
-  group rows. The door entry that keeps them out is written by the caller
-  (`Sanctum.Door.Store.deny/4`) — this is the part that acts on what the
-  person already has.
+  Eject a person from this server, as one transaction
+  (`Arca.SecurityTransitions.deny_user/3`): mark them denied, revoke every
+  session and API key they created, archive their own athanor, every
+  frozen estate they sit in and every group they leave empty (revoking
+  those estates' keys), and remove their memberships, the invitations
+  their address still holds and their thread follows. Either all of it
+  commits or none of it does, and a failure is answered, never reported
+  as an eject. The door entry that keeps them out is written by the
+  caller (`Sanctum.Door.Store.deny/4`).
+
+  After the commit, and only from what it returned: the removed sessions'
+  established contexts are dropped and their revocation announced, every
+  archived estate's members lose their cached contexts and the estate's
+  archival is announced, and every roster the denial changed is told.
+  Denying a person already denied re-runs the retirement and checks it.
   """
   @spec deny(User.t()) :: {:ok, User.t()} | {:error, term()}
-  def deny(%User{} = user) do
-    now = DateTime.utc_now()
+  def deny(%User{id: user_id} = user) do
+    with {:ok, change} <-
+           Arca.SecurityTransitions.deny_user(server(), user_id, verify: fn _rows -> :ok end) do
+      Sanctum.Session.announce_revoked(user_id, change.revoked_session_hashes)
+      Athanors.announce_archived(change.archived_athanor_ids, change)
+      Members.announce_removed(user_id, change)
 
-    with {:ok, user} <- update(user, %{status: "denied", denied_at: now}) do
-      Sanctum.Session.revoke_all_for_user(user.id)
-      Sanctum.ApiKey.revoke_all_created_by(user.id)
-      archive_personal(user)
-      # Seats held for the address, not yet for the person: the sweep below
-      # goes by `user_id` and cannot see them.
-      Members.withdraw_invites_for_email(user.email)
+      :telemetry.execute([:cyfr, :sanctum, :door, :denied], %{count: 1}, %{
+        user_id: user_id,
+        email: user.email
+      })
 
-      # The status is written (the person is out at the door either way);
-      # what fails here is reported so the operator can retry, not hidden.
-      with :ok <- Members.remove_all_for_user(user.id) do
-        :telemetry.execute([:cyfr, :sanctum, :door, :denied], %{count: 1}, %{
-          user_id: user.id,
-          email: user.email
-        })
-
-        {:ok, user}
-      end
+      {:ok, standing(user, change.user)}
     end
   end
 
   @doc """
-  Reverse `deny/1` at the door: the person may sign in again, their own
-  athanor is reopened and they are seated in it again. Revoked sessions and
-  keys stay revoked, and the group seats the deny removed are not restored —
-  eject is permanent for groups; a member adds them again.
+  Reverse `deny/1` at the door, as one transaction
+  (`Arca.SecurityTransitions.allow_user/3`): the person may sign in again,
+  their own athanor is reopened — subject to the server's athanor cap,
+  whose refusal leaves them denied — and they are seated in it again.
+  Revoked sessions and keys stay revoked, and the group seats and
+  invitations the deny removed are not restored — eject is permanent for
+  groups; a member adds them again. A context read before the deny
+  cannot issue a credential after this: the person's generation moved
+  twice.
   """
   @spec allow(User.t()) :: {:ok, User.t()} | {:error, term()}
-  def allow(%User{} = user) do
-    with {:ok, user} <- update(user, %{status: "active", denied_at: nil}),
-         :ok <- unarchive_personal(user) do
-      # The deny swept every membership by user id, their own seat included.
-      # Reopening the furnace without re-seating its owner would leave them
-      # locked out of it until their next sign-in re-provisioned the row.
-      reseat_personal(user)
-      {:ok, user}
+  def allow(%User{id: user_id} = user) do
+    # The deny swept every membership by user id, their own seat included;
+    # the transition re-seats them, because reopening the furnace without
+    # its owner would leave them locked out of it until their next sign-in
+    # re-provisioned the row.
+    with {:ok, change} <-
+           Arca.SecurityTransitions.allow_user(server(), user_id, verify: &restorable/1) do
+      {:ok, standing(user, change.user)}
     end
   end
 
-  defp archive_personal(%User{personal_athanor_id: id}) when is_binary(id) do
-    case Athanors.get(id) do
-      {:ok, athanor} -> Athanors.archive(athanor, force: true)
-      _ -> :ok
-    end
+  # Taking the place of an archived estate back has to ask for it, or
+  # archiving and reopening would be the way past `CYFR_MAX_ATHANORS`. The
+  # count runs inside the transition, with the estate locked.
+  defp restorable(%{athanor: %{status: "archived"}}),
+    do: Sanctum.Tenancy.Caps.check_counted(:max_athanors, &Athanors.count/0)
+
+  defp restorable(_rows), do: :ok
+
+  # The caller's struct, carrying the standing the transition committed.
+  defp standing(%User{} = user, %{} = committed) do
+    %{
+      user
+      | status: committed.status,
+        denied_at: committed.denied_at,
+        security_generation: committed.security_generation
+    }
   end
-
-  defp archive_personal(_), do: :ok
-
-  defp unarchive_personal(%User{personal_athanor_id: id}) when is_binary(id) do
-    case Athanors.get(id) do
-      {:ok, %{status: "archived"} = athanor} ->
-        case Athanors.unarchive(athanor) do
-          {:ok, _} -> :ok
-          # The server is full: say so rather than report a person restored
-          # to a furnace that is still shut.
-          {:error, {:limit_reached, _key, _cap}} = err -> err
-          {:error, _} = err -> err
-        end
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp unarchive_personal(_), do: :ok
-
-  defp reseat_personal(%User{id: user_id, personal_athanor_id: id}) when is_binary(id) do
-    Members.ensure(user_id, scope: "athanor", athanor_id: id, added_by: "system")
-    :ok
-  end
-
-  defp reseat_personal(_), do: :ok
 
   # What the provider asserted about the address, kept as asserted: `true`
   # proved, `false` refused, `nil` never claimed. An issuer that does not

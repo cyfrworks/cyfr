@@ -205,7 +205,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
   # chain lives.
   describe "private tincture — rendering under an authenticated caller" do
     setup do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
         Sanctum.ApiKey.create(ctx, %{
@@ -273,7 +273,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   describe "private tincture — API key auth" do
     setup do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       key_name = "tincture-test-key-#{:rand.uniform(1_000_000)}"
 

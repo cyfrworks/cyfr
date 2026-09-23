@@ -31,7 +31,7 @@ defmodule Emissary.AuthChainIntegrationTest do
 
     # Create an app key with only execute scope (no storage_read)
     {:ok, limited_key} =
-      Sanctum.ApiKey.create(ctx, %{
+      Sanctum.TestContext.create_key(ctx, %{
         name: "test-limited-key",
         type: :application,
         scope: ["execute"]
@@ -39,7 +39,7 @@ defmodule Emissary.AuthChainIntegrationTest do
 
     # Create an app key with execute + storage_read
     {:ok, reader_key} =
-      Sanctum.ApiKey.create(ctx, %{
+      Sanctum.TestContext.create_key(ctx, %{
         name: "test-reader-key",
         type: :application,
         scope: ["execute", "storage_read"]

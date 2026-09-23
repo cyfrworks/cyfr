@@ -53,6 +53,28 @@ defmodule Sanctum.Context do
   @type api_key_type :: :application | :service | :admin | nil
   @type plane :: :external | :guest
 
+  @typedoc """
+  What a credential this context holds was issued against, read when the
+  context was established: which credential (`source_kind`, `source_id`),
+  which membership authorized its focus (`focus_basis`: the membership
+  row id, `:key` for an athanor's key, or nil where no row does), and the
+  person's and the focused estate's standing generations. A freshly
+  admitted sign-in, which holds no credential yet, carries
+  `source_kind: :identity` and `source_id: nil`.
+
+  Issuing a credential from this context locks those rows and refuses
+  unless they still stand at these generations
+  (`Arca.SecurityTransitions.Issuance`), so a context read before a
+  retirement cannot issue after the restore.
+  """
+  @type credential_binding :: %{
+          source_kind: :identity | :session | :api_key,
+          source_id: String.t() | nil,
+          focus_basis: String.t() | :key | nil,
+          user_generation: pos_integer(),
+          athanor_generation: pos_integer() | nil
+        }
+
   @type t :: %__MODULE__{
           user_id: String.t() | nil,
           email: String.t() | nil,
@@ -66,6 +88,8 @@ defmodule Sanctum.Context do
           request_id: String.t() | nil,
           api_key_id: String.t() | nil,
           session_token_hash: binary() | nil,
+          credential_binding: credential_binding() | nil,
+          credential_deadline: DateTime.t() | nil,
           authenticated: boolean(),
           anonymous: boolean(),
           platform_admin: boolean(),
@@ -90,6 +114,15 @@ defmodule Sanctum.Context do
     # identifier as :api_key_id, and what `session.logout` needs to retire
     # exactly the session that called it.
     :session_token_hash,
+    # What this context's credential was issued against and the
+    # generations it read (`t:credential_binding/0`). Stamped together
+    # with `:session_token_hash` or `:api_key_id` by the one assembly path
+    # of each credential (`Sanctum.Session`, `Sanctum.ApiKey`), and by
+    # `Sanctum.Tenancy.resolve_status/2` for an admitted sign-in.
+    :credential_binding,
+    # The absolute instant this context's authority ends when a parent
+    # credential bounds it, or nil when only its own source does.
+    :credential_deadline,
     # The caller's resolved address, where the ingress knew one
     # (`Sanctum.ClientIp`). It is not identity and authorizes nothing — it
     # is what an anonymous, per-action budget can be charged to. Without
@@ -272,6 +305,9 @@ defmodule Sanctum.Context do
       api_key_type: Map.get(attrs, :api_key_type),
       request_id: Map.get(attrs, :request_id),
       api_key_id: Map.get(attrs, :api_key_id),
+      session_token_hash: Map.get(attrs, :session_token_hash),
+      credential_binding: binding!(Map.get(attrs, :credential_binding)),
+      credential_deadline: deadline!(Map.get(attrs, :credential_deadline)),
       client_ip: Map.get(attrs, :client_ip),
       authenticated: Map.get(attrs, :authenticated, false),
       anonymous: Map.get(attrs, :anonymous, false) == true,
@@ -288,6 +324,41 @@ defmodule Sanctum.Context do
     audit_platform!(ctx, Map.get(attrs, :__platform_ok__, false) == true)
     ctx
   end
+
+  @binding_sources [:identity, :session, :api_key]
+
+  # A binding is data the issuance check trusts, so a malformed one is a
+  # construction bug caught here rather than a refusal found later.
+  defp binding!(nil), do: nil
+
+  defp binding!(
+         %{
+           source_kind: kind,
+           source_id: source_id,
+           focus_basis: basis,
+           user_generation: user_generation,
+           athanor_generation: athanor_generation
+         } = binding
+       )
+       when kind in @binding_sources and (is_binary(source_id) or is_nil(source_id)) and
+              (is_binary(basis) or basis in [:key, nil]) and is_integer(user_generation) and
+              user_generation > 0 and
+              (is_nil(athanor_generation) or
+                 (is_integer(athanor_generation) and athanor_generation > 0)),
+       do: binding
+
+  defp binding!(other),
+    do: raise(ArgumentError, "credential_binding is malformed: #{inspect(other)}")
+
+  defp deadline!(nil), do: nil
+  defp deadline!(%DateTime{} = deadline), do: deadline
+
+  defp deadline!(other),
+    do:
+      raise(
+        ArgumentError,
+        "credential_deadline must be a DateTime or nil, got: #{inspect(other)}"
+      )
 
   @doc """
   The single builder for server-constructed, no-external-credential contexts.
@@ -505,12 +576,12 @@ defmodule Sanctum.Context do
 
   def focus(%__MODULE__{}, %Arca.Schemas.Athanor{status: "archived"}), do: {:error, :archived}
 
-  def focus(%__MODULE__{} = ctx, %Arca.Schemas.Athanor{id: id}) do
-    cond do
-      Sanctum.Tenancy.Members.member?(ctx.user_id, id) ->
-        {:ok, %{ctx | athanor_id: id, scope: :athanor}}
+  def focus(%__MODULE__{} = ctx, %Arca.Schemas.Athanor{id: id} = athanor) do
+    case Sanctum.Tenancy.Members.active_seat(ctx.user_id, id) do
+      {:ok, seat} ->
+        {:ok, refocused(ctx, athanor, seat.id)}
 
-      ctx.platform_admin ->
+      :none when ctx.platform_admin ->
         Sanctum.Telemetry.platform_context_event(%{
           caller: :focus,
           user_id: ctx.user_id,
@@ -518,10 +589,40 @@ defmodule Sanctum.Context do
           auth_method: ctx.auth_method
         })
 
-        {:ok, %{ctx | athanor_id: id, scope: :athanor}}
+        {:ok, refocused(ctx, athanor, platform_basis(ctx))}
 
-      true ->
+      _none_or_unreadable ->
         {:error, :not_member}
+    end
+  end
+
+  # A new focus is a new standing read: the binding follows it, naming the
+  # estate's generation as read now and the membership that authorized
+  # it. An athanor's key keeps `:key` — its standing is the key's, not a
+  # seat's.
+  defp refocused(%__MODULE__{credential_binding: nil} = ctx, %{id: id}, _basis),
+    do: %{ctx | athanor_id: id, scope: :athanor}
+
+  defp refocused(%__MODULE__{credential_binding: binding} = ctx, athanor, basis) do
+    basis = if binding.focus_basis == :key, do: :key, else: basis
+    ctx = %{ctx | athanor_id: athanor.id, scope: :athanor}
+
+    %{
+      ctx
+      | credential_binding: %{
+          binding
+          | focus_basis: basis,
+            athanor_generation: athanor.security_generation
+        }
+    }
+  end
+
+  defp platform_basis(%__MODULE__{credential_binding: nil}), do: nil
+
+  defp platform_basis(%__MODULE__{user_id: user_id}) do
+    case Sanctum.Tenancy.Members.platform_seat(user_id) do
+      {:ok, seat} -> seat.id
+      _none -> nil
     end
   end
 

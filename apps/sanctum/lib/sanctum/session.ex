@@ -100,21 +100,33 @@ defmodule Sanctum.Session do
 
   @doc """
   Create a new session for an authenticated context. Callers are the two
-  sign-in paths, after `Sanctum.Door.admit_identity/2` said yes; nothing
+  sign-in paths, after `Sanctum.Door.admit_identity/2` said yes and
+  `Sanctum.Tenancy.resolve_status/2` bound the admitted context; nothing
   else mints one.
 
+  The session is written in the issuance transaction
+  (`Arca.SecurityTransitions.Issuance`): the person and the session's
+  athanor are locked and reread, and must still be active at the
+  generations the context read (`ctx.credential_binding`), and the
+  membership that granted the focus must still stand. A context that read
+  its standing before a denial or an archive therefore cannot mint a
+  session after the allow or the reopen: `{:error, :stale_generation}`.
+  A context with no binding is `{:error, :missing_generation}` — except
+  where `generation_snapshot:` supplies one read from the rows
+  (`Sanctum.Tenancy.generation_snapshot/2`), which only a test fixture
+  building a context by hand does. `{:error, :not_standing}` is a person,
+  estate or membership that no longer stands.
+
   Returns a session map containing the token and identity fields.
-
-  ## Examples
-
-      ctx = Sanctum.Context.build(user_id: "123", email: "alice@example.com", provider: "github")
-      {:ok, session} = Sanctum.Session.create(ctx)
-      session.token
-      #=> "abc123..."
-
   """
-  @spec create(Context.t()) :: {:ok, session()} | {:error, term()}
-  def create(%Context{} = ctx) do
+  @spec create(Context.t(), keyword()) :: {:ok, session()} | {:error, term()}
+  def create(%Context{} = ctx, opts \\ []) when is_list(opts) do
+    with {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, opts) do
+      insert(ctx, expectation)
+    end
+  end
+
+  defp insert(%Context{} = ctx, expectation) do
     token = generate_token()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -141,7 +153,10 @@ defmodule Sanctum.Session do
       inserted_at: now
     }
 
-    case Arca.SessionStorage.create_session(hash_token(token), attrs) do
+    case Arca.SessionStorage.create_session(hash_token(token), attrs,
+           lock: Sanctum.Issuance.lock(expectation),
+           verify: Sanctum.Issuance.verify(expectation)
+         ) do
       :ok ->
         session = %{
           token: token,
@@ -194,7 +209,7 @@ defmodule Sanctum.Session do
 
     case get_session_direct(token) do
       {:ok, row} ->
-        row_to_context(row, surface)
+        row_to_context(row, hash_token(token), surface)
 
       {:error, :not_found} ->
         {:error, :invalid_session}
@@ -430,7 +445,11 @@ defmodule Sanctum.Session do
 
   # One return shape — {:ok, ctx} | {:error, :namespace_unavailable} — so
   # the caller stops discriminating structurally on struct-vs-tuple.
-  defp row_to_context(row, surface) do
+  #
+  # The one assembly of a session's context: the row key
+  # (`session_token_hash`) and the binding that names it are stamped here
+  # together and nowhere else.
+  defp row_to_context(row, token_hash, surface) do
     # A namespace is a publishing credential, not identity: a person
     # without one is as signed in as anyone, with `namespace: nil`.
     case namespace_of(row.user_id) do
@@ -453,15 +472,15 @@ defmodule Sanctum.Session do
             athanor_id: row.athanor_id,
             scope: :athanor,
             auth_method: surface_auth_method(surface),
+            session_token_hash: token_hash,
             authenticated: true
           )
 
         # Re-validated against the person's CURRENT standing, so a denial,
         # a revoked membership or an archived athanor takes effect at once;
         # a store that cannot say is a 503, never yesterday's answer.
-        case Sanctum.Tenancy.revalidate(ctx) do
-          {:ok, revalidated} -> {:ok, revalidated}
-          {:error, :unavailable} -> {:error, :database_error}
+        with {:ok, revalidated} <- revalidated(ctx) do
+          bound(revalidated, token_hash)
         end
 
       {:error, _reason} ->
@@ -469,6 +488,57 @@ defmodule Sanctum.Session do
         # Surface a retryable error so the caller returns 503 rather than
         # signing a valid person in as someone with no publisher namespace.
         {:error, :namespace_unavailable}
+    end
+  end
+
+  defp revalidated(ctx) do
+    case Sanctum.Tenancy.revalidate(ctx) do
+      {:ok, revalidated} -> {:ok, revalidated}
+      {:error, :unavailable} -> {:error, :database_error}
+    end
+  end
+
+  # The generations this context read, from a second read of the rows
+  # after revalidation chose the athanor: a read that raced a transition
+  # names the older generation, and the locked check at issuance refuses
+  # it. A person with no row, and a context the door no longer admits,
+  # carry no binding and can issue nothing.
+  defp bound(%Context{authenticated: false} = ctx, _token_hash), do: {:ok, ctx}
+
+  defp bound(%Context{} = ctx, token_hash) do
+    with {:ok, memberships} <- seats_of(ctx.user_id),
+         {:ok, snapshot} <- snapshot_of(ctx) do
+      binding =
+        snapshot &&
+          %{
+            source_kind: :session,
+            source_id: Base.url_encode64(token_hash, padding: false),
+            focus_basis:
+              Sanctum.Tenancy.focus_basis(
+                ctx,
+                ctx.athanor_id && %{id: ctx.athanor_id},
+                memberships
+              ),
+            user_generation: snapshot.user_generation,
+            athanor_generation: snapshot.athanor_generation
+          }
+
+      {:ok, %{ctx | credential_binding: binding}}
+    end
+  end
+
+  defp seats_of(user_id) do
+    case Sanctum.Tenancy.Members.list_by_user(user_id) do
+      {:ok, rows} -> {:ok, rows}
+      {:error, _reason} -> {:error, :database_error}
+    end
+  end
+
+  defp snapshot_of(%Context{} = ctx) do
+    case Sanctum.Tenancy.generation_snapshot(ctx.user_id, ctx.athanor_id) do
+      {:ok, snapshot} -> {:ok, snapshot}
+      {:error, :not_found} -> {:ok, nil}
+      {:error, :unavailable} -> {:error, :database_error}
     end
   end
 

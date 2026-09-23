@@ -54,11 +54,34 @@ defmodule Arca.ApiKeyStorage do
   ]
 
   @doc """
-  Insert a new API key. `attrs.athanor_id` names the owning athanor;
-  `(athanor_id, name)` is unique among unrevoked keys.
+  Insert a new API key, in the issuance transaction
+  (`Arca.SecurityTransitions.Issuance`): `lock:` names the rows the
+  creator's standing rests on and `verify:` is the caller's policy over
+  them, asked with them locked. `attrs.athanor_id` names the owning
+  athanor; `(athanor_id, name)` is unique among unrevoked keys, and a
+  violation answers `{:error, :already_exists}`.
   """
-  @spec create_key(map()) :: :ok | {:error, term()}
-  def create_key(attrs) do
+  @spec create_key(map(), keyword()) :: :ok | {:error, term()}
+  def create_key(attrs, opts) when is_list(opts) do
+    lock = Keyword.fetch!(opts, :lock)
+    verify = Keyword.fetch!(opts, :verify)
+
+    Arca.SecurityTransitions.Issuance.run(lock, verify, fn _locked -> insert_key(attrs) end)
+    |> case do
+      {:ok, :inserted} -> :ok
+      {:error, _reason} = refusal -> refusal
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      if Arca.Repo.Errors.unique_constraint_violation?(e) do
+        {:error, :already_exists}
+      else
+        Logger.error("[ApiKeyStorage] Database error in create_key: #{Exception.message(e)}")
+        {:error, :database_error}
+      end
+  end
+
+  defp insert_key(attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     row = %{
@@ -80,15 +103,7 @@ defmodule Arca.ApiKeyStorage do
     }
 
     Arca.Repo.insert_all(ApiKey, [row])
-    :ok
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      if Arca.Repo.Errors.unique_constraint_violation?(e) do
-        {:error, :already_exists}
-      else
-        Logger.error("[ApiKeyStorage] Database error in create_key: #{Exception.message(e)}")
-        {:error, :database_error}
-      end
+    {:ok, :inserted}
   end
 
   @doc """
@@ -258,49 +273,49 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Revoke every live key of an athanor. Returns the count.
+  Rotate a key: update key_hash, key_prefix, and rotated_at, in the
+  issuance transaction (`Arca.SecurityTransitions.Issuance`) under the
+  rotating caller's `lock:` and `verify:`. The key rotated is locked last,
+  by the statement that rotates it.
   """
-  @spec revoke_all_for_athanor(Cyfr.Actor.t()) ::
-          {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
-  def revoke_all_for_athanor(%Cyfr.Actor{athanor_id: athanor_id})
-      when is_binary(athanor_id) and athanor_id != "" do
-    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_all_for_athanor", fn ->
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-      query = from(k in ApiKey, where: k.revoked == ^false) |> where_athanor(athanor_id)
-      {count, _} = Arca.Repo.update_all(query, set: [revoked: true, updated_at: now])
-      {:ok, count}
-    end)
-  end
+  @spec rotate_key(Cyfr.Actor.t(), String.t(), binary(), String.t(), keyword()) ::
+          :ok | {:error, term()}
+  def rotate_key(%Cyfr.Actor{athanor_id: athanor_id}, name, new_key_hash, new_key_prefix, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
+    lock = Keyword.fetch!(opts, :lock)
+    verify = Keyword.fetch!(opts, :verify)
 
-  def revoke_all_for_athanor(%Cyfr.Actor{}), do: {:error, :no_athanor}
-
-  @doc """
-  Rotate a key: update key_hash, key_prefix, and rotated_at.
-  """
-  @spec rotate_key(Cyfr.Actor.t(), String.t(), binary(), String.t()) ::
-          :ok | {:error, :no_athanor | :not_found | :database_error}
-  def rotate_key(%Cyfr.Actor{athanor_id: athanor_id}, name, new_key_hash, new_key_prefix)
-      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.rotate_key", fn ->
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-      query =
-        from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
-        |> where_athanor(athanor_id)
-
-      case Arca.Repo.update_all(query,
-             set: [
-               key_hash: new_key_hash,
-               key_prefix: new_key_prefix,
-               rotated_at: now,
-               updated_at: now
-             ]
-           ) do
-        {0, _} -> {:error, :not_found}
-        {_, _} -> :ok
+      Arca.SecurityTransitions.Issuance.run(lock, verify, fn _locked ->
+        rotate_row(athanor_id, name, new_key_hash, new_key_prefix)
+      end)
+      |> case do
+        {:ok, :rotated} -> :ok
+        {:error, _reason} = refusal -> refusal
       end
     end)
   end
 
-  def rotate_key(%Cyfr.Actor{}, _name, _new_key_hash, _new_key_prefix), do: {:error, :no_athanor}
+  def rotate_key(%Cyfr.Actor{}, _name, _new_key_hash, _new_key_prefix, _opts),
+    do: {:error, :no_athanor}
+
+  defp rotate_row(athanor_id, name, new_key_hash, new_key_prefix) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    query =
+      from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
+      |> where_athanor(athanor_id)
+
+    case Arca.Repo.update_all(query,
+           set: [
+             key_hash: new_key_hash,
+             key_prefix: new_key_prefix,
+             rotated_at: now,
+             updated_at: now
+           ]
+         ) do
+      {0, _} -> {:error, :not_found}
+      {_, _} -> {:ok, :rotated}
+    end
+  end
 end

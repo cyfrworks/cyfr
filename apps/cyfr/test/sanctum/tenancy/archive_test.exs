@@ -150,7 +150,9 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   defp key_in(athanor_id, user_id) do
     ctx = member_ctx(athanor_id, user_id)
 
-    {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "k-#{System.unique_integer()}"})
+    {:ok, %{api_key: key}} =
+      Sanctum.TestContext.create_key(ctx, %{name: "k-#{System.unique_integer()}"})
+
     key
   end
 
@@ -194,7 +196,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     {:ok, group} = Athanors.create_group(owner.id, "Memo #{n}")
 
     {:ok, session} =
-      Sanctum.Session.create(%{
+      Sanctum.TestContext.create_session(%{
         member_ctx(group.id, owner.id)
         | provider: "github",
           email: owner.email

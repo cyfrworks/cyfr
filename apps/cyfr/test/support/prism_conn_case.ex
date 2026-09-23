@@ -203,7 +203,7 @@ defmodule PrismWeb.ConnCase do
         authenticated: true
       )
 
-    {:ok, session} = Sanctum.Session.create(ctx)
+    {:ok, session} = Sanctum.TestContext.create_session(ctx)
 
     Plug.Test.init_test_session(conn, %{@session_key => session.token})
   end

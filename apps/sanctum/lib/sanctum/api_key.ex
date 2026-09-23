@@ -130,14 +130,24 @@ defmodule Sanctum.ApiKey do
       iex> String.starts_with?(result.api_key, "cyfr_sk_")
       true
   """
-  def create(%Context{} = ctx, %{name: name} = opts) when is_binary(name) do
-    case Context.tenant_ok(ctx) do
-      {:error, :missing_tenant} -> {:error, :athanor_required}
-      :ok -> create_validated(ctx, name, opts)
+  def create(ctx, opts, issuance \\ [])
+
+  def create(%Context{} = ctx, %{name: name} = opts, issuance)
+      when is_binary(name) and is_list(issuance) do
+    with :ok <- tenant(ctx),
+         {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, issuance) do
+      create_validated(ctx, name, Map.put(opts, :expectation, expectation))
     end
   end
 
-  def create(_ctx, _opts), do: {:error, "name is required"}
+  def create(_ctx, _opts, _issuance), do: {:error, "name is required"}
+
+  defp tenant(ctx) do
+    case Context.tenant_ok(ctx) do
+      {:error, :missing_tenant} -> {:error, :athanor_required}
+      :ok -> :ok
+    end
+  end
 
   defp create_validated(ctx, name, opts) do
     key_type = Map.get(opts, :type, :application)
@@ -248,7 +258,7 @@ defmodule Sanctum.ApiKey do
         athanor_id: athanor_id
       }
 
-      store_key(attrs, key, name, key_type, scope_list, now)
+      store_key(attrs, Map.fetch!(opts, :expectation), key, name, key_type, scope_list, now)
     end
   end
 
@@ -273,8 +283,15 @@ defmodule Sanctum.ApiKey do
 
   defp encode_allowlist(_), do: {:error, :invalid_ip_allowlist}
 
-  defp store_key(attrs, key, name, key_type, scope_list, now) do
-    case Arca.ApiKeyStorage.create_key(attrs) do
+  # Written in the issuance transaction: the creator and the athanor
+  # locked and reread at the generations the context read, the seat that
+  # authorized the focus still standing and the credential the creator
+  # holds still live (`Sanctum.Issuance`).
+  defp store_key(attrs, expectation, key, name, key_type, scope_list, now) do
+    case Arca.ApiKeyStorage.create_key(attrs,
+           lock: Sanctum.Issuance.lock(expectation),
+           verify: Sanctum.Issuance.verify(expectation)
+         ) do
       :ok ->
         {:ok, %{api_key: key, name: name, type: key_type, scope: scope_list, created_at: now}}
 
@@ -351,12 +368,6 @@ defmodule Sanctum.ApiKey do
     Arca.ApiKeyStorage.revoke_all_created_by(user_id)
   end
 
-  @doc "Revoke every live key of an athanor."
-  @spec revoke_all_for_athanor(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def revoke_all_for_athanor(athanor_id) when is_binary(athanor_id) do
-    Arca.ApiKeyStorage.revoke_all_for_athanor(Cyfr.Actor.in_athanor(athanor_id))
-  end
-
   @doc """
   Rotate a key - issues a new secret for the same name and settings.
 
@@ -365,18 +376,19 @@ defmodule Sanctum.ApiKey do
   already carries one would spend the interactive grant twice. Revoke it and
   mint a new key instead — that path asks the consent plane again.
   """
-  def rotate(%Context{} = ctx, name) when is_binary(name) do
+  def rotate(%Context{} = ctx, name, issuance \\ []) when is_binary(name) and is_list(issuance) do
     actor = actor!(ctx)
 
-    with {:ok, false} <- Arca.ApiKeyStorage.capability_bearing?(actor, name) do
-      rotate_plain(ctx, actor, name)
+    with {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, issuance),
+         {:ok, false} <- Arca.ApiKeyStorage.capability_bearing?(actor, name) do
+      rotate_plain(expectation, actor, name)
     else
       {:ok, true} -> {:error, :capability_key_immutable}
-      {:error, :database_error} -> {:error, :database_error}
+      {:error, _reason} = refusal -> refusal
     end
   end
 
-  defp rotate_plain(_ctx, actor, name) do
+  defp rotate_plain(expectation, actor, name) do
     case Arca.ApiKeyStorage.get_key(actor, name) do
       {:ok, row} ->
         case parse_key_type(row.type) do
@@ -389,7 +401,9 @@ defmodule Sanctum.ApiKey do
                    actor,
                    name,
                    hash_key(new_key),
-                   String.slice(new_key, 0, 12)
+                   String.slice(new_key, 0, 12),
+                   lock: Sanctum.Issuance.lock(expectation),
+                   verify: Sanctum.Issuance.verify(expectation)
                  ) do
               :ok ->
                 {:ok,
@@ -488,7 +502,7 @@ defmodule Sanctum.ApiKey do
             {:error, :channel_closed}
 
           ip_allowlist in [nil, []] ->
-            {:ok, build_key_metadata(row, key_type)}
+            key_metadata(row, key_type)
 
           # An allowlisted key with no caller-supplied IP fails closed:
           # absence of the IP is not proof the restriction is satisfied
@@ -498,11 +512,41 @@ defmodule Sanctum.ApiKey do
             {:error, :ip_not_allowed}
 
           ip_allowed?(client_ip, ip_allowlist) ->
-            {:ok, build_key_metadata(row, key_type)}
+            key_metadata(row, key_type)
 
           true ->
             {:error, :ip_not_allowed}
         end
+    end
+  end
+
+  defp key_metadata(row, key_type) do
+    with {:ok, binding} <- key_binding(row) do
+      {:ok, row |> build_key_metadata(key_type) |> Map.put(:credential_binding, binding)}
+    end
+  end
+
+  # What a key's context was established against: the key itself, its
+  # creator's generation and its athanor's. A key with no person behind it
+  # — an orphan, or one the server's own principals created — carries no
+  # binding: it keeps its primary authentication and can issue nothing.
+  defp key_binding(%{id: id, created_by: creator, athanor_id: athanor_id}) do
+    case Sanctum.Tenancy.generation_snapshot(creator || "", athanor_id) do
+      {:ok, snapshot} ->
+        {:ok,
+         %{
+           source_kind: :api_key,
+           source_id: id,
+           focus_basis: :key,
+           user_generation: snapshot.user_generation,
+           athanor_generation: snapshot.athanor_generation
+         }}
+
+      {:error, :not_found} ->
+        {:ok, nil}
+
+      {:error, :unavailable} ->
+        {:error, :database_error}
     end
   end
 
@@ -548,7 +592,10 @@ defmodule Sanctum.ApiKey do
       scope: :athanor,
       auth_method: :api_key,
       api_key_type: metadata.type,
+      # The key's id and the binding that names it, stamped together here
+      # and nowhere else.
       api_key_id: metadata[:id],
+      credential_binding: metadata[:credential_binding],
       authenticated: true
     )
   end

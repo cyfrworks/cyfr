@@ -11,9 +11,9 @@ defmodule Sanctum.Tenancy.Athanors do
   job (`Sanctum.Provisioning`), not this module's: a row is a name,
   provisioning is what fills it.
 
-  A person's athanor is archived only through `Sanctum.Tenancy.Users.deny/1`
-  (`force: true`); a group is archived by its members or by its last member
-  leaving.
+  A person's athanor is archived only by their denial
+  (`Sanctum.Tenancy.Users.deny/1`) or by `archive/2` with `force: true`; a
+  group is archived by its members or by its last member leaving.
 
   ## What is decided here, and what is stored below
 
@@ -350,78 +350,85 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   Mark an athanor archived. Nothing is deleted; every ingress gate refuses
-  it, its API keys are revoked, whatever is running in it is cancelled, the
-  established-context memo of every member is dropped and its members are
-  told — the same on every path that archives (a member's
-  `athanor.archive`, the last member leaving, a person being denied), so no
-  path leaves work running in a furnace nobody may enter.
+  it, its API keys are revoked in the same transaction
+  (`Arca.SecurityTransitions.archive_athanor/3`), whatever is running in
+  it is cancelled, the established-context memo of every member is dropped
+  and its members are told — the same on every path that archives (a
+  member's `athanor.archive`, the last member leaving, a person being
+  denied), so no path leaves work running in a furnace nobody may enter.
+  The announcements follow the commit and are made from what it returned.
 
-  A person's athanor refuses unless `force: true` — the arm
-  `Sanctum.Tenancy.Users.deny/1` uses when it ejects a person.
+  A person's athanor refuses unless `force: true`. An athanor already
+  archived is archived again: its keys are revoked and checked again and
+  its archival announced again, so a retry reaches whatever a lost
+  announcement did not.
   """
   @spec archive(Athanor.t(), keyword()) :: {:ok, Athanor.t()} | {:error, term()}
-  def archive(%Athanor{} = athanor, opts \\ []) do
-    # Re-read first: callers often hold a struct from before the last change,
-    # and a changeset built on a stale status would write nothing.
-    with {:ok, current} <- get(athanor.id) do
-      cond do
-        current.status == "archived" ->
-          # Idempotent — but a retry after a half-finished archive still
-          # closes what the first attempt may not have reached.
-          close(current)
-          {:ok, current}
+  def archive(%Athanor{id: id} = athanor, opts \\ []) do
+    force? = Keyword.get(opts, :force, false)
 
-        current.kind == "person" and not Keyword.get(opts, :force, false) ->
-          {:error, :person_athanor_cannot_be_archived}
+    verify = fn
+      %{athanor: %{kind: "person", status: "active"}} when not force? ->
+        {:error, :person_athanor_cannot_be_archived}
 
-        true ->
-          with {:ok, archived} <- update(current, archived_attrs(current)) do
-            close(archived)
-            Sanctum.Notify.broadcast(archived.id, :athanor_changed, %{name: archived.name})
-            {:ok, archived}
-          end
-      end
+      _rows ->
+        :ok
+    end
+
+    with {:ok, change} <- Arca.SecurityTransitions.archive_athanor(server(), id, verify: verify) do
+      announce_archived([id], change)
+      {:ok, committed(athanor, change)}
     end
   end
 
-  defp archived_attrs(%Athanor{}), do: %{status: "archived", archived_at: DateTime.utc_now()}
+  @doc """
+  Announce estates a committed transition archived, from the data it
+  returned: each member's established-context memo is dropped, before
+  this returns — the memo caches an AUTHORIZATION decision, so an archive
+  that only flipped the status would leave every member working inside
+  the shut furnace until their memo aged out — and the archival is
+  announced, which is what stops in-flight work
+  (`Cyfr.Execution.ArchiveWatch`) and the processes serving the estate
+  from outside any tenant topic; the status gates already refuse new work
+  either way. Estates the transition actually moved tell their members'
+  open views.
+  """
+  @spec announce_archived([String.t()], map()) :: :ok
+  def announce_archived(ids, %{member_user_ids: members, athanors: moved}) do
+    for id <- ids do
+      members |> Map.get(id, []) |> Enum.each(&Sanctum.Session.invalidate_memo_for_user/1)
+      Sanctum.Telemetry.athanor_archived(id)
+    end
 
-  # What archiving closes: standing credentials and established
-  # authorization, both before this returns — they are authorization
-  # properties, not notifications. In-flight work is the execution
-  # domain's and stops in reaction to the announcement
-  # (`Cyfr.Execution.ArchiveWatch`), as do the processes serving the
-  # athanor from outside any tenant topic; the status gates already refuse
-  # new work either way.
-  defp close(%Athanor{id: id}) do
-    Sanctum.ApiKey.revoke_all_for_athanor(id)
-    drop_caller_memos(id)
-    Sanctum.Telemetry.athanor_archived(id)
-    :ok
-  end
-
-  # `Sanctum.Caller` memoizes an established context for a short TTL, and
-  # that context carries the athanor. The memo is a cache of an
-  # AUTHORIZATION decision, not of a display, so an archive that only
-  # flipped the status would leave every member working inside the shut
-  # furnace until their memo aged out — the status gates the next
-  # establish runs are exactly what the memo skips. Every member's memos
-  # go before this returns; a roster the store cannot read is logged and
-  # left to the TTL, which is the same best-effort posture as the rest of
-  # the close.
-  defp drop_caller_memos(athanor_id) do
-    case Arca.Members.active_user_ids(in_athanor(athanor_id)) do
-      {:ok, user_ids} ->
-        Enum.each(user_ids, &Sanctum.Session.invalidate_memo_for_user/1)
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Sanctum.Tenancy.Athanors] roster read failed while closing #{athanor_id}: " <>
-            "#{inspect(reason)} — cached callers age out instead"
-        )
+    for %{id: id, name: name, status: "archived"} <- moved do
+      Sanctum.Notify.broadcast(id, :athanor_changed, %{name: name})
     end
 
     :ok
+  end
+
+  # The row the caller named, as the transition left it: reread after
+  # commit, and — should that read fail — the caller's copy carrying the
+  # standing the commit returned, never an error for what did commit.
+  defp committed(%Athanor{id: id} = athanor, change) do
+    case get(id) do
+      {:ok, current} ->
+        current
+
+      {:error, _reason} ->
+        case Enum.find(change.athanors, &(&1.id == id)) do
+          nil ->
+            athanor
+
+          moved ->
+            %{
+              athanor
+              | status: moved.status,
+                archived_at: moved.archived_at,
+                security_generation: moved.security_generation
+            }
+        end
+    end
   end
 
   @doc """
@@ -472,7 +479,7 @@ defmodule Sanctum.Tenancy.Athanors do
   A **personal** athanor. `users.personal_athanor_id` is not an
   athanor-scoped column and would still name the tombstone: the unique
   index would then block minting a replacement, and
-  `Users.unarchive_personal/1` would try to reopen a wiped shell. Erasing
+  `Users.allow/1` would try to reopen a wiped shell. Erasing
   a person is a different act with different consequences —
   `Sanctum.Door`'s deny and `archive/1` are the person-level verbs.
 
@@ -515,32 +522,33 @@ defmodule Sanctum.Tenancy.Athanors do
     do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
 
   @doc """
-  Reopen an archived athanor, if the server still has room for it. An ended
-  DM never reopens: a frozen
-  estate is archived the moment either person leaves, so its husk holds
-  one member, and reopening it would seat that person alone in a second
-  You. Clicking the name again mints a new pair instead.
+  Reopen an archived athanor, if the server still has room for it
+  (`Arca.SecurityTransitions.unarchive_athanor/3`). Its revoked keys stay
+  revoked; the reopen raises the estate's generation, so a context read
+  before the archive cannot issue a credential in it afterwards. An ended
+  DM never reopens: a frozen estate is archived the moment either person
+  leaves, so its husk holds one member, and reopening it would seat that
+  person alone in a second You. Clicking the name again mints a new pair
+  instead.
   """
   @spec unarchive(Athanor.t()) :: {:ok, Athanor.t()} | {:error, term()}
-  def unarchive(%Athanor{} = athanor) do
-    with {:ok, current} <- get(athanor.id) do
-      cond do
-        current.roster == "frozen" ->
-          {:error, :frozen_is_final}
-
-        current.status == "active" ->
-          {:ok, current}
-
-        true ->
-          # An archived athanor freed its place against the server cap when it
-          # closed; taking the place back has to ask for it, or archiving and
-          # reopening would be the way past `CYFR_MAX_ATHANORS`.
-          with :ok <- Caps.check_counted(:max_athanors, &count/0) do
-            update(current, %{status: "active", archived_at: nil})
-          end
-      end
+  def unarchive(%Athanor{id: id} = athanor) do
+    with {:ok, change} <-
+           Arca.SecurityTransitions.unarchive_athanor(server(), id, verify: &reopenable/1) do
+      {:ok, committed(athanor, change)}
     end
   end
+
+  # An archived athanor freed its place against the server cap when it
+  # closed; taking the place back has to ask for it, or archiving and
+  # reopening would be the way past `CYFR_MAX_ATHANORS`. The count runs
+  # inside the transition, with the estate locked.
+  defp reopenable(%{athanor: %{roster: "frozen"}}), do: {:error, :frozen_is_final}
+
+  defp reopenable(%{athanor: %{status: "archived"}}),
+    do: Caps.check_counted(:max_athanors, &count/0)
+
+  defp reopenable(_rows), do: :ok
 
   @doc """
   Record that provisioning (seed + consents) completed — and forget any

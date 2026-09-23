@@ -50,6 +50,15 @@ defmodule Sanctum.Tenancy do
   athanor, which the tenant gate refuses): a database blip must never read
   as "you belong nowhere, contact your administrator" — a permanent-
   sounding answer to a transient fault no operator can see.
+
+  The reads that choose the athanor also bind the context
+  (`t:Sanctum.Context.credential_binding/0`). A context that holds no
+  credential yet — an admitted sign-in, the only caller that passes
+  `force: true` — is stamped `source_kind: :identity` with the person's
+  and the chosen estate's generations and the membership that granted it,
+  read after the door's verdict; a session or key context keeps its
+  source and person generation and takes the new estate's. A person with
+  no `users` row carries no binding, and can be issued nothing.
   """
   @spec resolve_status(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, :unavailable}
   def resolve_status(ctx, opts \\ [])
@@ -109,7 +118,8 @@ defmodule Sanctum.Tenancy do
   defp resolve_from_memberships(%Context{user_id: user_id} = ctx) do
     with {:ok, user} <- user_row(user_id),
          {:ok, memberships} <- Members.list_by_user(user_id) do
-      {:ok, apply_membership(ctx, memberships, user)}
+      {ctx, athanor} = apply_membership(ctx, memberships, user)
+      {:ok, bind(ctx, user, athanor, memberships)}
     else
       {:error, reason} ->
         Logger.error("[Sanctum.Tenancy] resolve failed for #{user_id}: #{inspect(reason)}")
@@ -127,17 +137,128 @@ defmodule Sanctum.Tenancy do
     end
   end
 
-  # Set capability and athanor from an already-loaded membership list.
+  # Set capability and athanor from an already-loaded membership list;
+  # answers the context and the chosen estate's row.
   defp apply_membership(%Context{} = ctx, memberships, user) do
     admin? = platform_admin?(memberships)
+    athanor = working_athanor(ctx, memberships, admin?, user)
+
+    {%{
+       ctx
+       | scope: :athanor,
+         platform_admin: admin?,
+         athanor_id: athanor && athanor.id
+     }, athanor}
+  end
+
+  # The binding the resolve's own reads support. A context with no source
+  # of its own — an admitted sign-in — is bound as `:identity`; a session
+  # or key context keeps its source and its person generation and follows
+  # the estate this resolve chose.
+  defp bind(%Context{} = ctx, nil, _athanor, _memberships), do: %{ctx | credential_binding: nil}
+
+  defp bind(
+         %Context{credential_binding: %{source_kind: kind} = binding} = ctx,
+         _user,
+         athanor,
+         memberships
+       )
+       when kind in [:session, :api_key] do
+    basis =
+      if binding.focus_basis == :key, do: :key, else: focus_basis(ctx, athanor, memberships)
 
     %{
       ctx
-      | scope: :athanor,
-        platform_admin: admin?,
-        athanor_id: working_athanor(ctx, memberships, admin?, user)
+      | credential_binding: %{
+          binding
+          | focus_basis: basis,
+            athanor_generation: athanor && athanor.security_generation
+        }
     }
   end
+
+  defp bind(%Context{} = ctx, user, athanor, memberships) do
+    %{
+      ctx
+      | credential_binding: %{
+          source_kind: :identity,
+          source_id: nil,
+          focus_basis: focus_basis(ctx, athanor, memberships),
+          user_generation: user.security_generation,
+          athanor_generation: athanor && athanor.security_generation
+        }
+    }
+  end
+
+  @doc """
+  The membership row that authorizes `ctx`'s focus on `athanor`: the
+  person's active seat there, else — for a platform admin — their
+  platform row, else nil. `memberships` are the person's active rows.
+  """
+  @spec focus_basis(Context.t(), map() | nil, [map()]) :: String.t() | nil
+  def focus_basis(_ctx, nil, _memberships), do: nil
+
+  def focus_basis(%Context{} = ctx, %{id: athanor_id}, memberships) do
+    seat =
+      Enum.find(memberships, fn
+        %{scope: "athanor", status: "active", athanor_id: ^athanor_id} -> true
+        _ -> false
+      end)
+
+    platform =
+      if ctx.platform_admin,
+        do: Enum.find(memberships, &(&1.scope == "platform" and &1.status == "active"))
+
+    case seat || platform do
+      %{id: id} -> id
+      nil -> nil
+    end
+  end
+
+  @typedoc """
+  The generations a person and an estate stand at, read from their rows:
+  what an issuance from a context with no binding of its own is checked
+  against (`Sanctum.Session.create/2`'s `:generation_snapshot`).
+  """
+  @type snapshot :: %{
+          user_id: String.t(),
+          user_generation: pos_integer(),
+          athanor_id: String.t() | nil,
+          athanor_generation: pos_integer() | nil
+        }
+
+  @doc """
+  Read the generations `user_id` and `athanor_id` stand at now:
+  `{:ok, snapshot}`, `{:error, :not_found}` when either row is absent, or
+  `{:error, :unavailable}` when the store cannot answer. A snapshot is
+  only a claim — the issuance that consumes it locks and rereads both
+  rows and refuses a generation that has since moved.
+  """
+  @spec generation_snapshot(String.t(), String.t() | nil) ::
+          {:ok, snapshot()} | {:error, :not_found | :unavailable}
+  def generation_snapshot(user_id, athanor_id) when is_binary(user_id) do
+    with {:ok, user} <- snapshot_row(Users.get(user_id)),
+         {:ok, athanor_generation} <- athanor_generation(athanor_id) do
+      {:ok,
+       %{
+         user_id: user.id,
+         user_generation: user.security_generation,
+         athanor_id: athanor_id,
+         athanor_generation: athanor_generation
+       }}
+    end
+  end
+
+  defp athanor_generation(nil), do: {:ok, nil}
+
+  defp athanor_generation(athanor_id) when is_binary(athanor_id) do
+    with {:ok, athanor} <- snapshot_row(Athanors.get(athanor_id)),
+         do: {:ok, athanor.security_generation}
+  end
+
+  defp snapshot_row({:ok, row}), do: {:ok, row}
+  defp snapshot_row({:error, :not_found}), do: {:error, :not_found}
+  defp snapshot_row({:error, _reason}), do: {:error, :unavailable}
 
   # The candidates in order of preference, then one read for their rows so
   # an archived athanor is skipped: the athanor the context already names
@@ -177,10 +298,7 @@ defmodule Sanctum.Tenancy do
     candidates = Enum.uniq(current ++ personal ++ granted)
     active = candidates |> Athanors.list_by_ids() |> Enum.filter(&(&1.status == "active"))
 
-    case Enum.find(candidates, fn id -> Enum.any?(active, &(&1.id == id)) end) do
-      nil -> nil
-      id -> id
-    end
+    Enum.find_value(candidates, fn id -> Enum.find(active, &(&1.id == id)) end)
   end
 
   defp membership_grants?(memberships, athanor_id) do
@@ -220,7 +338,7 @@ defmodule Sanctum.Tenancy do
 
       {:ok, user} ->
         case Members.list_by_user(user_id) do
-          {:ok, memberships} -> {:ok, apply_membership(ctx, memberships, user)}
+          {:ok, memberships} -> {:ok, ctx |> apply_membership(memberships, user) |> elem(0)}
           {:error, reason} -> unavailable("memberships", user_id, reason)
         end
 

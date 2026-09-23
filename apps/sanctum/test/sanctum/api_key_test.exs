@@ -15,7 +15,7 @@ defmodule Sanctum.ApiKeyTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.issuer!(Sanctum.TestContext.local())}
   end
 
   describe "create/2" do
@@ -544,13 +544,20 @@ defmodule Sanctum.ApiKeyTest do
   # Cross-tenant isolation for keys is proved separately in the cross-tenant
   # proof suite.
   describe "a key is a standing channel of its athanor" do
-    test "it stops when the athanor is archived, and when its creator is denied", %{ctx: ctx} do
+    test "it stops when the athanor is archived, and when its creator is denied" do
       n = System.unique_integer([:positive])
       # The creator is a person this server knows, named by their own id.
-      {ctx, creator} = Sanctum.TestContext.person!(ctx, %{email: "keys#{n}@example.com"})
+      {ctx, creator} =
+        Sanctum.TestContext.person!(Sanctum.TestContext.local(), %{email: "keys#{n}@example.com"})
+
       {:ok, group} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Keys #{n}")
-      in_group = %{ctx | athanor_id: group.id}
-      {:ok, %{api_key: key}} = ApiKey.create(in_group, %{name: "chan-#{n}"})
+      in_group = %{ctx | athanor_id: group.id, credential_binding: nil}
+
+      {:ok, %{api_key: key}} =
+        ApiKey.create(in_group, %{name: "chan-#{n}"},
+          generation_snapshot: Sanctum.TestContext.snapshot!(in_group)
+        )
+
       assert {:ok, _} = ApiKey.validate(key, [])
 
       # archiving revokes the athanor's keys for good — reopening the
@@ -564,7 +571,12 @@ defmodule Sanctum.ApiKeyTest do
       # even after its creator leaves the group
       other = "github|https://github.com|other-#{n}"
       {:ok, _} = Sanctum.Tenancy.Members.ensure(other, scope: "athanor", athanor_id: group.id)
-      {:ok, %{api_key: key}} = ApiKey.create(in_group, %{name: "chan2-#{n}"})
+
+      {:ok, %{api_key: key}} =
+        ApiKey.create(in_group, %{name: "chan2-#{n}"},
+          generation_snapshot: Sanctum.TestContext.snapshot!(in_group)
+        )
+
       assert {:ok, _} = ApiKey.validate(key, [])
       :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: ctx.user_id)
       assert {:ok, _} = ApiKey.validate(key, [])
@@ -594,17 +606,18 @@ defmodule Sanctum.ApiKeyTest do
     # name in different athanors coexist (no unique-constraint collision).
 
     setup do
-      ctx_a = %Context{
-        user_id: "user_x",
-        athanor_id: "ath_a",
-        permissions: MapSet.new([:*]),
-        scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil,
-        request_id: nil
-      }
+      ctx_a =
+        Sanctum.TestContext.issuer!(%Context{
+          user_id: "github|https://github.com|user-x",
+          athanor_id: "ath_a",
+          permissions: MapSet.new([:*]),
+          scope: :athanor,
+          auth_method: :oidc,
+          api_key_type: nil,
+          request_id: nil
+        })
 
-      ctx_b = %{ctx_a | athanor_id: "ath_b"}
+      ctx_b = Sanctum.TestContext.issuer!(%{ctx_a | athanor_id: "ath_b"})
 
       {:ok, ctx_a: ctx_a, ctx_b: ctx_b}
     end

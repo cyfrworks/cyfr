@@ -203,16 +203,17 @@ defmodule Sanctum.DoorTest do
     end
 
     defp session_for(user) do
-      {:ok, session} =
-        Sanctum.Session.create(
-          Sanctum.Context.build(
-            user_id: user.id,
-            email: user.email,
-            provider: "github",
-            authenticated: true,
-            permissions: [:read]
-          )
+      ctx =
+        Sanctum.Context.build(
+          user_id: user.id,
+          email: user.email,
+          provider: "github",
+          authenticated: true,
+          permissions: [:read]
         )
+
+      {:ok, session} =
+        Sanctum.Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
 
       session
     end
@@ -244,7 +245,11 @@ defmodule Sanctum.DoorTest do
 
       tenant = Sanctum.TestContext.local()
       ctx = %{tenant | user_id: stranger.id, email: stranger.email}
-      {:ok, key} = Sanctum.ApiKey.create(ctx, %{name: "stranger-key"})
+
+      {:ok, key} =
+        Sanctum.ApiKey.create(ctx, %{name: "stranger-key"},
+          generation_snapshot: Sanctum.TestContext.snapshot!(ctx)
+        )
 
       assert Enum.any?(elem(Sanctum.ApiKey.list(ctx), 1), &(&1.name == "stranger-key"))
 

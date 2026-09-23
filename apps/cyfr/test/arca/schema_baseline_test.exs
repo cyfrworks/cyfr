@@ -115,6 +115,53 @@ defmodule Arca.SchemaBaselineTest do
     refute Enum.find(columns("memberships"), &(&1.name == "user_id")).not_null?
   end
 
+  test "a person and an estate carry a positive standing generation, 1 at birth" do
+    for table <- ~w(users athanors) do
+      column = Enum.find(columns(table), &(&1.name == "security_generation"))
+      assert column.not_null?, "#{table}.security_generation is NOT NULL"
+      assert to_string(column.default) =~ "1", "#{table}.security_generation defaults to 1"
+    end
+
+    for schema <- [Arca.Schemas.User, Arca.Schemas.Athanor] do
+      assert :security_generation in schema.__schema__(:fields)
+    end
+
+    now = NaiveDateTime.utc_now()
+
+    estate = fn generation ->
+      %{
+        id: "ath_gen_#{System.unique_integer([:positive])}",
+        kind: "group",
+        name: "Generation",
+        slug: "generation-#{System.unique_integer([:positive])}",
+        created_by: "usr_schema",
+        security_generation: generation,
+        created_at: now,
+        updated_at: now
+      }
+    end
+
+    person = fn generation ->
+      %{
+        id: "usr_gen_#{System.unique_integer([:positive])}",
+        provider: "github",
+        security_generation: generation,
+        first_seen_at: now,
+        last_seen_at: now,
+        created_at: now,
+        updated_at: now
+      }
+    end
+
+    assert :ok = insert_row("athanors", estate.(1))
+    assert :ok = insert_row("users", person.(1))
+
+    for generation <- [0, -1] do
+      assert :refused = insert_row("athanors", estate.(generation))
+      assert :refused = insert_row("users", person.(generation))
+    end
+  end
+
   test "api_keys and webhooks have no scope-type column; vault_entries has no system column" do
     fossil = "scope" <> "_type"
     refute fossil in Enum.map(columns("api_keys"), & &1.name)

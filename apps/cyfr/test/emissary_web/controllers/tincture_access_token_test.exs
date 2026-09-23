@@ -15,7 +15,9 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
   test "GET /t/access-token with a valid Bearer key → 200 + a usable ?_t= token",
        %{conn: conn} do
     {:ok, %{api_key: key}} =
-      Sanctum.ApiKey.create(Sanctum.TestContext.local(), %{name: "mint-key"})
+      Sanctum.ApiKey.create(Sanctum.TestContext.issuer!(Sanctum.TestContext.local()), %{
+        name: "mint-key"
+      })
 
     resp =
       conn
@@ -46,7 +48,9 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
 
   test "the mint names one tincture or refuses", %{conn: conn} do
     {:ok, %{api_key: key}} =
-      Sanctum.ApiKey.create(Sanctum.TestContext.local(), %{name: "unscoped-key"})
+      Sanctum.ApiKey.create(Sanctum.TestContext.issuer!(Sanctum.TestContext.local()), %{
+        name: "unscoped-key"
+      })
 
     resp =
       conn
@@ -61,7 +65,9 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
     # credential: mint must demand the primary credential, so token expiry
     # actually means re-authentication.
     {:ok, %{api_key: key}} =
-      Sanctum.ApiKey.create(Sanctum.TestContext.local(), %{name: "renew-key"})
+      Sanctum.ApiKey.create(Sanctum.TestContext.issuer!(Sanctum.TestContext.local()), %{
+        name: "renew-key"
+      })
 
     minted =
       conn

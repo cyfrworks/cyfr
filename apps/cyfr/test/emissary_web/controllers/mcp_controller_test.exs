@@ -180,7 +180,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       Application.put_env(:arca, :base_path, test_dir)
 
       # Create a test API key
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, key_result} =
         Sanctum.ApiKey.create(ctx, %{
@@ -1135,7 +1135,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
   describe "subscriptions/listen gating" do
     setup do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, key_result} =
         Sanctum.ApiKey.create(ctx, %{name: "listen-gate-key", type: :application})

@@ -113,7 +113,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
     # asserting any particular outcome, because it fails if the value is ever
     # fed into a lookup again.
     test "a real session id in the header changes nothing", %{conn: conn} do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
       {:ok, session} = Sanctum.Session.create(ctx)
 
       assert unchanged_by_session_header(conn, session.token)
@@ -176,7 +176,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
 
       # From admission on the person is named by their own id.
       ctx = %{ctx | user_id: user.id}
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.TestContext.create_session(ctx)
 
       conn =
         conn
@@ -370,7 +370,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       Application.put_env(:sanctum, :auth_provider, __MODULE__.StubAuthProvider)
 
       # Create a test API key
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, key_result} =
         Sanctum.ApiKey.create(ctx, %{
@@ -463,7 +463,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
     test "a Sanctum session token authenticates as a bearer credential", %{conn: conn} do
       # Stateless auth: the credential travels on the request itself, so no
       # server-side MCP session is created and nothing is cached.
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, _} =
         Sanctum.Tenancy.Members.ensure(ctx.user_id,
@@ -487,7 +487,7 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
     test "a destroyed session token stops authenticating immediately", %{conn: conn} do
       # The bearer path reads the row on every request, so revocation takes
       # effect on the next call rather than when a cache entry expires.
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
       {:ok, session} = Sanctum.Session.create(ctx)
       :ok = Sanctum.Session.destroy(session.token)
 

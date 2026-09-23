@@ -12,13 +12,16 @@ defmodule Sanctum.SessionTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
+    # A session is issued only to a person this server knows, against the
+    # standing their row was read at.
     ctx =
       Context.build(
-        user_id: "user_123",
+        user_id: "github|https://github.com|session-#{System.unique_integer([:positive])}",
         email: "test@example.com",
         provider: "github",
         permissions: [:execute, :read]
       )
+      |> Sanctum.TestContext.issuer!()
 
     {:ok, ctx: ctx}
   end
@@ -29,7 +32,7 @@ defmodule Sanctum.SessionTest do
 
       assert session.token != nil
       assert byte_size(session.token) > 30
-      assert session.user_id == "user_123"
+      assert session.user_id == ctx.user_id
       assert session.email == "test@example.com"
       assert session.provider == "github"
     end
@@ -80,7 +83,7 @@ defmodule Sanctum.SessionTest do
       {:ok, session} = Session.create(ctx)
       {:ok, retrieved_ctx} = Session.load(session.token, surface: :console)
 
-      assert retrieved_ctx.user_id == "user_123"
+      assert retrieved_ctx.user_id == ctx.user_id
       assert retrieved_ctx.email == "test@example.com"
       assert retrieved_ctx.provider == "github"
       # The fixture person has no namespace: a publishing credential, not
@@ -113,7 +116,7 @@ defmodule Sanctum.SessionTest do
           permissions: [:read]
         )
 
-      {:ok, session} = Session.create(ctx)
+      {:ok, session} = Sanctum.TestContext.create_session(ctx)
 
       assert {:ok, %{authenticated: true, namespace: ns}} =
                Session.load(session.token, surface: :console)

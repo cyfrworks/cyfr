@@ -162,13 +162,17 @@ defmodule Arca.Users do
 
   def touch_identity(%Cyfr.Actor{}, _key, _now), do: {:error, :cross_tenant}
 
-  @doc "Write `attrs` over a person's row. `updated_at` is stamped here."
+  @doc """
+  Write `attrs` over a person's row. `updated_at` is stamped here. The
+  standing columns (`status`, `denied_at`, `security_generation`) are
+  refused as read-only: `Arca.SecurityTransitions` alone moves them.
+  """
   @spec update(Cyfr.Actor.t(), User.t(), map()) ::
           {:ok, User.t()} | refusal() | write_refusal()
   def update(%Cyfr.Actor{scope: :platform}, %User{} = user, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Users.update", fn ->
       user
-      |> User.changeset(Map.put(Map.new(attrs), :updated_at, DateTime.utc_now()))
+      |> User.update_changeset(Map.put(Map.new(attrs), :updated_at, DateTime.utc_now()))
       |> Arca.Repo.update()
       |> settled()
     end)

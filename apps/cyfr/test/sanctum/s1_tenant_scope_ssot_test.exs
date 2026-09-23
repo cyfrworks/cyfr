@@ -23,7 +23,7 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
 
     ctx =
       Context.build(
-        user_id: "u",
+        user_id: "github|https://github.com|s1-u",
         namespace: "ns",
         athanor_id: "ath_acme",
         permissions: [:*],
@@ -31,6 +31,7 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
         auth_method: :oidc,
         authenticated: true
       )
+      |> Sanctum.TestContext.issuer!()
 
     # An authenticated context that has not resolved an athanor yet (the
     # transient pre-resolution auth state) — the shape the tenant gate exists

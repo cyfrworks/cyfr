@@ -28,7 +28,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.issuer!(Sanctum.TestContext.local())}
   end
 
   defp future, do: DateTime.add(DateTime.utc_now(), 3600, :second)
