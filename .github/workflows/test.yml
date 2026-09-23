@@ -324,10 +324,11 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
       # The worker service releases without the control plane: a checkout
-      # holding only the lock, the contracts, Opus, the fetched deps and the
+      # holding only the lock, the contracts, Opus, the fetched deps, the
       # WIT tree (`Compendium.WITSource` embeds it; `Opus.Runtime` reads the
-      # same tree) compiles it with warnings as errors and runs its suite,
-      # against a scripted host and no database.
+      # same tree) and the protocol vectors compiles it with warnings as
+      # errors and runs its suite, against a scripted host and no database.
+      # The vector tests fail rather than skip without their fixture.
       - name: Compile and test Opus from its declared apps alone
         run: |
           set -euo pipefail
@@ -443,8 +444,8 @@ jobs:
       # spawner tests read (tests/fixtures) and the locus release's runtime
       # configuration (config/locus_runtime.exs, which its config test
       # evaluates) compiles it with warnings as errors and runs its suite,
-      # against no database. Unlike Opus's, Locus's vector tests fail
-      # rather than skip without the vector file.
+      # against no database. Its vector tests fail rather than skip
+      # without the vector file.
       - name: Compile and test Locus from its declared apps alone
         run: |
           set -euo pipefail
