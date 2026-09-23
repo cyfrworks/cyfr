@@ -486,11 +486,13 @@ defmodule Sanctum.TinctureAuth do
   # are the same ones every other surface uses (the `:tincture` surface
   # stamps auth_method `:session` in the loader). `denied` — the door
   # stopped admitting this person after the session was minted — is
-  # refused; nothing here upgrades what loaded.
+  # refused; nothing here upgrades what loaded. The memo bounds
+  # establishing, not validating: what it answers is revalidated against
+  # the stored session and standing before it admits anything.
   defp try_sanctum_session(token) do
     case Sanctum.Caller.establish(token, surface: :tincture, refresh: false) do
       {:ok, %Context{} = ctx} ->
-        {:ok, ctx}
+        revalidated_session(ctx)
 
       {:error, {:denied, _ctx}} ->
         {:error, :denied}
@@ -503,6 +505,14 @@ defmodule Sanctum.TinctureAuth do
 
       {:error, _} ->
         {:error, :invalid_credential}
+    end
+  end
+
+  defp revalidated_session(ctx) do
+    case Sanctum.Caller.revalidate_session(ctx) do
+      {:ok, fresh} -> {:ok, fresh}
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, _refused} -> {:error, :invalid_credential}
     end
   end
 

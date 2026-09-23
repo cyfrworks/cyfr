@@ -28,7 +28,15 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
 
   @impl true
   def update(%{load: true} = assigns, socket) do
-    {:ok, socket |> assign(Map.delete(assigns, :load)) |> load_skills() |> assign(:loaded, true)}
+    socket = assign(socket, Map.delete(assigns, :load))
+
+    {:noreply, socket} =
+      CyfrWeb.ContextGuard.guard(
+        socket,
+        &{:noreply, &1 |> load_skills() |> assign(:loaded, true)}
+      )
+
+    {:ok, socket}
   end
 
   def update(assigns, socket), do: {:ok, assign(socket, assigns)}
@@ -37,14 +45,16 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
   def handle_event("dismiss_flash", _params, socket), do: {:noreply, clear_flash(socket)}
 
   def handle_event("skill_open", %{"name" => name}, socket) do
-    case read_skill(socket, name) do
-      {:ok, skill} ->
-        {:noreply, assign(socket, :skill_open, skill)}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case read_skill(socket, name) do
+        {:ok, skill} ->
+          {:noreply, assign(socket, :skill_open, skill)}
 
-      {:error, reason} ->
-        {:noreply,
-         put_flash(socket, :error, "Could not read that scroll: #{error_message(reason)}")}
-    end
+        {:error, reason} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not read that scroll: #{error_message(reason)}")}
+      end
+    end)
   end
 
   def handle_event("skill_close", _params, socket),
@@ -58,19 +68,21 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
   # the index carries the description alone, and the body is what is
   # being edited.
   def handle_event("skill_edit", %{"name" => name}, socket) do
-    case read_skill(socket, name) do
-      {:ok, skill} ->
-        {:noreply,
-         assign(socket, :skill_editor, %{
-           name: name,
-           description: skill.description,
-           content: skill.content
-         })}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case read_skill(socket, name) do
+        {:ok, skill} ->
+          {:noreply,
+           assign(socket, :skill_editor, %{
+             name: name,
+             description: skill.description,
+             content: skill.content
+           })}
 
-      {:error, reason} ->
-        {:noreply,
-         put_flash(socket, :error, "Could not read that scroll: #{error_message(reason)}")}
-    end
+        {:error, reason} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not read that scroll: #{error_message(reason)}")}
+      end
+    end)
   end
 
   def handle_event("skill_cancel", _params, socket),
@@ -81,65 +93,81 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
         %{"description" => description, "content" => content} = params,
         socket
       ) do
-    ctx = socket.assigns.context
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      ctx = socket.assigns.context
 
-    {action, name} =
-      case socket.assigns.skill_editor do
-        %{name: name} when is_binary(name) -> {"skill_update", name}
-        _ -> {"skill_create", params["name"] || ""}
+      {action, name} =
+        case socket.assigns.skill_editor do
+          %{name: name} when is_binary(name) -> {"skill_update", name}
+          _ -> {"skill_create", params["name"] || ""}
+        end
+
+      case call_aqua(ctx, %{
+             "action" => action,
+             "name" => name,
+             "description" => description,
+             "content" => content
+           }) do
+        {:ok, _} ->
+          send(self(), {:refresh, :skills})
+
+          {:noreply,
+           socket
+           |> assign(:skill_editor, nil)
+           |> reopen_skill(name)
+           |> put_flash(:info, "Kept the scroll '#{name}'.")}
+
+        {:error, reason} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not keep that scroll: #{error_message(reason)}")}
       end
-
-    case call_aqua(ctx, %{
-           "action" => action,
-           "name" => name,
-           "description" => description,
-           "content" => content
-         }) do
-      {:ok, _} ->
-        send(self(), {:refresh, :skills})
-
-        {:noreply,
-         socket
-         |> assign(:skill_editor, nil)
-         |> reopen_skill(name)
-         |> put_flash(:info, "Kept the scroll '#{name}'.")}
-
-      {:error, reason} ->
-        {:noreply,
-         put_flash(socket, :error, "Could not keep that scroll: #{error_message(reason)}")}
-    end
+    end)
   end
 
   # Same disposition as a role: the estate's own scroll is deleted, an
   # edited copy of a shipped one is restored.
   def handle_event("skill_delete", %{"name" => name}, socket) do
-    case call_aqua(socket.assigns.context, %{"action" => "skill_delete", "name" => name}) do
-      {:ok, _} ->
-        open = socket.assigns.skill_open
-        socket = if open && open.name == name, do: assign(socket, :skill_open, nil), else: socket
-        send(self(), {:refresh, :skills})
-        {:noreply, put_flash(socket, :info, "Deleted the scroll '#{name}'.")}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case call_aqua(socket.assigns.context, %{"action" => "skill_delete", "name" => name}) do
+        {:ok, _} ->
+          open = socket.assigns.skill_open
 
-      {:error, reason} ->
-        {:noreply,
-         put_flash(socket, :error, "Could not delete that scroll: #{error_message(reason)}")}
-    end
+          socket =
+            if open && open.name == name, do: assign(socket, :skill_open, nil), else: socket
+
+          send(self(), {:refresh, :skills})
+          {:noreply, put_flash(socket, :info, "Deleted the scroll '#{name}'.")}
+
+        {:error, reason} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not delete that scroll: #{error_message(reason)}")}
+      end
+    end)
   end
 
   def handle_event("skill_revert", %{"name" => name}, socket) do
-    case call_aqua(socket.assigns.context, %{"action" => "skill_reset", "name" => name}) do
-      {:ok, _} ->
-        open = socket.assigns.skill_open
-        socket = if open && open.name == name, do: assign(socket, :skill_open, nil), else: socket
-        send(self(), {:refresh, :skills})
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case call_aqua(socket.assigns.context, %{"action" => "skill_reset", "name" => name}) do
+        {:ok, _} ->
+          open = socket.assigns.skill_open
 
-        {:noreply,
-         put_flash(socket, :info, "Reverted the scroll '#{name}' to what ships with the server.")}
+          socket =
+            if open && open.name == name, do: assign(socket, :skill_open, nil), else: socket
 
-      {:error, reason} ->
-        {:noreply,
-         put_flash(socket, :error, "Could not revert that scroll: #{error_message(reason)}")}
-    end
+          send(self(), {:refresh, :skills})
+
+          {:noreply,
+           put_flash(
+             socket,
+             :info,
+             "Reverted the scroll '#{name}' to what ships with the server."
+           )}
+
+        {:error, reason} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not revert that scroll: #{error_message(reason)}")}
+      end
+    end)
   end
 
   # ============================================================================

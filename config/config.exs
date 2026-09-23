@@ -59,6 +59,13 @@ config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
 # on. Sanctum names neither implementation: with the key unset every call
 # through the port refuses, distinguishably from an absent component.
 config :sanctum, :catalog, Cyfr.Ops.Catalog
+
+# How long a read of a caller's credential and standing is trusted: the
+# establish memo's TTL and the age past which a retained context is
+# revalidated before it is acted on (`Sanctum.Caller.fresh?/1`). A security
+# bound, not a tuning knob — it is how long a revocation no announcement
+# reached can go unread anywhere in the cell.
+config :sanctum, :caller_memo_ttl_ms, 2_000
 config :sanctum, :consent_components, Compendium.ConsentFacts
 
 # Where this deployment is reachable when the operator declared nothing:

@@ -237,6 +237,35 @@ defmodule Sanctum.SessionTest do
       assert :ok = Session.refresh_if_stale("nope")
     end
 
+    test "establishing slides a session only when it is due, on Sanctum's own pool" do
+      import Ecto.Query
+      # Seated in an estate, so the session establishes.
+      {:ok, session} = Session.create(Sanctum.TestContext.issuer!(Sanctum.TestContext.local()))
+      token_hash = :crypto.hash(:sha256, session.token)
+      expiry = fn -> elem(Session.get(session.token), 1).expires_at end
+
+      # A fresh session is not due: the load says so and no slide runs.
+      assert {:ok, %Context{}, false} = Session.load_sliding(session.token, surface: :console)
+      untouched = expiry.()
+      {:ok, _} = Sanctum.Caller.establish(session.token)
+      Process.sleep(50)
+      assert expiry.() == untouched
+
+      # One that is due is slid by the establish that read it.
+      soon = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:microsecond)
+
+      from(s in Arca.Schemas.Session, where: s.token_hash == ^token_hash)
+      |> Arca.Repo.update_all(set: [expires_at: soon])
+
+      assert {:ok, %Context{}, true} = Session.load_sliding(session.token, surface: :console)
+      {:ok, _} = Sanctum.Caller.establish(session.token)
+
+      Cyfr.Test.Wait.wait_until(fn ->
+        {:ok, at, _} = DateTime.from_iso8601(expiry.())
+        DateTime.diff(at, DateTime.utc_now(), :hour) >= 719
+      end)
+    end
+
     test "no-ops when TTL is infinite", %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
       Application.put_env(:sanctum, :session_ttl_hours, 0)

@@ -57,7 +57,15 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   def update(%{load: true} = assigns, socket) do
-    {:ok, socket |> assign(Map.delete(assigns, :load)) |> load_agents() |> assign(:loaded, true)}
+    socket = assign(socket, Map.delete(assigns, :load))
+
+    {:noreply, socket} =
+      CyfrWeb.ContextGuard.guard(
+        socket,
+        &{:noreply, &1 |> load_agents() |> assign(:loaded, true)}
+      )
+
+    {:ok, socket}
   end
 
   def update(assigns, socket), do: {:ok, assign(socket, assigns)}
@@ -70,20 +78,23 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # inline in the click, which would hold the LiveView. With no registry
   # configured the refusal comes back without a request being made.
   def handle_event("install_catalyst", %{"ref" => ref}, socket) when is_binary(ref) do
-    ctx = socket.assigns.context
-    lv = self()
-    logger_metadata = Cyfr.LoggerContext.capture()
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      ctx = socket.assigns.context
+      tag = CyfrWeb.ContextGuard.capture(ctx)
+      lv = self()
+      logger_metadata = Cyfr.LoggerContext.capture()
 
-    Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-      Cyfr.LoggerContext.restore(logger_metadata)
+      Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
 
-      result =
-        PrismWeb.Ops.call_tool(ctx, "component/pull", %{"reference" => ref})
+        result =
+          PrismWeb.Ops.call_tool(ctx, "component/pull", %{"reference" => ref})
 
-      send(lv, {:catalyst_installed, ref, result})
+        send(lv, {:catalyst_installed, tag, ref, result})
+      end)
+
+      {:noreply, assign(socket, :installing, ref)}
     end)
-
-    {:noreply, assign(socket, :installing, ref)}
   end
 
   # A new role gets its hands in the same flow: the policy it starts from
@@ -100,43 +111,45 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   def handle_event("editor_create_role", %{"name" => name} = params, socket)
       when name != "" do
-    ctx = socket.assigns.context
-    # The role a new one starts from is read again NOW — its hands as
-    # another member may have edited them since this page loaded — the
-    # same rule every allowlist edit on this page follows.
-    start = fresh_role(ctx, params["start_from"])
-    policy = if start, do: start["tool_policy"], else: %{}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      ctx = socket.assigns.context
+      # The role a new one starts from is read again NOW — its hands as
+      # another member may have edited them since this page loaded — the
+      # same rule every allowlist edit on this page follows.
+      start = fresh_role(ctx, params["start_from"])
+      policy = if start, do: start["tool_policy"], else: %{}
 
-    case call_aqua(ctx, %{
-           "action" => "create",
-           "name" => name,
-           "title" => name,
-           "description" => "Clone into #{name} for…",
-           "content" => "# #{name}\n\nYou are AQUA in the #{name} role.",
-           "tool_policy" => policy
-         }) do
-      {:ok, result} ->
-        hands = if start, do: "the #{start["title"]} role's hands", else: "no hands yet"
+      case call_aqua(ctx, %{
+             "action" => "create",
+             "name" => name,
+             "title" => name,
+             "description" => "Clone into #{name} for…",
+             "content" => "# #{name}\n\nYou are AQUA in the #{name} role.",
+             "tool_policy" => policy
+           }) do
+        {:ok, result} ->
+          hands = if start, do: "the #{start["title"]} role's hands", else: "no hands yet"
 
-        socket =
-          case result do
-            %{"cloneable" => true} ->
-              put_flash(
-                socket,
-                :info,
-                "Created the role '#{name}' with #{hands} — the soul may now clone into it."
-              )
+          socket =
+            case result do
+              %{"cloneable" => true} ->
+                put_flash(
+                  socket,
+                  :info,
+                  "Created the role '#{name}' with #{hands} — the soul may now clone into it."
+                )
 
-            %{"note" => note} ->
-              put_flash(socket, :error, "Created the role '#{name}' with #{hands}. #{note}")
-          end
+              %{"note" => note} ->
+                put_flash(socket, :error, "Created the role '#{name}' with #{hands}. #{note}")
+            end
 
-        send(self(), {:refresh, :agents})
-        {:noreply, socket}
+          send(self(), {:refresh, :agents})
+          {:noreply, socket}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Create failed: #{error_message(reason)}")}
-    end
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Create failed: #{error_message(reason)}")}
+      end
+    end)
   end
 
   def handle_event("editor_create_role", _params, socket), do: {:noreply, socket}
@@ -147,16 +160,18 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         socket
       )
       when field in @editable_fields do
-    args = Map.merge(%{field => value}, %{"action" => "update", "name" => name})
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      args = Map.merge(%{field => value}, %{"action" => "update", "name" => name})
 
-    case call_aqua(socket.assigns.context, args) do
-      {:ok, _} ->
-        send(self(), {:refresh, :agents})
-        {:noreply, socket}
+      case call_aqua(socket.assigns.context, args) do
+        {:ok, _} ->
+          send(self(), {:refresh, :agents})
+          {:noreply, socket}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
-    end
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
+      end
+    end)
   end
 
   def handle_event("editor_update_field", _params, socket), do: {:noreply, socket}
@@ -165,25 +180,31 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # edited copy of a shipped one is restored. The card offers the verb
   # only where one of those applies (`removal/1`).
   def handle_event("editor_delete", %{"name" => name}, socket) do
-    case call_aqua(socket.assigns.context, %{"action" => "delete", "name" => name}) do
-      {:ok, _} ->
-        send(self(), {:refresh, :agents})
-        {:noreply, put_flash(socket, :info, "Deleted the role '#{name}'.")}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case call_aqua(socket.assigns.context, %{"action" => "delete", "name" => name}) do
+        {:ok, _} ->
+          send(self(), {:refresh, :agents})
+          {:noreply, put_flash(socket, :info, "Deleted the role '#{name}'.")}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Delete failed: #{error_message(reason)}")}
-    end
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Delete failed: #{error_message(reason)}")}
+      end
+    end)
   end
 
   def handle_event("editor_revert", %{"name" => name}, socket) do
-    case call_aqua(socket.assigns.context, %{"action" => "reset", "name" => name}) do
-      {:ok, _} ->
-        send(self(), {:refresh, :agents})
-        {:noreply, put_flash(socket, :info, "Reverted '#{name}' to what ships with the server.")}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case call_aqua(socket.assigns.context, %{"action" => "reset", "name" => name}) do
+        {:ok, _} ->
+          send(self(), {:refresh, :agents})
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Revert failed: #{error_message(reason)}")}
-    end
+          {:noreply,
+           put_flash(socket, :info, "Reverted '#{name}' to what ships with the server.")}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Revert failed: #{error_message(reason)}")}
+      end
+    end)
   end
 
   # Taking a role out of the closet — and putting it back — without
@@ -191,21 +212,23 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # since the estate does not own it and cannot delete it.
   def handle_event("editor_set_disabled", %{"name" => name, "disabled" => flag}, socket)
       when flag in ["true", "false"] do
-    disabled? = flag == "true"
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      disabled? = flag == "true"
 
-    case call_aqua(socket.assigns.context, %{
-           "action" => "update",
-           "name" => name,
-           "disabled" => disabled?
-         }) do
-      {:ok, _} ->
-        send(self(), {:refresh, :agents})
-        verb = if disabled?, do: "Disabled", else: "Enabled"
-        {:noreply, put_flash(socket, :info, "#{verb} the role '#{name}'.")}
+      case call_aqua(socket.assigns.context, %{
+             "action" => "update",
+             "name" => name,
+             "disabled" => disabled?
+           }) do
+        {:ok, _} ->
+          send(self(), {:refresh, :agents})
+          verb = if disabled?, do: "Disabled", else: "Enabled"
+          {:noreply, put_flash(socket, :info, "#{verb} the role '#{name}'.")}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
-    end
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Update failed: #{error_message(reason)}")}
+      end
+    end)
   end
 
   # Add/remove a `tool.action` from an allowlist. On add, the default is
@@ -218,31 +241,33 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # annotation (`Aqua.Kinds.kind_for/2`), never taken off the wire. A
   # key that resolves to no known action is refused.
   def handle_event("editor_toggle_capability", %{"name" => name, "key" => key}, socket) do
-    soul? = soul_name?(socket, name)
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      soul? = soul_name?(socket, name)
 
-    {:noreply,
-     update_tool_policy(socket, name, fn policy ->
-       cond do
-         Map.has_key?(policy, key) ->
-           {:ok, %{key => nil}}
+      {:noreply,
+       update_tool_policy(socket, name, fn policy ->
+         cond do
+           Map.has_key?(policy, key) ->
+             {:ok, %{key => nil}}
 
-         resolved_kind(key) == nil ->
-           {:refused, "Unknown capability: #{key}"}
+           resolved_kind(key) == nil ->
+             {:refused, "Unknown capability: #{key}"}
 
-         not soul? and not auto_permitted?(key) ->
-           {:refused,
-            "#{key} always asks, and a role has no card to raise — the soul asks for it"}
+           not soul? and not auto_permitted?(key) ->
+             {:refused,
+              "#{key} always asks, and a role has no card to raise — the soul asks for it"}
 
-         not soul? ->
-           {:ok, %{key => "auto"}}
+           not soul? ->
+             {:ok, %{key => "auto"}}
 
-         resolved_kind(key) == :read ->
-           {:ok, %{key => "auto"}}
+           resolved_kind(key) == :read ->
+             {:ok, %{key => "auto"}}
 
-         true ->
-           {:ok, %{key => "ask"}}
-       end
-     end)}
+           true ->
+             {:ok, %{key => "ask"}}
+         end
+       end)}
+    end)
   end
 
   # Toggle a write/execute capability between "ask" (request approval) and
@@ -257,28 +282,32 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         socket
       )
       when mode in ["ask", "auto"] do
-    cond do
-      mode == "auto" and not auto_permitted?(key) ->
-        {:noreply, put_flash(socket, :error, "#{key} always asks — it cannot be set to auto")}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      cond do
+        mode == "auto" and not auto_permitted?(key) ->
+          {:noreply, put_flash(socket, :error, "#{key} always asks — it cannot be set to auto")}
 
-      mode == "ask" and not soul_name?(socket, name) ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "A role has no card to raise — #{key} runs in the role or not at all"
-         )}
+        mode == "ask" and not soul_name?(socket, name) ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             "A role has no card to raise — #{key} runs in the role or not at all"
+           )}
 
-      true ->
-        {:noreply, update_tool_policy(socket, name, fn _policy -> {:ok, %{key => mode}} end)}
-    end
+        true ->
+          {:noreply, update_tool_policy(socket, name, fn _policy -> {:ok, %{key => mode}} end)}
+      end
+    end)
   end
 
   # Toggle the provider-native search grant. It is an ordinary policy key
   # that coexists with the rest of the allowlist; the formula appends the
   # native tool when the key is "auto".
   def handle_event("editor_toggle_native", %{"name" => name}, socket) do
-    {:noreply, update_tool_policy(socket, name, &{:ok, toggle_key(&1, "native_search")})}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      {:noreply, update_tool_policy(socket, name, &{:ok, toggle_key(&1, "native_search")})}
+    end)
   end
 
   # Which roles the soul may clone into: one `<role>.*` glob each on the
@@ -286,17 +315,19 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # is a policy key, and a key for a role that does not exist is noise
   # the runtime would carry forever.
   def handle_event("editor_toggle_clone", %{"role" => role_name}, socket) do
-    with %{"name" => soul_name} <- socket.assigns.soul,
-         %{"name" => _} <- find_role(socket, role_name) do
-      {:noreply,
-       update_tool_policy(
-         socket,
-         soul_name,
-         &{:ok, toggle_key(&1, AquaAgent.clone_glob(role_name))}
-       )}
-    else
-      _ -> {:noreply, put_flash(socket, :error, "Unknown role: #{role_name}")}
-    end
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      with %{"name" => soul_name} <- socket.assigns.soul,
+           %{"name" => _} <- find_role(socket, role_name) do
+        {:noreply,
+         update_tool_policy(
+           socket,
+           soul_name,
+           &{:ok, toggle_key(&1, AquaAgent.clone_glob(role_name))}
+         )}
+      else
+        _ -> {:noreply, put_flash(socket, :error, "Unknown role: #{role_name}")}
+      end
+    end)
   end
 
   def handle_event("editor_edit_prompt", %{"name" => name}, socket) do
@@ -315,72 +346,76 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   def handle_event("editor_save_prompt", %{"content" => content}, socket) do
-    name = socket.assigns.editor_editing_prompt
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      name = socket.assigns.editor_editing_prompt
 
-    # The digest names the version this editor opened: a save over a
-    # prompt another member changed since is refused as a conflict, and
-    # the editor stays open with the draft.
-    case call_aqua(socket.assigns.context, %{
-           "action" => "update",
-           "name" => name,
-           "content" => content,
-           "expected_digest" => socket.assigns.editor_prompt_digest
-         }) do
-      {:ok, _} ->
-        send(self(), {:refresh, :agents})
-        {:noreply, assign(socket, :editor_editing_prompt, nil)}
+      # The digest names the version this editor opened: a save over a
+      # prompt another member changed since is refused as a conflict, and
+      # the editor stays open with the draft.
+      case call_aqua(socket.assigns.context, %{
+             "action" => "update",
+             "name" => name,
+             "content" => content,
+             "expected_digest" => socket.assigns.editor_prompt_digest
+           }) do
+        {:ok, _} ->
+          send(self(), {:refresh, :agents})
+          {:noreply, assign(socket, :editor_editing_prompt, nil)}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Save failed: #{error_message(reason)}")}
-    end
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Save failed: #{error_message(reason)}")}
+      end
+    end)
   end
 
   def handle_event("editor_set_model", %{"name" => name, "value" => value}, socket) do
-    ctx = socket.assigns.context
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      ctx = socket.assigns.context
 
-    result =
-      case Catalog.decode_model_choice(value) do
-        {:inherit} ->
-          call_aqua(ctx, %{
-            "action" => "update",
-            "name" => name,
-            "model" => nil,
-            "catalyst_ref" => nil
-          })
+      result =
+        case Catalog.decode_model_choice(value) do
+          {:inherit} ->
+            call_aqua(ctx, %{
+              "action" => "update",
+              "name" => name,
+              "model" => nil,
+              "catalyst_ref" => nil
+            })
 
-        {:model, provider, model} ->
-          # No hardcoded publisher fallback. A ref built from a personal
-          # namespace resolves to nothing on any other deployment, so the
-          # model choice failed silently there; the refs the page loaded are
-          # the only ones that exist.
-          catalyst_ref =
-            case socket.assigns[:catalyst_refs][provider] do
-              nil -> nil
-              ref -> Regex.replace(~r/:\d+\.\d+\.\d+$/, ref, "")
-            end
+          {:model, provider, model} ->
+            # No hardcoded publisher fallback. A ref built from a personal
+            # namespace resolves to nothing on any other deployment, so the
+            # model choice failed silently there; the refs the page loaded are
+            # the only ones that exist.
+            catalyst_ref =
+              case socket.assigns[:catalyst_refs][provider] do
+                nil -> nil
+                ref -> Regex.replace(~r/:\d+\.\d+\.\d+$/, ref, "")
+              end
 
-          call_aqua(ctx, %{
-            "action" => "update",
-            "name" => name,
-            "model" => model,
-            "catalyst_ref" => catalyst_ref
-          })
+            call_aqua(ctx, %{
+              "action" => "update",
+              "name" => name,
+              "model" => model,
+              "catalyst_ref" => catalyst_ref
+            })
 
-        :noop ->
-          {:ok, :noop}
+          :noop ->
+            {:ok, :noop}
+        end
+
+      send(self(), {:refresh, :agents})
+
+      case result do
+        {:ok, _} ->
+          {:noreply, socket}
+
+        {:error, reason} ->
+          # A discarded refusal made the select box appear to work — the
+          # refresh then quietly snapped it back.
+          {:noreply, put_flash(socket, :error, "Model update failed: #{error_message(reason)}")}
       end
-
-    send(self(), {:refresh, :agents})
-
-    case result do
-      {:ok, _} ->
-        {:noreply, socket}
-
-      {:error, reason} ->
-        # A discarded refusal made the select box appear to work — the
-        # refresh then quietly snapped it back.
-        {:noreply, put_flash(socket, :error, "Model update failed: #{error_message(reason)}")}
-    end
+    end)
   end
 
   # ============================================================================

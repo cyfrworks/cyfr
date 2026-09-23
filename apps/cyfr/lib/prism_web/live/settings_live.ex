@@ -165,7 +165,8 @@ defmodule PrismWeb.SettingsLive do
     socket |> assign(:door_entries, entries) |> assign(:door_requests, requests)
   end
 
-  defp load_door(socket), do: socket
+  # A socket whose capability went since it read the door drops what it read.
+  defp load_door(socket), do: socket |> assign(:door_entries, []) |> assign(:door_requests, [])
 
   defp load_prefs(socket) do
     ctx = socket.assigns.context

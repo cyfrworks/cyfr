@@ -57,6 +57,7 @@ defmodule PrismWeb.BuildsLive do
     # every assign in the task's heap.
     lv = self()
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
@@ -64,7 +65,7 @@ defmodule PrismWeb.BuildsLive do
            Cyfr.LoggerContext.restore(logger_metadata)
            args = %{"reference" => reference, "build_id" => build_id}
            result = call_tool(ctx, "build/compile", args)
-           send(lv, {:build_complete, result})
+           send(lv, {:deliver, tag, {:build_complete, result}})
          end) do
       {:ok, _pid} ->
         # A generation token, so a stale deadline (an earlier build that
@@ -98,7 +99,11 @@ defmodule PrismWeb.BuildsLive do
     {:noreply, socket}
   end
 
+  # The build's answer, taken only under the focus it was started for.
   @impl true
+  def handle_info({:deliver, tag, message}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &handle_info(message, &1))
+
   def handle_info(:load, socket) do
     toolchains =
       case call_tool(socket, "build/toolchains", %{}) do

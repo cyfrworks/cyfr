@@ -30,7 +30,9 @@ defmodule PrismWeb.AquaLive.NotesComponent do
 
   @impl true
   def update(%{load: true} = assigns, socket) do
-    {:ok, socket |> assign(Map.delete(assigns, :load)) |> load()}
+    socket = assign(socket, Map.delete(assigns, :load))
+    {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, load(&1)})
+    {:ok, socket}
   end
 
   def update(assigns, socket), do: {:ok, assign(socket, assigns)}
@@ -54,47 +56,53 @@ defmodule PrismWeb.AquaLive.NotesComponent do
     do: {:noreply, assign(socket, :about_draft, content)}
 
   def handle_event("about_save", %{"content" => content}, socket) do
-    args = %{"name" => socket.assigns.pinned_name, "content" => content}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      args = %{"name" => socket.assigns.pinned_name, "content" => content}
 
-    case call_tool(socket.assigns.context, "notes/pin", args) do
-      {:ok, result} ->
-        {:noreply,
-         socket
-         |> assign(:about_editing?, false)
-         |> load()
-         |> put_flash(:info, Aqua.Notes.describe(result) || "Pinned.")}
+      case call_tool(socket.assigns.context, "notes/pin", args) do
+        {:ok, result} ->
+          {:noreply,
+           socket
+           |> assign(:about_editing?, false)
+           |> load()
+           |> put_flash(:info, Aqua.Notes.describe(result) || "Pinned.")}
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not pin that: #{error_message(reason)}")}
-    end
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Could not pin that: #{error_message(reason)}")}
+      end
+    end)
   end
 
   def handle_event("note_open", %{"name" => name}, socket) do
-    case call_tool(socket.assigns.context, "notes/read", %{"name" => name}) do
-      {:ok, note} ->
-        {:noreply, assign(socket, :note_open, note)}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case call_tool(socket.assigns.context, "notes/read", %{"name" => name}) do
+        {:ok, note} ->
+          {:noreply, assign(socket, :note_open, note)}
 
-      {:error, reason} ->
-        {:noreply,
-         put_flash(socket, :error, "Could not read that note: #{error_message(reason)}")}
-    end
+        {:error, reason} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not read that note: #{error_message(reason)}")}
+      end
+    end)
   end
 
   def handle_event("note_close", _params, socket), do: {:noreply, assign(socket, :note_open, nil)}
 
   def handle_event("note_forget", %{"name" => name}, socket) do
-    case call_tool(socket.assigns.context, "notes/forget", %{"name" => name}) do
-      {:ok, result} ->
-        open = socket.assigns.note_open
-        socket = if open && open.name == name, do: assign(socket, :note_open, nil), else: socket
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case call_tool(socket.assigns.context, "notes/forget", %{"name" => name}) do
+        {:ok, result} ->
+          open = socket.assigns.note_open
+          socket = if open && open.name == name, do: assign(socket, :note_open, nil), else: socket
 
-        {:noreply,
-         socket |> load() |> put_flash(:info, Aqua.Notes.describe(result) || "Forgotten.")}
+          {:noreply,
+           socket |> load() |> put_flash(:info, Aqua.Notes.describe(result) || "Forgotten.")}
 
-      {:error, reason} ->
-        {:noreply,
-         put_flash(socket, :error, "Could not forget that note: #{error_message(reason)}")}
-    end
+        {:error, reason} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not forget that note: #{error_message(reason)}")}
+      end
+    end)
   end
 
   # ============================================================================

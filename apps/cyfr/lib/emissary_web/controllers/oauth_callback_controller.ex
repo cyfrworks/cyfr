@@ -11,8 +11,10 @@ defmodule EmissaryWeb.OAuthCallbackController do
   No user Context is required: proof-of-initiation is the single-use,
   unguessable `state` (256-bit, delete-on-read, 2-minute TTL) plus the
   server-held PKCE `code_verifier`. The pending record written when
-  `vault.authorize` ran carries the originating athanor and target
-  vault entry that the resulting tokens are stored under.
+  `vault.authorize` ran carries the originating context, athanor and
+  target vault entry that the resulting tokens are stored under; the
+  grant re-establishes that context's standing before it writes, so a
+  session revoked in between writes nothing.
   """
 
   use EmissaryWeb, :controller
@@ -32,6 +34,16 @@ defmodule EmissaryWeb.OAuthCallbackController do
 
       {:error, :unknown_state} ->
         error_page(conn, "Authorization failed", "invalid or expired state parameter")
+
+      {:error, :not_standing} ->
+        error_page(
+          conn,
+          "Authorization failed",
+          "the session that started this authorization is no longer signed in here"
+        )
+
+      {:error, :unavailable} ->
+        error_page(conn, 503, "Authorization failed", "Try again shortly")
 
       {:error, reason} ->
         error_page(conn, "Authorization failed", fmt_reason(reason))
@@ -86,10 +98,12 @@ defmodule EmissaryWeb.OAuthCallbackController do
     )
   end
 
-  defp error_page(conn, title, message) do
+  defp error_page(conn, title, message), do: error_page(conn, 400, title, message)
+
+  defp error_page(conn, status, title, message) do
     send_page(
       conn,
-      400,
+      status,
       title,
       """
       <p>#{PrismWeb.MinimalPage.h(message)}</p>

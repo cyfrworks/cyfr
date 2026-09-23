@@ -245,7 +245,7 @@ defmodule Cyfr.Bus do
   Unscoped on purpose: the subject is a session row key, and the memo it
   addresses is a cached AUTHORIZATION decision held in each member's own
   table. `Cyfr.StandingWatch` on every member drops it. The memo's TTL
-  (`:sanctum, :establish_cache_ms`, 2 s) is what bounds a delivery that
+  (`:sanctum, :caller_memo_ttl_ms`, 2 s) is what bounds a delivery that
   never arrives; this topic is what makes the usual case immediate.
   """
   @spec caller_invalidated_global() :: String.t()

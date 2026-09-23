@@ -49,7 +49,7 @@ defmodule PrismWeb.FileController do
   # A session refusal is rendered by its disposition; a path the tree does
   # not show is simply not found, whatever the reason.
   defp authenticate(token, athanor_id) do
-    case PrismWeb.AuthHelpers.authenticate_session(token, athanor_id) do
+    case CyfrWeb.ContextGuard.authenticate(token, athanor_id) do
       {:ok, ctx} -> {:ok, ctx}
       {:error, refusal} -> PrismWeb.AuthHelpers.disposition(refusal)
     end

@@ -6,8 +6,8 @@ defmodule EmissaryWeb.EndpointSocketTest do
   Pins what the `/live` socket is told about its caller.
 
   The LiveView socket is handled by `EmissaryWeb.Endpoint` before the
-  router (`router.ex` says so where it explains why `PrismWeb.LiveAuth`
-  exists), so it passes no plug at all — not `MCPRateLimit`, not
+  router (`router.ex` says so where it explains why `CyfrWeb.ContextGuard`
+  gates LiveView mounts), so it passes no plug at all — not `MCPRateLimit`, not
   `AuthRateLimit`. A LiveView that starts an anonymous device flow
   (`PrismWeb.LoginLive`, `PrismWeb.RegistryLive`) is therefore the only
   thing standing between one address and the server-wide sign-in budget,

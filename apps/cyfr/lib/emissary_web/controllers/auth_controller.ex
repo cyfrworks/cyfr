@@ -241,22 +241,32 @@ defmodule EmissaryWeb.AuthController do
     end
   end
 
+  # The probe writes on the person's row, so it runs only for a session that
+  # stands now: established, then revalidated against the stored session
+  # and the person's standing — never a look at who the cookie names.
   defp do_post_legal_accept(conn, access_token) do
-    case get_session(conn, PrismWeb.SignInResponse.session_key()) do
-      session_token when is_binary(session_token) and session_token != "" ->
-        with {:ok, peeked} <- Sanctum.Caller.peek(session_token),
-             {:ok, user} <- Sanctum.Tenancy.Users.get(peeked.user_id) do
-          provider = peeked.provider || "github"
-          {:proceed, user, report} = Compendium.SignInSync.complete(user, provider, access_token)
+    session_token = get_session(conn, PrismWeb.SignInResponse.session_key())
 
-          # The token stays for the claim that may follow the acceptance.
-          SignInResponse.respond(conn, {:proceed, report},
-            session: :existing,
-            access_token: if(is_nil(user.namespace), do: access_token)
-          )
-        else
-          _ -> conn |> redirect(to: "/login")
-        end
+    with {:ok, ctx} <- Sanctum.Caller.establish(session_token, refresh: false),
+         {:ok, ctx} <- Sanctum.Caller.revalidate_session(ctx),
+         {:ok, user} <- Sanctum.Tenancy.Users.get(ctx.user_id) do
+      provider = ctx.provider || "github"
+      {:proceed, user, report} = Compendium.SignInSync.complete(user, provider, access_token)
+
+      # The token stays for the claim that may follow the acceptance.
+      SignInResponse.respond(conn, {:proceed, report},
+        session: :existing,
+        access_token: if(is_nil(user.namespace), do: access_token)
+      )
+    else
+      {:error, :unavailable} ->
+        PrismWeb.MinimalPage.send_page(
+          conn,
+          503,
+          "Try again shortly",
+          "<p>We could not confirm your session just now.</p>" <>
+            "<p><a href=\"/login\">Sign in again</a></p>"
+        )
 
       _ ->
         conn |> redirect(to: "/login")

@@ -32,20 +32,26 @@ defmodule PrismWeb.ModelCatalog do
 
   @doc """
   Load the catalogue for the calling LiveView. Sends
-  `{:list_models_result, result}` — at once from the cache, else from a
-  supervised run that also arms a `{:task_timeout, :models}` deadline; when
-  no engine is running and nothing is cached there is nothing to load and
-  the caller's `:models_loaded` should be set — signalled by `:unavailable`.
+  `{:list_models_result, tag, result}` — at once from the cache, else from
+  a supervised run that also arms a `{:task_timeout, :models}` deadline;
+  when no engine is running and nothing is cached there is nothing to load
+  and the caller's `:models_loaded` should be set — signalled by
+  `:unavailable`. `tag` is the focus the catalogue was read for
+  (`CyfrWeb.ContextGuard.capture/1`); the caller takes the result through
+  `CyfrWeb.ContextGuard.deliver/3`, so a catalogue read for one estate is
+  never shown under another.
   """
   @spec load(Sanctum.Context.t()) :: :ok | :unavailable
   def load(%Sanctum.Context{athanor_id: athanor_id} = ctx) when is_binary(athanor_id) do
+    tag = CyfrWeb.ContextGuard.capture(ctx)
+
     case Arca.Cache.get(key(athanor_id)) do
       {:ok, result} ->
-        send(self(), {:list_models_result, {:ok, result}})
+        send(self(), {:list_models_result, tag, {:ok, result}})
         :ok
 
       :miss ->
-        if Cyfr.Execution.available?(), do: run(ctx, athanor_id), else: :unavailable
+        if Cyfr.Execution.available?(), do: run(ctx, athanor_id, tag), else: :unavailable
     end
   end
 
@@ -54,7 +60,7 @@ defmodule PrismWeb.ModelCatalog do
   # leave the caller waiting out the deadline.
   def load(%Sanctum.Context{}), do: :unavailable
 
-  defp run(ctx, athanor_id) do
+  defp run(ctx, athanor_id, tag) do
     lv = self()
     logger_metadata = Cyfr.LoggerContext.capture()
 
@@ -62,7 +68,7 @@ defmodule PrismWeb.ModelCatalog do
       Cyfr.LoggerContext.restore(logger_metadata)
       result = Cyfr.Models.catalogue(ctx)
       with {:ok, catalogue} <- result, do: remember(athanor_id, catalogue)
-      send(lv, {:list_models_result, result})
+      send(lv, {:list_models_result, tag, result})
     end)
 
     Process.send_after(lv, {:task_timeout, :models}, @timeout_ms)
@@ -84,7 +90,7 @@ defmodule PrismWeb.ModelCatalog do
   end
 
   @doc """
-  Decode a `{:list_models_result, {:ok, result}}` payload into
+  Decode a `{:list_models_result, tag, {:ok, result}}` payload into
   `%{models: %{provider => [model_id]}, refs: %{provider => ref}}` — both
   halves, so a page cannot silently drop one again.
   """

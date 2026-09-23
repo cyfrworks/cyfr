@@ -13,6 +13,8 @@ defmodule EmissaryWeb.AuthControllerTest do
   """
   use EmissaryWeb.ConnCase
 
+  import Ecto.Query, only: [from: 2]
+
   describe "request/2" do
     test "returns 404 for unknown provider", %{conn: conn} do
       conn = get(conn, ~p"/auth/unknown_provider")
@@ -778,5 +780,62 @@ defmodule EmissaryWeb.AuthControllerTest do
   defp person_id(identity) do
     {:ok, %{id: id}} = Sanctum.Tenancy.Users.get_by_identity(identity)
     id
+  end
+
+  describe "post_legal_accept/2 — the probe runs only for a session that stands" do
+    setup do
+      # cyfr.run unreachable, so a probe that does run answers at once.
+      prev = Application.get_env(:cyfr, :registry_url)
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:cyfr, :registry_url, prev),
+          else: Application.delete_env(:cyfr, :registry_url)
+      end)
+
+      person = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      {:ok, session} = Sanctum.Session.create(person)
+      {:ok, session: session}
+    end
+
+    defp probe_cookie do
+      secret = EmissaryWeb.Endpoint.config(:secret_key_base)
+
+      %{value: value} =
+        build_conn()
+        |> Map.put(:secret_key_base, secret)
+        |> put_resp_cookie("_cyfr_pending_probe", "gho_probe", encrypt: true, max_age: 600)
+        |> Map.fetch!(:resp_cookies)
+        |> Map.fetch!("_cyfr_pending_probe")
+
+      value
+    end
+
+    defp post_legal_accept(token) do
+      build_conn()
+      |> Plug.Test.init_test_session(%{sanctum_session_token: token})
+      |> Plug.Test.put_req_cookie("_cyfr_pending_probe", probe_cookie())
+      |> get("/auth/post-legal-accept")
+    end
+
+    test "a standing session completes the sign-in", %{session: session} do
+      refute redirected_to(post_legal_accept(session.token)) == "/login"
+    end
+
+    test "a session revoked with nobody told is sent to sign in, not probed", %{session: session} do
+      hash = Sanctum.Session.token_hash(session.token)
+
+      Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+
+      assert redirected_to(post_legal_accept(session.token)) == "/login"
+    end
+
+    test "a store that cannot answer says try again, and signs nobody in", %{session: session} do
+      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+      conn = post_legal_accept(session.token)
+      assert conn.status == 503
+      assert conn.resp_body =~ "Try again shortly"
+    end
   end
 end

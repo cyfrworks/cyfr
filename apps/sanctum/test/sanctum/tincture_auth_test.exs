@@ -5,6 +5,8 @@ defmodule Sanctum.TinctureAuthTest do
   # async: false — API-key validation hits the shared Arca.Repo sandbox.
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Context
   alias Sanctum.TinctureAuth
 
@@ -92,6 +94,37 @@ defmodule Sanctum.TinctureAuthTest do
       assert out.auth_method == :session
       assert out.scope == :athanor
       assert out.authenticated
+    end
+
+    # The establish memo bounds establishing, not validating: what it answers
+    # is revalidated against the stored session before this surface admits it.
+    test "a session revoked behind a warm memo is refused", %{ctx: ctx} do
+      original = Application.fetch_env(:sanctum, :caller_memo_ttl_ms)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
+
+      on_exit(fn ->
+        Arca.Cache.delete_match({:established, :_, :_, :_})
+
+        case original do
+          {:ok, value} -> Application.put_env(:sanctum, :caller_memo_ttl_ms, value)
+          :error -> Application.delete_env(:sanctum, :caller_memo_ttl_ms)
+        end
+      end)
+
+      ctx = Sanctum.TestContext.issuer!(ctx)
+
+      {:ok, session} =
+        Sanctum.Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
+
+      assert {:ok, %Context{}} = TinctureAuth.authenticate(bearer_conn(session.token))
+
+      hash = Sanctum.Session.token_hash(session.token)
+
+      Arca.Repo.delete_all(
+        Ecto.Query.from(s in Arca.Schemas.Session, where: s.token_hash == ^hash)
+      )
+
+      assert {:error, :invalid_credential} = TinctureAuth.authenticate(bearer_conn(session.token))
     end
 
     # A publisher namespace is not identity: a person without one goes

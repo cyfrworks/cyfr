@@ -140,17 +140,14 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     child!(view, "pane-" <> room.id)
   end
 
-  test "a session that no longer establishes renders the signed-out line", %{room: room} do
+  test "a session that no longer establishes is sent to sign in", %{room: room} do
     stale =
       Plug.Test.init_test_session(build_conn(), %{
         to_string(PrismWeb.SignInResponse.session_key()) => "not-a-session"
       })
 
-    {:ok, pane, _} =
-      live_isolated(stale, PrismWeb.ThreadPaneLive, session: %{"athanor_id" => room.id})
-
-    assert render(pane) =~ "Signed out — reload to continue."
-    refute has_element?(pane, "form")
+    assert {:error, {:redirect, %{to: "/login"}}} =
+             live_isolated(stale, PrismWeb.ThreadPaneLive, session: %{"athanor_id" => room.id})
   end
 
   test "a refused standing answer reaches the person as a sentence, not the machine's atom",
@@ -231,7 +228,9 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     # `load/1` returns, so no run was spawned and no deadline armed — with
     # or without an engine on the box.
     assert :ok = PrismWeb.ModelCatalog.load(in_room)
-    assert_received {:list_models_result, {:ok, %{"models" => %{"kept" => ["kept-model-1"]}}}}
+
+    assert_received {:list_models_result, _tag,
+                     {:ok, %{"models" => %{"kept" => ["kept-model-1"]}}}}
 
     pane = room_pane(conn, room, thread)
     assert has_element?(pane, ~s(select[name="model"] option[value="kept-model-1"]))

@@ -49,6 +49,10 @@ defmodule PrismWeb.ChatLive do
     {:ok,
      socket
      |> assign(:tray_key, token && Prism.Tray.session_hash(token))
+     # The session's own estate, as the mount found it: where the chat
+     # opens when the address names none. The page's context moves with
+     # the estate it has open.
+     |> assign(:default_athanor_id, socket.assigns.context.athanor_id)
      |> assign(:mine, personal_athanor(socket.assigns.context))
      |> assign(:room_feed, PrismWeb.RoomFeed.topic(socket.id))
      |> assign(:room, nil)
@@ -85,7 +89,8 @@ defmodule PrismWeb.ChatLive do
   # The address decides everything: which estate (a member's own default
   # without `a`), then which thread. The estate is entered through
   # `Context.focus/2` — membership checked, an archived one refused — and
-  # that focused context is what the lists and the pane run under.
+  # handed to `CyfrWeb.ContextGuard`, which keeps it current: that focused
+  # context is what the lists and the pane run under.
   @impl true
   def handle_params(params, _uri, socket) do
     if connected?(socket), do: open(socket, params), else: {:noreply, socket}
@@ -95,10 +100,11 @@ defmodule PrismWeb.ChatLive do
     ctx = socket.assigns.context
     athanors = Sanctum.Tenancy.list_athanors(ctx)
 
-    case focus_on(ctx, params["a"], athanors) do
-      {:ok, focus, athanor} ->
-        open_estate(socket, focus, athanor, athanors, params["c"])
-
+    with {:ok, focus, athanor} <-
+           focus_on(ctx, socket.assigns.default_athanor_id, params["a"], athanors),
+         {:ok, refocused} <- CyfrWeb.ContextGuard.refocus(socket, focus) do
+      open_estate(refocused, athanor, athanors, params["c"])
+    else
       {:error, :no_estate} ->
         # No seat anywhere: nothing to open, and nothing to patch to.
         {:noreply,
@@ -110,6 +116,13 @@ defmodule PrismWeb.ChatLive do
          |> assign(:estates, [])
          |> assign(:people, [])}
 
+      {:error, :unavailable} ->
+        {:noreply,
+         put_flash(socket, :error, "That estate cannot be opened just now. Try again shortly.")}
+
+      {:error, reason} when reason in [:unauthenticated, :not_standing] ->
+        {:noreply, redirect(socket, to: "/login")}
+
       {:error, reason} ->
         {:noreply,
          socket
@@ -117,6 +130,11 @@ defmodule PrismWeb.ChatLive do
          |> push_navigate(to: chat_path(nil))}
     end
   end
+
+  # The estate this page has open, as the context the guard keeps current;
+  # nil while none is.
+  defp focused(%{assigns: %{focus: nil}}), do: nil
+  defp focused(%{assigns: %{context: ctx}}), do: ctx
 
   # The row as it is now. Used after subscribing, so what the page renders
   # is never older than the topic it is listening to.
@@ -127,9 +145,9 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  defp open_estate(socket, focus, athanor, athanors, thread_id) do
+  defp open_estate(socket, athanor, athanors, thread_id) do
     ctx = socket.assigns.context
-    threads = estate_threads(focus)
+    threads = estate_threads(ctx)
 
     case pick(threads, thread_id) do
       {:ok, target} ->
@@ -140,7 +158,7 @@ defmodule PrismWeb.ChatLive do
          socket
          |> assign(:loading?, false)
          |> subscribe_estate(athanor)
-         |> assign(:focus, focus)
+         |> assign(:focus, ctx)
          # Re-read after subscribing, not before: a fill that completed
          # between the two would otherwise leave the setup banner up until
          # someone reloaded.
@@ -150,7 +168,7 @@ defmodule PrismWeb.ChatLive do
          |> assign(:threads, threads)
          |> assign(
            :followed,
-           Arca.ThreadSubscriptionStorage.followed(Sanctum.Context.actor(focus), ctx.user_id)
+           Arca.ThreadSubscriptionStorage.followed(Sanctum.Context.actor(ctx), ctx.user_id)
          )
          |> update(:expanded, &MapSet.put(&1, athanor.id))
          |> select(target)
@@ -169,9 +187,9 @@ defmodule PrismWeb.ChatLive do
   # No estate named: the session's default, or — when that seat is gone —
   # the first estate the person still holds one in. Never a patch back to
   # the default, which is how a lost seat would loop.
-  defp focus_on(ctx, route, athanors) when route in [nil, ""] do
+  defp focus_on(ctx, default_id, route, athanors) when route in [nil, ""] do
     default =
-      case ctx.athanor_id && Athanors.get(ctx.athanor_id) do
+      case default_id && Athanors.get(default_id) do
         {:ok, %{status: "active"} = athanor} -> [athanor]
         _ -> []
       end
@@ -189,7 +207,7 @@ defmodule PrismWeb.ChatLive do
   # the operator's open is reachable from this global address — not only
   # from a workbench page — is deliberate: the audit event is the
   # safeguard, wherever the open is made from.
-  defp focus_on(ctx, route, _athanors) when is_binary(route) do
+  defp focus_on(ctx, _default_id, route, _athanors) when is_binary(route) do
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, focus} <- Sanctum.Context.focus(ctx, athanor) do
       {:ok, focus, athanor}
@@ -480,7 +498,7 @@ defmodule PrismWeb.ChatLive do
 
   # A seeding that failed is retried by any member; the row says how it went.
   def handle_event("provision", _params, socket) do
-    case call_tool(socket.assigns.focus, "athanor/provision", %{}) do
+    case call_tool(focused(socket), "athanor/provision", %{}) do
       {:ok, _} ->
         {:noreply, socket |> reload_athanor() |> put_flash(:info, "Set up — AQUA is ready.")}
 
@@ -534,7 +552,8 @@ defmodule PrismWeb.ChatLive do
   end
 
   def handle_event("aloud_post", %{"thread" => thread_id}, socket) do
-    %{thread: thread, aloud_for: msg_id, aloud_estate: estate, focus: focus} = socket.assigns
+    %{thread: thread, aloud_for: msg_id, aloud_estate: estate} = socket.assigns
+    focus = focused(socket)
 
     result =
       call_tool(focus, "thread/aloud", %{
@@ -565,7 +584,7 @@ defmodule PrismWeb.ChatLive do
   # The id comes off the wire and the row is written under the estate in
   # focus, so only one of that estate's own threads may be named.
   def handle_event("follow_thread", %{"id" => id}, socket) do
-    focus = socket.assigns.focus
+    focus = focused(socket)
 
     with true <- thread_here?(socket, id),
          {:ok, _} <-
@@ -578,7 +597,7 @@ defmodule PrismWeb.ChatLive do
   end
 
   def handle_event("unfollow_thread", %{"id" => id}, socket) do
-    focus = socket.assigns.focus
+    focus = focused(socket)
 
     with true <- thread_here?(socket, id),
          {:ok, _} <-
@@ -591,7 +610,7 @@ defmodule PrismWeb.ChatLive do
   end
 
   def handle_event("delete_thread", %{"id" => id}, socket) do
-    focus = socket.assigns.focus
+    focus = focused(socket)
 
     # The turn may be running in a thread this tab is not looking at: the
     # runner is the fact, not what this socket happens to be rendering.
@@ -629,7 +648,7 @@ defmodule PrismWeb.ChatLive do
         {:thread, id, {:message, _row}},
         %{assigns: %{thread: %{id: id}}} = socket
       ) do
-    case Threads.get(Sanctum.Context.actor(socket.assigns.focus), id) do
+    case Threads.get(Sanctum.Context.actor(focused(socket)), id) do
       {:ok, thread} -> {:noreply, socket |> put_thread(thread) |> patch_row()}
       _ -> {:noreply, socket}
     end
@@ -694,11 +713,12 @@ defmodule PrismWeb.ChatLive do
   end
 
   # This person's own seats changed — a group they were added to, a DM the
-  # other person minted, a seat withdrawn. The gate (`PrismWeb.LiveAuth`)
-  # subscribes the page, settles the caller and hands the message on: a
-  # seat lost under the session's own estate never reaches here. One lost
-  # under the estate this page has open sends it back to the default;
-  # anything else re-reads the set of estates.
+  # other person minted, a seat withdrawn. The guard (`CyfrWeb.ContextGuard`)
+  # revalidates the page's context first and hands the message on: a seat
+  # lost under the estate this page has open ends the page there, unless an
+  # operator's audited open still stands, and then the seat is what this
+  # page was showing, so it goes back to the default. Anything else re-reads
+  # the set of estates.
   def handle_info(
         {:membership_changed, %{athanor_id: id, change: :left}},
         %{assigns: %{athanor: %{id: id}}} = socket

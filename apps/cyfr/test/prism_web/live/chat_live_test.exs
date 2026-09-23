@@ -701,8 +701,10 @@ defmodule PrismWeb.ChatLiveTest do
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
     {view, _} = mount_chat(alice_conn, group)
 
+    # The guard refuses the archived focus before the page's own notify
+    # handler runs; the root lands in the chat.
     {:ok, _} = Sanctum.Tenancy.Athanors.archive(group)
-    assert_redirect(view, "/chat")
+    assert_redirect(view, "/")
 
     # A fresh open is refused too — the root, or the login page when the
     # archived group was the only athanor the session had.

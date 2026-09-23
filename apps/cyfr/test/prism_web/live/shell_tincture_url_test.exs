@@ -100,7 +100,26 @@ defmodule PrismWeb.ShellTinctureUrlTest do
     refute frame_src(html)
   end
 
+  # The caller bound: how long the view acts on the context it validated
+  # before the guard revalidates it. The suite runs at 0.
+  defp bound!(ms) do
+    previous = Application.fetch_env(:sanctum, :caller_memo_ttl_ms)
+    Application.put_env(:sanctum, :caller_memo_ttl_ms, ms)
+
+    on_exit(fn ->
+      Arca.Cache.delete_match({:established, :_, :_, :_})
+
+      case previous do
+        {:ok, value} -> Application.put_env(:sanctum, :caller_memo_ttl_ms, value)
+        :error -> Application.delete_env(:sanctum, :caller_memo_ttl_ms)
+      end
+    end)
+  end
+
   test "a mint the session can no longer make renders refused", %{conn: conn, user: user} do
+    # Within the bound the view acts on the context it validated, so what
+    # refuses here is the mint's own reread of the session row.
+    bound!(60_000)
     {view, _html} = mount_athanor(conn, "/tinctures")
 
     # The session row behind the mounted view is gone; nothing has told the
@@ -112,5 +131,18 @@ defmodule PrismWeb.ShellTinctureUrlTest do
 
     assert html =~ ~s(data-tincture-state="refused")
     refute html =~ "?_t="
+  end
+
+  test "past the bound the guard sends the view to sign in before any mint", %{
+    conn: conn,
+    user: user
+  } do
+    bound!(0)
+    {view, _html} = mount_athanor(conn, "/tinctures")
+
+    {:ok, _} = Arca.SessionStorage.delete_by_user(user.user_id)
+
+    assert {:error, {:redirect, %{to: "/login"}}} =
+             render_click(view, "select_tincture", %{"tincture" => @window_id})
   end
 end

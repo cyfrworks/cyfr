@@ -36,6 +36,7 @@ defmodule Cyfr.Cluster.Fixtures do
               Cyfr.Execution,
               Cyfr.Execution.Events,
               Cyfr.UUID7,
+              CyfrWeb.ContextGuard,
               Sanctum.Authority.BudgetCounter,
               Sanctum.Caller,
               Sanctum.Context,
@@ -471,6 +472,75 @@ defmodule Cyfr.Cluster.Fixtures do
   """
   @spec context(String.t()) :: {:ok, Sanctum.Context.t()} | {:error, term()}
   def context(token), do: Sanctum.Caller.establish(token)
+
+  @doc """
+  A process on this member holding `token`'s context the way a mounted
+  console socket holds it: established once, watching the standing
+  announcements, and held to `CyfrWeb.ContextGuard.check/1` before each
+  action (`act/1`).
+  """
+  @spec hold_context(String.t()) :: pid()
+  def hold_context(token) do
+    owner = self()
+
+    pid =
+      spawn(fn ->
+        {:ok, ctx} = Sanctum.Caller.establish(token)
+        watch = CyfrWeb.ContextGuard.watch(ctx)
+        send(owner, {:held, self()})
+        held(watch)
+      end)
+
+    receive do
+      {:held, ^pid} -> pid
+    after
+      10_000 -> raise "the held context never established"
+    end
+  end
+
+  defp held(%{context: ctx} = watch) do
+    receive do
+      {:act, from} ->
+        case CyfrWeb.ContextGuard.check(ctx) do
+          {:ok, fresh} ->
+            send(from, {:acted, :ok})
+            held(%{watch | context: fresh})
+
+          {:error, reason} ->
+            send(from, {:acted, {:error, reason}})
+            refused(reason)
+        end
+
+      message ->
+        case CyfrWeb.ContextGuard.standing(message, watch) do
+          {:ok, watch} -> held(watch)
+          # A mounted view that is refused lets go: nothing more is acted on.
+          {:refused, reason} -> refused(reason)
+          :ignore -> held(watch)
+        end
+    end
+  end
+
+  defp refused(reason) do
+    receive do
+      {:act, from} -> send(from, {:acted, {:error, reason}})
+      _message -> :ok
+    end
+
+    refused(reason)
+  end
+
+  @doc "One action on a held context (`hold_context/1`): `:ok`, or the guard's refusal."
+  @spec act(pid()) :: :ok | {:error, term()}
+  def act(pid) do
+    send(pid, {:act, self()})
+
+    receive do
+      {:acted, result} -> result
+    after
+      10_000 -> {:error, :timeout}
+    end
+  end
 
   @doc "Deny the person `user_id` from this member: the one-transaction eject."
   @spec deny!(String.t()) :: String.t()

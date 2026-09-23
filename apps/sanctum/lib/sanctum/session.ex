@@ -199,7 +199,40 @@ defmodule Sanctum.Session do
   @spec load(String.t(), surface: :console | :tincture) ::
           {:ok, Context.t()}
           | {:error, :invalid_session | :database_error | :namespace_unavailable}
-  def load(token, opts) when is_binary(token) do
+  def load(token, opts) when is_binary(token), do: load_by_hash(hash_token(token), opts)
+
+  @doc """
+  `load/2`, also saying whether the session is due its sliding refresh
+  (`slide_due?/1`), read off the row the load already read — so the
+  caller starts a refresh only when one would write.
+  """
+  @spec load_sliding(String.t(), surface: :console | :tincture) ::
+          {:ok, Context.t(), boolean()}
+          | {:error, :invalid_session | :database_error | :namespace_unavailable}
+  def load_sliding(token, opts) when is_binary(token) do
+    token_hash = hash_token(token)
+
+    with {:ok, row} <- stored(token_hash, opts),
+         {:ok, ctx} <- row_to_context(row, token_hash, Keyword.fetch!(opts, :surface)) do
+      {:ok, ctx, slide_due?(row.expires_at)}
+    end
+  end
+
+  @doc """
+  Load a Context from a session's row key (`token_hash/1`) rather than its
+  token: what `Sanctum.Caller.revalidate_session/1` rebuilds a retained
+  context from, since a holder keeps the hash and never the token. The
+  same assembly as `load/2`, with the same `:surface` rule and results.
+  """
+  @spec load_by_hash(binary(), surface: :console | :tincture) ::
+          {:ok, Context.t()}
+          | {:error, :invalid_session | :database_error | :namespace_unavailable}
+  def load_by_hash(token_hash, opts) when is_binary(token_hash) do
+    with {:ok, row} <- stored(token_hash, opts),
+         do: row_to_context(row, token_hash, Keyword.fetch!(opts, :surface))
+  end
+
+  defp stored(token_hash, opts) do
     surface = Keyword.fetch!(opts, :surface)
 
     unless surface in [:console, :tincture] do
@@ -207,15 +240,10 @@ defmodule Sanctum.Session do
             "Session.load surface must be :console or :tincture, got: #{inspect(surface)}"
     end
 
-    case get_session_direct(token) do
-      {:ok, row} ->
-        row_to_context(row, hash_token(token), surface)
-
-      {:error, :not_found} ->
-        {:error, :invalid_session}
-
-      {:error, :database_error} ->
-        {:error, :database_error}
+    case Arca.SessionStorage.get_session(token_hash) do
+      {:ok, row} -> {:ok, row}
+      {:error, :not_found} -> {:error, :invalid_session}
+      {:error, :database_error} -> {:error, :database_error}
     end
   end
 
@@ -292,22 +320,33 @@ defmodule Sanctum.Session do
   """
   @spec refresh_if_stale(String.t()) :: :ok
   def refresh_if_stale(token) when is_binary(token) do
-    case session_ttl_hours() do
-      0 ->
-        :ok
+    with {:ok, row} <- get_session_direct(token),
+         true <- slide_due?(row.expires_at),
+         {:ok, _session} <- refresh(token) do
+      :ok
+    else
+      _ -> :ok
+    end
+  end
 
-      ttl_hours ->
+  @doc """
+  Whether a session expiring at `expires_at` is due its sliding refresh:
+  more than ~1 day (or half the TTL, whichever is smaller) has passed
+  since it was last extended. Never for infinite (TTL 0) sessions.
+  """
+  @spec slide_due?(DateTime.t() | term()) :: boolean()
+  def slide_due?(expires_at) do
+    case {session_ttl_hours(), coerce_datetime(expires_at)} do
+      {0, _} ->
+        false
+
+      {_ttl_hours, nil} ->
+        false
+
+      {ttl_hours, %DateTime{} = at} ->
         ttl_seconds = ttl_hours * 3600
         stale_after = ttl_seconds - min(86_400, div(ttl_seconds, 2))
-
-        with {:ok, row} <- get_session_direct(token),
-             %DateTime{} = expires_at <- coerce_datetime(row.expires_at),
-             true <- DateTime.diff(expires_at, DateTime.utc_now()) < stale_after,
-             {:ok, _session} <- refresh(token) do
-          :ok
-        else
-          _ -> :ok
-        end
+        DateTime.diff(at, DateTime.utc_now()) < stale_after
     end
   end
 

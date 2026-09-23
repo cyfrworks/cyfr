@@ -166,7 +166,7 @@ defmodule Cyfr.Boundaries do
   # from one of Elixir, OTP or a fetched dependency.
   @product_roots ~w(
     Arca Sanctum Aqua Compendium Crucible Emissary EmissaryWeb Grimoire
-    Prism PrismWeb Cyfr Opus Locus Codex
+    Prism PrismWeb Cyfr CyfrWeb Opus Locus Codex
   )
 
   @doc "The namespace roots this repository owns."
@@ -339,7 +339,11 @@ defmodule Cyfr.Boundaries do
       reason: "console domain code: the tenancy carrier and the tray's vocabulary"
     },
     %{
-      from: ["apps/cyfr/lib/prism_web/**/*.ex", "apps/cyfr/lib/prism_web.ex"],
+      from: [
+        "apps/cyfr/lib/prism_web/**/*.ex",
+        "apps/cyfr/lib/prism_web.ex",
+        "apps/cyfr/lib/cyfr_web/**/*.ex"
+      ],
       into: "Sanctum",
       allow: ~w(
         Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp
@@ -347,7 +351,9 @@ defmodule Cyfr.Boundaries do
         Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Webhook
       ),
       reason:
-        "`Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` alone: the " <>
+        "the console and its context guard (`CyfrWeb.ContextGuard`, which names " <>
+          "`Sanctum.Caller` and `Sanctum.Context` alone). " <>
+          "`Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` alone: the " <>
           "`/live` socket is handled by the endpoint BEFORE the router, so it passes " <>
           "no rate-limit plug, which makes the console the only per-address bound on " <>
           "the anonymous device flows it starts."
@@ -555,8 +561,9 @@ defmodule Cyfr.Boundaries do
     browser_authenticated: %{
       admits: :session,
       why:
-        "the `:athanor` live_session's on_mount pair: `PrismWeb.LiveAuth` requires a " <>
-          "session and `PrismWeb.Focus` narrows the context to the URL's athanor"
+        "the `:athanor` live_session's on_mount pair: `CyfrWeb.ContextGuard` requires " <>
+          "a session and keeps it current, and `PrismWeb.Focus` narrows the context to " <>
+          "the URL's athanor"
     },
     browser_focus_handler: %{
       admits: :session,
@@ -736,7 +743,6 @@ defmodule Cyfr.Boundaries do
   }
 
   @test_only_config_key_classes %{
-    establish_cache_ms: :seam,
     namespace_cache_ttl_ms: :seam,
     registry_health_probe: :seam,
 

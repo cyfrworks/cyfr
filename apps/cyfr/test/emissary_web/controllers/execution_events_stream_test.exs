@@ -4,6 +4,8 @@
 defmodule EmissaryWeb.ExecutionEventsStreamTest do
   use EmissaryWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias EmissaryWeb.ExecutionEventsController
   alias Cyfr.Execution.Events
 
@@ -119,5 +121,81 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
     body = Task.await(task, 10_000)
     assert ids(body) == ["1", "1.1", "2", "2.1", "3"]
     assert body =~ "event: execution.failed"
+  end
+
+  describe "an open stream holds its credential to its standing" do
+    setup %{exec: exec} do
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session: session, person: ctx, exec: exec}
+    end
+
+    defp bearer_stream(conn, exec, token) do
+      Task.async(fn ->
+        started = System.monotonic_time(:millisecond)
+
+        conn =
+          conn
+          |> put_req_header("authorization", "Bearer " <> token)
+          |> get("/api/executions/#{exec.id}/events")
+
+        {conn, System.monotonic_time(:millisecond) - started}
+      end)
+    end
+
+    test "a revocation announced for the caller ends the stream before its deadline", %{
+      conn: conn,
+      exec: exec,
+      session: session,
+      person: person
+    } do
+      task = bearer_stream(conn, exec, session.token)
+      Process.sleep(300)
+
+      {:ok, _} = Sanctum.Session.revoke_all_for_user(person.user_id)
+      {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
+
+      {conn, elapsed} = Task.await(task, 10_000)
+      assert conn.status == 200
+      assert elapsed < 2_500
+      refute "1.1" in ids(conn.resp_body)
+    end
+
+    test "a revocation nobody announced ends the stream at its periodic recheck", %{
+      conn: conn,
+      exec: exec,
+      session: session
+    } do
+      task = bearer_stream(conn, exec, session.token)
+      Process.sleep(300)
+
+      hash = Sanctum.Session.token_hash(session.token)
+
+      Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+
+      # The recheck the stream arms for itself every thirty seconds, now.
+      send(task.pid, CyfrWeb.ContextGuard.recheck_message())
+
+      {_conn, elapsed} = Task.await(task, 10_000)
+      assert elapsed < 2_500
+    end
+
+    test "a standing caller's recheck keeps delivering", %{
+      conn: conn,
+      exec: exec,
+      session: session
+    } do
+      task = bearer_stream(conn, exec, session.token)
+      Process.sleep(300)
+
+      send(task.pid, CyfrWeb.ContextGuard.recheck_message())
+      Process.sleep(100)
+      {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
+      two = durable!(exec, "execution.completed", %{"status" => "completed"})
+      publish!(exec, "execution.completed", two)
+
+      {conn, _elapsed} = Task.await(task, 10_000)
+      assert ids(conn.resp_body) == ["1", "1.1", "2"]
+    end
   end
 end

@@ -340,10 +340,15 @@ defmodule Cyfr.Schedules.Scheduler do
       else: recover_later(state)
   end
 
+  # A recovered occurrence runs under the same standing the fire path
+  # checks: the schedule's athanor still active and its creator not denied
+  # (`Sanctum.Tenancy.channel_active?/2`). One that no longer stands is
+  # recorded as the fire path records a skipped run, and failed.
   defp take_and_rerun(occurrence, state, generation) do
     with :ok <- take_over(occurrence),
          {:ok, %{status: "active"} = schedule} <-
            CronSchedule.get_for_daemon(occurrence.schedule_id),
+         :ok <- standing(schedule),
          {:ok, exec_reference, input} <- runnable(schedule) do
       ctx = context_of(schedule)
 
@@ -361,16 +366,41 @@ defmodule Cyfr.Schedules.Scheduler do
       {:error, :database_error} ->
         recover_later(state)
 
-      _ ->
+      {:error, {:not_standing, schedule}} ->
+        Logger.warning(
+          "[Schedules] occurrence #{occurrence.id} of #{schedule.id}: athanor " <>
+            "#{schedule.athanor_id} or creator #{inspect(schedule.user_id)} no longer " <>
+            "active — not run"
+        )
+
         if still_ours?(generation) do
-          ScheduleOccurrences.finish(
-            Cyfr.Actor.in_athanor(occurrence.athanor_id),
-            occurrence.id,
-            "failed"
-          )
+          ctx = context_of(schedule)
+          record_error(ctx, schedule.id, "Athanor or creator no longer active — run skipped")
+          emit_schedule_failed(schedule.id, ctx, "athanor_or_creator_inactive")
+          fail_recovered(occurrence, generation)
         end
 
         state
+
+      _ ->
+        fail_recovered(occurrence, generation)
+        state
+    end
+  end
+
+  defp standing(schedule) do
+    if Sanctum.Tenancy.channel_active?(schedule.athanor_id, schedule.user_id),
+      do: :ok,
+      else: {:error, {:not_standing, schedule}}
+  end
+
+  defp fail_recovered(occurrence, generation) do
+    if still_ours?(generation) do
+      ScheduleOccurrences.finish(
+        Cyfr.Actor.in_athanor(occurrence.athanor_id),
+        occurrence.id,
+        "failed"
+      )
     end
   end
 

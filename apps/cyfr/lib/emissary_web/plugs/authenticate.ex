@@ -238,14 +238,16 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   end
 
   # A Sanctum session token presented as a bearer credential.
-  # `Caller.establish/2` reads the row (through a short memo that every
-  # session mutation invalidates), so a revoked or expired session is
-  # rejected on the very next request.
+  # `Caller.establish/2` reads the row through a short memo that every
+  # session mutation invalidates; the memo bounds establishing, not
+  # validating, so the context it answers is then revalidated against the
+  # stored session and standing (`Caller.revalidate_session/1`) before it
+  # admits anything — a revocation this member never heard of refuses here.
   defp validate_session_token(token) do
     # This surface never slides the session — the console hooks do.
     # The context arrives carrying its session row key and the binding that
     # names it (`Sanctum.Session`, the one place both are stamped).
-    case Sanctum.Caller.establish(token, refresh: false) do
+    case establish_session(token) do
       {:ok, ctx} ->
         {:ok, ctx, :session_token}
 
@@ -268,6 +270,30 @@ defmodule EmissaryWeb.Plugs.Authenticate do
         # through rather than deciding, and the caller in `call/2` refuses only
         # once the provider has also declined.
         :unclaimed_bearer
+    end
+  end
+
+  defp establish_session(token, retried? \\ false) do
+    with {:ok, ctx} <- Sanctum.Caller.establish(token, refresh: false) do
+      case Sanctum.Caller.revalidate_session(ctx) do
+        {:ok, fresh} ->
+          {:ok, fresh}
+
+        {:error, :unavailable} ->
+          {:error, :unavailable}
+
+        # The memo named an estate the session no longer reaches: this
+        # member's copy is stale, and one establish without it resolves
+        # the session's standing estate again.
+        {:error, :not_member} when not retried? ->
+          Sanctum.Caller.drop_memo(ctx.session_token_hash)
+          establish_session(token, true)
+
+        # Gone, expired or retired since the memo was filled: no longer a
+        # session this server stands behind.
+        {:error, _refused} ->
+          {:error, :unauthenticated}
+      end
     end
   end
 

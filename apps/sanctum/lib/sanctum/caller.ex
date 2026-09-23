@@ -33,6 +33,15 @@ defmodule Sanctum.Caller do
     * `{:webhook, webhook}` — a verified webhook row (`request_id:`).
       Stands while its athanor is open and its creator is not denied.
 
+  Every Context this module establishes from a credential carries
+  `validated_at`, the instant its credential and standing were read from
+  the store. A memo hit returns that same instant, so reuse never extends
+  it. A context an auth provider synthesized (`establish_context/2`) has
+  no stored credential behind it and carries none. A holder
+  that keeps a session context — a mounted console, an open stream, a
+  pending grant — asks `revalidate_session/1` for a fresh one before
+  acting on it once `fresh?/1` says the context is past the bound.
+
   Refusals:
 
     * `:unauthenticated` — no token, or not a session this server issued.
@@ -89,9 +98,9 @@ defmodule Sanctum.Caller do
     * `:focus` — an athanor id or row to focus the established context on
       (`Context.focus/2`); how a nested view follows the page's focus.
     * `:refresh` — slide the session's expiry when due (default `true`).
-    * `:task_supervisor` — where the fire-and-forget refresh runs; no
-      supervisor, no refresh. Callers pass their own so the write never
-      blocks the hot path and test sandboxes see a known process.
+    * `:task_supervisor` — where the fire-and-forget refresh runs (default
+      `Sanctum.TaskSupervisor`), so the write never blocks the hot path;
+      `nil` runs none.
   """
   @spec establish(credential() | String.t() | nil, keyword()) ::
           {:ok, Context.t()} | {:error, refusal()}
@@ -104,7 +113,7 @@ defmodule Sanctum.Caller do
   def establish({:session, token}, _opts) when token in [nil, ""], do: {:error, :unauthenticated}
 
   def establish({:session, token}, opts) when is_binary(token) do
-    ttl = Application.get_env(:sanctum, :establish_cache_ms, 2_000)
+    ttl = memo_ttl_ms()
 
     if ttl > 0 do
       # A cold page load establishes the same caller several times inside
@@ -118,7 +127,8 @@ defmodule Sanctum.Caller do
       # an announcement the bus did not deliver. What is cached is an
       # AUTHORIZATION decision, so the TTL is a security bound and not a
       # tuning knob: it is how long a revoked authority may outlive its
-      # revocation anywhere in the cell.
+      # revocation anywhere in the cell — the same bound `fresh?/1` holds
+      # a retained context to.
       key = memo_key(token, opts)
 
       case Arca.Cache.get(key) do
@@ -140,7 +150,7 @@ defmodule Sanctum.Caller do
     case Sanctum.ApiKey.validate(raw, client_ip: Keyword.get(opts, :client_ip)) do
       {:ok, metadata} ->
         ctx = Sanctum.ApiKey.context_from_metadata(metadata)
-        with :ok <- tenant_ok(ctx), do: {:ok, ctx}
+        with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
 
       {:error, reason} ->
         {:error, api_key_refusal(reason)}
@@ -166,7 +176,7 @@ defmodule Sanctum.Caller do
           authenticated: true
         )
 
-      with :ok <- tenant_ok(ctx), do: {:ok, ctx}
+      with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
     end
   end
 
@@ -197,7 +207,7 @@ defmodule Sanctum.Caller do
           request_id: Keyword.get(opts, :request_id)
         )
 
-      with :ok <- tenant_ok(ctx), do: {:ok, ctx}
+      with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
     else
       {:error, :not_standing}
     end
@@ -364,11 +374,11 @@ defmodule Sanctum.Caller do
   end
 
   defp do_establish(token, opts) do
-    case Session.load(token, surface: Keyword.get(opts, :surface, :console)) do
-      {:ok, %Context{} = ctx} ->
+    case Session.load_sliding(token, surface: Keyword.get(opts, :surface, :console)) do
+      {:ok, %Context{} = ctx, slide_due?} ->
         with {:ok, established} <- establish_context(ctx, opts) do
-          maybe_refresh(token, opts)
-          {:ok, established}
+          if slide_due?, do: maybe_refresh(token, opts)
+          {:ok, validated(established)}
         end
 
       {:error, reason} when reason in [:namespace_unavailable, :database_error] ->
@@ -410,6 +420,306 @@ defmodule Sanctum.Caller do
       {:error, :unavailable} -> {:error, :unavailable}
     end
   end
+
+  @typedoc "Why a retained session context no longer stands."
+  @type revalidation_refusal :: :unauthenticated | :not_standing | :not_member | :unavailable
+
+  @doc """
+  Revalidate a context a holder has kept since it was established: the
+  one check a long-lived surface (a mounted console, an open stream, a
+  pending grant) runs before acting on a context it did not just get.
+
+  For a session-backed context (a `:session` credential binding, or a
+  session row key) it rereads, under the standing lock order
+  (`Arca.CredentialBindings.check/3`, never the establish memo), the
+  session row the context's hash names — it must exist, be unexpired and
+  belong to the same person — and the person's standing, and the focused
+  estate's; then rebuilds the context from the stored session and the
+  person's current memberships (`Sanctum.Session.load_by_hash/2`) and
+  focuses it again on the athanor the caller had in focus
+  (`Sanctum.Context.focus/2`). The result carries the caller's request
+  correlation and plane, never more permission than the caller held, and
+  a new `validated_at`.
+
+  Refusals, each distinct:
+
+    * `:unauthenticated` — the session is gone, expired or another
+      person's, or the context names a session binding with no row key.
+    * `:not_standing` — the person is denied or no longer exists.
+    * `:not_member` — the focused athanor is archived, gone or no longer
+      the caller's to focus. The session's own default athanor is never
+      substituted.
+    * `:unavailable` — the store could not answer; never a verdict.
+
+  An API-key context is held to its key the same way: the key row, its
+  creator and its estate are reread under the same lock — the key
+  unrevoked, still the estate's and the creator's, its allowlist admitting
+  the caller's address, the estate active and the creator not denied (the
+  rules the key was established under) — and the context comes back with
+  a new `validated_at`, or `:unauthenticated` for a key that no longer
+  admits the caller and `:not_standing` for an estate or creator that no
+  longer stands.
+
+  Any other context — one an auth provider synthesized, a tincture token,
+  a webhook, the system's own — keeps its establishment contract and is
+  answered `{:ok, ctx}` unchanged.
+  """
+  @spec revalidate_session(Context.t()) ::
+          {:ok, Context.t()} | {:error, revalidation_refusal()}
+  def revalidate_session(%Context{} = ctx) do
+    case holder(ctx) do
+      {:session, hash, surface} -> revalidate_stored(ctx, hash, surface)
+      {:api_key, id} -> revalidate_key(ctx, id)
+      :other -> {:ok, ctx}
+      :unbound -> {:error, :unauthenticated}
+    end
+  end
+
+  @doc """
+  Whether `ctx` was validated within the caller bound
+  (`config :sanctum, :caller_memo_ttl_ms`, 2 s): a holder acts on a fresh
+  context as it is and revalidates one that is not
+  (`revalidate_session/1`). It is the establish memo's own TTL — one
+  bound on how long a read of the store is trusted, whether a memo or a
+  holder keeps it. The bound runs from `validated_at`, the last time the
+  store was read for this context, so reusing a context never extends
+  it. A context no one validated is never fresh.
+  """
+  @spec fresh?(Context.t()) :: boolean()
+  def fresh?(%Context{validated_at: %DateTime{} = at}),
+    do: DateTime.diff(DateTime.utc_now(), at, :millisecond) < memo_ttl_ms()
+
+  def fresh?(%Context{}), do: false
+
+  defp memo_ttl_ms, do: Application.get_env(:sanctum, :caller_memo_ttl_ms, 2_000)
+
+  # Which credential the context holds, as far as revalidation goes. A
+  # tincture token is a derived credential held to its own rows at every
+  # use (`derived_standing/2`), whatever its source was; a context that
+  # names a session — by binding or by row key — is revalidated from that
+  # session and nothing else, so a binding without its key refuses rather
+  # than passing as some other kind.
+  defp holder(%Context{auth_method: :tincture}), do: :other
+  defp holder(%Context{auth_method: :api_key} = ctx), do: key_holder(ctx)
+
+  defp holder(%Context{session_token_hash: hash, credential_binding: binding} = ctx) do
+    if session_binding?(binding) or not is_nil(hash),
+      do: session_holder(ctx),
+      else: :other
+  end
+
+  defp session_binding?(%{source_kind: :session}), do: true
+  defp session_binding?(_binding), do: false
+
+  defp session_holder(%Context{session_token_hash: hash, credential_binding: binding} = ctx)
+       when is_binary(hash) and hash != "" do
+    with true <- binding_names?(binding, hash),
+         {:ok, surface} <- surface_of(ctx) do
+      {:session, hash, surface}
+    else
+      _ -> :unbound
+    end
+  end
+
+  defp session_holder(%Context{}), do: :unbound
+
+  # The binding and the row key are stamped together by the one session
+  # assembly; a context where they disagree is not that assembly's.
+  defp binding_names?(nil, _hash), do: true
+
+  defp binding_names?(%{source_kind: :session, source_id: id}, hash),
+    do: id == Base.url_encode64(hash, padding: false)
+
+  defp binding_names?(_binding, _hash), do: false
+
+  # A key context names its row; a binding, when the key has one, names
+  # the same row.
+  defp key_holder(%Context{api_key_id: id, credential_binding: binding})
+       when is_binary(id) and id != "" do
+    case binding do
+      nil -> {:api_key, id}
+      %{source_kind: :api_key, source_id: ^id} -> {:api_key, id}
+      _other -> :unbound
+    end
+  end
+
+  defp key_holder(%Context{}), do: :unbound
+
+  defp surface_of(%Context{auth_method: :oidc}), do: {:ok, :console}
+  defp surface_of(%Context{auth_method: :session}), do: {:ok, :tincture}
+  defp surface_of(%Context{}), do: :error
+
+  defp revalidate_stored(ctx, hash, surface) do
+    with :ok <- stored_standing(ctx, hash),
+         {:ok, rebuilt} <- reload(hash, surface),
+         :ok <- same_person(rebuilt, ctx),
+         {:ok, focused} <- refocus(rebuilt, ctx.athanor_id) do
+      {:ok, carried(focused, ctx)}
+    end
+  end
+
+  # The session, the person and the focused estate, locked and reread in
+  # the standing order with the database's own time read after the locks.
+  defp stored_standing(ctx, hash) do
+    binding = %{
+      user_id: ctx.user_id,
+      athanor_id: ctx.athanor_id,
+      membership_id: nil,
+      source: {:session, hash}
+    }
+
+    case Arca.CredentialBindings.check(Cyfr.Actor.system(), binding,
+           verify: &session_standing(&1, ctx)
+         ) do
+      :ok ->
+        :ok
+
+      {:error, reason} when reason in [:unauthenticated, :not_standing, :not_member] ->
+        {:error, reason}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp session_standing(rows, ctx) do
+    with :ok <- stored_session(rows.source, rows.now, ctx.user_id),
+         :ok <- standing_person(rows.user) do
+      standing_estate(rows.athanor, ctx.athanor_id)
+    end
+  end
+
+  defp stored_session(
+         %{kind: :session, row: %{user_id: user_id, expires_at: expires_at}},
+         now,
+         user_id
+       ) do
+    if DateTime.compare(expires_at, now) == :gt, do: :ok, else: {:error, :unauthenticated}
+  end
+
+  defp stored_session(_source, _now, _user_id), do: {:error, :unauthenticated}
+
+  defp standing_person(%{status: "active"}), do: :ok
+  defp standing_person(_user), do: {:error, :not_standing}
+
+  defp standing_estate(_athanor, nil), do: :ok
+  defp standing_estate(%{status: "active"}, _athanor_id), do: :ok
+  defp standing_estate(_athanor, _athanor_id), do: {:error, :not_member}
+
+  # The key row, its creator and its estate, locked and reread in the
+  # standing order; nothing is rebuilt, since everything a key's context
+  # carries is the key row's.
+  defp revalidate_key(ctx, id) do
+    binding = %{
+      user_id: ctx.user_id || "",
+      athanor_id: ctx.athanor_id,
+      membership_id: nil,
+      source: {:api_key, id}
+    }
+
+    case Arca.CredentialBindings.check(Cyfr.Actor.system(), binding,
+           verify: &key_standing(&1, ctx)
+         ) do
+      :ok -> {:ok, validated(ctx)}
+      {:error, reason} when reason in [:unauthenticated, :not_standing] -> {:error, reason}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp key_standing(rows, ctx) do
+    with :ok <- stored_key(rows.source, ctx),
+         :ok <- key_creator(rows.user, ctx.user_id) do
+      key_estate(rows.athanor)
+    end
+  end
+
+  defp stored_key(
+         %{
+           kind: :api_key,
+           row: %{revoked: false, athanor_id: athanor_id, created_by: creator} = row
+         },
+         %Context{athanor_id: athanor_id, user_id: creator, client_ip: client_ip}
+       ) do
+    case Cyfr.Json.decode_or(row.ip_allowlist, nil, "Sanctum.Caller") do
+      allowlist when allowlist in [nil, []] ->
+        :ok
+
+      allowlist when is_list(allowlist) and is_binary(client_ip) ->
+        if Sanctum.ApiKey.ip_allowed?(client_ip, allowlist),
+          do: :ok,
+          else: {:error, :unauthenticated}
+
+      _unprovable ->
+        {:error, :unauthenticated}
+    end
+  end
+
+  defp stored_key(_source, _ctx), do: {:error, :unauthenticated}
+
+  # The channel rule a key stands by (`Sanctum.Tenancy.channel_active?/2`):
+  # its creator not denied. A creator id that names no row stands only if
+  # it was never a person's.
+  defp key_creator(%{status: "denied"}, _user_id), do: {:error, :not_standing}
+  defp key_creator(%{}, _user_id), do: :ok
+
+  defp key_creator(nil, user_id) when is_binary(user_id) do
+    if Cyfr.PersonId.person?(user_id), do: {:error, :not_standing}, else: :ok
+  end
+
+  defp key_creator(nil, _user_id), do: :ok
+
+  defp key_estate(%{status: "active"}), do: :ok
+  defp key_estate(_athanor), do: {:error, :not_standing}
+
+  defp reload(hash, surface) do
+    case Session.load_by_hash(hash, surface: surface) do
+      {:ok, %Context{} = rebuilt} -> {:ok, rebuilt}
+      {:error, :invalid_session} -> {:error, :unauthenticated}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp same_person(%Context{user_id: user_id, authenticated: true}, %Context{user_id: user_id}),
+    do: :ok
+
+  defp same_person(%Context{user_id: user_id}, %Context{user_id: user_id}),
+    do: {:error, :not_standing}
+
+  defp same_person(_rebuilt, _ctx), do: {:error, :unauthenticated}
+
+  # The caller's focus, authorized again as any focus is; a refusal is the
+  # caller's focus lost, never a move to the session's default estate.
+  defp refocus(rebuilt, nil), do: {:ok, rebuilt}
+
+  defp refocus(rebuilt, athanor_id) do
+    case Context.focus(rebuilt, athanor_id) do
+      {:ok, focused} -> {:ok, focused}
+      {:error, _refused} -> {:error, :not_member}
+    end
+  end
+
+  # What the caller brought that the stored session does not say: its
+  # request correlation and address, a guest plane it cannot leave, and
+  # no permission it did not already hold.
+  defp carried(%Context{} = fresh, %Context{} = held) do
+    fresh = %{
+      fresh
+      | request_id: held.request_id,
+        client_ip: held.client_ip,
+        permissions: narrowed(fresh.permissions, held.permissions),
+        validated_at: now()
+    }
+
+    if held.plane == :guest, do: Context.enter_guest(fresh), else: fresh
+  end
+
+  defp narrowed(fresh, held) do
+    if MapSet.member?(held, :*), do: fresh, else: MapSet.intersection(fresh, held)
+  end
+
+  defp validated(%Context{} = ctx), do: %{ctx | validated_at: now()}
+
+  defp now, do: DateTime.utc_now()
 
   @doc """
   A light look at who a session belongs to — the identity fields and the
@@ -517,24 +827,44 @@ defmodule Sanctum.Caller do
     do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
 
   # Activity-based sliding refresh, fire-and-forget so the hot path never
-  # waits on the write; `Session.refresh_if_stale/1` no-ops unless due.
+  # waits on the write. Started only when the row the load read is due one
+  # (`Session.slide_due?/1`); `Session.refresh_if_stale/1` checks again.
   defp maybe_refresh(token, opts) do
     with true <- Keyword.get(opts, :refresh, true),
-         supervisor when not is_nil(supervisor) <- Keyword.get(opts, :task_supervisor) do
-      logger_metadata = Cyfr.LoggerContext.capture()
-
-      case Task.Supervisor.start_child(supervisor, fn ->
-             Cyfr.LoggerContext.restore(logger_metadata)
-             Session.refresh_if_stale(token)
-           end) do
-        {:ok, _pid} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.debug("[Sanctum.Caller] session refresh task not started: #{inspect(reason)}")
-      end
+         supervisor when not is_nil(supervisor) <-
+           Keyword.get(opts, :task_supervisor, Sanctum.TaskSupervisor) do
+      start_refresh(supervisor, token)
     else
       _ -> :ok
     end
+  end
+
+  # Best effort: a pool that is not up (a standalone build that never
+  # started this application) costs the slide, never the establish.
+  defp start_refresh(supervisor, token) do
+    logger_metadata = Cyfr.LoggerContext.capture()
+
+    case Task.Supervisor.start_child(supervisor, fn ->
+           Cyfr.LoggerContext.restore(logger_metadata)
+           slide(token)
+         end) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.debug("[Sanctum.Caller] session refresh task not started: #{inspect(reason)}")
+    end
+  catch
+    :exit, reason ->
+      Logger.debug("[Sanctum.Caller] session refresh task not started: #{inspect(reason)}")
+  end
+
+  # The slide swallows a store that cannot answer; a connection taken away
+  # under it (its owner gone) is the same unanswered read.
+  defp slide(token) do
+    Session.refresh_if_stale(token)
+  catch
+    :exit, reason ->
+      Logger.debug("[Sanctum.Caller] session refresh did not run: #{inspect(reason)}")
   end
 end

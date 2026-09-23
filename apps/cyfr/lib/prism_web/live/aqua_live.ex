@@ -110,23 +110,8 @@ defmodule PrismWeb.AquaLive do
   # A model catalyst arrived (or did not): the agents section reads its
   # status again either way, and the picker's kept catalogue is dropped so
   # the new provider is offered.
-  def handle_info({:catalyst_installed, ref, result}, socket) do
-    socket =
-      case result do
-        {:ok, _} ->
-          PrismWeb.ModelCatalog.forget(socket.assigns.context.athanor_id)
-          put_flash(socket, :info, "Installed #{ref}.")
-
-        {:error, reason} ->
-          put_flash(socket, :error, "Could not install #{ref}: #{error_message(reason)}")
-      end
-
-    # The section that owns the button hears which install ended, so an
-    # unrelated reload cannot re-enable it mid-download.
-    send_update(AgentsComponent, id: "aqua-agents", installed: ref)
-    send(self(), {:refresh, :agents})
-    {:noreply, load_models(socket)}
-  end
+  def handle_info({:catalyst_installed, tag, ref, result}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &installed(&1, ref, result))
 
   # The estate's row changed. A fill completing mints the consents the
   # page reports on, so it is read again.
@@ -165,8 +150,21 @@ defmodule PrismWeb.AquaLive do
     {:noreply, assign(socket, :consent_sheet_ref, nil)}
   end
 
-  # The catalogue, async. Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
-  def handle_info({:list_models_result, {:ok, result}}, socket) do
+  # The catalogue, async, for the focus it was read under.
+  def handle_info({:list_models_result, tag, result}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &models_loaded(&1, result))
+
+  def handle_info({:task_timeout, :models}, socket) do
+    {:noreply, assign(socket, :models_loaded, true)}
+  end
+
+  def handle_info(msg, socket) do
+    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    {:noreply, socket}
+  end
+
+  # Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
+  defp models_loaded(socket, {:ok, result}) do
     %{models: models, refs: refs} = PrismWeb.ModelCatalog.parse(result)
 
     {:noreply,
@@ -176,17 +174,25 @@ defmodule PrismWeb.AquaLive do
      |> assign(:models_loaded, true)}
   end
 
-  def handle_info({:list_models_result, {:error, _reason}}, socket) do
-    {:noreply, assign(socket, :models_loaded, true)}
-  end
+  defp models_loaded(socket, {:error, _reason}),
+    do: {:noreply, assign(socket, :models_loaded, true)}
 
-  def handle_info({:task_timeout, :models}, socket) do
-    {:noreply, assign(socket, :models_loaded, true)}
-  end
+  defp installed(socket, ref, result) do
+    socket =
+      case result do
+        {:ok, _} ->
+          PrismWeb.ModelCatalog.forget(socket.assigns.context.athanor_id)
+          put_flash(socket, :info, "Installed #{ref}.")
 
-  def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
-    {:noreply, socket}
+        {:error, reason} ->
+          put_flash(socket, :error, "Could not install #{ref}: #{error_message(reason)}")
+      end
+
+    # The section that owns the button hears which install ended, so an
+    # unrelated reload cannot re-enable it mid-download.
+    send_update(AgentsComponent, id: "aqua-agents", installed: ref)
+    send(self(), {:refresh, :agents})
+    {:noreply, load_models(socket)}
   end
 
   # A section's own reload. The roster and the scrolls both read their

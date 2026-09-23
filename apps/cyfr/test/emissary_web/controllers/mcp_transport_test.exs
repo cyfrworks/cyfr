@@ -8,6 +8,8 @@ defmodule EmissaryWeb.MCPTransportTest do
   """
   use EmissaryWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Emissary.MCP.Progress
   alias Emissary.MCP.Subscriptions
 
@@ -193,6 +195,117 @@ defmodule EmissaryWeb.MCPTransportTest do
       assert last["id"] == 7
       assert last["result"]["resultType"] == "complete"
       assert last["result"]["_meta"][Subscriptions.subscription_id_key()] == 7
+    end
+  end
+
+  describe "subscriptions/listen holds its credential to its standing" do
+    # The stream's own window, short: a case that leaves one open ends.
+    setup do
+      prev = Application.get_env(:cyfr, :mcp_subscription_max_ms)
+      Application.put_env(:cyfr, :mcp_subscription_max_ms, 5_000)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:cyfr, :mcp_subscription_max_ms, prev),
+          else: Application.delete_env(:cyfr, :mcp_subscription_max_ms)
+      end)
+
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, ctx: ctx, session: session}
+    end
+
+    defp open_listen(conn, token, id) do
+      Task.async(fn ->
+        started = System.monotonic_time(:millisecond)
+
+        conn =
+          conn
+          |> put_req_header("content-type", "application/json")
+          |> put_req_header("authorization", "Bearer " <> token)
+          |> mcp_post(%{
+            "jsonrpc" => "2.0",
+            "id" => id,
+            "method" => "subscriptions/listen",
+            "params" => %{"notifications" => %{"toolsListChanged" => true}}
+          })
+
+        {conn, System.monotonic_time(:millisecond) - started}
+      end)
+    end
+
+    defp last_frame(conn) do
+      conn.resp_body
+      |> String.split("\n\n", trim: true)
+      |> Enum.reject(&(&1 == ":"))
+      |> List.last()
+      |> String.replace_prefix("data: ", "")
+      |> Jason.decode!()
+    end
+
+    test "a revocation announced for the caller ends the stream with its refusal", %{
+      conn: conn,
+      ctx: ctx,
+      session: session
+    } do
+      task = open_listen(conn, session.token, 11)
+      Process.sleep(300)
+
+      {:ok, _} = Sanctum.Session.revoke_all_for_user(ctx.user_id)
+
+      {conn, elapsed} = Task.await(task, 10_000)
+      assert elapsed < 4_000
+      assert %{"id" => 11, "error" => %{"code" => -33001}} = last_frame(conn)
+    end
+
+    test "a revocation nobody announced ends the stream at its periodic recheck", %{
+      conn: conn,
+      session: session
+    } do
+      task = open_listen(conn, session.token, 12)
+      Process.sleep(300)
+
+      hash = Sanctum.Session.token_hash(session.token)
+
+      Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+
+      # The recheck the stream arms for itself every thirty seconds, now.
+      send(task.pid, CyfrWeb.ContextGuard.recheck_message())
+
+      {conn, elapsed} = Task.await(task, 10_000)
+      assert elapsed < 4_000
+      assert %{"id" => 12, "error" => %{"code" => -33001}} = last_frame(conn)
+    end
+
+    test "a key-backed stream ends at its recheck once the key is revoked", %{
+      conn: conn,
+      ctx: ctx
+    } do
+      name = "listen-#{System.unique_integer([:positive])}"
+      {:ok, %{api_key: raw}} = Sanctum.ApiKey.create(ctx, %{name: name, type: :service})
+
+      task = open_listen(conn, raw, 14)
+      Process.sleep(300)
+
+      :ok = Sanctum.ApiKey.revoke(ctx, name)
+      send(task.pid, CyfrWeb.ContextGuard.recheck_message())
+
+      {conn, elapsed} = Task.await(task, 10_000)
+      assert elapsed < 4_000
+      assert %{"id" => 14, "error" => %{"code" => -33001}} = last_frame(conn)
+    end
+
+    test "a standing caller's recheck keeps the stream open to its end", %{
+      conn: conn,
+      session: session
+    } do
+      task = open_listen(conn, session.token, 13)
+      Process.sleep(300)
+      send(task.pid, CyfrWeb.ContextGuard.recheck_message())
+
+      {conn, elapsed} = Task.await(task, 10_000)
+      assert elapsed >= 4_000
+      assert %{"id" => 13, "result" => %{"resultType" => "complete"}} = last_frame(conn)
     end
   end
 

@@ -197,15 +197,15 @@ defmodule Sanctum.CallerTest do
 
   describe "the establish memo" do
     setup do
-      original = Application.get_env(:sanctum, :establish_cache_ms)
-      Application.put_env(:sanctum, :establish_cache_ms, 60_000)
+      original = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
 
       on_exit(fn ->
         Arca.Cache.delete_match({:established, :_, :_, :_})
 
         if original,
-          do: Application.put_env(:sanctum, :establish_cache_ms, original),
-          else: Application.delete_env(:sanctum, :establish_cache_ms)
+          do: Application.put_env(:sanctum, :caller_memo_ttl_ms, original),
+          else: Application.delete_env(:sanctum, :caller_memo_ttl_ms)
       end)
 
       :ok
@@ -301,7 +301,7 @@ defmodule Sanctum.CallerTest do
       # whose delivery is lost must not go on serving a revoked authority
       # past it, so the case revokes the row the way a peer would and
       # never delivers anything here.
-      Application.put_env(:sanctum, :establish_cache_ms, 150)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 150)
 
       {user, _home} = new_user() |> claim!() |> member!()
       session = session_for(Map.put(user, :namespace, user.slug))

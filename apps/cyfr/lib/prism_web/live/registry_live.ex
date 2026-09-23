@@ -9,7 +9,7 @@ defmodule PrismWeb.RegistryLive do
   namespace state owned by the current user.
 
   Sources:
-    * Personal namespace — from `@personal_namespace_slug` (set by `LiveAuth`).
+    * Personal namespace — from `@personal_namespace_slug` (set by `PrismWeb.Focus`).
     * Publisher memberships — fetched via `registry.whoami` MCP action.
 
   For each owned namespace we call `component.discover` (which hits
@@ -329,7 +329,7 @@ defmodule PrismWeb.RegistryLive do
     end
   end
 
-  # Personal-namespace slug is already computed by `LiveAuth`; publisher
+  # Personal-namespace slug is already computed by `PrismWeb.Focus`; publisher
   # memberships come from `registry.whoami`. Both are strings; uniq to guard
   # against the edge case where a user is also a member of their own personal
   # slug (shouldn't happen today, but cheap to defend).

@@ -36,6 +36,10 @@ defmodule Sanctum.Supervisor do
         # Provisioning retries that must not ride a sign-in (registry
         # pulls), and the keepers that renew their claims' leases.
         {Task.Supervisor, name: Sanctum.ProvisioningSupervisor},
+        # This domain's own fire-and-forget writes off a caller's hot path:
+        # the session slide an establish triggers (`Sanctum.Caller`). On
+        # demand only — nothing is started here.
+        {Task.Supervisor, name: Sanctum.TaskSupervisor},
         # Single-use consent authorizations. The shipped store is the DB
         # (config.exs pins Proof.DB); the in-memory GenServer starts only
         # when a deployment explicitly configures it, so production does

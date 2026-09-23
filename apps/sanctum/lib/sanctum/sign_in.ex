@@ -233,7 +233,7 @@ defmodule Sanctum.SignIn do
       {:ok, :granted} ->
         emit_platform_bootstrap(user_id)
         # A freshly granted operator bit reaches this person's already
-        # mounted views: LiveAuth re-establishes on membership_changed.
+        # mounted views: their guard revalidates on membership_changed.
         Members.broadcast_change(user_id, nil, :platform_granted)
         :ok
 
