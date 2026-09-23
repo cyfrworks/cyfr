@@ -19,6 +19,11 @@ on:
       - 'tests/fixtures/residue-canary.go'
       # The image suites' sources, which the syntax check below reads.
       - 'tests/bridge-image/**'
+      # The dependency audit's adapter, and the scan wrapper and regression
+      # harness that share its exit policy.
+      - 'scripts/npm-audit-report.mjs'
+      - 'scripts/security-scan.sh'
+      - 'tests/security-scan-test.sh'
       - '.github/workflows/node-ci.yml'
   pull_request:
     paths:
@@ -28,6 +33,9 @@ on:
       - 'tests/fixtures/spawn_protocol.json'
       - 'tests/fixtures/residue-canary.go'
       - 'tests/bridge-image/**'
+      - 'scripts/npm-audit-report.mjs'
+      - 'scripts/security-scan.sh'
+      - 'tests/security-scan-test.sh'
       - '.github/workflows/node-ci.yml'
 
 permissions:
@@ -78,9 +86,12 @@ jobs:
           fi
           grep -q "fd 3 is not the spawner channel" "$RUNNER_TEMP/refusal.txt"
 
-      - name: Audit dependencies (report-only)
-        continue-on-error: true
-        run: npm audit --audit-level=high
+      # Advisories are report-only: the adapter prints the full report and
+      # passes whether or not it lists any. An audit that did not complete
+      # (a registry, network or npm error, an unexpected exit, or a missing,
+      # invalid or truncated report) fails the step.
+      - name: Audit dependencies (advisories report-only)
+        run: node ../../scripts/npm-audit-report.mjs
 
   spawn:
     name: vet + test (cyfr-spawn)

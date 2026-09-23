@@ -93,41 +93,48 @@ jobs:
         working-directory: apps/cyfr
 
   go-audit:
-    name: Go Vulnerability Check
+    name: Go Vulnerability Check (${{ matrix.tree }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every Go tree in the repository, each scanned under the Go version
+        # its own go.mod names.
+        tree: [apps/codex, apps/spawn]
     defaults:
       run:
-        working-directory: apps/codex
+        working-directory: ${{ matrix.tree }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: apps/codex/go.mod
-          cache-dependency-path: apps/codex/go.sum
+          go-version-file: ${{ matrix.tree }}/go.mod
+          cache-dependency-path: ${{ matrix.tree }}/go.sum
 
       - name: Install govulncheck
-        # Pinned like every other tool in CI — @latest was the one unpinned
-        # executable in the pipeline.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
+        # Pinned like every other tool in CI.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
       - name: Run govulncheck
-        # govulncheck v1.4.0 panics (exit 2) while analyzing generics under
-        # Go 1.26 ("ForEachElement called on type containing *types.TypeParam")
-        # — a known upstream tool bug, NOT a code finding. A real finding exits
-        # 3 and still fails CI; only the tool crash is tolerated so it doesn't
-        # block the pipeline. Revisit when a govulncheck release supports the
-        # toolchain pinned in apps/codex/go.mod.
-        run: |
-          set +e
-          govulncheck ./...
-          code=$?
-          set -e
-          case "$code" in
-            0) echo "govulncheck: no known vulnerabilities" ;;
-            3) echo "::error::govulncheck found vulnerabilities"; exit 1 ;;
-            *) echo "::warning::govulncheck exited $code (known v1.4.0 panic on Go 1.26 generics — not a finding)" ;;
-          esac
+        # Every nonzero exit fails: a finding (3), a scanner panic and any
+        # other tool failure alike, since a scan that did not complete is not
+        # clean coverage.
+        run: bash ../../scripts/security-scan.sh govulncheck ./...
+
+  security-scan-harness:
+    name: Security Scan Wrapper and npm Adapter Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # The npm adapter cases run scripts/npm-audit-report.mjs under node.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+
+      - name: Run security scan regression tests
+        run: bash tests/security-scan-test.sh
 
   installer-verify:
     name: Installer Verification Tests
