@@ -41,7 +41,10 @@ if [ -z "${MIX_BUILD_PATH:-}" ] && [ "$ADAPTER" = postgres ]; then export MIX_BU
 export CYFR_DATABASE="$ADAPTER" MIX_ENV=test CYFR_TEST_PARTITION_ENV_LIBRARY=0
 cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 per=$(( cores / PARTITIONS )); [ "$per" -lt 2 ] && per=2
-export ERL_FLAGS="+S ${per}:${per} +SDcpu ${per} +SDio ${per}"
+# Dirty I/O schedulers are threads that block inside the SQLite driver while
+# a writer waits on the busy timeout; scaling them down with the partition
+# count lets two waiters starve the holder they wait for. They stay wide.
+export ERL_FLAGS="+S ${per}:${per} +SDcpu ${per} +SDio 16"
 umask 077
 # UNIX socket paths have a small fixed ceiling on macOS. Do not nest under
 # the inherited TMPDIR (which may already consume most of that ceiling), and
