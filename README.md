@@ -531,7 +531,9 @@ recorded on their `users` row. `cyfr admin deny <email>` revokes their
 sessions and keys, archives their own athanor, removes them from every group
 and withdraws the invitations that address was still holding; `cyfr admin
 allow` lets them back in and reopens their own athanor — group seats are not
-restored, a member adds them again.
+restored, a member adds them again. Work running in an athanor when it is
+archived stops for good, on every member, whether or not the member heard:
+a reopen admits only runs started after it.
 
 ### Opening the door to everyone (`*`), and the caps that bound it
 

@@ -239,7 +239,9 @@ defmodule Arca.ScheduleOccurrencesTest do
           component_type: "reagent",
           schedule_id: running.id
         },
-        occurrence_id: started.id
+        occurrence_id: started.id,
+        grant: Arca.Test.Actor.grant(actor.athanor_id),
+        verify: &Arca.Test.Actor.admits/1
       )
 
     # Still running: not recoverable.
@@ -254,7 +256,8 @@ defmodule Arca.ScheduleOccurrencesTest do
         "exec_live",
         "failed",
         %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "swept"},
-        attempt.attempt
+        attempt.attempt,
+        Arca.Test.Actor.stored()
       )
 
     assert {:ok, %{lapsed: [%{id: started_id}]}} = ScheduleOccurrences.recoverable(now())
@@ -342,7 +345,9 @@ defmodule Arca.ScheduleOccurrencesTest do
                  component_type: "reagent",
                  schedule_id: schedule.id
                },
-               occurrence_id: occurrence.id
+               occurrence_id: occurrence.id,
+               grant: Arca.Test.Actor.grant(actor.athanor_id),
+               verify: &Arca.Test.Actor.admits/1
              )
 
     assert Arca.Repo.get(Arca.Execution, "exec_second") == nil

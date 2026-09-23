@@ -73,13 +73,16 @@ defmodule Cyfr.Execution.BarrierRefusalTest do
     parent_id = Cyfr.UUID7.execution_id()
 
     {:ok, %{attempt: attempt}} =
-      Arca.Execution.admit(%{
-        id: parent_id,
-        reference: "formula:local.barrier-parent:0.1.0",
-        user_id: ctx.user_id,
-        athanor_id: ctx.athanor_id,
-        component_type: "formula"
-      })
+      Arca.Execution.admit(
+        %{
+          id: parent_id,
+          reference: "formula:local.barrier-parent:0.1.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "formula"
+        },
+        Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+      )
 
     {:ok, _} =
       Arca.Execution.record_end(
@@ -87,7 +90,8 @@ defmodule Cyfr.Execution.BarrierRefusalTest do
         parent_id,
         "completed",
         %{completed_at: DateTime.utc_now(), duration_ms: 1, output: "{}"},
-        attempt.attempt
+        attempt.attempt,
+        Cyfr.Test.AttemptFixtures.stored()
       )
 
     [

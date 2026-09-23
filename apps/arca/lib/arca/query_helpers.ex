@@ -168,4 +168,25 @@ defmodule Arca.QueryHelpers do
       _sqlite -> query
     end
   end
+
+  @doc """
+  Hold the rows `query` reads against a writer until the enclosing
+  transaction ends, without holding them against another reader.
+
+  PostgreSQL gets `FOR SHARE`: any number of readers hold the row at once,
+  and a `for_update/1` or an `UPDATE` of it waits for all of them — and
+  each later reader waits for that writer and reads its commit. SQLite
+  gets the query back unchanged: its adapter raises on a lock clause, and
+  the transaction around the read decides — an immediate one
+  (`Arca.Repo.locking_transaction/2`) holds the database's one write
+  lock, and `Arca.Repo.read_transaction/1`'s reads a snapshot and waits
+  for no one.
+  """
+  @spec for_share(Ecto.Queryable.t()) :: Ecto.Queryable.t()
+  def for_share(query) do
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.Postgres -> lock(query, "FOR SHARE")
+      _sqlite -> query
+    end
+  end
 end

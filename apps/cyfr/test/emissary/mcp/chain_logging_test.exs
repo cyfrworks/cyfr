@@ -108,7 +108,10 @@ defmodule Emissary.MCP.ChainLoggingTest do
     guest = Context.enter_guest(ctx)
     auth = authority_granting(["system.status"])
 
-    {:ok, _} = Catalog.call_in_chain("system", guest, %{"action" => "status"}, auth)
+    {:ok, _} =
+      Catalog.call_in_chain("system", guest, %{"action" => "status"}, auth,
+        lineage: Cyfr.Test.AttemptFixtures.lineage!(guest)
+      )
 
     rows = rows_for(ctx, request_id)
 

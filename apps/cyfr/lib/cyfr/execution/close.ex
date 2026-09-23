@@ -82,15 +82,18 @@ defmodule Cyfr.Execution.Close do
   node's `max_response_size` or cannot be encoded closes the run failed. Answers the result — `%{status: :completed, output: masked,
   metadata: map}` — or `{:error, message}`. A cancel that closed the row
   first leaves the cancelled row standing; the result is still answered.
+  A run whose estate was archived while it ran is never answered as a
+  success: its completion is refused (`Cyfr.Execution.Record.write_completed/1`),
+  the row closes failed and the answer is `{:error, message}`.
   """
   @spec complete(t(), [String.t()], term(), map()) :: {:ok, map()} | {:error, String.t()}
   def complete(%__MODULE__{} = close, secrets, output, exec_metadata) do
     masked_output = SecretMasker.mask(output, secrets)
 
     with :ok <- check_application_error(close, secrets, masked_output),
-         :ok <- check_response_size(close, secrets, masked_output) do
-      completed_record = Record.complete(close.record, masked_output)
-      write_result = Record.write_completed(completed_record)
+         :ok <- check_response_size(close, secrets, masked_output),
+         completed_record = Record.complete(close.record, masked_output),
+         {:written, write_result} <- completed_write(close, completed_record) do
       if write_result == :ok, do: StepSpans.completed(close.step_spans)
 
       audit_error = audit_error(completed_record, write_result)
@@ -116,6 +119,21 @@ defmodule Cyfr.Execution.Close do
       # A completed parent leaves its asynchronous children running; failure
       # and cancellation cascade, and lease expiry reaps abandoned children.
       {:ok, result}
+    end
+  end
+
+  # A completion refused because the run's grant no longer stands was
+  # closed failed by the record's write: its output is neither answered
+  # nor announced as a success.
+  defp completed_write(close, completed_record) do
+    case Record.write_completed(completed_record) do
+      {:error, :not_standing} ->
+        message = "Execution refused: its athanor is no longer active"
+        Telemetry.execute_exception(Record.fail(close.record, message), message)
+        {:error, message}
+
+      write_result ->
+        {:written, write_result}
     end
   end
 

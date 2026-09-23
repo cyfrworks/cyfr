@@ -59,7 +59,7 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
         ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
       )
 
-    {:ok, %{attempt: root_attempt}} =
+    {:ok, %{execution: root, attempt: root_attempt}} =
       Arca.Execution.admit(
         %{
           id: "exec_charge_row_#{System.unique_integer([:positive])}",
@@ -68,7 +68,9 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
           athanor_id: @athanor,
           component_type: "formula"
         },
-        reservation: %{budget_id: auth.budget.id, cap: 1}
+        reservation: %{budget_id: auth.budget.id, cap: 1},
+        grant: Cyfr.Test.AttemptFixtures.grant(@athanor),
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     ctx =
@@ -88,26 +90,32 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
       holder_execution_id: nil
     }
 
-    {:ok, auth: auth, ctx: ctx, charge: charge}
+    # The chain the calls come from: the root's execution and the attempt
+    # that owns it, as the host stamps them.
+    lineage = %{parent_execution_id: root.id, attempt: root_attempt.attempt}
+
+    {:ok, auth: auth, ctx: ctx, charge: charge, lineage: lineage}
   end
 
-  defp call(ctx, auth, charge) do
+  defp call(ctx, auth, charge, lineage) do
     Catalog.call_in_chain(
       "tincture_visibility",
       ctx,
       %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"},
       auth,
       guest_fn: :spawn,
-      charge: charge
+      charge: charge,
+      lineage: lineage
     )
   end
 
   test "the row is charged for the call and released after it", %{
     auth: auth,
     ctx: ctx,
-    charge: charge
+    charge: charge,
+    lineage: lineage
   } do
-    case call(ctx, auth, charge) do
+    case call(ctx, auth, charge, lineage) do
       {:ok, _} -> :ok
       {:error, msg} when is_binary(msg) -> refute msg =~ "Denied by chain authority"
     end
@@ -124,7 +132,8 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
   test "a full reservation refuses the call and gives the slot back", %{
     auth: auth,
     ctx: ctx,
-    charge: charge
+    charge: charge,
+    lineage: lineage
   } do
     :ok =
       Arca.BudgetReservations.charge(
@@ -134,7 +143,7 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
         1
       )
 
-    assert {:error, msg} = call(ctx, auth, charge)
+    assert {:error, msg} = call(ctx, auth, charge, lineage)
     assert msg =~ "Denied by chain authority"
     assert Sanctum.Authority.budget(auth).in_flight == 0
 
@@ -145,10 +154,9 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
   test "a call under the chain's attempt with no identity of its own holds a row of its own", %{
     auth: auth,
     ctx: ctx,
-    charge: charge
+    charge: charge,
+    lineage: lineage
   } do
-    lineage = %{parent_execution_id: "exec_parent", attempt: charge.attempt}
-
     result =
       Catalog.call_in_chain(
         "tincture_visibility",

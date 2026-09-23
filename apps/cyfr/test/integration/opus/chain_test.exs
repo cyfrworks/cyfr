@@ -315,11 +315,13 @@ defmodule Opus.ChainTest do
       auth
     end
 
+    # A child inherits the grant its parent's attempt stores: the parent is
+    # a real row.
     defp child_opts(ctx, overrides \\ []) do
       Keyword.merge(
         [
           ctx: Context.enter_guest(ctx),
-          parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
+          parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,
           root_execution_id: "exec_root_ref",
           activation_digest: @root_activation
         ],
@@ -716,7 +718,9 @@ defmodule Opus.ChainTest do
             athanor_id: ctx.athanor_id,
             component_type: "formula"
           },
-          reservation: %{budget_id: auth.budget.id, cap: 1}
+          reservation: %{budget_id: auth.budget.id, cap: 1},
+          grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+          verify: &Sanctum.ExecutionStanding.verify/1
         )
 
       charge = %{
@@ -778,7 +782,9 @@ defmodule Opus.ChainTest do
             athanor_id: ctx.athanor_id,
             component_type: "formula"
           },
-          reservation: %{budget_id: auth.budget.id, cap: 2}
+          reservation: %{budget_id: auth.budget.id, cap: 2},
+          grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+          verify: &Sanctum.ExecutionStanding.verify/1
         )
 
       child_id = Cyfr.UUID7.execution_id()

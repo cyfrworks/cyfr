@@ -34,21 +34,31 @@ defmodule Cyfr.Execution.Host do
     2. `attach`: the assignment verifies (`Cyfr.Assignment.verify/3`), it
        names the header's athanor, execution, attempt, fence, generation
        and member, it is addressed to the header's worker service and
-       boot, and the attempt row is claimed for the header's runner
-       (`Arca.ExecutionAttempts.claim/4`). The attempt then unseals the
-       run's vault edge and audits each field it hands over, once, at the
-       attach that claims it (`Cyfr.Execution.Attempt.attach/2`).
+       boot, its attempt is open on this member, and the attempt row is
+       claimed for the header's runner (`Arca.ExecutionAttempts.claim/5`)
+       under the grant the row stores.
+       The attempt then unseals the run's vault edge and audits each field
+       it hands over, once, at the attach that claims it
+       (`Cyfr.Execution.Attempt.attach/2`).
     3. `renew`: each named attempt's lease is renewed by one update
        predicated on the header's runner holding it on the header's
-       service and boot (`Arca.ExecutionAttempts.renew_held/3`), the
-       runner's own attempt and the children it runs alike; one it does
-       not hold renews as `lost`.
+       service and boot, under the grant that attempt itself stores
+       (`Arca.ExecutionAttempts.renew_held/4`), the runner's own attempt
+       and the children it runs alike; one it does not hold, or whose
+       grant no longer stands, renews as `lost`.
     4. Every other operation: the header's nonce has not been presented to
        the attempt before, and the attempt row is held by the header's
-       runner, before the attempt runs it (`Cyfr.Execution.Attempt.call/3`).
+       runner under a grant that stands, before the attempt runs it
+       (`Cyfr.Execution.Attempt.call/3`); `fail` needs the hold alone.
        `admit_child` and `tool_call` act under what the attempt holds
        (`Cyfr.Execution.Host.Children`), and need the row live as well: no
        cancel asked of it and its execution running.
+
+  A grant stands while its estate is active at the generation the run was
+  admitted under (`Sanctum.ExecutionStanding.verify/1`). An archive
+  retires it for good, whether or not the archive was heard: a call under
+  it is `lost`, and one whose standing cannot be read is `unavailable`,
+  with no effect.
 
   ## Answers
 
@@ -245,6 +255,7 @@ defmodule Cyfr.Execution.Host do
   defp dispatch(caller, {:attach, token}, now) do
     with {:ok, assignment} <- Assignment.verify(token, Keys.assign_key(), now),
          :ok <- names_caller(assignment, caller),
+         :ok <- open_here(caller),
          :ok <- claim(caller) do
       Attempt.attach(caller.execution_id, caller)
     end
@@ -281,29 +292,42 @@ defmodule Cyfr.Execution.Host do
     end
   end
 
+  # An attempt with no process open on this member has nothing to attach
+  # to: its row is not claimed for a runner that could never be answered.
+  defp open_here(caller) do
+    if Attempt.whereis(caller.execution_id), do: :ok, else: {:error, :lost}
+  end
+
   defp claim(caller) do
     case Arca.ExecutionAttempts.claim(
            Cyfr.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
            caller.fence,
-           caller.runner
+           caller.runner,
+           grant: :stored,
+           verify: &Sanctum.ExecutionStanding.verify/1
          ) do
       :ok -> :ok
-      {:error, :database_error} -> {:error, :unavailable}
-      {:error, reason} -> {:error, reason}
+      {:error, reason} when reason in [:database_error, :unavailable] -> {:error, :unavailable}
+      {:error, :replayed} -> {:error, :replayed}
+      {:error, _lost} -> {:error, :lost}
     end
   end
 
   # A runner renews every attempt it holds on its worker service and boot:
   # its own and the children it runs. Each renewal is one update predicated
-  # on that hold, so a stale runner, boot or service renews nothing.
+  # on that hold and on the grant that attempt stores, so a stale runner,
+  # boot or service renews nothing, and neither does one whose estate was
+  # archived.
   defp renew(caller, attempt) do
     holder = %{service_id: caller.service, boot_id: caller.boot, runner: caller.runner}
 
     case Arca.ExecutionAttempts.renew_held(
            Cyfr.Actor.in_athanor(caller.athanor_id),
            attempt,
-           holder
+           holder,
+           grant: :stored,
+           verify: &Sanctum.ExecutionStanding.verify/1
          ) do
       {:ok, until} -> {:ok, {:ok, DateTime.to_unix(until, :millisecond)}}
       :lost -> {:ok, :lost}

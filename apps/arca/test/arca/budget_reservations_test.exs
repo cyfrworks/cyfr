@@ -33,7 +33,9 @@ defmodule Arca.BudgetReservationsTest do
           athanor_id: actor.athanor_id,
           component_type: "formula"
         },
-        reservation: %{budget_id: budget_id, cap: 3}
+        reservation: %{budget_id: budget_id, cap: 3},
+        grant: Arca.Test.Actor.grant(actor.athanor_id),
+        verify: &Arca.Test.Actor.admits/1
       )
 
     {:ok, actor: actor, root: root, attempt: attempt, budget: budget_id}
@@ -59,15 +61,18 @@ defmodule Arca.BudgetReservationsTest do
 
   defp child!(actor, root, id) do
     {:ok, %{attempt: attempt}} =
-      Arca.Execution.admit(%{
-        id: id,
-        reference: "catalyst:local.files:0.1.0",
-        user_id: actor.user_id,
-        athanor_id: actor.athanor_id,
-        component_type: "catalyst",
-        parent_execution_id: root.id,
-        root_execution_id: root.id
-      })
+      Arca.Execution.admit(
+        %{
+          id: id,
+          reference: "catalyst:local.files:0.1.0",
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
+          component_type: "catalyst",
+          parent_execution_id: root.id,
+          root_execution_id: root.id
+        },
+        Arca.Test.Actor.standing(actor.athanor_id)
+      )
 
     attempt
   end
@@ -121,14 +126,16 @@ defmodule Arca.BudgetReservationsTest do
     attempt: attempt
   } do
     {:ok, _} =
-      ExecutionAttempts.close(actor, attempt.attempt, "completed", "ok")
+      ExecutionAttempts.close(actor, attempt.attempt, "completed", "ok", Arca.Test.Actor.stored())
 
     assert :stale_attempt = charge(actor, budget, attempt.attempt, "c1")
 
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(actor, root.id,
         boot_id: "b2",
-        lease_until: ExecutionAttempts.lease_until()
+        lease_until: ExecutionAttempts.lease_until(),
+        grant: :stored,
+        verify: &Arca.Test.Actor.admits/1
       )
 
     assert :ok = charge(actor, budget, successor.attempt, "c1")
@@ -168,7 +175,8 @@ defmodule Arca.BudgetReservationsTest do
         actor,
         child_attempt.attempt,
         "completed",
-        "ok"
+        "ok",
+        Arca.Test.Actor.stored()
       )
 
     assert {:ok, 1} = BudgetReservations.sweep(actor)
@@ -198,7 +206,7 @@ defmodule Arca.BudgetReservationsTest do
     assert {:ok, [%{id: "call_live"}]} =
              BudgetReservations.charges(actor, budget)
 
-    {:ok, _} = ExecutionAttempts.close(actor, a, "completed", "ok")
+    {:ok, _} = ExecutionAttempts.close(actor, a, "completed", "ok", Arca.Test.Actor.stored())
     assert {:ok, 1} = BudgetReservations.sweep(actor)
     assert charged(actor, budget) == 0
   end

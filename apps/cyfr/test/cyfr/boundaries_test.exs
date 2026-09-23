@@ -850,6 +850,56 @@ defmodule Cyfr.BoundariesTest do
     end
   end
 
+  describe "the system responsibilities" do
+    test "the register is not empty, and each row names its modules, its check and why" do
+      rows = Boundaries.system_responsibilities()
+      refute Enum.empty?(rows), "the system-responsibility register is empty"
+
+      for row <- rows do
+        refute Enum.empty?(row.modules), "#{row.responsibility} names no module"
+
+        for name <- row.modules do
+          module = Module.concat([name])
+          assert Code.ensure_loaded?(module), "#{row.responsibility} names #{name}, not a module"
+        end
+
+        [module, fun, arity] =
+          Regex.run(~r/^(.+)\.(\w+)\/(\d+)$/, row.check, capture: :all_but_first)
+
+        assert function_exported?(
+                 Module.concat([module]),
+                 String.to_atom(fun),
+                 String.to_integer(arity)
+               ),
+               "#{row.responsibility} names #{row.check}, which is not exported"
+
+        assert String.length(row.reason) > 60, "#{row.responsibility} carries no reason"
+      end
+    end
+
+    test "every module that passes a retirement's check is rostered with it" do
+      rostered =
+        for row <- Boundaries.system_responsibilities(),
+            check = row.check |> String.split("/") |> hd(),
+            name <- row.modules,
+            into: MapSet.new(),
+            do: {check, name}
+
+      passing =
+        for lib <- SourceTree.app_libs(root()),
+            {path, lines} <- scan(lib <> "/**/*.ex"),
+            row <- Boundaries.system_responsibilities(),
+            check = row.check |> String.split("/") |> hd(),
+            Enum.any?(lines, &String.contains?(elem(&1, 0), check)),
+            [_, module] =
+              Regex.run(~r/^defmodule ([\w.]+) do/m, SourceTree.read(Path.join(root(), path))),
+            do: {check, module}
+
+      assert passing != [], "no module passes a rostered check: the scan read nothing"
+      assert Enum.reject(passing, &MapSet.member?(rostered, &1)) == []
+    end
+  end
+
   # The lines where a `%Cyfr.Actor{}` is BUILT — in expression position,
   # not matched in a function head, a `case` clause or the left of a
   # match. A regex cannot tell those apart; the parser can, so this walks

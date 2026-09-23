@@ -50,16 +50,19 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     actor = Sanctum.Context.actor(ctx)
 
     {:ok, %{execution: execution, attempt: attempt}} =
-      Arca.Execution.admit(%{
-        id: "exec_write_#{System.unique_integer([:positive])}",
-        reference: "catalyst:local.write:0.1.0",
-        user_id: actor.user_id,
-        athanor_id: actor.athanor_id,
-        component_type: "catalyst",
-        input: "{}"
-      })
+      Arca.Execution.admit(
+        %{
+          id: "exec_write_#{System.unique_integer([:positive])}",
+          reference: "catalyst:local.write:0.1.0",
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
+          component_type: "catalyst",
+          input: "{}"
+        },
+        Arca.Test.Actor.standing(actor.athanor_id)
+      )
 
-    :ok = ExecutionAttempts.claim(actor, attempt.attempt, 1, @runner)
+    :ok = ExecutionAttempts.claim(actor, attempt.attempt, 1, @runner, Arca.Test.Actor.stored())
     {:ok, ctx: ctx, actor: actor, execution: execution, attempt: attempt.attempt}
   end
 
@@ -75,7 +78,8 @@ defmodule Arca.ExecutionAttemptsWriteTest do
         path: Keyword.get(opts, :path, @path),
         bytes: Keyword.get(opts, :bytes, 5),
         io: io
-      }
+      },
+      Arca.Test.Actor.stored()
     )
   end
 
@@ -94,7 +98,8 @@ defmodule Arca.ExecutionAttemptsWriteTest do
         execution.id,
         "cancelled",
         %{completed_at: DateTime.utc_now(), duration_ms: 1},
-        nil
+        nil,
+        Arca.Test.Actor.stored()
       )
 
     :ok
@@ -104,7 +109,9 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(actor, execution.id,
         boot_id: Cyfr.Boot.id(),
-        lease_until: ExecutionAttempts.lease_until()
+        lease_until: ExecutionAttempts.lease_until(),
+        grant: :stored,
+        verify: &Arca.Test.Actor.admits/1
       )
 
     successor
@@ -293,7 +300,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(test)
 
       %{attempt: next, fence: 2} = Agent.get(successor, & &1)
-      :ok = ExecutionAttempts.claim(test.actor, next, 2, @runner)
+      :ok = ExecutionAttempts.claim(test.actor, next, 2, @runner, Arca.Test.Actor.stored())
 
       assert {:ok, {:confirmed, :ok}} = write(%{test | attempt: next}, put(test, "new"), fence: 2)
       assert {:ok, "new"} = Arca.get(test.actor, @path)
@@ -305,7 +312,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     test "a lapse between the intent and the settlement is uncertain", test do
       io = fn ->
         lease = attempt_row(test).lease_until
-        assert {:ok, ran} = ExecutionAttempts.lapse(test.attempt, lease)
+        assert {:ok, ran} = ExecutionAttempts.lapse(test.attempt, lease, Arca.Test.Actor.stored())
         assert is_integer(ran)
         put(test).()
       end
@@ -490,7 +497,8 @@ defmodule Arca.ExecutionAttemptsWriteTest do
                test.attempt,
                1,
                @runner,
-               %{op: :put, path: @path, io: fn -> flunk("the store was touched") end}
+               %{op: :put, path: @path, io: fn -> flunk("the store was touched") end},
+               Arca.Test.Actor.stored()
              )
   end
 end

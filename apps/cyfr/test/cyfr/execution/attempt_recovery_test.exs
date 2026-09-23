@@ -57,7 +57,9 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(Sanctum.Context.actor(ctx), record.id,
         boot_id: Record.boot_id(),
-        lease_until: Record.lease_until()
+        lease_until: Record.lease_until(),
+        grant: :stored,
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     assert successor.fence == 2

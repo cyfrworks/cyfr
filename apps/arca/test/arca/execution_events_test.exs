@@ -19,13 +19,16 @@ defmodule Arca.ExecutionEventsTest do
     actor = Arca.Test.Actor.local()
 
     {:ok, %{execution: execution}} =
-      Arca.Execution.admit(%{
-        id: "exec_evt_#{System.unique_integer([:positive])}",
-        reference: "catalyst:local.files:0.1.0",
-        user_id: actor.user_id,
-        athanor_id: actor.athanor_id,
-        component_type: "catalyst"
-      })
+      Arca.Execution.admit(
+        %{
+          id: "exec_evt_#{System.unique_integer([:positive])}",
+          reference: "catalyst:local.files:0.1.0",
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
+          component_type: "catalyst"
+        },
+        Arca.Test.Actor.standing(actor.athanor_id)
+      )
 
     {:ok, actor: actor, exec: execution}
   end

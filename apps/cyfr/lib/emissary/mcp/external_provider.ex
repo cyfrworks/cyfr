@@ -338,6 +338,13 @@ defmodule Emissary.MCP.ExternalProvider do
   # that cannot be kept is `result_lost`, a close that cannot be written
   # `not_recorded`, and neither hands the answer back. A console call
   # writes no row.
+  #
+  # The row runs under its caller's grant: the stamp its parent's current
+  # attempt stores, inherited unchanged and checked again as it is admitted
+  # and as it completes. A call whose caller's estate was archived is not
+  # admitted; one whose estate was archived while the call was in flight
+  # is never recorded as a success — its attempt closes `uncertain` and
+  # the answer is not handed back.
   defp attempted(ctx, server, server_name, remote_tool, args, opts, call) do
     id = Keyword.get(opts, :execution_id) || Cyfr.UUID7.execution_id()
     started_at = DateTime.utc_now()
@@ -361,17 +368,17 @@ defmodule Emissary.MCP.ExternalProvider do
       kind: "tool_call"
     }
 
-    admission =
-      [boot_id: Cyfr.Boot.id()]
-      |> Arca.QueryHelpers.maybe_put(:charge, Keyword.get(opts, :hold))
-      |> Arca.QueryHelpers.maybe_put(:step, Keyword.get(opts, :step))
-
-    with {:ok, staged} <- stage(ctx, id, "input", input, class),
+    with {:ok, grant} <- inherited_grant(ctx, attrs.parent_execution_id),
+         admission =
+           [boot_id: Cyfr.Boot.id(), grant: grant, verify: &Sanctum.ExecutionStanding.verify/1]
+           |> Arca.QueryHelpers.maybe_put(:charge, Keyword.get(opts, :hold))
+           |> Arca.QueryHelpers.maybe_put(:step, Keyword.get(opts, :step)),
+         {:ok, staged} <- stage(ctx, id, "input", input, class),
          {:ok, attempt} <- admit(attrs, [{:payloads, [staged]} | admission], staged) do
       {:ok, watch} = Cyfr.Execution.LeaseWatch.start(self(), id, attempt)
 
       try do
-        close(ctx, id, attempt, started_at, class, call.())
+        close(ctx, id, {attempt, grant}, started_at, class, call.())
       after
         Cyfr.Execution.LeaseWatch.stop(watch)
       end
@@ -381,6 +388,19 @@ defmodule Emissary.MCP.ExternalProvider do
          {:refused,
           "Call to #{remote_tool} on server '#{server_name}' not admitted: " <>
             (Cyfr.Ops.Error.render(reason) || inspect(reason))}}
+    end
+  end
+
+  # A call row is a child of the chain that made it: it inherits the stamp
+  # its parent's current attempt stores. A call with no parent row has no
+  # grant to run under and is not admitted.
+  defp inherited_grant(_ctx, nil), do: {:error, {:refused, :missing_grant}}
+
+  defp inherited_grant(ctx, parent_execution_id) do
+    case Arca.ExecutionAttempts.grant(Sanctum.Context.actor(ctx), parent_execution_id) do
+      {:ok, grant} -> {:ok, grant}
+      {:error, :database_error} -> {:error, {:refused, :unavailable}}
+      {:error, _none} -> {:error, {:refused, :not_standing}}
     end
   end
 
@@ -432,7 +452,7 @@ defmodule Emissary.MCP.ExternalProvider do
   # answer, committed as the row closes; a refusal from the server closes
   # the row failed with its sentence. The answer is handed back only
   # once both are written.
-  defp close(ctx, id, attempt, started_at, class, {:ok, answer} = result) do
+  defp close(ctx, id, {attempt, grant}, started_at, class, {:ok, answer} = result) do
     encoded = Jason.encode!(answer)
     now = DateTime.utc_now()
 
@@ -454,14 +474,20 @@ defmodule Emissary.MCP.ExternalProvider do
                id,
                "completed",
                Map.put(attrs, :payloads, [staged]),
-               attempt
+               attempt,
+               grant: grant,
+               verify: &Sanctum.ExecutionStanding.verify/1
              ) do
           {:ok, _} ->
             result
 
+          {:error, :not_standing} ->
+            _ = Arca.ExecutionPayloads.discard(staged)
+            retired(ctx, id, {attempt, grant}, started_at)
+
           {:error, {:payload_not_retained, reason}} ->
             _ = Arca.ExecutionPayloads.discard(staged)
-            result_lost(ctx, id, attempt, started_at, reason)
+            result_lost(ctx, id, {attempt, grant}, started_at, reason)
 
           {:error, reason} ->
             _ = Arca.ExecutionPayloads.discard(staged)
@@ -471,11 +497,11 @@ defmodule Emissary.MCP.ExternalProvider do
         end
 
       {:error, reason} ->
-        result_lost(ctx, id, attempt, started_at, reason)
+        result_lost(ctx, id, {attempt, grant}, started_at, reason)
     end
   end
 
-  defp close(ctx, id, attempt, started_at, _class, {:error, reason} = result) do
+  defp close(ctx, id, {attempt, grant}, started_at, _class, {:error, reason} = result) do
     now = DateTime.utc_now()
 
     attrs = %{
@@ -484,15 +510,41 @@ defmodule Emissary.MCP.ExternalProvider do
       duration_ms: DateTime.diff(now, started_at, :millisecond)
     }
 
-    _ = Arca.Execution.record_end(Sanctum.Context.actor(ctx), id, "failed", attrs, attempt)
+    _ = end_failed(ctx, id, attempt, grant, attrs)
     result
+  end
+
+  # A failure retires work: it needs the attempt's stored stamp, never a
+  # grant that still stands.
+  defp end_failed(ctx, id, attempt, grant, attrs) do
+    Arca.Execution.record_end(Sanctum.Context.actor(ctx), id, "failed", attrs, attempt,
+      grant: grant,
+      verify: &Sanctum.ExecutionStanding.stamp_only/1
+    )
+  end
+
+  # The call answered after its estate was archived: what it did may have
+  # happened, so its attempt closes `uncertain`, never `ok`, and the
+  # answer is not handed back.
+  defp retired(ctx, id, {attempt, grant}, started_at) do
+    now = DateTime.utc_now()
+
+    attrs = %{
+      error_message: "the call's athanor is no longer active",
+      outcome: "uncertain",
+      completed_at: now,
+      duration_ms: DateTime.diff(now, started_at, :millisecond)
+    }
+
+    _ = end_failed(ctx, id, attempt, grant, attrs)
+    {:error, {:not_recorded, "the call answered, but its athanor is no longer active"}}
   end
 
   # The call happened and answered; its answer could not be kept. The
   # attempt closes `result_lost`, durably where it can, and the answer
   # is never handed back — a caller that retried would run the effect
   # twice.
-  defp result_lost(ctx, id, attempt, started_at, reason) do
+  defp result_lost(ctx, id, {attempt, grant}, started_at, reason) do
     now = DateTime.utc_now()
 
     attrs = %{
@@ -502,7 +554,7 @@ defmodule Emissary.MCP.ExternalProvider do
       duration_ms: DateTime.diff(now, started_at, :millisecond)
     }
 
-    case Arca.Execution.record_end(Sanctum.Context.actor(ctx), id, "failed", attrs, attempt) do
+    case end_failed(ctx, id, attempt, grant, attrs) do
       {:ok, _} ->
         {:error, {:result_lost, "the call answered, but its result could not be kept"}}
 

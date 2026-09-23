@@ -61,6 +61,55 @@ defmodule Arca.Test.Actor do
     ]
   end
 
+  @doc """
+  The grant options (`Arca.ExecutionStanding`) a storage test admits an
+  execution under: the athanor's grant at the generation its row carries
+  now (1 when the suite has minted no row), and a check that admits. The
+  check is the identity domain's (`Sanctum.ExecutionStanding`); a storage
+  test is about the write, not the decision.
+  """
+  @spec standing(String.t()) :: keyword()
+  def standing(athanor_id \\ @athanor_id),
+    do: [grant: grant(athanor_id), verify: &admits/1]
+
+  @doc """
+  The grant options a storage test writes an admitted execution under: the
+  stamp its attempt stores, and a check that admits.
+  """
+  @spec stored() :: keyword()
+  def stored, do: [grant: :stored, verify: &admits/1]
+
+  @doc "A check that admits every grant: the storage test's stand-in for the decision."
+  @spec admits(Cyfr.ExecutionGrant.t()) :: :ok
+  def admits(%Cyfr.ExecutionGrant{}), do: :ok
+
+  @doc "The grant of `athanor_id` at the generation its row carries now."
+  @spec grant(String.t()) :: Cyfr.ExecutionGrant.t()
+  def grant(athanor_id \\ @athanor_id) do
+    generation =
+      case Arca.ExecutionStanding.current(Cyfr.Actor.in_athanor(athanor_id), athanor_id) do
+        {:ok, %{security_generation: generation}} -> generation
+        _none -> 1
+      end
+
+    {:ok, grant} = Cyfr.ExecutionGrant.new(athanor_id, generation)
+    grant
+  end
+
+  @doc """
+  The identity domain's decision over a grant, for a storage test that
+  exercises it: the estate row locked and read at the grant's generation
+  (`Sanctum.ExecutionStanding.verify/1` spells the same rule).
+  """
+  @spec verify(Cyfr.ExecutionGrant.t()) :: :ok | {:error, :not_standing | :unavailable}
+  def verify(%Cyfr.ExecutionGrant{athanor_id: athanor_id, generation: generation}) do
+    case Arca.ExecutionStanding.locked(Cyfr.Actor.in_athanor(athanor_id), athanor_id) do
+      {:ok, %{status: "active", security_generation: ^generation}} -> :ok
+      {:ok, _retired} -> {:error, :not_standing}
+      {:error, _reason} -> {:error, :unavailable}
+    end
+  end
+
   @doc "A bare tenant caller — an athanor, and nothing else."
   @spec in_athanor(String.t()) :: Cyfr.Actor.t()
   def in_athanor(athanor_id), do: Cyfr.Actor.in_athanor(athanor_id)

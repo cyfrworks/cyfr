@@ -57,7 +57,7 @@ defmodule Opus.ExecutionProvenanceTest do
   } do
     {row, output} =
       run(ctx,
-        parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
+        parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,
         retention_class: "chat_step"
       )
 

@@ -215,8 +215,11 @@ defmodule Cyfr.Execution.Admission do
   Admit one run of `reference` with `input` in `ctx`, under
   `opts[:authority]`.
 
-  In order: this boot must own the control plane; a version-less
-  reference is resolved to the pinned one; the registry row must type the
+  In order: this boot must own the control plane; the run's grant is read
+  — a root's estate standing now, a child's its parent's stored stamp —
+  and one that does not stand refuses with no row
+  (`{:error, :not_standing}`); a version-less reference is resolved to
+  the pinned one; the registry row must type the
   component, and a caller's `:type` may assert that type but never choose
   it; the node's consented timeout must parse; the input must fit the
   node's `max_request_size`; the node's rate bucket (and, for a public
@@ -274,10 +277,15 @@ defmodule Cyfr.Execution.Admission do
   end
 
   defp admit_owned(ctx, reference, input, opts) do
-    with {:ok, pinned, resolution} <- resolve(ctx, reference),
+    with {:ok, grant} <- grant(ctx, opts),
+         {:ok, pinned, resolution} <- resolve(ctx, reference),
          {:ok, component_ref, extracted_type, component} <- inspect_component(ctx, pinned),
          {:ok, component_type} <- authoritative_type(extracted_type, opts[:type], pinned) do
-      record = new_record(ctx, pinned, input, opts, component_type, component, resolution)
+      record =
+        ctx
+        |> new_record(pinned, input, opts, component_type, component, resolution)
+        |> Map.put(:grant, grant)
+
       Cyfr.LoggerContext.set_execution_id(record.id)
 
       run = %{
@@ -317,6 +325,17 @@ defmodule Cyfr.Execution.Admission do
             do: Close.barred(reason),
             else: Close.fail(run.close, [], reason)
       end
+    end
+  end
+
+  # The standing the run is admitted under, before anything is resolved: a
+  # root's estate as it stands now, a child's parent's stored stamp
+  # (`Cyfr.Execution.Record.grant/1`). The admission transaction checks
+  # it again under the estate's lock.
+  defp grant(ctx, opts) do
+    case opts[:parent_execution_id] do
+      nil -> Sanctum.ExecutionStanding.capture(ctx)
+      parent -> Record.inherited_grant(ctx.athanor_id, parent)
     end
   end
 
@@ -761,6 +780,7 @@ defmodule Cyfr.Execution.Admission do
         need: run.opts[:need],
         limits: run.limits,
         close: run.close,
+        grant: record.grant,
         # A formula's events go on its root's stream, which the caller
         # watching the whole run subscribes to; any other component's go on
         # its own.

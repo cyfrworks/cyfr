@@ -32,6 +32,9 @@ defmodule Cyfr.Execution.RecordTest do
         authenticated: true
       )
 
+    # A run is admitted only in an estate that stands: the test's own has a row.
+    Arca.Test.Actor.athanor!(ctx.athanor_id)
+
     on_exit(fn ->
       File.rm_rf!(test_path)
 
@@ -267,6 +270,21 @@ defmodule Cyfr.Execution.RecordTest do
           retention_class: "chat_step"
         )
 
+      # A child is admitted under the grant its parent's attempt stores:
+      # the root is a row, admitted with no payload of its own.
+      {:ok, _} =
+        Arca.Execution.admit(
+          %{
+            id: root.id,
+            reference: "agent:local.aqua",
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            component_type: "agent",
+            kind: "turn"
+          },
+          Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+        )
+
       child =
         Record.new(ctx, "catalyst:moonmoon69.claude:1.0.0", %{"messages" => []},
           parent_execution_id: root.id,
@@ -403,13 +421,23 @@ defmodule Cyfr.Execution.RecordTest do
     end
 
     test "includes parent_execution_id in record", %{ctx: ctx} do
+      parent = parent!(ctx)
+
       record =
-        Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: "exec_parent-456")
+        Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: parent)
 
       :ok = Record.write_started(record)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
-      assert db_record.parent_execution_id == "exec_parent-456"
+      assert db_record.parent_execution_id == parent
+    end
+
+    test "a child whose parent is not a row is admitted under no grant", %{ctx: ctx} do
+      record =
+        Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: "exec_parent-456")
+
+      assert {:error, :not_standing} = Record.write_started(record)
+      refute Arca.Repo.get(Arca.Execution, record.id)
     end
 
     test "parent_execution_id nil when not set", %{ctx: ctx} do
@@ -516,15 +544,15 @@ defmodule Cyfr.Execution.RecordTest do
 
   describe "parent_execution_id roundtrip" do
     test "write_started and get roundtrip preserves parent_execution_id", %{ctx: ctx} do
+      parent = parent!(ctx)
+
       record =
-        Record.new(ctx, "reagent:local.test:0.1.0", %{},
-          parent_execution_id: "exec_roundtrip-789"
-        )
+        Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: parent)
 
       :ok = Record.write_started(record)
 
       {:ok, loaded} = Record.get(ctx, record.id)
-      assert loaded.parent_execution_id == "exec_roundtrip-789"
+      assert loaded.parent_execution_id == parent
     end
 
     test "nil parent_execution_id roundtrips correctly", %{ctx: ctx} do
@@ -895,5 +923,13 @@ defmodule Cyfr.Execution.RecordTest do
       assert %{"keys" => keys} = Jason.decode!(row.input)
       assert "params" in keys
     end
+  end
+
+  # A parent row, admitted with its attempt: a child inherits the grant it
+  # stores.
+  defp parent!(ctx) do
+    parent = Record.new(ctx, "formula:local.parent:1.0.0", %{}, component_type: :formula)
+    :ok = Record.write_started(parent)
+    parent.id
   end
 end

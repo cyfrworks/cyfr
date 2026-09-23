@@ -48,9 +48,11 @@ defmodule Cyfr.Execution.AgentAuthorityTest do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted and "catalyst:local.claude" in minted
 
+    # A child inherits the grant its parent's attempt stores: the parent is
+    # a real row.
     child_opts = [
       ctx: Sanctum.Context.enter_guest(ctx),
-      parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
+      parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,
       root_execution_id: "exec_root_#{System.unique_integer([:positive])}"
     ]
 

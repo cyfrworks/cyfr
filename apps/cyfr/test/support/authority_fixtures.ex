@@ -14,6 +14,11 @@ defmodule Sanctum.Test.AuthorityFixtures do
   admission would — so the authority crosses the wire.
   """
   def reserve!(%Authority{} = auth, athanor_id \\ "ath_test") do
+    {:ok, grant} =
+      Sanctum.ExecutionStanding.capture(
+        Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+      )
+
     {:ok, _} =
       Arca.Execution.admit(
         %{
@@ -23,7 +28,9 @@ defmodule Sanctum.Test.AuthorityFixtures do
           athanor_id: athanor_id,
           component_type: "formula"
         },
-        reservation: %{budget_id: auth.budget.id, cap: auth.budget.cap}
+        reservation: %{budget_id: auth.budget.id, cap: auth.budget.cap},
+        grant: grant,
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     auth

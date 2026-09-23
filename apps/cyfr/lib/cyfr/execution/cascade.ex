@@ -68,11 +68,16 @@ defmodule Cyfr.Execution.Cascade do
     duration_ms = DateTime.diff(now, child.started_at, :millisecond)
     error_msg = "Parent execution (#{parent_id}) terminated"
 
+    # Failing a child retires work: it needs the attempt's stored stamp,
+    # never a grant that still stands
+    # (`Cyfr.Boundaries.system_responsibilities/0`).
     {count, event_seq} =
       Arca.Execution.mark_failed_if_running(
         child.id,
         %{completed_at: now, duration_ms: duration_ms, error_message: error_msg},
-        attempt: child.current_attempt
+        attempt: child.current_attempt,
+        grant: :stored,
+        verify: &Sanctum.ExecutionStanding.stamp_only/1
       )
 
     if count > 0 do

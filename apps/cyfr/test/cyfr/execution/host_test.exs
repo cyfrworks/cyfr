@@ -340,7 +340,9 @@ defmodule Cyfr.Execution.HostTest do
           Cyfr.Actor.in_athanor(fixture.athanor_id),
           fixture.execution_id,
           boot_id: Cyfr.Boot.id(),
-          lease_until: Arca.ExecutionAttempts.lease_until()
+          lease_until: Arca.ExecutionAttempts.lease_until(),
+          grant: :stored,
+          verify: &Sanctum.ExecutionStanding.verify/1
         )
 
       {:ok, fixture: fixture, successor: successor}
@@ -383,14 +385,17 @@ defmodule Cyfr.Execution.HostTest do
       ctx = Sanctum.TestContext.local()
 
       {:ok, %{execution: execution, attempt: attempt}} =
-        Arca.Execution.admit(%{
-          id: Cyfr.UUID7.execution_id(),
-          reference: "agent:local.aqua:0.1.0",
-          user_id: ctx.user_id,
-          athanor_id: ctx.athanor_id,
-          component_type: "agent",
-          kind: "turn"
-        })
+        Arca.Execution.admit(
+          %{
+            id: Cyfr.UUID7.execution_id(),
+            reference: "agent:local.aqua:0.1.0",
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            component_type: "agent",
+            kind: "turn"
+          },
+          Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+        )
 
       assert attempt.claimed_by == nil
 
@@ -728,15 +733,18 @@ defmodule Cyfr.Execution.HostTest do
 
   defp child_of!(fixture) do
     {:ok, %{execution: child}} =
-      Arca.Execution.admit(%{
-        id: Cyfr.UUID7.execution_id(),
-        reference: "reagent:local.child:0.1.0",
-        user_id: fixture.ctx.user_id,
-        athanor_id: fixture.athanor_id,
-        component_type: "reagent",
-        parent_execution_id: fixture.execution_id,
-        root_execution_id: fixture.execution_id
-      })
+      Arca.Execution.admit(
+        %{
+          id: Cyfr.UUID7.execution_id(),
+          reference: "reagent:local.child:0.1.0",
+          user_id: fixture.ctx.user_id,
+          athanor_id: fixture.athanor_id,
+          component_type: "reagent",
+          parent_execution_id: fixture.execution_id,
+          root_execution_id: fixture.execution_id
+        },
+        Cyfr.Test.AttemptFixtures.standing(fixture.athanor_id)
+      )
 
     child.id
   end

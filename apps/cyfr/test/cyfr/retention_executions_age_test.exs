@@ -30,11 +30,16 @@ defmodule Cyfr.Retention.ExecutionsAgeTest do
 
     if status != "running" do
       {:ok, _} =
-        Execution.record_complete(Sanctum.Context.actor(ctx), id, %{
-          completed_at: DateTime.add(started, 1, :second),
-          duration_ms: 1000,
-          status: status
-        })
+        Execution.record_complete(
+          Sanctum.Context.actor(ctx),
+          id,
+          %{
+            completed_at: DateTime.add(started, 1, :second),
+            duration_ms: 1000,
+            status: status
+          },
+          Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+        )
     end
 
     id

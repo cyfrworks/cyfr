@@ -353,14 +353,17 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
     # Started, and its execution has since ended without the occurrence.
     {:ok, %{attempt: attempt}} =
-      Arca.Execution.admit(%{
-        id: "exec_lapsed",
-        reference: "reagent:local.test:1.0.0",
-        user_id: ctx.user_id,
-        athanor_id: ctx.athanor_id,
-        component_type: "reagent",
-        schedule_id: schedule.id
-      })
+      Arca.Execution.admit(
+        %{
+          id: "exec_lapsed",
+          reference: "reagent:local.test:1.0.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "reagent",
+          schedule_id: schedule.id
+        },
+        Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+      )
 
     {:ok, _} =
       Arca.Execution.record_end(
@@ -368,7 +371,8 @@ defmodule Cyfr.Schedules.SchedulerTest do
         "exec_lapsed",
         "failed",
         %{completed_at: now, duration_ms: 1, error_message: "swept"},
-        attempt.attempt
+        attempt.attempt,
+        Cyfr.Test.AttemptFixtures.stored()
       )
 
     Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{

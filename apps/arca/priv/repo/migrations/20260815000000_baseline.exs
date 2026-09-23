@@ -606,6 +606,8 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp executions do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
     create table(:executions, primary_key: false) do
       add :id, :string, primary_key: true
       add :reference, :string, null: false
@@ -665,9 +667,23 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:executions, [:athanor_id, :kind, :status])
 
     # The fence: one row per attempt at an execution.
+    # The estate standing an attempt was admitted under
+    # (`Cyfr.ExecutionGrant`): the athanor's `security_generation` its
+    # root read, inherited unchanged by every child and successor. No
+    # default: an attempt whose admission named no generation is not
+    # written. Positive, spelled once per adapter as above.
+    attempt_generation = %{
+      name: "execution_attempts_athanor_generation_positive",
+      expr: "athanor_generation > 0"
+    }
+
     create table(:execution_attempts, primary_key: false) do
       add :attempt, :string, primary_key: true
       add :athanor_id, :string, null: false
+
+      add :athanor_generation, :bigint,
+        null: false,
+        check: if(sqlite?, do: attempt_generation)
 
       add :execution_id,
           references(:executions,
@@ -697,6 +713,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :started_at, :utc_datetime_usec, null: false
       add :running_since, :utc_datetime_usec
       add :ended_at, :utc_datetime_usec
+    end
+
+    unless sqlite? do
+      create constraint(:execution_attempts, attempt_generation.name,
+               check: attempt_generation.expr
+             )
     end
 
     create unique_index(:execution_attempts, [:execution_id, :fence])

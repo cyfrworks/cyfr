@@ -40,6 +40,9 @@ defmodule Cyfr.Execution.MCPTest do
         authenticated: true
       )
 
+    # A run is admitted only in an estate that stands: the test's own has a row.
+    Arca.Test.Actor.athanor!(ctx.athanor_id)
+
     # Plant the test WASM in a private seed so bootstrap can mint it.
     Cyfr.Test.SeedBundle.isolate!()
     wasm_bytes = File.read!(@math_wasm_path)

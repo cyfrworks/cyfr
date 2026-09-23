@@ -13,15 +13,39 @@ defmodule Emissary.MCP.ExternalProviderTest do
     {:ok, ctx: ctx}
   end
 
+  # An in-chain call comes from a real execution: the catalog stamps its
+  # row and the attempt that owns it into the call's arguments, and the
+  # call's own row inherits that attempt's grant.
+  defp chained(ctx, args) do
+    lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx)
+
+    Map.merge(args, %{
+      "parent_execution_id" => lineage.parent_execution_id,
+      "root_execution_id" => lineage.root_execution_id,
+      "attempt" => lineage.attempt
+    })
+  end
+
+  # The outbound calls' own rows, apart from the chains that made them.
+  defp tool_calls do
+    import Ecto.Query
+    Arca.Repo.all(from(e in Arca.Execution, where: e.kind == "tool_call"))
+  end
+
   describe "try_handle/4" do
     test "returns :not_external for non-namespaced tools", %{ctx: ctx} do
       assert {:error, :not_external} =
-               ExternalProvider.try_handle("regular_tool", ctx, %{}, :in_chain)
+               ExternalProvider.try_handle("regular_tool", ctx, chained(ctx, %{}), :in_chain)
     end
 
     test "returns :not_external when server doesn't exist", %{ctx: ctx} do
       assert {:error, :not_external} =
-               ExternalProvider.try_handle("nonexistent:some_tool", ctx, %{}, :in_chain)
+               ExternalProvider.try_handle(
+                 "nonexistent:some_tool",
+                 ctx,
+                 chained(ctx, %{}),
+                 :in_chain
+               )
     end
 
     test "returns error for disabled server", %{ctx: ctx} do
@@ -32,7 +56,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       })
 
       assert {:error, "Server 'disabled-srv' is disabled"} =
-               ExternalProvider.try_handle("disabled-srv:tool", ctx, %{}, :in_chain)
+               ExternalProvider.try_handle("disabled-srv:tool", ctx, chained(ctx, %{}), :in_chain)
     end
 
     test "a row handed in is the revision dispatch speaks to, not a second read", %{ctx: ctx} do
@@ -46,13 +70,13 @@ defmodule Emissary.MCP.ExternalProviderTest do
       # The caller judged a revision that is now disabled: dispatch sees
       # that revision, whatever the row says by now.
       assert {:error, "Server 'one-rev' is disabled"} =
-               ExternalProvider.try_handle("one-rev:tool", ctx, %{}, :in_chain,
+               ExternalProvider.try_handle("one-rev:tool", ctx, chained(ctx, %{}), :in_chain,
                  server: %{stored | enabled: false}
                )
 
       # A row for another server is nobody's revision of this one.
       assert {:error, msg} =
-               ExternalProvider.try_handle("one-rev:tool", ctx, %{}, :in_chain,
+               ExternalProvider.try_handle("one-rev:tool", ctx, chained(ctx, %{}), :in_chain,
                  server: %{stored | name: "other"}
                )
 
@@ -147,7 +171,8 @@ defmodule Emissary.MCP.ExternalProviderTest do
                )
 
       # try_handle should auto-start the server (connection will fail, but process starts)
-      result = ExternalProvider.try_handle("autostart:some_tool", ctx, %{}, :in_chain)
+      result =
+        ExternalProvider.try_handle("autostart:some_tool", ctx, chained(ctx, %{}), :in_chain)
 
       # The server process should now exist (started by try_handle)
       assert [{_pid, _}] =
@@ -181,7 +206,12 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
       # try_handle should dispatch (will fail at HTTP level, but not :not_external)
       assert {:error, msg} =
-               ExternalProvider.try_handle("dispatch-test:tool", ctx, %{}, :in_chain)
+               ExternalProvider.try_handle(
+                 "dispatch-test:tool",
+                 ctx,
+                 chained(ctx, %{}),
+                 :in_chain
+               )
 
       refute msg == :not_external
 
@@ -198,17 +228,18 @@ defmodule Emissary.MCP.ExternalProviderTest do
         url: "https://localhost:99999/mcp"
       })
 
-      parent = "exec_parent_#{System.unique_integer([:positive])}"
+      lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx)
+      parent = lineage.parent_execution_id
 
       assert {:error, _unreachable} =
                ExternalProvider.try_handle(
                  "rowed:probe",
                  ctx,
-                 %{"x" => 1, "parent_execution_id" => parent, "attempt" => "att_p"},
+                 %{"x" => 1, "parent_execution_id" => parent, "attempt" => lineage.attempt},
                  :in_chain
                )
 
-      assert [row] = Arca.Repo.all(Arca.Execution)
+      assert [row] = tool_calls()
       assert row.kind == "tool_call"
       assert row.component_type == "tool_server"
       assert row.reference == "rowed:probe"
@@ -238,7 +269,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       assert {:error, _unreachable} =
                ExternalProvider.try_handle("console-rowless:probe", ctx, %{}, :external)
 
-      assert [] = Arca.Repo.all(Arca.Execution)
+      assert [] = tool_calls()
       Emissary.MCP.ExternalServerSupervisor.stop("console-rowless", ctx.athanor_id)
     end
   end
@@ -335,7 +366,11 @@ defmodule Emissary.MCP.ExternalProviderTest do
       id = Cyfr.UUID7.execution_id()
 
       assert {:error, _unreachable} =
-               ExternalProvider.try_handle("kept:probe", ctx, %{"x" => 1}, :in_chain,
+               ExternalProvider.try_handle(
+                 "kept:probe",
+                 ctx,
+                 chained(ctx, %{"x" => 1}),
+                 :in_chain,
                  execution_id: id,
                  retention_class: "chat_step"
                )
@@ -356,9 +391,9 @@ defmodule Emissary.MCP.ExternalProviderTest do
     test "a call with no step is admitted under a minted id, in the caller's default class",
          %{ctx: ctx} do
       assert {:error, _unreachable} =
-               ExternalProvider.try_handle("kept:probe", ctx, %{}, :in_chain)
+               ExternalProvider.try_handle("kept:probe", ctx, chained(ctx, %{}), :in_chain)
 
-      assert [row] = Arca.Repo.all(Arca.Execution)
+      assert [row] = tool_calls()
 
       assert {:ok, %{retention_class: class}, _} =
                Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), row.id, "input")
@@ -369,28 +404,29 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
     test "a hold or a step the barriers cannot find refuses admission", %{ctx: ctx} do
       assert {:error, {:refused, why}} =
-               ExternalProvider.try_handle("kept:probe", ctx, %{}, :in_chain,
+               ExternalProvider.try_handle("kept:probe", ctx, chained(ctx, %{}), :in_chain,
                  hold: %{reservation_id: "bgt_gone", id: "chg_gone"}
                )
 
       assert why =~ "not admitted"
 
       assert {:error, {:refused, _}} =
-               ExternalProvider.try_handle("kept:probe", ctx, %{}, :in_chain,
+               ExternalProvider.try_handle("kept:probe", ctx, chained(ctx, %{}), :in_chain,
                  step: %{id: "stp_gone", generation: 0}
                )
 
-      assert [] = Arca.Repo.all(Arca.Execution)
+      assert [] = tool_calls()
     end
 
     test "an input the store cannot keep admits nothing", %{ctx: ctx} do
+      args = chained(ctx, %{"x" => 1})
       Application.put_env(:arca, :execution_payload_store, __MODULE__.RefusingStore)
 
       assert {:error, {:refused, why}} =
-               ExternalProvider.try_handle("kept:probe", ctx, %{"x" => 1}, :in_chain)
+               ExternalProvider.try_handle("kept:probe", ctx, args, :in_chain)
 
       assert why =~ "not admitted"
-      assert [] = Arca.Repo.all(Arca.Execution)
+      assert [] = tool_calls()
     end
 
     test "the answer is the caller's once its result is kept and the row closed", %{
@@ -405,7 +441,11 @@ defmodule Emissary.MCP.ExternalProviderTest do
       id = Cyfr.UUID7.execution_id()
 
       assert {:ok, %{"content" => [_]} = answer} =
-               ExternalProvider.try_handle("kept:probe", ctx, %{"q" => 1}, :in_chain,
+               ExternalProvider.try_handle(
+                 "kept:probe",
+                 ctx,
+                 chained(ctx, %{"q" => 1}),
+                 :in_chain,
                  execution_id: id
                )
 
@@ -423,12 +463,13 @@ defmodule Emissary.MCP.ExternalProviderTest do
     test "a result the store cannot keep closes the attempt result_lost and hands nothing back",
          %{ctx: ctx, server: server} do
       {:ok, pid} = __MODULE__.AnsweringServer.start(ctx, server, %{"content" => []})
+      args = chained(ctx, %{})
       __MODULE__.OnceStore.reset()
       Application.put_env(:arca, :execution_payload_store, __MODULE__.OnceStore)
       id = Cyfr.UUID7.execution_id()
 
       assert {:error, {:result_lost, _}} =
-               ExternalProvider.try_handle("kept:probe", ctx, %{}, :in_chain, execution_id: id)
+               ExternalProvider.try_handle("kept:probe", ctx, args, :in_chain, execution_id: id)
 
       assert %{status: "failed", error_message: "result not retained"} =
                Arca.Repo.get(Arca.Execution, id)

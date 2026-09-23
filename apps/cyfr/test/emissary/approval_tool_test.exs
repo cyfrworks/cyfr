@@ -42,7 +42,9 @@ defmodule Emissary.MCP.ApprovalToolTest do
           kind: "turn",
           turn_id: turn.id
         },
-        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4}
+        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     {:ok, turn} =

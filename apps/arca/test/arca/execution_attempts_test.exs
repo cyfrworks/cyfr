@@ -37,7 +37,7 @@ defmodule Arca.ExecutionAttemptsTest do
           component_type: "catalyst",
           input: "{}"
         },
-        opts
+        opts ++ Arca.Test.Actor.standing(actor.athanor_id)
       )
 
     {execution, attempt}
@@ -61,24 +61,27 @@ defmodule Arca.ExecutionAttemptsTest do
     {_execution, attempt} = admit!(actor)
     until = DateTime.add(DateTime.utc_now(), 300, :second)
 
-    assert {:ok, ^until} = ExecutionAttempts.renew(attempt.attempt, until)
+    assert {:ok, ^until} =
+             ExecutionAttempts.renew(attempt.attempt, until, Arca.Test.Actor.stored())
 
     assert {:ok, _ran} =
              ExecutionAttempts.close(
                actor,
                attempt.attempt,
                "completed",
-               "ok"
+               "ok",
+               Arca.Test.Actor.stored()
              )
 
-    assert :lost = ExecutionAttempts.renew(attempt.attempt, until)
+    assert :lost = ExecutionAttempts.renew(attempt.attempt, until, Arca.Test.Actor.stored())
 
     assert {:error, :not_owner} =
              ExecutionAttempts.close(
                actor,
                attempt.attempt,
                "failed",
-               "error"
+               "error",
+               Arca.Test.Actor.stored()
              )
   end
 
@@ -108,7 +111,12 @@ defmodule Arca.ExecutionAttemptsTest do
 
     assert {:ok, 1} =
              Arca.Repo.transaction(fn ->
-               ExecutionAttempts.resume!(actor, attempt.attempt, until)
+               ExecutionAttempts.resume!(
+                 actor,
+                 attempt.attempt,
+                 until,
+                 Arca.Test.Actor.grant(actor.athanor_id)
+               )
              end)
 
     resumed = ExecutionAttempts.get(actor, attempt.attempt)
@@ -126,7 +134,8 @@ defmodule Arca.ExecutionAttemptsTest do
                actor,
                attempt.attempt,
                "cancelled",
-               "cancelled"
+               "cancelled",
+               Arca.Test.Actor.stored()
              )
 
     assert %{state: "cancelled", outcome: "cancelled", ended_at: %DateTime{}} =
@@ -150,9 +159,9 @@ defmodule Arca.ExecutionAttemptsTest do
     # A renewal that landed after the scan changes the lease; the sweep's
     # observed value then matches nothing.
     later = DateTime.add(DateTime.utc_now(), 300, :second)
-    assert {:ok, nil} = ExecutionAttempts.lapse(attempt.attempt, later)
+    assert {:ok, nil} = ExecutionAttempts.lapse(attempt.attempt, later, Arca.Test.Actor.stored())
 
-    assert {:ok, ran} = ExecutionAttempts.lapse(attempt.attempt, lapsed)
+    assert {:ok, ran} = ExecutionAttempts.lapse(attempt.attempt, lapsed, Arca.Test.Actor.stored())
     assert is_integer(ran)
 
     assert %{state: "lapsed", outcome: "uncertain"} =
@@ -164,27 +173,32 @@ defmodule Arca.ExecutionAttemptsTest do
                actor,
                attempt.attempt,
                "completed",
-               "ok"
+               "ok",
+               Arca.Test.Actor.stored()
              )
 
     assert {:ok, %{previous: %{attempt: prev}, attempt: successor}} =
              ExecutionAttempts.takeover(actor, execution.id,
                boot_id: "boot-2",
-               lease_until: later
+               lease_until: later,
+               grant: :stored,
+               verify: &Arca.Test.Actor.admits/1
              )
 
     assert prev == attempt.attempt
     assert successor.fence == 2
     assert successor.state == "running"
     assert reload(execution.id).current_attempt == successor.attempt
-    assert :lost = ExecutionAttempts.renew(attempt.attempt, later)
-    assert {:ok, _} = ExecutionAttempts.renew(successor.attempt, later)
+    assert :lost = ExecutionAttempts.renew(attempt.attempt, later, Arca.Test.Actor.stored())
+    assert {:ok, _} = ExecutionAttempts.renew(successor.attempt, later, Arca.Test.Actor.stored())
 
     # A second takeover retires the successor and takes fence 3.
     assert {:ok, %{attempt: third}} =
              ExecutionAttempts.takeover(actor, execution.id,
                boot_id: "boot-3",
-               lease_until: later
+               lease_until: later,
+               grant: :stored,
+               verify: &Arca.Test.Actor.admits/1
              )
 
     assert third.fence == 3
@@ -242,7 +256,9 @@ defmodule Arca.ExecutionAttemptsTest do
                  parent_execution_id: root.id,
                  root_execution_id: root.id
                },
-               charge: %{reservation_id: reservation.id, id: "chg_child"}
+               charge: %{reservation_id: reservation.id, id: "chg_child"},
+               grant: Arca.Test.Actor.grant(actor.athanor_id),
+               verify: &Arca.Test.Actor.admits/1
              )
 
     assert {:ok, [%{admitted_at: %DateTime{}}]} =
@@ -274,7 +290,9 @@ defmodule Arca.ExecutionAttemptsTest do
                  parent_execution_id: root.id,
                  root_execution_id: root.id
                },
-               charge: %{reservation_id: reservation.id, id: "chg_late"}
+               charge: %{reservation_id: reservation.id, id: "chg_late"},
+               grant: Arca.Test.Actor.grant(actor.athanor_id),
+               verify: &Arca.Test.Actor.admits/1
              )
 
     refute Arca.Repo.get(Arca.Execution, "exec_child_2")
@@ -295,7 +313,9 @@ defmodule Arca.ExecutionAttemptsTest do
             parent_execution_id: parent.id,
             root_execution_id: parent.id
           },
-          parent_attempt: parent_attempt
+          parent_attempt: parent_attempt,
+          grant: Arca.Test.Actor.grant(actor.athanor_id),
+          verify: &Arca.Test.Actor.admits/1
         )
 
       {result, id}
@@ -319,7 +339,8 @@ defmodule Arca.ExecutionAttemptsTest do
               actor,
               attempt.attempt,
               "completed",
-              "ok"
+              "ok",
+              Arca.Test.Actor.stored()
             )
 
           {1, _} =
@@ -334,7 +355,9 @@ defmodule Arca.ExecutionAttemptsTest do
               %{completed_at: DateTime.utc_now(), duration_ms: 0, error_message: "lapsed"},
               attempt: attempt.attempt,
               lease_until: attempt.lease_until,
-              event: "execution.lapsed"
+              event: "execution.lapsed",
+              grant: :stored,
+              verify: &Arca.Test.Actor.admits/1
             )
         end,
         fn _parent, attempt ->
@@ -343,14 +366,17 @@ defmodule Arca.ExecutionAttemptsTest do
               actor,
               attempt.attempt,
               "cancelled",
-              "cancelled"
+              "cancelled",
+              Arca.Test.Actor.stored()
             )
         end,
         fn parent, _attempt ->
           {:ok, _} =
             ExecutionAttempts.takeover(actor, parent.id,
               boot_id: Cyfr.Boot.id(),
-              lease_until: ExecutionAttempts.lease_until()
+              lease_until: ExecutionAttempts.lease_until(),
+              grant: :stored,
+              verify: &Arca.Test.Actor.admits/1
             )
         end
       ]

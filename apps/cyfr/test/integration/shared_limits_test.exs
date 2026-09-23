@@ -344,7 +344,10 @@ defmodule Cyfr.SharedLimitsTest do
     refute OpusService.restart!() == old_boot
     assert %{state: "running", attempt: lapsing} = attempt(ctx, on_opus.id)
     past = DateTime.add(DateTime.utc_now(), -1, :second)
-    assert {:ok, ^past} = Arca.ExecutionAttempts.renew(lapsing, past)
+
+    assert {:ok, ^past} =
+             Arca.ExecutionAttempts.renew(lapsing, past, Cyfr.Test.AttemptFixtures.stored())
+
     :ok = Sweeper.sweep()
 
     assert {{:error, @lapsed}, _id} = Task.await(on_opus.task, 30_000)
