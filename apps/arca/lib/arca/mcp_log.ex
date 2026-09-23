@@ -3,132 +3,63 @@
 
 defmodule Arca.McpLog do
   @moduledoc """
-  Ecto schema for MCP request logs.
-
-  Stores the complete MCP request lifecycle including input/output payloads.
-
-  ## Schema
-
-  - `id` (PK) - This call. For the request an ingress received, it is the
-    request id; an in-chain call minted during that request has its own.
-  - `request_id` - The ingress request every call in one chain shares. Group by
-    this to see a formula's whole run: the `execution.run` that started it and
-    each tool it reached from inside the sandbox.
-  - `user_id` - User who made the request
-  - `timestamp` - When the request was received
-  - `tool` - Tool name (e.g., "execution", "storage")
-  - `action` - Action within tool (e.g., "run", "get")
-  - `method` - MCP method (e.g., "tools/call")
-  - `status` - pending/success/error
-  - `duration_ms` - Request duration in milliseconds
-  - `routed_to` - Service that handled the request
-  - `error_code` - JSON-RPC error code if failed
-  - `input` - JSON-encoded request input
-  - `output` - JSON-encoded response output
-  - `error` - Error message if failed
+  The MCP request log: recording a call's lifecycle, the tenant-scoped
+  readers and the retention primitives over `Arca.Schemas.McpLog`. Every
+  row a function here answers is a plain map (`Arca.Data`).
   """
 
-  use Ecto.Schema
-  import Ecto.Changeset
   import Ecto.Query
 
-  # The request-log status vocabulary, in one place like its sibling stores.
-  @statuses ~w(pending success error)
+  alias Arca.Schemas.McpLog, as: Row
 
   @doc "Every status a log row can carry."
-  def statuses, do: @statuses
-
-  @primary_key {:id, :string, autogenerate: false}
-  @timestamps_opts []
-
-  schema "mcp_logs" do
-    field :request_id, :string
-    field :user_id, :string
-    field :athanor_id, :string
-    field :timestamp, :utc_datetime_usec
-    field :tool, :string
-    field :action, :string
-    field :method, :string
-    field :status, :string, default: "pending"
-    field :duration_ms, :integer
-    field :routed_to, :string
-    field :error_code, :integer
-    field :input, :string
-    field :output, :string
-    field :error, :string
-  end
-
-  @required_fields [:id, :user_id, :athanor_id, :timestamp, :status]
-  @optional_fields [
-    :request_id,
-    :tool,
-    :action,
-    :method,
-    :duration_ms,
-    :routed_to,
-    :error_code,
-    :input,
-    :output,
-    :error
-  ]
-
-  @doc """
-  Creates a changeset for inserting a new MCP log entry.
-  """
-  def create_changeset(attrs) do
-    %__MODULE__{}
-    |> cast(attrs, @required_fields ++ @optional_fields)
-    |> validate_required(@required_fields)
-    |> validate_inclusion(:status, @statuses)
-  end
-
-  @doc """
-  Creates a changeset for updating an existing MCP log entry.
-  """
-  def update_changeset(log, attrs) do
-    log
-    |> cast(attrs, [:status, :duration_ms, :routed_to, :error_code, :output, :error])
-    |> validate_inclusion(:status, @statuses)
-  end
+  @spec statuses() :: [String.t()]
+  def statuses, do: Row.statuses()
 
   @doc """
   Inserts a new MCP log entry.
   """
+  @spec record(map()) :: {:ok, map()} | {:error, term()}
   def record(attrs) do
     Arca.Repo.Errors.with_db_rescue("McpLog.record", fn ->
       attrs
-      |> create_changeset()
+      |> Row.create_changeset()
       |> Arca.Repo.insert()
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
   Inserts a started row only if none exists: the write-behind may land the
   call's close first, and a close carries the whole row.
   """
+  @spec record_started(map()) :: {:ok, map()} | {:error, term()}
   def record_started(attrs) do
     Arca.Repo.Errors.with_db_rescue("McpLog.record_started", fn ->
       attrs
-      |> create_changeset()
+      |> Row.create_changeset()
       |> Arca.Repo.insert(on_conflict: :nothing, conflict_target: :id)
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
   Closes a call whose started row may or may not have landed: the whole
   row is written, and an existing row takes the close's fields.
   """
+  @spec record_close(map(), map()) :: {:ok, map()} | {:error, term()}
   def record_close(started, close) when is_map(started) and is_map(close) do
     Arca.Repo.Errors.with_db_rescue("McpLog.record_close", fn ->
       started
       |> Map.merge(close)
-      |> create_changeset()
+      |> Row.create_changeset()
       |> Arca.Repo.insert(
         on_conflict:
           {:replace, [:status, :duration_ms, :routed_to, :error_code, :output, :error]},
         conflict_target: :id
       )
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -136,23 +67,16 @@ defmodule Arca.McpLog do
 
   Uses tenant-scoped lookup when a context is provided.
   """
-  # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 one line above.
+  # arca:unscoped-ok the row was fetched tenant-scoped by row_of/2 one line above.
+  @spec record_update(Cyfr.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def record_update(%Cyfr.Actor{} = actor, id, attrs) do
     Arca.Repo.Errors.with_db_rescue("McpLog.record_update", fn ->
-      case get_tenant(actor, id) do
-        nil ->
-          {:error, :not_found}
-
-        # get_tenant is itself db-rescued: an outage answers a tuple here,
-        # and binding it as the row would raise a non-DB error straight
-        # through this rescue — crashing the RecordSink's whole batch.
-        {:error, _} = err ->
-          err
-
-        log ->
-          log |> update_changeset(attrs) |> Arca.Repo.update()
+      case row_of(actor, id) do
+        nil -> {:error, :not_found}
+        log -> log |> Row.update_changeset(attrs) |> Arca.Repo.update()
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -166,9 +90,10 @@ defmodule Arca.McpLog do
   - `:tool` - Filter by tool name
   - `:since` - Filter logs after this DateTime
   """
-  @spec list(keyword()) :: {:ok, [%__MODULE__{}]} | {:error, :database_error}
+  @spec list(keyword()) :: {:ok, [map()]} | {:error, :database_error}
   def list(opts) do
     Arca.Repo.Errors.with_db_rescue("McpLog.list", fn -> {:ok, do_list(opts)} end)
+    |> Arca.Data.project()
   end
 
   defp do_list(opts) do
@@ -181,7 +106,7 @@ defmodule Arca.McpLog do
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     query =
-      from(l in __MODULE__,
+      from(l in Row,
         order_by: [desc: l.timestamp],
         limit: ^limit
       )
@@ -201,14 +126,17 @@ defmodule Arca.McpLog do
 
   Platform scope bypasses tenant filtering.
   """
-  @spec get_tenant(Cyfr.Actor.t(), String.t()) ::
-          %__MODULE__{} | nil | {:error, :database_error}
+  @spec get_tenant(Cyfr.Actor.t(), String.t()) :: map() | nil | {:error, :database_error}
   def get_tenant(%Cyfr.Actor{} = actor, id) do
-    Arca.Repo.Errors.with_db_rescue("McpLog.get_tenant", fn ->
-      from(l in __MODULE__, where: l.id == ^id)
-      |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
-      |> Arca.Repo.one()
-    end)
+    Arca.Repo.Errors.with_db_rescue("McpLog.get_tenant", fn -> row_of(actor, id) end)
+    |> Arca.Data.project()
+  end
+
+  # arca:db-raise-ok inside the caller's rescue.
+  defp row_of(actor, id) do
+    from(l in Row, where: l.id == ^id)
+    |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
+    |> Arca.Repo.one()
   end
 
   @doc """
@@ -225,7 +153,7 @@ defmodule Arca.McpLog do
 
     Arca.Repo.Errors.with_db_rescue("Arca.McpLog.delete_before", fn ->
       {count, _} =
-        __MODULE__
+        Row
         |> Arca.QueryHelpers.where_athanor(athanor_id)
         |> Arca.QueryHelpers.where_before(:timestamp, datetime)
         |> Arca.Repo.delete_all()
@@ -242,7 +170,7 @@ defmodule Arca.McpLog do
 
     Arca.Repo.Errors.with_db_rescue("Arca.McpLog.count_before", fn ->
       count =
-        __MODULE__
+        Row
         |> Arca.QueryHelpers.where_athanor(athanor_id)
         |> Arca.QueryHelpers.where_before(:timestamp, datetime)
         |> Arca.Repo.aggregate(:count)
@@ -269,7 +197,7 @@ defmodule Arca.McpLog do
       user_id = Keyword.get(opts, :user_id)
       athanor_id = Keyword.fetch!(opts, :athanor_id)
 
-      query = Arca.QueryHelpers.where_athanor(__MODULE__, athanor_id)
+      query = Arca.QueryHelpers.where_athanor(Row, athanor_id)
 
       query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
       query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query

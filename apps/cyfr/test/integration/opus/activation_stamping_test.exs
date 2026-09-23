@@ -39,7 +39,7 @@ defmodule Opus.ActivationStampingTest do
   end
 
   defp execution_row(execution_id) do
-    Arca.Repo.get(Arca.Execution, execution_id)
+    Arca.Repo.get(Arca.Schemas.Execution, execution_id)
   end
 
   test "a root execution records its activation digest and graph", %{ctx: ctx} do
@@ -74,7 +74,9 @@ defmodule Opus.ActivationStampingTest do
 
     children =
       Arca.Repo.all(
-        from(e in Arca.Execution, where: e.parent_execution_id == ^result.metadata.execution_id)
+        from(e in Arca.Schemas.Execution,
+          where: e.parent_execution_id == ^result.metadata.execution_id
+        )
       )
 
     assert children != []

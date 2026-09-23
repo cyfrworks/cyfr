@@ -91,6 +91,7 @@ defmodule Arca.Doors do
     Arca.Repo.Errors.with_db_rescue("Arca.Doors.list", fn ->
       {:ok, Arca.Repo.all(from(e in Entry, order_by: [desc: e.created_at])) |> Enum.map(&row/1)}
     end)
+    |> Arca.Data.project()
   end
 
   def list(%Cyfr.Actor{}), do: {:error, :not_platform}
@@ -102,6 +103,7 @@ defmodule Arca.Doors do
       query = from(e in Entry, where: e.status == "requested", order_by: [asc: e.created_at])
       {:ok, Arca.Repo.all(query) |> Enum.map(&row/1)}
     end)
+    |> Arca.Data.project()
   end
 
   def requests(%Cyfr.Actor{}), do: {:error, :not_platform}
@@ -115,6 +117,7 @@ defmodule Arca.Doors do
         entry -> {:ok, row(entry)}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, id) when is_binary(id), do: {:error, :not_platform}
@@ -136,6 +139,7 @@ defmodule Arca.Doors do
         entry -> {:ok, row(entry)}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def find(%Cyfr.Actor{}, kind, value) when is_binary(kind) and is_binary(value),
@@ -163,6 +167,7 @@ defmodule Arca.Doors do
       |> Arca.Repo.insert()
       |> written()
     end)
+    |> Arca.Data.project()
   end
 
   def insert(%Cyfr.Actor{}, attrs) when is_map(attrs), do: {:error, :not_platform}
@@ -193,6 +198,7 @@ defmodule Arca.Doors do
           |> written()
       end
     end)
+    |> Arca.Data.project()
   end
 
   def update(%Cyfr.Actor{}, id, attrs) when is_binary(id) and is_map(attrs),
@@ -207,6 +213,7 @@ defmodule Arca.Doors do
         _ -> :ok
       end
     end)
+    |> Arca.Data.project()
   end
 
   def delete(%Cyfr.Actor{}, id) when is_binary(id), do: {:error, :not_platform}

@@ -22,7 +22,7 @@ defmodule Arca.ProviderCredentialStorage do
   alias Arca.Schemas.OauthProviderCredential
 
   @spec get(Cyfr.Actor.t(), String.t()) ::
-          {:ok, OauthProviderCredential.t()}
+          {:ok, map()}
           | {:error, :no_athanor | :not_found | :database_error}
   def get(%Cyfr.Actor{athanor_id: athanor_id}, provider)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(provider) do
@@ -36,6 +36,7 @@ defmodule Arca.ProviderCredentialStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, _provider), do: {:error, :no_athanor}
@@ -62,6 +63,7 @@ defmodule Arca.ProviderCredentialStorage do
 
       :ok
     end)
+    |> Arca.Data.project()
   end
 
   @spec delete(Cyfr.Actor.t(), String.t()) ::
@@ -78,6 +80,7 @@ defmodule Arca.ProviderCredentialStorage do
         {_, _} -> :ok
       end
     end)
+    |> Arca.Data.project()
   end
 
   def delete(%Cyfr.Actor{}, _provider), do: {:error, :no_athanor}
@@ -107,6 +110,7 @@ defmodule Arca.ProviderCredentialStorage do
 
       {:ok, rows}
     end)
+    |> Arca.Data.project()
   end
 
   def list(%Cyfr.Actor{}), do: {:error, :no_athanor}

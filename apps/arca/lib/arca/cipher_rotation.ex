@@ -132,6 +132,7 @@ defmodule Arca.CipherRotation do
 
       {:ok, rows}
     end)
+    |> Arca.Data.project()
   end
 
   def page(%Cyfr.Actor{scope: :platform}, table, cursor, limit)
@@ -162,6 +163,7 @@ defmodule Arca.CipherRotation do
 
       {:ok, rows}
     end)
+    |> Arca.Data.project()
   end
 
   def ciphertext_page(%Cyfr.Actor{scope: :platform}, table, cursor, limit)

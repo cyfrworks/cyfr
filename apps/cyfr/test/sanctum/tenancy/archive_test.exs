@@ -132,7 +132,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
   defp cancelled?(id) do
     id in ScriptedWorker.kills() and
-      match?(%{status: "cancelled"}, Arca.Repo.get(Arca.Execution, id))
+      match?(%{status: "cancelled"}, Arca.Repo.get(Arca.Schemas.Execution, id))
   end
 
   defp person(n) do

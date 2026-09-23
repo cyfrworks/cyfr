@@ -146,7 +146,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       now = DateTime.utc_now()
 
       {1, _} =
-        Arca.Repo.insert_all(Arca.Execution, [
+        Arca.Repo.insert_all(Arca.Schemas.Execution, [
           %{
             id: exec,
             athanor_id: ctx.athanor_id,
@@ -186,7 +186,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       exec = "exec_payload_#{System.unique_integer([:positive])}"
 
       {1, _} =
-        Arca.Repo.insert_all(Arca.Execution, [
+        Arca.Repo.insert_all(Arca.Schemas.Execution, [
           %{
             id: exec,
             athanor_id: ctx.athanor_id,

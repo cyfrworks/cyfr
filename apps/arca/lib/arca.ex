@@ -11,8 +11,9 @@ defmodule Arca do
 
   Two persistence planes share the `Arca` name and only tenancy besides:
   **blobs** go through this module (backed by `Arca.Storage` adapters),
-  **rows** go through the Ecto modules (`Arca.*Storage`, `Arca.Execution`,
-  `Arca.McpLog`, …) on `Arca.Repo`. Structured records want queries and
+  **rows** go through the row facades (`Arca.*Storage`, `Arca.Execution`,
+  `Arca.McpLog`, …) over the private `Arca.Schemas.*` on `Arca.Repo`, and
+  answer plain maps. Structured records want queries and
   uniqueness; WASM binaries, tincture trees and attachments want a
   filesystem or object store. Don't put "storage" in a new blob helper's
   name — the suffix is the row plane's.

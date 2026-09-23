@@ -73,7 +73,7 @@ defmodule Arca.SessionStorage do
 
   Only returns non-expired sessions.
   """
-  @spec get_session(binary()) :: {:ok, Session.t()} | {:error, :not_found | :database_error}
+  @spec get_session(binary()) :: {:ok, map()} | {:error, :not_found | :database_error}
   # arca:unscoped-ok sessions are credential-keyed; athanor_id is nullable pre-resolution (tenancy fabric).
   def get_session(token_hash) do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.get_session", fn ->
@@ -100,6 +100,7 @@ defmodule Arca.SessionStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """

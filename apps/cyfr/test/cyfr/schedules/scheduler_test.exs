@@ -9,6 +9,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
   import Cyfr.Test.Wait
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
+  alias Arca.Schemas.CronSchedule, as: ScheduleRow
   alias Cyfr.Schedules.Scheduler
   alias Cyfr.Test.{AuthorityFixtures, ScriptedWorker}
   alias Sanctum.Test.ConsentFixtures
@@ -124,7 +125,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
     past = DateTime.add(DateTime.utc_now(), -seconds_ago, :second)
 
     {1, _} =
-      Arca.Repo.update_all(from(s in CronSchedule, where: s.id == ^schedule.id),
+      Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
         set: [next_run_at: past]
       )
 
@@ -281,7 +282,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
              Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), execution_id, "input")
 
     assert [%{id: ^execution_id, schedule_id: schedule_id, status: "completed"}] =
-             Arca.Repo.all(Arca.Execution)
+             Arca.Repo.all(Arca.Schemas.Execution)
 
     assert schedule_id == schedule.id
 
@@ -329,7 +330,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
     end)
 
     assert [%{state: "failed", execution_id: nil, attempts: 0}] = occurrences(ctx, schedule)
-    assert [] = Arca.Repo.all(Arca.Execution)
+    assert [] = Arca.Repo.all(Arca.Schemas.Execution)
     assert ScriptedWorker.calls() == []
   end
 
@@ -441,7 +442,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
     assert log =~ "no longer active"
     assert ScriptedWorker.calls() == []
-    assert [] = Arca.Repo.all(Arca.Execution)
+    assert [] = Arca.Repo.all(Arca.Schemas.Execution)
     assert {:ok, %{error_count: 1}} = CronSchedule.get_for_daemon(schedule.id)
   end
 

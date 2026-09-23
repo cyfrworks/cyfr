@@ -178,7 +178,7 @@ defmodule Sanctum.Tenancy.PairsTest do
       # the membership row must survive a failed archive, because with the
       # row gone a retry finds nothing and the husk's pair_key would stand
       # forever.
-      {:ok, row} = Athanors.get(pair.id)
+      row = Arca.Repo.get!(Arca.Schemas.Athanor, pair.id)
       {:ok, _} = row |> Ecto.Changeset.change(kind: "person") |> Arca.Repo.update()
 
       assert {:error, :person_athanor_cannot_be_archived} =
@@ -186,7 +186,7 @@ defmodule Sanctum.Tenancy.PairsTest do
 
       assert Members.member?(alice, pair.id)
 
-      {:ok, row} = Athanors.get(pair.id)
+      row = Arca.Repo.get!(Arca.Schemas.Athanor, pair.id)
       {:ok, _} = row |> Ecto.Changeset.change(kind: "group") |> Arca.Repo.update()
 
       # The retry goes clean through: the tape ends and the key is

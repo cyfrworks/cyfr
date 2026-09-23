@@ -732,7 +732,7 @@ defmodule Cyfr.Execution.MCPTest do
       execution_id = hd(list_result.executions).execution_id
 
       # Check that execution record exists in SQLite
-      db_record = Arca.Repo.get(Arca.Execution, execution_id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
       assert db_record != nil
       assert db_record.id == execution_id
     end
@@ -750,7 +750,7 @@ defmodule Cyfr.Execution.MCPTest do
       assert list_result.count >= 1
       execution_id = hd(list_result.executions).execution_id
 
-      db_record = Arca.Repo.get(Arca.Execution, execution_id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
       assert db_record != nil
       assert db_record.status == "failed"
       assert db_record.completed_at != nil

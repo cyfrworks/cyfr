@@ -80,7 +80,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
   test "a cancel racing the formula's completion is counted once", %{ctx: ctx} do
     id = cancelled_at_completion!(ctx)
     assert noted(id) == 1
-    assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Execution, id)
+    assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Schemas.Execution, id)
   end
 
   test "as many cancelled runs as the threshold put the tenant in the penalty box, and one fewer does not",

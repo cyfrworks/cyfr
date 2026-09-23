@@ -32,7 +32,8 @@ defmodule Arca.Athanors do
       is asked for rather than assumed, and `Cyfr.Actor.system/0` is the
       server's own actor for the work no caller asked for.
 
-  Nothing that belongs to Ecto crosses the boundary. A refusal is
+  Nothing that belongs to Ecto crosses the boundary: a row is answered,
+  and handed to a callback, as a plain map (`Arca.Data`). A refusal is
   `:slug_taken` (the unique index on kind and slug, which a derived slug
   retries against), `{:invalid, %{field => [message]}}`, `:not_found`,
   `:cross_tenant`, `:no_athanor` or `:database_error`. Reads that a
@@ -53,10 +54,11 @@ defmodule Arca.Athanors do
 
   @doc "The actor's own athanor row."
   @spec current(Cyfr.Actor.t()) ::
-          {:ok, Athanor.t()} | {:error, :not_found | :no_athanor | :database_error}
+          {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
   def current(%Cyfr.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.current", fn -> read(athanor_id) end)
+    |> Arca.Data.project()
   end
 
   def current(%Cyfr.Actor{}), do: {:error, :no_athanor}
@@ -66,7 +68,7 @@ defmodule Arca.Athanors do
   changeset — the fields that may change after birth.
   """
   @spec update(Cyfr.Actor.t(), map()) ::
-          {:ok, Athanor.t()} | {:error, :not_found | :no_athanor} | write_refusal()
+          {:ok, map()} | {:error, :not_found | :no_athanor} | write_refusal()
   def update(%Cyfr.Actor{athanor_id: athanor_id}, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.update", fn ->
@@ -77,6 +79,7 @@ defmodule Arca.Athanors do
         |> settled()
       end
     end)
+    |> Arca.Data.project()
   end
 
   def update(%Cyfr.Actor{}, _attrs), do: {:error, :no_athanor}
@@ -137,9 +140,10 @@ defmodule Arca.Athanors do
   Insert an athanor row. `:id`, `:created_at` and `:updated_at` default;
   everything else the create changeset requires must be in `attrs`.
   """
-  @spec insert(Cyfr.Actor.t(), map()) :: {:ok, Athanor.t()} | refusal() | write_refusal()
+  @spec insert(Cyfr.Actor.t(), map()) :: {:ok, map()} | refusal() | write_refusal()
   def insert(%Cyfr.Actor{scope: :platform}, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.insert", fn -> do_insert(attrs) end)
+    |> Arca.Data.project()
   end
 
   def insert(%Cyfr.Actor{}, _attrs), do: {:error, :cross_tenant}
@@ -163,11 +167,11 @@ defmodule Arca.Athanors do
     * `:attrs` — a zero-arity function answering `{:ok, attrs}` or
       `{:error, reason}`. A function rather than a value because the slug
       is resolved against rows this transaction can see.
-    * `:seats` — a one-arity function taking the inserted athanor and
-      answering `:ok` or `{:error, reason}`: the memberships an estate is
-      born with.
+    * `:seats` — a one-arity function taking the inserted athanor, as
+      the plain map the mint answers, and answering `:ok` or
+      `{:error, reason}`: the memberships an estate is born with.
   """
-  @spec mint(Cyfr.Actor.t(), keyword()) :: {:ok, Athanor.t()} | {:error, term()}
+  @spec mint(Cyfr.Actor.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def mint(%Cyfr.Actor{scope: :platform}, opts) when is_list(opts) do
     hold = Keyword.get(opts, :hold, [])
     guards = Keyword.get(opts, :guards, [])
@@ -180,22 +184,24 @@ defmodule Arca.Athanors do
              :ok <- run_guards(guards),
              {:ok, attrs} <- attrs_fun.(),
              {:ok, athanor} <- do_insert(attrs),
-             :ok <- seats_fun.(athanor) do
+             :ok <- seats_fun.(Arca.Data.project(athanor)) do
           athanor
         else
           {:error, reason} -> Arca.Repo.rollback(reason)
         end
       end)
     end)
+    |> Arca.Data.project()
   end
 
   def mint(%Cyfr.Actor{}, _opts), do: {:error, :cross_tenant}
 
   @doc "The athanor row `id` names, whichever tenant it is."
   @spec get(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Athanor.t()} | {:error, :not_found} | refusal()
+          {:ok, map()} | {:error, :not_found} | refusal()
   def get(%Cyfr.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get", fn -> read(id) end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, _id), do: {:error, :cross_tenant}
@@ -205,30 +211,32 @@ defmodule Arca.Athanors do
   partial unique index on `owner_user_id` where `kind = 'person'`).
   """
   @spec get_by_owner(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Athanor.t()} | {:error, :not_found} | refusal()
+          {:ok, map()} | {:error, :not_found} | refusal()
   def get_by_owner(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get_by_owner", fn ->
       found(Arca.Repo.get_by(Athanor, kind: "person", owner_user_id: user_id))
     end)
+    |> Arca.Data.project()
   end
 
   def get_by_owner(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
 
   @doc "The athanor with this kind and slug — how a route segment resolves."
   @spec get_by_slug(Cyfr.Actor.t(), String.t(), String.t()) ::
-          {:ok, Athanor.t()} | {:error, :not_found} | refusal()
+          {:ok, map()} | {:error, :not_found} | refusal()
   def get_by_slug(%Cyfr.Actor{scope: :platform}, kind, slug)
       when is_binary(kind) and is_binary(slug) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get_by_slug", fn ->
       found(Arca.Repo.get_by(Athanor, kind: kind, slug: slug))
     end)
+    |> Arca.Data.project()
   end
 
   def get_by_slug(%Cyfr.Actor{}, _kind, _slug), do: {:error, :cross_tenant}
 
   @doc "The ACTIVE frozen estate with this canonical pair key, if there is one."
   @spec get_by_pair_key(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Athanor.t()} | {:error, :not_found} | refusal()
+          {:ok, map()} | {:error, :not_found} | refusal()
   def get_by_pair_key(%Cyfr.Actor{scope: :platform}, key) when is_binary(key) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get_by_pair_key", fn ->
       found(
@@ -237,24 +245,26 @@ defmodule Arca.Athanors do
         )
       )
     end)
+    |> Arca.Data.project()
   end
 
   def get_by_pair_key(%Cyfr.Actor{}, _key), do: {:error, :cross_tenant}
 
   @doc "The rows these ids name, oldest first. Ids with no row are simply absent."
-  @spec list_by_ids(Cyfr.Actor.t(), [String.t()]) :: {:ok, [Athanor.t()]} | refusal()
+  @spec list_by_ids(Cyfr.Actor.t(), [String.t()]) :: {:ok, [map()]} | refusal()
   def list_by_ids(%Cyfr.Actor{scope: :platform}, []), do: {:ok, []}
 
   def list_by_ids(%Cyfr.Actor{scope: :platform}, ids) when is_list(ids) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.list_by_ids", fn ->
       {:ok, Arca.Repo.all(from(a in Athanor, where: a.id in ^ids, order_by: [asc: a.created_at]))}
     end)
+    |> Arca.Data.project()
   end
 
   def list_by_ids(%Cyfr.Actor{}, _ids), do: {:error, :cross_tenant}
 
   @doc "Every active athanor on the server, oldest first — the roster a scan walks."
-  @spec list_active(Cyfr.Actor.t()) :: {:ok, [Athanor.t()]} | refusal()
+  @spec list_active(Cyfr.Actor.t()) :: {:ok, [map()]} | refusal()
   def list_active(%Cyfr.Actor{scope: :platform}) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.list_active", fn ->
       {:ok,
@@ -262,6 +272,7 @@ defmodule Arca.Athanors do
          from(a in Athanor, where: a.status == "active", order_by: [asc: a.created_at])
        )}
     end)
+    |> Arca.Data.project()
   end
 
   def list_active(%Cyfr.Actor{}), do: {:error, :cross_tenant}
@@ -274,7 +285,7 @@ defmodule Arca.Athanors do
   admits one active row per person and athanor, and Postgres refuses a
   `SELECT DISTINCT` ordered by an expression outside the select list.
   """
-  @spec list_for_user(Cyfr.Actor.t(), String.t()) :: {:ok, [Athanor.t()]} | refusal()
+  @spec list_for_user(Cyfr.Actor.t(), String.t()) :: {:ok, [map()]} | refusal()
   def list_for_user(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.list_for_user", fn ->
       {:ok,
@@ -289,6 +300,7 @@ defmodule Arca.Athanors do
          )
        )}
     end)
+    |> Arca.Data.project()
   end
 
   def list_for_user(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
@@ -416,20 +428,12 @@ defmodule Arca.Athanors do
   # The unique index on kind and slug is the one refusal a caller acts on
   # rather than reports: a derived slug asks again with the next name.
   defp refusal(%Ecto.Changeset{errors: errors} = changeset) do
-    if slug_conflict?(errors), do: :slug_taken, else: {:invalid, messages(changeset)}
+    if slug_conflict?(errors), do: :slug_taken, else: Arca.Data.invalid(changeset)
   end
 
   defp slug_conflict?(errors) do
     Enum.any?(errors, fn {field, {_message, meta}} ->
       field in [:kind, :slug] and meta[:constraint] == :unique
-    end)
-  end
-
-  defp messages(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
-      Regex.replace(~r"%{(\w+)}", message, fn _whole, key ->
-        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-      end)
     end)
   end
 

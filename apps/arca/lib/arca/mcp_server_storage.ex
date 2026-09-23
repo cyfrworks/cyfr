@@ -44,7 +44,7 @@ defmodule Arca.McpServerStorage do
   resolver and the vault reconciler all have to agree about such a row, and
   they can only agree if they decode it the same way.
   """
-  @spec config(McpServer.t() | map()) :: map()
+  @spec config(map() | map()) :: map()
   def config(%{config_json: json}) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, %{} = config} -> config
@@ -57,7 +57,7 @@ defmodule Arca.McpServerStorage do
   @doc """
   List all MCP server configs for the given tenant context.
   """
-  @spec list(Cyfr.Actor.t()) :: {:ok, [McpServer.t()]} | {:error, term()}
+  @spec list(Cyfr.Actor.t()) :: {:ok, [map()]} | {:error, term()}
   def list(%Cyfr.Actor{athanor_id: athanor_id} = actor)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.list", fn ->
@@ -67,6 +67,7 @@ defmodule Arca.McpServerStorage do
 
       {:ok, Arca.Repo.all(query)}
     end)
+    |> Arca.Data.project()
   end
 
   def list(%Cyfr.Actor{}), do: {:error, :no_athanor}
@@ -75,7 +76,7 @@ defmodule Arca.McpServerStorage do
   Get a single MCP server config by name, scoped to the given tenant.
   """
   @spec get(Cyfr.Actor.t(), String.t()) ::
-          {:ok, McpServer.t()} | {:error, :no_athanor | :not_found | :database_error}
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
   def get(%Cyfr.Actor{athanor_id: athanor_id} = actor, name)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(name) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.get", fn ->
@@ -88,6 +89,7 @@ defmodule Arca.McpServerStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
@@ -96,7 +98,7 @@ defmodule Arca.McpServerStorage do
   Get a single MCP server config by its row id, scoped to the given tenant.
   """
   @spec get_by_id(Cyfr.Actor.t(), String.t()) ::
-          {:ok, McpServer.t()} | {:error, :no_athanor | :not_found | :database_error}
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
   def get_by_id(%Cyfr.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.get_by_id", fn ->
@@ -109,6 +111,7 @@ defmodule Arca.McpServerStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get_by_id(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
@@ -123,7 +126,7 @@ defmodule Arca.McpServerStorage do
   serializes; Arca stores it verbatim). Optional: `:enabled`. The row's
   `created_by` is the context's user.
   """
-  @spec insert(Cyfr.Actor.t(), map()) :: {:ok, McpServer.t()} | {:error, :no_athanor | term()}
+  @spec insert(Cyfr.Actor.t(), map()) :: {:ok, map()} | {:error, :no_athanor | term()}
   # arca:unscoped-ok the actor's athanor is stamped onto the row below before the write.
   def insert(%Cyfr.Actor{athanor_id: athanor_id, user_id: user_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_map(attrs) do
@@ -151,6 +154,7 @@ defmodule Arca.McpServerStorage do
         {0, _} -> {:error, :exists}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def insert(%Cyfr.Actor{}, attrs) when is_map(attrs), do: {:error, :no_athanor}
@@ -160,7 +164,7 @@ defmodule Arca.McpServerStorage do
   answer the row that was deleted.
   """
   @spec delete(Cyfr.Actor.t(), String.t()) ::
-          {:ok, McpServer.t()} | {:error, :no_athanor | :not_found | :database_error}
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
   def delete(%Cyfr.Actor{athanor_id: athanor_id} = actor, name)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(name) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.delete", fn ->
@@ -173,6 +177,7 @@ defmodule Arca.McpServerStorage do
         {0, _} -> {:error, :not_found}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def delete(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
@@ -185,7 +190,7 @@ defmodule Arca.McpServerStorage do
   that epoch; a row that moved on answers `{:error, :stale_epoch}`.
   """
   @spec update(Cyfr.Actor.t(), String.t(), map(), pos_integer() | nil) ::
-          {:ok, McpServer.t()}
+          {:ok, map()}
           | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
   def update(actor, name, updates, expected_epoch \\ nil)
 
@@ -202,6 +207,7 @@ defmodule Arca.McpServerStorage do
       |> where_tenant(actor)
       |> write_epoch(set, expected_epoch, fn -> get(actor, name) end)
     end)
+    |> Arca.Data.project()
   end
 
   def update(%Cyfr.Actor{}, _name, _updates, _expected_epoch), do: {:error, :no_athanor}
@@ -211,7 +217,7 @@ defmodule Arca.McpServerStorage do
   `expected_epoch`, only while the row is still at that epoch.
   """
   @spec bump_epoch(Cyfr.Actor.t(), String.t(), pos_integer() | nil) ::
-          {:ok, McpServer.t()}
+          {:ok, map()}
           | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
   def bump_epoch(actor, id, expected_epoch \\ nil)
 
@@ -222,6 +228,7 @@ defmodule Arca.McpServerStorage do
       |> where_tenant(actor)
       |> write_epoch([updated_at: now()], expected_epoch, fn -> get_by_id(actor, id) end)
     end)
+    |> Arca.Data.project()
   end
 
   def bump_epoch(%Cyfr.Actor{}, _id, _expected_epoch), do: {:error, :no_athanor}
@@ -234,7 +241,7 @@ defmodule Arca.McpServerStorage do
   such row is absent from the map.
   """
   @spec fenced([{String.t(), String.t()}]) ::
-          {:ok, %{{String.t(), String.t()} => %{row: McpServer.t(), athanor_active: boolean()}}}
+          {:ok, %{{String.t(), String.t()} => %{row: map(), athanor_active: boolean()}}}
           | {:error, :database_error}
   # arca:unscoped-ok each row read is matched to the athanor its pair names before it is answered.
   def fenced(pairs) when is_list(pairs) do
@@ -260,6 +267,7 @@ defmodule Arca.McpServerStorage do
 
       {:ok, fenced}
     end)
+    |> Arca.Data.project()
   end
 
   # arca:unscoped-ok every caller hands in a query already scoped with where_tenant/2.

@@ -78,7 +78,7 @@ defmodule Emissary.IntegrationTest do
 
       # Logging is synchronous — no wait needed
 
-      log = Arca.Repo.get(Arca.McpLog, request_id)
+      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
 
       # Verify all required fields
       assert log.id == request_id
@@ -89,7 +89,7 @@ defmodule Emissary.IntegrationTest do
       assert log.duration_ms >= 0
 
       # Cleanup
-      Arca.Repo.get(Arca.McpLog, request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()
     end
 
     test "tool call log includes tool and action", %{conn: conn} do
@@ -124,7 +124,7 @@ defmodule Emissary.IntegrationTest do
 
       # Logging is synchronous — no wait needed
 
-      log = Arca.Repo.get(Arca.McpLog, request_id)
+      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
 
       assert log.method == "tools/call"
       assert log.tool == "system"
@@ -132,8 +132,8 @@ defmodule Emissary.IntegrationTest do
       assert log.routed_to == "emissary"
 
       # Cleanup
-      Arca.Repo.get(Arca.McpLog, request_id) |> Arca.Repo.delete()
-      Arca.Repo.get(Arca.McpLog, init_request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, init_request_id) |> Arca.Repo.delete()
     end
 
     test "failed request log includes error details", %{conn: conn} do
@@ -165,7 +165,7 @@ defmodule Emissary.IntegrationTest do
 
       # Logging is synchronous — no wait needed
 
-      log = Arca.Repo.get(Arca.McpLog, request_id)
+      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
 
       assert log.status == "error"
       assert is_binary(log.error)
@@ -173,8 +173,8 @@ defmodule Emissary.IntegrationTest do
       assert log.error_code != nil
 
       # Cleanup
-      Arca.Repo.get(Arca.McpLog, request_id) |> Arca.Repo.delete()
-      Arca.Repo.get(Arca.McpLog, init_request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, init_request_id) |> Arca.Repo.delete()
     end
   end
 
@@ -468,11 +468,11 @@ defmodule Emissary.IntegrationTest do
       # Logging is synchronous — no wait needed
 
       # Verify request_id is in the log
-      log = Arca.Repo.get(Arca.McpLog, request_id)
+      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
       assert log.id == request_id
 
       # Cleanup
-      Arca.Repo.get(Arca.McpLog, request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()
     end
 
     test "request_id is unique per request", %{conn: conn} do
@@ -534,18 +534,18 @@ defmodule Emissary.IntegrationTest do
       # Logging is synchronous — no wait needed
 
       # Verify both requests have their request_ids in logs
-      init_log = Arca.Repo.get(Arca.McpLog, init_request_id)
+      init_log = Arca.Repo.get(Arca.Schemas.McpLog, init_request_id)
       assert init_log.id == init_request_id
 
-      tool_log = Arca.Repo.get(Arca.McpLog, tool_request_id)
+      tool_log = Arca.Repo.get(Arca.Schemas.McpLog, tool_request_id)
       assert tool_log.id == tool_request_id
 
       # The log still attributes the call to a caller, now by credential.
       assert tool_log.user_id != nil
 
       # Cleanup
-      Arca.Repo.get(Arca.McpLog, init_request_id) |> Arca.Repo.delete()
-      Arca.Repo.get(Arca.McpLog, tool_request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, init_request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, tool_request_id) |> Arca.Repo.delete()
     end
 
     test "request_id propagates to downstream tool handlers", %{conn: conn} do
@@ -569,13 +569,13 @@ defmodule Emissary.IntegrationTest do
       # Logging is synchronous — no wait needed
 
       # Request log should exist and contain the request
-      log = Arca.Repo.get(Arca.McpLog, request_id)
+      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
       assert log.id == request_id
       assert log.method == "tools/call"
       assert log.tool == "system"
 
       # Cleanup
-      Arca.Repo.get(Arca.McpLog, request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()
     end
 
     test "request_id format is valid UUID7", %{conn: conn} do
@@ -632,13 +632,13 @@ defmodule Emissary.IntegrationTest do
       # Logging is synchronous — no wait needed
 
       # Error request should still be logged with its request_id
-      error_log = Arca.Repo.get(Arca.McpLog, error_request_id)
+      error_log = Arca.Repo.get(Arca.Schemas.McpLog, error_request_id)
       assert error_log.id == error_request_id
       assert error_log.status == "error"
 
       # Cleanup
-      Arca.Repo.get(Arca.McpLog, init_request_id) |> Arca.Repo.delete()
-      Arca.Repo.get(Arca.McpLog, error_request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, init_request_id) |> Arca.Repo.delete()
+      Arca.Repo.get(Arca.Schemas.McpLog, error_request_id) |> Arca.Repo.delete()
     end
   end
 end

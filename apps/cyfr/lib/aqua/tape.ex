@@ -34,10 +34,12 @@ defmodule Aqua.Tape do
   alias Arca.TurnStorage
   alias Sanctum.Context
 
-  @type turn :: Arca.Schemas.Turn.t()
-  @type step :: Arca.Schemas.TurnStep.t()
-  @type row :: Arca.Schemas.Message.t()
-  @type approval :: Arca.Schemas.Approval.t()
+  # The rows `Arca.TurnStorage` and `Arca.ThreadStorage` answer, each a
+  # plain map of the row's columns.
+  @type turn :: %{required(:id) => String.t(), optional(atom()) => term()}
+  @type step :: %{required(:id) => String.t(), optional(atom()) => term()}
+  @type row :: %{required(:id) => String.t(), optional(atom()) => term()}
+  @type approval :: %{required(:id) => String.t(), optional(atom()) => term()}
 
   @doc "Whether the turn has a terminal status in the durable lifecycle."
   @spec terminal?(turn()) :: boolean()

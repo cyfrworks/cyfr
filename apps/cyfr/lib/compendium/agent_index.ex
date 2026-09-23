@@ -21,7 +21,6 @@ defmodule Compendium.AgentIndex do
   re-derived from the file as it now stands.
   """
 
-  alias Arca.Schemas.Agent
   alias Compendium.{AquaAgent, AquaPath}
   alias Sanctum.Context
 
@@ -34,7 +33,7 @@ defmodule Compendium.AgentIndex do
   publishes nothing and answers `{:error, :claim_lost}`. A sync with no
   claim — a person editing a role — has none to lose.
   """
-  @spec sync(Context.t(), keyword()) :: {:ok, [Agent.t()]} | {:error, term()}
+  @spec sync(Context.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def sync(ctx, opts \\ [])
 
   def sync(%Context{} = ctx, opts) when is_list(opts) do
@@ -47,7 +46,7 @@ defmodule Compendium.AgentIndex do
   end
 
   @doc "The athanor's rows, the soul first, then the roles by name."
-  @spec list(Context.t()) :: {:ok, [Agent.t()]} | {:error, term()}
+  @spec list(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def list(%Context{} = ctx) do
     with {:ok, rows} <- Arca.AgentStorage.list(Context.actor(ctx)) do
       {:ok, Enum.sort_by(rows, &{&1.kind != AquaAgent.soul_type(), &1.name})}

@@ -29,7 +29,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
   # The outbound calls' own rows, apart from the chains that made them.
   defp tool_calls do
     import Ecto.Query
-    Arca.Repo.all(from(e in Arca.Execution, where: e.kind == "tool_call"))
+    Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.kind == "tool_call"))
   end
 
   describe "try_handle/4" do
@@ -375,7 +375,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
                  retention_class: "chat_step"
                )
 
-      assert %{id: ^id, kind: "tool_call"} = Arca.Repo.get(Arca.Execution, id)
+      assert %{id: ^id, kind: "tool_call"} = Arca.Repo.get(Arca.Schemas.Execution, id)
 
       assert {:ok, %{retention_class: "chat_step"}, bytes} =
                Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "input")
@@ -449,7 +449,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
                  execution_id: id
                )
 
-      assert %{status: "completed"} = row = Arca.Repo.get(Arca.Execution, id)
+      assert %{status: "completed"} = row = Arca.Repo.get(Arca.Schemas.Execution, id)
 
       assert {:ok, _, bytes} =
                Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), id, "result")
@@ -472,7 +472,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
                ExternalProvider.try_handle("kept:probe", ctx, args, :in_chain, execution_id: id)
 
       assert %{status: "failed", error_message: "result not retained"} =
-               Arca.Repo.get(Arca.Execution, id)
+               Arca.Repo.get(Arca.Schemas.Execution, id)
 
       assert %{state: "failed", outcome: "result_lost"} =
                Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)

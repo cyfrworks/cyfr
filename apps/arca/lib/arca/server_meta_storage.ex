@@ -41,6 +41,7 @@ defmodule Arca.ServerMetaStorage do
         %ServerMeta{value: value} -> {:ok, value}
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc "Record `value` under `key` only if no row exists yet."
@@ -54,6 +55,7 @@ defmodule Arca.ServerMetaStorage do
         {0, _} -> {:error, :exists}
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc "Replace the value under `key` only if it still reads `expected`."
@@ -70,6 +72,7 @@ defmodule Arca.ServerMetaStorage do
 
       if count == 1, do: :ok, else: {:error, :stale}
     end)
+    |> Arca.Data.project()
   end
 
   @doc """

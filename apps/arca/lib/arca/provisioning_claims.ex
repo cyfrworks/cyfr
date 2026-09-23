@@ -50,7 +50,7 @@ defmodule Arca.ProvisioningClaims do
   `entry_kind`, for `lease_ms`.
   """
   @spec claim(Cyfr.Actor.t(), String.t(), String.t(), pos_integer()) ::
-          {:ok, ProvisioningClaim.t()} | {:busy, ProvisioningClaim.t()} | refusal()
+          {:ok, map()} | {:busy, map()} | refusal()
   def claim(%Cyfr.Actor{athanor_id: athanor_id}, owner, entry_kind, lease_ms)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and
              is_binary(entry_kind) and
@@ -61,6 +61,7 @@ defmodule Arca.ProvisioningClaims do
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.claim", fn ->
       take(athanor_id, owner, entry_kind, lease_ms, @rounds)
     end)
+    |> Arca.Data.project()
   end
 
   def claim(%Cyfr.Actor{}, _owner, _entry_kind, _lease_ms), do: {:error, :no_athanor}
@@ -113,7 +114,7 @@ defmodule Arca.ProvisioningClaims do
 
   @doc "The athanor's claim row as it reads now."
   @spec current(Cyfr.Actor.t()) ::
-          {:ok, ProvisioningClaim.t()} | {:error, :not_found} | refusal()
+          {:ok, map()} | {:error, :not_found} | refusal()
   def current(%Cyfr.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.current", fn ->
@@ -122,6 +123,7 @@ defmodule Arca.ProvisioningClaims do
         claim -> {:ok, claim}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def current(%Cyfr.Actor{}), do: {:error, :no_athanor}
@@ -157,9 +159,12 @@ defmodule Arca.ProvisioningClaims do
   def hold?(%Cyfr.Actor{}, _owner, _fence),
     do: Arca.QueryHelpers.no_athanor!("Arca.ProvisioningClaims.hold?/3")
 
-  @doc "Whether `claim` still stands on the lease clock: unsettled, its lease not run out."
-  @spec live?(ProvisioningClaim.t()) :: boolean()
-  def live?(%ProvisioningClaim{} = claim) do
+  @doc """
+  Whether `claim`, as `claim/4` or `current/1` answered it, still stands on
+  the lease clock: unsettled, its lease not run out.
+  """
+  @spec live?(map()) :: boolean()
+  def live?(%{outcome: _, lease_until: %DateTime{}} = claim) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.live?", false, fn ->
       live?(claim, now())
     end)
@@ -169,8 +174,8 @@ defmodule Arca.ProvisioningClaims do
   How long ago, in milliseconds on the lease clock, `claim` was last
   written — what a backoff after a settled failure is measured on.
   """
-  @spec age_ms(ProvisioningClaim.t()) :: integer()
-  def age_ms(%ProvisioningClaim{updated_at: %DateTime{} = at}) do
+  @spec age_ms(map()) :: integer()
+  def age_ms(%{updated_at: %DateTime{} = at}) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.age_ms", 0, fn ->
       DateTime.diff(now(), at, :millisecond)
     end)
@@ -178,10 +183,10 @@ defmodule Arca.ProvisioningClaims do
 
   # ---- internal --------------------------------------------------------------
 
-  defp live?(%ProvisioningClaim{outcome: nil, lease_until: until}, now),
+  defp live?(%{outcome: nil, lease_until: until}, now),
     do: DateTime.compare(until, now) == :gt
 
-  defp live?(%ProvisioningClaim{}, _now), do: false
+  defp live?(%{}, _now), do: false
 
   defp take(athanor_id, _owner, _entry_kind, _lease_ms, 0) do
     case read(athanor_id) do

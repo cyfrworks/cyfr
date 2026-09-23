@@ -703,7 +703,7 @@ defmodule Cyfr.Execution.Record do
         {:error, :not_found}
 
       # get_tenant is db-rescued and answers a tuple on an outage. Bound as
-      # the row it reaches execution_to_map/1, whose `is_struct or is_map`
+      # the row it reaches execution_to_map/1, whose `is_map`
       # guard raises — an outage read as a crash. Passed through, the
       # caller sees the storage refusal its siblings already answer.
       {:error, _} = err ->
@@ -961,16 +961,16 @@ defmodule Cyfr.Execution.Record do
   defp usage_of(%{"status" => 200, "data" => %{"usage" => usage}}), do: usage
   defp usage_of(_output), do: nil
 
-  # The row's shape has one owner: the Ecto schema. The read map carries
-  # every schema column except the lease mechanics, which belong to the
+  # The row's shape has one owner: the storage row (`Arca.Execution.fields/0`).
+  # The read map carries every column except the lease mechanics, which belong to the
   # write path and the sweeper alone — `write_started` stamps them fresh
   # and nothing read back through here may act on them. A new column
   # flows into the map on its own; only `from_mcp_result/1` (the parser
   # layer) needs a decision about it.
   @row_only_fields [:event_seq]
 
-  defp execution_to_map(record) when is_struct(record) or is_map(record) do
-    Map.new(Arca.Execution.__schema__(:fields) -- @row_only_fields, fn field ->
+  defp execution_to_map(record) when is_map(record) do
+    Map.new(Arca.Execution.fields() -- @row_only_fields, fn field ->
       {field, Map.get(record, field)}
     end)
   end

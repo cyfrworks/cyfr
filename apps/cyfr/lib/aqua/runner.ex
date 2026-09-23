@@ -227,7 +227,7 @@ defmodule Aqua.Runner do
     do: Phoenix.PubSub.unsubscribe(Emissary.PubSub, topic(thread_id, athanor_id))
 
   @doc "Tell a thread's viewers about a row appended outside a turn (a line said aloud)."
-  @spec announce(Arca.Schemas.Message.t()) :: :ok | {:error, term()}
+  @spec announce(Aqua.Tape.row()) :: :ok | {:error, term()}
   def announce(%{thread_id: thread_id, athanor_id: athanor_id} = row) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,

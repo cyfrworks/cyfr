@@ -132,7 +132,7 @@ defmodule Opus.MemoryBoundTest do
 
     attempt = Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
     wait_until(fn -> attempt.attempt not in OpusService.status().attempts end, 10_000)
-    {result, Arca.Repo.get!(Arca.Execution, id), attempt.claimed_by}
+    {result, Arca.Repo.get!(Arca.Schemas.Execution, id), attempt.claimed_by}
   end
 
   test "a guest past its bounds is refused by the engine, and its runner stays clean for the next",

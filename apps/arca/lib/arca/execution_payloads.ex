@@ -10,7 +10,8 @@ defmodule Arca.ExecutionPayloads do
 
   A payload is kept in two steps so its row can join the transaction
   that admits or ends the execution: `stage/5` writes the bytes and
-  answers a `Staged`; `commit!/2` inserts the row inside the caller's
+  answers a `Staged` — an opaque handle, not a row, handed back to
+  `commit!/2` or `discard/1` as it was given; `commit!/2` inserts the row inside the caller's
   transaction, for the attempt that owns the execution; `discard/1`
   removes staged bytes no row names. `put/6` does both in a transaction
   of its own. A row exists only once its transaction committed, so a
@@ -106,11 +107,12 @@ defmodule Arca.ExecutionPayloads do
   def stage(%Cyfr.Actor{}, _execution_id, _kind, _bytes, _retention_class),
     do: {:error, :no_athanor}
 
-  @doc """
-  Insert the row for staged bytes as `attempt`'s payload, inside the
-  caller's transaction; a row that already exists for the execution,
-  kind and attempt raises, and the transaction rolls back.
-  """
+  @doc false
+  # Insert the row for staged bytes as `attempt`'s payload, inside the
+  # caller's transaction; a row that already exists for the execution,
+  # kind and attempt raises, and the transaction rolls back. An
+  # in-transaction helper: it answers the schema row to Arca's own
+  # transactions, never across the boundary.
   @spec commit!(Staged.t(), String.t() | nil) :: ExecutionPayload.t()
   # arca:db-raise-ok inside the caller's transaction
   # arca:unscoped-ok the row inserted carries the staged athanor_id
@@ -140,7 +142,7 @@ defmodule Arca.ExecutionPayloads do
   one transaction: the bytes, then the row.
   """
   @spec put(Cyfr.Actor.t(), String.t(), String.t(), binary(), String.t(), keyword()) ::
-          {:ok, ExecutionPayload.t()} | {:error, :no_athanor | :exists | :no_execution | term()}
+          {:ok, map()} | {:error, :no_athanor | :exists | :no_execution | term()}
   def put(actor, execution_id, kind, bytes, retention_class, opts \\ [])
 
   def put(
@@ -173,6 +175,7 @@ defmodule Arca.ExecutionPayloads do
       {:exists, _row} -> {:error, :exists}
       {:error, reason} -> {:error, reason}
     end
+    |> Arca.Data.project()
   end
 
   def put(%Cyfr.Actor{}, _execution_id, _kind, _bytes, _retention_class, _opts),
@@ -184,7 +187,7 @@ defmodule Arca.ExecutionPayloads do
   current attempt by default.
   """
   @spec get(Cyfr.Actor.t(), String.t(), String.t(), keyword()) ::
-          {:ok, ExecutionPayload.t(), binary()}
+          {:ok, map(), binary()}
           | {:error, :no_athanor | :not_found | :payload_corrupt | term()}
   def get(actor, execution_id, kind, opts \\ [])
 
@@ -204,6 +207,7 @@ defmodule Arca.ExecutionPayloads do
         {:error, :payload_corrupt}
       end
     end
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, _execution_id, _kind, _opts), do: {:error, :no_athanor}
@@ -219,6 +223,7 @@ defmodule Arca.ExecutionPayloads do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.count_older_than_days", fn ->
       {:ok, Arca.Repo.aggregate(aged(athanor_id, days, classes), :count)}
     end)
+    |> Arca.Data.project()
   end
 
   def count_older_than_days(%Cyfr.Actor{}, _days, _classes), do: {:error, :no_athanor}
@@ -237,6 +242,7 @@ defmodule Arca.ExecutionPayloads do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.delete_older_than_days", fn ->
       {:ok, delete_rows(actor, Arca.Repo.all(aged(athanor_id, days, classes)))}
     end)
+    |> Arca.Data.project()
   end
 
   def delete_older_than_days(%Cyfr.Actor{}, _days, _classes), do: {:error, :no_athanor}
@@ -264,6 +270,7 @@ defmodule Arca.ExecutionPayloads do
       _ = delete_row_ids(athanor_id, Enum.map(gone, & &1.id))
       {:ok, kept |> Enum.map(& &1.execution_id) |> Enum.uniq()}
     end)
+    |> Arca.Data.project()
   end
 
   def release(%Cyfr.Actor{}, _execution_ids), do: {:error, :no_athanor}
@@ -388,7 +395,7 @@ defmodule Arca.ExecutionPayloads do
   defp current_attempt(athanor_id, execution_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionPayloads.put", fn ->
       case Arca.Repo.one(
-             from(e in Arca.Execution,
+             from(e in Arca.Schemas.Execution,
                where: e.id == ^execution_id and e.athanor_id == ^athanor_id,
                select: {e.id, e.current_attempt}
              )
@@ -448,7 +455,7 @@ defmodule Arca.ExecutionPayloads do
         case attempt do
           nil ->
             from(p in base,
-              join: e in Arca.Execution,
+              join: e in Arca.Schemas.Execution,
               on: e.id == p.execution_id and e.athanor_id == p.athanor_id,
               where:
                 p.attempt == e.current_attempt or

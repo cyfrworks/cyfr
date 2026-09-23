@@ -136,7 +136,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
   defp stored?(fixture, segments),
     do: Arca.Adapters.Local.exists?(Sanctum.Context.actor(fixture.ctx), segments)
 
-  defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
+  defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 
   defp attempt_row(fixture), do: Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, fixture.attempt)
 
@@ -227,7 +227,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
 
       # No child was admitted under the retired formula.
       refute Arca.Repo.exists?(
-               from(e in Arca.Execution,
+               from(e in Arca.Schemas.Execution,
                  where: e.parent_execution_id == ^fixtures.admit_child.execution_id
                )
              )
@@ -324,7 +324,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
       assert {:error, :missing_grant} =
                Arca.Execution.admit(attrs, verify: &Sanctum.ExecutionStanding.verify/1)
 
-      refute Arca.Repo.get(Arca.Execution, attrs.id)
+      refute Arca.Repo.get(Arca.Schemas.Execution, attrs.id)
     end
   end
 
@@ -464,12 +464,14 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
       assert open_count(ctx) == 0
 
       for {id, _attempt} <- [child | roots] do
-        assert %{status: status} = Arca.Repo.get!(Arca.Execution, id)
+        assert %{status: status} = Arca.Repo.get!(Arca.Schemas.Execution, id)
         assert status in ["cancelled", "failed"], "#{id} ended #{status}"
       end
 
       assert {:ok, %{status: "cancelled"} = ended} = Arca.TurnStorage.get(actor(ctx), turn.id)
-      assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Execution, ended.root_execution_id)
+
+      assert %{status: "cancelled"} =
+               Arca.Repo.get!(Arca.Schemas.Execution, ended.root_execution_id)
 
       assert %{released_at: %DateTime{}} =
                Arca.Repo.get_by!(Arca.Schemas.BudgetReservation,

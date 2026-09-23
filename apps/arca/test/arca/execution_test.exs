@@ -5,6 +5,7 @@ defmodule Arca.ExecutionTest do
   use ExUnit.Case, async: false
 
   alias Arca.Execution
+  alias Arca.Schemas.Execution, as: Row
 
   @athanor Arca.Test.Actor.athanor_id()
 
@@ -26,7 +27,7 @@ defmodule Arca.ExecutionTest do
         component_type: "reagent"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       assert changeset.valid?
     end
 
@@ -41,13 +42,13 @@ defmodule Arca.ExecutionTest do
       }
 
       # No silent "reagent" default — the writer must state the type.
-      refute Execution.start_changeset(base).valid?
+      refute Row.start_changeset(base).valid?
 
       # Tinctures are browser-side and never execute through Opus.
-      refute Execution.start_changeset(Map.put(base, :component_type, "tincture")).valid?
+      refute Row.start_changeset(Map.put(base, :component_type, "tincture")).valid?
 
       for type <- Cyfr.ComponentRef.executable_types() do
-        assert Execution.start_changeset(Map.put(base, :component_type, type)).valid?
+        assert Row.start_changeset(Map.put(base, :component_type, type)).valid?
       end
     end
 
@@ -60,7 +61,7 @@ defmodule Arca.ExecutionTest do
         status: "running"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       refute changeset.valid?
       assert {:id, _} = hd(changeset.errors)
     end
@@ -74,7 +75,7 @@ defmodule Arca.ExecutionTest do
         status: "running"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       refute changeset.valid?
       assert {:reference, _} = hd(changeset.errors)
     end
@@ -89,7 +90,7 @@ defmodule Arca.ExecutionTest do
         status: "invalid_status"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       refute changeset.valid?
       assert {:status, _} = hd(changeset.errors)
     end
@@ -105,7 +106,7 @@ defmodule Arca.ExecutionTest do
         component_type: "invalid_type"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       refute changeset.valid?
       assert {:component_type, _} = hd(changeset.errors)
     end
@@ -123,7 +124,7 @@ defmodule Arca.ExecutionTest do
         input_hash: "def456"
       }
 
-      changeset = Execution.start_changeset(attrs)
+      changeset = Row.start_changeset(attrs)
       assert changeset.valid?
       assert Ecto.Changeset.get_field(changeset, :component_type) == "catalyst"
       assert Ecto.Changeset.get_field(changeset, :component_digest) == "sha256:abc123"
@@ -132,7 +133,7 @@ defmodule Arca.ExecutionTest do
 
   describe "complete_changeset/2" do
     test "creates valid changeset for completion" do
-      execution = %Execution{
+      execution = %Row{
         id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
@@ -147,12 +148,12 @@ defmodule Arca.ExecutionTest do
         status: "completed"
       }
 
-      changeset = Execution.complete_changeset(execution, attrs)
+      changeset = Row.complete_changeset(execution, attrs)
       assert changeset.valid?
     end
 
     test "accepts error_message for failed status" do
-      execution = %Execution{
+      execution = %Row{
         id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
@@ -168,13 +169,13 @@ defmodule Arca.ExecutionTest do
         error_message: "Component crashed"
       }
 
-      changeset = Execution.complete_changeset(execution, attrs)
+      changeset = Row.complete_changeset(execution, attrs)
       assert changeset.valid?
       assert Ecto.Changeset.get_field(changeset, :error_message) == "Component crashed"
     end
 
     test "validates status for completion" do
-      execution = %Execution{id: "exec_test123", status: "running"}
+      execution = %Row{id: "exec_test123", status: "running"}
 
       # Invalid status for completion
       attrs = %{
@@ -183,7 +184,7 @@ defmodule Arca.ExecutionTest do
         status: "invalid_status"
       }
 
-      changeset = Execution.complete_changeset(execution, attrs)
+      changeset = Row.complete_changeset(execution, attrs)
       refute changeset.valid?
       assert {:status, _} = hd(changeset.errors)
     end
@@ -221,7 +222,7 @@ defmodule Arca.ExecutionTest do
           child_key: "ck_one"
         })
 
-      assert {:ok, %Execution{id: id}} =
+      assert {:ok, %{id: id}} =
                Execution.child_by_key(actor, parent.id, "ck_one")
 
       assert id == child.id
@@ -256,7 +257,7 @@ defmodule Arca.ExecutionTest do
                  child_key: "ck_dup"
                })
 
-      assert %Execution{} =
+      assert %{id: _} =
                start!(%{
                  id: "exec_c_#{System.unique_integer([:positive])}",
                  parent_execution_id: sibling.id,
@@ -264,10 +265,10 @@ defmodule Arca.ExecutionTest do
                })
 
       # Roots carry no key, and two of them never collide.
-      assert %Execution{child_key: nil} =
+      assert %{child_key: nil} =
                start!(%{id: "exec_r_#{System.unique_integer([:positive])}"})
 
-      assert %Execution{child_key: nil} =
+      assert %{child_key: nil} =
                start!(%{id: "exec_r_#{System.unique_integer([:positive])}"})
     end
 
@@ -282,17 +283,17 @@ defmodule Arca.ExecutionTest do
         component_type: "catalyst"
       }
 
-      assert {:error, %Ecto.Changeset{errors: errors}} =
+      assert {:error, {:invalid, errors}} =
                Execution.record_start(
                  Map.merge(base, %{parent_execution_id: "exec_p", child_key: "no key"})
                )
 
-      assert Keyword.has_key?(errors, :child_key)
+      assert Map.has_key?(errors, :child_key)
 
-      assert {:error, %Ecto.Changeset{errors: errors}} =
+      assert {:error, {:invalid, errors}} =
                Execution.record_start(Map.put(base, :child_key, "ck_orphan"))
 
-      assert Keyword.has_key?(errors, :parent_execution_id)
+      assert Map.has_key?(errors, :parent_execution_id)
     end
   end
 
@@ -609,7 +610,7 @@ defmodule Arca.ExecutionTest do
       assert %{state: "lapsed", outcome: "uncertain"} =
                Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(@athanor), attempt)
 
-      assert Arca.Repo.get!(Execution, id).status == "failed"
+      assert Arca.Repo.get!(Row, id).status == "failed"
     end
 
     test "respects limit parameter" do

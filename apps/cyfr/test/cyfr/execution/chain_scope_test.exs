@@ -114,7 +114,7 @@ defmodule Cyfr.Execution.ChainScopeTest do
       import Ecto.Query
 
       Arca.Repo.update_all(
-        from(e in Arca.Execution, where: e.id == ^legacy.id),
+        from(e in Arca.Schemas.Execution, where: e.id == ^legacy.id),
         set: [root_execution_id: nil]
       )
 

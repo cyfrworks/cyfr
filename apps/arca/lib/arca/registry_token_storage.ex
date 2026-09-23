@@ -16,7 +16,7 @@ defmodule Arca.RegistryTokenStorage do
   alias Arca.Schemas.RegistryToken
 
   @spec get(String.t(), String.t(), String.t()) ::
-          {:ok, RegistryToken.t()} | {:error, :not_found | :database_error}
+          {:ok, map()} | {:error, :not_found | :database_error}
   def get(user_id, registry, namespace_slug)
       when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
     Arca.Repo.Errors.with_db_rescue("RegistryTokenStorage.get", fn ->
@@ -33,9 +33,10 @@ defmodule Arca.RegistryTokenStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
-  @spec list(String.t(), String.t()) :: {:ok, [RegistryToken.t()]} | {:error, :database_error}
+  @spec list(String.t(), String.t()) :: {:ok, [map()]} | {:error, :database_error}
   def list(user_id, registry) when is_binary(user_id) and is_binary(registry) do
     Arca.Repo.Errors.with_db_rescue("RegistryTokenStorage.list", fn ->
       query =
@@ -46,6 +47,7 @@ defmodule Arca.RegistryTokenStorage do
 
       {:ok, Arca.Repo.all(query)}
     end)
+    |> Arca.Data.project()
   end
 
   @spec put(map()) :: :ok | {:error, :database_error}
@@ -71,6 +73,7 @@ defmodule Arca.RegistryTokenStorage do
 
       :ok
     end)
+    |> Arca.Data.project()
   end
 
   @spec delete(String.t(), String.t(), String.t()) :: :ok | {:error, :database_error}
@@ -87,5 +90,6 @@ defmodule Arca.RegistryTokenStorage do
       Arca.Repo.delete_all(query)
       :ok
     end)
+    |> Arca.Data.project()
   end
 end

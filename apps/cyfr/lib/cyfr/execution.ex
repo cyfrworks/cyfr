@@ -278,7 +278,7 @@ defmodule Cyfr.Execution do
   # while the calling runner holds its claim and the row is live
   # (`Cyfr.Execution.Attempt.admitted/2`), and the assignment is signed
   # afresh from that; its keys derive from the same attempt.
-  defp admitted_child(%Arca.Execution{id: child_id}, opts) do
+  defp admitted_child(%{id: child_id}, opts) do
     holder = %{
       service_id: Keyword.fetch!(opts, :service_id),
       boot_id: Keyword.fetch!(opts, :boot_id),

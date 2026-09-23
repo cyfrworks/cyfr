@@ -235,7 +235,8 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   defp children(parent_id),
-    do: Arca.Repo.all(from(e in Arca.Execution, where: e.parent_execution_id == ^parent_id))
+    do:
+      Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^parent_id))
 
   defp decoded(output) when is_binary(output) do
     case Jason.decode(output) do
@@ -536,7 +537,7 @@ defmodule Opus.FormulaHandlerTest do
       assert Sanctum.Authority.budget(auth).in_flight == 0
 
       assert Arca.Repo.all(
-               from(e in Arca.Execution,
+               from(e in Arca.Schemas.Execution,
                  where: e.parent_execution_id == ^host.execution_id,
                  select: e.id
                )
@@ -644,7 +645,7 @@ defmodule Opus.FormulaHandlerTest do
       assert %{"status" => "pending"} = Jason.decode!(polled)
 
       [child] = children(root_id)
-      wait_until(fn -> Arca.Repo.get!(Arca.Execution, child.id).status == "failed" end)
+      wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
     end
 
     test "cancelling a spawned child's task stops it and gives back what it held", %{ctx: ctx} do
@@ -658,7 +659,7 @@ defmodule Opus.FormulaHandlerTest do
 
       authority = TwoServices.entered(root_id)
       [child] = children(root_id)
-      wait_until(fn -> Arca.Repo.get!(Arca.Execution, child.id).status == "failed" end)
+      wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
       wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
       wait_until(fn -> Cyfr.Execution.Attempt.whereis(child.id) == nil end)
     end
@@ -687,7 +688,7 @@ defmodule Opus.FormulaHandlerTest do
       assert [_first, _second, _called] = results!(root_id)
 
       for child <- children(root_id) do
-        wait_until(fn -> Arca.Repo.get!(Arca.Execution, child.id).status == "failed" end)
+        wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
         wait_until(fn -> Cyfr.Execution.Attempt.whereis(child.id) == nil end)
       end
 

@@ -52,7 +52,7 @@ defmodule Arca.JobClaimsTest do
     } do
       before = rows(key)
 
-      assert {:ok, %JobClaim{owner: "boot_a", fence: 1} = held} = watch(key, "boot_a")
+      assert {:ok, %{owner: "boot_a", fence: 1} = held} = watch(key, "boot_a")
       assert JobClaims.live?(held)
 
       assert {:busy, busy} = watch(key, "boot_b")

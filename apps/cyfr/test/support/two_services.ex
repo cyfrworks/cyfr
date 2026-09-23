@@ -534,7 +534,7 @@ defmodule Cyfr.Test.TwoServices do
   end
 
   defp dispense(ctx, ref, id, token) do
-    case Arca.Repo.get(Arca.Execution, id) do
+    case Arca.Repo.get(Arca.Schemas.Execution, id) do
       %{reference: reference} ->
         if String.starts_with?(reference, ref <> ":") do
           attempt = AttemptFixtures.current!(ctx.athanor_id, id)
@@ -754,7 +754,7 @@ defmodule Cyfr.Test.TwoServices do
         true
 
       fun when is_function(fun, 2) ->
-        fun.(Arca.Repo.get(Arca.Execution, id), call)
+        fun.(Arca.Repo.get(Arca.Schemas.Execution, id), call)
 
       _other ->
         false

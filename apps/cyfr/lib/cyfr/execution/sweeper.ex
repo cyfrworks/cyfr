@@ -185,10 +185,10 @@ defmodule Cyfr.Execution.Sweeper do
     actor = Cyfr.Actor.in_athanor(athanor_id)
 
     case Arca.Execution.get_tenant(actor, execution_id) do
-      %Arca.Execution{kind: "turn", turn_id: turn_id} when is_binary(turn_id) ->
+      %{kind: "turn", turn_id: turn_id} when is_binary(turn_id) ->
         end_turn(actor, execution_id, turn_id, grant)
 
-      %Arca.Execution{status: "running"} ->
+      %{status: "running"} ->
         ctx = Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
         _ = Dispatch.cancel(ctx, execution_id)
         :ok

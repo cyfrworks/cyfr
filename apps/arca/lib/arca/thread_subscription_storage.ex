@@ -35,6 +35,7 @@ defmodule Arca.ThreadSubscriptionStorage do
 
       :ok
     end)
+    |> Arca.Data.project()
   end
 
   def follow(%Cyfr.Actor{}, _thread_id, _user_id), do: {:error, :no_athanor}
@@ -54,6 +55,7 @@ defmodule Arca.ThreadSubscriptionStorage do
 
       :ok
     end)
+    |> Arca.Data.project()
   end
 
   def unfollow(%Cyfr.Actor{}, _thread_id, _user_id), do: {:error, :no_athanor}
@@ -100,6 +102,7 @@ defmodule Arca.ThreadSubscriptionStorage do
       |> Arca.Repo.one()
       |> Kernel.>(0)
     end)
+    |> Arca.Data.project()
   end
 
   # Fails toward "no" for an actor with no athanor and for an absent
@@ -126,6 +129,7 @@ defmodule Arca.ThreadSubscriptionStorage do
 
       :ok
     end)
+    |> Arca.Data.project()
   end
 
   def unfollow_all(%Cyfr.Actor{}, _user_id), do: {:error, :no_athanor}

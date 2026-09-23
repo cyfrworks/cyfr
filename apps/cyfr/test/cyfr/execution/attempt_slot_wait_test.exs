@@ -392,7 +392,9 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
       assert_accounting(held, [sibling], 1)
       assert_slots(%{available: 0, queued: 0})
       assert %{state: "lapsed", claimed_by: nil} = attempt(ctx, queued)
-      assert %{status: "failed", error_message: @lapsed} = Arca.Repo.get!(Arca.Execution, queued)
+
+      assert %{status: "failed", error_message: @lapsed} =
+               Arca.Repo.get!(Arca.Schemas.Execution, queued)
 
       refute_received {:start, ^queued, _handler}
       refute_received {:kill, ^queued}

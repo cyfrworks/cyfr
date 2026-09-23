@@ -181,7 +181,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert %{state: "completed", outcome: "ok"} =
              Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id)
 
-    assert %{status: "completed"} = Arca.Repo.get(Arca.Execution, child_id)
+    assert %{status: "completed"} = Arca.Repo.get(Arca.Schemas.Execution, child_id)
     assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == 0
 
     assert [%{execution_id: ^child_id, input: %{"messages" => []}, authority: %Authority{}}] =
@@ -207,7 +207,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
       )
     end)
 
-    assert %{status: "failed"} = Arca.Repo.get(Arca.Execution, child_id)
+    assert %{status: "failed"} = Arca.Repo.get(Arca.Schemas.Execution, child_id)
 
     wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
     wait_until(fn -> Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == 0 end)
@@ -246,7 +246,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     assert {:error, :hold_expired} = run(fx)
     assert Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id) == nil
-    assert Arca.Repo.get(Arca.Execution, child_id) == nil
+    assert Arca.Repo.get(Arca.Schemas.Execution, child_id) == nil
     assert Sanctum.Authority.budget(auth).in_flight == 0
     assert ScriptedWorker.calls() == []
   end
@@ -299,7 +299,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert {:error, _cancelled} = Task.await(task)
 
     assert id in ScriptedWorker.kills()
-    assert %{status: "cancelled"} = Arca.Repo.get(Arca.Execution, id)
+    assert %{status: "cancelled"} = Arca.Repo.get(Arca.Schemas.Execution, id)
     assert Attempt.whereis(id) == nil
     assert {:ok, %{attempts: []}} = ScriptedWorker.status()
   end
@@ -348,7 +348,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     # without it this reads the accounting mid-flight and fails wherever
     # the scheduler happened to be.
     wait_until(fn -> Attempt.whereis(id) == nil end, 5_000, "the attempt to stop")
-    assert %{status: "failed"} = Arca.Repo.get(Arca.Execution, id)
+    assert %{status: "failed"} = Arca.Repo.get(Arca.Schemas.Execution, id)
 
     # The athanor carries no note for it, and nothing was killed, because
     # nothing was left to kill.
@@ -438,7 +438,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     assert_receive {:DOWN, ^ref, :process, _, :killed}, 5_000
     refute_received {:returned, _}
-    assert %{status: "completed"} = Arca.Repo.get(Arca.Execution, id)
+    assert %{status: "completed"} = Arca.Repo.get(Arca.Schemas.Execution, id)
   end
 
   test "dispatch reaches the worker service at the endpoint its listener answers on" do

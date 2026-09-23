@@ -995,7 +995,7 @@ defmodule Cyfr.Execution.Attempt do
   # its attempt row in the same transaction, so one read decides.
   defp row_live(state) do
     case Arca.ExecutionAttempts.current(Context.actor(state.ctx), state.execution_id) do
-      %Arca.Schemas.ExecutionAttempt{attempt: attempt, fence: fence, state: "running"}
+      %{attempt: attempt, fence: fence, state: "running"}
       when attempt == state.attempt and fence == state.fence ->
         true
 

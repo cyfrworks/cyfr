@@ -28,7 +28,6 @@ defmodule Aqua.Loop.Request do
   """
 
   alias Aqua.Tape
-  alias Arca.Schemas.Message
 
   @default_max_tokens 16_384
   @ui_tool "ui"
@@ -269,7 +268,7 @@ defmodule Aqua.Loop.Request do
   those blocks belong to; without it they land on the first user message,
   which is only the right one in a transcript of one).
   """
-  @spec messages([Message.t()], keyword()) :: [map()]
+  @spec messages([Aqua.Tape.row()], keyword()) :: [map()]
   def messages(rows, opts \\ []) when is_list(rows) do
     rows
     |> apply_compaction()
@@ -384,7 +383,7 @@ defmodule Aqua.Loop.Request do
       nil ->
         Enum.reject(rows, &(&1.kind == "compaction"))
 
-      %Message{} = compaction ->
+      %{} = compaction ->
         %{"first_kept_seq" => first} = Tape.payload(compaction)
 
         kept = Enum.filter(rows, &(&1.kind != "compaction" and &1.seq >= first))
@@ -406,7 +405,7 @@ defmodule Aqua.Loop.Request do
 
   defp shape({:shaped, message}, acc, _opts), do: [message | acc]
 
-  defp shape(%Message{kind: "text"} = row, acc, opts) do
+  defp shape(%{kind: "text"} = row, acc, opts) do
     # A clone's task is the soul speaking to the role: the role reads it
     # as the person's words.
     task? = Tape.payload(row)["as"] == "task"
@@ -440,7 +439,7 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  defp shape(%Message{kind: "tool_call"} = row, acc, _opts) do
+  defp shape(%{kind: "tool_call"} = row, acc, _opts) do
     payload = Tape.payload(row)
     step = payload["step_id"]
 
@@ -463,7 +462,7 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  defp shape(%Message{kind: "tool_result"} = row, acc, _opts) do
+  defp shape(%{kind: "tool_result"} = row, acc, _opts) do
     payload = Tape.payload(row)
 
     block = %{
@@ -483,7 +482,7 @@ defmodule Aqua.Loop.Request do
     end
   end
 
-  defp shape(%Message{kind: "turn_aborted"} = row, acc, _opts) do
+  defp shape(%{kind: "turn_aborted"} = row, acc, _opts) do
     text =
       "[The server restarted while the assistant was working; tools may have partially executed. " <>
         (row.content || "") <> "]"
@@ -492,7 +491,7 @@ defmodule Aqua.Loop.Request do
   end
 
   # Cards, notes in the server's voice and errors are not the model's.
-  defp shape(%Message{}, acc, _opts), do: acc
+  defp shape(%{}, acc, _opts), do: acc
 
   defp finish_message(%{role: role, blocks: blocks} = message) do
     %{"role" => role, "content" => blocks}

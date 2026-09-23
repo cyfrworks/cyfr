@@ -219,7 +219,7 @@ defmodule Cyfr.Execution.RecordTest do
       :ok = Record.write_started(record)
 
       # Verify record exists in SQLite
-      db_record = Arca.Repo.get(Arca.Execution, record.id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record != nil
       assert db_record.id == record.id
       assert db_record.user_id == record.user_id
@@ -252,7 +252,7 @@ defmodule Cyfr.Execution.RecordTest do
         })
 
       :ok = Record.write_started(record)
-      {:ok, input} = Jason.decode(Arca.Repo.get(Arca.Execution, record.id).input)
+      {:ok, input} = Jason.decode(Arca.Repo.get(Arca.Schemas.Execution, record.id).input)
 
       assert [%{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => _, "digest" => _}] =
                input["attachments"]
@@ -305,7 +305,7 @@ defmodule Cyfr.Execution.RecordTest do
       }
 
       :ok = Record.write_completed(Record.complete(child, reply))
-      {:ok, output} = Jason.decode(Arca.Repo.get(Arca.Execution, child.id).output)
+      {:ok, output} = Jason.decode(Arca.Repo.get(Arca.Schemas.Execution, child.id).output)
 
       assert output["envelope"] == "v1"
       assert output["usage"] == %{"input_tokens" => 9, "output_tokens" => 2}
@@ -343,7 +343,7 @@ defmodule Cyfr.Execution.RecordTest do
       :ok = Record.write_completed(Record.complete(record, %{"usage" => %{"input_tokens" => 9}}))
 
       assert {:ok, %{"envelope" => "v1", "usage" => nil}} =
-               Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
+               Jason.decode(Arca.Repo.get(Arca.Schemas.Execution, record.id).output)
     end
 
     test "a refused model answer carries no usage", %{ctx: ctx} do
@@ -358,7 +358,7 @@ defmodule Cyfr.Execution.RecordTest do
       :ok = Record.write_completed(Record.complete(record, refused))
 
       assert {:ok, %{"envelope" => "v1", "usage" => nil}} =
-               Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
+               Jason.decode(Arca.Repo.get(Arca.Schemas.Execution, record.id).output)
     end
 
     test "any other component's output is the same shape, under its own class", %{ctx: ctx} do
@@ -368,7 +368,7 @@ defmodule Cyfr.Execution.RecordTest do
       :ok = Record.write_completed(Record.complete(record, %{"sum" => 2}))
 
       assert {:ok, %{"envelope" => "v1"}} =
-               Jason.decode(Arca.Repo.get(Arca.Execution, record.id).output)
+               Jason.decode(Arca.Repo.get(Arca.Schemas.Execution, record.id).output)
 
       assert {:ok, %{retention_class: "api"}, bytes} =
                Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), record.id, "result")
@@ -388,7 +388,7 @@ defmodule Cyfr.Execution.RecordTest do
       assert {:error, {:result_lost, :disk_full}} =
                Record.write_completed(Record.complete(record, %{"sum" => 2}))
 
-      row = Arca.Repo.get(Arca.Execution, record.id)
+      row = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert row.status == "failed"
       assert row.error_message == "result not retained"
 
@@ -398,7 +398,7 @@ defmodule Cyfr.Execution.RecordTest do
       # An input that cannot be kept admits nothing.
       other = Record.new(ctx, "reagent:local.test:0.1.0", %{"b" => 2})
       assert {:error, {:payload_not_retained, :disk_full}} = Record.write_started(other)
-      assert Arca.Repo.get(Arca.Execution, other.id) == nil
+      assert Arca.Repo.get(Arca.Schemas.Execution, other.id) == nil
     end
 
     test "includes component_type in record", %{ctx: ctx} do
@@ -407,7 +407,7 @@ defmodule Cyfr.Execution.RecordTest do
 
       :ok = Record.write_started(record)
 
-      db_record = Arca.Repo.get(Arca.Execution, record.id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record.component_type == "catalyst"
     end
 
@@ -416,7 +416,7 @@ defmodule Cyfr.Execution.RecordTest do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{}, component_digest: digest)
       :ok = Record.write_started(record)
 
-      db_record = Arca.Repo.get(Arca.Execution, record.id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record.component_digest == digest
     end
 
@@ -428,7 +428,7 @@ defmodule Cyfr.Execution.RecordTest do
 
       :ok = Record.write_started(record)
 
-      db_record = Arca.Repo.get(Arca.Execution, record.id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record.parent_execution_id == parent
     end
 
@@ -437,14 +437,14 @@ defmodule Cyfr.Execution.RecordTest do
         Record.new(ctx, "reagent:local.test:0.1.0", %{}, parent_execution_id: "exec_parent-456")
 
       assert {:error, :not_standing} = Record.write_started(record)
-      refute Arca.Repo.get(Arca.Execution, record.id)
+      refute Arca.Repo.get(Arca.Schemas.Execution, record.id)
     end
 
     test "parent_execution_id nil when not set", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       :ok = Record.write_started(record)
 
-      db_record = Arca.Repo.get(Arca.Execution, record.id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record.parent_execution_id == nil
     end
   end
@@ -475,7 +475,7 @@ defmodule Cyfr.Execution.RecordTest do
       # drift from what start_changeset/1 casts.
       assert Enum.sort(Arca.Execution.start_fields()) ==
                Enum.sort(
-                 Arca.Execution.__schema__(:fields) --
+                 Arca.Execution.fields() --
                    [:completed_at, :duration_ms, :error_message, :output]
                )
     end
@@ -489,7 +489,7 @@ defmodule Cyfr.Execution.RecordTest do
       completed = Record.complete(record, %{"result" => 42})
       :ok = Record.write_completed(completed)
 
-      db_record = Arca.Repo.get(Arca.Execution, record.id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record.status == "completed"
       assert db_record.completed_at != nil
       assert is_integer(db_record.duration_ms)
@@ -514,7 +514,7 @@ defmodule Cyfr.Execution.RecordTest do
       failed = Record.fail(record, "Component crashed")
       :ok = Record.write_failed(failed)
 
-      db_record = Arca.Repo.get(Arca.Execution, record.id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record.status == "failed"
       assert db_record.error_message == "Component crashed"
     end
@@ -525,7 +525,7 @@ defmodule Cyfr.Execution.RecordTest do
 
       {:ok, cancelled} = Record.cancel(ctx, record.id)
 
-      db_record = Arca.Repo.get(Arca.Execution, record.id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record.status == "cancelled"
       assert cancelled.status == :cancelled
     end
@@ -827,7 +827,7 @@ defmodule Cyfr.Execution.RecordTest do
       record = Record.new(ctx, ref, %{})
       :ok = Record.write_started(record)
 
-      db_record = Arca.Repo.get(Arca.Execution, record.id)
+      db_record = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert db_record.reference == "catalyst:local.gemini:0.1.0"
     end
 
@@ -918,7 +918,7 @@ defmodule Cyfr.Execution.RecordTest do
 
       assert Jason.decode!(bytes) == kept
 
-      row = Arca.Repo.get(Arca.Execution, record.id)
+      row = Arca.Repo.get(Arca.Schemas.Execution, record.id)
       assert row.input_hash == Arca.Execution.hash_input(sent)
       assert %{"keys" => keys} = Jason.decode!(row.input)
       assert "params" in keys

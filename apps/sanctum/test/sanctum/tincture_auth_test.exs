@@ -217,7 +217,8 @@ defmodule Sanctum.TinctureAuthTest do
       # the race window between an operator's deny and its reconcile. The
       # old blanket upgrade re-authenticated exactly this session.
       {:ok, _} =
-        user
+        Arca.Schemas.User
+        |> Arca.Repo.get!(user.id)
         |> Ecto.Changeset.change(status: "denied")
         |> Arca.Repo.update()
 

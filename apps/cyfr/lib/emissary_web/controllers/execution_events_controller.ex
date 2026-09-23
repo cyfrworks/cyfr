@@ -47,7 +47,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
         ctx = conn.assigns[:context]
 
         with {:auth, %Sanctum.Context{authenticated: true} = ctx} <- {:auth, ctx},
-             {:exec, %Arca.Execution{} = exec} <-
+             {:exec, %{id: _} = exec} <-
                {:exec, Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), execution_id)},
              :ok <- authorize_execution_read(ctx, exec),
              :ok <- EmissaryWeb.SSE.claim_slot(:sse_slot, ctx, :execution_events_max_concurrent) do
@@ -99,7 +99,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # checks). The chokepoint returns `{:error, String.t()}`; collapse it to the
   # controller's `:forbidden` so both not-found and not-authorized stay 404
   # (no execution-id existence disclosure).
-  defp authorize_execution_read(%Sanctum.Context{} = ctx, %Arca.Execution{} = exec) do
+  defp authorize_execution_read(%Sanctum.Context{} = ctx, %{id: _} = exec) do
     case Sanctum.Context.authorize(ctx, :storage_read, {:execution, exec}) do
       :ok -> :ok
       {:error, _reason} -> {:error, :forbidden}

@@ -63,7 +63,7 @@ defmodule Arca.ConsentStorage do
   `{:error, reason}` and must only read.
   """
   @spec insert_revision(map(), [map()], String.t() | nil, keyword()) ::
-          {:ok, Consent.t()} | {:error, term()}
+          {:ok, map()} | {:error, term()}
   def insert_revision(attrs, vault_refs, expected_head, opts \\ []) when is_map(attrs) do
     athanor_id = Map.fetch!(attrs, :athanor_id)
     row = revision_row(attrs, athanor_id)
@@ -79,7 +79,7 @@ defmodule Arca.ConsentStorage do
   `head_consent_id` is forever NULL.
   """
   @spec mint_profile_with_revision(map(), map(), [map()], keyword()) ::
-          {:ok, Consent.t()} | {:error, term()}
+          {:ok, map()} | {:error, term()}
   def mint_profile_with_revision(profile_attrs, consent_attrs, vault_refs, opts \\ []) do
     athanor_id = Map.fetch!(profile_attrs, :athanor_id)
     row = revision_row(consent_attrs, athanor_id)
@@ -179,6 +179,7 @@ defmodule Arca.ConsentStorage do
           {:error, reason}
       end
     end)
+    |> Arca.Data.project()
   end
 
   defp insert_refs([]), do: {0, nil}
@@ -193,7 +194,7 @@ defmodule Arca.ConsentStorage do
   # attribute maps their caller assembled and stamp no tenant of their
   # own.
   @spec get_head(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Consent.t(), [ConsentVaultRef.t()]}
+          {:ok, map(), [map()]}
           | {:error, :no_athanor | :not_found | :no_head | term()}
   def get_head(%Cyfr.Actor{athanor_id: athanor_id} = actor, profile_id)
       when is_binary(athanor_id) and athanor_id != "" do
@@ -213,6 +214,7 @@ defmodule Arca.ConsentStorage do
         {:error, reason} -> {:error, reason}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get_head(%Cyfr.Actor{}, _profile_id), do: {:error, :no_athanor}
@@ -244,6 +246,7 @@ defmodule Arca.ConsentStorage do
 
       {:ok, ids}
     end)
+    |> Arca.Data.project()
   end
 
   def head_profiles_referencing(%Cyfr.Actor{}, _vault_entry_id), do: {:error, :no_athanor}

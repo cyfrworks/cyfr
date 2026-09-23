@@ -45,12 +45,4 @@ defmodule Arca.Schemas.JobClaim do
   """
   @spec kinds() :: [String.t()]
   def kinds, do: @kinds
-
-  @doc """
-  The `key` of a job the cell has exactly one of — retention, the boot
-  reconciliation, the seed release. The kinds that name a thing of their
-  own (a worker service, a credential) carry that thing's id instead.
-  """
-  @spec cell_key() :: String.t()
-  def cell_key, do: "cell"
 end

@@ -179,7 +179,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
     import Ecto.Query, only: [from: 2]
 
     Arca.Repo.all(
-      from(e in Arca.Execution,
+      from(e in Arca.Schemas.Execution,
         where: e.parent_execution_id == ^fixture.execution_id,
         select: e.id
       )
@@ -230,7 +230,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       assert Sanctum.Authority.budget(authority).in_flight == 0
       assert charges(ctx, authority) == []
       assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before
-      assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, child.execution_id)
+      assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, child.execution_id)
     end
 
     test "a called child takes no charge", %{ctx: ctx} do
@@ -376,7 +376,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       assert repeat.assignment.boot == fixture.boot
 
       assert children_of(fixture) == [child.execution_id]
-      assert %{child_key: ^key} = Arca.Repo.get!(Arca.Execution, child.execution_id)
+      assert %{child_key: ^key} = Arca.Repo.get!(Arca.Schemas.Execution, child.execution_id)
       assert Sanctum.Authority.budget(authority).in_flight == 1
       assert [_charge] = charges(ctx, authority)
 
@@ -478,7 +478,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
                })
 
       assert %{status: "failed", error_message: "Execution refused: its runner could not start"} =
-               Arca.Repo.get!(Arca.Execution, child.execution_id)
+               Arca.Repo.get!(Arca.Schemas.Execution, child.execution_id)
 
       assert %{state: "failed", outcome: "error"} =
                Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), child.execution_id)
@@ -511,7 +511,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
                  AttemptFixtures.call(other, "release_child", %{"execution_id" => id})
       end
 
-      assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, child.execution_id)
+      assert %{status: "running"} = Arca.Repo.get!(Arca.Schemas.Execution, child.execution_id)
       assert Process.alive?(Attempt.whereis(child.execution_id))
       assert %{"ok" => _} = fail!(child, "done")
     end

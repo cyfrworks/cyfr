@@ -15,7 +15,7 @@ defmodule Arca.ProfileStorage do
 
   alias Arca.Schemas.Profile
 
-  @spec put(map()) :: {:ok, Profile.t()} | {:error, term()}
+  @spec put(map()) :: {:ok, map()} | {:error, term()}
   # arca:unscoped-ok the athanor arrives in attrs and its absence fails loudly two lines down.
   def put(attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.put", fn ->
@@ -38,10 +38,11 @@ defmodule Arca.ProfileStorage do
           result
       end
     end)
+    |> Arca.Data.project()
   end
 
   @spec get(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Profile.t()} | {:error, :no_athanor | :not_found | :database_error}
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
   def get(%Cyfr.Actor{athanor_id: athanor_id}, id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.get", fn ->
@@ -50,12 +51,13 @@ defmodule Arca.ProfileStorage do
         profile -> {:ok, profile}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc "Non-revoked profiles for a name-level source ref within an athanor."
-  @spec list_for_source(Cyfr.Actor.t(), String.t()) :: {:ok, [Profile.t()]} | {:error, term()}
+  @spec list_for_source(Cyfr.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def list_for_source(%Cyfr.Actor{athanor_id: athanor_id}, source_ref)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.list_for_source", fn ->
@@ -69,6 +71,7 @@ defmodule Arca.ProfileStorage do
 
       {:ok, rows}
     end)
+    |> Arca.Data.project()
   end
 
   def list_for_source(%Cyfr.Actor{}, _source_ref), do: {:error, :no_athanor}
@@ -86,6 +89,7 @@ defmodule Arca.ProfileStorage do
         {0, _} -> {:error, :not_found}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def set_status(%Cyfr.Actor{}, _id, _status), do: {:error, :no_athanor}
@@ -118,6 +122,7 @@ defmodule Arca.ProfileStorage do
         {0, _} -> {:error, :head_moved}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def advance_head(%Cyfr.Actor{}, _id, _expected, _new_consent_id), do: {:error, :no_athanor}

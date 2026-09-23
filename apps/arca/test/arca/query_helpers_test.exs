@@ -16,7 +16,7 @@ defmodule Arca.QueryHelpersTest do
 
   import Ecto.Query
 
-  defp base_query, do: from(e in Arca.Execution)
+  defp base_query, do: from(e in Arca.Schemas.Execution)
 
   defp in_athanor(id), do: Cyfr.Actor.in_athanor(id)
   defp platform, do: Cyfr.Actor.system()

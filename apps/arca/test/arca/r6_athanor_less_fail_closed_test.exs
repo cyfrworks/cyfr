@@ -22,7 +22,7 @@ defmodule Arca.R6AthanorLessFailClosedTest do
 
   import Ecto.Query
 
-  defp base_query, do: from(e in Arca.Execution)
+  defp base_query, do: from(e in Arca.Schemas.Execution)
 
   describe "where_tenant/2 — actors with no athanor" do
     test "raises for an unauthenticated actor with none" do

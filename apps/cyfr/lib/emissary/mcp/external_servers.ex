@@ -71,7 +71,7 @@ defmodule Emissary.MCP.ExternalServers do
   end
 
   @doc """
-  The config map of either a stored `%Arca.Schemas.McpServer{}` (decode its
+  The config map of either a stored server row (`Arca.McpServerStorage`; decode its
   raw `config_json`) or a freshly-built `%{config: map}` — the create path,
   which already holds the parsed config and has no column to read.
   """

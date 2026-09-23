@@ -28,7 +28,6 @@ defmodule Emissary.MCP.BridgeTest do
   import ExUnit.CaptureLog
 
   alias Arca.JobClaims
-  alias Arca.Schemas.JobClaim
   alias Cyfr.BridgeAuth
   alias Emissary.MCP.Bridge
   alias Emissary.MCP.ExternalServers
@@ -518,12 +517,12 @@ defmodule Emissary.MCP.BridgeTest do
 
   # The one `job_claims` row of this backend, as it reads now.
   defp claim_row(ctx, row) do
-    assert {:ok, %JobClaim{} = claim} = JobClaims.read("mcp_backend", claim_key(ctx, row))
+    assert {:ok, %{} = claim} = JobClaims.read("mcp_backend", claim_key(ctx, row))
     claim
   end
 
   defp claimed_by_peer(ctx, row) do
-    assert {:ok, %JobClaim{} = peer} =
+    assert {:ok, %{} = peer} =
              JobClaims.claim("mcp_backend", claim_key(ctx, row), @peer, 30_000)
 
     peer
@@ -653,7 +652,7 @@ defmodule Emissary.MCP.BridgeTest do
       # env template.
       refute_receive {:control, "sync", _sync, _fields}, 200
       refute_received {:sealed_env, _server, _env}
-      assert %JobClaim{owner: @peer, fence: fence} = claim_row(ctx, row)
+      assert %{owner: @peer, fence: fence} = claim_row(ctx, row)
       assert fence == peer.fence
 
       # The peer gives it up and this member takes it: one backend, one row.
@@ -663,7 +662,7 @@ defmodule Emissary.MCP.BridgeTest do
                Bridge.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
       assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
-      assert %JobClaim{owner: owner} = taken = claim_row(ctx, row)
+      assert %{owner: owner} = taken = claim_row(ctx, row)
       assert owner == Cyfr.Boot.id()
       assert JobClaims.live?(taken)
 
@@ -694,7 +693,7 @@ defmodule Emissary.MCP.BridgeTest do
       # the redaction whole, holding nothing that has to be redacted.
       {:status, _pid, _module, items} = :sys.get_status(bridge)
       assert %Bridge.State{claims: held} = status_state(items, Bridge.State)
-      assert [%JobClaim{owner: owner}] = Map.values(held)
+      assert [%{owner: owner}] = Map.values(held)
       assert owner == Cyfr.Boot.id()
     end
 
@@ -724,7 +723,7 @@ defmodule Emissary.MCP.BridgeTest do
 
       # The peer's row is untouched by the member that stood down, and what
       # that member still holds writes nothing: the fence refuses it.
-      assert %JobClaim{owner: @peer, fence: fence} = claim_row(ctx, row)
+      assert %{owner: @peer, fence: fence} = claim_row(ctx, row)
       assert fence == peer.fence
       assert :taken = JobClaims.release(held)
       refute_receive {:control, "release", _release, _fields}, 200
@@ -742,7 +741,7 @@ defmodule Emissary.MCP.BridgeTest do
       eventually(fn -> not JobClaims.live?(held) end, "the backend claim to run out")
       tick(bridge)
 
-      assert %JobClaim{owner: owner, fence: fence} = retaken = claim_row(ctx, row)
+      assert %{owner: owner, fence: fence} = retaken = claim_row(ctx, row)
       assert owner == Cyfr.Boot.id()
       assert fence > held.fence
       assert JobClaims.live?(retaken)

@@ -76,7 +76,7 @@ defmodule Sanctum.Tenancy do
   own memberships like anyone else; opening another athanor is an explicit,
   audited act (`Sanctum.Context.focus/2`), not a listing.
   """
-  @spec list_athanors(Context.t()) :: [Arca.Schemas.Athanor.t()]
+  @spec list_athanors(Context.t()) :: [Sanctum.Tenancy.Athanors.athanor()]
   def list_athanors(%Context{user_id: user_id}) when is_binary(user_id) do
     Athanors.list_for_user(user_id)
   end

@@ -49,7 +49,6 @@ defmodule Cyfr.Bootstrap do
   require Arca.Repo.Errors
 
   alias Arca.JobClaims
-  alias Arca.Schemas.JobClaim
 
   @lease_ms :timer.minutes(5)
   @wait_ms :timer.seconds(30)
@@ -105,7 +104,7 @@ defmodule Cyfr.Bootstrap do
   end
 
   defp reconcile_for_boot(opts) do
-    key = Keyword.get(opts, :key, JobClaim.cell_key())
+    key = Keyword.get(opts, :key, JobClaims.cell_key())
     owner = Keyword.get(opts, :owner, Cyfr.Boot.id())
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
     wait_ms = Keyword.get(opts, :wait_ms, @wait_ms)
@@ -143,7 +142,7 @@ defmodule Cyfr.Bootstrap do
       {:ok, claim} ->
         {:ok, claim}
 
-      {:busy, %JobClaim{owner: peer}} ->
+      {:busy, %{owner: peer}} ->
         left = deadline - System.monotonic_time(:millisecond)
 
         if left <= 0 do
@@ -183,7 +182,7 @@ defmodule Cyfr.Bootstrap do
 
   defp checked(claim, slot, lease_ms, reconcile) do
     case reconcile.(claim, slot: slot, lease_ms: lease_ms) do
-      {:ok, %JobClaim{} = renewed} ->
+      {:ok, %{owner: _} = renewed} ->
         with :ok <- release(renewed), do: still_held(slot)
 
       {:error, reason} when is_atom(reason) ->

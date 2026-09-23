@@ -8,7 +8,7 @@ defmodule Sanctum.Auth.Identity do
   An identity's key is `"<provider>|<iss>|<subject>"` — deterministic for a
   given IdP identity, so the same human via the same IdP presents the same
   key on every deployment. It is what the door judges before any row
-  exists and what an `Arca.Schemas.ExternalIdentity` row is keyed by; the
+  exists and what the stored identity row is keyed by (`Arca.Users`); the
   person it names has an id of this server's (`Sanctum.Tenancy.Users`).
   The two built-in direct providers and their issuers are the `@builtin`
   table below; it is the only place either is written.

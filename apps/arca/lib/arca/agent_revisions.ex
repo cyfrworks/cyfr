@@ -44,6 +44,7 @@ defmodule Arca.AgentRevisions do
 
       {:ok, digest}
     end)
+    |> Arca.Data.project()
   end
 
   def put(%Cyfr.Actor{}, _bytes), do: {:error, :no_athanor}
@@ -65,6 +66,7 @@ defmodule Arca.AgentRevisions do
         %AgentRevision{bytes: bytes} -> verify(bytes, digest)
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, _digest), do: {:error, :no_athanor}

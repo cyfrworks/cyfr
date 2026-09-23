@@ -172,7 +172,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can get their own execution
-      assert %Arca.Execution{id: "exec_cross_a"} =
+      assert %{id: "exec_cross_a"} =
                Arca.Execution.get_tenant(Sanctum.Context.actor(ctx_a), "exec_cross_a")
 
       # B cannot get A's execution
@@ -201,7 +201,7 @@ defmodule Arca.TenantIsolationTest do
           namespace: "testns"
         )
 
-      assert %Arca.Execution{id: "exec_platform_test"} =
+      assert %{id: "exec_platform_test"} =
                Arca.Execution.get_tenant(
                  Sanctum.Context.actor(platform_ctx),
                  "exec_platform_test"
@@ -434,10 +434,10 @@ defmodule Arca.TenantIsolationTest do
       assert {:ok, 1} = Cyfr.Retention.cleanup(ctx_a, "mcp_log_days", value: 1)
 
       # Tenant A's log is gone
-      assert Arca.Repo.get(Arca.McpLog, "log_tenant_a") == nil
+      assert Arca.Repo.get(Arca.Schemas.McpLog, "log_tenant_a") == nil
 
       # Tenant B's log survives
-      assert Arca.Repo.get(Arca.McpLog, "log_tenant_b") != nil
+      assert Arca.Repo.get(Arca.Schemas.McpLog, "log_tenant_b") != nil
     end
 
     test "dry_run scoped to tenant" do
@@ -610,7 +610,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can get their own log
-      assert %Arca.McpLog{id: "mlog_cross_a"} =
+      assert %{id: "mlog_cross_a"} =
                Arca.McpLog.get_tenant(Sanctum.Context.actor(ctx_a), "mlog_cross_a")
 
       # B cannot get A's log
@@ -637,7 +637,7 @@ defmodule Arca.TenantIsolationTest do
           namespace: "testns"
         )
 
-      assert %Arca.McpLog{id: "mlog_platform_test"} =
+      assert %{id: "mlog_platform_test"} =
                Arca.McpLog.get_tenant(Sanctum.Context.actor(platform_ctx), "mlog_platform_test")
     end
   end
@@ -661,7 +661,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can get their own log
-      assert %Arca.PolicyLog{id: "plog_cross_a"} =
+      assert %{id: "plog_cross_a"} =
                Arca.PolicyLog.get_tenant(Sanctum.Context.actor(ctx_a), "plog_cross_a")
 
       # B cannot get A's log
@@ -688,7 +688,7 @@ defmodule Arca.TenantIsolationTest do
           namespace: "testns"
         )
 
-      assert %Arca.PolicyLog{id: "plog_platform_test"} =
+      assert %{id: "plog_platform_test"} =
                Arca.PolicyLog.get_tenant(
                  Sanctum.Context.actor(platform_ctx),
                  "plog_platform_test"
@@ -711,7 +711,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # A can find by request_id
-      assert %Arca.PolicyLog{} =
+      assert %{id: _} =
                Arca.PolicyLog.get_by_request_id_tenant(
                  Sanctum.Context.actor(ctx_a),
                  "req_cross_tenant_123"
@@ -746,7 +746,7 @@ defmodule Arca.TenantIsolationTest do
           namespace: "testns"
         )
 
-      assert %Arca.PolicyLog{} =
+      assert %{id: _} =
                Arca.PolicyLog.get_by_request_id_tenant(
                  Sanctum.Context.actor(platform_ctx),
                  "req_platform_456"

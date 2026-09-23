@@ -124,7 +124,7 @@ defmodule Cyfr.Execution.BarrierRefusalTest do
   end
 
   defp assert_nothing_recorded(execution_id, log) do
-    assert Arca.Repo.get(Arca.Execution, execution_id) == nil
+    assert Arca.Repo.get(Arca.Schemas.Execution, execution_id) == nil
     refute_received {:lifecycle, _event, ^execution_id}
     assert log == ""
   end
@@ -155,7 +155,7 @@ defmodule Cyfr.Execution.BarrierRefusalTest do
     {answer, execution_id, _log} = admit(ctx, oversized, [])
 
     assert {:error, "Input size" <> _} = answer
-    assert %{status: "failed"} = Arca.Repo.get(Arca.Execution, execution_id)
+    assert %{status: "failed"} = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
     assert_received {:lifecycle, [:cyfr, :opus, :execute, :start], ^execution_id}
     assert_received {:lifecycle, [:cyfr, :opus, :execute, :exception], ^execution_id}
   end

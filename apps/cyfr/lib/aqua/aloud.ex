@@ -71,7 +71,7 @@ defmodule Aqua.Aloud do
   aloud does not move it out of your own thread.
   """
   @spec post(Context.t(), String.t(), [String.t()], String.t(), String.t()) ::
-          {:ok, [Arca.Schemas.Message.t()]} | {:error, error()}
+          {:ok, [Aqua.Tape.row()]} | {:error, error()}
   def post(%Context{} = ctx, source_id, message_ids, target_athanor_id, target_id)
       when is_binary(source_id) and is_list(message_ids) and
              is_binary(target_athanor_id) and is_binary(target_id) do

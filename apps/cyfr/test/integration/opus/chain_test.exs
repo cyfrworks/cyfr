@@ -228,7 +228,7 @@ defmodule Opus.ChainTest do
       assert authority.consent_id == "consent-chain"
       assert authority.cursor == {:bound, @root_node}
 
-      row = Arca.Repo.get(Arca.Execution, execution_id)
+      row = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
       assert row.activation_digest != nil
       assert Jason.decode!(row.activation_graph) == %{@root_node => root.release_digest}
       assert JCS.hash_binary(row.activation_graph) == row.activation_digest
@@ -274,7 +274,7 @@ defmodule Opus.ChainTest do
           execution_id: execution_id
         )
 
-      row = Arca.Repo.get(Arca.Execution, execution_id)
+      row = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
       assert row.activation_digest
       assert row.activation_graph
       assert row.parent_execution_id == nil
@@ -292,7 +292,7 @@ defmodule Opus.ChainTest do
           execution_id: execution_id
         )
 
-      assert %{profile_id: "prof-route-pub"} = Arca.Repo.get(Arca.Execution, execution_id)
+      assert %{profile_id: "prof-route-pub"} = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
     end
   end
 
@@ -372,7 +372,7 @@ defmodule Opus.ChainTest do
       assert authority.chain == [@root_node, @target_node]
       assert Map.get(target, :release_digest) != nil
 
-      row = Arca.Repo.get(Arca.Execution, execution_id)
+      row = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
       # A child carries its root's activation digest, no graph.
       assert row.activation_digest == @root_activation
       assert row.activation_graph == nil
@@ -572,7 +572,9 @@ defmodule Opus.ChainTest do
 
       rows =
         Arca.Repo.all(
-          from(e in Arca.Execution, where: e.parent_execution_id in [^parent_id, "exec_forged"])
+          from(e in Arca.Schemas.Execution,
+            where: e.parent_execution_id in [^parent_id, "exec_forged"]
+          )
         )
 
       assert [row] = rows
@@ -814,7 +816,7 @@ defmodule Opus.ChainTest do
                  child_opts(ctx, guest_fn: :spawn, charge: charge, execution_id: child_id)
                )
 
-      assert Arca.Repo.get(Arca.Execution, child_id) == nil
+      assert Arca.Repo.get(Arca.Schemas.Execution, child_id) == nil
       assert Sanctum.Authority.budget(auth).in_flight == 0
     end
   end

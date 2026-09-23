@@ -142,7 +142,7 @@ defmodule Arca.TurnTapeStorageTest do
     %{node: node, owner: owner}
   end
 
-  defp execution(id), do: Arca.Repo.get!(Arca.Execution, id)
+  defp execution(id), do: Arca.Repo.get!(Arca.Schemas.Execution, id)
 
   defp respond!(actor, turn, calls) do
     {:ok, step} =
@@ -1270,7 +1270,7 @@ defmodule Arca.TurnTapeStorageTest do
 
       {1, _} =
         Arca.Repo.update_all(
-          from(e in Arca.Execution, where: e.id == ^root.execution.id),
+          from(e in Arca.Schemas.Execution, where: e.id == ^root.execution.id),
           set: [status: "failed"]
         )
 

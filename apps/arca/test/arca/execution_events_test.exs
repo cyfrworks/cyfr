@@ -53,7 +53,7 @@ defmodule Arca.ExecutionEventsTest do
              ExecutionEvents.since(actor, exec.id, 0)
 
     assert Enum.map(rows, & &1.seq) == Enum.to_list(2..13)
-    assert Arca.Repo.get!(Arca.Execution, exec.id).event_seq == 13
+    assert Arca.Repo.get!(Arca.Schemas.Execution, exec.id).event_seq == 13
 
     assert {:ok, tail} = ExecutionEvents.since(actor, exec.id, 11)
     assert Enum.map(tail, & &1.seq) == [12, 13]

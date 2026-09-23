@@ -245,17 +245,17 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "A pending approval on `thread_id`, as a row a decision is a compare-and-set on."
   @spec approval!(String.t(), String.t()) :: String.t()
   def approval!(athanor_id, thread_id) do
-    {:ok, thread} = Arca.ThreadStorage.get(actor(athanor_id), thread_id)
     id = Cyfr.UUID7.generate_id("msg")
 
-    Arca.ThreadStorage.insert_message!(actor(athanor_id), thread, %{
-      id: id,
-      author: "usr_cluster",
-      kind: "approval",
-      status: "pending",
-      content: "may I?",
-      approval_id: id
-    })
+    {:ok, _row} =
+      Arca.ThreadStorage.append(actor(athanor_id), thread_id, %{
+        id: id,
+        author: "usr_cluster",
+        kind: "approval",
+        status: "pending",
+        content: "may I?",
+        approval_id: id
+      })
 
     id
   end

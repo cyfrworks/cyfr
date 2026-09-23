@@ -22,6 +22,7 @@ defmodule Arca.ConsentProofStorage do
         {:error, reason} -> {:error, reason}
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -29,7 +30,7 @@ defmodule Arca.ConsentProofStorage do
   `{:ok, row}` — everyone else gets `:not_found`, including the loser
   who read the row an instant before the winner's delete landed.
   """
-  @spec take(String.t()) :: {:ok, ConsentProof.t()} | {:error, :not_found}
+  @spec take(String.t()) :: {:ok, map()} | {:error, :not_found}
   # arca:unscoped-ok proofs are token-keyed and single-use; the hash is the
   # whole address, and the row names its own athanor.
   def take(token_hash) when is_binary(token_hash) do
@@ -47,6 +48,7 @@ defmodule Arca.ConsentProofStorage do
           end
       end
     end)
+    |> Arca.Data.project()
   end
 
   @spec purge_expired(DateTime.t()) :: non_neg_integer()
@@ -59,5 +61,6 @@ defmodule Arca.ConsentProofStorage do
       {count, _} = Arca.Repo.delete_all(from(p in ConsentProof, where: p.expires_at <= ^now))
       count
     end)
+    |> Arca.Data.project()
   end
 end

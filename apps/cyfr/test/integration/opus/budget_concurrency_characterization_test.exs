@@ -128,7 +128,7 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
       id = child.assignment.execution_id
 
       assert %{status: "completed", parent_execution_id: ^root_id} =
-               Arca.Repo.get!(Arca.Execution, id)
+               Arca.Repo.get!(Arca.Schemas.Execution, id)
     end
 
     wait_until(fn ->

@@ -45,7 +45,8 @@ defmodule Arca.Members do
   DELETE itself, so the caller invalidates exactly what was removed and
   only after it committed.
 
-  Nothing that belongs to Ecto crosses the boundary. A refusal is
+  Nothing that belongs to Ecto crosses the boundary: a row is answered as
+  a plain map (`Arca.Data`). A refusal is
   `:conflict` (the assignment index — the row is already there, so a
   caller that raced re-reads it), `{:invalid, %{field => [message]}}`,
   `:unknown_athanor`, `:athanor_archived`, `:not_found`, `:cross_tenant`,
@@ -55,7 +56,7 @@ defmodule Arca.Members do
   import Ecto.Query
 
   alias Arca.{ControlPlane, JobClaims, QueryHelpers}
-  alias Arca.Schemas.{Athanor, JobClaim, Membership, Session, User}
+  alias Arca.Schemas.{Athanor, Membership, Session, User}
 
   @type refusal :: {:error, :cross_tenant | :database_error}
   @type write_refusal ::
@@ -108,7 +109,7 @@ defmodule Arca.Members do
   a member to one already gets.
   """
   @spec seat(Cyfr.Actor.t(), map()) ::
-          {:ok, Membership.t()} | {:error, :no_athanor | :athanor_archived} | write_refusal()
+          {:ok, map()} | {:error, :no_athanor | :athanor_archived} | write_refusal()
   def seat(%Cyfr.Actor{athanor_id: athanor_id}, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.seat", fn ->
@@ -123,13 +124,14 @@ defmodule Arca.Members do
       end
       |> Arca.Repo.locking_transaction()
     end)
+    |> Arca.Data.project()
   end
 
   def seat(%Cyfr.Actor{}, _attrs), do: {:error, :no_athanor}
 
   @doc "The person's ACTIVE-or-invited athanor row in the actor's athanor, if any."
   @spec find(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Membership.t()} | {:error, :not_found | :no_athanor | :database_error}
+          {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
   def find(%Cyfr.Actor{athanor_id: athanor_id}, user_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.find", fn ->
@@ -143,13 +145,14 @@ defmodule Arca.Members do
         )
       )
     end)
+    |> Arca.Data.project()
   end
 
   def find(%Cyfr.Actor{}, _user_id), do: {:error, :no_athanor}
 
   @doc "The invitation this address holds in the actor's athanor, if any."
   @spec find_invited(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Membership.t()} | {:error, :not_found | :no_athanor | :database_error}
+          {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
   def find_invited(%Cyfr.Actor{athanor_id: athanor_id}, email)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(email) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.find_invited", fn ->
@@ -162,6 +165,7 @@ defmodule Arca.Members do
         )
       )
     end)
+    |> Arca.Data.project()
   end
 
   def find_invited(%Cyfr.Actor{}, _email), do: {:error, :no_athanor}
@@ -276,7 +280,7 @@ defmodule Arca.Members do
 
   @doc "Write the platform row for a person — the grant that names no athanor."
   @spec grant_platform(Cyfr.Actor.t(), map()) ::
-          {:ok, Membership.t()} | refusal() | write_refusal()
+          {:ok, map()} | refusal() | write_refusal()
   def grant_platform(%Cyfr.Actor{scope: :platform}, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.grant_platform", fn ->
       attrs
@@ -285,25 +289,27 @@ defmodule Arca.Members do
       |> Map.put(:athanor_id, nil)
       |> do_insert()
     end)
+    |> Arca.Data.project()
   end
 
   def grant_platform(%Cyfr.Actor{}, _attrs), do: {:error, :cross_tenant}
 
   @doc "A membership by its own id. The athanor may be nil — a platform row names none."
   @spec get(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Membership.t()} | {:error, :not_found} | refusal()
+          {:ok, map()} | {:error, :not_found} | refusal()
   # arca:unscoped-ok a membership is fabric, read by its own id; the athanor may be nil (platform).
   def get(%Cyfr.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.get", fn ->
       found(Arca.Repo.get(Membership, id))
     end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, _id), do: {:error, :cross_tenant}
 
   @doc "The person's platform row, if any."
   @spec find_platform(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Membership.t()} | {:error, :not_found} | refusal()
+          {:ok, map()} | {:error, :not_found} | refusal()
   # arca:unscoped-ok a platform row names no athanor by design.
   def find_platform(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.find_platform", fn ->
@@ -317,29 +323,37 @@ defmodule Arca.Members do
         )
       )
     end)
+    |> Arca.Data.project()
   end
 
   def find_platform(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
 
-  @doc "Delete exactly the row the caller already holds."
-  @spec delete(Cyfr.Actor.t(), Membership.t()) ::
-          {:ok, Membership.t()} | refusal() | write_refusal()
-  # arca:unscoped-ok deletes exactly the fabric row the caller already holds.
-  def delete(%Cyfr.Actor{scope: :platform}, %Membership{} = membership) do
+  @doc """
+  Delete the membership `id` names, as the row reads now, and answer the
+  row that went. `{:error, :not_found}` when there is none.
+  """
+  @spec delete(Cyfr.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :not_found} | refusal() | write_refusal()
+  # arca:unscoped-ok a membership is fabric, deleted by its own id; the athanor may be nil (platform).
+  def delete(%Cyfr.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.delete", fn ->
-      membership |> Arca.Repo.delete() |> settled()
+      with {:ok, membership} <- found(Arca.Repo.get(Membership, id)) do
+        membership |> Arca.Repo.delete() |> settled()
+      end
     end)
+    |> Arca.Data.project()
   end
 
-  def delete(%Cyfr.Actor{}, %Membership{}), do: {:error, :cross_tenant}
+  def delete(%Cyfr.Actor{}, _id), do: {:error, :cross_tenant}
 
   @doc "Every platform row — the server's operators, as the rows say."
-  @spec list_platform(Cyfr.Actor.t()) :: {:ok, [Membership.t()]} | refusal()
+  @spec list_platform(Cyfr.Actor.t()) :: {:ok, [map()]} | refusal()
   # arca:unscoped-ok platform memberships carry no athanor by design.
   def list_platform(%Cyfr.Actor{scope: :platform}) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.list_platform", fn ->
       {:ok, Arca.Repo.all(from(m in Membership, where: m.scope == "platform"))}
     end)
+    |> Arca.Data.project()
   end
 
   def list_platform(%Cyfr.Actor{}), do: {:error, :cross_tenant}
@@ -357,7 +371,7 @@ defmodule Arca.Members do
   answers to no sign-in. `added_by:` names who wrote the row.
   """
   @spec ensure_platform(Cyfr.Actor.t(), String.t(), keyword()) ::
-          {:ok, %{membership: Membership.t(), granted: boolean()}}
+          {:ok, %{membership: map(), granted: boolean()}}
           | {:error, :stale_identity}
           | refusal()
           | write_refusal()
@@ -393,6 +407,7 @@ defmodule Arca.Members do
         other -> other
       end
     end)
+    |> Arca.Data.project()
   end
 
   def ensure_platform(%Cyfr.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
@@ -452,17 +467,17 @@ defmodule Arca.Members do
   The slot is verified and the claim held at the start and again at the
   end, where a final checked renewal records
   `%{version: 1, status: "complete", policy_digest: …, owner: …}` in
-  `JobClaim.detail` and answers the newest claim, which is what the
+  the claim's `detail` and answers the newest claim, which is what the
   caller releases. `{:ok, %{claim: renewed, revoked: [revoked()]}}` is
   answered only after commit.
   """
-  @spec reconcile_platform(Cyfr.Actor.t(), JobClaim.t(), keyword()) ::
-          {:ok, %{claim: JobClaim.t(), revoked: [revoked()]}} | reconcile_refusal()
-  def reconcile_platform(%Cyfr.Actor{scope: :platform}, %JobClaim{} = claim, opts)
-      when is_list(opts) do
+  @spec reconcile_platform(Cyfr.Actor.t(), JobClaims.held(), keyword()) ::
+          {:ok, %{claim: map(), revoked: [revoked()]}} | reconcile_refusal()
+  def reconcile_platform(%Cyfr.Actor{scope: :platform}, %{owner: owner} = claim, opts)
+      when is_binary(owner) and is_list(opts) do
     slot = Keyword.fetch!(opts, :slot)
     operators = opts |> Keyword.fetch!(:operators) |> MapSet.new()
-    detail = completion(Keyword.fetch!(opts, :policy_digest), claim.owner)
+    detail = completion(Keyword.fetch!(opts, :policy_digest), owner)
     lease_ms = Keyword.fetch!(opts, :lease_ms)
 
     Arca.Repo.Errors.with_db_rescue("Arca.Members.reconcile_platform", fn ->
@@ -478,13 +493,14 @@ defmodule Arca.Members do
         end
       end)
     end)
+    |> Arca.Data.project()
   end
 
-  def reconcile_platform(%Cyfr.Actor{}, %JobClaim{}, _opts), do: {:error, :cross_tenant}
+  def reconcile_platform(%Cyfr.Actor{}, _claim, _opts), do: {:error, :cross_tenant}
 
   @doc "Every ACTIVE row of a person — platform and athanor alike, newest first."
   @spec list_active_for_user(Cyfr.Actor.t(), String.t()) ::
-          {:ok, [Membership.t()]} | refusal()
+          {:ok, [map()]} | refusal()
   # arca:unscoped-ok person-keyed by design — resolving a person's seats across athanors is the point.
   def list_active_for_user(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.list_active_for_user", fn ->
@@ -496,6 +512,7 @@ defmodule Arca.Members do
          )
        )}
     end)
+    |> Arca.Data.project()
   end
 
   def list_active_for_user(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
@@ -772,18 +789,10 @@ defmodule Arca.Members do
   # The assignment index is the one refusal a caller acts on rather than
   # reports: the row it wanted is already there, so it re-reads it.
   defp refusal(%Ecto.Changeset{errors: errors} = changeset) do
-    if unique?(errors), do: :conflict, else: {:invalid, messages(changeset)}
+    if unique?(errors), do: :conflict, else: Arca.Data.invalid(changeset)
   end
 
   defp unique?(errors) do
     Enum.any?(errors, fn {_field, {_message, meta}} -> meta[:constraint] == :unique end)
-  end
-
-  defp messages(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
-      Regex.replace(~r"%{(\w+)}", message, fn _whole, key ->
-        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-      end)
-    end)
   end
 end

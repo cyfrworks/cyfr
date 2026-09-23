@@ -216,12 +216,16 @@ defmodule Sanctum.ProvisioningReadinessTest do
     long_ago = DateTime.add(DateTime.utc_now(), -61, :second)
 
     {:ok, _} =
-      claim |> Ecto.Changeset.change(updated_at: long_ago) |> Arca.Repo.update()
-
-    {:ok, failed} = Athanors.get(group.id)
+      Arca.Schemas.ProvisioningClaim
+      |> Arca.Repo.get!(claim.id)
+      |> Ecto.Changeset.change(updated_at: long_ago)
+      |> Arca.Repo.update()
 
     {:ok, _} =
-      failed |> Ecto.Changeset.change(provisioning_failed_at: long_ago) |> Arca.Repo.update()
+      Arca.Schemas.Athanor
+      |> Arca.Repo.get!(group.id)
+      |> Ecto.Changeset.change(provisioning_failed_at: long_ago)
+      |> Arca.Repo.update()
 
     assert Provisioning.status(ctx) == :unfilled
 

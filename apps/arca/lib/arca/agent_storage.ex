@@ -39,7 +39,7 @@ defmodule Arca.AgentStorage do
   taken beforehand is true at one instant and the delete lands at another.
   """
   @spec replace_all(Cyfr.Actor.t(), [map()], keyword()) ::
-          {:ok, [Agent.t()]} | {:error, :claim_lost | term()}
+          {:ok, [map()]} | {:error, :claim_lost | term()}
   def replace_all(actor, rows, opts \\ [])
 
   def replace_all(%Cyfr.Actor{athanor_id: athanor_id} = actor, rows, opts)
@@ -57,6 +57,7 @@ defmodule Arca.AgentStorage do
         end
       end)
     end)
+    |> Arca.Data.project()
   end
 
   def replace_all(%Cyfr.Actor{}, _rows, _opts), do: {:error, :no_athanor}
@@ -67,7 +68,7 @@ defmodule Arca.AgentStorage do
     do: Arca.ProvisioningClaims.hold?(actor, owner, fence)
 
   @doc "The athanor's rows, by name."
-  @spec list(Cyfr.Actor.t()) :: {:ok, [Agent.t()]} | {:error, term()}
+  @spec list(Cyfr.Actor.t()) :: {:ok, [map()]} | {:error, term()}
   def list(%Cyfr.Actor{athanor_id: athanor_id}) when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.AgentStorage.list", fn ->
       {:ok,
@@ -75,6 +76,7 @@ defmodule Arca.AgentStorage do
          from(a in Agent, where: a.athanor_id == ^athanor_id, order_by: [asc: a.name])
        )}
     end)
+    |> Arca.Data.project()
   end
 
   def list(%Cyfr.Actor{}), do: {:error, :no_athanor}

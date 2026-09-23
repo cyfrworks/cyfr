@@ -50,22 +50,23 @@ defmodule Arca.ProfileStorageTest do
     end
 
     test "kind and status are held to the profile vocabulary", %{athanor: athanor} do
-      assert {:error, %Ecto.Changeset{errors: errors}} =
+      assert {:error, {:invalid, errors}} =
                ProfileStorage.put(attrs(athanor, %{kind: "guest"}))
 
-      assert Keyword.has_key?(errors, :kind)
+      assert Map.has_key?(errors, :kind)
 
-      assert {:error, %Ecto.Changeset{errors: errors}} =
+      assert {:error, {:invalid, errors}} =
                ProfileStorage.put(attrs(athanor, %{status: "sleeping"}))
 
-      assert Keyword.has_key?(errors, :status)
+      assert Map.has_key?(errors, :status)
     end
 
     test "a second active profile on the same identity refuses instead of raising", %{
       athanor: athanor
     } do
       assert {:ok, _} = ProfileStorage.put(attrs(athanor, %{label: "work"}))
-      assert {:error, %Ecto.Changeset{}} = ProfileStorage.put(attrs(athanor, %{label: "work"}))
+      assert {:error, {:invalid, errors}} = ProfileStorage.put(attrs(athanor, %{label: "work"}))
+      assert map_size(errors) > 0
     end
   end
 end

@@ -237,7 +237,7 @@ defmodule Arca.RecordSink do
     rows =
       items
       |> Enum.flat_map(fn {:policy_log, attrs} ->
-        case Arca.PolicyLog.create_changeset(attrs) do
+        case Arca.Schemas.PolicyLog.create_changeset(attrs) do
           %{valid?: true} = changeset ->
             [
               Ecto.Changeset.apply_changes(changeset)
@@ -254,7 +254,7 @@ defmodule Arca.RecordSink do
         end
       end)
 
-    if rows != [], do: Arca.Repo.insert_all(Arca.PolicyLog, rows)
+    if rows != [], do: Arca.Repo.insert_all(Arca.Schemas.PolicyLog, rows)
     :ok
   end
 

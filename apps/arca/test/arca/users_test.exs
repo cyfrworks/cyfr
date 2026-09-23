@@ -99,7 +99,7 @@ defmodule Arca.UsersTest do
       assert {:error, :cross_tenant} = Users.identities(member, "usr_1")
       assert {:error, :cross_tenant} = Users.personal_athanor?(member, "ath_1")
       assert {:error, :cross_tenant} = Users.touch_identity(member, "k", DateTime.utc_now())
-      assert {:error, :cross_tenant} = Users.update(member, row, %{display_name: "X"})
+      assert {:error, :cross_tenant} = Users.update(member, row.id, %{display_name: "X"})
       assert {:error, :cross_tenant} = Users.mint(member, %{}, %{})
       refute_received :queried
 
@@ -234,7 +234,7 @@ defmodule Arca.UsersTest do
       assert {:error, :not_found} = Users.get_by_identity(server(), "github|iss|nobody")
       assert {:error, :not_found} = Users.get_by_namespace(server(), "nobody-here")
 
-      assert {:ok, updated} = Users.update(server(), user, %{namespace: "ns-#{id}"})
+      assert {:ok, updated} = Users.update(server(), user.id, %{namespace: "ns-#{id}"})
       assert {:ok, %{id: ^id}} = Users.get_by_namespace(server(), updated.namespace)
     end
 
@@ -251,7 +251,7 @@ defmodule Arca.UsersTest do
     test "personal_athanor? answers whether any row names the athanor as its own" do
       user = person!()
       assert {:ok, false} = Users.personal_athanor?(server(), "ath_unclaimed")
-      {:ok, _} = Users.update(server(), user, %{personal_athanor_id: "ath_claimed"})
+      {:ok, _} = Users.update(server(), user.id, %{personal_athanor_id: "ath_claimed"})
       assert {:ok, true} = Users.personal_athanor?(server(), "ath_claimed")
     end
 

@@ -63,7 +63,7 @@ defmodule Arca.ExecutionStandingTest do
     assert {:error, :not_standing} =
              Arca.Execution.admit(missing, Actor.standing("ath_other"))
 
-    refute Arca.Repo.get(Arca.Execution, missing.id)
+    refute Arca.Repo.get(Arca.Schemas.Execution, missing.id)
   end
 
   test "a check that cannot answer admits, renews, claims and writes nothing", %{actor: actor} do
@@ -73,7 +73,7 @@ defmodule Arca.ExecutionStandingTest do
     assert {:error, :unavailable} =
              Arca.Execution.admit(refused, grant: grant, verify: unavailable())
 
-    refute Arca.Repo.get(Arca.Execution, refused.id)
+    refute Arca.Repo.get(Arca.Schemas.Execution, refused.id)
 
     {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(attrs(actor), Actor.standing(actor.athanor_id))
@@ -122,7 +122,7 @@ defmodule Arca.ExecutionStandingTest do
                down
              )
 
-    assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, execution.id)
+    assert %{status: "running"} = Arca.Repo.get!(Arca.Schemas.Execution, execution.id)
     assert %{lease_until: lease} = ExecutionAttempts.get(actor, attempt.attempt)
     assert DateTime.compare(lease, later) != :eq
   end
@@ -158,7 +158,7 @@ defmodule Arca.ExecutionStandingTest do
              )
 
     assert %{status: "running", current_attempt: current} =
-             Arca.Repo.get!(Arca.Execution, execution.id)
+             Arca.Repo.get!(Arca.Schemas.Execution, execution.id)
 
     assert current == attempt.attempt
   end
@@ -190,7 +190,7 @@ defmodule Arca.ExecutionStandingTest do
                verify: &Actor.admits/1
              )
 
-    assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, execution.id)
+    assert %{status: "running"} = Arca.Repo.get!(Arca.Schemas.Execution, execution.id)
 
     assert {:ok, %{status: "completed"}} =
              Arca.Execution.record_complete(actor, execution.id, done, Actor.stored())
@@ -206,7 +206,7 @@ defmodule Arca.ExecutionStandingTest do
 
     [bare] =
       Arca.Repo.all(
-        from(e in Arca.Execution,
+        from(e in Arca.Schemas.Execution,
           where: e.athanor_id == ^actor.athanor_id and is_nil(e.current_attempt)
         )
       )
@@ -298,14 +298,18 @@ defmodule Arca.ExecutionStandingLockTest do
 
     on_exit(fn ->
       unboxed(fn ->
-        ids = from(e in Arca.Execution, where: e.athanor_id == ^athanor_id, select: e.id)
+        ids = from(e in Arca.Schemas.Execution, where: e.athanor_id == ^athanor_id, select: e.id)
 
         Arca.Repo.delete_all(
           from(i in "execution_events", where: i.execution_id in subquery(ids))
         )
 
         Arca.Repo.delete_all(from(a in ExecutionAttempt, where: a.athanor_id == ^athanor_id))
-        Arca.Repo.delete_all(from(e in Arca.Execution, where: e.athanor_id == ^athanor_id))
+
+        Arca.Repo.delete_all(
+          from(e in Arca.Schemas.Execution, where: e.athanor_id == ^athanor_id)
+        )
+
         Arca.Repo.delete_all(from(k in ApiKey, where: k.athanor_id == ^athanor_id))
         Arca.Repo.delete_all(from(a in Athanor, where: a.id == ^athanor_id))
       end)
@@ -415,7 +419,7 @@ defmodule Arca.ExecutionStandingLockTest do
 
     # Had it acted on a read from before its wait, it would have admitted.
     assert {:error, :not_standing} = Task.await(admitter, 25_000)
-    unboxed(fn -> refute Arca.Repo.get(Arca.Execution, row.id) end)
+    unboxed(fn -> refute Arca.Repo.get(Arca.Schemas.Execution, row.id) end)
   end
 
   @tag :postgres

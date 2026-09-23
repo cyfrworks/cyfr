@@ -51,10 +51,33 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
     on_exit(fn ->
       Application.put_env(:arca, :base_path, original_path)
       File.rm_rf(base)
-      Prism.TinctureRegistry.reload()
+      reload_registry()
     end)
 
     {:ok, conn: conn, user: user, estate: estate}
+  end
+
+  # The registry is one server-wide process; it is left holding the real
+  # components root. The reload runs on a checkout of its own, lent to the
+  # registry alone: the test's owner may already have lost its connection
+  # to a query the invoke still had in flight when the test process
+  # exited, and the pool's shared mode is not this callback's to move.
+  defp reload_registry do
+    registry = Process.whereis(Prism.TinctureRegistry)
+
+    case Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo) do
+      :ok ->
+        try do
+          Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
+          :ok = Prism.TinctureRegistry.reload()
+        after
+          Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
+        end
+
+      {:already, _} ->
+        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
+        :ok = Prism.TinctureRegistry.reload()
+    end
   end
 
   test "an invoke files started and finished request-log rows", %{conn: conn, estate: estate} do
@@ -73,7 +96,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
 
     rows =
       Arca.Repo.all(
-        from(l in Arca.McpLog,
+        from(l in Arca.Schemas.McpLog,
           where: l.method == "LIVE /shell/invoke" and l.athanor_id == ^estate.id
         )
       )

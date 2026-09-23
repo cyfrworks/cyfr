@@ -137,7 +137,7 @@ defmodule Aqua.Attachments do
   Every attachment in a list of message rows, paired with the message
   that owns it — the shape `load/3` resolves.
   """
-  @spec attachments_of([Arca.Schemas.Message.t()]) :: [%{message_id: String.t(), ref: ref()}]
+  @spec attachments_of([Aqua.Tape.row()]) :: [%{message_id: String.t(), ref: ref()}]
   def attachments_of(rows) when is_list(rows) do
     Enum.flat_map(rows, fn msg ->
       Enum.map(refs_of(msg), &%{message_id: msg.id, ref: &1})
@@ -168,7 +168,7 @@ defmodule Aqua.Attachments do
   end
 
   @doc "The refs stored on a message row's payload (`[]` when none)."
-  @spec refs_of(Arca.Schemas.Message.t()) :: [ref()]
+  @spec refs_of(Aqua.Tape.row()) :: [ref()]
   def refs_of(msg) do
     case Arca.ThreadStorage.payload(msg)["attachments"] do
       refs when is_list(refs) -> refs

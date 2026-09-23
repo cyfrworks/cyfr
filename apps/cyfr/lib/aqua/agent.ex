@@ -128,7 +128,7 @@ defmodule Aqua.Agent do
   from a previous composition — so a decision withdrawn since is gone
   from the next turn. A pick has to be resolved first.
   """
-  @spec with_grants(t(), [Arca.Schemas.ToolGrant.t()]) :: t()
+  @spec with_grants(t(), [Aqua.ToolGrants.grant()]) :: t()
   def with_grants(%__MODULE__{agent: %{}} = pick, grants) when is_list(grants) do
     %{pick | policy: Aqua.ToolGrants.resolve(authored_policy(pick), grants)}
   end

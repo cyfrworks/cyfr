@@ -150,7 +150,7 @@ defmodule Cyfr.Execution.HostListenerTest do
   defp claimed_by(fixture),
     do: Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, fixture.attempt).claimed_by
 
-  defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
+  defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 
   defp live_events do
     receive do

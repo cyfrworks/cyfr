@@ -119,7 +119,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
 
   defp gated_adapter, do: Application.put_env(:arca, :storage_adapter, GatedAdapter)
 
-  defp row(fixture), do: Arca.Repo.get!(Arca.Execution, fixture.execution_id)
+  defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 
   defp intents(fixture),
     do:

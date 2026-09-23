@@ -91,7 +91,7 @@ defmodule Arca.WebhookStorage do
   > (`secret_encrypted`). Callers MUST NOT log or serialize the whole row;
   > decrypt only what is needed for signature verification.
   """
-  @spec get_by_slug(String.t()) :: {:ok, Webhook.t()} | {:error, :not_found}
+  @spec get_by_slug(String.t()) :: {:ok, map()} | {:error, :not_found}
   # arca:unscoped-ok the slug IS the public address a sender posts to; the
   # athanor is read off the row and every later step is scoped by it.
   def get_by_slug(slug) when is_binary(slug) do
@@ -103,13 +103,14 @@ defmodule Arca.WebhookStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
   Look up a webhook by name within an athanor. Excludes disabled rows.
   """
   @spec get_by_name(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Webhook.t()} | {:error, :no_athanor | :not_found | :database_error}
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
   def get_by_name(%Cyfr.Actor{athanor_id: athanor_id}, name)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.get_by_name", fn ->
@@ -122,6 +123,7 @@ defmodule Arca.WebhookStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def get_by_name(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
@@ -133,7 +135,7 @@ defmodule Arca.WebhookStorage do
   deliberately not loaded here (the only caller redacts them anyway; the verify
   path uses `get_by_slug`/`get_by_name`, which do load the secret).
   """
-  @spec list_webhooks(Cyfr.Actor.t()) :: {:ok, [Webhook.t()]} | {:error, term()}
+  @spec list_webhooks(Cyfr.Actor.t()) :: {:ok, [map()]} | {:error, term()}
   def list_webhooks(%Cyfr.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.list_webhooks", fn ->
@@ -162,6 +164,7 @@ defmodule Arca.WebhookStorage do
 
       {:ok, Arca.Repo.all(query)}
     end)
+    |> Arca.Data.project()
   end
 
   def list_webhooks(%Cyfr.Actor{}), do: {:error, :no_athanor}
@@ -204,6 +207,7 @@ defmodule Arca.WebhookStorage do
         end
       end
     end)
+    |> Arca.Data.project()
   end
 
   def update_webhook(%Cyfr.Actor{}, _name, _fields), do: {:error, :no_athanor}
@@ -227,6 +231,7 @@ defmodule Arca.WebhookStorage do
         {_, _} -> :ok
       end
     end)
+    |> Arca.Data.project()
   end
 
   def set_disabled(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
@@ -284,6 +289,7 @@ defmodule Arca.WebhookStorage do
           end
       end
     end)
+    |> Arca.Data.project()
   end
 
   def rotate_secret(%Cyfr.Actor{}, _name, _new_secret_encrypted, _previous_expires_at),

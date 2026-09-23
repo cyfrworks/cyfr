@@ -216,6 +216,7 @@ defmodule Arca.ExecutionAttempts do
         {:error, :missing_grant} -> :lost
       end
     end)
+    |> Arca.Data.project()
   end
 
   # arca:unscoped-ok the runner renews the attempt it holds; the id comes
@@ -286,6 +287,7 @@ defmodule Arca.ExecutionAttempts do
         end
       end
     end)
+    |> Arca.Data.project()
   end
 
   def claim(%Cyfr.Actor{}, _attempt, _fence, _runner, _opts), do: {:error, :no_athanor}
@@ -324,6 +326,7 @@ defmodule Arca.ExecutionAttempts do
         {:error, _refused} -> :lost
       end
     end)
+    |> Arca.Data.project()
   end
 
   def renew_held(%Cyfr.Actor{}, _attempt, _holder, _opts), do: {:error, :no_athanor}
@@ -381,6 +384,7 @@ defmodule Arca.ExecutionAttempts do
         from(a in running_owner(athanor_id, attempt, fence), where: a.claimed_by == ^runner)
       )
     end)
+    |> Arca.Data.project()
   end
 
   def held?(%Cyfr.Actor{}, _attempt, _fence, _runner), do: {:error, :no_athanor}
@@ -481,7 +485,7 @@ defmodule Arca.ExecutionAttempts do
 
   @doc "The write intents of `attempt`, oldest first."
   @spec write_intents(Cyfr.Actor.t(), String.t()) ::
-          [StorageWriteIntent.t()] | {:error, :no_athanor | :database_error}
+          [map()] | {:error, :no_athanor | :database_error}
   def write_intents(%Cyfr.Actor{athanor_id: athanor_id}, attempt)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.write_intents", fn ->
@@ -492,6 +496,7 @@ defmodule Arca.ExecutionAttempts do
         )
       )
     end)
+    |> Arca.Data.project()
   end
 
   def write_intents(%Cyfr.Actor{}, _attempt), do: {:error, :no_athanor}
@@ -512,6 +517,7 @@ defmodule Arca.ExecutionAttempts do
       {count, _} = Arca.Repo.delete_all(settled_before(cutoff, opts))
       {:ok, count}
     end)
+    |> Arca.Data.project()
   end
 
   @doc "How many rows `delete_intents_before/2` would remove — the dry-run count."
@@ -521,6 +527,7 @@ defmodule Arca.ExecutionAttempts do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.count_intents_before", fn ->
       {:ok, Arca.Repo.aggregate(settled_before(cutoff, opts), :count)}
     end)
+    |> Arca.Data.project()
   end
 
   defp settled_before(cutoff, opts) do
@@ -546,7 +553,7 @@ defmodule Arca.ExecutionAttempts do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.live?", fn ->
       Arca.Repo.exists?(
         from(a in ExecutionAttempt,
-          join: e in Arca.Execution,
+          join: e in Arca.Schemas.Execution,
           on: e.id == a.execution_id and e.athanor_id == a.athanor_id,
           where: a.athanor_id == ^athanor_id and a.attempt == ^attempt and a.fence == ^fence,
           where: a.state == "running" and a.claimed_by == ^runner,
@@ -554,6 +561,7 @@ defmodule Arca.ExecutionAttempts do
         )
       )
     end)
+    |> Arca.Data.project()
   end
 
   def live?(%Cyfr.Actor{}, _attempt, _fence, _runner), do: {:error, :no_athanor}
@@ -569,7 +577,7 @@ defmodule Arca.ExecutionAttempts do
              is_binary(runner) and is_list(opts) do
     standing_check(athanor_id, attempt, opts, fn grant ->
       from(a in ExecutionAttempt,
-        join: e in Arca.Execution,
+        join: e in Arca.Schemas.Execution,
         on: e.id == a.execution_id and e.athanor_id == a.athanor_id,
         where: a.athanor_id == ^athanor_id and a.attempt == ^attempt and a.fence == ^fence,
         where: a.state == "running" and a.claimed_by == ^runner,
@@ -624,6 +632,7 @@ defmodule Arca.ExecutionAttempts do
         grant -> {:ok, grant}
       end
     end)
+    |> Arca.Data.project()
   end
 
   def grant(%Cyfr.Actor{}, _execution_id), do: {:error, :no_athanor}
@@ -692,7 +701,7 @@ defmodule Arca.ExecutionAttempts do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(execution_id) and
              is_binary(attempt) do
     running_execution =
-      from(e in Arca.Execution,
+      from(e in Arca.Schemas.Execution,
         where: e.id == ^execution_id and e.athanor_id == ^athanor_id and e.status == "running",
         select: e.current_attempt
       )
@@ -811,6 +820,7 @@ defmodule Arca.ExecutionAttempts do
         |> Arca.Repo.locking_transaction()
       end
     end)
+    |> Arca.Data.project()
   end
 
   def close(%Cyfr.Actor{}, _attempt, _state, _outcome, _opts), do: {:error, :no_athanor}
@@ -844,6 +854,7 @@ defmodule Arca.ExecutionAttempts do
           refused
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc false
@@ -1017,12 +1028,13 @@ defmodule Arca.ExecutionAttempts do
           refused
       end
     end)
+    |> Arca.Data.project()
   end
 
   def takeover(%Cyfr.Actor{}, _execution_id, _opts), do: {:error, :no_athanor}
 
   @doc "The attempt that owns `execution_id`, or nil."
-  @spec current(Cyfr.Actor.t(), String.t()) :: ExecutionAttempt.t() | nil | {:error, term()}
+  @spec current(Cyfr.Actor.t(), String.t()) :: map() | nil | {:error, term()}
   def current(%Cyfr.Actor{athanor_id: athanor_id}, execution_id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.current", fn ->
@@ -1033,12 +1045,13 @@ defmodule Arca.ExecutionAttempts do
         )
       )
     end)
+    |> Arca.Data.project()
   end
 
   def current(%Cyfr.Actor{}, _execution_id), do: {:error, :no_athanor}
 
   @doc "One attempt by id, within the athanor."
-  @spec get(Cyfr.Actor.t(), String.t()) :: ExecutionAttempt.t() | nil | {:error, term()}
+  @spec get(Cyfr.Actor.t(), String.t()) :: map() | nil | {:error, term()}
   def get(%Cyfr.Actor{athanor_id: athanor_id}, attempt)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.get", fn ->
@@ -1046,6 +1059,7 @@ defmodule Arca.ExecutionAttempts do
         from(a in ExecutionAttempt, where: a.athanor_id == ^athanor_id and a.attempt == ^attempt)
       )
     end)
+    |> Arca.Data.project()
   end
 
   def get(%Cyfr.Actor{}, _attempt), do: {:error, :no_athanor}
@@ -1059,7 +1073,7 @@ defmodule Arca.ExecutionAttempts do
   calling member's: a member whose own clock runs fast would otherwise
   list attempts a peer is still renewing, and lapse live work.
   """
-  @spec list_stale(DateTime.t(), pos_integer()) :: [ExecutionAttempt.t()]
+  @spec list_stale(DateTime.t(), pos_integer()) :: [map()]
   def list_stale(%DateTime{} = now, limit \\ 50) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.list_stale", [], fn ->
       # arca:unscoped-ok the sweeper reaps lapsed attempts across all
@@ -1072,6 +1086,7 @@ defmodule Arca.ExecutionAttempts do
         )
       )
     end)
+    |> Arca.Data.project()
   end
 
   @doc "How long one lease is good for, in seconds."
@@ -1285,7 +1300,9 @@ defmodule Arca.ExecutionAttempts do
   # arca:db-raise-ok inside the caller's transaction
   defp point!(athanor_id, execution_id, attempt) do
     {1, _} =
-      from(e in Arca.Execution, where: e.id == ^execution_id and e.athanor_id == ^athanor_id)
+      from(e in Arca.Schemas.Execution,
+        where: e.id == ^execution_id and e.athanor_id == ^athanor_id
+      )
       |> Arca.Repo.update_all(set: [current_attempt: attempt])
 
     :ok
@@ -1294,7 +1311,7 @@ defmodule Arca.ExecutionAttempts do
   # The pointer of the execution `attempt` belongs to, as a subquery a
   # write can require its own id to be in.
   defp owner(attempt) do
-    from(e in Arca.Execution,
+    from(e in Arca.Schemas.Execution,
       join: a in ExecutionAttempt,
       on: a.execution_id == e.id,
       where: a.attempt == ^attempt,
@@ -1312,7 +1329,7 @@ defmodule Arca.ExecutionAttempts do
   end
 
   defp current_of(execution_id) do
-    from(e in Arca.Execution, where: e.id == ^execution_id, select: e.current_attempt)
+    from(e in Arca.Schemas.Execution, where: e.id == ^execution_id, select: e.current_attempt)
   end
 
   # The milliseconds from `since` to `upto` (now when nil), never negative;

@@ -67,6 +67,7 @@ defmodule Arca.WebhookDeliveryStorage do
           end
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -89,15 +90,17 @@ defmodule Arca.WebhookDeliveryStorage do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       query =
-        from d in WebhookDelivery,
+        from(d in WebhookDelivery,
           where:
             d.webhook_id == ^webhook_id and d.idempotency_key == ^idempotency_key and
               d.status == "claimed"
+        )
 
       Arca.Repo.update_all(query, set: [status: Atom.to_string(outcome), settled_at: now])
 
       :ok
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -115,12 +118,14 @@ defmodule Arca.WebhookDeliveryStorage do
       when is_binary(webhook_id) and is_binary(idempotency_key) do
     Arca.Repo.Errors.with_db_rescue("WebhookDeliveryStorage.release", fn ->
       query =
-        from d in WebhookDelivery,
+        from(d in WebhookDelivery,
           where: d.webhook_id == ^webhook_id and d.idempotency_key == ^idempotency_key
+        )
 
       Arca.Repo.delete_all(query)
       :ok
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -130,18 +135,20 @@ defmodule Arca.WebhookDeliveryStorage do
   @spec sweep(DateTime.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def sweep(%DateTime{} = older_than) do
     Arca.Repo.Errors.with_db_rescue("WebhookDeliveryStorage.sweep", fn ->
-      query = from d in WebhookDelivery, where: d.first_seen_at < ^older_than
+      query = from(d in WebhookDelivery, where: d.first_seen_at < ^older_than)
       {count, _} = Arca.Repo.delete_all(query)
       {:ok, count}
     end)
+    |> Arca.Data.project()
   end
 
   defp lookup_existing(webhook_id, key) do
     query =
-      from d in WebhookDelivery,
+      from(d in WebhookDelivery,
         where: d.webhook_id == ^webhook_id and d.idempotency_key == ^key,
         select: %{first_seen_at: d.first_seen_at, status: d.status},
         limit: 1
+      )
 
     case Arca.Repo.one(query) do
       nil -> :missing
@@ -153,10 +160,11 @@ defmodule Arca.WebhookDeliveryStorage do
   # row `claimed`, and this must not steal it.
   defp reclaim(webhook_id, idempotency_key, now) do
     query =
-      from d in WebhookDelivery,
+      from(d in WebhookDelivery,
         where:
           d.webhook_id == ^webhook_id and d.idempotency_key == ^idempotency_key and
             d.status == "failed"
+      )
 
     case Arca.Repo.update_all(query,
            set: [status: "claimed", first_seen_at: now, settled_at: nil]

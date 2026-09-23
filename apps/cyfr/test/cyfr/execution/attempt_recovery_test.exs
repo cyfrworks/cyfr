@@ -46,13 +46,13 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
     assert %{state: "lapsed", outcome: "uncertain"} =
              ExecutionAttempts.get(Sanctum.Context.actor(ctx), record.attempt)
 
-    assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, record.id)
+    assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
 
     # The dead runner's result arrives late and is refused by the fence.
     assert {:error, :not_running} =
              Record.write_completed(Record.complete(record, %{"late" => true}))
 
-    assert %{status: "failed", output: nil} = Arca.Repo.get!(Arca.Execution, record.id)
+    assert %{status: "failed", output: nil} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
 
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(Sanctum.Context.actor(ctx), record.id,
@@ -63,7 +63,7 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
       )
 
     assert successor.fence == 2
-    assert Arca.Repo.get!(Arca.Execution, record.id).current_attempt == successor.attempt
+    assert Arca.Repo.get!(Arca.Schemas.Execution, record.id).current_attempt == successor.attempt
     assert :lost = Record.renew_lease(record.id, record.attempt)
     assert {:ok, _} = Record.renew_lease(record.id, successor.attempt)
   end
@@ -93,7 +93,7 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
            |> Enum.find(&(&1.id == record.id)) == nil
 
     assert :ok = Cyfr.Execution.Sweeper.sweep()
-    assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, record.id)
+    assert %{status: "running"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
 
     # ...and a member whose own clock ran fast would find it takeable,
     # which is the disagreement the cell's clock exists to prevent: the
@@ -117,7 +117,7 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
              )
 
     assert :ok = Cyfr.Execution.Sweeper.sweep()
-    assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, record.id)
+    assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
   end
 
   test "the sweep tick of a boot that does not own the control plane marks nothing", %{ctx: ctx} do
@@ -139,11 +139,11 @@ defmodule Cyfr.Execution.AttemptRecoveryTest do
     on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
 
     assert {:noreply, %{}} = Cyfr.Execution.Sweeper.handle_info(:sweep, %{})
-    assert %{status: "running"} = Arca.Repo.get!(Arca.Execution, record.id)
+    assert %{status: "running"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
 
     Arca.ControlPlane.record(:unclaimed)
     assert {:noreply, %{}} = Cyfr.Execution.Sweeper.handle_info(:sweep, %{})
-    assert %{status: "failed"} = Arca.Repo.get!(Arca.Execution, record.id)
+    assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
   end
 
   test "a completion closes the attempt with the row, and a cancel from a read-back record closes the current one",

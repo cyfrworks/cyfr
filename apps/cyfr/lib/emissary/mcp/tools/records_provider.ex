@@ -875,7 +875,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
 
   defp format_datetime(value), do: Cyfr.Time.iso8601(value)
 
-  defp mcp_log_to_map(%Arca.McpLog{} = log) do
+  defp mcp_log_to_map(%{id: _} = log) do
     %{
       id: log.id,
       request_id: log.request_id,
@@ -894,7 +894,7 @@ defmodule Emissary.MCP.Tools.RecordsProvider do
     }
   end
 
-  defp policy_log_to_map(%Arca.PolicyLog{} = log) do
+  defp policy_log_to_map(%{id: _} = log) do
     %{
       id: log.id,
       request_id: log.request_id,

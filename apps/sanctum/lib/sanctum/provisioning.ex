@@ -106,7 +106,7 @@ defmodule Sanctum.Provisioning do
   @keeper_key {__MODULE__, :keeper}
 
   @typedoc "The claim an attempt holds while it fills an estate."
-  @type claim :: Arca.Schemas.ProvisioningClaim.t()
+  @type claim :: %{required(:owner) => String.t(), optional(atom()) => term()}
 
   @doc """
   Called once the person is admitted, and again whenever their namespace
@@ -116,7 +116,7 @@ defmodule Sanctum.Provisioning do
   no registry, no namespace and no claim to have a furnace of their own.
   """
   @spec after_sign_in(String.t()) ::
-          {:ok, Arca.Schemas.Athanor.t()} | {:error, term()} | :pending
+          {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()} | :pending
   def after_sign_in(user_id) when is_binary(user_id) do
     case Users.get(user_id) do
       {:ok, user} ->
@@ -138,8 +138,8 @@ defmodule Sanctum.Provisioning do
   person its only member), announced for filling if not yet filled, and
   recorded on the row. Idempotent.
   """
-  @spec ensure_personal_athanor(Arca.Schemas.User.t()) ::
-          {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
+  @spec ensure_personal_athanor(Sanctum.Tenancy.Users.user()) ::
+          {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
   def ensure_personal_athanor(%{id: user_id} = user) do
     with {:ok, athanor} <- find_or_create_personal(user),
          {:ok, _} <- Members.ensure(user_id, scope: "athanor", athanor_id: athanor.id),
@@ -293,8 +293,8 @@ defmodule Sanctum.Provisioning do
   filler attached answers `{:error, :unavailable}` — an estate nothing
   can fill is neither busy nor failed.
   """
-  @spec provision(Arca.Schemas.Athanor.t(), Context.t() | nil) ::
-          {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
+  @spec provision(Sanctum.Tenancy.Athanors.athanor(), Context.t() | nil) ::
+          {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
   def provision(%{provisioned_at: %DateTime{}} = athanor, _ctx), do: {:ok, athanor}
 
   def provision(athanor, acting_ctx) do
@@ -751,14 +751,14 @@ defmodule Sanctum.Provisioning do
   The athanor row, for a filler that holds only its id. Reading tenancy
   rows is this domain's; the component domain never queries them.
   """
-  @spec athanor(String.t()) :: {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
+  @spec athanor(String.t()) :: {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
   defdelegate athanor(athanor_id), to: Athanors, as: :get
 
   @doc """
   Every filled athanor a boot's seed sync offers new media to — active,
   and already provisioned.
   """
-  @spec filled_athanors() :: [Arca.Schemas.Athanor.t()]
+  @spec filled_athanors() :: [Sanctum.Tenancy.Athanors.athanor()]
   def filled_athanors do
     for athanor <- Athanors.list_active(), not is_nil(athanor.provisioned_at), do: athanor
   end
@@ -830,8 +830,8 @@ defmodule Sanctum.Provisioning do
   claim settled `ready`: announcing a fill that did not finish would have
   every listener read the bundle again and ask for another attempt.
   """
-  @spec mark_filled(Arca.Schemas.Athanor.t()) ::
-          {:ok, Arca.Schemas.Athanor.t()} | {:error, term()}
+  @spec mark_filled(Sanctum.Tenancy.Athanors.athanor()) ::
+          {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
   def mark_filled(athanor) do
     case Athanors.mark_provisioned(athanor) do
       {:ok, filled} ->
@@ -852,7 +852,8 @@ defmodule Sanctum.Provisioning do
   row records the failure only once that landed: an attempt whose claim a
   successor took leaves the successor's record alone.
   """
-  @spec record_failure(claim(), Arca.Schemas.Athanor.t(), atom(), term()) :: {:error, term()}
+  @spec record_failure(claim(), Sanctum.Tenancy.Athanors.athanor(), atom(), term()) ::
+          {:error, term()}
   def record_failure(claim, athanor, step, detail) do
     case settle(athanor.id, claim, "failed", "#{step}: #{inspect(detail)}") do
       :ok ->

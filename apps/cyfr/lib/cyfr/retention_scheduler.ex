@@ -75,7 +75,6 @@ defmodule Cyfr.RetentionScheduler do
   require Logger
 
   alias Arca.JobClaims
-  alias Arca.Schemas.JobClaim
 
   @default_interval_ms :timer.hours(6)
 
@@ -166,13 +165,13 @@ defmodule Cyfr.RetentionScheduler do
           | {:stopped, stopped(), summary()}
           | {:error, :database_error}
   def cycle(opts \\ []) when is_list(opts) do
-    key = Keyword.get(opts, :key, JobClaim.cell_key())
+    key = Keyword.get(opts, :key, JobClaims.cell_key())
     owner = Keyword.get(opts, :owner, Cyfr.Boot.id())
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
 
     case JobClaims.claim(@kind, key, owner, lease_ms) do
       {:ok, claim} -> open(claim, opts, lease_ms)
-      {:busy, %JobClaim{owner: peer}} -> {:busy, peer}
+      {:busy, %{owner: peer}} -> {:busy, peer}
       {:error, :database_error} = unavailable -> unavailable
     end
   end
@@ -187,7 +186,7 @@ defmodule Cyfr.RetentionScheduler do
       |> Map.get(:job, [])
       |> Keyword.put_new(:interval, Map.get(state, :interval, @default_interval_ms))
 
-    if Arca.ControlPlane.held?() and mine?(Keyword.get(opts, :key, JobClaim.cell_key())) do
+    if Arca.ControlPlane.held?() and mine?(Keyword.get(opts, :key, JobClaims.cell_key())) do
       report(cycle(opts))
     end
   end
@@ -241,7 +240,7 @@ defmodule Cyfr.RetentionScheduler do
   # its cycle is younger than a tick interval, or a fresh cycle. A
   # takeover leaves `detail` as it found it, so what is read here is what
   # the predecessor had completed.
-  defp resume(%JobClaim{detail: detail}, now, interval) do
+  defp resume(%{detail: detail}, now, interval) do
     with %{"cycle" => cycle, "step" => step} = recorded when is_binary(step) <- decode(detail),
          {:ok, began, _offset} <- DateTime.from_iso8601(cycle),
          true <- step in step_ids(),

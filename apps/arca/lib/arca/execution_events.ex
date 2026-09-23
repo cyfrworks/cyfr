@@ -43,14 +43,16 @@ defmodule Arca.ExecutionEvents do
   def append!(%Cyfr.Actor{athanor_id: athanor_id}, execution_id, type, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(type) do
     {count, _} =
-      from(e in Arca.Execution, where: e.id == ^execution_id and e.athanor_id == ^athanor_id)
+      from(e in Arca.Schemas.Execution,
+        where: e.id == ^execution_id and e.athanor_id == ^athanor_id
+      )
       |> Arca.Repo.update_all(inc: [event_seq: 1])
 
     if count != 1, do: Arca.Repo.rollback({:execution_not_found, execution_id})
 
     seq =
       Arca.Repo.one!(
-        from(e in Arca.Execution,
+        from(e in Arca.Schemas.Execution,
           where: e.id == ^execution_id and e.athanor_id == ^athanor_id,
           select: e.event_seq
         )
@@ -74,7 +76,7 @@ defmodule Arca.ExecutionEvents do
 
   @doc "Entry-point form of `append!/4`."
   @spec append(Cyfr.Actor.t(), String.t(), String.t(), keyword()) ::
-          {:ok, ExecutionEvent.t()} | {:error, term()}
+          {:ok, map()} | {:error, term()}
   def append(actor, execution_id, type, opts \\ [])
 
   def append(%Cyfr.Actor{athanor_id: athanor_id} = actor, execution_id, type, opts)
@@ -82,13 +84,14 @@ defmodule Arca.ExecutionEvents do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionEvents.append", fn ->
       Arca.Repo.transaction(fn -> append!(actor, execution_id, type, opts) end)
     end)
+    |> Arca.Data.project()
   end
 
   def append(%Cyfr.Actor{}, _execution_id, _type, _opts), do: {:error, :no_athanor}
 
   @doc "The events of an execution after `after_seq`, in order, at most `limit`."
   @spec since(Cyfr.Actor.t(), String.t(), non_neg_integer(), pos_integer()) ::
-          {:ok, [ExecutionEvent.t()]} | {:error, term()}
+          {:ok, [map()]} | {:error, term()}
   def since(actor, execution_id, after_seq, limit \\ 500)
 
   def since(%Cyfr.Actor{athanor_id: athanor_id}, execution_id, after_seq, limit)
@@ -104,15 +107,16 @@ defmodule Arca.ExecutionEvents do
          )
        )}
     end)
+    |> Arca.Data.project()
   end
 
   def since(%Cyfr.Actor{}, _execution_id, _after_seq, _limit), do: {:error, :no_athanor}
 
   @doc "The decoded `data` of an event row, or an empty map."
-  @spec data(ExecutionEvent.t()) :: map()
-  def data(%ExecutionEvent{data: nil}), do: %{}
+  @spec data(map()) :: map()
+  def data(%{data: nil}), do: %{}
 
-  def data(%ExecutionEvent{data: json}) do
+  def data(%{data: json}) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, map} when is_map(map) -> map
       _ -> %{}
