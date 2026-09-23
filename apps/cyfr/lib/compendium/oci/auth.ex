@@ -19,6 +19,8 @@ defmodule Compendium.OCI.Auth do
   for Docker/OCI client compatibility; cyfr itself always uses Bearer.
   """
 
+  require Logger
+
   alias Compendium.Registry.CredentialStore
 
   @doc """
@@ -44,16 +46,32 @@ defmodule Compendium.OCI.Auth do
 
   Returns `{:ok, credential}` or `:anonymous`. A nil context or missing
   `user_id` returns `:anonymous`; credentials are never shared across users.
+
+  A credential that cannot be read (the store is down, or the stored row
+  does not open) also sends the request anonymously — the OCI transport
+  always sends one — but says so in the log, so a 401 that follows is not
+  mistaken for a missing sign-in.
   """
   @spec fetch_credential(String.t(), String.t(), Sanctum.Context.t() | nil) ::
           {:ok, map()} | :anonymous
   def fetch_credential(registry, namespace_slug, ctx)
       when is_binary(registry) and is_binary(namespace_slug) do
     case ctx do
-      %Sanctum.Context{user_id: user_id} when is_binary(user_id) and user_id != "" ->
-        case CredentialStore.get(user_id, registry, namespace_slug) do
-          {:ok, cred} -> {:ok, cred}
-          :not_found -> :anonymous
+      %Sanctum.Context{user_id: user_id} = ctx when is_binary(user_id) and user_id != "" ->
+        case CredentialStore.get(ctx, registry, namespace_slug) do
+          {:ok, cred} ->
+            {:ok, cred}
+
+          {:error, :not_found} ->
+            :anonymous
+
+          {:error, reason} ->
+            Logger.warning(
+              "[Compendium.OCI.Auth] push token for namespace #{inspect(namespace_slug)} " <>
+                "unreadable (#{inspect(reason)}) — request goes anonymous"
+            )
+
+            :anonymous
         end
 
       _ ->

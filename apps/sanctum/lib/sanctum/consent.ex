@@ -16,8 +16,13 @@ defmodule Sanctum.Consent do
   | `Sanctum.Consent.Proof` | single-use authorization bound to one commit |
   | `Sanctum.Consent.Authz` | who may consent at all |
 
-  Persistence and the API endpoints are deliberately not here yet; these
-  are the pure verbs the endpoints will be built from.
+  ## Reading consent from above
+
+  Consent rows are security rows: a domain or a surface learns about
+  them only through `profiles/2`, `head_consent/2` and `revoke_source/2`
+  here. Each scopes by the tenant of the caller's context, and each keeps
+  an unreadable store, a damaged row and an absent one apart — a caller
+  that cannot tell them apart would read an outage as "not granted".
 
   ## The protocol
 
@@ -112,4 +117,68 @@ defmodule Sanctum.Consent do
   """
   @spec scopes() :: [scope()]
   def scopes, do: [:versionless, :pinned]
+
+  @typedoc """
+  One candidate profile of a source: decoded, or — when its stored kind or
+  status is outside the closed vocabulary — only its id and `:corrupt`.
+  """
+  @type profile_entry ::
+          Cyfr.Authority.RootSelect.profile_summary()
+          | %{required(:id) => String.t(), required(:status) => :corrupt}
+
+  @doc """
+  The non-revoked profiles of a name-level `source_ref` in the caller's
+  athanor. A row that cannot be decoded is present as
+  `%{id: id, status: :corrupt}`, never dropped: a caller that needs the
+  decoded profile treats it as unavailable for that profile.
+
+  `{:error, :unavailable}` is a store that could not answer, never an
+  empty list; `{:error, :no_athanor}` is a context with no tenant.
+  """
+  @spec profiles(Sanctum.Context.t(), String.t()) ::
+          {:ok, [profile_entry()]} | {:error, :unavailable | :no_athanor}
+  def profiles(%Sanctum.Context{} = ctx, source_ref) when is_binary(source_ref) do
+    case Arca.ConsentStorage.profile_entries(Sanctum.Context.actor(ctx), source_ref) do
+      {:ok, entries} -> {:ok, entries}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  The head consent revision of a profile in the caller's athanor, decoded
+  with its vault references (`t:Arca.ConsentStorage.consent/0`).
+
+  A profile with no head, or no such profile, is `:not_found`; a stored
+  value outside the closed vocabulary is `:corrupt`; a store that could
+  not answer is `:unavailable`.
+  """
+  @spec head_consent(Sanctum.Context.t(), String.t()) ::
+          {:ok, Arca.ConsentStorage.consent()}
+          | {:error, :not_found | :unavailable | :corrupt | :no_athanor}
+  def head_consent(%Sanctum.Context{} = ctx, profile_id) when is_binary(profile_id) do
+    case Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id) do
+      {:ok, consent} -> {:ok, consent}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, absent} when absent in [:not_found, :no_head] -> {:error, :not_found}
+      {:error, {:invalid_stored_value, _field}} -> {:error, :corrupt}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  Revoke every profile of a name-level `source_ref` in the caller's
+  athanor, in one transaction — what removing the last version of a
+  component does to the grants made for it. Consent history and vault
+  entries remain. Answers the ids revoked.
+  """
+  @spec revoke_source(Sanctum.Context.t(), String.t()) ::
+          {:ok, %{revoked: [String.t()]}} | {:error, :unavailable | :no_athanor}
+  def revoke_source(%Sanctum.Context{} = ctx, source_ref) when is_binary(source_ref) do
+    case Arca.ProfileStorage.revoke_for_source(Sanctum.Context.actor(ctx), source_ref) do
+      {:ok, ids} -> {:ok, %{revoked: ids}}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
 end

@@ -18,10 +18,6 @@ defmodule Compendium.Registry.IdentityTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    for slug <- ["alice", "stripe.com"] do
-      CredentialStore.delete(@user, registry(), slug)
-    end
-
     ctx =
       Context.build(
         user_id: @user,
@@ -33,17 +29,11 @@ defmodule Compendium.Registry.IdentityTest do
         authenticated: true
       )
 
-    {:ok, ctx: ctx}
-  end
+    for slug <- ["alice", "stripe.com"] do
+      CredentialStore.delete(ctx, registry(), slug)
+    end
 
-  defp push_token(slug) do
-    %{
-      type: :push_token,
-      token: "cyfr_pt_fake_#{slug}",
-      namespace: slug,
-      issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-      label: "test"
-    }
+    {:ok, ctx: ctx}
   end
 
   describe "identity/1 return shape" do
@@ -69,13 +59,21 @@ defmodule Compendium.Registry.IdentityTest do
       # unreachable in tests, so each confirm_namespace call times out. Our
       # impl keeps entries on transient errors (timeout) with `last_used_at: nil`,
       # so we'll observe a map with personal_namespace set to {slug: "alice", ...}.
-      :ok = CredentialStore.put(@user, registry(), "alice", push_token("alice"))
+      :ok =
+        CredentialStore.put_push_token(ctx, registry(), "alice", "cyfr_pt_fake_alice", "personal")
 
       result = Identity.identity(ctx)
       assert is_map(result)
       assert Map.has_key?(result, :authenticated)
       # Don't assert the exact authenticated flag — depends on whether the
       # registry host resolves in the test env. Just assert the shape is stable.
+    end
+
+    @tag :capture_log
+    test "a credential store that cannot be read is unavailable, not signed out", %{ctx: ctx} do
+      Arca.Repo.query!("ALTER TABLE registry_tokens RENAME TO registry_tokens_unavailable")
+
+      assert {:error, {:unavailable, "Registry credentials"}} = Identity.identity(ctx)
     end
   end
 end

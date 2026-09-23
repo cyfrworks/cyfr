@@ -3,34 +3,23 @@
 
 defmodule Compendium.Registry.CredentialStore do
   @moduledoc """
-  Encrypted server-side registry credential storage.
+  The component domain's door to a person's registry push tokens.
 
-  Backed by the `registry_tokens` table via `Arca.RegistryTokenStorage`;
-  values are sealed here with `Sanctum.Cipher` under the
-  `:registry_token` AAD purpose (the storage layer holds ciphertext only).
+  The tokens are identity's: `Sanctum.RegistryCredentials` seals, stores
+  and opens them, keyed by the person the caller's context names. This
+  module adds what only this domain knows — the device label a token is
+  issued under — and the logging a best-effort cache write needs. Every
+  function takes the caller's established context; none takes a user id.
 
-  ## Stored shape
-
-  Stores push tokens keyed by `(user_id, registry, namespace_slug)`.
-  Personal and publisher namespaces have independent credential slots.
-
-  Stored value:
-
-      %{type: :push_token, token: "cyfr_pt_...", namespace: "alice",
-        issued_at: iso8601, label: "host-name"}
-
-  Credentials are looked up only for the current user and configured registry.
+  Reads keep their three failures apart from absence (`:unavailable`,
+  `:corrupt`, `:not_found`), and a listing keeps a row that cannot be
+  opened as `%{id: id, status: :corrupt}`.
   """
 
   require Logger
 
-  alias Arca.RegistryTokenStorage
-  alias Sanctum.CipherAAD
-
-  # Keys in the stored credential map. `:type` carries the credential shape
-  # (currently always `:push_token`); it is a value, not a key, so don't list
-  # it here.
-  @valid_keys ~w(type token namespace issued_at label role)a
+  alias Sanctum.Context
+  alias Sanctum.RegistryCredentials
 
   @doc """
   Human-readable label for the device this credential was issued to.
@@ -60,221 +49,69 @@ defmodule Compendium.Registry.CredentialStore do
   end
 
   @doc """
-  Store a credential for a user, registry, and namespace.
+  Store a push token for the caller under this device's label,
+  best-effort.
 
-      CredentialStore.put(
-        "github|https://github.com|12345678",
-        "registry.cyfr.run",
-        "alice",
-        %{type: :push_token, token: "cyfr_pt_...", namespace: "alice",
-          issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-          label: "laptop"}
-      )
+  Shared by the OAuth callback, the claim flow and the CLI's re-probe —
+  all cache the same push-token shape after the identity probe. A failed
+  write degrades to `{:error, reason}` rather than crashing the caller,
+  which then decides whether to re-auth. A non-binary slug or token yields
+  `:skipped`.
   """
-  @spec put(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def put(user_id, registry, namespace_slug, credential)
-      when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    with {:ok, value} <- encode_credential(credential) do
-      aad = CipherAAD.registry_token(user_id, registry, namespace_slug)
-      {:ok, ciphertext} = Sanctum.Cipher.encrypt(value, aad)
-
-      RegistryTokenStorage.put(%{
-        user_id: user_id,
-        registry: registry,
-        namespace_slug: namespace_slug,
-        credential_ciphertext: ciphertext,
-        issued_at: credential_issued_at(credential)
-      })
-    end
-  end
-
-  @doc """
-  Build a push-token credential and store it, best-effort.
-
-  Shared by the OAuth callback and the CLI device flow — both cache the same
-  push-token shape after the identity probe. Failures, including a raised
-  encryption/keyring misconfiguration, degrade to `{:error, reason}` rather than
-  crashing the caller, which then decides whether to re-auth. A non-binary slug
-  or token yields `:skipped`.
-  """
-  @spec put_push_token(String.t(), String.t(), term(), term(), String.t()) ::
-          :ok | {:error, term()} | :skipped
-  def put_push_token(user_id, registry, slug, token, role)
-      when is_binary(slug) and is_binary(token) do
-    cred = %{
-      type: :push_token,
-      token: token,
-      namespace: slug,
-      role: role,
-      issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-      label: device_label()
-    }
-
-    case put(user_id, registry, slug, cred) do
-      :ok ->
-        :ok
-
+  @spec put_push_token(Context.t(), String.t(), term(), term(), String.t()) ::
+          :ok | :skipped | {:error, :unavailable | :forbidden}
+  def put_push_token(%Context{} = ctx, registry, slug, token, role) do
+    case RegistryCredentials.put_push_token(ctx, registry, slug, token, role,
+           label: device_label()
+         ) do
       {:error, reason} = err ->
         Logger.warning(
-          "[CredentialStore] push-token write failed for #{slug}: #{inspect(reason)} — " <>
+          "[CredentialStore] push-token write failed for #{inspect(slug)}: #{inspect(reason)} — " <>
             "leaving orphan cyfr.run token (server-side reaper backstop)"
         )
 
         err
-    end
-  rescue
-    e ->
-      Logger.warning(
-        "[CredentialStore] push-token write raised for #{slug}: #{Exception.message(e)} — " <>
-          "treating as a failed credential write"
-      )
 
-      {:error, :exception}
+      stored_or_skipped ->
+        stored_or_skipped
+    end
   end
 
-  def put_push_token(_user_id, _registry, _slug, _token, _role), do: :skipped
-
   @doc """
-  Get a credential for a specific user, registry, and namespace.
-
-  Returns `{:ok, credential_map}` or `:not_found`.
+  The caller's credential for one registry and namespace.
   """
-  @spec get(String.t(), String.t(), String.t()) :: {:ok, map()} | :not_found
-  def get(user_id, registry, namespace_slug)
-      when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    case RegistryTokenStorage.get(user_id, registry, namespace_slug) do
-      {:ok, row} ->
-        unseal(row)
-
-      {:error, :not_found} ->
-        :not_found
-
-      {:error, reason} ->
-        # The callers' contract stays two-valued, but a database outage must
-        # not be silently indistinguishable from "you have no credential" —
-        # the user-facing symptom is a spurious "run `cyfr login`".
-        Logger.warning("[CredentialStore] get unavailable: #{inspect(reason)}")
-        :not_found
-    end
-  end
+  @spec get(Context.t(), String.t(), String.t()) ::
+          {:ok, RegistryCredentials.credential()}
+          | {:error, :not_found | :unavailable | :corrupt | :forbidden}
+  defdelegate get(ctx, registry, namespace_slug), to: RegistryCredentials
 
   @doc """
-  List all credentials a user holds for a registry, one per namespace.
-
-  Returns a list ordered personal-first then publisher-alphabetical.
-  Empty list if the user has no credentials.
-
-  Push-token uses only — who a person is lives on the `users` row
-  (`Sanctum.Namespace`). Used by:
-  - `Compendium.Registry.Client.auth_headers/1` to pick a bearer for
-    non-namespace-scoped calls (e.g. `/v1/identity/probe`).
+  Every credential the caller holds for a registry, one per namespace,
+  personal first then publisher-alphabetical. Used by:
+  - `Compendium.Registry.Client` to pick a bearer for non-namespace-scoped
+    calls (e.g. `/v1/identity/probe`).
   - Registry `whoami` to present personal + membership identity.
   """
-  @spec list_for_user(String.t(), String.t()) :: [map()]
-  def list_for_user(user_id, registry)
-      when is_binary(user_id) and is_binary(registry) do
-    case RegistryTokenStorage.list(user_id, registry) do
-      {:ok, rows} ->
-        rows
-        |> Enum.sort_by(fn row ->
-          # Personal + reserved (no dot) come before publisher (has dot),
-          # then alphabetical within each bucket.
-          {if(String.contains?(row.namespace_slug, "."), do: 1, else: 0), row.namespace_slug}
-        end)
-        |> Enum.flat_map(fn row ->
-          case unseal(row) do
-            {:ok, cred} -> [cred]
-            :not_found -> []
-          end
-        end)
+  @spec list_for_user(Context.t(), String.t()) ::
+          {:ok, [RegistryCredentials.credential() | RegistryCredentials.corrupt()]}
+          | {:error, :unavailable | :forbidden}
+  def list_for_user(%Context{} = ctx, registry), do: RegistryCredentials.list(ctx, registry)
 
-      {:error, reason} ->
-        Logger.warning("[CredentialStore] list unavailable: #{inspect(reason)}")
-        []
-    end
+  @doc """
+  The usable push tokens of a listing, in its order: a row that could not
+  be opened, or a credential with no token, is skipped when choosing a
+  bearer — it is still in the listing, for a caller that reports it.
+  """
+  @spec push_tokens([map()]) :: [RegistryCredentials.credential()]
+  def push_tokens(entries) when is_list(entries) do
+    Enum.filter(entries, &match?(%{type: :push_token, token: token} when is_binary(token), &1))
   end
 
   @doc """
-  Delete a credential for a user, registry, and namespace.
+  Delete the caller's credential for one registry and namespace.
 
   A failed delete is a failed REVOCATION — it surfaces, never reports `:ok`.
   """
-  @spec delete(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def delete(user_id, registry, namespace_slug)
-      when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    RegistryTokenStorage.delete(user_id, registry, namespace_slug)
-  end
-
-  # ============================================================================
-  # Internal
-  # ============================================================================
-
-  defp unseal(row) do
-    aad = CipherAAD.registry_token(row.user_id, row.registry, row.namespace_slug)
-
-    case Sanctum.Cipher.decrypt(row.credential_ciphertext, aad) do
-      {:ok, value} ->
-        decode_credential(value)
-
-      {:error, reason} ->
-        Logger.warning(
-          "[CredentialStore] decrypt failed for user=#{row.user_id} " <>
-            "namespace=#{row.namespace_slug}: #{inspect(reason)}"
-        )
-
-        :not_found
-    end
-  end
-
-  defp credential_issued_at(credential) do
-    raw = credential[:issued_at] || credential["issued_at"]
-
-    with true <- is_binary(raw),
-         {:ok, dt, _offset} <- DateTime.from_iso8601(raw) do
-      DateTime.truncate(dt, :microsecond)
-    else
-      _ -> DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    end
-  end
-
-  defp encode_credential(credential) when is_map(credential) do
-    # Normalize atom keys to strings for JSON encoding.
-    normalized =
-      credential
-      |> Enum.map(fn
-        {k, v} when is_atom(k) -> {Atom.to_string(k), normalize_value(v)}
-        {k, v} -> {k, normalize_value(v)}
-      end)
-      |> Map.new()
-
-    case Jason.encode(normalized) do
-      {:ok, json} ->
-        {:ok, json}
-
-      {:error, reason} ->
-        # Reject encoding failures without overwriting the stored token.
-        Logger.warning("[CredentialStore] unencodable credential: #{inspect(reason)}")
-        {:error, :unencodable_credential}
-    end
-  end
-
-  defp normalize_value(v) when is_atom(v), do: Atom.to_string(v)
-  defp normalize_value(v), do: v
-
-  # The one credential shape this store writes; any other row is unusable.
-  defp decode_credential(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, %{"type" => "push_token"} = map} ->
-        credential =
-          for key <- @valid_keys,
-              Map.has_key?(map, Atom.to_string(key)),
-              into: %{},
-              do: {key, Map.fetch!(map, Atom.to_string(key))}
-
-        {:ok, %{credential | type: :push_token}}
-
-      _ ->
-        :not_found
-    end
-  end
+  @spec delete(Context.t(), String.t(), String.t()) :: :ok | {:error, :unavailable | :forbidden}
+  defdelegate delete(ctx, registry, namespace_slug), to: RegistryCredentials
 end

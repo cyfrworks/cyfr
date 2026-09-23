@@ -1562,8 +1562,9 @@ defmodule Arca.TurnStorage do
   `:scope`, `:resolution_kind` (`continue | launch | denied | expired`),
   `:resolution` (a map, stored as JSON), `:denied_result`
   (`%{content, payload}` — the `tool_result` row a declined, expired or
-  errored step leaves), `:grants` (rows for `Arca.ToolGrantStorage.put/1`,
-  written here so the standing answer lands with the decision), `:fence`.
+  errored step leaves), `:grants` (rows `Sanctum.ToolGrants.grant_row/2` built, for
+  `Arca.ToolGrantStorage.put/1`, written here so the standing answer lands
+  with the decision), `:fence`.
   An approved step returns to `proposed` (its kind becomes `launch` for a
   launch); any other decision closes it `denied`. Answers
   `{:ok, %{approval, step, card}}`; a decision already made answers

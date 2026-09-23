@@ -19,116 +19,109 @@ defmodule Compendium.Registry.CredentialStoreTest do
     for user <- [@user, @user2],
         reg <- [@reg, @other_reg],
         slug <- ["alice", "bob", "stripe.com"] do
-      CredentialStore.delete(user, reg, slug)
+      CredentialStore.delete(as(user), reg, slug)
     end
 
     :ok
   end
 
-  defp push_token_cred(slug) do
-    %{
-      type: :push_token,
-      token: "cyfr_pt_#{:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)}",
-      namespace: slug,
-      issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-      label: "test-host"
-    }
+  # The store keys by the person a context names, never by an id handed
+  # in beside it.
+  defp as(user_id),
+    do: Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+
+  defp token, do: "cyfr_pt_#{:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)}"
+
+  defp put!(user_id, registry, slug, token \\ token()) do
+    :ok = CredentialStore.put_push_token(as(user_id), registry, slug, token, "personal")
+    token
   end
 
-  describe "put/4 + get/3" do
+  describe "put_push_token/5 + get/3" do
     test "stores and retrieves a push-token credential keyed by namespace" do
-      cred = push_token_cred("alice")
+      token = put!(@user, @reg, "alice")
 
-      assert :ok = CredentialStore.put(@user, @reg, "alice", cred)
-
-      assert {:ok, retrieved} = CredentialStore.get(@user, @reg, "alice")
+      assert {:ok, retrieved} = CredentialStore.get(as(@user), @reg, "alice")
       assert retrieved.type == :push_token
-      assert retrieved.token == cred.token
+      assert retrieved.token == token
       assert retrieved.namespace == "alice"
-      assert retrieved.label == "test-host"
+      assert retrieved.role == "personal"
+      assert retrieved.label == CredentialStore.device_label()
     end
 
     test "namespaces under the same user are independent slots" do
-      alice_cred = push_token_cred("alice")
-      stripe_cred = push_token_cred("stripe.com")
+      a = put!(@user, @reg, "alice")
+      s = put!(@user, @reg, "stripe.com")
 
-      assert :ok = CredentialStore.put(@user, @reg, "alice", alice_cred)
-      assert :ok = CredentialStore.put(@user, @reg, "stripe.com", stripe_cred)
-
-      assert {:ok, %{token: a}} = CredentialStore.get(@user, @reg, "alice")
-      assert {:ok, %{token: s}} = CredentialStore.get(@user, @reg, "stripe.com")
-      assert a == alice_cred.token
-      assert s == stripe_cred.token
+      assert {:ok, %{token: ^a}} = CredentialStore.get(as(@user), @reg, "alice")
+      assert {:ok, %{token: ^s}} = CredentialStore.get(as(@user), @reg, "stripe.com")
     end
 
     test "overwrites an existing credential on re-put" do
-      first = push_token_cred("alice")
-      second = push_token_cred("alice")
+      _first = put!(@user, @reg, "alice")
+      second = put!(@user, @reg, "alice")
 
-      assert :ok = CredentialStore.put(@user, @reg, "alice", first)
-      assert :ok = CredentialStore.put(@user, @reg, "alice", second)
-
-      assert {:ok, retrieved} = CredentialStore.get(@user, @reg, "alice")
-      assert retrieved.token == second.token
+      assert {:ok, %{token: ^second}} = CredentialStore.get(as(@user), @reg, "alice")
     end
 
-    test "a stored credential of any other type, or of a type that is not a string, is not found" do
-      for type <- [1, "session", nil] do
-        assert :ok =
-                 CredentialStore.put(@user, @reg, "alice", %{
-                   push_token_cred("alice")
-                   | type: type
-                 })
+    test "a stored credential of any other type is damaged, not absent" do
+      for plaintext <- [~s({"type":1}), ~s({"type":"session"}), ~s({"type":null})] do
+        aad = Sanctum.CipherAAD.registry_token(@user, @reg, "alice")
+        {:ok, ciphertext} = Sanctum.Cipher.encrypt(plaintext, aad)
 
-        assert :not_found = CredentialStore.get(@user, @reg, "alice")
+        :ok =
+          Arca.RegistryTokenStorage.put(%{
+            user_id: @user,
+            registry: @reg,
+            namespace_slug: "alice",
+            credential_ciphertext: ciphertext
+          })
+
+        assert {:error, :corrupt} = CredentialStore.get(as(@user), @reg, "alice")
       end
     end
 
     test "returns :not_found for missing slot" do
-      assert :not_found = CredentialStore.get(@user, @reg, "nonexistent")
+      assert {:error, :not_found} = CredentialStore.get(as(@user), @reg, "nonexistent")
+    end
+
+    test "a slug or token that is not a string stores nothing" do
+      assert :skipped = CredentialStore.put_push_token(as(@user), @reg, nil, "t", "personal")
+      assert {:ok, []} = CredentialStore.list_for_user(as(@user), @reg)
     end
   end
 
   describe "user + registry isolation" do
     test "different users have separate credentials for the same namespace" do
-      a = push_token_cred("alice")
-      b = push_token_cred("alice")
+      a = put!(@user, @reg, "alice")
+      b = put!(@user2, @reg, "alice")
 
-      assert :ok = CredentialStore.put(@user, @reg, "alice", a)
-      assert :ok = CredentialStore.put(@user2, @reg, "alice", b)
-
-      assert {:ok, %{token: ta}} = CredentialStore.get(@user, @reg, "alice")
-      assert {:ok, %{token: tb}} = CredentialStore.get(@user2, @reg, "alice")
-      assert ta != tb
+      assert {:ok, %{token: ^a}} = CredentialStore.get(as(@user), @reg, "alice")
+      assert {:ok, %{token: ^b}} = CredentialStore.get(as(@user2), @reg, "alice")
+      assert a != b
     end
 
     test "different registries have separate credentials for the same slot" do
-      r1 = push_token_cred("alice")
-      r2 = push_token_cred("alice")
+      t1 = put!(@user, @reg, "alice")
+      t2 = put!(@user, @other_reg, "alice")
 
-      assert :ok = CredentialStore.put(@user, @reg, "alice", r1)
-      assert :ok = CredentialStore.put(@user, @other_reg, "alice", r2)
-
-      assert {:ok, %{token: t1}} = CredentialStore.get(@user, @reg, "alice")
-      assert {:ok, %{token: t2}} = CredentialStore.get(@user, @other_reg, "alice")
+      assert {:ok, %{token: ^t1}} = CredentialStore.get(as(@user), @reg, "alice")
+      assert {:ok, %{token: ^t2}} = CredentialStore.get(as(@user), @other_reg, "alice")
       assert t1 != t2
     end
   end
 
   describe "list_for_user/2" do
     test "returns empty list when the user has no credentials" do
-      assert [] = CredentialStore.list_for_user("unknown_user", @reg)
+      assert {:ok, []} = CredentialStore.list_for_user(as("unknown_user"), @reg)
     end
 
     test "personal-first ordering, then publishers alphabetical" do
-      for slug <- ["alice", "stripe.com", "bob"] do
-        cred = push_token_cred(slug)
-        assert :ok = CredentialStore.put(@user, @reg, slug, cred)
-      end
+      for slug <- ["alice", "stripe.com", "bob"], do: put!(@user, @reg, slug)
 
       # All three are personal (no dot) except stripe.com.
       # Personal+reserved bucket sorted alphabetically, then publisher bucket.
-      list = CredentialStore.list_for_user(@user, @reg)
+      assert {:ok, list} = CredentialStore.list_for_user(as(@user), @reg)
       assert length(list) == 3
 
       slugs = Enum.map(list, & &1.namespace)
@@ -137,37 +130,56 @@ defmodule Compendium.Registry.CredentialStoreTest do
     end
 
     test "does not leak credentials from other users" do
-      assert :ok = CredentialStore.put(@user, @reg, "alice", push_token_cred("alice"))
-      assert :ok = CredentialStore.put(@user2, @reg, "bob", push_token_cred("bob"))
+      put!(@user, @reg, "alice")
+      put!(@user2, @reg, "bob")
 
-      list = CredentialStore.list_for_user(@user, @reg)
+      assert {:ok, list} = CredentialStore.list_for_user(as(@user), @reg)
       assert Enum.map(list, & &1.namespace) == ["alice"]
+    end
+
+    test "a bearer is chosen from the usable tokens, past a damaged row" do
+      aad = Sanctum.CipherAAD.registry_token(@user, @reg, "alice")
+      {:ok, ciphertext} = Sanctum.Cipher.encrypt("not json", aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: @user,
+          registry: @reg,
+          namespace_slug: "alice",
+          credential_ciphertext: ciphertext
+        })
+
+      token = put!(@user, @reg, "bob")
+
+      assert {:ok, [%{status: :corrupt}, %{namespace: "bob"}] = entries} =
+               CredentialStore.list_for_user(as(@user), @reg)
+
+      assert [%{token: ^token}] = CredentialStore.push_tokens(entries)
     end
   end
 
   describe "delete/3" do
     test "removes a single namespace slot without touching siblings" do
-      assert :ok = CredentialStore.put(@user, @reg, "alice", push_token_cred("alice"))
-      assert :ok = CredentialStore.put(@user, @reg, "stripe.com", push_token_cred("stripe.com"))
+      put!(@user, @reg, "alice")
+      put!(@user, @reg, "stripe.com")
 
-      assert :ok = CredentialStore.delete(@user, @reg, "alice")
-      assert :not_found = CredentialStore.get(@user, @reg, "alice")
-      assert {:ok, _} = CredentialStore.get(@user, @reg, "stripe.com")
+      assert :ok = CredentialStore.delete(as(@user), @reg, "alice")
+      assert {:error, :not_found} = CredentialStore.get(as(@user), @reg, "alice")
+      assert {:ok, _} = CredentialStore.get(as(@user), @reg, "stripe.com")
     end
 
     test "delete is idempotent" do
-      assert :ok = CredentialStore.delete(@user, @reg, "never-existed")
+      assert :ok = CredentialStore.delete(as(@user), @reg, "never-existed")
     end
   end
 
   describe "multi-user privacy" do
     test "user B asking for user A's namespace gets :not_found, not A's token" do
       # User A holds a personal-namespace push token for "alice".
-      a_cred = push_token_cred("alice")
-      assert :ok = CredentialStore.put(@user, @reg, "alice", a_cred)
+      put!(@user, @reg, "alice")
 
       # A user without their own credential must not receive another user's token.
-      assert :not_found = CredentialStore.get(@user2, @reg, "alice")
+      assert {:error, :not_found} = CredentialStore.get(as(@user2), @reg, "alice")
     end
   end
 

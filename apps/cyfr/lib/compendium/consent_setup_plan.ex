@@ -20,16 +20,45 @@ defmodule Compendium.ConsentSetupPlan do
   @doc """
   The consent section for a source ref, or `nil` when no profile exists
   (the component then reads ready only if it requires nothing).
+
+  A store that cannot be read, or a profile row that cannot be decoded
+  where the one asked about would be, is a section that is not ready
+  (`profile_status: :unavailable` or `:corrupt`) — never `nil`, which
+  would read "nothing granted" and let a component that needs nothing
+  report ready on a store nobody could read.
   """
   @spec section(Context.t(), String.t()) :: map() | nil
   def section(%Context{} = ctx, source_ref) do
     with {:ok, name_ref} <- name_ref(source_ref),
-         {:ok, [_ | _] = profiles} <- Arca.ConsentStorage.profiles(Context.actor(ctx), name_ref),
-         profile <- pick_profile(profiles) do
-      describe(ctx, profile)
+         {:ok, [_ | _] = entries} <- read_profiles(ctx, name_ref) do
+      case pick_profile(entries) do
+        %{status: :corrupt} = corrupt -> not_ready(corrupt.id, :corrupt)
+        profile -> describe(ctx, profile)
+      end
     else
+      {:error, :unavailable} -> not_ready(nil, :unavailable)
       _ -> nil
     end
+  end
+
+  defp read_profiles(ctx, name_ref) do
+    case Sanctum.Consent.profiles(ctx, name_ref) do
+      {:ok, entries} -> {:ok, entries}
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, _no_tenant} -> :none
+    end
+  end
+
+  defp not_ready(profile_id, status) do
+    %{
+      profile_id: profile_id,
+      profile_kind: nil,
+      profile_status: status,
+      revision: nil,
+      scope: nil,
+      needs: [],
+      ready: false
+    }
   end
 
   defp name_ref(ref) do
@@ -40,13 +69,16 @@ defmodule Compendium.ConsentSetupPlan do
   end
 
   # The owner profile is what "is this set up" asks about; a public twin
-  # is a separate, deliberately narrower grant.
-  defp pick_profile(profiles) do
-    Enum.find(profiles, &(&1.kind == :owner)) || hd(profiles)
+  # is a separate, deliberately narrower grant. A row that cannot be
+  # decoded may be the owner, so it is what the section reports whenever
+  # no decoded owner answers.
+  defp pick_profile(entries) do
+    Enum.find(entries, &(Map.get(&1, :kind) == :owner)) ||
+      Enum.find(entries, &(&1.status == :corrupt)) || hd(entries)
   end
 
   defp describe(ctx, profile) do
-    case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id) do
+    case Sanctum.Consent.head_consent(ctx, profile.id) do
       {:ok, consent} ->
         bound = check_needs(ctx, consent)
         needs = bound ++ unbound_required(ctx, profile.source_ref, bound)

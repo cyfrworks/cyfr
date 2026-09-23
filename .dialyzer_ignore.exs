@@ -27,7 +27,6 @@
   {"lib/emissary_web/controllers/auth_controller.ex", :pattern_match_cov},
   {"lib/emissary_web/plugs/verify_webhook_signature.ex", :pattern_match},
   {"lib/emissary_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
-  {"lib/emissary_web/plugs/webhook_rate_limit.ex", :pattern_match},
   {"lib/emissary_web/sse.ex", :missing_range},
   # The step bench's harness, `Cyfr.Test.StepBench`, is test support: it is
   # compiled only under MIX_ENV=test, the one environment the task runs in.

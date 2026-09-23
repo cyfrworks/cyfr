@@ -50,11 +50,7 @@ defmodule Compendium.OCI.PushAuthTest do
     %{bypass: bypass, registry: registry, ref: ref} = c
 
     :ok =
-      CredentialStore.put(@user, registry, @namespace, %{
-        type: :push_token,
-        token: "cyfr_pt_push_test",
-        namespace: @namespace
-      })
+      CredentialStore.put_push_token(ctx(), registry, @namespace, "cyfr_pt_push_test", "personal")
 
     test_pid = self()
     path = "/v2/#{ref.repository}/manifests/#{ref.tag}"

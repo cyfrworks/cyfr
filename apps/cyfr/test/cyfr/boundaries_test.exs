@@ -370,6 +370,41 @@ defmodule Cyfr.BoundariesTest do
              """
     end
 
+    test "only Sanctum and Arca name the storage modules that hold security rows" do
+      row = security_row_seam()
+
+      # The row reads every `lib` tree but the one reader's and the holder's.
+      expected =
+        for %{lib: lib} <- Boundaries.applications(),
+            lib not in ["apps/sanctum/lib", "apps/arca/lib"],
+            do: lib <> "/**/*.ex"
+
+      assert Enum.sort(row.from) == Enum.sort(expected)
+
+      assert Boundaries.surface_violations(row, names(row.from)) == [],
+             "a module outside Sanctum names a security-row store — read it through Sanctum"
+
+      # The one reader does name them, so a scan that found none above it
+      # found none because there are none, not because it cannot see them.
+      below = Boundaries.surface_reaches(row, names("apps/sanctum/lib/**/*.ex"))
+      assert MapSet.member?(below, "Arca.ConsentStorage")
+      assert MapSet.member?(below, "Arca.RegistryTokenStorage")
+    end
+
+    test "the security-row roster is exactly the ten stores, each a module" do
+      assert Enum.sort(Boundaries.sanctum_only_storage()) ==
+               Enum.sort(~w(
+                 Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
+                 Arca.ToolGrantStorage Arca.VaultStorage Arca.SessionStorage
+                 Arca.ApiKeyStorage Arca.RegistryTokenStorage Arca.ProviderCredentialStorage
+                 Arca.WebhookStorage
+               ))
+
+      for name <- Boundaries.sanctum_only_storage() do
+        assert Code.ensure_loaded?(Module.concat([name])), "#{name} is not a module"
+      end
+    end
+
     test "every row says why its roster reads as it does" do
       for row <- Boundaries.surfaces() do
         assert is_binary(row.reason) and String.length(row.reason) > 40,
@@ -621,6 +656,11 @@ defmodule Cyfr.BoundariesTest do
     config_declarations() |> Enum.map(fn {_path, app, key} -> {app, key} end) |> Enum.uniq()
   end
 
+  defp security_row_seam do
+    Enum.find(Boundaries.surfaces(), &(Map.get(&1, :only) == Boundaries.sanctum_only_storage())) ||
+      flunk("no surface row holds the security-row stores to Sanctum")
+  end
+
   # ---------------------------------------------------------------------------
   # The planted violations
   # ---------------------------------------------------------------------------
@@ -660,6 +700,72 @@ defmodule Cyfr.BoundariesTest do
       ]
 
       assert Boundaries.surface_violations(row, planted) == ["Emissary.MCP"]
+    end
+
+    test "a direct read of a security row in a surface is reported, however it is spelled" do
+      row = security_row_seam()
+
+      planted = [
+        {"apps/cyfr/lib/prism_web/live/planted_live.ex",
+         CodeLines.aliases(~S'''
+         defmodule PrismWeb.PlantedLive do
+           alias Arca.Execution
+
+           def public?(actor, ref), do: Arca.ConsentStorage.profiles(actor, ref)
+           def run(actor, id), do: Execution.get(actor, id)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, planted) == ["Arca.ConsentStorage"]
+
+      for name <- Boundaries.sanctum_only_storage() do
+        ["Arca", store] = String.split(name, ".")
+
+        aliased = [
+          {"apps/cyfr/lib/aqua/planted.ex",
+           CodeLines.aliases(
+             "defmodule Aqua.Planted do\n  alias Arca.{Cache, #{store}}\n" <>
+               "  def f(a), do: #{store}.get(a, Cache)\nend\n"
+           )}
+        ]
+
+        assert Boundaries.surface_violations(row, aliased) == [name]
+      end
+
+      # The row looks where the planted surface sits.
+      assert "apps/cyfr/lib/**/*.ex" in row.from
+    end
+
+    test "the console may call the consent entries and nothing of the plane behind them" do
+      row =
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Sanctum.Consent" and "apps/cyfr/lib/prism_web/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences the console out of the consent plane")
+
+      planted = [
+        {"apps/cyfr/lib/prism_web/live/planted_consent_live.ex",
+         CodeLines.aliases(~S'''
+         defmodule PrismWeb.PlantedConsentLive do
+           def public?(ctx, ref), do: Sanctum.Consent.profiles(ctx, ref)
+           def grant(ctx), do: Sanctum.Consent.Commit.commit(ctx, %{})
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, planted) == ["Sanctum.Consent.Commit"]
+
+      entries_only = [
+        {"apps/cyfr/lib/prism_web/live/planted_consent_live.ex",
+         CodeLines.aliases(~S'''
+         defmodule PrismWeb.PlantedConsentLive do
+           def public?(ctx, ref), do: Sanctum.Consent.profiles(ctx, ref)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, entries_only) == []
     end
 
     test "a route with no declared posture is reported" do

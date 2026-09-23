@@ -127,16 +127,18 @@ defmodule Sanctum.SessionTest do
       # deleting one changes nothing about who the person is.
       registry = Compendium.RegistryHost.canonical_host()
 
+      person = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+
       :ok =
         Compendium.Registry.CredentialStore.put_push_token(
-          user_id,
+          person,
           registry,
           "sess#{n}",
           "t",
           "personal"
         )
 
-      :ok = Compendium.Registry.CredentialStore.delete(user_id, registry, "sess#{n}")
+      :ok = Compendium.Registry.CredentialStore.delete(person, registry, "sess#{n}")
       Sanctum.Namespace.invalidate(user_id)
       assert {:ok, %{authenticated: true}} = Session.load(session.token, surface: :console)
     end

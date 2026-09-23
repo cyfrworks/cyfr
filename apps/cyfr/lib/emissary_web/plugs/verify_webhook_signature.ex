@@ -20,9 +20,14 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
       secret decryption failed. Should never happen in practice.
 
   On success:
-    * Assigns the webhook row (struct of fields from `Arca.WebhookStorage`)
-      to `conn.assigns[:webhook]` for the controller to consume.
+    * Assigns the webhook row (`Sanctum.Webhook.resolve_ingress/1`'s, with
+      the function that opens its signing secrets removed) to
+      `conn.assigns[:webhook]` for the controller to consume.
     * Halts on any failure path; never falls through to the controller.
+
+  Whatever the outcome, the connection leaves this plug carrying no way to
+  open a signing secret: the lookup `WebhookRateLimit` cached is dropped
+  too. The secrets are opened here, by verification, and nowhere before.
 
   All response bodies are generic — secret material and structural error
   detail never leak.
@@ -36,18 +41,21 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
   def init(opts), do: opts
 
   def call(%Plug.Conn{path_params: %{"slug" => slug}} = conn, _opts) when is_binary(slug) do
-    case lookup_active_webhook(conn, slug) do
-      {:ok, webhook} ->
-        verify(conn, webhook)
+    conn =
+      case lookup_active_webhook(conn, slug) do
+        {:ok, webhook} ->
+          verify(conn, webhook)
 
-      :not_found ->
-        emit_telemetry(slug, nil, :not_found_or_disabled)
-        deny_404(conn)
+        :not_found ->
+          emit_telemetry(slug, nil, :not_found_or_disabled)
+          deny_404(conn)
 
-      :unavailable ->
-        emit_telemetry(slug, nil, :store_unavailable)
-        deny_503(conn)
-    end
+        :unavailable ->
+          emit_telemetry(slug, nil, :store_unavailable)
+          deny_503(conn)
+      end
+
+    drop_lookup(conn)
   end
 
   def call(conn, _opts) do
@@ -75,7 +83,7 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
   end
 
   defp fresh_lookup(slug) do
-    case Arca.WebhookStorage.get_by_slug(slug) do
+    case Sanctum.Webhook.resolve_ingress(slug) do
       {:ok, %{enabled: true} = webhook} -> {:ok, webhook}
       {:ok, _disabled} -> :not_found
       {:error, :not_found} -> :not_found
@@ -95,12 +103,16 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
       )
 
       conn
-      |> assign(:webhook, webhook)
+      |> assign(:webhook, Map.delete(webhook, :signing_secrets))
       |> assign(:raw_body, raw_body)
     else
       {:error, reason} -> deny_with_telemetry(conn, webhook, reason)
     end
   end
+
+  # The cached lookup carries the function that opens the signing secrets;
+  # nothing after verification needs it.
+  defp drop_lookup(conn), do: %{conn | assigns: Map.delete(conn.assigns, :webhook_lookup)}
 
   # Map verification failure reasons to telemetry + HTTP response. Status
   # bucketing is unchanged; the wrapper just adds an observability hook so

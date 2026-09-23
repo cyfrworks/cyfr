@@ -86,7 +86,10 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
         conn
 
       retry_after ->
-        EmissaryWeb.RateLimitRefusal.halt(conn, retry_after, EmissaryWeb.ApiError)
+        # A refused delivery is never verified: its secrets were never
+        # opened, and the function that would open them leaves here.
+        %{conn | assigns: Map.delete(conn.assigns, :webhook_lookup)}
+        |> EmissaryWeb.RateLimitRefusal.halt(retry_after, EmissaryWeb.ApiError)
     end
   end
 
@@ -108,7 +111,7 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
   # answers 503 on the same error.
   defp bucket_for(%Plug.Conn{path_params: %{"slug" => slug}} = conn)
        when is_binary(slug) and slug != "" do
-    lookup = Arca.WebhookStorage.get_by_slug(slug)
+    lookup = Sanctum.Webhook.resolve_ingress(slug)
     conn = assign(conn, :webhook_lookup, lookup)
 
     case lookup do

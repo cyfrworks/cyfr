@@ -17,7 +17,9 @@ defmodule Arca.ConsentStorage do
   outside the closed vocabulary, or an activation blob that does not parse,
   drops the profile or refuses the consent rather than guessing. Rows can
   only get that way through a bug or a hand edit, and neither may root an
-  execution.
+  execution. `profile_entries/2` is the same read with nothing dropped: an
+  undecodable profile is present as `%{id: id, status: :corrupt}`, for the
+  readers that must tell a damaged row from an absent one.
   """
 
   import Ecto.Query
@@ -263,8 +265,26 @@ defmodule Arca.ConsentStorage do
   @spec profiles(Cyfr.Actor.t(), String.t()) ::
           {:ok, [Cyfr.Authority.RootSelect.profile_summary()]} | {:error, term()}
   def profiles(%Cyfr.Actor{} = actor, source_ref) do
+    with {:ok, entries} <- profile_entries(actor, source_ref) do
+      {:ok, Enum.reject(entries, &(&1.status == :corrupt))}
+    end
+  end
+
+  @typedoc "A stored profile whose kind or status is outside the closed vocabulary."
+  @type corrupt_profile :: %{required(:id) => String.t(), required(:status) => :corrupt}
+
+  @doc """
+  `profiles/2` with every row accounted for: each candidate profile
+  decoded as `profiles/2` decodes it, or, when its stored kind or status
+  is outside the closed vocabulary, `%{id: id, status: :corrupt}`. The
+  marker carries nothing that could be selected.
+  """
+  @spec profile_entries(Cyfr.Actor.t(), String.t()) ::
+          {:ok, [Cyfr.Authority.RootSelect.profile_summary() | corrupt_profile()]}
+          | {:error, term()}
+  def profile_entries(%Cyfr.Actor{} = actor, source_ref) do
     with {:ok, rows} <- Arca.ProfileStorage.list_for_source(actor, source_ref) do
-      {:ok, rows |> Enum.map(&profile_summary/1) |> Enum.reject(&is_nil/1)}
+      {:ok, Enum.map(rows, &(profile_summary(&1) || %{id: &1.id, status: :corrupt}))}
     end
   end
 

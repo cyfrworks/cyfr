@@ -4,6 +4,8 @@
 defmodule EmissaryWeb.Plugs.VerifyWebhookSignatureTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias EmissaryWeb.Plugs.VerifyWebhookSignature
   alias Sanctum.Webhook
 
@@ -56,6 +58,58 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignatureTest do
     refute result.halted
     assert %{slug: ^slug} = result.assigns[:webhook]
     assert result.assigns[:raw_body] == body
+  end
+
+  test "the verified connection carries no signing secret, cached or assigned", %{ctx: ctx} do
+    %{slug: slug, secret: secret} = create_hook!(ctx, "scrubbed")
+    body = ~s({"event":"x"})
+    sig = "sha256=" <> hmac_hex(secret, body)
+
+    # The rate limiter resolves the slug first and caches what it read.
+    conn =
+      build_request(slug, body, [{"x-cyfr-signature", sig}])
+      |> EmissaryWeb.Plugs.WebhookRateLimit.call(%{})
+
+    assert {:ok, %{signing_secrets: _}} = conn.assigns[:webhook_lookup]
+
+    result = VerifyWebhookSignature.call(conn, [])
+
+    refute result.halted
+    refute Map.has_key?(result.assigns, :webhook_lookup)
+    refute Map.has_key?(result.assigns[:webhook], :signing_secrets)
+    refute Map.has_key?(result.assigns[:webhook], :secret_encrypted)
+    refute inspect(result) =~ secret
+  end
+
+  test "a refused delivery leaves no signing secret on the connection either", %{ctx: ctx} do
+    %{slug: slug} = create_hook!(ctx, "scrubbed-refused")
+
+    conn =
+      build_request(slug, "{}", [{"x-cyfr-signature", "sha256=00"}])
+      |> EmissaryWeb.Plugs.WebhookRateLimit.call(%{})
+
+    result = VerifyWebhookSignature.call(conn, [])
+
+    assert result.status == 401
+    refute Map.has_key?(result.assigns, :webhook_lookup)
+    refute Map.has_key?(result.assigns, :webhook)
+  end
+
+  test "500 when the stored secret cannot be opened — not the sender's signature", %{ctx: ctx} do
+    %{slug: slug, secret: secret} = create_hook!(ctx, "unreadable")
+
+    Arca.Repo.update_all(
+      Ecto.Query.from(w in Arca.Schemas.Webhook, where: w.slug == ^slug),
+      set: [secret_encrypted: "not a sealed secret"]
+    )
+
+    body = "{}"
+    conn = build_request(slug, body, [{"x-cyfr-signature", "sha256=" <> hmac_hex(secret, body)}])
+
+    result = VerifyWebhookSignature.call(conn, [])
+
+    assert result.halted
+    assert result.status == 500
   end
 
   test "404 on unknown slug" do

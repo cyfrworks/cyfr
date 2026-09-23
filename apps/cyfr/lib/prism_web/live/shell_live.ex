@@ -186,11 +186,16 @@ defmodule PrismWeb.ShellLive do
         # the proof-bound profile.publish walk, unpublishing revokes the
         # public profile. Until the sheet drives publish here, say so.
         message =
-          if tincture.public do
-            "Unpublish by revoking the public profile (profile.revoke)."
-          else
-            "Publish through the consent walk: profile.publish on this " <>
-              "tincture's owner profile."
+          case tincture.public do
+            true ->
+              "Unpublish by revoking the public profile (profile.revoke)."
+
+            false ->
+              "Publish through the consent walk: profile.publish on this " <>
+                "tincture's owner profile."
+
+            :unknown ->
+              "This tincture's visibility can't be read right now. Try again shortly."
           end
 
         {:noreply, put_flash(socket, :info, message)}
@@ -322,14 +327,7 @@ defmodule PrismWeb.ShellLive do
         ref = Cyfr.ComponentRef.build("tincture", t.publisher, t.name)
         access = mint_access(socket, t)
 
-        public =
-          case Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref) do
-            {:ok, profiles} ->
-              Enum.any?(profiles, &(&1.kind == :public and &1.status == :active))
-
-            _ ->
-              false
-          end
+        public = visibility(ctx, ref)
 
         %{
           id: "iframe_#{t.name}",
@@ -371,10 +369,31 @@ defmodule PrismWeb.ShellLive do
   defp mint_access(socket, t),
     do: Sanctum.TinctureAuth.issue_access_token(socket.assigns.context, t.publisher, t.name)
 
+  # Public is an active public profile. A store that could not answer, or
+  # a profile row that could not be decoded, is `:unknown` — never "not
+  # public": the card says it cannot tell and offers no toggle.
+  defp visibility(ctx, ref) do
+    case Sanctum.Consent.profiles(ctx, ref) do
+      {:ok, entries} ->
+        cond do
+          Enum.any?(entries, &(Map.get(&1, :kind) == :public and &1.status == :active)) -> true
+          Enum.any?(entries, &(&1.status == :corrupt)) -> :unknown
+          true -> false
+        end
+
+      {:error, _unreadable} ->
+        :unknown
+    end
+  end
+
   # A mint that did not happen renders as a state, never as a URL.
   defp refusal({:ok, _token}), do: nil
   defp refusal({:error, reason}) when reason in [:unavailable, :not_owner], do: :unavailable
   defp refusal({:error, _reason}), do: :refused
+
+  defp visibility_label(true), do: "public"
+  defp visibility_label(false), do: "private"
+  defp visibility_label(:unknown), do: "unavailable"
 
   # Same origin as the shell itself: a relative path, so the iframe is
   # never cross-origin whatever hostname or proxy the browser came in through.
@@ -869,14 +888,18 @@ defmodule PrismWeb.ShellLive do
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
           <span class="truncate text-base font-semibold text-text-primary">{@tincture.name}</span>
-          <span class={[
-            "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
-            if(@tincture.public,
-              do: "bg-green-500/15 text-green-500",
-              else: "bg-yellow-500/15 text-yellow-500"
-            )
-          ]}>
-            {if @tincture.public, do: "public", else: "private"}
+          <span
+            data-tincture-visibility={visibility_label(@tincture.public)}
+            class={[
+              "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
+              case @tincture.public do
+                true -> "bg-green-500/15 text-green-500"
+                false -> "bg-yellow-500/15 text-yellow-500"
+                :unknown -> "bg-surface-raised text-text-muted"
+              end
+            ]}
+          >
+            {visibility_label(@tincture.public)}
           </span>
         </div>
         <div :if={@tincture.tagline || @tincture.title} class="truncate text-xs text-text-muted">
@@ -896,9 +919,15 @@ defmodule PrismWeb.ShellLive do
         <button
           phx-click="toggle_visibility"
           phx-value-tincture={@tincture.id}
-          class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
+          disabled={@tincture.public == :unknown}
+          title={if @tincture.public == :unknown, do: "Visibility can't be read right now"}
+          class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {if @tincture.public, do: "Make Private", else: "Make Public"}
+          {case @tincture.public do
+            true -> "Make Private"
+            false -> "Make Public"
+            :unknown -> "Visibility unavailable"
+          end}
         </button>
         <button
           phx-click="copy_url"

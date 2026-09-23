@@ -61,14 +61,16 @@ defmodule Sanctum.NamespaceTest do
       # users row, tokens are for pushing.
       registry = Compendium.RegistryHost.canonical_host()
 
+      person = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+
       :ok =
-        CredentialStore.put_push_token(user_id, registry, "stripe.com", "cyfr_pt_pub", "member")
+        CredentialStore.put_push_token(person, registry, "stripe.com", "cyfr_pt_pub", "member")
 
       Namespace.invalidate(user_id)
       assert Namespace.lookup(user_id) == "alice"
 
       # And losing every token loses nothing.
-      :ok = CredentialStore.delete(user_id, registry, "stripe.com")
+      :ok = CredentialStore.delete(person, registry, "stripe.com")
       Namespace.invalidate(user_id)
       assert Namespace.lookup(user_id) == "alice"
     end

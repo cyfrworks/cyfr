@@ -6,7 +6,7 @@ defmodule Arca.RegistryTokenStorage do
   Storage for registry push tokens.
 
   Persistence mechanics only — sealing and credential semantics live in
-  `Compendium.Registry.CredentialStore`. Rows are keyed by
+  `Sanctum.RegistryCredentials`, the only caller. Rows are keyed by
   `(user_id, registry, namespace_slug)`; this is a platform-plane store
   (tokens belong to users, not tenants), so there are no tenant columns.
   """

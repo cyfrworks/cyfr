@@ -69,4 +69,37 @@ defmodule Arca.ProfileStorageTest do
       assert map_size(errors) > 0
     end
   end
+
+  describe "revoke_for_source/2" do
+    test "revokes the source's live profiles in the actor's athanor, and answers them", %{
+      athanor: athanor
+    } do
+      actor = Cyfr.Actor.in_athanor(athanor)
+      {:ok, owner} = ProfileStorage.put(attrs(athanor, %{}))
+      {:ok, blocked} = ProfileStorage.put(attrs(athanor, %{label: "blocked", status: "needs_consent"}))
+      {:ok, _gone} = ProfileStorage.put(attrs(athanor, %{label: "gone", status: "revoked"}))
+
+      {:ok, elsewhere} =
+        ProfileStorage.put(attrs(athanor, %{source_ref: "reagent:local.other-source"}))
+
+      assert {:ok, revoked} = ProfileStorage.revoke_for_source(actor, @source_ref)
+      assert Enum.sort(revoked) == Enum.sort([owner.id, blocked.id])
+
+      assert {:ok, []} = ProfileStorage.list_for_source(actor, @source_ref)
+      assert {:ok, %{status: "active"}} = ProfileStorage.get(actor, elsewhere.id)
+      assert {:ok, []} = ProfileStorage.revoke_for_source(actor, @source_ref)
+    end
+
+    test "an actor with no athanor is refused before any query" do
+      assert {:error, :no_athanor} = ProfileStorage.revoke_for_source(%Cyfr.Actor{}, @source_ref)
+    end
+
+    @tag :capture_log
+    test "a store that cannot answer is a database error", %{athanor: athanor} do
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+      assert {:error, :database_error} =
+               ProfileStorage.revoke_for_source(Cyfr.Actor.in_athanor(athanor), @source_ref)
+    end
+  end
 end

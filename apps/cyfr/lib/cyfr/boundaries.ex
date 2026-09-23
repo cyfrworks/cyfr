@@ -23,7 +23,9 @@ defmodule Cyfr.Boundaries do
     * `surfaces/0` — the directed reaches inside an application, which a
       dependency graph cannot express: which Sanctum namespaces the
       console may name, what the auth domain may name of the transport,
-      what reaches back up into the component domain.
+      what reaches back up into the component domain, and which storage
+      modules hold security rows only Sanctum may read
+      (`sanctum_only_storage/0`).
     * `route_postures/0` and `public_routes/0` — how every HTTP route is
       authenticated. The posture travels with the route
       (`EmissaryWeb.Router` declares it as route metadata); this catalog
@@ -44,8 +46,9 @@ defmodule Cyfr.Boundaries do
     * `actor_paths/0` — every way a `%Cyfr.Actor{}` is constructed, with
       the reason for each. Four is how you get six.
     * `system_responsibilities/0` — every write the server makes on work
-      whose standing it does not require, with the module that makes it
-      and why: a system responsibility is rostered, never a caller's flag.
+      whose standing it does not require, and every read it makes before
+      any caller is known, with the module that makes it and why: a system
+      responsibility is rostered, never a caller's flag.
     * `opus_named_by_cyfr_tests/0` — which CYFR test files may name an
       Opus module, and why.
 
@@ -249,6 +252,16 @@ defmodule Cyfr.Boundaries do
   # 2. The surfaces
   # ---------------------------------------------------------------------------
 
+  # The storage modules whose rows are security rows, and the `lib` trees
+  # that may name them: Sanctum, their one reader, and Arca, which holds
+  # them.
+  @sanctum_only_storage ~w(
+    Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage Arca.ToolGrantStorage
+    Arca.VaultStorage Arca.SessionStorage Arca.ApiKeyStorage Arca.RegistryTokenStorage
+    Arca.ProviderCredentialStorage Arca.WebhookStorage
+  )
+  @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
+
   @surfaces [
     # --- the auth domain's callers, each crossing the licence boundary ---
     %{
@@ -256,10 +269,13 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum Sanctum.Context Sanctum.ExecutionStanding Sanctum.Notify
-        Sanctum.Provisioning Sanctum.Tenancy
+        Sanctum.Provisioning Sanctum.Tenancy Sanctum.ToolGrants
       ),
       reason:
-        "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s two in-process agent reads " <>
+        "`Sanctum.ToolGrants` holds the standing answers a person gave, which are " <>
+          "consent state: the assistant composes them with an agent's policy and " <>
+          "checks which may stand, and reads and writes the rows only through it. " <>
+          "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s two in-process agent reads " <>
           "alone — the first-need hook: a turn reads its estate's tree in-process " <>
           "now rather than through the `aqua` tool, and the bundle a group estate " <>
           "is filled with on first read has to be there before the turn roots an " <>
@@ -270,16 +286,21 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Cipher Sanctum.CipherAAD Sanctum.Consent Sanctum.Context
-        Sanctum.Egress Sanctum.Network Sanctum.Namespace Sanctum.Provisioning Sanctum.SignIn
-        Sanctum.VaultReader
+        Sanctum Sanctum.Consent Sanctum.Context Sanctum.Egress Sanctum.Network
+        Sanctum.Namespace Sanctum.Provisioning Sanctum.RegistryCredentials Sanctum.SignIn
+        Sanctum.VaultReader Sanctum.Webhook
       ),
       reason:
         "`Sanctum.Provisioning` is the first-need hook and the half of filling an " <>
           "estate that is identity's: the claim it runs under, the baseline consents, " <>
           "the readiness and failure writes on the row. `Compendium.Provisioning` owns " <>
           "the component work and calls down into it. OCI and registry transports " <>
-          "use Sanctum.Network and Sanctum.Egress for validated outbound requests."
+          "use Sanctum.Network and Sanctum.Egress for validated outbound requests. " <>
+          "A person's push tokens are sealed and read by `Sanctum.RegistryCredentials`; " <>
+          "removing a component's last version revokes its profiles " <>
+          "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
+          "(`Sanctum.Webhook.disable_for_component/2`). `Compendium` never names " <>
+          "`Sanctum.Tenancy`."
     },
     %{
       from: ["apps/cyfr/lib/cyfr/**/*.ex"],
@@ -346,13 +367,15 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp
+        Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
         Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.Session Sanctum.SignIn
         Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Webhook
       ),
       reason:
         "the console and its context guard (`CyfrWeb.ContextGuard`, which names " <>
-          "`Sanctum.Caller` and `Sanctum.Context` alone). " <>
+          "`Sanctum.Caller` and `Sanctum.Context` alone). `Sanctum.Consent` is the " <>
+          "shell's read of whether a tincture has an active public profile " <>
+          "(`Sanctum.Consent.profiles/2`). " <>
           "`Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` alone: the " <>
           "`/live` socket is handled by the endpoint BEFORE the router, so it passes " <>
           "no rate-limit plug, which makes the console the only per-address bound on " <>
@@ -362,13 +385,29 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Sanctum.Consent",
       depth: 3,
-      allow: ~w(Sanctum.Consent.Components Sanctum.Consent.ShapeDerivation),
+      allow: ~w(Sanctum.Consent Sanctum.Consent.Components Sanctum.Consent.ShapeDerivation),
       reason:
         "the consent WRITE plane stays behind Sanctum's own surface: the estate " <>
           "filler mints its baseline consents through `Sanctum.Provisioning`, never " <>
           "`Sanctum.Consent.Bootstrap`. `Sanctum.Consent.Components` is the " <>
           "component-facts port — naming a behaviour one implements is the opposite " <>
-          "of reaching into the write plane."
+          "of reaching into the write plane. `Sanctum.Consent` itself is the read " <>
+          "and revoke entries the setup plan and the removal cascade call."
+    },
+    %{
+      from: [
+        "apps/cyfr/lib/prism_web/**/*.ex",
+        "apps/cyfr/lib/prism_web.ex",
+        "apps/cyfr/lib/cyfr_web/**/*.ex"
+      ],
+      into: "Sanctum.Consent",
+      depth: 3,
+      allow: ~w(Sanctum.Consent),
+      reason:
+        "the console reads consent through `Sanctum.Consent`'s own entries (the " <>
+          "shell's `profiles/2`) and names nothing of the plane behind them: the " <>
+          "plan, preview and commit walk, its proofs and its loader are reached " <>
+          "through the operation table like every other surface's."
     },
 
     # --- what the layers below name of the layers above ---
@@ -467,6 +506,22 @@ defmodule Cyfr.Boundaries do
           "material and the public origin from configuration, not from the endpoint."
     },
 
+    # --- the security rows: Sanctum is their only reader ---
+    %{
+      from:
+        for(%{lib: lib} <- @applications, lib not in @security_row_readers, do: lib <> "/**/*.ex"),
+      into: "Arca",
+      only: @sanctum_only_storage,
+      allow: [],
+      reason:
+        "profiles, consents and their proofs, standing tool grants, vault entries, " <>
+          "sessions, API keys, registry push tokens, provider credentials and " <>
+          "webhooks are security rows. A domain or a surface learns about them only " <>
+          "through Sanctum's entries, which scope by the caller's context and keep an " <>
+          "outage, a damaged row and an absent one apart. Arca holds the rows and " <>
+          "Sanctum reads them; no other tree names the stores."
+    },
+
     # --- the host names neither island ---
     %{
       from: ["apps/cyfr/lib/**/*.ex"],
@@ -492,10 +547,19 @@ defmodule Cyfr.Boundaries do
   reason the roster reads as it does.
 
   A row's `depth` is how many segments a reach is rostered by — two
-  (`Sanctum.Context`) unless it says otherwise.
+  (`Sanctum.Context`) unless it says otherwise. A row's `only`, when it
+  has one, narrows it to those namespaces under `into`: every other reach
+  into `into` is some other row's business.
   """
   @spec surfaces() :: [map()]
   def surfaces, do: @surfaces
+
+  @doc """
+  The storage modules whose rows only Sanctum may read: the `only` of the
+  surface row every `lib` tree but Sanctum's and Arca's is held to.
+  """
+  @spec sanctum_only_storage() :: [String.t()]
+  def sanctum_only_storage, do: @sanctum_only_storage
 
   @doc """
   Which namespaces `named` reaches into, for a surface row: the reach
@@ -507,12 +571,15 @@ defmodule Cyfr.Boundaries do
   def surface_reaches(row, named) do
     depth = Map.get(row, :depth, 2)
     into = row.into
+    only = Map.get(row, :only)
 
     for {_path, names} <- named,
         {module, _number} <- names,
         module == into or String.starts_with?(module, into <> "."),
+        reach = module |> String.split(".") |> Enum.take(depth) |> Enum.join("."),
+        is_nil(only) or reach in only,
         into: MapSet.new(),
-        do: module |> String.split(".") |> Enum.take(depth) |> Enum.join(".")
+        do: reach
   end
 
   @doc "The namespaces `named` reaches that the row's roster does not name."
@@ -1037,14 +1104,30 @@ defmodule Cyfr.Boundaries do
           "can report success, and none can write over a successor's attempt. A " <>
           "completion, new output, a renewal, a resume and a recovery each need the " <>
           "grant to stand (`Sanctum.ExecutionStanding.verify/1`)."
+    },
+    %{
+      responsibility: "resolve an inbound webhook delivery's slug before any caller is known",
+      modules: ~w(
+        Sanctum.Webhook EmissaryWeb.Plugs.WebhookRateLimit
+        EmissaryWeb.Plugs.VerifyWebhookSignature
+      ),
+      check: "Sanctum.Webhook.resolve_ingress/1",
+      reason:
+        "a webhook delivery authenticates by its signature, not by a caller: the slug " <>
+          "it is posted to is the only thing that names the row, so the lookup reads " <>
+          "across tenants by that one indexed column, and the athanor every later step " <>
+          "is scoped by is the one read off the row. The rate limiter reads it to pick " <>
+          "a bucket and the signature plug to verify. Its secrets are opened only by " <>
+          "that verification, and the function that opens them leaves the connection " <>
+          "once it is done."
     }
   ]
 
   @doc """
   Every write the server makes on work whose standing it does not
-  require, with the modules that make it, the check they pass in place of
-  the standing one, and why. A new one is argued for here before it
-  appears.
+  require, and every read it makes before any caller is known, with the
+  modules that make it, the check they pass in place of the standing one,
+  and why. A new one is argued for here before it appears.
   """
   @spec system_responsibilities() :: [map()]
   def system_responsibilities, do: @system_responsibilities

@@ -305,7 +305,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert ns == "alice#{n}"
 
       assert {:ok, %{token: "cyfr_pt_personal", role: "personal"}} =
-               CredentialStore.get(person_id(user_id), "registry.test", ns)
+               CredentialStore.get(person_context(user_id), "registry.test", ns)
 
       # The session is a working one: the person is authenticated at once...
       assert {:ok, %{authenticated: true, namespace: ^ns} = loaded} =
@@ -418,7 +418,8 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert {:ok, %{authenticated: true, namespace: nil, athanor_id: ^pid}} =
                Sanctum.Session.load(session_of(conn), surface: :console)
 
-      assert :not_found = CredentialStore.get(person_id(user_id), "registry.test", "alice")
+      assert {:error, :not_found} =
+               CredentialStore.get(person_context(user_id), "registry.test", "alice")
     end
 
     test "412: signed in, the policy owed at publish, IdP token kept", %{
@@ -454,7 +455,9 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert redirected_to(conn) == "/"
       assert is_binary(session_of(conn))
       assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "refused the sign-in token"
-      assert :not_found = CredentialStore.get(person_id(user_id), "registry.test", "alice")
+
+      assert {:error, :not_found} =
+               CredentialStore.get(person_context(user_id), "registry.test", "alice")
     end
 
     test "probe 5xx: a first-time person and a returning one both sign in",
@@ -490,7 +493,7 @@ defmodule EmissaryWeb.AuthControllerTest do
     test "the namespace is the identity: a push token that cannot be stored still signs the person in",
          %{conn: conn, bypass: bypass} do
       # Force at-rest encryption to fail by clearing the resolved keyring:
-      # CredentialStore.put → Sanctum.Cipher.encrypt raises without it.
+      # the push-token seal (`Sanctum.Cipher.encrypt`) raises without it.
       original_keyring = Application.get_env(:sanctum, :crypto_keyring)
       Application.delete_env(:sanctum, :crypto_keyring)
 
@@ -516,7 +519,10 @@ defmodule EmissaryWeb.AuthControllerTest do
       assert redirected_to(conn) == "/"
       assert {:ok, %{namespace: ns}} = Sanctum.Tenancy.Users.get(person_id(user_id))
       assert ns == "alice#{n}"
-      assert :not_found = CredentialStore.get(person_id(user_id), "registry.test", ns)
+
+      assert {:error, :not_found} =
+               CredentialStore.get(person_context(user_id), "registry.test", ns)
+
       assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "didn't fully sync"
     end
 
@@ -781,6 +787,15 @@ defmodule EmissaryWeb.AuthControllerTest do
     {:ok, %{id: id}} = Sanctum.Tenancy.Users.get_by_identity(identity)
     id
   end
+
+  # The person the push tokens are stored as, as a context names them.
+  defp person_context(identity),
+    do:
+      Sanctum.Context.build(
+        user_id: person_id(identity),
+        authenticated: true,
+        auth_method: :oidc
+      )
 
   describe "post_legal_accept/2 — the probe runs only for a session that stands" do
     setup do
