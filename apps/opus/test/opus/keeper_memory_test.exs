@@ -30,14 +30,12 @@ defmodule Opus.KeeperMemoryTest do
   @spec_env %{"OPUS_ROLE" => "runner", "OPUS_RUNNER_ID" => "runner_1"}
   @default 402_653_184
 
-  # The keeper's vectors, which the repository carries and a checkout of
-  # Opus alone (the independence build) does not.
+  # The keeper's vectors, the one file the keeper and every client of its
+  # wire read. Read as this module compiles, so a checkout without the file
+  # fails here, naming it, rather than running without the vectors.
   @vectors Path.expand("../../../../tests/fixtures/spawn_protocol.json", __DIR__)
-  @no_vectors if(File.exists?(@vectors),
-                do: false,
-                else:
-                  "the keeper's vectors (tests/fixtures/spawn_protocol.json) are not in this checkout"
-              )
+           |> File.read!()
+           |> Jason.decode!()
 
   setup do
     unique = System.unique_integer([:positive])
@@ -164,12 +162,9 @@ defmodule Opus.KeeperMemoryTest do
       end
     end
 
-    @tag skip: @no_vectors
     test "has the shape of the keeper's own runner spawn vector", ctx do
-      vectors = @vectors |> File.read!() |> Jason.decode!()
-
       vector =
-        Enum.find(vectors["valid_requests"], &(&1["pool"] == "runner" and &1["memory_bytes"]))
+        Enum.find(@vectors["valid_requests"], &(&1["pool"] == "runner" and &1["memory_bytes"]))
 
       {name, spawner} = start_client!(ctx, memory_bytes: vector["memory_bytes"])
       _handle = start_handle!(name)
@@ -183,12 +178,9 @@ defmodule Opus.KeeperMemoryTest do
   end
 
   describe "a runner ended at its bound" do
-    @tag skip: @no_vectors
     test "reaches its handle as the signal that ended it, logged as ended at its bound", ctx do
-      vectors = @vectors |> File.read!() |> Jason.decode!()
-
       at_bound =
-        Enum.find(vectors["replies"], &(&1["type"] == "exited" and &1["memory_exceeded"]))
+        Enum.find(@vectors["replies"], &(&1["type"] == "exited" and &1["memory_exceeded"]))
 
       {name, spawner} = start_client!(ctx, memory_bytes: 536_870_912)
       handle = start_handle!(name)
@@ -314,13 +306,10 @@ defmodule Opus.KeeperMemoryTest do
   end
 
   describe "a spawn the keeper cannot bound" do
-    @tag skip: @no_vectors
     test "is refused typed, logged once naming the option, and never asked again without its bound",
          ctx do
-      vectors = @vectors |> File.read!() |> Jason.decode!()
-
       assert %{"code" => "memory_unavailable"} =
-               Enum.find(vectors["replies"], &(&1["code"] == "memory_unavailable"))
+               Enum.find(@vectors["replies"], &(&1["code"] == "memory_unavailable"))
 
       {name, spawner} = start_client!(ctx)
 

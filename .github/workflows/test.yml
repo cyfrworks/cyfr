@@ -332,10 +332,11 @@ jobs:
         run: |
           set -euo pipefail
           island="$RUNNER_TEMP/opus-island"
-          mkdir -p "$island/apps"
+          mkdir -p "$island/apps" "$island/tests"
           cp mix.lock "$island/"
           cp -R apps/cyfr_contracts apps/opus "$island/apps/"
           cp -R deps wit "$island/"
+          cp -R tests/fixtures "$island/tests/"
           cd "$island/apps/opus"
           mix compile --warnings-as-errors
           mix test

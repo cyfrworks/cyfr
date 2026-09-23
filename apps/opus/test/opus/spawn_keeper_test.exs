@@ -26,9 +26,12 @@ defmodule Opus.SpawnKeeperTest do
 
   @spec_env %{"OPUS_ROLE" => "runner", "OPUS_RUNNER_ID" => "runner_1", "OPUS_CONTROL_FD" => "3"}
 
-  # The keeper's vectors, which the repository carries and a checkout of
-  # Opus alone (the independence build) does not.
+  # The keeper's vectors, the one file the keeper and every client of its
+  # wire read. Read as this module compiles, so a checkout without the file
+  # fails here, naming it, rather than running without the vectors.
   @vectors Path.expand("../../../../tests/fixtures/spawn_protocol.json", __DIR__)
+           |> File.read!()
+           |> Jason.decode!()
 
   setup do
     unique = System.unique_integer([:positive])
@@ -286,14 +289,8 @@ defmodule Opus.SpawnKeeperTest do
     assert_receive {:DOWN, ^ref, :process, ^client, {:shutdown, :channel_lost}}, 5_000
   end
 
-  @tag skip:
-         if(File.exists?(@vectors),
-           do: false,
-           else:
-             "the keeper's vectors (tests/fixtures/spawn_protocol.json) are not in this checkout"
-         )
   test "the client's control frames match the keeper's vectors" do
-    %{"control_frames" => [line_frame, end_frame]} = @vectors |> File.read!() |> Jason.decode!()
+    %{"control_frames" => [line_frame, end_frame]} = @vectors
 
     payload = Base.decode16!(line_frame["payload_hex"], case: :lower)
     assert {:ok, %{type: :cancel_child}} = RunnerControl.decode(payload)
@@ -308,30 +305,22 @@ defmodule Opus.SpawnKeeperTest do
   # This client asks for the pool's memory bound on every spawn: the report
   # every `exited` carries is understood, and the runner's end reaches its
   # handle as its signal.
-  @tag skip:
-         if(File.exists?(@vectors),
-           do: false,
-           else:
-             "the keeper's vectors (tests/fixtures/spawn_protocol.json) are not in this checkout"
-         )
   test "the keeper's memory vectors: a runner spawn may carry a bound, and an exit reported at one is understood",
        %{spawner: spawner, name: name, dir: dir} do
-    vectors = @vectors |> File.read!() |> Jason.decode!()
-
     assert %{"memory_bytes" => bound, "control" => true, "argv" => ["/app/bin/opus", "start"]} =
              Enum.find(
-               vectors["valid_requests"],
+               @vectors["valid_requests"],
                &(&1["pool"] == "runner" and &1["memory_bytes"])
              )
 
     assert is_integer(bound) and bound >= 16_777_216
 
     assert Enum.all?(
-             vectors["replies"],
+             @vectors["replies"],
              &(&1["type"] != "exited" or is_boolean(&1["memory_exceeded"]))
            )
 
-    exited = Enum.find(vectors["replies"], &(&1["type"] == "exited" and &1["memory_exceeded"]))
+    exited = Enum.find(@vectors["replies"], &(&1["type"] == "exited" and &1["memory_exceeded"]))
     assert %{"code" => nil, "signal" => "SIGKILL", "spawn_id" => spawn_id} = exited
 
     handle = start_handle!(name)
