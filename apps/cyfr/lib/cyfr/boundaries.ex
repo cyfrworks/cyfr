@@ -13,7 +13,7 @@ defmodule Cyfr.Boundaries do
   that read nothing, because a roster that stops reading passes every
   assertion it makes.
 
-  Four kinds of row, and three registers beside them:
+  Five kinds of row, and three registers beside them:
 
     * `applications/0` — what each umbrella application may depend on, as
       its `mix.exs` declares it, and the layer each module namespace sits
@@ -32,6 +32,9 @@ defmodule Cyfr.Boundaries do
     * `config_key_classes/0` — the configuration schema: every
       application key the code reads that no configuration file declares,
       and what each one is.
+    * `filesystem_seam/0` — the storage seam: a direct filesystem call in
+      an application's `lib` goes through `Arca.Storage` or carries the
+      bypass marker that names its group.
 
   And the registers:
 
@@ -45,11 +48,13 @@ defmodule Cyfr.Boundaries do
 
   Every check here takes a tree already read through
   `Cyfr.Test.CodeLines`: the module names a file names, for the namespace
-  rows, and its code lines for the rest. A name is read from the token
-  stream rather than matched in a line, so a module named in a log
-  sentence or a tool description is not a dependency and a call on a root
-  module is. The rules live here; the filter is the reader's, which is
-  what keeps a catalog that ships in `lib` off the test support.
+  rows, and its code lines for the rest — beside the file's text for the
+  filesystem seam, whose marker is a comment the filter drops. A name is
+  read from the token stream rather than matched in a line, so a module
+  named in a log sentence or a tool description is not a dependency and a
+  call on a root module is. The rules live here; the filter is the
+  reader's, which is what keeps a catalog that ships in `lib` off the
+  test support.
   """
 
   # ---------------------------------------------------------------------------
@@ -227,11 +232,12 @@ defmodule Cyfr.Boundaries do
   end
 
   @doc """
-  The one file every source scan skips: this catalog, which names each
+  The one file the source scans skip: this catalog, which names each
   namespace it rosters and would report itself as a reach into all of
   them. Nothing else is skipped, and the compiled scan — which reads what
   the compiler emitted rather than what a line says — covers this file
-  with no exception at all.
+  with no exception at all. The filesystem seam skips nothing: the call
+  pattern this file writes down is not a call.
   """
   @spec scan_exclusions() :: [Path.t()]
   def scan_exclusions, do: ["apps/cyfr/lib/cyfr/boundaries.ex"]
@@ -1024,4 +1030,99 @@ defmodule Cyfr.Boundaries do
   """
   @spec opus_named_by_cyfr_tests() :: %{String.t() => String.t()}
   def opus_named_by_cyfr_tests, do: @opus_named_by_cyfr_tests
+
+  # ---------------------------------------------------------------------------
+  # 8. The filesystem seam
+  # ---------------------------------------------------------------------------
+
+  @filesystem_seam %{
+    owner: "Arca.Storage",
+    from: "apps/*/lib/**/*.ex",
+    exempt: ["*/arca/adapters/*", "apps/arca/lib/arca/storage.ex"],
+    entire_module: ~r/arca:bypass-ok=[A-E] — entire module/,
+    marker: "arca:bypass-ok",
+    window: 4,
+    call:
+      ~r/(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard|(^|[^A-Za-z0-9_]):(file|filelib|erl_tar|prim_file)\./,
+    reason:
+      "file and blob I/O goes through `Arca.Storage`, so the local filesystem and a " <>
+        "configured object store behave alike. A direct call fits one of the bypass " <>
+        "groups `Arca.Storage` documents and names it: the marker on the call's line " <>
+        "or within the window above it, or once for a module whose every call is " <>
+        "sandbox or compile-time work. The adapters and the behaviour itself are the " <>
+        "seam, not callers of it."
+  }
+
+  @typedoc """
+  A scanned tree with each file's text beside its code lines, as
+  `{path, source, code_lines}`. The seam's marker is usually a comment,
+  which the code-line view drops, so the marker is read from the text and
+  the calls from the code lines.
+  """
+  @type texts :: [{Path.t(), String.t(), [{String.t(), pos_integer()}]}]
+
+  @doc """
+  The storage seam: every file under `from` whose path matches no
+  `exempt` pattern (`*` spans any characters, `/` included, as in a shell
+  `case`) and whose text carries no `entire_module` marker makes a direct
+  filesystem call — a code line `call` matches — only with `marker` on
+  that line or on one of the `window` lines above it.
+  """
+  @spec filesystem_seam() :: map()
+  def filesystem_seam, do: @filesystem_seam
+
+  @doc "Whether the seam exempts the whole file, by where it is or by what it says."
+  @spec filesystem_exempt?(Path.t(), String.t()) :: boolean()
+  def filesystem_exempt?(path, source) do
+    Enum.any?(@filesystem_seam.exempt, &shell_match?(&1, path)) or
+      source =~ @filesystem_seam.entire_module
+  end
+
+  @doc """
+  The direct filesystem calls in `tree` that no marker covers, each
+  rendered as `path:line: code`.
+  """
+  @spec filesystem_violations(texts()) :: [String.t()]
+  def filesystem_violations(tree) do
+    %{call: call, marker: marker, window: window} = @filesystem_seam
+
+    for {path, source, lines} <- tree,
+        not filesystem_exempt?(path, source),
+        marked = marked_lines(source, marker),
+        {line, n} <- lines,
+        line =~ call,
+        not Enum.any?((n - window)..n//1, &MapSet.member?(marked, &1)),
+        do: "#{path}:#{n}: #{String.trim(line)}"
+  end
+
+  @doc """
+  The exemptions the row names that exempt no file in `tree`: each
+  `exempt` pattern no path matches, and the `entire_module` marker's
+  pattern when no file carries it.
+  """
+  @spec stale_filesystem_exemptions(texts()) :: [String.t()]
+  def stale_filesystem_exemptions(tree) do
+    %{exempt: exempt, entire_module: entire_module} = @filesystem_seam
+
+    patterns =
+      for pattern <- exempt,
+          not Enum.any?(tree, fn {path, _source, _lines} -> shell_match?(pattern, path) end),
+          do: pattern
+
+    marked? = Enum.any?(tree, fn {_path, source, _lines} -> source =~ entire_module end)
+    if marked?, do: patterns, else: patterns ++ [Regex.source(entire_module)]
+  end
+
+  # Numbered as `Cyfr.Test.CodeLines` numbers them: 1-based, split on "\n".
+  defp marked_lines(source, marker) do
+    for {text, n} <- source |> String.split("\n") |> Enum.with_index(1),
+        String.contains?(text, marker),
+        into: MapSet.new(),
+        do: n
+  end
+
+  defp shell_match?(pattern, path) do
+    body = pattern |> String.split("*") |> Enum.map_join(".*", &Regex.escape/1)
+    Regex.match?(Regex.compile!("\\A" <> body <> "\\z"), path)
+  end
 end

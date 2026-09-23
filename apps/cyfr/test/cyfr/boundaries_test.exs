@@ -15,9 +15,10 @@ defmodule Cyfr.BoundariesTest do
   Three rules govern what is here, and they are why it is longer than a
   roster:
 
-    * **A planted violation must fail.** A dependency, a route and a
-      configuration key are each planted below and shown reported. A
-      catalog nobody can break is a catalog that checks nothing.
+    * **A planted violation must fail.** A dependency, a route, a
+      configuration key and a filesystem call are each planted below and
+      shown reported. A catalog nobody can break is a catalog that checks
+      nothing.
     * **An empty source scan must fail.** Every roster this replaces
       learned that the hard way, two of them this slice: a scan pointed at
       a moved tree passes every assertion it makes. So each scan is shown
@@ -980,7 +981,216 @@ defmodule Cyfr.BoundariesTest do
   end
 
   # ---------------------------------------------------------------------------
-  # 8. What the tree must keep looking like
+  # 8. The filesystem seam
+  # ---------------------------------------------------------------------------
+
+  describe "the filesystem seam" do
+    test "no application makes a direct filesystem call without its marker" do
+      seam = Boundaries.filesystem_seam()
+      tree = filesystem_tree()
+
+      calls =
+        for {_path, _source, lines} <- tree, {line, _n} <- lines, line =~ seam.call, do: line
+
+      assert lines_read(for {path, _source, lines} <- tree, do: {path, lines}) > 100,
+             "the filesystem scan read no code — it is not reading"
+
+      # The tree makes marked calls, so a pattern that stopped matching
+      # would read as a tree that makes none.
+      assert length(calls) > 10,
+             "the filesystem scan found #{length(calls)} calls — the pattern is not matching"
+
+      found = Boundaries.filesystem_violations(tree)
+
+      assert found == [],
+             """
+             A direct filesystem call carries no `#{seam.marker}` marker on its
+             line or within the #{seam.window} lines above it:
+
+             #{Enum.join(found, "\n")}
+
+             Route it through `Arca.Storage`, or mark the call with the bypass
+             group `Arca.Storage` documents for it: `# arca:bypass-ok=<A-E> — why`.
+             """
+    end
+
+    test "every exemption the row names still exempts a file" do
+      stale = Boundaries.stale_filesystem_exemptions(filesystem_tree())
+
+      assert stale == [],
+             "these exemptions exempt no file any more; remove them: #{inspect(stale)}"
+
+      # A tree none of them fits reports every one.
+      seam = Boundaries.filesystem_seam()
+      planted = planted_file("apps/cyfr/lib/cyfr/planted.ex", "defmodule Cyfr.Planted do\nend\n")
+
+      assert Boundaries.stale_filesystem_exemptions([planted]) ==
+               seam.exempt ++ [Regex.source(seam.entire_module)]
+    end
+
+    test "an unmarked call is reported with its file and line" do
+      planted =
+        planted_file("apps/cyfr/lib/cyfr/planted.ex", ~S'''
+        defmodule Cyfr.Planted do
+          @moduledoc "Reads a file."
+
+          def read(path), do: File.read(path)
+        end
+        ''')
+
+      assert Boundaries.filesystem_violations([planted]) ==
+               ["apps/cyfr/lib/cyfr/planted.ex:4: def read(path), do: File.read(path)"]
+    end
+
+    test "each call the row names is reported, and a near miss is not" do
+      planted =
+        planted_file("apps/cyfr/lib/cyfr/planted.ex", ~S'''
+        defmodule Cyfr.Planted do
+          def a(p), do: File.write!(p, "")
+          def b(p), do: Path.wildcard(p)
+          def c(p), do: :file.read_file(p)
+          def d(p), do: :filelib.is_dir(p)
+          def e(p), do: :erl_tar.extract(p)
+          def f(p), do: :prim_file.read_file(p)
+          def g(p), do: Arca.File.read(p)
+          def h(p), do: MyFile.read(p)
+          def i(%File.Stat{} = s), do: s
+          def j(p), do: :files.read(p)
+          def k(p), do: Path.join(p, "x")
+        end
+        ''')
+
+      assert planted |> List.wrap() |> Boundaries.filesystem_violations() |> line_numbers() ==
+               [2, 3, 4, 5, 6, 7]
+    end
+
+    test "a marker on the call's line or within four lines above covers it" do
+      planted =
+        planted_file("apps/cyfr/lib/cyfr/planted.ex", ~S'''
+        defmodule Cyfr.Planted do
+          def a(p), do: File.read(p) # arca:bypass-ok=D — same line
+
+          # arca:bypass-ok=D — four lines above the call
+          @scratch "tmp"
+
+          def b(p),
+            do: File.read(Path.join(@scratch, p))
+        end
+        ''')
+
+      assert Boundaries.filesystem_violations([planted]) == []
+    end
+
+    test "a marker five lines above, or below, covers nothing" do
+      planted =
+        planted_file("apps/cyfr/lib/cyfr/planted.ex", ~S'''
+        defmodule Cyfr.Planted do
+          # arca:bypass-ok=D — five lines above the call
+          @scratch "tmp"
+
+
+          def b(p),
+            do: File.read(Path.join(@scratch, p))
+
+          def c(p), do: File.rm(p)
+          # arca:bypass-ok=D — one line below the call
+        end
+        ''')
+
+      assert planted |> List.wrap() |> Boundaries.filesystem_violations() |> line_numbers() ==
+               [7, 9]
+    end
+
+    test "the entire-module marker exempts the file, for a group the seam names" do
+      source = fn group ->
+        """
+        defmodule Locus.Planted do
+          @moduledoc \"\"\"
+          Builds in a scratch sandbox.
+
+          ## arca:bypass-ok=#{group} — entire module
+          \"\"\"
+
+          @root "/tmp"
+
+          def a(p), do: File.read(Path.join(@root, p))
+        end
+        """
+      end
+
+      assert Boundaries.filesystem_violations([
+               planted_file("apps/locus/lib/locus/planted.ex", source.("D"))
+             ]) == []
+
+      assert Boundaries.filesystem_violations([
+               planted_file("apps/locus/lib/locus/planted.ex", source.("F"))
+             ])
+             |> line_numbers() == [10]
+    end
+
+    test "the adapters and the storage behaviour are the seam, not callers of it" do
+      source = "defmodule Arca.Planted do\n  def a(p), do: File.read(p)\nend\n"
+
+      exempt =
+        for path <- [
+              "apps/arca/lib/arca/adapters/local.ex",
+              "apps/arca/lib/arca/adapters/planted.ex",
+              "apps/arca/lib/arca/storage.ex"
+            ],
+            do: planted_file(path, source)
+
+      assert Boundaries.filesystem_violations(exempt) == []
+
+      assert Boundaries.filesystem_violations([
+               planted_file("apps/arca/lib/arca/storage_helper.ex", source),
+               planted_file("apps/arca/lib/arca/adapters.ex", source)
+             ]) == [
+               "apps/arca/lib/arca/storage_helper.ex:2: def a(p), do: File.read(p)",
+               "apps/arca/lib/arca/adapters.ex:2: def a(p), do: File.read(p)"
+             ]
+    end
+
+    test "a call in a comment or in documentation is not a call" do
+      planted =
+        planted_file("apps/cyfr/lib/cyfr/planted.ex", ~S'''
+        defmodule Cyfr.Planted do
+          @moduledoc """
+          Once read with File.read(path).
+          """
+
+          # def a(p), do: File.read(p)
+          #   :file.delete(p)
+          def b(p), do: p # File.rm(p)
+
+          @doc "Not File.read(p)."
+          def c(p), do: p
+        end
+        ''')
+
+      assert Boundaries.filesystem_violations([planted]) == []
+    end
+  end
+
+  # Every file the seam reads, with its text for the marker and its code
+  # lines for the calls. Unlike `scan/1`, the catalog's own file is read.
+  defp filesystem_tree do
+    for path <- SourceTree.files!(Path.join(root(), Boundaries.filesystem_seam().from)),
+        do: {Path.relative_to(path, root()), SourceTree.read(path), SourceTree.code_lines(path)}
+  end
+
+  # A planted file as the seam reads one: its text, and its code lines
+  # through the one filter.
+  defp planted_file(path, source), do: {path, source, CodeLines.code_lines(source)}
+
+  defp line_numbers(found) do
+    for violation <- found do
+      [_path, n | _rest] = String.split(violation, ":", parts: 3)
+      String.to_integer(n)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # 9. What the tree must keep looking like
   # ---------------------------------------------------------------------------
 
   describe "the tree" do
