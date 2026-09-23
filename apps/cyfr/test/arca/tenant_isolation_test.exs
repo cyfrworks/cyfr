@@ -814,17 +814,20 @@ defmodule Arca.TenantIsolationTest do
 
       # Create key for ath_alpha
       :ok =
-        Arca.ApiKeyStorage.create_key(%{
-          name: "cross-athanor-key",
-          key_hash: key_hash,
-          key_prefix: "cyfr_sk_",
-          type: "secret",
-          scope: "[]",
-          rate_limit: nil,
-          ip_allowlist: nil,
-          created_by: "user_a",
-          athanor_id: "ath_alpha"
-        })
+        Arca.ApiKeyStorage.create_key(
+          %{
+            name: "cross-athanor-key",
+            key_hash: key_hash,
+            key_prefix: "cyfr_sk_",
+            type: "secret",
+            scope: "[]",
+            rate_limit: nil,
+            ip_allowlist: nil,
+            created_by: "user_a",
+            athanor_id: "ath_alpha"
+          },
+          Arca.Test.Actor.issuance("user_a")
+        )
 
       # API keys are athanor credentials: the (sole) hash lookup returns the
       # key's OWN athanor from the row. Cross-tenant rejection happens on the
@@ -838,17 +841,20 @@ defmodule Arca.TenantIsolationTest do
       key_hash = :crypto.hash(:sha256, "test_key_metadata_#{:rand.uniform(100_000)}")
 
       :ok =
-        Arca.ApiKeyStorage.create_key(%{
-          name: "metadata-key",
-          key_hash: key_hash,
-          key_prefix: "cyfr_sk_",
-          type: "secret",
-          scope: "[]",
-          rate_limit: nil,
-          ip_allowlist: nil,
-          created_by: "user_a",
-          athanor_id: "ath_gamma"
-        })
+        Arca.ApiKeyStorage.create_key(
+          %{
+            name: "metadata-key",
+            key_hash: key_hash,
+            key_prefix: "cyfr_sk_",
+            type: "secret",
+            scope: "[]",
+            rate_limit: nil,
+            ip_allowlist: nil,
+            created_by: "user_a",
+            athanor_id: "ath_gamma"
+          },
+          Arca.Test.Actor.issuance("user_a")
+        )
 
       # Verify the row returned by get_key_by_hash includes athanor_id
       {:ok, row} = Arca.ApiKeyStorage.get_key_by_hash(key_hash)

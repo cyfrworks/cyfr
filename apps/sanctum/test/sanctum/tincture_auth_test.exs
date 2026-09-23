@@ -51,6 +51,7 @@ defmodule Sanctum.TinctureAuthTest do
 
   describe "authenticate/1 — credentials are never accepted from a query string" do
     test "a valid API key in ?_key= does not authenticate", %{ctx: ctx} do
+      ctx = Sanctum.TestContext.issuer!(ctx)
       {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "query-key"})
 
       # Valid credential, wrong channel. A URL reaches browser history, Referer
@@ -60,7 +61,7 @@ defmodule Sanctum.TinctureAuthTest do
     end
 
     test "a session id in ?_session= does not authenticate", %{ctx: ctx} do
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.Session.create(Sanctum.TestContext.issuer!(ctx))
 
       assert TinctureAuth.authenticate(conn("_session=#{session.token}")) == :unauthenticated
     end
@@ -81,7 +82,8 @@ defmodule Sanctum.TinctureAuthTest do
       {:ok, _} =
         Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
 
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} =
+        Sanctum.Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(session.token))
 
@@ -98,6 +100,8 @@ defmodule Sanctum.TinctureAuthTest do
     test "a person without a namespace authenticates like anyone else, athanor-scoped", %{
       ctx: ctx
     } do
+      {ctx, _user} = Sanctum.TestContext.person!(ctx)
+
       {:ok, estate} =
         Sanctum.Tenancy.Athanors.create_group(
           ctx.user_id,
@@ -107,7 +111,12 @@ defmodule Sanctum.TinctureAuthTest do
       {:ok, _} =
         Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: estate.id)
 
-      {:ok, session} = Sanctum.Session.create(%{ctx | namespace: nil, athanor_id: estate.id})
+      session_ctx = %{ctx | namespace: nil, athanor_id: estate.id}
+
+      {:ok, session} =
+        Sanctum.Session.create(session_ctx,
+          generation_snapshot: Sanctum.TestContext.snapshot!(session_ctx)
+        )
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(session.token))
       assert out.scope == :athanor
@@ -119,6 +128,7 @@ defmodule Sanctum.TinctureAuthTest do
 
   describe "authenticate/1 — API key path" do
     test "a bearer API key yields an :api_key context", %{ctx: ctx} do
+      ctx = Sanctum.TestContext.issuer!(ctx)
       {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "tincture-key"})
 
       assert {:ok, %Context{} = out} = TinctureAuth.authenticate(bearer_conn(key))
@@ -133,9 +143,9 @@ defmodule Sanctum.TinctureAuthTest do
       # surface still stamps scope :athanor / authenticated, but the tenant
       # gate refuses a context that names no athanor (the tincture HTTP
       # isolation guarantee) — and says so.
-      unresolved =
+      {unresolved, _user} =
         Context.build(
-          user_id: "u-nowhere-#{System.unique_integer([:positive])}",
+          user_id: "github|https://github.com|nowhere-#{System.unique_integer([:positive])}",
           email: "nowhere@example.com",
           provider: "github",
           athanor_id: nil,
@@ -144,8 +154,12 @@ defmodule Sanctum.TinctureAuthTest do
           auth_method: :oidc,
           authenticated: true
         )
+        |> Sanctum.TestContext.person!()
 
-      {:ok, session} = Sanctum.Session.create(unresolved)
+      {:ok, session} =
+        Sanctum.Session.create(unresolved,
+          generation_snapshot: Sanctum.TestContext.snapshot!(unresolved)
+        )
 
       assert TinctureAuth.authenticate(bearer_conn(session.token)) ==
                {:error, :no_athanor}
@@ -161,7 +175,9 @@ defmodule Sanctum.TinctureAuthTest do
       {:ok, _} =
         Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: ctx.athanor_id)
 
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} =
+        Sanctum.Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
+
       assert {:ok, %Context{}} = TinctureAuth.authenticate(bearer_conn(session.token))
 
       # Mark the row denied WITHOUT `Users.deny/1`'s session revocation —

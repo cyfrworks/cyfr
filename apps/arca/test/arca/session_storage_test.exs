@@ -35,7 +35,7 @@ defmodule Arca.SessionStorageTest do
       hash = make_token_hash("create")
       attrs = session_attrs()
 
-      assert :ok = SessionStorage.create_session(hash, attrs)
+      assert :ok = SessionStorage.create_session(hash, attrs, Arca.Test.Actor.issuance())
 
       assert {:ok, session} = SessionStorage.get_session(hash)
       assert session.user_id == "user_1"
@@ -52,7 +52,7 @@ defmodule Arca.SessionStorageTest do
       hash = make_token_hash("expired")
       attrs = session_attrs(%{expires_at: DateTime.add(DateTime.utc_now(), -1, :second)})
 
-      :ok = SessionStorage.create_session(hash, attrs)
+      :ok = SessionStorage.create_session(hash, attrs, Arca.Test.Actor.issuance())
 
       assert {:error, :not_found} = SessionStorage.get_session(hash)
     end
@@ -63,14 +63,20 @@ defmodule Arca.SessionStorageTest do
       hash = make_token_hash("athanor")
       attrs = session_attrs(%{athanor_id: "ath_home"})
 
-      assert :ok = SessionStorage.create_session(hash, attrs)
+      assert :ok = SessionStorage.create_session(hash, attrs, Arca.Test.Actor.issuance())
       assert {:ok, session} = SessionStorage.get_session(hash)
       assert session.athanor_id == "ath_home"
     end
 
     test "update_athanor/2 repoints a live session; delete_by_user/1 drops every session" do
       hash = make_token_hash("repoint")
-      :ok = SessionStorage.create_session(hash, session_attrs(%{athanor_id: "ath_a"}))
+
+      :ok =
+        SessionStorage.create_session(
+          hash,
+          session_attrs(%{athanor_id: "ath_a"}),
+          Arca.Test.Actor.issuance()
+        )
 
       assert :ok = SessionStorage.update_athanor(hash, "ath_b")
       assert {:ok, %{athanor_id: "ath_b"} = session} = SessionStorage.get_session(hash)
@@ -88,7 +94,7 @@ defmodule Arca.SessionStorageTest do
     test "updates session expiration" do
       hash = make_token_hash("refresh")
       attrs = session_attrs()
-      :ok = SessionStorage.create_session(hash, attrs)
+      :ok = SessionStorage.create_session(hash, attrs, Arca.Test.Actor.issuance())
 
       new_expires = DateTime.add(DateTime.utc_now(), 7200, :second)
       assert :ok = SessionStorage.refresh_session(hash, new_expires)
@@ -106,7 +112,7 @@ defmodule Arca.SessionStorageTest do
   describe "delete_session/1" do
     test "deletes a session" do
       hash = make_token_hash("delete")
-      :ok = SessionStorage.create_session(hash, session_attrs())
+      :ok = SessionStorage.create_session(hash, session_attrs(), Arca.Test.Actor.issuance())
 
       assert :ok = SessionStorage.delete_session(hash)
       assert {:error, :not_found} = SessionStorage.get_session(hash)
@@ -122,7 +128,7 @@ defmodule Arca.SessionStorageTest do
     test "deletes expired sessions globally and returns count" do
       hash = make_token_hash("cleanup")
       attrs = session_attrs(%{expires_at: DateTime.add(DateTime.utc_now(), -60, :second)})
-      :ok = SessionStorage.create_session(hash, attrs)
+      :ok = SessionStorage.create_session(hash, attrs, Arca.Test.Actor.issuance())
 
       {:ok, count} = SessionStorage.cleanup_expired_sessions()
       assert count >= 1
@@ -134,7 +140,7 @@ defmodule Arca.SessionStorageTest do
       hash = make_token_hash("tenant")
       attrs = session_attrs(%{athanor_id: "ath_alpha"})
 
-      assert :ok = SessionStorage.create_session(hash, attrs)
+      assert :ok = SessionStorage.create_session(hash, attrs, Arca.Test.Actor.issuance())
 
       assert {:ok, session} = SessionStorage.get_session(hash)
       assert session.athanor_id == "ath_alpha"
@@ -144,7 +150,7 @@ defmodule Arca.SessionStorageTest do
       hash = make_token_hash("tenant_default")
       attrs = session_attrs()
 
-      assert :ok = SessionStorage.create_session(hash, attrs)
+      assert :ok = SessionStorage.create_session(hash, attrs, Arca.Test.Actor.issuance())
 
       assert {:ok, session} = SessionStorage.get_session(hash)
       assert session.athanor_id == nil

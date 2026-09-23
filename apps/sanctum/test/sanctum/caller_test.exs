@@ -69,7 +69,7 @@ defmodule Sanctum.CallerTest do
         )
       )
 
-    {:ok, session} = Session.create(ctx)
+    {:ok, session} = Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
     session
   end
 
@@ -183,7 +183,7 @@ defmodule Sanctum.CallerTest do
 
   describe "peek/1" do
     test "answers the identity fields without establishing" do
-      user = new_user()
+      user = known!(new_user())
       session = session_for(user, namespace: nil)
 
       assert {:ok, %{user_id: user_id, provider: "github", namespace: nil}} =

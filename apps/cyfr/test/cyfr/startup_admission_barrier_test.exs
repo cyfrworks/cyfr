@@ -479,7 +479,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     {:ok, _} = Members.ensure_platform(user.id)
 
     {:ok, session} =
-      Sanctum.Session.create(
+      Sanctum.TestContext.create_session(
         Sanctum.Context.build(
           user_id: user.id,
           athanor_id: Sanctum.TestContext.athanor_id(),

@@ -601,17 +601,18 @@ defmodule EmissaryWeb.AuthControllerTest do
 
     test "returns session info for valid token", %{conn: conn} do
       # Create a real session
-      ctx =
+      {ctx, _user} =
         Sanctum.Context.build(
-          user_id: "user_whoami_test",
+          user_id: "github|https://github.com|whoami-#{System.unique_integer([:positive])}",
           email: "whoami@example.com",
           provider: "github",
           permissions: [:execute, :read],
           namespace: "testns",
           authenticated: true
         )
+        |> Sanctum.TestContext.person!()
 
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.TestContext.create_session(ctx)
 
       conn =
         conn
@@ -620,7 +621,7 @@ defmodule EmissaryWeb.AuthControllerTest do
 
       response = json_response(conn, 200)
       assert response["ok"] == true
-      assert response["session"]["user_id"] == "user_whoami_test"
+      assert response["session"]["user_id"] == ctx.user_id
       assert response["session"]["email"] == "whoami@example.com"
       assert response["session"]["provider"] == "github"
       assert response["session"]["created_at"] != nil
@@ -643,7 +644,7 @@ defmodule EmissaryWeb.AuthControllerTest do
           authenticated: true
         )
 
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.Session.create(Sanctum.TestContext.issuer!(ctx))
       session
     end
 

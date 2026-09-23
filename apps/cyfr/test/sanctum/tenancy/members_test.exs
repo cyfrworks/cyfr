@@ -30,9 +30,21 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   describe "revoke_platform/2" do
+    # A person this server knows: a session is issued only to one.
+    defp person_id do
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "github|https://github.com|revoke-#{System.unique_integer([:positive])}",
+          provider: "github",
+          verified: true
+        })
+
+      user.id
+    end
+
     defp session_for(user_id) do
       {:ok, session} =
-        Sanctum.Session.create(
+        Sanctum.TestContext.create_session(
           Sanctum.Context.build(
             user_id: user_id,
             athanor_id: Sanctum.TestContext.athanor_id(),
@@ -48,7 +60,7 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
 
     test "takes the grant and every session together, then announces the revocation" do
-      uid = "user_" <> Ecto.UUID.generate()
+      uid = person_id()
       {:ok, _} = Members.ensure_platform(uid)
       token = session_for(uid)
       Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.sessions())
@@ -61,7 +73,7 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
 
     test "an absent grant ends no session and announces nothing" do
-      uid = "user_" <> Ecto.UUID.generate()
+      uid = person_id()
       token = session_for(uid)
       Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.sessions())
 
@@ -409,7 +421,7 @@ defmodule Sanctum.Tenancy.MembersTest do
       assert Subs.follows?(Cyfr.Actor.in_athanor(athanor.id), thread, stayer.id)
     end
 
-    test "remove_all_for_user/1 drops the follows in every athanor the person sat in", %{
+    test "a denial drops the follows in every athanor the person sat in", %{
       athanor: athanor
     } do
       n = System.unique_integer([:positive])
@@ -424,7 +436,7 @@ defmodule Sanctum.Tenancy.MembersTest do
       :ok = Subs.follow(follow_actor(athanor.id, user.id), "thread_a_#{n}", user.id)
       :ok = Subs.follow(follow_actor(other.id, user.id), "thread_b_#{n}", user.id)
 
-      :ok = Members.remove_all_for_user(user.id)
+      {:ok, _} = Sanctum.Tenancy.Users.deny(user)
 
       assert Subs.followed(follow_actor(athanor.id, user.id), user.id) == MapSet.new()
       assert Subs.followed(follow_actor(other.id, user.id), user.id) == MapSet.new()

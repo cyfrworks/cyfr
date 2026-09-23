@@ -158,6 +158,71 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
+  The generations the context's person and athanor stand at, read from
+  their rows (`Sanctum.Tenancy.generation_snapshot/2`): what a fixture
+  that builds an issuing context by hand passes as `generation_snapshot:`
+  to `Sanctum.Session.create/2` or `Sanctum.ApiKey.create/3`. The
+  issuance still locks and rereads both rows.
+  """
+  def snapshot!(%Context{user_id: user_id, athanor_id: athanor_id}) do
+    {:ok, snapshot} = Sanctum.Tenancy.generation_snapshot(user_id, athanor_id)
+    snapshot
+  end
+
+  @doc """
+  `Sanctum.Session.create/2` for a context a fixture built by hand, with
+  the `generation_snapshot:` its rows stand at now (`snapshot!/1`).
+  """
+  def create_session(%Context{} = ctx),
+    do: Sanctum.Session.create(ctx, generation_snapshot: snapshot!(ctx))
+
+  @doc """
+  `Sanctum.ApiKey.create/3` for a context a fixture built by hand, with
+  the `generation_snapshot:` its rows stand at now (`snapshot!/1`).
+  """
+  def create_key(%Context{} = ctx, attrs),
+    do: Sanctum.ApiKey.create(ctx, attrs, generation_snapshot: snapshot!(ctx))
+
+  @doc """
+  The context as an issuer: its identity signed in (`person!/2`) unless it
+  already names a person, the test athanor's row present when it works
+  there, the person seated in the athanor it works in, and the binding an
+  admitted sign-in carries (`t:Sanctum.Context.credential_binding/0`,
+  `source_kind: :identity`, focused through that seat) stamped from
+  `snapshot!/1` — the suite's one hand-bound issuer, for the tests that
+  issue through a tool rather than by calling the issuer.
+  """
+  def issuer!(%Context{} = ctx, attrs \\ %{}) do
+    ctx =
+      if Cyfr.PersonId.person?(ctx.user_id),
+        do: ctx,
+        else: ctx |> person!(attrs) |> elem(0)
+
+    if ctx.athanor_id == @athanor_id, do: athanor!()
+    snapshot = snapshot!(ctx)
+
+    %{
+      ctx
+      | credential_binding: %{
+          source_kind: :identity,
+          source_id: nil,
+          focus_basis: seat!(ctx),
+          user_generation: snapshot.user_generation,
+          athanor_generation: snapshot.athanor_generation
+        }
+    }
+  end
+
+  defp seat!(%Context{athanor_id: nil}), do: nil
+
+  defp seat!(%Context{user_id: user_id, athanor_id: athanor_id}) do
+    {:ok, seat} =
+      Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: athanor_id)
+
+    seat.id
+  end
+
+  @doc """
   Build a platform-scope test Context through the one sanctioned
   construction path (`Sanctum.Context.internal/1`) — `build/1` refuses
   `scope: :platform` from anywhere else.

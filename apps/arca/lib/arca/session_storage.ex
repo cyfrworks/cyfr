@@ -21,31 +21,51 @@ defmodule Arca.SessionStorage do
   # ============================================================================
 
   @doc """
-  Insert a new session.
+  Insert a new session, in the issuance transaction
+  (`Arca.SecurityTransitions.Issuance`): `lock:` names the rows the
+  session's standing rests on and `verify:` is the caller's policy over
+  them, asked with them locked. A standing transition that retires the
+  person or the estate either commits first and is reread here, or waits
+  for this session and then retires it.
+
+  Answers `:ok`, or the policy's refusal with nothing written.
   """
-  @spec create_session(binary(), map()) :: :ok | {:error, :database_error}
-  def create_session(token_hash, attrs) do
+  @spec create_session(binary(), map(), keyword()) :: :ok | {:error, term()}
+  def create_session(token_hash, attrs, opts) when is_binary(token_hash) and is_list(opts) do
+    lock = Keyword.fetch!(opts, :lock)
+    verify = Keyword.fetch!(opts, :verify)
+
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.create_session", fn ->
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-      row = %{
-        id: Cyfr.UUID7.generate_id("ses"),
-        token_hash: token_hash,
-        token_prefix: attrs[:token_prefix],
-        user_id: attrs.user_id,
-        email: attrs[:email],
-        provider: attrs.provider,
-        # A nil athanor is a real state: the session exists from sign-in on,
-        # before the caller's athanor is resolved. Membership re-resolution
-        # runs on the next load; nothing is coerced.
-        athanor_id: attrs[:athanor_id],
-        expires_at: attrs.expires_at,
-        inserted_at: Map.get(attrs, :inserted_at, now)
-      }
-
-      Arca.Repo.insert_all(Session, [row])
-      :ok
+      Arca.SecurityTransitions.Issuance.run(lock, verify, fn _locked ->
+        insert_session(token_hash, attrs)
+      end)
+      |> case do
+        {:ok, :inserted} -> :ok
+        {:error, _reason} = refusal -> refusal
+      end
     end)
+  end
+
+  defp insert_session(token_hash, attrs) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    row = %{
+      id: Cyfr.UUID7.generate_id("ses"),
+      token_hash: token_hash,
+      token_prefix: attrs[:token_prefix],
+      user_id: attrs.user_id,
+      email: attrs[:email],
+      provider: attrs.provider,
+      # A nil athanor is a real state: the session exists from sign-in on,
+      # before the caller's athanor is resolved. Membership re-resolution
+      # runs on the next load; nothing is coerced.
+      athanor_id: attrs[:athanor_id],
+      expires_at: attrs.expires_at,
+      inserted_at: Map.get(attrs, :inserted_at, now)
+    }
+
+    Arca.Repo.insert_all(Session, [row])
+    {:ok, :inserted}
   end
 
   @doc """

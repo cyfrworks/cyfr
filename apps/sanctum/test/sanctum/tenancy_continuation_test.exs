@@ -62,6 +62,9 @@ defmodule Sanctum.TenancyContinuationTest do
     user: user,
     estate: estate
   } do
+    # Another member keeps the estate open through the denial, so the
+    # surviving row lands in an estate that still stands.
+    {:ok, _} = Members.ensure("usr_keeper", scope: "athanor", athanor_id: estate.id)
     {:ok, _} = Users.deny(user)
     {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: estate.id)
     assert Members.member?(user.id, estate.id)

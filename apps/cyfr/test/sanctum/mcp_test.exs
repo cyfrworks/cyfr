@@ -178,6 +178,7 @@ defmodule Sanctum.MCPTest do
     end
 
     test "logout retires the session that called it", %{ctx: ctx} do
+      ctx = Sanctum.TestContext.issuer!(ctx)
       {:ok, session} = Sanctum.Session.create(ctx)
       assert {:ok, _} = Sanctum.Session.load(session.token, surface: :console)
 
@@ -213,6 +214,10 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "key tool" do
+    # A key is issued only by a person this server knows, against the
+    # standing their rows were read at.
+    setup %{ctx: ctx}, do: {:ok, ctx: Sanctum.TestContext.issuer!(ctx)}
+
     test "list returns empty initially", %{ctx: ctx} do
       {:ok, result} = MCP.handle("key", ctx, %{"action" => "list"})
       assert result.keys == []
@@ -521,7 +526,7 @@ defmodule Sanctum.MCPTest do
     setup do
       scoped =
         Context.build(
-          user_id: "ext_user",
+          user_id: "github|https://github.com|ext_user",
           namespace: "ext_ns",
           athanor_id: "ath_acme",
           permissions: [:*],
@@ -529,6 +534,7 @@ defmodule Sanctum.MCPTest do
           auth_method: :oidc,
           authenticated: true
         )
+        |> Sanctum.TestContext.issuer!()
 
       unresolved =
         Context.build(

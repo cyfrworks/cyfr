@@ -140,7 +140,15 @@ defmodule MultiTenantIsolationTest do
   end
 
   describe "Sanctum.ApiKey isolation" do
+    # A key is issued only by a person this server knows, against the
+    # standing their rows were read at.
+    defp issuers(ctx_a, ctx_b) do
+      {Sanctum.TestContext.issuer!(%{ctx_a | user_id: "github|https://github.com|u_a"}),
+       Sanctum.TestContext.issuer!(%{ctx_b | user_id: "github|https://github.com|u_b"})}
+    end
+
     test "list/1 from athanor A does not return athanor B's keys", %{a: ctx_a, b: ctx_b} do
+      {ctx_a, ctx_b} = issuers(ctx_a, ctx_b)
       {:ok, _} = Sanctum.ApiKey.create(ctx_a, %{name: "key_a", type: :application, scope: []})
       {:ok, _} = Sanctum.ApiKey.create(ctx_b, %{name: "key_b", type: :application, scope: []})
 
@@ -158,6 +166,7 @@ defmodule MultiTenantIsolationTest do
     end
 
     test "the same key name is allowed in both athanors", %{a: ctx_a, b: ctx_b} do
+      {ctx_a, ctx_b} = issuers(ctx_a, ctx_b)
       attrs = %{name: "same", type: :application, scope: []}
       assert {:ok, _} = Sanctum.ApiKey.create(ctx_a, attrs)
       assert {:ok, _} = Sanctum.ApiKey.create(ctx_b, attrs)

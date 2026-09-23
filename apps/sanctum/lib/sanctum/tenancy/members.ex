@@ -175,11 +175,39 @@ defmodule Sanctum.Tenancy.Members do
 
   @doc "Is `user_id` an active member of the athanor?"
   @spec member?(String.t() | nil, String.t()) :: boolean()
-  def member?(user_id, athanor_id) when is_binary(user_id) and is_binary(athanor_id) do
-    match?({:ok, %Membership{status: "active"}}, find(user_id, "athanor", athanor_id))
+  def member?(user_id, athanor_id), do: match?({:ok, _seat}, active_seat(user_id, athanor_id))
+
+  @doc """
+  The active membership row seating `user_id` in the athanor: `{:ok, row}`,
+  `:none`, or `{:error, reason}` when the store cannot answer. Its id is
+  what a focus on that athanor is bound to
+  (`t:Sanctum.Context.credential_binding/0`).
+  """
+  @spec active_seat(String.t() | nil, String.t() | nil) ::
+          {:ok, Membership.t()} | :none | {:error, term()}
+  def active_seat(user_id, athanor_id) when is_binary(user_id) and is_binary(athanor_id) do
+    case find(user_id, "athanor", athanor_id) do
+      {:ok, %Membership{status: "active"} = row} -> {:ok, row}
+      {:ok, %Membership{}} -> :none
+      {:error, :not_found} -> :none
+      {:error, _} = err -> err
+    end
   end
 
-  def member?(_, _), do: false
+  def active_seat(_user_id, _athanor_id), do: :none
+
+  @doc "The person's platform row, as `active_seat/2` answers: `{:ok, row}`, `:none` or `{:error, reason}`."
+  @spec platform_seat(String.t() | nil) :: {:ok, Membership.t()} | :none | {:error, term()}
+  def platform_seat(user_id) when is_binary(user_id) do
+    case find(user_id, "platform", nil) do
+      {:ok, %Membership{status: "active"} = row} -> {:ok, row}
+      {:ok, %Membership{}} -> :none
+      {:error, :not_found} -> :none
+      {:error, _} = err -> err
+    end
+  end
+
+  def platform_seat(_user_id), do: :none
 
   @doc """
   Add someone to an athanor: a person already on this server (`user_id:`)
@@ -418,76 +446,22 @@ defmodule Sanctum.Tenancy.Members do
   end
 
   @doc """
-  Remove every row of a person (a denied user's rows) — group and platform
-  alike, and their thread follows in every athanor they held a seat in. A
-  group they were the last active member of is archived, as when they
-  leave it. A failure is reported: the caller is ejecting someone and must
-  not answer "done" while rows survive.
+  Announce the rows a committed denial removed, from the data it
+  returned (`Arca.SecurityTransitions.deny_user/3`): the person hears
+  they left every estate they sat in, and every roster that lost a seat
+  or an invitation is told.
   """
-  @spec remove_all_for_user(String.t()) :: :ok | {:error, term()}
-  def remove_all_for_user(user_id) when is_binary(user_id) do
-    # Frozen estates end when ANYONE leaves — archived BEFORE the rows
-    # go, for the same reason `remove_member/2` orders it that way: a
-    # failure must abort while the memberships still exist, or the husk
-    # could never be re-attempted and its pair_key would stand forever.
-    # The follows go before the rows for the same reason.
-    with {:ok, rows} <- Arca.Members.list_all_for_user(server(), user_id),
-         :ok <- end_frozen_estates(rows),
-         :ok <- drop_follows(rows, user_id),
-         {:ok, _count} <- Arca.Members.delete_all_for_user(server(), user_id) do
-      for %{athanor_id: athanor_id} <- rows, is_binary(athanor_id) do
-        broadcast_change(user_id, athanor_id, :left)
-        Sanctum.Notify.member_changed(athanor_id)
-
-        case Athanors.get(athanor_id) do
-          {:ok, athanor} -> archive_when_empty(athanor)
-          _ -> :ok
-        end
-      end
-
-      :ok
+  @spec announce_removed(String.t(), map()) :: :ok
+  def announce_removed(user_id, %{removed_memberships: removed, withdrawn_invitations: withdrawn}) do
+    for %{athanor_id: athanor_id} <- removed, is_binary(athanor_id) do
+      broadcast_change(user_id, athanor_id, :left)
     end
-  end
 
-  defp end_frozen_estates(rows) do
-    rows
-    |> athanor_ids()
-    |> Enum.reduce_while(:ok, fn athanor_id, :ok ->
-      case Athanors.get(athanor_id) do
-        {:ok, athanor} ->
-          case end_if_frozen(athanor) do
-            :ok -> {:cont, :ok}
-            {:error, _} = err -> {:halt, err}
-          end
-
-        # A membership naming no live athanor row has nothing to end; a
-        # store fault must abort — "unreadable" is not "not frozen".
-        {:error, :not_found} ->
-          {:cont, :ok}
-
-        {:error, _} = err ->
-          {:halt, err}
-      end
-    end)
-  end
-
-  defp drop_follows(rows, user_id) do
-    rows
-    |> athanor_ids()
-    |> Enum.reduce_while(:ok, fn athanor_id, :ok ->
-      case Arca.ThreadSubscriptionStorage.unfollow_all(Cyfr.Actor.in_athanor(athanor_id), user_id) do
-        :ok -> {:cont, :ok}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  # The athanors a person's rows name — a platform row names none.
-  defp athanor_ids(rows) do
-    rows
+    (removed ++ withdrawn)
     |> Enum.map(& &1.athanor_id)
     |> Enum.filter(&is_binary/1)
     |> Enum.uniq()
+    |> Enum.each(&Sanctum.Notify.member_changed/1)
   end
 
   @doc """

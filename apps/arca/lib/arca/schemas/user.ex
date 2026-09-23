@@ -15,6 +15,15 @@ defmodule Arca.Schemas.User do
   is `"active"` or `"denied"` (server-denied: sessions and keys revoked, the
   personal athanor archived). `prefs` is a JSON document (`mode`, `theme`)
   owned by `Sanctum.Tenancy.Users`.
+
+  `status`, `denied_at` and `security_generation` are the person's
+  standing. A deny or an allow writes them together in one transaction
+  (`Arca.SecurityTransitions`), raising `security_generation` on every
+  real change, so a credential issued against the generation a context
+  read cannot be issued after that context's standing moved. The
+  changesets here never write them after birth: `update_changeset/2`
+  refuses them as read-only, and `changeset/2` refuses a generation at
+  birth, which is always the column's 1.
   """
 
   use Ecto.Schema
@@ -43,41 +52,75 @@ defmodule Arca.Schemas.User do
   defdelegate person_id?(id), to: Cyfr.PersonId, as: :person?
 
   schema "users" do
-    field :email, :string
-    field :email_verified, :boolean
-    field :provider, :string
-    field :display_name, :string
-    field :namespace, :string
-    field :personal_athanor_id, :string
-    field :status, :string, default: "active"
-    field :prefs, :string
-    field :first_seen_at, :utc_datetime_usec
-    field :last_seen_at, :utc_datetime_usec
-    field :denied_at, :utc_datetime_usec
-    field :created_at, :utc_datetime_usec
-    field :updated_at, :utc_datetime_usec
+    field(:email, :string)
+    field(:email_verified, :boolean)
+    field(:provider, :string)
+    field(:display_name, :string)
+    field(:namespace, :string)
+    field(:personal_athanor_id, :string)
+    field(:status, :string, default: "active")
+    field(:prefs, :string)
+    field(:first_seen_at, :utc_datetime_usec)
+    field(:last_seen_at, :utc_datetime_usec)
+    field(:denied_at, :utc_datetime_usec)
+    field(:security_generation, :integer, default: 1)
+    field(:created_at, :utc_datetime_usec)
+    field(:updated_at, :utc_datetime_usec)
   end
+
+  # What a person is born with.
+  @create_fields [
+    :id,
+    :email,
+    :email_verified,
+    :provider,
+    :display_name,
+    :namespace,
+    :personal_athanor_id,
+    :status,
+    :prefs,
+    :first_seen_at,
+    :last_seen_at,
+    :denied_at,
+    :created_at,
+    :updated_at
+  ]
+
+  # The standing columns: written only by `Arca.SecurityTransitions`.
+  @standing_fields [:status, :denied_at, :security_generation]
 
   def statuses, do: @statuses
 
+  @doc "The changeset a person is minted with."
   def changeset(user, attrs) do
     user
-    |> cast(attrs, [
-      :id,
-      :email,
-      :email_verified,
-      :provider,
-      :display_name,
-      :namespace,
-      :personal_athanor_id,
-      :status,
-      :prefs,
-      :first_seen_at,
-      :last_seen_at,
-      :denied_at,
-      :created_at,
-      :updated_at
-    ])
+    |> cast(attrs, @create_fields)
+    |> read_only(attrs, [:security_generation])
+    |> validated()
+  end
+
+  @doc """
+  The changeset an ordinary attribute update writes through. The standing
+  columns are refused as read-only: they move only with a deny or an
+  allow.
+  """
+  def update_changeset(user, attrs) do
+    user
+    |> cast(attrs, @create_fields -- @standing_fields)
+    |> read_only(attrs, @standing_fields)
+    |> validated()
+  end
+
+  defp read_only(changeset, attrs, fields) do
+    Enum.reduce(fields, changeset, fn field, changeset ->
+      if Map.has_key?(attrs, field) or Map.has_key?(attrs, Atom.to_string(field)),
+        do: add_error(changeset, field, "is read-only"),
+        else: changeset
+    end)
+  end
+
+  defp validated(changeset) do
+    changeset
     |> validate_required([:id, :provider, :first_seen_at, :last_seen_at])
     # A person's id is minted here (`id_prefix/0`); the server's synthetic
     # principals — `system`, `_seed`, `webhook:<slug>`, … — never carry

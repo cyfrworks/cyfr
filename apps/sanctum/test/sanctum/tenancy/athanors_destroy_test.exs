@@ -194,7 +194,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
 
     # `users.personal_athanor_id` is not an athanor-scoped column, so
     # erasure would leave it naming a row whose data is gone: the unique
-    # index then blocks minting a replacement and `unarchive_personal/1`
+    # index then blocks minting a replacement and `Users.allow/1`
     # reopens a wiped shell.
     assert Sanctum.Tenancy.Users.personal_athanor?(personal.id)
 

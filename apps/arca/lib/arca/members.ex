@@ -48,8 +48,8 @@ defmodule Arca.Members do
   Nothing that belongs to Ecto crosses the boundary. A refusal is
   `:conflict` (the assignment index — the row is already there, so a
   caller that raced re-reads it), `{:invalid, %{field => [message]}}`,
-  `:unknown_athanor`, `:not_found`, `:cross_tenant`, `:no_athanor` or
-  `:database_error`.
+  `:unknown_athanor`, `:athanor_archived`, `:not_found`, `:cross_tenant`,
+  `:no_athanor` or `:database_error`.
   """
 
   import Ecto.Query
@@ -99,17 +99,29 @@ defmodule Arca.Members do
   The row also carries a foreign key, but SQLite reports a violation
   without naming it, so the changeset could not translate it. Reading the
   athanor first answers `:unknown_athanor` the same way on both adapters.
+
+  The athanor row is locked before the seat is written, in one
+  `Arca.Repo.locking_transaction/2`: a denial or an archive that is
+  retiring the estate (`Arca.SecurityTransitions`) holds that lock, so a
+  seat waits for it and then reads what it committed. A seat never lands
+  in an archived estate: `{:error, :athanor_archived}`, the answer adding
+  a member to one already gets.
   """
   @spec seat(Cyfr.Actor.t(), map()) ::
-          {:ok, Membership.t()} | {:error, :no_athanor} | write_refusal()
+          {:ok, Membership.t()} | {:error, :no_athanor | :athanor_archived} | write_refusal()
   def seat(%Cyfr.Actor{athanor_id: athanor_id}, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.seat", fn ->
-      if athanor_exists?(athanor_id) do
-        attrs |> defaults() |> Map.put(:athanor_id, athanor_id) |> do_insert()
-      else
-        {:error, :unknown_athanor}
+      fn ->
+        with :ok <- seatable(athanor_id),
+             {:ok, row} <-
+               attrs |> defaults() |> Map.put(:athanor_id, athanor_id) |> do_insert() do
+          row
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
       end
+      |> Arca.Repo.locking_transaction()
     end)
   end
 
@@ -488,30 +500,6 @@ defmodule Arca.Members do
 
   def list_active_for_user(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
 
-  @doc "Every row of a person, whatever its status — what a deny has to sweep."
-  @spec list_all_for_user(Cyfr.Actor.t(), String.t()) :: {:ok, [Membership.t()]} | refusal()
-  # arca:unscoped-ok person-keyed by design — a deny sweeps every athanor the person sat in.
-  def list_all_for_user(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Members.list_all_for_user", fn ->
-      {:ok, Arca.Repo.all(from(m in Membership, where: m.user_id == ^user_id))}
-    end)
-  end
-
-  def list_all_for_user(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
-
-  @doc "Delete every row of a person. Answers how many rows went."
-  @spec delete_all_for_user(Cyfr.Actor.t(), String.t()) ::
-          {:ok, non_neg_integer()} | refusal()
-  # arca:unscoped-ok person-keyed by design — a deny sweeps every athanor the person sat in.
-  def delete_all_for_user(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Members.delete_all_for_user", fn ->
-      {count, _} = Arca.Repo.delete_all(from(m in Membership, where: m.user_id == ^user_id))
-      {:ok, count}
-    end)
-  end
-
-  def delete_all_for_user(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
-
   @doc """
   Turn every invitation held for `email` into this person's active
   membership, and answer the athanors that changed.
@@ -670,8 +658,7 @@ defmodule Arca.Members do
 
       {_removed, session_hashes} = remove_platform(delisted)
 
-      {:ok,
-       Enum.map(delisted, &%{user_id: &1, session_hashes: Map.get(session_hashes, &1, [])})}
+      {:ok, Enum.map(delisted, &%{user_id: &1, session_hashes: Map.get(session_hashes, &1, [])})}
     end
   end
 
@@ -761,8 +748,18 @@ defmodule Arca.Members do
     |> Map.put_new(:updated_at, now)
   end
 
-  defp athanor_exists?(athanor_id),
-    do: Arca.Repo.exists?(from(a in Athanor, where: a.id == ^athanor_id))
+  # The estate a seat is written into, locked: an estate being retired
+  # holds this row until it commits.
+  defp seatable(athanor_id) do
+    from(a in Athanor, where: a.id == ^athanor_id, select: a.status)
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.one()
+    |> case do
+      nil -> {:error, :unknown_athanor}
+      "archived" -> {:error, :athanor_archived}
+      _active -> :ok
+    end
+  end
 
   defp found(nil), do: {:error, :not_found}
   defp found(%Membership{} = membership), do: {:ok, membership}

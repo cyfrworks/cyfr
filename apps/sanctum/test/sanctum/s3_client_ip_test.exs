@@ -125,7 +125,7 @@ defmodule Sanctum.S3ClientIpTest do
 
   describe "the closed bypass: allowlist is enforced, not skipped" do
     test "an allowlisted key with an unresolvable IP is REJECTED (was: bypassed)" do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
         Sanctum.ApiKey.create(ctx, %{name: "ip-key", ip_allowlist: ["203.0.113.0/24"]})
@@ -142,7 +142,7 @@ defmodule Sanctum.S3ClientIpTest do
 
     test "a spoofed leftmost XFF entry cannot satisfy the allowlist behind a proxy" do
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
         Sanctum.ApiKey.create(ctx, %{name: "xff-key", ip_allowlist: ["203.0.113.0/24"]})

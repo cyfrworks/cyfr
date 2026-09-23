@@ -243,13 +243,15 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   # rejected on the very next request.
   defp validate_session_token(token) do
     # This surface never slides the session — the console hooks do.
+    # The context arrives carrying its session row key and the binding that
+    # names it (`Sanctum.Session`, the one place both are stamped).
     case Sanctum.Caller.establish(token, refresh: false) do
       {:ok, ctx} ->
-        {:ok, stamp_token_hash(ctx, token), :session_token}
+        {:ok, ctx, :session_token}
 
       {:error, {:denied, denied}} ->
         # No standing at the door: only the anonymous surface answers.
-        {:ok, stamp_token_hash(denied, token), :session_token}
+        {:ok, denied, :session_token}
 
       {:error, :no_athanor} ->
         {:error, :missing_tenant}
@@ -268,11 +270,6 @@ defmodule EmissaryWeb.Plugs.Authenticate do
         :unclaimed_bearer
     end
   end
-
-  # The row key, not the token: enough for the caller to retire its own
-  # session, useless for authenticating as it.
-  defp stamp_token_hash(%Context{} = ctx, token),
-    do: %{ctx | session_token_hash: Sanctum.Session.token_hash(token)}
 
   # Validate an API key and build an athanor-scoped context from the key row.
   #

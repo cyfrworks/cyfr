@@ -58,7 +58,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
         })
 
       {:ok, session} =
-        Sanctum.Session.create(
+        Sanctum.TestContext.create_session(
           Sanctum.Context.build(
             user_id: person_id,
             email: "claim#{n}@example.com",
@@ -261,7 +261,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
           permissions: [:*]
         )
 
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.TestContext.create_session(ctx)
       {person_id, session.token, "claimed#{n}"}
     end
 

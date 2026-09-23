@@ -233,14 +233,23 @@ defmodule Sanctum.Door do
 
   defp record_request(_reason, _user_id, _email), do: :ok
 
-  @doc "The operator emails named in `CYFR_PLATFORM_ADMIN_EMAILS` (lowercased)."
-  @spec platform_admin_emails() :: [String.t()]
+  @doc """
+  The operator list named in `CYFR_PLATFORM_ADMIN_EMAILS`, as configured:
+  runtime configuration parses it into a list of lowercased addresses, but
+  this reads the value unchecked, so a reader that acts on it — the boot's
+  reconcile (`Sanctum.reconcile_platform_admins/2`) — validates its shape
+  and refuses anything else.
+  """
+  @spec platform_admin_emails() :: term()
   def platform_admin_emails, do: Application.get_env(:sanctum, :platform_admin_emails, [])
 
   @doc "Is this email one of the operators named in `CYFR_PLATFORM_ADMIN_EMAILS`?"
   @spec platform_admin_email?(String.t() | nil) :: boolean()
   def platform_admin_email?(email) when is_binary(email) do
-    String.downcase(email) in platform_admin_emails()
+    case platform_admin_emails() do
+      emails when is_list(emails) -> String.downcase(email) in emails
+      _malformed -> false
+    end
   end
 
   def platform_admin_email?(_), do: false

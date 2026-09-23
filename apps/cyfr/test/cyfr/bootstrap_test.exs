@@ -85,7 +85,7 @@ defmodule Cyfr.BootstrapTest do
     dropped = operator(n + 1, "dropped#{n}@example.com")
 
     {:ok, session} =
-      Sanctum.Session.create(
+      Sanctum.TestContext.create_session(
         Sanctum.Context.build(
           user_id: dropped.id,
           athanor_id: Sanctum.TestContext.athanor_id(),

@@ -411,7 +411,7 @@ defmodule Cyfr.Cluster.Fixtures do
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.id, "Cluster #{n}")
 
     {:ok, session} =
-      Sanctum.Session.create(%{
+      Sanctum.TestContext.create_session(%{
         Sanctum.Context.build(
           user_id: user.id,
           athanor_id: group.id,
@@ -444,6 +444,39 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "Whether this member still holds a memo for `hash`."
   @spec memo?(binary()) :: boolean()
   def memo?(hash), do: Arca.Cache.match(Arca.Cache.Keys.match_established(hash)) != []
+
+  @doc """
+  The context a request holding `token` is established with on this
+  member, as a term: what a context read before a retirement looks like
+  when it is used again after one.
+  """
+  @spec context(String.t()) :: {:ok, Sanctum.Context.t()} | {:error, term()}
+  def context(token), do: Sanctum.Caller.establish(token)
+
+  @doc "Deny the person `user_id` from this member: the one-transaction eject."
+  @spec deny!(String.t()) :: String.t()
+  def deny!(user_id) do
+    {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+    {:ok, denied} = Sanctum.Tenancy.Users.deny(user)
+    denied.status
+  end
+
+  @doc "Allow the person `user_id` again from this member."
+  @spec allow!(String.t()) :: String.t()
+  def allow!(user_id) do
+    {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+    {:ok, allowed} = Sanctum.Tenancy.Users.allow(user)
+    allowed.status
+  end
+
+  @doc "Issue a key from `ctx` on this member: the issuance rereads the rows its binding names."
+  @spec issue_key(Sanctum.Context.t()) :: {:ok, String.t()} | {:error, term()}
+  def issue_key(ctx) do
+    case Sanctum.ApiKey.create(ctx, %{name: "cluster-#{System.unique_integer([:positive])}"}) do
+      {:ok, %{api_key: key}} -> {:ok, key}
+      other -> other
+    end
+  end
 
   @doc "Archive `athanor_id` from this member, which announces the invalidation."
   @spec archive!(String.t()) :: atom()

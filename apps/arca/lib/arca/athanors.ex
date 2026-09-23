@@ -84,18 +84,29 @@ defmodule Arca.Athanors do
   @doc """
   Set `fields` on the actor's own athanor row with one statement — the
   provisioning stamps, which are the server's own record and never a
-  patch a caller supplies.
+  patch a caller supplies. The standing columns are refused as read-only
+  (`{:error, {:invalid, %{field => ["is read-only"]}}}`); they move only
+  with an archive or a reopen (`Arca.SecurityTransitions`).
   """
   @spec set(Cyfr.Actor.t(), keyword()) ::
-          :ok | {:error, :not_found | :no_athanor | :database_error}
+          :ok
+          | {:error,
+             :not_found | :no_athanor | :database_error | {:invalid, %{atom() => [String.t()]}}}
   def set(%Cyfr.Actor{athanor_id: athanor_id}, fields)
       when is_binary(athanor_id) and athanor_id != "" and is_list(fields) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Athanors.set", fn ->
-      case from(a in Athanor, where: a.id == ^athanor_id) |> Arca.Repo.update_all(set: fields) do
-        {1, _} -> :ok
-        {0, _} -> {:error, :not_found}
-      end
-    end)
+    case Enum.filter(Athanor.standing_fields(), &Keyword.has_key?(fields, &1)) do
+      [] ->
+        Arca.Repo.Errors.with_db_rescue("Arca.Athanors.set", fn ->
+          case from(a in Athanor, where: a.id == ^athanor_id)
+               |> Arca.Repo.update_all(set: fields) do
+            {1, _} -> :ok
+            {0, _} -> {:error, :not_found}
+          end
+        end)
+
+      standing ->
+        {:error, {:invalid, Map.new(standing, &{&1, ["is read-only"]})}}
+    end
   end
 
   def set(%Cyfr.Actor{}, _fields), do: {:error, :no_athanor}

@@ -11,6 +11,8 @@ defmodule Sanctum.MCP.KeyTool do
 
   require Logger
 
+  @standing_refusals [:missing_generation, :stale_generation, :not_standing]
+
   alias Sanctum.Context
 
   @doc false
@@ -158,6 +160,9 @@ defmodule Sanctum.MCP.KeyTool do
           {:error,
            "Scope #{inspect(scope_list)} exceeds allowed scopes for this key type: #{inspect(ceiling)}"}
 
+        {:error, reason} when reason in @standing_refusals ->
+          {:error, standing_refusal(reason)}
+
         # No re-log: the storage layer already logged this failure with the
         # exception detail (Arca.ApiKeyStorage); a second error line here
         # carried nothing the first lacked.
@@ -206,6 +211,9 @@ defmodule Sanctum.MCP.KeyTool do
          "#{name} carries a consent capability and cannot be rotated — " <>
            "revoke it and mint a new key, which asks for consent again"}
 
+      {:error, reason} when reason in @standing_refusals ->
+        {:error, standing_refusal(reason)}
+
       {:error, reason} ->
         Logger.error("[KeyTool] Failed to rotate key: #{inspect(reason)}")
         {:error, "Failed to rotate key"}
@@ -221,6 +229,17 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   # --- helpers ---
+
+  # The issuance refusals (`Sanctum.ApiKey`): the caller's standing, as the
+  # context read it, no longer holds — or was never read.
+  defp standing_refusal(:missing_generation),
+    do: "This session cannot issue a key; sign in again"
+
+  defp standing_refusal(:stale_generation),
+    do: "Your standing changed since this session was read; sign in again"
+
+  defp standing_refusal(:not_standing),
+    do: "Your session, membership or athanor no longer stands; sign in again"
 
   defp parse_key_type_arg("application"), do: {:ok, :application}
   defp parse_key_type_arg("service"), do: {:ok, :service}

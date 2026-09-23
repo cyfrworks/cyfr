@@ -27,14 +27,18 @@ defmodule Cyfr.ControlPlaneWorkersTest do
     hash = :crypto.hash(:sha256, "expired-#{System.unique_integer([:positive])}")
 
     :ok =
-      Arca.SessionStorage.create_session(hash, %{
-        user_id: "user_1",
-        email: "user@example.com",
-        provider: "github",
-        permissions: "[]",
-        expires_at: DateTime.add(DateTime.utc_now(), -60, :second),
-        token_prefix: "cyfr_"
-      })
+      Arca.SessionStorage.create_session(
+        hash,
+        %{
+          user_id: "user_1",
+          email: "user@example.com",
+          provider: "github",
+          permissions: "[]",
+          expires_at: DateTime.add(DateTime.utc_now(), -60, :second),
+          token_prefix: "cyfr_"
+        },
+        Arca.Test.Actor.issuance("user_1")
+      )
 
     state = %{interval: :timer.hours(999)}
 

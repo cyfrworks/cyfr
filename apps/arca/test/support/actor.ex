@@ -46,6 +46,21 @@ defmodule Arca.Test.Actor do
     }
   end
 
+  @doc """
+  The issuance options (`Arca.SecurityTransitions.Issuance`) a storage
+  test writes a session or a key under: the rows named for locking, and a
+  policy that admits. The policy is the identity domain's
+  (`Sanctum.Issuance`); a storage test is about the write, not the
+  decision.
+  """
+  @spec issuance(String.t()) :: keyword()
+  def issuance(user_id \\ "usr_test") do
+    [
+      lock: %{user_id: user_id, athanor_id: nil, membership_id: nil, source: nil},
+      verify: fn _rows -> :ok end
+    ]
+  end
+
   @doc "A bare tenant caller — an athanor, and nothing else."
   @spec in_athanor(String.t()) :: Cyfr.Actor.t()
   def in_athanor(athanor_id), do: Cyfr.Actor.in_athanor(athanor_id)

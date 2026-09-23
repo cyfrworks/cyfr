@@ -117,8 +117,6 @@ defmodule Arca.MembersTest do
       assert {:error, :cross_tenant} = Members.delete(member, row)
       assert {:error, :cross_tenant} = Members.list_platform(member)
       assert {:error, :cross_tenant} = Members.list_active_for_user(member, "usr_1")
-      assert {:error, :cross_tenant} = Members.list_all_for_user(member, "usr_1")
-      assert {:error, :cross_tenant} = Members.delete_all_for_user(member, "usr_1")
       assert {:error, :cross_tenant} = Members.shared_estate?(member, "usr_1", "usr_2")
 
       assert {:error, :cross_tenant} =
@@ -243,7 +241,7 @@ defmodule Arca.MembersTest do
       assert {:error, :not_found} = Members.find_platform(server(), user)
     end
 
-    test "a person's rows are read and swept across every athanor they sat in" do
+    test "a person's rows are read across every athanor they sat in" do
       a = group!()
       b = group!()
       user = person_id()
@@ -253,12 +251,8 @@ defmodule Arca.MembersTest do
 
       assert {:ok, rows} = Members.list_active_for_user(server(), user)
       assert length(rows) == 3
-      assert {:ok, all} = Members.list_all_for_user(server(), user)
-      assert length(all) == 3
 
       assert {:ok, true} = shared?(a.id, user)
-      assert {:ok, 3} = Members.delete_all_for_user(server(), user)
-      assert {:ok, []} = Members.list_all_for_user(server(), user)
     end
 
     test "two people share an estate only while both seats are active and the estate is" do
@@ -272,7 +266,9 @@ defmodule Arca.MembersTest do
       assert {:ok, true} = Members.shared_estate?(server(), alice, bob)
       assert {:ok, false} = Members.shared_estate?(server(), alice, carol)
 
-      {:ok, _} = Athanors.update(in_athanor(athanor.id), %{status: "archived"})
+      {:ok, _} =
+        Arca.SecurityTransitions.archive_athanor(server(), athanor.id, verify: fn _ -> :ok end)
+
       assert {:ok, false} = Members.shared_estate?(server(), alice, bob)
     end
   end
@@ -365,7 +361,10 @@ defmodule Arca.MembersTest do
       later = person!(%{email: "plain-#{uniq()}@example.com"})
       stale = facts(later)
       moved!(later, email: "ops-#{uniq()}@example.com")
-      {:ok, _} = Members.ensure_platform(server(), later.id, expected_identity: facts(reload(later)))
+
+      {:ok, _} =
+        Members.ensure_platform(server(), later.id, expected_identity: facts(reload(later)))
+
       token = session!(later.id)
 
       assert {:error, :stale_identity} =
@@ -558,11 +557,15 @@ defmodule Arca.MembersTest do
     hash = :crypto.strong_rand_bytes(32)
 
     :ok =
-      Arca.SessionStorage.create_session(hash, %{
-        user_id: user_id,
-        provider: "github",
-        expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
-      })
+      Arca.SessionStorage.create_session(
+        hash,
+        %{
+          user_id: user_id,
+          provider: "github",
+          expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+        },
+        Arca.Test.Actor.issuance(user_id)
+      )
 
     hash
   end

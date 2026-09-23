@@ -47,7 +47,7 @@ defmodule Cyfr.StandingWatchTest do
     {:ok, group} = Athanors.create_group(owner.id, "Standing #{n}")
 
     {:ok, session} =
-      Sanctum.Session.create(%{
+      Sanctum.TestContext.create_session(%{
         member_ctx(group.id, owner.id)
         | provider: "github",
           email: owner.email

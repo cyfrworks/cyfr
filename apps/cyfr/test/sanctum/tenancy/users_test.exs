@@ -175,8 +175,8 @@ defmodule Sanctum.Tenancy.UsersTest do
         authenticated: true
       )
 
-    {:ok, session} = Sanctum.Session.create(ctx)
-    {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "k4"})
+    {:ok, session} = Sanctum.TestContext.create_session(ctx)
+    {:ok, %{api_key: key}} = Sanctum.TestContext.create_key(ctx, %{name: "k4"})
 
     Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Session.topic())
 

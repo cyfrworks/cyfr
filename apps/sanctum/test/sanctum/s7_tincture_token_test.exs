@@ -39,7 +39,7 @@ defmodule Sanctum.S7TinctureTokenTest do
         athanor_id: "ath_acme"
       )
 
-    {:ok, ctx: Sanctum.TestContext.local(), user: user}
+    {:ok, ctx: Sanctum.TestContext.issuer!(Sanctum.TestContext.local()), user: user}
   end
 
   # The person the identity names: their own id, minted at the setup's sign-in.

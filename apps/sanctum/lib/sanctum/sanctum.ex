@@ -120,13 +120,14 @@ defmodule Sanctum do
     end
   end
 
-  # The configured list, read as configured — the key `Sanctum.Door`
-  # compares sign-ins against — and accepted only in the shape the door
-  # assumes: a list of lowercased addresses with nothing around them.
-  # Anything else is a configuration the reconcile cannot read, and
-  # reading it loosely could keep an operator the list no longer names.
+  # The configured list, read through the door that compares sign-ins
+  # against it (`Sanctum.Door.platform_admin_emails/0`), and accepted only
+  # in the shape the door assumes: a list of lowercased addresses with
+  # nothing around them. Anything else is a configuration the reconcile
+  # cannot read, and reading it loosely could keep an operator the list no
+  # longer names.
   defp operator_snapshot do
-    case Application.get_env(:sanctum, :platform_admin_emails, []) do
+    case Sanctum.Door.platform_admin_emails() do
       emails when is_list(emails) ->
         if Enum.all?(emails, &operator_email?/1),
           do: {:ok, emails |> Enum.uniq() |> Enum.sort()},

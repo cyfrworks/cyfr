@@ -56,6 +56,25 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp tenancy do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # The standing counters. A deny/allow or archive/reopen that changes a
+    # row's standing raises its counter by one in the same transaction
+    # (`Arca.SecurityTransitions`); nothing else writes it. A credential is
+    # issued only against the counters its context read, so a context read
+    # before a retirement cannot issue after a restore. Positive, starting
+    # at 1; spelled once per adapter for the same reason as the MCP
+    # transport check below.
+    athanor_generation = %{
+      name: "athanors_security_generation_positive",
+      expr: "security_generation > 0"
+    }
+
+    user_generation = %{
+      name: "users_security_generation_positive",
+      expr: "security_generation > 0"
+    }
+
     create table(:athanors, primary_key: false) do
       add :id, :string, primary_key: true
       add :kind, :string, null: false
@@ -75,8 +94,18 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :roster, :string, null: false, default: "open"
       # SHA-256 over the JSON-encoded sorted member ids of a frozen pair.
       add :pair_key, :string
+
+      add :security_generation, :bigint,
+        null: false,
+        default: 1,
+        check: if(sqlite?, do: athanor_generation)
+
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
+    end
+
+    unless sqlite? do
+      create constraint(:athanors, athanor_generation.name, check: athanor_generation.expr)
     end
 
     create unique_index(:athanors, [:kind, :slug])
@@ -114,8 +143,18 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :first_seen_at, :utc_datetime_usec, null: false
       add :last_seen_at, :utc_datetime_usec, null: false
       add :denied_at, :utc_datetime_usec
+
+      add :security_generation, :bigint,
+        null: false,
+        default: 1,
+        check: if(sqlite?, do: user_generation)
+
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
+    end
+
+    unless sqlite? do
+      create constraint(:users, user_generation.name, check: user_generation.expr)
     end
 
     create index(:users, [:email])
