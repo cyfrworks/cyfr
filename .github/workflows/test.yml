@@ -836,51 +836,6 @@ jobs:
       - name: Boot the release against a fresh ${{ matrix.db }} database
         run: tests/release-boot/boot.sh ${{ matrix.db }}
 
-  arca-seam:
-    name: Arca single-seam (no untagged filesystem I/O)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      # All file/blob I/O must use Arca.Storage unless a direct call is marked
-      # with `arca:bypass-ok=<A|B|C|D|E>` on its line or within four lines above it.
-      # This includes File.*, Path.wildcard, :file, :filelib, :erl_tar and :prim_file.
-      # Arca.Storage documents the bypass groups. Scratch-only modules may use
-      # `arca:bypass-ok=<X> — entire module`.
-      - name: Assert direct filesystem calls are tagged
-        run: |
-          set -uo pipefail
-          fail=0
-          sources="$(git ls-files 'apps/*/lib/*.ex' 'apps/*/lib/**/*.ex')"
-          # A scan that reads nothing would pass; refuse it.
-          if [ -z "$sources" ]; then
-            echo "::error::no application sources matched — the scan would read nothing"
-            exit 1
-          fi
-          while IFS= read -r f; do
-            case "$f" in
-              */arca/adapters/*) continue ;;
-              apps/arca/lib/arca/storage.ex) continue ;;
-            esac
-            if grep -qE 'arca:bypass-ok=[A-E] — entire module' "$f"; then continue; fi
-            bad="$(awk '
-              /arca:bypass-ok/ { ok = NR }
-              /(^|[^A-Za-z0-9_.])File\.[a-z]|Path\.wildcard|(^|[^A-Za-z0-9_]):(file|filelib|erl_tar|prim_file)\./ {
-                if ($0 ~ /^[[:space:]]*#/) next
-                if (ok && NR - ok <= 4) next
-                print NR ": " $0
-              }
-            ' "$f")"
-            if [ -n "$bad" ]; then
-              echo "::error file=$f::direct filesystem I/O without a nearby arca:bypass-ok tag (see Arca.Storage single-seam policy)"
-              echo "$bad"
-              fail=1
-            fi
-          done <<< "$sources"
-          if [ "$fail" -ne 0 ]; then
-            echo "Untagged filesystem I/O found. Route it through Arca, or tag the call site # arca:bypass-ok=<A|B|C|D|E>."
-            exit 1
-          fi
-
   seed-guards:
     name: Seed media (clean, immutable versions)
     runs-on: ubuntu-latest
@@ -1043,7 +998,7 @@ jobs:
           while IFS= read -r key; do
             [ -n "$key" ] || continue
             # Exempt when every file that compile_env's this key carries the
-            # tag, the same file-level shape the arca-seam job uses.
+            # tag: one tag anywhere in the file exempts the whole file.
             untagged=$(git grep -lE "compile_env\(:cyfr, *:${key}[^a-z_0-9]" -- 'apps/**/*.ex' 'apps/**/*.exs' \
               | while IFS= read -r f; do
                   grep -q 'config:compile-runtime-ok' "$f" || echo "$f"

@@ -19,10 +19,13 @@ defmodule Arca.Storage do
   a runner's or a build's own sandbox (group D), and the same scan holds
   them to their tags.
 
-  The `arca-seam` CI job (`.github/workflows/test.yml`) greps for direct
-  filesystem calls and fails when a file makes one without carrying an
-  `# arca:bypass-ok=<group>` tag. To intentionally bypass, mark the call with a
-  comment like `# arca:bypass-ok=B` (matching the group letter).
+  The seam is the filesystem row of `Cyfr.Boundaries` (`filesystem_seam/0`),
+  and `Cyfr.BoundariesTest` holds every application's `lib` to it: a direct
+  filesystem call fails unless an `# arca:bypass-ok=<group>` tag is on its
+  line or within the four lines above it, or its module says
+  `arca:bypass-ok=<group> — entire module` once. To intentionally bypass,
+  mark the call with a comment like `# arca:bypass-ok=B` (matching the group
+  letter).
 
   | Group | When | Why bypass is OK | Examples |
   |-------|------|------------------|----------|
