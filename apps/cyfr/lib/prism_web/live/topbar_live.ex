@@ -48,70 +48,43 @@ defmodule PrismWeb.TopbarLive do
   @refresh_window_ms 250
   @refresh_order [:requests, :executions, :log_stats, :schedules]
 
+  on_mount {CyfrWeb.ContextGuard, :protected}
+
+  # `CyfrWeb.ContextGuard` established the session, focused on the page's
+  # estate, and subscribed this bar to the person's standing — their
+  # memberships among it, which is what the switcher lists; a session the
+  # guard refuses never reaches here.
   @impl true
   def mount(_params, session, socket) do
     token = session[to_string(PrismWeb.SignInResponse.session_key())]
+    ctx = socket.assigns.context
+    ui_mode = Prism.Labels.mode(session["ui_mode"], ctx)
 
-    socket =
-      case PrismWeb.AuthHelpers.authenticate_session(token, session["athanor_id"]) do
-        {:ok, ctx} ->
-          ui_mode = Prism.Labels.mode(session["ui_mode"], ctx)
+    if connected?(socket) do
+      # The page this bar sits on says which estate it has in view.
+      Phoenix.PubSub.subscribe(Emissary.PubSub, viewing_topic(socket.parent_pid))
 
-          if connected?(socket) do
-            # The person's own memberships change what the switcher lists.
-            Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Tenancy.Members.topic(ctx.user_id))
-            # The page this bar sits on says which estate it has in view.
-            Phoenix.PubSub.subscribe(Emissary.PubSub, viewing_topic(socket.parent_pid))
+      if ctx.platform_admin,
+        do: Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.platform_topic())
 
-            if ctx.platform_admin,
-              do: Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.platform_topic())
+      if ui_mode == "dev", do: subscribe_indicators(ctx)
+      send(self(), :load_topbar)
+    end
 
-            if ui_mode == "dev", do: subscribe_indicators(ctx)
-          end
-
-          # Use cheap defaults for the disconnected render. Defer database reads,
-          # cache writes and tool calls to the connected mount.
-          socket =
-            socket
-            |> assign(:context, ctx)
-            |> assign(:personal_namespace_slug, ctx.namespace)
-            |> assign(:authenticated, true)
-            |> assign(:tray_key, Prism.Tray.session_hash(token))
-            |> assign(:ui_mode, ui_mode)
-            |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
-            |> assign(:viewing, ctx.athanor_id)
-            |> assign(:badges, %{})
-            |> assign(:platform_requests, 0)
-            |> assign(:athanors, [])
-            |> assign(:labels, %{})
-
-          if connected?(socket) do
-            send(self(), :load_topbar)
-          end
-
-          socket
-
-        # Every refusal renders as the signed-out topbar on purpose: this
-        # is a nested layout LiveView on every page — redirecting here
-        # would fight the page's own gate, which owns the bounce
-        # (AuthHelpers.disposition/1).
-        _ ->
-          socket
-          |> assign(:context, nil)
-          |> assign(:personal_namespace_slug, nil)
-          |> assign(:authenticated, false)
-          |> assign(:tray_key, nil)
-          |> assign(:ui_mode, Prism.Labels.mode(session["ui_mode"]))
-          |> assign(:athanor_route, nil)
-          |> assign(:viewing, nil)
-          |> assign(:athanors, [])
-          |> assign(:labels, %{})
-          |> assign(:badges, %{})
-          |> assign(:platform_requests, 0)
-      end
-
+    # Use cheap defaults for the disconnected render. Defer database reads,
+    # cache writes and tool calls to the connected mount.
     {:ok,
      socket
+     |> assign(:personal_namespace_slug, ctx.namespace)
+     |> assign(:authenticated, true)
+     |> assign(:tray_key, Prism.Tray.session_hash(token))
+     |> assign(:ui_mode, ui_mode)
+     |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
+     |> assign(:viewing, ctx.athanor_id)
+     |> assign(:badges, %{})
+     |> assign(:platform_requests, 0)
+     |> assign(:athanors, [])
+     |> assign(:labels, %{})
      |> assign(:open_popover, nil)
      |> assign(:system_status, nil)
      |> assign(:running_requests, [])
@@ -304,28 +277,30 @@ defmodule PrismWeb.TopbarLive do
   # their tray. The runner still broadcasts on the one athanor topic — the
   # filter lives at the reader, so no per-user topics exist and the tray
   # is where following becomes a notification fact.
+  #
+  # The subscription was keyed when the list was read; whether this person
+  # still holds a seat there is read again, through the focus rule, before
+  # anything of that estate is read or counted.
   def handle_info({:notify, athanor_id, _kind, %{thread_id: thread_id}}, socket)
       when is_binary(athanor_id) and is_binary(thread_id) do
     %{context: ctx, viewing: viewing} = socket.assigns
 
-    cond do
-      athanor_id == viewing ->
-        {:noreply, socket}
-
-      Arca.ThreadSubscriptionStorage.follows?(
-        Cyfr.Actor.in_athanor(athanor_id),
-        thread_id,
-        ctx.user_id
-      ) ->
-        {:noreply, assign(socket, :badges, Prism.Tray.bump(socket.assigns.tray_key, athanor_id))}
-
-      true ->
-        {:noreply, socket}
+    with false <- athanor_id == viewing,
+         {:ok, there} <- Sanctum.Context.focus(ctx, athanor_id),
+         true <-
+           Arca.ThreadSubscriptionStorage.follows?(
+             Sanctum.Context.actor(there),
+             thread_id,
+             ctx.user_id
+           ) do
+      {:noreply, assign(socket, :badges, Prism.Tray.bump(socket.assigns.tray_key, athanor_id))}
+    else
+      _ -> {:noreply, socket}
     end
   end
 
   def handle_info({:notify, athanor_id, _kind, _payload}, socket) do
-    if athanor_id == socket.assigns.viewing do
+    if athanor_id == socket.assigns.viewing or not seated?(socket, athanor_id) do
       {:noreply, socket}
     else
       badges = Prism.Tray.bump(socket.assigns.tray_key, athanor_id)
@@ -341,6 +316,8 @@ defmodule PrismWeb.TopbarLive do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
+
+  defp seated?(socket, athanor_id), do: Enum.any?(socket.assigns.athanors, &(&1.id == athanor_id))
 
   # ============================================================================
   # Loaders

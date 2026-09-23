@@ -46,6 +46,8 @@ defmodule EmissaryWeb.MCPController do
 
   alias Emissary.MCP
   alias Emissary.MCP.{Message, Progress, RequestLog, Subscriptions}
+  alias CyfrWeb.ContextGuard
+  require CyfrWeb.ContextGuard
   require Logger
   alias Cyfr.UUID7
 
@@ -331,6 +333,7 @@ defmodule EmissaryWeb.MCPController do
   defp open_subscription_stream(conn, context, params, request_id, id) do
     filter = get_in(params, ["params", "notifications"]) || %{}
     {:ok, acknowledged} = Subscriptions.listen(context, filter)
+    watch = ContextGuard.watch(context)
     deadline = EmissaryWeb.SSE.deadline(:mcp_subscription_max_ms)
 
     conn
@@ -338,7 +341,7 @@ defmodule EmissaryWeb.MCPController do
     |> put_resp_header("x-request-id", request_id)
     |> EmissaryWeb.SSE.open()
     |> acknowledge(id, acknowledged)
-    |> listen_loop(id, deadline)
+    |> listen_loop(id, deadline, watch)
   end
 
   defp listen_error(conn, request_id, id, code, message) do
@@ -364,33 +367,76 @@ defmodule EmissaryWeb.MCPController do
   # A write failure ends the stream. `sse_event/2` swallows one because a dead
   # client must not crash a one-shot response, but here that would spin against
   # a closed socket forever — so the loop uses the reporting form.
-  defp listen_loop(conn, id, deadline) do
+  #
+  # The caller's standing is watched the whole time
+  # (`CyfrWeb.ContextGuard.watch/1`): a standing announcement about them, or
+  # the watch's periodic recheck, revalidates, and a refusal answers the
+  # listen request with its error — the stream does not outlive its credential.
+  defp listen_loop(conn, id, deadline, watch) do
     remaining = deadline - System.monotonic_time(:millisecond)
 
     if remaining <= 0 do
+      ContextGuard.unwatch(watch)
       close_gracefully(conn, id)
     else
       receive do
+        message when ContextGuard.standing_message(message) ->
+          case ContextGuard.standing(message, watch) do
+            {:ok, watch} ->
+              listen_loop(conn, id, deadline, watch)
+
+            {:refused, reason} ->
+              ContextGuard.unwatch(watch)
+              refuse_stream(conn, id, reason)
+
+            :ignore ->
+              listen_loop(conn, id, deadline, watch)
+          end
+
         message ->
           case Subscriptions.notification_for(message) do
             {:ok, method, params} ->
               params = Map.put(params, "_meta", %{Subscriptions.subscription_id_key() => id})
 
-              write(conn, Message.encode_notification(method, params), id, deadline)
+              write(conn, Message.encode_notification(method, params), id, deadline, watch)
 
             :ignore ->
-              listen_loop(conn, id, deadline)
+              listen_loop(conn, id, deadline, watch)
           end
       after
         min(@keep_alive_ms, remaining) ->
           # An SSE comment: the client must ignore it, and it costs one line to
           # keep the connection from being reaped during a quiet period.
           case chunk(conn, ":\n\n") do
-            {:ok, conn} -> listen_loop(conn, id, deadline)
-            {:error, _closed} -> conn
+            {:ok, conn} ->
+              listen_loop(conn, id, deadline, watch)
+
+            {:error, _closed} ->
+              ContextGuard.unwatch(watch)
+              conn
           end
       end
     end
+  end
+
+  # The listen request answered with the refusal its credential now earns:
+  # retryable when the store could not answer, a sign-in otherwise.
+  defp refuse_stream(conn, id, :unavailable),
+    do:
+      sse_event(
+        conn,
+        Message.encode_error(id, :auth_invalid, "Authentication service unavailable")
+      )
+
+  defp refuse_stream(conn, id, _refused) do
+    sse_event(
+      conn,
+      Message.encode_error(
+        id,
+        :auth_required,
+        "Unauthorized: the credential behind this subscription no longer stands"
+      )
+    )
   end
 
   # Ending on the server's own initiative means answering the original request.
@@ -404,19 +450,23 @@ defmodule EmissaryWeb.MCPController do
     )
   end
 
-  defp write(conn, payload, id, deadline) do
+  defp write(conn, payload, id, deadline, watch) do
     case Jason.encode(payload) do
       {:ok, encoded} ->
         case chunk(conn, "data: #{encoded}\n\n") do
-          {:ok, conn} -> listen_loop(conn, id, deadline)
+          {:ok, conn} ->
+            listen_loop(conn, id, deadline, watch)
+
           # Closing the stream is this transport's cancellation signal, so a
           # disconnect is an ordinary end rather than a failure to report.
-          {:error, _closed} -> conn
+          {:error, _closed} ->
+            ContextGuard.unwatch(watch)
+            conn
         end
 
       {:error, reason} ->
         Logger.error("[MCPController] subscription payload not encodable: #{inspect(reason)}")
-        listen_loop(conn, id, deadline)
+        listen_loop(conn, id, deadline, watch)
     end
   end
 

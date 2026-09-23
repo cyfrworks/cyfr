@@ -411,7 +411,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     refute has_element?(panel, "#aqua-panel-sheet")
   end
 
-  test "the page's first paint carries the button alone; a session that no longer establishes says so",
+  test "the page's first paint carries the button alone; a session that no longer establishes is sent to sign in",
        %{conn: conn, room: room, thread: thread} do
     html = conn |> get(PrismWeb.ChatLive.chat_path(route(room), thread.id)) |> html_response(200)
     assert html =~ ~s(id="aqua-panel-button")
@@ -422,8 +422,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
         to_string(PrismWeb.SignInResponse.session_key()) => "not-a-session"
       })
 
-    {:ok, panel, _} = live_isolated(stale, PrismWeb.AquaPanelLive, session: %{"ui_mode" => "dev"})
-    assert render(panel) =~ "Signed out — reload to continue"
-    refute has_element?(panel, "#aqua-panel-button")
+    assert {:error, {:redirect, %{to: "/login"}}} =
+             live_isolated(stale, PrismWeb.AquaPanelLive, session: %{"ui_mode" => "dev"})
   end
 end

@@ -16,16 +16,28 @@ defmodule PrismWeb.OperatorDelistLiveTest do
   @keys [
     sanctum: :platform_admin_emails,
     cyfr: :provisioning_boot_enabled,
-    sanctum: :establish_cache_ms
+    sanctum: :caller_memo_ttl_ms
+  ]
+
+  # The four control-plane terms `Arca.ControlPlane` keeps: `Cyfr.Bootstrap.run/0`
+  # reconciles without a slot only from the erased, no-claimant baseline, so
+  # this case starts from it and hands back whatever the run had before.
+  @control_plane_keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot},
+    {Arca.ControlPlane, :roster}
   ]
 
   setup do
     prev = Map.new(@keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    saved_terms = Map.new(@control_plane_keys, &{&1, :persistent_term.get(&1, :absent)})
+    for key <- @control_plane_keys, do: :persistent_term.erase(key)
 
     Application.put_env(:cyfr, :provisioning_boot_enabled, true)
     # The suite keeps the establish memo off; primed here, so the
     # revocation has cached state to invalidate.
-    Application.put_env(:sanctum, :establish_cache_ms, :timer.minutes(1))
+    Application.put_env(:sanctum, :caller_memo_ttl_ms, :timer.minutes(1))
 
     on_exit(fn ->
       # The memos this case primed are the node's, not its own: left
@@ -36,6 +48,12 @@ defmodule PrismWeb.OperatorDelistLiveTest do
         if is_nil(value),
           do: Application.delete_env(app, key),
           else: Application.put_env(app, key, value)
+      end
+
+      for {key, value} <- saved_terms do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
       end
     end)
 

@@ -63,10 +63,11 @@ if config_env() == :test do
   # minted (`Sanctum.TinctureAuth`).
   config :arca, control_plane_claim_enabled: false
 
-  # The establish memo is a per-request convenience; tests assert on the
-  # uncached pipeline. A sandbox rollback is a write no invalidation ever
+  # The caller bound is off: the establish memo keeps nothing, so tests
+  # assert on the uncached pipeline, and a retained context is revalidated
+  # before each use. A sandbox rollback is a write no invalidation ever
   # sees, so the namespace read is uncached too.
-  config :sanctum, :establish_cache_ms, 0
+  config :sanctum, :caller_memo_ttl_ms, 0
   config :sanctum, :namespace_cache_ttl_ms, 0
 
   # Same for the provisioning retries a sign-in kicks off.

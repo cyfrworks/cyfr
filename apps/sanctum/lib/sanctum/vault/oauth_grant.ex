@@ -28,10 +28,13 @@ defmodule Sanctum.Vault.OAuthGrant do
   proof-of-initiation is the single-use 256-bit `state`
   (delete-on-read, 2-minute TTL) plus the server-held PKCE verifier, and
   the interactive-class check happened at `authorize_url/2` when the
-  pending record was minted. The pending record carries the `Cyfr.Actor`
-  that check passed for, so the callback acts with authority derived from
-  the session that started the grant and never from a tenant named in a
-  row it reads.
+  pending record was minted. The pending record carries the Context that
+  check passed for and the `Cyfr.Actor` it projects, so the callback acts
+  with authority derived from the session that started the grant and
+  never from a tenant named in a row it reads — and that standing is read
+  again before the credential is written: a session-backed context is
+  revalidated (`Sanctum.Caller.revalidate_session/1`), anything else is
+  held to the channel rule (`Sanctum.Tenancy.channel_active?/2`).
   """
 
   require Logger
@@ -90,6 +93,7 @@ defmodule Sanctum.Vault.OAuthGrant do
         target: target,
         redirect_uri: redirect_uri,
         code_verifier: code_verifier,
+        context: ctx,
         actor: Context.actor(ctx)
       }
 
@@ -126,14 +130,23 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   Returns `{:ok, %{entry_id, name, provider, rebound: bool}}`;
   `{:error, :unknown_state}` when no pending grant matches — the callback
-  answers 400, since an expired or foreign `state` proves nothing.
+  answers 400, since an expired or foreign `state` proves nothing. The
+  grant's actor must still stand where it started the grant, read before
+  the exchange and again before anything is written: `{:error,
+  :not_standing}` when it does not, `{:error, :unavailable}` when the store
+  cannot say.
   """
   @spec complete(String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def complete(state, code, redirect_uri) do
+    # Standing is read before the code is spent at the provider and again
+    # after, since the exchange is an outbound round trip a revocation can
+    # land inside.
     with {:ok, pending} <- fetch_pending(state),
          :ok <- validate_redirect_uri(pending, redirect_uri),
+         :ok <- still_standing(pending),
          {:ok, creds} <- provider_creds(pending.actor.athanor_id, pending.target.provider),
-         {:ok, response} <- exchange(pending, creds, code, redirect_uri) do
+         {:ok, response} <- exchange(pending, creds, code, redirect_uri),
+         :ok <- still_standing(pending) do
       bundle = %{
         "access_token" => response["access_token"],
         "refresh_token" => response["refresh_token"],
@@ -144,6 +157,32 @@ defmodule Sanctum.Vault.OAuthGrant do
 
       apply_grant(pending, bundle)
     end
+  end
+
+  # The grant's actor, re-established: a session that started the grant must
+  # still be a live session of a standing person focused on the same estate;
+  # any other holder is held to the rule an athanor-owned channel stands by.
+  defp still_standing(%{context: %Context{} = ctx, actor: actor}) do
+    case Sanctum.Caller.revalidate_session(ctx) do
+      {:ok, %Context{} = fresh} -> same_estate(fresh, actor)
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, _refused} -> {:error, :not_standing}
+    end
+  end
+
+  defp still_standing(%{actor: actor}), do: channel(actor)
+
+  defp same_estate(%Context{session_token_hash: hash, athanor_id: athanor_id}, actor)
+       when is_binary(hash) do
+    if athanor_id == actor.athanor_id, do: :ok, else: {:error, :not_standing}
+  end
+
+  defp same_estate(%Context{}, actor), do: channel(actor)
+
+  defp channel(%Cyfr.Actor{athanor_id: athanor_id, user_id: user_id}) do
+    if Sanctum.Tenancy.channel_active?(athanor_id, user_id),
+      do: :ok,
+      else: {:error, :not_standing}
   end
 
   # ---------------------------------------------------------------------------

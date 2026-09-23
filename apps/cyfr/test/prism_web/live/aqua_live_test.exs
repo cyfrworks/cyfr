@@ -599,7 +599,9 @@ defmodule PrismWeb.AquaLiveTest do
             })
         })
 
-      send(view.pid, {:catalyst_installed, ref, {:ok, %{}}})
+      # The install task answers under the focus it started with.
+      tag = CyfrWeb.ContextGuard.capture(:sys.get_state(view.pid).socket)
+      send(view.pid, {:catalyst_installed, tag, ref, {:ok, %{}}})
 
       html = settled_render(view)
       assert html =~ "Installed #{ref}."
@@ -657,7 +659,7 @@ defmodule PrismWeb.AquaLiveTest do
       # The kept entry is gone: a load from here finds no hit to hand back,
       # whatever a fresh run answers.
       PrismWeb.ModelCatalog.load(ctx)
-      refute_received {:list_models_result, {:ok, %{"models" => %{"kept" => _}}}}
+      refute_received {:list_models_result, _tag, {:ok, %{"models" => %{"kept" => _}}}}
     end
 
     test "the prompt editor is a dialog with a sibling backdrop and an Escape of its own",

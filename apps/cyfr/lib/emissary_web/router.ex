@@ -7,9 +7,9 @@ defmodule EmissaryWeb.Router do
   # Pipelines define authentication and transport rules for the scopes below.
 
   # The browser pipeline serves the Prism LiveViews and the auth pages.
-  # LiveView mounts are gated in `PrismWeb.LiveAuth`, because the LiveView
-  # socket is handled by the endpoint before the router and never passes
-  # through here.
+  # LiveView mounts are gated in `CyfrWeb.ContextGuard`, because the
+  # LiveView socket is handled by the endpoint before the router and never
+  # passes through here.
   pipeline :browser do
     # First: a headless node serves none of this (CYFR_HEADLESS).
     plug EmissaryWeb.Plugs.Headless
@@ -390,7 +390,7 @@ defmodule EmissaryWeb.Router do
 
     live_session :athanor,
       on_mount: [
-        {PrismWeb.LiveAuth, :require_auth},
+        {CyfrWeb.ContextGuard, :protected},
         {PrismWeb.Focus, :assign},
         {PrismWeb.ActiveContext, :assign}
       ] do

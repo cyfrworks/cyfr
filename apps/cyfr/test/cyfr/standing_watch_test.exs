@@ -23,15 +23,15 @@ defmodule Cyfr.StandingWatchTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    original = Application.get_env(:sanctum, :establish_cache_ms)
-    Application.put_env(:sanctum, :establish_cache_ms, 60_000)
+    original = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+    Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
 
     on_exit(fn ->
       Arca.Cache.delete_match({:established, :_, :_, :_})
 
       if original,
-        do: Application.put_env(:sanctum, :establish_cache_ms, original),
-        else: Application.delete_env(:sanctum, :establish_cache_ms)
+        do: Application.put_env(:sanctum, :caller_memo_ttl_ms, original),
+        else: Application.delete_env(:sanctum, :caller_memo_ttl_ms)
     end)
 
     n = System.unique_integer([:positive])

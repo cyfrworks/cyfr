@@ -171,6 +171,7 @@ defmodule PrismWeb.ComponentsLive do
 
     lv = self()
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
@@ -187,7 +188,7 @@ defmodule PrismWeb.ComponentsLive do
                e -> {:error, Exception.message(e)}
              end
 
-           send(lv, {:pull_complete, ref, result})
+           send(lv, {:deliver, tag, {:pull_complete, ref, result}})
          end) do
       {:ok, _pid} ->
         {:noreply, arm_task_timeout(socket, :pull)}
@@ -233,6 +234,7 @@ defmodule PrismWeb.ComponentsLive do
     # The context, never the socket, crosses into the task: a socket in
     # the closure pins every assign (streams included) in the task's heap.
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
@@ -245,7 +247,7 @@ defmodule PrismWeb.ComponentsLive do
                "register_id" => register_id
              })
 
-           send(lv, {:register_complete, result})
+           send(lv, {:deliver, tag, {:register_complete, result}})
          end) do
       {:ok, _pid} ->
         {:noreply, arm_task_timeout(socket, :register)}
@@ -316,6 +318,7 @@ defmodule PrismWeb.ComponentsLive do
 
     lv = self()
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
@@ -332,7 +335,7 @@ defmodule PrismWeb.ComponentsLive do
                e -> {:error, Exception.message(e)}
              end
 
-           send(lv, {:push_complete, ref, result})
+           send(lv, {:deliver, tag, {:push_complete, ref, result}})
          end) do
       {:ok, _pid} ->
         {:noreply, arm_task_timeout(socket, :push)}
@@ -390,7 +393,11 @@ defmodule PrismWeb.ComponentsLive do
 
   # --- PubSub handlers ---
 
+  # A task's answer, taken only under the focus it was started for.
   @impl true
+  def handle_info({:deliver, tag, message}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &handle_info(message, &1))
+
   def handle_info(:load, socket) do
     {:noreply, socket |> fetch_components() |> assign(:loading, false)}
   end
@@ -786,6 +793,7 @@ defmodule PrismWeb.ComponentsLive do
   defp load_readiness_async(socket, groups) do
     lv = self()
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
@@ -833,7 +841,7 @@ defmodule PrismWeb.ComponentsLive do
             acc
         end)
 
-      send(lv, {:readiness_loaded, readiness})
+      send(lv, {:deliver, tag, {:readiness_loaded, readiness}})
     end)
 
     socket

@@ -42,26 +42,22 @@ defmodule PrismWeb.ThreadPaneLive do
   # How many pages the assistant may leave pointed at in the panel at once.
   @max_links 5
 
+  # The session, focused on the estate the host names (`"athanor_id"`), is
+  # established and kept current by the guard; a refused one never mounts.
+  on_mount {CyfrWeb.ContextGuard, :protected}
+
   @impl true
   def mount(_params, session, socket) do
-    token = session[to_string(PrismWeb.SignInResponse.session_key())]
+    ctx = socket.assigns.context
     # Every DOM id here carries the pane's own: a page may hold two panes.
-    socket = assign(socket, :dom, socket.id)
+    socket = socket |> assign(:dom, socket.id) |> beside(session) |> open(ctx, session)
 
-    case PrismWeb.AuthHelpers.authenticate_session(token, session["athanor_id"]) do
-      {:ok, ctx} ->
-        socket = socket |> assign(:context, ctx) |> beside(session) |> open(ctx, session)
-
-        if connected?(socket) do
-          thread = socket.assigns.thread
-          tell_host(socket, {:ready, self(), thread && thread.id})
-        end
-
-        {:ok, socket, layout: false}
-
-      {:error, _} ->
-        {:ok, assign(socket, :context, nil), layout: false}
+    if connected?(socket) do
+      thread = socket.assigns.thread
+      tell_host(socket, {:ready, self(), thread && thread.id})
     end
+
+    {:ok, socket, layout: false}
   end
 
   # A pane in the person's own panel sits beside a room: it hears what the
@@ -499,18 +495,9 @@ defmodule PrismWeb.ThreadPaneLive do
     {:noreply, assign(socket, :consent_sheet_ref, nil)}
   end
 
-  def handle_info({:list_models_result, {:ok, result}}, socket) do
-    %{models: models} = PrismWeb.ModelCatalog.parse(result)
-
-    {:noreply,
-     socket
-     |> assign(:models_by_provider, models)
-     |> assign(:models_loaded, true)}
-  end
-
-  def handle_info({:list_models_result, {:error, _}}, socket) do
-    {:noreply, assign(socket, :models_loaded, true)}
-  end
+  # The catalogue, for the focus it was read under.
+  def handle_info({:list_models_result, tag, result}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &models_loaded(&1, result))
 
   def handle_info({:task_timeout, :models}, socket) do
     {:noreply, assign(socket, :models_loaded, true)}
@@ -568,6 +555,17 @@ defmodule PrismWeb.ThreadPaneLive do
     Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
+
+  defp models_loaded(socket, {:ok, result}) do
+    %{models: models} = PrismWeb.ModelCatalog.parse(result)
+
+    {:noreply,
+     socket
+     |> assign(:models_by_provider, models)
+     |> assign(:models_loaded, true)}
+  end
+
+  defp models_loaded(socket, {:error, _}), do: {:noreply, assign(socket, :models_loaded, true)}
 
   # A refusal reaches the person who clicked — log-only made the button
   # appear to do nothing.
@@ -1174,17 +1172,6 @@ defmodule PrismWeb.ThreadPaneLive do
   # ============================================================================
 
   @impl true
-  def render(%{context: nil} = assigns) do
-    ~H"""
-    <section
-      id={@dom <> "-pane"}
-      class="flex flex-1 min-w-0 flex-col items-center justify-center p-4 text-sm text-gray-500"
-    >
-      <p>Signed out — reload to continue.</p>
-    </section>
-    """
-  end
-
   def render(assigns) do
     ~H"""
     <%!-- Focusable so a click anywhere in the pane makes it the one ⌘. halts. --%>

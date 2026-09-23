@@ -90,6 +90,7 @@ defmodule Sanctum.Context do
           session_token_hash: binary() | nil,
           credential_binding: credential_binding() | nil,
           credential_deadline: DateTime.t() | nil,
+          validated_at: DateTime.t() | nil,
           authenticated: boolean(),
           anonymous: boolean(),
           platform_admin: boolean(),
@@ -123,6 +124,12 @@ defmodule Sanctum.Context do
     # The absolute instant this context's authority ends when a parent
     # credential bounds it, or nil when only its own source does.
     :credential_deadline,
+    # When this context's credential and standing were last read from the
+    # store (`Sanctum.Caller.establish/2`, `revalidate_session/1`), or nil
+    # for a context no one validated. A holder that keeps a context past
+    # the freshness bound (`Sanctum.Caller.fresh?/1`) revalidates before
+    # acting on it; reusing a context never moves this instant.
+    :validated_at,
     # The caller's resolved address, where the ingress knew one
     # (`Sanctum.ClientIp`). It is not identity and authorizes nothing — it
     # is what an anonymous, per-action budget can be charged to. Without
@@ -308,6 +315,7 @@ defmodule Sanctum.Context do
       session_token_hash: Map.get(attrs, :session_token_hash),
       credential_binding: binding!(Map.get(attrs, :credential_binding)),
       credential_deadline: deadline!(Map.get(attrs, :credential_deadline)),
+      validated_at: validated_at!(Map.get(attrs, :validated_at)),
       client_ip: Map.get(attrs, :client_ip),
       authenticated: Map.get(attrs, :authenticated, false),
       anonymous: Map.get(attrs, :anonymous, false) == true,
@@ -359,6 +367,12 @@ defmodule Sanctum.Context do
         ArgumentError,
         "credential_deadline must be a DateTime or nil, got: #{inspect(other)}"
       )
+
+  defp validated_at!(nil), do: nil
+  defp validated_at!(%DateTime{} = at), do: at
+
+  defp validated_at!(other),
+    do: raise(ArgumentError, "validated_at must be a DateTime or nil, got: #{inspect(other)}")
 
   @doc """
   The single builder for server-constructed, no-external-credential contexts.

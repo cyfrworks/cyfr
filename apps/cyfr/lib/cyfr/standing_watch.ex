@@ -23,7 +23,7 @@ defmodule Cyfr.StandingWatch do
 
   PubSub delivery is best effort: a partition, a restarting subscriber or
   a dropped message means a peer never hears. The memo's TTL
-  (`config :sanctum, :establish_cache_ms`, 2 s) is therefore the bound,
+  (`config :sanctum, :caller_memo_ttl_ms`, 2 s) is therefore the bound,
   not the mechanism — a revoked authority cannot survive longer than that
   anywhere in the cell, whether or not the announcement arrived, and the
   broadcast is what makes the usual case immediate instead.

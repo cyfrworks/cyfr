@@ -42,14 +42,19 @@ defmodule PrismWeb.Ops do
   Call an MCP tool with the socket's context, or with a context directly.
 
   The context form supports supervised tasks that have no LiveView socket.
+  Either way the context passes `CyfrWeb.ContextGuard.check/1` first: one
+  older than the freshness bound is revalidated for this call, and one
+  that no longer stands is the call's refusal — nothing is dispatched.
 
   Returns `{:ok, result}` or `{:error, reason}`.
   """
   def call_tool(socket_or_context, tool_name, args \\ %{})
 
   def call_tool(%Sanctum.Context{} = ctx, tool_name, args) do
-    {name, merged_args} = normalize_tool_call(tool_name, args)
-    Cyfr.Ops.Catalog.call_external(name, ctx, merged_args)
+    with {:ok, ctx} <- CyfrWeb.ContextGuard.check(ctx) do
+      {name, merged_args} = normalize_tool_call(tool_name, args)
+      Cyfr.Ops.Catalog.call_external(name, ctx, merged_args)
+    end
   end
 
   def call_tool(socket, tool_name, args) do

@@ -50,6 +50,7 @@ defmodule Cyfr.Test.Sandbox do
     Compendium.ProvisioningSupervisor,
     Cyfr.Schedules.TaskSupervisor,
     Sanctum.OAuth.RefreshTaskSupervisor,
+    Sanctum.TaskSupervisor,
     Cyfr.Execution.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
     Emissary.MCP.ExternalServerSupervisor,

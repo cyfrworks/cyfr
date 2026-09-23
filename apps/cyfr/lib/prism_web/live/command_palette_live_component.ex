@@ -44,11 +44,13 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   @impl true
   def handle_event("toggle", _params, socket) do
-    if socket.assigns.open do
-      {:noreply, close(socket)}
-    else
-      {:noreply, socket |> assign(:open, true) |> load_items()}
-    end
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      if socket.assigns.open do
+        {:noreply, close(socket)}
+      else
+        {:noreply, socket |> assign(:open, true) |> load_items()}
+      end
+    end)
   end
 
   def handle_event("close", _params, socket), do: {:noreply, close(socket)}

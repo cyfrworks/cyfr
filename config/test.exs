@@ -3,9 +3,10 @@
 import Config
 
 # We don't run a server during test
-# The establish memo is a per-request convenience; tests assert on the
-# uncached pipeline.
-config :sanctum, :establish_cache_ms, 0
+# The caller bound is off: the establish memo keeps nothing, so tests
+# assert on the uncached pipeline, and every retained context is
+# revalidated before each action it is used for.
+config :sanctum, :caller_memo_ttl_ms, 0
 
 config :cyfr, EmissaryWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],

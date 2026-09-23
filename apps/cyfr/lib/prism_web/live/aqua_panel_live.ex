@@ -24,8 +24,10 @@ defmodule PrismWeb.AquaPanelLive do
   and narrows to the person's own athanor. A person with no athanor of
   their own has no panel.
 
-  The dead render is the button alone; the session, the athanor and the
-  kept state are read on the connected mount, once.
+  The dead render is the button alone; the athanor and the kept state are
+  read on the connected mount, once. `CyfrWeb.ContextGuard` establishes
+  the session and keeps the panel's context current; the panel's move to
+  the person's own athanor goes back through it (`refocus/2`).
   """
 
   use PrismWeb, :live_view
@@ -37,6 +39,8 @@ defmodule PrismWeb.AquaPanelLive do
 
   @kept_ttl_ms :timer.hours(24)
 
+  on_mount {CyfrWeb.ContextGuard, :protected}
+
   @impl true
   def mount(_params, session, socket) do
     token = session[to_string(PrismWeb.SignInResponse.session_key())]
@@ -45,7 +49,6 @@ defmodule PrismWeb.AquaPanelLive do
     socket =
       socket
       |> assign(:phase, :pending)
-      |> assign(:context, nil)
       |> assign(:athanor, nil)
       |> assign(:kept, nil)
       |> assign(:open, false)
@@ -65,25 +68,21 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   # Your own athanor, focused. The session's default is whatever page this
-  # is on; the panel is always You. A session that no longer establishes
-  # is said so; a person with no athanor of their own gets nothing.
+  # is on; the panel is always You. A person with no athanor of their own
+  # gets nothing.
   defp own(socket, token) do
-    case PrismWeb.AuthHelpers.authenticate_session(token) do
-      {:ok, ctx} ->
-        with {:ok, id} <- Users.personal_athanor_id(ctx.user_id),
-             {:ok, %{status: "active"} = athanor} <- Athanors.get(id),
-             {:ok, focused} <- Sanctum.Context.focus(ctx, athanor) do
-          socket
-          |> assign(:phase, :ready)
-          |> assign(:context, focused)
-          |> assign(:athanor, athanor)
-          |> assign(:kept, {:aqua_panel, Prism.Tray.session_hash(token)})
-        else
-          _ -> assign(socket, :phase, :none)
-        end
+    ctx = socket.assigns.context
 
-      {:error, _} ->
-        assign(socket, :phase, :signed_out)
+    with {:ok, id} <- Users.personal_athanor_id(ctx.user_id),
+         {:ok, %{status: "active"} = athanor} <- Athanors.get(id),
+         {:ok, focused} <- Sanctum.Context.focus(ctx, athanor),
+         {:ok, refocused} <- CyfrWeb.ContextGuard.refocus(socket, focused) do
+      refocused
+      |> assign(:phase, :ready)
+      |> assign(:athanor, athanor)
+      |> assign(:kept, {:aqua_panel, Prism.Tray.session_hash(token)})
+    else
+      _ -> assign(socket, :phase, :none)
     end
   end
 
@@ -191,20 +190,6 @@ defmodule PrismWeb.AquaPanelLive do
   # ============================================================================
 
   @impl true
-  def render(%{phase: :signed_out} = assigns) do
-    ~H"""
-    <div id="aqua-panel-root">
-      <p
-        id="aqua-panel-signed-out"
-        role="status"
-        class="fixed bottom-20 right-4 z-40 rounded-full border border-gray-800 bg-gray-900 px-4 py-2 text-xs text-gray-400 shadow-lg"
-      >
-        Signed out — reload to continue
-      </p>
-    </div>
-    """
-  end
-
   def render(%{phase: :none} = assigns) do
     ~H"""
     <div id="aqua-panel-root"></div>

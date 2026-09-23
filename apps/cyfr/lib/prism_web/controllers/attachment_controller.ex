@@ -32,7 +32,7 @@ defmodule PrismWeb.AttachmentController do
     token = get_session(conn, PrismWeb.SignInResponse.session_key())
 
     with {:ok, athanor} <- Athanors.by_route_slug(route),
-         {:ok, ctx} <- PrismWeb.AuthHelpers.authenticate_session(token, athanor.id),
+         {:ok, ctx} <- CyfrWeb.ContextGuard.authenticate(token, athanor.id),
          {:ok, msg} <- Threads.get_message(Sanctum.Context.actor(ctx), message_id),
          {:ok, ref} <- find_ref(msg, filename),
          {:ok, path} <- Aqua.Attachments.blob_path(msg.thread_id, msg.id, ref) do

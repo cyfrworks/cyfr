@@ -16,9 +16,19 @@ defmodule EmissaryWeb.ExecutionEventsController do
   the last of them. Delivery is in commit order whatever order
   publications arrive in: a live event that does not immediately follow
   the cursor is a trigger to read the rows again.
+
+  An open stream holds the caller's standing to the same rule the
+  console does (`CyfrWeb.ContextGuard.watch/1`): it revalidates on every
+  standing announcement about its caller and at least every thirty
+  seconds, and a refusal ends it as the deadline does — the client's
+  reconnect is then answered by the authentication plug.
   """
 
   use EmissaryWeb, :controller
+
+  require CyfrWeb.ContextGuard
+
+  alias CyfrWeb.ContextGuard
 
   @keep_alive_interval_ms EmissaryWeb.SSE.keep_alive_ms()
   @terminal_types Arca.ExecutionEvents.terminal_types()
@@ -45,7 +55,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
 
           conn
           |> EmissaryWeb.SSE.open()
-          |> stream_events(execution_id, cursor, exec)
+          |> stream_events(ctx, execution_id, cursor, exec)
         else
           {:auth, _} ->
             EmissaryWeb.ApiError.send(
@@ -100,18 +110,24 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # subscribe used, and a platform-scoped viewer may carry a different
   # athanor than the record it was authorized to read. The subscription
   # comes first and the replay once, so replay and live never overlap.
-  defp stream_events(conn, execution_id, cursor, exec) do
+  defp stream_events(conn, ctx, execution_id, cursor, exec) do
     Cyfr.Execution.subscribe_events(execution_id, exec)
+    watch = ContextGuard.watch(ctx)
 
     case drain(conn, execution_id, exec, cursor) do
       {conn, _cursor, true} ->
-        Cyfr.Execution.unsubscribe_events(execution_id, exec)
-        conn
+        close(conn, execution_id, exec, watch)
 
       {conn, cursor, false} ->
         deadline = EmissaryWeb.SSE.deadline(:execution_events_max_ms)
-        event_loop(conn, execution_id, exec, cursor, deadline)
+        event_loop(conn, {execution_id, exec, watch}, cursor, deadline)
     end
+  end
+
+  defp close(conn, execution_id, exec, watch) do
+    Cyfr.Execution.unsubscribe_events(execution_id, exec)
+    ContextGuard.unwatch(watch)
+    conn
   end
 
   # Everything after the cursor, in order: the durable
@@ -143,30 +159,38 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # sent twice. The deadline bounds a stream whose execution never
   # reaches a terminal event — the client reconnects with Last-Event-ID
   # and misses nothing.
-  defp event_loop(conn, execution_id, exec, cursor, deadline) do
+  #
+  # The caller's standing is watched the whole time: a standing
+  # announcement about them, or the watch's periodic recheck, revalidates,
+  # and a refusal ends the stream the way the deadline does.
+  defp event_loop(conn, {execution_id, exec, watch} = stream, cursor, deadline) do
     if System.monotonic_time(:millisecond) >= deadline do
-      Cyfr.Execution.unsubscribe_events(execution_id, exec)
-      conn
+      close(conn, execution_id, exec, watch)
     else
       receive do
         {:execution_event, event} ->
           case forward(conn, execution_id, exec, cursor, event) do
             {conn, _cursor, true} ->
-              Cyfr.Execution.unsubscribe_events(execution_id, exec)
-              conn
+              close(conn, execution_id, exec, watch)
 
             {conn, cursor, false} ->
-              event_loop(conn, execution_id, exec, cursor, deadline)
+              event_loop(conn, stream, cursor, deadline)
+          end
+
+        message when ContextGuard.standing_message(message) ->
+          case ContextGuard.standing(message, watch) do
+            {:ok, watch} -> event_loop(conn, {execution_id, exec, watch}, cursor, deadline)
+            {:refused, _reason} -> close(conn, execution_id, exec, watch)
+            :ignore -> event_loop(conn, stream, cursor, deadline)
           end
       after
         @keep_alive_interval_ms ->
           case chunk(conn, EmissaryWeb.SSE.keep_alive_comment()) do
             {:ok, conn} ->
-              event_loop(conn, execution_id, exec, cursor, deadline)
+              event_loop(conn, stream, cursor, deadline)
 
             {:error, _} ->
-              Cyfr.Execution.unsubscribe_events(execution_id, exec)
-              conn
+              close(conn, execution_id, exec, watch)
           end
       end
     end

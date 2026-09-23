@@ -407,6 +407,44 @@ defmodule Cyfr.Schedules.SchedulerTest do
     assert [_, _] = occurrences(ctx, schedule)
   end
 
+  test "a claimed occurrence whose athanor no longer stands is not run on recovery, as the fire path would not",
+       %{ctx: ctx} do
+    script!([%{"ran" => true}])
+    schedule = create_schedule(ctx)
+
+    Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+      id: "occ_unstanding",
+      athanor_id: ctx.athanor_id,
+      schedule_id: schedule.id,
+      scheduled_for: DateTime.add(DateTime.utc_now(), -120, :second),
+      state: "claimed",
+      claimed_by: "gone",
+      claimed_at: DateTime.utc_now()
+    })
+
+    # The estate stops standing with no announcement: recovery reads it.
+    Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^ctx.athanor_id),
+      set: [status: "archived"]
+    )
+
+    log =
+      capture_log(fn ->
+        scheduler!()
+
+        wait_until(fn ->
+          match?(
+            {:ok, %{state: "failed"}},
+            ScheduleOccurrences.get(Sanctum.Context.actor(ctx), "occ_unstanding")
+          )
+        end)
+      end)
+
+    assert log =~ "no longer active"
+    assert ScriptedWorker.calls() == []
+    assert [] = Arca.Repo.all(Arca.Execution)
+    assert {:ok, %{error_count: 1}} = CronSchedule.get_for_daemon(schedule.id)
+  end
+
   test "a live peer's freshly claimed occurrence is left where it is", %{ctx: ctx} do
     script!([%{"ran" => true}])
     schedule = create_schedule(ctx)

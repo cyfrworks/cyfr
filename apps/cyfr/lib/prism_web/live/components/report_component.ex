@@ -55,44 +55,46 @@ defmodule PrismWeb.ReportComponent do
   end
 
   def handle_event("submit_report", params, socket) do
-    category = params |> Map.get("category", "") |> String.trim()
-    details = params |> Map.get("details", "") |> String.trim()
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      category = params |> Map.get("category", "") |> String.trim()
+      details = params |> Map.get("details", "") |> String.trim()
 
-    cond do
-      # The allowlist is enforced, not just rendered: `category` is a
-      # client value forwarded to the registry.
-      category not in Enum.map(@categories, &elem(&1, 0)) ->
-        {:noreply, assign(socket, :error, "Pick a category.")}
+      cond do
+        # The allowlist is enforced, not just rendered: `category` is a
+        # client value forwarded to the registry.
+        category not in Enum.map(@categories, &elem(&1, 0)) ->
+          {:noreply, assign(socket, :error, "Pick a category.")}
 
-      details == "" ->
-        {:noreply, assign(socket, :error, "Describe the issue.")}
+        details == "" ->
+          {:noreply, assign(socket, :error, "Describe the issue.")}
 
-      String.length(details) > @details_max ->
-        {:noreply, assign(socket, :error, "Details too long (max #{@details_max} chars).")}
+        String.length(details) > @details_max ->
+          {:noreply, assign(socket, :error, "Details too long (max #{@details_max} chars).")}
 
-      true ->
-        socket = assign(socket, :submitting, true)
+        true ->
+          socket = assign(socket, :submitting, true)
 
-        args = %{
-          "action" => "report",
-          "category" => category,
-          "target_component_ref" => socket.assigns.target_ref,
-          "details" => details
-        }
+          args = %{
+            "action" => "report",
+            "category" => category,
+            "target_component_ref" => socket.assigns.target_ref,
+            "details" => details
+          }
 
-        case PrismWeb.Ops.call_tool(socket.assigns.ctx, "registry", args) do
-          {:ok, _body} ->
-            send(self(), {:report_component, :submitted})
-            {:noreply, assign(socket, open: false, submitting: false, error: nil)}
+          case PrismWeb.Ops.call_tool(socket.assigns.context, "registry", args) do
+            {:ok, _body} ->
+              send(self(), {:report_component, :submitted})
+              {:noreply, assign(socket, open: false, submitting: false, error: nil)}
 
-          {:error, reason} ->
-            {:noreply,
-             assign(socket,
-               submitting: false,
-               error: PrismWeb.Ops.error_message(reason)
-             )}
-        end
-    end
+            {:error, reason} ->
+              {:noreply,
+               assign(socket,
+                 submitting: false,
+                 error: PrismWeb.Ops.error_message(reason)
+               )}
+          end
+      end
+    end)
   end
 
   @impl true

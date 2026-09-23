@@ -13,6 +13,8 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
   """
   use EmissaryWeb.ConnCase
 
+  import Ecto.Query, only: [from: 2]
+
   setup do
     # Tests migrate the cyfr.run endpoint to an unreachable host so any probe
     # that does reach HTTP fails fast rather than hanging on real DNS/TCP.
@@ -240,7 +242,8 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
     end
 
     # A signed-in person with no publisher namespace yet: a users row
-    # without one, and an ordinary session.
+    # without one, a seat of their own, and an ordinary session — the
+    # session the claim establishes and revalidates before it writes.
     defp unclaimed_person do
       n = System.unique_integer([:positive])
       user_id = "github|https://github.com|claim-#{n}"
@@ -253,11 +256,17 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
           verified: true
         })
 
+      {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(person_id, "Claim #{n}")
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(person_id, scope: "athanor", athanor_id: estate.id)
+
       ctx =
         Sanctum.Context.build(
           user_id: person_id,
           email: "claim#{n}@example.com",
           provider: "github",
+          athanor_id: estate.id,
           permissions: [:*]
         )
 
@@ -306,6 +315,43 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
 
       assert {:ok, %{token: "cyfr_pt_new"}} =
                Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
+    end
+
+    test "a session revoked with nobody told claims nothing and records nothing", %{
+      bypass: bypass
+    } do
+      {user_id, token, slug} = unclaimed_person()
+      hash = Sanctum.Session.token_hash(token)
+
+      Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+
+      # The registry is never asked: the claim is refused at the session.
+      Bypass.pass(bypass)
+
+      conn = submit(slug, token)
+      assert conn.status == 401
+      assert get_resp_header(conn, "location") == ["/login"]
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
+      assert :not_found = Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
+    end
+
+    test "a session revoked while the registry answered records nothing", %{bypass: bypass} do
+      {user_id, token, slug} = unclaimed_person()
+      hash = Sanctum.Session.token_hash(token)
+
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn c ->
+        Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+
+        c
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => slug, "token" => "cyfr_pt_late"}))
+      end)
+
+      conn = submit(slug, token)
+      assert conn.status == 401
+      assert get_resp_header(conn, "location") == ["/login"]
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
+      assert :not_found = Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
     end
 
     test "a claim answered without a token still records the identity", %{bypass: bypass} do

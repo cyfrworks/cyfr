@@ -55,8 +55,12 @@ defmodule PrismWeb.ConsentSheetComponent do
     socket = assign(socket, assigns)
 
     case socket.assigns[:plan] do
-      nil -> {:ok, load_plan(socket, ref)}
-      _ -> {:ok, socket}
+      nil ->
+        {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, load_plan(&1, ref)})
+        {:ok, socket}
+
+      _ ->
+        {:ok, socket}
     end
   end
 
@@ -68,17 +72,23 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   @impl true
   def handle_event("pick_entry", %{"need" => need, "entry_id" => entry_id}, socket) do
-    decisions = Map.put(socket.assigns.decisions, need, entry_id)
-    {:noreply, socket |> assign(decisions: decisions, preview: nil) |> preview()}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      decisions = Map.put(socket.assigns.decisions, need, entry_id)
+      {:noreply, socket |> assign(decisions: decisions, preview: nil) |> preview()}
+    end)
   end
 
   def handle_event("clear_entry", %{"need" => need}, socket) do
-    decisions = Map.delete(socket.assigns.decisions, need)
-    {:noreply, socket |> assign(decisions: decisions, preview: nil) |> preview()}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      decisions = Map.delete(socket.assigns.decisions, need)
+      {:noreply, socket |> assign(decisions: decisions, preview: nil) |> preview()}
+    end)
   end
 
   def handle_event("commit", _params, socket) do
-    {:noreply, commit(socket)}
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      {:noreply, commit(socket)}
+    end)
   end
 
   def handle_event("cancel", _params, socket) do

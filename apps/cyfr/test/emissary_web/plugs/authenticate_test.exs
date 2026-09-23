@@ -12,6 +12,8 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
   """
   use EmissaryWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias EmissaryWeb.Plugs.Authenticate
 
   # Test auth provider that returns an authenticated user
@@ -188,6 +190,66 @@ defmodule EmissaryWeb.Plugs.AuthenticateTest do
       assert conn.assigns[:auth_method] == :session_token
 
       Sanctum.Session.destroy(session.token)
+    end
+
+    # The establish memo bounds establishing, not validating: a context it
+    # answers is revalidated against the stored session before admission.
+    defp warm_memo! do
+      original = Application.fetch_env(:sanctum, :caller_memo_ttl_ms)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
+
+      on_exit(fn ->
+        Arca.Cache.delete_match({:established, :_, :_, :_})
+
+        case original do
+          {:ok, value} -> Application.put_env(:sanctum, :caller_memo_ttl_ms, value)
+          :error -> Application.delete_env(:sanctum, :caller_memo_ttl_ms)
+        end
+      end)
+
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      {:ok, session} = Sanctum.Session.create(ctx)
+      assert {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false)
+      session
+    end
+
+    test "a session revoked behind a warm memo is refused, not admitted from the memo", %{
+      conn: conn
+    } do
+      session = warm_memo!()
+      Application.delete_env(:sanctum, :auth_provider)
+
+      # Revoked with nobody told: the memo still holds the context.
+      hash = Sanctum.Session.token_hash(session.token)
+      Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+      assert {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer " <> session.token)
+        |> Map.put(:body_params, %{"method" => "tools/call"})
+        |> Authenticate.call([])
+
+      assert conn.halted
+      assert conn.status == 401
+    end
+
+    test "a session bearer the store cannot revalidate is a 503, never an admission", %{
+      conn: conn
+    } do
+      session = warm_memo!()
+      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+
+      # The memo still answers establish; the revalidation cannot be answered.
+      assert {:ok, _} = Sanctum.Caller.establish(session.token, refresh: false)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer " <> session.token)
+        |> Authenticate.call([])
+
+      assert conn.halted
+      assert conn.status == 503
     end
 
     # Reject unrecognized credentials after configured providers have had a chance to resolve them.

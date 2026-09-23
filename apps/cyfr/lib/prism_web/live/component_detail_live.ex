@@ -214,7 +214,7 @@ defmodule PrismWeb.ComponentDetailLive do
       <.live_component
         module={PrismWeb.ReportComponent}
         id="report"
-        ctx={@context}
+        context={@context}
         athanor_route={@athanor_route}
       />
     </div>

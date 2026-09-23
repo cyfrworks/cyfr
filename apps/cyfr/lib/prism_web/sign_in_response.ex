@@ -28,14 +28,16 @@ defmodule PrismWeb.SignInResponse do
   require Logger
 
   @probe_cookie PrismWeb.PendingProbe.cookie_name()
-  @session_key :sanctum_session_token
+  @session_key CyfrWeb.ContextGuard.session_key()
 
   @type outcome :: {:proceed, map()} | {:unavailable, atom()}
 
   @doc """
   The Plug session key holding the Sanctum session token. This module is
-  the one writer; every reader takes the spelling from here (LiveView
-  mounts see the session as a string-keyed map — `to_string/1` it).
+  the one writer; the spelling is the guard's that reads it on every
+  protected mount (`CyfrWeb.ContextGuard.session_key/0`), and every other
+  reader takes it from here (LiveView mounts see the session as a
+  string-keyed map — `to_string/1` it).
   """
   def session_key, do: @session_key
 

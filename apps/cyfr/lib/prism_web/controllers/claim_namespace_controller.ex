@@ -41,10 +41,13 @@ defmodule PrismWeb.ClaimNamespaceController do
     # function was called with. Naming them apart keeps that a decision
     # instead of a surprise the day a clause above starts assigning.
     with {:ok, popped, access_token} <- PendingProbe.pop(conn),
-         {:ok, user_id} <- current_user_id(popped),
+         {:ok, ctx} <- standing_caller(popped),
          {:ok, provider} <- current_provider(popped, params),
          {:ok, body} <-
-           Client.claim_personal_namespace(username, provider, access_token) do
+           Client.claim_personal_namespace(username, provider, access_token),
+         # The registry answered after a round trip: the session is read
+         # again before anything is written under it.
+         {:ok, %{user_id: user_id}} <- still_standing(popped, ctx) do
       conn = popped
       slug = body["slug"] || username
 
@@ -100,6 +103,14 @@ defmodule PrismWeb.ClaimNamespaceController do
         conn
         |> put_status(:unauthorized)
         |> redirect(to: "/login")
+
+      {:unavailable, conn} ->
+        page(
+          conn,
+          503,
+          username,
+          "We could not confirm your session just now. Try again shortly."
+        )
 
       {:error, :invalid_access_token} ->
         # IdP access_token expired between the callback-side cookie stash and
@@ -183,9 +194,24 @@ defmodule PrismWeb.ClaimNamespaceController do
     end
   end
 
-  defp current_user_id(conn) do
-    case Sanctum.Caller.peek(get_session(conn, PrismWeb.SignInResponse.session_key())) do
-      {:ok, %{user_id: id}} when is_binary(id) -> {:ok, id}
+  # The session the cookie names, established and revalidated against the
+  # stored session and the person's standing: the claim writes on that
+  # person's row, so a look at who the cookie names is not enough.
+  defp standing_caller(conn) do
+    token = get_session(conn, PrismWeb.SignInResponse.session_key())
+
+    with {:ok, ctx} <- Sanctum.Caller.establish(token, refresh: false) do
+      still_standing(conn, ctx)
+    else
+      {:error, :unavailable} -> {:unavailable, conn}
+      _ -> {:not_logged_in, conn}
+    end
+  end
+
+  defp still_standing(conn, ctx) do
+    case Sanctum.Caller.revalidate_session(ctx) do
+      {:ok, %Sanctum.Context{user_id: id} = fresh} when is_binary(id) -> {:ok, fresh}
+      {:error, :unavailable} -> {:unavailable, conn}
       _ -> {:not_logged_in, conn}
     end
   end

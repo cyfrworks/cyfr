@@ -26,8 +26,11 @@ defmodule PrismWeb.AquaLive.RestoreComponent do
   # role and scroll the estate made, so the tree is exactly the shipped
   # set again. The tool answers what it reverted and what it kept, and
   # the page shows both lists rather than a bare "done".
-  def handle_event("restore_shipped", _params, socket), do: restore(socket, false)
-  def handle_event("restore_all", _params, socket), do: restore(socket, true)
+  def handle_event("restore_shipped", _params, socket),
+    do: CyfrWeb.ContextGuard.guard(socket, fn socket -> restore(socket, false) end)
+
+  def handle_event("restore_all", _params, socket),
+    do: CyfrWeb.ContextGuard.guard(socket, fn socket -> restore(socket, true) end)
 
   def handle_event("restore_dismiss", _params, socket),
     do: {:noreply, assign(socket, :reset_result, nil)}

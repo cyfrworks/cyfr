@@ -120,6 +120,7 @@ defmodule PrismWeb.ShellLive do
   # while a scan runs rides the running one instead of stacking another.
   def handle_event("refresh_tinctures", _params, socket) do
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
     lv = self()
     scan_key = Arca.Cache.Keys.tincture_scan_running(Sanctum.Context.actor(ctx))
 
@@ -145,7 +146,7 @@ defmodule PrismWeb.ShellLive do
             Arca.Cache.delete_match(scan_key)
           end
 
-          send(lv, :tinctures_refreshed)
+          send(lv, {:deliver, tag, :tinctures_refreshed})
         end)
 
         {:noreply, put_flash(socket, :info, "Refreshing tinctures…")}
@@ -598,7 +599,11 @@ defmodule PrismWeb.ShellLive do
   # Tincture execution context is built by `Sanctum.build_tincture_context/2`
   # (single source of truth, shared with the tincture controller).
 
+  # The refresh's answer, taken only under the focus it was started for.
   @impl true
+  def handle_info({:deliver, tag, message}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &handle_info(message, &1))
+
   def handle_info({:report_component, :submitted}, socket) do
     {:noreply, put_flash(socket, :info, "Report submitted. Thanks.")}
   end
@@ -721,7 +726,7 @@ defmodule PrismWeb.ShellLive do
       <.live_component
         module={PrismWeb.ReportComponent}
         id="report"
-        ctx={@context}
+        context={@context}
         athanor_route={@athanor_route}
       />
     </div>
