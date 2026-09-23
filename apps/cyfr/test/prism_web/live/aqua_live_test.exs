@@ -535,9 +535,23 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:error, %Compendium.OCI.Errors{reason: :registry_unconfigured}} =
                Compendium.Pull.oci_reference_for("catalyst:moonmoon69.claude")
 
+      before = Task.Supervisor.children(Aqua.TaskSupervisor)
+
       view
       |> element("button[phx-click=install_catalyst]")
       |> render_click()
+
+      fetch = page_tasks(view, before)
+
+      # The click only starts the fetch; its refusal reaches the page when
+      # the task answers. The page tells the section which install ended
+      # while it serves that answer, so a render asked for once the refusal
+      # shows is served after the section has heard.
+      Cyfr.Test.Wait.wait_until(
+        fn -> render(view) =~ "Could not install" end,
+        5_000,
+        "the install's refusal"
+      )
 
       html = render(view)
       assert html =~ "Could not install"
@@ -546,6 +560,14 @@ defmodule PrismWeb.AquaLiveTest do
       # showing "Installing…" with nothing to click.
       refute html =~ "Installing…"
       assert has_element?(view, "button[phx-click=install_catalyst]:not([disabled])")
+
+      # The fetch has answered; it is gone before the registry setting it
+      # read is restored and before the sandbox it queried is released.
+      Cyfr.Test.Wait.wait_until(
+        fn -> not Enum.any?(Task.Supervisor.children(Aqua.TaskSupervisor), &(&1 in fetch)) end,
+        5_000,
+        "the install's fetch to end"
+      )
     end
 
     test "an install that lands leaves the model asking for a key, not asking to be installed",
@@ -807,4 +829,14 @@ defmodule PrismWeb.AquaLiveTest do
   # A section re-reads itself on a message the write sends after it
   # answers, so a card's new state is awaited rather than read at once.
   defp settled(fun, label), do: Cyfr.Test.Wait.wait_until(fun, 2_000, label)
+
+  # The tasks the page itself started on the Aqua supervisor since `before`
+  # was read: a task names the process that started it first in its
+  # `$callers`, which leaves out the tasks those tasks start in turn.
+  defp page_tasks(%{pid: page}, before) do
+    for pid <- Task.Supervisor.children(Aqua.TaskSupervisor) -- before,
+        {:dictionary, dictionary} <- [Process.info(pid, :dictionary)],
+        match?([^page | _], dictionary[:"$callers"]),
+        do: pid
+  end
 end
