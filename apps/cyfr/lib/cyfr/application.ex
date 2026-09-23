@@ -8,6 +8,10 @@ defmodule Cyfr.Application do
 
   use Application
 
+  # config:compile-runtime-ok — the permission is compiled in on purpose: a
+  # release is built without it, so no runtime setting can omit the gate.
+  @bootstrap_skip_permitted Application.compile_env(:cyfr, :bootstrap_skip_permitted, false)
+
   @impl true
   def start(_type, _args) do
     # The storage and counted cap port's one write, before every domain
@@ -79,7 +83,38 @@ defmodule Cyfr.Application do
     attach_webhook_verify_failed_logger()
     Cyfr.ScheduleNotes.attach()
 
-    infra_children = [
+    # Two tiers under a :rest_for_one root so each has its own restart budget:
+    # a crash-looping endpoint exhausts only the web tier (infra keeps running,
+    # then the root restarts just the web tier), while an infra collapse
+    # restarts infra AND the web tier so endpoints rebind to fresh
+    # PubSub and registries instead of holding dead references. The repo is
+    # the `arca` application's and restarts under its own supervisor;
+    # everything here reaches it by name. Shutdown is reverse start order:
+    # endpoints drain before infra goes down.
+    children = for {name, tier_children} <- tiers(), do: tier(name, tier_children)
+
+    opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
+    Supervisor.start_link(children, opts)
+  end
+
+  @doc false
+  # The two tiers in start order, each with its children in start order —
+  # the census `Cyfr.StartupAdmissionBarrierTest` reads, so the test and
+  # the boot cannot describe different trees.
+  @spec tiers() :: [{module(), [Supervisor.child_spec() | module() | {module(), term()}]}]
+  def tiers do
+    [
+      {Cyfr.InfraSupervisor, List.flatten([pre_gate(), gate(), post_gate(), seed_offer()])},
+      {Cyfr.WebSupervisor, [EmissaryWeb.Endpoint]}
+    ]
+  end
+
+  # Before the gate: only what the security reconcile needs and what must
+  # hear its announcements. None of these runs tenant work, projects a
+  # credential, dispatches to a provider, starts a backend or recovers
+  # anything; each only answers once something else calls it.
+  defp pre_gate do
+    [
       # The database is the one this release's schema built, its tenant
       # roster covers the schema, and its keyring is the one this boot
       # resolved — before any worker reads a row or seals one under a
@@ -92,7 +127,8 @@ defmodule Cyfr.Application do
       # failure `Cyfr.Cell`'s refusals exist to stop.
       cluster_supervisor(),
       # This member's slot in the cell — claimed before anything that
-      # assumes it is the only one holding this database.
+      # assumes it is the only one holding this database, and the slot the
+      # security reconcile runs under.
       cell_claim(),
       # The two registries that write catalogues into `Arca.Cache`. The
       # table dies with its owner, `Arca.Cache.Sweeper`, which the `arca`
@@ -103,13 +139,6 @@ defmodule Cyfr.Application do
       # read through the cache.
       Cyfr.Ops.Catalog,
       Emissary.MCP.ResourceRegistry,
-      Cyfr.RetentionScheduler,
-      # Recurring component executions: the runs the scheduler fires are
-      # tasks of their own, monitored by it.
-      Supervisor.child_spec({Task.Supervisor, name: Cyfr.Schedules.TaskSupervisor},
-        shutdown: 30_000
-      ),
-      Cyfr.Schedules.Scheduler,
       # The audit roster is the catalog's, read here and handed down: an
       # event is audited exactly when `Cyfr.Telemetry.Catalog` names
       # `:audit` among its consumers. The storage layer holds the handler
@@ -122,6 +151,36 @@ defmodule Cyfr.Application do
       # says one is no longer good. Right after PubSub, and before
       # anything that establishes a caller.
       Cyfr.StandingWatch,
+      # The host's telemetry-to-bus bridge, attached before the reconcile
+      # announces a revocation, so the announcement reaches mounted views.
+      Prism.TelemetryBridge
+    ]
+  end
+
+  # The gate: synchronous, and a checked success or no boot. Its `init/1`
+  # returns only after the reconcile committed, its claim was released
+  # and this member's slot re-verified; a refusal stops the supervisor's
+  # start, so nothing after it ever starts. Only the sandboxed test boot
+  # omits it, where no process may write before a test checks out the
+  # sandbox — see `bootstrap_skipped?/2`.
+  defp gate do
+    if bootstrap_skipped?(@bootstrap_skip_permitted, boot_work_enabled?()),
+      do: [],
+      else: [Supervisor.child_spec(Cyfr.Bootstrap, restart: :temporary)]
+  end
+
+  # After the gate: everything that admits work — fires a schedule,
+  # recovers a turn, starts a backend, serves a host call, dispenses a
+  # credential or publishes a result.
+  defp post_gate do
+    [
+      Cyfr.RetentionScheduler,
+      # Recurring component executions: the runs the scheduler fires are
+      # tasks of their own, monitored by it.
+      Supervisor.child_spec({Task.Supervisor, name: Cyfr.Schedules.TaskSupervisor},
+        shutdown: 30_000
+      ),
+      Cyfr.Schedules.Scheduler,
       # Execution admission: the slots a member's own work holds. The
       # consented rate has no child here — its window is a row every
       # member of the cell claims in (`Arca.RateWindows`), so there is
@@ -197,7 +256,6 @@ defmodule Cyfr.Application do
       # announcement that an athanor needs filling.
       Compendium.Provisioning,
       # Prism dashboard
-      Prism.TelemetryBridge,
       Prism.TinctureRegistry,
       group(Aqua.WorkerTree, [
         Aqua.Loop.Worker,
@@ -214,39 +272,28 @@ defmodule Cyfr.Application do
         {Registry, keys: :unique, name: Aqua.RunnerRegistry},
         {DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one},
         maybe_thread_recovery()
-      ]),
-      # Last, and synchronous: reconciles the platform-admin roster against
-      # the env and offers new seed media to the estates that exist (the
-      # overlay serves the bundle in place — no bytes are copied). Needs the
-      # repo, the tincture registry (the scan reloads it) and nothing else.
-      #
-      # It runs its work in `init/1` and answers `:ignore`, so this child
-      # finishing is what gates the web tier below — the endpoint must not
-      # answer requests while a de-listed operator's sessions are still
-      # live.
-      Supervisor.child_spec(Cyfr.Bootstrap, restart: :temporary)
+      ])
     ]
-
-    infra_children = List.flatten(infra_children)
-
-    web_children = [EmissaryWeb.Endpoint]
-
-    # Two tiers under a :rest_for_one root so each has its own restart budget:
-    # a crash-looping endpoint exhausts only the web tier (infra keeps running,
-    # then the root restarts just the web tier), while an infra collapse
-    # restarts infra AND the web tier so endpoints rebind to fresh
-    # PubSub and registries instead of holding dead references. The repo is
-    # the `arca` application's and restarts under its own supervisor;
-    # everything here reaches it by name. Shutdown is reverse start order:
-    # endpoints drain before infra goes down.
-    children = [
-      tier(Cyfr.InfraSupervisor, infra_children),
-      tier(Cyfr.WebSupervisor, web_children)
-    ]
-
-    opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
-    Supervisor.start_link(children, opts)
   end
+
+  # Last in the infra tier, and optional: offers new seed media to the
+  # estates that exist. Its failure is logged and never stops the boot; the
+  # sandboxed test boot omits it with the gate's runtime switch.
+  defp seed_offer do
+    if boot_work_enabled?(),
+      do: [Supervisor.child_spec(Cyfr.SeedOffer, restart: :temporary)],
+      else: []
+  end
+
+  @doc false
+  # Pure decision seam: the gate is omitted only when the build was
+  # compiled with the test permission (`config/test.exs` alone sets it)
+  # AND the runtime switch turns boot work off. Either alone keeps it.
+  @spec bootstrap_skipped?(boolean(), boolean()) :: boolean()
+  def bootstrap_skipped?(skip_permitted?, boot_work_enabled?),
+    do: skip_permitted? == true and boot_work_enabled? == false
+
+  defp boot_work_enabled?, do: Application.get_env(:cyfr, :provisioning_boot_enabled, true)
 
   # The execution slots: one `Cyfr.Slots` instance, keyed by athanor, on
   # the caps the operator configured (`CYFR_MAX_CONCURRENT_EXECUTIONS`,

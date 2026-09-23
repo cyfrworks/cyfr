@@ -31,6 +31,31 @@ defmodule Arca.Repo do
   def adapter, do: Application.get_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3)
 
   @doc """
+  Run `fun_or_multi` as a transaction that reads rows it is about to
+  change under a lock, as `transaction/2` would otherwise run it.
+
+  SQLite has one writer, so the transaction itself is the lock: it opens
+  `BEGIN IMMEDIATE`, and a second locking transaction waits at its own
+  BEGIN (up to the busy timeout) and then reads what the first committed.
+  PostgreSQL opens an ordinary transaction, and the rows are locked one
+  by one through `Arca.QueryHelpers.for_update/1`, in the order the
+  caller's contract states.
+
+  This and `Arca.QueryHelpers.for_update/1` are the only places the lock
+  is spelled for either adapter (`Arca.LockingSeamTest`). Nested inside
+  another transaction it is a savepoint of that transaction, whose lock
+  it already runs under.
+  """
+  @spec locking_transaction((-> term()) | (module() -> term()) | Ecto.Multi.t(), keyword()) ::
+          {:ok, term()} | {:error, term()} | {:error, term(), term(), map()}
+  def locking_transaction(fun_or_multi, opts \\ []) when is_list(opts) do
+    case adapter() do
+      Ecto.Adapters.SQLite3 -> transaction(fun_or_multi, Keyword.merge(opts, mode: :immediate))
+      _postgres -> transaction(fun_or_multi, opts)
+    end
+  end
+
+  @doc """
   SQLite busy timeout, used both as the Repo connection option and in the
   boot-time PRAGMA — one constant so the two mechanisms stay in step.
   """

@@ -506,6 +506,10 @@ defmodule Cyfr.Cluster.Cell do
         {:worker_key, Application.fetch_env!(:cyfr, :worker_key)},
         {:retention_scheduler_enabled, true},
         {:cron_scheduler_enabled, true},
+        # The security gate runs on every member: this build carries the
+        # suite's compile-time skip permission, and turning the runtime
+        # switch on is what keeps `Cyfr.Bootstrap` in the member's tree, so
+        # each member boots only through its own checked reconcile.
         {:provisioning_boot_enabled, true},
         {:thread_recovery, true},
         {:execution_sweeper_enabled, true},

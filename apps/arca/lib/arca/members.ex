@@ -32,6 +32,19 @@ defmodule Arca.Members do
       `scope: :platform` and refuse an athanor-scoped actor with
       `{:error, :cross_tenant}`.
 
+  ## The platform transitions
+
+  `ensure_platform/3`, `revoke_platform/3` and `reconcile_platform/3` read
+  rows and change them under one view, so each is one
+  `Arca.Repo.locking_transaction/2` taking its locks in one order: the
+  member slot, the bootstrap claim, the people sorted by id, their
+  platform grants, then their sessions. A sign-in's grant or revoke takes
+  only the suffix from the person on, and never a claim or a slot after
+  it. A removed grant ends every session of its person in the same
+  transaction, and the ended sessions' token hashes are read from that
+  DELETE itself, so the caller invalidates exactly what was removed and
+  only after it committed.
+
   Nothing that belongs to Ecto crosses the boundary. A refusal is
   `:conflict` (the assignment index — the row is already there, so a
   caller that raced re-reads it), `{:invalid, %{field => [message]}}`,
@@ -41,12 +54,33 @@ defmodule Arca.Members do
 
   import Ecto.Query
 
-  alias Arca.Schemas.{Athanor, Membership, User}
+  alias Arca.{ControlPlane, JobClaims, QueryHelpers}
+  alias Arca.Schemas.{Athanor, JobClaim, Membership, Session, User}
 
   @type refusal :: {:error, :cross_tenant | :database_error}
   @type write_refusal ::
           {:error,
            :conflict | :unknown_athanor | {:invalid, %{atom() => [String.t()]}} | :database_error}
+
+  @typedoc """
+  The identity facts one admitted sign-in asserted, spelled as the
+  `users` row stores them: the lowercased email, and the verification
+  claim as `true`, `false` or `nil` for none.
+  """
+  @type identity :: %{email: String.t() | nil, email_verified: boolean() | nil}
+
+  @typedoc "One person a platform transition took the grant from, and the sessions it ended."
+  @type revoked :: %{user_id: String.t(), session_hashes: [binary()]}
+
+  @typedoc "Why the operator reconcile committed nothing."
+  @type reconcile_refusal ::
+          {:error,
+           :slot_lost
+           | :claim_taken
+           | :claim_lapsed
+           | :missing_user
+           | :cross_tenant
+           | :database_error}
 
   @max_page 500
 
@@ -298,22 +332,143 @@ defmodule Arca.Members do
 
   def list_platform(%Cyfr.Actor{}), do: {:error, :cross_tenant}
 
-  @doc "Remove the platform row for a person, if any. Answers how many rows went."
-  @spec delete_platform(Cyfr.Actor.t(), String.t()) ::
-          {:ok, non_neg_integer()} | refusal()
-  # arca:unscoped-ok platform memberships carry no athanor by design.
-  def delete_platform(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Members.delete_platform", fn ->
-      {count, _} =
-        Arca.Repo.delete_all(
-          from(m in Membership, where: m.user_id == ^user_id and m.scope == "platform")
-        )
+  @doc """
+  Hold the person's platform grant, writing it when absent, and answer
+  whether this call wrote it.
 
-      {:ok, count}
+  `expected_identity:` is what an admitted sign-in asserted (`t:identity/0`).
+  With it, the person's row is locked and must still carry exactly those
+  facts, and its email must not be explicitly unverified, or nothing is
+  written and the answer is `{:error, :stale_identity}`: an earlier
+  sign-in must not grant the operator bit to a row a later assertion has
+  since changed. Without it, the grant is the server's own act and
+  answers to no sign-in. `added_by:` names who wrote the row.
+  """
+  @spec ensure_platform(Cyfr.Actor.t(), String.t(), keyword()) ::
+          {:ok, %{membership: Membership.t(), granted: boolean()}}
+          | {:error, :stale_identity}
+          | refusal()
+          | write_refusal()
+  def ensure_platform(%Cyfr.Actor{scope: :platform}, user_id, opts)
+      when is_binary(user_id) and is_list(opts) do
+    expected = Keyword.get(opts, :expected_identity)
+
+    grant = fn ->
+      with :ok <- identity_holds(user_id, expected, :grant) do
+        case locked_platform_rows([user_id]) do
+          [%Membership{} = row | _] ->
+            %{membership: row, granted: false}
+
+          [] ->
+            attrs = %{user_id: user_id, added_by: Keyword.get(opts, :added_by)}
+
+            case attrs |> defaults() |> Map.put(:scope, "platform") |> do_insert() do
+              {:ok, row} -> %{membership: row, granted: true}
+              {:error, reason} -> Arca.Repo.rollback(reason)
+            end
+        end
+      else
+        {:error, reason} -> Arca.Repo.rollback(reason)
+      end
+    end
+
+    Arca.Repo.Errors.with_db_rescue("Arca.Members.ensure_platform", fn ->
+      # A writer that does not take the person's lock (`grant_platform/2`)
+      # can still win the assignment index between the read and the
+      # insert; the one retry reads the row it wrote.
+      case Arca.Repo.locking_transaction(grant) do
+        {:error, :conflict} -> Arca.Repo.locking_transaction(grant)
+        other -> other
+      end
     end)
   end
 
-  def delete_platform(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
+  def ensure_platform(%Cyfr.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
+
+  @doc """
+  Remove the person's platform grant and, when one went, every session
+  they hold, in one transaction. Answers how many grant rows went and the
+  token hashes of the sessions that went with them; an absent grant ends
+  no session.
+
+  `expected_identity:` checks the person's row as `ensure_platform/3`
+  does, answering `{:error, :stale_identity}` with nothing removed.
+  """
+  @spec revoke_platform(Cyfr.Actor.t(), String.t(), keyword()) ::
+          {:ok, %{removed: non_neg_integer(), session_hashes: [binary()]}}
+          | {:error, :stale_identity}
+          | refusal()
+  def revoke_platform(actor, user_id, opts \\ [])
+
+  def revoke_platform(%Cyfr.Actor{scope: :platform}, user_id, opts)
+      when is_binary(user_id) and is_list(opts) do
+    expected = Keyword.get(opts, :expected_identity)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.Members.revoke_platform", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        with :ok <- identity_holds(user_id, expected, :revoke) do
+          {removed, session_hashes} = remove_platform([user_id])
+          %{removed: removed, session_hashes: Map.get(session_hashes, user_id, [])}
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
+    end)
+  end
+
+  def revoke_platform(%Cyfr.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
+
+  @doc """
+  The boot's operator reconcile: remove every platform grant whose person
+  the operator list no longer names, with all of that person's sessions,
+  under the member slot and the `bootstrap` claim `claim` — one
+  transaction, or nothing.
+
+  `opts` (all required): `:slot`, the slot this member won
+  (`Arca.ControlPlane.held/0`), or `:none` in a deployment where no
+  member claims one; `:operators`, the lowercased emails the operator
+  list names; `:policy_digest`, the digest of that list; `:lease_ms`, the
+  claim lease the final renewal extends.
+
+  A grant stands while its person exists and their stored email is one of
+  `:operators`. Every person holding a grant is locked, sorted by id, and
+  their grants are read again under that lock; those are the grants
+  examined, and at commit each of them stands. A grant naming a person
+  with no row refuses the whole reconcile (`:missing_user`) rather than
+  guessing.
+
+  The slot is verified and the claim held at the start and again at the
+  end, where a final checked renewal records
+  `%{version: 1, status: "complete", policy_digest: …, owner: …}` in
+  `JobClaim.detail` and answers the newest claim, which is what the
+  caller releases. `{:ok, %{claim: renewed, revoked: [revoked()]}}` is
+  answered only after commit.
+  """
+  @spec reconcile_platform(Cyfr.Actor.t(), JobClaim.t(), keyword()) ::
+          {:ok, %{claim: JobClaim.t(), revoked: [revoked()]}} | reconcile_refusal()
+  def reconcile_platform(%Cyfr.Actor{scope: :platform}, %JobClaim{} = claim, opts)
+      when is_list(opts) do
+    slot = Keyword.fetch!(opts, :slot)
+    operators = opts |> Keyword.fetch!(:operators) |> MapSet.new()
+    detail = completion(Keyword.fetch!(opts, :policy_digest), claim.owner)
+    lease_ms = Keyword.fetch!(opts, :lease_ms)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.Members.reconcile_platform", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        with :ok <- slot_holds(slot),
+             {:ok, held} <- claim_holds(claim),
+             {:ok, revoked} <- delist(operators),
+             :ok <- slot_holds(slot),
+             {:ok, renewed} <- renewed(held, lease_ms, detail) do
+          %{claim: renewed, revoked: revoked}
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
+    end)
+  end
+
+  def reconcile_platform(%Cyfr.Actor{}, %JobClaim{}, _opts), do: {:error, :cross_tenant}
 
   @doc "Every ACTIVE row of a person — platform and athanor alike, newest first."
   @spec list_active_for_user(Cyfr.Actor.t(), String.t()) ::
@@ -465,6 +620,127 @@ defmodule Arca.Members do
   def shared_estate?(%Cyfr.Actor{}, _user_a, _user_b), do: {:error, :cross_tenant}
 
   # ---- internal --------------------------------------------------------------
+
+  defp slot_holds(:none), do: :ok
+
+  defp slot_holds(slot) do
+    case ControlPlane.verify_held(slot) do
+      :ok -> :ok
+      :lost -> {:error, :slot_lost}
+    end
+  end
+
+  defp claim_holds(claim) do
+    case JobClaims.hold(claim) do
+      {:ok, held} -> {:ok, held}
+      :taken -> {:error, :claim_taken}
+      :lapsed -> {:error, :claim_lapsed}
+    end
+  end
+
+  defp renewed(held, lease_ms, detail) do
+    case JobClaims.renew_held(held, lease_ms, detail: detail) do
+      {:ok, renewed} -> {:ok, renewed}
+      :taken -> {:error, :claim_taken}
+      :lapsed -> {:error, :claim_lapsed}
+    end
+  end
+
+  defp completion(digest, owner) when is_binary(digest) and is_binary(owner) do
+    Jason.encode!(%{version: 1, status: "complete", policy_digest: digest, owner: owner})
+  end
+
+  # arca:unscoped-ok platform rows name no athanor by design; the reconcile is server-wide.
+  defp delist(operators) do
+    user_ids =
+      Arca.Repo.all(from(m in Membership, where: m.scope == "platform", select: m.user_id))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    people = lock_people(Enum.reject(user_ids, &is_nil/1))
+
+    if Enum.any?(user_ids, &(not Map.has_key?(people, &1))) do
+      {:error, :missing_user}
+    else
+      delisted =
+        for %Membership{user_id: user_id} <- locked_platform_rows(Map.keys(people)),
+            not MapSet.member?(operators, people[user_id].email),
+            uniq: true,
+            do: user_id
+
+      {_removed, session_hashes} = remove_platform(delisted)
+
+      {:ok,
+       Enum.map(delisted, &%{user_id: &1, session_hashes: Map.get(session_hashes, &1, [])})}
+    end
+  end
+
+  # The person's row under lock, checked against what a sign-in asserted.
+  # A grant also refuses an email the provider explicitly left unverified.
+  defp identity_holds(user_id, expected, transition) do
+    person = Map.get(lock_people([user_id]), user_id)
+
+    cond do
+      is_nil(expected) -> :ok
+      is_nil(person) -> {:error, :stale_identity}
+      person.email != expected.email -> {:error, :stale_identity}
+      person.email_verified != expected.email_verified -> {:error, :stale_identity}
+      transition == :grant and person.email_verified == false -> {:error, :stale_identity}
+      true -> :ok
+    end
+  end
+
+  # People before their grants, sorted by id: the order every platform
+  # transition takes their locks in.
+  defp lock_people([]), do: %{}
+
+  defp lock_people(user_ids) do
+    from(u in User, where: u.id in ^user_ids, order_by: [asc: u.id])
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.all()
+    |> Map.new(&{&1.id, &1})
+  end
+
+  # arca:unscoped-ok platform rows name no athanor by design; the people are the scope.
+  defp locked_platform_rows(user_ids) do
+    from(m in Membership,
+      where: m.scope == "platform" and m.user_id in ^user_ids,
+      order_by: [asc: m.user_id, asc: m.id]
+    )
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.all()
+  end
+
+  # Grants first, then the sessions of the people who lost one, each read
+  # back from its own DELETE: what the caller invalidates is exactly what
+  # this transaction removed.
+  # arca:unscoped-ok platform rows name no athanor, and sessions are the person's own.
+  defp remove_platform(user_ids) do
+    {_count, removed} =
+      Arca.Repo.delete_all(
+        from(m in Membership,
+          where: m.scope == "platform" and m.user_id in ^user_ids,
+          select: m.user_id
+        )
+      )
+
+    removed = removed || []
+    people = Enum.uniq(removed)
+
+    session_hashes =
+      if people == [] do
+        %{}
+      else
+        {_count, sessions} =
+          Arca.Repo.delete_all(
+            from(s in Session, where: s.user_id in ^people, select: {s.user_id, s.token_hash})
+          )
+
+        Enum.group_by(sessions || [], &elem(&1, 0), &elem(&1, 1))
+      end
+
+    {length(removed), session_hashes}
+  end
 
   # arca:unscoped-ok the athanor is the caller's clause's: `seat/2` takes it from the actor and
   # `grant_platform/2` writes the row that names none, so this statement never chooses one.

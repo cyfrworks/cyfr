@@ -116,7 +116,6 @@ defmodule Arca.MembersTest do
       assert {:error, :cross_tenant} = Members.find_platform(member, "usr_1")
       assert {:error, :cross_tenant} = Members.delete(member, row)
       assert {:error, :cross_tenant} = Members.list_platform(member)
-      assert {:error, :cross_tenant} = Members.delete_platform(member, "usr_1")
       assert {:error, :cross_tenant} = Members.list_active_for_user(member, "usr_1")
       assert {:error, :cross_tenant} = Members.list_all_for_user(member, "usr_1")
       assert {:error, :cross_tenant} = Members.delete_all_for_user(member, "usr_1")
@@ -127,6 +126,12 @@ defmodule Arca.MembersTest do
 
       assert {:error, :cross_tenant} =
                Members.withdraw_invites_for_email(member, "a@example.com")
+
+      assert {:error, :cross_tenant} = Members.ensure_platform(member, "usr_1", [])
+      assert {:error, :cross_tenant} = Members.revoke_platform(member, "usr_1")
+
+      assert {:error, :cross_tenant} =
+               Members.reconcile_platform(member, %Arca.Schemas.JobClaim{}, [])
 
       refute_received :queried
     end
@@ -234,7 +239,7 @@ defmodule Arca.MembersTest do
       assert {:ok, %{id: ^id}} = Members.get(server(), row.id)
       assert Enum.any?(elem(Members.list_platform(server()), 1), &(&1.id == row.id))
 
-      assert {:ok, 1} = Members.delete_platform(server(), user)
+      assert {:ok, %{removed: 1, session_hashes: []}} = Members.revoke_platform(server(), user)
       assert {:error, :not_found} = Members.find_platform(server(), user)
     end
 
@@ -325,9 +330,420 @@ defmodule Arca.MembersTest do
     end
   end
 
+  describe "the platform transitions" do
+    test "a grant is written once and then held", %{} do
+      user = person!()
+      facts = facts(user)
+
+      assert {:ok, %{membership: row, granted: true}} =
+               Members.ensure_platform(server(), user.id, expected_identity: facts)
+
+      assert row.scope == "platform" and row.athanor_id == nil
+
+      assert {:ok, %{membership: %{id: same}, granted: false}} =
+               Members.ensure_platform(server(), user.id, expected_identity: facts)
+
+      assert same == row.id
+      # Without a sign-in's facts the grant is the server's own act.
+      assert {:ok, %{granted: false}} = Members.ensure_platform(server(), user.id, [])
+    end
+
+    test "a grant answers to the facts the sign-in asserted, in either direction of change" do
+      # The operator's assertion was overtaken: the row now carries another
+      # address, so the earlier sign-in grants nothing.
+      ops = person!(%{email: "ops-#{uniq()}@example.com"})
+      asserted = facts(ops)
+      moved!(ops, email: "someone-#{uniq()}@example.com")
+
+      assert {:error, :stale_identity} =
+               Members.ensure_platform(server(), ops.id, expected_identity: asserted)
+
+      assert {:error, :not_found} = Members.find_platform(server(), ops.id)
+
+      # And the other way: a non-operator's earlier assertion does not
+      # revoke the grant a later operator assertion now stands behind.
+      later = person!(%{email: "plain-#{uniq()}@example.com"})
+      stale = facts(later)
+      moved!(later, email: "ops-#{uniq()}@example.com")
+      {:ok, _} = Members.ensure_platform(server(), later.id, expected_identity: facts(reload(later)))
+      token = session!(later.id)
+
+      assert {:error, :stale_identity} =
+               Members.revoke_platform(server(), later.id, expected_identity: stale)
+
+      assert {:ok, _} = Members.find_platform(server(), later.id)
+      assert {:ok, _} = Arca.SessionStorage.get_session(token)
+    end
+
+    test "a verification claim that changed is stale, and an explicitly unverified email is never granted" do
+      user = person!(%{email_verified: true})
+      asserted = facts(user)
+      moved!(user, email_verified: nil)
+
+      assert {:error, :stale_identity} =
+               Members.ensure_platform(server(), user.id, expected_identity: asserted)
+
+      unverified = person!(%{email_verified: false})
+
+      assert {:error, :stale_identity} =
+               Members.ensure_platform(server(), unverified.id,
+                 expected_identity: facts(unverified)
+               )
+
+      assert {:error, :not_found} = Members.find_platform(server(), unverified.id)
+
+      # A revoke needs no proved address: it only takes away.
+      {:ok, _} = Members.ensure_platform(server(), unverified.id, [])
+
+      assert {:ok, %{removed: 1}} =
+               Members.revoke_platform(server(), unverified.id,
+                 expected_identity: facts(unverified)
+               )
+    end
+
+    test "an unchanged delayed verdict still lands" do
+      user = person!()
+      asserted = facts(user)
+      # Time passes and the row is touched, but its identity facts do not change.
+      moved!(user, display_name: "Renamed", last_seen_at: DateTime.utc_now())
+
+      assert {:ok, %{granted: true}} =
+               Members.ensure_platform(server(), user.id, expected_identity: asserted)
+    end
+
+    test "a revoke removes the grant and exactly that person's sessions, and answers their hashes" do
+      user = person!()
+      other = person!()
+      {:ok, _} = Members.ensure_platform(server(), user.id, [])
+      mine = [session!(user.id), session!(user.id)]
+      theirs = session!(other.id)
+
+      assert {:ok, %{removed: 1, session_hashes: hashes}} =
+               Members.revoke_platform(server(), user.id)
+
+      assert Enum.sort(hashes) == Enum.sort(mine)
+      for hash <- mine, do: assert({:error, _} = Arca.SessionStorage.get_session(hash))
+      assert {:ok, _} = Arca.SessionStorage.get_session(theirs)
+      assert {:error, :not_found} = Members.find_platform(server(), user.id)
+    end
+
+    test "an absent grant leaves ordinary sessions alone" do
+      user = person!()
+      token = session!(user.id)
+
+      assert {:ok, %{removed: 0, session_hashes: []}} = Members.revoke_platform(server(), user.id)
+      assert {:ok, _} = Arca.SessionStorage.get_session(token)
+    end
+  end
+
+  describe "reconcile_platform/3" do
+    test "removes every grant the list no longer names with its sessions, and records success" do
+      kept = person!()
+      dropped = person!()
+      {:ok, _} = Members.ensure_platform(server(), kept.id, [])
+      {:ok, _} = Members.ensure_platform(server(), dropped.id, [])
+      dropped_sessions = [session!(dropped.id)]
+      kept_session = session!(kept.id)
+      claim = claim!()
+
+      assert {:ok, %{claim: renewed, revoked: revoked}} =
+               reconcile(claim, operators: [kept.email])
+
+      assert revoked == [%{user_id: dropped.id, session_hashes: dropped_sessions}]
+      assert {:ok, _} = Members.find_platform(server(), kept.id)
+      assert {:error, :not_found} = Members.find_platform(server(), dropped.id)
+      assert {:ok, _} = Arca.SessionStorage.get_session(kept_session)
+      assert {:error, _} = Arca.SessionStorage.get_session(hd(dropped_sessions))
+
+      # The final checked renewal is the claim the caller releases, and its
+      # evidence says who completed it under which list.
+      assert renewed.fence == claim.fence + 1
+
+      assert %{
+               "version" => 1,
+               "status" => "complete",
+               "policy_digest" => "digest-1",
+               "owner" => "boot_reconcile"
+             } = Jason.decode!(renewed.detail)
+
+      assert :ok = Arca.JobClaims.release(renewed)
+    end
+
+    test "a grant naming a person with no row refuses the whole reconcile" do
+      dropped = person!()
+      {:ok, _} = Members.ensure_platform(server(), dropped.id, [])
+      {:ok, _} = Members.grant_platform(server(), %{user_id: person_id(), added_by: "x"})
+      claim = claim!()
+
+      assert {:error, :missing_user} = reconcile(claim, operators: [])
+
+      # Nothing moved: the delisted grant and the claim are as they were.
+      assert {:ok, _} = Members.find_platform(server(), dropped.id)
+      assert {:ok, %{fence: fence}} = Arca.JobClaims.read("bootstrap", claim.key)
+      assert fence == claim.fence
+    end
+
+    test "a claim taken or lapsed, or a slot lost, commits nothing" do
+      dropped = person!()
+      {:ok, _} = Members.ensure_platform(server(), dropped.id, [])
+
+      taken = claim!()
+      {:ok, _moved} = Arca.JobClaims.record(taken, "a peer's write")
+      assert {:error, :claim_taken} = reconcile(taken, operators: [])
+
+      {:ok, lapsed} = Arca.JobClaims.claim("bootstrap", "cell-#{uniq()}", "boot_reconcile", 1)
+      Process.sleep(5)
+      assert {:error, :claim_lapsed} = reconcile(lapsed, operators: [])
+
+      slot = slot!()
+      assert {:error, :slot_lost} = reconcile(claim!(), operators: [], slot: %{slot | owner: "x"})
+
+      expired = slot!(-1_000)
+      assert {:error, :slot_lost} = reconcile(claim!(), operators: [], slot: expired)
+
+      assert {:ok, _} = Members.find_platform(server(), dropped.id)
+
+      # Under the slot this member does hold, the same reconcile lands.
+      assert {:ok, %{revoked: [%{user_id: user_id}]}} =
+               reconcile(claim!(), operators: [], slot: slot)
+
+      assert user_id == dropped.id
+    end
+  end
+
+  defp uniq, do: System.unique_integer([:positive])
+
+  defp person!(overrides \\ %{}) do
+    n = uniq()
+    now = DateTime.utc_now()
+
+    user_attrs =
+      Map.merge(
+        %{
+          id: Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix()),
+          provider: "github",
+          email: "m#{n}@example.com",
+          email_verified: true,
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        overrides
+      )
+
+    {:ok, user} =
+      Arca.Users.mint(server(), user_attrs, %{
+        key: "github|https://github.com|m#{n}",
+        provider: "github",
+        issuer: "https://github.com",
+        subject: "m#{n}",
+        first_seen_at: now,
+        last_seen_at: now
+      })
+
+    user
+  end
+
+  defp reload(user), do: elem(Arca.Users.get(server(), user.id), 1)
+
+  defp facts(user), do: %{email: user.email, email_verified: user.email_verified}
+
+  defp moved!(user, changes) do
+    {:ok, _} = Arca.Users.update(server(), reload(user), Map.new(changes))
+    :ok
+  end
+
+  defp session!(user_id) do
+    hash = :crypto.strong_rand_bytes(32)
+
+    :ok =
+      Arca.SessionStorage.create_session(hash, %{
+        user_id: user_id,
+        provider: "github",
+        expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+      })
+
+    hash
+  end
+
+  defp claim!(lease_ms \\ 60_000) do
+    {:ok, claim} =
+      Arca.JobClaims.claim("bootstrap", "cell-#{uniq()}", "boot_reconcile", lease_ms)
+
+    claim
+  end
+
+  # A slot row written for this test alone: the verify reads the row, never
+  # the process-wide cache a take would also write.
+  defp slot!(lease_offset_ms \\ 60_000) do
+    now = Arca.ServerMetaStorage.now!()
+    node = "node-members-#{uniq()}"
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.CellLease, [
+        %{
+          node: node,
+          owner: "boot_reconcile",
+          generation: 1,
+          fence: 1,
+          lease_until: DateTime.add(now, lease_offset_ms, :millisecond),
+          taken_at: now,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    %{
+      node: node,
+      owner: "boot_reconcile",
+      generation: 1,
+      fence: 1,
+      lease_until: DateTime.add(now, lease_offset_ms, :millisecond)
+    }
+  end
+
+  defp reconcile(claim, opts) do
+    Members.reconcile_platform(
+      server(),
+      claim,
+      Keyword.merge([slot: :none, policy_digest: "digest-1", lease_ms: 60_000], opts)
+    )
+  end
+
   defp shared?(athanor_id, user_id) do
     with {:ok, ids} <- Members.active_user_ids(in_athanor(athanor_id)) do
       {:ok, user_id in ids}
     end
+  end
+end
+
+defmodule Arca.MembersLockTest do
+  @moduledoc """
+  The platform transitions under two real connections, outside the
+  sandbox: two concurrent grants of one person write one row, and a
+  grant waiting behind a change to the person's row acts on what that
+  change committed — on PostgreSQL by waiting on the row, on SQLite by
+  waiting at its own BEGIN.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query
+
+  alias Arca.Members
+  alias Arca.Schemas.{ExternalIdentity, Membership, User}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+  defp server, do: Cyfr.Actor.system()
+
+  setup do
+    n = System.unique_integer([:positive])
+    now = DateTime.utc_now()
+    id = Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix())
+
+    {:ok, user} =
+      unboxed(fn ->
+        Arca.Users.mint(
+          server(),
+          %{
+            id: id,
+            provider: "github",
+            email: "lock#{n}@example.com",
+            email_verified: true,
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
+          },
+          %{
+            key: "github|https://github.com|lock#{n}",
+            provider: "github",
+            issuer: "https://github.com",
+            subject: "lock#{n}",
+            first_seen_at: now,
+            last_seen_at: now
+          }
+        )
+      end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(where(Membership, user_id: ^id))
+        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^id))
+        Arca.Repo.delete_all(where(User, id: ^id))
+      end)
+    end)
+
+    {:ok, user: user, facts: %{email: user.email, email_verified: true}}
+  end
+
+  # Two racers: on SQLite a waiter sleeps out its busy timeout inside the
+  # driver on a dirty I/O scheduler, and the partitioned runs give each VM
+  # two of them, so more waiters than that starve the lock's own holder.
+  test "concurrent idempotent grants write one row, and exactly one says it wrote it", %{
+    user: user,
+    facts: facts
+  } do
+    results =
+      1..2
+      |> Enum.map(fn _ ->
+        Task.async(fn ->
+          unboxed(fn -> Members.ensure_platform(server(), user.id, expected_identity: facts) end)
+        end)
+      end)
+      |> Enum.map(&Task.await(&1, 25_000))
+
+    assert Enum.all?(results, &match?({:ok, %{granted: _}}, &1))
+    assert Enum.count(results, &match?({:ok, %{granted: true}}, &1)) == 1
+
+    assert 1 ==
+             unboxed(fn ->
+               Arca.Repo.aggregate(
+                 where(Membership, user_id: ^user.id, scope: "platform"),
+                 :count
+               )
+             end)
+  end
+
+  test "a grant waiting behind a change to the person acts on the change, not on its read", %{
+    user: user,
+    facts: facts
+  } do
+    test = self()
+
+    changer =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            from(u in User, where: u.id == ^user.id)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one()
+
+            send(test, :holding)
+
+            receive do
+              :commit -> :ok
+            end
+
+            Arca.Repo.update_all(where(User, id: ^user.id), set: [email: "moved@example.com"])
+          end)
+        end)
+      end)
+
+    assert_receive :holding, 5_000
+
+    granter =
+      Task.async(fn ->
+        unboxed(fn -> Members.ensure_platform(server(), user.id, expected_identity: facts) end)
+      end)
+
+    refute Task.yield(granter, 300), "the grant decided while the person's row was held"
+    send(changer.pid, :commit)
+    assert {:ok, {1, _}} = Task.await(changer, 25_000)
+    assert {:error, :stale_identity} = Task.await(granter, 25_000)
+
+    assert {:error, :not_found} = unboxed(fn -> Members.find_platform(server(), user.id) end)
   end
 end

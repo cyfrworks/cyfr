@@ -328,7 +328,7 @@ defmodule Compendium.Provisioning do
   they read as available until a person pulls them, so an upgrade never
   changes an estate under its members.
 
-  Runs at boot (`Cyfr.Bootstrap`); a failure logs and moves on — a sync
+  Runs at boot (`Cyfr.SeedOffer`); a failure logs and moves on — a sync
   must never take the server down or block another athanor's.
   """
   @spec sync_seeds() :: :ok

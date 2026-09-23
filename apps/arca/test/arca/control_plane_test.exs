@@ -365,6 +365,54 @@ defmodule Arca.ControlPlaneTest do
     end
   end
 
+  describe "verifying the slot inside a transaction" do
+    test "a slot this member still holds verifies, moving neither the fence nor the cache", %{
+      node: node
+    } do
+      claimed_here(true)
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+      cached = {ControlPlane.held(), ControlPlane.generation(), ControlPlane.held?()}
+
+      assert {:ok, :ok} = Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(slot) end)
+
+      assert {:ok, %{fence: fence}} = ControlPlane.slot(node)
+      assert fence == slot.fence
+      assert {ControlPlane.held(), ControlPlane.generation(), ControlPlane.held?()} == cached
+    end
+
+    test "the claimant's renew moving the fence does not unseat it", %{node: node} do
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+      assert {:ok, renewed} = ControlPlane.renew(60_000)
+      assert renewed.fence > slot.fence
+
+      # Node, owner and generation name the slot; the fence is the renew's.
+      assert {:ok, :ok} = Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(slot) end)
+    end
+
+    test "a successor's generation, another owner or a lapsed lease is :lost", %{node: node} do
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+      verify = fn s -> Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(s) end) end
+
+      assert {:ok, :lost} = verify.(%{slot | owner: "boot_other"})
+      assert {:ok, :lost} = verify.(%{slot | generation: slot.generation + 1})
+
+      expire(node)
+      assert {:ok, :lost} = verify.(slot)
+
+      assert {:ok, successor} = ControlPlane.take(node, "boot_b", 60_000)
+      assert {:ok, :lost} = verify.(slot)
+      assert {:ok, :ok} = verify.(successor)
+    end
+
+    test "outside a transaction it refuses to answer", %{node: node} do
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+
+      assert_raise ArgumentError, ~r/inside a locking transaction/, fn ->
+        ControlPlane.verify_held(slot)
+      end
+    end
+  end
+
   # The row put past its lease on the cell's clock — the one condition a
   # takeover turns on, made rather than waited for.
   defp expire(node) do
@@ -380,4 +428,87 @@ defmodule Arca.ControlPlaneTest do
   defp restore(key, value), do: :persistent_term.put(key, value)
 
   defp assert_queries(n, fun), do: Arca.Test.QueryCounter.assert_queries(n, fun)
+end
+
+defmodule Arca.ControlPlaneLockTest do
+  @moduledoc """
+  `Arca.ControlPlane.verify_held/1` under two real connections, outside
+  the sandbox: a verify that waited behind a release decides on the
+  database's clock read after the wait, so it answers `:lost` rather
+  than passing on an instant taken before the slot was given up.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.ControlPlane
+  alias Arca.Schemas.CellLease
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    saved = Map.new(@keys, &{&1, :persistent_term.get(&1, :absent)})
+    node = "node-lock-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      unboxed(fn -> Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node)) end)
+
+      for {key, value} <- saved do
+        if value == :absent, do: :persistent_term.erase(key), else: :persistent_term.put(key, value)
+      end
+    end)
+
+    {:ok, node: node}
+  end
+
+  test "a verify waiting behind a release answers :lost on the clock read after its wait", %{
+    node: node
+  } do
+    {:ok, slot} = unboxed(fn -> ControlPlane.take(node, "boot_a", 60_000) end)
+    test = self()
+
+    releaser =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            now = Arca.ServerMetaStorage.now!()
+
+            {1, _} =
+              Arca.Repo.update_all(
+                from(l in CellLease, where: l.node == ^node),
+                set: [lease_until: now, fence: slot.fence + 1]
+              )
+
+            send(test, :releasing)
+
+            receive do
+              :commit -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :releasing, 5_000
+
+    verifier =
+      Task.async(fn ->
+        unboxed(fn -> Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(slot) end) end)
+      end)
+
+    refute Task.yield(verifier, 300), "the verify answered while the release held the row"
+    # The release instant is now in the past on every clock the verify
+    # could read after its wait.
+    Process.sleep(20)
+    send(releaser.pid, :commit)
+    assert {:ok, :ok} = Task.await(releaser, 25_000)
+    assert {:ok, :lost} = Task.await(verifier, 25_000)
+  end
 end

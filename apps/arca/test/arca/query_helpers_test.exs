@@ -147,4 +147,147 @@ defmodule Arca.QueryHelpersTest do
       assert QueryHelpers.maybe_put([], :key, nil) == []
     end
   end
+
+  describe "for_update/1" do
+    test "locks the rows it reads on PostgreSQL, and leaves SQLite's query untouched" do
+      query = from(c in Arca.Schemas.JobClaim, where: c.kind == "bootstrap")
+      locked = QueryHelpers.for_update(query)
+      {sql, _params} = Ecto.Adapters.SQL.to_sql(:all, Arca.Repo, locked)
+
+      case Arca.Repo.adapter() do
+        Ecto.Adapters.Postgres ->
+          assert sql =~ ~r/FOR UPDATE$/
+
+        Ecto.Adapters.SQLite3 ->
+          # SQLite's adapter raises on any lock clause; the immediate
+          # transaction around the read is the lock there.
+          assert locked == query
+          refute sql =~ "FOR UPDATE"
+      end
+    end
+
+    test "a bare schema is a queryable it can lock" do
+      locked = QueryHelpers.for_update(Arca.Schemas.JobClaim)
+      assert {_sql, []} = Ecto.Adapters.SQL.to_sql(:all, Arca.Repo, locked)
+    end
+  end
+end
+
+defmodule Arca.LockingTransactionTest do
+  @moduledoc """
+  `Arca.Repo.locking_transaction/2` with `Arca.QueryHelpers.for_update/1`
+  under two real connections, outside the sandbox: inside it one shared
+  connection would serialize the two transactions the test is about.
+
+  PostgreSQL's loser opens its transaction at once and waits on the row;
+  SQLite's waits at its own BEGIN, since the winner's immediate
+  transaction holds the one write lock. Either way the loser acts only on
+  what the winner committed, and reads the database's clock after its
+  wait.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query
+
+  alias Arca.QueryHelpers
+  alias Arca.Schemas.JobClaim
+  alias Ecto.Adapters.SQL.Sandbox
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    key = "lock-#{System.unique_integer([:positive])}"
+    {:ok, claim} = unboxed(fn -> Arca.JobClaims.claim("retention", key, "boot_lock", 60_000) end)
+    on_exit(fn -> unboxed(fn -> Arca.Repo.delete_all(where(JobClaim, key: ^key)) end) end)
+    {:ok, claim: claim}
+  end
+
+  defp locked_detail(claim) do
+    from(c in JobClaim, where: c.id == ^claim.id, select: c.detail)
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.one()
+  end
+
+  test "answers what the function answers, and a rollback commits nothing", %{claim: claim} do
+    assert {:ok, nil} = unboxed(fn -> Arca.Repo.locking_transaction(fn -> locked_detail(claim) end) end)
+
+    assert {:error, :refused} =
+             unboxed(fn ->
+               Arca.Repo.locking_transaction(fn ->
+                 Arca.Repo.update_all(where(JobClaim, id: ^claim.id), set: [detail: "moved"])
+                 Arca.Repo.rollback(:refused)
+               end)
+             end)
+
+    assert {:ok, nil} = unboxed(fn -> Arca.Repo.locking_transaction(fn -> locked_detail(claim) end) end)
+  end
+
+  test "runs a multi as the same transaction", %{claim: claim} do
+    multi =
+      Ecto.Multi.new()
+      |> Ecto.Multi.run(:before, fn _repo, _ -> {:ok, locked_detail(claim)} end)
+      |> Ecto.Multi.update_all(:write, where(JobClaim, id: ^claim.id), set: [detail: "multi"])
+
+    assert {:ok, %{before: nil, write: {1, _}}} =
+             unboxed(fn -> Arca.Repo.locking_transaction(multi) end)
+  end
+
+  test "the loser waits for the winner's commit and acts only on what it committed", %{
+    claim: claim
+  } do
+    test = self()
+
+    winner =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            nil = locked_detail(claim)
+            send(test, :holding)
+
+            receive do
+              :commit -> :ok
+            end
+
+            Arca.Repo.update_all(where(JobClaim, id: ^claim.id), set: [detail: "winner"])
+            Arca.ServerMetaStorage.now!()
+          end)
+        end)
+      end)
+
+    assert_receive :holding, 5_000
+
+    loser =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            send(test, :loser_began)
+            detail = locked_detail(claim)
+            {detail, Arca.ServerMetaStorage.now!()}
+          end)
+        end)
+      end)
+
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.Postgres ->
+        # The transaction is open; the row is what it waits on.
+        assert_receive :loser_began, 5_000
+
+      Ecto.Adapters.SQLite3 ->
+        # The one write lock is the winner's, so the loser's BEGIN waits.
+        refute_receive :loser_began, 300
+    end
+
+    refute Task.yield(loser, 300), "the loser read the row while the winner held it"
+
+    send(winner.pid, :commit)
+    assert {:ok, committed_at} = Task.await(winner, 25_000)
+    assert {:ok, {"winner", read_at}} = Task.await(loser, 25_000)
+
+    # SQLite's loser began only once the winner's transaction had ended.
+    if Arca.Repo.adapter() == Ecto.Adapters.SQLite3, do: assert_received(:loser_began)
+
+    # The loser's clock reading is its own, taken after the wait.
+    assert DateTime.compare(read_at, committed_at) in [:gt, :eq]
+  end
 end

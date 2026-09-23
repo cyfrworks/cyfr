@@ -114,6 +114,26 @@ defmodule Sanctum.Tenancy.Members do
   @spec ensure_platform(String.t()) :: {:ok, Membership.t()} | {:error, term()}
   def ensure_platform(user_id), do: ensure(user_id, scope: "platform")
 
+  @doc """
+  The platform grant an admitted operator sign-in asks for, checked
+  against exactly the identity facts that sign-in asserted
+  (`t:Arca.Members.identity/0`): the person's row is locked and must
+  still carry them, and the email must not be explicitly unverified, or
+  nothing is written and the answer is `{:error, :stale_identity}`.
+  `{:ok, :granted}` when this call wrote the row, `{:ok, :held}` when it
+  was already there.
+  """
+  @spec grant_platform(String.t(), Arca.Members.identity()) ::
+          {:ok, :granted | :held} | {:error, term()}
+  def grant_platform(user_id, %{email: _, email_verified: _} = expected_identity)
+      when is_binary(user_id) do
+    case Arca.Members.ensure_platform(server(), user_id, expected_identity: expected_identity) do
+      {:ok, %{granted: true}} -> {:ok, :granted}
+      {:ok, %{granted: false}} -> {:ok, :held}
+      {:error, _reason} = refusal -> refusal
+    end
+  end
+
   @doc "Every platform-admin row — the server's operators, as the rows say."
   @spec list_platform() :: {:ok, [Membership.t()]} | {:error, :database_error}
   def list_platform, do: Arca.Members.list_platform(server())
@@ -123,19 +143,30 @@ defmodule Sanctum.Tenancy.Members do
   reported, not swallowed: the caller is taking a capability away, and
   answering `:ok` while the row survives would leave the operator bit on.
 
-  When a row was actually removed, the person's sessions are revoked with
-  it (`Sanctum.Session.revoke_all_for_user/1`): the capability rides on
-  established contexts — memoized per request, held for a LiveView
-  socket's lifetime — and ending the sessions is what makes the
-  revocation a next-request fact on every surface. A no-op revoke (no
-  row) touches nothing, so the routine sign-in of a non-operator never
-  logs anyone out.
+  When a row was actually removed, the person's sessions go with it in
+  the same transaction (`Arca.Members.revoke_platform/3`): the capability
+  rides on established contexts — memoized per request, held for a
+  LiveView socket's lifetime — and ending the sessions is what makes the
+  revocation a next-request fact on every surface. Either both go or
+  neither does, and only after the commit are the removed sessions'
+  memos dropped and the revocation announced. A no-op revoke (no row)
+  touches nothing, so the routine sign-in of a non-operator never logs
+  anyone out.
+
+  `expected_identity:` is an admitted sign-in's facts, checked as
+  `grant_platform/2` checks them (`{:error, :stale_identity}`).
   """
-  @spec revoke_platform(String.t()) :: :ok | {:error, :database_error}
-  def revoke_platform(user_id) when is_binary(user_id) do
-    with {:ok, count} <- Arca.Members.delete_platform(server(), user_id) do
-      if count > 0, do: Sanctum.Session.revoke_all_for_user(user_id)
-      :ok
+  @spec revoke_platform(String.t(), keyword()) :: :ok | {:error, term()}
+  def revoke_platform(user_id, opts \\ []) when is_binary(user_id) and is_list(opts) do
+    case Arca.Members.revoke_platform(server(), user_id, Keyword.take(opts, [:expected_identity])) do
+      {:ok, %{removed: 0}} ->
+        :ok
+
+      {:ok, %{session_hashes: hashes}} ->
+        Sanctum.Session.announce_revoked(user_id, hashes)
+
+      {:error, _reason} = refusal ->
+        refusal
     end
   end
 

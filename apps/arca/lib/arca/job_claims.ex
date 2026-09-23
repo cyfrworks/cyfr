@@ -29,6 +29,10 @@ defmodule Arca.JobClaims do
     * `renew/3` moves the lease forward, `record/2` writes `detail`
       without moving it, and `release/1` gives the row up by leaving its
       lease already run out. Each answers the row it wrote.
+    * `hold/1` and `renew_held/3` are the same checks as steps of a
+      caller's locking transaction: the row is held at its owner and
+      fence until the caller commits, and the lease is judged on the
+      clock read after the lock was won.
 
   ## The fence
 
@@ -116,21 +120,55 @@ defmodule Arca.JobClaims do
           {:ok, JobClaim.t()} | lost() | {:error, :database_error}
   def renew(%JobClaim{} = held, lease_ms, opts \\ [])
       when is_integer(lease_ms) and lease_ms > 0 and is_list(opts) do
-    detail = Keyword.get(opts, :detail, :keep)
-
     Arca.Repo.Errors.with_db_rescue("Arca.JobClaims.renew", fn ->
-      now = Arca.ServerMetaStorage.now!()
-
-      sets =
-        [lease_until: lease_end(now, lease_ms), fence: held.fence + 1, updated_at: now]
-        |> with_detail(detail)
-
-      held
-      |> mine()
-      |> where([c], c.lease_until > ^now)
-      |> Arca.Repo.update_all(set: sets)
-      |> landed(held)
+      checked_renew(held, lease_ms, Keyword.get(opts, :detail, :keep))
     end)
+  end
+
+  @doc """
+  Inside a caller's `Arca.Repo.locking_transaction/2`: lock `held`'s row
+  at its owner and fence, then decide on the database's clock read after
+  that lock was won whether its lease still stands.
+
+  `{:ok, claim}` is the row as locked, which nothing else can change
+  before the caller commits. `:taken` and `:lapsed` mean what they mean
+  for `renew/3`. A decision is never taken on an instant read before a
+  wait for the lock: a holder that waited behind a release or a takeover
+  finds the row gone from under its fence, and one that waited past its
+  own lease finds it lapsed.
+
+  Raises outside a transaction and on a store that cannot answer, so the
+  caller's transaction rolls back.
+  """
+  @spec hold(JobClaim.t()) :: {:ok, JobClaim.t()} | lost()
+  # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
+  def hold(%JobClaim{} = held) do
+    in_transaction!("hold/1")
+
+    case held |> mine() |> Arca.QueryHelpers.for_update() |> Arca.Repo.one() do
+      nil ->
+        :taken
+
+      %JobClaim{} = claim ->
+        if live?(claim, Arca.ServerMetaStorage.now!()), do: {:ok, claim}, else: :lapsed
+    end
+  end
+
+  @doc """
+  `renew/3` as a step of a caller's `Arca.Repo.locking_transaction/2`: the
+  final checked renewal that records the job's evidence and answers the
+  newest claim, which is the one the caller releases after committing.
+
+  Raises outside a transaction and on a store that cannot answer, so the
+  caller's transaction rolls back rather than committing work whose claim
+  it could not renew.
+  """
+  @spec renew_held(JobClaim.t(), pos_integer(), keyword()) :: {:ok, JobClaim.t()} | lost()
+  # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
+  def renew_held(%JobClaim{} = held, lease_ms, opts \\ [])
+      when is_integer(lease_ms) and lease_ms > 0 and is_list(opts) do
+    in_transaction!("renew_held/3")
+    checked_renew(held, lease_ms, Keyword.get(opts, :detail, :keep))
   end
 
   @doc """
@@ -200,6 +238,28 @@ defmodule Arca.JobClaims do
   # ---- internal --------------------------------------------------------------
 
   defp live?(%JobClaim{lease_until: until}, now), do: DateTime.compare(until, now) == :gt
+
+  # The clock is read here, after any lock the caller already holds, so the
+  # lease comparison is never older than the write it decides.
+  defp checked_renew(held, lease_ms, detail) do
+    now = Arca.ServerMetaStorage.now!()
+
+    sets =
+      [lease_until: lease_end(now, lease_ms), fence: held.fence + 1, updated_at: now]
+      |> with_detail(detail)
+
+    held
+    |> mine()
+    |> where([c], c.lease_until > ^now)
+    |> Arca.Repo.update_all(set: sets)
+    |> landed(held)
+  end
+
+  defp in_transaction!(fun) do
+    unless Arca.Repo.in_transaction?() do
+      raise ArgumentError, "Arca.JobClaims.#{fun} runs inside a locking transaction"
+    end
+  end
 
   defp take(kind, key, _owner, _lease_ms, 0) do
     case row(kind, key) do

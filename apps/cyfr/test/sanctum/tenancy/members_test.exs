@@ -29,6 +29,49 @@ defmodule Sanctum.Tenancy.MembersTest do
     )
   end
 
+  describe "revoke_platform/2" do
+    defp session_for(user_id) do
+      {:ok, session} =
+        Sanctum.Session.create(
+          Sanctum.Context.build(
+            user_id: user_id,
+            athanor_id: Sanctum.TestContext.athanor_id(),
+            provider: "github",
+            permissions: [:*],
+            scope: :athanor,
+            auth_method: :oidc,
+            authenticated: true
+          )
+        )
+
+      session.token
+    end
+
+    test "takes the grant and every session together, then announces the revocation" do
+      uid = "user_" <> Ecto.UUID.generate()
+      {:ok, _} = Members.ensure_platform(uid)
+      token = session_for(uid)
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.sessions())
+
+      assert :ok = Members.revoke_platform(uid)
+
+      refute Sanctum.Tenancy.platform_admin?(uid)
+      assert {:error, _} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
+      assert_receive {:sessions_revoked, ^uid}
+    end
+
+    test "an absent grant ends no session and announces nothing" do
+      uid = "user_" <> Ecto.UUID.generate()
+      token = session_for(uid)
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.sessions())
+
+      assert :ok = Members.revoke_platform(uid)
+
+      assert {:ok, _} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
+      refute_receive {:sessions_revoked, ^uid}, 100
+    end
+  end
+
   describe "create/1" do
     test "creates an athanor membership", %{athanor: athanor} do
       assert {:ok, mem} = Members.create(attrs(athanor.id))
