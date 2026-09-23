@@ -4,6 +4,8 @@
 defmodule EmissaryWeb.TinctureControllerTest do
   use EmissaryWeb.ConnCase, async: false
 
+  require Ecto.Query
+
   defp tincture_dir(name) do
     Arca.Adapters.Local.build_path(
       Sanctum.Context.actor(Sanctum.TestContext.local()),
@@ -454,21 +456,22 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   describe "assets — private tinctures (signed token)" do
     setup do
-      # The prefix names the person it was minted for; a private app's own
-      # assets are theirs to read, not anyone's who has the URL.
-      ctx = Sanctum.TestContext.local()
-
+      # The prefix is minted from the reader's own session: a private app's
+      # own assets are theirs to read while that session and their seat
+      # stand, not anyone's who has the URL. A second seat keeps the estate
+      # open when the reader leaves it.
       {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id,
-          scope: "athanor",
-          athanor_id: ctx.athanor_id
-        )
+        Sanctum.Tenancy.Members.ensure("usr_keeper", scope: "athanor", athanor_id: "ath_test")
 
-      {:ok, reader: ctx.user_id}
+      reader = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      {:ok, session} = Sanctum.TestContext.create_session(reader)
+      {:ok, ctx} = Sanctum.Caller.establish(session.token)
+
+      {:ok, reader: reader, ctx: ctx}
     end
 
-    test "serves private tincture assets with valid token", %{conn: conn, reader: reader} do
-      token = asset_token(reader)
+    test "serves private tincture assets with valid token", %{conn: conn, ctx: ctx} do
+      token = asset_token(ctx)
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 200
@@ -479,19 +482,20 @@ defmodule EmissaryWeb.TinctureControllerTest do
       assert get_resp_header(conn, "cache-control") == ["private, max-age=3600"]
     end
 
-    test "a prefix minted for someone else opens nothing — by name", %{conn: conn} do
+    test "a prefix minted for someone else opens nothing — by name", %{
+      conn: conn,
+      ctx: ctx,
+      reader: reader
+    } do
       # The URL is the whole credential a sandboxed iframe has, so a shared
-      # one must not be a shared key: it names its reader. A non-member
-      # reader is refused as such, not hidden behind a 404 — the signed URL
-      # already names the tincture.
-      stranger =
-        Phoenix.Token.sign(
-          Sanctum.TinctureAuth.signing_secret(),
-          "tincture_asset_v2",
-          {"test", "local", "auth-dash", "github|https://github.com|stranger"}
-        )
+      # one must not be a shared key: it is held to the seat its reader held.
+      # A reader who left is refused as such, not hidden behind a 404 — the
+      # signed URL already names the tincture.
+      token = asset_token(ctx)
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.get("ath_test")
+      :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: reader.user_id)
 
-      conn = get(conn, "/t/test/local/auth-dash/_s/#{stranger}/app.js")
+      conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 403
       assert json_response(conn, 403)["code"] == "not_member"
     end
@@ -502,64 +506,197 @@ defmodule EmissaryWeb.TinctureControllerTest do
       assert json_response(conn, 401)["code"] == "asset_token_invalid"
     end
 
-    test "a token scoped to a different tincture is refused as invalid", %{conn: conn} do
-      token =
-        Phoenix.Token.sign(
-          Sanctum.TinctureAuth.signing_secret(),
-          "tincture_asset_v2",
-          {"test", "local", "pub-dash", Sanctum.TestContext.local().user_id}
-        )
+    test "a token scoped to a different tincture is refused as invalid", %{conn: conn, ctx: ctx} do
+      token = asset_token(ctx, "local", "pub-dash")
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 401
       assert json_response(conn, 401)["code"] == "asset_token_invalid"
     end
 
-    test "a token with the wrong publisher is refused as invalid", %{conn: conn} do
-      token =
-        Phoenix.Token.sign(
-          Sanctum.TinctureAuth.signing_secret(),
-          "tincture_asset_v2",
-          {"test", "evil", "auth-dash", Sanctum.TestContext.local().user_id}
-        )
+    test "a token with the wrong publisher is refused as invalid", %{conn: conn, ctx: ctx} do
+      token = asset_token(ctx, "evil", "auth-dash")
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 401
       assert json_response(conn, 401)["code"] == "asset_token_invalid"
     end
 
-    test "a token whose athanor differs from the URL is refused as invalid", %{conn: conn} do
-      token =
-        Phoenix.Token.sign(
-          Sanctum.TinctureAuth.signing_secret(),
-          "tincture_asset_v2",
-          {"test", "local", "auth-dash", Sanctum.TestContext.local().user_id}
-        )
+    test "a token whose athanor differs from the URL is refused as invalid", %{
+      conn: conn,
+      ctx: ctx
+    } do
+      token = asset_token(ctx)
+
+      {:ok, _} =
+        Sanctum.Tenancy.Athanors.create(%{
+          kind: "group",
+          name: "Other",
+          slug: "other",
+          created_by: "test"
+        })
 
       conn = get(conn, "/t/other/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 401
       assert json_response(conn, 401)["code"] == "asset_token_invalid"
     end
 
-    test "blocks data.db even with valid token", %{conn: conn} do
-      token =
-        Phoenix.Token.sign(
-          Sanctum.TinctureAuth.signing_secret(),
-          "tincture_asset_v2",
-          {"test", "local", "auth-dash", Sanctum.TestContext.local().user_id}
-        )
+    test "blocks data.db even with valid token", %{conn: conn, ctx: ctx} do
+      token = asset_token(ctx)
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/data.db")
       assert conn.status == 404
     end
   end
 
-  defp asset_token(reader) do
-    Phoenix.Token.sign(
-      Sanctum.TinctureAuth.signing_secret(),
-      "tincture_asset_v2",
-      {"test", "local", "auth-dash", reader}
-    )
+  defp asset_token(ctx, publisher \\ "local", name \\ "auth-dash") do
+    {:ok, token} = Sanctum.TinctureAuth.issue_asset_token(ctx, publisher, name)
+    token
+  end
+
+  describe "the derived tokens over HTTP" do
+    setup do
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure("usr_keeper", scope: "athanor", athanor_id: "ath_test")
+
+      reader = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      {:ok, session} = Sanctum.TestContext.create_session(reader)
+      {:ok, reader: reader, session: session}
+    end
+
+    defp base_token(html) do
+      [_, token] = Regex.run(~r/<base href="\/t\/test\/local\/auth-dash\/_s\/([^\/"]+)\/">/, html)
+      token
+    end
+
+    test "the index's asset prefix opens the assets, and dies with the session it came from",
+         %{conn: conn, session: session} do
+      page =
+        conn
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> get("/t/test/local/auth-dash")
+
+      token = base_token(page.resp_body)
+      assert get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js").status == 200
+
+      :ok = Sanctum.Session.destroy(session.token)
+      gone = get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js")
+      assert json_response(gone, 403)["code"] == "not_standing"
+    end
+
+    test "a ?_t= token opens no more than its :execute: no private index, no asset prefix",
+         %{conn: conn, session: session} do
+      minted =
+        conn
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
+        |> json_response(200)
+
+      # Reading a private tincture's files takes `:storage_read`, which a
+      # token derived for one tincture's `:execute` does not carry; the
+      # derivative never widens what its source's policy grants it.
+      page = get(build_conn(), "/t/test/local/auth-dash?_t=#{minted["token"]}")
+      assert page.status == 404
+      refute page.resp_body =~ "_s/"
+    end
+
+    test "a credential that cannot mint renders a named refusal, never a URL", %{conn: conn} do
+      # A key whose creator is none of this server's people: it stands as a
+      # key, and it mints nothing.
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+
+      {:ok, %{api_key: key}} =
+        Sanctum.ApiKey.create(ctx, %{name: "orphan-#{:rand.uniform(1_000_000)}"})
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(k in Arca.Schemas.ApiKey, where: k.created_by == ^ctx.user_id),
+          set: [created_by: "system"]
+        )
+
+      mint =
+        conn
+        |> put_req_header("authorization", "Bearer #{key}")
+        |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
+
+      body = json_response(mint, 403)
+      assert body["code"] == "missing_generation"
+      refute Map.has_key?(body, "token")
+
+      page =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{key}")
+        |> get("/t/test/local/auth-dash")
+
+      assert json_response(page, 403)["code"] == "missing_generation"
+      refute page.resp_body =~ "_s/"
+    end
+
+    test "a key's allowlist holds its derived tokens: admitted address served, other refused",
+         %{conn: conn} do
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+
+      {:ok, %{api_key: key}} =
+        Sanctum.ApiKey.create(ctx, %{
+          name: "allowlisted-#{:rand.uniform(1_000_000)}",
+          type: :service,
+          scope: ["execute", "component_read", "storage_read"],
+          ip_allowlist: ["127.0.0.1"]
+        })
+
+      mint =
+        conn
+        |> put_req_header("authorization", "Bearer #{key}")
+        |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
+
+      assert json_response(mint, 200)["token"]
+
+      page =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{key}")
+        |> get("/t/test/local/auth-dash")
+
+      token = base_token(page.resp_body)
+      assert get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js").status == 200
+
+      elsewhere =
+        %{build_conn() | remote_ip: {198, 51, 100, 1}}
+        |> get("/t/test/local/auth-dash/_s/#{token}/app.js")
+
+      assert json_response(elsewhere, 403)["code"] == "ip_not_allowed"
+    end
+
+    test "a store that cannot answer serves nothing", %{conn: conn, session: session} do
+      page =
+        conn
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> get("/t/test/local/auth-dash")
+
+      token = base_token(page.resp_body)
+      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+
+      asset = get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js")
+      assert json_response(asset, 503)["code"] == "unavailable"
+      refute asset.resp_body =~ "auth app"
+
+      # The private index, asked with the session, answers the same: the
+      # store cannot say whether the caller stands, so nothing is served.
+      index =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> get("/t/test/local/auth-dash")
+
+      assert json_response(index, 503)["code"] == "unavailable"
+      assert get_resp_header(index, "retry-after") == ["5"]
+      refute index.resp_body =~ "Auth"
+
+      mint =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
+
+      assert json_response(mint, 503)["code"] == "unavailable"
+    end
   end
 
   describe "assets — signed token expiry" do

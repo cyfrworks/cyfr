@@ -26,13 +26,12 @@ defmodule EmissaryWeb.TinctureController do
 
   alias Sanctum.TinctureAccess
 
-  # The signed prefix a private tincture's own assets are fetched under: the
-  # iframe is sandboxed without `allow-same-origin`, so it carries no cookie
-  # and the URL is the only credential it has. It therefore names the person
-  # it was minted for and lives as long as the `?_t=` token, not a day: a
-  # URL that reached anyone else is a URL that opens nothing.
-  @token_salt "tincture_asset_v2"
-  @token_max_age 3_600
+  # A private tincture's own assets are fetched under a signed `/_s/`
+  # prefix: the iframe is sandboxed without `allow-same-origin`, so it
+  # carries no cookie and the URL is the only credential it has. That
+  # token is `Sanctum.TinctureAuth`'s to mint and to verify — derived from
+  # the caller's session or key, held to its rows on every fetch — and this
+  # surface only renders the outcome.
 
   # Base CSP — connect-src is extended dynamically from manifest tincture.connect
   @base_csp_prefix "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " <>
@@ -50,7 +49,7 @@ defmodule EmissaryWeb.TinctureController do
   # session/Bearer credential (sent as a header, never a URL) for a
   # short-lived, single-purpose `?_t=` token, so a raw credential never
   # travels in a tincture iframe/`<img>` URL. Same-origin Prism mints
-  # server-side via `Sanctum.TinctureAuth.issue_access_token/1` directly.
+  # server-side via `Sanctum.TinctureAuth.issue_access_token/3` directly.
   # -------------------------------------------------------------------
 
   def access_token(conn, _params) do
@@ -79,12 +78,16 @@ defmodule EmissaryWeb.TinctureController do
         # the thing the scoping exists to prevent.
         case {conn.params["publisher"], conn.params["tincture_name"]} do
           {publisher, name} when is_binary(publisher) and is_binary(name) ->
-            conn
-            |> put_status(200)
-            |> json(%{
-              token: Sanctum.TinctureAuth.issue_access_token(ctx, publisher, name),
-              expires_in: Sanctum.TinctureAuth.access_token_max_age()
-            })
+            # `expires_in` is the signed deadline's remainder: a source that
+            # expires sooner than the hour shortens the token with it.
+            with {:ok, token} <- Sanctum.TinctureAuth.issue_access_token(ctx, publisher, name),
+                 {:ok, expires_in} <- Sanctum.TinctureAuth.expires_in(token) do
+              conn
+              |> put_status(200)
+              |> json(%{token: token, expires_in: expires_in})
+            else
+              {:error, reason} -> mint_refused(conn, reason)
+            end
 
           _ ->
             EmissaryWeb.ApiError.send(
@@ -142,28 +145,24 @@ defmodule EmissaryWeb.TinctureController do
         end
 
       {:ok, tincture, :private, ctx} ->
-        case Cyfr.TinctureHelpers.resolve_entry(tincture) do
-          {:ok, entry} ->
-            token =
-              Phoenix.Token.sign(
-                Sanctum.TinctureAuth.signing_secret(),
-                @token_salt,
-                {athanor, publisher, tincture_name, ctx.user_id}
-              )
+        with {:ok, entry} <- Cyfr.TinctureHelpers.resolve_entry(tincture),
+             {:ok, token} <- Sanctum.TinctureAuth.issue_asset_token(ctx, publisher, tincture_name) do
+          base_href =
+            Cyfr.TinctureHelpers.tincture_path(athanor, publisher, tincture_name) <>
+              "/_s/#{token}/"
 
-            base_href =
-              Cyfr.TinctureHelpers.tincture_path(athanor, publisher, tincture_name) <>
-                "/_s/#{token}/"
+          csp = build_csp(tincture.manifest)
 
-            csp = build_csp(tincture.manifest)
-
-            conn
-            |> put_resp_header("x-frame-options", "SAMEORIGIN")
-            |> Cyfr.TinctureHelpers.serve_index(ctx, tincture.segments, entry, base_href, csp)
-
-          :error ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+          conn
+          |> put_resp_header("x-frame-options", "SAMEORIGIN")
+          |> Cyfr.TinctureHelpers.serve_index(ctx, tincture.segments, entry, base_href, csp)
+        else
+          :error -> EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+          {:error, reason} -> mint_refused(conn, reason)
         end
+
+      {:error, :unavailable} ->
+        unavailable(conn)
 
       {:error, :not_found} ->
         EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
@@ -212,6 +211,9 @@ defmodule EmissaryWeb.TinctureController do
           EmissaryWeb.ApiError.send(conn, 500, :execution_failed, msg)
       end
     else
+      {:error, :unavailable} ->
+        unavailable(conn)
+
       {:error, :not_found} ->
         EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
     end
@@ -255,35 +257,35 @@ defmodule EmissaryWeb.TinctureController do
             |> page_csp(tincture, segments)
             |> Cyfr.TinctureHelpers.serve_asset(ctx, tincture.segments, segments, public: false)
 
+          {:error, :unavailable} ->
+            unavailable(conn)
+
           {:error, :not_found} ->
             EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
         end
     end
   end
 
-  # Distinguish token expiry, invalid or mismatched tokens, lost standing,
-  # missing athanors and missing tinctures so clients can choose recovery.
+  # The token is verified against this request's own athanor, tincture and
+  # client address; the bytes are served only through the context it
+  # narrows. A store that cannot answer serves nothing.
   defp serve_signed_asset(conn, athanor, publisher, tincture_name, token, segments) do
     outcome =
-      with {:ok, {^athanor, ^publisher, ^tincture_name, user_id}} <-
-             Phoenix.Token.verify(Sanctum.TinctureAuth.signing_secret(), @token_salt, token,
-               max_age: @token_max_age
-             ),
-           {:ok, public_ctx} <- Cyfr.TinctureHelpers.build_public_context(athanor),
-           :ok <- asset_reader_standing(user_id, public_ctx.athanor_id),
-           {:ok, tincture} <- TinctureAccess.lookup(public_ctx, publisher, tincture_name) do
-        {:serve, public_ctx, tincture}
+      with {:ok, public_ctx} <- Cyfr.TinctureHelpers.build_public_context(athanor),
+           request_ctx = %{public_ctx | client_ip: Sanctum.ClientIp.resolve(conn)},
+           {:ok, ctx} <-
+             Sanctum.TinctureAuth.verify_asset_token(token, request_ctx, publisher, tincture_name),
+           {:ok, tincture} <- TinctureAccess.lookup(ctx, publisher, tincture_name) do
+        {:serve, ctx, tincture}
       end
 
     case outcome do
-      {:serve, public_ctx, tincture} ->
+      {:serve, ctx, tincture} ->
         conn
         |> page_csp(tincture, segments)
-        |> Cyfr.TinctureHelpers.serve_asset(public_ctx, tincture.segments, segments,
-          public: false
-        )
+        |> Cyfr.TinctureHelpers.serve_asset(ctx, tincture.segments, segments, public: false)
 
-      {:error, :expired} ->
+      {:error, :expired_credential} ->
         EmissaryWeb.ApiError.send(
           conn,
           401,
@@ -291,31 +293,50 @@ defmodule EmissaryWeb.TinctureController do
           "Signed asset token expired — reload the tincture"
         )
 
-      {:ok, _other_tincture} ->
-        EmissaryWeb.ApiError.send(conn, 401, :asset_token_invalid, "Signed asset token invalid")
-
-      {:error, reason} when reason in [:invalid, :missing, :no_user] ->
+      {:error, :invalid_credential} ->
         EmissaryWeb.ApiError.send(conn, 401, :asset_token_invalid, "Signed asset token invalid")
 
       {:error, :not_member} ->
         EmissaryWeb.ApiError.send(conn, 403, :not_member, "No longer a member of this athanor")
+
+      {:error, reason} when reason in [:not_standing, :ip_not_allowed] ->
+        EmissaryWeb.ApiError.send(conn, 403, reason, "The credential behind this link is retired")
+
+      {:error, :unavailable} ->
+        unavailable(conn)
 
       _ ->
         EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
     end
   end
 
-  # The token names a person; the athanor says whether they are still one of
-  # its own. The bytes are then served through the public context (path
-  # resolution only) exactly as before.
-  defp asset_reader_standing(user_id, athanor_id) when is_binary(user_id) do
-    if Sanctum.Tenancy.Members.member?(user_id, athanor_id) or
-         Sanctum.Tenancy.platform_admin?(user_id),
-       do: :ok,
-       else: {:error, :not_member}
+  # A store that could not say whether the credential stands: retryable,
+  # and nothing is served — never read as "not found" or as allowed.
+  defp unavailable(conn) do
+    conn
+    |> put_resp_header("retry-after", "5")
+    |> EmissaryWeb.ApiError.send(503, :unavailable, "Try again shortly")
   end
 
-  defp asset_reader_standing(_user_id, _athanor_id), do: {:error, :no_user}
+  # A mint that did not happen is a named state, never a URL: an outage or
+  # a member that lost the control plane is retryable, anything else is the
+  # caller's credential refusing.
+  defp mint_refused(conn, :unavailable), do: unavailable(conn)
+
+  defp mint_refused(conn, :not_owner) do
+    conn
+    |> put_resp_header("retry-after", "5")
+    |> EmissaryWeb.ApiError.send(503, :not_owner, "Try again shortly")
+  end
+
+  defp mint_refused(conn, reason) do
+    EmissaryWeb.ApiError.send(
+      conn,
+      403,
+      reason,
+      "This credential cannot open a tincture link; sign in again"
+    )
+  end
 
   # -------------------------------------------------------------------
   # Private helpers
@@ -335,12 +356,17 @@ defmodule EmissaryWeb.TinctureController do
           # tincture in their OWN athanor, so the URL's athanor must be the
           # resolved context's — otherwise we'd serve one athanor's tincture
           # under another athanor's URL.
+          # A store that cannot say who is asking is an outage, never a
+          # stranger: it answers `:unavailable`, not an indistinguishable 404.
           case Sanctum.TinctureAuth.authenticate(conn) do
             {:ok, %Sanctum.Context{athanor_id: id} = ctx} when id == public_ctx.athanor_id ->
               case TinctureAccess.get_private(ctx, publisher, tincture_name) do
                 {:ok, tincture} -> {:ok, tincture, :private, ctx}
                 {:error, _} -> {:error, :not_found}
               end
+
+            {:error, :unavailable} ->
+              {:error, :unavailable}
 
             _ ->
               {:error, :not_found}

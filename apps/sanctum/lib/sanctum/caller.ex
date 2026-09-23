@@ -24,8 +24,12 @@ defmodule Sanctum.Caller do
       its creator is not denied.
     * `{:tincture_token, token}` — the short-lived `?_t=` token one
       tincture is opened with (`tincture: {publisher, name}` names the
-      one the request is for; `{nil, nil}` on a route that names none).
-      Held to the standing of what minted it: a person's, or a key's.
+      one the request is for; `{nil, nil}` on a route that names none;
+      `client_ip:` for a key's allowlist). A narrowed derivative of the
+      session or key it was minted from, held to that credential's rows as
+      they are now (`derived_standing/2`): a retired source, a denial or
+      an archive since, or the membership its focus rested on gone,
+      refuses it for good.
     * `{:webhook, webhook}` — a verified webhook row (`request_id:`).
       Stands while its athanor is open and its creator is not denied.
 
@@ -144,18 +148,25 @@ defmodule Sanctum.Caller do
   end
 
   def establish({:tincture_token, token}, opts) when is_binary(token) do
-    with {:ok, payload} <- Sanctum.TinctureAuth.verify_access_token(token),
-         :ok <- names_tincture(payload, Keyword.get(opts, :tincture)) do
-      Context.build(
-        user_id: payload.u,
-        namespace: payload.n,
-        athanor_id: payload.a,
-        permissions: [:execute],
-        scope: :athanor,
-        auth_method: :tincture,
-        authenticated: true
-      )
-      |> standing(payload.a, Map.get(payload, :m, :person))
+    with {:ok, claims} <- Sanctum.TinctureAuth.verify_access_token(token),
+         :ok <- names_tincture(claims, Keyword.get(opts, :tincture)),
+         {:ok, _standing} <- token_standing(claims, Keyword.get(opts, :client_ip)) do
+      # The namespace is display, reread from the person's row; the token
+      # carries no authority beyond what the checked rows still grant.
+      ctx =
+        Context.build(
+          user_id: claims.user_id,
+          namespace: Sanctum.Namespace.lookup(claims.user_id),
+          athanor_id: claims.athanor_id,
+          permissions: [:execute],
+          scope: :athanor,
+          auth_method: :tincture,
+          credential_binding: Sanctum.TinctureAuth.claims_binding(claims),
+          credential_deadline: claims.expires_at,
+          authenticated: true
+        )
+
+      with :ok <- tenant_ok(ctx), do: {:ok, ctx}
     end
   end
 
@@ -203,30 +214,153 @@ defmodule Sanctum.Caller do
 
   # The token opens the tincture it was minted for and no other. A route
   # that names none (the access-token mint) has nothing to compare.
-  defp names_tincture(_payload, nil), do: :ok
-  defp names_tincture(_payload, {nil, nil}), do: :ok
-  defp names_tincture(%{p: publisher, t: name}, {publisher, name}), do: :ok
-  defp names_tincture(_payload, _tincture), do: {:error, :wrong_tincture}
+  defp names_tincture(_claims, nil), do: :ok
+  defp names_tincture(_claims, {nil, nil}), do: :ok
+  defp names_tincture(%{publisher: publisher, tincture_name: name}, {publisher, name}), do: :ok
+  defp names_tincture(_claims, _tincture), do: {:error, :wrong_tincture}
 
-  # A signature says who minted the token, not what they may still do. A
-  # token exchanged for a person's session is held to that person's standing
-  # — the door and their seat here — exactly as a session load is, so a deny
-  # or a removal stops it rather than being outlived by the hour. One
-  # exchanged for an API key is held to the key's own rule: the athanor is
-  # open and the creator is not denied, but a key outlives its creator's
-  # membership on purpose.
-  defp standing(%Context{} = ctx, athanor_id, :api_key) do
-    if Sanctum.Tenancy.channel_active?(athanor_id, ctx.user_id),
-      do: {:ok, ctx},
+  # An access token opens nothing its source no longer would: the refusals
+  # a request is answered with.
+  defp token_standing(claims, client_ip) do
+    case derived_standing(claims, client_ip: client_ip) do
+      {:ok, standing} -> {:ok, standing}
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, :ip_not_allowed} -> {:error, :ip_not_allowed}
+      {:error, _retired} -> {:error, :not_standing}
+    end
+  end
+
+  @doc """
+  Whether the credential a derived token names still stands: the one
+  authoritative check behind every tincture access and asset token, at
+  mint and at every use. Never answered from the establish memo.
+
+  `claims` name the person, the estate and their generations as read at
+  mint, the source credential (`:session` with its base64url token hash,
+  or `:api_key` with its row id) and the focus basis (the membership row
+  id, or `:key`). The rows are locked and reread in the standing order
+  (`Arca.CredentialBindings.check/3`), with the database's own time read
+  after the locks, and must hold:
+
+    * the person exists, is active, at the generation read — a person
+      denied and allowed again is a new generation;
+    * the estate exists, is active, at the generation read — an estate
+      archived and reopened is a new generation;
+    * a session source still exists for this person and has not
+      expired; a key source is unrevoked, the estate's, the person's,
+      and its allowlist admits `client_ip:`;
+    * the membership a session's focus rested on is still that active
+      seat (a rejoin is a new row); a key's focus is the key, so its
+      creator leaving the estate does not end it.
+
+  `{:ok, %{now: now, source_expires_at: expiry | nil}}`, or a refusal:
+  `:not_standing`, `:not_member` (the focus membership is gone),
+  `:ip_not_allowed`, or `:unavailable` when the store cannot answer —
+  never read as either verdict.
+  """
+  @spec derived_standing(map(), keyword()) ::
+          {:ok, %{now: DateTime.t(), source_expires_at: DateTime.t() | nil}}
+          | {:error, :not_standing | :not_member | :ip_not_allowed | :unavailable}
+  def derived_standing(claims, opts \\ []) do
+    binding = %{
+      user_id: claims.user_id,
+      athanor_id: claims.athanor_id,
+      membership_id: if(is_binary(claims.focus_basis), do: claims.focus_basis),
+      source: source_row(claims)
+    }
+
+    case Arca.CredentialBindings.check(Cyfr.Actor.system(), binding,
+           verify: &derived_policy(&1, claims, Keyword.get(opts, :client_ip))
+         ) do
+      {:ok, standing} -> {:ok, standing}
+      {:error, :database_error} -> {:error, :unavailable}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp source_row(%{source_kind: :session, source_id: id}) do
+    case Base.url_decode64(id, padding: false) do
+      {:ok, hash} -> {:session, hash}
+      :error -> {:session, <<>>}
+    end
+  end
+
+  defp source_row(%{source_kind: :api_key, source_id: id}), do: {:api_key, id}
+
+  defp derived_policy(rows, claims, client_ip) do
+    with :ok <- derived_person(rows.user, claims),
+         :ok <- derived_estate(rows.athanor, claims),
+         :ok <- derived_focus(rows.membership, claims),
+         {:ok, expires_at} <- derived_source(rows.source, rows.now, claims, client_ip) do
+      {:ok, %{now: rows.now, source_expires_at: expires_at}}
+    end
+  end
+
+  defp derived_person(%{status: "active", security_generation: generation}, %{
+         user_generation: generation
+       }),
+       do: :ok
+
+  defp derived_person(_user, _claims), do: {:error, :not_standing}
+
+  defp derived_estate(%{status: "active", security_generation: generation}, %{
+         athanor_generation: generation
+       }),
+       do: :ok
+
+  defp derived_estate(_athanor, _claims), do: {:error, :not_standing}
+
+  defp derived_focus(nil, %{focus_basis: :key, source_kind: :api_key}), do: :ok
+
+  defp derived_focus(
+         %{status: "active", user_id: user_id, scope: "athanor", athanor_id: athanor_id},
+         %{user_id: user_id, athanor_id: athanor_id, source_kind: :session}
+       ),
+       do: :ok
+
+  defp derived_focus(
+         %{status: "active", user_id: user_id, scope: "platform"},
+         %{user_id: user_id, source_kind: :session}
+       ),
+       do: :ok
+
+  defp derived_focus(_membership, _claims), do: {:error, :not_member}
+
+  defp derived_source(
+         %{kind: :session, row: %{user_id: user_id} = row},
+         now,
+         %{
+           user_id: user_id
+         },
+         _client_ip
+       ) do
+    if DateTime.compare(row.expires_at, now) == :gt,
+      do: {:ok, row.expires_at},
       else: {:error, :not_standing}
   end
 
-  defp standing(%Context{} = ctx, athanor_id, _person) do
-    case Sanctum.Tenancy.revalidate(ctx) do
-      {:ok, %Context{authenticated: true, athanor_id: ^athanor_id} = current} -> {:ok, current}
-      {:error, :unavailable} -> {:error, :unavailable}
-      _ -> {:error, :not_standing}
+  defp derived_source(
+         %{
+           kind: :api_key,
+           row: %{revoked: false, athanor_id: athanor_id, created_by: user_id} = row
+         },
+         _now,
+         %{athanor_id: athanor_id, user_id: user_id},
+         client_ip
+       ) do
+    case Cyfr.Json.decode_or(row.ip_allowlist, nil, "Sanctum.Caller") do
+      allowlist when allowlist in [nil, []] -> {:ok, nil}
+      allowlist when is_binary(client_ip) and is_list(allowlist) -> allowed(client_ip, allowlist)
+      _ -> {:error, :ip_not_allowed}
     end
+  end
+
+  defp derived_source(_source, _now, _claims, _client_ip), do: {:error, :not_standing}
+
+  defp allowed(client_ip, allowlist) do
+    if Sanctum.ApiKey.ip_allowed?(client_ip, allowlist),
+      do: {:ok, nil},
+      else: {:error, :ip_not_allowed}
   end
 
   defp do_establish(token, opts) do

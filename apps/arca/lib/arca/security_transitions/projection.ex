@@ -79,7 +79,8 @@ defmodule Arca.SecurityTransitions.Projection do
       name: key.name,
       athanor_id: key.athanor_id,
       created_by: key.created_by,
-      revoked: key.revoked
+      revoked: key.revoked,
+      ip_allowlist: key.ip_allowlist
     }
   end
 end

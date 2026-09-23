@@ -52,6 +52,17 @@ if config_env() == :test do
   # this to false and never honor the override.
   config :sanctum, allow_tenancy_resolver_override: true
 
+  # Let fixtures that build an issuing context by hand pass the generations
+  # its rows stand at (`generation_snapshot:`). Compile-time gate, like the
+  # override above: a release compiles it out and refuses the option.
+  config :sanctum, issuance_snapshot_permitted: true
+
+  # No host runs here to claim a control-plane slot, as none claims one in
+  # the umbrella's suite (`config/test.exs`): the member counts as holding
+  # the plane unless a case records otherwise, so a tincture token can be
+  # minted (`Sanctum.TinctureAuth`).
+  config :arca, control_plane_claim_enabled: false
+
   # The establish memo is a per-request convenience; tests assert on the
   # uncached pipeline. A sandbox rollback is a write no invalidation ever
   # sees, so the namespace read is uncached too.

@@ -7,6 +7,8 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
   """
   use EmissaryWeb.ConnCase, async: false
 
+  require Ecto.Query
+
   test "GET /t/access-token without credentials → 401", %{conn: conn} do
     conn = get(conn, "/t/access-token")
     assert json_response(conn, 401)["code"] == "unauthenticated"
@@ -26,7 +28,9 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
 
     body = json_response(resp, 200)
     assert is_binary(body["token"])
-    assert body["expires_in"] == 3600
+    # The signed deadline's remainder: a key has no expiry of its own, so the
+    # hour bounds it, less the instant the mint took.
+    assert body["expires_in"] in 3590..3600
 
     # The minted token authenticates a fresh request for the tincture it names.
     token_conn = %Plug.Conn{
@@ -44,6 +48,30 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
                token_conn
                | path_params: %{"publisher" => "acme", "tincture_name" => "billing"}
              })
+  end
+
+  test "expires_in is the signed remainder: a session ending sooner than the hour ends it",
+       %{conn: conn} do
+    ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+    {:ok, session} = Sanctum.TestContext.create_session(ctx)
+    soon = DateTime.add(DateTime.utc_now(), 600, :second)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(s in Arca.Schemas.Session,
+          where: s.token_hash == ^Sanctum.Session.token_hash(session.token)
+        ),
+        set: [expires_at: soon]
+      )
+
+    body =
+      conn
+      |> put_req_header("authorization", "Bearer #{session.token}")
+      |> get("/t/access-token?publisher=acme&tincture_name=dash")
+      |> json_response(200)
+
+    assert body["expires_in"] <= 600
+    assert body["expires_in"] > 590
   end
 
   test "the mint names one tincture or refuses", %{conn: conn} do

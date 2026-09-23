@@ -8,7 +8,8 @@ defmodule Sanctum.Issuance do
   #
   # An issuing context must say what standing it read: its
   # `credential_binding` (an admitted sign-in's `:identity`, a session's,
-  # or a key's), or — for the few fixtures that build a context by hand —
+  # or a key's), or — for the few fixtures that build a context by hand,
+  # and only in a build compiled with `:issuance_snapshot_permitted` —
   # a `:generation_snapshot` read from the rows
   # (`Sanctum.Tenancy.generation_snapshot/2`). Neither is
   # `{:error, :missing_generation}`, and so is a key with no person behind
@@ -21,6 +22,11 @@ defmodule Sanctum.Issuance do
   # longer stands is `{:error, :not_standing}`.
 
   alias Sanctum.Context
+
+  # config:compile-runtime-ok — the permission is compiled in on purpose: a
+  # release is built without it, so no runtime setting can hand an issuance
+  # a snapshot in place of its context's own binding.
+  @snapshot_permitted Application.compile_env(:sanctum, :issuance_snapshot_permitted, false)
 
   @type expectation :: %{
           user_id: String.t(),
@@ -36,9 +42,16 @@ defmodule Sanctum.Issuance do
   def expectation(%Context{} = ctx, opts) do
     case Keyword.get(opts, :generation_snapshot) do
       nil -> from_binding(ctx)
-      snapshot -> from_snapshot(ctx, snapshot)
+      snapshot -> snapshot(@snapshot_permitted, ctx, snapshot)
     end
   end
+
+  # Only a build compiled with the test permission takes a snapshot; a
+  # release answers one as a context with no generations.
+  @doc false
+  @spec snapshot(boolean(), Context.t(), map()) :: {:ok, expectation()} | {:error, atom()}
+  def snapshot(true, ctx, snapshot), do: from_snapshot(ctx, snapshot)
+  def snapshot(false, _ctx, _snapshot), do: {:error, :missing_generation}
 
   defp from_snapshot(
          %Context{user_id: user_id, athanor_id: athanor_id},
