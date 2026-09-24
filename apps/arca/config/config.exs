@@ -18,10 +18,13 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
   :sqlite ->
     config :arca, :repo_adapter, Ecto.Adapters.SQLite3
 
-    # Every transaction takes the write lock at BEGIN. A deferred
-    # transaction that reads and then writes fails with
-    # SQLITE_BUSY_SNAPSHOT when another write committed in between, which
-    # would surface as a lost write.
+    # Every transaction takes the write lock at its start. A transaction
+    # that reads and then takes the lock fails with SQLITE_BUSY_SNAPSHOT
+    # when another write committed in between, which would surface as a
+    # lost write. `Arca.Repo.prepare_transaction/2` takes it for every
+    # transaction the repo opens, waiting at most `busy_timeout` (the
+    # lock-wait deadline); the immediate default is kept for a transaction
+    # opened with no mode, of which the tree has none today.
     config :arca, Arca.Repo,
       database: Path.expand("data/arca.db"),
       pool_size: 20,

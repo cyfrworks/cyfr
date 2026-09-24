@@ -76,6 +76,11 @@ defmodule Cyfr.RuntimeConfigWiringTest do
             assert Keyword.has_key?(repo_config, :url)
             refute Keyword.has_key?(repo_config, :journal_mode)
         end
+
+        # The busy timeout is the pool's lock-wait deadline, config.exs's
+        # value (`Arca.Repo.busy_timeout_ms/0`); the runtime file does not
+        # restate it for either adapter.
+        refute Keyword.has_key?(repo_config, :busy_timeout)
       end)
     end
   end

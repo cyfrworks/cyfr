@@ -643,7 +643,7 @@ defmodule Arca.MembersLockTest do
   sandbox: two concurrent grants of one person write one row, and a
   grant waiting behind a change to the person's row acts on what that
   change committed — on PostgreSQL by waiting on the row, on SQLite by
-  waiting at its own BEGIN.
+  waiting at the lock its transaction takes at entry.
   """
 
   use ExUnit.Case, async: false
@@ -698,9 +698,9 @@ defmodule Arca.MembersLockTest do
     {:ok, user: user, facts: %{email: user.email, email_verified: true}}
   end
 
-  # Two racers: on SQLite a waiter sleeps out its busy timeout inside the
-  # driver on a dirty I/O scheduler, and the partitioned runs give each VM
-  # two of them, so more waiters than that starve the lock's own holder.
+  # Two racers: on SQLite a waiter now sleeps inside the driver only one
+  # quantum at a time (`Arca.Repo.prepare_transaction/2`), but two is what
+  # the barrier needs and more only lengthens the wait.
   test "concurrent idempotent grants write one row, and exactly one says it wrote it", %{
     user: user,
     facts: facts

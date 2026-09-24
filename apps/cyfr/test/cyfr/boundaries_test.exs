@@ -389,15 +389,16 @@ defmodule Cyfr.BoundariesTest do
       below = Boundaries.surface_reaches(row, names("apps/sanctum/lib/**/*.ex"))
       assert MapSet.member?(below, "Arca.ConsentStorage")
       assert MapSet.member?(below, "Arca.RegistryTokenStorage")
+      assert MapSet.member?(below, "Arca.Members")
     end
 
-    test "the security-row roster is exactly the ten stores, each a module" do
+    test "the security-row roster is exactly the fourteen stores, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
                  Arca.ToolGrantStorage Arca.VaultStorage Arca.SessionStorage
                  Arca.ApiKeyStorage Arca.RegistryTokenStorage Arca.ProviderCredentialStorage
-                 Arca.WebhookStorage
+                 Arca.WebhookStorage Arca.Users Arca.Members Arca.Athanors Arca.Doors
                ))
 
       for name <- Boundaries.sanctum_only_storage() do
@@ -718,6 +719,19 @@ defmodule Cyfr.BoundariesTest do
       ]
 
       assert Boundaries.surface_violations(row, planted) == ["Arca.ConsentStorage"]
+
+      # Standing is a security row too: a surface that asks the membership
+      # store who is seated, rather than Sanctum, is refused.
+      standing = [
+        {"apps/cyfr/lib/prism_web/live/planted_members_live.ex",
+         CodeLines.aliases(~S'''
+         defmodule PrismWeb.PlantedMembersLive do
+           def seated(actor), do: Arca.Members.active_user_ids(actor)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, standing) == ["Arca.Members"]
 
       for name <- Boundaries.sanctum_only_storage() do
         ["Arca", store] = String.split(name, ".")

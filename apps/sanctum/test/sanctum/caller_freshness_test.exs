@@ -369,6 +369,19 @@ defmodule Sanctum.CallerFreshnessTest do
       refute Caller.fresh?(ctx)
       refute Caller.fresh?(%{ctx | validated_at: nil})
     end
+
+    test "a validation in the future is never fresh, whatever the bound" do
+      %{ctx: ctx} = person!()
+      ahead = %{ctx | validated_at: DateTime.add(DateTime.utc_now(), 1, :second)}
+
+      # The two-second default, which a naive `elapsed < ttl` would admit.
+      Application.delete_env(:sanctum, :caller_memo_ttl_ms)
+      refute Caller.fresh?(ahead)
+      assert Caller.fresh?(%{ctx | validated_at: DateTime.utc_now()})
+
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 0)
+      refute Caller.fresh?(ahead)
+    end
   end
 
   test "the session's row key survives a round trip through the store unchanged" do

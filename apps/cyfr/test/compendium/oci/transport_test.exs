@@ -5,7 +5,9 @@ defmodule Compendium.OCI.TransportTest do
   @moduledoc """
   The OCI transport on the shared retry policy: ambiguous failures are
   idempotency-gated, a 401 surfaces for re-login rather than negotiating,
-  and an SSRF refusal is never dialled at all.
+  and an SSRF refusal is never dialled at all. A push token that cannot
+  be read refuses the request before anything is sent; only a caller with
+  no token goes anonymous.
   """
 
   use ExUnit.Case, async: false
@@ -119,5 +121,96 @@ defmodule Compendium.OCI.TransportTest do
              )
 
     assert attempts() == 0
+  end
+
+  describe "the caller's push token" do
+    setup do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+      user_id = "oci_transport_#{System.unique_integer([:positive])}"
+      ctx = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+      {:ok, ctx: ctx}
+    end
+
+    # A row written past the facade under the key the transport reads —
+    # the repository's first segment — sealed around `plaintext`.
+    defp plant!(%Sanctum.Context{user_id: user_id}, plaintext) do
+      aad = Sanctum.CipherAAD.registry_token(user_id, @registry, "testns")
+      {:ok, ciphertext} = Sanctum.Cipher.encrypt(plaintext, aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: user_id,
+          registry: @registry,
+          namespace_slug: "testns",
+          credential_ciphertext: ciphertext
+        })
+    end
+
+    defp authorization(parent) do
+      fn conn ->
+        send(parent, {:authorization, Plug.Conn.get_req_header(conn, "authorization")})
+        Plug.Conn.send_resp(conn, 200, "")
+      end
+    end
+
+    test "a stored token is sent as the bearer", %{ctx: ctx} do
+      :ok =
+        Compendium.Registry.CredentialStore.put_push_token(
+          ctx,
+          @registry,
+          "testns",
+          "cyfr_pt_transport",
+          "personal"
+        )
+
+      stub(authorization(self()))
+
+      assert {:ok, 200, _headers, ""} =
+               Transport.request_url(ctx, :get, @url, @registry, @repository)
+
+      assert_received {:authorization, ["Bearer cyfr_pt_transport"]}
+      assert attempts() == 1
+    end
+
+    test "a caller with no stored token is sent anonymously", %{ctx: ctx} do
+      stub(authorization(self()))
+
+      assert {:ok, 200, _headers, ""} =
+               Transport.request_url(ctx, :get, @url, @registry, @repository)
+
+      assert_received {:authorization, []}
+      assert attempts() == 1
+    end
+
+    @tag :capture_log
+    test "a stored token that does not open refuses before anything is sent", %{ctx: ctx} do
+      stub(fn conn -> Plug.Conn.send_resp(conn, 200, "never reached") end)
+      plant!(ctx, ~s({"type":"push_token","token":""}))
+
+      assert {:error, %Errors{reason: :registry_unavailable} = err} =
+               Transport.request_url(ctx, :get, @url, @registry, @repository)
+
+      assert err.detail == %{credential_store: :corrupt}
+      assert Errors.to_string(err) =~ "namespace 'testns' could not be opened"
+      assert attempts() == 0
+    end
+
+    @tag :capture_log
+    test "a credential store that cannot answer refuses at once, never retried", %{ctx: ctx} do
+      stub(fn conn -> Plug.Conn.send_resp(conn, 200, "never reached") end)
+      Arca.Repo.query!("ALTER TABLE registry_tokens RENAME TO registry_tokens_unavailable")
+
+      assert {:error, %Errors{reason: :registry_unavailable} = err} =
+               Transport.request_url(ctx, :get, @url, @registry, @repository)
+
+      assert err.detail == %{credential_store: :unavailable}
+
+      assert Errors.to_string(err) ==
+               "Your registry credentials could not be read — retry shortly"
+
+      assert attempts() == 0
+    end
   end
 end

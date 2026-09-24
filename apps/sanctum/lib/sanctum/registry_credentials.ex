@@ -18,9 +18,9 @@ defmodule Sanctum.RegistryCredentials do
 
   A read keeps three failures apart from absence: `:unavailable` (the
   store could not answer), `:corrupt` (a row that does not decrypt, or
-  decrypts to anything but a push token) and `:not_found`. A caller that
-  collapsed them would tell a person whose token is damaged, or whose
-  server is down, to sign in again.
+  decrypts to anything but a push token carrying a non-empty token) and
+  `:not_found`. A caller that collapsed them would tell a person whose
+  token is damaged, or whose server is down, to sign in again.
 
   ## Stored shape
 
@@ -39,10 +39,10 @@ defmodule Sanctum.RegistryCredentials do
   # `:push_token`; any other stored type is a damaged row.
   @valid_keys ~w(type token namespace issued_at label role)a
 
-  @typedoc "One decrypted push-token credential."
+  @typedoc "One decrypted push-token credential; its token is never empty."
   @type credential :: %{
           required(:type) => :push_token,
-          optional(:token) => term(),
+          required(:token) => String.t(),
           optional(:namespace) => term(),
           optional(:issued_at) => term(),
           optional(:label) => term(),
@@ -54,8 +54,8 @@ defmodule Sanctum.RegistryCredentials do
 
   @doc """
   Seal and store a push token for the caller, replacing the one the same
-  `(registry, namespace_slug)` held. A non-binary slug or token stores
-  nothing and answers `:skipped`.
+  `(registry, namespace_slug)` held. A non-binary slug, or a token that
+  is not a non-empty string, stores nothing and answers `:skipped`.
 
   `opts`: `:label`, the name of the device the token was issued to.
   """
@@ -65,7 +65,7 @@ defmodule Sanctum.RegistryCredentials do
 
   def put_push_token(%Context{} = ctx, registry, namespace_slug, token, role, opts)
       when is_binary(registry) and is_binary(namespace_slug) and is_binary(token) and
-             is_list(opts) do
+             token != "" and is_list(opts) do
     with {:ok, user_id} <- person(ctx) do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -196,7 +196,8 @@ defmodule Sanctum.RegistryCredentials do
     aad = CipherAAD.registry_token(row.user_id, row.registry, row.namespace_slug)
 
     with {:ok, value} <- Sanctum.Cipher.decrypt(row.credential_ciphertext, aad),
-         {:ok, %{"type" => "push_token"} = map} <- Jason.decode(value) do
+         {:ok, %{"type" => "push_token", "token" => token} = map}
+         when is_binary(token) and token != "" <- Jason.decode(value) do
       credential =
         for key <- @valid_keys,
             Map.has_key?(map, Atom.to_string(key)),

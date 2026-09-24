@@ -382,6 +382,12 @@ defmodule Compendium.OCI.Client do
                 # Digest changed, re-fetch
                 fetch_manifest_remote(ctx, ref, tag)
 
+              # The caller's push token could not be read: the registry was
+              # never asked, so the cached copy is not served in its place —
+              # the pull refuses as the credential store answered.
+              {:error, %Errors{detail: %{credential_store: _}}} = refused ->
+                refused
+
               {:error, _} ->
                 Logger.warning(
                   "[Compendium.OCI.Client] Stale cache: registry unreachable for digest check, " <>

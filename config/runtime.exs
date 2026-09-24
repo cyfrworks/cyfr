@@ -697,8 +697,10 @@ if config_env() != :test do
 
     # Database connection config. The adapter is selected at compile time in
     # config.exs from CYFR_DATABASE; here we supply connection parameters for
-    # whichever adapter was built — gated so SQLite-only keys (journal_mode,
-    # busy_timeout) never bleed into a Postgres build and vice versa.
+    # whichever adapter was built — gated so SQLite-only keys (journal_mode)
+    # never bleed into a Postgres build and vice versa. SQLite's busy timeout
+    # is config.exs's: it is the pool's lock-wait deadline
+    # (`Arca.Repo.busy_timeout_ms/0`), not a deployment setting.
     case built_adapter do
       Ecto.Adapters.SQLite3 ->
         pool_size =
@@ -710,8 +712,7 @@ if config_env() != :test do
         config :arca, Arca.Repo,
           database: paths.database_path,
           pool_size: pool_size,
-          journal_mode: :wal,
-          busy_timeout: Cyfr.RuntimeConfig.sqlite_busy_timeout_ms()
+          journal_mode: :wal
 
       Ecto.Adapters.Postgres ->
         # A Postgres build carries no connection config from config.exs, so a

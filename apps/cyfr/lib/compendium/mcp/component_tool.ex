@@ -1433,49 +1433,26 @@ defmodule Compendium.MCP.ComponentTool do
                 _ -> ""
               end
 
-            anonymous? =
-              Compendium.OCI.Auth.fetch_credential(
-                Compendium.RegistryHost.canonical_host(),
-                namespace_slug,
-                ctx
-              ) ==
-                :anonymous
+            case Compendium.OCI.Auth.fetch_credential(
+                   Compendium.RegistryHost.canonical_host(),
+                   namespace_slug,
+                   ctx
+                 ) do
+              # A token that cannot be read is not a missing sign-in: the
+              # pull is refused rather than sent anonymously, where its 401
+              # would read as one. An outage passes; a damaged row does not,
+              # so it says what the person does about it instead.
+              {:error, :unavailable} ->
+                {:error, {:unavailable, "Your registry credential"}}
 
-            if anonymous? do
-              Logger.warning(
-                "[Compendium.MCP] No credentials for #{Compendium.RegistryHost.canonical_host()} — " <>
-                  "pull may fail for non-public components. Run `cyfr login` to authenticate."
-              )
-            end
+              {:error, :corrupt} ->
+                {:error,
+                 {:invalid_argument,
+                  "The push token stored for namespace '#{namespace_slug}' could not be " <>
+                    "opened — sign in again to re-mint it"}}
 
-            case Compendium.OCI.Client.pull(ctx, reference) do
-              {:ok, result} ->
-                if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
-
-                result =
-                  if anonymous? do
-                    Map.put(
-                      result,
-                      :auth_note,
-                      "You are pulling anonymously from #{Compendium.RegistryHost.canonical_host()}. " <>
-                        "Private components will not be accessible. Run `cyfr login` to authenticate."
-                    )
-                  else
-                    result
-                  end
-
-                result = maybe_auto_pull_oci_deps(ctx, reference, result)
-                {:ok, result}
-
-              {:error, reason} ->
-                if anonymous? do
-                  {:error,
-                   reason <>
-                     " — No credentials configured for #{Compendium.RegistryHost.canonical_host()}. " <>
-                     "Run `cyfr login` to authenticate."}
-                else
-                  {:error, reason}
-                end
+              credential ->
+                oci_pull(ctx, reference, credential == :anonymous)
             end
 
           {:error, msg} ->
@@ -1484,6 +1461,45 @@ defmodule Compendium.MCP.ComponentTool do
 
       {:error, reason} ->
         {:error, {:invalid_argument, "Invalid OCI reference: #{reason}"}}
+    end
+  end
+
+  defp oci_pull(ctx, reference, anonymous?) do
+    if anonymous? do
+      Logger.warning(
+        "[Compendium.MCP] No credentials for #{Compendium.RegistryHost.canonical_host()} — " <>
+          "pull may fail for non-public components. Run `cyfr login` to authenticate."
+      )
+    end
+
+    case Compendium.OCI.Client.pull(ctx, reference) do
+      {:ok, result} ->
+        if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
+
+        result =
+          if anonymous? do
+            Map.put(
+              result,
+              :auth_note,
+              "You are pulling anonymously from #{Compendium.RegistryHost.canonical_host()}. " <>
+                "Private components will not be accessible. Run `cyfr login` to authenticate."
+            )
+          else
+            result
+          end
+
+        result = maybe_auto_pull_oci_deps(ctx, reference, result)
+        {:ok, result}
+
+      {:error, reason} ->
+        if anonymous? do
+          {:error,
+           reason <>
+             " — No credentials configured for #{Compendium.RegistryHost.canonical_host()}. " <>
+             "Run `cyfr login` to authenticate."}
+        else
+          {:error, reason}
+        end
     end
   end
 

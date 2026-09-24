@@ -33,8 +33,8 @@ defmodule Arca.SecurityTransitions do
   estates sorted by id, then memberships, invitations and follows, then
   sessions, then API keys. A transition taking only a suffix of that order
   never goes back for an earlier lock. On PostgreSQL the order is the
-  deadlock rule; on SQLite the immediate transaction is the lock and the
-  order is code order (`Arca.Repo.locking_transaction/2`).
+  deadlock rule; on SQLite the write lock every transaction takes at entry is the lock
+  and the order is code order (`Arca.Repo.locking_transaction/2`).
 
   A denial computes the estates it touches from the person's memberships,
   locks them, then locks the memberships and computes the set again, and
