@@ -68,7 +68,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Crucible.WorkerWatch,
     Crucible.HostListener,
     Emissary.MCP.SubscriptionRegistry,
-    Emissary.MCP.ExternalServerTree,
+    Emissary.External.ServerTree,
     Emissary.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
     Grimoire.RunningTasks,
@@ -459,7 +459,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
     assert {:ok, now_backend} = Arca.McpServerStorage.get_by_id(actor, backend.id)
     assert now_backend.epoch == backend.epoch
-    assert Registry.lookup(Emissary.MCP.ExternalServerRegistry, backend.id) == []
+    assert Registry.lookup(Emissary.External.ServerRegistry, backend.id) == []
 
     refute_receive %Cyfr.Bus.Execution{kind: :started}
     refute_receive %Cyfr.Bus.ScheduleRun{kind: :fired}

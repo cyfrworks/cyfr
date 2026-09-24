@@ -160,7 +160,7 @@ defmodule Sanctum.Consent.Authz do
   @doc """
   Render a refusal as the `consent_class_required:` sentence the caller
   reads — the ONE spelling of this vocabulary's prose. Every surface that
-  answers a consent refusal (`Sanctum.MCP.ProfileTool`, the MCP dispatch
+  answers a consent refusal (`Sanctum.Providers.Profile`, the MCP dispatch
   gate via `Sanctum.Unauthorized`) renders through here, so the phrasing
   cannot fork per surface. The tag prefix is wire-stable: clients grep it.
   """

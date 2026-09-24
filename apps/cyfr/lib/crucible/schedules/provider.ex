@@ -13,7 +13,7 @@ defmodule Crucible.Schedules.Provider do
 
   @behaviour Prima.Provider
 
-  def service, do: "schedules"
+  def service, do: "crucible"
 
   alias Sanctum.Context
 

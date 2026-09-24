@@ -34,8 +34,8 @@ defmodule Compendium.Registry.Identity do
   `{:error, {:unavailable, "Registry credentials"}}` — never
   `authenticated: false`, which would tell the person to sign in again.
 
-  Consumed by `Compendium.MCP.registry.whoami`. Not exposed via
-  `Sanctum.MCP.session.whoami` — that action is local-user-only, so the
+  Consumed by `Compendium.Provider.registry.whoami`. Not exposed via
+  `Sanctum.Provider.session.whoami` — that action is local-user-only, so the
   auth sliver stays Compendium-free.
   """
 

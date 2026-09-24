@@ -12,7 +12,7 @@ defmodule PrismWeb.McpServersLive do
     * **Add stdio server** — one stdio backend (a command such as
       `npx -y @modelcontextprotocol/server-github` and its env) that the MCP
       bridge runs under a uid of its own. Env values are `vault:ENTRY`
-      templates; only the non-secret names `Emissary.MCP.BackendDefinition`
+      templates; only the non-secret names `Emissary.External.BackendDefinition`
       lists may hold a literal. More backends for one server go through the
       config form.
     * **Add server** — the config as JSON: an http server's `url` and

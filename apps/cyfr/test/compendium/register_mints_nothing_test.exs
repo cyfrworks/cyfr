@@ -89,7 +89,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
       # Now run the action itself. This is the whole point: the scanner
       # sees a local component with no profile and must leave it that way.
-      {:ok, result} = Compendium.MCP.handle("component", ctx, %{"action" => "register"})
+      {:ok, result} = Compendium.Provider.handle("component", ctx, %{"action" => "register"})
       assert result.status == "scanned"
 
       assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref),
@@ -158,7 +158,7 @@ defmodule Compendium.RegisterMintsNothingTest do
       assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
 
       # The scanner runs and indexes it — that is its job.
-      {:ok, _} = Compendium.MCP.handle("component", ctx, %{"action" => "register"})
+      {:ok, _} = Compendium.Provider.handle("component", ctx, %{"action" => "register"})
 
       # But it consents to nothing. An `egress.domains: ["*"]` a catalyst
       # wrote for itself is exactly what must not arrive pre-approved.

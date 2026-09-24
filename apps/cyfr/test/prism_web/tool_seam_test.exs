@@ -65,7 +65,7 @@ defmodule PrismWeb.ToolSeamTest do
     {"apps/cyfr/lib/prism_web/controllers/session_controller.ex", "Sanctum.Session.destroy"},
     # Recording the registry push token the claim flow just obtained. Part of
     # minting the person's identity, before any athanor exists to run a tool
-    # in; `Compendium.MCP.Shared.namespace_bearer/2` reads it afterwards.
+    # in; `Compendium.Providers.Shared.namespace_bearer/2` reads it afterwards.
     {"apps/cyfr/lib/prism_web/controllers/claim_namespace_controller.ex",
      "Compendium.Registry.CredentialStore.put_push_token"},
     # Chat IS on the wire now (`thread.*`, external-plane and

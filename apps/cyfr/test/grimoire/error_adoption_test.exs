@@ -40,50 +40,50 @@ defmodule Grimoire.ErrorAdoptionTest do
   # Ordered by size, which is also the order worth converting them in.
   @worklist %{
     "apps/prima/lib/prima/component_ref.ex" => 20,
-    "apps/cyfr/lib/emissary/mcp/external_server.ex" => 19,
+    "apps/cyfr/lib/emissary/external/server.ex" => 19,
     # The concurrency argument's own refusal is a sentence about the value
     # offered; the two that were the tool's catch-alls are typed now, so
     # the action-coverage case reads one vocabulary.
     "apps/cyfr/lib/crucible/schedules/provider.ex" => 18,
-    "apps/sanctum/lib/sanctum/mcp/webhook_tool.ex" => 18,
+    "apps/sanctum/lib/sanctum/providers/webhook.ex" => 18,
     "apps/cyfr/lib/crucible/provider.ex" => 13,
     # An upstream registry's own diagnostics, which are its words and not
     # this vocabulary's.
     "apps/cyfr/lib/compendium/oci/client.ex" => 12,
     "apps/cyfr/lib/grimoire/provider.ex" => 12,
     "apps/prima/lib/prima/authority/blob.ex" => 11,
-    "apps/sanctum/lib/sanctum/mcp/key_tool.ex" => 11,
+    "apps/sanctum/lib/sanctum/providers/key.ex" => 11,
     # What is wrong with a cron expression, said in the expression's own
     # terms.
     "apps/cyfr/lib/crucible/schedules/cron.ex" => 10,
     "apps/cyfr/lib/compendium/scaffold.ex" => 8,
-    "apps/cyfr/lib/compendium/mcp.ex" => 6,
-    "apps/cyfr/lib/compendium/mcp/component_tool.ex" => 7,
+    "apps/cyfr/lib/compendium/provider.ex" => 6,
+    "apps/cyfr/lib/compendium/providers/component.ex" => 7,
     # The entry rule's sentences, which the tincture validators return to
     # a publisher; the facade answers the same rule typed.
     "apps/cyfr/lib/compendium/tincture.ex" => 7,
-    "apps/sanctum/lib/sanctum/mcp/profile_tool.ex" => 7,
+    "apps/sanctum/lib/sanctum/providers/profile.ex" => 7,
     "apps/sanctum/lib/sanctum/webhook.ex" => 7,
-    "apps/cyfr/lib/emissary/mcp/mcp_servers_tool.ex" => 6,
+    "apps/cyfr/lib/emissary/external/provider.ex" => 6,
     "apps/cyfr/lib/compendium/fork.ex" => 5,
     "apps/cyfr/lib/compendium/oci/reference.ex" => 5,
     "apps/prima/lib/prima/limits.ex" => 5,
     "apps/sanctum/lib/sanctum/provider_credentials.ex" => 5,
     "apps/cyfr/lib/aqua/approvals.ex" => 4,
     "apps/cyfr/lib/compendium/component.ex" => 4,
-    "apps/cyfr/lib/compendium/mcp/shared.ex" => 4,
+    "apps/cyfr/lib/compendium/providers/shared.ex" => 4,
     "apps/cyfr/lib/compendium/registry.ex" => 4,
     "apps/cyfr/lib/grimoire/catalog.ex" => 4,
     # The build orchestration behind `Compendium.Builds.Provider`: the
     # three this ratchet could not see until the scan followed a tool
     # module into what it calls.
     "apps/cyfr/lib/compendium/builds.ex" => 3,
-    "apps/cyfr/lib/emissary/mcp/external_provider.ex" => 3,
-    "apps/sanctum/lib/sanctum/mcp/oauth_tool.ex" => 3,
+    "apps/cyfr/lib/emissary/external/proxy.ex" => 3,
+    "apps/sanctum/lib/sanctum/providers/oauth.ex" => 3,
     # Two of the three are the capacity refusals a poller sees when the
     # server will not mint them an athanor: remediation prose (wait, or ask
     # the operator), not a resource that is missing or briefly away.
-    "apps/sanctum/lib/sanctum/mcp/session_tool.ex" => 3,
+    "apps/sanctum/lib/sanctum/providers/session.ex" => 3,
     "apps/sanctum/lib/sanctum/vault/oauth_grant.ex" => 3,
     "apps/cyfr/lib/aqua/policy.ex" => 2,
     # A tool this provider does not define, and the validation rate a
@@ -91,12 +91,12 @@ defmodule Grimoire.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/builds/provider.ex" => 2,
     "apps/cyfr/lib/crucible/record.ex" => 2,
     "apps/prima/lib/prima/arg.ex" => 2,
-    "apps/sanctum/lib/sanctum/mcp.ex" => 1,
+    "apps/sanctum/lib/sanctum/provider.ex" => 1,
     "apps/cyfr/lib/compendium/pull.ex" => 1,
     "apps/sanctum/lib/sanctum/api_key.ex" => 1,
     "apps/sanctum/lib/sanctum/auth/device_flow.ex" => 1,
-    "apps/sanctum/lib/sanctum/mcp/athanor_tool.ex" => 1,
-    "apps/sanctum/lib/sanctum/mcp/tincture_visibility_tool.ex" => 1,
+    "apps/sanctum/lib/sanctum/providers/athanor.ex" => 1,
+    "apps/sanctum/lib/sanctum/providers/tincture_visibility.ex" => 1,
     "apps/sanctum/lib/sanctum/vault.ex" => 1
   }
 

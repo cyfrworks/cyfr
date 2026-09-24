@@ -217,13 +217,13 @@ defmodule Cyfr.Cluster.CellTest do
 
   describe "what a cell does not run" do
     test "no member runs a bridge controller, so no member claims a backend" do
-      # `Emissary.MCP.Bridge.start_link/1` answers `:ignore` while
+      # `Emissary.External.Backends.start_link/1` answers `:ignore` while
       # `:cluster` is on: a cluster of control planes runs no stdio
       # servers. That is why the `mcp_backend` claim has no roster gate —
       # there is no controller in a cell to gate — and it is what the
       # shipped guides say.
       for id <- [:a, :b] do
-        refute Cell.call(id, Emissary.MCP.Bridge, :running?, []),
+        refute Cell.call(id, Emissary.External.Backends, :running?, []),
                "member #{id} started a bridge controller in a cell"
       end
 

@@ -726,7 +726,7 @@ defmodule Grimoire.Catalog do
          %{descriptions_digest: baseline} = grant when is_binary(baseline) <-
            Enum.find(servers, &(&1.server_digest == digest)),
          {:ok, tools} <-
-           Emissary.MCP.ExternalServer.get_tools(grant.server_name, ctx.athanor_id),
+           Emissary.External.Server.get_tools(grant.server_name, ctx.athanor_id),
          {:ok, live} <-
            Sanctum.ToolServerDigest.descriptions_digest(tools, grant.tool_patterns) do
       unless Plug.Crypto.secure_compare(live, baseline) do
@@ -1033,7 +1033,7 @@ defmodule Grimoire.Catalog do
               args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
 
               execute_tool_call(name, ctx, opts, fn ->
-                Emissary.MCP.ExternalProvider.try_handle(name, ctx, args, plane,
+                Emissary.External.Proxy.try_handle(name, ctx, args, plane,
                   server: Keyword.get(opts, :server),
                   execution_id: Keyword.get(opts, :execution_id),
                   step: Keyword.get(opts, :step),
@@ -1095,10 +1095,10 @@ defmodule Grimoire.Catalog do
   either gate. The catalog runs this at boot and refuses to start on any
   finding.
 
-  Skips `Emissary.MCP.ExternalProvider` (its `mcp_servers` definition is
+  Skips `Emissary.External.Proxy` (its `mcp_servers` definition is
   audited; the upstream-tool proxy is exempt — those are classified as
   `:external` by `Aqua.Kinds.kind_for/2` via namespacing, and get
-  their plane from `ExternalProvider.default_planes/0`).
+  their plane from `Emissary.External.Proxy.default_planes/0`).
 
   Returns `:ok` when all tools are clean, or `{:error, [missing]}` where
   each entry is `%{provider: module, tool: name, action: verb, reason: r}`.
@@ -1730,11 +1730,11 @@ defmodule Grimoire.Catalog do
   # what describes them.
   @impl Sanctum.Grimoire
   def tool_server_candidates(%Context{} = ctx),
-    do: Emissary.MCP.ExternalProvider.consent_candidates(ctx)
+    do: Emissary.External.Proxy.consent_candidates(ctx)
 
   @impl Sanctum.Grimoire
   def tool_server_candidate(%Context{} = ctx, name) when is_binary(name),
-    do: Emissary.MCP.ExternalProvider.consent_candidate(ctx, name)
+    do: Emissary.External.Proxy.consent_candidate(ctx, name)
 
   defp loadable?(module),
     do: Code.ensure_loaded?(module) and function_exported?(module, :tools, 0)

@@ -152,7 +152,7 @@ defmodule Crucible.Schedules.Scheduler do
   def handle_info(:retry_load, state) do
     if state.load_retry_count >= @max_load_retries do
       Logger.error(
-        "[Schedules] max retries (#{@max_load_retries}) exhausted loading schedules — retrying in 5 minutes"
+        "[Crucible.Schedules.Scheduler] max retries (#{@max_load_retries}) exhausted loading schedules — retrying in 5 minutes"
       )
 
       :telemetry.execute([:cyfr, :schedules, :scheduler, :load_failed], %{count: 1}, %{
@@ -180,7 +180,7 @@ defmodule Crucible.Schedules.Scheduler do
 
     if map_size(state.tasks) > 0 do
       ids = state.tasks |> Map.keys() |> Enum.join(", ")
-      Logger.info("[Schedules] shutting down with running schedules: #{ids}")
+      Logger.info("[Crucible.Schedules.Scheduler] shutting down with running schedules: #{ids}")
     end
 
     :ok
@@ -206,7 +206,10 @@ defmodule Crucible.Schedules.Scheduler do
         load_retry(state, "storage unavailable")
 
       {:ok, schedules} ->
-        Logger.info("[Schedules] loading #{length(schedules)} active schedule(s)")
+        Logger.info(
+          "[Crucible.Schedules.Scheduler] loading #{length(schedules)} active schedule(s)"
+        )
+
         state = Enum.reduce(schedules, state, &load_one_schedule/2)
         %{state | load_retry_count: 0}
     end
@@ -225,7 +228,7 @@ defmodule Crucible.Schedules.Scheduler do
 
     Logger.log(
       level,
-      "[Schedules] failed to load schedules (#{why}), retry #{retry_count}/#{@max_load_retries} in #{delay_ms}ms"
+      "[Crucible.Schedules.Scheduler] failed to load schedules (#{why}), retry #{retry_count}/#{@max_load_retries} in #{delay_ms}ms"
     )
 
     Process.send_after(self(), :retry_load, delay_ms)
@@ -240,13 +243,16 @@ defmodule Crucible.Schedules.Scheduler do
         schedule_timer(schedule.id, acc)
 
       {:error, reason} ->
-        Logger.warning("[Schedules] invalid cron for schedule #{schedule.id}: #{reason}")
+        Logger.warning(
+          "[Crucible.Schedules.Scheduler] invalid cron for schedule #{schedule.id}: #{reason}"
+        )
+
         acc
     end
   rescue
     e ->
       Logger.warning(
-        "[Schedules] failed to load schedule #{schedule.id}: #{Exception.message(e)}"
+        "[Crucible.Schedules.Scheduler] failed to load schedule #{schedule.id}: #{Exception.message(e)}"
       )
 
       timer_failed(schedule.id, Exception.message(e))
@@ -254,7 +260,7 @@ defmodule Crucible.Schedules.Scheduler do
   catch
     :exit, reason ->
       Logger.warning(
-        "[Schedules] failed to load schedule #{schedule.id}: exited #{inspect(reason)}"
+        "[Crucible.Schedules.Scheduler] failed to load schedule #{schedule.id}: exited #{inspect(reason)}"
       )
 
       timer_failed(schedule.id, inspect(reason))
@@ -298,7 +304,7 @@ defmodule Crucible.Schedules.Scheduler do
           Enum.reduce(lapsed, state, fn occurrence, acc ->
             if still_ours?(generation) do
               Logger.warning(
-                "[Schedules] occurrence #{occurrence.id} of #{occurrence.schedule_id} started " <>
+                "[Crucible.Schedules.Scheduler] occurrence #{occurrence.id} of #{occurrence.schedule_id} started " <>
                   "and its execution ended without it: uncertain"
               )
 
@@ -326,11 +332,17 @@ defmodule Crucible.Schedules.Scheduler do
     end
   rescue
     e in @db_load_errors ->
-      Logger.warning("[Schedules] occurrence recovery failed: #{Exception.message(e)}")
+      Logger.warning(
+        "[Crucible.Schedules.Scheduler] occurrence recovery failed: #{Exception.message(e)}"
+      )
+
       state
   catch
     :exit, reason ->
-      Logger.warning("[Schedules] occurrence recovery exited: #{inspect(reason)}")
+      Logger.warning(
+        "[Crucible.Schedules.Scheduler] occurrence recovery exited: #{inspect(reason)}"
+      )
+
       state
   end
 
@@ -360,7 +372,7 @@ defmodule Crucible.Schedules.Scheduler do
       ctx = context_of(schedule)
 
       Logger.info(
-        "[Schedules] occurrence #{occurrence.id} of #{schedule.id} claimed and never run: running it"
+        "[Crucible.Schedules.Scheduler] occurrence #{occurrence.id} of #{schedule.id} claimed and never run: running it"
       )
 
       run_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation)
@@ -375,7 +387,7 @@ defmodule Crucible.Schedules.Scheduler do
 
       {:error, {:not_standing, schedule}} ->
         Logger.warning(
-          "[Schedules] occurrence #{occurrence.id} of #{schedule.id}: athanor " <>
+          "[Crucible.Schedules.Scheduler] occurrence #{occurrence.id} of #{schedule.id}: athanor " <>
             "#{schedule.athanor_id} or creator #{inspect(schedule.user_id)} no longer " <>
             "active — not run"
         )
@@ -448,7 +460,7 @@ defmodule Crucible.Schedules.Scheduler do
           # server — the run is skipped and recorded, never the schedule
           # deleted: the members who remain decide its fate.
           Logger.warning(
-            "[Schedules] schedule #{schedule_id} athanor #{schedule.athanor_id} or " <>
+            "[Crucible.Schedules.Scheduler] schedule #{schedule_id} athanor #{schedule.athanor_id} or " <>
               "creator #{inspect(schedule.user_id)} no longer active — skipping run"
           )
 
@@ -463,7 +475,7 @@ defmodule Crucible.Schedules.Scheduler do
   rescue
     e in @db_fire_errors ->
       Logger.warning(
-        "[Schedules] fire_schedule #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s"
+        "[Crucible.Schedules.Scheduler] fire_schedule #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s"
       )
 
       :telemetry.execute([:cyfr, :schedules, :scheduler, :fire_failed], %{count: 1}, %{
@@ -474,7 +486,7 @@ defmodule Crucible.Schedules.Scheduler do
   catch
     :exit, reason ->
       Logger.warning(
-        "[Schedules] fire_schedule #{schedule_id} exited (#{inspect(reason)}), retrying in 30s"
+        "[Crucible.Schedules.Scheduler] fire_schedule #{schedule_id} exited (#{inspect(reason)}), retrying in 30s"
       )
 
       retry_later(schedule_id, state)
@@ -484,7 +496,7 @@ defmodule Crucible.Schedules.Scheduler do
     case runnable(schedule) do
       {:error, :unresolved_reference} ->
         Logger.error(
-          "[Schedules] schedule #{schedule.id} has no resolved_reference. " <>
+          "[Crucible.Schedules.Scheduler] schedule #{schedule.id} has no resolved_reference. " <>
             "Cannot execute with unresolved reference '#{schedule.reference}'. " <>
             "Re-create or update the schedule to pin a resolved version."
         )
@@ -495,7 +507,7 @@ defmodule Crucible.Schedules.Scheduler do
 
       {:error, :invalid_input} ->
         Logger.error(
-          "[Schedules] schedule #{schedule.id} has invalid JSON input, skipping execution"
+          "[Crucible.Schedules.Scheduler] schedule #{schedule.id} has invalid JSON input, skipping execution"
         )
 
         emit_schedule_failed(schedule.id, ctx, :invalid_input)
@@ -544,7 +556,7 @@ defmodule Crucible.Schedules.Scheduler do
 
       _unparseable ->
         Logger.warning(
-          "[Schedules] schedule #{schedule.id} has an unusable cron expression — not claiming"
+          "[Crucible.Schedules.Scheduler] schedule #{schedule.id} has an unusable cron expression — not claiming"
         )
 
         :held
@@ -591,7 +603,7 @@ defmodule Crucible.Schedules.Scheduler do
       {:error, reason} ->
         if still_ours?(generation) do
           Logger.error(
-            "[Schedules] failed to spawn task for schedule #{schedule.id}: #{inspect(reason)}"
+            "[Crucible.Schedules.Scheduler] failed to spawn task for schedule #{schedule.id}: #{inspect(reason)}"
           )
 
           _ =
@@ -698,7 +710,9 @@ defmodule Crucible.Schedules.Scheduler do
 
           publish_completion(ctx, completed, finished, recorded, generation)
 
-          Logger.debug("[Schedules] schedule #{schedule.id} completed (#{execution_id})")
+          Logger.debug(
+            "[Crucible.Schedules.Scheduler] schedule #{schedule.id} completed (#{execution_id})"
+          )
 
         {:error, reason} ->
           # An admission that failed left the occurrence claimed; a run
@@ -717,7 +731,10 @@ defmodule Crucible.Schedules.Scheduler do
             routed_to: Crucible.service()
           })
 
-          Logger.warning("[Schedules] schedule #{schedule.id} failed: #{inspect(reason)}")
+          Logger.warning(
+            "[Crucible.Schedules.Scheduler] schedule #{schedule.id} failed: #{inspect(reason)}"
+          )
+
           emit_schedule_failed(schedule.id, ctx, reason, execution_id)
           record_error(ctx, schedule.id, inspect(reason))
       end
@@ -727,7 +744,9 @@ defmodule Crucible.Schedules.Scheduler do
   # The runner died without answering: the occurrence it held ends as
   # what the row says — never invoked, or started with an unknown end.
   defp runner_died(schedule_id, task, reason) do
-    Logger.warning("[Schedules] schedule #{schedule_id} execution failed: #{inspect(reason)}")
+    Logger.warning(
+      "[Crucible.Schedules.Scheduler] schedule #{schedule_id} execution failed: #{inspect(reason)}"
+    )
 
     _ =
       ScheduleOccurrences.settle_dead(Prima.Actor.in_athanor(task.athanor_id), task.occurrence_id)
@@ -741,7 +760,10 @@ defmodule Crucible.Schedules.Scheduler do
         {:ok, row}
 
       {:error, reason} ->
-        Logger.warning("[Schedules] failed to record_run for #{schedule_id}: #{inspect(reason)}")
+        Logger.warning(
+          "[Crucible.Schedules.Scheduler] failed to record_run for #{schedule_id}: #{inspect(reason)}"
+        )
+
         {:error, reason}
     end
   end
@@ -777,7 +799,7 @@ defmodule Crucible.Schedules.Scheduler do
 
         {:error, reason} ->
           Logger.warning(
-            "[Schedules] completion of #{schedule.id} not announced: #{inspect(reason)}"
+            "[Crucible.Schedules.Scheduler] completion of #{schedule.id} not announced: #{inspect(reason)}"
           )
       end
     end
@@ -832,7 +854,9 @@ defmodule Crucible.Schedules.Scheduler do
         :ok
 
       {:error, err} ->
-        Logger.warning("[Schedules] failed to record_error for #{schedule_id}: #{inspect(err)}")
+        Logger.warning(
+          "[Crucible.Schedules.Scheduler] failed to record_error for #{schedule_id}: #{inspect(err)}"
+        )
 
         :telemetry.execute(
           [:cyfr, :schedules, :scheduler, :record_error_failed],
@@ -917,7 +941,10 @@ defmodule Crucible.Schedules.Scheduler do
             arm(schedule_id, {:fire, schedule_id}, delay_ms + jitter_ms(delay_ms), state)
 
           {:error, reason} ->
-            Logger.warning("[Schedules] cannot schedule #{schedule_id}: #{reason}")
+            Logger.warning(
+              "[Crucible.Schedules.Scheduler] cannot schedule #{schedule_id}: #{reason}"
+            )
+
             timer_failed(schedule_id, reason)
             state
         end
@@ -928,7 +955,7 @@ defmodule Crucible.Schedules.Scheduler do
   rescue
     e in @db_timer_errors ->
       Logger.warning(
-        "[Schedules] schedule_timer #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s"
+        "[Crucible.Schedules.Scheduler] schedule_timer #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s"
       )
 
       timer_failed(schedule_id, Exception.message(e))
@@ -936,7 +963,7 @@ defmodule Crucible.Schedules.Scheduler do
   catch
     :exit, reason ->
       Logger.warning(
-        "[Schedules] schedule_timer #{schedule_id} exited (#{inspect(reason)}), retrying in 30s"
+        "[Crucible.Schedules.Scheduler] schedule_timer #{schedule_id} exited (#{inspect(reason)}), retrying in 30s"
       )
 
       retry_later(schedule_id, state)
@@ -992,7 +1019,9 @@ defmodule Crucible.Schedules.Scheduler do
         :ok
 
       {:error, reason} ->
-        Logger.warning("[Schedules] schedule update not announced: #{inspect(reason)}")
+        Logger.warning(
+          "[Crucible.Schedules.Scheduler] schedule update not announced: #{inspect(reason)}"
+        )
     end
   end
 end

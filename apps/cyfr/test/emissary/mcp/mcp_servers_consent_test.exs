@@ -14,7 +14,7 @@ defmodule Emissary.MCP.McpServersConsentTest do
 
   alias Grimoire.Catalog
   alias Grimoire.Visibility
-  alias Emissary.MCP.McpServersTool
+  alias Emissary.External.Provider
 
   @defining ~w(create update)
   @operating ~w(delete list get test refresh enable disable restart)
@@ -63,7 +63,7 @@ defmodule Emissary.MCP.McpServersConsentTest do
   end
 
   test "defining a server is interactive and admin; operating one is admin alone" do
-    actions = McpServersTool.definition().annotations.actions
+    actions = Provider.definition().annotations.actions
 
     for action <- @defining do
       assert actions[action].consent == :interactive, "mcp_servers.#{action} is not interactive"

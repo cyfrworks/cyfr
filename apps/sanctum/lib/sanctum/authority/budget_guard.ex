@@ -12,7 +12,7 @@ defmodule Sanctum.Authority.BudgetGuard do
   after the charge (`guard/2`); the slot comes back either when the holder
   releases explicitly — which removes the guard — or when the holder dies
   (the `:DOWN` compensation). Exactly once, whichever comes first. The
-  pattern is `Emissary.MCP.ExternalServer`'s in-flight monitor, applied
+  pattern is `Emissary.External.Server`'s in-flight monitor, applied
   to the budget.
 
   Without a registered guard, release directly. If the guard process is

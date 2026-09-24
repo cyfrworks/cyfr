@@ -284,7 +284,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
         Application.delete_env(:sanctum, :device_flow_last_ip)
       end)
 
-      Sanctum.MCP.SessionTool.handle(ctx, %{"action" => "device_init", "provider" => "github"})
+      Sanctum.Providers.Session.handle(ctx, %{"action" => "device_init", "provider" => "github"})
 
       assert Application.get_env(:sanctum, :device_flow_last_ip) == "203.0.113.9",
              "the MCP device flow was charged no address"
@@ -322,7 +322,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       ctx = %{Sanctum.TestContext.local() | authenticated: false}
 
       assert {:error, message} =
-               Sanctum.MCP.SessionTool.handle(ctx, %{
+               Sanctum.Providers.Session.handle(ctx, %{
                  "action" => "device_poll",
                  "provider" => "github",
                  "device_code" => "dc_full"

@@ -237,11 +237,11 @@ defmodule Cyfr.Application do
       # controller, servers and reconciler. A failure restarts its
       # dependents. The controller starts before the servers and stops after
       # them, because a stopping stdio server releases its owner through it.
-      group(Emissary.MCP.ExternalServerTree, [
-        {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
-        Emissary.MCP.Bridge,
-        {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
-        Emissary.MCP.ExternalServerReconciler
+      group(Emissary.External.ServerTree, [
+        {Registry, keys: :unique, name: Emissary.External.ServerRegistry},
+        Emissary.External.Backends,
+        {DynamicSupervisor, name: Emissary.External.ServerSupervisor, strategy: :one_for_one},
+        Emissary.External.Reconciler
       ]),
       {Task.Supervisor, name: Emissary.TaskSupervisor},
       # Builds (`Compendium.Builds`): a started build, the process watching

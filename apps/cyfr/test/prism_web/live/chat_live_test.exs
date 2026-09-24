@@ -687,7 +687,7 @@ defmodule PrismWeb.ChatLiveTest do
     # The harness offering the same send names the same identity: the
     # console and the wire agree on what was accepted.
     assert {:ok, %{replayed: true, message_id: ^message_id}} =
-             Emissary.MCP.ThreadTool.handle("thread", ctx, %{
+             Aqua.Providers.Thread.handle("thread", ctx, %{
                "action" => "send",
                "thread" => thread_id,
                "message" => "@aqua hold this",

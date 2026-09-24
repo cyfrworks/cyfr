@@ -23,10 +23,8 @@ defmodule Cyfr.ContextSwapTest do
 
   @scanned [
     "apps/cyfr/lib/aqua",
-    "apps/cyfr/lib/emissary/mcp/thread_tool.ex",
-    "apps/cyfr/lib/emissary/mcp/notes_tool.ex",
     "apps/cyfr/lib/prism_web",
-    "apps/sanctum/lib/sanctum"
+    "apps/sanctum/lib"
   ]
 
   # Raw swaps that stay, by file and exact count.
@@ -41,7 +39,7 @@ defmodule Cyfr.ContextSwapTest do
     # open of an ARCHIVED athanor for `get`/`unarchive`, hand-built under
     # the same two admissions (membership, or the operator's audited open)
     # because `focus/2` rightly refuses an archived athanor.
-    "apps/sanctum/lib/sanctum/mcp/athanor_tool.ex" => 1
+    "apps/sanctum/lib/sanctum/providers/athanor.ex" => 1
   }
 
   @pattern ~r/%\{\s*[\w.]+\s*\|\s*athanor_id:/

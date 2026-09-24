@@ -78,7 +78,7 @@ defmodule Compendium.OCILocalNamespaceTest do
   describe "the component tool's early check" do
     test "refuses a bare local ref with an actionable message", %{ctx: ctx} do
       assert {:error, message} =
-               Compendium.MCP.ComponentTool.handle(ctx, %{
+               Compendium.Providers.Component.handle(ctx, %{
                  "action" => "pull",
                  "reference" => "reagent:local.thing:1.0.0"
                })

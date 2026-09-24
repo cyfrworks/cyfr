@@ -658,7 +658,7 @@ defmodule Sanctum.Context do
   @doc """
   Focuses the caller on another athanor for domain reads or writes after
   checking membership and archive status. Archived-athanor management uses
-  `Sanctum.MCP.AthanorTool.resolve/3`, which permits get and unarchive.
+  `Sanctum.Providers.Athanor.resolve/3`, which permits get and unarchive.
 
   A user context goes through `focus/2` whole: membership or the audited
   operator open, and an archived athanor refused. A **system** context

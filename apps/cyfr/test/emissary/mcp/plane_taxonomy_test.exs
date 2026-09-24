@@ -53,7 +53,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # Require annotations on registered actions and agent virtual tools.
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.ExternalProvider
+  alias Emissary.External.Proxy
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
   alias Grimoire.Catalog
   alias Aqua.Hands
@@ -242,7 +242,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   describe "upstream external tools" do
     test "the bucket default is in-chain" do
-      assert ExternalProvider.default_planes() == [:in_chain]
+      assert Proxy.default_planes() == [:in_chain]
     end
 
     test "external tool names remain unreachable over HTTP" do
@@ -256,7 +256,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
     # The bucket default is also enforced at dispatch, not left to the
     # wiring: an external-plane call of a `server:tool` name is refused
     # unless the server row opts in with "console": true. That needs DB
-    # rows, so it is pinned in `Emissary.MCP.ExternalProviderTest`
+    # rows, so it is pinned in `Emissary.External.ProxyTest`
     # ("call_external refuses a proxied name on the external plane").
   end
 

@@ -16,14 +16,13 @@ defmodule Grimoire.ServicesTest do
     assert names == names |> Enum.uniq() |> Enum.sort()
   end
 
-  test "the storage providers are arca's and files', everywhere they are named" do
+  test "the storage providers are arca's, everywhere they are named" do
     # routed_to and system.status read the same map, so the same module
     # cannot be one service in the log and another in the report. Several
     # providers may share a service.
     assert Services.service_name(Arca.Providers.Records) == "arca"
-    assert Services.providers_for("arca") == [Arca.Providers.Records]
-    assert Services.service_name(Arca.Providers.Files) == "files"
-    assert Services.providers_for("files") == [Arca.Providers.Files]
+    assert Services.service_name(Arca.Providers.Files) == "arca"
+    assert Services.providers_for("arca") == [Arca.Providers.Records, Arca.Providers.Files]
   end
 
   test "an unlisted module is grimoire's" do

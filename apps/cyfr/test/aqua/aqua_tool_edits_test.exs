@@ -149,7 +149,7 @@ defmodule Aqua.AquaToolEditsTest do
 
   test "a prompt save names the version it edited and is refused over a newer one", %{ctx: ctx} do
     {:ok, %{"content_digest" => digest}} = call(ctx, %{"action" => "get", "name" => "scout"})
-    assert digest == Compendium.MCP.AquaTool.content_digest("")
+    assert digest == Compendium.Providers.Aqua.content_digest("")
 
     assert {:ok, _} =
              call(ctx, %{

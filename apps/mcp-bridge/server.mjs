@@ -86,7 +86,7 @@ const TIMESTAMP_WINDOW_MS = 30_000;
 
 // The most body each endpoint reads. A control message is at most a sync of
 // sixteen backend definitions and their sealed environment; CYFR refuses to
-// send a larger one (Emissary.MCP.Bridge). An MCP request carries one tool
+// send a larger one (Emissary.External.Backends). An MCP request carries one tool
 // call's arguments, at most the 10 MiB request ceiling of a CYFR call
 // (Prima.Limits.Ceiling), and its JSON-RPC envelope.
 export const CONTROL_BODY_LIMIT = 1024 * 1024;
@@ -97,7 +97,7 @@ export const MCP_BODY_LIMIT = 10 * 1024 * 1024 + 64 * 1024;
 // which is also the most CYFR reads of any control answer. A status past
 // the owner bound is refused as `too_many_owners`, and one whose answer
 // would pass the byte bound as `status_too_large`; neither is truncated.
-// CYFR mirrors the owner bound (Emissary.MCP.Bridge) and never sends more.
+// CYFR mirrors the owner bound (Emissary.External.Backends) and never sends more.
 export const MAX_STATUS_OWNERS = 64;
 export const STATUS_ANSWER_LIMIT = CONTROL_BODY_LIMIT;
 

@@ -7,7 +7,11 @@ defmodule Aqua.ToolSeamTest do
   surface — the same contract `PrismWeb.ToolSeamTest` pins for the
   console.
 
-  Checks that assistant-domain MCP dependencies use Aqua.Ops.
+  Checks that assistant-domain MCP dependencies use Aqua.Ops. The
+  assistant owns its providers (`Aqua.Providers.*`), which the operation
+  table calls into; they live under `lib/aqua` like the rest of the
+  domain, so the scan holds them too, and nothing there but the seam
+  names `Emissary.MCP.`.
 
   Outside its scope, deliberately: `Aqua.Intents`' read of the console
   route table, rostered in `Cyfr.Boundaries`. The assistant's live

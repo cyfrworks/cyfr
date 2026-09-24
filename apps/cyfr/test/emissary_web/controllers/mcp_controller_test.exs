@@ -846,7 +846,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       end
     end
 
-    for {tool, expected_service} <- [{"execution", "opus"}, {"build", "locus"}] do
+    for {tool, expected_service} <- [{"execution", "crucible"}, {"build", "compendium"}] do
       @tool tool
       @expected_service expected_service
 

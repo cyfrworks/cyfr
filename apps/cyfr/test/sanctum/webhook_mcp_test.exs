@@ -4,7 +4,7 @@
 defmodule Sanctum.WebhookMCPTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.MCP
+  alias Sanctum.Provider
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -30,7 +30,7 @@ defmodule Sanctum.WebhookMCPTest do
 
   describe "webhook tool definition" do
     test "is exposed in tools/0" do
-      tools = MCP.tools()
+      tools = Provider.tools()
       assert Enum.any?(tools, &(&1.name == "webhook"))
 
       webhook = Enum.find(tools, &(&1.name == "webhook"))
@@ -46,14 +46,14 @@ defmodule Sanctum.WebhookMCPTest do
 
   describe "webhook/list" do
     test "returns empty initially", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("webhook", ctx, %{"action" => "list"})
+      {:ok, result} = Provider.handle("webhook", ctx, %{"action" => "list"})
       assert result.webhooks == []
       assert result.count == 0
     end
 
     test "lists created webhooks (without secrets)", %{ctx: ctx} do
       {:ok, _} =
-        MCP.handle("webhook", ctx, %{
+        Provider.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "github-push",
           "replay_protection" => "none",
@@ -61,7 +61,7 @@ defmodule Sanctum.WebhookMCPTest do
           "profile_id" => "prof-handler"
         })
 
-      {:ok, result} = MCP.handle("webhook", ctx, %{"action" => "list"})
+      {:ok, result} = Provider.handle("webhook", ctx, %{"action" => "list"})
       assert result.count == 1
 
       hook = hd(result.webhooks)
@@ -74,7 +74,7 @@ defmodule Sanctum.WebhookMCPTest do
   describe "webhook/create" do
     test "returns plaintext secret + slug exactly once", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("webhook", ctx, %{
+        Provider.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "stripe",
           "replay_protection" => "none",
@@ -88,12 +88,12 @@ defmodule Sanctum.WebhookMCPTest do
     end
 
     test "missing required args returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "create"})
+      {:error, msg} = Provider.handle("webhook", ctx, %{"action" => "create"})
       assert msg =~ "Missing required arguments"
     end
 
     test "duplicate name returns error", %{ctx: ctx} do
-      MCP.handle("webhook", ctx, %{
+      Provider.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "dup",
         "replay_protection" => "none",
@@ -102,7 +102,7 @@ defmodule Sanctum.WebhookMCPTest do
       })
 
       {:error, msg} =
-        MCP.handle("webhook", ctx, %{
+        Provider.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "dup",
           "replay_protection" => "none",
@@ -115,7 +115,7 @@ defmodule Sanctum.WebhookMCPTest do
 
     test "rejects reserved input_template key", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("webhook", ctx, %{
+        Provider.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "reserved",
           "replay_protection" => "none",
@@ -129,7 +129,7 @@ defmodule Sanctum.WebhookMCPTest do
 
     test "accepts custom signature_header and stores it lowercased", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("webhook", ctx, %{
+        Provider.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "github-style",
           "replay_protection" => "none",
@@ -144,7 +144,7 @@ defmodule Sanctum.WebhookMCPTest do
 
   describe "webhook/get" do
     test "returns webhook by name without secret", %{ctx: ctx} do
-      MCP.handle("webhook", ctx, %{
+      Provider.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "g",
         "replay_protection" => "none",
@@ -152,18 +152,18 @@ defmodule Sanctum.WebhookMCPTest do
         "profile_id" => "prof-handler"
       })
 
-      {:ok, hook} = MCP.handle("webhook", ctx, %{"action" => "get", "name" => "g"})
+      {:ok, hook} = Provider.handle("webhook", ctx, %{"action" => "get", "name" => "g"})
       assert hook.name == "g"
       refute Map.has_key?(hook, :secret)
     end
 
     test "missing name returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "get"})
+      {:error, msg} = Provider.handle("webhook", ctx, %{"action" => "get"})
       assert msg =~ "Missing required argument"
     end
 
     test "unknown name returns not_found", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "get", "name" => "ghost"})
+      {:error, msg} = Provider.handle("webhook", ctx, %{"action" => "get", "name" => "ghost"})
       assert Grimoire.Error.render(msg) =~ "not found"
     end
   end
@@ -171,7 +171,7 @@ defmodule Sanctum.WebhookMCPTest do
   describe "webhook/update" do
     test "updates target_ref without rotating secret", %{ctx: ctx} do
       {:ok, %{secret: secret_before}} =
-        MCP.handle("webhook", ctx, %{
+        Provider.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "u",
           "replay_protection" => "none",
@@ -180,13 +180,13 @@ defmodule Sanctum.WebhookMCPTest do
         })
 
       assert {:ok, _} =
-               MCP.handle("webhook", ctx, %{
+               Provider.handle("webhook", ctx, %{
                  "action" => "update",
                  "name" => "u",
                  "target_ref" => "f:local.updated"
                })
 
-      {:ok, hook} = MCP.handle("webhook", ctx, %{"action" => "get", "name" => "u"})
+      {:ok, hook} = Provider.handle("webhook", ctx, %{"action" => "get", "name" => "u"})
       assert hook.target_ref == "f:local.updated"
 
       # Same secret still verifies — rotate did NOT happen.
@@ -203,7 +203,7 @@ defmodule Sanctum.WebhookMCPTest do
     end
 
     test "no mutable fields returns error", %{ctx: ctx} do
-      MCP.handle("webhook", ctx, %{
+      Provider.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "x",
         "replay_protection" => "none",
@@ -211,19 +211,19 @@ defmodule Sanctum.WebhookMCPTest do
         "profile_id" => "prof-handler"
       })
 
-      {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "update", "name" => "x"})
+      {:error, msg} = Provider.handle("webhook", ctx, %{"action" => "update", "name" => "x"})
       assert msg =~ "No mutable fields"
     end
 
     test "missing name returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "update"})
+      {:error, msg} = Provider.handle("webhook", ctx, %{"action" => "update"})
       assert msg =~ "Missing required argument"
     end
   end
 
   describe "webhook/revoke" do
     test "soft-disables and excludes from list", %{ctx: ctx} do
-      MCP.handle("webhook", ctx, %{
+      Provider.handle("webhook", ctx, %{
         "action" => "create",
         "name" => "r",
         "replay_protection" => "none",
@@ -231,19 +231,20 @@ defmodule Sanctum.WebhookMCPTest do
         "profile_id" => "prof-handler"
       })
 
-      {:ok, %{revoked: true}} = MCP.handle("webhook", ctx, %{"action" => "revoke", "name" => "r"})
+      {:ok, %{revoked: true}} =
+        Provider.handle("webhook", ctx, %{"action" => "revoke", "name" => "r"})
 
-      {:ok, %{webhooks: hooks}} = MCP.handle("webhook", ctx, %{"action" => "list"})
+      {:ok, %{webhooks: hooks}} = Provider.handle("webhook", ctx, %{"action" => "list"})
       refute Enum.any?(hooks, &(&1.name == "r"))
     end
 
     test "missing name returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "revoke"})
+      {:error, msg} = Provider.handle("webhook", ctx, %{"action" => "revoke"})
       assert msg =~ "Missing required argument"
     end
 
     test "unknown name returns not_found", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "revoke", "name" => "ghost"})
+      {:error, msg} = Provider.handle("webhook", ctx, %{"action" => "revoke", "name" => "ghost"})
       assert Grimoire.Error.render(msg) =~ "not found"
     end
   end
@@ -251,7 +252,7 @@ defmodule Sanctum.WebhookMCPTest do
   describe "webhook/rotate" do
     test "returns new secret; old one stops verifying", %{ctx: ctx} do
       {:ok, %{secret: old_secret, slug: slug}} =
-        MCP.handle("webhook", ctx, %{
+        Provider.handle("webhook", ctx, %{
           "action" => "create",
           "name" => "rot",
           "replay_protection" => "none",
@@ -259,7 +260,7 @@ defmodule Sanctum.WebhookMCPTest do
           "profile_id" => "prof-handler"
         })
 
-      {:ok, rotated} = MCP.handle("webhook", ctx, %{"action" => "rotate", "name" => "rot"})
+      {:ok, rotated} = Provider.handle("webhook", ctx, %{"action" => "rotate", "name" => "rot"})
       assert rotated.secret != old_secret
       assert rotated.slug == slug
 
@@ -287,19 +288,19 @@ defmodule Sanctum.WebhookMCPTest do
     end
 
     test "missing name returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "rotate"})
+      {:error, msg} = Provider.handle("webhook", ctx, %{"action" => "rotate"})
       assert msg =~ "Missing required argument"
     end
 
     test "unknown name returns not_found", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "rotate", "name" => "ghost"})
+      {:error, msg} = Provider.handle("webhook", ctx, %{"action" => "rotate", "name" => "ghost"})
       assert Grimoire.Error.render(msg) =~ "not found"
     end
   end
 
   describe "webhook unknown action" do
     test "returns informative error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("webhook", ctx, %{"action" => "nonsense"})
+      {:error, msg} = Provider.handle("webhook", ctx, %{"action" => "nonsense"})
       assert msg =~ "Invalid webhook action"
     end
   end

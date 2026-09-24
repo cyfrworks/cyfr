@@ -1836,7 +1836,7 @@ defmodule Arca.OverlayTest do
   end
 
   describe "a partial aqua skill is not a skill" do
-    # `compendium/mcp/aqua_tool.ex` reads the tree directly — `list_typed`,
+    # `compendium/providers/aqua.ex` reads the tree directly — `list_typed`,
     # `list_recursive`, `get` — so a half-written skill that read as whole
     # would put its instructions in front of the agent.
     #

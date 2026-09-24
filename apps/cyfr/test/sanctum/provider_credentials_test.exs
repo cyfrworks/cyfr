@@ -121,7 +121,7 @@ defmodule Sanctum.ProviderCredentialsTest do
     end
 
     test "both oauth mutations are annotated interactive" do
-      actions = Sanctum.MCP.OAuthTool.definition().annotations.actions
+      actions = Sanctum.Providers.OAuth.definition().annotations.actions
 
       assert actions["set_client"][:consent] == :interactive
       assert actions["delete_client"][:consent] == :interactive
@@ -143,7 +143,7 @@ defmodule Sanctum.ProviderCredentialsTest do
   describe "oauth.set_client MCP action" do
     test "stores credentials via the tool surface", %{ctx: ctx} do
       assert {:ok, %{status: "ok"}} =
-               Sanctum.MCP.OAuthTool.handle(ctx, %{
+               Sanctum.Providers.OAuth.handle(ctx, %{
                  "action" => "set_client",
                  "provider" => "google",
                  "client_id" => "tool-id",
@@ -156,7 +156,7 @@ defmodule Sanctum.ProviderCredentialsTest do
 
     test "requires provider and client_id" do
       ctx = Sanctum.TestContext.local()
-      assert {:error, _} = Sanctum.MCP.OAuthTool.handle(ctx, %{"action" => "set_client"})
+      assert {:error, _} = Sanctum.Providers.OAuth.handle(ctx, %{"action" => "set_client"})
     end
 
     test "requires the interactive class" do
