@@ -15,7 +15,7 @@ defmodule Prima.Refusal do
       `Prima.GuestError`
 
   It lives in the contracts because the runner's renderer must reach it
-  and the runner names nothing of the control plane. `Cyfr.Ops.Error` is
+  and the runner names nothing of the control plane. `Grimoire.Error` is
   the host's renderer over this vocabulary and the product ones beside it
   (an unauthorized caller, an OCI registry's own error, a consent signal);
   `Prima.GuestError` is the runner's, over this vocabulary and the shapes

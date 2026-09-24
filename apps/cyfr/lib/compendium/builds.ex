@@ -83,7 +83,7 @@ defmodule Compendium.Builds do
 
   Answers the operation's result — `status`, `reference`, `digest`,
   `size`, `files`, `exports`, `language`, `target_type` and
-  `registration: "pending"` — or a refusal `Cyfr.Ops.Error.render/2`
+  `registration: "pending"` — or a refusal `Grimoire.Error.render/2`
   renders.
   """
   @spec compile(Context.t(), String.t(), [option()]) :: {:ok, map()} | {:error, term()}
@@ -235,7 +235,7 @@ defmodule Compendium.Builds do
 
   defp record_outcome(%{ctx: ctx, build_id: build_id}, {:error, reason}) do
     sentence =
-      Cyfr.Ops.Error.render(reason) ||
+      Grimoire.Error.render(reason) ||
         "The build failed for an unexpected reason — see the server log"
 
     BuildRecords.record_finished(Context.actor(ctx), build_id, "failed", sentence)
@@ -643,7 +643,7 @@ defmodule Compendium.Builds do
         Prima.LoggerContext.restore(logger_metadata)
 
         outcome =
-          case Cyfr.Ops.Catalog.call_external("component", ctx, %{"action" => "register"}) do
+          case Grimoire.Catalog.call_external("component", ctx, %{"action" => "register"}) do
             {:ok, _} ->
               "done"
 

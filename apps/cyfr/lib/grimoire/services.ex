@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.Services do
+defmodule Grimoire.Services do
   @moduledoc """
   The service vocabulary over the tool providers. Each provider declares
   its own service (`c:Prima.Provider.service/0`); this module
@@ -9,7 +9,7 @@ defmodule Cyfr.Ops.Services do
   checks from the same answers the request log's `routed_to` label reads.
   """
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
 
   require Logger
 
@@ -18,7 +18,7 @@ defmodule Cyfr.Ops.Services do
   (`c:Prima.Provider.service/0`), so a provider cannot be one
   service in the status report and another in the log, and a renamed
   module cannot silently fall out of a central map. A module that answers
-  nothing is labeled emissary's, LOUDLY — that fallback is a defect, not
+  nothing is labeled grimoire's, LOUDLY — that fallback is a defect, not
   a default.
   """
   @spec service_name(module()) :: String.t()
@@ -47,11 +47,11 @@ defmodule Cyfr.Ops.Services do
       {:ok, module.service()}
     else
       Logger.error(
-        "[Cyfr.Ops.Services] provider #{inspect(module)} exports no service/0 — " <>
-          "labeling as \"emissary\"; declare `service/0` on the provider"
+        "[Grimoire.Services] provider #{inspect(module)} exports no service/0 — " <>
+          "labeling as \"grimoire\"; declare `service/0` on the provider"
       )
 
-      {:fallback, "emissary"}
+      {:fallback, "grimoire"}
     end
   end
 

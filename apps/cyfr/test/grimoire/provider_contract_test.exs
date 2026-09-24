@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.ProviderTest do
+defmodule Grimoire.ProviderContractTest do
   # Not async: the projection cases register probe tools in the shared
   # catalog and the boot case swaps the provider roster.
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Prima.{Arg, Operation, Provider}
   alias Prima.Test.AuthorityFixtures
 
@@ -111,7 +111,7 @@ defmodule Cyfr.Ops.ProviderTest do
   end
 
   test "every loadable configured provider implements the moved behaviour" do
-    for module <- Cyfr.Ops.Catalog.available_providers() do
+    for module <- Grimoire.Catalog.available_providers() do
       assert function_exported?(module, :service, 0)
       assert function_exported?(module, :tools, 0)
       assert function_exported?(module, :handle, 3)

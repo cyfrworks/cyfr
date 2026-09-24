@@ -23,7 +23,7 @@ defmodule Aqua.Standing do
   @doc "Whether `scope` may stand for the card's intent."
   @spec check(map(), scope()) :: :ok | {:error, {:scope_not_permitted, term()}}
   def check(intent, scope) when scope in [:thread, :always] do
-    standing = Cyfr.Ops.Annotations.standing(intent["standing"])
+    standing = Grimoire.Annotations.standing(intent["standing"])
 
     cond do
       intent["action_kind"] in ["destructive", "external"] ->

@@ -116,8 +116,9 @@ def git(repo, *args):
 
 
 def check(plan, tracked):
-    """The findings that fail the ledger, and the future inputs that do not."""
-    findings, future = [], []
+    """The findings that fail the ledger, the future inputs that do not, and
+    how many moves are complete."""
+    findings, future, complete = [], [], 0
     if not tracked:
         findings.append("the repository tracks no file; nothing was checked")
 
@@ -139,6 +140,9 @@ def check(plan, tracked):
         if plan.moves:
             findings.append(f"{MOVE_TARGET} is not in the sequence, so no move can be placed")
 
+    # A move is pending while its source is tracked and its destination is
+    # not, and complete once the destination is tracked and the source is
+    # not, so the ledger fits the tree before, between and after the moves.
     claimed = {}
     for source, destination in plan.moves.items():
         if destination in claimed:
@@ -147,8 +151,13 @@ def check(plan, tracked):
             )
         claimed.setdefault(destination, source)
         if destination in tracked:
-            findings.append(f"move destination {destination} already exists before {MOVE_TARGET}")
-        if source not in tracked:
+            if source in tracked:
+                findings.append(
+                    f"move destination {destination} already exists beside its source {source}"
+                )
+            else:
+                complete += 1
+        elif source not in tracked:
             producers = [o for o in plan.permissions.get(source, []) if o in before]
             if producers:
                 future.append(f"future input: {source} (produced by {', '.join(producers)})")
@@ -157,7 +166,7 @@ def check(plan, tracked):
                     f"move source {source} does not exist and no target before "
                     f"{MOVE_TARGET} produces it"
                 )
-    return findings, future
+    return findings, future, complete
 
 
 def outside(plan, target, changed):
@@ -202,9 +211,9 @@ def main(argv):
         parser.error(f"cannot read the plan: {error}")
 
     if args.check:
-        findings, future = plan.findings, []
+        findings, future, complete = plan.findings, [], 0
         if plan.permissions is not None and plan.moves is not None:
-            more, future = check(plan, set(git(args.repo, "ls-files", "-z")))
+            more, future, complete = check(plan, set(git(args.repo, "ls-files", "-z")))
             findings = findings + more
         for line in future:
             print(line)
@@ -214,7 +223,8 @@ def main(argv):
             return 1
         print(
             f"ok: {len(plan.permissions)} keys, {len(plan.moves)} moves, "
-            f"{len(plan.sequence)} targets, {len(future)} future inputs"
+            f"{len(plan.sequence)} targets, {len(future)} future inputs, "
+            f"{complete} moves complete"
         )
         return 0
 

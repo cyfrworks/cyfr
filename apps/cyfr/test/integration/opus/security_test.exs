@@ -417,7 +417,7 @@ defmodule Opus.SecurityTest do
         })
 
       assert {:consent_required, %{}} = msg
-      refute Cyfr.Ops.Error.render(msg) =~ "Signature verification"
+      refute Grimoire.Error.render(msg) =~ "Signature verification"
     end
   end
 end

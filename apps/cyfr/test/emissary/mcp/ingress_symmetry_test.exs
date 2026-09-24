@@ -10,7 +10,7 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Prima.{Arg, Operation}
 
   defmodule Provider do

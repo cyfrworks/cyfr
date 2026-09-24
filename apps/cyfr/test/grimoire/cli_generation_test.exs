@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.CliGenerationTest do
+defmodule Grimoire.CliGenerationTest do
   use ExUnit.Case, async: true
 
   alias Prima.{Arg, Operation}

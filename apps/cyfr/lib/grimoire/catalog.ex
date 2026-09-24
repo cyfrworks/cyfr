@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.Catalog do
+defmodule Grimoire.Catalog do
   @moduledoc """
   Cache-backed registry for MCP tools.
 
@@ -13,7 +13,7 @@ defmodule Cyfr.Ops.Catalog do
 
   ```
   ┌──────────────────────────────────────────────────────────────────────┐
-  │  Cyfr.Ops.Catalog (GenServer)                                        │
+  │  Grimoire.Catalog (GenServer)                                        │
   │  ├── Arca.Cache keys: {:mcp_tool, name}                              │
   │  │   └── {:mcp_tool, "record"} => {Arca.Providers.Records, %{...}}   │
   │  │   └── {:mcp_tool, "execution"} => {Cyfr.Execution.MCP, %{...}}    │
@@ -24,10 +24,10 @@ defmodule Cyfr.Ops.Catalog do
   ## Usage
 
       # List all tools
-      Cyfr.Ops.Catalog.list_tools()
+      Grimoire.Catalog.list_tools()
 
       # Call a tool
-      Cyfr.Ops.Catalog.call_external("retention", context, %{"action" => "get"})
+      Grimoire.Catalog.call_external("retention", context, %{"action" => "get"})
 
   ## One node, honestly
 
@@ -62,10 +62,10 @@ defmodule Cyfr.Ops.Catalog do
 
   use GenServer
 
-  @behaviour Sanctum.Catalog
+  @behaviour Sanctum.Grimoire
   require Logger
 
-  alias Cyfr.Ops.Annotations
+  alias Grimoire.Annotations
   alias Prima.Operation
   alias Sanctum.Context
 
@@ -253,7 +253,7 @@ defmodule Cyfr.Ops.Catalog do
         _ -> nil
       end
 
-    Cyfr.Ops.Visibility.restrict_actions(tool_def, actions, operations)
+    Grimoire.Visibility.restrict_actions(tool_def, actions, operations)
   end
 
   @doc """
@@ -272,7 +272,7 @@ defmodule Cyfr.Ops.Catalog do
   the assistant, which already hold an authenticated context and a
   process of their own; `:supervised` runs it in a task under a timeout,
   registered under `ctx.request_id` so a transport whose caller
-  disconnects can stop it (`Emissary.MCP.RunningTasks`), for the wire.
+  disconnects can stop it (`Grimoire.RunningTasks`), for the wire.
   """
   def call_external(name, ctx, args, opts \\ [])
 
@@ -314,7 +314,7 @@ defmodule Cyfr.Ops.Catalog do
   transition step and releases it when the synchronous dispatch returns.
 
   Options: `:guest_fn` (`:call` | `:spawn`, default `:call`), `:cancel_handle`
-  (a caller-owned name for this call, `Emissary.MCP.RunningTasks.cancel_handle/1`
+  (a caller-owned name for this call, `Grimoire.RunningTasks.cancel_handle/1`
   stops the supervised handler by it alone), plus `call_external/4`'s
   options. The runner defaults to `:supervised` here: the handler runs on
   a guest's behalf, and a crash or a hang inside it must not take the
@@ -658,7 +658,7 @@ defmodule Cyfr.Ops.Catalog do
         case Enum.filter(listed, &(&1 in reachable)) do
           [] -> nil
           ^listed -> tool_def
-          pruned -> Cyfr.Ops.Visibility.restrict_actions(tool_def, pruned)
+          pruned -> Grimoire.Visibility.restrict_actions(tool_def, pruned)
         end
 
       {_, _} ->
@@ -731,7 +731,7 @@ defmodule Cyfr.Ops.Catalog do
            Sanctum.ToolServerDigest.descriptions_digest(tools, grant.tool_patterns) do
       unless Plug.Crypto.secure_compare(live, baseline) do
         Logger.warning(
-          "[Cyfr.Ops.Catalog] tool descriptions for server '#{grant.server_name}' drifted " <>
+          "[Grimoire.Catalog] tool descriptions for server '#{grant.server_name}' drifted " <>
             "from their consent-time baseline — treat upstream descriptions as untrusted"
         )
 
@@ -757,7 +757,7 @@ defmodule Cyfr.Ops.Catalog do
       # "no drift" — the same is true when the failure arrives as a value.
       {:error, reason} ->
         Logger.warning(
-          "[Cyfr.Ops.Catalog] description-drift check could not run: #{inspect(reason)}"
+          "[Grimoire.Catalog] description-drift check could not run: #{inspect(reason)}"
         )
 
         :telemetry.execute(
@@ -772,7 +772,7 @@ defmodule Cyfr.Ops.Catalog do
     # Log drift-check failures; the check remains best-effort.
     e ->
       Logger.warning(
-        "[Cyfr.Ops.Catalog] description-drift check failed: " <>
+        "[Grimoire.Catalog] description-drift check failed: " <>
           Exception.format(:error, e, __STACKTRACE__)
       )
 
@@ -901,7 +901,7 @@ defmodule Cyfr.Ops.Catalog do
   end
 
   defp check_auth(name, ctx, annotation) do
-    if Cyfr.Ops.Visibility.admits?(annotation, ctx) do
+    if Grimoire.Visibility.admits?(annotation, ctx) do
       :ok
     else
       {:error, {:tool_auth_required, name}}
@@ -982,7 +982,7 @@ defmodule Cyfr.Ops.Catalog do
     started = %{tool: name, action: action, method: "tools/call", input: logged_args}
     opts = Keyword.put(opts, :action, action)
 
-    Emissary.MCP.RequestLog.around(log_mode, ctx, call_id, started, fn ->
+    Grimoire.RequestLog.around(log_mode, ctx, call_id, started, fn ->
       # A member that lost its cell slot dispatches nothing, catalogued or
       # proxied: the endpoint's plug refuses new requests, but a connected
       # console, an in-process caller and a running chain's next call all
@@ -1328,7 +1328,7 @@ defmodule Cyfr.Ops.Catalog do
       {:error, missing} ->
         if Application.get_env(:cyfr, :tool_providers_lenient, false) do
           Logger.warning(
-            "[Cyfr.Ops.Catalog] tool providers not loaded (lenient): #{inspect(missing)}"
+            "[Grimoire.Catalog] tool providers not loaded (lenient): #{inspect(missing)}"
           )
         else
           raise "configured tool providers failed to load: #{inspect(missing)} — " <>
@@ -1504,14 +1504,14 @@ defmodule Cyfr.Ops.Catalog do
 
     exception ->
       Logger.error(
-        "[Cyfr.Ops.Catalog] Tool #{name} crashed: " <>
+        "[Grimoire.Catalog] Tool #{name} crashed: " <>
           Exception.format(:error, exception, __STACKTRACE__)
       )
 
       {:error, {:crashed, "Tool #{name} crashed"}}
   catch
     :exit, reason ->
-      Logger.error("[Cyfr.Ops.Catalog] Tool #{name} exited: #{inspect(reason)}")
+      Logger.error("[Grimoire.Catalog] Tool #{name} exited: #{inspect(reason)}")
       {:error, {:exit, "Tool #{name} exited unexpectedly"}}
   end
 
@@ -1523,7 +1523,7 @@ defmodule Cyfr.Ops.Catalog do
       handle ->
         # Claimed before the task exists, so a cancel that lands first is
         # seen when the task registers, and the handler never runs.
-        case Emissary.MCP.RunningTasks.claim(handle) do
+        case Grimoire.RunningTasks.claim(handle) do
           :ok -> supervise(name, ctx, opts, handle, execute_fn)
           :cancelled -> {:error, {:exit, "Tool #{name} was cancelled"}}
         end
@@ -1546,12 +1546,12 @@ defmodule Cyfr.Ops.Catalog do
       Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
         Prima.LoggerContext.restore(logger_metadata)
 
-        if handle && Emissary.MCP.RunningTasks.register_handle(handle, self()) == :cancelled,
+        if handle && Grimoire.RunningTasks.register_handle(handle, self()) == :cancelled,
           do: exit(:cancelled),
           else: execute_fn.()
       end)
 
-    if trackable?, do: Emissary.MCP.RunningTasks.register(request_id, task)
+    if trackable?, do: Grimoire.RunningTasks.register(request_id, task)
 
     # An in-chain effect the handler may have made before it died is not
     # undone by its death: unless the action is reviewed as replay-safe,
@@ -1578,7 +1578,7 @@ defmodule Cyfr.Ops.Catalog do
 
         {:exit, {exception, stacktrace}} when is_exception(exception) ->
           Logger.error(
-            "[Cyfr.Ops.Catalog] Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}"
+            "[Grimoire.Catalog] Tool #{name} crashed: #{Exception.format(:error, exception, stacktrace)}"
           )
 
           # The tuple carries only the tool's name — the exception's own
@@ -1594,28 +1594,28 @@ defmodule Cyfr.Ops.Catalog do
             else: {:error, {:exit, "Tool #{name} was cancelled"}}
 
         {:exit, reason} ->
-          Logger.error("[Cyfr.Ops.Catalog] Tool #{name} exited: #{inspect(reason)}")
+          Logger.error("[Grimoire.Catalog] Tool #{name} exited: #{inspect(reason)}")
 
           if uncertain?,
             do: {:error, {:uncertain, "Tool #{name} exited; its outcome is unknown"}},
             else: {:error, {:exit, "Tool #{name} exited unexpectedly"}}
 
         nil ->
-          Logger.error("[Cyfr.Ops.Catalog] Tool #{name} timed out after #{@tool_timeout_ms}ms")
+          Logger.error("[Grimoire.Catalog] Tool #{name} timed out after #{@tool_timeout_ms}ms")
 
           if uncertain?,
             do: {:error, {:uncertain, "Tool #{name} timed out; its outcome is unknown"}},
             else: {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
       end
 
-    if trackable?, do: Emissary.MCP.RunningTasks.unregister(request_id, task)
-    if handle, do: Emissary.MCP.RunningTasks.release_handle(handle)
+    if trackable?, do: Grimoire.RunningTasks.unregister(request_id, task)
+    if handle, do: Grimoire.RunningTasks.release_handle(handle)
     result
   end
 
   defp replay_safe?(name, action) when is_binary(action) do
     case get_tool(name) do
-      {:ok, tool_def} -> Cyfr.Ops.Annotations.recovery(tool_def, action) == :replay_safe
+      {:ok, tool_def} -> Grimoire.Annotations.recovery(tool_def, action) == :replay_safe
       _ -> false
     end
   end
@@ -1640,7 +1640,7 @@ defmodule Cyfr.Ops.Catalog do
       end)
 
     Logger.info(
-      "[Cyfr.Ops.Catalog] loaded #{length(tools)} tools from #{length(providers)} providers"
+      "[Grimoire.Catalog] loaded #{length(tools)} tools from #{length(providers)} providers"
     )
 
     length(tools)
@@ -1669,7 +1669,7 @@ defmodule Cyfr.Ops.Catalog do
         true
       else
         Logger.warning(
-          "[Cyfr.Ops.Catalog] Tool provider #{inspect(module)} not available — skipping. " <>
+          "[Grimoire.Catalog] Tool provider #{inspect(module)} not available — skipping. " <>
             "Check that the application is started and the module exists."
         )
 
@@ -1678,7 +1678,7 @@ defmodule Cyfr.Ops.Catalog do
     end)
   end
 
-  @impl Sanctum.Catalog
+  @impl Sanctum.Grimoire
   def providers_loaded do
     case Enum.reject(configured_providers(), &loadable?/1) do
       [] -> :ok
@@ -1716,8 +1716,8 @@ defmodule Cyfr.Ops.Catalog do
   end
 
   # Every `tool.action` the loaded providers declare — what a consent
-  # shape may name (`Sanctum.Catalog`).
-  @impl Sanctum.Catalog
+  # shape may name (`Sanctum.Grimoire`).
+  @impl Sanctum.Grimoire
   def tool_actions do
     for module <- available_providers(),
         tool <- module.tools(),
@@ -1725,14 +1725,14 @@ defmodule Cyfr.Ops.Catalog do
         do: "#{tool.name}.#{action}"
   end
 
-  # The external tool servers a grant may name (`Sanctum.Catalog`). The
+  # The external tool servers a grant may name (`Sanctum.Grimoire`). The
   # proxied `server:tool` entries are the external provider's, so it is
   # what describes them.
-  @impl Sanctum.Catalog
+  @impl Sanctum.Grimoire
   def tool_server_candidates(%Context{} = ctx),
     do: Emissary.MCP.ExternalProvider.consent_candidates(ctx)
 
-  @impl Sanctum.Catalog
+  @impl Sanctum.Grimoire
   def tool_server_candidate(%Context{} = ctx, name) when is_binary(name),
     do: Emissary.MCP.ExternalProvider.consent_candidate(ctx, name)
 

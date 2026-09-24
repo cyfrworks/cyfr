@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.RunningTasksTest do
+defmodule Grimoire.RunningTasksTest do
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.RunningTasks
+  alias Grimoire.RunningTasks
 
   setup do
     # `RunningTasks` is a child of the infra tier, so the supervisor owns its
@@ -185,7 +185,7 @@ defmodule Emissary.MCP.RunningTasksTest do
       # The supervisor may restart the GenServer (recreating the table) before
       # this assertion runs, so we verify the table is either gone or empty
       # (freshly recreated by supervisor with no entries).
-      case :ets.whereis(Emissary.MCP.RunningTasks) do
+      case :ets.whereis(Grimoire.RunningTasks) do
         :undefined -> :ok
         ref -> assert :ets.tab2list(ref) == []
       end

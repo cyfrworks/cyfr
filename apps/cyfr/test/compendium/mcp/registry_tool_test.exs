@@ -5,7 +5,7 @@ defmodule Compendium.MCP.RegistryToolTest do
   use ExUnit.Case, async: false
 
   alias Compendium.MCP.RegistryTool
-  alias Cyfr.Ops.Error
+  alias Grimoire.Error
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

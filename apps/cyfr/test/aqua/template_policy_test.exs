@@ -13,7 +13,7 @@ defmodule Prism.AquaTemplatePolicyTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Aqua.Hands
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)

@@ -44,7 +44,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   end
 
   test "every verb the sheet speaks is a registered profile action" do
-    {:ok, tool} = Cyfr.Ops.Catalog.get_tool("profile")
+    {:ok, tool} = Grimoire.Catalog.get_tool("profile")
 
     enum = get_in(tool, ["inputSchema", "properties", "action", "enum"]) || []
 

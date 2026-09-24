@@ -973,7 +973,7 @@ defmodule Compendium.MCP.AquaTool do
           cloneable: false,
           note:
             "The soul was not given leave to clone into it: " <>
-              (Cyfr.Ops.Error.render(reason) || "the write failed")
+              (Grimoire.Error.render(reason) || "the write failed")
         }
     end
   end

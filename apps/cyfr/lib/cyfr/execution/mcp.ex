@@ -20,7 +20,7 @@ defmodule Cyfr.Execution.MCP do
   name is `"opus"` and its resources are `opus://executions/…`.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Cyfr.Ops.Catalog.
+  which is validated at runtime by Grimoire.Catalog.
 
   ## Simplified Lifecycle
 
@@ -746,7 +746,7 @@ defmodule Cyfr.Execution.MCP do
   defp format_root_result({:error, reason}) when not is_binary(reason) do
     # Render typed refusals through the shared seam. Log internal terms
     # without returning them to the client.
-    case Cyfr.Ops.Error.render(reason) do
+    case Grimoire.Error.render(reason) do
       nil ->
         Logger.warning("[Cyfr.Execution.MCP] unrenderable authority error: #{inspect(reason)}")
         {:error, "authority_error: the request could not be authorized"}

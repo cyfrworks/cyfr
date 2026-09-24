@@ -129,7 +129,7 @@ defmodule Emissary.IntegrationTest do
       assert log.method == "tools/call"
       assert log.tool == "system"
       assert log.action == "status"
-      assert log.routed_to == "emissary"
+      assert log.routed_to == "grimoire"
 
       # Cleanup
       Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()

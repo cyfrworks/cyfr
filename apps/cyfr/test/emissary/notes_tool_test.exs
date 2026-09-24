@@ -8,7 +8,7 @@ defmodule Emissary.MCP.NotesToolTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.NotesTool, as: Tool
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context
@@ -579,22 +579,22 @@ defmodule Emissary.MCP.NotesToolTest do
     star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
     assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-             Cyfr.Ops.Catalog.call_external("notes", star, %{
+             Grimoire.Catalog.call_external("notes", star, %{
                "action" => "keep",
                "name" => "sneak",
                "content" => "x"
              })
 
     assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-             Cyfr.Ops.Catalog.call_external("notes", star, %{
+             Grimoire.Catalog.call_external("notes", star, %{
                "action" => "list",
                "scope" => "mine"
              })
 
     # Discovery agrees with dispatch: the key is not shown the tool.
     shown =
-      Cyfr.Ops.Visibility.filter_for_context(
-        Cyfr.Ops.Catalog.list_tools(),
+      Grimoire.Visibility.filter_for_context(
+        Grimoire.Catalog.list_tools(),
         star
       )
 

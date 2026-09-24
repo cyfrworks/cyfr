@@ -157,7 +157,7 @@ defmodule Sanctum.MCPDispatchContractTest do
 
   defp read(ctx, uri),
     do:
-      Cyfr.Ops.Catalog.call_external("session", ctx, %{
+      Grimoire.Catalog.call_external("session", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })
@@ -173,7 +173,7 @@ defmodule Sanctum.MCPDispatchContractTest do
       for {tool, expected} <- @invalid_action_errors do
         assert {:error, reason} = MCP.handle(tool, ctx, %{"action" => "___no_such_action___"})
 
-        assert Cyfr.Ops.Error.render(reason) == expected,
+        assert Grimoire.Error.render(reason) == expected,
                "invalid-action message drift for tool #{tool}"
       end
     end

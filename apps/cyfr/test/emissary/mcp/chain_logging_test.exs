@@ -11,7 +11,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context
@@ -97,7 +97,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
     # The transport's own row, as `EmissaryWeb.MCPController` writes it: the
     # call id *is* the request id, because this call is the request.
     :ok =
-      Emissary.MCP.RequestLog.log_started(ctx, request_id, %{
+      Grimoire.RequestLog.log_started(ctx, request_id, %{
         tool: "execution",
         action: "run",
         method: "tools/call"
@@ -134,7 +134,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
     ctx = %{ctx | request_id: request_id}
 
     :ok =
-      Emissary.MCP.RequestLog.log_started(ctx, request_id, %{
+      Grimoire.RequestLog.log_started(ctx, request_id, %{
         tool: "system",
         action: "status",
         method: "tools/call"

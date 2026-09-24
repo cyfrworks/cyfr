@@ -76,7 +76,7 @@ defmodule EmissaryWeb.HealthController do
       cache: check_cache(),
       pubsub: check_pubsub(),
       storage: check_storage(),
-      tool_registry: check_process(Cyfr.Ops.Catalog),
+      tool_registry: check_process(Grimoire.Catalog),
       resource_registry: check_process(Emissary.MCP.ResourceRegistry),
       # A boot that lost its control-plane lease is not ready: the endpoint
       # answers 503 to everything but this probe until the claim is won back.

@@ -55,7 +55,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   alias Emissary.MCP.ExternalProvider
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Aqua.Hands
 
   # Sibling-app providers are unavailable when this app's suite runs alone.
@@ -157,7 +157,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       ctx = Sanctum.TestContext.local()
 
       listed =
-        for tool_def <- Cyfr.Ops.Visibility.filter_for_context(Catalog.list_tools(), ctx),
+        for tool_def <- Grimoire.Visibility.filter_for_context(Catalog.list_tools(), ctx),
             verb <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
             do: "#{tool_def["name"]}.#{verb}"
 

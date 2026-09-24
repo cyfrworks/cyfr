@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.CatalogTest.CrashingProvider do
+defmodule Grimoire.CatalogTest.CrashingProvider do
   @moduledoc false
   # A provider that fails the way a real one would: by raising or exiting
   # rather than returning an error tuple.
@@ -14,7 +14,7 @@ defmodule Cyfr.Ops.CatalogTest.CrashingProvider do
   def handle(_tool, _ctx, _args), do: {:ok, %{"ok" => true}}
 end
 
-defmodule Cyfr.Ops.CatalogTest.BlockingProvider do
+defmodule Grimoire.CatalogTest.BlockingProvider do
   @moduledoc false
   # A provider that stays in flight. It announces its own pid to the test
   # process first, so a test can assert on the dispatcher's bookkeeping while
@@ -34,7 +34,7 @@ defmodule Cyfr.Ops.CatalogTest.BlockingProvider do
   end
 end
 
-defmodule Cyfr.Ops.CatalogTest.ReplaySafeWrite do
+defmodule Grimoire.CatalogTest.ReplaySafeWrite do
   @moduledoc false
   # A write annotated replay-safe: the audit's refusal, as a provider.
   def service, do: "poker"
@@ -47,7 +47,7 @@ defmodule Cyfr.Ops.CatalogTest.ReplaySafeWrite do
   def handle(_name, _ctx, _args), do: {:ok, %{}}
 end
 
-defmodule Cyfr.Ops.CatalogTest do
+defmodule Grimoire.CatalogTest do
   @moduledoc """
   Tests for the MCP tool registry.
 
@@ -55,7 +55,7 @@ defmodule Cyfr.Ops.CatalogTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Prima.{Arg, Operation}
   alias Sanctum.Context
 
@@ -98,7 +98,7 @@ defmodule Cyfr.Ops.CatalogTest do
       end
     end
 
-    test "includes system tool from SystemProvider" do
+    test "includes system tool from Grimoire.Provider" do
       tools = Catalog.list_tools()
       tool_names = Enum.map(tools, & &1["name"])
 
@@ -282,7 +282,7 @@ defmodule Cyfr.Ops.CatalogTest do
 
       Catalog.register_tool(
         @crash_tool,
-        Cyfr.Ops.CatalogTest.CrashingProvider,
+        Grimoire.CatalogTest.CrashingProvider,
         definition,
         :timer.minutes(1)
       )
@@ -416,7 +416,7 @@ defmodule Cyfr.Ops.CatalogTest do
     test "tools may include title field" do
       {:ok, tool} = Catalog.get_tool("system")
 
-      # SystemProvider includes title
+      # Grimoire.Provider includes title
       if Map.has_key?(tool, "title") do
         assert is_binary(tool["title"])
       end
@@ -458,7 +458,7 @@ defmodule Cyfr.Ops.CatalogTest do
 
       Catalog.register_tool(
         @blocking_tool,
-        Cyfr.Ops.CatalogTest.BlockingProvider,
+        Grimoire.CatalogTest.BlockingProvider,
         definition,
         :timer.minutes(1)
       )
@@ -486,17 +486,17 @@ defmodule Cyfr.Ops.CatalogTest do
       assert_receive {:handler_running, handler_pid}, 5_000
 
       assert [{"req_tracked", ^handler_pid}] =
-               :ets.lookup(Emissary.MCP.RunningTasks, "req_tracked")
+               :ets.lookup(Grimoire.RunningTasks, "req_tracked")
 
-      assert :ok = Emissary.MCP.RunningTasks.cancel("req_tracked")
+      assert :ok = Grimoire.RunningTasks.cancel("req_tracked")
 
       # Killing the handler surfaces to the caller as a typed error rather than
       # taking the dispatcher down with it.
       assert_receive {:result, {:error, {:exit, message}}}, 5_000
       assert message =~ "cancelled"
 
-      :sys.get_state(Emissary.MCP.RunningTasks)
-      assert {:error, :not_found} = Emissary.MCP.RunningTasks.cancel("req_tracked")
+      :sys.get_state(Grimoire.RunningTasks)
+      assert {:error, :not_found} = Grimoire.RunningTasks.cancel("req_tracked")
     end
 
     test "the entry is cleaned up when the work finishes on its own" do
@@ -505,8 +505,8 @@ defmodule Cyfr.Ops.CatalogTest do
       {:ok, _} =
         Catalog.call_external("system", ctx, %{"action" => "status"}, runner: :supervised)
 
-      :sys.get_state(Emissary.MCP.RunningTasks)
-      assert {:error, :not_found} = Emissary.MCP.RunningTasks.cancel("req_finished")
+      :sys.get_state(Grimoire.RunningTasks)
+      assert {:error, :not_found} = Grimoire.RunningTasks.cancel("req_finished")
     end
 
     # The in-process runner: the console and the assistant hold an
@@ -519,7 +519,7 @@ defmodule Cyfr.Ops.CatalogTest do
       args = %{"action" => "block", "release" => true}
       assert {:ok, %{ran_on: pid}} = Catalog.call_external(@blocking_tool, ctx, args)
       assert pid == self()
-      assert [] = :ets.lookup(Emissary.MCP.RunningTasks, "req_inline")
+      assert [] = :ets.lookup(Grimoire.RunningTasks, "req_inline")
     end
 
     test "the inline runner contains a crash and answers a raised refusal as the refusal" do
@@ -717,32 +717,32 @@ defmodule Cyfr.Ops.CatalogTest do
     test "prunes to actions whose planes include :in_chain" do
       defs = [tool_def("mixed", %{"get" => [:external, :in_chain], "set" => [:external]})]
 
-      [pruned] = Cyfr.Ops.Catalog.in_chain_view(defs)
+      [pruned] = Grimoire.Catalog.in_chain_view(defs)
       assert get_in(pruned, ["inputSchema", "properties", "action", "enum"]) == ["get"]
     end
 
     test "drops a tool with no in-chain actions" do
       defs = [tool_def("external_only", %{"plan" => [:external], "commit" => [:external]})]
 
-      assert Cyfr.Ops.Catalog.in_chain_view(defs) == []
+      assert Grimoire.Catalog.in_chain_view(defs) == []
     end
 
     test "keeps a fully in-chain tool untouched" do
       defs = [tool_def("chained", %{"run" => [:external, :in_chain]})]
 
-      assert Cyfr.Ops.Catalog.in_chain_view(defs) == defs
+      assert Grimoire.Catalog.in_chain_view(defs) == defs
     end
 
     test "proxied server:tool entries pass through whole" do
       defs = [%{"name" => "notion:create_page"}]
 
-      assert Cyfr.Ops.Catalog.in_chain_view(defs) == defs
+      assert Grimoire.Catalog.in_chain_view(defs) == defs
     end
 
     test "a tool without annotations fails closed" do
       defs = [%{"name" => "bare", "inputSchema" => %{}}]
 
-      assert Cyfr.Ops.Catalog.in_chain_view(defs) == []
+      assert Grimoire.Catalog.in_chain_view(defs) == []
     end
   end
 
@@ -767,10 +767,10 @@ defmodule Cyfr.Ops.CatalogTest do
       Application.put_env(
         :cyfr,
         :tool_providers,
-        original ++ [Cyfr.Ops.CatalogTest.NoSuchProvider]
+        original ++ [Grimoire.CatalogTest.NoSuchProvider]
       )
 
-      assert {:error, [Cyfr.Ops.CatalogTest.NoSuchProvider]} = Catalog.providers_loaded()
+      assert {:error, [Grimoire.CatalogTest.NoSuchProvider]} = Catalog.providers_loaded()
 
       Application.put_env(:cyfr, :tool_providers_lenient, false)
 
@@ -786,7 +786,7 @@ defmodule Cyfr.Ops.CatalogTest do
       Application.put_env(
         :cyfr,
         :tool_providers,
-        original ++ [Cyfr.Ops.CatalogTest.ReplaySafeWrite]
+        original ++ [Grimoire.CatalogTest.ReplaySafeWrite]
       )
 
       assert_raise RuntimeError,

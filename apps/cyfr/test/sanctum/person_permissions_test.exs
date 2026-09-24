@@ -7,8 +7,8 @@ defmodule Sanctum.PersonPermissionsTest do
   # and no production builder spells the wildcard.
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.Annotations
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Annotations
+  alias Grimoire.Catalog
   alias Sanctum.Context
 
   defp root, do: Path.expand("../../../..", __DIR__)

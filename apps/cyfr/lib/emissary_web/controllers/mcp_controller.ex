@@ -33,7 +33,7 @@ defmodule EmissaryWeb.MCPController do
   Closing the response stream cancels the request — the only cancellation
   signal this transport has. It is noticed on the next write, which is either
   the next notification or the keep-alive comment, and it kills the tool task
-  through `Emissary.MCP.RunningTasks` as well as the wrapper waiting on it.
+  through `Grimoire.RunningTasks` as well as the wrapper waiting on it.
 
   ## Telemetry
 
@@ -45,7 +45,8 @@ defmodule EmissaryWeb.MCPController do
   use EmissaryWeb, :controller
 
   alias Emissary.MCP
-  alias Emissary.MCP.{Message, Progress, RequestLog, Subscriptions}
+  alias Emissary.MCP.{Message, Progress, Subscriptions}
+  alias Grimoire.RequestLog
   alias CyfrWeb.ContextGuard
   require CyfrWeb.ContextGuard
   require Logger
@@ -588,7 +589,7 @@ defmodule EmissaryWeb.MCPController do
   # killed after it, since killing the wrapper alone would leave the
   # `async_nolink`'d tool task running with nobody waiting on it.
   defp cancel_work(%Task{} = task, request_id) do
-    Emissary.MCP.RunningTasks.cancel(request_id)
+    Grimoire.RunningTasks.cancel(request_id)
     Task.shutdown(task, :brutal_kill)
     :cancelled
   end
@@ -667,12 +668,12 @@ defmodule EmissaryWeb.MCPController do
   defp extract_action(%{"params" => %{"arguments" => %{"action" => action}}}), do: action
   defp extract_action(_), do: nil
 
-  defp determine_routed_to(nil, _action), do: "emissary"
+  defp determine_routed_to(nil, _action), do: "grimoire"
 
   defp determine_routed_to(tool, _action) do
-    case Cyfr.Ops.Catalog.lookup(tool) do
-      {:ok, {module, _meta}} -> Cyfr.Ops.Services.service_name(module)
-      :miss -> "emissary"
+    case Grimoire.Catalog.lookup(tool) do
+      {:ok, {module, _meta}} -> Grimoire.Services.service_name(module)
+      :miss -> "grimoire"
     end
   end
 

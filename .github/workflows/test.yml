@@ -1111,6 +1111,9 @@ jobs:
             'Compendium\.(WITSource|WasmValidator)\b' \
             'Cyfr\.Test\.(SourceTree|CodeLines|Wait|AuthorityFixtures)\b' \
             'Emissary\.MCP\.VaultRef\b' \
+            'Cyfr\.Ops\b' \
+            'Sanctum\.Catalog\b' \
+            'Emissary\.MCP\.(RequestLog|RunningTasks|Tools\.SystemProvider)\b' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then

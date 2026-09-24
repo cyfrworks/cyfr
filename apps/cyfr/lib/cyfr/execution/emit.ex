@@ -255,7 +255,7 @@ defmodule Cyfr.Execution.Emit do
   end
 
   defp render(reason) do
-    case Cyfr.Ops.Error.render(reason) do
+    case Grimoire.Error.render(reason) do
       nil ->
         Logger.warning("[Cyfr.Execution.Emit] unrenderable emit refusal: #{inspect(reason)}")
         "the event was refused"

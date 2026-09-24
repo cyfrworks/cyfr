@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.LiteralDriftTest do
+defmodule Grimoire.LiteralDriftTest do
   @moduledoc """
   Every operation a client spells as a literal exists in the catalog, and
   the CLI's generated names and argument structs are the catalog's.
@@ -20,7 +20,7 @@ defmodule Cyfr.Ops.LiteralDriftTest do
   """
   use ExUnit.Case, async: false
 
-  @root Path.expand("../../../../..", __DIR__)
+  @root Path.expand("../../../..", __DIR__)
 
   # `CallTool(<ctx>, "<tool>", map[string]any{ "action": "<x>"`, the map
   # literal on the same or the following line.
@@ -30,7 +30,7 @@ defmodule Cyfr.Ops.LiteralDriftTest do
   @ex_call ~r/call_(?:external|in_chain)\("(\w+)",[^%]*%\{\s*"action"\s*=>\s*"(\w+)"/
 
   test "every literal tool.action in the CLI and the library is one the catalog serves" do
-    served = MapSet.new(Cyfr.Ops.Catalog.tool_actions())
+    served = MapSet.new(Grimoire.Catalog.tool_actions())
 
     go_pairs =
       for file <- Prima.Test.SourceTree.files!(Path.join(@root, "apps/codex/**/*.go")),

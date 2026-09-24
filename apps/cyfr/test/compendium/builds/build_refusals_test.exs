@@ -64,7 +64,7 @@ defmodule Compendium.Builds.BuildRefusalsTest do
   end
 
   defp err_msg(reason) do
-    Cyfr.Ops.Error.render(reason) || flunk("unrenderable refusal: #{inspect(reason)}")
+    Grimoire.Error.render(reason) || flunk("unrenderable refusal: #{inspect(reason)}")
   end
 
   describe "build.compile at the builder's capacity" do

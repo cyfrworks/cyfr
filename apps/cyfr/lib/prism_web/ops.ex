@@ -5,7 +5,7 @@ defmodule PrismWeb.Ops do
   @moduledoc """
   The console's adapter onto the operation catalog.
 
-  All tool invocations go through `Cyfr.Ops.Catalog.call_external/3`
+  All tool invocations go through `Grimoire.Catalog.call_external/3`
   using the `Sanctum.Context` stored in socket assigns — in-process: the
   gate, the contract and the handler on the LiveView's own process, with
   no task, timeout or wire encoding between them.
@@ -53,7 +53,7 @@ defmodule PrismWeb.Ops do
   def call_tool(%Sanctum.Context{} = ctx, tool_name, args) do
     with {:ok, ctx} <- CyfrWeb.ContextGuard.check(ctx) do
       {name, merged_args} = normalize_tool_call(tool_name, args)
-      Cyfr.Ops.Catalog.call_external(name, ctx, merged_args)
+      Grimoire.Catalog.call_external(name, ctx, merged_args)
     end
   end
 
@@ -95,7 +95,7 @@ defmodule PrismWeb.Ops do
 
   def error_message(reason) do
     # Use the shared wire, console and guest error renderer.
-    case Cyfr.Ops.Error.render(reason) do
+    case Grimoire.Error.render(reason) do
       nil ->
         Logger.warning("[PrismWeb.Ops] tool call failed: #{inspect(reason)}")
         "The request failed — try again."

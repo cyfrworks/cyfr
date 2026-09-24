@@ -45,10 +45,10 @@ config :cyfr,
     Compendium.MCP,
     # External MCP server management. `Emissary.MCP.ExternalProvider` is not
     # here: it owns no tool of its own — the tools it discovers are the
-    # upstream servers', reached through `Cyfr.Ops.Catalog` on a lookup miss.
+    # upstream servers', reached through `Grimoire.Catalog` on a lookup miss.
     Emissary.MCP.McpServersTool,
     # System/transport (cross-cutting)
-    Emissary.MCP.Tools.SystemProvider
+    Grimoire.Provider
   ]
 
 # Consent proofs are durable: the plan → preview → commit walk spans human
@@ -56,11 +56,11 @@ config :cyfr,
 config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
 
 # The two ports the identity domain declares and something above it
-# implements. `:catalog` is consent's view of the operation table;
+# implements. `:grimoire` is consent's view of the operation table;
 # `:consent_components` is the component facts a consent decision rests
 # on. Sanctum names neither implementation: with the key unset every call
 # through the port refuses, distinguishably from an absent component.
-config :sanctum, :catalog, Cyfr.Ops.Catalog
+config :sanctum, :grimoire, Grimoire.Catalog
 
 # How long a read of a caller's credential and standing is trusted: the
 # establish memo's TTL and the age past which a retained context is

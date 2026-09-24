@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.AnnotationsTest do
+defmodule Grimoire.AnnotationsTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.Annotations
+  alias Grimoire.Annotations
 
   @annotation %{
     kind: :write,

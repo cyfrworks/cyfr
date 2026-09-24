@@ -7,7 +7,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
   # but authorized server returns an upstream error, not an authorization denial.
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Prima.Authority
   alias Prima.Authority.Blob
 
@@ -162,7 +162,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
         name = tool_def["name"],
         not String.contains?(name, ":"),
         action <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
-        :in_chain in Cyfr.Ops.Annotations.planes(tool_def, action),
+        :in_chain in Grimoire.Annotations.planes(tool_def, action),
         {name, action} not in advertised do
       assert {:deny, :tool_not_granted} =
                Prima.Authority.Transition.step(

@@ -90,7 +90,7 @@ defmodule Sanctum.MCPTest do
   # gate like any other call.
   defp read(ctx, uri),
     do:
-      Cyfr.Ops.Catalog.call_external("session", ctx, %{
+      Grimoire.Catalog.call_external("session", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })
@@ -351,12 +351,12 @@ defmodule Sanctum.MCPTest do
 
     test "key:list requires admin permission", %{restricted_ctx: ctx} do
       assert {:error, {:missing_permission, :admin}} =
-               Cyfr.Ops.Catalog.call_external("key", ctx, %{"action" => "list"})
+               Grimoire.Catalog.call_external("key", ctx, %{"action" => "list"})
     end
 
     test "key:get requires admin permission", %{restricted_ctx: ctx} do
       assert {:error, {:missing_permission, :admin}} =
-               Cyfr.Ops.Catalog.call_external("key", ctx, %{
+               Grimoire.Catalog.call_external("key", ctx, %{
                  "action" => "get",
                  "name" => "test-key"
                })
@@ -597,7 +597,7 @@ defmodule Sanctum.MCPTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Cyfr.Ops.Error.render(reason) ||
+    Grimoire.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

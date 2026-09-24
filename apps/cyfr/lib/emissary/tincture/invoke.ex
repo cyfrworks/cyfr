@@ -16,7 +16,7 @@ defmodule Emissary.Tincture.Invoke do
 
   require Logger
 
-  alias Emissary.MCP.RequestLog
+  alias Grimoire.RequestLog
 
   @type result :: %{
           status: term(),

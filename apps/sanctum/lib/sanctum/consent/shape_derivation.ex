@@ -203,7 +203,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @doc false
   # The catalog's own roster, through the port consent reads it by, so a
   # shape derived here can only name actions the catalog can serve.
-  def all_tool_actions, do: Sanctum.Catalog.tool_actions()
+  def all_tool_actions, do: Sanctum.Grimoire.tool_actions()
 
   # ---------------------------------------------------------------------------
   # Internal

@@ -57,7 +57,7 @@ defmodule Cyfr.Application do
       OpentelemetryPhoenix.setup(adapter: :bandit)
     end
 
-    # Emissary: RunningTasks GenServer is now in the supervision tree
+    # Grimoire: RunningTasks GenServer is now in the supervision tree
 
     # CORS hardening once authentication is configured (and thus users other
     # than the operator can make credentialed cross-origin requests).
@@ -136,7 +136,7 @@ defmodule Cyfr.Application do
       # rebuilds its catalogue when it goes, rather than answering
       # "Unknown tool" until a 23-hour refresh. Before anything that might
       # read through the cache.
-      Cyfr.Ops.Catalog,
+      Grimoire.Catalog,
       Emissary.MCP.ResourceRegistry,
       # The audit roster is the catalog's, read here and handed down: an
       # event is audited exactly when `Cyfr.Telemetry.Catalog` names
@@ -250,7 +250,7 @@ defmodule Cyfr.Application do
       # through, so a shutdown ends the builds before them; a build it ends
       # publishes nothing.
       {Task.Supervisor, name: Compendium.Builds.TaskSupervisor},
-      Emissary.MCP.RunningTasks,
+      Grimoire.RunningTasks,
       # Filling an athanor's component estate: the background fills the
       # first-need hook and a sign-in ask for, and the registry pulls each
       # attempt runs under its own deadline.

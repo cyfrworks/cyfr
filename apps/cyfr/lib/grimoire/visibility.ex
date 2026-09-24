@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.Visibility do
+defmodule Grimoire.Visibility do
   @moduledoc """
   Derives what a caller may see in `tools/list` — and, for a caller with
   no credential, what they may reach at all — from the same per-action
-  access annotations `Cyfr.Ops.Catalog` enforces at dispatch.
+  access annotations `Grimoire.Catalog` enforces at dispatch.
 
   Discovery is not a policy of its own. Every question here is answered by
   reading the action's annotation (`auth`, `permission`, `consent`), so a
@@ -13,14 +13,14 @@ defmodule Cyfr.Ops.Visibility do
 
   - An external-plane caller sees only actions whose planes include
     `:external`; a running chain's view is pruned to its own plane by
-    `Cyfr.Ops.Catalog`.
+    `Grimoire.Catalog`.
   - `auth: :anonymous` actions are visible to everyone.
   - `permission:` actions require the named permission.
   - `consent:` actions require an admitted surface: `:interactive` accepts
     OIDC sessions; `:staging` accepts OIDC sessions or API keys.
   - Unannotated actions are invisible and refused by dispatch.
 
-  The completeness audit (`Cyfr.Ops.Catalog.audit_action_kinds/0`,
+  The completeness audit (`Grimoire.Catalog.audit_action_kinds/0`,
   asserted `:ok` in CI) guarantees every registered action carries a full
   declaration, so nothing falls through to an accidental default.
 
@@ -30,7 +30,7 @@ defmodule Cyfr.Ops.Visibility do
   callers pass them through unchanged.
   """
 
-  alias Cyfr.Ops.Annotations
+  alias Grimoire.Annotations
   alias Sanctum.Context
 
   @doc """
@@ -41,7 +41,7 @@ defmodule Cyfr.Ops.Visibility do
   """
   @spec anonymous_action?(String.t(), String.t()) :: boolean()
   def anonymous_action?(name, action) do
-    case Cyfr.Ops.Catalog.lookup(name) do
+    case Grimoire.Catalog.lookup(name) do
       {:ok, {_module, meta}} ->
         Annotations.auth(meta, action) == :anonymous
 
@@ -68,7 +68,7 @@ defmodule Cyfr.Ops.Visibility do
   @doc "`admits?/2` by tool and action name, for the Router's invocation gate."
   @spec admits_action?(String.t(), String.t(), Context.t()) :: boolean()
   def admits_action?(name, action, %Context{} = ctx) do
-    case Cyfr.Ops.Catalog.lookup(name) do
+    case Grimoire.Catalog.lookup(name) do
       {:ok, {_module, meta}} ->
         admits?(Annotations.annotation(meta, action) || %{}, ctx)
 
@@ -157,7 +157,7 @@ defmodule Cyfr.Ops.Visibility do
     end
   end
 
-  # One shape reaches here. `Cyfr.Ops.Catalog` emits the wire
+  # One shape reaches here. `Grimoire.Catalog` emits the wire
   # spelling for registered tools and `ExternalProvider` maps a peer's
   # "parameters" onto it at ingest, so this reads "inputSchema" and nothing
   # else — a second accepted spelling only invites a third.

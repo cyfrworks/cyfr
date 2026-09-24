@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.RequestLogTest do
+defmodule Grimoire.RequestLogTest do
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.RequestLog
+  alias Grimoire.RequestLog
   alias Prima.UUID7
 
   setup do

@@ -65,7 +65,7 @@ defmodule Prima.WIT do
   # plus each `export <iface>;` line becomes `cyfr:<type>/<iface>@<ver>`.
   # Deriving (not hand-listing) means a WIT edit moves this with it; the
   # runtime's addressing of the same names is pinned by
-  # `Cyfr.WasmConventionDriftTest`.
+  # `Cyfr.WitAbiDriftTest`.
   @expected_exports Map.new(@wit_files, fn {type, files} ->
                       world =
                         case List.keyfind(files, ["world.wit"], 0) do

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-defmodule Cyfr.Ops.ServicesTest do
+defmodule Grimoire.ServicesTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.Services
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Services
+  alias Grimoire.Catalog
 
   test "every configured provider maps to a service the roster lists" do
     names = Services.service_names()
@@ -26,7 +26,7 @@ defmodule Cyfr.Ops.ServicesTest do
     assert Services.providers_for("files") == [Arca.Providers.Files]
   end
 
-  test "an unlisted module is emissary's" do
-    assert Services.service_name(UnknownProvider) == "emissary"
+  test "an unlisted module is grimoire's" do
+    assert Services.service_name(UnknownProvider) == "grimoire"
   end
 end

@@ -55,8 +55,8 @@ defmodule Prima.Provider do
   @typedoc """
   Per-action access declaration — the gate, not a hint.
 
-  `Cyfr.Ops.Catalog.do_call/4` enforces these keys at dispatch and
-  `Cyfr.Ops.Visibility` derives discovery from the same map, so what
+  `Grimoire.Catalog.do_call/4` enforces these keys at dispatch and
+  `Grimoire.Visibility` derives discovery from the same map, so what
   a caller is shown and what a caller may invoke cannot drift apart.
 
   - `:auth` — `:anonymous` serves uncredentialed callers (device flow,

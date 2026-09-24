@@ -87,7 +87,7 @@ defmodule Cyfr.Execution.MCPTest do
       end
 
       assert {:error, {:invalid_argument, _}} =
-               Cyfr.Ops.Catalog.call_external("execution", ctx, %{
+               Grimoire.Catalog.call_external("execution", ctx, %{
                  "action" => "run",
                  "reference" => "agent:local.aqua",
                  "input" => %{}
@@ -434,7 +434,7 @@ defmodule Cyfr.Execution.MCPTest do
     test "the handler releases when reached; the operator gate is the annotation" do
       # Releasing every athanor's slots is a server-wide side effect. The
       # `scope: :platform` annotation admits platform admins alone at
-      # dispatch (`Cyfr.Ops.Catalog`); the handler itself does not
+      # dispatch (`Grimoire.Catalog`); the handler itself does not
       # re-check, so a direct call releases.
       admin_ctx = %{Sanctum.TestContext.local() | platform_admin: true}
 
@@ -446,13 +446,13 @@ defmodule Cyfr.Execution.MCPTest do
 
     test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do
       assert {:error, :platform_admin_required} =
-               Cyfr.Ops.Catalog.call_external("execution", ctx, %{
+               Grimoire.Catalog.call_external("execution", ctx, %{
                  "action" => "force_release"
                })
 
       [tool] =
-        Cyfr.Ops.Visibility.filter_for_context(
-          Enum.filter(Cyfr.Ops.Catalog.list_tools(), &(&1["name"] == "execution")),
+        Grimoire.Visibility.filter_for_context(
+          Enum.filter(Grimoire.Catalog.list_tools(), &(&1["name"] == "execution")),
           ctx
         )
 
@@ -498,7 +498,7 @@ defmodule Cyfr.Execution.MCPTest do
       # Through the dispatcher, where a permission refusal would come from: the
       # handler alone refuses nothing on permission.
       result =
-        Cyfr.Ops.Catalog.call_external("execution", restricted_ctx, %{
+        Grimoire.Catalog.call_external("execution", restricted_ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
@@ -526,14 +526,14 @@ defmodule Cyfr.Execution.MCPTest do
       # Through the dispatcher — the :execute gate lives in the action
       # annotation, enforced by the catalog, not in the handler.
       assert {:error, {:missing_permission, :execute}} =
-               Cyfr.Ops.Catalog.call_external("execution", no_execute_ctx, %{
+               Grimoire.Catalog.call_external("execution", no_execute_ctx, %{
                  "action" => "status"
                })
     end
 
     test "execution.cancel denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
       assert {:error, {:missing_permission, :execute}} =
-               Cyfr.Ops.Catalog.call_external("execution", no_execute_ctx, %{
+               Grimoire.Catalog.call_external("execution", no_execute_ctx, %{
                  "action" => "cancel",
                  "execution_id" => "exec_nonexistent"
                })
@@ -866,7 +866,7 @@ defmodule Cyfr.Execution.MCPTest do
   # the gate like any other call; the answer is `%{content:, mimeType:}`.
   defp read(ctx, uri),
     do:
-      Cyfr.Ops.Catalog.call_external("execution", ctx, %{
+      Grimoire.Catalog.call_external("execution", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })
@@ -1003,7 +1003,7 @@ defmodule Cyfr.Execution.MCPTest do
   # Plain strings (the consent-tag wire forms included) pass through
   # unchanged.
   defp err_msg(reason) do
-    Cyfr.Ops.Error.render(reason) ||
+    Grimoire.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 

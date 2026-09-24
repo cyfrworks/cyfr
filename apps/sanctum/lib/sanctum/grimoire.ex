@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.Catalog do
+defmodule Sanctum.Grimoire do
   @moduledoc """
   The operation catalog as consent sees it.
 
@@ -15,7 +15,7 @@ defmodule Sanctum.Catalog do
   cannot load is a boot failure there, never a narrower answer here — a
   digest derived from a partial catalog would read as the whole.
 
-  Which module that is comes from configuration (`:sanctum, :catalog`),
+  Which module that is comes from configuration (`:sanctum, :grimoire`),
   so nothing here names it: a default spelled in code would be a
   compile-time reference to the layer above. With the key unset the
   catalog is unreadable, and every call raises rather than answering a
@@ -59,13 +59,13 @@ defmodule Sanctum.Catalog do
 
   @doc """
   The implementation, written by configuration at boot
-  (`:sanctum, :catalog`) and swappable for a test. Raises when unset:
+  (`:sanctum, :grimoire`) and swappable for a test. Raises when unset:
   see the note above on why an unreadable catalog is not an empty one.
   """
   @spec impl() :: module()
   def impl do
-    Application.get_env(:sanctum, :catalog) ||
-      raise "no :sanctum, :catalog is configured: consent cannot read the operation table"
+    Application.get_env(:sanctum, :grimoire) ||
+      raise "no :sanctum, :grimoire is configured: consent cannot read the operation table"
   end
 
   @spec tool_actions() :: [String.t()]

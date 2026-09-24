@@ -18,7 +18,7 @@ defmodule Cyfr.GenServerCatchallTest do
   # Probed live: named, started by the app under test.
   @genservers [
     {Aqua.Loop.Worker, "Loop.Worker"},
-    {Cyfr.Ops.Catalog, "Catalog"},
+    {Grimoire.Catalog, "Catalog"},
     {Emissary.MCP.ResourceRegistry, "ResourceRegistry"},
     {Arca.Cache.Sweeper, "Sweeper"},
     {Cyfr.TelemetryBridge, "TelemetryBridge"},
@@ -45,7 +45,7 @@ defmodule Cyfr.GenServerCatchallTest do
     Cyfr.Execution.WorkerWatch => "gated by :worker_watch_enabled",
     Emissary.MCP.ExternalServerReconciler => "gated by :external_server_reconciler_enabled",
     Emissary.MCP.Bridge => "started only when an MCP bridge URL and key are configured",
-    Emissary.MCP.RunningTasks => "probing would race real request tracking",
+    Grimoire.RunningTasks => "probing would race real request tracking",
     Sanctum.Consent.Proof.Memory => "started only when the memory proof store is configured",
     Sanctum.Authority.BudgetGuard => "guards live invoke budgets"
   }

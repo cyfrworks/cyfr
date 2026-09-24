@@ -70,7 +70,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert [] = Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id)
 
     # And the refusal has a sentence every surface renders the same way.
-    assert Cyfr.Ops.Error.render(:not_provisioned) =~ "still being prepared"
+    assert Grimoire.Error.render(:not_provisioned) =~ "still being prepared"
   end
 
   test "a reader adds nothing while a fill is already running", %{ctx: ctx, group: group} do

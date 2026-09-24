@@ -456,8 +456,8 @@ defmodule Opus.ModelContractTest do
     # A catalog tool's schema is the one the gate derives for the actions the
     # policy offers, and nothing the policy does not offer is named.
     for {name, actions} <- [{"notes", ~w(keep list read search)}, {"system", ~w(status)}] do
-      {:ok, definition} = Cyfr.Ops.Catalog.get_tool(name)
-      derived = Cyfr.Ops.Catalog.restrict_tool(definition, actions)["inputSchema"]
+      {:ok, definition} = Grimoire.Catalog.get_tool(name)
+      derived = Grimoire.Catalog.restrict_tool(definition, actions)["inputSchema"]
       %{"parameters" => given} = Enum.find(tools, &(&1["name"] == name))
 
       assert given == Jason.decode!(Jason.encode!(derived))

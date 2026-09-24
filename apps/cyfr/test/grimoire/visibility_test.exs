@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.VisibilityTest do
+defmodule Grimoire.VisibilityTest do
   # Not async: reads the live registry cache the application owns.
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
-  alias Cyfr.Ops.Visibility
+  alias Grimoire.Catalog
+  alias Grimoire.Visibility
   alias Sanctum.Context
 
   # Derive fixtures from Catalog.list_tools/0 to check the definitions served at runtime.

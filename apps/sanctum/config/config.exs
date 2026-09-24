@@ -20,7 +20,7 @@ config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
 config :sanctum, :fallback_origin, "http://localhost:4000"
 
 # The two ports this domain declares — consent's view of the operation
-# table (`:catalog`) and the component facts a consent rests on
+# table (`:grimoire`) and the component facts a consent rests on
 # (`:consent_components`) — are deliberately unset here. Nothing above
 # this application exists to implement them, and an unset port refuses
 # every call through it, distinguishably from an absent component; the

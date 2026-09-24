@@ -8,8 +8,8 @@ defmodule Sanctum.MCP.AthanorMemberDoorToolsTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Error
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Error
+  alias Grimoire.Catalog
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 

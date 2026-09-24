@@ -15,10 +15,10 @@ defmodule Emissary.MCP.Router do
   ## Authorization Model
 
   The Router gates; the dispatcher authorizes. For a declared action the
-  Router asks `Cyfr.Ops.Catalog.authorize_declared_action/4` before
+  Router asks `Grimoire.Catalog.authorize_declared_action/4` before
   validating remaining fields, so an unauthorized caller receives the
   catalog's access refusal rather than a schema-detail error. Discovery
-  still reads the same annotations through `Cyfr.Ops.Visibility`.
+  still reads the same annotations through `Grimoire.Visibility`.
   Handlers keep only the residual checks an annotation cannot express
   (tenant presence, ownership, definition authority, the domain's finer
   consent arms).
@@ -29,7 +29,7 @@ defmodule Emissary.MCP.Router do
 
   The anonymous surface — which tool actions a caller with no credential may
   reach — is the set of actions annotated `auth: :anonymous`, read through
-  `Cyfr.Ops.Visibility`, which also decides what such a caller may
+  `Grimoire.Visibility`, which also decides what such a caller may
   *see*. Discovery and invocation read one declaration: when each held its
   own list, discovery advertised writes that invocation refused.
 
@@ -39,7 +39,7 @@ defmodule Emissary.MCP.Router do
   metadata. `resources/read` is an ordinary operation call:
   `Emissary.MCP.ResourceRegistry.resolve/1` names the operation that
   declares the URI's scheme, and the Router calls it once through
-  `Cyfr.Ops.Catalog.call_external/4` with the URI as its one argument —
+  `Grimoire.Catalog.call_external/4` with the URI as its one argument —
   the same gate, plane, authentication, permission and runner a
   `tools/call` gets. The Router makes no authorization decision of its
   own; it renders the answer.
@@ -51,7 +51,7 @@ defmodule Emissary.MCP.Router do
 
   require Logger
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Emissary.MCP.{Message, Protocol, ResourceRegistry}
 
   @server_capabilities %{
@@ -147,7 +147,7 @@ defmodule Emissary.MCP.Router do
 
   defp dispatch_method(ctx, "tools/list", params, _id) do
     Catalog.list_tools()
-    |> Cyfr.Ops.Visibility.filter_for_context(ctx)
+    |> Grimoire.Visibility.filter_for_context(ctx)
     |> paginate("tools", params)
   end
 
@@ -341,15 +341,15 @@ defmodule Emissary.MCP.Router do
     end
   end
 
-  # Render known typed errors through Cyfr.Ops.Error and pass client-safe
+  # Render known typed errors through Grimoire.Error and pass client-safe
   # strings through. Log unknown internal terms and return a generic reply.
   defp format_error_reason(reason) when is_binary(reason), do: reason
 
   defp format_error_reason(reason) do
-    # One renderer for every typed vocabulary (`Cyfr.Ops.Error.render/2`
+    # One renderer for every typed vocabulary (`Grimoire.Error.render/2`
     # — Unauthorized, `Prima.Refusal`, OCI errors); `nil` means the term is
     # internal and must not be reflected.
-    case Cyfr.Ops.Error.render(reason) do
+    case Grimoire.Error.render(reason) do
       nil ->
         Logger.warning("[MCP.Router] tool call failed: #{inspect(reason)}")
         "The tool call failed."
@@ -448,6 +448,6 @@ defmodule Emissary.MCP.Router do
   # `cursor` as the only parameter, and nothing in this repository — no client,
   # no guide, no test — ever sent it. The view it produced is still reachable
   # where it is actually used, through the `tools` tool
-  # (`Emissary.MCP.Tools.SystemProvider`), which is how a running component
+  # (`Grimoire.Provider`), which is how a running component
   # discovers what it may call.
 end

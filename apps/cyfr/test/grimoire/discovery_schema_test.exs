@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.DiscoverySchemaTest do
+defmodule Grimoire.DiscoverySchemaTest do
   @moduledoc """
   Every registered tool's discovery schema is one a model API accepts.
   Anthropic refuses `oneOf`, `anyOf` and `allOf` at the top level of a
@@ -11,7 +11,7 @@ defmodule Cyfr.Ops.DiscoverySchemaTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
 
   @combinators ~w(oneOf anyOf allOf not if then else)
 

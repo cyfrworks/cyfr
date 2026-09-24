@@ -158,7 +158,7 @@ defmodule Cyfr.Execution.ChainScopeTest do
       # call_in_chain drops the guest's key and re-injects only the
       # lineage it was told, so the stranger stays out of reach.
       {:error, message} =
-        Cyfr.Ops.Catalog.call_in_chain(
+        Grimoire.Catalog.call_in_chain(
           "execution",
           ctx,
           %{
@@ -183,7 +183,7 @@ defmodule Cyfr.Execution.ChainScopeTest do
       # Belt to the chain scope's braces: the record read gate refuses the
       # guest plane outright, before any lineage question arises.
       {:error, message} =
-        Cyfr.Ops.Catalog.call_in_chain(
+        Grimoire.Catalog.call_in_chain(
           "execution",
           Sanctum.Context.enter_guest(ctx),
           %{"action" => "logs", "execution_id" => stranger.id},
