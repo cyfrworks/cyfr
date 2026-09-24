@@ -291,7 +291,7 @@ omitted entirely for methods that name no subject.
     ],
     "isError": false,
     "_meta": {
-      "io.modelcontextprotocol/serverInfo": {"name": "CYFR", "version": "0.5.8"}
+      "io.modelcontextprotocol/serverInfo": {"name": "CYFR", "version": "<release>"}
     }
   }
 }

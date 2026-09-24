@@ -395,7 +395,7 @@ defmodule Sanctum.ApiKey do
           {:ok, key_type} ->
             new_key = generate_key(key_type)
             now = DateTime.utc_now() |> DateTime.to_iso8601()
-            scope_list = Cyfr.Json.decode_or(row.scope, [], "Sanctum.ApiKey")
+            scope_list = decode_stored(row.scope, [], "scope")
 
             case Arca.ApiKeyStorage.rotate_key(
                    actor,
@@ -495,11 +495,15 @@ defmodule Sanctum.ApiKey do
         {:error, :revoked}
 
       {:ok, row} ->
-        ip_allowlist = Cyfr.Json.decode_or(row.ip_allowlist, nil, "Sanctum.ApiKey")
+        ip_allowlist = decode_allowlist(row.ip_allowlist)
 
         cond do
           not Sanctum.Tenancy.channel_active?(row.athanor_id, row.created_by) ->
             {:error, :channel_closed}
+
+          # A restriction that cannot be read admits no address.
+          ip_allowlist == :corrupt ->
+            {:error, :ip_not_allowed}
 
           ip_allowlist in [nil, []] ->
             key_metadata(row, key_type)
@@ -605,9 +609,9 @@ defmodule Sanctum.ApiKey do
       id: row.id,
       name: row.name,
       type: key_type,
-      scope: Cyfr.Json.decode_or(row.scope, [], "Sanctum.ApiKey"),
+      scope: decode_stored(row.scope, [], "scope"),
       rate_limit: row.rate_limit,
-      ip_allowlist: Cyfr.Json.decode_or(row.ip_allowlist, nil, "Sanctum.ApiKey"),
+      ip_allowlist: decode_stored(row.ip_allowlist, nil, "ip_allowlist"),
       user_id: row.created_by,
       athanor_id: row.athanor_id
     }
@@ -733,9 +737,9 @@ defmodule Sanctum.ApiKey do
       name: row.name,
       type: key_type,
       key_prefix: (row.key_prefix || "") <> "...",
-      scope: Cyfr.Json.decode_or(row.scope, [], "Sanctum.ApiKey"),
+      scope: decode_stored(row.scope, [], "scope"),
       rate_limit: row.rate_limit,
-      ip_allowlist: Cyfr.Json.decode_or(row.ip_allowlist, nil, "Sanctum.ApiKey"),
+      ip_allowlist: decode_stored(row.ip_allowlist, nil, "ip_allowlist"),
       created_at: Cyfr.Time.iso8601(row.inserted_at),
       rotated_at: Cyfr.Time.iso8601(row.rotated_at)
     }
@@ -760,5 +764,51 @@ defmodule Sanctum.ApiKey do
       {:ok, json} -> json
       {:error, _} -> "[]"
     end
+  end
+
+  # A stored JSON column that does not decode reads as its default. The
+  # line names the column and its size, never its bytes.
+  defp decode_stored(nil, default, _field), do: default
+  defp decode_stored("", default, _field), do: default
+
+  defp decode_stored(json, default, field) when is_binary(json) do
+    case Cyfr.Json.decode(json) do
+      {:ok, value} ->
+        value
+
+      {:error, :invalid_json} ->
+        Logger.warning(
+          "[Sanctum.ApiKey] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
+        )
+
+        default
+    end
+  end
+
+  # A stored allowlist is a security row. Valid JSON holding only strings
+  # is the list, an absent column is no restriction, and anything else is
+  # corrupt, which every admission refuses. The line names the column and
+  # its size, never its bytes.
+  defp decode_allowlist(nil), do: nil
+  defp decode_allowlist(""), do: nil
+
+  defp decode_allowlist(json) when is_binary(json) do
+    case Cyfr.Json.decode(json) do
+      {:ok, list} when is_list(list) ->
+        if Enum.all?(list, &is_binary/1),
+          do: list,
+          else: corrupt_allowlist("is not a list of strings", json)
+
+      {:ok, _other} ->
+        corrupt_allowlist("is not a list of strings", json)
+
+      {:error, :invalid_json} ->
+        corrupt_allowlist("is not valid JSON", json)
+    end
+  end
+
+  defp corrupt_allowlist(problem, json) do
+    Logger.warning("[Sanctum.ApiKey] stored ip_allowlist #{problem} (#{byte_size(json)} bytes)")
+    :corrupt
   end
 end

@@ -267,7 +267,7 @@ defmodule Cyfr.BuilderProtocol do
 
   @doc "This release's version, as a health answer reports it."
   @spec release() :: String.t()
-  def release, do: :cyfr_contracts |> Application.spec(:vsn) |> to_string()
+  def release, do: Cyfr.Version.current()
 
   @doc "The MAC domain every Locus service signs under."
   @spec domain() :: String.t()

@@ -35,6 +35,8 @@ defmodule Sanctum.Consent.Plan do
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
 
+  require Logger
+
   # Ten minutes: an operator reads candidates and decides. The commit
   # proof (120s) is the short-lived one; the plan token only pins facts.
   @plan_ttl_ms 600_000
@@ -68,7 +70,7 @@ defmodule Sanctum.Consent.Plan do
          {:ok, shape_input} <- ShapeDerivation.shape_input(ctx, source_ref),
          {:ok, shape_digest} <- ShapeDigest.compute(shape_input),
          {:ok, profile_id, expected_revision} <- locate_profile(ctx, source_ref, label, kind),
-         manifest = decode_manifest(component),
+         manifest = manifest(component, source_ref),
          {:ok, resources, limits} <-
            Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest),
          {:ok, candidates} <- candidates(ctx),
@@ -139,8 +141,17 @@ defmodule Sanctum.Consent.Plan do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp decode_manifest(component) do
-    Cyfr.Manifest.decode(Map.get(component, :manifest) || Map.get(component, "manifest"))
+  # A manifest that does not decode declares nothing. The line names the
+  # component, never the manifest's bytes.
+  defp manifest(row, ref) do
+    case Cyfr.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Sanctum.Consent.Plan] manifest malformed: #{ref}")
+        %{}
+    end
   end
 
   # Declared needs become the sheet's rows — the operator sees each
@@ -221,7 +232,7 @@ defmodule Sanctum.Consent.Plan do
   defp node_manifest(ctx, node_key) do
     with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
          {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-      {:ok, Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
+      {:ok, manifest(row, node_key)}
     end
   end
 

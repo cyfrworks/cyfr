@@ -4,6 +4,9 @@
 defmodule Sanctum.CallerTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+  import ExUnit.CaptureLog
+
   alias Sanctum.Caller
   alias Sanctum.Context
   alias Sanctum.Session
@@ -317,6 +320,61 @@ defmodule Sanctum.CallerTest do
 
       Process.sleep(200)
       assert {:error, :unauthenticated} = Caller.establish(session.token)
+    end
+  end
+
+  describe "a key whose stored allowlist does not read" do
+    # A corrupt allowlist is a corrupt security row, not an absent
+    # restriction: the derived source and the retained context both refuse.
+    setup do
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      name = "corrupt-allowlist-#{System.unique_integer([:positive])}"
+
+      {:ok, %{api_key: raw}} =
+        Sanctum.ApiKey.create(ctx, %{name: name, type: :service, ip_allowlist: ["192.168.1.0/24"]})
+
+      {:ok, key} = Caller.establish({:api_key, raw}, client_ip: "192.168.1.10")
+      key = %{key | client_ip: "192.168.1.10"}
+
+      claims =
+        Map.merge(key.credential_binding, %{user_id: key.user_id, athanor_id: key.athanor_id})
+
+      # Standing while the row reads: both paths admit.
+      assert {:ok, _} = Caller.derived_standing(claims, client_ip: "192.168.1.10")
+      assert {:ok, _} = Caller.revalidate_session(key)
+
+      {:ok, name: name, key: key, claims: claims}
+    end
+
+    for {label, stored} <- [
+          {"not JSON", ~s(["192.168.1.0/24")},
+          {"not a list", ~s({"allow": "192.168.1.0/24"})},
+          {"not strings", "[1, 2]"}
+        ] do
+      test "#{label}: the derived source and the revalidation refuse", %{
+        name: name,
+        key: key,
+        claims: claims
+      } do
+        stored = unquote(stored)
+
+        Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.name == ^name),
+          set: [ip_allowlist: stored]
+        )
+
+        log =
+          capture_log(fn ->
+            assert Caller.derived_standing(claims, client_ip: "192.168.1.10") ==
+                     {:error, :ip_not_allowed}
+
+            assert Caller.revalidate_session(key) == {:error, :unauthenticated}
+          end)
+
+        assert log =~
+                 ~r/\[Sanctum\.Caller\] stored ip_allowlist is not (valid JSON|a list of strings) \(#{byte_size(stored)} bytes\)/
+
+        refute log =~ stored
+      end
     end
   end
 

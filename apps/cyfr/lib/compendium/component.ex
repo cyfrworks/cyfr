@@ -13,6 +13,8 @@ defmodule Compendium.Component do
   alias Sanctum.Context
   alias Compendium.Registry
 
+  require Logger
+
   @doc """
   Inspect a component by reference.
 
@@ -87,8 +89,7 @@ defmodule Compendium.Component do
       {:ok, component, ref} ->
         canonical_ref = canonical_ref(ref)
 
-        manifest = component[:manifest] || component["manifest"] || %{}
-        manifest = decode_manifest(manifest)
+        manifest = decode_manifest(component[:manifest] || component["manifest"], canonical_ref)
 
         needs = declared_needs(manifest)
         deps = extract_dependency_refs(manifest)
@@ -210,7 +211,8 @@ defmodule Compendium.Component do
   # ============================================================================
 
   defp maybe_enrich_with_dependencies(ctx, component, result) do
-    manifest = decode_manifest(component[:manifest] || component["manifest"])
+    manifest =
+      decode_manifest(component[:manifest] || component["manifest"], result["component_ref"])
 
     static_deps = get_in(manifest, ["dependencies", "static"]) || []
     has_dynamic = Compendium.DependencyResolver.has_dynamic_deps?(manifest)
@@ -249,7 +251,18 @@ defmodule Compendium.Component do
     end)
   end
 
-  defdelegate decode_manifest(value), to: Cyfr.Manifest, as: :decode
+  # A manifest that does not decode declares nothing. The line names the
+  # component, never the manifest's bytes.
+  defp decode_manifest(value, ref) do
+    case Cyfr.Manifest.decode_strict(value) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Compendium.Component] manifest malformed: #{ref}")
+        %{}
+    end
+  end
 
   # ============================================================================
   # Private — Setup Plan Helpers

@@ -124,7 +124,7 @@ defmodule Opus.Runner do
   def handle_info({:watchdog, _execution_id}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

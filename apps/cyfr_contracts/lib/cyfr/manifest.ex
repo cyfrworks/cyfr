@@ -16,8 +16,6 @@ defmodule Cyfr.Manifest do
   every caller) and restates nothing about the layout.
   """
 
-  require Logger
-
   alias Cyfr.Manifest.{Caps, Needs}
 
   # The closed top-level key roster — every field a manifest may carry,
@@ -124,28 +122,16 @@ defmodule Cyfr.Manifest do
 
   Handles nil (returns empty map), maps (passthrough), and JSON strings.
   Returns an empty map on decode failure — a malformed manifest degrades to
-  "no declarations", so the failure is logged to avoid a silent capability gap.
+  "no declarations". A caller for which that is a capability gap reads
+  `decode_strict/1` instead and says so in its own log.
   """
   @spec decode(nil | map() | binary()) :: map()
-  def decode(nil), do: %{}
-  def decode(manifest) when is_map(manifest), do: manifest
-
-  def decode(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, map} when is_map(map) ->
-        map
-
-      other ->
-        Logger.warning(
-          "[Cyfr.Manifest] manifest decode failed (#{inspect(elem_or_self(other))}); " <>
-            "treating as empty — declared capabilities will be missing"
-        )
-
-        %{}
+  def decode(manifest) do
+    case decode_strict(manifest) do
+      {:ok, map} -> map
+      {:error, :malformed_manifest} -> %{}
     end
   end
-
-  def decode(_), do: %{}
 
   @doc """
   Strict counterpart of `decode/1` for write boundaries.
@@ -167,9 +153,6 @@ defmodule Cyfr.Manifest do
   end
 
   def decode_strict(_), do: {:error, :malformed_manifest}
-
-  defp elem_or_self({:error, reason}), do: reason
-  defp elem_or_self(other), do: other
 
   defp reject_unknown_keys(manifest) do
     case manifest |> Map.keys() |> Enum.filter(&(is_binary(&1) and &1 not in @known_keys)) do

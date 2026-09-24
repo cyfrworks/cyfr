@@ -463,7 +463,7 @@ defmodule Emissary.MCP.ExternalServer do
   def handle_info({:bridge_tools_changed, _another_epoch}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

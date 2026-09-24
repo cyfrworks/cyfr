@@ -40,6 +40,8 @@ defmodule Compendium.Activation do
   alias Sanctum.Context
   alias Cyfr.JCS
 
+  require Logger
+
   # Mirrors Compendium.DependencyResolver's traversal bound.
   @max_depth 10
 
@@ -155,7 +157,7 @@ defmodule Compendium.Activation do
   end
 
   defp integrity(row) do
-    manifest = Cyfr.Manifest.decode(field(row, :manifest))
+    manifest = manifest(row)
 
     case Compendium.ReleaseDigest.compute(field(row, :digest), manifest) do
       {:ok, recomputed} ->
@@ -200,7 +202,7 @@ defmodule Compendium.Activation do
 
       true ->
         acc = Map.put(acc, key, component)
-        manifest = Cyfr.Manifest.decode(field(component, :manifest))
+        manifest = manifest(component)
 
         case Compendium.DependencyResolver.extract_from_manifest(manifest, key) do
           {:ok, deps} -> walk_deps(ctx, deps, acc, depth)
@@ -254,6 +256,20 @@ defmodule Compendium.Activation do
   # from the registry's build path; neither implements Access.
   defp field(component, key) do
     Map.get(component, key) || Map.get(component, Atom.to_string(key))
+  end
+
+  # A manifest that does not decode declares nothing: no dependencies, and
+  # a release digest that no longer matches. The line names the component,
+  # never the manifest's bytes.
+  defp manifest(row) do
+    case Cyfr.Manifest.decode_strict(field(row, :manifest)) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Compendium.Activation] manifest malformed: #{node_key(row)}")
+        %{}
+    end
   end
 
   defp hash_graph(graph) do

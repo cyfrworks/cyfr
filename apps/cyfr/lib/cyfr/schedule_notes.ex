@@ -81,9 +81,28 @@ defmodule Cyfr.ScheduleNotes do
   defp decode(%{} = decoded), do: decoded
 
   defp decode(raw) do
-    case Cyfr.Json.decode_or(raw, %{}, "Cyfr.ScheduleNotes") do
+    case decode_stored(raw, %{}, "metadata") do
       %{} = decoded -> decoded
       _ -> %{}
+    end
+  end
+
+  # A stored JSON column that does not decode reads as its default. The
+  # line names the column and its size, never its bytes.
+  defp decode_stored(nil, default, _field), do: default
+  defp decode_stored("", default, _field), do: default
+
+  defp decode_stored(json, default, field) when is_binary(json) do
+    case Cyfr.Json.decode(json) do
+      {:ok, value} ->
+        value
+
+      {:error, :invalid_json} ->
+        Logger.warning(
+          "[Cyfr.ScheduleNotes] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
+        )
+
+        default
     end
   end
 

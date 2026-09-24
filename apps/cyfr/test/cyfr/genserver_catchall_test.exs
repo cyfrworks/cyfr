@@ -4,9 +4,9 @@
 defmodule Cyfr.GenServerCatchallTest do
   @moduledoc """
   Every named GenServer with a catch-all `handle_info/2` survives an
-  unexpected message and logs it BOUNDED.
+  unexpected message and logs its shape, bounded and without its values.
 
-  Discovers named GenServers using `Cyfr.UnexpectedMessage.log/3` and
+  Discovers named GenServers using `Cyfr.LoggerContext.unexpected/3` and
   requires each to have a behavioral probe or an explicit exemption.
   """
   use ExUnit.Case, async: false
@@ -157,7 +157,7 @@ defmodule Cyfr.GenServerCatchallTest do
         for dir <- @release_libs,
             path <- Cyfr.Test.SourceTree.files!(Path.join([root, dir, "**/*.ex"])),
             source = Cyfr.Test.SourceTree.read(path),
-            String.contains?(source, "Cyfr.UnexpectedMessage.log(__MODULE__"),
+            String.contains?(source, "Cyfr.LoggerContext.unexpected(__MODULE__"),
             # Two spellings register the app-wide name, and matching only the
             # first hid `Sanctum.Authority.BudgetGuard` — a real adopter —
             # from this roster entirely, which made its `@not_probed` row
@@ -170,22 +170,81 @@ defmodule Cyfr.GenServerCatchallTest do
       missing = Enum.reject(adopters, &MapSet.member?(rostered, &1))
 
       assert missing == [],
-             "named GenServers adopted Cyfr.UnexpectedMessage without joining this " <>
+             "named GenServers adopted Cyfr.LoggerContext.unexpected/3 without joining this " <>
                "test's roster (probe them, or excuse them with a reason): #{inspect(missing)}"
     end
   end
 
-  describe "the helper's inspect is bounded" do
+  describe "the helper logs a message's shape" do
+    # The line from the module prefix to its end: what the helper wrote,
+    # without the formatter's timestamp and level.
+    defp helper_line(log) do
+      [line] = Regex.run(~r/\[Cyfr\.GenServerCatchallTest\] unexpected message: .*/, log)
+      line
+    end
+
     test "a huge term logs a bounded line" do
       huge = %{blob: String.duplicate("x", 1_000_000), list: Enum.to_list(1..100_000)}
 
-      log = capture_log(fn -> Cyfr.UnexpectedMessage.log(__MODULE__, huge) end)
+      log = capture_log(fn -> Cyfr.LoggerContext.unexpected(__MODULE__, huge) end)
 
       assert log =~ "unexpected message"
+      refute log =~ "xxxx"
 
-      assert String.length(log) < 2_000,
+      assert String.length(helper_line(log)) <= 200,
              "the unexpected-message line is unbounded (#{String.length(log)} chars) — " <>
                "the helper exists to keep a stray huge term out of the log"
+    end
+
+    test "a secret-bearing message logs its shape and never the secret" do
+      secret = "sk-live-4f9a1c2e7b0d4e6f8a1b3c5d7e9f0a2b"
+
+      messages = [
+        {:thread_event, %{"content" => secret}},
+        %{token: secret, athanor_id: "ath_1"},
+        %URI{userinfo: secret, host: "example.com"},
+        secret,
+        [secret, {:credential, secret}],
+        {secret, :tail}
+      ]
+
+      for message <- messages do
+        log = capture_log(fn -> Cyfr.LoggerContext.unexpected(__MODULE__, message) end)
+
+        assert log =~ "unexpected message"
+        refute log =~ "sk-live", "the log carried the secret: #{log}"
+      end
+    end
+
+    test "the shape names the tuple's tag and arity, the struct's module and keys" do
+      log = capture_log(fn -> Cyfr.LoggerContext.unexpected(__MODULE__, {:ping, 1, 2}) end)
+      assert helper_line(log) =~ "tuple :ping/3"
+
+      log = capture_log(fn -> Cyfr.LoggerContext.unexpected(__MODULE__, %URI{host: "h"}) end)
+      assert helper_line(log) =~ "%URI{:authority, :fragment, :host"
+      refute log =~ ~s("h")
+
+      map = Map.new(1..20, &{:"key_#{String.pad_leading(to_string(&1), 2, "0")}", &1})
+      log = capture_log(fn -> Cyfr.LoggerContext.unexpected(__MODULE__, map) end)
+      assert helper_line(log) =~ "map/20 [:key_01,"
+      assert log =~ ":key_10]"
+      refute log =~ ":key_11"
+    end
+
+    test "the level is the caller's" do
+      # The suite logs at :warning; this synchronous test lowers it and
+      # puts it back.
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        capture_log([level: :debug], fn ->
+          Cyfr.LoggerContext.unexpected(__MODULE__, :sibling_broadcast, :debug)
+        end)
+
+      assert log =~ "[debug]"
+      assert helper_line(log) =~ ":sibling_broadcast"
     end
   end
 end

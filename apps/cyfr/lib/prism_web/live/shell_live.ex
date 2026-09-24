@@ -654,7 +654,7 @@ defmodule PrismWeb.ShellLive do
   def handle_info({:notify, _athanor_id, _kind, _payload}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

@@ -17,7 +17,13 @@ defmodule Cyfr.LoggerContext do
   before application code is loaded and so must spell the list literally;
   `Cyfr.LoggerRosterTest` binds the two together, and `Cyfr.JsonFormatter`
   falls back to it.
+
+  `unexpected/3` is the one log line for a process's unexpected-message
+  catch-all. Each server keeps its own final `handle_info/2` clause and
+  calls it there.
   """
+
+  require Logger
 
   # Every key this module ever sets. A key the formatter's roster omits is
   # written to the process dictionary and then dropped on the floor, which
@@ -90,5 +96,92 @@ defmodule Cyfr.LoggerContext do
   """
   def restore(metadata) when is_list(metadata) do
     Logger.metadata(metadata)
+  end
+
+  @levels [:debug, :info, :warning, :error]
+
+  # The whole line, prefix included. A catch-all receives whatever reached
+  # the mailbox, so the line has one size whatever the message's.
+  @max_line 200
+
+  # A map names at most this many of its keys.
+  @max_keys 10
+
+  @doc """
+  Log an unexpected message at `level`, by its shape and never its values.
+
+  The line reads `[Module] unexpected message: <shape>`, at most
+  #{@max_line} characters. The shape of a tuple is its leading atom and
+  its arity; of a struct, its module and sorted field keys; of a map, its
+  size and its first #{@max_keys} sorted keys, an atom key as itself and
+  any other key by its type; an atom is itself; a pid,
+  reference, port or function is its type; anything else is its type and
+  size. A message routinely carries thread rows, execution output or a
+  credential, and none of that reaches the log.
+
+  ## Level
+
+  Defaults to `:warning`: a supervised server receiving a message it does
+  not understand is a wiring fault worth seeing.
+
+  Console LiveViews pass `:debug`. A LiveView subscribes to tenant-wide
+  topics and is expected to receive broadcasts meant for its siblings; at
+  `:warning` every such message would be an alarm about normal operation.
+  """
+  @spec unexpected(module(), term(), :debug | :info | :warning | :error) :: :ok
+  def unexpected(module, message, level \\ :warning)
+      when is_atom(module) and level in @levels do
+    line = "[#{inspect(module)}] unexpected message: " <> shape(message)
+    Logger.log(level, cap(line, @max_line))
+  end
+
+  defp shape(atom) when is_atom(atom), do: inspect(atom)
+
+  defp shape(tuple) when is_tuple(tuple) do
+    case tuple_size(tuple) do
+      0 -> "tuple/0"
+      arity when is_atom(elem(tuple, 0)) -> "tuple #{inspect(elem(tuple, 0))}/#{arity}"
+      arity -> "tuple/#{arity}"
+    end
+  end
+
+  defp shape(%module{} = struct) do
+    keys = struct |> Map.keys() |> List.delete(:__struct__) |> Enum.sort()
+    "%#{inspect(module)}{#{Enum.map_join(keys, ", ", &key/1)}}"
+  end
+
+  defp shape(map) when is_map(map) do
+    keys = map |> Map.keys() |> Enum.sort() |> Enum.take(@max_keys)
+    "map/#{map_size(map)} [#{Enum.map_join(keys, ", ", &key/1)}]"
+  end
+
+  defp shape(binary) when is_binary(binary), do: "binary/#{byte_size(binary)} bytes"
+  defp shape(bits) when is_bitstring(bits), do: "bitstring/#{bit_size(bits)} bits"
+  defp shape(list) when is_list(list), do: "list/#{count(list, 0)}"
+  defp shape(other), do: type(other)
+
+  # An atom key names a field. Any other key is data, a credential
+  # possibly, and is only its type.
+  defp key(atom) when is_atom(atom), do: inspect(atom)
+  defp key(other), do: type(other)
+
+  defp type(term) when is_tuple(term), do: "tuple"
+  defp type(term) when is_map(term), do: "map"
+  defp type(term) when is_list(term), do: "list"
+  defp type(term) when is_binary(term), do: "binary"
+  defp type(term) when is_bitstring(term), do: "bitstring"
+  defp type(term) when is_integer(term), do: "integer"
+  defp type(term) when is_float(term), do: "float"
+  defp type(term) when is_pid(term), do: "pid"
+  defp type(term) when is_reference(term), do: "reference"
+  defp type(term) when is_port(term), do: "port"
+  defp type(term) when is_function(term), do: "function"
+
+  # An improper list has no length; its proper prefix is what is counted.
+  defp count([_ | rest], n), do: count(rest, n + 1)
+  defp count(_tail, n), do: n
+
+  defp cap(text, max) do
+    if String.length(text) > max, do: String.slice(text, 0, max - 1) <> "…", else: text
   end
 end

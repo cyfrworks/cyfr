@@ -25,8 +25,6 @@ defmodule Cyfr.SecretMasker do
   covers the case where the component puts one in its own output.
   """
 
-  require Logger
-
   @redacted "[REDACTED]"
 
   @doc """
@@ -93,31 +91,15 @@ defmodule Cyfr.SecretMasker do
 
   defp usable_secrets(_values), do: []
 
+  # Through JSON, so nested structures mask consistently. A value JSON
+  # cannot carry, or a replacement that broke the JSON, masks the map
+  # directly instead.
   defp do_mask(output, secret_values) when is_map(output) do
-    # Convert to JSON, mask, and convert back
-    # This handles nested structures consistently
-    case Jason.encode(output) do
-      {:ok, json} ->
-        masked_json = mask_in_string(json, secret_values)
-
-        case Jason.decode(masked_json) do
-          {:ok, result} ->
-            result
-
-          {:error, _} ->
-            Logger.warning(
-              "[Cyfr.SecretMasker] JSON re-decode failed after masking — masking operation may have broken JSON structure. Falling back to direct map masking."
-            )
-
-            mask_map(output, secret_values)
-        end
-
-      {:error, _} ->
-        Logger.debug(
-          "[Cyfr.SecretMasker] Output is not JSON-encodable, using direct map masking instead"
-        )
-
-        mask_map(output, secret_values)
+    with {:ok, json} <- Jason.encode(output),
+         {:ok, result} <- json |> mask_in_string(secret_values) |> Jason.decode() do
+      result
+    else
+      {:error, _} -> mask_map(output, secret_values)
     end
   end
 

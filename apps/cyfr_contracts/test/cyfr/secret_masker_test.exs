@@ -81,5 +81,10 @@ defmodule Cyfr.SecretMaskerTest do
       assert SecretMasker.mask(%{"a" => "b"}, []) == %{"a" => "b"}
       assert SecretMasker.mask(%{"a" => "b"}, nil) == %{"a" => "b"}
     end
+
+    test "a map JSON cannot carry is masked directly" do
+      assert SecretMasker.mask(%{"pid" => self(), "note" => "sk-secret123"}, ["sk-secret123"]) ==
+               %{"pid" => self(), "note" => @redacted}
+    end
   end
 end

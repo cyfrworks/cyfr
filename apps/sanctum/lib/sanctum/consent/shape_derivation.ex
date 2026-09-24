@@ -31,6 +31,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
   alias Sanctum.Consent.ShapeDigest
   alias Cyfr.ToolPattern
 
+  require Logger
+
   @doc """
   The live shape digest for a source ref, or `{:error, reason}` when the
   shape inputs cannot be read — the caller treats that as no live shape,
@@ -88,13 +90,13 @@ defmodule Sanctum.Consent.ShapeDerivation do
          slots: Enum.sort(Enum.map(needs, & &1.name)),
          dependency_releases: dependency_releases(ctx, row, source_ref)
        }
-       |> Cyfr.MapUtil.put_present(:model_target, model_target(row))
-       |> Cyfr.MapUtil.put_present(:tool_policy, tool_policy(row))}
+       |> Cyfr.MapUtil.put_present(:model_target, model_target(row, source_ref))
+       |> Cyfr.MapUtil.put_present(:tool_policy, tool_policy(row, source_ref))}
     end
   end
 
-  defp model_target(row) do
-    manifest = Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+  defp model_target(row, source_ref) do
+    manifest = manifest(row, source_ref)
     agent = manifest["agent"] || %{}
 
     case {manifest["type"], agent["catalyst"], agent["model"]} do
@@ -107,8 +109,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
     end
   end
 
-  defp tool_policy(row) do
-    manifest = Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+  defp tool_policy(row, source_ref) do
+    manifest = manifest(row, source_ref)
 
     case get_in(manifest, ["agent", "policy"]) do
       %{"auto" => auto, "ask" => ask} when is_list(auto) and is_list(ask) ->
@@ -181,7 +183,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   defp manifest_row(ctx, source_ref) do
     with {:ok, ref} <- Cyfr.ComponentRef.parse(source_ref),
          {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-      manifest = Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+      manifest = manifest(row, source_ref)
 
       {:ok, row, Needs.from_manifest(manifest),
        Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)}
@@ -244,5 +246,18 @@ defmodule Sanctum.Consent.ShapeDerivation do
       {key, value}, acc ->
         Map.put(acc, "limits.#{key}", value)
     end)
+  end
+
+  # A manifest that does not decode declares nothing. The line names the
+  # component, never the manifest's bytes.
+  defp manifest(row, ref) do
+    case Cyfr.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Sanctum.Consent.ShapeDerivation] manifest malformed: #{ref}")
+        %{}
+    end
   end
 end

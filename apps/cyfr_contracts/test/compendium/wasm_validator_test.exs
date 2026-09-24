@@ -4,6 +4,8 @@
 defmodule Compendium.WasmValidatorTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Compendium.WasmValidator
 
   # Valid minimal WASM binary (magic + version + empty sections)
@@ -276,6 +278,25 @@ defmodule Compendium.WasmValidatorTest do
 
     test "core modules pass untouched — the runtime refuses them anyway" do
       assert {:ok, %{format: :core_module}} = WasmValidator.validate(@valid_wasm, "catalyst")
+    end
+  end
+
+  describe "a malformed export section" do
+    # An export section of one entry whose name runs past the section.
+    @truncated_entry @valid_wasm <> <<7, 3, 1, 5, ?a>>
+
+    test "is the returned reason, and nothing is logged" do
+      log =
+        capture_log(fn ->
+          assert {:error, {:wasm_parse_failed, :export_entry_parse_failed}} =
+                   WasmValidator.validate(@truncated_entry)
+
+          assert {:error, :export_entry_parse_failed} =
+                   WasmValidator.extract_exports(@truncated_entry)
+        end)
+
+      # Other async modules log while this one runs.
+      refute log =~ "WasmValidator"
     end
   end
 end

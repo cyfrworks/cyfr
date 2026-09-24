@@ -1268,38 +1268,35 @@ defmodule Compendium.Registry do
     row
     |> Map.update(:tags, [], &decode_json/1)
     |> Map.update(:exports, [], &decode_json/1)
-    |> Map.update(:manifest, nil, &decode_manifest_json/1)
+    |> Map.update(:manifest, nil, &decode_manifest_json(&1, row))
   end
 
-  defp decode_manifest_json(nil), do: nil
-  defp decode_manifest_json(value) when is_map(value), do: value
+  defp decode_manifest_json(nil, _row), do: nil
+  defp decode_manifest_json(value, _row) when is_map(value), do: value
 
-  defp decode_manifest_json(value) when is_binary(value) do
+  # A manifest that does not decode reads as none. The line names the
+  # component, never the manifest's bytes.
+  defp decode_manifest_json(value, row) when is_binary(value) do
     case Cyfr.Json.decode(value) do
       {:ok, map} when is_map(map) ->
         map
 
-      other ->
-        Logger.warning("[Registry] Failed to decode manifest JSON: #{inspect(other)}")
+      _malformed ->
+        Logger.warning("[Compendium.Registry] manifest malformed: #{component_ref(row)}")
         nil
     end
   end
 
-  defp add_component_ref(component) do
-    type = component[:component_type]
-    publisher = ComponentPath.normalize_publisher(component[:publisher])
-    name = component[:name]
-    version = component[:version]
+  defp add_component_ref(component),
+    do: Map.put(component, :component_ref, component_ref(component))
 
-    ref =
-      Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
-        type: type,
-        namespace: publisher,
-        name: name,
-        version: version
-      })
-
-    Map.put(component, :component_ref, ref)
+  defp component_ref(component) do
+    Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
+      type: component[:component_type],
+      namespace: ComponentPath.normalize_publisher(component[:publisher]),
+      name: component[:name],
+      version: component[:version]
+    })
   end
 
   defp decode_json(nil), do: []
