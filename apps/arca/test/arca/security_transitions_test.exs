@@ -529,7 +529,7 @@ defmodule Arca.SecurityTransitionsLockTest do
   @moduledoc """
   The transitions under two real connections, outside the sandbox: a
   transition waiting behind another acts on what that one committed — on
-  PostgreSQL by waiting on the row, on SQLite by waiting at its own BEGIN
+  PostgreSQL by waiting on the row, on SQLite by waiting at the lock its transaction takes at entry
   — and never on a read taken before the wait; and a denial whose
   membership set moves while it locks the estates runs again on the set
   as it now stands.
@@ -776,8 +776,8 @@ defmodule Arca.SecurityTransitionsLockTest do
 
   # A write-then-rollback on the person's row from a fresh connection,
   # retried every 50 ms until it gets the row or the bound passes; answers
-  # the milliseconds since `since`. On SQLite the probe waits at its own
-  # BEGIN (up to the busy timeout), on PostgreSQL on the row lock.
+  # the milliseconds since `since`. On SQLite the probe waits at the lock its
+  # transaction takes at entry (up to the busy timeout), on PostgreSQL on the row lock.
   defp await_release!(user_id, since, bound_ms) do
     probe =
       try do

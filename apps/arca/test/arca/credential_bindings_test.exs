@@ -101,7 +101,7 @@ defmodule Arca.CredentialBindingsLockTest do
   @moduledoc """
   A check waiting behind a denial, on two real connections outside the
   sandbox, reads what the denial committed — on PostgreSQL by waiting on
-  the person's row, on SQLite at its own BEGIN — with the database's time
+  the person's row, on SQLite at the lock its transaction takes at entry — with the database's time
   read after the wait.
   """
 

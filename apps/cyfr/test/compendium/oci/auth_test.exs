@@ -4,7 +4,7 @@
 defmodule Compendium.OCI.AuthTest do
   use ExUnit.Case, async: false
 
-  alias Compendium.OCI.Auth
+  alias Compendium.OCI.{Auth, Errors}
   alias Compendium.Registry.CredentialStore
   alias Sanctum.Context
 
@@ -33,6 +33,24 @@ defmodule Compendium.OCI.AuthTest do
       authenticated: true
     )
   end
+
+  # A row written past the facade: sealed around `plaintext` under the key
+  # it is stored at.
+  defp plant!(slug, plaintext) do
+    aad = Sanctum.CipherAAD.registry_token(@user, @registry, slug)
+    {:ok, ciphertext} = Sanctum.Cipher.encrypt(plaintext, aad)
+
+    :ok =
+      Arca.RegistryTokenStorage.put(%{
+        user_id: @user,
+        registry: @registry,
+        namespace_slug: slug,
+        credential_ciphertext: ciphertext
+      })
+  end
+
+  defp outage!,
+    do: Arca.Repo.query!("ALTER TABLE registry_tokens RENAME TO registry_tokens_unavailable")
 
   describe "fetch_credential/3" do
     test "returns :anonymous when no credential is stored" do
@@ -66,6 +84,41 @@ defmodule Compendium.OCI.AuthTest do
 
       assert Auth.fetch_credential(@registry, "stripe.com", ctx()) == :anonymous
     end
+
+    @tag :capture_log
+    test "a stored row that does not open is corrupt, never anonymous" do
+      for plaintext <- [
+            "not json",
+            ~s({"type":"push_token"}),
+            ~s({"type":"push_token","token":""}),
+            ~s({"type":"push_token","token":7})
+          ] do
+        plant!("alice", plaintext)
+
+        assert Auth.fetch_credential(@registry, "alice", ctx()) == {:error, :corrupt},
+               "#{plaintext} read as something other than corrupt"
+      end
+    end
+
+    @tag :capture_log
+    test "a store that cannot answer is unavailable, never anonymous" do
+      :ok = CredentialStore.put_push_token(ctx(), @registry, "alice", "cyfr_pt_alice", "personal")
+      outage!()
+
+      assert Auth.fetch_credential(@registry, "alice", ctx()) == {:error, :unavailable}
+    end
+
+    test "the log names the namespace and never the token" do
+      plant!("alice", ~s({"type":"push_token","token":["cyfr_pt_leak"]}))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, :corrupt} = Auth.fetch_credential(@registry, "alice", ctx())
+        end)
+
+      assert log =~ "alice"
+      refute log =~ "cyfr_pt_leak"
+    end
   end
 
   describe "auth_headers/4" do
@@ -79,6 +132,34 @@ defmodule Compendium.OCI.AuthTest do
 
       assert {:ok, [{"authorization", "Bearer cyfr_pt_abc123"}]} =
                Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
+    end
+
+    @tag :capture_log
+    test "a corrupt token refuses as unavailable and names the namespace, not the token" do
+      plant!("alice", ~s({"type":"push_token","token":42}))
+
+      assert {:error,
+              %Errors{
+                reason: :registry_unavailable,
+                detail: %{credential_store: :corrupt},
+                message: message
+              }} = Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
+
+      assert message ==
+               "The push token stored for namespace 'alice' could not be opened — " <>
+                 "sign in again to re-mint it"
+    end
+
+    @tag :capture_log
+    test "a store outage refuses as unavailable rather than going anonymous" do
+      outage!()
+
+      assert {:error,
+              %Errors{
+                reason: :registry_unavailable,
+                detail: %{credential_store: :unavailable},
+                message: "Your registry credentials could not be read — retry shortly"
+              }} = Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
     end
   end
 end

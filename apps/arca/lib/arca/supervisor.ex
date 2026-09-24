@@ -101,7 +101,6 @@ defmodule Arca.Supervisor do
     case Arca.Repo.adapter() do
       Ecto.Adapters.SQLite3 ->
         Arca.Repo.query!("PRAGMA journal_mode=WAL")
-        Arca.Repo.query!("PRAGMA busy_timeout=#{Arca.Repo.busy_timeout_ms()}")
 
       _ ->
         :ok

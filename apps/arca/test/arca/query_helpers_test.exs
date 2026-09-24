@@ -204,10 +204,10 @@ defmodule Arca.LockingTransactionTest do
   would serialize the transactions the test is about.
 
   PostgreSQL's loser opens its transaction at once and waits on the row;
-  SQLite's waits at its own BEGIN, since the winner's immediate
-  transaction holds the one write lock. Either way the loser acts only on
-  what the winner committed, and reads the database's clock after its
-  wait.
+  SQLite's waits as its transaction starts, before its function runs,
+  since the winner's transaction holds the one write lock. Either way the
+  loser acts only on what the winner committed, and reads the database's
+  clock after its wait.
   """
 
   use ExUnit.Case, async: false
@@ -255,8 +255,40 @@ defmodule Arca.LockingTransactionTest do
       |> Ecto.Multi.run(:before, fn _repo, _ -> {:ok, locked_detail(claim)} end)
       |> Ecto.Multi.update_all(:write, where(JobClaim, id: ^claim.id), set: [detail: "multi"])
 
-    assert {:ok, %{before: nil, write: {1, _}}} =
+    assert {:ok, %{before: nil, write: {1, _}} = changes} =
              unboxed(fn -> Arca.Repo.locking_transaction(multi) end)
+
+    # SQLite's write lock is the multi's first step, and the one key it adds.
+    expected =
+      case Arca.Repo.adapter() do
+        Ecto.Adapters.SQLite3 -> [:arca_lock, :before, :write]
+        Ecto.Adapters.Postgres -> [:before, :write]
+      end
+
+    assert changes |> Map.keys() |> Enum.sort() == expected
+  end
+
+  test "the transaction hook changes nothing on PostgreSQL, and takes the lock on SQLite" do
+    fun = fn -> :ok end
+    multi = Ecto.Multi.new()
+
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.Postgres ->
+        assert Arca.Repo.prepare_transaction(fun, timeout: 1) == {fun, [timeout: 1]}
+        assert Arca.Repo.prepare_transaction(multi, []) == {multi, []}
+
+      Ecto.Adapters.SQLite3 ->
+        {locking, opts} = Arca.Repo.prepare_transaction(fun, timeout: 1)
+        assert locking != fun
+
+        assert Keyword.take(opts, [:timeout, :mode]) |> Enum.sort() == [
+                 mode: :deferred,
+                 timeout: 1
+               ]
+
+        {locking_multi, _opts} = Arca.Repo.prepare_transaction(multi, [])
+        assert Ecto.Multi.to_list(locking_multi) |> Enum.map(&elem(&1, 0)) == [:arca_lock]
+    end
   end
 
   test "the loser waits for the winner's commit and acts only on what it committed", %{
@@ -300,7 +332,8 @@ defmodule Arca.LockingTransactionTest do
         assert_receive :loser_began, 5_000
 
       Ecto.Adapters.SQLite3 ->
-        # The one write lock is the winner's, so the loser's BEGIN waits.
+        # The one write lock is the winner's, so the loser waits for it
+        # before its function runs.
         refute_receive :loser_began, 300
     end
 
@@ -342,8 +375,8 @@ defmodule Arca.LockingTransactionTest do
   } do
     test = self()
 
-    # A writer holding its transaction open: SQLite's immediate one holds
-    # the one write lock; PostgreSQL's holds the row it wrote.
+    # A writer holding its transaction open: on SQLite it holds the one
+    # write lock; on PostgreSQL the row it wrote.
     writer =
       Task.async(fn ->
         unboxed(fn ->

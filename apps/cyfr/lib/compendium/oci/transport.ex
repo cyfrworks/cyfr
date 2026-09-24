@@ -8,7 +8,8 @@ defmodule Compendium.OCI.Transport do
   Issues requests via `Sanctum.Egress.pinned_request/5` (SSRF + DNS-rebinding
   protection) and adds:
   - Automatic auth header injection via `OCI.Auth`, recomputed per attempt
-    so a retry picks up a rotated token
+    so a retry picks up a rotated token; a stored token that cannot be read
+    refuses the request (`:registry_unavailable`) before anything is sent
   - Retry with backoff, idempotency-gated for ambiguous failures — the
     policy is `Compendium.Transport.Retry`, shared with the REST transport
   - Consistent return format: `{:ok, status, headers, body}` or `{:error, reason}`
@@ -142,91 +143,96 @@ defmodule Compendium.OCI.Transport do
          attempt
        ) do
     namespace_slug = namespace_from_repository(repository)
-    {:ok, auth_headers} = Auth.auth_headers(registry, repository, namespace_slug, ctx)
-    headers = auth_headers ++ extra_headers
+    # A push token that cannot be read is the credential store's answer, not
+    # the registry's: it comes back at once, with no request sent and no
+    # retry, and is never replaced by an anonymous request.
+    with {:ok, auth_headers} <- Auth.auth_headers(registry, repository, namespace_slug, ctx) do
+      headers = auth_headers ++ extra_headers
 
-    # pinned_request validates the resolved IP and connects to it directly (no
-    # second DNS resolution → no rebinding), preserving SNI/Host. A private
-    # registry is reachable only when the operator named it in the
-    # private-egress allowlist. The size ceiling is enforced while the body
-    # streams in — a hostile registry cannot flood the host's heap.
-    case Sanctum.Egress.pinned_request(method, url, headers, body,
-           receive_timeout: @receive_timeout,
-           private_policy: :operator,
-           max_response_bytes: Keyword.get(opts, :max_response_bytes, @default_max_response_bytes)
-         ) do
-      {:ok, 401, resp_headers, resp_body} ->
-        # Push tokens don't do realm exchange. 401 means the token is missing
-        # or revoked — surface it to the caller so they can prompt re-login.
-        # The WWW-Authenticate: Basic realm=... header is still emitted by
-        # the server for Docker/OCI compatibility, but we don't act on it.
-        _ = resp_headers
+      # pinned_request validates the resolved IP and connects to it directly (no
+      # second DNS resolution → no rebinding), preserving SNI/Host. A private
+      # registry is reachable only when the operator named it in the
+      # private-egress allowlist. The size ceiling is enforced while the body
+      # streams in — a hostile registry cannot flood the host's heap.
+      case Sanctum.Egress.pinned_request(method, url, headers, body,
+             receive_timeout: @receive_timeout,
+             private_policy: :operator,
+             max_response_bytes:
+               Keyword.get(opts, :max_response_bytes, @default_max_response_bytes)
+           ) do
+        {:ok, 401, resp_headers, resp_body} ->
+          # Push tokens don't do realm exchange. 401 means the token is missing
+          # or revoked — surface it to the caller so they can prompt re-login.
+          # The WWW-Authenticate: Basic realm=... header is still emitted by
+          # the server for Docker/OCI compatibility, but we don't act on it.
+          _ = resp_headers
 
-        Logger.info(
-          "[Compendium.OCI.Transport] 401 from #{registry}/#{repository} (namespace=#{namespace_slug}) — " <>
-            "push token missing or revoked; caller should prompt re-login"
-        )
+          Logger.info(
+            "[Compendium.OCI.Transport] 401 from #{registry}/#{repository} (namespace=#{namespace_slug}) — " <>
+              "push token missing or revoked; caller should prompt re-login"
+          )
 
-        {:error, Errors.from_response(401, resp_body, registry)}
+          {:error, Errors.from_response(401, resp_body, registry)}
 
-      {:ok, 429, resp_headers, _resp_body} ->
-        retry_or_give_up(
-          method,
-          url,
-          registry,
-          repository,
-          extra_headers,
-          body,
-          ctx,
-          opts,
-          attempt,
-          Retry.classify({:status, 429}),
-          "429",
-          max(Retry.retry_after_ms(resp_headers), Retry.backoff(attempt)),
-          fn -> {:error, Errors.from_response(429, "Rate limited", registry)} end
-        )
+        {:ok, 429, resp_headers, _resp_body} ->
+          retry_or_give_up(
+            method,
+            url,
+            registry,
+            repository,
+            extra_headers,
+            body,
+            ctx,
+            opts,
+            attempt,
+            Retry.classify({:status, 429}),
+            "429",
+            max(Retry.retry_after_ms(resp_headers), Retry.backoff(attempt)),
+            fn -> {:error, Errors.from_response(429, "Rate limited", registry)} end
+          )
 
-      {:ok, status, _resp_headers, resp_body} when status >= 500 ->
-        retry_or_give_up(
-          method,
-          url,
-          registry,
-          repository,
-          extra_headers,
-          body,
-          ctx,
-          opts,
-          attempt,
-          Retry.classify({:status, status}),
-          "#{status}",
-          Retry.backoff(attempt),
-          fn -> {:error, Errors.from_response(status, resp_body, registry)} end
-        )
+        {:ok, status, _resp_headers, resp_body} when status >= 500 ->
+          retry_or_give_up(
+            method,
+            url,
+            registry,
+            repository,
+            extra_headers,
+            body,
+            ctx,
+            opts,
+            attempt,
+            Retry.classify({:status, status}),
+            "#{status}",
+            Retry.backoff(attempt),
+            fn -> {:error, Errors.from_response(status, resp_body, registry)} end
+          )
 
-      {:ok, status, resp_headers, resp_body} ->
-        {:ok, status, resp_headers, resp_body}
+        {:ok, status, resp_headers, resp_body} ->
+          {:ok, status, resp_headers, resp_body}
 
-      # SSRF/DNS validation failure — the URL is blocked; never retry.
-      {:error, reason} when is_binary(reason) ->
-        Logger.error("[Compendium.OCI.Transport] Blocked request to #{registry}: #{reason}")
-        {:error, Errors.connection_error(registry, reason)}
+        # SSRF/DNS validation failure — the URL is blocked; never retry.
+        {:error, reason} when is_binary(reason) ->
+          Logger.error("[Compendium.OCI.Transport] Blocked request to #{registry}: #{reason}")
+          {:error, Errors.connection_error(registry, reason)}
 
-      {:error, reason} ->
-        retry_or_give_up(
-          method,
-          url,
-          registry,
-          repository,
-          extra_headers,
-          body,
-          ctx,
-          opts,
-          attempt,
-          Retry.classify({:error, reason}),
-          inspect(reason),
-          Retry.backoff(attempt),
-          fn -> {:error, Errors.connection_error(registry, reason)} end
-        )
+        {:error, reason} ->
+          retry_or_give_up(
+            method,
+            url,
+            registry,
+            repository,
+            extra_headers,
+            body,
+            ctx,
+            opts,
+            attempt,
+            Retry.classify({:error, reason}),
+            inspect(reason),
+            Retry.backoff(attempt),
+            fn -> {:error, Errors.connection_error(registry, reason)} end
+          )
+      end
     end
   end
 

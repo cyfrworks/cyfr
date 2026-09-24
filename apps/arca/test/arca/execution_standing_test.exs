@@ -263,7 +263,7 @@ defmodule Arca.ExecutionStandingLockTest do
   @moduledoc """
   An admission and an archive under two real connections, outside the
   sandbox, in both orders. Each serializes on the estate's row — on
-  PostgreSQL by waiting on the row, on SQLite by waiting at its own BEGIN
+  PostgreSQL by waiting on the row, on SQLite by waiting at the lock its transaction takes at entry
   — and the one that waits acts on what the other committed: an admission
   that committed first is retired by the archive, and one that waited
   reads the archive and admits nothing. On PostgreSQL the checks hold the

@@ -265,13 +265,6 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  SQLite busy timeout, used both as the Repo connection option and in the
-  boot-time PRAGMA — one constant so the two mechanisms stay in step.
-  """
-  @spec sqlite_busy_timeout_ms() :: pos_integer()
-  defdelegate sqlite_busy_timeout_ms(), to: Arca.Repo, as: :busy_timeout_ms
-
-  @doc """
   Returns the default per-window tincture invocation budget. HTTP uses
   per-IP buckets; the console shell uses separate per-person buckets.
   """

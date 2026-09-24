@@ -512,6 +512,47 @@ defmodule Compendium.MCPTest do
 
       assert is_binary(msg)
     end
+
+    @tag :capture_log
+    test "a push token that does not open refuses the pull rather than going anonymous",
+         %{ctx: ctx} do
+      registry = Compendium.RegistryHost.canonical_host()
+      aad = Sanctum.CipherAAD.registry_token(ctx.user_id, registry, "cyfr")
+      {:ok, ciphertext} = Sanctum.Cipher.encrypt(~s({"type":"push_token","token":""}), aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: ctx.user_id,
+          registry: registry,
+          namespace_slug: "cyfr",
+          credential_ciphertext: ciphertext
+        })
+
+      assert {:error, {:invalid_argument, _} = reason} =
+               MCP.handle("component", ctx, %{
+                 "action" => "pull",
+                 "reference" => "#{registry}/cyfr/reagents/test:1.0.0"
+               })
+
+      assert err_msg(reason) ==
+               "The push token stored for namespace 'cyfr' could not be opened — " <>
+                 "sign in again to re-mint it"
+    end
+
+    @tag :capture_log
+    test "a credential store that cannot answer refuses the pull rather than going anonymous",
+         %{ctx: ctx} do
+      Arca.Repo.query!("ALTER TABLE registry_tokens RENAME TO registry_tokens_unavailable")
+
+      assert {:error, {:unavailable, "Your registry credential"} = reason} =
+               MCP.handle("component", ctx, %{
+                 "action" => "pull",
+                 "reference" =>
+                   "#{Compendium.RegistryHost.canonical_host()}/cyfr/reagents/test:1.0.0"
+               })
+
+      assert err_msg(reason) == "Your registry credential is unavailable — retry shortly"
+    end
   end
 
   # ============================================================================

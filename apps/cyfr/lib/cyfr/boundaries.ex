@@ -259,6 +259,7 @@ defmodule Cyfr.Boundaries do
     Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage Arca.ToolGrantStorage
     Arca.VaultStorage Arca.SessionStorage Arca.ApiKeyStorage Arca.RegistryTokenStorage
     Arca.ProviderCredentialStorage Arca.WebhookStorage
+    Arca.Users Arca.Members Arca.Athanors Arca.Doors
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
 
@@ -515,8 +516,9 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "profiles, consents and their proofs, standing tool grants, vault entries, " <>
-          "sessions, API keys, registry push tokens, provider credentials and " <>
-          "webhooks are security rows. A domain or a surface learns about them only " <>
+          "sessions, API keys, registry push tokens, provider credentials, webhooks, " <>
+          "and the identities, memberships, athanors and doors that decide standing " <>
+          "are security rows. A domain or a surface learns about them only " <>
           "through Sanctum's entries, which scope by the caller's context and keep an " <>
           "outage, a damaged row and an absent one apart. Arca holds the rows and " <>
           "Sanctum reads them; no other tree names the stores."

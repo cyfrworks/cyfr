@@ -8,6 +8,10 @@
 [
   {"lib/arca/adapters/s3.ex", :call_without_opaque},
   {"lib/arca/consent_storage.ex", :call_without_opaque},
+  # prepare_transaction/2 receives `fun | Ecto.Multi.t()`; the Multi clause is
+  # the non-fun fall-through and Dialyzer cannot narrow the union past the
+  # guard, so the append of the opaque Multi reads as a non-opaque call.
+  {"lib/arca/repo.ex", :call_without_opaque},
   {"lib/arca/repo/errors.ex", :pattern_match},
   {"lib/arca/usage.ex", :pattern_match},
   {"lib/compendium/component.ex", :guard_fail},

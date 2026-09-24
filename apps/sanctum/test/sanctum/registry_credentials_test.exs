@@ -86,6 +86,20 @@ defmodule Sanctum.RegistryCredentialsTest do
       assert :skipped = RegistryCredentials.put_push_token(alice, @registry, "alice", nil, "member")
       assert {:ok, []} = RegistryCredentials.list(alice, @registry)
     end
+
+    test "an empty token stores nothing and leaves the slot as it was", %{alice: alice} do
+      assert :skipped =
+               RegistryCredentials.put_push_token(alice, @registry, "alice", "", "personal")
+
+      assert {:error, :not_found} = RegistryCredentials.get(alice, @registry, "alice")
+
+      :ok = RegistryCredentials.put_push_token(alice, @registry, "alice", "cyfr_pt_a", "personal")
+
+      assert :skipped =
+               RegistryCredentials.put_push_token(alice, @registry, "alice", "", "personal")
+
+      assert {:ok, %{token: "cyfr_pt_a"}} = RegistryCredentials.get(alice, @registry, "alice")
+    end
   end
 
   describe "a damaged row is corrupt, never absent" do
@@ -103,6 +117,26 @@ defmodule Sanctum.RegistryCredentialsTest do
 
         assert {:error, :corrupt} = RegistryCredentials.get(alice, @registry, "alice"),
                "#{plaintext} read as something other than corrupt"
+      end
+    end
+
+    test "a push token without a usable token is corrupt, never a credential", %{alice: alice} do
+      for plaintext <- [
+            ~s({"type":"push_token","namespace":"alice"}),
+            ~s({"type":"push_token","token":""}),
+            ~s({"type":"push_token","token":42}),
+            ~s({"type":"push_token","token":null})
+          ] do
+        plant!(alice, "alice", plaintext)
+
+        assert {:error, :corrupt} = RegistryCredentials.get(alice, @registry, "alice"),
+               "#{plaintext} read as something other than corrupt"
+
+        assert {:ok, [%{id: id, status: :corrupt} = entry]} =
+                 RegistryCredentials.list(alice, @registry)
+
+        assert is_binary(id)
+        refute Map.has_key?(entry, :token)
       end
     end
 

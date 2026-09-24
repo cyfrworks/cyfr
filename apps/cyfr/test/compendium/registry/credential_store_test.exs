@@ -89,6 +89,11 @@ defmodule Compendium.Registry.CredentialStoreTest do
       assert :skipped = CredentialStore.put_push_token(as(@user), @reg, nil, "t", "personal")
       assert {:ok, []} = CredentialStore.list_for_user(as(@user), @reg)
     end
+
+    test "an empty token stores nothing" do
+      assert :skipped = CredentialStore.put_push_token(as(@user), @reg, "alice", "", "personal")
+      assert {:error, :not_found} = CredentialStore.get(as(@user), @reg, "alice")
+    end
   end
 
   describe "user + registry isolation" do

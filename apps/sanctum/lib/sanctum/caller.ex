@@ -483,11 +483,17 @@ defmodule Sanctum.Caller do
   bound on how long a read of the store is trusted, whether a memo or a
   holder keeps it. The bound runs from `validated_at`, the last time the
   store was read for this context, so reusing a context never extends
-  it. A context no one validated is never fresh.
+  it. A context no one validated is never fresh, and neither is one
+  whose validation lies in the future: the elapsed time must be at least
+  zero and under the bound. The bound runs on this node's wall clock —
+  a context never leaves the node that validated it — so a backward
+  clock step can only shorten it, never extend it.
   """
   @spec fresh?(Context.t()) :: boolean()
-  def fresh?(%Context{validated_at: %DateTime{} = at}),
-    do: DateTime.diff(DateTime.utc_now(), at, :millisecond) < memo_ttl_ms()
+  def fresh?(%Context{validated_at: %DateTime{} = at}) do
+    elapsed = DateTime.diff(now(), at, :millisecond)
+    elapsed >= 0 and elapsed < memo_ttl_ms()
+  end
 
   def fresh?(%Context{}), do: false
 

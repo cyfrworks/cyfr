@@ -13,7 +13,7 @@ defmodule Arca.CredentialIssuanceTest do
   reads the denial's commit — and the database's own time after the wait
   — and refuses; a denial waiting behind an issuance retires the
   credential the issuance just wrote. On PostgreSQL the waiter blocks on
-  the person's row; on SQLite at its own BEGIN.
+  the person's row; on SQLite at the lock its transaction takes at entry.
   """
 
   use ExUnit.Case, async: false

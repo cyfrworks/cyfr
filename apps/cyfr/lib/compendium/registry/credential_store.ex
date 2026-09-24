@@ -55,8 +55,8 @@ defmodule Compendium.Registry.CredentialStore do
   Shared by the OAuth callback, the claim flow and the CLI's re-probe —
   all cache the same push-token shape after the identity probe. A failed
   write degrades to `{:error, reason}` rather than crashing the caller,
-  which then decides whether to re-auth. A non-binary slug or token yields
-  `:skipped`.
+  which then decides whether to re-auth. A non-binary slug, or a token
+  that is not a non-empty string, yields `:skipped`.
   """
   @spec put_push_token(Context.t(), String.t(), term(), term(), String.t()) ::
           :ok | :skipped | {:error, :unavailable | :forbidden}
@@ -98,9 +98,10 @@ defmodule Compendium.Registry.CredentialStore do
   def list_for_user(%Context{} = ctx, registry), do: RegistryCredentials.list(ctx, registry)
 
   @doc """
-  The usable push tokens of a listing, in its order: a row that could not
-  be opened, or a credential with no token, is skipped when choosing a
-  bearer — it is still in the listing, for a caller that reports it.
+  The usable push tokens of a listing, in its order: a row the decoder
+  refused (`%{status: :corrupt}`) is skipped when choosing a bearer — it
+  is still in the listing, for a caller that reports it. Every credential
+  the decoder hands back carries a non-empty token.
   """
   @spec push_tokens([map()]) :: [RegistryCredentials.credential()]
   def push_tokens(entries) when is_list(entries) do

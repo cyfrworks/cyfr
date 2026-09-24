@@ -15,7 +15,9 @@ defmodule Arca.Repo.Errors do
   @adapter Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3)
 
   @doc """
-  Returns the list of database error modules for use in rescue clauses.
+  Returns the list of database error modules for use in rescue clauses:
+  the driver's own, and `Arca.Repo.BusyTimeoutError` for a transaction
+  that could not take SQLite's write lock in time.
 
   ## Example
 
@@ -27,10 +29,20 @@ defmodule Arca.Repo.Errors do
     errors =
       case @adapter do
         Ecto.Adapters.Postgres ->
-          [Ecto.QueryError, DBConnection.ConnectionError, Postgrex.Error]
+          [
+            Ecto.QueryError,
+            DBConnection.ConnectionError,
+            Postgrex.Error,
+            Arca.Repo.BusyTimeoutError
+          ]
 
         _ ->
-          [Ecto.QueryError, DBConnection.ConnectionError, Exqlite.Error]
+          [
+            Ecto.QueryError,
+            DBConnection.ConnectionError,
+            Exqlite.Error,
+            Arca.Repo.BusyTimeoutError
+          ]
       end
 
     Macro.escape(errors)
@@ -85,4 +97,21 @@ defmodule Arca.Repo.Errors do
     String.contains?(message, "UNIQUE constraint failed") or
       String.contains?(message, "duplicate key value violates unique constraint")
   end
+end
+
+defmodule Arca.Repo.BusyTimeoutError do
+  @moduledoc """
+  A SQLite transaction that could not take the database's one write lock
+  before the pool's busy timeout ran out.
+
+  Raised at the transaction's start, before any of the caller's work
+  runs, so it rolls back nothing but the attempt. The message names the
+  deadline and never the statement.
+  """
+
+  defexception [:deadline_ms]
+
+  @impl true
+  def message(%__MODULE__{deadline_ms: deadline_ms}),
+    do: "the database write lock was not acquired within #{deadline_ms} ms"
 end

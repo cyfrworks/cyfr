@@ -258,7 +258,7 @@ defmodule Compendium.OCI.ClientTest do
 
       on_exit(fn ->
         File.rm_rf!(test_dir)
-        restore_env(:base_path, original_base)
+        restore_env(:arca, :base_path, original_base)
         restore_env(:oci_registry_url, original_registry)
         restore_env(:sanctum, :auth_provider, original_auth)
       end)
@@ -337,10 +337,85 @@ defmodule Compendium.OCI.ClientTest do
     end
   end
 
+  # ============================================================================
+  # A cached tag under an unreadable push token
+  # ============================================================================
+
+  describe "a cached tag under a push token that cannot be read" do
+    setup do
+      test_dir = Path.join(System.tmp_dir!(), "cyfr_oci_cred_test_#{:rand.uniform(1_000_000)}")
+      File.mkdir_p!(test_dir)
+
+      original_base = Application.get_env(:arca, :base_path)
+      original_registry = Application.get_env(:cyfr, :oci_registry_url)
+      original_auth = Application.get_env(:sanctum, :auth_provider)
+
+      Application.put_env(:arca, :base_path, test_dir)
+      # No auth provider → localhost registries are reachable, so a request
+      # that went out would land on the listener below and be counted.
+      Application.delete_env(:sanctum, :auth_provider)
+
+      on_exit(fn ->
+        File.rm_rf!(test_dir)
+        restore_env(:arca, :base_path, original_base)
+        restore_env(:oci_registry_url, original_registry)
+        restore_env(:sanctum, :auth_provider, original_auth)
+      end)
+
+      :ok
+    end
+
+    @tag :capture_log
+    test "the pull refuses with the credential error, sends nothing and serves no cache" do
+      wasm = "wasm-bytes-under-test"
+      {manifest_json, wasm_digest} = manifest_fixture(wasm)
+      manifest_digest = Blob.compute_digest(manifest_json)
+
+      # The registry would vouch for the cached copy were it asked.
+      port = start_canned_server("", [{"docker-content-digest", manifest_digest}], self())
+      registry = "localhost:#{port}"
+      Application.put_env(:cyfr, :oci_registry_url, registry)
+
+      # Everything the pull needs is cached: the tag's manifest and both blobs.
+      :ok =
+        Cache.put_manifest(
+          registry,
+          "alice/reagents/pinned",
+          "1.0.0",
+          manifest_json,
+          manifest_digest
+        )
+
+      :ok = Cache.put_blob(Blob.compute_digest(config_fixture()), config_fixture())
+      :ok = Cache.put_blob(wasm_digest, wasm)
+
+      # The caller's push token for the namespace does not open.
+      ctx = Sanctum.TestContext.local()
+      aad = Sanctum.CipherAAD.registry_token(ctx.user_id, registry, "alice")
+      {:ok, ciphertext} = Sanctum.Cipher.encrypt(~s({"type":"push_token","token":""}), aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: ctx.user_id,
+          registry: registry,
+          namespace_slug: "alice",
+          credential_ciphertext: ciphertext
+        })
+
+      assert {:error, msg} = Client.pull(ctx, "#{registry}/alice/reagents/pinned:1.0.0")
+      assert msg =~ "The push token stored for namespace 'alice' could not be opened"
+      refute msg =~ "stale"
+      refute_received {:registry_contacted, _}
+    end
+  end
+
+  defp config_fixture,
+    do: Jason.encode!(%{"name" => "pinned", "version" => "1.0.0", "type" => "reagent"})
+
   # Minimal OCI image manifest wrapping the given bytes as a reagent WASM
   # layer. Returns {manifest_json, wasm_layer_digest}.
   defp manifest_fixture(wasm_bytes) do
-    config = Jason.encode!(%{"name" => "pinned", "version" => "1.0.0", "type" => "reagent"})
+    config = config_fixture()
     wasm_digest = Blob.compute_digest(wasm_bytes)
 
     manifest =
@@ -367,21 +442,23 @@ defmodule Compendium.OCI.ClientTest do
   end
 
   # Tiny HTTP responder: answers every request on the listen socket with a
-  # 200 carrying `body` plus `extra_headers`. Returns the bound port; the
-  # listener is closed via on_exit.
-  defp start_canned_server(body, extra_headers) do
+  # 200 carrying `body` plus `extra_headers`, telling `observer` (when one
+  # is given) of each connection before it answers. Returns the bound
+  # port; the listener is closed via on_exit.
+  defp start_canned_server(body, extra_headers, observer \\ nil) do
     {:ok, listen} = :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
     {:ok, port} = :inet.port(listen)
 
-    spawn(fn -> accept_loop(listen, body, extra_headers) end)
+    spawn(fn -> accept_loop(listen, body, extra_headers, observer) end)
     on_exit(fn -> :gen_tcp.close(listen) end)
 
     port
   end
 
-  defp accept_loop(listen, body, extra_headers) do
+  defp accept_loop(listen, body, extra_headers, observer) do
     case :gen_tcp.accept(listen) do
       {:ok, sock} ->
+        if observer, do: send(observer, {:registry_contacted, sock})
         drain_request(sock, "")
 
         headers = Enum.map_join(extra_headers, "", fn {k, v} -> "#{k}: #{v}\r\n" end)
@@ -394,7 +471,7 @@ defmodule Compendium.OCI.ClientTest do
 
         :gen_tcp.send(sock, response)
         :gen_tcp.close(sock)
-        accept_loop(listen, body, extra_headers)
+        accept_loop(listen, body, extra_headers, observer)
 
       {:error, _} ->
         :ok
@@ -414,8 +491,8 @@ defmodule Compendium.OCI.ClientTest do
 
   defp restore_env(key, value), do: restore_env(:cyfr, key, value)
 
-  # `:auth_provider` is the identity domain's key; the paths and the
-  # registry URL are the host's.
+  # `:auth_provider` is the identity domain's key and `:base_path` the
+  # storage's; the registry URL is the host's.
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 end
