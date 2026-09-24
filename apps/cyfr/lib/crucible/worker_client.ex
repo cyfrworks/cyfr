@@ -23,7 +23,7 @@ defmodule Crucible.WorkerClient do
   A request is a `POST` to the callback's route (`Prima.WorkerWire.worker_route/1`)
   whose body is the JSON `{"op", "args"}` and whose `x-cyfr-auth` header
   is `Prima.WorkerAuth.request_header/3` over that body, signed with the
-  worker service's dispatch key (`Crucible.Keys.worker_key/1`),
+  worker service's dispatch key (`Crucible.Keys.opus_key/1`),
   naming the service the request is addressed to and this boot
   (`Prima.Boot.id/0`) as the incarnation presenting it, under a fresh nonce.
   An answer is a `200` read up to `Prima.HostAPI.max_answer_bytes/0`:
