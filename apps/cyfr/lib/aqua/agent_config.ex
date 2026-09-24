@@ -182,66 +182,6 @@ defmodule Aqua.AgentConfig do
   end
 
   @doc """
-  For each agent's catalyst: the installed release it resolves to and
-  whether its consent is complete — `%{catalyst_ref => {:ready | :needs_key
-  | :missing, resolved_ref}}`.
-
-  A model with no key is the one thing that keeps a fresh athanor's AQUA
-  silent, so both the AQUA page and the chat's own empty state ask here.
-  """
-  @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
-  def model_status(nil, _agents), do: %{}
-
-  def model_status(%Context{} = ctx, agents) when is_list(agents) do
-    listing =
-      case catalyst_listing(ctx) do
-        {:ok, components} -> components
-        _ -> []
-      end
-
-    soul_type = AquaAgent.soul_type()
-
-    agents
-    |> Enum.filter(&(&1["type"] == soul_type))
-    |> Enum.map(& &1["catalyst_ref"])
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-    |> Enum.uniq()
-    |> Map.new(fn ref -> {ref, catalyst_status(ctx, listing, ref)} end)
-  end
-
-  # A model is ready when its own profile binds a key AND the assistant's
-  # consent selects that profile on its edge to the catalyst — the key
-  # the assistant actually runs it with, resolved as a turn would resolve
-  # it. A bound key the assistant's edge does not select is still a key
-  # to connect.
-  defp catalyst_status(ctx, listing, ref) do
-    with {:ok, resolved} <- find_matching_catalyst(listing, ref),
-         {:ok, plan} <-
-           Aqua.Ops.call_tool("component", ctx, %{
-             "action" => "setup_plan",
-             "reference" => resolved
-           }) do
-      if (plan[:ready] || plan["ready"]) == true and lent_to_assistant?(ctx, ref),
-        do: {:ready, resolved},
-        else: {:needs_key, resolved}
-    else
-      _ -> {:missing, ref}
-    end
-  end
-
-  defp lent_to_assistant?(ctx, catalyst_ref) do
-    soul = Compendium.AgentSource.soul_ref()
-
-    with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, soul),
-         {:ok, edge} <-
-           Cyfr.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
-      Cyfr.Authority.Blob.bound_vault?(edge.vault)
-    else
-      _ -> false
-    end
-  end
-
-  @doc """
   The installed release a versionless catalyst ref resolves to in
   `listing` — the newest by semver precedence, never lexicographic max
   ("10.0.0" outranks "9.0.0").

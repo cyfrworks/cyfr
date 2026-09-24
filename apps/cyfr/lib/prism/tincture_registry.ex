@@ -329,7 +329,7 @@ defmodule Prism.TinctureRegistry do
   end
 
   defp put_segment(tincture, segment) do
-    entry_url = Cyfr.TinctureHelpers.tincture_path(segment, tincture.publisher, tincture.name)
+    entry_url = Cyfr.TinctureUrl.path(segment, tincture.publisher, tincture.name)
     %{tincture | athanor_segment: segment, entry_url: entry_url}
   end
 
@@ -363,12 +363,6 @@ defmodule Prism.TinctureRegistry do
     do:
       match?({:ok, %{type: "tincture", rest: [_manifest]}}, Compendium.ComponentPath.parse(segs))
 
-  # Launch constraint: tinctures can't SURFACE raster image assets in the
-  # discovery slots until CSAM hash matching (PhotoDNA) is live. Vector
-  # (.svg) is allowed. The roster lives with the serve-gate policy
-  # (`Cyfr.TinctureHelpers`) so the two cannot drift.
-  @blocked_image_extensions Cyfr.TinctureHelpers.blocked_raster_extensions()
-
   defp parse_manifest(ctx, manifest_segs, raw, athanor_id) do
     with {:ok, manifest} <- Jason.decode(raw),
          true <- manifest["type"] == "tincture",
@@ -379,7 +373,7 @@ defmodule Prism.TinctureRegistry do
       name = manifest["name"]
       version = manifest["version"] || "0.1.0"
 
-      entry_result = Cyfr.TinctureHelpers.entry_of(manifest)
+      entry_result = Compendium.tincture_entry(manifest)
       icon = tincture_block["icon"] || "palette"
       window = tincture_block["window"] || %{}
       tagline = tincture_block["tagline"]
@@ -387,7 +381,7 @@ defmodule Prism.TinctureRegistry do
       # Convention auto-discovery via Arca.exists? (works for both Local and
       # S3). Manifest-declared media still wins for non-standard layouts.
       media_block = tincture_block["media"] || %{}
-      discovered = Cyfr.TinctureHelpers.discover_media_via_arca(ctx, version_segs)
+      discovered = Compendium.tincture_media(ctx, version_segs)
 
       media_icon = media_block["icon"] || discovered.icon
 
@@ -401,9 +395,10 @@ defmodule Prism.TinctureRegistry do
       # entry the serve side will refuse lists something that 404s on the
       # first click — and says nothing about why.
       case {entry_result, blocked_image_refs(media_icon, media_previews)} do
-        {{:error, message}, _} ->
+        {{:error, refused}, _} ->
           Logger.warning(
-            "[TinctureRegistry] skipping tincture at #{Enum.join(manifest_segs, "/")} — #{message}"
+            "[TinctureRegistry] skipping tincture at #{Enum.join(manifest_segs, "/")} — " <>
+              "its entry is refused (#{refused})"
           )
 
           []
@@ -473,9 +468,13 @@ defmodule Prism.TinctureRegistry do
     |> Enum.filter(&blocked_image?/1)
   end
 
+  # Launch constraint: tinctures can't SURFACE raster image assets in the
+  # discovery slots until CSAM hash matching (PhotoDNA) is live. Vector
+  # (.svg) is allowed. The roster is the component domain's rule map, read
+  # where it is used, so the serve gate and the listing cannot drift.
   defp blocked_image?(path) when is_binary(path) do
     ext = path |> Path.extname() |> String.downcase()
-    ext in @blocked_image_extensions
+    ext in Compendium.tincture_asset_rules().blocked_raster_extensions
   end
 
   defp blocked_image?(_), do: false

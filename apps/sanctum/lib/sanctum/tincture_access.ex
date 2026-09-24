@@ -9,7 +9,7 @@ defmodule Sanctum.TinctureAccess do
   and delegates authorization to `Context.authorize/2`.
 
   Public access (`get_public/3`) requires an unauthenticated `Sanctum.Context`
-  (built at the Phoenix boundary via `TinctureHelpers.build_public_context/0`).
+  (resolved from the URL's athanor segment by `public_context/1`).
   It does NOT call `Context.authorize` — that function rejects all
   unauthenticated contexts. Instead it checks whether an active public
   profile exists for the tincture (what `profile.publish` mints), then
@@ -27,6 +27,41 @@ defmodule Sanctum.TinctureAccess do
   alias Cyfr.ComponentRef
   alias Sanctum.Consent.Components
   alias Sanctum.Context
+
+  @doc """
+  The public (unauthenticated) context for the athanor a tincture URL's
+  segment names, for lookups in that athanor.
+
+  The segment is the athanor's route slug: `@<namespace>` names a person's
+  athanor, a bare slug a group's. Only an active athanor resolves; a
+  missing, archived or otherwise inactive one is `{:error, :not_found}` —
+  the URL never falls back to another athanor — and a store that cannot
+  answer is `{:error, :unavailable}`, never a missing athanor.
+
+  This is the serving and lookup path; nothing runs under it. The context
+  that runs a tincture's catalyst is `Sanctum.build_tincture_context/2`'s.
+  The context is athanor-scoped with `authenticated: false`, so the
+  tenant-scoped reads downstream take it as they take any other, and
+  visibility is still decided by whether an active public profile exists
+  (`get_public/3`).
+  """
+  @spec public_context(String.t()) :: {:ok, Context.t()} | {:error, :not_found | :unavailable}
+  def public_context("@" <> namespace) when namespace != "",
+    do: namespace |> by_slug("person") |> public_in()
+
+  def public_context(slug) when is_binary(slug) and slug != "",
+    do: slug |> by_slug("group") |> public_in()
+
+  def public_context(_segment), do: {:error, :not_found}
+
+  defp by_slug(slug, kind), do: Sanctum.Tenancy.Athanors.get_by_slug(kind, slug)
+
+  defp public_in({:ok, %{id: id, status: "active"}}) when is_binary(id),
+    do: {:ok, Context.build(athanor_id: id, scope: :athanor, authenticated: false)}
+
+  defp public_in({:ok, _inactive}), do: {:error, :not_found}
+  defp public_in({:error, :not_found}), do: {:error, :not_found}
+  defp public_in({:error, _unreadable}), do: {:error, :unavailable}
 
   @doc """
   Look up a tincture for authenticated/private access.

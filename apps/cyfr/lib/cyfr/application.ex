@@ -81,7 +81,7 @@ defmodule Cyfr.Application do
     # detaching `"webhook-verify-failed-log"` if they prefer an alternative
     # sink (e.g. forwarding to SIEM via a Telemetry Metrics consumer).
     attach_webhook_verify_failed_logger()
-    Cyfr.ScheduleNotes.attach()
+    Aqua.ScheduleNotes.attach()
 
     # Two tiers under a :rest_for_one root so each has its own restart budget:
     # a crash-looping endpoint exhausts only the web tier (infra keeps running,

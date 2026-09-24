@@ -61,7 +61,7 @@ defmodule Opus.ModelsCatalogueTest do
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
     {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
 
-    assert {:ok, catalogue} = Cyfr.Models.catalogue(ctx)
+    assert {:ok, catalogue} = Aqua.models(ctx)
 
     expected_refs = Map.new(models, &{&1.name, &1.ref})
     assert catalogue["refs"] == expected_refs

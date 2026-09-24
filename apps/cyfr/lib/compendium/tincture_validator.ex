@@ -106,7 +106,7 @@ defmodule Compendium.TinctureValidator do
   # the module-level note above. The Arca-routed validator (used by the
   # indexer) is `validate_from_pairs/1`.
   defp check_entry(dir, manifest) do
-    with {:ok, entry} <- Cyfr.TinctureHelpers.entry_of(manifest) do
+    with {:ok, entry} <- Compendium.Tincture.entry_of(manifest) do
       path = Path.join(dir, entry)
       resolved = Path.expand(path)
       base = Path.expand(dir)
@@ -243,7 +243,7 @@ defmodule Compendium.TinctureValidator do
   end
 
   defp check_entry_in_pairs(files, manifest) do
-    with {:ok, entry} <- Cyfr.TinctureHelpers.entry_of(manifest) do
+    with {:ok, entry} <- Compendium.Tincture.entry_of(manifest) do
       if Map.has_key?(files, entry) do
         :ok
       else

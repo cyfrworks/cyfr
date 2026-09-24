@@ -8,7 +8,7 @@ defmodule PrismWeb.ModelCatalog do
   Callers use `load/1` to request models and `parse/1` to decode the
   resulting message.
 
-  The catalogue is `Cyfr.Models.catalogue/1`: every installed catalyst
+  The catalogue is `Aqua.models/1`: every installed catalyst
   that speaks `model/chat@1`, asked for its models with the key the
   estate bound on it. A pane asks for it on every mount — every thread
   switch — so a run's answer is kept per athanor in `Arca.Cache` for a
@@ -66,7 +66,7 @@ defmodule PrismWeb.ModelCatalog do
 
     Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
       Cyfr.LoggerContext.restore(logger_metadata)
-      result = Cyfr.Models.catalogue(ctx)
+      result = Aqua.models(ctx)
       with {:ok, catalogue} <- result, do: remember(athanor_id, catalogue)
       send(lv, {:list_models_result, tag, result})
     end)

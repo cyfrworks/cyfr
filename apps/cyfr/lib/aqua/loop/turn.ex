@@ -57,7 +57,7 @@ defmodule Aqua.Loop.Turn do
 
   Refuses an agent that names no model (`:no_model`), a catalyst the
   estate does not hold or that does not speak `model/chat@1`, and a
-  model its catalyst cannot describe (`Cyfr.Models.capabilities/5`; a
+  model its catalyst cannot describe (`Aqua.Models.capabilities/5`; a
   typed refusal is `{:model_refused, catalyst, error}`, and a catalyst
   whose consent lacks its key `{:setup_required, catalyst}`).
   """
@@ -255,13 +255,13 @@ defmodule Aqua.Loop.Turn do
   defp speaks_chat(listing, catalyst) do
     row = Enum.find(listing, &(&1["component_ref"] == catalyst)) || %{}
 
-    if Cyfr.Models.speaks_chat?(row["manifest"]),
+    if Cyfr.Model.speaks_chat?(row["manifest"]),
       do: :ok,
       else: {:error, {:catalyst_not_chat, catalyst}}
   end
 
   defp capabilities(ctx, authority, catalyst, model, turn) do
-    case Cyfr.Models.capabilities(ctx, catalyst, model, authority.consent_id,
+    case Aqua.Models.capabilities(ctx, catalyst, model, authority.consent_id,
            run: capability_probe(ctx, authority, catalyst, turn)
          ) do
       {:ok, capabilities} -> {:ok, capabilities}

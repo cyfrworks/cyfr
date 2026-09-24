@@ -97,7 +97,7 @@ defmodule Cyfr.TelemetryCatalogTest do
   end
 
   test "the schedule-notes handler attaches exactly the catalog's :notes roster" do
-    assert Catalog.consumed_by(:notes) == [Cyfr.ScheduleNotes.event()]
+    assert Catalog.consumed_by(:notes) == [Aqua.ScheduleNotes.event()]
 
     for event <- Catalog.consumed_by(:notes) do
       ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)

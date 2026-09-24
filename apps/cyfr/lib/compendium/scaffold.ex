@@ -50,8 +50,8 @@ defmodule Compendium.Scaffold do
               {base_path ++ ["index.html"], tincture_index_html(name)},
               {base_path ++ ["app.js"], tincture_app_js()},
               {base_path ++ ["style.css"], tincture_style_css()},
-              {base_path ++ Cyfr.TinctureHelpers.default_icon(), placeholder_icon_svg()},
-              {base_path ++ Cyfr.TinctureHelpers.default_preview(), placeholder_preview_svg()}
+              {base_path ++ Compendium.Tincture.default_icon(), placeholder_icon_svg()},
+              {base_path ++ Compendium.Tincture.default_preview(), placeholder_preview_svg()}
             ]
 
           _ ->
@@ -402,9 +402,9 @@ defmodule Compendium.Scaffold do
     [
       "Edit src/App.tsx to build your UI",
       "Add backend components to dependencies.static in #{Compendium.ComponentPath.manifest_name()}",
-      "Replace #{Path.join(Cyfr.TinctureHelpers.default_icon())} and " <>
-        "#{Path.join(Cyfr.TinctureHelpers.default_preview())} to brand the picker card " <>
-        "(add up to #{Cyfr.TinctureHelpers.preview_count()} previews)",
+      "Replace #{Path.join(Compendium.Tincture.default_icon())} and " <>
+        "#{Path.join(Compendium.Tincture.default_preview())} to brand the picker card " <>
+        "(add up to #{Compendium.Tincture.preview_count()} previews)",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the built tincture"
     ]
@@ -415,9 +415,9 @@ defmodule Compendium.Scaffold do
       "Edit index.html, app.js, and style.css to build your UI",
       "The cyfr SDK (window.cyfr) is auto-injected — use cyfr.invoke() to call backend components",
       "Add backend components to dependencies.static in #{Compendium.ComponentPath.manifest_name()}",
-      "Replace #{Path.join(Cyfr.TinctureHelpers.default_icon())} and " <>
-        "#{Path.join(Cyfr.TinctureHelpers.default_preview())} to brand the picker card " <>
-        "(add up to #{Cyfr.TinctureHelpers.preview_count()} previews)",
+      "Replace #{Path.join(Compendium.Tincture.default_icon())} and " <>
+        "#{Path.join(Compendium.Tincture.default_preview())} to brand the picker card " <>
+        "(add up to #{Compendium.Tincture.preview_count()} previews)",
       "Register: use component.register with reference '#{reference}'"
     ]
   end
@@ -513,8 +513,8 @@ defmodule Compendium.Scaffold do
       {base_path ++ ["src", "main.tsx"], react_main_tsx()},
       {base_path ++ ["src", "App.tsx"], react_app_tsx(name)},
       {base_path ++ ["src", "index.css"], tincture_style_css()},
-      {base_path ++ Cyfr.TinctureHelpers.default_icon(), placeholder_icon_svg()},
-      {base_path ++ Cyfr.TinctureHelpers.default_preview(), placeholder_preview_svg()}
+      {base_path ++ Compendium.Tincture.default_icon(), placeholder_icon_svg()},
+      {base_path ++ Compendium.Tincture.default_preview(), placeholder_preview_svg()}
     ]
   end
 

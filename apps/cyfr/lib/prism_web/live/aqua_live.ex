@@ -51,7 +51,7 @@ defmodule PrismWeb.AquaLive do
       |> assign(:active_nav, "aqua")
       |> assign(:loading, true)
       |> assign(:provenance, %{})
-      |> assign(:stale_consents, [])
+      |> assign(:stale_consents, {:ok, []})
       |> assign(:models_by_provider, %{})
       |> assign(:catalyst_refs, %{})
       |> assign(:models_loaded, false)
@@ -218,7 +218,7 @@ defmodule PrismWeb.AquaLive do
 
     socket
     |> assign(:provenance, provenance)
-    |> assign(:stale_consents, Cyfr.ConsentDrift.stale_refs(socket.assigns.context))
+    |> assign(:stale_consents, Aqua.stale_consent_refs(socket.assigns.context))
   end
 
   # Each section reads itself when told, with the provenance as it is now.
@@ -274,6 +274,51 @@ defmodule PrismWeb.AquaLive do
       "so #{short_ref(ref)} cannot run until a member consents again."
   end
 
+  @doc """
+  What the estate's consent status says: one row per formula or agent
+  whose consent no longer answers, each with its re-consent button, or —
+  when the status could not be read — one line that says so and offers
+  nothing to press, so an outage never reads as "all consents current".
+  """
+  attr :stale_consents, :any, required: true
+
+  def consent_status(%{stale_consents: {:error, _refused}} = assigns) do
+    ~H"""
+    <div
+      id="aqua-consent-status-unavailable"
+      role="status"
+      class="rounded border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200"
+    >
+      <p>Consent status unavailable — try again shortly.</p>
+    </div>
+    """
+  end
+
+  def consent_status(%{stale_consents: {:ok, stale}} = assigns) do
+    assigns = assign(assigns, :stale, stale)
+
+    ~H"""
+    <%!-- Installing a component widens the closure every source that
+          names it was consented against, so recovery is per source. --%>
+    <div
+      :for={{ref, state} <- @stale}
+      id={"aqua-consent-drift-" <> ref}
+      role="status"
+      class="rounded border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200 flex items-start justify-between gap-3"
+    >
+      <p>{consent_warning(ref, state)}</p>
+      <button
+        type="button"
+        phx-click="open_consent"
+        phx-value-ref={ref}
+        class="shrink-0 rounded bg-amber-700 hover:bg-amber-600 px-2 py-1 text-[11px] font-medium text-white"
+      >
+        Re-consent
+      </button>
+    </div>
+    """
+  end
+
   defp short_ref("formula:local." <> name), do: name
   defp short_ref("agent:local." <> name), do: name
   defp short_ref(ref), do: ref
@@ -295,25 +340,7 @@ defmodule PrismWeb.AquaLive do
 
       <.live_loading :if={@loading} message="Loading AQUA…" />
 
-      <%!-- One row per formula or agent whose consent no longer answers.
-            Installing a component widens the closure every source that
-            names it was consented against, so recovery is per source. --%>
-      <div
-        :for={{ref, state} <- @stale_consents}
-        id={"aqua-consent-drift-" <> ref}
-        role="status"
-        class="rounded border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200 flex items-start justify-between gap-3"
-      >
-        <p>{consent_warning(ref, state)}</p>
-        <button
-          type="button"
-          phx-click="open_consent"
-          phx-value-ref={ref}
-          class="shrink-0 rounded bg-amber-700 hover:bg-amber-600 px-2 py-1 text-[11px] font-medium text-white"
-        >
-          Re-consent
-        </button>
-      </div>
+      <.consent_status stale_consents={@stale_consents} />
 
       <.live_component
         module={AgentsComponent}

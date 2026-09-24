@@ -4,7 +4,7 @@
 defmodule Aqua.Loop.Planner do
   @moduledoc """
   One context planner for the loop, fed by what the catalyst reports
-  (`Cyfr.Models.capabilities/5`) and what the last response cost
+  (`Aqua.Models.capabilities/5`) and what the last response cost
   (`usage.input_tokens`).
 
   A request fits while the observed size stays under most of the usable

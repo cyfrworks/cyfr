@@ -160,11 +160,7 @@ defmodule PrismWeb.ShellLive do
       # The public address: the one origin plus the tincture's path.
       url =
         EmissaryWeb.Endpoint.url() <>
-          Cyfr.TinctureHelpers.tincture_path(
-            tincture.athanor_segment,
-            tincture.publisher,
-            tincture.name
-          )
+          Cyfr.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
 
       {:noreply,
        socket
@@ -398,7 +394,7 @@ defmodule PrismWeb.ShellLive do
   # Same origin as the shell itself: a relative path, so the iframe is
   # never cross-origin whatever hostname or proxy the browser came in through.
   defp build_tincture_url({:ok, token}, t) do
-    base = Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name)
+    base = Cyfr.TinctureUrl.path(t.athanor_segment, t.publisher, t.name)
     "#{base}?_t=#{token}"
   end
 
@@ -406,11 +402,11 @@ defmodule PrismWeb.ShellLive do
 
   # Build a same-origin asset URL for icons/previews. Returns nil for missing
   # paths or non-image extensions — server-side validators in
-  # `Cyfr.TinctureHelpers.serve_asset/4` re-check everything; this is a fast
-  # client-side reject so we don't emit obviously broken URLs.
+  # `CyfrWeb.Ingress.TinctureAssets.serve_asset/5` re-check everything; this
+  # is a fast client-side reject so we don't emit obviously broken URLs.
   # Derived from the serve gate: the fast client-side reject and the
-  # server-side validators answer from one roster.
-  @image_extensions Cyfr.TinctureHelpers.image_extensions()
+  # server-side validators answer from one rule map
+  # (`Compendium.tincture_asset_rules/0`), read where it is used.
 
   defp build_asset_url(_access, _tincture, nil), do: nil
   defp build_asset_url(_access, _tincture, ""), do: nil
@@ -420,8 +416,7 @@ defmodule PrismWeb.ShellLive do
       encoded = path |> String.split("/") |> Enum.map_join("/", &URI.encode/1)
 
       base =
-        Cyfr.TinctureHelpers.tincture_path(t.athanor_segment, t.publisher, t.name) <>
-          "/" <> encoded
+        Cyfr.TinctureUrl.path(t.athanor_segment, t.publisher, t.name) <> "/" <> encoded
 
       "#{base}?_t=#{token}"
     end
@@ -432,7 +427,8 @@ defmodule PrismWeb.ShellLive do
   defp safe_asset_path?(path) do
     ext = path |> Path.extname() |> String.downcase()
 
-    Cyfr.PathSafety.validate_relative_path(path) == :ok and ext in @image_extensions
+    Cyfr.PathSafety.validate_relative_path(path) == :ok and
+      ext in Compendium.tincture_asset_rules().image_extensions
   end
 
   defp emoji_from_hint(hint) when is_binary(hint) do

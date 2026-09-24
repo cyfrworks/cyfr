@@ -119,19 +119,19 @@ defmodule Cyfr.StoredJsonTest do
     assert_logged(log, "Cyfr.Schedules.Provider", "input")
   end
 
-  test "Cyfr.ScheduleNotes reads corrupt schedule metadata as a run nobody asked to keep" do
-    event = Cyfr.ScheduleNotes.event()
+  test "Aqua.ScheduleNotes reads corrupt schedule metadata as a run nobody asked to keep" do
+    event = Aqua.ScheduleNotes.event()
 
     for metadata <- [nil, "", ~s({"keep_outcome": false})] do
-      assert Cyfr.ScheduleNotes.handle_event(event, %{}, %{metadata: metadata}, nil) == :ok
+      assert Aqua.ScheduleNotes.handle_event(event, %{}, %{metadata: metadata}, nil) == :ok
     end
 
     log =
       capture_log(fn ->
-        assert Cyfr.ScheduleNotes.handle_event(event, %{}, %{metadata: @corrupt}, nil) == :ok
+        assert Aqua.ScheduleNotes.handle_event(event, %{}, %{metadata: @corrupt}, nil) == :ok
       end)
 
-    assert_logged(log, "Cyfr.ScheduleNotes", "metadata")
+    assert_logged(log, "Aqua.ScheduleNotes", "metadata")
   end
 
   test "Sanctum.ApiKey lists a corrupt scope as none and a corrupt allowlist as absent" do

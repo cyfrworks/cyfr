@@ -68,7 +68,7 @@ defmodule Cyfr.Test.SeedBundle do
     units =
       seed
       |> shipped_units("catalysts")
-      |> Enum.filter(&Cyfr.Models.speaks_chat?(&1.manifest))
+      |> Enum.filter(&Cyfr.Model.speaks_chat?(&1.manifest))
       |> newest_by_name()
       |> Enum.sort_by(& &1.name)
 

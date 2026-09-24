@@ -1,19 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.ModelsCapabilitiesTest do
+defmodule Aqua.ModelCapabilitiesTest do
   @moduledoc """
   A model's capabilities are its catalyst's `describe` of that model: the
   window, the output ceiling and the input ceiling come from the answer,
   a malformed ceiling reads as absent, a model the catalyst does not know
   and a describe that fails are errors, an answer with no window is an
-  error whatever else it carries, and only a reading that succeeded is
-  cached, under the key it ran with.
+  error whatever else it carries, a describe that outruns its deadline is
+  stopped, and only a reading that succeeded is cached, under the key it
+  ran with.
   """
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Models
+  alias Aqua.Models
 
   @ref "catalyst:local.claude:1.3.1"
 
@@ -142,5 +143,62 @@ defmodule Cyfr.ModelsCapabilitiesTest do
              Models.capabilities(ctx, @ref, "m", "sha256:c", run: ceiling_only)
 
     assert runs.() == 2
+  end
+
+  test "a changed binding digest misses the cache; the same key hits it", %{ctx: ctx} do
+    {run, runs} =
+      counted(fn _ -> {:ok, envelope(%{"model" => "m", "context_window" => 100_000})} end)
+
+    assert {:ok, %{context_window: 100_000}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:bound", run: run)
+
+    assert {:ok, _} = Models.capabilities(ctx, @ref, "m", "sha256:bound", run: run)
+    assert runs.() == 1
+
+    # A key bound or rebound since is another binding: the reading it ran
+    # with says nothing about the new one, so the catalyst is asked again.
+    assert {:ok, _} = Models.capabilities(ctx, @ref, "m", "sha256:rebound", run: run)
+    assert runs.() == 2
+
+    # So is no binding at all, and another release of the catalyst.
+    assert {:ok, _} = Models.capabilities(ctx, @ref, "m", nil, run: run)
+    assert {:ok, _} = Models.capabilities(ctx, "catalyst:local.claude:1.3.2", "m", nil, run: run)
+    assert runs.() == 4
+
+    # And another estate never reads this one's entry.
+    other = %{ctx | athanor_id: "ath_other_#{System.unique_integer([:positive])}"}
+    assert {:ok, _} = Models.capabilities(other, @ref, "m", "sha256:bound", run: run)
+    assert runs.() == 5
+  end
+
+  test "a describe that outruns its deadline is stopped, refused and not cached", %{ctx: ctx} do
+    test = self()
+
+    {slow, runs} =
+      counted(fn _ ->
+        send(test, {:describing, self()})
+        Process.sleep(:infinity)
+      end)
+
+    assert {:error, {:describe_failed, :timeout}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:slow", run: slow, timeout: 50)
+
+    # The run was stopped, not left behind.
+    assert_received {:describing, pid}
+    refute Process.alive?(pid)
+
+    assert {:error, {:describe_failed, :timeout}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:slow", run: slow, timeout: 50)
+
+    assert runs.() == 2
+
+    # Within the deadline the answer is the catalyst's, and it is kept.
+    fast = fn _ -> {:ok, envelope(%{"model" => "m", "context_window" => 8_000})} end
+
+    assert {:ok, %{context_window: 8_000}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:fast", run: fast, timeout: 5_000)
+
+    assert {:ok, %{context_window: 8_000}} =
+             Models.capabilities(ctx, @ref, "m", "sha256:fast", run: slow, timeout: 50)
   end
 end

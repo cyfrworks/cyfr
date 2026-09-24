@@ -17,7 +17,7 @@ defmodule Cyfr.Telemetry.Catalog do
   - `:metrics` — `EmissaryWeb.Telemetry` metric definitions. Pinned equal
     by test.
   - `:log` — a dedicated Logger attach (`Cyfr.Application`).
-  - `:notes` — `Cyfr.ScheduleNotes`, which files a completed schedule's
+  - `:notes` — `Aqua.ScheduleNotes`, which files a completed schedule's
     outcome as a note when the schedule asked for it. Pinned by test.
   - `:estate` — `Compendium.Provisioning`, the component domain's answer
     to the identity domain's "this athanor needs filling". A foundation

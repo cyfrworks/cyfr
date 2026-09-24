@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.ScheduleNotes do
+defmodule Aqua.ScheduleNotes do
   @moduledoc """
   A schedule that asked to keep what it did. `keep_outcome: true` in a
   schedule's metadata (`Cyfr.Schedules.Provider`) files every completed run's output
@@ -10,12 +10,13 @@ defmodule Cyfr.ScheduleNotes do
   and the execution as provenance, capped so one run cannot fill a
   ledger. Each run replaces the note before it.
 
-  A telemetry consumer of `[:cyfr, :schedules, :completed]`,
-  attached at boot. The write runs under the server's own context
-  refocused on the schedule's athanor — the estate the run itself ran
-  in — and an archived athanor's schedule writes nothing. The handler
-  runs inside the scheduler and never raises into it: a note that cannot
-  be kept is logged, and the run stands.
+  A telemetry consumer of `[:cyfr, :schedules, :completed]`, attached
+  at boot by `Cyfr.Application`. The write runs under the server's own
+  context, able to read and write storage and nothing more, refocused on
+  the schedule's athanor — the estate the run itself ran in — and an
+  archived athanor's schedule writes nothing. The handler runs inside the
+  scheduler and never raises into it: a note that cannot be kept is
+  logged, and the run stands.
   """
 
   require Logger
@@ -99,7 +100,7 @@ defmodule Cyfr.ScheduleNotes do
 
       {:error, :invalid_json} ->
         Logger.warning(
-          "[Cyfr.ScheduleNotes] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
+          "[Aqua.ScheduleNotes] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
         )
 
         default
@@ -114,7 +115,11 @@ defmodule Cyfr.ScheduleNotes do
   defp name(_none, _metadata), do: nil
 
   defp keep(metadata, name) do
-    internal = Context.internal(user_id: metadata[:user_id] || "system")
+    internal =
+      Context.internal(
+        user_id: metadata[:user_id] || "system",
+        permissions: [:storage_read, :storage_write]
+      )
 
     with {:ok, ctx} <- Context.refocus(internal, metadata[:athanor_id]),
          {:ok, _} <-
@@ -138,7 +143,7 @@ defmodule Cyfr.ScheduleNotes do
     end
   end
 
-  defp body(output) when is_binary(output), do: Cyfr.Text.cut(output, @max_bytes, @marker)
+  defp body(output) when is_binary(output), do: Aqua.Text.cut(output, @max_bytes, @marker)
 
-  defp body(output), do: output |> Cyfr.Json.safe_encode() |> Cyfr.Text.cut(@max_bytes, @marker)
+  defp body(output), do: output |> Cyfr.Json.safe_encode() |> Aqua.Text.cut(@max_bytes, @marker)
 end

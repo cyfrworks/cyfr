@@ -533,12 +533,12 @@ defmodule Cyfr.DocsDriftTest do
     assert readme =~ ~r/^\| `locus-builds` \*\(profile: `locus-builds`\)\* \|/m
   end
 
-  # What `describe` may answer, as `Cyfr.Models` reads it, is what the
+  # What `describe` may answer, as `Aqua.Models` reads it, is what the
   # guide documents for a catalyst author.
-  test "every field Cyfr.Models reads from describe is in the component guide" do
+  test "every field Aqua.Models reads from describe is in the component guide" do
     read =
       @repo_root
-      |> Path.join("apps/cyfr/lib/cyfr/models.ex")
+      |> Path.join("apps/cyfr/lib/aqua/models.ex")
       |> File.read!()
       |> then(&Regex.scan(~r/described\["([a-z_]+)"\]/, &1, capture: :all_but_first))
       |> List.flatten()

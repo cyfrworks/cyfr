@@ -1800,7 +1800,7 @@ defmodule Compendium.MCP.ComponentTool do
             component
 
           segments ->
-            discovered = Cyfr.TinctureHelpers.discover_media_via_arca(ctx, segments)
+            discovered = Compendium.Tincture.media(ctx, segments)
             updated = merge_discovered_into_manifest(parsed, discovered)
             put_manifest(component, updated, raw_manifest)
         end

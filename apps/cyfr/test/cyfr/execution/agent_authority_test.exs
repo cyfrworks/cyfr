@@ -105,7 +105,7 @@ defmodule Cyfr.Execution.AgentAuthorityTest do
                child_opts
              )
 
-    assert {:ok, %{"contracts" => ["model/chat@1"]}} = Cyfr.Models.decode_envelope(output)
+    assert {:ok, %{"contracts" => ["model/chat@1"]}} = Cyfr.Model.decode_envelope(output)
 
     {:ok, [claude]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.claude")

@@ -59,7 +59,9 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/scaffold.ex" => 8,
     "apps/cyfr/lib/compendium/mcp.ex" => 6,
     "apps/cyfr/lib/compendium/mcp/component_tool.ex" => 7,
-    "apps/cyfr/lib/cyfr/tincture_helpers.ex" => 7,
+    # The entry rule's sentences, which the tincture validators return to
+    # a publisher; the facade answers the same rule typed.
+    "apps/cyfr/lib/compendium/tincture.ex" => 7,
     "apps/sanctum/lib/sanctum/mcp/profile_tool.ex" => 7,
     "apps/sanctum/lib/sanctum/webhook.ex" => 7,
     "apps/cyfr/lib/emissary/mcp/mcp_servers_tool.ex" => 6,
