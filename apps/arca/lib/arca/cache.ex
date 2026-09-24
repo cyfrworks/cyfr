@@ -19,8 +19,6 @@ defmodule Arca.Cache do
   `Arca.Cache.Keys`, e.g.:
   - `{:component_meta, "ath_…", "catalyst:local.demo:0.1.0"}`
   - `{:wasm_bytes, "sha256:…"}`
-  - `{:mcp_tool, "execution"}` (private to `Grimoire.Catalog` —
-    read and written only through its `lookup/1` / `register_tool/4`)
   """
 
   require Logger
@@ -43,11 +41,8 @@ defmodule Arca.Cache do
   would own — that is the difference between a cache the node keeps and
   one a transient request process happens to hold.
 
-  A sweeper crash flushes the cache. That is harmless for a genuine
-  read-through entry — a miss re-derives it — but NOT for a consumer that
-  write-populates the table and would otherwise wait out its own refresh
-  interval before noticing. Those consumers watch the owner with
-  `monitor_owner/0`.
+  A sweeper crash flushes the cache, which is harmless for a read-through
+  entry: a miss re-derives it.
   """
   @spec init() :: :ok
   def init do
@@ -61,9 +56,10 @@ defmodule Arca.Cache do
           :public,
           :named_table,
           read_concurrency: true,
-          # Written on hot paths (HTTP-stream chunks, session state, tool
-          # catalogs) from many processes — without this, every write takes
-          # a whole-table lock. The sibling limiter tables set it too.
+          # Written on hot paths (HTTP-stream chunks, session state, each
+          # athanor's external tools) from many processes — without this,
+          # every write takes a whole-table lock. The sibling limiter tables
+          # set it too.
           write_concurrency: true
         ])
 
@@ -75,31 +71,6 @@ defmodule Arca.Cache do
         # one carries on without it.
         _ = Arca.Cache.Sweeper.ensure_table()
         :ok
-    end
-  end
-
-  @doc """
-  Monitor the process that owns the cache table.
-
-  For the consumers that treat this table as a store rather than a
-  read-through: `Grimoire.Catalog` and
-  `Emissary.MCP.ResourceRegistry` write their catalogues here at boot and
-  refresh them only every 23 hours. The table dies with its owner and comes
-  back empty, and `get/1` turns the missing table into an ordinary miss —
-  so without a monitor the whole MCP catalogue reads as "unknown tool" for
-  up to a day, silently, and nothing restarts them (they are siblings of
-  the sweeper under a `:one_for_one` tier).
-
-  Returns the monitor reference, or `nil` when the table is not up yet —
-  the caller retries in that case.
-  """
-  @spec monitor_owner() :: reference() | nil
-  def monitor_owner do
-    with tid when tid != :undefined <- :ets.whereis(@table_name),
-         owner when is_pid(owner) <- :ets.info(tid, :owner) do
-      Process.monitor(owner)
-    else
-      _ -> nil
     end
   end
 

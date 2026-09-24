@@ -23,7 +23,7 @@ defmodule Compendium.Provider do
   close to their implementation.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Grimoire.Catalog.
+  which the operation table validates at boot.
   """
 
   @behaviour Prima.Provider

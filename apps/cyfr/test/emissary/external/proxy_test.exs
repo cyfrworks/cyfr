@@ -161,7 +161,7 @@ defmodule Emissary.External.ProxyTest do
       })
 
       assert {:error, {:invalid_argument, msg}} =
-               Grimoire.Catalog.call_external("plane-pin:sometool", ctx, %{})
+               Grimoire.call_external("plane-pin:sometool", ctx, %{})
 
       assert msg =~ "only from inside a chain"
 

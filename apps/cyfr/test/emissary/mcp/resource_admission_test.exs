@@ -23,7 +23,8 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
   alias Grimoire.Catalog
   alias Prima.{Arg, Operation}
   alias Prima.Test.AuthorityFixtures
-  alias Emissary.MCP.{Message, ResourceRegistry, Router}
+  alias Emissary.MCP.{Message, Router}
+  alias Grimoire.Resources
   alias Sanctum.Context
 
   @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
@@ -74,7 +75,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
   describe "the declarations" do
     test "four read operations, one per scheme, each resolved from its scheme" do
       for {tool, action, permission, auth, scheme, uri} <- @declarations do
-        assert {:ok, {_module, meta}} = Catalog.lookup(tool)
+        assert {:ok, {_module, meta}} = Grimoire.lookup(tool)
         op = Enum.find(meta.operations, &(&1.action == action))
 
         assert %Operation{kind: :read, planes: [:external], consent: nil} = op
@@ -84,7 +85,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
         assert op.resource_schemes == [scheme]
         assert [%Arg{name: "uri", type: :string, required: true}] = op.args
 
-        assert ResourceRegistry.resolve(uri) == {:ok, tool, action}
+        assert Resources.resolve(uri) == {:ok, tool, action}
       end
 
       assert :ok = Catalog.audit_resource_schemes()
@@ -142,8 +143,8 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
 
     test "an anonymous read is refused as the declaration's auth, with today's code" do
       for {tool, _action, _permission, :required, _scheme, uri} <- @declarations do
-        assert {:error, {:tool_auth_required, ^tool}} =
-                 Catalog.call_external(tool, anonymous(), %{
+        assert {:error, %Prima.Refusal{stage: :admission, reason: {:tool_auth_required, ^tool}}} =
+                 Grimoire.call_external(tool, anonymous(), %{
                    "action" => action_of(tool),
                    "uri" => uri
                  })
@@ -173,8 +174,8 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
 
       # The roots are the admitted context's, never an argument: an extra
       # argument is refused by the declaration, whoever sends it.
-      assert {:error, {:invalid_argument, _}} =
-               Catalog.call_external("resource", storage_key, %{
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
+               Grimoire.call_external("resource", storage_key, %{
                  "action" => "read",
                  "uri" => "arca://files/aqua/reach.md",
                  "roots" => ["aqua"]
@@ -195,7 +196,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
       # `Arca.get/2` raises on an actor with no athanor; a typed refusal is
       # the proof the reader stopped before it.
       assert {:error, :missing_tenant} =
-               Catalog.call_external("resource", tenantless, %{
+               Grimoire.call_external("resource", tenantless, %{
                  "action" => "read",
                  "uri" => "arca://files/data/reach.txt"
                })
@@ -205,8 +206,8 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
       guest = Context.enter_guest(ctx)
 
       for {tool, action, _permission, _auth, _scheme, uri} <- @declarations do
-        assert {:error, {:guest_plane_call, ^tool}} =
-                 Catalog.call_external(tool, guest, %{"action" => action, "uri" => uri})
+        assert {:error, %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, ^tool}}} =
+                 Grimoire.call_external(tool, guest, %{"action" => action, "uri" => uri})
 
         assert {:error, :insufficient_permissions, message} = read(guest, uri)
         assert message =~ "a call from inside a running component cannot call"
@@ -222,8 +223,8 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
       for {tool, action, _permission, _auth, _scheme, uri} <- @declarations do
         refute Catalog.in_chain_reachable?(tool, action)
 
-        assert {:error, message} =
-                 Catalog.call_in_chain(
+        assert {:error, %Prima.Refusal{stage: :admission, message: message}} =
+                 Grimoire.call_in_chain(
                    tool,
                    guest,
                    %{"action" => action, "uri" => uri},
@@ -245,7 +246,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
         Arca.ExecutionPayloads.put(Context.actor(ctx), parent, "result", ~s({"own":1}), "api")
 
       chain = fn args ->
-        Catalog.call_in_chain(
+        Grimoire.call_in_chain(
           "record",
           Context.enter_guest(ctx),
           Map.put(args, "action", "payload"),
@@ -275,14 +276,14 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
       unit = "components/reagents/local/fresh/0.1.0"
 
       put =
-        &Catalog.call_external("file", ctx, %{"action" => "write", "path" => &1, "content" => &2})
+        &Grimoire.call_external("file", ctx, %{"action" => "write", "path" => &1, "content" => &2})
 
       manifest = fn description ->
         Jason.encode!(%{"type" => "reagent", "version" => "0.1.0", "description" => description})
       end
 
       assert {:ok, _} =
-               Catalog.call_external("file", ctx, %{
+               Grimoire.call_external("file", ctx, %{
                  "action" => "write",
                  "path" => unit <> "/reagent.wasm",
                  "content" => Base.encode64(@valid_wasm),
@@ -308,7 +309,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
 
       for {tool, action, _permission, _auth, _scheme, uri} <- @declarations do
         assert {:error, :control_plane_lost} =
-                 Catalog.call_external(tool, ctx, %{"action" => action, "uri" => uri})
+                 Grimoire.call_external(tool, ctx, %{"action" => action, "uri" => uri})
 
         assert {:error, :not_owner, message} = read(ctx, uri)
         assert message == Prima.Refusal.message(:control_plane_lost)
@@ -367,7 +368,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
       [_, body] = String.split(source, "defp read_resource(ctx, uri, _id) do", parts: 2)
       [body | _] = String.split(body, "\n  defp ", parts: 2)
 
-      assert length(String.split(body, "Catalog.call_external(")) == 2,
+      assert length(String.split(body, "Grimoire.call_external(")) == 2,
              "a resource read is one gate call"
 
       for decision <-
@@ -376,7 +377,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
         refute body =~ decision, "the Router's resource read makes a decision: #{decision}"
       end
 
-      refute function_exported?(ResourceRegistry, :read, 2)
+      refute function_exported?(Resources, :read, 2)
     end
   end
 

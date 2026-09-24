@@ -31,7 +31,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   """
   def enumerate_tool_actions do
     mcp =
-      Grimoire.Catalog.list_tools()
+      Grimoire.list_tools()
       |> Enum.map(fn t ->
         name = t["name"]
         schema = t["inputSchema"] || %{}
@@ -81,7 +81,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   end
 
   defp reachable?(name, action) when is_binary(name),
-    do: Grimoire.Catalog.chain_reachable?(name, action)
+    do: Grimoire.chain_reachable?(name, action)
 
   defp reachable?(_name, _action), do: false
 

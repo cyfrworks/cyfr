@@ -87,7 +87,7 @@ defmodule Crucible.ProviderTest do
       end
 
       assert {:error, {:invalid_argument, _}} =
-               Grimoire.Catalog.call_external("execution", ctx, %{
+               Grimoire.call_external("execution", ctx, %{
                  "action" => "run",
                  "reference" => "agent:local.aqua",
                  "input" => %{}
@@ -434,7 +434,7 @@ defmodule Crucible.ProviderTest do
     test "the handler releases when reached; the operator gate is the annotation" do
       # Releasing every athanor's slots is a server-wide side effect. The
       # `scope: :platform` annotation admits platform admins alone at
-      # dispatch (`Grimoire.Catalog`); the handler itself does not
+      # dispatch (the gate); the handler itself does not
       # re-check, so a direct call releases.
       admin_ctx = %{Sanctum.TestContext.local() | platform_admin: true}
 
@@ -445,14 +445,14 @@ defmodule Crucible.ProviderTest do
     end
 
     test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do
-      assert {:error, :platform_admin_required} =
-               Grimoire.Catalog.call_external("execution", ctx, %{
+      assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
+               Grimoire.call_external("execution", ctx, %{
                  "action" => "force_release"
                })
 
       [tool] =
         Grimoire.Visibility.filter_for_context(
-          Enum.filter(Grimoire.Catalog.list_tools(), &(&1["name"] == "execution")),
+          Enum.filter(Grimoire.list_tools(), &(&1["name"] == "execution")),
           ctx
         )
 
@@ -498,7 +498,7 @@ defmodule Crucible.ProviderTest do
       # Through the dispatcher, where a permission refusal would come from: the
       # handler alone refuses nothing on permission.
       result =
-        Grimoire.Catalog.call_external("execution", restricted_ctx, %{
+        Grimoire.call_external("execution", restricted_ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
@@ -525,15 +525,15 @@ defmodule Crucible.ProviderTest do
     test "execution.status denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
       # Through the dispatcher — the :execute gate lives in the action
       # annotation, enforced by the catalog, not in the handler.
-      assert {:error, {:missing_permission, :execute}} =
-               Grimoire.Catalog.call_external("execution", no_execute_ctx, %{
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :execute}}} =
+               Grimoire.call_external("execution", no_execute_ctx, %{
                  "action" => "status"
                })
     end
 
     test "execution.cancel denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
-      assert {:error, {:missing_permission, :execute}} =
-               Grimoire.Catalog.call_external("execution", no_execute_ctx, %{
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :execute}}} =
+               Grimoire.call_external("execution", no_execute_ctx, %{
                  "action" => "cancel",
                  "execution_id" => "exec_nonexistent"
                })
@@ -866,7 +866,7 @@ defmodule Crucible.ProviderTest do
   # the gate like any other call; the answer is `%{content:, mimeType:}`.
   defp read(ctx, uri),
     do:
-      Grimoire.Catalog.call_external("execution", ctx, %{
+      Grimoire.call_external("execution", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })

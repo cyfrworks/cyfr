@@ -163,7 +163,7 @@ defmodule Compendium.ProviderTest do
   # the gate like any other call.
   defp read(ctx, uri),
     do:
-      Grimoire.Catalog.call_external("component", ctx, %{
+      Grimoire.call_external("component", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })
@@ -216,12 +216,14 @@ defmodule Compendium.ProviderTest do
         )
 
       # Refused at the gate, before any tenant resolution or read.
-      assert {:error, {:tool_auth_required, "component"} = msg} =
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:tool_auth_required, "component"} = msg}} =
                read(anon, "compendium://components/r:local.anon-read:1.0.0")
 
       assert err_msg(msg) =~ "requires authentication"
 
-      assert {:error, {:tool_auth_required, "component"}} =
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:tool_auth_required, "component"}}} =
                read(anon, "compendium://assets/r:local.anon-read:1.0.0/README.md")
     end
 
@@ -301,7 +303,8 @@ defmodule Compendium.ProviderTest do
 
       assert {:ok, _} = read(key.([:component_read]), uri)
 
-      assert {:error, {:missing_permission, :component_read}} =
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :component_read}}} =
                read(key.([:storage_read]), uri)
     end
   end
@@ -2131,8 +2134,9 @@ defmodule Compendium.ProviderTest do
     end
 
     test "component.create denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      assert {:error, {:missing_permission, :component_manage}} =
-               Grimoire.Catalog.call_external("component", restricted_ctx, %{
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :component_manage}}} =
+               Grimoire.call_external("component", restricted_ctx, %{
                  "action" => "create",
                  "name" => "test-comp",
                  "type" => "reagent"
@@ -2140,8 +2144,9 @@ defmodule Compendium.ProviderTest do
     end
 
     test "component.push denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      assert {:error, {:missing_permission, :component_manage}} =
-               Grimoire.Catalog.call_external("component", restricted_ctx, %{
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :component_manage}}} =
+               Grimoire.call_external("component", restricted_ctx, %{
                  "action" => "push",
                  "reference" => "reagent:local.test:0.1.0"
                })
@@ -2159,7 +2164,7 @@ defmodule Compendium.ProviderTest do
       }
 
       {:error, msg} =
-        Grimoire.Catalog.call_external("component", key_ctx, %{
+        Grimoire.call_external("component", key_ctx, %{
           "action" => "push",
           "reference" => "reagent:local.test:0.1.0"
         })
@@ -2168,15 +2173,17 @@ defmodule Compendium.ProviderTest do
     end
 
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      assert {:error, {:missing_permission, :component_manage}} =
-               Grimoire.Catalog.call_external("component", restricted_ctx, %{
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :component_manage}}} =
+               Grimoire.call_external("component", restricted_ctx, %{
                  "action" => "register"
                })
     end
 
     test "component.delete denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      assert {:error, {:missing_permission, :component_manage}} =
-               Grimoire.Catalog.call_external("component", restricted_ctx, %{
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :component_manage}}} =
+               Grimoire.call_external("component", restricted_ctx, %{
                  "action" => "delete",
                  "reference" => "reagent:local.test:0.1.0"
                })

@@ -83,11 +83,12 @@ defmodule Cyfr.ApplicationTest do
       assert Phoenix.PubSub.Supervisor in ids or
                Enum.any?(ids, fn id -> id == Cyfr.PubSub end)
 
-      # The repo is the `arca` application's now, and so is the cache
-      # table's owner; this tier holds the registries that write
-      # catalogues into that table and reaches the repo by name.
-      assert Grimoire.Catalog in ids
-      assert Emissary.MCP.ResourceRegistry in ids
+      # The repo is the `arca` application's, and so is the cache table's
+      # owner; this tier reaches the repo by name. The operation table is
+      # a term written before the tree starts, owned by no child.
+      refute Grimoire.Catalog in ids
+      refute Emissary.MCP.ResourceRegistry in ids
+      assert is_map(Grimoire.operations())
       refute Arca.Repo in ids
       refute EmissaryWeb.Endpoint in ids
     end
@@ -160,9 +161,8 @@ defmodule Cyfr.ApplicationTest do
 
     # Builds run on the control plane's own task supervisor and nowhere
     # else: this server starts no builder, and a build's request, watcher and
-    # registration stop before the catalog and the bookkeeping they write
-    # through.
-    test "the builds' task supervisor starts under the infra tier after the catalog, and no builder does" do
+    # registration stop before the bookkeeping they write through.
+    test "the builds' task supervisor starts under the infra tier after PubSub, and no builder does" do
       started = Cyfr.InfraSupervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
 
@@ -171,10 +171,6 @@ defmodule Cyfr.ApplicationTest do
 
       pubsub = Enum.find_index(started, &(&1 in [Cyfr.PubSub, Phoenix.PubSub.Supervisor]))
       assert builds > pubsub
-
-      for id <- [Grimoire.Catalog, Emissary.MCP.ResourceRegistry] do
-        assert builds > at.(id), "#{inspect(id)} must start before the builds' supervisor"
-      end
 
       assert is_pid(Process.whereis(Compendium.Builds.TaskSupervisor))
       refute Enum.any?(started, &(inspect(&1) =~ "Locus"))

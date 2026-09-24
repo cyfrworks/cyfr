@@ -276,7 +276,7 @@ defmodule Aqua.Providers.Notes do
 
   # Where a note was kept from. In a chain the registry stamps the
   # execution and the thread onto the call as host-only keys
-  # (`Grimoire.Catalog`'s lineage), and those are the only
+  # (the gate's lineage), and those are the only
   # provenance read there — a value the model put under `thread` or
   # `execution` is ignored, never recorded. At the door a person says
   # what they choose to.

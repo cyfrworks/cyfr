@@ -76,8 +76,10 @@ defmodule EmissaryWeb.HealthController do
       cache: check_cache(),
       pubsub: check_pubsub(),
       storage: check_storage(),
-      tool_registry: check_process(Grimoire.Catalog),
-      resource_registry: check_process(Emissary.MCP.ResourceRegistry),
+      # The operation table and its resource index are written once at
+      # boot, before any listener: each check says its term is there.
+      tool_registry: check_written(&Grimoire.operations/0),
+      resource_registry: check_written(&Grimoire.resources/0),
       # A boot that lost its control-plane lease is not ready: the endpoint
       # answers 503 to everything but this probe until the claim is won back.
       control_plane:
@@ -185,13 +187,9 @@ defmodule EmissaryWeb.HealthController do
     e -> {:error, Exception.message(e)}
   end
 
-  defp check_process(name) do
-    case Process.whereis(name) do
-      pid when is_pid(pid) ->
-        if Process.alive?(pid), do: :ok, else: {:error, :not_alive}
-
-      nil ->
-        {:error, :not_registered}
-    end
+  defp check_written(read) do
+    if is_map(read.()), do: :ok, else: {:error, :not_written}
+  rescue
+    ArgumentError -> {:error, :not_written}
   end
 end

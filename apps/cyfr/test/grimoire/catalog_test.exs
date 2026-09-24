@@ -1,39 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Grimoire.CatalogTest.CrashingProvider do
-  @moduledoc false
-  # A provider that fails the way a real one would: by raising or exiting
-  # rather than returning an error tuple.
-  def handle(_tool, _ctx, %{"action" => "raise"}), do: raise("boom from provider")
-  def handle(_tool, _ctx, %{"action" => "exit"}), do: exit(:provider_exit)
-
-  def handle(_tool, _ctx, %{"action" => "unauthorized"}),
-    do: raise(Sanctum.UnauthorizedError, reason: :missing_tenant)
-
-  def handle(_tool, _ctx, _args), do: {:ok, %{"ok" => true}}
-end
-
-defmodule Grimoire.CatalogTest.BlockingProvider do
-  @moduledoc false
-  # A provider that stays in flight. It announces its own pid to the test
-  # process first, so a test can assert on the dispatcher's bookkeeping while
-  # the call is provably still running instead of guessing at a delay. Asked
-  # to, it answers at once with the process it ran on, crashes, or raises
-  # the refusal a handler's tenant gate raises.
-  def handle(_tool, _ctx, %{"crash" => true}), do: raise("boom from provider")
-
-  def handle(_tool, _ctx, %{"refuse" => true}),
-    do: raise(Sanctum.UnauthorizedError, reason: :missing_tenant)
-
-  def handle(_tool, _ctx, %{"release" => true}), do: {:ok, %{ran_on: self()}}
-
-  def handle(_tool, _ctx, _args) do
-    send(:catalog_blocking_observer, {:handler_running, self()})
-    Process.sleep(:infinity)
-  end
-end
-
 defmodule Grimoire.CatalogTest.ReplaySafeWrite do
   @moduledoc false
   # A write annotated replay-safe: the audit's refusal, as a provider.
@@ -49,14 +16,15 @@ end
 
 defmodule Grimoire.CatalogTest do
   @moduledoc """
-  Tests for the MCP tool registry.
+  Tests for the operation table and its gate.
 
-  Verifies tool discovery, listing, lookup, and delegation.
+  Verifies the boot-time table, listing, lookup, and delegation.
   """
   use ExUnit.Case, async: false
 
   alias Grimoire.Catalog
-  alias Prima.{Arg, Operation}
+  alias Grimoire.Probe
+  alias Prima.Refusal
   alias Sanctum.Context
 
   setup do
@@ -146,7 +114,7 @@ defmodule Grimoire.CatalogTest do
 
       result = Catalog.call_external("nonexistent/tool", ctx, %{})
 
-      assert {:error, message} = result
+      assert {:error, %Refusal{stage: :admission, message: message}} = result
       assert message =~ "Unknown tool"
     end
 
@@ -155,7 +123,7 @@ defmodule Grimoire.CatalogTest do
 
       # Call system with invalid action to trigger error — the dispatch
       # gate answers with the typed default-deny.
-      {:error, {:unknown_action, message}} =
+      {:error, %Refusal{stage: :admission, reason: {:unknown_action, message}}} =
         Catalog.call_external("system", ctx, %{"action" => "invalid_action"})
 
       assert message == "system.invalid_action"
@@ -180,21 +148,26 @@ defmodule Grimoire.CatalogTest do
       ctx = Context.build(authenticated: false, permissions: [])
 
       # An auth refusal, never "Unknown tool" — the gate fires first.
-      assert {:error, {:tool_auth_required, "someserver:some_tool"}} =
+      assert {:error,
+              %Refusal{stage: :admission, reason: {:tool_auth_required, "someserver:some_tool"}}} =
                Catalog.call_external("someserver:some_tool", ctx, %{})
     end
 
     test "authenticated caller with a nonexistent server still gets Unknown tool" do
       ctx = Sanctum.TestContext.local()
 
-      assert {:error, message} = Catalog.call_external("no-such-server:some_tool", ctx, %{})
+      assert {:error, %Refusal{stage: :admission, message: message}} =
+               Catalog.call_external("no-such-server:some_tool", ctx, %{})
+
       assert message =~ "Unknown tool"
     end
 
     test "unauthenticated caller with a bare unknown name still gets Unknown tool" do
       ctx = Context.build(authenticated: false, permissions: [])
 
-      assert {:error, message} = Catalog.call_external("definitely_not_a_tool", ctx, %{})
+      assert {:error, %Refusal{stage: :admission, message: message}} =
+               Catalog.call_external("definitely_not_a_tool", ctx, %{})
+
       assert message =~ "Unknown tool"
     end
   end
@@ -209,20 +182,72 @@ defmodule Grimoire.CatalogTest do
     end
   end
 
-  describe "refresh/0" do
-    test "reloads providers and returns tool count" do
-      {:ok, count} = Catalog.refresh()
+  describe "the table" do
+    test "holds every configured provider's tools, as their declarations built them" do
+      for provider <- Catalog.available_providers(), tool <- provider.tools() do
+        assert {:ok, {^provider, held}} = Catalog.lookup(tool.name)
+        assert held.operations == tool.operations
+      end
 
-      assert is_integer(count)
-      assert count > 0
+      assert map_size(Catalog.operations()) == length(Catalog.list_tools())
     end
 
-    test "tools are available after refresh" do
-      {:ok, _count} = Catalog.refresh()
+    test "outlives the cache owner: a flushed cache takes no tool with it" do
+      before = Catalog.list_tools()
+      owner = Process.whereis(Arca.Cache.Sweeper)
+      ref = Process.monitor(owner)
+      Process.exit(owner, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^owner, :killed}, 5_000
 
-      # Verify tools are still accessible
-      tools = Catalog.list_tools()
-      assert tools != []
+      # No rebuild, no wait: the table never lived in the cache.
+      assert Catalog.list_tools() == before
+      assert {:ok, {Grimoire.Provider, _}} = Catalog.lookup("system")
+      assert {:ok, "session", "read_resource"} = Grimoire.Resources.resolve("sanctum://identity")
+
+      # Leave the cache as it was found: owned, with its table.
+      assert :ok = wait_for_cache_owner(owner)
+    end
+
+    test "a planted provider is in the table for its block, and gone after" do
+      refute Catalog.exists?(Probe.Crashing.tool())
+
+      Catalog.with_providers([Probe.Crashing], fn ->
+        assert Catalog.exists?(Probe.Crashing.tool())
+        assert Enum.any?(Catalog.list_tools(), &(&1["name"] == Probe.Crashing.tool()))
+      end)
+
+      refute Catalog.exists?(Probe.Crashing.tool())
+      refute Enum.any?(Catalog.list_tools(), &(&1["name"] == Probe.Crashing.tool()))
+    end
+
+    test "the table is put back when the block raises" do
+      before = Catalog.operations()
+
+      assert_raise RuntimeError, "in the block", fn ->
+        Catalog.with_providers([Probe.Crashing], fn -> raise "in the block" end)
+      end
+
+      assert Catalog.operations() == before
+    end
+
+    test "a module that declares no tools cannot be planted" do
+      assert_raise ArgumentError, ~r/does not export tools\/0/, fn ->
+        Catalog.with_providers([Grimoire.CatalogTest.NoSuchProvider], fn -> :ok end)
+      end
+    end
+  end
+
+  defp wait_for_cache_owner(dead, attempts \\ 100) do
+    case Process.whereis(Arca.Cache.Sweeper) do
+      pid when is_pid(pid) and pid != dead ->
+        :ok = Arca.Cache.Sweeper.ensure_table()
+
+      _ when attempts > 0 ->
+        Process.sleep(20)
+        wait_for_cache_owner(dead, attempts - 1)
+
+      _ ->
+        :timeout
     end
   end
 
@@ -253,7 +278,7 @@ defmodule Grimoire.CatalogTest do
 
       # Should return error instead of crashing — an undeclared action is
       # the typed default-deny, refused before the handler could raise.
-      assert {:error, {:unknown_action, message}} = result
+      assert {:error, %Refusal{stage: :admission, reason: {:unknown_action, message}}} = result
       assert is_binary(message)
     end
 
@@ -262,88 +287,72 @@ defmodule Grimoire.CatalogTest do
 
       result = Catalog.call_external("completely/unknown/tool", ctx, %{})
 
-      assert {:error, message} = result
+      assert {:error, %Refusal{stage: :admission, message: message}} = result
       assert message =~ "Unknown tool"
       assert message =~ "completely/unknown/tool"
     end
 
-    @crash_tool "crash_barrier_test_tool"
-
-    defp register_crashing_tool do
-      definition =
-        Operation.tool(
-          for action <- ~w(raise exit unauthorized ok) do
-            Operation.new(@crash_tool, action, "Crash barrier probe", [],
-              kind: if(action == "ok", do: :read, else: :execute),
-              planes: [:external]
-            )
-          end
-        )
-
-      Catalog.register_tool(
-        @crash_tool,
-        Grimoire.CatalogTest.CrashingProvider,
-        definition,
-        :timer.minutes(1)
-      )
-
-      on_exit(fn -> Catalog.unregister_tool(@crash_tool) end)
-    end
+    @crash_tool Probe.Crashing.tool()
 
     test "a raising handler yields a typed error and the caller survives" do
-      register_crashing_tool()
-      ctx = Sanctum.TestContext.local()
-      caller = self()
+      Catalog.with_providers([Probe.Crashing], fn ->
+        ctx = Sanctum.TestContext.local()
+        caller = self()
 
-      assert {:error, {:crashed, message}} =
-               Catalog.call_external(@crash_tool, ctx, %{"action" => "raise"})
+        assert {:error, {:crashed, message}} =
+                 Catalog.call_external(@crash_tool, ctx, %{"action" => "raise"})
 
-      # The tuple names the tool, never the exception's own message — that
-      # text can carry a query, a path, or the offending bytes, and this
-      # tuple renders verbatim on the wire.
-      assert message == "Tool #{@crash_tool} crashed"
-      refute message =~ "boom from provider"
+        # The tuple names the tool, never the exception's own message — that
+        # text can carry a query, a path, or the offending bytes, and this
+        # tuple renders verbatim on the wire.
+        assert message == "Tool #{@crash_tool} crashed"
+        refute message =~ "boom from provider"
 
-      # The whole point: Task.async would have propagated a link exit and killed
-      # this process, so reaching the next line at all is the assertion.
-      assert Process.alive?(caller)
+        # The whole point: Task.async would have propagated a link exit and killed
+        # this process, so reaching the next line at all is the assertion.
+        assert Process.alive?(caller)
 
-      assert {:ok, %{"ok" => true}} =
-               Catalog.call_external(@crash_tool, ctx, %{"action" => "ok"})
+        assert {:ok, %{"ok" => true}} =
+                 Catalog.call_external(@crash_tool, ctx, %{"action" => "ok"})
+      end)
     end
 
     test "an exiting handler yields a typed error and the caller survives" do
-      register_crashing_tool()
-      ctx = Sanctum.TestContext.local()
+      Catalog.with_providers([Probe.Crashing], fn ->
+        ctx = Sanctum.TestContext.local()
 
-      assert {:error, {:exit, message}} =
-               Catalog.call_external(@crash_tool, ctx, %{"action" => "exit"})
+        assert {:error, {:exit, message}} =
+                 Catalog.call_external(@crash_tool, ctx, %{"action" => "exit"})
 
-      assert message =~ "exited unexpectedly"
-      assert Process.alive?(self())
+        assert message =~ "exited unexpectedly"
+        assert Process.alive?(self())
+      end)
     end
 
     test "a raised UnauthorizedError is a refusal, never a crash" do
-      register_crashing_tool()
-      ctx = Sanctum.TestContext.local()
+      Catalog.with_providers([Probe.Crashing], fn ->
+        ctx = Sanctum.TestContext.local()
 
-      # The reason travels, not a rendered sentence: the wire boundary
-      # renders a raised refusal exactly as it renders a returned one, which
-      # is how it gets its own JSON-RPC code instead of everything landing
-      # on :insufficient_permissions.
-      assert {:error, reason} =
-               Catalog.call_external(@crash_tool, ctx, %{"action" => "unauthorized"})
+        # The reason travels, not a rendered sentence: the wire boundary
+        # renders a raised refusal exactly as it renders a returned one, which
+        # is how it gets its own JSON-RPC code instead of everything landing
+        # on :insufficient_permissions. The handler raised it, so it is the
+        # execution's refusal, not the gate's.
+        assert {:error, reason} =
+                 Catalog.call_external(@crash_tool, ctx, %{"action" => "unauthorized"})
 
-      assert reason == :missing_tenant
-      assert Sanctum.Unauthorized.reason?(reason)
-      assert Process.alive?(self())
+        assert reason == :missing_tenant
+        assert Sanctum.Unauthorized.reason?(reason)
+        assert Process.alive?(self())
+      end)
     end
 
     test "handles nil arguments gracefully" do
       ctx = Sanctum.TestContext.local()
 
       # This should fail due to missing required action, but not crash
-      assert {:error, :action_missing} = Catalog.call_external("system", ctx, %{})
+      assert {:error, %Refusal{stage: :admission, reason: :action_missing}} =
+               Catalog.call_external("system", ctx, %{})
     end
 
     test "provider errors are wrapped with context" do
@@ -351,7 +360,7 @@ defmodule Grimoire.CatalogTest do
 
       # Invalid action is the dispatcher's typed default-deny, naming the
       # tool.action it refused.
-      {:error, {:unknown_action, message}} =
+      {:error, %Refusal{stage: :admission, reason: {:unknown_action, message}}} =
         Catalog.call_external("system", ctx, %{"action" => "nonexistent"})
 
       assert message == "system.nonexistent"
@@ -435,68 +444,45 @@ defmodule Grimoire.CatalogTest do
   end
 
   describe "cancellation tracking" do
-    @blocking_tool "cancellation_test_tool"
+    @blocking_tool Probe.Blocking.tool()
 
-    defp register_blocking_tool do
+    defp with_blocking_tool(fun) do
       Process.register(self(), :catalog_blocking_observer)
-
-      definition =
-        Operation.tool([
-          Operation.new(
-            @blocking_tool,
-            "block",
-            "Cancellation probe",
-            [
-              Arg.new("crash", :boolean),
-              Arg.new("refuse", :boolean),
-              Arg.new("release", :boolean)
-            ],
-            kind: :execute,
-            planes: [:external]
-          )
-        ])
-
-      Catalog.register_tool(
-        @blocking_tool,
-        Grimoire.CatalogTest.BlockingProvider,
-        definition,
-        :timer.minutes(1)
-      )
-
-      on_exit(fn -> Catalog.unregister_tool(@blocking_tool) end)
+      Catalog.with_providers([Probe.Blocking], fun)
     end
 
     # Supervised work must be registered under the server request id used for cancellation.
     test "in-flight work is registered under the context's request id, and cancellable" do
-      register_blocking_tool()
-      ctx = %{Sanctum.TestContext.local() | request_id: "req_tracked"}
-      caller = self()
+      with_blocking_tool(fn ->
+        ctx = %{Sanctum.TestContext.local() | request_id: "req_tracked"}
+        caller = self()
 
-      spawn(fn ->
-        args = %{"action" => "block"}
+        spawn(fn ->
+          args = %{"action" => "block"}
 
-        send(
-          caller,
-          {:result, Catalog.call_external(@blocking_tool, ctx, args, runner: :supervised)}
-        )
+          send(
+            caller,
+            {:result, Catalog.call_external(@blocking_tool, ctx, args, runner: :supervised)}
+          )
+        end)
+
+        # The handler reports its pid and then blocks, so the call is provably
+        # still in flight for the assertions below — no sleeping, no racing.
+        assert_receive {:handler_running, handler_pid}, 5_000
+
+        assert [{"req_tracked", ^handler_pid}] =
+                 :ets.lookup(Grimoire.RunningTasks, "req_tracked")
+
+        assert :ok = Grimoire.RunningTasks.cancel("req_tracked")
+
+        # Killing the handler surfaces to the caller as a typed error rather than
+        # taking the dispatcher down with it.
+        assert_receive {:result, {:error, {:exit, message}}}, 5_000
+        assert message =~ "cancelled"
+
+        :sys.get_state(Grimoire.RunningTasks)
+        assert {:error, :not_found} = Grimoire.RunningTasks.cancel("req_tracked")
       end)
-
-      # The handler reports its pid and then blocks, so the call is provably
-      # still in flight for the assertions below — no sleeping, no racing.
-      assert_receive {:handler_running, handler_pid}, 5_000
-
-      assert [{"req_tracked", ^handler_pid}] =
-               :ets.lookup(Grimoire.RunningTasks, "req_tracked")
-
-      assert :ok = Grimoire.RunningTasks.cancel("req_tracked")
-
-      # Killing the handler surfaces to the caller as a typed error rather than
-      # taking the dispatcher down with it.
-      assert_receive {:result, {:error, {:exit, message}}}, 5_000
-      assert message =~ "cancelled"
-
-      :sys.get_state(Grimoire.RunningTasks)
-      assert {:error, :not_found} = Grimoire.RunningTasks.cancel("req_tracked")
     end
 
     test "the entry is cleaned up when the work finishes on its own" do
@@ -514,33 +500,38 @@ defmodule Grimoire.CatalogTest do
     # contract and the handler run right there — no task, no timeout, and
     # nothing registered for a transport to cancel.
     test "the default runner is inline: the handler runs on the caller's process, unregistered" do
-      register_blocking_tool()
-      ctx = %{Sanctum.TestContext.local() | request_id: "req_inline"}
-      args = %{"action" => "block", "release" => true}
-      assert {:ok, %{ran_on: pid}} = Catalog.call_external(@blocking_tool, ctx, args)
-      assert pid == self()
-      assert [] = :ets.lookup(Grimoire.RunningTasks, "req_inline")
+      with_blocking_tool(fn ->
+        ctx = %{Sanctum.TestContext.local() | request_id: "req_inline"}
+        args = %{"action" => "block", "release" => true}
+        assert {:ok, %{ran_on: pid}} = Catalog.call_external(@blocking_tool, ctx, args)
+        assert pid == self()
+        assert [] = :ets.lookup(Grimoire.RunningTasks, "req_inline")
+      end)
     end
 
     test "the inline runner contains a crash and answers a raised refusal as the refusal" do
-      register_blocking_tool()
-      ctx = Sanctum.TestContext.local()
+      with_blocking_tool(fn ->
+        ctx = Sanctum.TestContext.local()
 
-      log =
-        ExUnit.CaptureLog.capture_log(fn ->
-          assert {:error, {:crashed, message}} =
-                   Catalog.call_external(@blocking_tool, ctx, %{
-                     "action" => "block",
-                     "crash" => true
-                   })
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            assert {:error, {:crashed, message}} =
+                     Catalog.call_external(@blocking_tool, ctx, %{
+                       "action" => "block",
+                       "crash" => true
+                     })
 
-          assert message =~ "crashed"
-        end)
+            assert message =~ "crashed"
+          end)
 
-      assert log =~ "crashed"
+        assert log =~ "crashed"
 
-      assert {:error, :missing_tenant} =
-               Catalog.call_external(@blocking_tool, ctx, %{"action" => "block", "refuse" => true})
+        assert {:error, :missing_tenant} =
+                 Catalog.call_external(@blocking_tool, ctx, %{
+                   "action" => "block",
+                   "refuse" => true
+                 })
+      end)
     end
   end
 
@@ -552,7 +543,7 @@ defmodule Grimoire.CatalogTest do
       # gate's typed default-deny before any handler could raise.
       result = Catalog.call_external("system", ctx, %{"action" => "this_will_cause_error"})
 
-      assert {:error, {:unknown_action, message}} = result
+      assert {:error, %Refusal{stage: :admission, reason: {:unknown_action, message}}} = result
       assert is_binary(message)
     end
 
@@ -585,7 +576,7 @@ defmodule Grimoire.CatalogTest do
     test "error messages from provider are descriptive" do
       ctx = Sanctum.TestContext.local()
 
-      {:error, {:unknown_action, message}} =
+      {:error, %Refusal{stage: :admission, reason: {:unknown_action, message}}} =
         Catalog.call_external("system", ctx, %{"action" => "unknown_action"})
 
       # Error should mention the issue
@@ -764,36 +755,70 @@ defmodule Grimoire.CatalogTest do
 
     test "a configured provider that cannot load is named, and refuses the boot unless lenient",
          %{original: original} do
-      Application.put_env(
-        :cyfr,
-        :tool_providers,
-        original ++ [Grimoire.CatalogTest.NoSuchProvider]
-      )
+      # Each boot is run inside a block that puts the member's table back.
+      Catalog.with_providers([], fn ->
+        before = Catalog.operations()
 
-      assert {:error, [Grimoire.CatalogTest.NoSuchProvider]} = Catalog.providers_loaded()
+        Application.put_env(
+          :cyfr,
+          :tool_providers,
+          original ++ [Grimoire.CatalogTest.NoSuchProvider]
+        )
 
-      Application.put_env(:cyfr, :tool_providers_lenient, false)
+        assert {:error, [Grimoire.CatalogTest.NoSuchProvider]} = Catalog.providers_loaded()
 
-      assert_raise RuntimeError, ~r/failed to load.*refusing to boot/, fn ->
-        Catalog.init([])
-      end
+        Application.put_env(:cyfr, :tool_providers_lenient, false)
 
-      Application.put_env(:cyfr, :tool_providers_lenient, true)
-      assert {:ok, %{}} = Catalog.init([])
+        assert_raise RuntimeError, ~r/failed to load.*refusing to boot/, fn ->
+          Catalog.load!()
+        end
+
+        # A refused boot wrote nothing.
+        assert Catalog.operations() == before
+
+        Application.put_env(:cyfr, :tool_providers_lenient, true)
+
+        log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = Catalog.load!() end)
+
+        assert log =~
+                 "Grimoire.CatalogTest.NoSuchProvider skipped (lenient): " <>
+                   "the module is not available"
+
+        assert Catalog.operations() == before
+      end)
+    end
+
+    test "a module that exports no tools/0 refuses the boot, or is skipped with its reason",
+         %{original: original} do
+      Catalog.with_providers([], fn ->
+        Application.put_env(:cyfr, :tool_providers, original ++ [Grimoire.CatalogTest])
+        Application.put_env(:cyfr, :tool_providers_lenient, false)
+        assert_raise RuntimeError, ~r/failed to load.*CatalogTest/, fn -> Catalog.load!() end
+
+        Application.put_env(:cyfr, :tool_providers_lenient, true)
+        log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = Catalog.load!() end)
+        assert log =~ "Grimoire.CatalogTest skipped (lenient): it does not export tools/0"
+      end)
     end
 
     test "an action the audit refuses refuses the boot", %{original: original} do
-      Application.put_env(
-        :cyfr,
-        :tool_providers,
-        original ++ [Grimoire.CatalogTest.ReplaySafeWrite]
-      )
+      Catalog.with_providers([], fn ->
+        before = Catalog.operations()
 
-      assert_raise RuntimeError,
-                   ~r/failed the catalog audit.*poker\.poke: invalid_operation/s,
-                   fn ->
-                     Catalog.init([])
-                   end
+        Application.put_env(
+          :cyfr,
+          :tool_providers,
+          original ++ [Grimoire.CatalogTest.ReplaySafeWrite]
+        )
+
+        assert_raise RuntimeError,
+                     ~r/failed the catalog audit.*poker\.poke: invalid_operation/s,
+                     fn ->
+                       Catalog.load!()
+                     end
+
+        assert Catalog.operations() == before
+      end)
     end
   end
 end

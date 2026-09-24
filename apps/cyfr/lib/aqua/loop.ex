@@ -1322,6 +1322,13 @@ defmodule Aqua.Loop do
             do: {"denied", message, true},
             else: {"error", message, true}
 
+        # The gate's own refusal, in a sentence it wrote: the chain's
+        # authority denying the call closes the step `denied`.
+        {:error, %Prima.Refusal{stage: :admission, reason: message}} when is_binary(message) ->
+          if String.starts_with?(message, "Denied by chain authority"),
+            do: {"denied", message, true},
+            else: {"error", message, true}
+
         {:ok, text} when is_binary(text) ->
           {"ok", text, false}
 

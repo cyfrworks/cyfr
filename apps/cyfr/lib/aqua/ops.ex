@@ -17,7 +17,7 @@ defmodule Aqua.Ops do
   @doc "Call a tool on the external plane under `ctx`."
   @spec call_tool(String.t(), Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_tool(tool, %Sanctum.Context{} = ctx, args) when is_binary(tool) and is_map(args) do
-    Grimoire.Catalog.call_external(tool, ctx, args)
+    Grimoire.call_external(tool, ctx, args)
   end
 
   @doc """
@@ -31,7 +31,7 @@ defmodule Aqua.Ops do
   @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Prima.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def call_in_chain(tool, %Sanctum.Context{} = ctx, args, authority, opts \\ []) do
-    Grimoire.Catalog.call_in_chain(tool, ctx, args, authority, opts)
+    Grimoire.call_in_chain(tool, ctx, args, authority, opts)
   end
 
   @doc """
@@ -41,7 +41,7 @@ defmodule Aqua.Ops do
   """
   @spec action_kind(String.t(), String.t()) :: atom() | nil
   def action_kind(tool, action) do
-    case Grimoire.Catalog.get_tool(tool) do
+    case Grimoire.get_tool(tool) do
       {:ok, tool_def} -> Grimoire.Annotations.kind(tool_def, action)
       _ -> nil
     end
@@ -62,7 +62,7 @@ defmodule Aqua.Ops do
   """
   @spec replay_safe?(String.t(), String.t()) :: boolean()
   def replay_safe?(tool, action) do
-    case Grimoire.Catalog.get_tool(tool) do
+    case Grimoire.get_tool(tool) do
       {:ok, tool_def} -> Grimoire.Annotations.recovery(tool_def, action) == :replay_safe
       _ -> false
     end
@@ -74,7 +74,7 @@ defmodule Aqua.Ops do
   """
   @spec action_standing(String.t(), String.t()) :: :thread | false | nil
   def action_standing(tool, action) do
-    case Grimoire.Catalog.get_tool(tool) do
+    case Grimoire.get_tool(tool) do
       {:ok, tool_def} -> Grimoire.Annotations.standing(tool_def, action)
       _ -> nil
     end
@@ -87,7 +87,7 @@ defmodule Aqua.Ops do
   """
   @spec actions_of(String.t()) :: [String.t()]
   def actions_of(tool) when is_binary(tool) do
-    case Grimoire.Catalog.get_tool(tool) do
+    case Grimoire.get_tool(tool) do
       {:ok, tool_def} ->
         case get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) do
           verbs when is_list(verbs) -> Enum.filter(verbs, &is_binary/1)
@@ -104,7 +104,7 @@ defmodule Aqua.Ops do
   @doc "Whether a running chain would refuse `tool`/`action` (nothing a chain can run)."
   @spec in_chain_refused?(String.t(), String.t()) :: boolean()
   def in_chain_refused?(tool, action),
-    do: Grimoire.Catalog.in_chain_refused?(tool, action)
+    do: Grimoire.in_chain_refused?(tool, action)
 
   @doc """
   Whether an approved `tool`/`action` is an execution the assistant runs
@@ -113,7 +113,7 @@ defmodule Aqua.Ops do
   a card (`Aqua.Loop`).
   """
   @spec child_execution?(String.t(), String.t()) :: boolean()
-  def child_execution?(tool, action), do: Grimoire.Catalog.host_intercepted?(tool, action)
+  def child_execution?(tool, action), do: Grimoire.host_intercepted?(tool, action)
 
   @doc """
   One sentence for a refusal: the gate's renderer (`Grimoire.Error.render/1`),

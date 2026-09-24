@@ -245,7 +245,7 @@ defmodule Emissary.External.Proxy do
   end
 
   # ============================================================================
-  # External Tool Dispatch (called by Grimoire.Catalog on a lookup miss)
+  # External Tool Dispatch (called by the gate on a table miss)
   # ============================================================================
 
   @doc """

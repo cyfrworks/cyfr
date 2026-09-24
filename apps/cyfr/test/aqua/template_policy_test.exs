@@ -13,7 +13,6 @@ defmodule Prism.AquaTemplatePolicyTest do
   """
   use ExUnit.Case, async: true
 
-  alias Grimoire.Catalog
   alias Aqua.Hands
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
@@ -84,5 +83,5 @@ defmodule Prism.AquaTemplatePolicyTest do
     end
   end
 
-  defp refused_action?(tool, action), do: Catalog.in_chain_refused?(tool, action)
+  defp refused_action?(tool, action), do: Grimoire.in_chain_refused?(tool, action)
 end

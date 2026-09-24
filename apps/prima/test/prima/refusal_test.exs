@@ -306,6 +306,14 @@ defmodule Prima.RefusalTest do
     assert Refusal.classify(built) == built
   end
 
+  test "a refusal is an execution refusal unless its maker says it refused admission" do
+    assert %Refusal{stage: :execution} = Refusal.classify({:invalid_argument, "x"})
+
+    admitted_not = %{Refusal.classify({:invalid_argument, "x"}) | stage: :admission}
+    assert Refusal.classify(admitted_not) == admitted_not
+    assert Refusal.message(admitted_not) == "x"
+  end
+
   test "the presented-credential rows keep their auth_invalid code" do
     for reason <- [:invalid_bearer, :invalid_api_key, :api_key_revoked] do
       assert Refusal.code_override(reason) == :auth_invalid

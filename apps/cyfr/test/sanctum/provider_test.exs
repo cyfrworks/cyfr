@@ -90,7 +90,7 @@ defmodule Sanctum.ProviderTest do
   # gate like any other call.
   defp read(ctx, uri),
     do:
-      Grimoire.Catalog.call_external("session", ctx, %{
+      Grimoire.call_external("session", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })
@@ -353,13 +353,13 @@ defmodule Sanctum.ProviderTest do
     end
 
     test "key:list requires admin permission", %{restricted_ctx: ctx} do
-      assert {:error, {:missing_permission, :admin}} =
-               Grimoire.Catalog.call_external("key", ctx, %{"action" => "list"})
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :admin}}} =
+               Grimoire.call_external("key", ctx, %{"action" => "list"})
     end
 
     test "key:get requires admin permission", %{restricted_ctx: ctx} do
-      assert {:error, {:missing_permission, :admin}} =
-               Grimoire.Catalog.call_external("key", ctx, %{
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :admin}}} =
+               Grimoire.call_external("key", ctx, %{
                  "action" => "get",
                  "name" => "test-key"
                })

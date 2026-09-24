@@ -33,6 +33,14 @@ defmodule Cyfr.Application do
       "components" => Compendium.ComponentPath
     })
 
+    # The operation table and its resource index, built from the
+    # configured providers and written once into Grimoire's term — after
+    # the ports its audit and its providers read, before any process that
+    # dispatches, derives a consent shape or serves `tools/list` exists.
+    # A provider that cannot load, or a declaration the gates cannot
+    # classify, refuses the boot here.
+    Grimoire.Catalog.load!()
+
     # One redaction vocabulary: Phoenix's inbound request-param filter is
     # fed from its owner (config/config.exs deliberately does not spell a
     # list — config files run before this module exists).
@@ -134,15 +142,6 @@ defmodule Cyfr.Application do
       # assumes it is the only one holding this database, and the slot the
       # security reconcile runs under.
       cell_claim(),
-      # The two registries that write catalogues into `Arca.Cache`. The
-      # table dies with its owner, `Arca.Cache.Sweeper`, which the `arca`
-      # application starts — one app below, so no supervisor of this one
-      # can hold both. Each registry monitors the owner instead and
-      # rebuilds its catalogue when it goes, rather than answering
-      # "Unknown tool" until a 23-hour refresh. Before anything that might
-      # read through the cache.
-      Grimoire.Catalog,
-      Emissary.MCP.ResourceRegistry,
       # The audit roster is the catalog's, read here and handed down: an
       # event is audited exactly when `Cyfr.Telemetry.Catalog` names
       # `:audit` among its consumers. The storage layer holds the handler

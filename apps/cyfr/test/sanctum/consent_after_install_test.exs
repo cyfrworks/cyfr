@@ -151,7 +151,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     Application.put_env(:cyfr, :oci_registry_url, "localhost:#{port}")
 
     assert {:ok, _} =
-             Grimoire.Catalog.call_external("component", in_group, %{
+             Grimoire.call_external("component", in_group, %{
                "action" => "pull",
                "reference" => @remote
              })

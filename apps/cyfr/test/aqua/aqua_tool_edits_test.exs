@@ -129,7 +129,7 @@ defmodule Aqua.AquaToolEditsTest do
                "tool_policy_patch" => %{"files.read" => "ask"}
              })
 
-    assert {:error, {:invalid_argument, _}} =
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
              call(ctx, %{
                "action" => "update",
                "name" => "scout",

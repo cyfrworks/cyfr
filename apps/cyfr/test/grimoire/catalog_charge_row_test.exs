@@ -129,6 +129,56 @@ defmodule Grimoire.CatalogChargeRowTest do
              Arca.BudgetReservations.charges(Prima.Actor.in_athanor(@athanor), auth.budget.id)
   end
 
+  # The authority is conjoined at the gate, inside the control-plane
+  # fence: a member that lost its slot refuses the call before the step,
+  # so no invoke slot and no reservation row is taken for it.
+  test "a member that lost its slot takes no budget for the call", %{
+    auth: auth,
+    ctx: ctx,
+    charge: charge,
+    lineage: lineage
+  } do
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+    before = Sanctum.Authority.budget(auth)
+    Arca.ControlPlane.record(:lost)
+
+    assert {:error, :control_plane_lost} = call(ctx, auth, charge, lineage)
+
+    Arca.ControlPlane.record(:unclaimed)
+    assert Sanctum.Authority.budget(auth) == before
+
+    assert %{charged: 0} =
+             Arca.BudgetReservations.lookup(Prima.Actor.in_athanor(@athanor), auth.budget.id)
+
+    assert {:ok, []} =
+             Arca.BudgetReservations.charges(Prima.Actor.in_athanor(@athanor), auth.budget.id)
+  end
+
+  # One decision, one row: a chain's call the gate refuses writes the one
+  # log row of that call, filed under the chain's request.
+  test "a refused call writes its one row", %{
+    auth: auth,
+    ctx: ctx,
+    charge: charge,
+    lineage: lineage
+  } do
+    :ok =
+      Arca.BudgetReservations.charge(
+        Prima.Actor.in_athanor(@athanor),
+        auth.budget.id,
+        %{charge | id: "other"},
+        1
+      )
+
+    assert {:error, %Prima.Refusal{stage: :admission}} = call(ctx, auth, charge, lineage)
+
+    {:ok, rows} =
+      Arca.McpLog.list(request_id: ctx.request_id, athanor_id: @athanor, limit: 100)
+
+    assert [%{tool: "tincture_visibility", status: status}] = rows
+    refute status == "success"
+  end
+
   test "a full reservation refuses the call and gives the slot back", %{
     auth: auth,
     ctx: ctx,
@@ -143,7 +193,9 @@ defmodule Grimoire.CatalogChargeRowTest do
         1
       )
 
-    assert {:error, msg} = call(ctx, auth, charge, lineage)
+    assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
+             call(ctx, auth, charge, lineage)
+
     assert msg =~ "Denied by chain authority"
     assert Sanctum.Authority.budget(auth).in_flight == 0
 
@@ -188,7 +240,7 @@ defmodule Grimoire.CatalogChargeRowTest do
         1
       )
 
-    assert {:error, msg} =
+    assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
              Catalog.call_in_chain(
                "tincture_visibility",
                ctx,

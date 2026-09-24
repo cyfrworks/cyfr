@@ -29,6 +29,13 @@ defmodule Grimoire.Error do
   end
 
   @doc """
+  The gate's own refusal of `reason`, made before any handler ran:
+  `classify/1`'s refusal with `stage: :admission`.
+  """
+  @spec admission(term()) :: Prima.Refusal.t()
+  def admission(reason), do: %{classify(reason) | stage: :admission}
+
+  @doc """
   The public sentence for any refusal: `classify/1`'s message, never `nil`
   and never an `inspect/1` of the term.
   """

@@ -7,7 +7,6 @@ defmodule Emissary.MCP.ToolServerGrantTest do
   # but authorized server returns an upstream error, not an authorization denial.
   use ExUnit.Case, async: false
 
-  alias Grimoire.Catalog
   alias Prima.Authority
   alias Prima.Authority.Blob
 
@@ -109,7 +108,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     on_exit(fn -> Arca.Cache.delete_match({:external_tools, :_}) end)
 
     {:ok, %{tools: tools}} =
-      Catalog.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth,
+      Grimoire.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -134,7 +133,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:ok, %{tools: tools}} =
-      Catalog.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth,
+      Grimoire.call_in_chain("tools", guest(ctx), %{"action" => "list"}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -158,7 +157,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     # Everything in-chain-planed but ungranted was pruned, and a call
     # would be denied — the catalogue and the verdict are one fact.
-    for tool_def <- Catalog.list_tools(),
+    for tool_def <- Grimoire.list_tools(),
         name = tool_def["name"],
         not String.contains?(name, ":"),
         action <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
@@ -177,21 +176,22 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     auth = authority_with_server(digest)
 
     {:error, reason} =
-      Catalog.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
+      Grimoire.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
     # It got PAST the authority — the failure is the unreachable upstream,
     # which the proxy hands back classified rather than as a bare sentence.
     refute is_binary(reason)
+    refute match?(%Prima.Refusal{stage: :admission}, reason)
     refute Grimoire.Error.render(reason) =~ "Denied by chain authority"
   end
 
   test "a tool outside the granted patterns is not callable", %{ctx: ctx, digest: digest} do
     auth = authority_with_server(digest)
 
-    {:error, message} =
-      Catalog.call_in_chain("ghserver:repo_get", guest(ctx), %{}, auth,
+    {:error, %Prima.Refusal{stage: :admission, message: message}} =
+      Grimoire.call_in_chain("ghserver:repo_get", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -208,8 +208,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
 
     auth = authority_with_server(digest)
 
-    {:error, message} =
-      Catalog.call_in_chain("othersrv:issues.list", guest(ctx), %{}, auth,
+    {:error, %Prima.Refusal{stage: :admission, message: message}} =
+      Grimoire.call_in_chain("othersrv:issues.list", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -228,8 +228,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     # The digest cache is tenant-invalidated on config mutation.
     Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
 
-    {:error, message} =
-      Catalog.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
+    {:error, %Prima.Refusal{stage: :admission, message: message}} =
+      Grimoire.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
@@ -239,8 +239,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
   test "an unknown server resolves to the sentinel and denies", %{ctx: ctx, digest: digest} do
     auth = authority_with_server(digest)
 
-    {:error, message} =
-      Catalog.call_in_chain("ghost:issues.list", guest(ctx), %{}, auth,
+    {:error, %Prima.Refusal{stage: :admission, message: message}} =
+      Grimoire.call_in_chain("ghost:issues.list", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 

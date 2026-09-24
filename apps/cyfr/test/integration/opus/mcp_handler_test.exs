@@ -9,7 +9,7 @@ defmodule Opus.FormulaHandlerMcpTest do
 
   Every dispatch is a host call of the formula's attempt, decided by CYFR
   under the authority it holds for that attempt: a catalog tool goes
-  through `Grimoire.Catalog.call_in_chain/5`, where the grant is the
+  through `Grimoire.call_in_chain/5`, where the grant is the
   consented edge's tool list — exact `tool.action` entries,
   deny-by-default. The telemetry a call emits in its runner's VM is
   `Opus.FormulaHandlerRunnerTest`'s, in Opus's suite.
@@ -31,11 +31,6 @@ defmodule Opus.FormulaHandlerMcpTest do
     File.mkdir_p!(test_dir)
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_dir)
-
-    # Ensure the catalog has providers loaded for dispatch tests
-    if Process.whereis(Grimoire.Catalog) do
-      Grimoire.Catalog.refresh()
-    end
 
     ctx = Sanctum.TestContext.local()
 

@@ -13,7 +13,6 @@ defmodule Emissary.MCP.InChainIdentityTest do
   # gate that still needs the identity-conjunct branch.
   use ExUnit.Case, async: false
 
-  alias Grimoire.Catalog
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context
@@ -95,7 +94,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
     refusals =
       for {tool, action} <- pairs,
           result =
-            Catalog.call_in_chain(tool, ctx, %{"action" => action}, auth,
+            Grimoire.call_in_chain(tool, ctx, %{"action" => action}, auth,
               lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
             ),
           match?({:error, msg} when is_binary(msg), result),
@@ -126,7 +125,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     args = %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"}
 
-    case Catalog.call_in_chain("tincture_visibility", ctx, args, auth,
+    case Grimoire.call_in_chain("tincture_visibility", ctx, args, auth,
            lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
          ) do
       {:ok, _result} ->
@@ -147,8 +146,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
         authenticated: true
       })
 
-    assert {:error, {:guest_plane_call, "component"}} =
-             Catalog.call_external("component", ctx, %{"action" => "list"})
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, "component"}}} =
+             Grimoire.call_external("component", ctx, %{"action" => "list"})
   end
 
   test "call_in_chain denies an action the authority does not grant" do
@@ -163,8 +162,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
         request_id: "req_identity_matrix"
       })
 
-    assert {:error, msg} =
-             Catalog.call_in_chain("component", ctx, %{"action" => "search"}, auth,
+    assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
+             Grimoire.call_in_chain("component", ctx, %{"action" => "search"}, auth,
                lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
              )
 
@@ -184,8 +183,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
         request_id: "req_identity_matrix"
       })
 
-    assert {:error, msg} =
-             Catalog.call_in_chain(
+    assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
+             Grimoire.call_in_chain(
                "execution",
                ctx,
                %{"action" => "force_release"},
@@ -223,8 +222,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
       })
 
     for {tool, action} <- verbs do
-      assert {:error, msg} =
-               Catalog.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth,
+      assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
+               Grimoire.call_in_chain(tool, ctx, %{"action" => action, "name" => "x"}, auth,
                  lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
                )
 
@@ -244,8 +243,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
         request_id: "req_identity_matrix"
       })
 
-    assert {:error, msg} =
-             Catalog.call_in_chain("github:create_issue", ctx, %{}, auth,
+    assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
+             Grimoire.call_in_chain("github:create_issue", ctx, %{}, auth,
                lineage: Cyfr.Test.AttemptFixtures.lineage!(ctx)
              )
 

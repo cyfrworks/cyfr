@@ -5,60 +5,41 @@ defmodule PrismWeb.OpsTest do
   use ExUnit.Case, async: false
 
   alias Grimoire.Catalog
-  alias Prima.Operation
+  alias Grimoire.Probe
   alias PrismWeb.Ops
-
-  defmodule ListProvider do
-    def handle("helper_list_probe", _ctx, %{"action" => "wrapped"}),
-      do: {:ok, %{items: [%{id: 1}]}}
-
-    def handle("helper_list_probe", _ctx, %{"action" => "bare"}), do: {:ok, [%{id: 2}]}
-    def handle("helper_list_probe", _ctx, %{"action" => "shapeless"}), do: {:ok, %{count: 3}}
-    def handle("helper_list_probe", _ctx, %{"action" => "refused"}), do: {:error, "Not allowed."}
-  end
 
   setup do
     Cyfr.Test.Sandbox.setup!()
-
-    Catalog.register_tool(
-      "helper_list_probe",
-      ListProvider,
-      Operation.tool(
-        for action <- ~w(wrapped bare shapeless refused) do
-          Operation.new("helper_list_probe", action, "List probe", [],
-            kind: :read,
-            planes: [:external]
-          )
-        end
-      ),
-      :timer.minutes(1)
-    )
-
-    on_exit(fn -> Catalog.unregister_tool("helper_list_probe") end)
     {:ok, socket: %{assigns: %{context: Sanctum.TestContext.local()}}}
   end
 
   test "call_tool splits tool/action and requires a context", %{socket: socket} do
-    assert {:ok, %{items: [%{id: 1}]}} =
-             Ops.call_tool(socket, "helper_list_probe/wrapped")
+    Catalog.with_providers([Probe.List], fn ->
+      assert {:ok, %{items: [%{id: 1}]}} =
+               Ops.call_tool(socket, "helper_list_probe/wrapped")
 
-    assert {:error, :no_context} = Ops.call_tool(%{assigns: %{}}, "key/list")
+      assert {:error, :no_context} = Ops.call_tool(%{assigns: %{}}, "key/list")
+    end)
   end
 
   test "fetch_list unwraps both list shapes to one", %{socket: socket} do
-    assert {:ok, [%{id: 1}]} = Ops.fetch_list(socket, "helper_list_probe/wrapped", :items)
-    assert {:ok, [%{id: 2}]} = Ops.fetch_list(socket, "helper_list_probe/bare", :items)
+    Catalog.with_providers([Probe.List], fn ->
+      assert {:ok, [%{id: 1}]} = Ops.fetch_list(socket, "helper_list_probe/wrapped", :items)
+      assert {:ok, [%{id: 2}]} = Ops.fetch_list(socket, "helper_list_probe/bare", :items)
+    end)
   end
 
   test "anything else becomes one failure vocabulary", %{socket: socket} do
-    assert {:error, "The outcome could not be confirmed."} =
-             Ops.fetch_list(socket, "helper_list_probe/shapeless", :items)
+    Catalog.with_providers([Probe.List], fn ->
+      assert {:error, "The outcome could not be confirmed."} =
+               Ops.fetch_list(socket, "helper_list_probe/shapeless", :items)
 
-    assert {:error, "Not allowed."} =
-             Ops.fetch_list(socket, "helper_list_probe/refused", :items)
+      assert {:error, "Not allowed."} =
+               Ops.fetch_list(socket, "helper_list_probe/refused", :items)
 
-    assert {:error, "Not signed in."} =
-             Ops.fetch_list(%{assigns: %{}}, "helper_list_probe/wrapped", :items)
+      assert {:error, "Not signed in."} =
+               Ops.fetch_list(%{assigns: %{}}, "helper_list_probe/wrapped", :items)
+    end)
   end
 
   test "error_message passes refusal sentences and hides raw terms" do

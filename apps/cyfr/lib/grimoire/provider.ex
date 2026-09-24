@@ -503,19 +503,7 @@ defmodule Grimoire.Provider do
     div(uptime_ms, 1000)
   end
 
-  defp tool_count do
-    if Process.whereis(Grimoire.Catalog) do
-      Grimoire.Catalog.list_tools() |> length()
-    else
-      0
-    end
-  end
+  defp tool_count, do: length(Grimoire.Catalog.list_tools())
 
-  defp resource_count do
-    if Process.whereis(Emissary.MCP.ResourceRegistry) do
-      Emissary.MCP.ResourceRegistry.list_resources() |> length()
-    else
-      0
-    end
-  end
+  defp resource_count, do: length(Grimoire.Resources.list_resources())
 end

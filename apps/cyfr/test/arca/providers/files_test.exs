@@ -62,37 +62,37 @@ defmodule Arca.Providers.FilesTest do
            }
 
     assert :ok = Catalog.audit_action_kinds([Tool])
-    assert "file" in Enum.map(Catalog.list_tools(), & &1["name"])
+    assert "file" in Enum.map(Grimoire.list_tools(), & &1["name"])
   end
 
   test "the catalog serves the tree in the console's words", %{ctx: ctx} do
-    assert {:ok, %{entries: folders}} = Catalog.call_external("file", ctx, %{"action" => "list"})
+    assert {:ok, %{entries: folders}} = Grimoire.call_external("file", ctx, %{"action" => "list"})
     assert Enum.map(folders, & &1.name) == ~w(data aqua components threads notes)
 
     assert {:ok, %{written: "data/hello.txt", size: 5}} =
-             Catalog.call_external("file", ctx, %{
+             Grimoire.call_external("file", ctx, %{
                "action" => "write",
                "path" => "data/hello.txt",
                "content" => "hello"
              })
 
     assert {:ok, %{content: "hello", encoding: "utf8"}} =
-             Catalog.call_external("file", ctx, %{"action" => "read", "path" => "data/hello.txt"})
+             Grimoire.call_external("file", ctx, %{"action" => "read", "path" => "data/hello.txt"})
 
     assert {:ok, %{entries: [%{name: "hello.txt", kind: :file, size: 5}]}} =
-             Catalog.call_external("file", ctx, %{"action" => "list", "path" => "data"})
+             Grimoire.call_external("file", ctx, %{"action" => "list", "path" => "data"})
 
     assert {:ok, %{deleted: "data/hello.txt"}} =
-             Catalog.call_external("file", ctx, %{
+             Grimoire.call_external("file", ctx, %{
                "action" => "delete",
                "path" => "data/hello.txt"
              })
 
     assert {:error, {:not_found, "File", "data/hello.txt"}} =
-             Catalog.call_external("file", ctx, %{"action" => "read", "path" => "data/hello.txt"})
+             Grimoire.call_external("file", ctx, %{"action" => "read", "path" => "data/hello.txt"})
 
     assert {:error, {:not_found, "Folder", "payloads"}} =
-             Catalog.call_external("file", ctx, %{"action" => "list", "path" => "payloads"})
+             Grimoire.call_external("file", ctx, %{"action" => "list", "path" => "payloads"})
   end
 
   test "a missing argument and an unknown action answer in words", %{ctx: ctx} do
@@ -136,10 +136,10 @@ defmodule Arca.Providers.FilesTest do
         permissions: MapSet.new([:storage_read])
     }
 
-    assert {:ok, %{entries: _}} = Catalog.call_external("file", reader, %{"action" => "list"})
+    assert {:ok, %{entries: _}} = Grimoire.call_external("file", reader, %{"action" => "list"})
 
     assert {:error, _refused} =
-             Catalog.call_external("file", reader, %{
+             Grimoire.call_external("file", reader, %{
                "action" => "write",
                "path" => "data/x.txt",
                "content" => "x"

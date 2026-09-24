@@ -12,7 +12,7 @@ defmodule Aqua.Providers.ApprovalTest do
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
-  alias Grimoire.{Catalog, Visibility}
+  alias Grimoire.Visibility
   alias Sanctum.Context
 
   setup do
@@ -95,27 +95,31 @@ defmodule Aqua.Providers.ApprovalTest do
   } do
     star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
-    assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-             Catalog.call_external("approval", star, %{
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+            }} =
+             Grimoire.call_external("approval", star, %{
                "action" => "resolve",
                "approval" => "apr_x",
                "decision" => "approve"
              })
 
     refute Enum.any?(
-             Visibility.filter_for_context(Catalog.list_tools(), star),
+             Visibility.filter_for_context(Grimoire.list_tools(), star),
              &(&1["name"] == "approval")
            )
 
     assert Enum.any?(
-             Visibility.filter_for_context(Catalog.list_tools(), ctx),
+             Visibility.filter_for_context(Grimoire.list_tools(), ctx),
              &(&1["name"] == "approval")
            )
 
     guest = Context.enter_guest(ctx)
 
-    assert {:error, {:guest_plane_call, "approval"}} =
-             Catalog.call_external("approval", guest, %{"action" => "list"})
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, "approval"}}} =
+             Grimoire.call_external("approval", guest, %{"action" => "list"})
   end
 
   test "a card is listed, declined once through the door, and answered again as a replay", %{
@@ -125,7 +129,7 @@ defmodule Aqua.Providers.ApprovalTest do
     %{approval: approval, step: step} = card!(ctx, thread)
 
     assert {:ok, %{count: 1, approvals: [%{id: aid, status: "pending"}]}} =
-             Catalog.call_external("approval", ctx, %{
+             Grimoire.call_external("approval", ctx, %{
                "action" => "list",
                "thread" => thread.id
              })
@@ -133,7 +137,7 @@ defmodule Aqua.Providers.ApprovalTest do
     assert aid == approval.id
 
     assert {:ok, %{decision: "declined", resolution_kind: "denied", replayed: false}} =
-             Catalog.call_external("approval", ctx, %{
+             Grimoire.call_external("approval", ctx, %{
                "action" => "resolve",
                "approval" => approval.id,
                "decision" => "decline",
@@ -144,13 +148,13 @@ defmodule Aqua.Providers.ApprovalTest do
     assert {:ok, %{dispatch_state: "closed", outcome: "denied"}} = Tape.step(ctx, step.id)
 
     assert {:ok, %{count: 0}} =
-             Catalog.call_external("approval", ctx, %{
+             Grimoire.call_external("approval", ctx, %{
                "action" => "list",
                "thread" => thread.id
              })
 
     assert {:ok, %{decision: "declined", replayed: true}} =
-             Catalog.call_external("approval", ctx, %{
+             Grimoire.call_external("approval", ctx, %{
                "action" => "resolve",
                "approval" => approval.id,
                "decision" => "approve"
@@ -164,7 +168,7 @@ defmodule Aqua.Providers.ApprovalTest do
     %{approval: approval} = card!(ctx, thread)
 
     assert {:error, {:invalid_argument, msg}} =
-             Catalog.call_external("approval", ctx, %{
+             Grimoire.call_external("approval", ctx, %{
                "action" => "resolve",
                "approval" => approval.id,
                "decision" => "approve",
@@ -173,22 +177,22 @@ defmodule Aqua.Providers.ApprovalTest do
 
     assert msg =~ "approve takes scope"
 
-    assert {:error, {:invalid_argument, _}} =
-             Catalog.call_external("approval", ctx, %{
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
+             Grimoire.call_external("approval", ctx, %{
                "action" => "resolve",
                "approval" => approval.id,
                "decision" => "maybe"
              })
 
     assert {:error, {:not_found, "approval", "apr_nothing"}} =
-             Catalog.call_external("approval", ctx, %{
+             Grimoire.call_external("approval", ctx, %{
                "action" => "resolve",
                "approval" => "apr_nothing",
                "decision" => "decline"
              })
 
     assert {:error, {:not_found, "thread", "thread_nothing"}} =
-             Catalog.call_external("approval", ctx, %{
+             Grimoire.call_external("approval", ctx, %{
                "action" => "list",
                "thread" => "thread_nothing"
              })

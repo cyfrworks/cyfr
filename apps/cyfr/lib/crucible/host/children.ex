@@ -48,7 +48,7 @@ defmodule Crucible.Host.Children do
   ## tool_call
 
   The tool runs through the catalog's in-chain entry
-  (`Grimoire.Catalog.call_in_chain/5`) under the attempt's authority and
+  (`Grimoire.call_in_chain/5`) under the attempt's authority and
   context, with the header's execution as its parent, the attempt's root
   and the header's attempt as its lineage. A setup refusal is announced on
   the root's event stream. The answer is the tool's result.
@@ -171,7 +171,7 @@ defmodule Crucible.Host.Children do
         attempt: caller.attempt
       }
 
-      case Grimoire.Catalog.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,
+      case Grimoire.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,
              guest_fn: tool.guest_fn,
              lineage: lineage
            ) do

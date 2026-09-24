@@ -18,8 +18,6 @@ defmodule Cyfr.GenServerCatchallTest do
   # Probed live: named, started by the app under test.
   @genservers [
     {Aqua.Loop.Worker, "Loop.Worker"},
-    {Grimoire.Catalog, "Catalog"},
-    {Emissary.MCP.ResourceRegistry, "ResourceRegistry"},
     {Arca.Cache.Sweeper, "Sweeper"},
     {Cyfr.TelemetryBridge, "TelemetryBridge"},
     {Aqua.ScheduleNotes, "ScheduleNotes"},

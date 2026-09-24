@@ -6,7 +6,8 @@ defmodule Emissary.MCP.ResourceReadAuditTest do
   # runs reads through the shared-mode sandbox.
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.{Message, ResourceRegistry, Router}
+  alias Emissary.MCP.{Message, Router}
+  alias Grimoire.Resources
   alias Sanctum.Context
 
   @moduledoc """
@@ -58,7 +59,7 @@ defmodule Emissary.MCP.ResourceReadAuditTest do
   end
 
   test "every advertised resource refuses anonymous reads or echoes only the caller" do
-    resources = ResourceRegistry.list_resources()
+    resources = Resources.list_resources()
     assert resources != [], "no resources registered — audit is vacuous"
 
     for %{"uri" => uri} <- resources do
@@ -83,7 +84,7 @@ defmodule Emissary.MCP.ResourceReadAuditTest do
   # the refusal is authorization-shaped (never a not-found from a data
   # access that already happened) holds template reads to the same gate.
   test "every advertised resource template refuses unauthorized reads before touching data" do
-    templates = ResourceRegistry.list_resource_templates()
+    templates = Resources.list_resource_templates()
     assert templates != [], "no resource templates registered — audit is vacuous"
 
     for %{"uriTemplate" => template} <- templates,

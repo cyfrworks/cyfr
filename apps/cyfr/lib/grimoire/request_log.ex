@@ -192,7 +192,7 @@ defmodule Grimoire.RequestLog do
           )
 
         {:error, reason} ->
-          error_text = Map.get(meta, :error_text) || inspect(sanitize_input(reason))
+          error_text = Map.get(meta, :error_text) || error_text(reason)
 
           put_routed(
             %{
@@ -229,7 +229,7 @@ defmodule Grimoire.RequestLog do
         )
 
       {:error, reason} ->
-        error_text = Map.get(meta, :error_text) || inspect(sanitize_input(reason))
+        error_text = Map.get(meta, :error_text) || error_text(reason)
 
         safe_log_failed(
           ctx,
@@ -243,6 +243,12 @@ defmodule Grimoire.RequestLog do
 
     result
   end
+
+  # The row names the reason the gate refused with, not the refusal it
+  # wrapped that reason in: an admission refusal is logged by the same
+  # term a handler's refusal is.
+  defp error_text(%Prima.Refusal{stage: :admission, reason: reason}), do: error_text(reason)
+  defp error_text(reason), do: inspect(sanitize_input(reason))
 
   # The write-behind never fails the call either: inline (the test env)
   # it writes in the caller, and a caller with no connection of its own

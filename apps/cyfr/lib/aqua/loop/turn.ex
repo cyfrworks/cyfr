@@ -305,7 +305,7 @@ defmodule Aqua.Loop.Turn do
     for {key, mode} <- policy,
         mode in ["auto", "ask"],
         String.contains?(key, ":"),
-        {:ok, definition} <- [Grimoire.Catalog.get_tool(key)] do
+        {:ok, definition} <- [Grimoire.get_tool(key)] do
       %{
         name: key,
         description: definition["description"],

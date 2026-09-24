@@ -157,7 +157,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
 
   defp read(ctx, uri),
     do:
-      Grimoire.Catalog.call_external("session", ctx, %{
+      Grimoire.call_external("session", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })

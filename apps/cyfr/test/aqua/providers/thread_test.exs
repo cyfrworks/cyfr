@@ -9,7 +9,7 @@ defmodule Aqua.Providers.ThreadTest do
 
   alias Arca.ThreadStorage, as: Threads
   alias Aqua.Providers.Thread, as: Tool
-  alias Grimoire.{Catalog, Visibility}
+  alias Grimoire.Visibility
 
   setup do
     Cyfr.Test.Sandbox.setup!()
@@ -116,7 +116,7 @@ defmodule Aqua.Providers.ThreadTest do
       refute "turn" in schema["required"]
 
       # And the catalog serves both, under the provider's one service.
-      served = MapSet.new(Catalog.tool_actions())
+      served = MapSet.new(Sanctum.Grimoire.tool_actions())
       assert MapSet.member?(served, "turn.suspend")
       assert MapSet.member?(served, "turn.recover")
       assert Grimoire.Services.service_name(Tool) == "aqua"
@@ -128,17 +128,21 @@ defmodule Aqua.Providers.ThreadTest do
     } do
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
-      assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               Catalog.call_external("turn", star, %{
+      assert {:error,
+              %Prima.Refusal{
+                stage: :admission,
+                reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+              }} =
+               Grimoire.call_external("turn", star, %{
                  "action" => "suspend",
                  "thread" => thread.id
                })
 
-      shown = Visibility.filter_for_context(Catalog.list_tools(), star)
+      shown = Visibility.filter_for_context(Grimoire.list_tools(), star)
       refute Enum.any?(shown, &(&1["name"] == "turn"))
 
       assert Enum.any?(
-               Visibility.filter_for_context(Catalog.list_tools(), ctx),
+               Visibility.filter_for_context(Grimoire.list_tools(), ctx),
                &(&1["name"] == "turn")
              )
     end
@@ -183,16 +187,24 @@ defmodule Aqua.Providers.ThreadTest do
       # external plane and would sail through it.
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
-      assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               Catalog.call_external("thread", star, %{
+      assert {:error,
+              %Prima.Refusal{
+                stage: :admission,
+                reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+              }} =
+               Grimoire.call_external("thread", star, %{
                  "action" => "events",
                  "thread" => thread.id
                })
 
       scoped = %{ctx | auth_method: :api_key, api_key_type: :application}
 
-      assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               Catalog.call_external("thread", scoped, %{
+      assert {:error,
+              %Prima.Refusal{
+                stage: :admission,
+                reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+              }} =
+               Grimoire.call_external("thread", scoped, %{
                  "action" => "send",
                  "thread" => thread.id,
                  "message" => "hi"
@@ -204,10 +216,10 @@ defmodule Aqua.Providers.ThreadTest do
       # is not offered a door it cannot open.
       star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
-      shown = Visibility.filter_for_context(Catalog.list_tools(), star)
+      shown = Visibility.filter_for_context(Grimoire.list_tools(), star)
       refute Enum.any?(shown, &(&1["name"] == "thread"))
 
-      shown_oidc = Visibility.filter_for_context(Catalog.list_tools(), ctx)
+      shown_oidc = Visibility.filter_for_context(Grimoire.list_tools(), ctx)
       assert Enum.any?(shown_oidc, &(&1["name"] == "thread"))
     end
 
@@ -220,8 +232,8 @@ defmodule Aqua.Providers.ThreadTest do
       # stamped one-way and refused at the registry door.
       guest = Sanctum.Context.enter_guest(ctx)
 
-      assert {:error, {:guest_plane_call, "thread"}} =
-               Catalog.call_external("thread", guest, %{
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, "thread"}}} =
+               Grimoire.call_external("thread", guest, %{
                  "action" => "events",
                  "thread" => thread.id
                })
