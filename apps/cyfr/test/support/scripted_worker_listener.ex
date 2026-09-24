@@ -12,7 +12,7 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
 
   `start_link/1` takes `worker:` (the `Prima.WorkerAPI` module it serves)
   and `service:` (that worker service's configured id, whose dispatch key
-  CYFR derives for it: `Crucible.Keys.worker_key/1`); `url/1` is the
+  CYFR derives for it: `Crucible.Keys.opus_key/1`); `url/1` is the
   base URL a `t:Prima.WorkerAPI.endpoint/0` names.
 
   A request is answered as Opus's listener answers it: the `x-cyfr-auth`
