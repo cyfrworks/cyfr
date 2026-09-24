@@ -23,12 +23,12 @@ defmodule Crucible.SlotsTest do
   test "the instance runs on the configured caps, as the infra tier's child" do
     {max, key_max} = Cyfr.Application.execution_slot_caps()
 
-    assert max == Application.get_env(:cyfr, :max_concurrent_executions, Slots.default_max())
+    assert max == Application.get_env(:cyfr, :crucible_max_concurrent, Slots.default_max())
 
     assert key_max ==
              Application.get_env(
                :cyfr,
-               :max_concurrent_executions_per_tenant,
+               :crucible_max_concurrent_per_tenant,
                Slots.default_key_max()
              )
 
@@ -62,8 +62,8 @@ defmodule Crucible.SlotsTest do
     assert {:warn, message} = Cyfr.Application.execution_slot_footprint(16 * depth, 16)
     assert message =~ "one athanor can hold every slot"
     assert message =~ "16 roots x depth #{depth} = #{16 * depth} >= #{16 * depth} slots"
-    assert message =~ "CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT"
-    assert message =~ "CYFR_MAX_CONCURRENT_EXECUTIONS"
+    assert message =~ "CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT"
+    assert message =~ "CYFR_CRUCIBLE_MAX_CONCURRENT"
 
     assert :ok = Cyfr.Application.execution_slot_footprint(16 * depth + 1, 16)
     assert :ok = Cyfr.Application.execution_slot_footprint(16 * depth, 15)

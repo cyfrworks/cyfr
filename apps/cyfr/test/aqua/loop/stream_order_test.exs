@@ -36,7 +36,7 @@ defmodule Aqua.Loop.StreamOrderTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "stream_order_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_path)
     Application.put_env(:arca, :seed_path, @seed_root)

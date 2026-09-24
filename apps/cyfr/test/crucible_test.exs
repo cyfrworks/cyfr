@@ -47,8 +47,8 @@ defmodule CrucibleTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Arca.Cache.init()
 
-    previous = Application.get_env(:cyfr, :workers)
-    on_exit(fn -> Application.put_env(:cyfr, :workers, previous) end)
+    previous = Application.get_env(:cyfr, :opus_workers)
+    on_exit(fn -> Application.put_env(:cyfr, :opus_workers, previous) end)
 
     {:ok, ctx: Sanctum.TestContext.local(), configured: previous}
   end
@@ -62,7 +62,7 @@ defmodule CrucibleTest do
   test "with no worker service configured, execution is unavailable and a run is refused", %{
     ctx: ctx
   } do
-    Application.put_env(:cyfr, :workers, [])
+    Application.put_env(:cyfr, :opus_workers, [])
 
     refute Crucible.available?()
     assert {:error, :execution_unavailable} = run(ctx)
@@ -72,7 +72,7 @@ defmodule CrucibleTest do
 
   test "with no worker service, a root run is refused before any consent is resolved or row written",
        %{ctx: ctx} do
-    Application.put_env(:cyfr, :workers, [])
+    Application.put_env(:cyfr, :opus_workers, [])
 
     assert {:error, :execution_unavailable} =
              Crucible.run_root(ctx, :default, "reagent:local.off-graph:1.0.0", %{})
@@ -84,7 +84,7 @@ defmodule CrucibleTest do
   test "a configured worker service that does not answer leaves execution unavailable", %{
     ctx: ctx
   } do
-    Application.put_env(:cyfr, :workers, ScriptedWorker.workers("reagent:local.ta", []))
+    Application.put_env(:cyfr, :opus_workers, ScriptedWorker.workers("reagent:local.ta", []))
 
     assert [
              %{
@@ -93,14 +93,14 @@ defmodule CrucibleTest do
                components: ["reagent:local.ta"]
              }
            ] =
-             Application.get_env(:cyfr, :workers)
+             Application.get_env(:cyfr, :opus_workers)
 
     refute Crucible.available?()
     assert {:error, :execution_unavailable} = run(ctx)
   end
 
   test "a configured worker service that answers makes execution available" do
-    Application.put_env(:cyfr, :workers, ScriptedWorker.workers("reagent:local.ta", []))
+    Application.put_env(:cyfr, :opus_workers, ScriptedWorker.workers("reagent:local.ta", []))
     start_supervised!({ScriptedWorker, ref: "reagent:local.ta", script: []})
 
     assert Crucible.available?()
@@ -118,13 +118,13 @@ defmodule CrucibleTest do
 
     imposter = ScriptedWorkerListener.endpoint(listener, "wrk_imposter")
 
-    Application.put_env(:cyfr, :workers, [imposter])
+    Application.put_env(:cyfr, :opus_workers, [imposter])
     refute Crucible.available?()
     assert {:error, :execution_unavailable} = Dispatch.worker()
 
     start_supervised!({ScriptedWorker, ref: "reagent:local.ta", script: []})
 
-    Application.put_env(:cyfr, :workers, [
+    Application.put_env(:cyfr, :opus_workers, [
       imposter | ScriptedWorker.workers("reagent:local.ta", [])
     ])
 
@@ -140,7 +140,7 @@ defmodule CrucibleTest do
     assert url == Cyfr.Test.OpusService.url()
     assert {:ok, %{service: "wrk_local"}} = Dispatch.worker()
     assert Application.get_env(:opus, :service_id) == "wrk_local"
-    assert Application.get_env(:cyfr, :worker_key) == Keys.root()
+    assert Application.get_env(:cyfr, :opus_key) == Keys.root()
 
     {:ok, worker_key} = WorkerAuth.worker_key(Keys.root(), "wrk_local")
     assert Application.get_env(:opus, :service_key) == Base.encode16(worker_key, case: :lower)

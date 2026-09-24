@@ -5,7 +5,7 @@
 # product's, no database and no tenant state, and the release carries only
 # the shared contracts and the engine (`mix release opus`).
 #
-# Process model: cyfr-spawn runs as root holding only SETUID, SETGID and
+# Process model: cyfr-keeper runs as root holding only SETUID, SETGID and
 # KILL (it refuses to start with any other capability), starts the opus
 # release as opus, the service, and runs every runner — the process that
 # runs one execution subtree at a time (`Opus.Runner`) — under a pooled
@@ -13,25 +13,25 @@
 # /var/lib/opus/homes and its control channel on file descriptor 3. When
 # a runner ends every process of its uid is killed and everything the uid
 # left is removed before another runner gets it; the service loads no
-# component, and refuses to start runners without cyfr-spawn. Every runner
+# component, and refuses to start runners without cyfr-keeper. Every runner
 # runs inside a memory bound of its own (OPUS_RUNNER_MEMORY_BYTES, 384 MiB
 # unless set), and one that reaches it is ended whole and never reused.
 #
-# The memory bound is a cgroup v2 group cyfr-spawn makes for each runner, so
+# The memory bound is a cgroup v2 group cyfr-keeper makes for each runner, so
 # the container must be started with the security option
 # `writable-cgroups=true` (Docker Engine 28 or later on a cgroup v2 host).
-# It adds no capability. Without it cyfr-spawn cannot bound a runner and
+# It adds no capability. Without it cyfr-keeper cannot bound a runner and
 # starts none: the service logs, naming the option, that it cannot, no
 # component runs, and none runs unbounded.
 
-# ---- cyfr-spawn, the process helper: a static Go binary, pinned to the Go
-# release apps/spawn/go.mod names ----
-FROM golang:1.26.6-alpine AS spawn
+# ---- cyfr-keeper, the process helper: a static Go binary, pinned to the Go
+# release apps/keeper/go.mod names ----
+FROM golang:1.26.6-alpine AS keeper
 WORKDIR /src
-COPY apps/spawn/go.mod apps/spawn/go.sum ./
+COPY apps/keeper/go.mod apps/keeper/go.sum ./
 RUN go mod download
-COPY apps/spawn/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-spawn .
+COPY apps/keeper/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-keeper .
 
 # ---- Stage 1: release build ----
 FROM hexpm/elixir:1.20.3-erlang-29.0.5-debian-bookworm-20260824 AS relbuilder
@@ -101,7 +101,7 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 
 WORKDIR /app
 
-COPY --from=spawn /out/cyfr-spawn /usr/local/bin/cyfr-spawn
+COPY --from=keeper /out/cyfr-keeper /usr/local/bin/cyfr-keeper
 COPY --from=relbuilder /app/_build/prod/rel/opus ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
@@ -124,4 +124,4 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
 # Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
 # `no-new-privileges`, a read-only root, `ipc: none` and the homes and
 # /run/opus tmpfs mounts (docker-compose.yml's opus service).
-ENTRYPOINT ["cyfr-spawn", "serve", "--pool", "runner:30101-30108", "--home-root", "/var/lib/opus/homes", "--client-user", "opus", "--", "/app/bin/opus", "start"]
+ENTRYPOINT ["cyfr-keeper", "serve", "--pool", "runner:30101-30108", "--home-root", "/var/lib/opus/homes", "--client-user", "opus", "--", "/app/bin/opus", "start"]

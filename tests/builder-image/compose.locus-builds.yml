@@ -22,6 +22,6 @@ services:
       - "127.0.0.1::4100"
     volumes:
       - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro
-    entrypoint: ["cyfr-spawn", "serve", "--pool", "build:${BUILD_POOL:?set BUILD_POOL}", "--home-root", "/var/lib/cyfr-builder/homes", "--client-user", "cyfr-builder", "--", "/app/bin/locus", "start"]
+    entrypoint: ["cyfr-keeper", "serve", "--pool", "build:${BUILD_POOL:?set BUILD_POOL}", "--home-root", "/var/lib/cyfr-builder/homes", "--client-user", "cyfr-builder", "--", "/app/bin/locus", "start"]
     environment:
       - LOCUS_BUILDS_TIMEOUT_MS=${LOCUS_BUILDS_TIMEOUT_MS:-}

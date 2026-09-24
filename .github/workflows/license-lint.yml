@@ -12,7 +12,7 @@ on:
       - '**/*.exs'
       - 'apps/codex/**'
       - 'apps/mcp-bridge/**/*.mjs'
-      - 'apps/spawn/**'
+      - 'apps/keeper/**'
       - 'tests/bridge-image/**'
       - 'tests/fixtures/*.go'
       - 'wit/**'
@@ -28,7 +28,7 @@ on:
       - '**/*.exs'
       - 'apps/codex/**'
       - 'apps/mcp-bridge/**/*.mjs'
-      - 'apps/spawn/**'
+      - 'apps/keeper/**'
       - 'tests/bridge-image/**'
       - 'tests/fixtures/*.go'
       - 'wit/**'
@@ -59,8 +59,22 @@ jobs:
             return 1
           }
 
+          patterns=('*.ex' '*.exs' 'apps/codex/*.go' 'apps/keeper/*.go' 'apps/mcp-bridge/*.mjs' 'apps/mcp-bridge/test/*.mjs' 'tests/bridge-image/*.mjs' 'tests/fixtures/*.go' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
+
+          # A pattern that matches nothing checks nothing while the scan of
+          # the others passes; refuse each such pattern by itself.
+          empty=0
+          for pattern in "${patterns[@]}"; do
+            if [ -z "$(git ls-files "$pattern")" ]; then
+              echo "::error::no tracked source matches $pattern — the lint would check nothing there"
+              empty=1
+            fi
+          done
+          if [ "$empty" -ne 0 ]; then
+            exit 1
+          fi
+
           fail=0
-          checked=0
           while IFS= read -r f; do
             head3="$(head -3 "$f")"
 
@@ -79,14 +93,7 @@ jobs:
                 fail=1
               fi
             fi
-            checked=$((checked + 1))
-          done < <(git ls-files '*.ex' '*.exs' 'apps/codex/*.go' 'apps/spawn/*.go' 'apps/mcp-bridge/*.mjs' 'apps/mcp-bridge/test/*.mjs' 'tests/bridge-image/*.mjs' 'tests/fixtures/*.go' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
-
-          # A scan that reads nothing would pass; refuse it.
-          if [ "$checked" -eq 0 ]; then
-            echo "::error::no tracked source matched — the lint would check nothing"
-            exit 1
-          fi
+          done < <(git ls-files "${patterns[@]}")
 
           if [ "$fail" -ne 0 ]; then
             echo "License boundary check failed. Fix the headers above."

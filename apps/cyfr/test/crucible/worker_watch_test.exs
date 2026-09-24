@@ -485,19 +485,19 @@ defmodule Crucible.WorkerWatchTest do
 
       # The application's configuration is read the same way, and the
       # defaults stand where it says nothing.
-      previous = Application.get_env(:cyfr, :worker_watch)
+      previous = Application.get_env(:cyfr, :opus_watch)
 
       on_exit(fn ->
         if previous,
-          do: Application.put_env(:cyfr, :worker_watch, previous),
-          else: Application.delete_env(:cyfr, :worker_watch)
+          do: Application.put_env(:cyfr, :opus_watch, previous),
+          else: Application.delete_env(:cyfr, :opus_watch)
       end)
 
-      Application.put_env(:cyfr, :worker_watch, poll_ms: "5000")
+      Application.put_env(:cyfr, :opus_watch, poll_ms: "5000")
       assert {:error, message} = WorkerWatch.start_link(workers: [], name: :bad_watch)
       assert message =~ "poll_ms"
 
-      Application.put_env(:cyfr, :worker_watch, misses: 2)
+      Application.put_env(:cyfr, :opus_watch, misses: 2)
       {:ok, pid} = WorkerWatch.start_link(workers: [], name: :configured_watch)
       assert %{poll_ms: 5_000, misses: 2} = :sys.get_state(pid)
       GenServer.stop(pid)
@@ -516,14 +516,14 @@ defmodule Crucible.WorkerWatchTest do
 
   describe "dispatch" do
     setup do
-      configured = Application.get_env(:cyfr, :workers)
-      on_exit(fn -> Application.put_env(:cyfr, :workers, configured) end)
+      configured = Application.get_env(:cyfr, :opus_workers)
+      on_exit(fn -> Application.put_env(:cyfr, :opus_workers, configured) end)
       :ok
     end
 
     test "addresses a start to the boot the watch heard within a poll interval, and asks otherwise" do
       endpoint = serve!([status("boot_1")])
-      Application.put_env(:cyfr, :workers, [endpoint])
+      Application.put_env(:cyfr, :opus_workers, [endpoint])
 
       # Without a watch, each selection asks the worker service.
       assert {:ok, %{service: @service, boot: "boot_1", endpoint: ^endpoint}} = Dispatch.worker()

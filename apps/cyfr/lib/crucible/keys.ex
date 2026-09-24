@@ -6,7 +6,7 @@ defmodule Crucible.Keys do
   The keys CYFR and its execution workers authenticate each other with
   (`Prima.WorkerAuth`).
 
-  The worker root is `config :cyfr, :worker_key` (`CYFR_WORKER_KEY`, 32
+  The worker root is `config :cyfr, :opus_key` (`CYFR_OPUS_KEY`, 32
   bytes). Without one, the root is 32 random bytes minted when the
   application starts and held only in this BEAM, which serves only a
   worker service running in this BEAM; a restart then retires every
@@ -48,7 +48,7 @@ defmodule Crucible.Keys do
   # caller that beat the start.
   def mint do
     root =
-      case Application.get_env(:cyfr, :worker_key) do
+      case Application.get_env(:cyfr, :opus_key) do
         <<_::binary-size(32)>> = configured -> configured
         nil -> :crypto.strong_rand_bytes(32)
       end
@@ -66,8 +66,8 @@ defmodule Crucible.Keys do
   boot), from which its dispatch and dispatch seal keys derive
   (`Prima.WorkerAuth.worker_key/2`).
   """
-  @spec worker_key(String.t()) :: {:ok, binary()} | {:error, Prima.MacEnvelope.invalid_field()}
-  def worker_key(service) when is_binary(service), do: WorkerAuth.worker_key(root(), service)
+  @spec opus_key(String.t()) :: {:ok, binary()} | {:error, Prima.MacEnvelope.invalid_field()}
+  def opus_key(service) when is_binary(service), do: WorkerAuth.worker_key(root(), service)
 
   @doc """
   The keys of one attempt at one fence and generation on one worker

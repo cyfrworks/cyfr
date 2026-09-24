@@ -40,7 +40,7 @@ func generateSecretKey() (string, error) {
 }
 
 // generateHexKey returns 32 cryptographically random bytes as 64
-// hexadecimal digits: the one form of CYFR_MCP_BRIDGE_KEY, CYFR_WORKER_KEY
+// hexadecimal digits: the one form of CYFR_MCP_BRIDGE_KEY, CYFR_OPUS_KEY
 // and CYFR_LOCUS_BUILDS_KEY that cyfr and each service accept.
 func generateHexKey() (string, error) {
 	b := make([]byte, 32)
@@ -54,7 +54,7 @@ func generateHexKey() (string, error) {
 const (
 	secretKeyBaseVar = "CYFR_SECRET_KEY_BASE"
 	bridgeKeyVar     = "CYFR_MCP_BRIDGE_KEY"
-	workerRootVar    = "CYFR_WORKER_KEY"
+	workerRootVar    = "CYFR_OPUS_KEY"
 	serviceIDVar     = "OPUS_SERVICE_ID"
 	serviceKeyVar    = "OPUS_SERVICE_KEY"
 	buildsURLVar     = "CYFR_LOCUS_BUILDS_URL"
@@ -62,7 +62,7 @@ const (
 	corsOriginsVar   = "CYFR_CORS_ALLOWED_ORIGINS"
 
 	// The opus service's id when .env names none: docker-compose.yml's
-	// default for both OPUS_SERVICE_ID and the entry of CYFR_WORKERS.
+	// default for both OPUS_SERVICE_ID and the entry of CYFR_OPUS_WORKERS.
 	defaultServiceID = "wrk_opus"
 	// The compose builds service's listener (docker-compose.yml's
 	// `locus-builds`, port 4100).
@@ -95,7 +95,7 @@ func decodeHexKey(text string) ([]byte, bool) {
 // id, one per line.
 func workerKey(root []byte, serviceID string) []byte {
 	mac := hmac.New(sha256.New, root)
-	mac.Write([]byte("cyfr-worker/v1/worker\n" + serviceID))
+	mac.Write([]byte("cyfr-opus/v1/worker\n" + serviceID))
 	return mac.Sum(nil)
 }
 
@@ -226,7 +226,7 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 	if serviceID == "" {
 		serviceID = defaultServiceID
 	} else if !serviceIDPattern.MatchString(serviceID) {
-		return "", nil, refuseEnv("%s in .env is %q, which is not `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, so no key can be derived for it: fix the id (and the matching entry of CYFR_WORKERS) and run cyfr init again.", serviceIDVar, serviceID)
+		return "", nil, refuseEnv("%s in .env is %q, which is not `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, so no key can be derived for it: fix the id (and the matching entry of CYFR_OPUS_WORKERS) and run cyfr init again.", serviceIDVar, serviceID)
 	}
 	rootText, _ := f.value(workerRootVar)
 	serviceKeyText, _ := f.value(serviceKeyVar)
@@ -365,7 +365,7 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, .env.example, the services' own env examples and the bundled scaffold (component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example, prompting for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email; and pulls the images the stack starts. Run with --no-interactive to take the defaults silently.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_MCP_BRIDGE_KEY, the worker root CYFR_WORKER_KEY with the OPUS_SERVICE_KEY derived from it for OPUS_SERVICE_ID (wrk_opus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin — a release with sign-in configured refuses to boot on the wildcard default, which init never writes.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_MCP_BRIDGE_KEY, the worker root CYFR_OPUS_KEY with the OPUS_SERVICE_KEY derived from it for OPUS_SERVICE_ID (wrk_opus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin — a release with sign-in configured refuses to boot on the wildcard default, which init never writes.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. A builds URL set empty with no key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml.`,
 	Example: `  cyfr init

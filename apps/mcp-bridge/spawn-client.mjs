@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// The bridge's side of cyfr-spawn (apps/spawn). The spawner starts this
+// The bridge's side of cyfr-keeper (apps/keeper). The spawner starts this
 // process with a socketpair on fd 3 and starts, signals and retires every
 // backend on request over it, one JSON object per line. Each backend's stdio
 // reaches the bridge through a relay: a helper running as the bridge's own

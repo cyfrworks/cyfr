@@ -74,9 +74,22 @@ defmodule Emissary.External.BackendDefinitionTest do
       assert refused([backend(%{"env" => %{name => "vault:x"}})]) =~ "must match"
     end
 
-    for name <- ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD CYFR_MCP_BRIDGE_KEY MCP_BRIDGE_PORT) do
+    for name <-
+          ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD CYFR_MCP_BRIDGE_KEY MCP_BRIDGE_PORT KEEPER_CHANNEL) do
       assert refused([backend(%{"env" => %{name => "vault:x"}})]) =~ "reserved"
     end
+  end
+
+  # The keeper's vectors hold the list the keeper and the bridge refuse, so
+  # a backend CYFR accepts is one neither of them refuses for its names.
+  test "the reserved prefixes are the keeper's vectors'" do
+    vectors =
+      Path.expand("../../../../../tests/fixtures/keeper_protocol.json", __DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert [_ | _] = vectors["reserved_env_prefixes"]
+    assert BackendDefinition.reserved_prefixes() == vectors["reserved_env_prefixes"]
   end
 
   test "an env value is a vault template; only the non-secret names may hold a literal" do

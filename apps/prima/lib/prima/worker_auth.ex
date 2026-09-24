@@ -7,18 +7,18 @@ defmodule Prima.WorkerAuth do
   `Prima.MacEnvelope`. `tests/fixtures/worker_auth.json` holds the vectors
   every derivation, MAC and seal here must reproduce.
 
-  One root secret of 32 bytes (`CYFR_WORKER_KEY`, `decode_root/1`) is
+  One root secret of 32 bytes (`CYFR_OPUS_KEY`, `decode_root/1`) is
   CYFR's. Every key is derived from it, so nothing but the root is
   configured and nothing is stored:
 
   | Key | Derived from, over | Held by | Use |
   |---|---|---|---|
-  | `assign_key/1` | the root, `cyfr-worker/v1/assign` | CYFR | MACs assignments (`Prima.Assignment`) |
-  | `worker_key/2` | the root, `cyfr-worker/v1/worker` and the worker service's id | CYFR and that worker service | derives the two keys below, and nothing else |
-  | `dispatch_key/1` | a worker key, `cyfr-worker/v1/dispatch` | CYFR and that worker service | signs WorkerAPI requests to it and its reports |
-  | `dispatch_seal_key/1` | a worker key, `cyfr-worker/v1/dseal` | CYFR and that worker service | seals the keys of an attempt started on it (`seal_attempt_keys/3`) |
-  | `attempt_call_key/2` | the root, `cyfr-worker/v1/call` and the attempt | CYFR and the attempt's runner | signs the attempt's host calls |
-  | `attempt_seal_key/2` | the root, `cyfr-worker/v1/seal` and the attempt | CYFR and the attempt's runner | seals the attempt's host call bodies and answers (`seal_call/4`) |
+  | `assign_key/1` | the root, `cyfr-opus/v1/assign` | CYFR | MACs assignments (`Prima.Assignment`) |
+  | `worker_key/2` | the root, `cyfr-opus/v1/worker` and the worker service's id | CYFR and that worker service | derives the two keys below, and nothing else |
+  | `dispatch_key/1` | a worker key, `cyfr-opus/v1/dispatch` | CYFR and that worker service | signs WorkerAPI requests to it and its reports |
+  | `dispatch_seal_key/1` | a worker key, `cyfr-opus/v1/dseal` | CYFR and that worker service | seals the keys of an attempt started on it (`seal_attempt_keys/3`) |
+  | `attempt_call_key/2` | the root, `cyfr-opus/v1/call` and the attempt | CYFR and the attempt's runner | signs the attempt's host calls |
+  | `attempt_seal_key/2` | the root, `cyfr-opus/v1/seal` and the attempt | CYFR and the attempt's runner | seals the attempt's host call bodies and answers (`seal_call/4`) |
 
   A key derived over fields is HMAC-SHA256 over its label followed by the
   field values, one per line (`Prima.MacEnvelope.derive/4`).
@@ -30,7 +30,7 @@ defmodule Prima.WorkerAuth do
 
     * the **service** id — a worker service's stable, configured identity
       (`OPUS_SERVICE_ID` on the service, the same id in CYFR's
-      `CYFR_WORKERS`), which `worker_key/2` derives its keys over and
+      `CYFR_OPUS_WORKERS`), which `worker_key/2` derives its keys over and
       which an attempt's keys are bound to; two worker services never share
       one;
     * the **boot** id — the incarnation a worker service mints on every
@@ -66,16 +66,16 @@ defmodule Prima.WorkerAuth do
   `attempt` is the JCS of the attempt's six fields and `sealed` is
   `Prima.MacEnvelope`'s AES-256-GCM seal of the call key followed by the
   seal key under the worker service's dispatch seal key, its additional
-  data `cyfr-worker/v1/attempt-keys` followed by those fields one per line.
+  data `cyfr-opus/v1/attempt-keys` followed by those fields one per line.
   `open_attempt_keys/2` answers the attempt and its keys only when the seal
   opens as the attempt it names.
 
   ## Sealed host calls
 
   A host call's body is sealed with the attempt's seal key
-  (`seal_call/4`), its additional data `cyfr-worker/v1/call-body` followed
+  (`seal_call/4`), its additional data `cyfr-opus/v1/call-body` followed
   by the call's header fields, one per line; its answer is sealed the same
-  way under `cyfr-worker/v1/call-answer`. Each opens (`open_call/4`) only
+  way under `cyfr-opus/v1/call-answer`. Each opens (`open_call/4`) only
   as the direction and the call it was sealed for.
 
   ## Headers
@@ -148,7 +148,7 @@ defmodule Prima.WorkerAuth do
   # header before it reads the body it covers (`verify_host_call_header/4`,
   # `verify_request_header/3`, `verify_report_header/3`, then `verify_body/2`).
   @call %MacEnvelope{
-    prefix: "cyfr-worker/v1",
+    prefix: "cyfr-opus/v1",
     kind: "call",
     fields:
       @attempt_fields ++
@@ -164,19 +164,19 @@ defmodule Prima.WorkerAuth do
 
   @dispatch_fields [service: :string, boot: :string, ts: :integer, nonce: :string]
   @request %MacEnvelope{
-    prefix: "cyfr-worker/v1",
+    prefix: "cyfr-opus/v1",
     kind: "request",
     fields: @dispatch_fields,
     body_hash_in_header: true
   }
   @report %MacEnvelope{
-    prefix: "cyfr-worker/v1",
+    prefix: "cyfr-opus/v1",
     kind: "report",
     fields: @dispatch_fields,
     body_hash_in_header: true
   }
 
-  @sealed_directions %{body: "cyfr-worker/v1/call-body", answer: "cyfr-worker/v1/call-answer"}
+  @sealed_directions %{body: "cyfr-opus/v1/call-body", answer: "cyfr-opus/v1/call-answer"}
 
   @typedoc "The attempt an attempt's keys are bound to."
   @type attempt :: %{
@@ -243,7 +243,7 @@ defmodule Prima.WorkerAuth do
   @type body_hash :: String.t()
 
   @doc """
-  The root secret `CYFR_WORKER_KEY` spells: exactly 64 hexadecimal digits,
+  The root secret `CYFR_OPUS_KEY` spells: exactly 64 hexadecimal digits,
   in either case. Anything else is `:error`.
   """
   @spec decode_root(term()) :: {:ok, binary()} | :error
@@ -260,7 +260,7 @@ defmodule Prima.WorkerAuth do
   @doc "The key assignments are MAC'd with. Only CYFR holds it."
   @spec assign_key(binary()) :: binary()
   def assign_key(root) when byte_size(root) == 32,
-    do: MacEnvelope.derive(root, "cyfr-worker/v1/assign")
+    do: MacEnvelope.derive(root, "cyfr-opus/v1/assign")
 
   @doc """
   The key of the worker service `service`: the one secret that worker
@@ -270,29 +270,29 @@ defmodule Prima.WorkerAuth do
   @spec worker_key(binary(), String.t()) ::
           {:ok, binary()} | {:error, MacEnvelope.invalid_field()}
   def worker_key(root, service) when byte_size(root) == 32,
-    do: MacEnvelope.derive(root, "cyfr-worker/v1/worker", [service: :string], %{service: service})
+    do: MacEnvelope.derive(root, "cyfr-opus/v1/worker", [service: :string], %{service: service})
 
   @doc "The key WorkerAPI requests to a worker service and its reports are signed with."
   @spec dispatch_key(binary()) :: binary()
   def dispatch_key(worker_key) when byte_size(worker_key) == 32,
-    do: MacEnvelope.derive(worker_key, "cyfr-worker/v1/dispatch")
+    do: MacEnvelope.derive(worker_key, "cyfr-opus/v1/dispatch")
 
   @doc "The key the attempt keys a worker service is started with are sealed with."
   @spec dispatch_seal_key(binary()) :: binary()
   def dispatch_seal_key(worker_key) when byte_size(worker_key) == 32,
-    do: MacEnvelope.derive(worker_key, "cyfr-worker/v1/dseal")
+    do: MacEnvelope.derive(worker_key, "cyfr-opus/v1/dseal")
 
   @doc "The key an attempt's runner signs its host calls with."
   @spec attempt_call_key(binary(), attempt()) ::
           {:ok, binary()} | {:error, MacEnvelope.invalid_field()}
   def attempt_call_key(root, attempt) when byte_size(root) == 32 and is_map(attempt),
-    do: MacEnvelope.derive(root, "cyfr-worker/v1/call", @attempt_fields, attempt)
+    do: MacEnvelope.derive(root, "cyfr-opus/v1/call", @attempt_fields, attempt)
 
   @doc "The key an attempt's host call bodies and answers are sealed with."
   @spec attempt_seal_key(binary(), attempt()) ::
           {:ok, binary()} | {:error, MacEnvelope.invalid_field()}
   def attempt_seal_key(root, attempt) when byte_size(root) == 32 and is_map(attempt),
-    do: MacEnvelope.derive(root, "cyfr-worker/v1/seal", @attempt_fields, attempt)
+    do: MacEnvelope.derive(root, "cyfr-opus/v1/seal", @attempt_fields, attempt)
 
   @doc "The attempt's keys, both derived from `root` (`t:attempt_keys/0`)."
   @spec attempt_keys(binary(), attempt()) ::
@@ -319,7 +319,7 @@ defmodule Prima.WorkerAuth do
     with {:ok, sealed} <-
            MacEnvelope.seal(
              seal_key,
-             "cyfr-worker/v1/attempt-keys",
+             "cyfr-opus/v1/attempt-keys",
              @attempt_fields,
              attempt,
              call <> seal,
@@ -344,7 +344,7 @@ defmodule Prima.WorkerAuth do
          {:ok, <<call::binary-size(32), seal::binary-size(32)>>} <-
            MacEnvelope.open(
              seal_key,
-             "cyfr-worker/v1/attempt-keys",
+             "cyfr-opus/v1/attempt-keys",
              @attempt_fields,
              attempt,
              box

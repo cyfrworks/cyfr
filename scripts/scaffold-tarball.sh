@@ -14,7 +14,7 @@ ITEMS=(
   # MCP bridge, TLS proxy and optional builds profile. The bridge and its
   # process helper are built from the sources shipped here; the app, worker
   # and builder images are pulled as published.
-  docker-compose.yml Caddyfile .env.example Dockerfile.node apps/mcp-bridge/ apps/spawn/
+  docker-compose.yml Caddyfile .env.example Dockerfile.node apps/mcp-bridge/ apps/keeper/
   # One example per env file docker-compose.yml names beside .env.
   .env.locus.example .env.opus.example .env.bridge.example
 )

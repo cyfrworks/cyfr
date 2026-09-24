@@ -3,7 +3,7 @@
 
 defmodule Opus.KeeperMemoryTest do
   @moduledoc """
-  The `cyfr-spawn` client holds every runner to a memory bound, against a
+  The `cyfr-keeper` client holds every runner to a memory bound, against a
   scripted keeper on a socket the test holds the keeper's end of: every
   spawn carries the pool's `:runner_memory_bytes` (or the bound the client
   was started with) and no spawn can ask for none; a malformed bound stops
@@ -22,7 +22,7 @@ defmodule Opus.KeeperMemoryTest do
   import ExUnit.CaptureLog
   import Opus.Test.Wait
 
-  alias Opus.Keeper.Spawn
+  alias Opus.Keeper.Channel
   alias Opus.{RunnerPool, RunnerProcess}
 
   @stream_attach 3
@@ -33,7 +33,7 @@ defmodule Opus.KeeperMemoryTest do
   # The keeper's vectors, the one file the keeper and every client of its
   # wire read. Read as this module compiles, so a checkout without the file
   # fails here, naming it, rather than running without the vectors.
-  @vectors Path.expand("../../../../tests/fixtures/spawn_protocol.json", __DIR__)
+  @vectors Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)
            |> File.read!()
            |> Jason.decode!()
 
@@ -65,8 +65,8 @@ defmodule Opus.KeeperMemoryTest do
 
     start_supervised!(
       Supervisor.child_spec(
-        {Spawn, [channel: keeper_end, attach_dir: ctx.dir, name: name] ++ opts},
-        id: {Spawn, name},
+        {Channel, [channel: keeper_end, attach_dir: ctx.dir, name: name] ++ opts},
+        id: {Channel, name},
         restart: :temporary
       )
     )
@@ -85,7 +85,7 @@ defmodule Opus.KeeperMemoryTest do
   defp start_handle!(name, id \\ "runner_1") do
     spec = %{runner: id, argv: ["/app/bin/opus", "start"], env: @spec_env, server: name}
 
-    start_supervised!({RunnerProcess, id: id, keeper: Spawn, spec: spec, owner: self()},
+    start_supervised!({RunnerProcess, id: id, keeper: Channel, spec: spec, owner: self()},
       id: {RunnerProcess, id}
     )
   end
@@ -153,7 +153,7 @@ defmodule Opus.KeeperMemoryTest do
         {_spawner, keeper_end} = channel(ctx)
 
         assert {:error, {:keeper_unavailable, {:malformed, :runner_memory_bytes}}} =
-                 Spawn.start_link(
+                 Channel.start_link(
                    channel: keeper_end,
                    attach_dir: ctx.dir,
                    memory_bytes: bound,
@@ -232,7 +232,7 @@ defmodule Opus.KeeperMemoryTest do
     # The pool spawns through the client registered under the keeper's own
     # name, as the service tree starts it.
     test "is tainted, released and never handed out again by the pool", ctx do
-      {_name, spawner} = start_client!(ctx, name: Spawn, memory_bytes: 268_435_456)
+      {_name, spawner} = start_client!(ctx, name: Channel, memory_bytes: 268_435_456)
       supervisor = :"memory_pool_runners_#{ctx.unique}"
       start_supervised!({DynamicSupervisor, name: supervisor, strategy: :one_for_one})
       {:ok, defaults} = Opus.Settings.pool([], %{})
@@ -242,7 +242,7 @@ defmodule Opus.KeeperMemoryTest do
           {RunnerPool,
            name: :"memory_pool_#{ctx.unique}",
            settings: %{defaults | pool_size: 1},
-           keeper: Spawn,
+           keeper: Channel,
            supervisor: supervisor,
            command: %{argv: ["/app/bin/opus", "start"], env: %{}}}
         )

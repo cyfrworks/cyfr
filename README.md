@@ -88,7 +88,7 @@ cyfr -h
 open http://localhost:4000
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example`, prompting for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email, and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_MCP_BRIDGE_KEY`, the worker root `CYFR_WORKER_KEY` with the `OPUS_SERVICE_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `opus` (the execution worker that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `mcp-bridge` (stdio MCP servers) and `caddy` (TLS + reverse proxy at `:80`/`:443`, for real-hostname deployments); `cyfr up` brings up the first four, and `caddy` too when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example`, prompting for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email, and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_MCP_BRIDGE_KEY`, the worker root `CYFR_OPUS_KEY` with the `OPUS_SERVICE_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `opus` (the execution worker that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `mcp-bridge` (stdio MCP servers) and `caddy` (TLS + reverse proxy at `:80`/`:443`, for real-hostname deployments); `cyfr up` brings up the first four, and `caddy` too when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
@@ -116,7 +116,7 @@ your-project/
 ├── docker-compose.yml      # Self-hosted stack: cyfr, opus, locus-builds, mcp-bridge (+ caddy in TLS mode)
 ├── Caddyfile               # Reverse proxy (TLS mode only): everything → cyfr:4000
 ├── Dockerfile.node         # Builds the `mcp-bridge` image
-├── apps/                   # The sources that image is built from: mcp-bridge/, spawn/
+├── apps/                   # The sources that image is built from: mcp-bridge/, keeper/
 ├── cyfr.yaml
 ├── .env                    # The stack's keys and config, written by `cyfr init` (do not commit)
 ├── .env.example            # Everything .env can set
@@ -338,7 +338,7 @@ There is **no censorship-circumvention layer** here — Caddy gives you TLS, not
 
 ### Prerequisites
 
-- A Linux VPS (or any Docker host) with Docker + the Compose plugin: **Docker Engine 28 or later on a cgroup v2 host** (cgroup v2 is the default of current distributions and of Docker Desktop). `opus` and `locus-builds` hold every runner and every build to a memory bound of its own, a cgroup `cyfr-spawn` makes for it, which needs the containers' `security_opt: writable-cgroups=true` (in the shipped `docker-compose.yml`; it adds no capability). Without it — an older engine, a cgroup v1 host, or the option removed — nothing runs unbounded and nothing runs: `opus` starts no runner and logs, naming `writable-cgroups=true`, that it cannot bound one, so no component runs; and every build is refused as `unavailable`, naming the option.
+- A Linux VPS (or any Docker host) with Docker + the Compose plugin: **Docker Engine 28 or later on a cgroup v2 host** (cgroup v2 is the default of current distributions and of Docker Desktop). `opus` and `locus-builds` hold every runner and every build to a memory bound of its own, a cgroup `cyfr-keeper` makes for it, which needs the containers' `security_opt: writable-cgroups=true` (in the shipped `docker-compose.yml`; it adds no capability). Without it — an older engine, a cgroup v1 host, or the option removed — nothing runs unbounded and nothing runs: `opus` starts no runner and logs, naming `writable-cgroups=true`, that it cannot bound one, so no component runs; and every build is refused as `unavailable`, naming the option.
 - For TLS mode: a domain pointing at the VPS. For direct mode: nothing extra.
 - Firewall: TLS mode → open `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). Direct mode publishes `:4000` on `127.0.0.1` only — it is for the box you run it on.
 
@@ -356,7 +356,7 @@ cyfr init        # downloads compose + Caddyfile, writes .env and its keys, asks
 cyfr up          # starts cyfr + opus + locus-builds + mcp-bridge (and caddy if TLS mode)
 ```
 
-`cyfr init` mints every key the stack needs into `.env`: `CYFR_SECRET_KEY_BASE`, `CYFR_MCP_BRIDGE_KEY`, the [execution worker](#execution-workers)'s root `CYFR_WORKER_KEY` with the `OPUS_SERVICE_KEY` derived from it for the worker's service id (`wrk_opus` unless `.env` names another `OPUS_SERVICE_ID`), and the [builds](#builds) key beside `CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100`. It also assigns [`CYFR_CORS_ALLOWED_ORIGINS`](#cors-allowlist-required-for-server-deployments) the empty allowlist, which a release with sign-in configured needs to boot and the shipped stack's same-origin clients never notice. Run in a project whose `.env` already exists, it adds only the keys `.env` lacks and never rewrites one: with no root and no service key it mints both, with a root alone it derives the service key from it, a builds URL gets a minted key and a builds key gets the URL. A service key with no root beside it, or one the root beside it does not derive, is refused with a sentence naming the fix, and nothing is written.
+`cyfr init` mints every key the stack needs into `.env`: `CYFR_SECRET_KEY_BASE`, `CYFR_MCP_BRIDGE_KEY`, the [execution worker](#execution-workers)'s root `CYFR_OPUS_KEY` with the `OPUS_SERVICE_KEY` derived from it for the worker's service id (`wrk_opus` unless `.env` names another `OPUS_SERVICE_ID`), and the [builds](#builds) key beside `CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100`. It also assigns [`CYFR_CORS_ALLOWED_ORIGINS`](#cors-allowlist-required-for-server-deployments) the empty allowlist, which a release with sign-in configured needs to boot and the shipped stack's same-origin clients never notice. Run in a project whose `.env` already exists, it adds only the keys `.env` lacks and never rewrites one: with no root and no service key it mints both, with a root alone it derives the service key from it, a builds URL gets a minted key and a builds key gets the URL. A service key with no root beside it, or one the root beside it does not derive, is refused with a sentence naming the fix, and nothing is written.
 
 <details><summary>Prefer a source checkout?</summary>
 
@@ -370,8 +370,8 @@ cp .env.example .env
 #   CYFR_BEHIND_PROXY    — true for TLS (caddy) mode, false for direct
 #   CADDY_ACME_EMAIL     — your email (only needed for TLS mode)
 #   CYFR_MCP_BRIDGE_KEY  — `openssl rand -hex 32`
-#   CYFR_WORKER_KEY      — `openssl rand -hex 32`
-#   OPUS_SERVICE_KEY     — `env CYFR_WORKER_KEY=… mix cyfr.worker.key wrk_opus`
+#   CYFR_OPUS_KEY      — `openssl rand -hex 32`
+#   OPUS_SERVICE_KEY     — `env CYFR_OPUS_KEY=… mix cyfr.opus.key wrk_opus`
 #                          (see "Execution workers" for the openssl equivalent)
 #   CYFR_LOCUS_BUILDS_URL — http://locus-builds:4100 (see "Builds")
 #   CYFR_LOCUS_BUILDS_KEY — `openssl rand -hex 32`
@@ -414,9 +414,9 @@ How it holds together:
 
 Components run on a worker service, not in `cyfr`: the `opus` container runs the WASM engine, and `cyfr` reaches it over HTTP to start and kill runs while its runners reach `cyfr`'s host API for everything a run needs (its attempt, its credentials, its stream, its children). Every request and host call is authenticated with keys derived from one root, which only `cyfr` holds.
 
-- **Two keys.** `CYFR_WORKER_KEY` (32 random bytes as 64 hex digits) is the root, in `.env` and read by `cyfr` alone. `OPUS_SERVICE_KEY` is the key derived from it for the worker's service id, `OPUS_SERVICE_ID` (`wrk_opus` by default; another id is named in `CYFR_WORKERS` too), and compose hands the id and the key to `opus` alone, from `.env`. `cyfr init` mints the root and derives the key; by hand, the root is `openssl rand -hex 32`, and `CYFR_WORKER_KEY=… mix cyfr.worker.key wrk_opus` prints the key from a source checkout, or `printf 'cyfr-worker/v1/worker\nwrk_opus' | openssl dgst -sha256 -mac HMAC -macopt hexkey:$CYFR_WORKER_KEY` is the same HMAC without one. The worker never sees the root, the keyring or the database; it refuses to start with any of them in its environment. Changing the root ends every run in flight and needs every service key derived again: remove `OPUS_SERVICE_KEY` beside the new root and `cyfr init` derives it.
-- **Who is where.** `CYFR_WORKERS` lists the worker services `cyfr` dispatches to as `<service_id>=<url>` entries, tried in order; compose sets `wrk_opus=http://opus:4200`. `cyfr`'s host API listens at `CYFR_HOST_API_BIND:CYFR_HOST_API_PORT` (default `127.0.0.1:4300`; compose binds every interface, since it is reached over the internal `worker` network alone) and `OPUS_HOST_URL` tells the worker where that is. An attempt's host calls go to the member that admitted it: the assignment carries that member's address, `CYFR_HOST_API_URL`, and the worker posts them there. With one member the address is the worker's own `OPUS_HOST_URL` and nothing more is set. `cyfr` asks each worker for its status every `CYFR_WORKER_WATCH_POLL_MS` and, after `CYFR_WORKER_WATCH_MISSES` misses in a row or when a worker comes back as a new boot, closes the runs that boot held as lapsed. The worker's own settings are in `.env.opus` (copy `.env.opus.example`).
-- **Runners.** Inside `opus`, `cyfr-spawn` — the keeper binary the builder and the bridge also run under — starts the service as the `opus` user with no capability and runs every subtree in a runner: a VM of its own under a pooled uid (`opus-runner01`…`08`) with a private home on a tmpfs, holding no key, reached by the service alone over a control channel. The service keeps `OPUS_POOL_SIZE` runners spawned ahead; a runner that completes cleanly is kept idle for its athanor for `OPUS_IDLE_TTL_MS`; one that was killed, lost a host answer or exited with attempts open is tainted, never assigned again, and retired — every process of its uid killed and its home scrubbed before the uid is reused — with `OPUS_RELEASE_GRACE_MS` to report what it held; a guest that ignores its deadline is halted by the runner's watchdog `OPUS_WATCHDOG_GRACE_MS` past it. `tests/worker-image/` runs each of these against the shipped image.
+- **Two keys.** `CYFR_OPUS_KEY` (32 random bytes as 64 hex digits) is the root, in `.env` and read by `cyfr` alone. `OPUS_SERVICE_KEY` is the key derived from it for the worker's service id, `OPUS_SERVICE_ID` (`wrk_opus` by default; another id is named in `CYFR_OPUS_WORKERS` too), and compose hands the id and the key to `opus` alone, from `.env`. `cyfr init` mints the root and derives the key; by hand, the root is `openssl rand -hex 32`, and `CYFR_OPUS_KEY=… mix cyfr.opus.key wrk_opus` prints the key from a source checkout, or `printf 'cyfr-opus/v1/worker\nwrk_opus' | openssl dgst -sha256 -mac HMAC -macopt hexkey:$CYFR_OPUS_KEY` is the same HMAC without one. The worker never sees the root, the keyring or the database; it refuses to start with any of them in its environment. Changing the root ends every run in flight and needs every service key derived again: remove `OPUS_SERVICE_KEY` beside the new root and `cyfr init` derives it.
+- **Who is where.** `CYFR_OPUS_WORKERS` lists the worker services `cyfr` dispatches to as `<service_id>=<url>` entries, tried in order; compose sets `wrk_opus=http://opus:4200`. `cyfr`'s host API listens at `CYFR_HOST_API_BIND:CYFR_HOST_API_PORT` (default `127.0.0.1:4300`; compose binds every interface, since it is reached over the internal `worker` network alone) and `OPUS_HOST_URL` tells the worker where that is. An attempt's host calls go to the member that admitted it: the assignment carries that member's address, `CYFR_HOST_API_URL`, and the worker posts them there. With one member the address is the worker's own `OPUS_HOST_URL` and nothing more is set. `cyfr` asks each worker for its status every `CYFR_OPUS_WATCH_POLL_MS` and, after `CYFR_OPUS_WATCH_MISSES` misses in a row or when a worker comes back as a new boot, closes the runs that boot held as lapsed. The worker's own settings are in `.env.opus` (copy `.env.opus.example`).
+- **Runners.** Inside `opus`, `cyfr-keeper` — the keeper binary the builder and the bridge also run under — starts the service as the `opus` user with no capability and runs every subtree in a runner: a VM of its own under a pooled uid (`opus-runner01`…`08`) with a private home on a tmpfs, holding no key, reached by the service alone over a control channel. The service keeps `OPUS_POOL_SIZE` runners spawned ahead; a runner that completes cleanly is kept idle for its athanor for `OPUS_IDLE_TTL_MS`; one that was killed, lost a host answer or exited with attempts open is tainted, never assigned again, and retired — every process of its uid killed and its home scrubbed before the uid is reused — with `OPUS_RELEASE_GRACE_MS` to report what it held; a guest that ignores its deadline is halted by the runner's watchdog `OPUS_WATCHDOG_GRACE_MS` past it. `tests/worker-image/` runs each of these against the shipped image.
 - **Memory.** Every runner is held to `OPUS_RUNNER_MEMORY_BYTES` (384 MiB by default; 16 MiB to 1 TiB): its VM, every guest's linear memory, its home and the kernel memory charged to it, together. A runner that reaches it is ended whole by the kernel, the runs it held are reported, and it is never reused; a sibling is untouched. The container's limit, `OPUS_MEMORY_LIMIT` in `.env` (4G), holds all eight runner uids at their bound and the service beside them — raise it with the bound. The bound needs the [Docker requirement](#prerequisites) above.
 - **Nothing on disk.** The worker keeps no state. A run's identity, budget, credentials and output live in `cyfr`; the worker holds only what it was assigned, sealed for its key, and reports a runner that exits. A worker restart ends its runs, which `cyfr` closes as lapsed.
 
@@ -428,7 +428,7 @@ Builds are on after `cyfr init`: it writes both settings into `.env`, and `cyfr 
 
 - **One key.** `CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100` and `CYFR_LOCUS_BUILDS_KEY` (32 random bytes as 64 hex digits; `cyfr init` mints it, and by hand it is `openssl rand -hex 32`) in `.env`, both or neither: `cyfr` refuses to boot with one and not the other, or with a malformed value. Compose hands the same key to the builder as `LOCUS_BUILDS_KEY`; the builder refuses to start without it, and with any of `cyfr`'s own secrets in its environment. With the URL set, `cyfr up` starts the service too (`docker compose --profile locus-builds up -d` without the CLI).
 - **Turning builds off.** Set both empty in `.env` — `CYFR_LOCUS_BUILDS_URL=` and `CYFR_LOCUS_BUILDS_KEY=` — then `cyfr down` and `cyfr up`: `locus-builds` no longer starts, and `cyfr` refuses every build. `cyfr init` leaves a URL set empty with no key alone; with the two lines removed or commented out instead, running it again turns builds back on.
-- **Isolation.** Inside `locus-builds`, `cyfr-spawn` runs every build under a pooled uid of its own with a private home on a tmpfs, and every process a build leaves behind is killed with its uid before the uid is reused. Only `cyfr` reaches the builder, over their own network; the network is not internal, because cargo and npm fetch from crates.io and the npm registry.
+- **Isolation.** Inside `locus-builds`, `cyfr-keeper` runs every build under a pooled uid of its own with a private home on a tmpfs, and every process a build leaves behind is killed with its uid before the uid is reused. Only `cyfr` reaches the builder, over their own network; the network is not internal, because cargo and npm fetch from crates.io and the npm registry.
 - **Memory.** Every build is held to `LOCUS_BUILDS_MEMORY_BYTES` (1 GiB by default): its processes, its home and the kernel memory charged to it, together. A build that reaches it is ended and answered as having reached its bound; a sibling build is untouched. The container's limit, `LOCUS_BUILDS_MEMORY_LIMIT` in `.env` (4G), holds `LOCUS_BUILDS_MAX_CONCURRENT` builds at their bound and the service beside them. The builder's other settings are in `.env.locus` (copy `.env.locus.example`). The bound needs the [Docker requirement](#prerequisites) above.
 
 **`OOMKilled` is not the container's.** Docker marks the `opus` or `locus-builds` container `OOMKilled` whenever a runner or a build is ended at its own bound, though neither the container nor its release was touched: the kernel reports the kill in the container's cgroup tree. Read it as a runner or a build that passed its bound — the service's log says which — not as the container running out of memory; alert on the container restarting instead.
@@ -617,7 +617,7 @@ boots only with all seven of:
 - **A discovery topology** — `CYFR_CLUSTER_NODES` naming the members, or
   `CYFR_CLUSTER_DNS_QUERY` with `CYFR_CLUSTER_NODE_BASENAME` for a
   headless service.
-- **A shared worker root** — `CYFR_WORKER_KEY`, identical on every
+- **A shared worker root** — `CYFR_OPUS_KEY`, identical on every
   member. Unset it is random per boot, so a worker's report to a peer
   fails verification.
 - **This member's own address** — `CYFR_HOST_API_URL`, the address a
@@ -647,9 +647,9 @@ What a cell gives up and what it keeps:
   misrouted worker loses the call loudly rather than keeping a peer's
   lease alive while its work goes nowhere. One worker service may serve
   several members; each member still lists the workers it dispatches to
-  in its own `CYFR_WORKERS`.
+  in its own `CYFR_OPUS_WORKERS`.
 - Stdio MCP servers are not available in a cell.
-- Per-member ceilings multiply: `CYFR_MAX_CONCURRENT_EXECUTIONS` and its
+- Per-member ceilings multiply: `CYFR_CRUCIBLE_MAX_CONCURRENT` and its
   per-tenant cap, and the per-credential stream cap, are each member's.
   The tenant's durable ceilings — its consented invocation rate and its
   budget — are rows, and hold for the cell.
@@ -724,8 +724,8 @@ All four required vars must be set or the server refuses to start.
   closed.
 - `CYFR_MCP_RATE_LIMIT_MAX` / `CYFR_MCP_RATE_LIMIT_WINDOW_MS` (default
   120/60s) — per-client-IP transport throttle on the `/mcp` endpoint.
-- `CYFR_MAX_CONCURRENT_EXECUTIONS` (default 128) and
-  `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT` (default 16) — global and
+- `CYFR_CRUCIBLE_MAX_CONCURRENT` (default 128) and
+  `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT` (default 16) — global and
   per-athanor WASM concurrency caps. The container CPU quota
   (`CYFR_CPU_LIMIT`, default 4) bounds aggregate CPU use.
 
@@ -855,6 +855,39 @@ Use `--no-interactive` or set `CYFR_NO_INTERACTIVE=1` to disable interactive pro
 `cyfr` normally reads its credential from `~/.cyfr/config.json` (written by `cyfr login`). A CI job or container passes one directly instead: `--token <cyfr_...>` on any command, or `CYFR_TOKEN` in the environment — a `cyfr_` API key minted with `cyfr key create`, or a session token. The flag wins over the environment, which wins over the stored config.
 
 CLI environment variables: `CYFR_TOKEN` (credential), `CYFR_NO_INTERACTIVE=1` (no prompts), `CYFR_NO_UPDATE_CHECK=1` (no release check — air-gapped installs), `CYFR_DEBUG=1` (verbose request/response detail on stderr).
+
+## Glossary
+
+Each part of CYFR has one name, and the name is its directory, its binary or image, its environment variable prefix, its MAC domain, its provider's service label and its log label. Words for a role inside a part stay English.
+
+| Name | Is | Directory | Binary or image | Environment prefix | MAC domain | Service label | Log label |
+|------|----|-----------|-----------------|--------------------|------------|---------------|-----------|
+| Prima | the contracts every side agrees on: shapes, protocols, and the shared runtime primitives | `apps/prima` | in every release | — | — | — | `[Prima…]` |
+| Arca | persistence: rows, blobs, cache, leases, retention, the records and file doors | `apps/arca` | the `cyfr` release | — | — | `arca` | `[Arca…]` |
+| Sanctum | decisions: identity, tenancy, authority, consent, the vault, caps | `apps/sanctum` | the `cyfr` release | — | — | `sanctum` | `[Sanctum…]` |
+| Grimoire | the operation table and its gate: dispatch, the request log | `apps/cyfr/lib/grimoire` | the `cyfr` release | — | — | `grimoire` | `[Grimoire…]` |
+| Cyfr | the host: boot, control-plane ownership, the bus, telemetry, configuration, the one endpoint | `apps/cyfr/lib/cyfr`, `apps/cyfr/lib/cyfr_web` | the `cyfr` release and image | `CYFR_` | — | — | `[Cyfr…]` |
+| Compendium | components: the registry, sources and builds | `apps/cyfr/lib/compendium` | the `cyfr` release | — | — | `compendium` | `[Compendium…]` |
+| Aqua | the assistant: threads, notes and approvals | `apps/cyfr/lib/aqua` | the `cyfr` release | — | — | `aqua` | `[Aqua…]` |
+| Crucible | execution: admission, attempts, the host and worker protocols, schedules | `apps/cyfr/lib/crucible` | the `cyfr` release | `CYFR_CRUCIBLE_`, `CYFR_HOST_API_` | — | `crucible` | `[Crucible…]` |
+| Emissary | MCP in both directions: `/mcp`, and external MCP servers over HTTP or on the bridge | `apps/cyfr/lib/emissary`, `apps/cyfr/lib/emissary_web` | the `cyfr` release | — | — | `emissary` | `[Emissary…]` |
+| Prism | the console | `apps/cyfr/lib/prism`, `apps/cyfr/lib/prism_web` | the `cyfr` release | — | — | — | `[Prism…]` |
+| Codex | the command-line client | `apps/codex` | the `cyfr` binary | — | — | — | — |
+| Opus | the WASM engine: a worker service and the runners it starts under the keeper | `apps/opus` | the `opus` release, image `cyfr-opus` | `OPUS_`, `CYFR_OPUS_` | `cyfr-opus/v1` | — | `[Opus…]` |
+| Locus | where untrusted native processes run: builds, and the stdio MCP backends of the bridge | `apps/locus`, `apps/mcp-bridge` | the `locus` release, image `cyfr-locus`; the `mcp-bridge` image | `LOCUS_BUILDS_`, `MCP_BRIDGE_` | `cyfr-locus/v1`, `cyfr-bridge/v1` | — | `[Locus…]`, `[mcp-bridge]` |
+| keeper | the role of the privileged companion binary that starts Opus's runners and Locus's builds and backends under uids of their own | `apps/keeper` | `cyfr-keeper`, the entrypoint of the `cyfr-opus`, `cyfr-locus` and `mcp-bridge` images | `KEEPER_` | — | — | `[cyfr-keeper]` |
+| provider | the implementation of a tool's operations, `<Name>.Provider` or `<Name>.Providers.<Tool>`; its service label is its part's name | — | — | — | — | — | — |
+| facade | a part's own module, the one entry the parts above it call | — | — | — | — | — | — |
+| port | one of five behaviours a lower part declares and a higher one implements, installed at boot; `Sanctum.Grimoire` is consent's view of the operation table, and `Grimoire` is the table | — | — | — | — | — | — |
+| plane | the kind of caller an operation is admitted for: an external caller, or a call inside a running chain | — | — | — | — | — | — |
+| actor | the tenant and identity a call carries | — | — | — | — | — | — |
+| lease | a control-plane member's database-held claim to its slot | — | — | — | — | — | — |
+| fence | the number that refuses a write from an owner that has been replaced | — | — | — | — | — | — |
+| attempt | one try at running an execution on a worker service | — | — | — | — | — | — |
+| backend | one stdio process of an external MCP server, run by the bridge | — | — | — | — | — | — |
+| cell | several control-plane members sharing one database | — | — | — | — | — | — |
+
+Every setting of the control plane is a `CYFR_` variable; a part named with a prefix of its own beneath it owns those settings. `HostAPI` and `WorkerAPI` are protocol names, and `CYFR_HOST_API_` serves the first.
 
 ## Documentation
 

@@ -24,7 +24,7 @@ import re
 import secrets
 import time
 
-PREFIX = "cyfr-worker/v1"
+PREFIX = "cyfr-opus/v1"
 ATTEMPT_FIELDS = ("athanor_id", "execution_id", "attempt", "fence", "generation", "service")
 CALL_FIELDS = ATTEMPT_FIELDS + ("boot", "runner", "member", "ts", "nonce")
 DISPATCH_FIELDS = ("service", "boot", "ts", "nonce")

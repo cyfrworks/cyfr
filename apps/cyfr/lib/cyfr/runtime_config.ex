@@ -26,7 +26,7 @@ defmodule Cyfr.RuntimeConfig do
 
   @type getenv :: (String.t() -> String.t() | nil)
 
-  # The worker vocabulary `CYFR_WORKERS` and the host API listener take
+  # The worker vocabulary `CYFR_OPUS_WORKERS` and the host API listener take
   # their defaults from: a local Opus service, reached and reaching back
   # over loopback.
   @default_workers "wrk_local=http://127.0.0.1:4200"
@@ -419,7 +419,7 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve the worker services runs are dispatched to from `CYFR_WORKERS`:
+  Resolve the worker services runs are dispatched to from `CYFR_OPUS_WORKERS`:
   comma-separated `<service_id>=<url>` entries, default
   `wrk_local=http://127.0.0.1:4200`. A service id is `wrk_` followed by 1
   to 64 letters, digits, `_` or `-`, the id its key derives over
@@ -431,7 +431,7 @@ defmodule Cyfr.RuntimeConfig do
   @spec resolve_workers(getenv) :: {:ok, [Prima.WorkerAPI.endpoint()]} | {:error, String.t()}
   def resolve_workers(getenv) when is_function(getenv, 1) do
     entries =
-      (blank_to_nil(getenv.("CYFR_WORKERS")) || @default_workers)
+      (blank_to_nil(getenv.("CYFR_OPUS_WORKERS")) || @default_workers)
       |> String.split(",")
       |> Enum.map(&String.trim/1)
       |> Enum.reject(&(&1 == ""))
@@ -440,13 +440,13 @@ defmodule Cyfr.RuntimeConfig do
       case worker_entry(entry) do
         {:ok, %{id: id} = endpoint} ->
           if Enum.any?(acc, &(&1.id == id)),
-            do: {:halt, {:error, "CYFR_WORKERS names the service #{inspect(id)} twice."}},
+            do: {:halt, {:error, "CYFR_OPUS_WORKERS names the service #{inspect(id)} twice."}},
             else: {:cont, {:ok, acc ++ [endpoint]}}
 
         :error ->
           {:halt,
            {:error,
-            "CYFR_WORKERS entry #{inspect(entry)} is not <service_id>=<url>: a service id " <>
+            "CYFR_OPUS_WORKERS entry #{inspect(entry)} is not <service_id>=<url>: a service id " <>
               "is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, and a URL is " <>
               "http or https with a host and no path."}}
       end
@@ -624,21 +624,21 @@ defmodule Cyfr.RuntimeConfig do
 
   @doc """
   Resolve the worker watch's bounds (`Crucible.WorkerWatch`):
-  `CYFR_WORKER_WATCH_POLL_MS`, the interval between its status polls of
+  `CYFR_OPUS_WATCH_POLL_MS`, the interval between its status polls of
   each worker service, a whole number of milliseconds from 1000 to 60000
-  (default 5000), and `CYFR_WORKER_WATCH_MISSES`, the misses in a row
+  (default 5000), and `CYFR_OPUS_WATCH_MISSES`, the misses in a row
   after which the boot last heard from has its running attempts lapsed,
   from 1 to 100 (default 3). Answers the keyword `config :cyfr,
-  :worker_watch` takes with only the set bounds, so the code's defaults
+  :opus_watch` takes with only the set bounds, so the code's defaults
   stand for the rest; a set value outside its range, or not a whole
   number, is an error naming it.
   """
-  @spec resolve_worker_watch(getenv) :: {:ok, keyword()} | {:error, String.t()}
-  def resolve_worker_watch(getenv) when is_function(getenv, 1) do
+  @spec resolve_opus_watch(getenv) :: {:ok, keyword()} | {:error, String.t()}
+  def resolve_opus_watch(getenv) when is_function(getenv, 1) do
     with {:ok, poll_ms} <-
-           Prima.EnvValue.milliseconds(getenv, "CYFR_WORKER_WATCH_POLL_MS", 1_000..60_000),
+           Prima.EnvValue.milliseconds(getenv, "CYFR_OPUS_WATCH_POLL_MS", 1_000..60_000),
          {:ok, misses} <-
-           Prima.EnvValue.whole_number(getenv, "CYFR_WORKER_WATCH_MISSES", 1..100, "misses") do
+           Prima.EnvValue.whole_number(getenv, "CYFR_OPUS_WATCH_MISSES", 1..100, "misses") do
       {:ok,
        Enum.reject([poll_ms: poll_ms, misses: misses], fn {_key, value} -> is_nil(value) end)}
     end

@@ -39,21 +39,22 @@ defmodule Opus.SettingsTest do
     end
 
     test "the keeper follows the environment when unset, and is what the configuration names when set" do
-      assert {:ok, %{keeper: :spawn}} = Settings.pool([], %{"CYFR_SPAWN_CHANNEL" => "socket:[1]"})
-      assert {:ok, %{keeper: :direct}} = Settings.pool([], %{"CYFR_SPAWN_CHANNEL" => ""})
+      assert {:ok, %{keeper: :channel}} = Settings.pool([], %{"KEEPER_CHANNEL" => "socket:[1]"})
+      assert {:ok, %{keeper: :direct}} = Settings.pool([], %{"KEEPER_CHANNEL" => ""})
 
       assert {:ok, %{keeper: :direct}} =
-               Settings.pool([keeper: :direct], %{"CYFR_SPAWN_CHANNEL" => "socket:[1]"})
+               Settings.pool([keeper: :direct], %{"KEEPER_CHANNEL" => "socket:[1]"})
 
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :remote], %{})
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :local], %{})
-      assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: "spawn"], %{})
+      assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: "channel"], %{})
+      assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :spawn], %{})
     end
 
     # A subtree runs in a runner's VM of its own in every build, the test
     # build included: there is no keeper that runs one in the service's.
-    test "the keepers are spawn and direct, in every build" do
-      assert Settings.keepers() == [:spawn, :direct]
+    test "the keepers are channel and direct, in every build" do
+      assert Settings.keepers() == [:channel, :direct]
     end
 
     test "a bound that is not a positive integer refuses, naming its key" do

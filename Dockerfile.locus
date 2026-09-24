@@ -7,7 +7,7 @@
 # the build wire (Prima.BuilderProtocol): sources arrive in a signed
 # request, artifacts leave in its answer.
 #
-# Process model: cyfr-spawn runs as root holding only SETUID, SETGID and
+# Process model: cyfr-keeper runs as root holding only SETUID, SETGID and
 # KILL (it refuses to start with any other capability), starts the locus
 # release as cyfr-builder, and runs every build under a pooled uid of its
 # own (cyfr-build01…cyfr-build16) with a 0700 home under
@@ -15,23 +15,23 @@
 # (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB unless set). When a build ends every
 # process of its uid is killed and everything the uid left is removed
 # before another build gets it; the locus release refuses to serve builds
-# without cyfr-spawn.
+# without cyfr-keeper.
 #
-# The memory bound is a cgroup v2 group cyfr-spawn makes for each build, so
+# The memory bound is a cgroup v2 group cyfr-keeper makes for each build, so
 # the container must be started with the security option
 # `writable-cgroups=true` (Docker Engine 28 or later on a cgroup v2 host).
-# It adds no capability. Without it cyfr-spawn cannot bound a build and
+# It adds no capability. Without it cyfr-keeper cannot bound a build and
 # refuses every one: the service answers each build `unavailable`, naming
 # the option, and none runs unbounded.
 
-# ---- cyfr-spawn, the process helper: a static Go binary, pinned to the Go
-# release apps/spawn/go.mod names ----
-FROM golang:1.26.6-alpine AS spawn
+# ---- cyfr-keeper, the process helper: a static Go binary, pinned to the Go
+# release apps/keeper/go.mod names ----
+FROM golang:1.26.6-alpine AS keeper
 WORKDIR /src
-COPY apps/spawn/go.mod apps/spawn/go.sum ./
+COPY apps/keeper/go.mod apps/keeper/go.sum ./
 RUN go mod download
-COPY apps/spawn/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-spawn .
+COPY apps/keeper/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-keeper .
 
 # ---- Stage 1: release build ----
 FROM hexpm/elixir:1.20.3-erlang-29.0.5-debian-bookworm-20260824 AS relbuilder
@@ -140,7 +140,7 @@ RUN ARCH=$(dpkg --print-architecture) \
 
 # The toolchains stay root-owned: a build reads them and writes only its
 # own home, so no build can alter what the next one compiles with. A build
-# runs with cyfr-spawn's fixed PATH, so the Rust toolchain's commands are
+# runs with cyfr-keeper's fixed PATH, so the Rust toolchain's commands are
 # linked into /usr/local/bin.
 RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 
@@ -164,7 +164,7 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 
 WORKDIR /app
 
-COPY --from=spawn /out/cyfr-spawn /usr/local/bin/cyfr-spawn
+COPY --from=keeper /out/cyfr-keeper /usr/local/bin/cyfr-keeper
 COPY --from=relbuilder /app/_build/prod/rel/locus ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
@@ -208,4 +208,4 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
 # `security_opt: [no-new-privileges, writable-cgroups=true]`, a read-only
 # root, `ipc: none` and the homes and /run/cyfr-builder tmpfs mounts
 # (docker-compose.yml's locus-builds service).
-ENTRYPOINT ["cyfr-spawn", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/cyfr-builder/homes", "--client-user", "cyfr-builder", "--", "/app/bin/locus", "start"]
+ENTRYPOINT ["cyfr-keeper", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/cyfr-builder/homes", "--client-user", "cyfr-builder", "--", "/app/bin/locus", "start"]

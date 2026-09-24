@@ -41,7 +41,7 @@ defmodule Cyfr.EgressInventoryTest do
     # Guest streaming HTTP — `into: :self` with an append-time byte budget.
     "apps/opus/lib/opus/http_stream_handler.ex" => :guest_stream,
     # The worker wire, CYFR's side: `Prima.WorkerAPI` requests to the
-    # operator-configured worker services (CYFR_WORKERS), signed with each
+    # operator-configured worker services (CYFR_OPUS_WORKERS), signed with each
     # service's dispatch key, bounded answers (`Prima.WorkerWire`).
     "apps/cyfr/lib/crucible/worker_client.ex" => :worker_client,
     # The worker wire, Opus's side: a runner's host calls and the service's

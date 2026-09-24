@@ -190,10 +190,10 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     refute src =~ ~S|opus_bound.("OPUS_RUNNER_MEMORY_BYTES"|
 
     assert src =~ ~S|Opus.Settings.pool(opus_pool, System.get_env())|
-    assert src =~ ~S|Cyfr.RuntimeConfig.resolve_worker_watch(getenv)|
+    assert src =~ ~S|Cyfr.RuntimeConfig.resolve_opus_watch(getenv)|
 
-    assert src =~ ~S|names no keeper; use spawn or direct|,
-           "OPUS_KEEPER must name spawn or direct, or refuse the boot"
+    assert src =~ ~S|names no keeper; use channel or direct|,
+           "OPUS_KEEPER must name channel or direct, or refuse the boot"
 
     refute src =~ ~S|"local" ->|, "OPUS_KEEPER names two keepers, and local is neither"
   end

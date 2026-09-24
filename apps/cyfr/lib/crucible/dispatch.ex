@@ -6,7 +6,7 @@ defmodule Crucible.Dispatch do
   Runs an execution on a worker service, and stops one.
 
   `run/4` dispatches to the first worker service in
-  `config :cyfr, :workers` (each a `t:Prima.WorkerAPI.endpoint/0`, reached
+  `config :cyfr, :opus_workers` (each a `t:Prima.WorkerAPI.endpoint/0`, reached
   through `Crucible.WorkerClient`) whose status answers its
   configured id: the status `Crucible.WorkerWatch` heard from it
   within the last poll interval (`Crucible.WorkerWatch.fresh_boot/2`),
@@ -273,7 +273,7 @@ defmodule Crucible.Dispatch do
 
   @doc """
   The worker service runs are dispatched to: the first entry of
-  `config :cyfr, :workers` (a `t:Prima.WorkerAPI.endpoint/0`, whose
+  `config :cyfr, :opus_workers` (a `t:Prima.WorkerAPI.endpoint/0`, whose
   `components` list names the name-level references it alone runs, or is
   nil) whose status answers its configured id, with the boot that status
   names; an entry that does not answer, or answers as another service, is
@@ -299,7 +299,7 @@ defmodule Crucible.Dispatch do
 
   defp select(runs?) do
     :cyfr
-    |> Application.get_env(:workers, [])
+    |> Application.get_env(:opus_workers, [])
     |> Enum.find_value({:error, :execution_unavailable}, fn
       %{id: id, url: url} = entry when is_binary(id) and is_binary(url) ->
         if runs?.(entry), do: answering(entry)
@@ -380,7 +380,7 @@ defmodule Crucible.Dispatch do
   # worker service may have started it.
   defp start(admitted, endpoint, input) do
     with {:signed, {:ok, issued}} <- {:signed, Assignments.issue(admitted.assignment)},
-         {:ok, worker_key} <- Keys.worker_key(admitted.assignment.service),
+         {:ok, worker_key} <- Keys.opus_key(admitted.assignment.service),
          {:ok, sealed} <-
            WorkerAuth.seal_attempt_keys(
              WorkerAuth.dispatch_seal_key(worker_key),

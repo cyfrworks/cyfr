@@ -7,7 +7,7 @@ defmodule Opus.Keeper do
   processes its runners are, behind one behaviour with two
   implementations chosen by `config :opus, :keeper` (`Opus.Settings`):
 
-    * `Opus.Keeper.Spawn` — the client of `cyfr-spawn` (`apps/spawn`),
+    * `Opus.Keeper.Channel` — the client of `cyfr-keeper` (`apps/keeper`),
       the keeper the image starts the service under: each runner is
       spawned in the keeper's `runner` uid pool with an explicit
       environment, and its control channel (`Prima.RunnerControl`) is the
@@ -34,7 +34,7 @@ defmodule Opus.Keeper do
   runner runs under, nil for a keeper that applies none.
 
   The keeper's own process, one per pool (`c:child_spec/1`), holds the
-  keeper channel and the attach listener (Spawn) or watches the runners'
+  keeper channel and the attach listener (Channel) or watches the runners'
   owners and reaps a runner whose owner is gone (Direct); the pool
   starts it as a sibling and is restarted with it.
   """
@@ -99,8 +99,8 @@ defmodule Opus.Keeper do
               | :unknown
 
   @doc "The module for the keeper `config :opus, :keeper` names."
-  @spec module(:spawn | :direct) :: module()
-  def module(:spawn), do: Opus.Keeper.Spawn
+  @spec module(:channel | :direct) :: module()
+  def module(:channel), do: Opus.Keeper.Channel
   def module(:direct), do: Opus.Keeper.Direct
 
   @doc "`keeper.available/2` under the process environment, raising with the reason when it refuses."

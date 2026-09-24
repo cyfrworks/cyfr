@@ -3,7 +3,7 @@
 
 defmodule Crucible.KeysTest do
   @moduledoc """
-  The worker root is the configured `:worker_key` when one is set, and 32
+  The worker root is the configured `:opus_key` when one is set, and 32
   random bytes of this boot's own otherwise; every key CYFR issues derives
   from it. Keys are issued under the control plane's generation, `1` for a
   boot that claims none, and under no generation when the control plane
@@ -17,15 +17,15 @@ defmodule Crucible.KeysTest do
 
   setup do
     previous = Keys.root()
-    configured = Application.get_env(:cyfr, :worker_key)
+    configured = Application.get_env(:cyfr, :opus_key)
 
     on_exit(fn ->
-      Application.put_env(:cyfr, :worker_key, previous)
+      Application.put_env(:cyfr, :opus_key, previous)
       Keys.mint()
 
       if configured,
-        do: Application.put_env(:cyfr, :worker_key, configured),
-        else: Application.delete_env(:cyfr, :worker_key)
+        do: Application.put_env(:cyfr, :opus_key, configured),
+        else: Application.delete_env(:cyfr, :opus_key)
     end)
 
     :ok
@@ -33,12 +33,12 @@ defmodule Crucible.KeysTest do
 
   test "a configured worker key is the root every key derives from" do
     root = :crypto.strong_rand_bytes(32)
-    Application.put_env(:cyfr, :worker_key, root)
+    Application.put_env(:cyfr, :opus_key, root)
 
     assert Keys.mint() == root
     assert Keys.root() == root
     assert Keys.assign_key() == WorkerAuth.assign_key(root)
-    assert Keys.worker_key("wrk_1") == WorkerAuth.worker_key(root, "wrk_1")
+    assert Keys.opus_key("wrk_1") == WorkerAuth.worker_key(root, "wrk_1")
   end
 
   test "the generation is the claim's, 1 without a claim, and refused when it is unknown" do
@@ -67,7 +67,7 @@ defmodule Crucible.KeysTest do
   end
 
   test "without one, each boot mints a root of its own" do
-    Application.delete_env(:cyfr, :worker_key)
+    Application.delete_env(:cyfr, :opus_key)
 
     first = Keys.mint()
     second = Keys.mint()

@@ -305,8 +305,8 @@ defmodule Cyfr.Application do
   defp boot_work_enabled?, do: Application.get_env(:cyfr, :provisioning_boot_enabled, true)
 
   # The execution slots: one `Prima.Slots` instance, keyed by athanor, on
-  # the caps the operator configured (`CYFR_MAX_CONCURRENT_EXECUTIONS`,
-  # `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT`), else the shipped ones.
+  # the caps the operator configured (`CYFR_CRUCIBLE_MAX_CONCURRENT`,
+  # `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT`), else the shipped ones.
   # The ratio warning is said once here, at boot, where an operator can
   # act on it.
   defp execution_slots do
@@ -325,10 +325,10 @@ defmodule Cyfr.Application do
   # athanor may hold.
   @spec execution_slot_caps() :: {pos_integer(), pos_integer()}
   def execution_slot_caps do
-    {Application.get_env(:cyfr, :max_concurrent_executions, Prima.Slots.default_max()),
+    {Application.get_env(:cyfr, :crucible_max_concurrent, Prima.Slots.default_max()),
      Application.get_env(
        :cyfr,
-       :max_concurrent_executions_per_tenant,
+       :crucible_max_concurrent_per_tenant,
        Prima.Slots.default_key_max()
      )}
   end
@@ -350,8 +350,8 @@ defmodule Cyfr.Application do
          "#{key_max} roots x depth #{Prima.Authority.depth_cap()} = #{footprint} >= " <>
          "#{max} slots. Children are exempt from the per-athanor cap by design (a chain " <>
          "must be able to finish), so the cap bounds roots, not footprint. Lower " <>
-         "CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT or raise " <>
-         "CYFR_MAX_CONCURRENT_EXECUTIONS to keep one athanor off the whole pool."}
+         "CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT or raise " <>
+         "CYFR_CRUCIBLE_MAX_CONCURRENT to keep one athanor off the whole pool."}
     else
       :ok
     end

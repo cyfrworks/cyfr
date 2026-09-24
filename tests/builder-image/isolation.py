@@ -3,9 +3,9 @@
 # Copyright 2026 CYFR Works Inc.
 """The builder image isolates its builds, run as docker-compose.yml's locus-builds service.
 
-- cyfr-spawn holds exactly SETUID, SETGID and KILL; the release runs as
+- cyfr-keeper holds exactly SETUID, SETGID and KILL; the release runs as
   cyfr-builder with no capability and no Erlang distribution listener; the
-  release refuses to serve builds when started without cyfr-spawn, and to
+  release refuses to serve builds when started without cyfr-keeper, and to
   start at all with a control-plane variable in its environment.
 - A build runs under a pooled uid, alone in its group, in a 0700 home,
   with none of the release's environment; it cannot read the release's
@@ -139,10 +139,10 @@ def fields(text):
 
 def test_process_model(stack, image):
     procs = stack.processes()
-    spawner = [p for p in procs if p["cmd"].startswith("cyfr-spawn serve")]
+    spawner = [p for p in procs if p["cmd"].startswith("cyfr-keeper serve")]
     release = [p for p in procs if "beam.smp" in p["cmd"]]
     expect(len(spawner) == 1 and spawner[0]["uids"] == [0, 0, 0, 0] and spawner[0]["cap_eff"] == SPAWNER_CAPS,
-           "cyfr-spawn runs as root holding exactly SETUID, SETGID and KILL", procs)
+           "cyfr-keeper runs as root holding exactly SETUID, SETGID and KILL", procs)
     expect(len(release) == 1 and release[0]["uids"] == [RELEASE_UID] * 4 and release[0]["cap_eff"] == "0000000000000000",
            "the release runs as cyfr-builder with no capability", procs)
     expect(not any("epmd" in p["cmd"] for p in procs) and "-sname" not in release[0]["cmd"] and " -name " not in release[0]["cmd"],
@@ -158,8 +158,8 @@ def test_process_model(stack, image):
                    "-e", f"LOCUS_BUILDS_KEY={stack.key}", *env, "--entrypoint", RELEASE_BIN, image, "start", check=False, timeout=120)
 
     refused = start_alone("alone")
-    expect(refused.returncode != 0 and "runs a build only through cyfr-spawn" in refused.stdout + refused.stderr,
-           "the release refuses to serve builds when started without cyfr-spawn", refused.stdout + refused.stderr)
+    expect(refused.returncode != 0 and "runs a build only through cyfr-keeper" in refused.stdout + refused.stderr,
+           "the release refuses to serve builds when started without cyfr-keeper", refused.stdout + refused.stderr)
     refused = start_alone("keyring", "-e", "CYFR_CRYPTO_KEYRING=not-a-builders")
     expect(refused.returncode != 0 and "must not see CYFR_CRYPTO_KEYRING" in refused.stdout + refused.stderr
            and "not-a-builders" not in refused.stdout + refused.stderr,

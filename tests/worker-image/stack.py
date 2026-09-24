@@ -6,7 +6,7 @@ A Stack runs docker-compose.yml's `opus` service layered with
 compose.worker.yml, which adds only the image under test, a loopback port,
 the host gateway the scripted control plane (control_plane.py, on this
 machine) is reached through and the pool settings a test chooses.
-Everything else — cyfr-spawn's capabilities, the security options, the
+Everything else — cyfr-keeper's capabilities, the security options, the
 read-only root, `ipc: none`, the tmpfs mounts, the limits, the restart
 policy — is the shipped service. A Stack made with
 `writable_cgroups=False` also layers compose.no-writable-cgroups.yml, as a

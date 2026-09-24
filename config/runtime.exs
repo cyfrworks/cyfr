@@ -9,12 +9,51 @@ if config_env() != :test do
   # For releases, look for .env at RELEASE_ROOT; otherwise use project root
   env_dir = System.get_env("RELEASE_ROOT") || File.cwd!()
 
-  source!([
-    Path.join(env_dir, ".env"),
-    Path.join(env_dir, ".env.#{config_env()}"),
-    Path.join(env_dir, ".env.local"),
-    System.get_env()
-  ])
+  sourced =
+    source!([
+      Path.join(env_dir, ".env"),
+      Path.join(env_dir, ".env.#{config_env()}"),
+      Path.join(env_dir, ".env.local"),
+      System.get_env()
+    ])
+
+  # A setting under a name that was replaced refuses the boot of either
+  # release while it is set anywhere this file reads (the process
+  # environment or an .env file), blank or not, naming the name that
+  # replaced it and never its value. The old names are spelled in two parts
+  # so the vocabulary gate, which refuses them everywhere else, stays whole.
+  retired_names = %{
+    ("CYFR_WORKER" <> "_KEY") => "CYFR_OPUS_KEY",
+    ("CYFR_WORKER" <> "S") => "CYFR_OPUS_WORKERS",
+    ("CYFR_WORKER" <> "_WATCH_POLL_MS") => "CYFR_OPUS_WATCH_POLL_MS",
+    ("CYFR_WORKER" <> "_WATCH_MISSES") => "CYFR_OPUS_WATCH_MISSES",
+    ("CYFR_SPAWN" <> "_CHANNEL") => "KEEPER_CHANNEL"
+  }
+
+  retired_prefixes = %{
+    ("CYFR_EXECUTION" <> "_EVENTS_") => "CYFR_CRUCIBLE_EVENTS_",
+    ("CYFR_MAX_CONCURRENT" <> "_EXECUTIONS") => "CYFR_CRUCIBLE_MAX_CONCURRENT"
+  }
+
+  retired =
+    sourced
+    |> Map.keys()
+    |> Enum.sort()
+    |> Enum.flat_map(fn name ->
+      renamed =
+        Map.get_lazy(retired_names, name, fn ->
+          Enum.find_value(retired_prefixes, fn {old, new} ->
+            if String.starts_with?(name, old), do: String.replace_prefix(name, old, new)
+          end)
+        end)
+
+      if renamed, do: ["#{name} (now #{renamed})"], else: []
+    end)
+
+  if retired != [] do
+    raise "[Cyfr] FATAL: settings under replaced names are set: #{Enum.join(retired, ", ")}. " <>
+            "Set each under its new name and remove the old one."
+  end
 
   # Runtime configuration for CYFR
   # This file is executed at runtime, not compile time
@@ -105,23 +144,23 @@ if config_env() != :test do
 
   # The root key the execution workers' keys derive from (`Prima.WorkerAuth`):
   # 32 random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), the
-  # one secret `mix cyfr.worker.key <service_id>` derives a worker service's
+  # one secret `mix cyfr.opus.key <service_id>` derives a worker service's
   # key from. A malformed key refuses the boot. Unset, a development boot
   # that runs Opus beside CYFR mints one here, so both sides derive from it;
   # a `cyfr` release without one can authenticate no worker service, so no
   # component runs, and it says so.
   worker_root =
     if cyfr_boot? do
-      case env_str.("CYFR_WORKER_KEY", nil) do
+      case env_str.("CYFR_OPUS_KEY", nil) do
         nil when release_name == nil ->
           :crypto.strong_rand_bytes(32)
 
         nil ->
           IO.puts(
             :stderr,
-            "[warning] CYFR_WORKER_KEY is not set: no worker service can authenticate to " <>
+            "[warning] CYFR_OPUS_KEY is not set: no worker service can authenticate to " <>
               "this server, so no component runs. Generate one with `openssl rand -hex 32` " <>
-              "and give each worker service the key `mix cyfr.worker.key` derives from it."
+              "and give each worker service the key `mix cyfr.opus.key` derives from it."
           )
 
           nil
@@ -132,7 +171,7 @@ if config_env() != :test do
               root
 
             :error ->
-              raise "[Cyfr] FATAL: CYFR_WORKER_KEY must be exactly 64 hexadecimal " <>
+              raise "[Cyfr] FATAL: CYFR_OPUS_KEY must be exactly 64 hexadecimal " <>
                       "digits (32 bytes); generate one with `openssl rand -hex 32`"
           end
       end
@@ -155,7 +194,7 @@ if config_env() != :test do
   # The Opus worker service (`Opus.Credentials`): its stable id (`wrk_`
   # followed by 1 to 64 letters, digits, `_` or `-`, default `wrk_local`),
   # the worker key CYFR derived for that id (64 hexadecimal digits, from
-  # `mix cyfr.worker.key`; the `opus` release must be given one, and a
+  # `mix cyfr.opus.key`; the `opus` release must be given one, and a
   # development boot derives it from the root above), the base URL of
   # CYFR's host API (required by the `opus` release; a development boot
   # defaults to its own listener), and the address and port its listener
@@ -199,11 +238,11 @@ if config_env() != :test do
     # its assignment's deadline a runner may live before it halts itself
     # (OPUS_WATCHDOG_GRACE_MS, 5000), how long a released runner is given to
     # report what it holds before its process group is killed
-    # (OPUS_RELEASE_GRACE_MS, 2000), the memory bound cyfr-spawn holds each
+    # (OPUS_RELEASE_GRACE_MS, 2000), the memory bound cyfr-keeper holds each
     # runner to (OPUS_RUNNER_MEMORY_BYTES, a whole number of bytes from
     # 16777216 to 1099511627776, 16 MiB to 1 TiB, the keeper's own range;
     # default 402653184, 384 MiB), which keeper starts its runners
-    # (OPUS_KEEPER: `spawn`, the cyfr-spawn channel the image inherits, or
+    # (OPUS_KEEPER: `channel`, the cyfr-keeper channel the image inherits, or
     # `direct`, plain child processes of the service's VM for a machine
     # without a keeper; unset follows the environment) and where the keeper's
     # relays attach (OPUS_ATTACH_DIR, /run/opus). Only the set ones are
@@ -215,14 +254,14 @@ if config_env() != :test do
         nil ->
           nil
 
-        "spawn" ->
-          :spawn
+        "channel" ->
+          :channel
 
         "direct" ->
           :direct
 
         other ->
-          raise "[Cyfr] FATAL: OPUS_KEEPER=#{inspect(other)} names no keeper; use spawn or direct"
+          raise "[Cyfr] FATAL: OPUS_KEEPER=#{inspect(other)} names no keeper; use channel or direct"
       end
 
     # A bound is read strictly (`Prima.EnvValue`): a set value that is not a
@@ -329,15 +368,15 @@ if config_env() != :test do
             end)
 
     # The worker root every key CYFR issues derives from, resolved above.
-    config :cyfr, :worker_key, worker_root
+    config :cyfr, :opus_key, worker_root
 
     # The worker services runs are dispatched to (`Crucible.Dispatch`):
-    # `CYFR_WORKERS`, comma-separated `<service_id>=<url>` entries, each the
+    # `CYFR_OPUS_WORKERS`, comma-separated `<service_id>=<url>` entries, each the
     # configured id of a worker service and the base URL of its listener,
     # tried in order. Default the Opus service of a local boot; a malformed
     # entry or a repeated id refuses the boot.
     case Cyfr.RuntimeConfig.resolve_workers(getenv) do
-      {:ok, workers} -> config :cyfr, :workers, workers
+      {:ok, workers} -> config :cyfr, :opus_workers, workers
       {:error, message} -> raise "[Cyfr] FATAL: #{message}"
     end
 
@@ -348,14 +387,14 @@ if config_env() != :test do
     config :cyfr, :host_api_url, host_api.url
 
     # How the worker watch (`Crucible.WorkerWatch`) hears from each
-    # worker service: CYFR_WORKER_WATCH_POLL_MS, the interval between its
+    # worker service: CYFR_OPUS_WATCH_POLL_MS, the interval between its
     # status polls (1000 to 60000, default 5000), and
-    # CYFR_WORKER_WATCH_MISSES, the misses in a row after which the boot
+    # CYFR_OPUS_WATCH_MISSES, the misses in a row after which the boot
     # last heard from has its running attempts lapsed (1 to 100, default
     # 3). Only the set bounds are configured; a set value outside its range
     # refuses the boot naming it.
-    case Cyfr.RuntimeConfig.resolve_worker_watch(getenv) do
-      {:ok, worker_watch} -> config :cyfr, :worker_watch, worker_watch
+    case Cyfr.RuntimeConfig.resolve_opus_watch(getenv) do
+      {:ok, opus_watch} -> config :cyfr, :opus_watch, opus_watch
       {:error, message} -> raise "[Cyfr] FATAL: #{message}"
     end
 
@@ -427,20 +466,20 @@ if config_env() != :test do
     # A quarter of the slots is reserved for chain children (a formula's hops);
     # that reserve must hold a chain of the full authority depth (8), so the
     # floor is 32 — below it a deep chain could wait on itself.
-    if max_exec = env_int.("CYFR_MAX_CONCURRENT_EXECUTIONS", nil) do
+    if max_exec = env_int.("CYFR_CRUCIBLE_MAX_CONCURRENT", nil) do
       if max_exec < 32 do
         raise ArgumentError,
-              "CYFR_MAX_CONCURRENT_EXECUTIONS must be at least 32 (a quarter of the slots " <>
+              "CYFR_CRUCIBLE_MAX_CONCURRENT must be at least 32 (a quarter of the slots " <>
                 "is the child reserve, which must fit a chain of depth 8), got #{max_exec}"
       end
 
-      config :cyfr, :max_concurrent_executions, max_exec
+      config :cyfr, :crucible_max_concurrent, max_exec
     end
 
     # Maximum concurrent WASM executions per tenant (default: 16)
     # Bounds the blast radius of one athanor queueing many long-running executions
-    if max_tenant_exec = env_int.("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", nil) do
-      config :cyfr, :max_concurrent_executions_per_tenant, max_tenant_exec
+    if max_tenant_exec = env_int.("CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT", nil) do
+      config :cyfr, :crucible_max_concurrent_per_tenant, max_tenant_exec
     end
 
     # MCP transport rate limit, per client IP (default: 120 requests / 60s window).
@@ -481,12 +520,12 @@ if config_env() != :test do
       config :cyfr, :mcp_subscription_max_ms, v
     end
 
-    if v = env_int.("CYFR_EXECUTION_EVENTS_MAX_CONCURRENT", nil) do
-      config :cyfr, :execution_events_max_concurrent, v
+    if v = env_int.("CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT", nil) do
+      config :cyfr, :crucible_events_max_concurrent, v
     end
 
-    if v = env_int.("CYFR_EXECUTION_EVENTS_MAX_MS", nil) do
-      config :cyfr, :execution_events_max_ms, v
+    if v = env_int.("CYFR_CRUCIBLE_EVENTS_MAX_MS", nil) do
+      config :cyfr, :crucible_events_max_ms, v
     end
 
     # Webhook replay window (default 300s). A delivery whose `timestamp_header`

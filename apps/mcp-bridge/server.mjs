@@ -36,7 +36,7 @@
 // keys are derived, and owners, versions and leases arrive in messages.
 //
 // Backends are started only through the spawner (`createBridge({ spawner })`):
-// in the image that is cyfr-spawn, which starts this process with its channel
+// in the image that is cyfr-keeper, which starts this process with its channel
 // on fd 3 and runs each backend under a uid of its own with a 0700 home and
 // an environment built from nothing but the backend's own block
 // (spawn-client.mjs). The port is reachable from the compose network only.
@@ -623,7 +623,7 @@ export function createBridge({
 // Boot
 // ============================================================================
 
-// fd 3 is the spawner's channel only when cyfr-spawn started this process.
+// fd 3 is the spawner's channel only when cyfr-keeper started this process.
 function spawnerChannelPresent() {
   try {
     return fstatSync(SPAWNER_FD).isSocket();
@@ -655,7 +655,7 @@ async function main() {
   if (!spawnerChannelPresent()) {
     console.error(
       "[mcp-bridge] FATAL: fd 3 is not the spawner channel. Start the bridge through " +
-        "`cyfr-spawn serve … -- node server.mjs` (the image's entrypoint).",
+        "`cyfr-keeper serve … -- node server.mjs` (the image's entrypoint).",
     );
     process.exit(1);
   }

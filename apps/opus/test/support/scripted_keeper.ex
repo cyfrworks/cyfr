@@ -20,7 +20,7 @@ defmodule Opus.Test.ScriptedKeeper do
   ends the runner as `exit/2` does, after its grace, and is listed by
   `releases/1`. `kill!/1` ends the keeper as a lost channel would: every
   runner's owner hears `{:error, :channel_lost}`. `refuse/2` makes it
-  refuse every spawn after the request, as `cyfr-spawn` refuses one it
+  refuse every spawn after the request, as `cyfr-keeper` refuses one it
   cannot bound, until it is told to start runners again, and `refused/1`
   counts the spawns it refused. It holds a runner to the `:memory_bytes`
   of the pool's keeper options, or to none.
@@ -57,7 +57,7 @@ defmodule Opus.Test.ScriptedKeeper do
       {:ok, ref, runner} ->
         {:ok, %{ref: ref, keeper: keeper, runner: runner}, [{:spawned, nil}, :attached]}
 
-      # Refused after the request, as cyfr-spawn answers one it cannot
+      # Refused after the request, as cyfr-keeper answers one it cannot
       # bound: the handle hears it as the keeper's message.
       {:refused, ref, reason} ->
         Kernel.send(self(), {__MODULE__, ref, {:refused, reason}})

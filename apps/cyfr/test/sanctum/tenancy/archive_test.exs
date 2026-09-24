@@ -35,13 +35,13 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_path = Path.join(System.tmp_dir!(), "archive_#{System.unique_integer([:positive])}")
-    keys = [cyfr: :workers, arca: :base_path]
+    keys = [cyfr: :opus_workers, arca: :base_path]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
 
     Application.put_env(
       :cyfr,
-      :workers,
-      ScriptedWorker.workers(@reference, prev[{:cyfr, :workers}])
+      :opus_workers,
+      ScriptedWorker.workers(@reference, prev[{:cyfr, :opus_workers}])
     )
 
     Application.put_env(:arca, :base_path, test_path)

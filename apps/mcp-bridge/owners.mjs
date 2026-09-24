@@ -59,7 +59,10 @@ export const MAX_CRASHES = 5;
 // credential from the vault and is masked in everything returned.
 export const LITERAL_ENV_NAMES = new Set(["NODE_ENV", "LOG_LEVEL", "TZ", "LANG", "LC_ALL", "NO_COLOR", "DEBUG"]);
 const RESERVED_ENV_NAMES = new Set(["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD"]);
-const RESERVED_ENV_PREFIXES = ["CYFR_", "MCP_BRIDGE_"];
+// Prefixes no backend variable may carry: CYFR's, the bridge's and the
+// keeper's own. The list is the keeper's vectors' reserved_env_prefixes
+// (tests/fixtures/keeper_protocol.json), which CYFR and the keeper hold too.
+export const RESERVED_ENV_PREFIXES = ["CYFR_", "MCP_BRIDGE_", "KEEPER_"];
 
 const BACKEND_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;

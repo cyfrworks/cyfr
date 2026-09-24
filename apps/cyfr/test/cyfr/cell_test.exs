@@ -379,7 +379,7 @@ defmodule Cyfr.CellTest do
       cell_cookie: String.duplicate("c", 40),
       node_cookie: String.duplicate("c", 40),
       topologies: [cyfr: [strategy: Cluster.Strategy.Epmd, config: [hosts: [:a@h]]]],
-      worker_key: :crypto.strong_rand_bytes(32),
+      opus_key: :crypto.strong_rand_bytes(32),
       host_api_url: "http://member-1:4300"
     }
 
@@ -441,11 +441,11 @@ defmodule Cyfr.CellTest do
     end
 
     test "an unset or malformed worker root is refused, naming what a peer cannot verify" do
-      assert [message] = Cell.refusals(%{@cell_facts | worker_key: nil})
-      assert message =~ "CYFR_WORKER_KEY"
+      assert [message] = Cell.refusals(%{@cell_facts | opus_key: nil})
+      assert message =~ "CYFR_OPUS_KEY"
       assert message =~ "MAC verification"
 
-      assert [_short] = Cell.refusals(%{@cell_facts | worker_key: <<1, 2, 3>>})
+      assert [_short] = Cell.refusals(%{@cell_facts | opus_key: <<1, 2, 3>>})
     end
 
     test "a member with no address of its own is refused, naming what a worker falls back to" do
@@ -464,7 +464,7 @@ defmodule Cyfr.CellTest do
         cell_cookie: nil,
         node_cookie: nil,
         topologies: [],
-        worker_key: nil,
+        opus_key: nil,
         host_api_url: nil
       }
 

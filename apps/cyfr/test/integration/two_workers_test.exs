@@ -71,7 +71,7 @@ defmodule Cyfr.TwoWorkersTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "two_workers_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
 
@@ -149,8 +149,8 @@ defmodule Cyfr.TwoWorkersTest do
 
       # The keys differ, and each listener refuses a request under the
       # other's before reading it.
-      {:ok, local_key} = Keys.worker_key(@local)
-      {:ok, other_key} = Keys.worker_key(@other)
+      {:ok, local_key} = Keys.opus_key(@local)
+      {:ok, other_key} = Keys.opus_key(@other)
       refute local_key == other_key
 
       assert {401, %{"error" => "bad_mac"}} = status_request(OpusService.url(), @local, other_key)
@@ -312,8 +312,8 @@ defmodule Cyfr.TwoWorkersTest do
     test "an exit report signed with another key, for a boot that no longer runs or a runner holding nothing lapses nothing",
          %{ctx: ctx} do
       fixture = attached!(ctx)
-      {:ok, local_key} = Keys.worker_key(@local)
-      {:ok, other_key} = Keys.worker_key(@other)
+      {:ok, local_key} = Keys.opus_key(@local)
+      {:ok, other_key} = Keys.opus_key(@other)
       running = fn -> match?(%{status: "running"}, row(fixture.execution_id)) end
 
       # Another service's key, naming this one.

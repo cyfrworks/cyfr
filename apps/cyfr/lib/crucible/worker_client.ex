@@ -222,7 +222,7 @@ defmodule Crucible.WorkerClient do
   end
 
   defp dispatch_key(service) do
-    case Keys.worker_key(service) do
+    case Keys.opus_key(service) do
       {:ok, worker_key} -> {:ok, WorkerAuth.dispatch_key(worker_key)}
       {:error, _invalid} -> :error
     end

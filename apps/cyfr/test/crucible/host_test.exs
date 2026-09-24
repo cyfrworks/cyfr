@@ -605,7 +605,7 @@ defmodule Crucible.HostTest do
     end
 
     defp dispatch_key(service) do
-      {:ok, worker_key} = Keys.worker_key(service)
+      {:ok, worker_key} = Keys.opus_key(service)
       Prima.WorkerAuth.dispatch_key(worker_key)
     end
 

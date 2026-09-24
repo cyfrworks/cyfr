@@ -7,12 +7,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   MAX_NONCES,
   NONCE_WINDOW_MS,
   Owners,
+  RESERVED_ENV_PREFIXES,
   Refusal,
   compareVersions,
   mask,
@@ -21,7 +23,10 @@ import {
 } from "../owners.mjs";
 import { FakeSpawner } from "./fake-spawner.mjs";
 
-const CHILD = path.join(path.dirname(fileURLToPath(import.meta.url)), "fake-child.mjs");
+const DIR = path.dirname(fileURLToPath(import.meta.url));
+const CHILD = path.join(DIR, "fake-child.mjs");
+// The keeper's vectors, whose reserved_env_prefixes the keeper and CYFR hold too.
+const KEEPER = JSON.parse(readFileSync(path.join(DIR, "..", "..", "..", "tests", "fixtures", "keeper_protocol.json"), "utf8"));
 
 const refusal = (code) => (err) => err instanceof Refusal && err.code === code;
 
@@ -48,6 +53,18 @@ test("a backend definition is canonical once valid: env names sorted", () => {
     Array.from({ length: 17 }, (_, i) => ({ name: `b${i}`, command: "x", env_names: [] })),
   ]) {
     assert.throws(() => validateBackends(bad), refusal("bad_request"), JSON.stringify(bad).slice(0, 80));
+  }
+});
+
+test("the reserved variable prefixes are the keeper's vectors', and a backend naming one is refused", () => {
+  assert.ok(KEEPER.reserved_env_prefixes.length > 0);
+  assert.deepEqual(RESERVED_ENV_PREFIXES, KEEPER.reserved_env_prefixes);
+  for (const prefix of KEEPER.reserved_env_prefixes) {
+    assert.throws(
+      () => validateBackends([{ name: "fs", command: "x", env_names: [`${prefix}X`] }]),
+      refusal("bad_request"),
+      prefix,
+    );
   }
 });
 

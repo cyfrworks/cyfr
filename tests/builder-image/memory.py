@@ -3,18 +3,18 @@
 # Copyright 2026 CYFR Works Inc.
 """A build cannot take more memory than its bound, run as docker-compose.yml's builder service.
 
-cyfr-spawn bounds a spawn that asks for `memory_bytes` with a cgroup of its
-own (apps/spawn/internal/cgroup): the kernel never lets the spawn's whole
+cyfr-keeper bounds a spawn that asks for `memory_bytes` with a cgroup of its
+own (apps/keeper/internal/cgroup): the kernel never lets the spawn's whole
 process tree, the tmpfs pages of its home and the kernel memory charged to
 it pass the bound, kills every process of the spawn when they cannot stay
-under it, and cyfr-spawn reports that end as `memory_exceeded`. It can do
+under it, and cyfr-keeper reports that end as `memory_exceeded`. It can do
 so only where the service mounts the container's cgroup writable
 (`security_opt: writable-cgroups=true`); anywhere else it refuses a spawn
 that asks for a bound.
 
-`keeper` drives a second cyfr-spawn inside the running service, over its
+`keeper` drives a second cyfr-keeper inside the running service, over its
 own uids, with a client that speaks the spawner's protocol
-(tests/fixtures/spawn_protocol.json):
+(tests/fixtures/keeper_protocol.json):
 
 - a bound that is zero, not a number or above the maximum is refused, and a
   command runs under the least bound the protocol allows;
@@ -26,7 +26,7 @@ own uids, with a client that speaks the spawner's protocol
 - no group's peak, as the kernel accounts it, passed its bound; no process
   of their uids, no home and no group is left; the release and the
   container were not touched;
-- where the service gives cyfr-spawn no writable cgroup, every spawn that
+- where the service gives cyfr-keeper no writable cgroup, every spawn that
   asks for a bound is refused as `memory_unavailable` while one that asks
   for none runs, and this suite fails, naming the option the service lacks.
 
@@ -36,8 +36,8 @@ without end), `rust` (a build.rs doing so), `tree` (100 processes of
 64 MiB) and `home` (files until the home is full). Each must be answered
 with the build wire's `memory` class (`Prima.BuilderProtocol`), leave no
 process of its uid and no home, and leave its sibling, the release and the
-container as they were. The builder asks cyfr-spawn for a bound for every
-build (`Locus.Spawner`, LOCUS_BUILDS_MEMORY_BYTES); a build ended by the
+container as they were. The builder asks cyfr-keeper for a bound for every
+build (`Locus.Keeper`, LOCUS_BUILDS_MEMORY_BYTES); a build ended by the
 container's own limit or the deadline instead fails its case here.
 
 Every case prints what it measured: the peak of the hostile tree (the
@@ -70,7 +70,7 @@ from stack import HOME_ROOT, POOL_FIRST, POOL_LAST, RELEASE_UID, Stack, expect, 
 MIB = 1 << 20
 # A build nothing else ends is ended by this deadline.
 DEADLINE_MS = 60_000
-# The second cyfr-spawn's uids, one for each spawn of its scenario that
+# The second cyfr-keeper's uids, one for each spawn of its scenario that
 # runs: the last of the image's pool, which the service's own spawner is
 # started without.
 PROBE_FIRST, PROBE_LAST = POOL_LAST - 5, POOL_LAST
@@ -88,8 +88,8 @@ while :; do
     /^VmRSS:/ { if (uid >= first && uid <= last) rss[uid] += $2 }
     END { for (u in n) printf "%%s:%%d:%%d,", u, rss[u], n[u] }'
   groups=""
-  for d in /sys/fs/cgroup/spawn-*; do
-    peak="$(cat "$d/memory.peak" 2>/dev/null)" && groups="$groups${d##*spawn-}:$peak,"
+  for d in /sys/fs/cgroup/keeper-*; do
+    peak="$(cat "$d/memory.peak" 2>/dev/null)" && groups="$groups${d##*keeper-}:$peak,"
   done
   printf '|%%s|%%s|%%s\n' "$(cat /sys/fs/cgroup/memory.current)" "$(awk '$1 == "shmem" {print $2}' /sys/fs/cgroup/memory.stat)" "$groups"
   sleep 0.1
@@ -148,7 +148,7 @@ impl Guest for Hostile {
 }
 """
 
-# The keeper cases' client: cyfr-spawn starts it as the release's user with
+# The keeper cases' client: cyfr-keeper starts it as the release's user with
 # the channel on fd 3. It sends every spawn of the scenario, attaches their
 # relays, and prints what the spawner answered for each.
 CLIENT = r"""
@@ -361,13 +361,13 @@ def own_limit_writable(stack):
     result = stack.exec('v="$(cat /sys/fs/cgroup/memory.max)" && echo "$v" > /sys/fs/cgroup/memory.max')
     if result.returncode == 0:
         return ("writable from inside: this host mounts cgroup2 without nsdelegate, so uid 0 in the container "
-                "(cyfr-spawn and the container's init, nothing else) can rewrite the container's own limits")
+                "(cyfr-keeper and the container's init, nothing else) can rewrite the container's own limits")
     return "not writable from inside: " + (result.stderr.strip().rsplit(": ", 1)[-1] or "refused")
 
 
 def test_keeper(stack, limit, canary):
     user = stack.exec(f"getent passwd {RELEASE_UID} | cut -d: -f1").stdout.strip()
-    expect(user, "the release's user has a name cyfr-spawn can start a client under", user)
+    expect(user, "the release's user has a name cyfr-keeper can start a client under", user)
     with open(os.path.join(canary, "memory-client.mjs"), "w") as out:
         out.write(CLIENT)
     with open(os.path.join(canary, "memory-scenario.json"), "w") as out:
@@ -378,11 +378,11 @@ def test_keeper(stack, limit, canary):
     sampler = Sampler(stack.container)
     sampler.start()
     result = stack.exec(
-        f"exec cyfr-spawn serve --pool probe:{PROBE_FIRST}-{PROBE_LAST} --home-root {HOME_ROOT} --client-user {user} "
+        f"exec cyfr-keeper serve --pool probe:{PROBE_FIRST}-{PROBE_LAST} --home-root {HOME_ROOT} --client-user {user} "
         "-- node /canary/memory-client.mjs /canary/memory-scenario.json")
     time.sleep(1)
     sampler.stop()
-    expect("<<<" in result.stdout, "the second cyfr-spawn ran the scenario's client", result.stdout + result.stderr)
+    expect("<<<" in result.stdout, "the second cyfr-keeper ran the scenario's client", result.stdout + result.stderr)
     report = json.loads(result.stdout.split("<<<", 1)[1].rsplit(">>>", 1)[0])
     spawns = {spawn["name"]: spawn for spawn in report["spawns"]}
     after = container_state(stack)
@@ -418,8 +418,8 @@ def test_keeper(stack, limit, canary):
     refused = [name for name in bounded if reply(name, "error")]
     if refused:
         expect(all(reply(name, "error")["code"] == "memory_unavailable" and not reply(name, "spawned") for name in bounded),
-               "where it cannot enforce a bound, cyfr-spawn refuses every spawn that asks for one", spawns)
-        sys.exit("FAIL: the service gives cyfr-spawn no writable cgroup, so no build can be bounded: "
+               "where it cannot enforce a bound, cyfr-keeper refuses every spawn that asks for one", spawns)
+        sys.exit("FAIL: the service gives cyfr-keeper no writable cgroup, so no build can be bounded: "
                  "the service needs `security_opt: writable-cgroups=true` (Docker Engine 28 or later)\n" + result.stderr[-1500:])
 
     least = reply("the least bound", "exited")
@@ -444,7 +444,7 @@ def test_keeper(stack, limit, canary):
     left = stack.pool_processes()
     expect(left == [], "no process of any spawn's uid is left, the daemon included", left)
     expect(stack.homes() == [], "no home is left", stack.homes())
-    groups = stack.exec("ls -d /sys/fs/cgroup/spawn-* 2>/dev/null").stdout.split()
+    groups = stack.exec("ls -d /sys/fs/cgroup/keeper-* 2>/dev/null").stdout.split()
     expect(groups == [], "no spawn's cgroup is left", groups)
     expect(not again and after["release"] == before["release"] and after["release"],
            "the release and the container were not touched", {"before": before, "after": after})

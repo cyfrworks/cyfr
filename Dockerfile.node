@@ -5,18 +5,18 @@
 #   --target mcp-bridge  → runs the stdio MCP servers CYFR registers with
 #                          transport stdio and serves their tools over HTTP
 #                          MCP. Source under apps/mcp-bridge/, its process
-#                          helper under apps/spawn/.
+#                          helper under apps/keeper/.
 #
 # e.g.  docker build -f Dockerfile.node --target mcp-bridge -t cyfr-mcp-bridge .
 
-# cyfr-spawn, the bridge's process helper: a static Go binary. Pinned to the
-# Go release apps/spawn/go.mod names.
-FROM golang:1.26.6-alpine AS spawn
+# cyfr-keeper, the bridge's process helper: a static Go binary. Pinned to the
+# Go release apps/keeper/go.mod names.
+FROM golang:1.26.6-alpine AS keeper
 WORKDIR /src
-COPY apps/spawn/go.mod apps/spawn/go.sum ./
+COPY apps/keeper/go.mod apps/keeper/go.sum ./
 RUN go mod download
-COPY apps/spawn/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-spawn .
+COPY apps/keeper/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-keeper .
 
 # Pinned to the same Node LTS the builder image ships (Dockerfile.locus
 # NODE_VERSION) — `24-alpine` floated with every upstream release.
@@ -34,7 +34,7 @@ RUN apk --no-cache upgrade
 # server's process calls its own backends' tools, `<backend>__<tool>`, over
 # /mcp; both are signed under CYFR_MCP_BRIDGE_KEY. The bridge keeps no state.
 #
-# Process model: cyfr-spawn runs as root holding only SETUID, SETGID and
+# Process model: cyfr-keeper runs as root holding only SETUID, SETGID and
 # KILL (it refuses to start with any other capability), starts the bridge
 # as cyfr-bridge, and runs every child under a pooled uid of its own
 # (cyfr-b001…cyfr-b032) with a 0700 home under /var/lib/cyfr-bridge/homes.
@@ -59,7 +59,7 @@ WORKDIR /app
 COPY apps/mcp-bridge/package.json apps/mcp-bridge/package-lock.json ./
 RUN npm ci --omit=dev
 COPY apps/mcp-bridge/server.mjs apps/mcp-bridge/owners.mjs apps/mcp-bridge/auth.mjs apps/mcp-bridge/spawn-client.mjs ./
-COPY --from=spawn /out/cyfr-spawn /usr/local/bin/cyfr-spawn
+COPY --from=keeper /out/cyfr-keeper /usr/local/bin/cyfr-keeper
 # This image contains only Apache-2.0 components. Bundle the repo-level
 # license docs so operators can see the full CYFR product license boundary.
 COPY LICENSE FAIR_SOURCE.md /app/
@@ -70,4 +70,4 @@ EXPOSE 8001
 # `no-new-privileges`, a read-only root, `ipc: none`, the homes and attach
 # tmpfs mounts and CYFR_MCP_BRIDGE_KEY (docker-compose.yml's mcp-bridge
 # service).
-ENTRYPOINT ["cyfr-spawn", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/cyfr-bridge/homes", "--client-user", "cyfr-bridge", "--", "node", "server.mjs"]
+ENTRYPOINT ["cyfr-keeper", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/cyfr-bridge/homes", "--client-user", "cyfr-bridge", "--", "node", "server.mjs"]

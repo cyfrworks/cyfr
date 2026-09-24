@@ -54,7 +54,7 @@ defmodule Cyfr.SharedLimitsTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "shared_limits_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
 
@@ -441,8 +441,8 @@ defmodule Cyfr.SharedLimitsTest do
   defp through!(wire) do
     Application.put_env(
       :cyfr,
-      :workers,
-      Enum.map(Application.get_env(:cyfr, :workers), fn
+      :opus_workers,
+      Enum.map(Application.get_env(:cyfr, :opus_workers), fn
         %{id: @other} = entry -> %{entry | url: wire.url}
         entry -> entry
       end)
@@ -610,7 +610,7 @@ defmodule Cyfr.SharedLimitsTest do
       nonce: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
     }
 
-    {:ok, worker_key} = Keys.worker_key(service)
+    {:ok, worker_key} = Keys.opus_key(service)
     {:ok, header} = WorkerAuth.report_header(WorkerAuth.dispatch_key(worker_key), fields, body)
 
     {:ok, %Req.Response{status: status, body: answer}} =

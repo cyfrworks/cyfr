@@ -6,4 +6,4 @@
 # the test can fill it.
 services:
   mcp-bridge:
-    entrypoint: ["cyfr-spawn", "serve", "--pool", "backends:20001-20003", "--home-root", "/var/lib/cyfr-bridge/homes", "--client-user", "cyfr-bridge", "--", "node", "server.mjs"]
+    entrypoint: ["cyfr-keeper", "serve", "--pool", "backends:20001-20003", "--home-root", "/var/lib/cyfr-bridge/homes", "--client-user", "cyfr-bridge", "--", "node", "server.mjs"]

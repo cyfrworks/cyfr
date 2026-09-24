@@ -1,6 +1,6 @@
 name: Node CI (mcp-bridge)
 
-# Test the MCP bridge and its process helper (cyfr-spawn), and report npm
+# Test the MCP bridge and its process helper (cyfr-keeper), and report npm
 # dependency advisories. The image's own proofs — that it isolates backends
 # from each other and from the bridge, refuses every request it cannot
 # attribute, and leaves no residue across a uid's reuse — are a D15 row, so
@@ -12,10 +12,10 @@ on:
     branches: [main]
     paths:
       - 'apps/mcp-bridge/**'
-      - 'apps/spawn/**'
+      - 'apps/keeper/**'
       # The authentication and spawner-protocol vectors the suites reproduce.
       - 'tests/fixtures/bridge_auth.json'
-      - 'tests/fixtures/spawn_protocol.json'
+      - 'tests/fixtures/keeper_protocol.json'
       - 'tests/fixtures/residue-canary.go'
       # The image suites' sources, which the syntax check below reads.
       - 'tests/bridge-image/**'
@@ -28,9 +28,9 @@ on:
   pull_request:
     paths:
       - 'apps/mcp-bridge/**'
-      - 'apps/spawn/**'
+      - 'apps/keeper/**'
       - 'tests/fixtures/bridge_auth.json'
-      - 'tests/fixtures/spawn_protocol.json'
+      - 'tests/fixtures/keeper_protocol.json'
       - 'tests/fixtures/residue-canary.go'
       - 'tests/bridge-image/**'
       - 'scripts/npm-audit-report.mjs'
@@ -74,7 +74,7 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      # The bridge starts backends only through cyfr-spawn, which hands it
+      # The bridge starts backends only through cyfr-keeper, which hands it
       # its channel as fd 3; started any other way it must refuse to run.
       - name: Refuses to start without the spawner
         run: |
@@ -93,19 +93,19 @@ jobs:
       - name: Audit dependencies (advisories report-only)
         run: node ../../scripts/npm-audit-report.mjs
 
-  spawn:
-    name: vet + test (cyfr-spawn)
+  keeper:
+    name: vet + test (cyfr-keeper)
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: apps/spawn
+        working-directory: apps/keeper
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: apps/spawn/go.mod
-          cache-dependency-path: apps/spawn/go.sum
+          go-version-file: apps/keeper/go.mod
+          cache-dependency-path: apps/keeper/go.sum
 
       - name: gofmt
         run: test -z "$(gofmt -l . ../../tests/fixtures)"
@@ -134,14 +134,14 @@ jobs:
           fi
           go_version="$(sed -n 's/^go //p' go.mod)"
           docker run --rm --security-opt writable-cgroups=true \
-            -v "$GITHUB_WORKSPACE:/src:ro" -w /src/apps/spawn \
+            -v "$GITHUB_WORKSPACE:/src:ro" -w /src/apps/keeper \
             -e GOFLAGS=-buildvcs=false \
             "golang:$go_version" \
-            go test ./... -race -count=1 -v 2>&1 | tee "$RUNNER_TEMP/spawn-kernel.log"
-          if grep -E 'needs root|no memory bound can be enforced here' "$RUNNER_TEMP/spawn-kernel.log"; then
+            go test ./... -race -count=1 -v 2>&1 | tee "$RUNNER_TEMP/keeper-kernel.log"
+          if grep -E 'needs root|no memory bound can be enforced here' "$RUNNER_TEMP/keeper-kernel.log"; then
             echo "::error::a real-kernel test skipped for want of root or of a memory bound"
             exit 1
           fi
 
       - name: Static build
-        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-spawn" .
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-keeper" .

@@ -30,8 +30,8 @@ defmodule Locus.Config do
   the worker root and the bridge key are CYFR's, and a builder that can
   see them was given more than a builder holds.
 
-  `:memory_bytes` is the bound every build's spawn asks cyfr-spawn for
-  (`Locus.Spawner`): the memory of the build's processes, what it writes
+  `:memory_bytes` is the bound every build's spawn asks cyfr-keeper for
+  (`Locus.Keeper`): the memory of the build's processes, what it writes
   to its home and the kernel memory charged to it, together. Its range is
   the keeper's own for a spawn's `memory_bytes`, so a value accepted here
   is one the keeper accepts. There is no value that means "no bound".
@@ -65,11 +65,11 @@ defmodule Locus.Config do
     log_format: :text
   ]
 
-  # cyfr-spawn's range for a spawn's `memory_bytes` (`apps/spawn`'s
+  # cyfr-keeper's range for a spawn's `memory_bytes` (`apps/keeper`'s
   # protocol, MinMemoryBytes to MaxMemoryBytes).
   @memory_range 16_777_216..1_099_511_627_776
 
-  @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_WORKER_KEY CYFR_MCP_BRIDGE_KEY)
+  @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY CYFR_MCP_BRIDGE_KEY)
 
   @typedoc "The `:locus` application environment `from_env/1` writes."
   @type settings :: [
@@ -216,7 +216,7 @@ defmodule Locus.Config do
   @spec max_concurrent_per_tenant() :: pos_integer()
   def max_concurrent_per_tenant, do: get(:max_concurrent_per_tenant)
 
-  @doc "The memory bound every build's spawn asks cyfr-spawn for, in bytes."
+  @doc "The memory bound every build's spawn asks cyfr-keeper for, in bytes."
   @spec memory_bytes() :: pos_integer()
   def memory_bytes, do: get(:memory_bytes)
 

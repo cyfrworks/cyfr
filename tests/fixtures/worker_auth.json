@@ -1,9 +1,9 @@
 {
   "assignment": {
-    "mac": "_Be0mVGR4WYZT_0EXatjD1FPoFdyfzLx8joYcecr1-o",
+    "mac": "-O3w7CT90AJ-Xgwh4dEikpLUcsSch6R6cZRyyavZZZc",
     "now": 1789305249602,
     "payload": "{\"actor\":{\"authenticated\":true,\"user_id\":\"usr_01a09fee-0000-7000-8000-000000000003\"},\"athanor_id\":\"ath_01a09fee-045b-770b-b745-a62792bb8798\",\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"authority\":{\"activation\":{},\"budget\":{\"id\":\"bgt_AAAAAAAAAAHKmY6r\"},\"chain\":[],\"cursor\":\"unbound\",\"depth\":0,\"invoke_mode\":\"open_inert\"},\"boot\":\"boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d\",\"claim_by\":1789305279602,\"component\":{\"declared_needs\":[],\"digest\":\"sha256:b0d51c58c8b9c1f458fadf16c7d375630ef51da4df81915893b05c0fa4ed8bc6\",\"ref\":\"reagent:local.vector:0.1.0\",\"type\":\"reagent\"},\"deadline\":1789305279602,\"execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"fence\":2,\"generation\":7,\"host_url\":\"http://cyfr-1:4300\",\"input_digest\":\"sha256:69f1d4a18667949e6b56cf0082924bd79616bd6fa64a026124d8899698fb94a4\",\"intercepted\":[\"execution.run\",\"execution.run_stream\"],\"issued_at\":1789305249602,\"lease_until\":1789305429602,\"member\":\"cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708\",\"root_execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\",\"service\":\"wrk_4f3c2a1e9d8b7c6a\",\"timeout_ms\":30000,\"v\":1}",
-    "token": "eyJhY3RvciI6eyJhdXRoZW50aWNhdGVkIjp0cnVlLCJ1c2VyX2lkIjoidXNyXzAxYTA5ZmVlLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDAwMyJ9LCJhdGhhbm9yX2lkIjoiYXRoXzAxYTA5ZmVlLTA0NWItNzcwYi1iNzQ1LWE2Mjc5MmJiODc5OCIsImF0dGVtcHQiOiJhdHRfMDFhMDlmZWUtMGEzMS03YTJiLThmMGMtM2QxZTViN2M5YTQyIiwiYXV0aG9yaXR5Ijp7ImFjdGl2YXRpb24iOnt9LCJidWRnZXQiOnsiaWQiOiJiZ3RfQUFBQUFBQUFBQUhLbVk2ciJ9LCJjaGFpbiI6W10sImN1cnNvciI6InVuYm91bmQiLCJkZXB0aCI6MCwiaW52b2tlX21vZGUiOiJvcGVuX2luZXJ0In0sImJvb3QiOiJib290XzAxYTA5ZmVlLTJlNGYtN2E1Yi05YzZkLTdlOGY5YTBiMWMyZCIsImNsYWltX2J5IjoxNzg5MzA1Mjc5NjAyLCJjb21wb25lbnQiOnsiZGVjbGFyZWRfbmVlZHMiOltdLCJkaWdlc3QiOiJzaGEyNTY6YjBkNTFjNThjOGI5YzFmNDU4ZmFkZjE2YzdkMzc1NjMwZWY1MWRhNGRmODE5MTU4OTNiMDVjMGZhNGVkOGJjNiIsInJlZiI6InJlYWdlbnQ6bG9jYWwudmVjdG9yOjAuMS4wIiwidHlwZSI6InJlYWdlbnQifSwiZGVhZGxpbmUiOjE3ODkzMDUyNzk2MDIsImV4ZWN1dGlvbl9pZCI6ImV4ZWNfMDFhMDlmZWUtMDdjYy03OTFmLWE1OTgtZTdmOTA2MDhjOWUyIiwiZmVuY2UiOjIsImdlbmVyYXRpb24iOjcsImhvc3RfdXJsIjoiaHR0cDovL2N5ZnItMTo0MzAwIiwiaW5wdXRfZGlnZXN0Ijoic2hhMjU2OjY5ZjFkNGExODY2Nzk0OWU2YjU2Y2YwMDgyOTI0YmQ3OTYxNmJkNmZhNjRhMDI2MTI0ZDg4OTk2OThmYjk0YTQiLCJpbnRlcmNlcHRlZCI6WyJleGVjdXRpb24ucnVuIiwiZXhlY3V0aW9uLnJ1bl9zdHJlYW0iXSwiaXNzdWVkX2F0IjoxNzg5MzA1MjQ5NjAyLCJsZWFzZV91bnRpbCI6MTc4OTMwNTQyOTYwMiwibWVtYmVyIjoiY3lmckAxMC4wLjAuMSNib290XzAxYTA5ZmVlLTVkN2UtN2Y4MC05MWEyLWIzYzRkNWU2ZjcwOCIsInJvb3RfZXhlY3V0aW9uX2lkIjoiZXhlY18wMWEwOWZlZS0wN2NjLTc5MWYtYTU5OC1lN2Y5MDYwOGM5ZTIiLCJzZXJ2aWNlIjoid3JrXzRmM2MyYTFlOWQ4YjdjNmEiLCJ0aW1lb3V0X21zIjozMDAwMCwidiI6MX0._Be0mVGR4WYZT_0EXatjD1FPoFdyfzLx8joYcecr1-o"
+    "token": "eyJhY3RvciI6eyJhdXRoZW50aWNhdGVkIjp0cnVlLCJ1c2VyX2lkIjoidXNyXzAxYTA5ZmVlLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDAwMyJ9LCJhdGhhbm9yX2lkIjoiYXRoXzAxYTA5ZmVlLTA0NWItNzcwYi1iNzQ1LWE2Mjc5MmJiODc5OCIsImF0dGVtcHQiOiJhdHRfMDFhMDlmZWUtMGEzMS03YTJiLThmMGMtM2QxZTViN2M5YTQyIiwiYXV0aG9yaXR5Ijp7ImFjdGl2YXRpb24iOnt9LCJidWRnZXQiOnsiaWQiOiJiZ3RfQUFBQUFBQUFBQUhLbVk2ciJ9LCJjaGFpbiI6W10sImN1cnNvciI6InVuYm91bmQiLCJkZXB0aCI6MCwiaW52b2tlX21vZGUiOiJvcGVuX2luZXJ0In0sImJvb3QiOiJib290XzAxYTA5ZmVlLTJlNGYtN2E1Yi05YzZkLTdlOGY5YTBiMWMyZCIsImNsYWltX2J5IjoxNzg5MzA1Mjc5NjAyLCJjb21wb25lbnQiOnsiZGVjbGFyZWRfbmVlZHMiOltdLCJkaWdlc3QiOiJzaGEyNTY6YjBkNTFjNThjOGI5YzFmNDU4ZmFkZjE2YzdkMzc1NjMwZWY1MWRhNGRmODE5MTU4OTNiMDVjMGZhNGVkOGJjNiIsInJlZiI6InJlYWdlbnQ6bG9jYWwudmVjdG9yOjAuMS4wIiwidHlwZSI6InJlYWdlbnQifSwiZGVhZGxpbmUiOjE3ODkzMDUyNzk2MDIsImV4ZWN1dGlvbl9pZCI6ImV4ZWNfMDFhMDlmZWUtMDdjYy03OTFmLWE1OTgtZTdmOTA2MDhjOWUyIiwiZmVuY2UiOjIsImdlbmVyYXRpb24iOjcsImhvc3RfdXJsIjoiaHR0cDovL2N5ZnItMTo0MzAwIiwiaW5wdXRfZGlnZXN0Ijoic2hhMjU2OjY5ZjFkNGExODY2Nzk0OWU2YjU2Y2YwMDgyOTI0YmQ3OTYxNmJkNmZhNjRhMDI2MTI0ZDg4OTk2OThmYjk0YTQiLCJpbnRlcmNlcHRlZCI6WyJleGVjdXRpb24ucnVuIiwiZXhlY3V0aW9uLnJ1bl9zdHJlYW0iXSwiaXNzdWVkX2F0IjoxNzg5MzA1MjQ5NjAyLCJsZWFzZV91bnRpbCI6MTc4OTMwNTQyOTYwMiwibWVtYmVyIjoiY3lmckAxMC4wLjAuMSNib290XzAxYTA5ZmVlLTVkN2UtN2Y4MC05MWEyLWIzYzRkNWU2ZjcwOCIsInJvb3RfZXhlY3V0aW9uX2lkIjoiZXhlY18wMWEwOWZlZS0wN2NjLTc5MWYtYTU5OC1lN2Y5MDYwOGM5ZTIiLCJzZXJ2aWNlIjoid3JrXzRmM2MyYTFlOWQ4YjdjNmEiLCJ0aW1lb3V0X21zIjozMDAwMCwidiI6MX0.-O3w7CT90AJ-Xgwh4dEikpLUcsSch6R6cZRyyavZZZc"
   },
   "attempt": {
     "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
@@ -16,8 +16,8 @@
   "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
   "call": {
     "body": "{\"op\":\"push_deltas\",\"args\":{\"deltas\":[]}}",
-    "canonical": "cyfr-worker/v1/call\nath_01a09fee-045b-770b-b745-a62792bb8798\nexec_01a09fee-07cc-791f-a598-e7f90608c9e2\natt_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\n2\n7\nwrk_4f3c2a1e9d8b7c6a\nboot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d\nrun_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b\ncyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708\n1789305249602\nn_7d3e9a\n0cd4f65b95e0a66418a02bdca40e6c92547fbcdb02779d1b4341106abff63b52",
-    "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305249602 nonce=n_7d3e9a body=0cd4f65b95e0a66418a02bdca40e6c92547fbcdb02779d1b4341106abff63b52 mac=Z6ugiOXFAuOCzI5zoZDzCV7FpttHuIvKCkSTowkeQUs",
+    "canonical": "cyfr-opus/v1/call\nath_01a09fee-045b-770b-b745-a62792bb8798\nexec_01a09fee-07cc-791f-a598-e7f90608c9e2\natt_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\n2\n7\nwrk_4f3c2a1e9d8b7c6a\nboot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d\nrun_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b\ncyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708\n1789305249602\nn_7d3e9a\n0cd4f65b95e0a66418a02bdca40e6c92547fbcdb02779d1b4341106abff63b52",
+    "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305249602 nonce=n_7d3e9a body=0cd4f65b95e0a66418a02bdca40e6c92547fbcdb02779d1b4341106abff63b52 mac=AAxmdRajEGrpiZa7VgeaZqWkY_bCrE8CvKLt2WCZQ8c",
     "nonce": "n_7d3e9a",
     "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
     "ts": 1789305249602
@@ -25,26 +25,26 @@
   "comment": "The vectors pinning Prima.WorkerAuth and Prima.Assignment: the suite derives every key here from the root, the worker service id and the attempt, reproduces every canonical string, header, MAC, sealed value and assignment token from the fields and fixed IVs, opens every sealed value, and decodes every valid root text to the root and refuses every invalid one. Integers are written in decimal in canonical strings, headers and key labels. The service id is the key input; the boot is signed beside it and compared, never derived over. The member is the control-plane member that issued the assignment and answers that attempt's host calls: a call header field, an assignment field beside host_url (the address those calls are posted to) and an argument of the exit report. A member that is not the one named refuses the call, whatever it asked for.",
   "host_url": "http://cyfr-1:4300",
   "keys": {
-    "assign_hex": "1c8e7dd23b696d5a9bf1dda4dc4b8b9bf3681504c5b423e30fd4ae965861d282",
-    "attempt_call_hex": "b6f70404d43dd76ebe621ce95b8b41b1eebdba5d0243808e1925d48f7965a6c1",
-    "attempt_seal_hex": "15de96100d0612975e8d5a64bb2d07eaa0c72e9bd3dca340c0d4c22c31a91621",
-    "dispatch_hex": "bc672b23569d4a626171a6d0308b1b2514e2898b96085790881357f11d422106",
-    "dispatch_seal_hex": "10d72c615ce070f75613d2cf40d93ad82deb19d27acdfa4be6074812fe0fb6c0",
-    "worker_hex": "6350e9846c13af4e509b7748ca22475a074cab65a998b17a92e5f48911dd2c85"
+    "assign_hex": "bef5afc6d2ed1e87fcc2216116e7142e139bc74b7308f9c02b4bc5f7c300e506",
+    "attempt_call_hex": "3cb8492ec8c02995ea05e6baaaf6fd9fbee331348c98737e0e0efee507405c6d",
+    "attempt_seal_hex": "573d6c336e49b5565f81ab9d5e029854bf3e2c7393cdb8fad2e3a07b5f962237",
+    "dispatch_hex": "e5a341209bfcaf7251ef0ac78d93c4acf63cb2a19c6a25dcc1bd4ad619a27105",
+    "dispatch_seal_hex": "9078f889da10185f9b2be166625d6e49d887d4b8d84914972adc580ef52a8790",
+    "worker_hex": "7df1b249193b857ff851e1a94c48d88ba232ce01648556ca452b637d05183099"
   },
   "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
   "report": {
     "body": "{\"op\":\"runner_exited\",\"args\":{\"member\":\"cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708\",\"runner\":\"run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b\",\"attempts\":[\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\"]}}",
-    "canonical": "cyfr-worker/v1/report\nwrk_4f3c2a1e9d8b7c6a\nboot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d\n1789305249700\nn_2b8f41\nd7afb06b35e90473b76e12dab0577ba3a7da4b2a4ef88ed4741c28fe3d905578",
-    "header": "v1 kind=report service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d ts=1789305249700 nonce=n_2b8f41 body=d7afb06b35e90473b76e12dab0577ba3a7da4b2a4ef88ed4741c28fe3d905578 mac=7I7dBjApQYNkQEQJXmjW-pmaoV28yG1Qy8NxP6dW3hw",
+    "canonical": "cyfr-opus/v1/report\nwrk_4f3c2a1e9d8b7c6a\nboot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d\n1789305249700\nn_2b8f41\nd7afb06b35e90473b76e12dab0577ba3a7da4b2a4ef88ed4741c28fe3d905578",
+    "header": "v1 kind=report service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d ts=1789305249700 nonce=n_2b8f41 body=d7afb06b35e90473b76e12dab0577ba3a7da4b2a4ef88ed4741c28fe3d905578 mac=Aa-W7AOTi2uhK2OoHbNm1TVhje8WiU99V-QnFFnYxQY",
     "nonce": "n_2b8f41",
     "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
     "ts": 1789305249700
   },
   "request": {
     "body": "{\"op\":\"kill\",\"args\":{\"execution_id\":\"exec_01a09fee-07cc-791f-a598-e7f90608c9e2\"}}",
-    "canonical": "cyfr-worker/v1/request\nwrk_4f3c2a1e9d8b7c6a\nboot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d\n1789305249700\nn_2b8f41\nedaffb22256122410c60e7f180f2fd7e6aef36a4543a9aa3c97dff7efc55665e",
-    "header": "v1 kind=request service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d ts=1789305249700 nonce=n_2b8f41 body=edaffb22256122410c60e7f180f2fd7e6aef36a4543a9aa3c97dff7efc55665e mac=yUMdF1P7dZie11WZQIT2JiaXPMea2U2U0qwkfqghGJg",
+    "canonical": "cyfr-opus/v1/request\nwrk_4f3c2a1e9d8b7c6a\nboot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d\n1789305249700\nn_2b8f41\nedaffb22256122410c60e7f180f2fd7e6aef36a4543a9aa3c97dff7efc55665e",
+    "header": "v1 kind=request service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d ts=1789305249700 nonce=n_2b8f41 body=edaffb22256122410c60e7f180f2fd7e6aef36a4543a9aa3c97dff7efc55665e mac=ydv_EeQrNJWJaTpgixJOH-zMtRxxbZhh3cqwnsHTB_8",
     "nonce": "n_2b8f41",
     "ts": 1789305249700
   },
@@ -65,14 +65,14 @@
   },
   "sealed_attempt_keys": {
     "iv_hex": "a0a1a2a3a4a5a6a7a8a9aaab",
-    "sealed": "eyJhdGhhbm9yX2lkIjoiYXRoXzAxYTA5ZmVlLTA0NWItNzcwYi1iNzQ1LWE2Mjc5MmJiODc5OCIsImF0dGVtcHQiOiJhdHRfMDFhMDlmZWUtMGEzMS03YTJiLThmMGMtM2QxZTViN2M5YTQyIiwiZXhlY3V0aW9uX2lkIjoiZXhlY18wMWEwOWZlZS0wN2NjLTc5MWYtYTU5OC1lN2Y5MDYwOGM5ZTIiLCJmZW5jZSI6MiwiZ2VuZXJhdGlvbiI6Nywic2VydmljZSI6Indya180ZjNjMmExZTlkOGI3YzZhIn0.oKGio6SlpqeoqaqrS8k8Y9f5Qs3C4GDu0P-Zy6bqk395GzY52ILE4xS7JxfAcB8y8uVnvL9JM1XwrnsDw2eudTrMyGbfs1q_sYuppQbDjFsiNniDFw0XIB7wzoM"
+    "sealed": "eyJhdGhhbm9yX2lkIjoiYXRoXzAxYTA5ZmVlLTA0NWItNzcwYi1iNzQ1LWE2Mjc5MmJiODc5OCIsImF0dGVtcHQiOiJhdHRfMDFhMDlmZWUtMGEzMS03YTJiLThmMGMtM2QxZTViN2M5YTQyIiwiZXhlY3V0aW9uX2lkIjoiZXhlY18wMWEwOWZlZS0wN2NjLTc5MWYtYTU5OC1lN2Y5MDYwOGM5ZTIiLCJmZW5jZSI6MiwiZ2VuZXJhdGlvbiI6Nywic2VydmljZSI6Indya180ZjNjMmExZTlkOGI3YzZhIn0.oKGio6SlpqeoqaqrTmR-S8hSBIXpkQMp3QVzqJzcFcnpWrtGdXrb3Sy9rhj-vW9CTWFKm273HwumXyHAMeAkXE_2TQD8_OAdkNIM_D50dhazky8zwvELDsHX_Ig"
   },
   "sealed_call": {
     "answer": "{\"ok\":[\"{\\\"ok\\\":true,\\\"sequence\\\":\\\"3.0\\\"}\"]}",
     "answer_iv_hex": "c0c1c2c3c4c5c6c7c8c9cacb",
-    "answer_sealed": "wMHCw8TFxsfIycrL9HP6MmtcbC8jQZ0IV5qabYKHNiHFAgAqapNbM8Sizbfv0i4_gBF2OfvaNFQIeRyYOcyueh1yjpJ0zpqQHQ",
+    "answer_sealed": "wMHCw8TFxsfIycrLLbC8fmRaIsR4x8Zz2NqMjvhANVBVNMuaW6VUiQYAVRw5y3bAJGAM6GvFJ3ZGeT7tsGCIseURNX20nyeLgw",
     "body_iv_hex": "b0b1b2b3b4b5b6b7b8b9babb",
-    "body_sealed": "sLGys7S1tre4ubq7cf41s5tygb3xUsQC0pxAaN11cJlkolI23TMt4aNHQmq2y_KZI-wk6yQFKy4FetboceKKpkJ7_Y3J"
+    "body_sealed": "sLGys7S1tre4ubq73FDYpPujnSaU0uxRbduzcVyQ-D2MgSfQKj_rhlE_wLkgZYOPQPSnqmXVNikRnGWPbIKGh1tMjcAs"
   },
   "service": "wrk_4f3c2a1e9d8b7c6a",
   "status": {
@@ -482,7 +482,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
+            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)"
           },
           "runners": {
             "busy": 3,
@@ -502,7 +502,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": "memory_unavailable",
             "since": 1
           },
@@ -524,7 +524,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": "Memory_unavailable"
           },
           "runners": {
@@ -545,7 +545,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": ""
           },
           "runners": {
@@ -566,7 +566,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": "memory unavailable"
           },
           "runners": {
@@ -587,7 +587,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
           },
           "runners": {
@@ -608,7 +608,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": 5
           },
           "runners": {
@@ -751,7 +751,7 @@
     ],
     "valid": [
       {
-        "why": "a service under cyfr-spawn: every runner bounded at 384 MiB, nothing refused",
+        "why": "a service under cyfr-keeper: every runner bounded at 384 MiB, nothing refused",
         "wire": {
           "attempts": [
             "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42"
@@ -791,7 +791,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
+            "message": "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: start the opus service with the security option writable-cgroups=true (Docker Engine 28 or later on a cgroup v2 host)",
             "reason": "memory_unavailable"
           },
           "runners": {
@@ -812,7 +812,7 @@
           "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
           "memory_bytes": 402653184,
           "refusal": {
-            "message": "cyfr-spawn has no runner uid free — every one is in use",
+            "message": "cyfr-keeper has no runner uid free — every one is in use",
             "reason": "capacity"
           },
           "runners": {

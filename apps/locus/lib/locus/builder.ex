@@ -35,12 +35,12 @@ defmodule Locus.Builder do
   the wire's output bounds; output past a bound is refused as `failed`,
   never truncated.
 
-  Each build runs through cyfr-spawn under a pooled uid of its own
-  (`Locus.Spawner`): a 0700 home neither another build nor this node's user
+  Each build runs through cyfr-keeper under a pooled uid of its own
+  (`Locus.Keeper`): a 0700 home neither another build nor this node's user
   can enter, an environment built from nothing, resource limits, a memory
   bound, and at its end every process of the uid killed and everything it
   left removed before the uid serves another build. A node without
-  cyfr-spawn builds nothing, the test environment excepted
+  cyfr-keeper builds nothing, the test environment excepted
   (`Locus.Executor`).
 
   ## What a build sees
@@ -70,7 +70,7 @@ defmodule Locus.Builder do
   | Refusal | When |
   |---|---|
   | `malformed` | the sources do not make a build of that language |
-  | `unavailable` | the toolchain, the Cargo seed or cyfr-spawn is missing, or cyfr-spawn cannot bound the build's memory |
+  | `unavailable` | the toolchain, the Cargo seed or cyfr-keeper is missing, or cyfr-keeper cannot bound the build's memory |
   | `capacity` | no pooled uid is free |
   | `timeout` | the build passed `:timeout_ms` and was ended |
   | `memory` | the build reached its memory bound and was ended there |
@@ -317,7 +317,7 @@ defmodule Locus.Builder do
 
       {:error, :no_keeper} ->
         {:error,
-         {:unavailable, "cyfr-spawn is not running, and the builder runs a build only under it"}}
+         {:unavailable, "cyfr-keeper is not running, and the builder runs a build only under it"}}
     end
   end
 
@@ -424,7 +424,7 @@ defmodule Locus.Builder do
 
       {:error, {:spawn_failed, reason}} ->
         Logger.error("[Locus.Builder] a build could not be run: #{inspect(reason)}")
-        {:error, {:unavailable, "cyfr-spawn could not run the build (#{spawn_failure(reason)})"}}
+        {:error, {:unavailable, "cyfr-keeper could not run the build (#{spawn_failure(reason)})"}}
     end
   end
 

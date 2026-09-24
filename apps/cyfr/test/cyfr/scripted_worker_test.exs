@@ -37,14 +37,14 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     test_path =
       Path.join(System.tmp_dir!(), "scripted_worker_#{System.unique_integer([:positive])}")
 
-    keys = [arca: :base_path, cyfr: :workers]
+    keys = [arca: :base_path, cyfr: :opus_workers]
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_path)
 
     Application.put_env(
       :cyfr,
-      :workers,
-      ScriptedWorker.workers(@scripted, previous[{:cyfr, :workers}])
+      :opus_workers,
+      ScriptedWorker.workers(@scripted, previous[{:cyfr, :opus_workers}])
     )
 
     ctx = Sanctum.TestContext.local()
@@ -451,7 +451,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     start_supervised!({ScriptedWorker, ref: @scripted, script: []})
 
     assert [%{id: "wrk_scripted", url: url, components: [@scripted]} | _rest] =
-             Application.get_env(:cyfr, :workers)
+             Application.get_env(:cyfr, :opus_workers)
 
     assert url == ScriptedWorker.url()
     assert "http://127.0.0.1:" <> port = url
@@ -518,7 +518,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   end
 
   defp dispatch_key do
-    {:ok, worker_key} = Crucible.Keys.worker_key(ScriptedWorker.service())
+    {:ok, worker_key} = Crucible.Keys.opus_key(ScriptedWorker.service())
     WorkerAuth.dispatch_key(worker_key)
   end
 

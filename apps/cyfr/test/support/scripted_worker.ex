@@ -36,10 +36,10 @@ defmodule Cyfr.Test.ScriptedWorker do
   which CYFR counts as nothing whose native work may still run. A reference it does
   not script never reaches it: starting it puts an
   entry for its scripted references alone ahead of the configured worker
-  services in `config :cyfr, :workers` (`workers/2`), so
+  services in `config :cyfr, :opus_workers` (`workers/2`), so
   `Crucible.Dispatch` routes every other reference to the worker
   services configured after it, and stopping it removes that entry. Tests
-  that change `:workers` themselves restore it on exit as they do today.
+  that change `:opus_workers` themselves restore it on exit as they do today.
   Started for a reference the routing did not name, it refuses the
   assignment `:malformed`.
 
@@ -125,7 +125,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   def endpoint, do: %{id: @service, url: url(), components: nil}
 
   @doc """
-  The `config :cyfr, :workers` list that routes the scripted `refs` (any
+  The `config :cyfr, :opus_workers` list that routes the scripted `refs` (any
   form `Prima.ComponentRef.to_name_ref/1` reads) to this worker service and
   every other reference to the worker services in `configured` (the list
   being replaced, with any earlier entry of this worker service dropped).
@@ -232,8 +232,8 @@ defmodule Cyfr.Test.ScriptedWorker do
     # services configured before; `terminate/2` takes the entry out again.
     Application.put_env(
       :cyfr,
-      :workers,
-      entries(refs, Application.get_env(:cyfr, :workers), url)
+      :opus_workers,
+      entries(refs, Application.get_env(:cyfr, :opus_workers), url)
     )
 
     {:ok,
@@ -262,7 +262,7 @@ defmodule Cyfr.Test.ScriptedWorker do
          true <- scripted?(state, assignment.component.ref),
          true <- assignment.service == @service and assignment.boot == state.boot,
          true <- Prima.Digest.sha256(input) == assignment.input_digest,
-         {:ok, worker_key} <- Keys.worker_key(@service),
+         {:ok, worker_key} <- Keys.opus_key(@service),
          {:ok, %{attempt: attempt} = keys} <-
            WorkerAuth.open_attempt_keys(WorkerAuth.dispatch_seal_key(worker_key), sealed_keys),
          true <- attempt == assignment |> Map.take(@attempt_fields) |> Map.put(:service, @service),
@@ -390,8 +390,8 @@ defmodule Cyfr.Test.ScriptedWorker do
     for {pid, _runner} <- state.runners, do: Process.exit(pid, :kill)
 
     # The listener, linked, goes with this process.
-    configured = Application.get_env(:cyfr, :workers, [])
-    Application.put_env(:cyfr, :workers, Enum.reject(configured, &(&1[:id] == @service)))
+    configured = Application.get_env(:cyfr, :opus_workers, [])
+    Application.put_env(:cyfr, :opus_workers, Enum.reject(configured, &(&1[:id] == @service)))
     :ok
   end
 
@@ -434,7 +434,7 @@ defmodule Cyfr.Test.ScriptedWorker do
         nonce: nonce()
       }
 
-      with {:ok, worker_key} <- Keys.worker_key(@service),
+      with {:ok, worker_key} <- Keys.opus_key(@service),
            {:ok, header} <-
              WorkerAuth.report_header(WorkerAuth.dispatch_key(worker_key), fields, body),
            %{"ok" => true} <- header |> Host.runner_exited(body) |> Jason.decode!() do

@@ -10,8 +10,8 @@ defmodule Locus.DirectLauncher do
   applies no memory bound: a build here may take whatever memory the
   machine gives it. `Locus.Executor` knows it under the test environment
   alone, so the suites can run a real toolchain on a machine without
-  cyfr-spawn; no release and no development node builds through it, and
-  the builds service refuses to serve without cyfr-spawn anywhere else
+  cyfr-keeper; no release and no development node builds through it, and
+  the builds service refuses to serve without cyfr-keeper anywhere else
   (`Locus.Application`).
 
   ## arca:bypass-ok=D — entire module

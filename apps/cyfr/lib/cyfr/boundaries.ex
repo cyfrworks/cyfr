@@ -1006,10 +1006,10 @@ defmodule Cyfr.Boundaries do
       "the `:api` bucket's own budget, read by `EmissaryWeb.Plugs.MCPRateLimit` " <>
         "under a key it builds from the bucket's name",
     api_rate_limit_window_ms: "the same bucket's window, built the same way",
-    execution_events_max_concurrent:
+    crucible_events_max_concurrent:
       "handed to `EmissaryWeb.SSE.claim_slot/3` as the key to read, so the two SSE " <>
         "surfaces share one reader",
-    execution_events_max_ms: "handed to `EmissaryWeb.SSE.deadline/1` as the key to read",
+    crucible_events_max_ms: "handed to `EmissaryWeb.SSE.deadline/1` as the key to read",
     mcp_subscription_max_concurrent:
       "handed to `EmissaryWeb.SSE.claim_slot/3` as the key to read",
     mcp_subscription_max_ms: "handed to `EmissaryWeb.SSE.deadline/1` as the key to read"
@@ -1335,7 +1335,7 @@ defmodule Cyfr.Boundaries do
       "the sandbox helper's own case: what it drains IS the pool, so the assertion " <>
         "has to name it.",
     "apps/cyfr/test/crucible/start_refusal_test.exs" =>
-      "the refusal a keeper gives is `Opus.Keeper.Spawn.refusal/1`'s shape, and this " <>
+      "the refusal a keeper gives is `Opus.Keeper.Channel.refusal/1`'s shape, and this " <>
         "case holds CYFR's rendering of it to that shape.",
     "apps/cyfr/test/grimoire/error_renderers_test.exs" =>
       "the in-chain guest's renderer is Opus's, and the one-vocabulary case is that " <>

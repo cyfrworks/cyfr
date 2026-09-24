@@ -20,8 +20,10 @@ defmodule Emissary.External.BackendDefinition do
       byte and no `vault:` — every process in the bridge can read a command
       line, so a credential never goes in one;
     * an env name matches `^[A-Z_][A-Z0-9_]{0,63}$` and is none of
-      `PATH HOME USER LOGNAME SHELL TMPDIR PWD`, nor prefixed `CYFR_` or
-      `MCP_BRIDGE_` — the bridge sets the first and the rest are CYFR's;
+      `PATH HOME USER LOGNAME SHELL TMPDIR PWD`, nor prefixed with one of
+      `reserved_prefixes/0` (`CYFR_`, `MCP_BRIDGE_`, `KEEPER_`) — the
+      bridge sets the first, and the prefixes are CYFR's, the bridge's and
+      the keeper's, the list the keeper and the bridge refuse too;
     * an env value is a vault template (`Prima.VaultRef`); only the
       non-secret names in `literal_names/0` may hold a literal instead.
   """
@@ -31,7 +33,7 @@ defmodule Emissary.External.BackendDefinition do
   @name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
   @env_name ~r/\A[A-Z_][A-Z0-9_]{0,63}\z/
   @reserved_names ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD)
-  @reserved_prefixes ~w(CYFR_ MCP_BRIDGE_)
+  @reserved_prefixes ~w(CYFR_ MCP_BRIDGE_ KEEPER_)
   @literal_names ~w(NODE_ENV LOG_LEVEL TZ LANG LC_ALL NO_COLOR DEBUG)
   @max_text_bytes 4096
 
@@ -45,6 +47,10 @@ defmodule Emissary.External.BackendDefinition do
   @doc "The env names that may hold a literal value."
   @spec literal_names() :: [String.t()]
   def literal_names, do: @literal_names
+
+  @doc "The prefixes no env name may carry."
+  @spec reserved_prefixes() :: [String.t()]
+  def reserved_prefixes, do: @reserved_prefixes
 
   @doc "Validate and normalize a stdio server's backends."
   @spec validate(term()) :: {:ok, [backend()]} | {:error, {:invalid_argument, String.t()}}

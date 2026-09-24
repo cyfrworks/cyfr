@@ -93,7 +93,7 @@ defmodule Cyfr.Cluster.Boot do
   def route!(references, endpoints) do
     Application.put_env(
       :cyfr,
-      :workers,
+      :opus_workers,
       Enum.map(endpoints, &Map.put(&1, :components, references))
     )
 

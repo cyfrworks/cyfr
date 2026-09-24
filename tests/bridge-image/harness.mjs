@@ -95,7 +95,7 @@ export function processes(target) {
 
 /**
  * Builds tests/fixtures/residue-canary.go for Linux on the host's
- * architecture, in a Go container pinned to the release apps/spawn/go.mod
+ * architecture, in a Go container pinned to the release apps/keeper/go.mod
  * names, and answers the directory holding `canary`.
  */
 export function buildCanary() {

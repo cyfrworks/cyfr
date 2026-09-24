@@ -15,7 +15,7 @@ defmodule Crucible.StartRefusalTest do
 
   The worker service is a stub listener that answers `status` as a
   refusing Opus service does and `start` as the case needs; the sentence
-  is the one Opus's keeper client gives (`Opus.Keeper.Spawn.refusal/1`),
+  is the one Opus's keeper client gives (`Opus.Keeper.Channel.refusal/1`),
   which Opus's own suite shows its listener answering a start with
   (`Opus.WorkerServicePoolTest`).
   """
@@ -26,7 +26,7 @@ defmodule Crucible.StartRefusalTest do
   alias Prima.Authority.Blob
   alias Prima.WorkerWire
 
-  @compile {:no_warn_undefined, [Opus.Keeper.Spawn]}
+  @compile {:no_warn_undefined, [Opus.Keeper.Channel]}
 
   @service "wrk_refusing"
   @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
@@ -70,7 +70,7 @@ defmodule Crucible.StartRefusalTest do
       Path.join(System.tmp_dir!(), "start_refusal_#{System.unique_integer([:positive])}")
 
     previous =
-      Map.new([arca: :base_path, cyfr: :workers], fn {app, key} ->
+      Map.new([arca: :base_path, cyfr: :opus_workers], fn {app, key} ->
         {{app, key}, Application.get_env(app, key)}
       end)
 
@@ -96,7 +96,7 @@ defmodule Crucible.StartRefusalTest do
         description: "A reagent no worker service starts"
       })
 
-    {:ok, ctx: ctx, refusal: Opus.Keeper.Spawn.refusal(:memory_unavailable)}
+    {:ok, ctx: ctx, refusal: Opus.Keeper.Channel.refusal(:memory_unavailable)}
   end
 
   defp serve!(start, refusal) do
@@ -120,7 +120,7 @@ defmodule Crucible.StartRefusalTest do
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
     endpoint = %{id: @service, url: "http://127.0.0.1:#{port}", components: nil}
-    Application.put_env(:cyfr, :workers, [endpoint])
+    Application.put_env(:cyfr, :opus_workers, [endpoint])
     endpoint
   end
 
