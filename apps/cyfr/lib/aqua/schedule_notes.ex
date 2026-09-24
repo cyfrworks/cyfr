@@ -4,146 +4,142 @@
 defmodule Aqua.ScheduleNotes do
   @moduledoc """
   A schedule that asked to keep what it did. `keep_outcome: true` in a
-  schedule's metadata (`Cyfr.Schedules.Provider`) files every completed run's output
-  as a note in the schedule's estate (`Aqua.Notes`) — named by the
-  metadata's `note_name`, else by the schedule's id — with the schedule
-  and the execution as provenance, capped so one run cannot fill a
-  ledger. Each run replaces the note before it.
+  schedule's metadata (`Cyfr.Schedules.Provider`) files every completed run's
+  output as a note in the schedule's estate (`Aqua.Notes`) — named by the
+  metadata's `note_name`, else by the schedule's id — with the schedule and
+  the execution as provenance, capped so one run cannot fill a ledger. Each
+  run replaces the note before it.
 
-  A telemetry consumer of `[:cyfr, :schedules, :completed]`, attached
-  at boot by `Cyfr.Application`. The write runs under the server's own
-  context, able to read and write storage and nothing more, refocused on
-  the schedule's athanor — the estate the run itself ran in — and an
-  archived athanor's schedule writes nothing. The handler runs inside the
-  scheduler and never raises into it: a note that cannot be kept is
-  logged, and the run stands.
+  One process per member, subscribed to the committed completions
+  (`Cyfr.Bus.schedule_completions/0`, `Cyfr.Bus.ScheduleCompleted`). Every
+  member hears every completion; this one acts only when its own member
+  holds its slot and that slot is the completion's issuer
+  (`Arca.ControlPlane.held?/0`, `held/0`), so a peer's delivery writes
+  nothing. The slot is asked again just before the write, and a note that
+  already records the completion's execution is not written again, which
+  bounds a duplicate delivery to no second note.
+
+  The write runs under the server's own context, able to read and write
+  storage and nothing more, refocused on the schedule's athanor — the
+  estate the run itself ran in — and an archived athanor's schedule writes
+  nothing. Keeping a note is best effort: one that cannot be kept is
+  logged, and the run stands. No takeover and no guaranteed delivery is
+  promised.
   """
+
+  use GenServer
 
   require Logger
 
+  alias Cyfr.Bus.ScheduleCompleted
   alias Sanctum.Context
 
-  @event [:cyfr, :schedules, :completed]
-  @handler_id "notes-schedule-completed"
-  @max_bytes 64 * 1024
   @marker "\n\n[cut — the outcome was longer than 64 KiB]"
 
-  @doc "The event this module consumes."
-  @spec event() :: [atom()]
-  def event, do: @event
-
-  @doc "Attach at boot; detaching first keeps a restart from attaching twice."
-  @spec attach() :: :ok | {:error, :already_exists}
-  def attach do
-    _ = :telemetry.detach(@handler_id)
-    :telemetry.attach(@handler_id, @event, &__MODULE__.handle_event/4, nil)
+  @doc false
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  # `:telemetry` detaches a handler that fails in ANY way — a raise, an
-  # exit (a store checkout timing out arrives as one), a throw — for the
-  # life of the node, silently. Every class is caught, so one bad run
-  # costs one note and not every note after it.
-  @doc false
-  def handle_event(@event, _measurements, metadata, _config) do
-    case wanted(metadata) do
-      {:ok, name} -> keep(metadata, name)
-      :skip -> :ok
-    end
+  @impl true
+  def init(_opts) do
+    :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
+    {:ok, %{}}
+  end
+
+  @impl true
+  def handle_info(%ScheduleCompleted{} = completed, state) do
+    _ = keep(completed)
+    {:noreply, state}
+  end
+
+  def handle_info(msg, state) do
+    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    {:noreply, state}
+  end
+
+  @doc """
+  What this member does with `completed`: `:kept` when it filed the note,
+  `:duplicate` when the note already records that execution, `:skipped`
+  when the run asked for nothing or another member issued it, and
+  `:not_kept` when the write failed or the slot was lost before it. Never
+  raises.
+  """
+  @spec keep(ScheduleCompleted.t()) :: :kept | :duplicate | :skipped | :not_kept
+  def keep(%ScheduleCompleted{keep_outcome: false}), do: :skipped
+
+  def keep(%ScheduleCompleted{} = completed) do
+    if issuer?(completed.issuer_member), do: write(completed), else: :skipped
   catch
     kind, reason ->
       Logger.warning(
-        "[ScheduleNotes] note not kept for schedule #{inspect(metadata[:schedule_id])}: " <>
+        "[ScheduleNotes] note not kept for schedule #{completed.schedule_id}: " <>
           Exception.format_banner(kind, reason)
       )
 
-      :ok
+      :not_kept
   end
 
-  # `keep_outcome` true in the row's metadata, which rides the event as the
-  # JSON the row holds. Anything else — absent, false, unreadable — is a
-  # run nobody asked to keep.
-  defp wanted(metadata) do
-    case decode(metadata[:metadata]) do
-      %{"keep_outcome" => true} = wants ->
-        case name(wants["note_name"], metadata) do
-          nil ->
-            Logger.warning("[ScheduleNotes] a completed run named no schedule; nothing kept")
-            :skip
-
-          name ->
-            {:ok, name}
-        end
-
-      _ ->
-        :skip
-    end
+  # This member holds its slot, and it is the slot that published: taken
+  # the same way on both sides (`ScheduleCompleted.issuer/1`).
+  defp issuer?(issuer) do
+    Arca.ControlPlane.held?() and ScheduleCompleted.issuer(Arca.ControlPlane.held()) == issuer
   end
 
-  defp decode(%{} = decoded), do: decoded
+  defp write(%ScheduleCompleted{} = completed) do
+    name = completed.note_name || completed.schedule_id
 
-  defp decode(raw) do
-    case decode_stored(raw, %{}, "metadata") do
-      %{} = decoded -> decoded
-      _ -> %{}
-    end
-  end
-
-  # A stored JSON column that does not decode reads as its default. The
-  # line names the column and its size, never its bytes.
-  defp decode_stored(nil, default, _field), do: default
-  defp decode_stored("", default, _field), do: default
-
-  defp decode_stored(json, default, field) when is_binary(json) do
-    case Cyfr.Json.decode(json) do
-      {:ok, value} ->
-        value
-
-      {:error, :invalid_json} ->
-        Logger.warning(
-          "[Aqua.ScheduleNotes] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
-        )
-
-        default
-    end
-  end
-
-  # The operator's `note_name` when set (the ledger's grammar judges it),
-  # else the schedule's own id — grammar-safe and unique, where a
-  # component reference is neither.
-  defp name(note_name, _metadata) when is_binary(note_name) and note_name != "", do: note_name
-  defp name(_none, %{schedule_id: id}) when is_binary(id) and id != "", do: id
-  defp name(_none, _metadata), do: nil
-
-  defp keep(metadata, name) do
     internal =
       Context.internal(
-        user_id: metadata[:user_id] || "system",
+        user_id: completed.actor.user_id || "system",
         permissions: [:storage_read, :storage_write]
       )
 
-    with {:ok, ctx} <- Context.refocus(internal, metadata[:athanor_id]),
+    with {:ok, ctx} <- Context.refocus(internal, completed.athanor_id),
+         :fresh <- recorded(ctx, name, completed.execution_id),
+         true <- Arca.ControlPlane.held?() || :lost,
          {:ok, _} <-
-           Aqua.Notes.keep(ctx, name, body(metadata[:output]),
-             kept_by: "schedule:" <> to_string(metadata[:schedule_id]),
-             execution: metadata[:execution_id]
+           Aqua.Notes.keep(ctx, name, body(completed),
+             kept_by: "schedule:" <> completed.schedule_id,
+             execution: completed.execution_id
            ) do
-      :ok
+      :kept
     else
+      :recorded ->
+        :duplicate
+
+      :lost ->
+        Logger.info(
+          "[ScheduleNotes] slot lost before the note of schedule #{completed.schedule_id} " <>
+            "was kept; nothing written"
+        )
+
+        :not_kept
+
       # The furnace closed between the fire and the finish: nothing to keep.
       {:error, :archived} ->
-        :ok
+        :skipped
 
       {:error, reason} ->
         Logger.warning(
-          "[ScheduleNotes] note not kept for schedule #{inspect(metadata[:schedule_id])}: " <>
+          "[ScheduleNotes] note not kept for schedule #{completed.schedule_id}: " <>
             inspect(reason)
         )
 
-        :ok
+        :not_kept
     end
   end
 
-  defp body(output) when is_binary(output), do: Aqua.Text.cut(output, @max_bytes, @marker)
+  # Whether the note already records this execution — the one question a
+  # second delivery of the same completion must answer before it writes.
+  defp recorded(ctx, name, execution_id) do
+    case Aqua.Notes.read(ctx, name) do
+      {:ok, %{execution: ^execution_id}} -> :recorded
+      _ -> :fresh
+    end
+  end
 
-  defp body(output), do: output |> Cyfr.Json.safe_encode() |> Aqua.Text.cut(@max_bytes, @marker)
+  defp body(%ScheduleCompleted{output: nil}), do: "null"
+  defp body(%ScheduleCompleted{output: output, truncated: true}), do: output <> @marker
+  defp body(%ScheduleCompleted{output: output}), do: output
 end

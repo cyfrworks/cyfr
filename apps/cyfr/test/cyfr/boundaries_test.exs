@@ -824,14 +824,79 @@ defmodule Cyfr.BoundariesTest do
     end
 
     test "a surface that widens is reported against its row" do
-      row = Enum.find(Boundaries.surfaces(), &(&1.into == "Emissary" and &1.allow == []))
+      row = Enum.find(Boundaries.surfaces(), &(&1.into == "Compendium" and &1.allow == []))
 
       planted = [
         {"apps/sanctum/lib/sanctum/planted.ex",
-         CodeLines.aliases("defmodule Sanctum.Planted do\n  alias Emissary.MCP.Tools\nend\n")}
+         CodeLines.aliases(
+           "defmodule Sanctum.Planted do\n  alias Compendium.Registry.Client\nend\n"
+         )}
       ]
 
-      assert Boundaries.surface_violations(row, planted) == ["Emissary.MCP"]
+      assert Boundaries.surface_violations(row, planted) == ["Compendium.Registry"]
+    end
+
+    test "a foundation that broadcasts, names the PubSub server or reaches the bus is reported" do
+      planted = [
+        {"apps/sanctum/lib/sanctum/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Sanctum.Planted do
+           def announce(topic), do: Phoenix.PubSub.broadcast(Cyfr.PubSub, topic, :changed)
+           def topic(actor), do: Cyfr.Bus.notify(actor)
+         end
+         ''')},
+        {"apps/arca/lib/arca/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Arca.Planted do
+           alias Cyfr.Bus.Components
+           def announce(actor), do: Components.new(actor, :changed)
+         end
+         ''')}
+      ]
+
+      reported =
+        for into <- ["Phoenix.PubSub", "Cyfr.PubSub", "Cyfr.Bus"],
+            row = Enum.find(Boundaries.surfaces(), &(&1.into == into)),
+            do: {into, Boundaries.surface_violations(row, planted)}
+
+      assert reported == [
+               {"Phoenix.PubSub", ["Phoenix.PubSub"]},
+               {"Cyfr.PubSub", ["Cyfr.PubSub"]},
+               {"Cyfr.Bus", ["Cyfr.Bus"]}
+             ]
+
+      for into <- ["Phoenix.PubSub", "Cyfr.PubSub", "Cyfr.Bus"] do
+        row = Enum.find(Boundaries.surfaces(), &(&1.into == into))
+        assert "apps/sanctum/lib/**/*.ex" in row.from and "apps/arca/lib/**/*.ex" in row.from
+        assert row.allow == []
+      end
+    end
+
+    test "the bus names nothing of the identity domain, a domain or a surface" do
+      named = names(Boundaries.bus_free().from)
+
+      assert Enum.sum(for {_path, names} <- named, do: length(names)) > 20,
+             "the bus's own scan found no names — it is not reading"
+
+      assert Boundaries.bus_violations(named) == []
+
+      planted = [
+        {"apps/cyfr/lib/cyfr/bus/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Cyfr.Bus.Planted do
+           alias Sanctum.Context
+           def a(%Context{} = ctx), do: Aqua.Runner.subscribe(ctx.athanor_id, "t")
+           def b, do: Cyfr.Execution.Events.flush("e")
+           def c, do: Cyfr.Actor.system()
+         end
+         ''')}
+      ]
+
+      assert Boundaries.bus_violations(planted) == [
+               "apps/cyfr/lib/cyfr/bus/planted.ex:2 names Sanctum.Context",
+               "apps/cyfr/lib/cyfr/bus/planted.ex:3 names Aqua.Runner",
+               "apps/cyfr/lib/cyfr/bus/planted.ex:4 names Cyfr.Execution.Events"
+             ]
     end
 
     test "a direct read of a security row in a surface is reported, however it is spelled" do

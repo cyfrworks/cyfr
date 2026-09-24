@@ -13,6 +13,7 @@ defmodule Aqua.TapeTest do
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -20,7 +21,7 @@ defmodule Aqua.TapeTest do
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local()
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
   end
 
@@ -82,14 +83,14 @@ defmodule Aqua.TapeTest do
     assert {:ok, %{message: message, turn: turn, replayed: false}} =
              Tape.accept(ctx, thread.id, send_attrs)
 
-    assert_receive {:thread, thread_id, {:message, %{id: mid}}}
+    assert_receive %ThreadEvent{thread_id: thread_id, kind: :message, data: %{id: mid}}
     assert thread_id == thread.id and mid == message.id
 
     assert {:ok, %{message: %{id: ^mid}, turn: %{id: tid}, replayed: true}} =
              Tape.accept(ctx, thread.id, send_attrs)
 
     assert tid == turn.id
-    refute_receive {:thread, _, {:message, _}}, 100
+    refute_receive %ThreadEvent{kind: :message, data: _}, 100
 
     changed = put_in(send_attrs, [:message, :content], "@aqua something else")
     assert {:error, :client_id_reused} = Tape.accept(ctx, thread.id, changed)
@@ -128,7 +129,7 @@ defmodule Aqua.TapeTest do
     thread: thread
   } do
     turn = started!(ctx, thread, "@aqua read")
-    assert_receive {:thread, _, {:message, _}}
+    assert_receive %ThreadEvent{kind: :message, data: _}
     guest = Sanctum.Context.enter_guest(ctx)
 
     {:ok, step} = Tape.record_model_intent(guest, turn, %{idempotency_key: "model:1"})
@@ -152,9 +153,9 @@ defmodule Aqua.TapeTest do
                ]
              })
 
-    assert_receive {:thread, _, {:message, %{id: text_id}}}
+    assert_receive %ThreadEvent{kind: :message, data: %{id: text_id}}
     assert text_id == text.id
-    assert_receive {:thread, _, {:message, %{id: call_id}}}
+    assert_receive %ThreadEvent{kind: :message, data: %{id: call_id}}
     assert call_id == call.id
 
     assert {:ok, [%{id: ^text_id}, %{id: ^call_id}]} =
@@ -168,14 +169,14 @@ defmodule Aqua.TapeTest do
     assert {:ok, %{result: result}} =
              Tape.close_step(guest, turn, call_step, "ok", %{result: %{content: "line"}})
 
-    assert_receive {:thread, _, {:message, %{id: result_id}}}
+    assert_receive %ThreadEvent{kind: :message, data: %{id: result_id}}
     assert result_id == result.id
 
     # The fence moves: the old turn value writes nothing more.
     {:ok, superseded} = Tape.supersede(ctx, turn)
     assert superseded.fence != turn.fence
     assert {:error, :superseded} = Tape.record_model_intent(guest, turn, %{})
-    refute_receive {:thread, _, _}, 50
+    refute_receive %ThreadEvent{}, 50
 
     # The rows a turn owns but no step produced change what the next request
     # reads, so a superseded runner must not be able to add one either.
@@ -187,15 +188,16 @@ defmodule Aqua.TapeTest do
              })
 
     assert {:error, :superseded} = Tape.append_aborted(guest, turn, "stopped")
-    refute_receive {:thread, _, _}, 50
+    refute_receive %ThreadEvent{}, 50
 
     assert {:ok, finished} = Tape.finish(ctx, superseded, "cancelled", %{error: "stopped"})
     assert finished.status == "cancelled"
-    assert_receive {:thread, _, {:turn_finished}}
+    assert_receive %ThreadEvent{kind: :turn_finished}
   end
 
   test "a card is announced to the estate, and its decision too", %{ctx: ctx, thread: thread} do
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(ctx.athanor_id))
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
     turn = started!(ctx, thread, "@aqua write")
     {:ok, step} = Tape.record_model_intent(ctx, turn, %{})
 
@@ -220,7 +222,7 @@ defmodule Aqua.TapeTest do
                card: %{content: "Write?"}
              })
 
-    assert_receive {:notify, _, :approval_pending, %{approval_id: aid}}
+    assert_receive %Cyfr.Bus.Notify{kind: :approval_pending, payload: %{approval_id: aid}}
     assert aid == approval.id
     assert card.approval_id == approval.id
 
@@ -230,7 +232,7 @@ defmodule Aqua.TapeTest do
                resolution_kind: "continue"
              })
 
-    assert_receive {:notify, _, :approval_resolved, %{decision: "approved"}}
+    assert_receive %Cyfr.Bus.Notify{kind: :approval_resolved, payload: %{decision: "approved"}}
     assert {:ok, []} = Tape.pending_approvals(ctx, turn)
     assert {:ok, %{status: "approved"}} = Tape.approval(ctx, approval.id)
   end

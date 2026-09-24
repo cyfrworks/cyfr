@@ -179,7 +179,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     pane_id = "pane-" <> room.id <> "-pane"
     intents = [%{kind: "copy_clipboard", text: "friday"}, %{kind: "navigate", to: "/activities"}]
 
-    send(pane.pid, {:thread, thread.id, {:intents, intents, user.user_id}})
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :intents,
+      data: %{intents: intents, user_id: user.user_id}
+    })
+
     render(pane)
 
     assert_push_event(pane, "aqua:intents", %{pane: ^pane_id, intents: pushed})
@@ -187,7 +193,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert to == PrismWeb.Focus.path(route(room), "/activities")
 
     # Another member's intents are theirs alone.
-    send(pane.pid, {:thread, thread.id, {:intents, intents, "someone-else"}})
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :intents,
+      data: %{intents: intents, user_id: "someone-else"}
+    })
+
     render(pane)
     refute_push_event(pane, "aqua:intents", %{intents: _})
   end
@@ -207,7 +219,13 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       %{kind: "navigate", to: "/executions?id=exec_a"}
     ]
 
-    send(pane.pid, {:thread, thread.id, {:intents, intents, user.user_id}})
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :intents,
+      data: %{intents: intents, user_id: user.user_id}
+    })
+
     render(pane)
 
     assert_push_event(pane, "aqua:intents", %{intents: pushed})
@@ -255,20 +273,44 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     user: user
   } do
     pane = room_pane(conn, room, thread)
-    send(pane.pid, {:thread, thread.id, {:turn_starting, user.user_id}})
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :turn_starting,
+      data: user.user_id
+    })
+
     assert render(pane) =~ "Thinking"
 
-    send(pane.pid, {:thread, thread.id, {:turn_paused, "trn_x", :uncertain}})
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :turn_paused,
+      data: %{turn_id: "trn_x", reason: :uncertain}
+    })
+
     html = render(pane)
     assert html =~ "Stopped: a tool"
     assert html =~ "Your next message continues this turn"
     refute html =~ "Thinking"
     assert has_element?(pane, ~s(button[phx-click="stop"]))
 
-    send(pane.pid, {:thread, thread.id, {:turn_starting, user.user_id}})
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :turn_starting,
+      data: user.user_id
+    })
+
     refute render(pane) =~ "Stopped: a tool"
 
-    send(pane.pid, {:thread, thread.id, {:turn_finished}})
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :turn_finished
+    })
+
     refute has_element?(pane, ~s(button[phx-click="stop"]))
   end
 end

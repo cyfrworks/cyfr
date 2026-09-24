@@ -187,7 +187,7 @@ defmodule Cyfr.Execution.Dispatch do
         # children's rows first.
         Cascade.fail_children_of(execution_id)
         stop(execution_id, record.athanor_id)
-        emit_cancel_telemetry(ctx, execution_id)
+        Cyfr.Execution.Telemetry.execute_cancelled(record, ctx.user_id)
         {:ok, %{cancelled: true, execution_id: execution_id}}
 
       error ->
@@ -543,13 +543,5 @@ defmodule Cyfr.Execution.Dispatch do
     end
 
     :ok
-  end
-
-  defp emit_cancel_telemetry(ctx, execution_id) do
-    :telemetry.execute(
-      [:cyfr, :opus, :execute, :exception],
-      %{duration: 0, system_time: System.system_time()},
-      %{execution_id: execution_id, user_id: ctx.user_id, error: "cancelled", status: :cancelled}
-    )
   end
 end

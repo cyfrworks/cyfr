@@ -38,6 +38,7 @@ defmodule PrismWeb.ExecutionsLive do
 
   use PrismWeb, :live_view
 
+  alias Cyfr.Bus.Execution
   alias Phoenix.LiveView.JS
 
   require Logger
@@ -47,8 +48,8 @@ defmodule PrismWeb.ExecutionsLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.executions(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
     end
 
     {:ok,
@@ -159,18 +160,18 @@ defmodule PrismWeb.ExecutionsLive do
   # ============================================================================
 
   @impl true
-  def handle_info({:execution_started, metadata, _meas}, socket) do
-    eid = metadata[:execution_id]
+  def handle_info(%Execution{kind: :started} = started, socket) do
+    eid = started.execution_id
 
     if eid && Enum.any?(socket.assigns.executions, &(f(&1, :execution_id) == eid)) do
       {:noreply, socket}
     else
       entry = %{
         execution_id: eid,
-        request_id: metadata[:request_id],
-        parent_execution_id: metadata[:parent_execution_id],
-        reference: metadata[:component] || metadata[:reference],
-        component_type: metadata[:component_type] && to_string(metadata[:component_type]),
+        request_id: started.request_id,
+        parent_execution_id: started.parent_execution_id,
+        reference: started.reference,
+        component_type: started.component_type && to_string(started.component_type),
         status: "running",
         started_at: DateTime.utc_now() |> DateTime.to_iso8601(),
         duration_ms: nil,
@@ -186,13 +187,12 @@ defmodule PrismWeb.ExecutionsLive do
     end
   end
 
-  def handle_info({:execution_completed, metadata, _meas}, socket) do
-    {:noreply, socket |> update_execution(metadata, "completed") |> regroup()}
+  def handle_info(%Execution{kind: :completed} = ended, socket) do
+    {:noreply, socket |> update_execution(ended, "completed") |> regroup()}
   end
 
-  def handle_info({:execution_failed, metadata, _meas}, socket) do
-    status = if metadata[:status] == :cancelled, do: "cancelled", else: "failed"
-    {:noreply, socket |> update_execution(metadata, status) |> regroup()}
+  def handle_info(%Execution{kind: kind} = ended, socket) when kind in [:failed, :cancelled] do
+    {:noreply, socket |> update_execution(ended, Atom.to_string(kind)) |> regroup()}
   end
 
   def handle_info({:load_detail, id}, socket) do
@@ -250,22 +250,19 @@ defmodule PrismWeb.ExecutionsLive do
     end
   end
 
-  defp update_execution(socket, metadata, status) do
-    target = metadata[:execution_id]
+  defp update_execution(socket, %Execution{} = ended, status) do
+    target = ended.execution_id
 
     list =
       Enum.map(socket.assigns.executions, fn exec ->
         if f(exec, :execution_id) == target do
           exec
           |> Map.put(:status, status)
-          |> put_some(:duration_ms, metadata[:duration_ms])
-          |> put_some(:error, metadata[:error])
-          |> put_some(:request_id, metadata[:request_id])
-          |> put_some(
-            :component_type,
-            metadata[:component_type] && to_string(metadata[:component_type])
-          )
-          |> put_some(:parent_execution_id, metadata[:parent_execution_id])
+          |> put_some(:duration_ms, ended.duration_ms)
+          |> put_some(:error, ended.error && to_string(ended.error))
+          |> put_some(:request_id, ended.request_id)
+          |> put_some(:component_type, ended.component_type && to_string(ended.component_type))
+          |> put_some(:parent_execution_id, ended.parent_execution_id)
         else
           exec
         end

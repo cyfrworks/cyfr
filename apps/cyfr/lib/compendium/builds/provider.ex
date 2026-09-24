@@ -13,9 +13,10 @@ defmodule Compendium.Builds.Provider do
   - `toolchains` — the toolchains the builds service reports
   - `status` — a started build's row
 
-  A build's progress and its completion leave from here: each step is
-  broadcast on the build's topic (`Cyfr.Bus.build/2`) and emitted on the
-  calling request's MCP progress stream (`Emissary.MCP.Progress`).
+  A build's progress leaves from here: each step is a `Cyfr.Bus.Progress`
+  on the build's topic and, when the build runs for an MCP request, on that
+  request's (`Cyfr.Bus.broadcast_progress/2`), where the transport streams
+  it to the caller.
   """
 
   @behaviour Cyfr.Ops.Provider
@@ -209,19 +210,18 @@ defmodule Compendium.Builds.Provider do
   end
 
   # The console follows the build's topic; an MCP caller that asked for
-  # progress follows its request's stream. Neither failing fails the build.
+  # progress follows its request's. Neither failing fails the build.
   defp send_progress(ctx, %{build_id: build_id, phase: phase, message: message}) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      Cyfr.Bus.build(build_id, ctx),
-      {:build_progress,
-       %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
-    )
+    actor = Context.actor(ctx)
 
-    Emissary.MCP.Progress.emit(ctx, %{
-      "build_id" => build_id,
-      "phase" => phase,
-      "message" => message
-    })
+    step =
+      Cyfr.Bus.Progress.new(actor, {:build, build_id},
+        request_id: ctx.request_id,
+        phase: phase,
+        message: message
+      )
+
+    _ = Cyfr.Bus.broadcast_progress(actor, step)
+    :ok
   end
 end

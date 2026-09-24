@@ -19,8 +19,8 @@ defmodule Sanctum.Vault do
 
   Every mutation requires the interactive consent class (`:oidc`
   surface, external plane) — no permission wildcard and no scoped key
-  reaches these verbs. Each broadcasts `{:vault_entry_changed, id, verb}`
-  on the tenant `"vault:changed"` topic so dependents (external MCP
+  reaches these verbs. Each announces the change by entry, verb and name
+  (`Sanctum.Telemetry.vault_entry_changed/4`) so dependents (external MCP
   server processes holding resolved headers) reconcile immediately.
 
   What ships to callers is metadata only: names, kinds, field *names*,

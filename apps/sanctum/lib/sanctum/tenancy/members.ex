@@ -18,9 +18,8 @@ defmodule Sanctum.Tenancy.Members do
   outlive the eject. Adding an email the door does not admit also queues a
   request for the platform admin — an invite never opens the door by itself.
 
-  Every change broadcasts `{:membership_changed, %{user_id, athanor_id,
-  change}}` on `"sanctum:memberships:<user_id>"` so a mounted LiveView can
-  re-derive what it shows.
+  Every change is announced (`Sanctum.Telemetry.membership_changed/3`),
+  keyed by the person, so a mounted LiveView can re-derive what it shows.
 
   ## What is decided here, and what is stored below
 
@@ -37,8 +36,6 @@ defmodule Sanctum.Tenancy.Members do
 
   @typedoc "A membership row, as the plain map `Arca.Members` answers."
   @type membership :: %{required(:id) => String.t(), optional(atom()) => term()}
-
-  @topic_prefix "sanctum:memberships:"
 
   @doc """
   Insert a membership. `attrs` must carry `:scope`; an active row `:user_id`,
@@ -532,10 +529,6 @@ defmodule Sanctum.Tenancy.Members do
     do: match?({:ok, 1}, count_by_athanor(athanor_id))
 
   def solo?(_), do: false
-
-  @doc "The PubSub topic a person's LiveViews subscribe to for their own membership changes."
-  @spec topic(String.t()) :: String.t()
-  def topic(user_id) when is_binary(user_id), do: @topic_prefix <> user_id
 
   @doc false
   def broadcast_change(user_id, athanor_id, change) when is_binary(user_id),

@@ -246,8 +246,9 @@ defmodule Cyfr.Test.ChatFixture do
 
     @impl true
     def init({ctx, thread_id}) do
+      actor = Sanctum.Context.actor(ctx)
       :ok = Aqua.Runner.subscribe(thread_id, ctx.athanor_id)
-      :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.executions(ctx.athanor_id))
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
       {:ok, %{ctx: ctx, thread: [], started: [], streams: %{}}}
     end
 
@@ -266,21 +267,21 @@ defmodule Cyfr.Test.ChatFixture do
     end
 
     @impl true
-    def handle_info({:thread, _thread_id, event}, state),
-      do: {:noreply, %{state | thread: [event | state.thread]}}
+    def handle_info(%Cyfr.Bus.ThreadEvent{kind: kind, data: data}, state),
+      do: {:noreply, %{state | thread: [{kind, data} | state.thread]}}
 
-    def handle_info({:execution_started, %{execution_id: id} = metadata, _measurements}, state) do
+    def handle_info(%Cyfr.Bus.Execution{kind: :started, execution_id: id} = started, state) do
       :ok = Cyfr.Execution.subscribe_events(id, state.ctx)
       replayed = Cyfr.Execution.events_since(id, {0, 0}, state.ctx.athanor_id)
 
       state =
-        Enum.reduce(replayed, %{state | started: [metadata | state.started]}, &keep(&2, id, &1))
+        Enum.reduce(replayed, %{state | started: [started | state.started]}, &keep(&2, id, &1))
 
       {:noreply, state}
     end
 
-    def handle_info({:execution_event, %{execution_id: id} = event}, state),
-      do: {:noreply, keep(state, id, event)}
+    def handle_info(%Cyfr.Bus.ExecutionEvent{execution_id: id} = event, state),
+      do: {:noreply, keep(state, id, Cyfr.Bus.ExecutionEvent.event(event))}
 
     def handle_info(_other, state), do: {:noreply, state}
 
@@ -307,11 +308,15 @@ defmodule Cyfr.Test.ChatFixture do
   end
 
   @doc """
-  What the viewer has seen: `thread`, the thread topic's events in order;
-  `started`, the metadata of each execution announced; `streams`, each
-  execution's events by id, in the order they arrived.
+  What the viewer has seen: `thread`, the thread topic's events in order as
+  `{kind, data}`; `started`, each execution announced (`Cyfr.Bus.Execution`);
+  `streams`, each execution's events by id, in the order they arrived.
   """
-  @spec seen(pid()) :: %{thread: [term()], started: [map()], streams: %{String.t() => [map()]}}
+  @spec seen(pid()) :: %{
+          thread: [{atom(), term()}],
+          started: [Cyfr.Bus.Execution.t()],
+          streams: %{String.t() => [map()]}
+        }
   def seen(observer), do: GenServer.call(observer, :seen, 30_000)
 
   @doc "The guest's events of one stream: the `data` of each `emit`, in order."

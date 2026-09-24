@@ -66,6 +66,17 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
     )
   end
 
+  @doc """
+  Every external server process running on this member, as
+  `{name, athanor_id, pid}`: what the reconciler's periodic pass walks.
+  """
+  @spec live() :: [{String.t(), String.t(), pid()}]
+  def live do
+    Registry.select(Emissary.MCP.ExternalServerRegistry, [
+      {{{:"$1", :"$2"}, :"$3", :_}, [], [{{:"$1", :"$2", :"$3"}}]}
+    ])
+  end
+
   @doc "Stop every external server process serving `athanor_id`."
   @spec stop_athanor(String.t()) :: :ok
   def stop_athanor(athanor_id) when is_binary(athanor_id) do

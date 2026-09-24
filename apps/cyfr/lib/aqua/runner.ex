@@ -66,18 +66,17 @@ defmodule Aqua.Runner do
   changing the tape or advancing queued turns. A holding runner recovers
   the open work from its durable rows.
 
-  ## Broadcasts — `{:thread, thread_id, event}`
+  ## Broadcasts — `Cyfr.Bus.ThreadEvent` on `Cyfr.Bus.thread/2`
 
-  The rows from the tape (`{:message, row}`, `{:turn_finished}`,
-  `{:approval_resolved, _}`), and from here `{:turn_starting, user_id}`,
-  `{:turn_started, turn_id}`, `{:queued, n}`, `{:grants, set}`,
-  `{:restart_prompt, text, user_id}`, `{:error, text}`; the loop
-  announces `{:usage, _}`, `{:tool_activity, _}`, `{:intents, _, _}`,
-  `{:consent_required, _, _}`, the running loop's
-  `{:turn_fence, turn_id, fence}`, a chat step's streamed text as
-  `{:delta, _}` and `{:delta_abandoned, marker}` (`Aqua.Loop.Stream`),
+  The rows from the tape (`:message`, `:turn_suspended`, `:turn_finished`,
+  `:approval_resolved`), and from here `:turn_starting`, `:turn_started`,
+  `:turn_paused`, `:queued`, `:grants` and `:restart_prompt`; the loop
+  announces `:usage`, `:tool_activity`, `:intents`, `:consent_required`,
+  the running loop's `:turn_fence`, a chat step's streamed text as
+  `:delta` and its withdrawal as `:delta_abandoned` (`Aqua.Loop.Stream`),
   which the runner keeps for the running turn's current fence until each
-  step's answer lands or is withdrawn.
+  step's answer lands or is withdrawn. `Cyfr.Bus.ThreadEvent` says what
+  each kind's `data` is.
   """
 
   use GenServer, restart: :transient
@@ -86,6 +85,7 @@ defmodule Aqua.Runner do
 
   alias Aqua.Runner.{Admission, RecoveryTable}
   alias Aqua.Tape
+  alias Cyfr.Bus.{Notify, ThreadEvent}
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members}
 
@@ -211,28 +211,29 @@ defmodule Aqua.Runner do
     :exit, _ -> false
   end
 
-  @doc "The PubSub topic a thread's viewers subscribe to, tenant-prefixed."
-  @spec topic(String.t(), String.t()) :: String.t()
-  def topic(thread_id, athanor_id),
-    do: Cyfr.Bus.thread(thread_id, athanor_id)
-
   @doc "Subscribe the calling process to a thread's broadcasts."
   @spec subscribe(String.t(), String.t()) :: :ok | {:error, term()}
-  def subscribe(thread_id, athanor_id),
-    do: Phoenix.PubSub.subscribe(Emissary.PubSub, topic(thread_id, athanor_id))
+  def subscribe(thread_id, athanor_id) do
+    actor = Cyfr.Actor.in_athanor(athanor_id)
+    Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread_id))
+  end
 
   @doc "Undo `subscribe/2` for the calling process."
-  @spec unsubscribe(String.t(), String.t()) :: :ok
-  def unsubscribe(thread_id, athanor_id),
-    do: Phoenix.PubSub.unsubscribe(Emissary.PubSub, topic(thread_id, athanor_id))
+  @spec unsubscribe(String.t(), String.t()) :: :ok | {:error, term()}
+  def unsubscribe(thread_id, athanor_id) do
+    actor = Cyfr.Actor.in_athanor(athanor_id)
+    Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.thread(actor, thread_id))
+  end
 
   @doc "Tell a thread's viewers about a row appended outside a turn (a line said aloud)."
   @spec announce(Aqua.Tape.row()) :: :ok | {:error, term()}
   def announce(%{thread_id: thread_id, athanor_id: athanor_id} = row) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      topic(thread_id, athanor_id),
-      {:thread, thread_id, {:message, row}}
+    actor = Cyfr.Actor.in_athanor(athanor_id)
+
+    Cyfr.Bus.broadcast(
+      actor,
+      Cyfr.Bus.thread(actor, thread_id),
+      Cyfr.Bus.ThreadEvent.new(actor, thread_id, :message, row)
     )
   end
 
@@ -453,7 +454,8 @@ defmodule Aqua.Runner do
     with :ok <- held(),
          {:ok, thread} <- Tape.thread(ctx, thread_id),
          {:ok, %{status: "active"}} <- Athanors.get(athanor_id) do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor_id))
+      actor = Cyfr.Actor.in_athanor(athanor_id)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
       :ok = subscribe(thread.id, athanor_id)
 
       state =
@@ -587,7 +589,9 @@ defmodule Aqua.Runner do
 
         case cancel_work(state, "restart required") do
           {:ok, state} ->
-            if prompt, do: broadcast(state, {:restart_prompt, prompt, ctx.user_id})
+            if prompt,
+              do: broadcast(state, :restart_prompt, %{text: prompt, user_id: ctx.user_id})
+
             {:reply, :ok, state}
 
           {:error, reason, state} ->
@@ -719,7 +723,7 @@ defmodule Aqua.Runner do
         state =
           if busy?(state) do
             state = %{state | queue: state.queue ++ [entry]}
-            broadcast(state, {:queued, length(state.queue)})
+            broadcast(state, :queued, length(state.queue))
             state
           else
             start(state, entry)
@@ -789,8 +793,8 @@ defmodule Aqua.Runner do
   # The loop is a worker of this process: it, and every worker under it,
   # is killed when the runner ends.
   defp run(state, entry, fun) do
-    broadcast(state, {:turn_starting, entry.user_id})
-    broadcast(state, {:turn_started, entry.turn_id})
+    broadcast(state, :turn_starting, entry.user_id)
+    broadcast(state, :turn_started, entry.turn_id)
     task = Aqua.Loop.Worker.async(fun)
 
     state = %{
@@ -809,7 +813,7 @@ defmodule Aqua.Runner do
 
   defp start_next(%{queue: [entry | rest]} = state) do
     state = %{state | queue: rest}
-    broadcast(state, {:queued, length(rest)})
+    broadcast(state, :queued, length(rest))
 
     cond do
       not Members.member?(entry.user_id, state.athanor_id) ->
@@ -881,40 +885,40 @@ defmodule Aqua.Runner do
 
   # A card decided: the paused turn continues once none is pending.
   defp handle_owned_info(
-         {:thread, _id, {:approval_resolved, %{turn_id: turn_id}}},
+         %ThreadEvent{kind: :approval_resolved, data: %{turn_id: turn_id}},
          %{paused: %{turn_id: turn_id}} = state
        ) do
     {:noreply, settle_paused(state)}
   end
 
-  defp handle_owned_info({:thread, _id, {:usage, usage}}, state),
+  defp handle_owned_info(%ThreadEvent{kind: :usage, data: usage}, state),
     do: {:noreply, %{state | usage: usage}}
 
-  defp handle_owned_info({:thread, _id, {:tool_activity, list}}, state),
+  defp handle_owned_info(%ThreadEvent{kind: :tool_activity, data: list}, state),
     do: {:noreply, %{state | tool_activity: list}}
 
   defp handle_owned_info(
-         {:thread, _id, {:turn_fence, turn_id, fence}},
+         %ThreadEvent{kind: :turn_fence, data: %{turn_id: turn_id, fence: fence}},
          %{live: %{turn_id: turn_id}} = state
        ),
        do: {:noreply, %{state | partials: Aqua.Loop.Stream.advance(state.partials, fence)}}
 
   defp handle_owned_info(
-         {:thread, _id, {:delta_abandoned, %{turn_id: turn_id} = marker}},
+         %ThreadEvent{kind: :delta_abandoned, data: %{turn_id: turn_id} = marker},
          %{live: %{turn_id: turn_id}} = state
        ),
        do: {:noreply, %{state | partials: Aqua.Loop.Stream.abandoned(state.partials, marker)}}
 
   defp handle_owned_info(
-         {:thread, _id, {:delta, %{turn_id: turn_id} = delta}},
+         %ThreadEvent{kind: :delta, data: %{turn_id: turn_id} = delta},
          %{live: %{turn_id: turn_id}} = state
        ),
        do: {:noreply, %{state | partials: Aqua.Loop.Stream.add(state.partials, delta)}}
 
-  defp handle_owned_info({:thread, _id, {:message, row}}, state),
+  defp handle_owned_info(%ThreadEvent{kind: :message, data: row}, state),
     do: {:noreply, %{state | partials: Aqua.Loop.Stream.landed(state.partials, row)}}
 
-  defp handle_owned_info({:thread, _id, _event}, state), do: {:noreply, state}
+  defp handle_owned_info(%ThreadEvent{}, state), do: {:noreply, state}
 
   defp handle_owned_info({:expire, turn_id}, %{paused: %{turn_id: turn_id}} = state) do
     Aqua.Approvals.expire_due(state.ctx)
@@ -935,7 +939,7 @@ defmodule Aqua.Runner do
   defp handle_owned_info({:recover, _turn_id}, state), do: {:noreply, state}
 
   # The athanor changed: an archive ends the runner, its turns cut.
-  defp handle_owned_info({:notify, _athanor_id, :athanor_changed, _payload}, state) do
+  defp handle_owned_info(%Notify{kind: :athanor_changed}, state) do
     case Athanors.get(state.athanor_id) do
       {:ok, %{status: "archived"}} ->
         case cancel_work(state, "the athanor was archived") do
@@ -948,7 +952,7 @@ defmodule Aqua.Runner do
     end
   end
 
-  defp handle_owned_info({:notify, _athanor_id, _kind, _payload}, state), do: {:noreply, state}
+  defp handle_owned_info(%Notify{}, state), do: {:noreply, state}
   defp handle_owned_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   defp handle_owned_info(:idle, %{live: nil, paused: nil, queue: [], held: held} = state)
@@ -983,7 +987,7 @@ defmodule Aqua.Runner do
             }
         }
 
-        broadcast(state, {:turn_paused, live.turn_id, reason})
+        broadcast(state, :turn_paused, %{turn_id: live.turn_id, reason: reason})
         settle_paused(state)
 
       {:error, :held} ->
@@ -1020,7 +1024,7 @@ defmodule Aqua.Runner do
         }
 
         state = %{state | live: nil, paused: paused}
-        broadcast(state, {:turn_paused, live.turn_id, paused.reason})
+        broadcast(state, :turn_paused, %{turn_id: live.turn_id, reason: paused.reason})
         {:noreply, settle_paused(state)}
 
       _ ->
@@ -1249,7 +1253,7 @@ defmodule Aqua.Runner do
         queue: Enum.reject(state.queue, &(&1.turn_id == id))
     }
 
-    broadcast(state, {:queued, length(state.queue)})
+    broadcast(state, :queued, length(state.queue))
     touch(state)
   end
 
@@ -1438,7 +1442,7 @@ defmodule Aqua.Runner do
     case Aqua.ToolGrants.allowed_by_agent(ctx, state.id) do
       {:ok, grants} ->
         state = %{state | grants: grants}
-        broadcast(state, {:grants, grants})
+        broadcast(state, :grants, grants)
         state
 
       {:error, _} ->
@@ -1446,7 +1450,7 @@ defmodule Aqua.Runner do
     end
   end
 
-  defp broadcast(state, event), do: Tape.announce(state.ctx, state.id, event)
+  defp broadcast(state, kind, data), do: Tape.announce(state.ctx, state.id, kind, data)
 
   defp touch(state) do
     if state.idle_ref, do: Process.cancel_timer(state.idle_ref)

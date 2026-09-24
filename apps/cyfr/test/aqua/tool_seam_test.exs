@@ -9,11 +9,10 @@ defmodule Aqua.ToolSeamTest do
 
   Checks that assistant-domain MCP dependencies use Aqua.Ops.
 
-  Outside its scope, deliberately: `Emissary.PubSub` used as a process
-  NAME (the application's one supervised PubSub, the posture
-  `Cyfr.Boundaries` rosters for sanctum), and `Aqua.Intents`'
-  read of the console route table, rostered in
-  `Cyfr.Boundaries`.
+  Outside its scope, deliberately: `Aqua.Intents`' read of the console
+  route table, rostered in `Cyfr.Boundaries`. The assistant's live
+  events go through the host's bus (`Cyfr.Bus`), which is not the tool
+  surface.
   """
 
   use ExUnit.Case, async: true

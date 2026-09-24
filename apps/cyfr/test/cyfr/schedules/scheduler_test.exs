@@ -10,6 +10,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
   alias Arca.Schemas.CronSchedule, as: ScheduleRow
+  alias Cyfr.Bus.ScheduleCompleted
   alias Cyfr.Schedules.Scheduler
   alias Cyfr.Test.{AuthorityFixtures, ScriptedWorker}
   alias Sanctum.Test.ConsentFixtures
@@ -166,6 +167,10 @@ defmodule Cyfr.Schedules.SchedulerTest do
     )
 
     on_exit(fn -> :telemetry.detach(id) end)
+
+    # And the committed completion the bus carries, which must follow the
+    # same gates.
+    :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
   end
 
   for loss <- [:lost, :expired], event <- [:completion, :death] do
@@ -211,6 +216,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
       assert Map.has_key?(state.timers, schedule.id)
       assert {CronSchedule.get_for_daemon(schedule.id), occurrences(ctx, schedule)} == before
       refute_received {:schedule_outcome, _}
+      refute_received %ScheduleCompleted{}
 
       if unquote(event) == :completion do
         Arca.ControlPlane.record(:unclaimed)
@@ -247,6 +253,120 @@ defmodule Cyfr.Schedules.SchedulerTest do
       send(scheduler, :recover_occurrences)
       wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
       assert [_] = ScriptedWorker.calls()
+    end
+  end
+
+  describe "the committed completion" do
+    setup do
+      :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
+
+      # The notes keeper hears every completion this suite publishes; its
+      # write is done before the test gives its sandbox back.
+      on_exit(fn -> :sys.get_state(Aqua.ScheduleNotes) end)
+      :ok
+    end
+
+    test "is published once per completed occurrence, after both writes, from this member", %{
+      ctx: ctx
+    } do
+      script!([%{"ran" => true}])
+
+      schedule =
+        due!(
+          create_schedule(ctx, %{metadata: ~s({"keep_outcome": true, "note_name": "nightly"})})
+        )
+
+      scheduler!()
+
+      assert_receive %ScheduleCompleted{schedule_id: schedule_id} = completion, 15_000
+      assert schedule_id == schedule.id
+
+      # Both writes were committed before it was said.
+      assert [%{state: "completed", id: occurrence_id, execution_id: execution_id}] =
+               occurrences(ctx, schedule)
+
+      assert {:ok, %{run_count: 1, last_execution_id: ^execution_id}} =
+               CronSchedule.get_for_daemon(schedule.id)
+
+      assert completion.occurrence_id == occurrence_id
+      assert completion.execution_id == execution_id
+      assert completion.athanor_id == ctx.athanor_id
+      assert completion.actor.athanor_id == ctx.athanor_id
+      assert completion.keep_outcome and completion.note_name == "nightly"
+      assert is_binary(completion.output) and completion.output =~ "ran"
+      assert %DateTime{} = completion.completed_at
+      # No claimant runs in this suite: the issuer is the member's `:none`.
+      assert completion.issuer_member == ScheduleCompleted.issuer(Arca.ControlPlane.held())
+
+      refute_receive %ScheduleCompleted{}, 300
+    end
+
+    test "carries no output for a schedule that did not ask to keep it", %{ctx: ctx} do
+      script!([%{"ran" => true}])
+      schedule = due!(create_schedule(ctx))
+      scheduler!()
+
+      assert_receive %ScheduleCompleted{schedule_id: id, keep_outcome: false, output: nil}, 15_000
+      assert id == schedule.id
+    end
+
+    test "is not published when recovery closed the occurrence first", %{ctx: ctx} do
+      script!([{:probe, self()}, %{"ran" => true}])
+      schedule = due!(create_schedule(ctx))
+      scheduler = scheduler!()
+      assert_receive {:scripted_probe, worker, _execution_id}, 10_000
+      _ = :sys.get_state(scheduler)
+      task = running_task()
+      ref = Process.monitor(task)
+
+      # The occurrence is closed by another closer while the run is in
+      # flight: the run's own finish moves no row.
+      [%{id: occurrence_id, state: "started"}] = occurrences(ctx, schedule)
+
+      assert {:ok, 1} =
+               ScheduleOccurrences.finish(Sanctum.Context.actor(ctx), occurrence_id, "uncertain")
+
+      send(worker, :continue)
+      assert_receive {:DOWN, ^ref, :process, ^task, _}, 10_000
+      _ = :sys.get_state(scheduler)
+
+      assert [%{state: "uncertain"}] = occurrences(ctx, schedule)
+      refute_received %ScheduleCompleted{}
+    end
+
+    test "is not published when the slot is lost after the writes and before the publish", %{
+      ctx: ctx
+    } do
+      script!([%{"ran" => true}])
+      schedule = due!(create_schedule(ctx))
+
+      # The run's telemetry fires in its own task, after the close and the
+      # run record committed and before the publish's recheck: the slot is
+      # lost exactly there.
+      handler = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :schedules, :completed],
+        fn _event, _measurements, _metadata, _config -> Arca.ControlPlane.record(:lost) end,
+        nil
+      )
+
+      on_exit(fn ->
+        :telemetry.detach(handler)
+        Arca.ControlPlane.record(:unclaimed)
+      end)
+
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+      scheduler!()
+
+      wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
+
+      wait_until(fn ->
+        match?({:ok, %{run_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      refute_receive %ScheduleCompleted{}, 300
     end
   end
 

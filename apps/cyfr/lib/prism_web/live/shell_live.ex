@@ -41,7 +41,8 @@ defmodule PrismWeb.ShellLive do
         ctx = socket.assigns.context
 
         if ctx.athanor_id do
-          Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(ctx.athanor_id))
+          actor = Sanctum.Context.actor(ctx)
+          Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
         end
 
         load_tinctures(socket)
@@ -633,7 +634,7 @@ defmodule PrismWeb.ShellLive do
   # An archived athanor must let go of already-mounted shells — every
   # ingress gate refuses it, and a socket invoking tinctures from before
   # the archive must not be the exception.
-  def handle_info({:notify, athanor_id, :athanor_changed, _payload}, socket) do
+  def handle_info(%Cyfr.Bus.Notify{athanor_id: athanor_id, kind: :athanor_changed}, socket) do
     ctx = socket.assigns.context
 
     if athanor_id == ctx.athanor_id and not Sanctum.Tenancy.Athanors.active?(athanor_id) do
@@ -647,7 +648,7 @@ defmodule PrismWeb.ShellLive do
   end
 
   # Other tray traffic on the athanor's topic is for the topbar, not the shell.
-  def handle_info({:notify, _athanor_id, _kind, _payload}, socket), do: {:noreply, socket}
+  def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
     Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)

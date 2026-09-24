@@ -6,7 +6,6 @@ defmodule Prism do
   The console's shell-plane services — what `PrismWeb`'s LiveViews lean on
   that is not itself a page.
 
-  - `Prism.TelemetryBridge` — telemetry → PubSub for live console updates.
   - `Prism.TinctureRegistry` — the member-facing tincture cache, populated
     lazily per athanor.
   - `Prism.Labels` / `Prism.Tray` — mode vocabulary and the notification

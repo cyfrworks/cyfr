@@ -277,12 +277,10 @@ defmodule Compendium.ProjectionReconciler do
   defp tincture_key?(key),
     do: String.starts_with?(key, Compendium.ComponentPath.type_plural("tincture") <> "/")
 
-  defp announce_tinctures(%Context{athanor_id: athanor_id}) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      Cyfr.Bus.tinctures(athanor_id),
-      {:tinctures_changed, athanor_id}
-    )
+  # After the replacement committed: the console's tincture cache re-reads.
+  defp announce_tinctures(%Context{} = ctx) do
+    actor = Context.actor(ctx)
+    Cyfr.Bus.broadcast(actor, Cyfr.Bus.tinctures(actor), Cyfr.Bus.Tinctures.new(actor, :changed))
   end
 
   defp settle_after_ms(opts),

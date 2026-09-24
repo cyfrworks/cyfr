@@ -275,7 +275,13 @@ defmodule PrismWeb.AquaPanelLiveTest do
   end
 
   defp intents(pane, thread, user, intents) do
-    send(pane.pid, {:thread, thread.id, {:intents, intents, user.user_id}})
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :intents,
+      data: %{intents: intents, user_id: user.user_id}
+    })
+
     render(pane)
   end
 

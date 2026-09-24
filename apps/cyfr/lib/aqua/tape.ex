@@ -10,9 +10,9 @@ defmodule Aqua.Tape do
   Each write is one storage transaction (`Arca.TurnStorage`), fenced on
   the turn's `fence`: a runner whose fence moved is refused
   `{:error, :superseded}`. The rows a person sees are broadcast on the
-  thread's topic AFTER the transaction commits, in the vocabulary
-  the console already reads (`{:thread, id, {:message, row}}`);
-  approvals are also announced to the estate (`Sanctum.Notify`). A
+  thread's topic AFTER the transaction commits, as plain maps in
+  `Cyfr.Bus.ThreadEvent`s of kind `:message`; approvals are also
+  announced to the estate (`Sanctum.Notify`). A
   guest-planed context writes here unchanged: the tape is a narrow
   interface, not a plane, and the tenant is the context's.
 
@@ -72,7 +72,7 @@ defmodule Aqua.Tape do
   def accept(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
     case TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread_id, attrs) do
       {:ok, %{message: message, turn: turn}} ->
-        broadcast(ctx, thread_id, {:message, message})
+        broadcast(ctx, thread_id, :message, message)
         {:ok, %{message: message, turn: turn, replayed: false}}
 
       {:error, reason} when reason in [:duplicate_client_id, :message_id_reused] ->
@@ -125,7 +125,7 @@ defmodule Aqua.Tape do
   @spec append(Context.t(), String.t(), map()) :: {:ok, row()} | {:error, term()}
   def append(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
     with {:ok, row} <- Threads.append(Sanctum.Context.actor(ctx), thread_id, attrs) do
-      broadcast(ctx, thread_id, {:message, row})
+      broadcast(ctx, thread_id, :message, row)
       {:ok, row}
     end
   end
@@ -151,7 +151,7 @@ defmodule Aqua.Tape do
       |> Map.put(:fence, turn.fence)
 
     with {:ok, row} <- TurnStorage.append_turn_row(Sanctum.Context.actor(ctx), turn.id, attrs) do
-      broadcast(ctx, turn.thread_id, {:message, row})
+      broadcast(ctx, turn.thread_id, :message, row)
       {:ok, row}
     end
   end
@@ -224,7 +224,7 @@ defmodule Aqua.Tape do
              fence: turn.fence,
              reason: reason
            }) do
-      broadcast(ctx, turn.thread_id, {:turn_suspended, turn.id})
+      broadcast(ctx, turn.thread_id, :turn_suspended, turn.id)
       {:ok, suspended}
     end
   end
@@ -272,7 +272,7 @@ defmodule Aqua.Tape do
              |> Map.put_new(:fence, turn.fence)
              |> standing(if(status == "completed", do: :current, else: :retiring))
            ) do
-      broadcast(ctx, turn.thread_id, {:turn_finished})
+      broadcast(ctx, turn.thread_id, :turn_finished, nil)
       {:ok, finished}
     end
   end
@@ -342,8 +342,8 @@ defmodule Aqua.Tape do
              model_step.id,
              Map.put_new(response, :fence, turn.fence)
            ) do
-      if text, do: broadcast(ctx, turn.thread_id, {:message, text})
-      Enum.each(calls, &broadcast(ctx, turn.thread_id, {:message, &1.message}))
+      if text, do: broadcast(ctx, turn.thread_id, :message, text)
+      Enum.each(calls, &broadcast(ctx, turn.thread_id, :message, &1.message))
       {:ok, recorded}
     end
   end
@@ -364,7 +364,7 @@ defmodule Aqua.Tape do
              outcome,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
-      if result, do: broadcast(ctx, turn.thread_id, {:message, result})
+      if result, do: broadcast(ctx, turn.thread_id, :message, result)
       {:ok, closed}
     end
   end
@@ -398,7 +398,7 @@ defmodule Aqua.Tape do
              turn.id,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
-      broadcast(ctx, turn.thread_id, {:message, aborted})
+      broadcast(ctx, turn.thread_id, :message, aborted)
       {:ok, paused}
     end
   end
@@ -432,7 +432,7 @@ defmodule Aqua.Tape do
            }) do
       Enum.each(steps, fn step ->
         with {:ok, row} <- Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
-             do: broadcast(ctx, turn.thread_id, {:message, row})
+             do: broadcast(ctx, turn.thread_id, :message, row)
       end)
 
       {:ok, steps}
@@ -474,7 +474,7 @@ defmodule Aqua.Tape do
              step.id,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
-      broadcast(ctx, turn.thread_id, {:message, card})
+      broadcast(ctx, turn.thread_id, :message, card)
 
       Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_pending, %{
         thread_id: turn.thread_id,
@@ -497,11 +497,11 @@ defmodule Aqua.Tape do
              decision,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
-      broadcast(ctx, turn.thread_id, {:message, card})
+      broadcast(ctx, turn.thread_id, :message, card)
 
       if step.result_message_id do
         with {:ok, row} <- Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
-             do: broadcast(ctx, turn.thread_id, {:message, row})
+             do: broadcast(ctx, turn.thread_id, :message, row)
       end
 
       Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_resolved, %{
@@ -513,15 +513,12 @@ defmodule Aqua.Tape do
 
       # The runner holding the turn learns the decision from the topic,
       # after the commit like every row.
-      broadcast(ctx, turn.thread_id, {
-        :approval_resolved,
-        %{
-          approval_id: approval_id,
-          turn_id: turn.id,
-          step_id: step.id,
-          decision: decision,
-          resolution_kind: Map.get(resolved.approval, :resolution_kind)
-        }
+      broadcast(ctx, turn.thread_id, :approval_resolved, %{
+        approval_id: approval_id,
+        turn_id: turn.id,
+        step_id: step.id,
+        decision: decision,
+        resolution_kind: Map.get(resolved.approval, :resolution_kind)
       })
 
       {:ok, resolved}
@@ -542,7 +539,7 @@ defmodule Aqua.Tape do
              parent.id,
              Map.put_new(attrs, :fence, parent.fence)
            ) do
-      broadcast(ctx, parent.thread_id, {:message, task})
+      broadcast(ctx, parent.thread_id, :message, task)
       {:ok, opened}
     end
   end
@@ -639,11 +636,11 @@ defmodule Aqua.Tape do
   @doc """
   Announce an ephemeral console event on the thread's topic — a
   delta, the tool activity, the usage, the sender's intents — without a
-  row.
+  row: a `Cyfr.Bus.ThreadEvent` of `kind` carrying `data`.
   """
-  @spec announce(Context.t(), String.t(), term()) :: :ok
-  def announce(%Context{} = ctx, thread_id, event),
-    do: broadcast(ctx, thread_id, event)
+  @spec announce(Context.t(), String.t(), Cyfr.Bus.ThreadEvent.kind(), term()) :: :ok
+  def announce(%Context{} = ctx, thread_id, kind, data \\ nil),
+    do: broadcast(ctx, thread_id, kind, data)
 
   @doc "The `tool_call` payloads of the calls a turn and its clones closed."
   @spec closed_calls(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
@@ -669,23 +666,18 @@ defmodule Aqua.Tape do
   def latest_messages(%Context{} = ctx, thread_id, n),
     do: Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, n)
 
-  @doc "The topic a thread's rows are broadcast on."
-  @spec topic(Context.t(), String.t()) :: String.t()
-  def topic(%Context{} = ctx, thread_id),
-    do: Cyfr.Bus.thread(thread_id, Context.athanor!(ctx))
-
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
 
-  # Durable rows reach viewers only after their transaction committed.
-  defp broadcast(ctx, thread_id, event) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      topic(ctx, thread_id),
-      {:thread, thread_id, event}
-    )
-
+  # Durable rows reach viewers only after their transaction committed. A
+  # row is plain data already (`Arca.TurnStorage` answers maps); a
+  # refused or failed publish costs the viewers one update, never the
+  # write.
+  defp broadcast(ctx, thread_id, kind, data) do
+    actor = Sanctum.Context.actor(ctx)
+    event = Cyfr.Bus.ThreadEvent.new(actor, thread_id, kind, data)
+    _ = Cyfr.Bus.broadcast(actor, Cyfr.Bus.thread(actor, thread_id), event)
     :ok
   end
 

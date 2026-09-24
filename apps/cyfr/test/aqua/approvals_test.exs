@@ -16,6 +16,7 @@ defmodule Aqua.ApprovalsTest do
 
   alias Aqua.{Approvals, Launch, Tape}
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Sanctum.Consent.{Bootstrap}
   alias Sanctum.Tenancy.{Members, Users}
 
@@ -56,7 +57,7 @@ defmodule Aqua.ApprovalsTest do
     {:ok, %{capability_digest: capability}} = Compendium.AgentIndex.snapshot(ctx, "aqua")
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
 
     pins = %{profile_id: profile_id, consent_id: consent_id, agent_capability_digest: capability}
     {:ok, ctx: ctx, thread: thread, pins: pins}
@@ -151,7 +152,10 @@ defmodule Aqua.ApprovalsTest do
             %{decision: "approved", resolution_kind: "continue", replayed: false, pending: 0}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
-    assert_receive {:thread, _, {:approval_resolved, %{approval_id: aid, decision: "approved"}}}
+    assert_receive %ThreadEvent{
+      kind: :approval_resolved,
+      data: %{approval_id: aid, decision: "approved"}
+    }
 
     assert aid == approval.id
     assert {:ok, %{dispatch_state: "proposed", kind: "tool"}} = Tape.step(ctx, step.id)

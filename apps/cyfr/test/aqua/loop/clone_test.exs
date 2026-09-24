@@ -18,6 +18,7 @@ defmodule Aqua.Loop.CloneTest do
   alias Aqua.Loop.Clone
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Compendium.{AgentIndex, AgentSource, AquaPath}
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap, Commit, Plan}
@@ -285,7 +286,7 @@ defmodule Aqua.Loop.CloneTest do
     ctx: ctx,
     thread: thread
   } do
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     turn = accept!(ctx, thread, "@aqua plan this")
 
     start_supervised!(
@@ -304,11 +305,17 @@ defmodule Aqua.Loop.CloneTest do
 
     turn_id = turn.id
 
-    assert_receive {:thread, _,
-                    {:delta, %{text: "planning", role: "planner", turn_id: ^turn_id}}},
+    assert_receive %ThreadEvent{
+                     kind: :delta,
+                     data: %{text: "planning", role: "planner", turn_id: ^turn_id}
+                   },
                    5_000
 
-    assert_receive {:thread, _, {:delta, %{text: "done", role: nil, turn_id: ^turn_id}}}, 5_000
+    assert_receive %ThreadEvent{
+                     kind: :delta,
+                     data: %{text: "done", role: nil, turn_id: ^turn_id}
+                   },
+                   5_000
   end
 
   test "a turn cut while its clone works stops the clone, which writes nothing more", %{

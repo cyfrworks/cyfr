@@ -178,14 +178,14 @@ defmodule Sanctum.Tenancy.UsersTest do
     {:ok, session} = Sanctum.TestContext.create_session(ctx)
     {:ok, %{api_key: key}} = Sanctum.TestContext.create_key(ctx, %{name: "k4"})
 
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Session.topic())
+    Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
 
     assert {:ok, denied} = Users.deny(u)
     assert denied.status == "denied"
     assert denied.denied_at
 
     assert {:error, _} = Sanctum.Session.load(session.token, surface: :console)
-    assert_receive {:sessions_revoked, uid}
+    assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: uid}
     assert uid == u.id
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)

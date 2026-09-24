@@ -2,12 +2,16 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Aqua.ScheduleNotesTest do
-  # A schedule that asked to keep its outcome: the handler files a note in
-  # the schedule's estate with the run as provenance, capped, and writes
-  # nothing for a run nobody asked to keep or into a closed furnace.
+  # A schedule that asked to keep its outcome: the committed completion
+  # files a note in the schedule's estate with the run as provenance,
+  # capped, once per execution, and only on the member that issued it; a
+  # run nobody asked to keep, a closed furnace or a lost slot writes
+  # nothing.
   use ExUnit.Case, async: false
 
+  alias Arca.ControlPlane
   alias Aqua.ScheduleNotes
+  alias Cyfr.Bus.ScheduleCompleted
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -25,6 +29,8 @@ defmodule Aqua.ScheduleNotesTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
+    on_exit(fn -> ControlPlane.record(:unclaimed) end)
+
     n = System.unique_integer([:positive])
     user = "local|idp|sched-#{n}"
     {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(user, "Ops #{n}")
@@ -32,152 +38,177 @@ defmodule Aqua.ScheduleNotesTest do
     {:ok, user: user, estate: estate, ctx: ctx}
   end
 
+  # What the scheduler publishes once the occurrence's close and the run's
+  # record committed, from this member's own slot.
   defp completed(estate, user, overrides \\ %{}) do
-    Map.merge(
-      %{
-        request_id: "req_1",
-        schedule_id: "sched_#{System.unique_integer([:positive])}",
-        # What the scheduler really carries: the pinned component reference,
-        # which the ledger's name grammar would refuse as a note name.
-        reference: "formula:local.daily-report:1.2.3",
-        execution_id: "exec_1",
-        athanor_id: estate.id,
-        user_id: user,
-        output: %{"summary" => "42 rows reconciled"},
-        metadata: ~s({"keep_outcome": true})
-      },
-      overrides
-    )
-  end
+    actor = %{Cyfr.Actor.in_athanor(estate.id) | user_id: user}
 
-  defp fire(metadata), do: ScheduleNotes.handle_event(ScheduleNotes.event(), %{}, metadata, nil)
+    fields =
+      Map.merge(
+        %{
+          issuer_member: ScheduleCompleted.issuer(ControlPlane.held()),
+          schedule_id: "sched_#{System.unique_integer([:positive])}",
+          execution_id: "exec_#{System.unique_integer([:positive])}",
+          occurrence_id: "occ_1",
+          completed_at: DateTime.utc_now(),
+          keep_outcome: true,
+          output: %{"summary" => "42 rows reconciled"}
+        },
+        overrides
+      )
+
+    ScheduleCompleted.new(actor, fields)
+  end
 
   test "a completed run that asked to be kept files a note, named by the schedule's id, with the run as provenance",
        %{estate: estate, user: user, ctx: ctx} do
-    metadata = completed(estate, user)
-    assert :ok = fire(metadata)
+    completion = completed(estate, user)
+    assert :kept = ScheduleNotes.keep(completion)
 
-    assert {:ok, note} = Aqua.Notes.read(ctx, metadata.schedule_id)
+    assert {:ok, note} = Aqua.Notes.read(ctx, completion.schedule_id)
     assert note.content =~ "42 rows reconciled"
-    assert note.kept_by == "schedule:" <> metadata.schedule_id
-    assert note.execution == "exec_1"
+    assert note.kept_by == "schedule:" <> completion.schedule_id
+    assert note.execution == completion.execution_id
   end
 
   test "the next run replaces the note before it", %{estate: estate, user: user, ctx: ctx} do
-    metadata = completed(estate, user)
-    assert :ok = fire(metadata)
-    assert :ok = fire(%{metadata | output: %{"summary" => "43 rows reconciled"}})
+    first = completed(estate, user)
+    assert :kept = ScheduleNotes.keep(first)
 
-    assert {:ok, note} = Aqua.Notes.read(ctx, metadata.schedule_id)
+    next =
+      completed(estate, user, %{schedule_id: first.schedule_id, output: %{"summary" => "43 rows"}})
+
+    assert :kept = ScheduleNotes.keep(next)
+
+    assert {:ok, note} = Aqua.Notes.read(ctx, first.schedule_id)
     assert note.content =~ "43 rows"
     refute note.content =~ "42 rows"
     assert {:ok, %{notes: [_]}} = Aqua.Notes.list(ctx)
   end
 
+  test "the same completion delivered twice keeps one note, once", %{
+    estate: estate,
+    user: user,
+    ctx: ctx
+  } do
+    completion = completed(estate, user)
+    assert :kept = ScheduleNotes.keep(completion)
+    {:ok, %{kept_at: kept_at}} = Aqua.Notes.read(ctx, completion.schedule_id)
+
+    assert :duplicate = ScheduleNotes.keep(completion)
+    assert {:ok, %{notes: [_]}} = Aqua.Notes.list(ctx)
+    assert {:ok, %{kept_at: ^kept_at}} = Aqua.Notes.read(ctx, completion.schedule_id)
+  end
+
   test "note_name names the note; a string output is kept as it is; a long one is cut with a marker",
        %{estate: estate, user: user, ctx: ctx} do
     long = String.duplicate("é", 40_000)
+    completion = completed(estate, user, %{output: long, note_name: "reconciliation"})
+    assert completion.truncated
 
-    metadata =
-      completed(estate, user, %{
-        output: long,
-        metadata: ~s({"keep_outcome": true, "note_name": "reconciliation"})
-      })
-
-    assert :ok = fire(metadata)
+    assert :kept = ScheduleNotes.keep(completion)
 
     assert {:ok, note} = Aqua.Notes.read(ctx, "reconciliation")
     assert String.valid?(note.content)
     assert String.ends_with?(note.content, "longer than 64 KiB]")
     assert byte_size(note.content) <= 64 * 1024 + 100
-    assert {:error, _} = Aqua.Notes.read(ctx, metadata.schedule_id)
+    assert {:error, _} = Aqua.Notes.read(ctx, completion.schedule_id)
   end
 
   test "a note_name the ledger's grammar refuses writes nothing, and the id is not used instead",
        %{estate: estate, user: user, ctx: ctx} do
-    assert :ok =
-             fire(
-               completed(estate, user, %{
-                 metadata: ~s({"keep_outcome": true, "note_name": "nightly: sync"})
-               })
-             )
+    assert :not_kept =
+             ScheduleNotes.keep(completed(estate, user, %{note_name: "nightly: sync"}))
 
+    assert :not_kept = ScheduleNotes.keep(completed(estate, user, %{note_name: "../escape"}))
     assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
   end
 
-  test "a run nobody asked to keep, or with unreadable metadata, writes nothing",
-       %{estate: estate, user: user, ctx: ctx} do
-    assert :ok = fire(completed(estate, user, %{metadata: nil}))
-    assert :ok = fire(completed(estate, user, %{metadata: ~s({"keep_outcome": false})}))
-    assert :ok = fire(completed(estate, user, %{metadata: "not json"}))
+  test "a run nobody asked to keep writes nothing", %{estate: estate, user: user, ctx: ctx} do
+    assert :skipped = ScheduleNotes.keep(completed(estate, user, %{keep_outcome: false}))
     assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
-  end
-
-  test "a name the ledger refuses is logged, not raised, and the run stands",
-       %{estate: estate, user: user, ctx: ctx} do
-    assert :ok =
-             fire(
-               completed(estate, user, %{
-                 metadata: ~s({"keep_outcome": true, "note_name": "../escape"})
-               })
-             )
-
-    assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
-  end
-
-  test "an event that names no athanor is logged, not raised", %{estate: estate, user: user} do
-    assert :ok = fire(completed(estate, user, %{athanor_id: nil}))
-  end
-
-  test "a failure inside the handler does not detach it", %{estate: estate, user: user} do
-    # Through `:telemetry.execute/3`, which detaches a handler that fails
-    # in any class: an athanor that is not even a string makes the
-    # crossing raise deep inside, and the handler must still be listed
-    # afterwards. Exits and throws share the same catch.
-    before = ScheduleNotes.event() |> :telemetry.list_handlers() |> Enum.map(& &1.id)
-    assert "notes-schedule-completed" in before
-
-    :telemetry.execute(
-      ScheduleNotes.event(),
-      %{},
-      completed(estate, user, %{athanor_id: :nowhere})
-    )
-
-    after_ = ScheduleNotes.event() |> :telemetry.list_handlers() |> Enum.map(& &1.id)
-    assert "notes-schedule-completed" in after_
   end
 
   test "an archived athanor's schedule writes nothing", %{estate: estate, user: user, ctx: ctx} do
     {:ok, _} = Sanctum.Tenancy.Athanors.archive(estate)
-    assert :ok = fire(completed(estate, user))
+    assert :skipped = ScheduleNotes.keep(completed(estate, user))
     assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
   end
 
-  test "the handler is attached at boot, once" do
-    ids = ScheduleNotes.event() |> :telemetry.list_handlers() |> Enum.map(& &1.id)
-    assert "notes-schedule-completed" in ids
-    assert :ok = ScheduleNotes.attach()
-    ids = ScheduleNotes.event() |> :telemetry.list_handlers() |> Enum.map(& &1.id)
-    assert Enum.count(ids, &(&1 == "notes-schedule-completed")) == 1
+  describe "the issuer" do
+    test "another member's completion writes nothing here", %{
+      estate: estate,
+      user: user,
+      ctx: ctx
+    } do
+      peer = %{node: "peer@host", owner: "boot_peer", generation: 1}
+      assert :skipped = ScheduleNotes.keep(completed(estate, user, %{issuer_member: peer}))
+      assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+    end
+
+    test "a member that does not hold its slot writes nothing", %{
+      estate: estate,
+      user: user,
+      ctx: ctx
+    } do
+      completion = completed(estate, user)
+      ControlPlane.record(:lost)
+      assert :skipped = ScheduleNotes.keep(completion)
+      assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+    end
   end
 
-  test "attaching again keeps one handler, so one completed run files one note",
-       %{estate: estate, user: user, ctx: ctx} do
-    assert :ok = ScheduleNotes.attach()
-    assert :ok = ScheduleNotes.attach()
+  describe "the process" do
+    test "hears the committed completion on the bus and keeps its note", %{
+      estate: estate,
+      user: user,
+      ctx: ctx
+    } do
+      completion = completed(estate, user)
+      :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
 
-    handlers =
-      ScheduleNotes.event()
-      |> :telemetry.list_handlers()
-      |> Enum.filter(&(&1.id == "notes-schedule-completed"))
+      # One round trip: the completion ahead of it has been handled.
+      :sys.get_state(ScheduleNotes)
+      assert {:ok, %{execution: execution}} = Aqua.Notes.read(ctx, completion.schedule_id)
+      assert execution == completion.execution_id
+    end
 
-    assert [%{function: function}] = handlers
-    assert function == (&ScheduleNotes.handle_event/4)
+    test "is subscribed again after a restart", %{estate: estate, user: user, ctx: ctx} do
+      before = Process.whereis(ScheduleNotes)
+      ref = Process.monitor(before)
+      Process.exit(before, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^before, :killed}
 
-    metadata = completed(estate, user)
-    :telemetry.execute(ScheduleNotes.event(), %{}, metadata)
+      :ok =
+        Cyfr.Test.Wait.wait_until(
+          fn -> Process.whereis(ScheduleNotes) not in [nil, before] end,
+          5_000,
+          "the notes keeper to restart"
+        )
 
-    assert {:ok, %{notes: [%{name: name}]}} = Aqua.Notes.list(ctx)
-    assert name == metadata.schedule_id
+      restarted = Process.whereis(ScheduleNotes)
+      assert Cyfr.Bus.schedule_completions() in Registry.keys(Cyfr.PubSub, restarted)
+
+      completion = completed(estate, user)
+      :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
+      :sys.get_state(ScheduleNotes)
+      assert {:ok, _note} = Aqua.Notes.read(ctx, completion.schedule_id)
+    end
+
+    test "survives a completion that cannot be kept" do
+      completion =
+        ScheduleCompleted.new(Cyfr.Actor.in_athanor("ath_nowhere"), %{
+          schedule_id: "s",
+          execution_id: "e",
+          keep_outcome: true,
+          issuer_member: ScheduleCompleted.issuer(ControlPlane.held()),
+          output: "x"
+        })
+
+      pid = Process.whereis(ScheduleNotes)
+      :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
+      :sys.get_state(ScheduleNotes)
+      assert Process.whereis(ScheduleNotes) == pid
+    end
   end
 end

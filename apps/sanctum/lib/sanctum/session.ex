@@ -391,8 +391,8 @@ defmodule Sanctum.Session do
 
   @doc """
   Revoke every session of a person (server-denied, or removed as an
-  operator). Broadcasts `{:sessions_revoked, user_id}` on
-  `"sanctum:sessions"` so mounted LiveViews let go.
+  operator). Announces the revocation (`Sanctum.Telemetry.sessions_revoked/1`)
+  so mounted LiveViews let go.
   """
   @spec revoke_all_for_user(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def revoke_all_for_user(user_id) when is_binary(user_id) do
@@ -411,8 +411,8 @@ defmodule Sanctum.Session do
   @doc """
   Announce sessions a committed transaction already removed: drop the
   established-context memo of each token hash that transaction's DELETE
-  returned, then broadcast `{:sessions_revoked, user_id}` as
-  `revoke_all_for_user/1` does. Called only after the commit, so a
+  returned, then announce the revocation as `revoke_all_for_user/1`
+  does. Called only after the commit, so a
   context re-established in between finds no row to cache.
   """
   @spec announce_revoked(String.t(), [binary()]) :: :ok
@@ -606,16 +606,10 @@ defmodule Sanctum.Session do
   defp coerce_datetime(%DateTime{} = dt), do: dt
   defp coerce_datetime(_), do: nil
 
-  @session_topic "sanctum:sessions"
-
-  # Subscribers (e.g. AuthLive) hear that a session was created. No token
-  # travels — a subscriber uses adopt_active_session() to get its own.
-  # Sanctum announces; the host's bridge is what broadcasts.
+  # Subscribers hear that a session was created. No token travels — a
+  # subscriber uses adopt_active_session() to get its own. Sanctum
+  # announces; the host's bridge is what broadcasts.
   defp broadcast_session_created(_session), do: Sanctum.Telemetry.session_created()
 
   defp broadcast_sessions_revoked(user_id), do: Sanctum.Telemetry.sessions_revoked(user_id)
-
-  @doc "The topic session lifecycle events are broadcast on."
-  @spec topic() :: String.t()
-  def topic, do: @session_topic
 end

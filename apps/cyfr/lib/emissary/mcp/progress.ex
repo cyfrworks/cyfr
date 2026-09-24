@@ -12,103 +12,83 @@ defmodule Emissary.MCP.Progress do
   stream with the response. There is no separate stream to open and nothing to
   correlate by hand.
 
-  Channels are keyed on `context.request_id`, which is minted per request, so
-  a channel belongs to exactly one call. A key that was stable per credential
-  would hand two concurrent calls by the same caller a shared channel, and
-  each would receive the other's progress.
+  The work publishes each step as a `Cyfr.Bus.Progress` on its subject's
+  topic and on its request's (`Cyfr.Bus.progress/2` with
+  `{:request, request_id}`); request ids are minted per request, so a request's
+  topic belongs to exactly one call. The connection process subscribes to that
+  topic before it dispatches, binds the client's token here (`listen/2`), and
+  renders each step it hears (`notification/1`). The bus bounds what reaches a
+  backed-up connection (`Cyfr.Bus.BoundedDispatcher`).
 
   ## Contract
 
   Callers opt in to streaming with `_meta.progressToken`. Without it, the
-  server returns one JSON object and `emit/2` is a no-op. Lost progress
+  server returns one JSON object and no process listens. Lost progress
   notifications must not fail the underlying work.
   """
 
   require Logger
 
+  alias Cyfr.Bus.Progress, as: Step
   alias Emissary.MCP.Message
-  alias Sanctum.Context
-
-  @registry __MODULE__.Registry
-
-  # How many undelivered messages the listening connection may hold before
-  # progress is dropped instead of queued. The conn process writes each
-  # notification with a blocking chunk/2, so against a stalled socket a
-  # chatty tool would otherwise grow its mailbox for the life of the
-  # request — the one unbounded queue on this path. Progress is idempotent
-  # display state; dropping under pressure is the honest policy, counted.
-  @max_pending_messages 100
-
-  @doc "Child spec for the registry that maps a request to its listening connection."
-  def child_spec(_opts) do
-    Registry.child_spec(keys: :unique, name: @registry)
-  end
 
   @doc """
-  Register the calling process as the recipient of progress for `request_id`.
-
-  Called by the connection process before it dispatches. The token is stored
-  alongside so `emit/2` can stamp it without threading it through every handler.
+  Bind `progress_token` to `request_id` in the calling process — the
+  connection that streams the request's response. A request id already
+  bound keeps its first token: ids are minted per request, so a second
+  bind means one is being reused, and the first stream stays intact.
   """
   @spec listen(String.t(), term()) :: :ok
   def listen(request_id, progress_token) when is_binary(request_id) do
-    case Registry.register(@registry, request_id, progress_token) do
-      {:ok, _} ->
-        :ok
-
-      {:error, {:already_registered, _}} ->
-        # Request ids are minted per request, so this means one is being reused.
-        # Refusing to overwrite keeps the first listener's stream intact.
-        Logger.warning("[MCP.Progress] request_id #{request_id} already has a listener")
-        :ok
+    case Process.get(key(request_id)) do
+      nil -> Process.put(key(request_id), progress_token)
+      _bound -> Logger.warning("[MCP.Progress] request_id #{request_id} already has a listener")
     end
+
+    :ok
+  end
+
+  @doc "Unbind the calling process's token for `request_id`."
+  @spec forget(String.t()) :: :ok
+  def forget(request_id) when is_binary(request_id) do
+    _ = Process.delete(key(request_id))
+    :ok
   end
 
   @doc """
-  Emit a progress notification for the request `ctx` belongs to.
-
-  `payload` is merged into the notification's params. The `progressToken` the
-  client sent is added here rather than by the caller: a handler should not have
-  to know how the client opted in, only that it has something to report.
+  The `notifications/progress` a step renders to in the calling process:
+  the step's phase and message, its subject's id under the key the client
+  has always read it by, its data, and the token the client bound. A step
+  of a request this process has not bound renders nothing.
   """
-  @spec emit(Context.t(), map()) :: :ok
-  def emit(%Context{request_id: request_id}, payload)
-      when is_binary(request_id) and is_map(payload) do
-    case Registry.lookup(@registry, request_id) do
-      [{pid, progress_token}] ->
-        case Process.info(pid, :message_queue_len) do
-          {:message_queue_len, len} when len < @max_pending_messages ->
-            params = Map.put(payload, "progressToken", progress_token)
+  @spec notification(Step.t()) :: {:ok, map()} | :ignore
+  def notification(%Step{request_id: request_id} = step) when is_binary(request_id) do
+    case Process.get(key(request_id)) do
+      nil ->
+        :ignore
 
-            send(
-              pid,
-              {:mcp_progress, Message.encode_notification("notifications/progress", params)}
-            )
+      token ->
+        {kind, id} = step.subject
 
-            :ok
+        params =
+          (step.data || %{})
+          |> Map.new(fn {k, v} -> {to_string(k), v} end)
+          |> Map.merge(%{
+            subject_key(kind) => id,
+            "phase" => step.phase,
+            "message" => step.message,
+            "progressToken" => token
+          })
 
-          {:message_queue_len, _backed_up} ->
-            # The connection cannot keep up (a stalled socket blocks its
-            # chunk/2). Dropped, counted — never queued without bound.
-            :telemetry.execute(
-              [:cyfr, :mcp, :progress, :dropped],
-              %{count: 1},
-              %{request_id: request_id}
-            )
-
-            :ok
-
-          nil ->
-            # The listener died between lookup and send — same as no stream.
-            :ok
-        end
-
-      [] ->
-        # No stream for this request: either the client did not ask for progress,
-        # or it hung up. Neither is the working code's problem.
-        :ok
+        {:ok, Message.encode_notification("notifications/progress", params)}
     end
   end
 
-  def emit(_ctx, _payload), do: :ok
+  def notification(_step), do: :ignore
+
+  defp subject_key(:build), do: "build_id"
+  defp subject_key(:register), do: "register_id"
+  defp subject_key(:pull), do: "progress_id"
+
+  defp key(request_id), do: {__MODULE__, request_id}
 end

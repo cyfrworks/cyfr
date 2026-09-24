@@ -60,10 +60,8 @@ defmodule PrismWeb.AquaLive do
     # Subscribe before the load asks whether the estate is ready: a fill
     # that finishes in between must still reach this page.
     if connected?(socket) and socket.assigns[:context] do
-      Phoenix.PubSub.subscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.notify(socket.assigns.context.athanor_id)
-      )
+      actor = Sanctum.Context.actor(socket.assigns.context)
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
 
       # Paint first, load after: five tool reads and a registry walk stand
       # between the mount and the roster, and the frame shows its spinner
@@ -115,7 +113,7 @@ defmodule PrismWeb.AquaLive do
 
   # The estate's row changed. A fill completing mints the consents the
   # page reports on, so it is read again.
-  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
+  def handle_info(%Cyfr.Bus.Notify{kind: :athanor_changed}, socket) do
     if connected?(socket) and not socket.assigns.loading, do: send(self(), :load)
     {:noreply, socket}
   end

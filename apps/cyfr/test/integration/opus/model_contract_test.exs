@@ -26,6 +26,7 @@ defmodule Opus.ModelContractTest do
 
   alias Aqua.{Approvals, Runner, Tape}
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ChatFixture, as: Fixture
 
   @moduletag timeout: 180_000
@@ -617,7 +618,7 @@ defmodule Opus.ModelContractTest do
                turn_events(ctx, played, "model.completed", step_id)
 
       assert usage == tokens(2, 3)
-      assert {:turn_finished} in played.seen.thread
+      assert {:turn_finished, nil} in played.seen.thread
     end
   end
 
@@ -665,7 +666,7 @@ defmodule Opus.ModelContractTest do
              &(&1.content =~ "The model could not answer: the provider said no")
            )
 
-    assert {:turn_finished} in played.seen.thread
+    assert {:turn_finished, nil} in played.seen.thread
 
     # The thread takes the next turn, which a script of its own plays.
     again = play(ctx, back(), played.thread)
@@ -755,7 +756,7 @@ defmodule Opus.ModelContractTest do
     assert [%{step_id: ^step_id}] =
              for({:delta_abandoned, marker} <- played.seen.thread, do: marker)
 
-    assert {:turn_finished} in played.seen.thread
+    assert {:turn_finished, nil} in played.seen.thread
 
     assert %{status: "failed"} =
              Arca.Repo.get!(Arca.Schemas.Execution, played.turn.root_execution_id)
@@ -788,7 +789,7 @@ defmodule Opus.ModelContractTest do
     assert %{status: "failed", error_message: ^error} = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert %{type: "execution.failed"} = List.last(Map.fetch!(played.seen.streams, id))
     assert [] = agent_rows(played)
-    assert {:turn_finished} in played.seen.thread
+    assert {:turn_finished, nil} in played.seen.thread
   end
 
   test "an event over the size bound is refused to the guest, and the run goes on", %{ctx: ctx} do
@@ -921,7 +922,7 @@ defmodule Opus.ModelContractTest do
     wait_until(
       fn ->
         seen = Fixture.seen(observer)
-        ended? = turn.status == "paused" or {:turn_finished} in seen.thread
+        ended? = turn.status == "paused" or {:turn_finished, nil} in seen.thread
 
         ended? and
           Enum.all?(closed, fn id ->
@@ -964,17 +965,17 @@ defmodule Opus.ModelContractTest do
   # announced again, which a turn being followed to its end reads past.
   defp await_turn(ctx, turn_id, mode) do
     receive do
-      {:thread, _thread, {:turn_finished}} ->
+      %ThreadEvent{kind: :turn_finished} ->
         :ok
 
-      {:thread, _thread, {:message, %{kind: "approval"}}} when mode == :pauses ->
+      %ThreadEvent{kind: :message, data: %{kind: "approval"}} when mode == :pauses ->
         wait_until(
           fn -> match?({:ok, %{status: "paused"}}, Tape.turn(ctx, turn_id)) end,
           @turn_ms,
           "the turn to pause on its card"
         )
 
-      {:thread, _thread, _event} ->
+      %ThreadEvent{} ->
         await_turn(ctx, turn_id, mode)
     after
       @turn_ms -> flunk("the turn #{turn_id} neither finished nor paused")
@@ -983,7 +984,7 @@ defmodule Opus.ModelContractTest do
 
   defp drain_thread do
     receive do
-      {:thread, _thread, _event} -> drain_thread()
+      %ThreadEvent{} -> drain_thread()
     after
       0 -> :ok
     end
@@ -1032,7 +1033,7 @@ defmodule Opus.ModelContractTest do
   defp kept_text(events) do
     events
     |> Enum.reduce(Aqua.Loop.Stream.new(), fn
-      {:turn_fence, _, fence}, kept -> Aqua.Loop.Stream.advance(kept, fence)
+      {:turn_fence, %{fence: fence}}, kept -> Aqua.Loop.Stream.advance(kept, fence)
       {:delta, delta}, kept -> Aqua.Loop.Stream.add(kept, delta)
       {:delta_abandoned, marker}, kept -> Aqua.Loop.Stream.abandoned(kept, marker)
       {:message, row}, kept -> Aqua.Loop.Stream.landed(kept, row)

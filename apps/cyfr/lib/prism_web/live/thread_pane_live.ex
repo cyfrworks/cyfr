@@ -33,6 +33,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   alias Arca.ThreadStorage, as: Threads
   alias Aqua.Runner
+  alias Cyfr.Bus.ThreadEvent
   alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Users
 
@@ -133,8 +134,10 @@ defmodule PrismWeb.ThreadPaneLive do
   # The estate's own topic. `Sanctum.Provisioning` broadcasts
   # `:athanor_changed` when a fill completes, which is what clears the
   # preparing state without a reload.
-  defp subscribe_estate(%Sanctum.Context{athanor_id: id}) when is_binary(id) and id != "",
-    do: Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.notify(id))
+  defp subscribe_estate(%Sanctum.Context{athanor_id: id} = ctx) when is_binary(id) and id != "" do
+    actor = Sanctum.Context.actor(ctx)
+    Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
+  end
 
   defp subscribe_estate(_ctx), do: :ok
 
@@ -453,11 +456,14 @@ defmodule PrismWeb.ThreadPaneLive do
   # ============================================================================
 
   @impl true
-  def handle_info({:thread, id, event}, %{assigns: %{thread: %{id: id}}} = socket) do
-    {:noreply, handle_thread_event(socket, event)}
+  def handle_info(
+        %ThreadEvent{thread_id: id, kind: kind, data: data},
+        %{assigns: %{thread: %{id: id}}} = socket
+      ) do
+    {:noreply, handle_thread_event(socket, kind, data)}
   end
 
-  def handle_info({:thread, _other, _event}, socket), do: {:noreply, socket}
+  def handle_info(%ThreadEvent{}, socket), do: {:noreply, socket}
 
   # Approval cards dispatch the decision to their LiveView — this one; a
   # refusal reaches the person who clicked.
@@ -515,11 +521,12 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # The host page opened another thread: the room this pane reads changed.
-  def handle_info({:room_in_view, room}, socket), do: {:noreply, assign(socket, :room, room)}
+  def handle_info(%Cyfr.Bus.RoomInView{room: room}, socket),
+    do: {:noreply, assign(socket, :room, room)}
 
   # The estate's row changed. When it was the fill completing, the reads
   # skipped at mount are made now and the pane stops saying "preparing".
-  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
+  def handle_info(%Cyfr.Bus.Notify{kind: :athanor_changed}, socket) do
     ctx = socket.assigns.context
 
     case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
@@ -623,17 +630,15 @@ defmodule PrismWeb.ThreadPaneLive do
   # ---------------------------------------------------------------------------
 
   # A step's text row replaces the answer that streamed for it.
-  defp handle_thread_event(socket, {:message, row}) do
+  defp handle_thread_event(socket, :message, row) do
     socket
     |> upsert_message(row)
     |> assign(:partials, Aqua.Loop.Stream.landed(socket.assigns.partials, row))
   end
 
-  defp handle_thread_event(socket, {:message_updated, row}), do: upsert_message(socket, row)
-
   # A turn may start for a message queued earlier — the sender's draft of
   # a newer message stays where it is (`send_message/3` clears on send).
-  defp handle_thread_event(socket, {:turn_starting, user_id}) do
+  defp handle_thread_event(socket, :turn_starting, user_id) do
     socket = assign(socket, :announcement, "AQUA is thinking.")
 
     socket
@@ -646,9 +651,9 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:token_usage, %{input: 0, output: 0})
   end
 
-  defp handle_thread_event(socket, {:queued, n}), do: assign(socket, :queued, n)
+  defp handle_thread_event(socket, :queued, n), do: assign(socket, :queued, n)
 
-  defp handle_thread_event(socket, {:turn_started, turn_id}) do
+  defp handle_thread_event(socket, :turn_started, turn_id) do
     socket
     |> assign(:running, true)
     |> assign(:paused, false)
@@ -658,7 +663,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # The turn stopped on a card, a launch, or a call whose outcome is
   # unknown; the sender it waits on stays named.
-  defp handle_thread_event(socket, {:turn_paused, _turn_id, reason}) do
+  defp handle_thread_event(socket, :turn_paused, %{reason: reason}) do
     socket =
       if reason == :uncertain,
         do: assign(socket, :announcement, "AQUA stopped: a tool's outcome is unknown."),
@@ -673,7 +678,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:tool_activity, [])
   end
 
-  defp handle_thread_event(socket, {:turn_finished}) do
+  defp handle_thread_event(socket, :turn_finished, _data) do
     socket = assign(socket, :announcement, "AQUA replied.")
 
     socket
@@ -691,41 +696,44 @@ defmodule PrismWeb.ThreadPaneLive do
   # delta for any other turn, or while none runs, is not kept.
   defp handle_thread_event(
          %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
-         {:turn_fence, turn_id, fence}
+         :turn_fence,
+         %{turn_id: turn_id, fence: fence}
        ),
        do: assign(socket, :partials, Aqua.Loop.Stream.advance(socket.assigns.partials, fence))
 
   defp handle_thread_event(
          %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
-         {:delta_abandoned, %{turn_id: turn_id} = marker}
+         :delta_abandoned,
+         %{turn_id: turn_id} = marker
        ),
        do: assign(socket, :partials, Aqua.Loop.Stream.abandoned(socket.assigns.partials, marker))
 
   defp handle_thread_event(
          %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
-         {:delta, %{turn_id: turn_id} = delta}
+         :delta,
+         %{turn_id: turn_id} = delta
        ),
        do: assign(socket, :partials, Aqua.Loop.Stream.add(socket.assigns.partials, delta))
 
-  defp handle_thread_event(socket, {:tool_activity, list}),
+  defp handle_thread_event(socket, :tool_activity, list),
     do: assign(socket, :tool_activity, list)
 
-  defp handle_thread_event(socket, {:usage, usage}), do: assign(socket, :token_usage, usage)
-  defp handle_thread_event(socket, {:grants, grants}), do: assign(socket, :grants, grants)
+  defp handle_thread_event(socket, :usage, usage), do: assign(socket, :token_usage, usage)
+  defp handle_thread_event(socket, :grants, grants), do: assign(socket, :grants, grants)
 
   # Client intents and the consent sheet are the sender's alone: another
   # member's browser must not navigate because this one asked.
-  defp handle_thread_event(socket, {:intents, intents, user_id}) do
+  defp handle_thread_event(socket, :intents, %{intents: intents, user_id: user_id}) do
     if user_id == socket.assigns.context.user_id, do: push_intents(socket, intents), else: socket
   end
 
-  defp handle_thread_event(socket, {:consent_required, ref, user_id}) do
+  defp handle_thread_event(socket, :consent_required, %{ref: ref, user_id: user_id}) do
     if user_id == socket.assigns.context.user_id,
       do: assign(socket, :consent_sheet_ref, ref),
       else: socket
   end
 
-  defp handle_thread_event(socket, {:restart_prompt, text, user_id}) do
+  defp handle_thread_event(socket, :restart_prompt, %{text: text, user_id: user_id}) do
     if user_id == socket.assigns.context.user_id do
       socket
       |> assign(:restart_prompt, text)
@@ -735,8 +743,8 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  defp handle_thread_event(socket, {:error, text}), do: put_flash(socket, :error, text)
-  defp handle_thread_event(socket, _), do: socket
+  defp handle_thread_event(socket, :error, text), do: put_flash(socket, :error, text)
+  defp handle_thread_event(socket, _kind, _data), do: socket
 
   # The stream owns membership and ordering (stream_insert replaces an
   # existing dom id in place); only the two derived facts the templates

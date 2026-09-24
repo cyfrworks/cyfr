@@ -32,7 +32,7 @@ defmodule Prism.TinctureRegistry do
   (`Compendium.ProjectionReconciler.acknowledged_epoch/3`). A read past
   the registry's barrier that finds the epoch moved rescans the athanor,
   so a tincture change reaches the table whether or not the domain's
-  `{:tinctures_changed, id}` announcement on the athanor's tinctures topic
+  `%Cyfr.Bus.Tinctures{kind: :changed}` on the athanor's tinctures topic
   did.
   """
 
@@ -175,7 +175,8 @@ defmodule Prism.TinctureRegistry do
     if MapSet.member?(state.watching, athanor_id) do
       state
     else
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.tinctures(athanor_id))
+      actor = Cyfr.Actor.in_athanor(athanor_id)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.tinctures(actor))
       %{state | watching: MapSet.put(state.watching, athanor_id)}
     end
   end
@@ -204,12 +205,15 @@ defmodule Prism.TinctureRegistry do
 
   # The domain announced a change (`Compendium.ProjectionReconciler`
   # broadcasts on the athanor's tinctures topic after a replacement that
-  # touched a tincture); this cache follows.
+  # touched a tincture); this cache follows. The topic's invocation kinds
+  # are the console's activity feed, not this cache's business.
   @impl true
-  def handle_info({:tinctures_changed, athanor_id}, state) do
+  def handle_info(%Cyfr.Bus.Tinctures{kind: :changed, athanor_id: athanor_id}, state) do
     scan_athanor_into(state.table, athanor_id, scan_epoch(athanor_id))
     {:noreply, state}
   end
+
+  def handle_info(%Cyfr.Bus.Tinctures{}, state), do: {:noreply, state}
 
   @impl true
   def handle_info(msg, state) do

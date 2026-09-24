@@ -35,15 +35,12 @@ defmodule Opus.RestartRequiredTest do
   test "the running execution terminates carrying the typed payload", %{ctx: ctx} do
     record = running!(ctx)
 
-    Phoenix.PubSub.subscribe(
-      Emissary.PubSub,
-      Sanctum.PubSub.topic("execution:events:#{record.id}", ctx)
-    )
+    :ok = Cyfr.Execution.Events.subscribe(record.id, ctx)
 
     assert {:ok, %{cancelled: true}} =
              Cyfr.Execution.Dispatch.cancel_for_restart(ctx, record.id, @payload)
 
-    assert_receive {:execution_event, event}, 2_000
+    assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2_000
     assert event.type == "execution.cancelled"
     assert event.origin == "host"
     assert %{"restart_required" => payload} = event.data
@@ -68,14 +65,11 @@ defmodule Opus.RestartRequiredTest do
   test "an ordinary cancel still reports as cancelled", %{ctx: ctx} do
     record = running!(ctx)
 
-    Phoenix.PubSub.subscribe(
-      Emissary.PubSub,
-      Sanctum.PubSub.topic("execution:events:#{record.id}", ctx)
-    )
+    :ok = Cyfr.Execution.Events.subscribe(record.id, ctx)
 
     assert {:ok, _} = Cyfr.Execution.Dispatch.cancel(ctx, record.id)
 
-    assert_receive {:execution_event, event}, 2_000
+    assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2_000
     assert event.type == "execution.cancelled"
     refute Map.has_key?(event.data, "restart_required")
   end
@@ -83,13 +77,10 @@ defmodule Opus.RestartRequiredTest do
   test "a surface reading the event sees a payload it can act on", %{ctx: ctx} do
     record = running!(ctx)
 
-    Phoenix.PubSub.subscribe(
-      Emissary.PubSub,
-      Sanctum.PubSub.topic("execution:events:#{record.id}", ctx)
-    )
+    :ok = Cyfr.Execution.Events.subscribe(record.id, ctx)
 
     {:ok, _} = Cyfr.Execution.Dispatch.cancel_for_restart(ctx, record.id, @payload)
-    assert_receive {:execution_event, event}, 2_000
+    assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2_000
 
     # Everything the console needs to say "approved — re-run to continue"
     # and to show what was missing, without re-deriving anything.

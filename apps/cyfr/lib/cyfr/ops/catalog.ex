@@ -1530,9 +1530,9 @@ defmodule Cyfr.Ops.Catalog do
   end
 
   defp supervise(name, ctx, opts, handle, execute_fn) do
-    # Registered under the server-minted request id, which is also the key
-    # `Emissary.MCP.Progress` uses — one identity per request across both
-    # subsystems. The transport cancels through this when its caller hangs up;
+    # Registered under the server-minted request id, which is also the
+    # request's progress topic (`Cyfr.Bus.progress/2`) — one identity per
+    # request across both subsystems. The transport cancels through this when its caller hangs up;
     # a context without one (an internal call that bypassed `do_call/4`'s
     # minting) simply is not cancellable that way — its caller cancels by
     # handle.

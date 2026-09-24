@@ -256,10 +256,14 @@ defmodule PrismWeb.ChatLive do
         socket
 
       previous ->
-        if previous,
-          do: Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.Notify.topic(previous.id))
+        if previous do
+          left = Cyfr.Actor.in_athanor(previous.id)
+          Cyfr.Bus.unsubscribe(left, Cyfr.Bus.notify(left))
+        end
 
-        Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor.id))
+        # The page's context is focused on the estate it opens.
+        actor = Sanctum.Context.actor(socket.assigns.context)
+        Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
         assign(socket, :notified, athanor)
     end
   end
@@ -646,14 +650,14 @@ defmodule PrismWeb.ChatLive do
   end
 
   # ============================================================================
-  # PubSub fan-in — the lists, and what the pane tells the page
+  # Bus fan-in — the lists, and what the pane tells the page
   # ============================================================================
 
   # A message on the open thread: that row's title and last activity, and
   # nothing else — the pane holds the tape.
   @impl true
   def handle_info(
-        {:thread, id, {:message, _row}},
+        %Cyfr.Bus.ThreadEvent{thread_id: id, kind: :message},
         %{assigns: %{thread: %{id: id}}} = socket
       ) do
     case Threads.get(Sanctum.Context.actor(focused(socket)), id) do
@@ -662,7 +666,7 @@ defmodule PrismWeb.ChatLive do
     end
   end
 
-  def handle_info({:thread, _id, _event}, socket), do: {:noreply, socket}
+  def handle_info(%Cyfr.Bus.ThreadEvent{}, socket), do: {:noreply, socket}
 
   # The pane is live: this is where a thread switch goes. A pane that
   # mounted on a thread the address has since left is turned at once.
@@ -698,7 +702,7 @@ defmodule PrismWeb.ChatLive do
 
   # A rename or a settings change re-reads the row; an archive sends the
   # page back to the default — the runner behind the thread has stopped.
-  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
+  def handle_info(%Cyfr.Bus.Notify{kind: :athanor_changed}, socket) do
     case Athanors.get(socket.assigns.athanor.id) do
       {:ok, %{status: "archived"} = athanor} ->
         {:noreply,
@@ -716,7 +720,7 @@ defmodule PrismWeb.ChatLive do
   end
 
   # Someone joined or left the estate in view: the people list is theirs.
-  def handle_info({:notify, _athanor_id, :member_changed, _payload}, socket) do
+  def handle_info(%Cyfr.Bus.Notify{kind: :member_changed}, socket) do
     {:noreply, build_rail(socket, Sanctum.Tenancy.list_athanors(socket.assigns.context))}
   end
 
@@ -728,7 +732,7 @@ defmodule PrismWeb.ChatLive do
   # page was showing, so it goes back to the default. Anything else re-reads
   # the set of estates.
   def handle_info(
-        {:membership_changed, %{athanor_id: id, change: :left}},
+        %Cyfr.Bus.Membership{athanor_id: id, change: :left},
         %{assigns: %{athanor: %{id: id}}} = socket
       ) do
     {:noreply,
@@ -737,12 +741,12 @@ defmodule PrismWeb.ChatLive do
      |> push_navigate(to: chat_path(nil))}
   end
 
-  def handle_info({:membership_changed, _change}, socket) do
+  def handle_info(%Cyfr.Bus.Membership{}, socket) do
     {:noreply, build_rail(socket, Sanctum.Tenancy.list_athanors(socket.assigns.context))}
   end
 
   # The estate's other notifies are the bar's (the tray) and the pane's.
-  def handle_info({:notify, _athanor_id, _kind, _payload}, socket), do: {:noreply, socket}
+  def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
     Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)

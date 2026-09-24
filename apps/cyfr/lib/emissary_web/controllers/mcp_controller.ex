@@ -496,10 +496,13 @@ defmodule EmissaryWeb.MCPController do
   end
 
   # Run work in a task while this process streams progress and handles
-  # client disconnection. Register the progress listener before starting
-  # the task so immediate notifications are received.
+  # client disconnection. The request's progress topic is subscribed and
+  # its token bound before the task starts, so immediate notifications are
+  # received; on completion or cancel the subscription ends and whatever
+  # progress was already queued is discarded, so nothing is written after.
   defp streamed_dispatch(conn, context, params, request_id, token) do
-    Progress.listen(request_id, token)
+    topic = progress_topic(context, request_id)
+    :ok = Progress.listen(request_id, token)
 
     logger_metadata = Cyfr.LoggerContext.capture()
 
@@ -509,7 +512,37 @@ defmodule EmissaryWeb.MCPController do
         MCP.handle_message(context, params)
       end)
 
-    pump(conn, task, request_id)
+    result = pump(conn, task, request_id)
+    stop_progress(topic, request_id)
+    result
+  end
+
+  # A caller with no athanor runs nothing that reports progress: nothing is
+  # subscribed, and the request answers as one JSON object.
+  defp progress_topic(%Sanctum.Context{athanor_id: athanor_id} = context, request_id)
+       when is_binary(athanor_id) and athanor_id != "" do
+    actor = Sanctum.Context.actor(context)
+    topic = Cyfr.Bus.progress(actor, {:request, request_id})
+    :ok = Cyfr.Bus.subscribe(actor, topic)
+    {actor, topic}
+  end
+
+  defp progress_topic(_context, _request_id), do: nil
+
+  defp stop_progress(nil, request_id), do: Progress.forget(request_id)
+
+  defp stop_progress({actor, topic}, request_id) do
+    Cyfr.Bus.unsubscribe(actor, topic)
+    drain_progress(request_id)
+    Progress.forget(request_id)
+  end
+
+  defp drain_progress(request_id) do
+    receive do
+      %Cyfr.Bus.Progress{request_id: ^request_id} -> drain_progress(request_id)
+    after
+      0 -> :ok
+    end
   end
 
   # The stream is opened on the first notification rather than up front, because
@@ -521,10 +554,16 @@ defmodule EmissaryWeb.MCPController do
   # nothing and keeps the status codes honest.
   defp pump(conn, %Task{ref: ref} = task, request_id) do
     receive do
-      {:mcp_progress, notification} ->
-        case conn |> open_stream() |> write_event(notification) do
-          {:ok, conn} -> pump(conn, task, request_id)
-          {:error, conn} -> {conn, cancel_work(task, request_id)}
+      %Cyfr.Bus.Progress{request_id: ^request_id} = step ->
+        case Progress.notification(step) do
+          {:ok, notification} ->
+            case conn |> open_stream() |> write_event(notification) do
+              {:ok, conn} -> pump(conn, task, request_id)
+              {:error, conn} -> {conn, cancel_work(task, request_id)}
+            end
+
+          :ignore ->
+            pump(conn, task, request_id)
         end
 
       {^ref, outcome} ->
@@ -669,8 +708,8 @@ defmodule EmissaryWeb.MCPController do
     duration = System.monotonic_time() - start_time
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)
 
-    # Carry the athanor so Prism.TelemetryBridge routes the broadcast to this
-    # athanor's dashboard subscribers.
+    # Carry the athanor so the host's bridge (`Cyfr.TelemetryBridge`) routes
+    # the message to this athanor's dashboard subscribers.
     metadata = Map.put(metadata, :athanor_id, context.athanor_id)
 
     :telemetry.execute(

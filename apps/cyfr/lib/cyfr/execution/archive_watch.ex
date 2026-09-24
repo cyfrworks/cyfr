@@ -43,12 +43,12 @@ defmodule Cyfr.Execution.ArchiveWatch do
 
   @impl true
   def init(_opts) do
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.athanor_archived_global())
+    :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.athanor_archived_global())
     {:ok, %{}}
   end
 
   @impl true
-  def handle_info({:athanor_archived_global, athanor_id}, state)
+  def handle_info(%Cyfr.Bus.AthanorArchived{athanor_id: athanor_id}, state)
       when is_binary(athanor_id) and athanor_id != "" do
     cancel_running(athanor_id)
     {:noreply, state}

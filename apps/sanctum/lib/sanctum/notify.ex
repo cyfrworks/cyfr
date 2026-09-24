@@ -3,20 +3,29 @@
 
 defmodule Sanctum.Notify do
   @moduledoc """
-  One fan-in topic per athanor for the things a person's tray shows:
-  members joining or leaving, invites, allowlist requests, and (later)
-  executions finishing and approvals waiting. Phoenix.PubSub has no
-  wildcard, so a tray subscribes to `topic/1` for every athanor the person
-  belongs to and to `platform_topic/0` when they are a platform admin.
+  What a person's tray shows: members joining or leaving, invites,
+  allowlist requests, executions finishing, approvals waiting and
+  schedules failing — about one athanor, or, for its operators, about the
+  server.
 
-  Messages: `{:notify, athanor_id | :platform, kind, payload}`.
-
-  This module owns the topic and the vocabulary; it does not broadcast.
-  A foundation below the host emits `:telemetry`
-  (`[:cyfr, :sanctum, :notify]`) and the host's bridge is the one place
-  that becomes a bus message — so a tray update travels the same path as
-  every other standing change, and nothing here names the PubSub server.
+  This module owns the vocabulary (`t:kind/0`, `kinds/0`) and the
+  announcements; it names no topic and never broadcasts. A foundation
+  below the host emits `:telemetry` (`[:cyfr, :sanctum, :notify]`) and the
+  host's bridge is the one place that becomes a bus message, so a tray
+  update travels the same path as every other standing change.
   """
+
+  @kinds [
+    :member_changed,
+    :athanor_changed,
+    :allowlist_request,
+    :allowlist_changed,
+    :execution_finished,
+    :execution_failed,
+    :approval_pending,
+    :approval_resolved,
+    :schedule_failed
+  ]
 
   @type kind ::
           :member_changed
@@ -29,14 +38,9 @@ defmodule Sanctum.Notify do
           | :approval_resolved
           | :schedule_failed
 
-  @doc "The topic for one athanor."
-  @spec topic(String.t()) :: String.t()
-  def topic(athanor_id) when is_binary(athanor_id) and athanor_id != "",
-    do: Sanctum.PubSub.topic("notify", athanor_id)
-
-  @doc "The topic platform admins subscribe to for server-level events."
-  @spec platform_topic() :: String.t()
-  def platform_topic, do: "platform:notify"
+  @doc "The tray's closed vocabulary, in the order `t:kind/0` names it."
+  @spec kinds() :: [kind()]
+  def kinds, do: @kinds
 
   @doc "Announce an event about one athanor."
   @spec broadcast(String.t(), kind(), map()) :: :ok

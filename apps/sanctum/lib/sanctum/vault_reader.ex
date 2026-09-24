@@ -42,6 +42,12 @@ defmodule Sanctum.VaultReader do
           optional(:projection) => %{fields: [String.t()], scopes: [String.t()]} | nil
         }
 
+  @typedoc """
+  What `revisions/2` answers for an active entry: the payload revision a
+  rotation moves, and the binding digest a rebind moves.
+  """
+  @type revision :: {non_neg_integer(), String.t() | nil}
+
   @type error ::
           :anonymous_denied
           | :not_found
@@ -109,6 +115,53 @@ defmodule Sanctum.VaultReader do
       {:ok, fields}
     else
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  The revision token of each named entry of `athanor_id`, metadata only:
+  nothing is unsealed and no use is recorded.
+
+  An active entry answers `{payload_rev, binding_digest}` — its payload
+  revision, which a rotation moves, paired with the binding digest derived
+  from its binding fields, which a rebind moves — so the token changes on
+  either. One that is missing, tombstoned or otherwise not `active`
+  answers `:inactive`. A holder of material resolved by name
+  (`unseal_by_name/2`) compares these with the tokens it resolved under,
+  so a rotation, rebind or revocation whose announcement never reached it
+  is still found. A store that cannot answer refuses whole, so an outage
+  never reads as a changed credential.
+  """
+  @spec revisions(String.t(), [String.t()]) ::
+          {:ok, %{String.t() => revision() | :inactive}} | {:error, term()}
+  def revisions(athanor_id, names) when is_binary(athanor_id) and is_list(names) do
+    actor = tenant_actor(athanor_id)
+
+    names
+    |> Enum.uniq()
+    |> Enum.reduce_while({:ok, %{}}, fn name, {:ok, acc} ->
+      case Arca.VaultStorage.get_by_name(actor, name) do
+        {:ok, %{status: "active"} = entry} ->
+          {:cont, {:ok, Map.put(acc, name, revision(entry))}}
+
+        {:ok, _not_active} ->
+          {:cont, {:ok, Map.put(acc, name, :inactive)}}
+
+        {:error, :not_found} ->
+          {:cont, {:ok, Map.put(acc, name, :inactive)}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  # A binding whose fields cannot be read derives no digest; the token
+  # still moves with the payload, and a later readable binding moves it.
+  defp revision(entry) do
+    case binding_digest(entry) do
+      {:ok, digest} -> {entry.payload_rev, digest}
+      {:error, _} -> {entry.payload_rev, nil}
     end
   end
 

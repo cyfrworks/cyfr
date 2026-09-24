@@ -71,18 +71,19 @@ defmodule Cyfr.TelemetryCatalogTest do
     for event <- Catalog.consumed_by(:audit) do
       ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
 
-      assert Enum.any?(ids, &String.starts_with?(&1, "audit-")),
+      assert Enum.any?(ids, &(is_binary(&1) and String.starts_with?(&1, "audit-"))),
              "no audit handler attached for #{inspect(event)}"
     end
   end
 
   test "the telemetry bridge attaches exactly the catalog's :bridge roster" do
-    for event <- Catalog.consumed_by(:bridge) do
-      ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
+    assert Cyfr.TelemetryBridge.events() == Catalog.consumed_by(:bridge)
 
-      assert Enum.any?(ids, &String.starts_with?(&1, "prism-")),
-             "no bridge handler attached for #{inspect(event)}"
-    end
+    attached =
+      for %{id: {Cyfr.TelemetryBridge, event}, event_name: event} <- :telemetry.list_handlers([]),
+          do: event
+
+    assert Enum.sort(attached) == Catalog.consumed_by(:bridge)
   end
 
   test "the metric definitions cover exactly the catalog's :metrics roster" do
@@ -96,15 +97,17 @@ defmodule Cyfr.TelemetryCatalogTest do
     assert metric_events == Catalog.consumed_by(:metrics)
   end
 
-  test "the schedule-notes handler attaches exactly the catalog's :notes roster" do
-    assert Catalog.consumed_by(:notes) == [Aqua.ScheduleNotes.event()]
+  # A completed schedule's note is kept from the committed bus message
+  # (`Cyfr.Bus.ScheduleCompleted`), never from the telemetry event too: the
+  # old `:notes` consumer is gone, with nothing attached in its place.
+  test "a completed schedule's telemetry has no consumer that keeps a note" do
+    assert Catalog.consumed_by(:notes) == []
+    assert Catalog.all()[[:cyfr, :schedules, :completed]].consumers == [:operator]
 
-    for event <- Catalog.consumed_by(:notes) do
-      ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
+    ids =
+      [:cyfr, :schedules, :completed] |> :telemetry.list_handlers() |> Enum.map(& &1.id)
 
-      assert Enum.any?(ids, &String.starts_with?(&1, "notes-")),
-             "no notes handler attached for #{inspect(event)}"
-    end
+    refute Enum.any?(ids, &(is_binary(&1) and String.starts_with?(&1, "notes-")))
   end
 
   test "the projection reconciler attaches exactly the catalog's :projection roster" do
@@ -128,7 +131,7 @@ defmodule Cyfr.TelemetryCatalogTest do
     for event <- Catalog.consumed_by(:log) do
       ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)
 
-      assert Enum.any?(ids, &String.contains?(&1, "-log")),
+      assert Enum.any?(ids, &(is_binary(&1) and String.contains?(&1, "-log"))),
              "no logger attach for #{inspect(event)}"
     end
   end

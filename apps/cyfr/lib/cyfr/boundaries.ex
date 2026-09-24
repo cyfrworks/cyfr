@@ -26,7 +26,9 @@ defmodule Cyfr.Boundaries do
       what reaches back up into the component domain, and which storage
       modules hold security rows only Sanctum may read
       (`sanctum_only_storage/0`). Beside them, `http_free/0` names the
-      domain trees no line of which names an HTTP type.
+      domain trees no line of which names an HTTP type, and `bus_free/0`
+      the bus's own tree, which names no identity, domain or surface
+      module.
     * `route_postures/0` and `public_routes/0` — how every HTTP route is
       authenticated. The posture travels with the route
       (`EmissaryWeb.Router` declares it as route metadata); this catalog
@@ -323,8 +325,8 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller
         Sanctum.Catalog Sanctum.Cipher
-        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.ExecutionStanding Sanctum.Notify
-        Sanctum.Policy Sanctum.PubSub Sanctum.Session
+        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.ExecutionStanding
+        Sanctum.Policy Sanctum.Session
         Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.VaultReader
       ),
@@ -371,8 +373,11 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/prism/**/*.ex", "apps/cyfr/lib/prism.ex"],
       into: "Sanctum",
-      allow: ~w(Sanctum Sanctum.Context Sanctum.Notify Sanctum.Tenancy),
-      reason: "console domain code: the tenancy carrier and the tray's vocabulary"
+      allow: ~w(Sanctum Sanctum.Context Sanctum.Tenancy),
+      reason:
+        "console domain code: the tenancy carrier. The tray's messages arrive on " <>
+          "`Cyfr.Bus` as its own structs, so the console names none of the identity " <>
+          "domain's announcement vocabulary"
     },
     %{
       from: [
@@ -383,7 +388,7 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
-        Sanctum.Context Sanctum.Door Sanctum.Notify Sanctum.Session Sanctum.SignIn
+        Sanctum.Context Sanctum.Door Sanctum.Session Sanctum.SignIn
         Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Webhook
       ),
       reason:
@@ -427,13 +432,29 @@ defmodule Cyfr.Boundaries do
 
     # --- what the layers below name of the layers above ---
     %{
-      from: ["apps/sanctum/lib/**/*.ex"],
-      into: "Emissary",
+      from: ["apps/sanctum/lib/**/*.ex", "apps/arca/lib/**/*.ex"],
+      into: "Phoenix.PubSub",
       allow: [],
       reason:
-        "a foundation below the host emits `:telemetry` and never broadcasts, so the " <>
-          "PubSub server's own name — the last thing the auth domain knew about the " <>
-          "transport — is the host bridge's now."
+        "a foundation below the host emits `:telemetry` and never broadcasts: the host's " <>
+          "bridge (`Cyfr.TelemetryBridge`) is the one place an announcement becomes a " <>
+          "bus message, after the fact it announces committed."
+    },
+    %{
+      from: ["apps/sanctum/lib/**/*.ex", "apps/arca/lib/**/*.ex"],
+      into: "Cyfr.PubSub",
+      allow: [],
+      reason:
+        "the PubSub server's name is the host's: only `Cyfr.Application` starts it and " <>
+          "only `Cyfr.Bus` publishes on it."
+    },
+    %{
+      from: ["apps/sanctum/lib/**/*.ex", "apps/arca/lib/**/*.ex"],
+      into: "Cyfr.Bus",
+      allow: [],
+      reason:
+        "the topics, their payloads and their tenant checks are the host's bus; a " <>
+          "foundation below it names none of them and keeps no topic vocabulary."
     },
     %{
       from: ["apps/arca/lib/**/*.ex"],
@@ -689,6 +710,45 @@ defmodule Cyfr.Boundaries do
         {line, n} <- lines,
         line =~ @http_free.pattern,
         do: "#{path}:#{n}: #{String.trim(line)}"
+  end
+
+  # The bus is the host's primitive every layer above it publishes through:
+  # it names its own payloads, the actor and Phoenix, and nothing of the
+  # identity domain, a domain or a surface — so no topic can come to
+  # depend on who publishes or hears it.
+  @bus_free %{
+    from: ["apps/cyfr/lib/cyfr/bus.ex", "apps/cyfr/lib/cyfr/bus/**/*.ex"],
+    roots:
+      ~w(Sanctum Aqua Compendium Crucible Grimoire Emissary EmissaryWeb Prism PrismWeb CyfrWeb),
+    namespaces: ~w(Cyfr.Execution Cyfr.Schedules),
+    reason:
+      "`Cyfr.Bus` owns every topic and payload and checks every publish against the " <>
+        "actor it is handed; naming the identity domain, a domain or a surface would " <>
+        "make the one shared carrier depend on its own publishers and subscribers. " <>
+        "The roster names them as text (`Cyfr.Bus.topics/0`), which is not a reach."
+  }
+
+  @doc """
+  The bus's own tree and what it may not name: `from` is where to read,
+  `roots` the product namespaces and `namespaces` the host's domain
+  namespaces it stays clear of.
+  """
+  @spec bus_free() :: map()
+  def bus_free, do: @bus_free
+
+  @doc "Every name in `named` the bus may not reach, as `path:line names Module`."
+  @spec bus_violations(named()) :: [String.t()]
+  def bus_violations(named) do
+    for {path, names} <- named,
+        {module, number} <- names,
+        forbidden_by_bus?(module),
+        uniq: true,
+        do: "#{path}:#{number} names #{module}"
+  end
+
+  defp forbidden_by_bus?(module) do
+    (module |> String.split(".") |> hd()) in @bus_free.roots or
+      Enum.any?(@bus_free.namespaces, &(module == &1 or String.starts_with?(module, &1 <> ".")))
   end
 
   # ---------------------------------------------------------------------------

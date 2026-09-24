@@ -27,10 +27,10 @@ defmodule PrismWeb.ActivitiesLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
+      actor = Sanctum.Context.actor(socket.assigns[:context])
 
-      for topic <- [Bus.requests(ctx), Bus.tinctures(ctx), Bus.schedule_runs(ctx)] do
-        Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
+      for topic <- [Bus.requests(actor), Bus.tinctures(actor), Bus.schedule_runs(actor)] do
+        Bus.subscribe(actor, topic)
       end
     end
 
@@ -131,19 +131,19 @@ defmodule PrismWeb.ActivitiesLive do
   end
 
   @impl true
-  # PubSub broadcasts from the enriched TelemetryBridge — re-fetch the row list
-  # on a debounced timer so a burst of events doesn't hammer the DB. The cockpit
+  # Bus messages the host's bridge publishes — re-fetch the row list on a
+  # debounced timer so a burst of events doesn't hammer the DB. The cockpit
   # is single-user; rates are low and clarity beats micro-optimisation here.
-  def handle_info({:request, _metadata, _measurements}, socket), do: schedule_refresh(socket)
+  # A schedule that fired or failed is an activity either way.
+  def handle_info(%Bus.Request{}, socket), do: schedule_refresh(socket)
 
-  def handle_info({:tincture_invoke_started, _metadata, _measurements}, socket),
-    do: schedule_refresh(socket)
+  def handle_info(%Bus.Tinctures{kind: kind}, socket)
+      when kind in [:invoke_started, :invoke_stopped],
+      do: schedule_refresh(socket)
 
-  def handle_info({:tincture_invoke_stopped, _metadata, _measurements}, socket),
-    do: schedule_refresh(socket)
+  def handle_info(%Bus.Tinctures{}, socket), do: {:noreply, socket}
 
-  def handle_info({:schedule_fired, _metadata, _measurements}, socket),
-    do: schedule_refresh(socket)
+  def handle_info(%Bus.ScheduleRun{}, socket), do: schedule_refresh(socket)
 
   def handle_info(:load_data, socket) do
     {:noreply, fetch_logs(socket)}

@@ -52,7 +52,7 @@ defmodule Cyfr.Execution.EventsTest do
     Events.flush(record.id)
 
     id = record.id
-    assert_receive {:execution_event, %{type: "execution.completed", execution_id: ^id}}
+    assert_receive %Cyfr.Bus.ExecutionEvent{type: "execution.completed", execution_id: ^id}
 
     # Replay under the record's athanor sees the events; another athanor's
     # key does not.
@@ -71,7 +71,7 @@ defmodule Cyfr.Execution.EventsTest do
     Events.flush(record.id)
 
     id = record.id
-    assert_receive {:execution_event, %{type: "emit", execution_id: ^id, sequence: "1.1"}}
+    assert_receive %Cyfr.Bus.ExecutionEvent{type: "emit", execution_id: ^id, sequence: "1.1"}
   end
 
   test "an athanor-less producer is dropped, never routed into a default tenant" do
@@ -85,15 +85,15 @@ defmodule Cyfr.Execution.EventsTest do
              Events.publish(record.id, nil, "execution.failed", 9, %{})
 
     id = record.id
-    refute_receive {:execution_event, %{execution_id: ^id}}, 100
+    refute_receive %Cyfr.Bus.ExecutionEvent{execution_id: ^id}, 100
   end
 
-  test "replay and topic refuse a missing athanor" do
+  test "replay and subscription refuse a missing athanor" do
     exec_id = "exec_evt_nil_#{System.unique_integer([:positive])}"
 
     assert_raise ArgumentError, fn -> Events.since(exec_id, {0, 0}, nil) end
     # A context whose athanor is unresolved: the platform's own.
-    assert_raise ArgumentError, fn -> Events.topic(exec_id, Sanctum.Context.internal()) end
+    assert_raise ArgumentError, fn -> Events.subscribe(exec_id, Sanctum.Context.internal()) end
   end
 
   describe "numbering — durable rows and the deltas under them" do

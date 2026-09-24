@@ -96,8 +96,11 @@ defmodule Cyfr.Execution.Close do
          {:written, write_result} <- completed_write(close, completed_record) do
       if write_result == :ok, do: StepSpans.completed(close.step_spans)
 
+      # The lifecycle telemetry follows the row: a completion is announced
+      # only when its write committed. A cancel that closed the row first
+      # announces nothing here; any other failed write is an audit error.
       audit_error = audit_error(completed_record, write_result)
-      Telemetry.execute_stop(completed_record, exec_metadata)
+      if write_result == :ok, do: Telemetry.execute_stop(completed_record, exec_metadata)
 
       # The terminal event is the row's, published by the record's write.
       if write_result == {:error, :not_running} do
@@ -288,8 +291,12 @@ defmodule Cyfr.Execution.Close do
   # A cancel won the race for the row: not an audit fault.
   defp audit_error(_record, {:error, :not_running}), do: nil
 
-  # The result was answered and not retained.
-  defp audit_error(_record, {:error, {:result_lost, reason}}), do: inspect(reason)
+  # The result was answered and not retained: the record's write closed
+  # the row failed and said so in its own log line.
+  defp audit_error(record, {:error, {:result_lost, reason}} = lost) do
+    emit_audit_error(record, :completed, elem(lost, 1))
+    inspect(reason)
+  end
 
   defp audit_error(record, {:error, reason}) do
     Logger.error(
@@ -297,16 +304,19 @@ defmodule Cyfr.Execution.Close do
         "Audit trail is incomplete — this execution will appear as 'running' in logs."
     )
 
-    # The reason travels as data: `Arca.AuditHandler` redacts this metadata
-    # by key on its way to the sinks, and key-based redaction cannot see
-    # inside a string.
+    emit_audit_error(record, :completed, reason)
+    inspect(reason)
+  end
+
+  # The reason travels as data: `Arca.AuditHandler` redacts this metadata
+  # by key on its way to the sinks, and key-based redaction cannot see
+  # inside a string.
+  defp emit_audit_error(record, phase, reason) do
     :telemetry.execute(
       [:cyfr, :opus, :audit_error],
       %{system_time: System.system_time()},
-      %{execution_id: record.id, phase: :completed, reason: reason}
+      %{execution_id: record.id, phase: phase, reason: reason}
     )
-
-    inspect(reason)
   end
 
   defp metadata(close, record) do
@@ -358,24 +368,37 @@ defmodule Cyfr.Execution.Close do
               "appear in logs."
           )
 
-          Telemetry.execute_start(record)
-          close_failed(%{close | started: true}, secrets, message)
+          emit_audit_error(record, :started, reason)
+          write_failed(%{close | started: true}, secrets, message, :unadmitted)
         end
     end
   end
 
-  defp close_failed(close, secrets, message) do
+  defp close_failed(close, secrets, message),
+    do: write_failed(close, secrets, message, :admitted)
+
+  defp write_failed(close, secrets, message, admitted) do
     message = SecretMasker.mask(message, secrets)
     failed_record = Record.fail(close.record, message)
-    ended_failed(failed_record, Record.write_failed(failed_record), message)
+    ended_failed(failed_record, Record.write_failed(failed_record), message, admitted)
   end
 
   # What follows a failure's terminal write, whatever it answered: the
-  # failure telemetry and the cascade to a formula's running children.
-  defp ended_failed(failed_record, written, message) do
+  # failure telemetry when the write committed (nothing when there was no
+  # running row to close, an audit error when it failed), and the cascade
+  # to a formula's running children. `admitted` says whether the row was
+  # written at all: one whose admission failed has no row for the write
+  # to close, which is not a cancel winning the race.
+  defp ended_failed(failed_record, written, message, admitted \\ :admitted) do
     case written do
       :ok ->
-        :ok
+        Telemetry.execute_exception(failed_record, message)
+
+      {:error, :not_running} when admitted == :unadmitted ->
+        Logger.error(
+          "[Cyfr.Execution.Close] execution #{failed_record.id} was never admitted; " <>
+            "its failure has no row to close"
+        )
 
       {:error, :not_running} ->
         Logger.info(
@@ -389,9 +412,10 @@ defmodule Cyfr.Execution.Close do
             "#{inspect(reason)}. Audit trail is incomplete — this execution will appear " <>
             "as 'running' in logs."
         )
+
+        emit_audit_error(failed_record, :failed, reason)
     end
 
-    Telemetry.execute_exception(failed_record, message)
     Cascade.fail_children(failed_record)
 
     {:error, message}

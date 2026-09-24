@@ -9,12 +9,12 @@ defmodule PrismWeb.SettingsLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.requests(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.requests(actor))
     end
 
     if connected?(socket) and socket.assigns.context.platform_admin do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.platform_topic())
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.platform_notify())
     end
 
     socket =
@@ -97,11 +97,11 @@ defmodule PrismWeb.SettingsLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info({:request, _metadata, _measurements}, socket) do
+  def handle_info(%Cyfr.Bus.Request{}, socket) do
     {:noreply, load_log_stats(socket)}
   end
 
-  def handle_info({:notify, :platform, kind, _payload}, socket)
+  def handle_info(%Cyfr.Bus.Notify{athanor_id: :platform, kind: kind}, socket)
       when kind in [:allowlist_request, :allowlist_changed] do
     {:noreply, load_door(socket)}
   end

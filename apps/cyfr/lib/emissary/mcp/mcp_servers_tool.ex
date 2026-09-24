@@ -945,7 +945,12 @@ defmodule Emissary.MCP.McpServersTool do
 
   # Publish mcp_servers updates for both console and MCP subscription clients.
   defp broadcast_mcp_servers_changed(ctx) do
-    topic = Cyfr.Bus.mcp_servers(ctx)
-    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :mcp_servers_changed)
+    actor = Sanctum.Context.actor(ctx)
+
+    Cyfr.Bus.broadcast(
+      actor,
+      Cyfr.Bus.mcp_servers(actor),
+      Cyfr.Bus.McpServers.new(actor, :changed)
+    )
   end
 end

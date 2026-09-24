@@ -15,9 +15,10 @@ defmodule Cyfr.Cluster.StreamTest do
   them; a peer has none, and a reader that reconnected there would see a
   gap if the replay came from the buffer alone.
 
-  The live half is the other direction: the stream's topic is on
-  `Emissary.PubSub`, which spans the cell's members, so a reader attached
-  to one member follows an execution running on the other.
+  The live half is the other direction: the stream's topic is on the
+  bus (`Cyfr.Bus`, over `Cyfr.PubSub`), which spans the cell's members, so
+  a reader attached to one member follows an execution running on the
+  other.
   """
 
   use Cyfr.Cluster.Case, async: false
@@ -66,17 +67,26 @@ defmodule Cyfr.Cluster.StreamTest do
       # The execution goes on producing on the member that holds it.
       more = Cell.call(:a, Cyfr.Cluster.Fixtures, :stream_more!, [athanor.id, stream.id, 2])
 
+      expected = Enum.map(more, &Integer.to_string/1)
+
+      # An event published before the subscription landed may still reach
+      # the peer after it — the member forwards to its peer's PubSub
+      # asynchronously — so what was heard first is not asserted; what was
+      # published after the reader attached must arrive, in order, last.
       heard =
         Wait.until!(
           fn ->
             seen = Cell.call(:b, Cyfr.Cluster.Boot, :stream_heard, [])
-            if length(seen) >= 2, do: seen
+            if Enum.all?(expected, &(&1 in seen)), do: seen
           end,
           "the reader on the peer never heard the execution's events",
           15_000
         )
 
-      assert Enum.take(heard, 2) == Enum.map(more, &Integer.to_string/1),
+      assert Enum.take(heard, -length(expected)) == expected,
+             "the peer heard #{inspect(heard)} where the member published #{inspect(more)}"
+
+      assert Enum.all?(durables(heard), &(String.to_integer(&1) <= List.last(more))),
              "the peer heard #{inspect(heard)} where the member published #{inspect(more)}"
     end
   end

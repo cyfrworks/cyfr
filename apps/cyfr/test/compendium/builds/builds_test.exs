@@ -26,6 +26,7 @@ defmodule Compendium.BuildsTest do
   alias Compendium.Builds
   alias Compendium.Builds.Provider
   alias Compendium.ComponentPath
+  alias Cyfr.Bus.Progress
   alias Cyfr.Test.ScriptedBuilder
 
   import Cyfr.Test.Wait
@@ -293,8 +294,9 @@ defmodule Compendium.BuildsTest do
          %{ctx: ctx} do
       test = self()
       ctx = %{ctx | request_id: "req_build_progress"}
-      :ok = Emissary.MCP.Progress.listen("req_build_progress", "tok-build")
-      :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.build("build_watched", ctx))
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.progress(actor, {:build, "build_watched"}))
+      _listener = request_listener(actor, "req_build_progress", "tok-build")
 
       ScriptedBuilder.script([
         {:stream,
@@ -312,21 +314,31 @@ defmodule Compendium.BuildsTest do
 
       # The first line is on the topic while the builder still works.
       assert_receive {:scripted_builder, :holding, handler}, 5_000
-      assert_receive {:build_progress, %{phase: :preparing, message: "Preparing source files..."}}
+
+      assert_receive %Progress{
+        subject: {:build, "build_watched"},
+        request_id: "req_build_progress",
+        phase: :preparing,
+        message: "Preparing source files..."
+      }
+
       send(handler, :continue)
       assert {:ok, %{status: "compiled"}} = Task.await(task, 10_000)
 
       assert [:compiling, :output, :validating, :complete] ==
                Enum.map(1..4, fn _ ->
-                 assert_received {:build_progress, %{phase: phase, timestamp: _}}
+                 assert_received %Progress{subject: {:build, _}, phase: phase, at: at}
+                 assert is_binary(at)
                  phase
                end)
 
-      refute_received {:build_progress, _}
+      refute_received %Progress{}
 
       notified =
         for _ <- 1..5 do
-          assert_received {:mcp_progress, %{"method" => "notifications/progress", "params" => p}}
+          assert_receive {:notified, %{"method" => "notifications/progress", "params" => p}},
+                         5_000
+
           assert p["progressToken"] == "tok-build"
           assert p["build_id"] == "build_watched"
           to_string(p["phase"])
@@ -337,15 +349,47 @@ defmodule Compendium.BuildsTest do
     end
 
     test "ends in an error step when the build does not", %{ctx: ctx} do
-      :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.build("build_failing", ctx))
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.progress(actor, {:build, "build_failing"}))
 
       ScriptedBuilder.script([
         {:stream, [{:progress, :compiling, "…"}, {:refusal, {:failed, {:signal, "KILL"}}, []}]}
       ])
 
       assert {:error, _} = compile(ctx, %{"build_id" => "build_failing"})
-      assert_received {:build_progress, %{phase: :compiling}}
-      assert_received {:build_progress, %{phase: :error, message: "Build failed"}}
+      assert_received %Progress{phase: :compiling}
+      assert_received %Progress{phase: :error, message: "Build failed"}
+    end
+  end
+
+  # A stand-in for the connection streaming the request's response: bound
+  # to its token and subscribed to its request's progress, forwarding each
+  # notification it renders.
+  defp request_listener(actor, request_id, token) do
+    test = self()
+
+    pid =
+      spawn_link(fn ->
+        :ok = Emissary.MCP.Progress.listen(request_id, token)
+        :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.progress(actor, {:request, request_id}))
+        send(test, {:listening, self()})
+        relay(test)
+      end)
+
+    receive do
+      {:listening, ^pid} -> pid
+    after
+      5_000 -> flunk("the request listener never subscribed")
+    end
+  end
+
+  defp relay(test) do
+    receive do
+      %Progress{} = step ->
+        with {:ok, notification} <- Emissary.MCP.Progress.notification(step),
+             do: send(test, {:notified, notification})
+
+        relay(test)
     end
   end
 

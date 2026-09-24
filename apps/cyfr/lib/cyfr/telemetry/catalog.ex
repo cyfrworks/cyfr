@@ -12,13 +12,11 @@ defmodule Cyfr.Telemetry.Catalog do
 
   - `:audit` — `Arca.AuditHandler` → audit sinks. Its roster **derives**
     from this table (`consumed_by(:audit)`).
-  - `:bridge` — `Prism.TelemetryBridge` → console PubSub. Pinned equal by
-    test.
+  - `:bridge` — `Cyfr.TelemetryBridge` → `Cyfr.Bus`. Its attach is this
+    roster (`consumed_by(:bridge)`).
   - `:metrics` — `EmissaryWeb.Telemetry` metric definitions. Pinned equal
     by test.
   - `:log` — a dedicated Logger attach (`Cyfr.Application`).
-  - `:notes` — `Aqua.ScheduleNotes`, which files a completed schedule's
-    outcome as a note when the schedule asked for it. Pinned by test.
   - `:estate` — `Compendium.Provisioning`, the component domain's answer
     to the identity domain's "this athanor needs filling". A foundation
     below the host announces and never calls up, and this is the one
@@ -304,8 +302,10 @@ defmodule Cyfr.Telemetry.Catalog do
     # ——— schedules ———
     [:cyfr, :schedules, :fired] => %{consumers: [:bridge]},
     [:cyfr, :schedules, :completed] => %{
-      consumers: [:notes],
-      note: "a schedule with `keep_outcome` in its metadata files the run's output as a note"
+      consumers: [:operator],
+      note:
+        "a schedule's occurrence completed, for operator metrics; what keeps the outcome as " <>
+          "a note is the committed `Cyfr.Bus.ScheduleCompleted` message, not this event"
     },
     [:cyfr, :schedules, :failed] => %{consumers: [:bridge]},
     [:cyfr, :schedules, :scheduler, :load_failed] => %{
@@ -378,6 +378,22 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :aqua, :approval] => %{
       consumers: [:audit],
       note: "a person approved or declined an agent's proposed action"
+    },
+
+    # ——— the bus ———
+    [:cyfr, :bus, :publish_refused] => %{
+      consumers: [:operator],
+      note:
+        "a tenant publish whose topic, actor and payload disagreed on the athanor, or whose " <>
+          "payload is not the topic's struct, was refused: a bug above the bus and possibly " <>
+          "a leak, counted by the payload's type and never its content"
+    },
+    [:cyfr, :bus, :bridge_dropped] => %{
+      consumers: [:operator],
+      note:
+        "a bridged event that named no athanor, or lacked what its message needs, had " <>
+          "nowhere to go and was dropped: counted, so a producer that stops naming its " <>
+          "tenant shows up as a rising count rather than a quiet console"
     },
 
     # ——— record sink ———

@@ -277,7 +277,7 @@ defmodule Sanctum.CredentialRetirementTest do
       {user, own} = owner!("announce")
       {session, _ctx} = signed_in!(user)
       hash = Session.token_hash(session.token)
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Session.topic())
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
 
       handler =
         attach([[:cyfr, :sanctum, :caller, :invalidated], [:cyfr, :sanctum, :athanor, :archived]])
@@ -287,7 +287,7 @@ defmodule Sanctum.CredentialRetirementTest do
       assert denied.security_generation == 2
       assert denied.denied_at
 
-      assert_receive {:sessions_revoked, uid}
+      assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: uid}
       assert uid == user.id
       assert_receive {:telemetry, [:cyfr, :sanctum, :caller, :invalidated], %{hash: ^hash}}
       assert_receive {:telemetry, [:cyfr, :sanctum, :athanor, :archived], %{athanor_id: own_id}}
@@ -298,7 +298,7 @@ defmodule Sanctum.CredentialRetirementTest do
     test "a failed denial announces nothing and leaves the person's credentials standing" do
       {user, own} = owner!("silent")
       {session, _ctx} = signed_in!(user)
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Session.topic())
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
 
       handler =
         attach([[:cyfr, :sanctum, :caller, :invalidated], [:cyfr, :sanctum, :athanor, :archived]])
@@ -307,7 +307,7 @@ defmodule Sanctum.CredentialRetirementTest do
 
       assert {:error, :database_error} = Users.deny(user)
 
-      refute_receive {:sessions_revoked, _}, 100
+      refute_receive %Cyfr.Bus.Session{kind: :revoked}, 100
       refute_receive {:telemetry, _, _}, 100
       assert {:ok, %{status: "active"}} = Users.get(user.id)
       assert {:ok, %{status: "active"}} = Athanors.get(own.id)

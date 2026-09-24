@@ -26,13 +26,11 @@ defmodule Emissary.MCP.Subscriptions do
 
   ## Tenancy
 
-  Subscriptions use tenant-scoped `Sanctum.PubSub.topic/2` topics.
+  Subscriptions are the athanor's own bus topics (`Cyfr.Bus.mcp_servers/1`).
   Opening a stream requires a context identifying the subscriber’s athanor.
   """
 
   alias Sanctum.Context
-
-  @pubsub Emissary.PubSub
 
   # `_meta` key correlating every message on a stream with the request that
   # opened it. On stdio one channel carries every subscription, so a client
@@ -54,7 +52,8 @@ defmodule Emissary.MCP.Subscriptions do
   def listen(%Context{} = ctx, filter) when is_map(filter) do
     acknowledged =
       if truthy?(filter["toolsListChanged"]) do
-        Phoenix.PubSub.subscribe(@pubsub, Cyfr.Bus.mcp_servers(ctx))
+        actor = Context.actor(ctx)
+        :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.mcp_servers(actor))
         %{"toolsListChanged" => true}
       else
         %{}
@@ -66,14 +65,14 @@ defmodule Emissary.MCP.Subscriptions do
   def listen(%Context{} = ctx, _filter), do: listen(ctx, %{})
 
   @doc """
-  Translate a PubSub message into an MCP notification, or ignore it.
+  Translate a bus message into an MCP notification, or ignore it.
 
   Anything this stream is not carrying is dropped here rather than at the
   subscribe site, so a topic that grows a second message type cannot start
   leaking it to subscribers who asked for something else.
   """
   @spec notification_for(term()) :: {:ok, String.t(), map()} | :ignore
-  def notification_for(:mcp_servers_changed) do
+  def notification_for(%Cyfr.Bus.McpServers{kind: :changed}) do
     {:ok, "notifications/tools/list_changed", %{}}
   end
 

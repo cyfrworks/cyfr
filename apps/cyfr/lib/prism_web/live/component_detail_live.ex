@@ -9,8 +9,8 @@ defmodule PrismWeb.ComponentDetailLive do
   @impl true
   def mount(%{"ref" => ref}, _session, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.components(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.components(actor))
     end
 
     {:ok,
@@ -84,7 +84,7 @@ defmodule PrismWeb.ComponentDetailLive do
   end
 
   @impl true
-  def handle_info(:components_changed, socket) do
+  def handle_info(%Cyfr.Bus.Components{}, socket) do
     ref = socket.assigns.ref
 
     component =

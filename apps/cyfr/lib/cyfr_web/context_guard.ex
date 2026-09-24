@@ -43,6 +43,7 @@ defmodule CyfrWeb.ContextGuard do
 
   import Phoenix.Component, only: [assign: 3]
 
+  alias Cyfr.Bus.{AthanorArchived, CallerInvalidated, Membership, Session}
   alias Phoenix.LiveView
   alias Phoenix.LiveView.Socket
   alias Sanctum.{Caller, Context}
@@ -72,12 +73,16 @@ defmodule CyfrWeb.ContextGuard do
   """
   @type tag :: {String.t() | nil, String.t() | :key | nil, DateTime.t() | nil}
 
-  @typedoc "A stream's standing watch (`watch/2`)."
+  @typedoc """
+  A stream's standing watch (`watch/2`): the context it holds, the
+  recheck's cadence and timer, and the person whose standing it
+  subscribed to.
+  """
   @type watch :: %{
           context: Context.t(),
           every: pos_integer(),
           timer: reference(),
-          topics: [String.t()]
+          user_id: String.t() | nil
         }
 
   @doc "The Plug session key holding the Sanctum session token."
@@ -151,26 +156,26 @@ defmodule CyfrWeb.ContextGuard do
   # Announcements about this caller revalidate now; announcements about
   # anyone else are consumed here, as the gate's own traffic. A membership
   # change goes on to the page afterwards, which may have a list to reread.
-  defp on_info({:sessions_revoked, user_id}, socket) do
+  defp on_info(%Session{kind: :revoked, user_id: user_id}, socket) do
     if caller?(socket, &(&1.user_id == user_id)),
       do: settle(socket, :halt),
       else: {:halt, socket}
   end
 
-  defp on_info({:caller_invalidated, hash}, socket) do
-    if caller?(socket, &(&1.session_token_hash == hash)),
+  defp on_info(%CallerInvalidated{session_key: key}, socket) do
+    if caller?(socket, &(&1.session_token_hash == key)),
       do: settle(socket, :halt),
       else: {:halt, socket}
   end
 
-  defp on_info({:athanor_archived_global, athanor_id}, socket) do
+  defp on_info(%AthanorArchived{athanor_id: athanor_id}, socket) do
     if caller?(socket, &(&1.athanor_id == athanor_id)),
       do: settle(socket, :halt),
       else: {:halt, socket}
   end
 
-  defp on_info({:membership_changed, _change}, socket), do: settle(socket, :cont)
-  defp on_info({:session_created, _}, socket), do: {:halt, socket}
+  defp on_info(%Membership{}, socket), do: settle(socket, :cont)
+  defp on_info(%Session{kind: :created}, socket), do: {:halt, socket}
   defp on_info(@recheck, socket), do: settle(socket, :halt)
   defp on_info(_message, socket), do: proceed(socket)
 
@@ -364,9 +369,8 @@ defmodule CyfrWeb.ContextGuard do
   @spec watch(Context.t(), keyword()) :: watch()
   def watch(%Context{} = ctx, opts \\ []) do
     every = Keyword.get(opts, :every, @stream_recheck_ms)
-    topics = standing_topics(ctx)
-    Enum.each(topics, &Phoenix.PubSub.subscribe(Emissary.PubSub, &1))
-    %{context: ctx, every: every, timer: arm(every), topics: topics}
+    :ok = Cyfr.Bus.subscribe_standing(ctx.user_id)
+    %{context: ctx, every: every, timer: arm(every), user_id: ctx.user_id}
   end
 
   @doc """
@@ -374,15 +378,9 @@ defmodule CyfrWeb.ContextGuard do
   `receive` takes nothing else it does not own.
   """
   defguard standing_message(message)
-           when is_tuple(message) and tuple_size(message) == 2 and
-                  elem(message, 0) in [
-                    :sessions_revoked,
-                    :caller_invalidated,
-                    :athanor_archived_global,
-                    :membership_changed,
-                    :session_created,
-                    __MODULE__
-                  ]
+           when is_struct(message, Session) or is_struct(message, CallerInvalidated) or
+                  is_struct(message, AthanorArchived) or is_struct(message, Membership) or
+                  message == @recheck
 
   @doc """
   What a message a watching stream received means for it:
@@ -400,24 +398,24 @@ defmodule CyfrWeb.ContextGuard do
     with {:ok, watch} <- revalidate(watch), do: {:ok, %{watch | timer: arm(watch.every)}}
   end
 
-  def standing({:sessions_revoked, user_id}, %{context: ctx} = watch),
+  def standing(%Session{kind: :revoked, user_id: user_id}, %{context: ctx} = watch),
     do: if(ctx.user_id == user_id, do: revalidate(watch), else: {:ok, watch})
 
-  def standing({:caller_invalidated, hash}, %{context: ctx} = watch),
-    do: if(ctx.session_token_hash == hash, do: revalidate(watch), else: {:ok, watch})
+  def standing(%CallerInvalidated{session_key: key}, %{context: ctx} = watch),
+    do: if(ctx.session_token_hash == key, do: revalidate(watch), else: {:ok, watch})
 
-  def standing({:athanor_archived_global, athanor_id}, %{context: ctx} = watch),
+  def standing(%AthanorArchived{athanor_id: athanor_id}, %{context: ctx} = watch),
     do: if(ctx.athanor_id == athanor_id, do: revalidate(watch), else: {:ok, watch})
 
-  def standing({:membership_changed, _change}, watch), do: revalidate(watch)
-  def standing({:session_created, _}, watch), do: {:ok, watch}
+  def standing(%Membership{}, watch), do: revalidate(watch)
+  def standing(%Session{kind: :created}, watch), do: {:ok, watch}
   def standing(_message, _watch), do: :ignore
 
   @doc "End a watch: unsubscribe, disarm, and drop a recheck already queued."
   @spec unwatch(watch()) :: :ok
-  def unwatch(%{timer: timer, topics: topics}) do
+  def unwatch(%{timer: timer, user_id: user_id}) do
     Process.cancel_timer(timer)
-    Enum.each(topics, &Phoenix.PubSub.unsubscribe(Emissary.PubSub, &1))
+    :ok = Cyfr.Bus.unsubscribe_standing(user_id)
 
     receive do
       @recheck -> :ok
@@ -439,22 +437,11 @@ defmodule CyfrWeb.ContextGuard do
   # Announcements and refusals
   # ---------------------------------------------------------------------------
 
-  # Every announcement that can end a context's standing. The archive and
-  # invalidation topics are server-wide, so a move to another estate
-  # needs no new subscription; each holder filters for its own caller.
-  defp subscribe(ctx),
-    do: Enum.each(standing_topics(ctx), &Phoenix.PubSub.subscribe(Emissary.PubSub, &1))
-
-  defp standing_topics(%Context{user_id: user_id}) do
-    person =
-      if is_binary(user_id) and user_id != "", do: [Cyfr.Bus.memberships(user_id)], else: []
-
-    [
-      Cyfr.Bus.sessions(),
-      Cyfr.Bus.caller_invalidated_global(),
-      Cyfr.Bus.athanor_archived_global()
-    ] ++ person
-  end
+  # Every announcement that can end a context's standing
+  # (`Cyfr.Bus.subscribe_standing/1`). The archive and invalidation topics
+  # are server-wide, so a move to another estate needs no new
+  # subscription; each holder filters for its own caller.
+  defp subscribe(%Context{user_id: user_id}), do: Cyfr.Bus.subscribe_standing(user_id)
 
   defp refusal_path(:not_member), do: "/"
   defp refusal_path(_session_refused), do: "/login"

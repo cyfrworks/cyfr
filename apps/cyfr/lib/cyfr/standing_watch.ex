@@ -42,13 +42,13 @@ defmodule Cyfr.StandingWatch do
 
   @impl true
   def init(_opts) do
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.caller_invalidated_global())
+    :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.caller_invalidated_global())
     {:ok, %{}}
   end
 
   @impl true
-  def handle_info({:caller_invalidated, hash}, state) when is_binary(hash) do
-    Sanctum.Caller.drop_memo(hash)
+  def handle_info(%Cyfr.Bus.CallerInvalidated{session_key: key}, state) when is_binary(key) do
+    Sanctum.Caller.drop_memo(key)
     {:noreply, state}
   end
 

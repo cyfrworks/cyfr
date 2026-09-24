@@ -155,7 +155,8 @@ defmodule PrismWeb.AquaPanelLive do
   # ============================================================================
 
   @impl true
-  def handle_info({:room_in_view, room}, socket), do: {:noreply, assign(socket, :room, room)}
+  def handle_info(%Cyfr.Bus.RoomInView{room: room}, socket),
+    do: {:noreply, assign(socket, :room, room)}
 
   # The pane is live: this is where a thread switch goes.
   def handle_info({:pane, _pane, {:ready, pid, thread_id}}, socket) do

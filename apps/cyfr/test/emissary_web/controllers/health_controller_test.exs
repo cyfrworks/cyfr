@@ -39,7 +39,6 @@ defmodule EmissaryWeb.HealthControllerTest do
       assert response["checks"]["storage"] == "ok"
       assert response["checks"]["tool_registry"] == "ok"
       assert response["checks"]["resource_registry"] == "ok"
-      assert response["checks"]["progress"] == "ok"
     end
 
     test "the write probe's root is a real global root" do

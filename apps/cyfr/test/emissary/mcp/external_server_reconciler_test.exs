@@ -162,10 +162,11 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
         })
     end
 
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
+    actor = Cyfr.Actor.in_athanor(ctx.athanor_id)
+
+    Cyfr.Bus.broadcast_global(
       Cyfr.Bus.vault_changed_global(),
-      {:vault_entry_changed_global, ctx.athanor_id, "vlt_unnamed", :delete, %{}}
+      Cyfr.Bus.VaultEntryChanged.new(actor, :delete, entry_id: "vlt_unnamed")
     )
 
     sync_reconciler()
@@ -185,10 +186,9 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
 
     watched = Process.monitor(pid)
 
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
+    Cyfr.Bus.broadcast_global(
       Cyfr.Bus.athanor_archived_global(),
-      {:athanor_archived_global, athanor_id}
+      Cyfr.Bus.AthanorArchived.new(athanor_id)
     )
 
     assert_receive {:DOWN, ^watched, :process, ^pid, _}, 2_000
@@ -259,6 +259,138 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
     # After revocation the same reference fails closed.
     assert {:error, _} =
              Sanctum.VaultReader.unseal_by_name(ctx.athanor_id, "revoke-me")
+  end
+
+  describe "the periodic pass" do
+    # A server connected and resolved against `revision`, its entry's
+    # revision token (the payload revision and the binding digest).
+    defp swept_server!(ctx, name, entry_name) do
+      {:ok, _} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          name: name,
+          url: "https://127.0.0.1:9/mcp",
+          config_json:
+            Jason.encode!(%{
+              "headers" => %{"authorization" => "vault:" <> entry_name},
+              "timeout_ms" => 1_000
+            })
+        })
+
+      {:ok, pid} =
+        Emissary.MCP.ExternalServerSupervisor.ensure_started(
+          name: name,
+          url: "https://127.0.0.1:9/mcp",
+          headers: %{"authorization" => "vault:" <> entry_name},
+          athanor_id: ctx.athanor_id
+        )
+
+      {:ok, %{^entry_name => revision}} =
+        Sanctum.VaultReader.revisions(ctx.athanor_id, [entry_name])
+
+      # What a connect records before it resolves: the revision it read.
+      :sys.replace_state(pid, &%{&1 | status: :ready, vault_revisions: %{entry_name => revision}})
+      {pid, revision}
+    end
+
+    defp sweep! do
+      send(ExternalServerReconciler, :sweep)
+      sync_reconciler()
+    end
+
+    test "a server whose credential was rotated without an announcement is restarted",
+         %{ctx: ctx} do
+      {:ok, entry} =
+        Vault.create(ctx, %{name: "swept-token", kind: "api_key", fields: %{"token" => "v1"}})
+
+      sync_reconciler()
+      {pid, {payload_rev, _digest}} = swept_server!(ctx, "sweptsrv", "swept-token")
+      watched = Process.monitor(pid)
+
+      # Nothing moved: the pass leaves it serving.
+      sweep!()
+      refute_received {:DOWN, ^watched, :process, ^pid, _}
+      assert Process.alive?(pid)
+
+      # A rotation whose `vault_changed` never reached this member: the
+      # payload moves and no announcement is made.
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, row} = Arca.VaultStorage.get(actor, entry.id)
+      :ok = Arca.VaultStorage.rotate_payload(actor, entry.id, payload_rev, row.sealed_payload)
+
+      sweep!()
+      assert_receive {:DOWN, ^watched, :process, ^pid, _}, 2_000
+      assert_receive {:reconciled, %{server: "sweptsrv", entry_id: nil}}, 2_000
+      assert {:ok, %{epoch: epoch}} = Arca.McpServerStorage.get(actor, "sweptsrv")
+      assert epoch > 0
+    end
+
+    test "a server whose credential was rebound without an announcement is restarted",
+         %{ctx: ctx} do
+      {:ok, entry} =
+        Vault.create(ctx, %{name: "rebound-token", kind: "api_key", fields: %{"token" => "v1"}})
+
+      sync_reconciler()
+      {pid, {payload_rev, digest}} = swept_server!(ctx, "reboundsrv", "rebound-token")
+      watched = Process.monitor(pid)
+
+      # A rebind whose `vault_changed` never reached this member: the
+      # binding moves and the payload does not.
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, row} = Arca.VaultStorage.get(actor, entry.id)
+
+      {:ok, _blocked} =
+        Arca.VaultStorage.move_binding(
+          actor,
+          entry.id,
+          row.binding_digest,
+          %{field_names: Jason.encode!(["token", "scope"]), binding_digest: "sha256:rebound"},
+          "needs_consent"
+        )
+
+      {:ok, %{"rebound-token" => {^payload_rev, moved}}} =
+        Sanctum.VaultReader.revisions(ctx.athanor_id, ["rebound-token"])
+
+      refute moved == digest
+
+      sweep!()
+      assert_receive {:DOWN, ^watched, :process, ^pid, _}, 2_000
+      assert_receive {:reconciled, %{server: "reboundsrv", entry_id: nil}}, 2_000
+    end
+
+    test "a server whose entry is no longer active is stopped", %{ctx: ctx} do
+      {:ok, entry} =
+        Vault.create(ctx, %{name: "gone-token", kind: "api_key", fields: %{"token" => "v1"}})
+
+      sync_reconciler()
+      {pid, _revision} = swept_server!(ctx, "gonesrv", "gone-token")
+      watched = Process.monitor(pid)
+
+      actor = Sanctum.Context.actor(ctx)
+      # Revoked without an announcement reaching this member.
+      _ = Arca.VaultStorage.set_status(actor, entry.id, "revoked")
+
+      sweep!()
+      assert_receive {:DOWN, ^watched, :process, ^pid, _}, 2_000
+    end
+
+    test "a server not yet connected resolved nothing and is left alone", %{ctx: ctx} do
+      {:ok, _} =
+        Vault.create(ctx, %{name: "idle-token", kind: "api_key", fields: %{"token" => "v1"}})
+
+      {:ok, pid} =
+        Emissary.MCP.ExternalServerSupervisor.ensure_started(
+          name: "idlesrv",
+          url: "https://127.0.0.1:9/mcp",
+          headers: %{"authorization" => "vault:idle-token"},
+          athanor_id: ctx.athanor_id
+        )
+
+      assert Emissary.MCP.ExternalServer.vault_revisions(pid) == :none
+      watched = Process.monitor(pid)
+      sweep!()
+      refute_received {:DOWN, ^watched, :process, ^pid, _}
+      DynamicSupervisor.terminate_child(Emissary.MCP.ExternalServerSupervisor, pid)
+    end
   end
 
   test "the catch-all handle_info survives and logs an unexpected message" do

@@ -121,7 +121,7 @@ defmodule Arca.AuditHandler do
   # the entry and writing the line. A deployment's own attach on
   # `[:cyfr, :audit, :recorded]` is telemetry's to catch and detach, not
   # this handler's, though it runs in this process and on this path.
-  # `Cyfr.OtelTenantHandler` and `Prism.TelemetryBridge` take the same
+  # `Cyfr.OtelTenantHandler` and `Cyfr.TelemetryBridge` take the same
   # precaution for the same reason.
   def handle_event(event_name, measurements, metadata, config) do
     do_handle_event(event_name, measurements, metadata, config)

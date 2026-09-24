@@ -1331,33 +1331,12 @@ defmodule Compendium.MCP.ComponentTool do
     {pulled, Enum.map(failed, fn {ref, _reason} -> ref end)}
   end
 
-  # Broadcast register progress to both PubSub (the console) and the MCP
-  # response stream (the CLI).
+  # Register progress on the registration's topic (the console) and the
+  # calling request's (the CLI's response stream).
   defp broadcast_register_progress(_ctx, nil, _phase, _message), do: :ok
 
-  defp broadcast_register_progress(ctx, register_id, phase, message) do
-    payload = %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}
-
-    case Phoenix.PubSub.broadcast(
-           Emissary.PubSub,
-           Cyfr.Bus.register(register_id, ctx),
-           {:register_progress, payload}
-         ) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[Compendium.MCP] PubSub broadcast failed: #{inspect(reason)}")
-    end
-
-    Emissary.MCP.Progress.emit(ctx, %{
-      "register_id" => register_id,
-      "phase" => phase,
-      "message" => message
-    })
-
-    :ok
-  end
+  defp broadcast_register_progress(ctx, register_id, phase, message),
+    do: publish_progress(ctx, {:register, register_id}, phase, message)
 
   # A push is a person's act from an athanor under a namespace they hold:
   # record all three. The namespace is the one the push resolved to
@@ -1397,8 +1376,6 @@ defmodule Compendium.MCP.ComponentTool do
 
   defp namespace_of(_), do: nil
 
-  # Broadcast to all Prism LiveViews subscribed to bus:components.
-  # Fires after any state-changing component operation (pull, register, delete, new, publish).
   # A diff's relative segment lists, joined for the wire.
   defp format_diff(%{added: added, removed: removed, changed: changed}) do
     %{
@@ -1408,35 +1385,44 @@ defmodule Compendium.MCP.ComponentTool do
     }
   end
 
+  # The registry changed after a state-changing component operation (pull,
+  # register, delete, new, publish) committed: every console view of it
+  # re-reads.
   defp broadcast_components_changed(ctx) do
-    topic = Cyfr.Bus.components(ctx)
-    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed)
+    actor = Sanctum.Context.actor(ctx)
+
+    Cyfr.Bus.broadcast(
+      actor,
+      Cyfr.Bus.components(actor),
+      Cyfr.Bus.Components.new(actor, :changed)
+    )
   end
 
-  # Broadcast generic progress to both PubSub (the console) and the MCP response
-  # stream (the CLI). Used by pull and publish handlers.
+  # Pull and publish progress on the pull's topic (the console) and the
+  # calling request's (the CLI's response stream).
   defp broadcast_progress(_ctx, nil, _phase, _message), do: :ok
 
-  defp broadcast_progress(ctx, progress_id, phase, message) do
-    payload = %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}
+  defp broadcast_progress(ctx, progress_id, phase, message),
+    do: publish_progress(ctx, {:pull, progress_id}, phase, message)
 
-    case Phoenix.PubSub.broadcast(
-           Emissary.PubSub,
-           Cyfr.Bus.progress(progress_id, ctx),
-           {:progress, payload}
-         ) do
+  # Neither topic failing fails the work: progress is display state.
+  defp publish_progress(ctx, subject, phase, message) do
+    actor = Sanctum.Context.actor(ctx)
+
+    step =
+      Cyfr.Bus.Progress.new(actor, subject,
+        request_id: ctx.request_id,
+        phase: phase,
+        message: message
+      )
+
+    case Cyfr.Bus.broadcast_progress(actor, step) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        Logger.warning("[Compendium.MCP] PubSub broadcast failed: #{inspect(reason)}")
+        Logger.warning("[Compendium.MCP] progress not published: #{inspect(reason)}")
     end
-
-    Emissary.MCP.Progress.emit(ctx, %{
-      "progress_id" => progress_id,
-      "phase" => phase,
-      "message" => message
-    })
 
     :ok
   end

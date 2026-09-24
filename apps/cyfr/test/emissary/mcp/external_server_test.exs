@@ -489,10 +489,9 @@ defmodule Emissary.MCP.ExternalServerTest do
     end
 
     defp stop_cause(:archived, %{ctx: ctx}) do
-      Phoenix.PubSub.broadcast(
-        Emissary.PubSub,
+      Cyfr.Bus.broadcast_global(
         Cyfr.Bus.athanor_archived_global(),
-        {:athanor_archived_global, ctx.athanor_id}
+        Cyfr.Bus.AthanorArchived.new(ctx.athanor_id)
       )
 
       :sys.get_state(Emissary.MCP.ExternalServerReconciler)
@@ -503,6 +502,112 @@ defmodule Emissary.MCP.ExternalServerTest do
         Emissary.MCP.ExternalServerSupervisor.ensure_started(
           Emissary.MCP.ExternalServers.server_config(%{row | epoch: row.epoch + 1}, ctx)
         )
+    end
+  end
+
+  describe "vault revisions" do
+    # A connect reads the revision token of every vault entry the server's
+    # header and backend env templates name before it resolves any of them,
+    # and refuses when the store cannot answer.
+    setup do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      {:ok, ctx: Sanctum.TestContext.local()}
+    end
+
+    defp vault!(ctx, name) do
+      {:ok, _} =
+        Sanctum.Vault.create(ctx, %{
+          name: name,
+          kind: "api_key",
+          fields: %{"token" => "t-" <> name}
+        })
+    end
+
+    defp connect(pid), do: GenServer.call(pid, :get_tools, 30_000)
+
+    test "an http connect records every header reference before resolving one", %{
+      name: name,
+      ctx: ctx
+    } do
+      vault!(ctx, "rev-header")
+
+      # The second reference names no entry, so resolving the headers fails:
+      # what was recorded was recorded before anything was resolved.
+      pid =
+        start_server(name, ctx.athanor_id,
+          headers: %{"authorization" => "vault:rev-header", "x-other" => "vault:rev-missing"}
+        )
+
+      assert {:error, _} = connect(pid)
+
+      {:ok, expected} =
+        Sanctum.VaultReader.revisions(ctx.athanor_id, ["rev-header", "rev-missing"])
+
+      state = :sys.get_state(pid)
+      assert state.vault_revisions == expected
+      assert {rev, digest} = expected["rev-header"]
+      assert is_integer(rev) and is_binary(digest)
+      assert expected["rev-missing"] == :inactive
+      assert state.headers == %{}
+    end
+
+    test "a stdio connect records every backend env reference before the bridge resolves it",
+         %{name: name, ctx: ctx} do
+      vault!(ctx, "rev-env")
+      vault!(ctx, "rev-env-other")
+
+      pid =
+        start_server(name, ctx.athanor_id,
+          transport: :stdio,
+          id: "srv_rev_#{System.unique_integer([:positive])}",
+          epoch: 1,
+          backends: [
+            %{"name" => "one", "command" => "npx -y one", "env" => %{"TOKEN" => "vault:rev-env"}},
+            %{
+              "name" => "two",
+              "command" => "npx -y two",
+              "env" => %{"KEY" => "vault:rev-env-other", "NODE_ENV" => "production"}
+            }
+          ]
+        )
+
+      # No bridge runs here: the sync that would resolve the env is refused.
+      assert {:error, _} = connect(pid)
+
+      {:ok, expected} =
+        Sanctum.VaultReader.revisions(ctx.athanor_id, ["rev-env", "rev-env-other"])
+
+      assert :sys.get_state(pid).vault_revisions == expected
+      assert map_size(expected) == 2
+    end
+
+    test "a store that cannot answer refuses the connect as unavailable, resolving nothing", %{
+      name: name,
+      ctx: ctx
+    } do
+      vault!(ctx, "rev-outage")
+      pid = start_server(name, ctx.athanor_id, headers: %{"authorization" => "vault:rev-outage"})
+
+      Arca.Repo.query!("ALTER TABLE vault_entries RENAME TO vault_entries_unreadable")
+
+      assert {:error, {:unavailable, "Vault"}} = connect(pid)
+
+      state = :sys.get_state(pid)
+      assert state.vault_revisions == nil
+      assert state.headers == %{}
+    end
+
+    test "a server that names no vault entry records nothing and reads nothing", %{
+      name: name,
+      ctx: ctx
+    } do
+      pid = start_server(name, ctx.athanor_id, headers: %{"accept" => "application/json"})
+      Arca.Repo.query!("ALTER TABLE vault_entries RENAME TO vault_entries_unreadable")
+
+      assert {:error, reason} = connect(pid)
+      refute reason == {:unavailable, "Vault"}
+      assert :sys.get_state(pid).vault_revisions == %{}
     end
   end
 

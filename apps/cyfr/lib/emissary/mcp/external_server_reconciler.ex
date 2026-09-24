@@ -34,13 +34,25 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   emits `[:cyfr, :emissary, :external_server, :reconcile_failed]` telemetry and is
   retried (fast retries, then a periodic sweep), because dropping one would
   leave a revoked credential flowing until the server process restarts.
+
+  A signal can also be lost — delivered to a member that was restarting,
+  or dropped by the PubSub itself. The periodic sweep therefore also walks
+  every live server process on this member
+  (`Emissary.MCP.ExternalServerSupervisor.live/0`), rereads the revision
+  tokens of the entries it resolved against
+  (`Emissary.MCP.ExternalServer.vault_revisions/2`,
+  `Sanctum.VaultReader.revisions/2`: the payload revision and the binding
+  digest) and restarts, as above, any whose token moved — a rotation or a
+  rebind — or whose entry is no longer active. A lost signal of any
+  relevant verb costs at most one sweep interval.
   """
 
   use GenServer
 
   require Logger
 
-  @topic Cyfr.Bus.vault_changed_global()
+  alias Cyfr.Bus.{AthanorArchived, VaultEntryChanged}
+
   @relevant_verbs [:rotate, :rebind, :revoke, :delete, :rename]
 
   @doc "The vault verbs this reconciler acts on — pinned by `Sanctum.VaultTest`."
@@ -65,25 +77,24 @@ defmodule Emissary.MCP.ExternalServerReconciler do
 
   @impl GenServer
   def init(_opts) do
-    Phoenix.PubSub.subscribe(Emissary.PubSub, @topic)
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.athanor_archived_global())
+    :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.vault_changed_global())
+    :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.athanor_archived_global())
     schedule_sweep()
     {:ok, %{pending: %{}}}
   end
 
   @impl GenServer
-  def handle_info({:vault_entry_changed_global, athanor_id, entry_id, verb, meta}, state)
+  def handle_info(%VaultEntryChanged{kind: verb} = changed, state)
       when verb in @relevant_verbs do
-    {:noreply, attempt(state, {athanor_id, entry_id}, meta, 0)}
+    meta = %{name: changed.name, old_name: changed.old_name}
+    {:noreply, attempt(state, {changed.athanor_id, changed.entry_id}, meta, 0)}
   end
 
   # A vault change with a verb we don't reconcile (e.g. :create) — expected;
   # ignore without the catch-all's warning.
-  def handle_info({:vault_entry_changed_global, _athanor, _entry, _verb, _meta}, state) do
-    {:noreply, state}
-  end
+  def handle_info(%VaultEntryChanged{}, state), do: {:noreply, state}
 
-  def handle_info({:athanor_archived_global, athanor_id}, state) do
+  def handle_info(%AthanorArchived{athanor_id: athanor_id}, state) do
     Emissary.MCP.ExternalServerSupervisor.stop_athanor(athanor_id)
 
     Emissary.MCP.ExternalProvider.invalidate_external_tools_cache(
@@ -104,6 +115,10 @@ defmodule Emissary.MCP.ExternalServerReconciler do
       Enum.reduce(state.pending, state, fn {key, %{meta: meta}}, acc ->
         attempt(acc, key, meta, 0)
       end)
+
+    # Then catch what no signal said: a live server whose vault revisions
+    # moved under it.
+    _ = while_held(&sweep_revisions/0)
 
     schedule_sweep()
     {:noreply, state}
@@ -179,8 +194,12 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   # A server whose epoch could not be raised is retried whole: stopping a
   # process and raising an epoch again are both harmless.
   defp stop_affected(servers, names, athanor_id, entry_id, ctx) do
-    affected = Enum.filter(servers, &references?(&1, names))
+    servers
+    |> Enum.filter(&references?(&1, names))
+    |> stop_servers(athanor_id, entry_id, ctx)
+  end
 
+  defp stop_servers(affected, athanor_id, entry_id, ctx) do
     results =
       Enum.map(affected, fn server ->
         Logger.info(
@@ -209,6 +228,67 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   end
 
   defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
+
+  @doc false
+  # The revision pass, one athanor at a time. A server that is not
+  # connected resolved nothing and is skipped; an athanor whose revisions
+  # or rows cannot be read is left for the next pass, counted.
+  @spec sweep_revisions() :: :ok
+  def sweep_revisions do
+    Emissary.MCP.ExternalServerSupervisor.live()
+    |> Enum.flat_map(fn {name, athanor_id, pid} ->
+      case Emissary.MCP.ExternalServer.vault_revisions(pid) do
+        {:ok, recorded} when map_size(recorded) > 0 -> [{athanor_id, name, recorded}]
+        _ -> []
+      end
+    end)
+    |> Enum.group_by(&elem(&1, 0))
+    |> Enum.each(fn {athanor_id, held} -> sweep_athanor(athanor_id, held) end)
+  end
+
+  defp sweep_athanor(athanor_id, held) do
+    names = held |> Enum.flat_map(fn {_athanor, _name, recorded} -> Map.keys(recorded) end)
+
+    with {:ok, current} <- Sanctum.VaultReader.revisions(athanor_id, Enum.uniq(names)),
+         [_ | _] = moved <- moved(held, current) do
+      ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
+      moved_names = moved |> Enum.flat_map(&elem(&1, 1)) |> Enum.uniq()
+      _released = Emissary.MCP.Bridge.release_referencing(athanor_id, moved_names)
+
+      with {:ok, servers} <- Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
+        server_names = MapSet.new(moved, &elem(&1, 0))
+        affected = Enum.filter(servers, &MapSet.member?(server_names, &1.name))
+        stop_servers(affected, athanor_id, nil, ctx)
+      end
+    end
+    |> case do
+      {:error, reason} ->
+        :telemetry.execute(
+          [:cyfr, :emissary, :external_server, :reconcile_failed],
+          %{count: 1},
+          %{athanor_id: athanor_id, entry_id: nil, reason: reason}
+        )
+
+      _ ->
+        :ok
+    end
+  rescue
+    error ->
+      :telemetry.execute(
+        [:cyfr, :emissary, :external_server, :reconcile_failed],
+        %{count: 1},
+        %{athanor_id: athanor_id, entry_id: nil, reason: Exception.message(error)}
+      )
+  end
+
+  # Each live server with the names whose revision token is no longer the
+  # one it resolved against: rotated, rebound, or no longer active.
+  defp moved(held, current) do
+    for {_athanor, name, recorded} <- held,
+        stale = for({entry, rev} <- recorded, Map.get(current, entry) != rev, do: entry),
+        stale != [],
+        do: {name, stale}
+  end
 
   defp references?(server, names) do
     config = Arca.McpServerStorage.config(server)

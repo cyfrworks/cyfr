@@ -43,6 +43,18 @@ defmodule Emissary.MCP.ExternalServer do
   became ready after the sync answered, crashed or restarted — and a
   changed catalogue invalidates the athanor's cached external tool list and
   tells its subscribers (`Cyfr.Bus.mcp_servers/1`).
+
+  ## Vault revisions
+
+  Before a connect resolves anything, the process reads the revision token
+  of every vault entry its header and backend env templates name
+  (`Sanctum.VaultReader.revisions/2`: the payload revision and the binding
+  digest) and keeps them for as long as it serves with what it resolved
+  (`vault_revisions/2`). The reconciler's periodic pass compares them with
+  the store, so a rotation, rebind or revocation whose announcement never
+  arrived still ends this process. Read before resolving, a change in
+  between leaves a token older than the material, which the pass reads as
+  moved: a spurious restart, never a missed one.
   """
 
   use GenServer
@@ -111,6 +123,21 @@ defmodule Emissary.MCP.ExternalServer do
         raise ArgumentError,
               "Emissary.MCP.ExternalServer: config requires :athanor_id, got #{inspect(other)}"
     end
+  end
+
+  @doc """
+  The revision token (`Sanctum.VaultReader.revisions/2`) of each vault
+  entry the server process `pid` resolved its credentials against, or
+  `:none` while it is not connected and serves with nothing resolved. A
+  process that does not answer within `timeout` answers `:none` too; the
+  next pass asks again.
+  """
+  @spec vault_revisions(pid(), timeout()) ::
+          {:ok, %{String.t() => Sanctum.VaultReader.revision() | :inactive}} | :none
+  def vault_revisions(pid, timeout \\ 5_000) when is_pid(pid) do
+    GenServer.call(pid, :vault_revisions, timeout)
+  catch
+    :exit, _reason -> :none
   end
 
   @doc """
@@ -220,6 +247,11 @@ defmodule Emissary.MCP.ExternalServer do
       transport: :http,
       raw_headers: %{},
       headers: %{},
+      # Every vault entry the header and backend env templates name, and
+      # the revision token of each as read before the last connect
+      # resolved them; nil until then.
+      vault_names: [],
+      vault_revisions: nil,
       status: :disconnected,
       tools: [],
       request_id: 0,
@@ -247,6 +279,7 @@ defmodule Emissary.MCP.ExternalServer do
       server_id: config[:id],
       epoch: config[:epoch],
       raw_headers: config[:headers] || %{},
+      vault_names: vault_names(config),
       timeout_ms:
         min(
           config[:timeout_ms] || Emissary.MCP.ExternalServers.default_timeout_ms(),
@@ -285,6 +318,16 @@ defmodule Emissary.MCP.ExternalServer do
   def handle_call({:call_tool, tool_name, arguments}, from, state) do
     dispatch_call(state, from, {tool_name, arguments, 0})
   end
+
+  @impl true
+  def handle_call(
+        :vault_revisions,
+        _from,
+        %{status: :ready, vault_revisions: %{} = revs} = state
+      ),
+      do: {:reply, {:ok, revs}, state}
+
+  def handle_call(:vault_revisions, _from, state), do: {:reply, :none, state}
 
   @impl true
   def handle_call(:status, _from, state) do
@@ -548,10 +591,12 @@ defmodule Emissary.MCP.ExternalServer do
       Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
     )
 
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      Cyfr.Bus.mcp_servers(athanor_id),
-      :mcp_servers_changed
+    actor = Cyfr.Actor.in_athanor(athanor_id)
+
+    Cyfr.Bus.broadcast(
+      actor,
+      Cyfr.Bus.mcp_servers(actor),
+      Cyfr.Bus.McpServers.new(actor, :changed)
     )
   end
 
@@ -655,13 +700,47 @@ defmodule Emissary.MCP.ExternalServer do
   defp do_initialize(%State{transport: :stdio} = state) do
     Logger.info("[ExternalServer] Connecting to #{state.name} through the MCP bridge")
     state = %{state | last_init_attempt: System.monotonic_time(:millisecond), era: :modern}
-    stdio_connect(state, 0)
+
+    case record_revisions(state) do
+      {:ok, state} -> stdio_connect(state, 0)
+      {:error, reason, state} -> fail_initialize(state, reason)
+    end
   end
 
   defp do_initialize(state) do
     Logger.info("[ExternalServer] Connecting to #{state.name} at #{state.url}")
     state = %{state | last_init_attempt: System.monotonic_time(:millisecond)}
 
+    case record_revisions(state) do
+      {:ok, state} -> http_initialize(state)
+      {:error, reason, state} -> fail_initialize(state, reason)
+    end
+  end
+
+  # The revisions are read before anything is resolved (see the module
+  # doc); a store that cannot answer fails the connect closed, as a
+  # resolve against it would.
+  defp record_revisions(%State{vault_names: []} = state),
+    do: {:ok, %{state | vault_revisions: %{}}}
+
+  defp record_revisions(state) do
+    case Sanctum.VaultReader.revisions(state.athanor_id, state.vault_names) do
+      {:ok, revisions} -> {:ok, %{state | vault_revisions: revisions}}
+      {:error, _reason} -> {:error, {:unavailable, "Vault"}, state}
+    end
+  end
+
+  defp vault_names(config) do
+    headers =
+      case config[:headers] do
+        %{} = headers -> Emissary.MCP.VaultRef.names(headers)
+        _ -> []
+      end
+
+    Enum.uniq(headers ++ Emissary.MCP.BackendDefinition.entry_names(config[:backends]))
+  end
+
+  defp http_initialize(state) do
     # The handshake runs inside handle_call while callers wait only
     # @initialize_timeout_ms — clamp the wire timeout to match, so a
     # stalling upstream cannot head-of-line-block the server process for

@@ -32,8 +32,8 @@ defmodule PrismWeb.RegistryLive do
     # doesn't block on the cyfr.run round-trip. The load handler below
     # flips `:loading` to false and fills `:components`.
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.components(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.components(actor))
       send(self(), :load_registry)
     end
 
@@ -261,7 +261,7 @@ defmodule PrismWeb.RegistryLive do
     end
   end
 
-  def handle_info(:components_changed, socket) do
+  def handle_info(%Cyfr.Bus.Components{}, socket) do
     {:noreply, load_registry(socket)}
   end
 

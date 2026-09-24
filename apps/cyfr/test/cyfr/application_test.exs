@@ -81,7 +81,7 @@ defmodule Cyfr.ApplicationTest do
         |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
 
       assert Phoenix.PubSub.Supervisor in ids or
-               Enum.any?(ids, fn id -> id == Emissary.PubSub end)
+               Enum.any?(ids, fn id -> id == Cyfr.PubSub end)
 
       # The repo is the `arca` application's now, and so is the cache
       # table's owner; this tier holds the registries that write
@@ -125,7 +125,7 @@ defmodule Cyfr.ApplicationTest do
       # `which_children/1` lists the most recently started child first.
       started = Cyfr.InfraSupervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
-      pubsub = Enum.find_index(started, &(&1 in [Emissary.PubSub, Phoenix.PubSub.Supervisor]))
+      pubsub = Enum.find_index(started, &(&1 in [Cyfr.PubSub, Phoenix.PubSub.Supervisor]))
 
       # The consented rate is not among them: its window is a shared row,
       # so this boot starts nothing for it.
@@ -169,7 +169,7 @@ defmodule Cyfr.ApplicationTest do
       builds = at.(Compendium.Builds.TaskSupervisor)
       assert is_integer(builds)
 
-      pubsub = Enum.find_index(started, &(&1 in [Emissary.PubSub, Phoenix.PubSub.Supervisor]))
+      pubsub = Enum.find_index(started, &(&1 in [Cyfr.PubSub, Phoenix.PubSub.Supervisor]))
       assert builds > pubsub
 
       for id <- [Cyfr.Ops.Catalog, Emissary.MCP.ResourceRegistry] do

@@ -48,7 +48,7 @@ defmodule Cyfr.Execution.EmitTest do
 
   defp received do
     receive do
-      {:execution_event, %{type: "emit", data: data}} -> [data | received()]
+      %Cyfr.Bus.ExecutionEvent{type: "emit", data: data} -> [data | received()]
     after
       200 -> []
     end
