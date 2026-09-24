@@ -12,9 +12,9 @@ defmodule Sanctum.Consent.Normalize do
   # are errors). Every function takes the error tag its caller reports
   # under, so `ShapeDigest` and `CommitDigest` keep their own taxonomies.
 
-  alias Cyfr.ComponentRef
+  alias Prima.ComponentRef
 
-  # Durations must be exact here. Cyfr.Limits.parse_duration/1 tolerates
+  # Durations must be exact here. Prima.Limits.parse_duration/1 tolerates
   # repeated trailing suffixes ("5mm" parses as 5 minutes) — harmless for a
   # timeout, unacceptable for a digest input, where it would give one
   # duration two spellings.

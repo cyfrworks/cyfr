@@ -84,7 +84,7 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
 
     case fetch_key(conn, header) do
       nil -> nil
-      signature -> "sig:" <> Cyfr.Digest.sha256(signature)
+      signature -> "sig:" <> Prima.Digest.sha256(signature)
     end
   end
 
@@ -120,7 +120,7 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
         body =
           Jason.encode!(%{
             "status" => "duplicate",
-            "first_seen_at" => Cyfr.Time.iso8601(first_seen_at)
+            "first_seen_at" => Prima.Time.iso8601(first_seen_at)
           })
 
         conn

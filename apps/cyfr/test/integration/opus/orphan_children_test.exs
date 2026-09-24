@@ -30,7 +30,7 @@ defmodule Opus.OrphanChildrenTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Cyfr.Test.TwoServices
@@ -59,7 +59,7 @@ defmodule Opus.OrphanChildrenTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do
@@ -103,7 +103,7 @@ defmodule Opus.OrphanChildrenTest do
   end
 
   test "a run_stream child takes a charge row and gives it back", %{ctx: ctx} do
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
     hold_children!(root_id)
     TwoServices.hold!(:complete, root_id, once: true)
     start_root(ctx, root_id, %{"op" => "call", "request" => request("run_stream")})
@@ -133,7 +133,7 @@ defmodule Opus.OrphanChildrenTest do
   end
 
   test "every child is killed at its deadline, within its parent's, held past it", %{ctx: ctx} do
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
     hold_children!(root_id)
 
     # A spawned child, a streamed one and a called one, the guest waiting on
@@ -198,7 +198,7 @@ defmodule Opus.OrphanChildrenTest do
   # as its runner attached with it, the held close and the client its
   # runner holds.
   defp held_root!(ctx) do
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
     TwoServices.hold!(:complete, root_id, once: true)
     start_root(ctx, root_id, %{"op" => "echo"})
     assert_receive {:held, ^root_id, close}, 30_000

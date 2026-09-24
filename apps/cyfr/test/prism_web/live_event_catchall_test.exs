@@ -17,7 +17,7 @@ defmodule PrismWeb.LiveEventCatchallTest do
   import ExUnit.CaptureLog
 
   defp live_modules do
-    Cyfr.Test.SourceTree.files!(Path.join(__DIR__, "../../lib/prism_web/**/*.ex"))
+    Prima.Test.SourceTree.files!(Path.join(__DIR__, "../../lib/prism_web/**/*.ex"))
     |> Enum.filter(fn path ->
       source = File.read!(path)
 

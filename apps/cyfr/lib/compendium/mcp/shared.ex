@@ -43,8 +43,8 @@ defmodule Compendium.MCP.Shared do
     do: err |> Atom.to_string() |> String.replace("_", " ")
 
   def to_error_string(err) do
-    if Cyfr.Refusal.reason?(err) do
-      Cyfr.Refusal.message(err)
+    if Prima.Refusal.reason?(err) do
+      Prima.Refusal.message(err)
     else
       Logger.warning("[Compendium.MCP.Shared] unrenderable error: #{inspect(err)}")
       "The registry request failed — try again."
@@ -77,13 +77,13 @@ defmodule Compendium.MCP.Shared do
   def namespace_bearer(_, _), do: {:error, "authentication required"}
 
   # deprecate/yank require a fully-qualified ref (all four fields).
-  # Cyfr.ComponentRef.parse/1 can succeed with version=nil for
+  # Prima.ComponentRef.parse/1 can succeed with version=nil for
   # `c:alice.foo` (latest); these actions must target a specific version.
-  def ensure_fully_qualified(%Cyfr.ComponentRef{version: nil}),
+  def ensure_fully_qualified(%Prima.ComponentRef{version: nil}),
     do: {:error, "deprecate/yank require a pinned version, e.g. c:alice.foo:1.0.0"}
 
-  def ensure_fully_qualified(%Cyfr.ComponentRef{version: ""}),
+  def ensure_fully_qualified(%Prima.ComponentRef{version: ""}),
     do: {:error, "deprecate/yank require a pinned version, e.g. c:alice.foo:1.0.0"}
 
-  def ensure_fully_qualified(%Cyfr.ComponentRef{}), do: :ok
+  def ensure_fully_qualified(%Prima.ComponentRef{}), do: :ok
 end

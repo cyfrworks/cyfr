@@ -68,7 +68,7 @@ defmodule Cyfr.Test.SeedBundle do
     units =
       seed
       |> shipped_units("catalysts")
-      |> Enum.filter(&Cyfr.Model.speaks_chat?(&1.manifest))
+      |> Enum.filter(&Prima.Model.speaks_chat?(&1.manifest))
       |> newest_by_name()
       |> Enum.sort_by(& &1.name)
 
@@ -93,7 +93,7 @@ defmodule Cyfr.Test.SeedBundle do
   defp shipped_units(seed, kind) do
     glob = Path.join([seed, "components", kind, "local", "*", "*", "cyfr-manifest.json"])
 
-    for path <- Cyfr.Test.SourceTree.files!(glob) do
+    for path <- Prima.Test.SourceTree.files!(glob) do
       version_dir = Path.dirname(path)
       components = Path.join(seed, "components")
       manifest = Jason.decode!(File.read!(path))
@@ -131,7 +131,7 @@ defmodule Cyfr.Test.SeedBundle do
       versions =
         [@repo_seed, "components", "catalysts", "local", name, "*"]
         |> Path.join()
-        |> Cyfr.Test.SourceTree.files!()
+        |> Prima.Test.SourceTree.files!()
         |> Enum.map(&Path.basename/1)
         |> Compendium.Semver.sort_desc()
 
@@ -158,7 +158,7 @@ defmodule Cyfr.Test.SeedBundle do
   defp copy_unit!(src, dest) do
     src
     |> Path.join("**")
-    |> Cyfr.Test.SourceTree.files!(match_dot: false)
+    |> Prima.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn file ->
       target = Path.join(dest, Path.relative_to(file, src))

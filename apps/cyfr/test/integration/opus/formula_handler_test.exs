@@ -24,14 +24,14 @@ defmodule Opus.FormulaHandlerTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Opus.FormulaHandler
   alias Opus.Test.FormulaHost
   alias Opus.Test.NestedExecution, as: Probe
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Cyfr.Test.TwoServices
   alias Sanctum.Consent.{Bootstrap}
 
@@ -41,7 +41,7 @@ defmodule Opus.FormulaHandlerTest do
   @test_ref "reagent:local.test-math:0.1.0"
   @test_node "reagent:local.test-math"
   @fh_node "formula:local.fh-root"
-  @act_fh Cyfr.Digest.sha256("act-fh")
+  @act_fh Prima.Digest.sha256("act-fh")
   @probe_node "formula:local.nested-probe"
 
   setup tags do
@@ -65,7 +65,7 @@ defmodule Opus.FormulaHandlerTest do
       })
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       if original_base_path,
@@ -179,7 +179,7 @@ defmodule Opus.FormulaHandlerTest do
           } <- TwoServices.calls(),
           do: token
 
-    {:ok, assignment} = Cyfr.Assignment.read(token)
+    {:ok, assignment} = Prima.Assignment.read(token)
     {:ok, authority} = Authority.from_wire(assignment.authority)
     %{execution_id: assignment.execution_id, authority: authority}
   end
@@ -204,7 +204,7 @@ defmodule Opus.FormulaHandlerTest do
   # child it spawns is held at the catalog call it makes, on the suite's
   # wire, until the test ends.
   defp run_steps!(ctx, steps, opts \\ []) do
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
     if Keyword.get(opts, :hold_children, false), do: hold_children!(root_id)
     start_steps(ctx, root_id, steps)
     {root_id, results!(root_id)}
@@ -256,7 +256,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero())
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       assert is_map(imports)
       assert is_pid(tracker_pid)
@@ -665,7 +665,7 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "tasks a formula leaves running end with it, and CYFR reclaims their holds", %{ctx: ctx} do
-      root_id = Cyfr.UUID7.execution_id()
+      root_id = Prima.UUID7.execution_id()
       hold_children!(root_id)
       TwoServices.hold!(:tool_call, root_id, once: true)
 
@@ -704,7 +704,7 @@ defmodule Opus.FormulaHandlerTest do
     test "stops tracker and returns :ok", %{ctx: ctx} do
       {_imports, tracker_pid} =
         FormulaHandler.build_formula_imports(host!(ctx, Authority.zero()),
-          limits: Cyfr.Limits.defaults(:formula)
+          limits: Prima.Limits.defaults(:formula)
         )
 
       assert Process.alive?(tracker_pid)
@@ -740,7 +740,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: "exec_emit_test")
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -757,7 +757,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: "exec_emit_seq")
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -776,7 +776,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: "exec_emit_bad")
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -794,7 +794,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       Cyfr.Execution.Events.subscribe(execution_id, ctx)
 
@@ -822,7 +822,7 @@ defmodule Opus.FormulaHandlerTest do
         )
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       Cyfr.Execution.Events.subscribe(execution_id, ctx)
 
@@ -845,7 +845,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -890,7 +890,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: execution_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
@@ -912,7 +912,7 @@ defmodule Opus.FormulaHandlerTest do
       host = host!(ctx, Authority.zero(), stream_id: root_id)
 
       {imports, tracker_pid} =
-        FormulaHandler.build_formula_imports(host, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
       Cyfr.Execution.Events.subscribe(root_id, ctx)
       Cyfr.Execution.Events.subscribe(host.execution_id, ctx)
@@ -996,7 +996,7 @@ defmodule Opus.FormulaHandlerTest do
       assert parsed["error"]["type"] == "setup_required"
 
       # One remediation shape on the wire, whichever dispatch path failed —
-      # Cyfr.Remediation's, the one component-guide documents.
+      # Prima.Remediation's, the one component-guide documents.
       remediation = parsed["error"]["remediation"]
       assert remediation["component_ref"] == "catalyst:local.no-policy-test:0.1.0"
       assert remediation["setup_command"] =~ "profile grant"

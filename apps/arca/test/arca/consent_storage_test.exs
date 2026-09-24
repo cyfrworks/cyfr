@@ -34,7 +34,7 @@ defmodule Arca.ConsentStorageTest do
 
   defp entry!(athanor) do
     {:ok, entry} =
-      VaultStorage.put(%Cyfr.Actor{athanor_id: athanor}, %{
+      VaultStorage.put(%Prima.Actor{athanor_id: athanor}, %{
         name: "entry-#{System.unique_integer([:positive])}",
         kind: "api_key",
         sealed_payload: "sealed"
@@ -53,7 +53,7 @@ defmodule Arca.ConsentStorageTest do
       invoke_mode: "open_inert",
       shape_digest: "sha256:shape",
       commit_digest: "sha256:commit",
-      blob_digest: Cyfr.JCS.hash_binary("{}"),
+      blob_digest: Prima.JCS.hash_binary("{}"),
       resolved_policy: "{}",
       activation: "{}",
       granted_by: "test",
@@ -81,7 +81,7 @@ defmodule Arca.ConsentStorageTest do
 
       # Nothing unverifiable was stored, and the profile has no head.
       assert {:error, :no_head} =
-               ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
+               ConsentStorage.get_head(Prima.Actor.in_athanor(athanor), profile.id)
 
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
     end
@@ -99,7 +99,7 @@ defmodule Arca.ConsentStorageTest do
                  nil
                )
 
-      {:ok, head, refs} = ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
+      {:ok, head, refs} = ConsentStorage.get_head(Prima.Actor.in_athanor(athanor), profile.id)
       assert head.id == consent.id
       assert [%{vault_entry_id: entry_id}] = refs
       assert entry_id == entry.id
@@ -119,7 +119,7 @@ defmodule Arca.ConsentStorageTest do
                )
 
       assert {:error, :no_head} =
-               ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
+               ConsentStorage.get_head(Prima.Actor.in_athanor(athanor), profile.id)
 
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
       assert Arca.Repo.aggregate(Arca.Schemas.ConsentVaultRef, :count) == 0
@@ -136,7 +136,7 @@ defmodule Arca.ConsentStorageTest do
       assert {:error, :head_moved} =
                ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 2), [], nil)
 
-      {:ok, head, _refs} = ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
+      {:ok, head, _refs} = ConsentStorage.get_head(Prima.Actor.in_athanor(athanor), profile.id)
       assert head.id == first.id
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 1
     end
@@ -151,7 +151,7 @@ defmodule Arca.ConsentStorageTest do
       assert {:error, :head_moved} =
                ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
 
-      {:ok, head, _refs} = ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
+      {:ok, head, _refs} = ConsentStorage.get_head(Prima.Actor.in_athanor(athanor), profile.id)
       assert head.id == first.id
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 1
     end
@@ -168,7 +168,7 @@ defmodule Arca.ConsentStorageTest do
                )
 
       assert {:error, :no_head} =
-               ConsentStorage.get_head(Cyfr.Actor.in_athanor(athanor), profile.id)
+               ConsentStorage.get_head(Prima.Actor.in_athanor(athanor), profile.id)
 
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
     end
@@ -194,7 +194,7 @@ defmodule Arca.ConsentStorageTest do
                  [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}]
                )
 
-      {:ok, profile} = ProfileStorage.get(Cyfr.Actor.in_athanor(athanor), "prof_mint_1")
+      {:ok, profile} = ProfileStorage.get(Prima.Actor.in_athanor(athanor), "prof_mint_1")
       assert profile.head_consent_id == consent.id
     end
 
@@ -217,7 +217,7 @@ defmodule Arca.ConsentStorageTest do
                )
 
       assert {:error, :not_found} =
-               ProfileStorage.get(Cyfr.Actor.in_athanor(athanor), "prof_mint_2")
+               ProfileStorage.get(Prima.Actor.in_athanor(athanor), "prof_mint_2")
     end
   end
 
@@ -238,8 +238,8 @@ defmodule Arca.ConsentStorageTest do
           nil
         )
 
-      mine = Cyfr.Actor.in_athanor(athanor)
-      theirs = Cyfr.Actor.in_athanor(Arca.Test.Actor.athanor!("ath_other").id)
+      mine = Prima.Actor.in_athanor(athanor)
+      theirs = Prima.Actor.in_athanor(Arca.Test.Actor.athanor!("ath_other").id)
 
       assert {:ok, [_ | _]} = ConsentStorage.profiles(mine, "reagent:local.storage-test")
       assert {:ok, %{revision: 1}} = ConsentStorage.head_consent(mine, profile.id)
@@ -260,7 +260,7 @@ defmodule Arca.ConsentStorageTest do
       {:ok, _consent} =
         ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
 
-      nobody = %Cyfr.Actor{}
+      nobody = %Prima.Actor{}
 
       assert {:error, :no_athanor} = ConsentStorage.profiles(nobody, "reagent:local.storage-test")
       assert {:error, :no_athanor} = ConsentStorage.head_consent(nobody, profile.id)
@@ -289,7 +289,7 @@ defmodule Arca.ConsentStorageTest do
           set: [status: "sideways"]
         )
 
-      actor = %Cyfr.Actor{athanor_id: athanor}
+      actor = %Prima.Actor{athanor_id: athanor}
 
       assert {:ok, entries} = ConsentStorage.profile_entries(actor, "reagent:local.storage-test")
       assert %{id: "prof_entries_damaged", status: :corrupt} in entries

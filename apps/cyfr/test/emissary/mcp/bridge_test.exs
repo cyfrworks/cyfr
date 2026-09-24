@@ -28,7 +28,7 @@ defmodule Emissary.MCP.BridgeTest do
   import ExUnit.CaptureLog
 
   alias Arca.JobClaims
-  alias Cyfr.BridgeAuth
+  alias Prima.BridgeAuth
   alias Emissary.MCP.Bridge
   alias Emissary.MCP.ExternalServers
   alias Emissary.MCP.McpServersTool
@@ -55,7 +55,7 @@ defmodule Emissary.MCP.BridgeTest do
 
     import Plug.Conn
 
-    alias Cyfr.BridgeAuth
+    alias Prima.BridgeAuth
 
     def start(test, root) do
       bypass = Bypass.open()
@@ -667,7 +667,7 @@ defmodule Emissary.MCP.BridgeTest do
 
       assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
       assert %{owner: owner} = taken = claim_row(ctx, row)
-      assert owner == Cyfr.Boot.id()
+      assert owner == Prima.Boot.id()
       assert JobClaims.live?(taken)
 
       # And giving the owner up here gives the row up with it, lease run
@@ -698,7 +698,7 @@ defmodule Emissary.MCP.BridgeTest do
       {:status, _pid, _module, items} = :sys.get_status(bridge)
       assert %Bridge.State{claims: held} = status_state(items, Bridge.State)
       assert [%{owner: owner}] = Map.values(held)
-      assert owner == Cyfr.Boot.id()
+      assert owner == Prima.Boot.id()
     end
 
     test "a member that loses its claim stops the backend here and revokes nothing a peer now runs",
@@ -746,7 +746,7 @@ defmodule Emissary.MCP.BridgeTest do
       tick(bridge)
 
       assert %{owner: owner, fence: fence} = retaken = claim_row(ctx, row)
-      assert owner == Cyfr.Boot.id()
+      assert owner == Prima.Boot.id()
       assert fence > held.fence
       assert JobClaims.live?(retaken)
       assert Process.alive?(pid)
@@ -762,7 +762,7 @@ defmodule Emissary.MCP.BridgeTest do
       pid = connect(ctx, row)
       assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
       first = claim_row(ctx, row)
-      assert first.owner == Cyfr.Boot.id()
+      assert first.owner == Prima.Boot.id()
 
       watched = Process.monitor(pid)
       {:ok, _} = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), row.id)
@@ -772,7 +772,7 @@ defmodule Emissary.MCP.BridgeTest do
       assert_released(row, 1)
 
       given_up = claim_row(ctx, row)
-      assert given_up.owner == Cyfr.Boot.id()
+      assert given_up.owner == Prima.Boot.id()
       assert given_up.fence > first.fence
       refute JobClaims.live?(given_up)
 
@@ -782,7 +782,7 @@ defmodule Emissary.MCP.BridgeTest do
       connect(ctx, moved)
       assert_receive {:control, "sync", %{"e" => 2}, _fields}, 2_000
       taken = claim_row(ctx, row)
-      assert taken.owner == Cyfr.Boot.id()
+      assert taken.owner == Prima.Boot.id()
       assert taken.fence > given_up.fence
       assert JobClaims.live?(taken)
     end

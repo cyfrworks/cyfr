@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Cyfr.BuilderProtocol, the wire between CYFR's build client and the builder Locus serves: every consumer derives the request key from the service key over the label, reproduces the request's canonical string, MAC and header, reads every line and refusal here to its fields, refuses every invalid body with the error named, and refuses every header under auth_rejected. File contents under fields are base64 of the bytes. A synthesize entry names a body to build from the valid one: `files` files of `bytes` zero bytes each in place of its files, or a progress message of `message_bytes`.",
+  "comment": "The vectors pinning Prima.BuilderProtocol, the wire between CYFR's build client and the builder Locus serves: every consumer derives the request key from the service key over the label, reproduces the request's canonical string, MAC and header, reads every line and refusal here to its fields, refuses every invalid body with the error named, and refuses every header under auth_rejected. File contents under fields are base64 of the bytes. A synthesize entry names a body to build from the valid one: `files` files of `bytes` zero bytes each in place of its files, or a progress message of `message_bytes`.",
   "version": 1,
   "domain": "cyfr-locus/v1",
   "service": "builds",

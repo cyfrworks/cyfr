@@ -23,10 +23,10 @@ defmodule Aqua.ToolSeamTest do
 
   test "the assistant reaches the tool surface only through its seam" do
     offenders =
-      for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/aqua/**/*.ex")),
+      for path <- Prima.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/aqua/**/*.ex")),
           rel = Path.relative_to(path, root()),
           rel != @seam,
-          {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
+          {line, n} <- path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.code_lines(),
           String.contains?(line, "Emissary.MCP."),
           do: "#{rel}:#{n}: #{String.trim(line)}"
 

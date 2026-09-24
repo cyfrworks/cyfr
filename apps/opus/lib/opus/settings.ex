@@ -284,7 +284,7 @@ defmodule Opus.Settings do
         {:error, {:missing, "OPUS_HOST_URL"}}
 
       url ->
-        case Cyfr.WorkerWire.base_url(url) do
+        case Prima.WorkerWire.base_url(url) do
           {:ok, base} -> {:ok, base}
           :error -> {:error, {:malformed, "OPUS_HOST_URL"}}
         end

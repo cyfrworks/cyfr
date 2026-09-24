@@ -34,7 +34,7 @@ defmodule Arca.Retention.StagedRevisions do
   def limit, do: Kind.configured(:staging_sweep_limit, 200)
 
   @impl true
-  def prune(%Cyfr.Actor{} = actor, days, dry_run) do
+  def prune(%Prima.Actor{} = actor, days, dry_run) do
     with :ok <- held(),
          {:ok, report} <-
            Arca.StorageGC.sweep(actor,

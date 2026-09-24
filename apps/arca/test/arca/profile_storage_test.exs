@@ -41,7 +41,7 @@ defmodule Arca.ProfileStorageTest do
       assert {:error, {:invalid_label, ""}} = ProfileStorage.put(attrs(athanor, %{label: ""}))
 
       assert {:ok, []} =
-               ProfileStorage.list_for_source(Cyfr.Actor.in_athanor(athanor), @source_ref)
+               ProfileStorage.list_for_source(Prima.Actor.in_athanor(athanor), @source_ref)
     end
 
     test "a label merely carrying the prefix's letters is stored", %{athanor: athanor} do
@@ -74,7 +74,7 @@ defmodule Arca.ProfileStorageTest do
     test "revokes the source's live profiles in the actor's athanor, and answers them", %{
       athanor: athanor
     } do
-      actor = Cyfr.Actor.in_athanor(athanor)
+      actor = Prima.Actor.in_athanor(athanor)
       {:ok, owner} = ProfileStorage.put(attrs(athanor, %{}))
       {:ok, blocked} = ProfileStorage.put(attrs(athanor, %{label: "blocked", status: "needs_consent"}))
       {:ok, _gone} = ProfileStorage.put(attrs(athanor, %{label: "gone", status: "revoked"}))
@@ -91,7 +91,7 @@ defmodule Arca.ProfileStorageTest do
     end
 
     test "an actor with no athanor is refused before any query" do
-      assert {:error, :no_athanor} = ProfileStorage.revoke_for_source(%Cyfr.Actor{}, @source_ref)
+      assert {:error, :no_athanor} = ProfileStorage.revoke_for_source(%Prima.Actor{}, @source_ref)
     end
 
     @tag :capture_log
@@ -99,7 +99,7 @@ defmodule Arca.ProfileStorageTest do
       Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
 
       assert {:error, :database_error} =
-               ProfileStorage.revoke_for_source(Cyfr.Actor.in_athanor(athanor), @source_ref)
+               ProfileStorage.revoke_for_source(Prima.Actor.in_athanor(athanor), @source_ref)
     end
   end
 end

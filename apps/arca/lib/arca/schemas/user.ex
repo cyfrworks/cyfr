@@ -35,13 +35,13 @@ defmodule Arca.Schemas.User do
 
   @type t :: %__MODULE__{}
 
-  # The prefix and the predicate are `Cyfr.PersonId`'s: the identity
+  # The prefix and the predicate are `Prima.PersonId`'s: the identity
   # domain mints with the one and this table refuses a row that fails the
   # other, so both read one declaration.
 
   @doc "The prefix every person's id carries; `Sanctum.Tenancy.Users` mints with it."
   @spec id_prefix() :: String.t()
-  defdelegate id_prefix(), to: Cyfr.PersonId, as: :prefix
+  defdelegate id_prefix(), to: Prima.PersonId, as: :prefix
 
   @doc """
   Whether `id` is a person's — minted with the prefix above — as opposed
@@ -49,7 +49,7 @@ defmodule Arca.Schemas.User do
   `webhook:<slug>`, …), which are never people and never have a row.
   """
   @spec person_id?(term()) :: boolean()
-  defdelegate person_id?(id), to: Cyfr.PersonId, as: :person?
+  defdelegate person_id?(id), to: Prima.PersonId, as: :person?
 
   schema "users" do
     field(:email, :string)

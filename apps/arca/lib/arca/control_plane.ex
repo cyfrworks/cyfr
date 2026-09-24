@@ -356,7 +356,7 @@ defmodule Arca.ControlPlane do
   "is the claimant still alive?" in the cell — a turn's holder, an
   occurrence's claimant, an attempt's runner.
 
-  Because `Cyfr.Boot.id/0` embeds the node, a claim left by an OLDER boot
+  Because `Prima.Boot.id/0` embeds the node, a claim left by an OLDER boot
   of the same node is not live, which is exactly right: that boot is gone
   even though its node came back.
 

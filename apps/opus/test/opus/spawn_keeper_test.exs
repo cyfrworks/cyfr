@@ -15,7 +15,7 @@ defmodule Opus.SpawnKeeperTest do
 
   use ExUnit.Case, async: true
 
-  alias Cyfr.RunnerControl
+  alias Prima.RunnerControl
   alias Opus.Keeper.Spawn
   alias Opus.RunnerProcess
 

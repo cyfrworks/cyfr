@@ -17,7 +17,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
 
     Operation.tool(
       [
@@ -51,7 +51,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
     # Dispatch enforces auth + :storage_read; the tenant residual keeps an
     # athanor-less context out of the profile store.
     with :ok <- Context.tenant_ok(ctx) do
-      ref = Cyfr.ComponentRef.build("tincture", publisher, name)
+      ref = Prima.ComponentRef.build("tincture", publisher, name)
 
       case Arca.ConsentStorage.profiles(Context.actor(ctx), ref) do
         {:ok, profiles} ->
@@ -92,7 +92,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Cyfr.Ops.Provider.invalid_action("tincture_visibility", action_enum())}
+    {:error, Prima.Provider.invalid_action("tincture_visibility", action_enum())}
   end
 
   # The finished public URL, so no client composes the route shape itself.
@@ -100,7 +100,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
   defp public_url(ctx, publisher, name) do
     case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
       {:ok, athanor} ->
-        Cyfr.TinctureUrl.path(
+        Prima.TinctureUrl.path(
           Sanctum.Tenancy.Athanors.route_slug(athanor),
           publisher,
           name
@@ -111,5 +111,5 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
     end
   end
 
-  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
+  defp action_enum, do: Prima.Provider.action_enum(definition())
 end

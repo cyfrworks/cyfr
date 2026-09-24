@@ -79,7 +79,7 @@ defmodule Cyfr.Execution.Events.Sequence do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 end

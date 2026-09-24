@@ -120,15 +120,15 @@ defmodule Sanctum.EgressTest do
     end
   end
 
-  describe "Cyfr.BoundedBody on the pinned transport's Req.Response" do
+  describe "Prima.BoundedBody on the pinned transport's Req.Response" do
     test "collects into a Req.Response and halts past the ceiling" do
-      collector = Cyfr.BoundedBody.collector(4)
+      collector = Prima.BoundedBody.collector(4)
 
       {:cont, {_req, resp}} = collector.({:data, "1234"}, {:req, %Req.Response{}})
-      assert Cyfr.BoundedBody.read(resp, 4) == {:ok, "1234"}
+      assert Prima.BoundedBody.read(resp, 4) == {:ok, "1234"}
 
       {:halt, {_req, resp}} = collector.({:data, "5"}, {:req, resp})
-      assert Cyfr.BoundedBody.read(resp, 4) == {:error, {:response_too_large, 5, 4}}
+      assert Prima.BoundedBody.read(resp, 4) == {:error, {:response_too_large, 5, 4}}
     end
   end
 end

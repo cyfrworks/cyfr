@@ -14,8 +14,8 @@ defmodule Emissary.MCP.InChainIdentityTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Ops.Catalog
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Sanctum.Context
 
   @plane_refusal ~r/guest-plane context cannot/

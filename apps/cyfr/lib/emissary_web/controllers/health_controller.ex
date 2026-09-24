@@ -95,7 +95,7 @@ defmodule EmissaryWeb.HealthController do
   # rescue is the belt its siblings here also wear — nothing on this path
   # may turn a probe into a 500.
   defp check_database do
-    case Arca.Health.check(Cyfr.Actor.system()) do
+    case Arca.Health.check(Prima.Actor.system()) do
       :ok -> :ok
       {:error, {:unavailable, why}} -> {:error, why}
       {:error, reason} -> {:error, describe(reason)}

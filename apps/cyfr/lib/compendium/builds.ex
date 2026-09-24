@@ -47,7 +47,7 @@ defmodule Compendium.Builds do
   alias Arca.BuildRecords
   alias Compendium.Builds.Client
   alias Compendium.ComponentPath
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
   alias Sanctum.Context
 
   @supervisor Compendium.Builds.TaskSupervisor
@@ -61,7 +61,7 @@ defmodule Compendium.Builds do
 
   @typedoc """
   One step of a build as its watchers see it: a stage the builder reported
-  (`t:Cyfr.BuilderProtocol.stage/0`), or `:complete` or `:error` at its end.
+  (`t:Prima.BuilderProtocol.stage/0`), or `:complete` or `:error` at its end.
   """
   @type progress :: %{build_id: String.t(), phase: atom(), message: String.t()}
 
@@ -170,7 +170,7 @@ defmodule Compendium.Builds do
   # its shape is bounded, and an id naming a build still in flight is
   # refused rather than refreshing that build's row under its subscriber
   # (`Arca.BuildRecords.record_started/3` overwrites the caller's own row).
-  defp settle_build_id(_ctx, nil), do: {:ok, Cyfr.UUID7.generate_id("build")}
+  defp settle_build_id(_ctx, nil), do: {:ok, Prima.UUID7.generate_id("build")}
 
   defp settle_build_id(ctx, id) when is_binary(id) do
     cond do
@@ -195,11 +195,11 @@ defmodule Compendium.Builds do
   defp run_recorded(%{ctx: ctx, build_id: build_id, reference: reference} = build) do
     case BuildRecords.record_started(Context.actor(ctx), build_id, reference) do
       :ok ->
-        logger_metadata = Cyfr.LoggerContext.capture()
+        logger_metadata = Prima.LoggerContext.capture()
 
         started =
           Task.Supervisor.start_child(@supervisor, fn ->
-            Cyfr.LoggerContext.restore(logger_metadata)
+            Prima.LoggerContext.restore(logger_metadata)
             record_outcome(build, run(build))
           end)
 
@@ -371,12 +371,12 @@ defmodule Compendium.Builds do
   # Sources
   # ---------------------------------------------------------------------------
 
-  # `Cyfr.ComponentRef.parse/1` gates the type and the namespace policy the
+  # `Prima.ComponentRef.parse/1` gates the type and the namespace policy the
   # namespace. Sources, version resolution and the published artifact all
   # use the local publisher, so a reference of another namespace is refused
   # rather than renamespaced.
   defp parse_reference(reference) do
-    case Cyfr.ComponentRef.parse(reference) do
+    case Prima.ComponentRef.parse(reference) do
       {:ok, ref} ->
         case Compendium.NamespacePolicy.require_local_build(ref.namespace) do
           :ok -> {:ok, ref.type, ref.name, ref.version}
@@ -393,7 +393,7 @@ defmodule Compendium.Builds do
   defp resolve_version(ctx, reference, nil) do
     case Compendium.Resolver.resolve(ctx, reference) do
       {:ok, resolved_ref, _metadata} ->
-        {:ok, parsed} = Cyfr.ComponentRef.parse(resolved_ref)
+        {:ok, parsed} = Prima.ComponentRef.parse(resolved_ref)
         {:ok, parsed.version}
 
       {:error, reason} ->
@@ -636,11 +636,11 @@ defmodule Compendium.Builds do
   # A started build's row carries the outcome; a build with no row told
   # its caller `"pending"` and this is a no-op.
   defp register(%{ctx: ctx, build_id: build_id}) do
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     started =
       Task.Supervisor.start_child(@supervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
+        Prima.LoggerContext.restore(logger_metadata)
 
         outcome =
           case Cyfr.Ops.Catalog.call_external("component", ctx, %{"action" => "register"}) do

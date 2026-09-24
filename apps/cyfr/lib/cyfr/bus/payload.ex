@@ -9,18 +9,18 @@ defmodule Cyfr.Bus.Payload do
   # rather than riding along.
 
   @doc false
-  @spec athanor!(Cyfr.Actor.t()) :: String.t()
-  def athanor!(%Cyfr.Actor{athanor_id: athanor_id})
+  @spec athanor!(Prima.Actor.t()) :: String.t()
+  def athanor!(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "",
       do: athanor_id
 
-  def athanor!(%Cyfr.Actor{athanor_id: athanor_id}) do
+  def athanor!(%Prima.Actor{athanor_id: athanor_id}) do
     raise ArgumentError,
           "a tenant payload needs an actor with a non-empty athanor_id, got #{inspect(athanor_id)}"
   end
 
   def athanor!(other) do
-    raise ArgumentError, "a tenant payload needs a Cyfr.Actor, got #{inspect(other, limit: 3)}"
+    raise ArgumentError, "a tenant payload needs a Prima.Actor, got #{inspect(other, limit: 3)}"
   end
 
   @doc false

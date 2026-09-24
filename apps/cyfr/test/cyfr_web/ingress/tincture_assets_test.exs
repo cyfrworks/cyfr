@@ -64,7 +64,7 @@ defmodule CyfrWeb.Ingress.TinctureAssetsTest do
 
   describe "the tincture URL the adapter is served under" do
     test "is the canonical athanor-scoped path" do
-      assert Cyfr.TinctureUrl.path("home", "moonmoon", "app") == "/t/home/moonmoon/app"
+      assert Prima.TinctureUrl.path("home", "moonmoon", "app") == "/t/home/moonmoon/app"
     end
 
     test "a person athanor's segment is its @namespace" do
@@ -79,11 +79,11 @@ defmodule CyfrWeb.Ingress.TinctureAssetsTest do
 
       segment = Sanctum.Tenancy.Athanors.route_slug(athanor)
       assert segment == "@alice"
-      assert Cyfr.TinctureUrl.path(segment, "local", "dash") == "/t/@alice/local/dash"
+      assert Prima.TinctureUrl.path(segment, "local", "dash") == "/t/@alice/local/dash"
     end
 
     test "refuses an empty athanor segment" do
-      assert_raise FunctionClauseError, fn -> Cyfr.TinctureUrl.path("", "local", "x") end
+      assert_raise FunctionClauseError, fn -> Prima.TinctureUrl.path("", "local", "x") end
     end
   end
 

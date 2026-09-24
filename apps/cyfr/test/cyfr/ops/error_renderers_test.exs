@@ -10,7 +10,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cyfr.Refusal
+  alias Prima.Refusal
 
   # The seven a guest used to be handed by name. Each had a sentence in
   # the console's vocabulary and none in the runner's, and the runner
@@ -69,7 +69,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
 
     # `component.create`, `component.fork` and the scroll writes are
     # in-chain, so a guest receives these too. The guest view renders
-    # `Cyfr.GuestError`, a second vocabulary that restates the sentences;
+    # `Prima.GuestError`, a second vocabulary that restates the sentences;
     # this case is what holds the two together.
     test "render the same sentence on all three surfaces" do
       for reason <- @commit_vocabulary do
@@ -130,7 +130,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
         refute expected == Atom.to_string(reason),
                "#{inspect(reason)} renders as its own name"
 
-        assert Cyfr.GuestError.render(reason) == expected,
+        assert Prima.GuestError.render(reason) == expected,
                "the runner's vocabulary disagrees about #{inspect(reason)}"
 
         assert Opus.FormulaHandler.render_reason(reason) == expected,
@@ -144,7 +144,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
     test "an atom outside the vocabulary is internal, and is not spelled out" do
       # What the runner's renderer did to every atom it did not know.
       assert Opus.FormulaHandler.render_reason(:some_internal_state) == "The call failed."
-      assert Cyfr.GuestError.render(:some_internal_state) == nil
+      assert Prima.GuestError.render(:some_internal_state) == nil
     end
   end
 
@@ -166,7 +166,7 @@ defmodule Cyfr.Ops.ErrorRenderersTest do
       assert Opus.FormulaHandler.render_reason({:not_found, "component", "x"}) ==
                Refusal.message({:not_found, "component", "x"})
 
-      # Opus renders from contract data alone (`Cyfr.GuestError`): a Sanctum
+      # Opus renders from contract data alone (`Prima.GuestError`): a Sanctum
       # refusal reaches a guest only once CYFR has rendered it into the wire
       # answer, so the bare term is internal to the engine and generalized.
       unauthorized = {:missing_permission, :vault_read}

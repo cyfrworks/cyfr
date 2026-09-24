@@ -19,7 +19,7 @@ defmodule Sanctum.MCP.KeyTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
 
     Operation.tool(
       [
@@ -225,7 +225,7 @@ defmodule Sanctum.MCP.KeyTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Cyfr.Ops.Provider.invalid_action("key", action_enum())}
+    {:error, Prima.Provider.invalid_action("key", action_enum())}
   end
 
   # --- helpers ---
@@ -251,5 +251,5 @@ defmodule Sanctum.MCP.KeyTool do
   defp broadcast_api_keys_changed(ctx),
     do: Sanctum.Telemetry.api_keys_changed(Sanctum.Context.athanor!(ctx))
 
-  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
+  defp action_enum, do: Prima.Provider.action_enum(definition())
 end

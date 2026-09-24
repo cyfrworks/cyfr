@@ -99,10 +99,10 @@ defmodule Compendium.Tincture do
   @doc """
   Whether a `tincture.connect` entry is a bare domain with an optional
   `*.` prefix — the grammar the manifest validator holds entries to and
-  the served page's CSP is built from, owned by `Cyfr.Manifest`.
+  the served page's CSP is built from, owned by `Prima.Manifest`.
   """
   @spec valid_connect_domain?(term()) :: boolean()
-  defdelegate valid_connect_domain?(domain), to: Cyfr.Manifest
+  defdelegate valid_connect_domain?(domain), to: Prima.Manifest
 
   @doc "What a tincture serves when its manifest names no entry."
   @spec default_entry() :: String.t()
@@ -164,7 +164,7 @@ defmodule Compendium.Tincture do
 
   # Branch on the typed refusal, independently of message wording.
   defp path_safe(entry) do
-    case Cyfr.PathSafety.validate_relative_path(entry) do
+    case Prima.PathSafety.validate_relative_path(entry) do
       :ok ->
         :ok
 

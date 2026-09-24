@@ -4,8 +4,8 @@ defmodule Sanctum.Authority.MonotoneUnboundPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Transition
+  alias Prima.Authority
+  alias Prima.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   # Once unbound, every subsequent transition stays unbound and uses zero-authority limits.

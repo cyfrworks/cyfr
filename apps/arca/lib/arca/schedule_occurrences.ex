@@ -16,14 +16,14 @@ defmodule Arca.ScheduleOccurrences do
   `Arca.Execution.admit/2`), so a `claimed` occurrence is one nothing
   ever invoked, and the run's end closes it (`finish/3`).
 
-  `claimed_by` names the BOOT that took the occurrence (`Cyfr.Boot.id/0`),
+  `claimed_by` names the BOOT that took the occurrence (`Prima.Boot.id/0`),
   not its node: an occurrence is held while its claimant is a live member
   of the cell, and a restarted node is a different boot whose work a
   successor may take. Whether the occurrence is due, and when it was
   claimed, are decided on DATABASE time (`Arca.ServerMetaStorage.now!/0`),
   so two members with skewed clocks agree which occurrence is ready.
 
-  Every function that names an athanor takes the `Cyfr.Actor` first and
+  Every function that names an athanor takes the `Prima.Actor` first and
   matches it in its head; an actor whose athanor is nil or the empty
   string is refused before any query, as `{:error, :no_athanor}` from an
   entry point and as a raise from `start!/3`, which runs inside
@@ -92,7 +92,7 @@ defmodule Arca.ScheduleOccurrences do
 
         %ScheduleOccurrence{}
         |> ScheduleOccurrence.changeset(%{
-          id: Cyfr.UUID7.generate_id("occ"),
+          id: Prima.UUID7.generate_id("occ"),
           athanor_id: athanor_id,
           schedule_id: id,
           scheduled_for: due_for,
@@ -121,9 +121,9 @@ defmodule Arca.ScheduleOccurrences do
   the attempt. Answers the rows moved: 0 when the occurrence was not
   claimed, so the admission it runs inside rolls back.
   """
-  @spec start!(Cyfr.Actor.t(), String.t(), String.t()) :: non_neg_integer()
+  @spec start!(Prima.Actor.t(), String.t(), String.t()) :: non_neg_integer()
   # arca:db-raise-ok inside the admission transaction
-  def start!(%Cyfr.Actor{athanor_id: athanor_id}, occurrence_id, execution_id)
+  def start!(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, execution_id)
       when is_binary(athanor_id) and athanor_id != "" do
     {count, _} =
       from(o in ScheduleOccurrence,
@@ -137,13 +137,13 @@ defmodule Arca.ScheduleOccurrences do
     count
   end
 
-  def start!(%Cyfr.Actor{}, _occurrence_id, _execution_id),
+  def start!(%Prima.Actor{}, _occurrence_id, _execution_id),
     do: Arca.QueryHelpers.no_athanor!("Arca.ScheduleOccurrences.start!/3")
 
   @doc "End an open occurrence as `completed`, `failed` or `uncertain`. Answers the rows moved."
-  @spec finish(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec finish(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
-  def finish(%Cyfr.Actor{athanor_id: athanor_id}, occurrence_id, state)
+  def finish(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, state)
       when is_binary(athanor_id) and athanor_id != "" and state in @terminal do
     Errors.with_db_rescue("ScheduleOccurrences.finish", fn ->
       {count, _} =
@@ -156,16 +156,16 @@ defmodule Arca.ScheduleOccurrences do
     end)
   end
 
-  def finish(%Cyfr.Actor{}, _occurrence_id, _state), do: {:error, :no_athanor}
+  def finish(%Prima.Actor{}, _occurrence_id, _state), do: {:error, :no_athanor}
 
   @doc """
   End an occurrence whose runner died: one never invoked (`claimed`)
   failed, one started `uncertain` — the execution may have had its
   effect. Answers the state written, or nil when it was already closed.
   """
-  @spec settle_dead(Cyfr.Actor.t(), String.t()) ::
+  @spec settle_dead(Prima.Actor.t(), String.t()) ::
           {:ok, String.t() | nil} | {:error, :no_athanor | :database_error}
-  def settle_dead(%Cyfr.Actor{athanor_id: athanor_id} = actor, occurrence_id)
+  def settle_dead(%Prima.Actor{athanor_id: athanor_id} = actor, occurrence_id)
       when is_binary(athanor_id) and athanor_id != "" do
     Errors.with_db_rescue("ScheduleOccurrences.settle_dead", fn ->
       case Arca.Repo.get_by(ScheduleOccurrence, athanor_id: athanor_id, id: occurrence_id) do
@@ -183,12 +183,12 @@ defmodule Arca.ScheduleOccurrences do
     end)
   end
 
-  def settle_dead(%Cyfr.Actor{}, _occurrence_id), do: {:error, :no_athanor}
+  def settle_dead(%Prima.Actor{}, _occurrence_id), do: {:error, :no_athanor}
 
   @doc "The occurrence, by id, within the actor's athanor."
-  @spec get(Cyfr.Actor.t(), String.t()) ::
+  @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
-  def get(%Cyfr.Actor{athanor_id: athanor_id}, id)
+  def get(%Prima.Actor{athanor_id: athanor_id}, id)
       when is_binary(athanor_id) and athanor_id != "" do
     Errors.with_db_rescue("ScheduleOccurrences.get", fn ->
       case Arca.Repo.get_by(ScheduleOccurrence, athanor_id: athanor_id, id: id) do
@@ -199,14 +199,14 @@ defmodule Arca.ScheduleOccurrences do
     |> Arca.Data.project()
   end
 
-  def get(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
+  def get(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc "The schedule's occurrences within the actor's athanor, newest first."
-  @spec list(Cyfr.Actor.t(), String.t(), keyword()) ::
+  @spec list(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, [map()]} | {:error, :no_athanor | :database_error}
   def list(actor, schedule_id, opts \\ [])
 
-  def list(%Cyfr.Actor{athanor_id: athanor_id}, schedule_id, opts)
+  def list(%Prima.Actor{athanor_id: athanor_id}, schedule_id, opts)
       when is_binary(athanor_id) and athanor_id != "" do
     Errors.with_db_rescue("ScheduleOccurrences.list", fn ->
       limit = Keyword.get(opts, :limit, 20)
@@ -223,7 +223,7 @@ defmodule Arca.ScheduleOccurrences do
     |> Arca.Data.project()
   end
 
-  def list(%Cyfr.Actor{}, _schedule_id, _opts), do: {:error, :no_athanor}
+  def list(%Prima.Actor{}, _schedule_id, _opts), do: {:error, :no_athanor}
 
   @doc """
   What a member may take over: the occurrences claimed and never invoked
@@ -279,9 +279,9 @@ defmodule Arca.ScheduleOccurrences do
   claim's clock moves with it, so the winner's re-run is not itself
   abandoned on the next pass.
   """
-  @spec recover(Cyfr.Actor.t(), String.t(), String.t(), String.t()) ::
+  @spec recover(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
           :ok | :held | {:error, :no_athanor | :database_error}
-  def recover(%Cyfr.Actor{athanor_id: athanor_id}, occurrence_id, previous, claimant)
+  def recover(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, previous, claimant)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(previous) and
              is_binary(claimant) do
     Errors.with_db_rescue("ScheduleOccurrences.recover", fn ->
@@ -299,7 +299,7 @@ defmodule Arca.ScheduleOccurrences do
     end)
   end
 
-  def recover(%Cyfr.Actor{}, _occurrence_id, _previous, _claimant), do: {:error, :no_athanor}
+  def recover(%Prima.Actor{}, _occurrence_id, _previous, _claimant), do: {:error, :no_athanor}
 
   # Occurrences no live member is holding: the claimant's boot is not in
   # the cell's live roster, or the claim is older than the caller's window

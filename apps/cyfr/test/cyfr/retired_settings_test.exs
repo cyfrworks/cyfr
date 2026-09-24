@@ -89,7 +89,7 @@ defmodule Cyfr.RetiredSettingsTest do
   test "the builds service's two keys are wired, and read through their accessors alone" do
     for key <- ~w(locus_builds_url locus_builds_key) do
       declared =
-        for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "config/*.exs")),
+        for path <- Prima.Test.SourceTree.files!(Path.join(root(), "config/*.exs")),
             File.read!(path) =~ ~r/config :cyfr, :#{key},/,
             do: Path.basename(path)
 
@@ -97,9 +97,9 @@ defmodule Cyfr.RetiredSettingsTest do
     end
 
     readers =
-      for lib <- Cyfr.Test.SourceTree.app_libs(root()),
-          path <- Cyfr.Test.SourceTree.files!(Path.join([root(), lib, "**/*.ex"])),
-          Cyfr.Test.SourceTree.read(path) =~
+      for lib <- Prima.Test.SourceTree.app_libs(root()),
+          path <- Prima.Test.SourceTree.files!(Path.join([root(), lib, "**/*.ex"])),
+          Prima.Test.SourceTree.read(path) =~
             ~r/Application\.get_env\(:cyfr, :locus_builds_(url|key)\)/,
           do: Path.relative_to(path, root())
 

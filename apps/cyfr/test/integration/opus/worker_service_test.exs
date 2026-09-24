@@ -34,11 +34,11 @@ defmodule Opus.WorkerServiceWireTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
-  alias Cyfr.Authority.Budget
+  alias Prima.Authority.Budget
   alias Cyfr.Execution.{Attempt, Keys}
-  alias Cyfr.Slots
+  alias Prima.Slots
   alias Cyfr.Test.{AttemptFixtures, OpusService, TwoServices}
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
@@ -81,7 +81,7 @@ defmodule Opus.WorkerServiceWireTest do
 
     {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @probe_node)
     authority = %{authority | budget: Budget.new(2)}
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
 
     {:ok, %{attempt: attempt}} =
       Arca.Execution.admit(
@@ -143,7 +143,7 @@ defmodule Opus.WorkerServiceWireTest do
 
     for _ <- 1..2 do
       spawn_link(fn ->
-        id = Cyfr.UUID7.execution_id()
+        id = Prima.UUID7.execution_id()
         ran = child!(ctx, authority, root_id, attempt, execution_id: id)
         send(test_pid, {:ran, id, ran})
       end)
@@ -175,7 +175,7 @@ defmodule Opus.WorkerServiceWireTest do
        %{ctx: ctx} do
     children_before = Slots.status(@slots).child_active
     slots_before = Slots.status(@slots).active
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
     hold_children!(root_id)
     test_pid = self()
 
@@ -295,8 +295,8 @@ defmodule Opus.WorkerServiceWireTest do
     } do
       fixture = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
       other = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
-      elsewhere = Cyfr.WorkerAuth.dispatch_seal_key(worker_key!("wrk_other"))
-      signing = Cyfr.WorkerAuth.dispatch_key(worker_key!(service))
+      elsewhere = Prima.WorkerAuth.dispatch_seal_key(worker_key!("wrk_other"))
+      signing = Prima.WorkerAuth.dispatch_key(worker_key!(service))
 
       for sealed <- [
             sealed(other),
@@ -370,8 +370,8 @@ defmodule Opus.WorkerServiceWireTest do
   # The fixture's attempt keys, sealed with `key` (default the dispatch seal
   # key of the worker service the attempt is dispatched to).
   defp sealed(fixture, key \\ nil) do
-    key = key || Cyfr.WorkerAuth.dispatch_seal_key(worker_key!(fixture.service))
-    {:ok, sealed} = Cyfr.WorkerAuth.seal_attempt_keys(key, fixture.keys)
+    key = key || Prima.WorkerAuth.dispatch_seal_key(worker_key!(fixture.service))
+    {:ok, sealed} = Prima.WorkerAuth.seal_attempt_keys(key, fixture.keys)
     sealed
   end
 
@@ -394,7 +394,7 @@ defmodule Opus.WorkerServiceWireTest do
         )
       )
 
-    %{Cyfr.Authority.zero() | budget: %Budget{id: reservation.id, cap: reservation.cap}}
+    %{Prima.Authority.zero() | budget: %Budget{id: reservation.id, cap: reservation.cap}}
   end
 
   defp attempt_row(ctx, id),

@@ -17,6 +17,6 @@ defmodule Arca.Retention.Builds do
   def unit, do: :keep
 
   @impl true
-  def prune(%Cyfr.Actor{} = actor, keep, dry_run),
+  def prune(%Prima.Actor{} = actor, keep, dry_run),
     do: Arca.BuildRecords.prune(actor, keep, dry_run: dry_run)
 end

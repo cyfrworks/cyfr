@@ -119,11 +119,11 @@ defmodule Compendium.SignInSync do
   end
 
   defp probe(provider, access_token) do
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     task =
       Task.Supervisor.async_nolink(Compendium.ProvisioningSupervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
+        Prima.LoggerContext.restore(logger_metadata)
         Compendium.Registry.Client.probe_identity(provider, access_token)
       end)
 

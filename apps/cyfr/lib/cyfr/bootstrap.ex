@@ -105,7 +105,7 @@ defmodule Cyfr.Bootstrap do
 
   defp reconcile_for_boot(opts) do
     key = Keyword.get(opts, :key, JobClaims.cell_key())
-    owner = Keyword.get(opts, :owner, Cyfr.Boot.id())
+    owner = Keyword.get(opts, :owner, Prima.Boot.id())
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
     wait_ms = Keyword.get(opts, :wait_ms, @wait_ms)
     reconcile = Keyword.get(opts, :reconcile, &Sanctum.reconcile_platform_admins/2)

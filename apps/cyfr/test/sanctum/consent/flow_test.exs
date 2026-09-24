@@ -4,7 +4,7 @@
 defmodule Sanctum.Consent.FlowTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
+  alias Prima.Authority
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Plan
@@ -577,7 +577,7 @@ defmodule Sanctum.Consent.FlowTest do
 
       {:ok, head, _refs} = Arca.ConsentStorage.get_head(Sanctum.Context.actor(ctx), owner_id)
 
-      assert head.blob_digest == Cyfr.JCS.hash_binary(head.resolved_policy),
+      assert head.blob_digest == Prima.JCS.hash_binary(head.resolved_policy),
              "a consent row must carry the hash of the policy it stores"
     end
 
@@ -921,7 +921,7 @@ defmodule Sanctum.Consent.FlowTest do
         assert is_binary(consent.blob_digest) and consent.blob_digest != "",
                "#{ref} was minted without a blob digest"
 
-        assert consent.blob_digest == Cyfr.JCS.hash_binary(consent.resolved_policy),
+        assert consent.blob_digest == Prima.JCS.hash_binary(consent.resolved_policy),
                "#{ref}'s stored digest does not describe its stored policy"
       end
     end

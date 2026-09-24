@@ -22,11 +22,11 @@ defmodule Emissary.MCP.BackendDefinition do
     * an env name matches `^[A-Z_][A-Z0-9_]{0,63}$` and is none of
       `PATH HOME USER LOGNAME SHELL TMPDIR PWD`, nor prefixed `CYFR_` or
       `MCP_BRIDGE_` — the bridge sets the first and the rest are CYFR's;
-    * an env value is a vault template (`Emissary.MCP.VaultRef`); only the
+    * an env value is a vault template (`Prima.VaultRef`); only the
       non-secret names in `literal_names/0` may hold a literal instead.
   """
 
-  alias Emissary.MCP.VaultRef
+  alias Prima.VaultRef
 
   @name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
   @env_name ~r/\A[A-Z_][A-Z0-9_]{0,63}\z/

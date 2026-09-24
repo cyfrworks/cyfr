@@ -58,7 +58,7 @@ defmodule Compendium.Scaffold do
             [
               {base_path ++ [Compendium.ComponentPath.manifest_name()],
                manifest_for(name, type, version)},
-              {base_path ++ ["src", "Cargo.toml"], Cyfr.CargoToml.template(type_atom)},
+              {base_path ++ ["src", "Cargo.toml"], Prima.CargoToml.template(type_atom)},
               {base_path ++ ["src", "src", "lib.rs"], lib_rs_for(type_atom)}
             ] ++ wit_files(base_path, type_atom)
         end
@@ -89,7 +89,7 @@ defmodule Compendium.Scaffold do
         # — so they are answered as themselves; anything else is a
         # storage term, said in words.
         {:error, reason} = refusal ->
-          if Cyfr.Refusal.reason?(reason),
+          if Prima.Refusal.reason?(reason),
             do: refusal,
             else: {:error, "Failed to write scaffold files: #{inspect(reason)}"}
       end
@@ -103,7 +103,7 @@ defmodule Compendium.Scaffold do
   defp validate_name(name) when is_binary(name) do
     # The component name grammar lives in one place; a scaffold that accepted
     # a name registration refuses would strand the user one step later.
-    case Cyfr.ComponentRef.validate_name(name) do
+    case Prima.ComponentRef.validate_name(name) do
       :ok -> :ok
       {:error, reason} -> {:error, "Invalid component name: '#{name}'. #{reason}"}
     end
@@ -114,7 +114,7 @@ defmodule Compendium.Scaffold do
   defp validate_type(nil), do: {:error, "Missing required argument: type"}
 
   defp validate_type(type) when is_binary(type) do
-    if type in Cyfr.ComponentRef.valid_types() do
+    if type in Prima.ComponentRef.valid_types() do
       :ok
     else
       {:error,
@@ -129,7 +129,7 @@ defmodule Compendium.Scaffold do
 
   # Use the shared component version grammar.
   defp validate_version(version) when is_binary(version) do
-    case Cyfr.ComponentRef.validate_version(version) do
+    case Prima.ComponentRef.validate_version(version) do
       :ok -> :ok
       {:error, _} -> {:error, "Invalid version: '#{version}'. Must be valid semver (e.g. 0.1.0)"}
     end
@@ -172,7 +172,7 @@ defmodule Compendium.Scaffold do
 
   # The one spelling of a local reference — never hand-interpolated.
   defp local_ref(type, name, version) do
-    Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
+    Prima.ComponentRef.to_string(%Prima.ComponentRef{
       type: type,
       namespace: Compendium.ComponentPath.default_publisher(),
       name: name,
@@ -350,11 +350,11 @@ defmodule Compendium.Scaffold do
   # WIT Files
   # ============================================================================
 
-  # The embedded WIT tree (`Compendium.WITSource` — the one source the
+  # The embedded WIT tree (`Prima.WIT` — the one source the
   # Locus build sandbox consumes too), mapped into the scaffold's layout.
   defp wit_files(base_path, type_atom) do
     type_atom
-    |> Compendium.WITSource.files()
+    |> Prima.WIT.files()
     |> Enum.map(fn {rel_segments, content} ->
       {base_path ++ ["src", "wit" | rel_segments], content}
     end)

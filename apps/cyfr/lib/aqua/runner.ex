@@ -214,21 +214,21 @@ defmodule Aqua.Runner do
   @doc "Subscribe the calling process to a thread's broadcasts."
   @spec subscribe(String.t(), String.t()) :: :ok | {:error, term()}
   def subscribe(thread_id, athanor_id) do
-    actor = Cyfr.Actor.in_athanor(athanor_id)
+    actor = Prima.Actor.in_athanor(athanor_id)
     Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread_id))
   end
 
   @doc "Undo `subscribe/2` for the calling process."
   @spec unsubscribe(String.t(), String.t()) :: :ok | {:error, term()}
   def unsubscribe(thread_id, athanor_id) do
-    actor = Cyfr.Actor.in_athanor(athanor_id)
+    actor = Prima.Actor.in_athanor(athanor_id)
     Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.thread(actor, thread_id))
   end
 
   @doc "Tell a thread's viewers about a row appended outside a turn (a line said aloud)."
   @spec announce(Aqua.Tape.row()) :: :ok | {:error, term()}
   def announce(%{thread_id: thread_id, athanor_id: athanor_id} = row) do
-    actor = Cyfr.Actor.in_athanor(athanor_id)
+    actor = Prima.Actor.in_athanor(athanor_id)
 
     Cyfr.Bus.broadcast(
       actor,
@@ -454,7 +454,7 @@ defmodule Aqua.Runner do
     with :ok <- held(),
          {:ok, thread} <- Tape.thread(ctx, thread_id),
          {:ok, %{status: "active"}} <- Athanors.get(athanor_id) do
-      actor = Cyfr.Actor.in_athanor(athanor_id)
+      actor = Prima.Actor.in_athanor(athanor_id)
       :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
       :ok = subscribe(thread.id, athanor_id)
 
@@ -878,7 +878,7 @@ defmodule Aqua.Runner do
         end
 
       nil ->
-        Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+        Prima.LoggerContext.unexpected(__MODULE__, msg)
         {:noreply, state}
     end
   end
@@ -962,7 +962,7 @@ defmodule Aqua.Runner do
   defp handle_owned_info(:idle, state), do: {:noreply, touch(state)}
 
   defp handle_owned_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

@@ -10,7 +10,7 @@ defmodule Arca.Providers.Records do
 
   The provider declares `context_kind: :actor`: the gate authorizes every
   call with the caller's full context and hands these handlers the
-  `Cyfr.Actor` it projects, and nothing else. What remains here is the
+  `Prima.Actor` it projects, and nothing else. What remains here is the
   residual the annotations cannot express: the stores are tenant-scoped,
   so an actor with no athanor is refused before any row is read (an actor
   of `:platform` scope reads across athanors and is not), and in-chain an
@@ -38,7 +38,7 @@ defmodule Arca.Providers.Records do
   It makes no permission decision of its own: the gate made it.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   require Logger
 
@@ -52,7 +52,7 @@ defmodule Arca.Providers.Records do
 
   @impl true
   def tools do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # In-chain, an execution reads its own payload alone, for the
     # attempt the host stamped on its lineage.
     [
@@ -234,7 +234,7 @@ defmodule Arca.Providers.Records do
   # Both the settable keys and the cleanup vocabulary derive from the
   # roster, so a new kind is on this surface the moment it exists.
   defp retention_tool do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
 
     Operation.tool(
       [
@@ -299,7 +299,7 @@ defmodule Arca.Providers.Records do
   # ============================================================================
 
   @impl true
-  def handle("record", %Cyfr.Actor{} = actor, %{"action" => "get", "id" => id}) do
+  def handle("record", %Prima.Actor{} = actor, %{"action" => "get", "id" => id}) do
     with :ok <- tenant_ok(actor) do
       case Arca.Execution.get_tenant(actor, id) do
         nil ->
@@ -320,7 +320,7 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("record", %Cyfr.Actor{}, %{"action" => "get"}) do
+  def handle("record", %Prima.Actor{}, %{"action" => "get"}) do
     {:error, {:invalid_argument, "Missing required argument: id"}}
   end
 
@@ -328,7 +328,7 @@ defmodule Arca.Providers.Records do
   # for a member of the athanor that ran it — or, in-chain, for the
   # execution itself: the host-stamped lineage must name it as the
   # caller and the stamped attempt must be its current one.
-  def handle("record", %Cyfr.Actor{} = actor, %{"action" => "payload", "id" => id} = args) do
+  def handle("record", %Prima.Actor{} = actor, %{"action" => "payload", "id" => id} = args) do
     kind = Map.get(args, "kind", "result")
 
     with :ok <- tenant_ok(actor),
@@ -347,7 +347,7 @@ defmodule Arca.Providers.Records do
              bytes: row.bytes,
              retention_class: row.retention_class,
              content: Base.encode64(bytes),
-             mimeType: Cyfr.MediaType.binary()
+             mimeType: Prima.MediaType.binary()
            }}
 
         {:error, :not_found} ->
@@ -365,11 +365,11 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("record", %Cyfr.Actor{}, %{"action" => "payload"}) do
+  def handle("record", %Prima.Actor{}, %{"action" => "payload"}) do
     {:error, {:invalid_argument, "Missing required argument: id"}}
   end
 
-  def handle("record", %Cyfr.Actor{} = actor, %{"action" => "list"} = args) do
+  def handle("record", %Prima.Actor{} = actor, %{"action" => "list"} = args) do
     with :ok <- tenant_ok(actor) do
       opts =
         [
@@ -391,15 +391,15 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("record", %Cyfr.Actor{}, _args) do
-    {:error, Cyfr.Ops.Provider.invalid_action("record", action_enum("record"))}
+  def handle("record", %Prima.Actor{}, _args) do
+    {:error, Prima.Provider.invalid_action("record", action_enum("record"))}
   end
 
   # ============================================================================
   # MCP Log Tool
   # ============================================================================
 
-  def handle("mcp_log", %Cyfr.Actor{} = actor, %{"action" => "get", "id" => id}) do
+  def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "get", "id" => id}) do
     with :ok <- tenant_ok(actor) do
       case Arca.McpLog.get_tenant(actor, id) do
         nil ->
@@ -415,11 +415,11 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("mcp_log", %Cyfr.Actor{}, %{"action" => "get"}) do
+  def handle("mcp_log", %Prima.Actor{}, %{"action" => "get"}) do
     {:error, {:invalid_argument, "Missing required argument: id"}}
   end
 
-  def handle("mcp_log", %Cyfr.Actor{} = actor, %{"action" => "list"} = args) do
+  def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "list"} = args) do
     with :ok <- tenant_ok(actor) do
       opts =
         [
@@ -441,7 +441,7 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("mcp_log", %Cyfr.Actor{} = actor, %{
+  def handle("mcp_log", %Prima.Actor{} = actor, %{
         "action" => "correlate",
         "request_id" => request_id
       }) do
@@ -484,7 +484,7 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("mcp_log", %Cyfr.Actor{}, %{"action" => "correlate"}) do
+  def handle("mcp_log", %Prima.Actor{}, %{"action" => "correlate"}) do
     {:error, {:invalid_argument, "Missing required argument: request_id"}}
   end
 
@@ -492,7 +492,7 @@ defmodule Arca.Providers.Records do
   # recorded against it? Used by ActivitiesLive to render the EXECS column
   # for a page of MCP log rows in a single GROUP BY instead of N correlate
   # queries.
-  def handle("mcp_log", %Cyfr.Actor{} = actor, %{"action" => "fan_outs", "request_ids" => ids})
+  def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "fan_outs", "request_ids" => ids})
       when is_list(ids) do
     with :ok <- tenant_ok(actor) do
       ids = Enum.filter(ids, &is_binary/1)
@@ -509,12 +509,12 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("mcp_log", %Cyfr.Actor{}, %{"action" => "fan_outs"}) do
+  def handle("mcp_log", %Prima.Actor{}, %{"action" => "fan_outs"}) do
     {:error,
      {:invalid_argument, "Missing or invalid argument: request_ids (must be a list of strings)"}}
   end
 
-  def handle("mcp_log", %Cyfr.Actor{} = actor, %{"action" => "stats"} = args) do
+  def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "stats"} = args) do
     with :ok <- tenant_ok(actor) do
       since_hours = args["since_hours"] || 1
 
@@ -543,15 +543,15 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("mcp_log", %Cyfr.Actor{}, _args) do
-    {:error, Cyfr.Ops.Provider.invalid_action("mcp_log", action_enum("mcp_log"))}
+  def handle("mcp_log", %Prima.Actor{}, _args) do
+    {:error, Prima.Provider.invalid_action("mcp_log", action_enum("mcp_log"))}
   end
 
   # ============================================================================
   # Policy Log Tool
   # ============================================================================
 
-  def handle("policy_log", %Cyfr.Actor{} = actor, %{"action" => "get", "id" => id}) do
+  def handle("policy_log", %Prima.Actor{} = actor, %{"action" => "get", "id" => id}) do
     with :ok <- tenant_ok(actor) do
       record =
         Arca.PolicyLog.get_tenant(actor, id) ||
@@ -567,11 +567,11 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("policy_log", %Cyfr.Actor{}, %{"action" => "get"}) do
+  def handle("policy_log", %Prima.Actor{}, %{"action" => "get"}) do
     {:error, {:invalid_argument, "Missing required argument: id"}}
   end
 
-  def handle("policy_log", %Cyfr.Actor{} = actor, %{"action" => "list"} = args) do
+  def handle("policy_log", %Prima.Actor{} = actor, %{"action" => "list"} = args) do
     with :ok <- tenant_ok(actor) do
       opts =
         [
@@ -590,7 +590,7 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("policy_log", %Cyfr.Actor{} = actor, %{
+  def handle("policy_log", %Prima.Actor{} = actor, %{
         "action" => "correlate",
         "request_id" => request_id
       }) do
@@ -612,19 +612,19 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("policy_log", %Cyfr.Actor{}, %{"action" => "correlate"}) do
+  def handle("policy_log", %Prima.Actor{}, %{"action" => "correlate"}) do
     {:error, {:invalid_argument, "Missing required argument: request_id"}}
   end
 
-  def handle("policy_log", %Cyfr.Actor{}, _args) do
-    {:error, Cyfr.Ops.Provider.invalid_action("policy_log", action_enum("policy_log"))}
+  def handle("policy_log", %Prima.Actor{}, _args) do
+    {:error, Prima.Provider.invalid_action("policy_log", action_enum("policy_log"))}
   end
 
   # ============================================================================
   # Retention Tool
   # ============================================================================
 
-  def handle("retention", %Cyfr.Actor{} = actor, %{"action" => "get"}) do
+  def handle("retention", %Prima.Actor{} = actor, %{"action" => "get"}) do
     with :ok <- athanor_ok(actor) do
       case Arca.Retention.get_settings(actor) do
         {:ok, settings} -> {:ok, %{action: "get", settings: settings}}
@@ -633,7 +633,7 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("retention", %Cyfr.Actor{} = actor, %{"action" => "set", "settings" => settings})
+  def handle("retention", %Prima.Actor{} = actor, %{"action" => "set", "settings" => settings})
       when is_map(settings) do
     with :ok <- athanor_ok(actor) do
       case Arca.Retention.set_settings(actor, settings) do
@@ -654,11 +654,11 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("retention", %Cyfr.Actor{}, %{"action" => "set"}) do
+  def handle("retention", %Prima.Actor{}, %{"action" => "set"}) do
     {:error, {:invalid_argument, "Missing required parameter: settings (must be a JSON object)"}}
   end
 
-  def handle("retention", %Cyfr.Actor{} = actor, %{"action" => "cleanup"} = args) do
+  def handle("retention", %Prima.Actor{} = actor, %{"action" => "cleanup"} = args) do
     with :ok <- athanor_ok(actor) do
       cleanup_type = Map.get(args, "cleanup_type", "executions")
       dry_run = Map.get(args, "dry_run", false)
@@ -684,11 +684,11 @@ defmodule Arca.Providers.Records do
     end
   end
 
-  def handle("retention", %Cyfr.Actor{}, _args) do
-    {:error, Cyfr.Ops.Provider.invalid_action("retention", action_enum("retention"))}
+  def handle("retention", %Prima.Actor{}, _args) do
+    {:error, Prima.Provider.invalid_action("retention", action_enum("retention"))}
   end
 
-  def handle(tool, %Cyfr.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
+  def handle(tool, %Prima.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
 
   # A settings refusal as the wire renders it.
   defp settings_refusal(:corrupt), do: {:corrupt, "Retention settings"}
@@ -713,9 +713,9 @@ defmodule Arca.Providers.Records do
   typed argument error; a URI naming anything but `arca://files/` is an
   unknown resource.
   """
-  @spec read(Cyfr.Actor.t(), String.t(), [String.t()]) ::
+  @spec read(Prima.Actor.t(), String.t(), [String.t()]) ::
           {:ok, %{content: String.t(), mimeType: String.t()}} | {:error, term()}
-  def read(%Cyfr.Actor{} = actor, uri, allowed_roots)
+  def read(%Prima.Actor{} = actor, uri, allowed_roots)
       when is_binary(uri) and is_list(allowed_roots) do
     roots = Enum.filter(allowed_roots, &(&1 in Arca.Storage.tenant_roots()))
 
@@ -726,7 +726,7 @@ defmodule Arca.Providers.Records do
          :ok <- within(roots, segments) do
       case Arca.get(actor, segments) do
         {:ok, content} ->
-          {:ok, %{content: Base.encode64(content), mimeType: Cyfr.MediaType.binary()}}
+          {:ok, %{content: Base.encode64(content), mimeType: Prima.MediaType.binary()}}
 
         {:error, :not_found} ->
           {:error, {:not_found, "File", path}}
@@ -755,7 +755,7 @@ defmodule Arca.Providers.Records do
   end
 
   defp validate_segments(segments) do
-    case Cyfr.PathSafety.validate_segments(segments) do
+    case Prima.PathSafety.validate_segments(segments) do
       :ok -> :ok
       {:error, {_reason, message}} -> {:error, {:invalid_argument, "Invalid path: #{message}"}}
     end
@@ -768,14 +768,14 @@ defmodule Arca.Providers.Records do
   # The stores below are tenant-scoped: an actor with no athanor is refused
   # before it can reach any athanor's rows. A `:platform` scope actor reads
   # across athanors and needs none.
-  defp tenant_ok(%Cyfr.Actor{scope: :platform}), do: :ok
-  defp tenant_ok(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok
-  defp tenant_ok(%Cyfr.Actor{}), do: {:error, :missing_tenant}
+  defp tenant_ok(%Prima.Actor{scope: :platform}), do: :ok
+  defp tenant_ok(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok
+  defp tenant_ok(%Prima.Actor{}), do: {:error, :missing_tenant}
 
   # Retention settings belong to one athanor, so every actor without one —
   # a `:platform` scope actor included — is refused before they are read.
-  defp athanor_ok(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok
-  defp athanor_ok(%Cyfr.Actor{}), do: {:error, :missing_tenant}
+  defp athanor_ok(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok
+  defp athanor_ok(%Prima.Actor{}), do: {:error, :missing_tenant}
 
   # Blob reads are tenant-relative, so even a platform actor must carry the
   # athanor whose bytes it reads.
@@ -785,7 +785,7 @@ defmodule Arca.Providers.Records do
       else: {:error, :missing_tenant}
   end
 
-  defp payload_attempt(%Cyfr.Actor{plane: :guest} = actor, id, args) do
+  defp payload_attempt(%Prima.Actor{plane: :guest} = actor, id, args) do
     attempt = args["attempt"]
 
     cond do
@@ -847,7 +847,7 @@ defmodule Arca.Providers.Records do
     }
   end
 
-  defp format_datetime(value), do: Cyfr.Time.iso8601(value)
+  defp format_datetime(value), do: Prima.Time.iso8601(value)
 
   defp mcp_log_to_map(%{id: _} = log) do
     %{
@@ -899,7 +899,7 @@ defmodule Arca.Providers.Records do
   defp decode_stored("", default, _field), do: default
 
   defp decode_stored(json, default, field) when is_binary(json) do
-    case Cyfr.Json.decode(json) do
+    case Prima.Json.decode(json) do
       {:ok, value} ->
         value
 

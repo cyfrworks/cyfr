@@ -149,8 +149,8 @@ defmodule Arca.PolicyLog do
 
   Platform scope bypasses tenant filtering.
   """
-  @spec get_tenant(Cyfr.Actor.t(), String.t()) :: map() | nil | {:error, :database_error}
-  def get_tenant(%Cyfr.Actor{} = actor, id) do
+  @spec get_tenant(Prima.Actor.t(), String.t()) :: map() | nil | {:error, :database_error}
+  def get_tenant(%Prima.Actor{} = actor, id) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.get_tenant", fn ->
       from(l in Row, where: l.id == ^id)
       |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
@@ -164,9 +164,9 @@ defmodule Arca.PolicyLog do
 
   Platform scope bypasses tenant filtering.
   """
-  @spec get_by_request_id_tenant(Cyfr.Actor.t(), String.t()) ::
+  @spec get_by_request_id_tenant(Prima.Actor.t(), String.t()) ::
           map() | nil | {:error, :database_error}
-  def get_by_request_id_tenant(%Cyfr.Actor{} = actor, request_id) do
+  def get_by_request_id_tenant(%Prima.Actor{} = actor, request_id) do
     Arca.Repo.Errors.with_db_rescue("PolicyLog.get_by_request_id_tenant", fn ->
       from(l in Row, where: l.request_id == ^request_id, limit: 1)
       |> Arca.QueryHelpers.where_tenant_unless_platform(actor)

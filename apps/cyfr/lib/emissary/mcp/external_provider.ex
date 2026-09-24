@@ -74,7 +74,7 @@ defmodule Emissary.MCP.ExternalProvider do
   dispatch, not defending against the member's own deliberate
   configuration.
   """
-  @spec default_planes() :: [Cyfr.Ops.Provider.plane(), ...]
+  @spec default_planes() :: [Prima.Provider.plane(), ...]
   def default_planes, do: [:in_chain]
 
   @doc """
@@ -137,7 +137,7 @@ defmodule Emissary.MCP.ExternalProvider do
         {:ok, tools} ->
           matched =
             Enum.filter(tools, fn tool ->
-              Enum.any?(patterns, &Cyfr.ToolPattern.matches?(&1, tool["name"] || ""))
+              Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, tool["name"] || ""))
             end)
 
           descriptions =
@@ -193,7 +193,7 @@ defmodule Emissary.MCP.ExternalProvider do
 
             tools
             |> Enum.filter(fn tool ->
-              Enum.any?(patterns, &Cyfr.ToolPattern.matches?(&1, tool["name"] || ""))
+              Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, tool["name"] || ""))
             end)
             |> Enum.map(fn tool ->
               upstream_ann = tool["annotations"] || %{}
@@ -283,7 +283,7 @@ defmodule Emissary.MCP.ExternalProvider do
               not server.enabled ->
                 {:error, "Server '#{server_name}' is disabled"}
 
-              not Enum.any?(patterns, &Cyfr.ToolPattern.matches?(&1, remote_tool)) ->
+              not Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, remote_tool)) ->
                 {:error, "Tool '#{remote_tool}' is not exposed by server '#{server_name}'"}
 
               plane == :external and not console_reachable?(server) ->
@@ -346,7 +346,7 @@ defmodule Emissary.MCP.ExternalProvider do
   # is never recorded as a success — its attempt closes `uncertain` and
   # the answer is not handed back.
   defp attempted(ctx, server, server_name, remote_tool, args, opts, call) do
-    id = Keyword.get(opts, :execution_id) || Cyfr.UUID7.execution_id()
+    id = Keyword.get(opts, :execution_id) || Prima.UUID7.execution_id()
     started_at = DateTime.utc_now()
     input = Map.drop(args, ["action", "parent_execution_id", "root_execution_id", "attempt"])
 
@@ -372,7 +372,7 @@ defmodule Emissary.MCP.ExternalProvider do
 
     with {:ok, grant} <- inherited_grant(ctx, attrs.parent_execution_id),
          admission =
-           [boot_id: Cyfr.Boot.id(), grant: grant, verify: &Sanctum.ExecutionStanding.verify/1]
+           [boot_id: Prima.Boot.id(), grant: grant, verify: &Sanctum.ExecutionStanding.verify/1]
            |> Arca.QueryHelpers.maybe_put(:charge, Keyword.get(opts, :hold))
            |> Arca.QueryHelpers.maybe_put(:step, Keyword.get(opts, :step)),
          {:ok, staged} <- stage(ctx, id, "input", input, class),
@@ -462,7 +462,7 @@ defmodule Emissary.MCP.ExternalProvider do
       output:
         Jason.encode!(%{
           "envelope" => "v1",
-          "output_hash" => Cyfr.Digest.sha256(encoded),
+          "output_hash" => Prima.Digest.sha256(encoded),
           "bytes" => byte_size(encoded)
         }),
       completed_at: now,

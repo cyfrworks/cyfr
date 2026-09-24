@@ -19,7 +19,7 @@ defmodule Arca.CredentialBindingsTest do
     :ok
   end
 
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
   test "the policy sees each named row, nil for what does not exist, and the time" do
     test = self()
@@ -75,7 +75,7 @@ defmodule Arca.CredentialBindingsTest do
   test "an actor other than the server's own is refused before any read" do
     assert {:error, :cross_tenant} =
              CredentialBindings.check(
-               Cyfr.Actor.in_athanor("ath_test"),
+               Prima.Actor.in_athanor("ath_test"),
                %{user_id: "usr_x", athanor_id: "ath_test", membership_id: nil, source: nil},
                verify: fn _rows -> flunk("read under a tenant actor") end
              )
@@ -85,11 +85,11 @@ defmodule Arca.CredentialBindingsTest do
     root = Path.expand("../../../..", __DIR__)
 
     callers =
-      for path <- Cyfr.Test.SourceTree.files!(Path.join(root, "apps/*/lib/**/*.ex")),
+      for path <- Prima.Test.SourceTree.files!(Path.join(root, "apps/*/lib/**/*.ex")),
           rel = Path.relative_to(path, root),
           not String.starts_with?(rel, "apps/arca/lib/"),
           not String.starts_with?(rel, "apps/sanctum/lib/"),
-          line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
+          line <- path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.lines(),
           line =~ ~r/\bArca\.CredentialBindings\b/,
           do: rel
 
@@ -113,13 +113,13 @@ defmodule Arca.CredentialBindingsLockTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
   setup do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
-    user_id = Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix())
-    athanor_id = Cyfr.UUID7.generate_id("ath")
+    user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+    athanor_id = Prima.UUID7.generate_id("ath")
 
     unboxed(fn ->
       {:ok, _} =
@@ -176,7 +176,7 @@ defmodule Arca.CredentialBindingsLockTest do
 
     {:ok, seat} =
       unboxed(fn ->
-        Arca.Members.seat(Cyfr.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
+        Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
       end)
 
     denier =

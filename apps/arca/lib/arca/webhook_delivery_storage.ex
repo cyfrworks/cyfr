@@ -39,7 +39,7 @@ defmodule Arca.WebhookDeliveryStorage do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       row = %{
-        id: Cyfr.UUID7.generate_id("whd"),
+        id: Prima.UUID7.generate_id("whd"),
         webhook_id: webhook_id,
         idempotency_key: idempotency_key,
         first_seen_at: now

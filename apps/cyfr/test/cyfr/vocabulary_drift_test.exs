@@ -83,9 +83,9 @@ defmodule Cyfr.VocabularyDriftTest do
   end
 
   defp code_lines(glob) do
-    for path <- Cyfr.Test.SourceTree.files!(Path.join(@root, glob)) do
+    for path <- Prima.Test.SourceTree.files!(Path.join(@root, glob)) do
       {Path.relative_to(path, @root),
-       path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines()}
+       path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.lines()}
     end
   end
 
@@ -112,7 +112,7 @@ defmodule Cyfr.VocabularyDriftTest do
   test "the seed, the CLI, the guides and the manifest speak soul, role and scroll" do
     stale =
       for glob <- @product_files,
-          path <- Cyfr.Test.SourceTree.files!(Path.join(@root, glob)),
+          path <- Prima.Test.SourceTree.files!(Path.join(@root, glob)),
           not String.ends_with?(path, "_test.go"),
           {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
           line =~ @old_words,

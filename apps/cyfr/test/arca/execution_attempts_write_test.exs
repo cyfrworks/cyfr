@@ -108,7 +108,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
   defp takeover!(%{actor: actor, execution: execution}) do
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(actor, execution.id,
-        boot_id: Cyfr.Boot.id(),
+        boot_id: Prima.Boot.id(),
         lease_until: ExecutionAttempts.lease_until(),
         grant: :stored,
         verify: &Arca.Test.Actor.admits/1
@@ -490,11 +490,11 @@ defmodule Arca.ExecutionAttemptsWriteTest do
   test "an intent is another estate's to neither read nor settle", test do
     assert {:ok, {:confirmed, :ok}} = write(test, put(test))
 
-    assert [] = ExecutionAttempts.write_intents(Cyfr.Actor.in_athanor("ath_gamma"), test.attempt)
+    assert [] = ExecutionAttempts.write_intents(Prima.Actor.in_athanor("ath_gamma"), test.attempt)
 
     assert {:error, :lost} =
              ExecutionAttempts.while_held(
-               Cyfr.Actor.in_athanor("ath_gamma"),
+               Prima.Actor.in_athanor("ath_gamma"),
                test.attempt,
                1,
                @runner,

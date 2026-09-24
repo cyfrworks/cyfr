@@ -28,7 +28,7 @@ defmodule Arca.BuildRecordsTest do
   end
 
   defp actor(athanor_id, user_id \\ "build_user"),
-    do: %Cyfr.Actor{athanor_id: athanor_id, user_id: user_id, authenticated: true}
+    do: %Prima.Actor{athanor_id: athanor_id, user_id: user_id, authenticated: true}
 
   test "a build's lifecycle round-trips as the status tool's map", %{actor: actor} do
     :ok = BuildRecords.record_started(actor, "build_x", "reagent:local.demo:0.1.0")
@@ -225,7 +225,7 @@ defmodule Arca.BuildRecordsTest do
         Arca.Repo.aggregate(Arca.Schemas.BuildRecord, :count)
       end
 
-      nobody = %Cyfr.Actor{athanor_id: nil, user_id: "usr_nobody"}
+      nobody = %Prima.Actor{athanor_id: nil, user_id: "usr_nobody"}
 
       assert {:error, :no_athanor} = BuildRecords.get(nobody, "build_x")
 
@@ -246,7 +246,7 @@ defmodule Arca.BuildRecordsTest do
     # matched `is_binary/1` would filter on `athanor_id == ""`, find nothing
     # and answer like an empty tenant -- turning a refusal into silence.
     test "an empty athanor is refused rather than read as a tenant with no rows" do
-      empty = %Cyfr.Actor{athanor_id: "", user_id: "usr_nobody"}
+      empty = %Prima.Actor{athanor_id: "", user_id: "usr_nobody"}
 
       assert {:error, :no_athanor} = BuildRecords.get(empty, "build_x")
 
@@ -272,7 +272,7 @@ defmodule Arca.BuildRecordsTest do
 
   # `record_started` writes `started_at` itself, so ordering a prune's
   # input means writing the column directly.
-  defp backdate(%Cyfr.Actor{athanor_id: athanor_id}, build_id, at) do
+  defp backdate(%Prima.Actor{athanor_id: athanor_id}, build_id, at) do
     {1, _} =
       Arca.Schemas.BuildRecord
       |> where([b], b.id == ^build_id and b.athanor_id == ^athanor_id)

@@ -24,13 +24,13 @@ defmodule Arca.StorageUnitsTest do
     {:ok, actor: actor("ath_a"), other: actor("ath_b"), key: key}
   end
 
-  defp actor(athanor_id), do: %Cyfr.Actor{athanor_id: athanor_id, user_id: "usr_writer"}
+  defp actor(athanor_id), do: %Prima.Actor{athanor_id: athanor_id, user_id: "usr_writer"}
 
   defp identity(revision, attrs \\ %{}) do
     Map.merge(
       %{
         new_revision: revision,
-        content_identity: Cyfr.Digest.sha256(revision),
+        content_identity: Prima.Digest.sha256(revision),
         commit_identity: "usr_writer"
       },
       attrs
@@ -170,7 +170,7 @@ defmodule Arca.StorageUnitsTest do
              } = commit
 
       assert unit_id == draft.id
-      assert commit.content_identity == Cyfr.Digest.sha256("rev_1")
+      assert commit.content_identity == Prima.Digest.sha256("rev_1")
     end
 
     test "a second commit appends a second journal row naming the first as its prior", %{
@@ -434,7 +434,7 @@ defmodule Arca.StorageUnitsTest do
     end
 
     test "an actor with no athanor is refused, and registers nothing", %{key: key} do
-      nobody = %Cyfr.Actor{athanor_id: nil, user_id: "usr_x"}
+      nobody = %Prima.Actor{athanor_id: nil, user_id: "usr_x"}
       unit = %StorageUnit{id: "unit_x", athanor_id: "ath_a", root: @root, unit_key: key}
 
       assert {:error, :no_athanor} = StorageUnits.register_draft(nobody, @root, key, "wrt_1")
@@ -449,7 +449,7 @@ defmodule Arca.StorageUnitsTest do
                StorageUnits.commit(nobody, unit, nil, "wrt_1", identity("rev_1"))
 
       # And an empty athanor is no athanor.
-      blank = %Cyfr.Actor{athanor_id: ""}
+      blank = %Prima.Actor{athanor_id: ""}
       assert {:error, :no_athanor} = StorageUnits.register_draft(blank, @root, key, "wrt_1")
 
       assert {:error, :not_found} = StorageUnits.current(actor("ath_a"), @root, key)

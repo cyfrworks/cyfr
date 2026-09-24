@@ -15,7 +15,7 @@ defmodule Arca.VaultStorageTest do
 
     actor = Arca.Test.Actor.local()
 
-    {:ok, actor: actor, other: %Cyfr.Actor{athanor_id: "ath_other"}}
+    {:ok, actor: actor, other: %Prima.Actor{athanor_id: "ath_other"}}
   end
 
   defp put!(actor, over \\ %{}) do
@@ -58,7 +58,7 @@ defmodule Arca.VaultStorageTest do
           invoke_mode: "open_inert",
           shape_digest: "sha256:shape",
           commit_digest: "sha256:commit",
-          blob_digest: Cyfr.JCS.hash_binary("{}"),
+          blob_digest: Prima.JCS.hash_binary("{}"),
           resolved_policy: "{}",
           activation: "{}",
           granted_by: "test",
@@ -85,7 +85,7 @@ defmodule Arca.VaultStorageTest do
     test "a plain map, a bare athanor id and a nil athanor are all refused before any query",
          %{actor: actor} do
       QueryCounter.assert_queries(0, fn ->
-        # A map carrying the actor's own fields is not a `%Cyfr.Actor{}`, and
+        # A map carrying the actor's own fields is not a `%Prima.Actor{}`, and
         # neither is the athanor id on its own: both miss every head.
         not_an_actor = %{athanor_id: actor.athanor_id}
 
@@ -104,7 +104,7 @@ defmodule Arca.VaultStorageTest do
           apply(VaultStorage, :rotate_payload, [actor.athanor_id, "vlt_x", 0, "sealed"])
         end
 
-        nil_athanor = %Cyfr.Actor{athanor_id: nil}
+        nil_athanor = %Prima.Actor{athanor_id: nil}
 
         assert {:error, :no_athanor} = VaultStorage.get(nil_athanor, "vlt_x")
         assert {:error, :no_athanor} = VaultStorage.get_by_name(nil_athanor, "n")
@@ -139,7 +139,7 @@ defmodule Arca.VaultStorageTest do
     test "an empty athanor is refused, not read as a tenant with nothing in it",
          %{actor: actor} do
       entry = put!(actor, %{name: "resolved-only"})
-      empty = %Cyfr.Actor{athanor_id: ""}
+      empty = %Prima.Actor{athanor_id: ""}
 
       # `""` filters as a tenant and matches nothing, so a facade that let
       # it through would answer an ordinary empty result and make "no
@@ -361,7 +361,7 @@ defmodule Arca.VaultStorageTest do
       # effect on it, if any, is the only thing the assertion can see.
       :ok =
         Arca.ProfileStorage.set_status(
-          Cyfr.Actor.in_athanor(actor.athanor_id),
+          Prima.Actor.in_athanor(actor.athanor_id),
           profile.id,
           "active"
         )

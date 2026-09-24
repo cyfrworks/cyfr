@@ -78,7 +78,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} =
         McpLog.record(log_attrs(%{id: "req_cross", athanor_id: "ath_a"}))
 
-      other_tenant = %Cyfr.Actor{
+      other_tenant = %Prima.Actor{
         athanor_id: "ath_b",
         user_id: "u",
         authenticated: true,
@@ -183,7 +183,7 @@ defmodule Arca.McpLogTest do
     test "athanor scope filters by tenant" do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_t1", athanor_id: "ath_a"}))
 
-      match = %Cyfr.Actor{
+      match = %Prima.Actor{
         athanor_id: "ath_a",
         user_id: "u",
         authenticated: true,

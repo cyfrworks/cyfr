@@ -9,7 +9,7 @@ defmodule Arca.Files do
   `notes/`, `threads/`. The server's own storage has no name here
   and is never listed; another athanor's tree is unreachable because the
   athanor is the actor's, never the path's. Every operation takes the
-  `Cyfr.Actor` first and refuses one with no athanor as
+  `Prima.Actor` first and refuses one with no athanor as
   `{:error, :missing_tenant}` before it reads or writes anything.
 
   What a folder allows is its tier:
@@ -28,11 +28,11 @@ defmodule Arca.Files do
       written only by their own surfaces.
 
   A write into a component's manifest must decode and pass the one
-  manifest validator (`Cyfr.Manifest.validate/2`, with this layer's
+  manifest validator (`Prima.Manifest.validate/2`, with this layer's
   guest-path predicate), and a write under another publisher's component
-  is refused by the shared namespace rule (`Cyfr.ComponentNamespace`).
+  is refused by the shared namespace rule (`Prima.ComponentNamespace`).
 
-  Every operation answers the typed refusals `Cyfr.Refusal` names,
+  Every operation answers the typed refusals `Prima.Refusal` names,
   so the `file` tool, the Files page and the download route speak one
   vocabulary.
   """
@@ -66,10 +66,10 @@ defmodule Arca.Files do
   by name; files carry their size. The empty path lists the folders
   themselves. `truncated` says the listing was cut at its ceiling.
   """
-  @spec list(Cyfr.Actor.t(), String.t()) ::
+  @spec list(Prima.Actor.t(), String.t()) ::
           {:ok, %{path: String.t(), tier: tier() | nil, entries: [entry()], truncated: boolean()}}
           | {:error, term()}
-  def list(%Cyfr.Actor{} = actor, path) when is_binary(path) do
+  def list(%Prima.Actor{} = actor, path) when is_binary(path) do
     with :ok <- tenant(actor) do
       case split(path) do
         [] ->
@@ -103,11 +103,11 @@ defmodule Arca.Files do
   past `max_inline_read/0` is refused in words — the download route
   serves it whole.
   """
-  @spec read(Cyfr.Actor.t(), String.t()) ::
+  @spec read(Prima.Actor.t(), String.t()) ::
           {:ok,
            %{path: String.t(), size: non_neg_integer(), content: String.t(), encoding: String.t()}}
           | {:error, term()}
-  def read(%Cyfr.Actor{} = actor, path) when is_binary(path) do
+  def read(%Prima.Actor{} = actor, path) when is_binary(path) do
     with :ok <- tenant(actor),
          {:ok, segments, physical, _tier} <- resolve_file(path),
          {:ok, bytes} <- get(actor, physical, path) do
@@ -137,9 +137,9 @@ defmodule Arca.Files do
   The physical segments the download route streams for a console path,
   with the folder's tier — a file in any shown folder.
   """
-  @spec locate(Cyfr.Actor.t(), String.t()) ::
+  @spec locate(Prima.Actor.t(), String.t()) ::
           {:ok, Arca.Storage.path(), tier()} | {:error, term()}
-  def locate(%Cyfr.Actor{} = actor, path) when is_binary(path) do
+  def locate(%Prima.Actor{} = actor, path) when is_binary(path) do
     with :ok <- tenant(actor),
          {:ok, _segments, physical, tier} <- resolve_file(path),
          do: {:ok, physical, tier}
@@ -151,9 +151,9 @@ defmodule Arca.Files do
   a read of the registry or the agent index after it observes it. A
   component's manifest must decode and validate as one.
   """
-  @spec write(Cyfr.Actor.t(), String.t(), String.t(), String.t()) ::
+  @spec write(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
           {:ok, %{written: String.t(), size: non_neg_integer()}} | {:error, term()}
-  def write(%Cyfr.Actor{} = actor, path, content, encoding \\ "utf8")
+  def write(%Prima.Actor{} = actor, path, content, encoding \\ "utf8")
       when is_binary(path) and is_binary(content) do
     with :ok <- tenant(actor),
          {:ok, bytes} <- decode(content, encoding),
@@ -178,12 +178,12 @@ defmodule Arca.Files do
   `write/4`'s.
   """
   @spec update(
-          Cyfr.Actor.t(),
+          Prima.Actor.t(),
           String.t(),
           (String.t() -> {:ok, String.t()} | {:error, term()})
         ) ::
           {:ok, %{written: String.t()}} | {:error, term()}
-  def update(%Cyfr.Actor{} = actor, path, fun) when is_binary(path) and is_function(fun, 1) do
+  def update(%Prima.Actor{} = actor, path, fun) when is_binary(path) and is_function(fun, 1) do
     with :ok <- tenant(actor),
          {:ok, segments, physical, tier} <- resolve_file(path),
          :ok <- writable(tier, physical, segments),
@@ -197,8 +197,8 @@ defmodule Arca.Files do
   ships refuses; a shaped folder above its units refuses too — units go
   one at a time, by their own verbs.
   """
-  @spec delete(Cyfr.Actor.t(), String.t()) :: {:ok, %{deleted: String.t()}} | {:error, term()}
-  def delete(%Cyfr.Actor{} = actor, path) when is_binary(path) do
+  @spec delete(Prima.Actor.t(), String.t()) :: {:ok, %{deleted: String.t()}} | {:error, term()}
+  def delete(%Prima.Actor{} = actor, path) when is_binary(path) do
     with :ok <- tenant(actor),
          {:ok, segments, physical, tier} <- resolve_file(path),
          :ok <- deletable(tier, physical, segments),
@@ -209,8 +209,8 @@ defmodule Arca.Files do
 
   # The tree is the actor's athanor's; with none resolved there is no tree
   # to name, and nothing is read or written.
-  defp tenant(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok
-  defp tenant(%Cyfr.Actor{}), do: {:error, :missing_tenant}
+  defp tenant(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok
+  defp tenant(%Prima.Actor{}), do: {:error, :missing_tenant}
 
   # ---- paths -----------------------------------------------------------------
 
@@ -246,7 +246,7 @@ defmodule Arca.Files do
   end
 
   defp safe(segments) do
-    case Cyfr.PathSafety.validate_segments(segments) do
+    case Prima.PathSafety.validate_segments(segments) do
       :ok -> :ok
       {:error, {_refusal, message}} -> {:error, {:invalid_argument, message}}
     end
@@ -292,14 +292,14 @@ defmodule Arca.Files do
   # A pulled component is fork-to-modify, never rewritten in place — the
   # same rule the guest boundary applies.
   defp local_unit(["components", _plural, publisher | _], segments) do
-    case Cyfr.ComponentNamespace.require_local_guest_write(publisher) do
+    case Prima.ComponentNamespace.require_local_guest_write(publisher) do
       :ok ->
         :ok
 
       {:error, reason} ->
         {:error,
          {:invalid_argument,
-          "'#{join(segments)}': #{Cyfr.ComponentNamespace.message(reason, publisher)}"}}
+          "'#{join(segments)}': #{Prima.ComponentNamespace.message(reason, publisher)}"}}
     end
   end
 
@@ -503,8 +503,8 @@ defmodule Arca.Files do
   end
 
   defp valid_manifest(bytes, name) do
-    with {:ok, manifest} <- Cyfr.Manifest.decode_strict(bytes),
-         :ok <- Cyfr.Manifest.validate(manifest, &Arca.Storage.valid_guest_path?/1) do
+    with {:ok, manifest} <- Prima.Manifest.decode_strict(bytes),
+         :ok <- Prima.Manifest.validate(manifest, &Arca.Storage.valid_guest_path?/1) do
       :ok
     else
       {:error, :malformed_manifest} ->

@@ -147,7 +147,7 @@ defmodule Arca.Storage do
   Every athanor on a server shares one storage root (filesystem path or
   object-store bucket prefix); isolation comes from the athanor segment.
 
-  `Cyfr.Actor.user_id` (a person's `usr_…`, or a synthetic principal
+  `Prima.Actor.user_id` (a person's `usr_…`, or a synthetic principal
   such as `"webhook:<slug>"`) and `namespace` are identity
   fields (attribution, display, tincture tokens) — they are *not* path
   primitives. Only `athanor_id` shapes the on-disk layout, so members of an
@@ -157,7 +157,7 @@ defmodule Arca.Storage do
 
   Services use the main `Arca` module which dispatches to the configured adapter:
 
-      actor = Cyfr.Actor.in_athanor("ath_test")
+      actor = Prima.Actor.in_athanor("ath_test")
 
       # Tenant-scoped (auto-prefixed with {athanor_id}/)
       Arca.put(actor, ["data", "notes.txt"], content)
@@ -553,7 +553,7 @@ defmodule Arca.Storage do
   Whether a guest-facing storage path names a guest scope: the empty string
   (the scope listing), a bare scope (`"data"`, `"components"`), or anything
   under one (`"data/notes.txt"`). One predicate shared by the manifest
-  validator (`Cyfr.Manifest.validate/2`) and the guest storage boundary
+  validator (`Prima.Manifest.validate/2`) and the guest storage boundary
   (`Cyfr.Execution.GuestStorage`), so a grant no runtime
   would honor is refused at parse — and the two layers cannot drift.
 
@@ -594,11 +594,11 @@ defmodule Arca.Storage do
   guest-facing refusals (`Cyfr.Execution.GuestStorage`) consume this,
   and everything else keeps the fail-closed raise.
   """
-  @spec athanor_ready?(Cyfr.Actor.t()) :: boolean()
-  def athanor_ready?(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "",
+  @spec athanor_ready?(Prima.Actor.t()) :: boolean()
+  def athanor_ready?(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "",
     do: id =~ @athanor_id_format
 
-  def athanor_ready?(%Cyfr.Actor{}), do: false
+  def athanor_ready?(%Prima.Actor{}), do: false
 
   @doc """
   Build the tenant segment list `[athanor_id]` used by every storage adapter
@@ -610,8 +610,8 @@ defmodule Arca.Storage do
   legitimately bypasses): a platform or system task must still carry the
   athanor whose files it touches.
   """
-  @spec tenant_segments(Cyfr.Actor.t()) :: [String.t()]
-  def tenant_segments(%Cyfr.Actor{athanor_id: athanor_id})
+  @spec tenant_segments(Prima.Actor.t()) :: [String.t()]
+  def tenant_segments(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     # Defense-in-depth: athanor ids are minted by trusted code, but a
     # corrupted row or a future code path that bypasses those validations
@@ -626,7 +626,7 @@ defmodule Arca.Storage do
     [athanor_id]
   end
 
-  def tenant_segments(%Cyfr.Actor{} = actor) do
+  def tenant_segments(%Prima.Actor{} = actor) do
     raise ArgumentError,
           "Arca.Storage.tenant_segments/1: a resolved athanor_id is required " <>
             "(user_id=#{inspect(actor.user_id)} scope=#{inspect(actor.scope)} " <>
@@ -664,7 +664,7 @@ defmodule Arca.Storage do
   `authorize_path/2` — so they are the fail-closed backstop for code that
   reaches an adapter directly.
   """
-  @spec physical_segments(Cyfr.Actor.t(), path()) :: path()
+  @spec physical_segments(Prima.Actor.t(), path()) :: path()
   def physical_segments(actor, segments) do
     case classify(segments) do
       :seed ->
@@ -698,13 +698,13 @@ defmodule Arca.Storage do
   to any adapter. Writability is a separate gate — seed media is
   read-only at the `Arca` facade whatever the actor.
 
-  The authority read here is `Cyfr.Actor.system`, and it is a different
+  The authority read here is `Prima.Actor.system`, and it is a different
   question from `scope`: `system` opens a shared path, `scope` widens a
   read across tenants, and neither implies the other. `system` is not a
   wire member, so nothing a worker returns can claim it.
   """
-  @spec authorize_path(Cyfr.Actor.t(), [String.t()]) :: :ok | {:error, :forbidden}
-  def authorize_path(%Cyfr.Actor{system: system?}, path) do
+  @spec authorize_path(Prima.Actor.t(), [String.t()]) :: :ok | {:error, :forbidden}
+  def authorize_path(%Prima.Actor{system: system?}, path) do
     case classify(path) do
       :tenant -> :ok
       :invalid -> {:error, :forbidden}
@@ -730,7 +730,7 @@ defmodule Arca.Storage do
   @doc """
   Validate that path segments contain no traversal attacks.
 
-  Delegates to `Cyfr.PathSafety.validate_segments!/1` (the canonical
+  Delegates to `Prima.PathSafety.validate_segments!/1` (the canonical
   denylist, shared with the Opus storage policy boundary). Called once
   per operation, from the adapter's single path/key builder
   (`Arca.Adapters.Local.build_path/2`, the S3 adapter's key builder) —
@@ -744,13 +744,13 @@ defmodule Arca.Storage do
       iex> Arca.Storage.validate_path!(["data", "..", "..", "etc", "passwd"])
       ** (ArgumentError) Path traversal rejected: segment \"..\" is not allowed
   """
-  defdelegate validate_path!(segments), to: Cyfr.PathSafety, as: :validate_segments!
+  defdelegate validate_path!(segments), to: Prima.PathSafety, as: :validate_segments!
 
   @doc "Read content from storage"
-  @callback get(Cyfr.Actor.t(), path()) :: {:ok, binary()} | error()
+  @callback get(Prima.Actor.t(), path()) :: {:ok, binary()} | error()
 
   @doc "Write content to storage (overwrites existing)"
-  @callback put(Cyfr.Actor.t(), path(), binary()) :: :ok | error()
+  @callback put(Prima.Actor.t(), path(), binary()) :: :ok | error()
 
   @doc """
   Append content to storage, creating the path when it does not exist.
@@ -766,10 +766,10 @@ defmodule Arca.Storage do
   refuses an oversized object; the local filesystem's `O_APPEND` write
   has neither limit.
   """
-  @callback append(Cyfr.Actor.t(), path(), binary()) :: :ok | error()
+  @callback append(Prima.Actor.t(), path(), binary()) :: :ok | error()
 
   @doc "Delete content from storage"
-  @callback delete(Cyfr.Actor.t(), path()) :: :ok | error()
+  @callback delete(Prima.Actor.t(), path()) :: :ok | error()
 
   @doc """
   List the entries directly under a path prefix, each with its kind.
@@ -782,11 +782,11 @@ defmodule Arca.Storage do
   A path that is itself a file answers `{:error, :enotdir}` on every adapter;
   a path with nothing under it answers `{:ok, []}`.
   """
-  @callback list_typed(Cyfr.Actor.t(), path()) ::
+  @callback list_typed(Prima.Actor.t(), path()) ::
               {:ok, [{String.t(), :file | :dir}]} | error()
 
   @doc "Check if path exists"
-  @callback exists?(Cyfr.Actor.t(), path()) :: boolean()
+  @callback exists?(Prima.Actor.t(), path()) :: boolean()
 
   @doc """
   Recursively delete a directory tree at path.
@@ -795,7 +795,7 @@ defmodule Arca.Storage do
   postcondition already holds. `{:error, :not_found}` is `delete/2`'s
   answer for a missing single object, never this callback's.
   """
-  @callback delete_tree(Cyfr.Actor.t(), path()) :: :ok | error()
+  @callback delete_tree(Prima.Actor.t(), path()) :: :ok | error()
 
   @doc """
   Recursively list all leaf paths under a prefix.
@@ -804,7 +804,7 @@ defmodule Arca.Storage do
   pass them straight to `get/2` without reassembly. Order is unspecified.
   Implementations must call `validate_path!/1` on the input prefix.
   """
-  @callback list_recursive(Cyfr.Actor.t(), path()) :: {:ok, [path()]} | error()
+  @callback list_recursive(Prima.Actor.t(), path()) :: {:ok, [path()]} | error()
 
   @doc """
   Recursive file count and byte total at and under a path: a directory's
@@ -814,7 +814,7 @@ defmodule Arca.Storage do
   not just the top level, or a nested write evades the ceiling.
   Implementations must call `validate_path!/1` on the input prefix.
   """
-  @callback usage(Cyfr.Actor.t(), path()) ::
+  @callback usage(Prima.Actor.t(), path()) ::
               {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | error()
 
   @doc """
@@ -824,7 +824,7 @@ defmodule Arca.Storage do
   `:ok` without a request — a folder there exists when a key sits under
   it. Idempotent.
   """
-  @callback ensure_dir(Cyfr.Actor.t(), path()) :: :ok | error()
+  @callback ensure_dir(Prima.Actor.t(), path()) :: :ok | error()
 
   @doc """
   Read a whole subtree through any adapter, as `{relative_path, binary}`
@@ -847,9 +847,9 @@ defmodule Arca.Storage do
   `{:error, {:subtree_read_failed, leaf, reason}}` — never an exit in the
   caller.
   """
-  @spec read_subtree_via(module(), Cyfr.Actor.t(), path(), keyword()) ::
+  @spec read_subtree_via(module(), Prima.Actor.t(), path(), keyword()) ::
           {:ok, [{path(), binary()}]} | error()
-  def read_subtree_via(adapter, %Cyfr.Actor{} = actor, path, opts \\ []) do
+  def read_subtree_via(adapter, %Prima.Actor{} = actor, path, opts \\ []) do
     with {:ok, leaf_segments} <- adapter.list_recursive(actor, path) do
       case leaf_segments do
         [] ->
@@ -907,7 +907,7 @@ defmodule Arca.Storage do
   """
   @callback serve_to_conn(
               Plug.Conn.t(),
-              Cyfr.Actor.t(),
+              Prima.Actor.t(),
               path(),
               opts :: keyword()
             ) :: {:ok, Plug.Conn.t()} | {:error, term()}
@@ -965,7 +965,7 @@ defmodule Arca.Storage do
   Implementations must validate every path through their one path
   builder, as for any other callback.
   """
-  @callback replace_tree(Cyfr.Actor.t(), path(), [tree_file()]) :: :ok | error()
+  @callback replace_tree(Prima.Actor.t(), path(), [tree_file()]) :: :ok | error()
 
   @typedoc """
   An adapter's proof of the object version a conditional write saw — an
@@ -993,7 +993,7 @@ defmodule Arca.Storage do
   last-writer-wins overwrite. An adapter whose store cannot make the
   create conditional answers `{:error, :unsupported}` and writes nothing.
   """
-  @callback put_if_none_match(Cyfr.Actor.t(), path(), iodata()) ::
+  @callback put_if_none_match(Prima.Actor.t(), path(), iodata()) ::
               {:ok, precondition()} | {:error, :exists | :unsupported | term()}
 
   @doc """
@@ -1008,7 +1008,7 @@ defmodule Arca.Storage do
   rather than writing, and one whose store cannot honour preconditions at
   all answers `{:error, :unsupported}`. Never last-writer-wins.
   """
-  @callback put_if_match(Cyfr.Actor.t(), path(), iodata(), precondition()) ::
+  @callback put_if_match(Prima.Actor.t(), path(), iodata(), precondition()) ::
               {:ok, precondition()}
               | {:error, :precondition_failed | :missing | :unsupported | term()}
 
@@ -1025,7 +1025,7 @@ defmodule Arca.Storage do
   no proof of its version — a conditional replace of it is not possible,
   and no caller may fall back to an unconditional one.
   """
-  @callback get_for_update(Cyfr.Actor.t(), path()) ::
+  @callback get_for_update(Prima.Actor.t(), path()) ::
               {:ok, binary(), precondition()} | {:error, :not_found | :unsupported | term()}
 
   @doc """
@@ -1035,7 +1035,7 @@ defmodule Arca.Storage do
   prefix that is itself one object answers that object alone, and a
   prefix with nothing under it answers `{:ok, []}`.
   """
-  @callback list_prefix(Cyfr.Actor.t(), path()) :: {:ok, [path()]} | {:error, term()}
+  @callback list_prefix(Prima.Actor.t(), path()) :: {:ok, [path()]} | {:error, term()}
 
   @optional_callbacks sweep_stale_tmp: 1, replace_tree: 3
 
@@ -1045,26 +1045,26 @@ defmodule Arca.Storage do
   as `Arca.mutating/5` does for a plain write. A gated conditional write
   is `Arca.put_if_match/5`.
   """
-  @spec put_if_none_match(Cyfr.Actor.t(), path(), iodata()) ::
+  @spec put_if_none_match(Prima.Actor.t(), path(), iodata()) ::
           {:ok, precondition()} | {:error, :exists | :unsupported | term()}
-  def put_if_none_match(%Cyfr.Actor{} = actor, path, content),
+  def put_if_none_match(%Prima.Actor{} = actor, path, content),
     do: configured_adapter().put_if_none_match(actor, path, content)
 
   @doc "`c:put_if_match/4` on the configured adapter. A thin dispatch, as `put_if_none_match/3`."
-  @spec put_if_match(Cyfr.Actor.t(), path(), iodata(), precondition()) ::
+  @spec put_if_match(Prima.Actor.t(), path(), iodata(), precondition()) ::
           {:ok, precondition()}
           | {:error, :precondition_failed | :missing | :unsupported | term()}
-  def put_if_match(%Cyfr.Actor{} = actor, path, content, precondition),
+  def put_if_match(%Prima.Actor{} = actor, path, content, precondition),
     do: configured_adapter().put_if_match(actor, path, content, precondition)
 
   @doc "`c:get_for_update/2` on the configured adapter. A thin dispatch, as `put_if_none_match/3`."
-  @spec get_for_update(Cyfr.Actor.t(), path()) ::
+  @spec get_for_update(Prima.Actor.t(), path()) ::
           {:ok, binary(), precondition()} | {:error, :not_found | :unsupported | term()}
-  def get_for_update(%Cyfr.Actor{} = actor, path),
+  def get_for_update(%Prima.Actor{} = actor, path),
     do: configured_adapter().get_for_update(actor, path)
 
   @doc "`c:list_prefix/2` on the configured adapter. A thin dispatch, as `put_if_none_match/3`."
-  @spec list_prefix(Cyfr.Actor.t(), path()) :: {:ok, [path()]} | {:error, term()}
-  def list_prefix(%Cyfr.Actor{} = actor, prefix),
+  @spec list_prefix(Prima.Actor.t(), path()) :: {:ok, [path()]} | {:error, term()}
+  def list_prefix(%Prima.Actor{} = actor, prefix),
     do: configured_adapter().list_prefix(actor, prefix)
 end

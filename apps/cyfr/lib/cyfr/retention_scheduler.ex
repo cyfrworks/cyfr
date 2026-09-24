@@ -154,7 +154,7 @@ defmodule Cyfr.RetentionScheduler do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -178,7 +178,7 @@ defmodule Cyfr.RetentionScheduler do
           | {:error, :database_error}
   def cycle(opts \\ []) when is_list(opts) do
     key = Keyword.get(opts, :key, JobClaims.cell_key())
-    owner = Keyword.get(opts, :owner, Cyfr.Boot.id())
+    owner = Keyword.get(opts, :owner, Prima.Boot.id())
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
 
     case JobClaims.claim(@kind, key, owner, lease_ms) do

@@ -126,7 +126,7 @@ defmodule Sanctum.ToolGrants do
 
   defp athanor(ctx) do
     case Context.actor(ctx) do
-      %Cyfr.Actor{athanor_id: athanor_id} when is_binary(athanor_id) and athanor_id != "" ->
+      %Prima.Actor{athanor_id: athanor_id} when is_binary(athanor_id) and athanor_id != "" ->
         {:ok, athanor_id}
 
       _ ->

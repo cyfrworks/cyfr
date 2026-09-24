@@ -15,7 +15,7 @@ defmodule Opus.WorkerListenerTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.{WorkerAuth, WorkerWire}
+  alias Prima.{WorkerAuth, WorkerWire}
   alias Opus.Test.ScriptedHost
 
   setup do
@@ -80,7 +80,7 @@ defmodule Opus.WorkerListenerTest do
     assert %{"fresh" => _, "idle" => 0, "busy" => 0, "tainted" => 0} = runners
 
     # The answer is the contract's wire form of the service's own status.
-    assert {:ok, read} = Cyfr.WorkerAPI.read_status(status)
+    assert {:ok, read} = Prima.WorkerAPI.read_status(status)
     {:ok, own} = Opus.WorkerService.status()
     assert Map.drop(read, [:runners]) == Map.drop(own, [:runners])
   end
@@ -88,7 +88,7 @@ defmodule Opus.WorkerListenerTest do
   test "a request under another key is refused without the body being read", context do
     # A body past the listener's bound: refused for its key, not its size,
     # so the refusal came before the body was read.
-    huge = String.duplicate("x", Cyfr.HostAPI.max_body_bytes() + 1)
+    huge = String.duplicate("x", Prima.HostAPI.max_body_bytes() + 1)
     stranger = ScriptedHost.dispatch_key(ScriptedHost.start!(root: :crypto.strong_rand_bytes(32)))
 
     assert {401, %{"error" => "bad_mac"}} = post(context, :status, huge, key: stranger)
@@ -138,7 +138,7 @@ defmodule Opus.WorkerListenerTest do
   end
 
   test "a body past the listener's bound is refused once the header verifies", context do
-    huge = String.duplicate("x", Cyfr.HostAPI.max_body_bytes() + 1)
+    huge = String.duplicate("x", Prima.HostAPI.max_body_bytes() + 1)
     assert {413, %{"error" => "malformed"}} = post(context, :status, huge)
   end
 

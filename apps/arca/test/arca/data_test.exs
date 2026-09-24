@@ -118,14 +118,22 @@ defmodule Arca.DataTest do
     end
 
     test "a Prima contract struct stays that struct, and its fields are projected" do
-      actor = %Cyfr.Actor{Cyfr.Actor.system() | request_id: user()}
+      actor = %Prima.Actor{Prima.Actor.system() | request_id: user()}
       projected = Arca.Data.project({:ok, actor})
 
-      assert {:ok, %Cyfr.Actor{} = kept} = projected
+      assert {:ok, %Prima.Actor{} = kept} = projected
       assert kept.scope == actor.scope
       assert plain?(kept.request_id)
       assert kept.request_id.id == "usr_data"
       assert clean?(projected)
+    end
+
+    test "the contract structs are read from the Prima application, and a missing module list refuses" do
+      assert Map.has_key?(Arca.Data.prima_structs(Arca.Data.prima_modules()), Prima.Actor)
+      refute Map.has_key?(Arca.Data.prima_structs(Arca.Data.prima_modules()), Private)
+
+      error = assert_raise Arca.Data.PrimaUnavailableError, fn -> Arca.Data.prima_structs(nil) end
+      assert Exception.message(error) =~ ":prima"
     end
   end
 
@@ -187,7 +195,7 @@ defmodule Arca.DataTest do
       assert Arca.Execution.get_tenant(elsewhere, own.id) == nil
 
       assert {:error, :no_athanor} =
-               Arca.Athanors.current(%Cyfr.Actor{Arca.Test.Actor.local() | athanor_id: nil})
+               Arca.Athanors.current(%Prima.Actor{Arca.Test.Actor.local() | athanor_id: nil})
 
       assert_raise ArgumentError, fn ->
         Arca.Execution.get_tenant(Arca.Test.Actor.local(athanor_id: nil), own.id)

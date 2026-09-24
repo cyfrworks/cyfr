@@ -45,7 +45,7 @@ defmodule Emissary.MCP.McpServersTool do
   `Emissary.MCP.ExternalServers`.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   require Logger
 
@@ -55,7 +55,7 @@ defmodule Emissary.MCP.McpServersTool do
   alias Emissary.MCP.BackendDefinition
   alias Emissary.MCP.ExternalProvider
   alias Emissary.MCP.ExternalServers
-  alias Emissary.MCP.VaultRef
+  alias Prima.VaultRef
   alias Sanctum.Context
 
   @impl true
@@ -68,7 +68,7 @@ defmodule Emissary.MCP.McpServersTool do
   @doc "The tool definition: name, annotations (the gate), and input schema."
   @spec definition() :: map()
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # The listing (names, transport, status, the vault entries a server
     # reads) is open to any authenticated caller; a server's connection
     # config is the operator's. Neither is a chain capability: a
@@ -496,7 +496,7 @@ defmodule Emissary.MCP.McpServersTool do
   defp validate_tool_patterns(nil), do: :ok
 
   defp validate_tool_patterns(patterns) when is_list(patterns) do
-    case Enum.reject(patterns, &Cyfr.ToolPattern.valid?/1) do
+    case Enum.reject(patterns, &Prima.ToolPattern.valid?/1) do
       [] ->
         :ok
 

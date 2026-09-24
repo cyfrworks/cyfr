@@ -24,7 +24,7 @@ defmodule Cyfr.BoundariesTest do
       a moved tree passes every assertion it makes. So each scan is shown
       to have read code before its rosters are believed.
     * **Two scans, because neither sees everything.** The source scan,
-      through `Cyfr.Test.CodeLines`, sees aliases, struct patterns,
+      through `Prima.Test.CodeLines`, sees aliases, struct patterns,
       typespecs and compile-time attributes, which emit no call. The
       compiled scan, the import table of each `.beam`, sees every remote
       call the compiler emitted, including ones spelled in a way a regex
@@ -35,7 +35,7 @@ defmodule Cyfr.BoundariesTest do
   use ExUnit.Case, async: true
 
   alias Cyfr.Boundaries
-  alias Cyfr.Test.{CodeLines, SourceTree}
+  alias Prima.Test.{CodeLines, SourceTree}
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
@@ -66,7 +66,7 @@ defmodule Cyfr.BoundariesTest do
 
   defp lines_read(scanned), do: Enum.sum(for {_path, lines} <- scanned, do: length(lines))
 
-  # `.../Elixir.Cyfr.JCS.beam` is the module `Cyfr.JCS`. An Erlang module's
+  # `.../Elixir.Cyfr.JCS.beam` is the module `Prima.JCS`. An Erlang module's
   # beam carries no prefix and yields its own name, which no layer claims.
   defp module_name(path),
     do: path |> Path.basename(".beam") |> String.replace_prefix("Elixir.", "")
@@ -75,7 +75,7 @@ defmodule Cyfr.BoundariesTest do
     do: app |> Application.app_dir("ebin") |> Path.join("*.beam") |> Path.wildcard()
 
   defp contracts_modules do
-    :cyfr_contracts |> beams() |> Enum.map(&module_name/1) |> MapSet.new()
+    :prima |> beams() |> Enum.map(&module_name/1) |> MapSet.new()
   end
 
   # Every remote call the compiler emitted from `app`'s production
@@ -233,11 +233,11 @@ defmodule Cyfr.BoundariesTest do
             do: {module, Boundaries.layer(module, contracts)}
 
       assert reached != [], "the scan of the storage doors found no names"
-      assert {"Cyfr.Manifest", :contracts} in reached
-      assert {"Cyfr.ComponentNamespace", :contracts} in reached
+      assert {"Prima.Manifest", :prima} in reached
+      assert {"Prima.ComponentNamespace", :prima} in reached
 
       above =
-        for {module, layer} <- reached, layer not in [:arca, :contracts, :outside], do: module
+        for {module, layer} <- reached, layer not in [:arca, :prima, :outside], do: module
 
       assert above == [], "a storage door names a module above Arca: #{inspect(above)}"
 
@@ -272,7 +272,7 @@ defmodule Cyfr.BoundariesTest do
              "the scan of retention found no names"
 
       above =
-        for {module, layer} <- reached, layer not in [:arca, :contracts, :outside], do: module
+        for {module, layer} <- reached, layer not in [:arca, :prima, :outside], do: module
 
       assert above == [], "retention names a module above Arca: #{inspect(above)}"
       assert athanor_rows(named) == []
@@ -303,9 +303,9 @@ defmodule Cyfr.BoundariesTest do
 
       assert Enum.sort(Boundaries.dependency_violations(:arca, planted, contracts_modules())) == [
                "apps/arca/lib/arca/files.ex:2 names Compendium.NamespacePolicy (host); " <>
-                 "arca may name [:arca, :contracts, :outside]",
+                 "arca may name [:arca, :prima, :outside]",
                "apps/arca/lib/arca/files.ex:3 names Sanctum.Context (sanctum); " <>
-                 "arca may name [:arca, :contracts, :outside]"
+                 "arca may name [:arca, :prima, :outside]"
              ]
     end
   end
@@ -381,8 +381,8 @@ defmodule Cyfr.BoundariesTest do
     end
   end
 
-  # `Cyfr.Authority.Blob.Edge` is named for its struct and type: a module
-  # of the contracts, or a type spelled under one (`Cyfr.HostAPI.renewal`).
+  # `Prima.Authority.Blob.Edge` is named for its struct and type: a module
+  # of the contracts, or a type spelled under one (`Prima.HostAPI.renewal`).
   defp contract_type?(name, contracts) do
     name
     |> String.split(".")
@@ -450,9 +450,10 @@ defmodule Cyfr.BoundariesTest do
       assert found == [],
              """
              A surface widened. Add the namespace to its row in `Cyfr.Boundaries`
-             with a line saying why, or move the shared piece to the glue
-             namespace (`Cyfr.`) — several of these cross the licence boundary,
-             and one of them is a domain naming a user interface.
+             with a line saying why, or move the shared piece to Prima
+             (`Prima.`) or the host's glue (`Cyfr.`) — several of these cross
+             the licence boundary, and one of them is a domain naming a user
+             interface.
 
              #{Enum.join(found, "\n\n")}
              """
@@ -814,9 +815,9 @@ defmodule Cyfr.BoundariesTest do
 
       assert Enum.sort(found) == [
                "apps/arca/lib/arca/planted.ex:2 names Sanctum.Context (sanctum); " <>
-                 "arca may name [:arca, :contracts, :outside]",
+                 "arca may name [:arca, :prima, :outside]",
                "apps/arca/lib/arca/planted.ex:4 names Compendium.Resolver (host); " <>
-                 "arca may name [:arca, :contracts, :outside]"
+                 "arca may name [:arca, :prima, :outside]"
              ]
 
       # The same file under the host, which may name both, is no violation.
@@ -887,7 +888,7 @@ defmodule Cyfr.BoundariesTest do
            alias Sanctum.Context
            def a(%Context{} = ctx), do: Aqua.Runner.subscribe(ctx.athanor_id, "t")
            def b, do: Cyfr.Execution.Events.flush("e")
-           def c, do: Cyfr.Actor.system()
+           def c, do: Prima.Actor.system()
          end
          ''')}
       ]
@@ -1188,7 +1189,7 @@ defmodule Cyfr.BoundariesTest do
       built =
         for lib <- SourceTree.app_libs(root()),
             {path, lines} <- scan(lib <> "/**/*.ex"),
-            Enum.any?(lines, &String.contains?(elem(&1, 0), "%Cyfr.Actor{")),
+            Enum.any?(lines, &String.contains?(elem(&1, 0), "%Prima.Actor{")),
             constructed_at(SourceTree.read(Path.join(root(), path))) != [],
             do: path
 
@@ -1197,7 +1198,7 @@ defmodule Cyfr.BoundariesTest do
 
       assert unrostered == [],
              """
-             A `%Cyfr.Actor{}` is built in a file the catalog does not name:
+             A `%Prima.Actor{}` is built in a file the catalog does not name:
 
              #{Enum.join(unrostered, "\n")}
 
@@ -1222,13 +1223,15 @@ defmodule Cyfr.BoundariesTest do
     end
 
     test "a built actor is found where a matched one is not" do
-      assert constructed_at("defmodule A do\n  def a, do: %Cyfr.Actor{athanor_id: \"x\"}\nend\n") ==
+      assert constructed_at("defmodule A do\n  def a, do: %Prima.Actor{athanor_id: \"x\"}\nend\n") ==
                [2]
 
-      assert constructed_at("defmodule A do\n  def a(%Cyfr.Actor{athanor_id: id}), do: id\nend\n") ==
+      assert constructed_at(
+               "defmodule A do\n  def a(%Prima.Actor{athanor_id: id}), do: id\nend\n"
+             ) ==
                []
 
-      assert constructed_at("defmodule A do\n  def a(x) do\n    %Cyfr.Actor{} = x\n  end\nend\n") ==
+      assert constructed_at("defmodule A do\n  def a(x) do\n    %Prima.Actor{} = x\n  end\nend\n") ==
                []
     end
   end
@@ -1289,7 +1292,7 @@ defmodule Cyfr.BoundariesTest do
 
       # Refused before any query: only the server's own actor, narrowed to
       # one athanor, is what the row names.
-      estate = %Cyfr.Actor{athanor_id: "ath_boundaries", scope: :athanor, system: true}
+      estate = %Prima.Actor{athanor_id: "ath_boundaries", scope: :athanor, system: true}
 
       assert {:error, :forbidden} = Arca.Retention.cleanup_athanor(%{estate | system: false})
       assert {:error, :forbidden} = Arca.Retention.cleanup_athanor(%{estate | scope: :platform})
@@ -1319,14 +1322,14 @@ defmodule Cyfr.BoundariesTest do
     end
   end
 
-  # The lines where a `%Cyfr.Actor{}` is BUILT — in expression position,
+  # The lines where a `%Prima.Actor{}` is BUILT — in expression position,
   # not matched in a function head, a `case` clause or the left of a
   # match. A regex cannot tell those apart; the parser can, so this walks
   # the tree and carries the one bit that decides it.
   defp constructed_at(source),
     do: source |> Code.string_to_quoted!() |> built(false) |> Enum.sort()
 
-  defp built({:%, meta, [{:__aliases__, _, [:Cyfr, :Actor]}, {:%{}, _, fields}]}, false),
+  defp built({:%, meta, [{:__aliases__, _, [:Prima, :Actor]}, {:%{}, _, fields}]}, false),
     do: [meta[:line] | built(fields, false)]
 
   defp built({:=, _meta, [lhs, rhs]}, pattern?), do: built(lhs, true) ++ built(rhs, pattern?)
@@ -1663,19 +1666,19 @@ defmodule Cyfr.BoundariesTest do
   # ---------------------------------------------------------------------------
 
   describe "the tree" do
-    test "the shared primitives live in the glue namespace" do
+    test "the shared primitives live in Prima, and the bus in the host" do
       assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/bus.ex"))
-      assert File.exists?(Path.join(root(), "apps/cyfr_contracts/lib/cyfr/uuid7.ex"))
+      assert File.exists?(Path.join(root(), "apps/prima/lib/prima/uuid7.ex"))
 
       refute File.exists?(Path.join(root(), "apps/cyfr/lib/prism/topics.ex")),
-             "Cyfr.Bus moved out of the console namespace; it must not come back"
+             "Cyfr.Bus is the host's, not the console's; it must not come back"
 
       refute File.exists?(Path.join(root(), "apps/cyfr/lib/emissary/uuid7.ex")),
-             "Cyfr.UUID7 moved out of the transport namespace; it must not come back"
+             "Prima.UUID7 is a shared primitive, not the transport's; it must not come back"
     end
 
     test "the builder's copy of the line filter is the contracts' copy" do
-      owner = SourceTree.read(Path.join(root(), "apps/cyfr_contracts/test/support/code_lines.ex"))
+      owner = SourceTree.read(Path.join(root(), "apps/prima/test/support/code_lines.ex"))
       copy = SourceTree.read(Path.join(root(), "apps/locus/test/support/code_lines.ex"))
       marker = "  # `Foo.Bar.{A, B}`"
 
@@ -1683,7 +1686,7 @@ defmodule Cyfr.BoundariesTest do
 
       assert body(owner, marker) == body(copy, marker),
              """
-             `Locus.Test.CodeLines` and `Cyfr.Test.CodeLines` have drifted. The
+             `Locus.Test.CodeLines` and `Prima.Test.CodeLines` have drifted. The
              builder's suite loads nothing of the control plane's, so it keeps a
              copy — and a copy that classifies lines differently is two filters,
              which is two answers to what a dependency is.

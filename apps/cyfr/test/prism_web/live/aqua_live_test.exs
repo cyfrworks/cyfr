@@ -547,7 +547,7 @@ defmodule PrismWeb.AquaLiveTest do
       # the task answers. The page tells the section which install ended
       # while it serves that answer, so a render asked for once the refusal
       # shows is served after the section has heard.
-      Cyfr.Test.Wait.wait_until(
+      Prima.Test.Wait.wait_until(
         fn -> render(view) =~ "Could not install" end,
         5_000,
         "the install's refusal"
@@ -563,7 +563,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       # The fetch has answered; it is gone before the registry setting it
       # read is restored and before the sandbox it queried is released.
-      Cyfr.Test.Wait.wait_until(
+      Prima.Test.Wait.wait_until(
         fn -> not Enum.any?(Task.Supervisor.children(Aqua.TaskSupervisor), &(&1 in fetch)) end,
         5_000,
         "the install's fetch to end"
@@ -830,7 +830,7 @@ defmodule PrismWeb.AquaLiveTest do
 
   # A section re-reads itself on a message the write sends after it
   # answers, so a card's new state is awaited rather than read at once.
-  defp settled(fun, label), do: Cyfr.Test.Wait.wait_until(fun, 2_000, label)
+  defp settled(fun, label), do: Prima.Test.Wait.wait_until(fun, 2_000, label)
 
   # The tasks the page itself started on the Aqua supervisor since `before`
   # was read: a task names the process that started it first in its

@@ -171,13 +171,13 @@ defmodule Emissary.MCP.Router do
                 {:error, Sanctum.Unauthorized.code(reason),
                  Sanctum.Unauthorized.message(reason, ctx.auth_method)}
               else
-                {:error, :invalid_params, Cyfr.Refusal.message(reason)}
+                {:error, :invalid_params, Prima.Refusal.message(reason)}
               end
 
             :ok ->
               case Catalog.validate_arguments(name, arguments) do
                 {:error, reason} ->
-                  {:error, :invalid_params, Cyfr.Refusal.message(reason)}
+                  {:error, :invalid_params, Prima.Refusal.message(reason)}
 
                 {:ok, arguments} ->
                   has_output_schema = Map.has_key?(tool_def, "outputSchema")
@@ -299,12 +299,12 @@ defmodule Emissary.MCP.Router do
 
     case read do
       {:ok, content} ->
-        mime_type = Map.get(content, :mimeType, Cyfr.MediaType.json())
+        mime_type = Map.get(content, :mimeType, Prima.MediaType.json())
         encoded = encode_content(content)
 
         # Per MCP spec: binary content uses "blob" field, text uses "text" field
         content_entry =
-          if Cyfr.MediaType.binary_mime?(mime_type) do
+          if Prima.MediaType.binary_mime?(mime_type) do
             %{"uri" => uri, "mimeType" => mime_type, "blob" => encoded}
           else
             %{"uri" => uri, "mimeType" => mime_type, "text" => encoded}
@@ -325,8 +325,8 @@ defmodule Emissary.MCP.Router do
             {:error, :internal_error, "Failed to read resource: the store could not answer"}
 
           # A typed tool refusal renders through its vocabulary.
-          Cyfr.Refusal.reason?(reason) ->
-            {:error, :resource_not_found, Cyfr.Refusal.message(reason)}
+          Prima.Refusal.reason?(reason) ->
+            {:error, :resource_not_found, Prima.Refusal.message(reason)}
 
           # A binary reason is a handler's crafted, client-safe diagnosis
           # ("Asset not found: …").
@@ -347,7 +347,7 @@ defmodule Emissary.MCP.Router do
 
   defp format_error_reason(reason) do
     # One renderer for every typed vocabulary (`Cyfr.Ops.Error.render/2`
-    # — Unauthorized, `Cyfr.Refusal`, OCI errors); `nil` means the term is
+    # — Unauthorized, `Prima.Refusal`, OCI errors); `nil` means the term is
     # internal and must not be reflected.
     case Cyfr.Ops.Error.render(reason) do
       nil ->
@@ -361,8 +361,8 @@ defmodule Emissary.MCP.Router do
 
   defp encode_content(%{content: content}) when is_binary(content), do: content
 
-  defp encode_content(%{content: content}), do: Cyfr.Json.safe_encode(content)
-  defp encode_content(content) when is_map(content), do: Cyfr.Json.safe_encode(content)
+  defp encode_content(%{content: content}), do: Prima.Json.safe_encode(content)
+  defp encode_content(content) when is_map(content), do: Prima.Json.safe_encode(content)
 
   # ============================================================================
   # Notifications

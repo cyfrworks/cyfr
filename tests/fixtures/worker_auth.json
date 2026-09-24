@@ -22,7 +22,7 @@
     "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
     "ts": 1789305249602
   },
-  "comment": "The vectors pinning Cyfr.WorkerAuth and Cyfr.Assignment: the suite derives every key here from the root, the worker service id and the attempt, reproduces every canonical string, header, MAC, sealed value and assignment token from the fields and fixed IVs, opens every sealed value, and decodes every valid root text to the root and refuses every invalid one. Integers are written in decimal in canonical strings, headers and key labels. The service id is the key input; the boot is signed beside it and compared, never derived over. The member is the control-plane member that issued the assignment and answers that attempt's host calls: a call header field, an assignment field beside host_url (the address those calls are posted to) and an argument of the exit report. A member that is not the one named refuses the call, whatever it asked for.",
+  "comment": "The vectors pinning Prima.WorkerAuth and Prima.Assignment: the suite derives every key here from the root, the worker service id and the attempt, reproduces every canonical string, header, MAC, sealed value and assignment token from the fields and fixed IVs, opens every sealed value, and decodes every valid root text to the root and refuses every invalid one. Integers are written in decimal in canonical strings, headers and key labels. The service id is the key input; the boot is signed beside it and compared, never derived over. The member is the control-plane member that issued the assignment and answers that attempt's host calls: a call header field, an assignment field beside host_url (the address those calls are posted to) and an argument of the exit report. A member that is not the one named refuses the call, whatever it asked for.",
   "host_url": "http://cyfr-1:4300",
   "keys": {
     "assign_hex": "1c8e7dd23b696d5a9bf1dda4dc4b8b9bf3681504c5b423e30fd4ae965861d282",
@@ -76,7 +76,7 @@
   },
   "service": "wrk_4f3c2a1e9d8b7c6a",
   "status": {
-    "comment": "The answer of Cyfr.WorkerAPI's status as its listener writes it: the contracts suite reads every valid wire to its status and writes that status back to exactly the same wire, and refuses every invalid one; the worker image tests' control plane (tests/worker-image/worker_auth.py) reads the same. memory_bytes is the bound every runner runs under, null where the keeper applies none; refusal is why the keeper refuses runners, null while it starts them.",
+    "comment": "The answer of Prima.WorkerAPI's status as its listener writes it: the contracts suite reads every valid wire to its status and writes that status back to exactly the same wire, and refuses every invalid one; the worker image tests' control plane (tests/worker-image/worker_auth.py) reads the same. memory_bytes is the bound every runner runs under, null where the keeper applies none; refusal is why the keeper refuses runners, null while it starts them.",
     "invalid": [
       {
         "why": "not an object",

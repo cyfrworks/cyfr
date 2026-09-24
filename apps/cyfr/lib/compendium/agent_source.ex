@@ -39,26 +39,26 @@ defmodule Compendium.AgentSource do
   alias Sanctum.Context
 
   # The ref vocabulary — the type segment, the publisher and the soul's
-  # reserved name — is `Cyfr.AgentRef`, where the identity domain reads it
+  # reserved name — is `Prima.AgentRef`, where the identity domain reads it
   # too: consent has to recognise an agent source it never mints.
-  @type_name Cyfr.AgentRef.type()
+  @type_name Prima.AgentRef.type()
   @publisher "local"
 
   @doc "The source type an agent ref carries: `agent`."
   @spec type() :: String.t()
-  defdelegate type(), to: Cyfr.AgentRef
+  defdelegate type(), to: Prima.AgentRef
 
   @doc "The name-level ref of the agent `name`: `agent:local.<name>`."
   @spec ref(String.t()) :: String.t()
-  defdelegate ref(name), to: Cyfr.AgentRef
+  defdelegate ref(name), to: Prima.AgentRef
 
   @doc "The soul's name-level ref: `agent:local.aqua`."
   @spec soul_ref() :: String.t()
-  defdelegate soul_ref(), to: Cyfr.AgentRef
+  defdelegate soul_ref(), to: Prima.AgentRef
 
   @doc "Whether `ref` names an agent source."
   @spec agent_ref?(String.t()) :: boolean()
-  defdelegate agent_ref?(ref), to: Cyfr.AgentRef
+  defdelegate agent_ref?(ref), to: Prima.AgentRef
 
   @doc """
   The row of every enabled agent in the estate's tree, the soul first.
@@ -141,8 +141,8 @@ defmodule Compendium.AgentSource do
           "ask" => ask |> Enum.map(&elem(&1, 0)) |> Enum.sort()
         }
       }
-      |> Cyfr.MapUtil.put_present("catalyst", agent.catalyst_ref)
-      |> Cyfr.MapUtil.put_present("model", agent.model)
+      |> Prima.MapUtil.put_present("catalyst", agent.catalyst_ref)
+      |> Prima.MapUtil.put_present("model", agent.model)
 
     %{
       "name" => name,
@@ -158,7 +158,7 @@ defmodule Compendium.AgentSource do
 
   @doc "Whether `name` is the estate's soul."
   @spec soul?(String.t()) :: boolean()
-  defdelegate soul?(name), to: Cyfr.AgentRef
+  defdelegate soul?(name), to: Prima.AgentRef
 
   @doc "The overlay unit an agent's file is: what `Arca.Overlay.unit_status/2` classifies."
   @spec unit(String.t()) :: Arca.Storage.path()

@@ -18,7 +18,7 @@ defmodule Sanctum.VaultReaderTest do
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
 
   defp mint_material_entry(ctx, fields, over \\ %{}) do
-    id = Cyfr.UUID7.generate_id("vlt")
+    id = Prima.UUID7.generate_id("vlt")
     hint = Map.get(over, :provider_hint, "")
     aad = CipherAAD.vault_entry(ctx.athanor_id, id, hint)
 
@@ -110,7 +110,7 @@ defmodule Sanctum.VaultReaderTest do
     end
 
     test "a payload with unknown keys is refused at decode", %{ctx: ctx} do
-      id = Cyfr.UUID7.generate_id("vlt")
+      id = Prima.UUID7.generate_id("vlt")
       aad = CipherAAD.vault_entry(ctx.athanor_id, id, "")
       {:ok, sealed} = Sanctum.Cipher.encrypt(~s({"v":2,"fields":{},"extra":1}), aad)
 

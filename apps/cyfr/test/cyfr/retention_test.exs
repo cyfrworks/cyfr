@@ -117,9 +117,9 @@ defmodule Arca.RetentionTest do
 
   describe "default_class/1" do
     test "a webhook's, the server's own, and everything else" do
-      assert Retention.default_class(%Cyfr.Actor{user_id: "webhook:wh_1"}) == "webhook"
-      assert Retention.default_class(%Cyfr.Actor{user_id: "usr_1", system: true}) == "system"
-      assert Retention.default_class(%Cyfr.Actor{user_id: "usr_1"}) == "api"
+      assert Retention.default_class(%Prima.Actor{user_id: "webhook:wh_1"}) == "webhook"
+      assert Retention.default_class(%Prima.Actor{user_id: "usr_1", system: true}) == "system"
+      assert Retention.default_class(%Prima.Actor{user_id: "usr_1"}) == "api"
     end
   end
 
@@ -157,7 +157,7 @@ defmodule Arca.RetentionTest do
     test "an estate with no athanor row sets and reads its own settings" do
       # The settings are the storage layer's own row, not a column of the
       # athanor's: nothing about the athanor row is asked for.
-      actor = %Cyfr.Actor{athanor_id: "ath_rowless_#{System.unique_integer([:positive])}"}
+      actor = %Prima.Actor{athanor_id: "ath_rowless_#{System.unique_integer([:positive])}"}
 
       assert {:ok, %{"executions" => 10_000}} = Retention.get_settings(actor)
       assert {:ok, %{"executions" => 5}} = Retention.set_settings(actor, %{"executions" => 5})
@@ -176,8 +176,8 @@ defmodule Arca.RetentionTest do
     test "settings are isolated across athanors" do
       # Within an athanor, members share settings (one config); the isolation
       # boundary is the athanor, not the user.
-      a = %Cyfr.Actor{athanor_id: "ath_a_#{System.unique_integer([:positive])}", user_id: "u1"}
-      b = %Cyfr.Actor{athanor_id: "ath_b_#{System.unique_integer([:positive])}", user_id: "u2"}
+      a = %Prima.Actor{athanor_id: "ath_a_#{System.unique_integer([:positive])}", user_id: "u1"}
+      b = %Prima.Actor{athanor_id: "ath_b_#{System.unique_integer([:positive])}", user_id: "u2"}
 
       {:ok, _} = Retention.set_settings(a, %{"executions" => 5})
       {:ok, _} = Retention.set_settings(b, %{"executions" => 15})
@@ -218,7 +218,7 @@ defmodule Arca.RetentionTest do
     end
 
     test "an actor with no athanor is refused" do
-      for nobody <- [%Cyfr.Actor{}, %Cyfr.Actor{athanor_id: ""}, %Cyfr.Actor{scope: :platform}] do
+      for nobody <- [%Prima.Actor{}, %Prima.Actor{athanor_id: ""}, %Prima.Actor{scope: :platform}] do
         assert {:error, :no_athanor} = Retention.get_settings(nobody)
         assert {:error, :no_athanor} = Retention.set_settings(nobody, %{"executions" => 5})
         assert {:error, :no_athanor} = Retention.cleanup(nobody, "executions")
@@ -502,7 +502,7 @@ defmodule Arca.RetentionTest do
       assert {:error, :forbidden} = Retention.cleanup_athanor(%{system | scope: :platform})
       assert {:error, :no_athanor} = Retention.cleanup_athanor(%{system | athanor_id: nil})
       assert {:error, :no_athanor} = Retention.cleanup_athanor(%{system | athanor_id: ""})
-      assert {:error, :no_athanor} = Retention.cleanup_athanor(Cyfr.Actor.system())
+      assert {:error, :no_athanor} = Retention.cleanup_athanor(Prima.Actor.system())
     end
 
     test "prunes each kind by the athanor's own settings, per athanor not per member", %{
@@ -531,7 +531,7 @@ defmodule Arca.RetentionTest do
       end
 
       # Another estate's rows are not this estate's to prune.
-      other = %Cyfr.Actor{athanor_id: actor.athanor_id <> "_other", user_id: "u9"}
+      other = %Prima.Actor{athanor_id: actor.athanor_id <> "_other", user_id: "u9"}
 
       for i <- 1..3,
           do: create_execution_with_timestamp(other, "other_#{i}", "2025-01-0#{i}T10:00:00Z")

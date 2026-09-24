@@ -15,7 +15,7 @@ defmodule Compendium.Builds.ClientTest do
   use ExUnit.Case, async: false
 
   alias Compendium.Builds.Client
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
   alias Cyfr.Test.ScriptedBuilder
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
@@ -62,7 +62,7 @@ defmodule Compendium.Builds.ClientTest do
       assert {:ok, _built} =
                Client.build(request(%{resolve: true}), deadline: deadline)
 
-      # Verified and read by the builder with `Cyfr.BuilderProtocol`.
+      # Verified and read by the builder with `Prima.BuilderProtocol`.
       assert [read] = ScriptedBuilder.requests()
 
       assert read == %{
@@ -125,7 +125,7 @@ defmodule Compendium.Builds.ClientTest do
 
   describe "a result" do
     test "has its digest, size and exports derived from the bytes, and keeps the build's lock" do
-      {:ok, real} = Compendium.WasmValidator.validate(@wasm)
+      {:ok, real} = Prima.Wasm.validate(@wasm)
       lock = "version = 4\n"
 
       ScriptedBuilder.script([
@@ -154,7 +154,7 @@ defmodule Compendium.Builds.ClientTest do
 
       assert {:ok, built} = build(request(%{target_type: :tincture}))
       assert built.output_files == files
-      assert {built.digest, built.size} == Cyfr.Digest.file_set(files)
+      assert {built.digest, built.size} == Prima.Digest.file_set(files)
       assert built.exports == []
       assert built.target_type == "tincture"
     end
@@ -248,7 +248,7 @@ defmodule Compendium.Builds.ClientTest do
           %{
             "path" => path,
             "base64" => Base.encode64(bytes),
-            "digest" => Cyfr.Digest.sha256(bytes)
+            "digest" => Prima.Digest.sha256(bytes)
           }
         end
     })
@@ -472,7 +472,7 @@ defmodule Compendium.Builds.ClientTest do
 
       assert_receive {:scripted_builder, :holding, handler}, 5_000
       # The deadline has passed by the time the builder answers.
-      Cyfr.Test.Wait.wait_until(fn -> now() > hd(ScriptedBuilder.requests()).deadline end)
+      Prima.Test.Wait.wait_until(fn -> now() > hd(ScriptedBuilder.requests()).deadline end)
       send(handler, :continue)
 
       assert {:error, {:refused, {:timeout, 100}, ^log}} = Task.await(task, 10_000)

@@ -10,7 +10,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
   alias Arca.Schemas.{ApiKey, Athanor, Membership, Session, User}
 
-  def server, do: Cyfr.Actor.system()
+  def server, do: Prima.Actor.system()
   def admit, do: fn _rows -> :ok end
   def uniq, do: System.unique_integer([:positive])
 
@@ -23,7 +23,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
         server(),
         Map.merge(
           %{
-            id: Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix()),
+            id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
             provider: "github",
             email: "st#{n}@example.com",
             email_verified: true,
@@ -80,14 +80,14 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
   def seat!(athanor_id, user_id) do
     {:ok, row} =
-      Arca.Members.seat(Cyfr.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
+      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
 
     row
   end
 
   def invite!(athanor_id, email) do
     {:ok, row} =
-      Arca.Members.seat(Cyfr.Actor.in_athanor(athanor_id), %{
+      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{
         email: email,
         status: "invited",
         added_by: "x"
@@ -218,7 +218,7 @@ defmodule Arca.SecurityTransitionsTest do
       invitation = invite!(shared.id, user.email)
 
       :ok =
-        Arca.ThreadSubscriptionStorage.follow(Cyfr.Actor.in_athanor(open.id), "thr_1", user.id)
+        Arca.ThreadSubscriptionStorage.follow(Prima.Actor.in_athanor(open.id), "thr_1", user.id)
 
       own_session = session!(user.id, own.id)
       other_session = session!(user.id)
@@ -325,7 +325,7 @@ defmodule Arca.SecurityTransitionsTest do
       user = person!()
 
       assert {:error, :cross_tenant} =
-               SecurityTransitions.deny_user(Cyfr.Actor.in_athanor("ath_test"), user.id,
+               SecurityTransitions.deny_user(Prima.Actor.in_athanor("ath_test"), user.id,
                  verify: admit()
                )
 
@@ -348,7 +348,7 @@ defmodule Arca.SecurityTransitionsTest do
         key = key!(own.id, user.id)
 
         :ok =
-          Arca.ThreadSubscriptionStorage.follow(Cyfr.Actor.in_athanor(own.id), "thr_f", user.id)
+          Arca.ThreadSubscriptionStorage.follow(Prima.Actor.in_athanor(own.id), "thr_f", user.id)
 
         failure = fail_on!(unquote(table), unquote(event))
 
@@ -511,13 +511,13 @@ defmodule Arca.SecurityTransitionsTest do
       group = group!()
 
       assert {:error, {:invalid, %{security_generation: ["is read-only"]}}} =
-               Arca.Athanors.update(Cyfr.Actor.in_athanor(group.id), %{security_generation: 9})
+               Arca.Athanors.update(Prima.Actor.in_athanor(group.id), %{security_generation: 9})
 
       assert {:error, {:invalid, %{status: ["is read-only"]}}} =
-               Arca.Athanors.update(Cyfr.Actor.in_athanor(group.id), %{status: "archived"})
+               Arca.Athanors.update(Prima.Actor.in_athanor(group.id), %{status: "archived"})
 
       assert {:error, {:invalid, %{security_generation: ["is read-only"]}}} =
-               Arca.Athanors.set(Cyfr.Actor.in_athanor(group.id), security_generation: 9)
+               Arca.Athanors.set(Prima.Actor.in_athanor(group.id), security_generation: 9)
 
       assert user(user.id).security_generation == 1
       assert athanor(group.id).security_generation == 1
@@ -553,8 +553,8 @@ defmodule Arca.SecurityTransitionsLockTest do
   setup do
     n = uniq()
     now = DateTime.utc_now()
-    user_id = Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix())
-    own_id = Cyfr.UUID7.generate_id("ath")
+    user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+    own_id = Prima.UUID7.generate_id("ath")
 
     unboxed(fn ->
       {:ok, _} =
@@ -636,7 +636,7 @@ defmodule Arca.SecurityTransitionsLockTest do
 
   defp seat(athanor_id, user_id) do
     unboxed(fn ->
-      Arca.Members.seat(Cyfr.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
+      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
     end)
   end
 
@@ -874,7 +874,7 @@ defmodule Arca.SecurityTransitionsLockTest do
               end
 
               {:ok, _} =
-                Arca.Members.seat(Cyfr.Actor.in_athanor(pair_id), %{
+                Arca.Members.seat(Prima.Actor.in_athanor(pair_id), %{
                   user_id: user_id,
                   added_by: "x"
                 })
@@ -954,7 +954,7 @@ defmodule Arca.SecurityTransitionsLockTest do
     on_exit(fn -> remove_estates!([group_id]) end)
     {:ok, _} = seat(group_id, user_id)
 
-    other = Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix())
+    other = Prima.UUID7.generate_id(Prima.PersonId.prefix())
     on_exit(fn -> unboxed(fn -> Arca.Repo.delete_all(where(Membership, user_id: ^other)) end) end)
 
     # The person is the group's last member, so the denial archives it; it

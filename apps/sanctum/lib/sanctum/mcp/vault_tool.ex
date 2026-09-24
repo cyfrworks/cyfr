@@ -20,7 +20,7 @@ defmodule Sanctum.MCP.VaultTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # Mutations are interactive-consent surfaces (OIDC sessions only,
     # by owner decision — no permission conjunct); list admits the
     # staging class so keys can enumerate entries.
@@ -204,9 +204,9 @@ defmodule Sanctum.MCP.VaultTool do
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name, "kind" => kind} = args) do
     params =
       %{name: name, kind: kind, fields: Map.get(args, "fields", %{})}
-      |> Cyfr.MapUtil.put_present(:provider_hint, args["provider_hint"])
-      |> Cyfr.MapUtil.put_present(:oauth_endpoints, args["oauth_endpoints"])
-      |> Cyfr.MapUtil.put_present(:oauth_scopes, args["oauth_scopes"])
+      |> Prima.MapUtil.put_present(:provider_hint, args["provider_hint"])
+      |> Prima.MapUtil.put_present(:oauth_endpoints, args["oauth_endpoints"])
+      |> Prima.MapUtil.put_present(:oauth_scopes, args["oauth_scopes"])
 
     case Vault.create(ctx, params) do
       {:ok, view} -> {:ok, %{entry: view}}
@@ -285,9 +285,9 @@ defmodule Sanctum.MCP.VaultTool do
   def handle(%Context{} = ctx, %{"action" => "rebind", "id" => id} = args) do
     params =
       %{id: id}
-      |> Cyfr.MapUtil.put_present(:oauth_endpoints, args["oauth_endpoints"])
-      |> Cyfr.MapUtil.put_present(:oauth_scopes, args["oauth_scopes"])
-      |> Cyfr.MapUtil.put_present(:field_names, args["field_names"])
+      |> Prima.MapUtil.put_present(:oauth_endpoints, args["oauth_endpoints"])
+      |> Prima.MapUtil.put_present(:oauth_scopes, args["oauth_scopes"])
+      |> Prima.MapUtil.put_present(:field_names, args["field_names"])
 
     case Vault.rebind(ctx, params) do
       {:ok, result} -> {:ok, Map.put(result, :status, "rebound")}
@@ -322,7 +322,7 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Cyfr.Ops.Provider.invalid_action("vault", action_enum())}
+    {:error, Prima.Provider.invalid_action("vault", action_enum())}
   end
 
   # ---------------------------------------------------------------------------
@@ -368,11 +368,11 @@ defmodule Sanctum.MCP.VaultTool do
   defp fmt(reason) do
     Logger.warning(
       "[VaultTool] unrenderable reason: " <>
-        inspect(Cyfr.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
+        inspect(Prima.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
     )
 
     {:unavailable, "Vault"}
   end
 
-  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
+  defp action_enum, do: Prima.Provider.action_enum(definition())
 end

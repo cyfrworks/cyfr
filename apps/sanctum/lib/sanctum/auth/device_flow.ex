@@ -141,7 +141,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp check_init_budget(client_ip) do
     with :ok <- check_ip_budget({:device_init, client_ip}, @init_per_ip_max),
          :ok <-
-           Cyfr.RateLimiter.check({:device_init, :all}, @init_global_max, @poll_window_ms) do
+           Prima.RateLimiter.check({:device_init, :all}, @init_global_max, @poll_window_ms) do
       :ok
     else
       {:deny, _retry_ms} -> {:error, "Too many sign-in attempts — try again shortly"}
@@ -153,7 +153,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp check_ip_budget({_bucket, nil}, _max), do: :ok
 
   defp check_ip_budget({bucket, client_ip}, max) when is_binary(client_ip) do
-    Cyfr.RateLimiter.check({bucket, client_ip}, max, @poll_window_ms)
+    Prima.RateLimiter.check({bucket, client_ip}, max, @poll_window_ms)
   end
 
   @doc """
@@ -307,11 +307,11 @@ defmodule Sanctum.Auth.DeviceFlow do
   # top of the module — init reads them too, and attributes must be
   # defined before use.)
   defp check_poll_budget(device_code, client_ip) do
-    per_code_key = {:device_poll, Cyfr.Digest.sha256_hex(device_code)}
+    per_code_key = {:device_poll, Prima.Digest.sha256_hex(device_code)}
 
-    with :ok <- Cyfr.RateLimiter.check(per_code_key, @poll_per_code_max, @poll_window_ms),
+    with :ok <- Prima.RateLimiter.check(per_code_key, @poll_per_code_max, @poll_window_ms),
          :ok <- check_ip_budget({:device_poll, client_ip}, @poll_per_ip_max),
-         :ok <- Cyfr.RateLimiter.check({:device_poll, :all}, @poll_global_max, @poll_window_ms) do
+         :ok <- Prima.RateLimiter.check({:device_poll, :all}, @poll_global_max, @poll_window_ms) do
       :ok
     else
       {:deny, _retry_ms} -> {:budget, :slow_down}

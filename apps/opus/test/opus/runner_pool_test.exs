@@ -20,7 +20,7 @@ defmodule Opus.RunnerPoolTest do
 
   import Opus.Test.Wait
 
-  alias Cyfr.RunnerControl
+  alias Prima.RunnerControl
   alias Opus.{RunnerPool, RunnerProcess}
   alias Opus.Test.ScriptedKeeper
 

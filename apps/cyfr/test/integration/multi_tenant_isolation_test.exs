@@ -348,7 +348,7 @@ defmodule MultiTenantIsolationTest do
 
       assert_raise ArgumentError, fn ->
         Arca.VaultStorage.put(
-          %Cyfr.Actor{athanor_id: "ath_other"},
+          %Prima.Actor{athanor_id: "ath_other"},
           Map.put(attrs, :athanor_id, "ath_other")
         )
       end

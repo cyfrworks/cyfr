@@ -21,7 +21,7 @@ defmodule Opus.ModelContractTest do
   use ExUnit.Case, async: false
 
   import Cyfr.Test.ChatFixture
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import ExUnit.CaptureLog
 
   alias Aqua.{Approvals, Runner, Tape}
@@ -64,7 +64,7 @@ defmodule Opus.ModelContractTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     ctx = Fixture.estate!()
-    on_exit(fn -> Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id) end)
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id) end)
     :ok = Fixture.bind_key!(ctx, @canary)
     {:ok, ctx: ctx}
   end
@@ -77,7 +77,7 @@ defmodule Opus.ModelContractTest do
       assert [_, recorded] =
                Regex.run(~r/^#{Regex.escape(name)}\s+(sha256:[0-9a-f]{64})$/m, readme)
 
-      assert Cyfr.Digest.sha256(File.read!(Path.join(dir, name))) == recorded, name
+      assert Prima.Digest.sha256(File.read!(Path.join(dir, name))) == recorded, name
     end
   end
 

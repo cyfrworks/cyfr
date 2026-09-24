@@ -4,7 +4,7 @@
 # endpoint of the product's, no database and no tenant state, and the
 # release holds only the shared contracts and Locus (`mix release locus`).
 # It holds one builds key (LOCUS_BUILDS_KEY) and is reached by CYFR over
-# the build wire (Cyfr.BuilderProtocol): sources arrive in a signed
+# the build wire (Prima.BuilderProtocol): sources arrive in a signed
 # request, artifacts leave in its answer.
 #
 # Process model: cyfr-spawn runs as root holding only SETUID, SETGID and
@@ -57,15 +57,15 @@ RUN mix local.hex --force && mix local.rebar --force
 # the compile runs without listeners, and the release is assembled from
 # what it compiled.
 COPY mix.exs mix.lock ./
-COPY apps/cyfr_contracts/mix.exs apps/cyfr_contracts/mix.exs
+COPY apps/prima/mix.exs apps/prima/mix.exs
 COPY apps/locus/mix.exs apps/locus/mix.exs
 
 RUN mix deps.get --only prod && mix deps.compile
 
 COPY config/ config/
-COPY apps/cyfr_contracts/ apps/cyfr_contracts/
+COPY apps/prima/ apps/prima/
 COPY apps/locus/ apps/locus/
-# Compendium.WITSource embeds the whole WIT tree at COMPILE time, and the
+# Prima.WIT embeds the whole WIT tree at COMPILE time, and the
 # runtime never reads it from disk: a release without its ABI fails the
 # build here instead.
 COPY wit/ wit/
@@ -199,7 +199,7 @@ ARG LOCUS_BUILDS_PORT=4100
 EXPOSE ${LOCUS_BUILDS_PORT}
 
 # The wire's health operation: a POST of the versioned body, answered
-# without a key (Cyfr.BuilderProtocol).
+# without a key (Prima.BuilderProtocol).
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
     CMD curl -fsS -X POST -H 'content-type: application/json' -d '{"version":1}' \
         "http://localhost:${LOCUS_BUILDS_PORT:-4100}/locus/v1/builds/health" || exit 1

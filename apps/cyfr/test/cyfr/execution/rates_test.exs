@@ -25,14 +25,14 @@ defmodule Cyfr.Execution.RatesTest do
     Arca.Cache.init()
 
     {:ok,
-     actor: Cyfr.Actor.in_athanor("ath_rates_#{System.unique_integer([:positive])}"),
+     actor: Prima.Actor.in_athanor("ath_rates_#{System.unique_integer([:positive])}"),
      bucket: "local.test-component:1.0.0",
      now: DateTime.utc_now()}
   end
 
   defp policy(requests, window), do: %{rate_limit: %{requests: requests, window: window}}
 
-  defp row(%Cyfr.Actor{athanor_id: athanor_id}, bucket) do
+  defp row(%Prima.Actor{athanor_id: athanor_id}, bucket) do
     Arca.Repo.one(
       from(w in RateWindow, where: w.athanor_id == ^athanor_id and w.bucket == ^bucket)
     )
@@ -113,8 +113,8 @@ defmodule Cyfr.Execution.RatesTest do
     end
 
     test "athanors and buckets each keep their own allowance", %{bucket: bucket} do
-      mine = Cyfr.Actor.in_athanor("ath_rates_mine_#{System.unique_integer([:positive])}")
-      theirs = Cyfr.Actor.in_athanor("ath_rates_theirs_#{System.unique_integer([:positive])}")
+      mine = Prima.Actor.in_athanor("ath_rates_mine_#{System.unique_integer([:positive])}")
+      theirs = Prima.Actor.in_athanor("ath_rates_theirs_#{System.unique_integer([:positive])}")
 
       assert {:ok, 0} = Rates.check(mine, bucket, policy(1, "1m"))
       assert {:error, :rate_limited, _} = Rates.check(mine, bucket, policy(1, "1m"))
@@ -125,11 +125,11 @@ defmodule Cyfr.Execution.RatesTest do
       assert {:ok, 0} = Rates.check(mine, bucket <> ":other", policy(1, "1m"))
     end
 
-    test "a Cyfr.Limits struct is a limit source like any other", %{
+    test "a Prima.Limits struct is a limit source like any other", %{
       actor: actor,
       bucket: bucket
     } do
-      limits = %Cyfr.Limits{
+      limits = %Prima.Limits{
         timeout: "30s",
         max_memory_bytes: 64 * 1024 * 1024,
         max_request_size: 1_048_576,
@@ -254,7 +254,7 @@ defmodule Cyfr.Execution.RatesTest do
   describe "refusals stay apart" do
     @tag :capture_log
     test "an unresolved athanor is refused before any claim", %{bucket: bucket} do
-      for actor <- [%Cyfr.Actor{athanor_id: nil}, %Cyfr.Actor{athanor_id: ""}] do
+      for actor <- [%Prima.Actor{athanor_id: nil}, %Prima.Actor{athanor_id: ""}] do
         assert {:error, :missing_tenant} = Rates.check(actor, bucket, policy(10, "1m"))
         assert {:error, :missing_tenant} = Rates.status(actor, bucket, policy(10, "1m"))
         assert {:error, :missing_tenant} = Rates.reset(actor, bucket)

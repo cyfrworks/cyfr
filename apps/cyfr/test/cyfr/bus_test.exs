@@ -13,7 +13,7 @@ defmodule Cyfr.BusTest do
   alias Cyfr.Bus
   alias Cyfr.Bus.{Execution, Notify, Progress, RoomInView, Session, Viewing}
 
-  defp actor(athanor_id), do: Cyfr.Actor.in_athanor(athanor_id)
+  defp actor(athanor_id), do: Prima.Actor.in_athanor(athanor_id)
 
   @tenant_1 [
     :executions,
@@ -40,11 +40,11 @@ defmodule Cyfr.BusTest do
 
     test "an actor with a nil or empty athanor raises rather than routing somewhere" do
       for athanor <- [nil, ""] do
-        assert_raise ArgumentError, fn -> Bus.prefix(%Cyfr.Actor{athanor_id: athanor}) end
+        assert_raise ArgumentError, fn -> Bus.prefix(%Prima.Actor{athanor_id: athanor}) end
 
         for fun <- @tenant_1 do
           assert_raise ArgumentError, fn ->
-            apply(Bus, fun, [%Cyfr.Actor{athanor_id: athanor}])
+            apply(Bus, fun, [%Prima.Actor{athanor_id: athanor}])
           end
         end
       end
@@ -234,7 +234,7 @@ defmodule Cyfr.BusTest do
     test "is refused for an actor that names no athanor" do
       assert {:error, :cross_tenant} =
                Bus.broadcast(
-                 %Cyfr.Actor{athanor_id: nil},
+                 %Prima.Actor{athanor_id: nil},
                  Bus.executions(actor("ath_a")),
                  Execution.new(actor("ath_a"), :started)
                )
@@ -334,11 +334,11 @@ defmodule Cyfr.BusTest do
   ]
 
   defp lib_lines do
-    for lib <- Cyfr.Test.SourceTree.app_libs(root()),
-        path <- Cyfr.Test.SourceTree.files!(Path.join([root(), lib, "**/*.ex"])),
+    for lib <- Prima.Test.SourceTree.app_libs(root()),
+        path <- Prima.Test.SourceTree.files!(Path.join([root(), lib, "**/*.ex"])),
         rel = Path.relative_to(path, root()),
         rel not in @owners,
-        {line, n} <- Cyfr.Test.SourceTree.code_lines(path),
+        {line, n} <- Prima.Test.SourceTree.code_lines(path),
         do: {rel, n, line}
   end
 
@@ -386,7 +386,7 @@ defmodule Cyfr.BusTest do
     end
     '''
 
-    lines = Cyfr.Test.CodeLines.code_lines(planted)
+    lines = Prima.Test.CodeLines.code_lines(planted)
 
     assert Enum.any?(lines, fn {line, _} -> line =~ ~r/\bPhoenix\.PubSub\./ end)
     assert Enum.any?(lines, fn {line, _} -> String.contains?(line, ~s("tenant:)) end)

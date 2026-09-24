@@ -22,7 +22,7 @@ defmodule Cyfr.Execution.AttemptMaskingTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import ExUnit.CaptureLog
 
   alias Cyfr.Execution.Dispatch

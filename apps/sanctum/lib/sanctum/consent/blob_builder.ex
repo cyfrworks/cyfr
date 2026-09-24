@@ -11,7 +11,7 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   Every edge A → B carries B's own resources, and every node's grant is
   manifest-sourced: resources come from the declared caps (the ask,
-  granted whole at this grain) and limits from `Cyfr.Limits.defaults/1`
+  granted whole at this grain) and limits from `Prima.Limits.defaults/1`
   under `caps.limits`. A manifest with no `needs`/`caps` blocks grants the
   empty ask — deny-all resources under type-default limits.
 
@@ -24,9 +24,9 @@ defmodule Sanctum.Consent.BlobBuilder do
   bootstrap selects on each vouched edge into a shipped dependency.
   """
 
-  alias Cyfr.Manifest.Caps
+  alias Prima.Manifest.Caps
   alias Sanctum.Consent.Components
-  alias Cyfr.JCS
+  alias Prima.JCS
 
   require Logger
 
@@ -117,7 +117,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   defp edge_vaults(node, nodes) do
-    ingress = node.edges[Cyfr.Authority.Blob.ingress_key()]
+    ingress = node.edges[Prima.Authority.Blob.ingress_key()]
     ingress_vault = if is_map(ingress), do: [ingress["__vault__"]], else: []
 
     dep_vaults =
@@ -165,7 +165,7 @@ defmodule Sanctum.Consent.BlobBuilder do
             |> Map.merge(extras)
             |> Map.put("__vault__", vault)
 
-          Map.put(edges, Cyfr.Authority.Blob.ingress_key(), ingress)
+          Map.put(edges, Prima.Authority.Blob.ingress_key(), ingress)
         else
           edges
         end
@@ -224,7 +224,7 @@ defmodule Sanctum.Consent.BlobBuilder do
     defaults =
       node_key
       |> node_type()
-      |> Cyfr.Limits.defaults()
+      |> Prima.Limits.defaults()
       |> Map.from_struct()
 
     defaults
@@ -239,14 +239,14 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   defp node_type(node_key) do
-    case Cyfr.ComponentRef.parse(node_key) do
+    case Prima.ComponentRef.parse(node_key) do
       {:ok, ref} -> String.to_existing_atom(ref.type)
       {:error, _} -> :reagent
     end
   end
 
   defp node_row(ctx, node_key) do
-    case Cyfr.ComponentRef.parse(node_key) do
+    case Prima.ComponentRef.parse(node_key) do
       {:ok, ref} ->
         case Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
           {:ok, row} -> {:ok, row}
@@ -264,11 +264,11 @@ defmodule Sanctum.Consent.BlobBuilder do
   # dangling dep. A required dependency always edges: the activation
   # refused to resolve without it, so it is in the graph.
   defp direct_dep_keys(manifest, graph, node_key) do
-    case Cyfr.Manifest.Dependencies.from_manifest(manifest) do
+    case Prima.Manifest.Dependencies.from_manifest(manifest) do
       {:ok, deps} ->
         deps
         |> Enum.map(fn dep ->
-          {Cyfr.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name),
+          {Prima.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name),
            dep.optional == true}
         end)
         |> Enum.reject(fn {key, optional?} -> optional? and not Map.has_key?(graph, key) end)
@@ -293,7 +293,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   # A manifest that does not decode declares nothing. The line names the
   # component, never the manifest's bytes.
   defp manifest(row, ref) do
-    case Cyfr.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
       {:ok, manifest} ->
         manifest
 

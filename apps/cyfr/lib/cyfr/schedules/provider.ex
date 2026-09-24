@@ -11,7 +11,7 @@ defmodule Cyfr.Schedules.Provider do
   run while another of the same schedule is still open.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   def service, do: "schedules"
 
@@ -26,7 +26,7 @@ defmodule Cyfr.Schedules.Provider do
   def read(_ctx, _uri), do: {:error, "No resources"}
 
   def tools do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # create/update also require the registration's consent binding —
     # a conditional Authz check that stays in the handler.
     [
@@ -552,7 +552,7 @@ defmodule Cyfr.Schedules.Provider do
   defp decode_stored("", default, _field), do: default
 
   defp decode_stored(json, default, field) when is_binary(json) do
-    case Cyfr.Json.decode(json) do
+    case Prima.Json.decode(json) do
       {:ok, value} ->
         value
 
@@ -629,7 +629,7 @@ defmodule Cyfr.Schedules.Provider do
 
   defp maybe_resolve_reference(_ctx, _args, update_attrs), do: {:ok, update_attrs}
 
-  defp safe_encode(value), do: Cyfr.Json.safe_encode(value)
+  defp safe_encode(value), do: Prima.Json.safe_encode(value)
 
   # Binding a schedule to a profile mints a standing, attacker-timed
   # invocation conduit for that profile's authority — the consent

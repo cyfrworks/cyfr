@@ -4,8 +4,8 @@
 defmodule Opus.ResourceLimitsTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"

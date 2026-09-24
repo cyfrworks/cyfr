@@ -3,7 +3,7 @@
 
 // Package ref parses and validates CLI component references.
 // Types are catalyst, reagent, formula and tincture, with shorthands c, r, f and t.
-// Cyfr.ComponentRef performs full server validation.
+// Prima.ComponentRef performs full server validation.
 //
 // ParseRef splits the type at the first colon, version at the last colon,
 // and namespace/name at the last dot. Validate rejects @ anywhere in a ref;
@@ -54,7 +54,7 @@ var nameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
 var singleCharNameRegex = regexp.MustCompile(`^[a-z0-9]$`)
 
 // versionRegex matches semver with optional pre-release and build metadata.
-// Strict semver (semver.org), byte-identical to Cyfr.ComponentRef's
+// Strict semver (semver.org), byte-identical to Prima.ComponentRef's
 // @version_regex — the cross-language drift test pins the spelling.
 var versionRegex = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$`)
 
@@ -140,7 +140,7 @@ func ParseRef(s string) ParsedRef {
 	return p
 }
 
-// Validate enforces the same rules as Cyfr.ComponentRef on cyfr. It
+// Validate enforces the same rules as Prima.ComponentRef on cyfr. It
 // returns nil on success or a descriptive error on failure. The first
 // failure short-circuits the rest of the checks.
 //

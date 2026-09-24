@@ -75,7 +75,7 @@ defmodule Opus.SeedModelCatalystsTest do
       # before any key exists: `describe` needs none, and a chat request
       # off the contract is refused as such rather than as a key failure.
       {:ok, component} = Compendium.Registry.get_latest(ctx, name, "local", "catalyst")
-      assert Cyfr.Model.speaks_chat?(component.manifest)
+      assert Prima.Model.speaks_chat?(component.manifest)
 
       assert {:ok, %{result: described}} =
                MCP.handle("execution", ctx, %{
@@ -84,8 +84,8 @@ defmodule Opus.SeedModelCatalystsTest do
                  "input" => %{"operation" => "describe", "params" => %{}}
                })
 
-      assert {:ok, capabilities} = Cyfr.Model.decode_envelope(described)
-      assert capabilities["contracts"] == [Cyfr.Model.chat_contract()]
+      assert {:ok, capabilities} = Prima.Model.decode_envelope(described)
+      assert capabilities["contracts"] == [Prima.Model.chat_contract()]
       assert capabilities["tools"] == true and capabilities["streaming"] == true
       assert is_list(capabilities["provider_tools"]) and is_list(capabilities["media_types"])
 
@@ -102,7 +102,7 @@ defmodule Opus.SeedModelCatalystsTest do
           assert {:ok, %{result: answer}} = describe_model.(model)
 
           assert {:ok, %{"context_window" => ^context_window}} =
-                   Cyfr.Model.decode_envelope(answer)
+                   Prima.Model.decode_envelope(answer)
 
           assert {:error, message} = describe_model.("no-such-model")
           assert message =~ "not a model"
@@ -238,7 +238,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
   defp newest_shipped(plural, name) do
     Path.join(@seed_root, "components/#{plural}/local/#{name}/*")
-    |> Cyfr.Test.SourceTree.files!()
+    |> Prima.Test.SourceTree.files!()
     |> Enum.map(&Path.basename/1)
     |> Compendium.Semver.sort_desc()
     |> hd()

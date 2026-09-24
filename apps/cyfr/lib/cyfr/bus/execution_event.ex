@@ -50,8 +50,8 @@ defmodule Cyfr.Bus.ExecutionEvent do
   must carry no `delta` and a delta must carry one; a kind outside
   `kinds/0` or a field this struct does not declare raises.
   """
-  @spec new(Cyfr.Actor.t(), kind(), map()) :: t()
-  def new(%Cyfr.Actor{} = actor, kind, %{} = fields) do
+  @spec new(Prima.Actor.t(), kind(), map()) :: t()
+  def new(%Prima.Actor{} = actor, kind, %{} = fields) do
     case {Payload.kind!(__MODULE__, kind, @kinds), Map.get(fields, :delta)} do
       {:durable, nil} ->
         :ok

@@ -3,7 +3,7 @@
 defmodule Sanctum.Authority.ZeroAuthorityTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.Authority
+  alias Prima.Authority
 
   # A zero authority's invoke budget admits one spawn at a time, per zero/0 call.
 

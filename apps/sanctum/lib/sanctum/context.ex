@@ -45,9 +45,9 @@ defmodule Sanctum.Context do
 
   require Logger
 
-  # The vocabulary is `Cyfr.TenancyScope`'s, where the actor and the
+  # The vocabulary is `Prima.TenancyScope`'s, where the actor and the
   # stored membership row read it too.
-  @type scope :: Cyfr.TenancyScope.t()
+  @type scope :: Prima.TenancyScope.t()
   @type auth_method ::
           :oidc | :api_key | :scheduled | :webhook | :tincture | :system | :session | nil
   @type api_key_type :: :application | :service | :admin | nil
@@ -463,7 +463,7 @@ defmodule Sanctum.Context do
   def enter_guest(%__MODULE__{} = ctx), do: %{ctx | plane: :guest}
 
   @doc """
-  The actor this context projects: a `Cyfr.Actor` with `athanor_id`,
+  The actor this context projects: a `Prima.Actor` with `athanor_id`,
   `plane`, `anonymous`, `user_id`, `request_id`, `authenticated` and
   `client_ip` copied one field each, with the meanings they carry here. The
   context stays the owner of those fields and stores no duplicate `:actor`;
@@ -478,16 +478,16 @@ defmodule Sanctum.Context do
   `auth_method == :system`, the provenance that lets the server's own work
   mutate seed, global and tenant-reserved paths; every other
   `auth_method` records where a caller came from and grants nothing, so it
-  projects `system: false`. Neither crosses the wire (`Cyfr.Actor`).
+  projects `system: false`. Neither crosses the wire (`Prima.Actor`).
 
   A context whose athanor is unresolved projects `athanor_id: nil`, never a
   sentinel: the facade refuses it before any query, and it stays
   distinguishable from `anonymous: true`, which is a caller that has a
   tenant and no credentials of its own.
   """
-  @spec actor(t()) :: Cyfr.Actor.t()
+  @spec actor(t()) :: Prima.Actor.t()
   def actor(%__MODULE__{} = ctx) do
-    %Cyfr.Actor{
+    %Prima.Actor{
       athanor_id: ctx.athanor_id,
       plane: ctx.plane,
       anonymous: ctx.anonymous,

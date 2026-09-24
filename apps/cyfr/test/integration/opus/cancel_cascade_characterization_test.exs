@@ -25,7 +25,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Cyfr.Test.{OpusService, TwoServices}
@@ -51,7 +51,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do
@@ -73,8 +73,8 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   test "a cancelled formula leaves one cancelled row, failed children and nothing held", %{
     ctx: ctx
   } do
-    slots_before = Cyfr.Slots.status(Cyfr.Execution.Slots).active
-    root_id = Cyfr.UUID7.execution_id()
+    slots_before = Prima.Slots.status(Cyfr.Execution.Slots).active
+    root_id = Prima.UUID7.execution_id()
     hold_children!(root_id)
 
     root =
@@ -135,7 +135,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     wait_until(fn -> not Enum.any?(host_side, &Process.alive?/1) end, 30_000)
     wait_until(fn -> reported_exit?(runner) end, 30_000, "the runner's exit report")
     wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
-    wait_until(fn -> Cyfr.Slots.status(Cyfr.Execution.Slots).active == slots_before end)
+    wait_until(fn -> Prima.Slots.status(Cyfr.Execution.Slots).active == slots_before end)
     assert Sanctum.Authority.budget(authority).in_flight == 0
 
     assert {:ok, _reclaimed} = Arca.BudgetReservations.sweep(Sanctum.Context.actor(ctx))
@@ -162,7 +162,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     # The cancel lands at staggered points of the run's last moments: while
     # its close crosses the wire, as CYFR records it, and after its row closed.
     for delay <- [0, 1, 2, 3, 4, 5, 6, 8, 12, 20, 80] do
-      root_id = Cyfr.UUID7.execution_id()
+      root_id = Prima.UUID7.execution_id()
       TwoServices.hold!(:complete, root_id, once: true)
       root = start_root(ctx, root_id, %{"op" => "echo"})
       assert_receive {:held, ^root_id, close}, 30_000
@@ -238,7 +238,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   defp admitted(parent_id) do
     for %{fields: %{execution_id: ^parent_id}, answer: %{"ok" => %{"assignment" => token}}} <-
           TwoServices.calls(),
-        {:ok, %{execution_id: id}} <- [Cyfr.Assignment.read(token)],
+        {:ok, %{execution_id: id}} <- [Prima.Assignment.read(token)],
         do: id
   end
 

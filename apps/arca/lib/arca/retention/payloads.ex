@@ -28,9 +28,9 @@ defmodule Arca.Retention.Payloads do
   def prune(actor, days, dry_run), do: prune_classes(actor, @classes, days, dry_run)
 
   @doc "Delete — or on a dry run count — the payloads in `classes` older than `days`."
-  @spec prune_classes(Cyfr.Actor.t(), [String.t()], pos_integer(), boolean()) ::
+  @spec prune_classes(Prima.Actor.t(), [String.t()], pos_integer(), boolean()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def prune_classes(%Cyfr.Actor{} = actor, classes, days, dry_run) do
+  def prune_classes(%Prima.Actor{} = actor, classes, days, dry_run) do
     if dry_run,
       do: Arca.ExecutionPayloads.count_older_than_days(actor, days, classes),
       else: Arca.ExecutionPayloads.delete_older_than_days(actor, days, classes)

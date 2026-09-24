@@ -3,36 +3,36 @@
 
 defmodule Opus.HostClient do
   @moduledoc """
-  A runner's client of CYFR's host calls (`Cyfr.HostAPI`), for one
+  A runner's client of CYFR's host calls (`Prima.HostAPI`), for one
   execution attempt, over HTTP.
 
   A client names the attempt (its athanor, execution, attempt id, fence,
   generation and worker service), the runner presenting it, the attempt's
   keys CYFR issued with the assignment, and **the member that issued that
   assignment**: its boot id and the base URL of its host API, both read
-  from the assignment (`Cyfr.Assignment`). An attempt has one process, on
+  from the assignment (`Prima.Assignment`). An attempt has one process, on
   that member, so its calls are posted at that member's address and name
   it in every header; a member that is not the one named refuses them,
   and an assignment naming no address is posted to the address this
   worker service is configured with (`Opus.Credentials`), which is the
   whole deployment where only one member issues. Every call is one `POST`
   to the callback's route
-  (`Cyfr.WorkerWire.host_route/1`): its body is the JSON
+  (`Prima.WorkerWire.host_route/1`): its body is the JSON
   `{"op": name, "args": {...}}` sealed with the attempt's seal key to the
-  call's fields (`Cyfr.WorkerAuth.seal_call/5`), and its `x-cyfr-auth`
+  call's fields (`Prima.WorkerAuth.seal_call/5`), and its `x-cyfr-auth`
   header is the attempt's call-key signature over those fields — a fresh
   nonce and the current time among them — and the sealed body
-  (`Cyfr.WorkerAuth.host_call_header/3`). A `200` answer is the JSON
-  `Cyfr.WorkerWire` describes, sealed to the same fields in the answer
-  direction and read up to `Cyfr.HostAPI.max_answer_bytes/0`; any other
+  (`Prima.WorkerAuth.host_call_header/3`). A `200` answer is the JSON
+  `Prima.WorkerWire` describes, sealed to the same fields in the answer
+  direction and read up to `Prima.HostAPI.max_answer_bytes/0`; any other
   status is the listener's refusal, and is lost. The attempt's seal key
   also opens the keys of a child CYFR admits for this client's runner
   (`admit_child/5`).
 
-  Each function answers as the `Cyfr.HostAPI` callback of the same name.
-  An answer that does not arrive within `Cyfr.HostAPI.request_timeout_ms/1`,
+  Each function answers as the `Prima.HostAPI` callback of the same name.
+  An answer that does not arrive within `Prima.HostAPI.request_timeout_ms/1`,
   or cannot be read, is lost, and what the client does then is the
-  callback's retry class (`Cyfr.HostAPI.retry/1`): an `:idempotent`,
+  callback's retry class (`Prima.HostAPI.retry/1`): an `:idempotent`,
   `:outcome`, `:batch` or `:keyed` call is made once more — the same body
   under a fresh header, so a `push_deltas` batch goes again as the same
   batch and an `admit_child` under the same `child_key` — and a `:never`
@@ -51,7 +51,7 @@ defmodule Opus.HostClient do
 
   require Logger
 
-  alias Cyfr.{Assignment, BoundedBody, HostAPI, WorkerAuth, WorkerWire}
+  alias Prima.{Assignment, BoundedBody, HostAPI, WorkerAuth, WorkerWire}
 
   @derive {Inspect, except: [:call_key, :seal_key]}
   @enforce_keys [
@@ -115,7 +115,7 @@ defmodule Opus.HostClient do
   @uncertain "The call's answer was lost and its effect is unknown"
 
   @doc """
-  A client for the attempt `keys` name (`t:Cyfr.WorkerAuth.attempt_keys/0`),
+  A client for the attempt `keys` name (`t:Prima.WorkerAuth.attempt_keys/0`),
   signing with its call key and posting to the member `at` names: its
   `member` boot id, which every header presents, and the `host_url` its
   host API answers at. `runner` names the runner presenting the calls (a
@@ -123,7 +123,7 @@ defmodule Opus.HostClient do
   boot it presents from.
   """
   @spec new(
-          Cyfr.WorkerAuth.attempt_keys(),
+          Prima.WorkerAuth.attempt_keys(),
           String.t() | nil,
           String.t(),
           %{member: String.t(), host_url: String.t()}
@@ -144,7 +144,7 @@ defmodule Opus.HostClient do
       generation: Map.fetch!(attempt, :generation),
       service: Map.fetch!(attempt, :service),
       boot: boot,
-      runner: runner || Cyfr.UUID7.generate_id("runner"),
+      runner: runner || Prima.UUID7.generate_id("runner"),
       member: member,
       call_key: call_key,
       seal_key: seal_key,
@@ -171,7 +171,7 @@ defmodule Opus.HostClient do
 
   @doc "Renew the leases of `attempts`, answering each one's renewal by attempt id."
   @spec renew(t(), [String.t()]) ::
-          {:ok, %{optional(String.t()) => Cyfr.HostAPI.renewal()}} | {:error, term()}
+          {:ok, %{optional(String.t()) => Prima.HostAPI.renewal()}} | {:error, term()}
   def renew(%__MODULE__{} = client, attempts) when is_list(attempts) do
     with {:ok, %{} = renewals} <- request(client, :renew, %{"attempts" => attempts}) do
       {:ok, Map.new(renewals, fn {attempt, renewal} -> {attempt, renewal(renewal)} end)}
@@ -249,7 +249,7 @@ defmodule Opus.HostClient do
   (`"path"`, and `"content"` for a write or append), answering the
   success answer's members.
   """
-  @spec storage(t(), Cyfr.HostAPI.storage_op(), map()) :: {:ok, map()} | {:error, term()}
+  @spec storage(t(), Prima.HostAPI.storage_op(), map()) :: {:ok, map()} | {:error, term()}
   def storage(%__MODULE__{} = client, op, args)
       when op in [:read, :write, :append, :list, :delete, :exists] and is_map(args) do
     case request(client, :storage, Map.put(args, "action", Atom.to_string(op))) do
@@ -276,7 +276,7 @@ defmodule Opus.HostClient do
   Record a refusal the runner made for the attempt's component: one of its
   own egress checks, by its WIT error `type` and `message`, or
   `secret_denied` with the vault field name the guest was refused
-  (`Cyfr.HostAPI.valid_field_name?/1`), which CYFR audits for this attempt.
+  (`Prima.HostAPI.valid_field_name?/1`), which CYFR audits for this attempt.
   """
   @spec record_denial(t(), String.t(), String.t()) :: :ok | {:error, term()}
   def record_denial(%__MODULE__{} = client, type, message)
@@ -293,12 +293,12 @@ defmodule Opus.HostClient do
   named `need`, with `input`, made with `guest_fn` (`:call` or `:spawn`).
   CYFR admits it under the authority it holds for this attempt and claims
   it for this client's runner, under a `child_key` this client mints
-  (`t:Cyfr.HostAPI.child_key/0`), so a lost answer is asked again for the
+  (`t:Prima.HostAPI.child_key/0`), so a lost answer is asked again for the
   same child. Answers the child to run (`t:child/0`), once its keys open
   under this attempt's seal key as the attempt its assignment names on
   this client's worker service, and its input hashes to the assignment's
   digest. A refusal of the child is `{:error, guest_error}`
-  (`t:Cyfr.HostAPI.guest_error/0`).
+  (`t:Prima.HostAPI.guest_error/0`).
   """
   @spec admit_child(t(), String.t(), term(), map(), :call | :spawn) ::
           {:ok, child()} | {:error, term()}
@@ -323,7 +323,7 @@ defmodule Opus.HostClient do
          {:ok, assignment} <- Assignment.read(token) do
       with {:ok, keys} <- WorkerAuth.open_attempt_keys(client.seal_key, sealed),
            true <- names_attempt?(assignment, keys.attempt, client),
-           true <- Cyfr.Digest.sha256(input_json) == assignment.input_digest,
+           true <- Prima.Digest.sha256(input_json) == assignment.input_digest,
            {:ok, %{} = admitted_input} <- Jason.decode(input_json) do
         {:ok,
          %{

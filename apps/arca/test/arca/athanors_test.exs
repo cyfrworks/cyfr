@@ -17,9 +17,9 @@ defmodule Arca.AthanorsTest do
     :ok
   end
 
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
-  defp in_athanor(id), do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
+  defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
   defp group!(overrides \\ %{}) do
     n = System.unique_integer([:positive])
@@ -72,7 +72,7 @@ defmodule Arca.AthanorsTest do
   describe "the actor is the first argument, and a wrong one refuses before any query" do
     test "an actor with no athanor is refused by every inside-the-tenant function" do
       watch_queries!()
-      nobody = %Cyfr.Actor{athanor_id: nil, user_id: "someone"}
+      nobody = %Prima.Actor{athanor_id: nil, user_id: "someone"}
 
       assert {:error, :no_athanor} = Athanors.current(nobody)
       assert {:error, :no_athanor} = Athanors.update(nobody, %{name: "X"})
@@ -91,7 +91,7 @@ defmodule Arca.AthanorsTest do
       # identity domain above refuses outright. Taking it would filter
       # on `athanor_id == ""`, match nothing, and turn the refusal into an
       # ordinary empty result.
-      unresolved = %{Cyfr.Actor.system() | athanor_id: "", scope: :athanor}
+      unresolved = %{Prima.Actor.system() | athanor_id: "", scope: :athanor}
 
       assert {:error, :no_athanor} = Athanors.current(unresolved)
       assert {:error, :no_athanor} = Athanors.update(unresolved, %{name: "X"})

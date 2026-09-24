@@ -168,7 +168,7 @@ defmodule Sanctum.Policy.Enforcement do
   defp detail(%{errors: errors}) when is_list(errors), do: inspect(errors)
 
   defp detail(other),
-    do: inspect(Cyfr.Sanitizer.sanitize(other), limit: 20, printable_limit: 200)
+    do: inspect(Prima.Sanitizer.sanitize(other), limit: 20, printable_limit: 200)
 
   defp emit_telemetry(record_attrs) do
     :telemetry.execute(
@@ -243,5 +243,5 @@ defmodule Sanctum.Policy.Enforcement do
   defp encode_chain(chain) when is_binary(chain), do: chain
   defp encode_chain(_), do: nil
 
-  defp generate_id, do: Cyfr.UUID7.generate_id("polog")
+  defp generate_id, do: Prima.UUID7.generate_id("polog")
 end

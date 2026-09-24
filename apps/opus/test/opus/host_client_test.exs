@@ -16,7 +16,7 @@ defmodule Opus.HostClientTest do
 
   import ExUnit.CaptureLog
 
-  alias Cyfr.{Assignment, WorkerWire}
+  alias Prima.{Assignment, WorkerWire}
   alias Opus.HostClient
   alias Opus.Test.ScriptedHost
 
@@ -122,7 +122,7 @@ defmodule Opus.HostClientTest do
 
     assert [first, second] = ScriptedHost.requests(host, "admit_child")
     assert first.body == second.body
-    assert Cyfr.HostAPI.valid_child_key?(first.args["child_key"])
+    assert Prima.HostAPI.valid_child_key?(first.args["child_key"])
     assert first.args["child_key"] == second.args["child_key"]
 
     # A new admission mints a new key.
@@ -172,7 +172,7 @@ defmodule Opus.HostClientTest do
     ScriptedHost.script(
       host,
       "renew",
-      {:raw, 200, String.duplicate("x", Cyfr.HostAPI.max_answer_bytes() + 1)}
+      {:raw, 200, String.duplicate("x", Prima.HostAPI.max_answer_bytes() + 1)}
     )
 
     assert {:error, :lost} = HostClient.renew(client, [client.attempt])
@@ -402,16 +402,16 @@ defmodule Opus.HostClientTest do
   end
 
   defp sealed_for(seal_key, keys) do
-    {:ok, sealed} = Cyfr.WorkerAuth.seal_attempt_keys(seal_key, keys)
+    {:ok, sealed} = Prima.WorkerAuth.seal_attempt_keys(seal_key, keys)
     sealed
   end
 
   defp worker_key(host, service) do
-    {:ok, key} = Cyfr.WorkerAuth.worker_key(host.root, service)
+    {:ok, key} = Prima.WorkerAuth.worker_key(host.root, service)
     key
   end
 
-  # The answer envelope the client reads is the one `Cyfr.WorkerWire` builds.
+  # The answer envelope the client reads is the one `Prima.WorkerWire` builds.
   test "the answers read are the worker protocol's envelopes" do
     assert WorkerWire.ok(1) == %{"ok" => 1}
     assert WorkerWire.error(:lost) == %{"error" => "lost"}

@@ -53,7 +53,7 @@ defmodule Cyfr.ContextSwapTest do
       full = Path.join(root(), path)
 
       if File.dir?(full),
-        do: Cyfr.Test.SourceTree.files!(Path.join(full, "**/*.ex")),
+        do: Prima.Test.SourceTree.files!(Path.join(full, "**/*.ex")),
         else: [full]
     end)
   end
@@ -65,7 +65,7 @@ defmodule Cyfr.ContextSwapTest do
           {line, n} <-
             path
             |> File.read!()
-            |> Cyfr.Test.CodeLines.code_lines(),
+            |> Prima.Test.CodeLines.code_lines(),
           String.match?(line, @pattern) do
         {rel, "#{rel}:#{n}: #{String.trim(line)}"}
       end

@@ -343,13 +343,13 @@ defmodule Opus.SecurityTest do
 
     test "default input limit is 1MB" do
       # Verify the default limit constant
-      limits = Cyfr.Limits.defaults(:reagent)
+      limits = Prima.Limits.defaults(:reagent)
       assert limits.max_request_size == 1_048_576
     end
 
     test "default output limit is 5MB" do
       # Verify the default limit constant
-      limits = Cyfr.Limits.defaults(:reagent)
+      limits = Prima.Limits.defaults(:reagent)
       assert limits.max_response_size == 5_242_880
     end
   end

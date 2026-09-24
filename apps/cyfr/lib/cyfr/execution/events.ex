@@ -130,7 +130,7 @@ defmodule Cyfr.Execution.Events do
   end
 
   defp durable_seq(execution_id, athanor_id) do
-    case Arca.Execution.event_seq(Cyfr.Actor.in_athanor(athanor_id), execution_id) do
+    case Arca.Execution.event_seq(Prima.Actor.in_athanor(athanor_id), execution_id) do
       {:ok, seq} when is_integer(seq) -> seq
       _ -> 0
     end
@@ -183,7 +183,7 @@ defmodule Cyfr.Execution.Events do
   # needs the stream's fields reads them back with
   # `Cyfr.Bus.ExecutionEvent.event/1`, so live and replayed events agree.
   defp broadcast(execution_id, athanor_id, event) do
-    actor = Cyfr.Actor.in_athanor(athanor_id)
+    actor = Prima.Actor.in_athanor(athanor_id)
     payload = ExecutionEvent.new(actor, ExecutionEvent.kind(event), event)
 
     case Cyfr.Bus.broadcast(actor, Cyfr.Bus.execution_events(actor, execution_id), payload) do
@@ -227,7 +227,7 @@ defmodule Cyfr.Execution.Events do
   def since(execution_id, {durable, n}, athanor_id)
       when is_binary(athanor_id) and athanor_id != "" and is_integer(durable) and is_integer(n) do
     rows =
-      case Arca.ExecutionEvents.since(Cyfr.Actor.in_athanor(athanor_id), execution_id, durable) do
+      case Arca.ExecutionEvents.since(Prima.Actor.in_athanor(athanor_id), execution_id, durable) do
         {:ok, rows} -> Enum.map(rows, &row_event/1)
         {:error, _} -> []
       end
@@ -270,7 +270,7 @@ defmodule Cyfr.Execution.Events do
 
   defp buffered(execution_id, athanor_id) do
     case Arca.Cache.get(
-           Arca.Cache.Keys.exec_events(Cyfr.Actor.in_athanor(athanor_id), execution_id)
+           Arca.Cache.Keys.exec_events(Prima.Actor.in_athanor(athanor_id), execution_id)
          ) do
       {:ok, events} -> events
       :miss -> []
@@ -302,7 +302,7 @@ defmodule Cyfr.Execution.Events do
   defp actor!(execution_id, ctx) do
     case extract_athanor_id(ctx) do
       {:ok, athanor_id} ->
-        Cyfr.Actor.in_athanor(athanor_id)
+        Prima.Actor.in_athanor(athanor_id)
 
       :error ->
         raise ArgumentError,
@@ -332,7 +332,7 @@ defmodule Cyfr.Execution.Events do
     # the row's counter, or what the cache saw last.
     events =
       case Arca.Cache.get(
-             Arca.Cache.Keys.exec_events(Cyfr.Actor.in_athanor(athanor_id), execution_id)
+             Arca.Cache.Keys.exec_events(Prima.Actor.in_athanor(athanor_id), execution_id)
            ) do
         {:ok, cached} when is_list(cached) -> cached
         _ -> []
@@ -378,7 +378,7 @@ defmodule Cyfr.Execution.Events do
     events = (state.events ++ [event]) |> Enum.take(-@max_events)
 
     Arca.Cache.put(
-      Arca.Cache.Keys.exec_events(Cyfr.Actor.in_athanor(state.athanor_id), state.execution_id),
+      Arca.Cache.Keys.exec_events(Prima.Actor.in_athanor(state.athanor_id), state.execution_id),
       events,
       @buffer_ttl_ms
     )
@@ -399,7 +399,7 @@ defmodule Cyfr.Execution.Events do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state, @idle_timeout}
   end
 
@@ -412,7 +412,7 @@ defmodule Cyfr.Execution.Events do
     # can interleave; losing events cannot.
     if state.events != [] do
       key =
-        Arca.Cache.Keys.exec_events(Cyfr.Actor.in_athanor(state.athanor_id), state.execution_id)
+        Arca.Cache.Keys.exec_events(Prima.Actor.in_athanor(state.athanor_id), state.execution_id)
 
       cached =
         case Arca.Cache.get(key) do
@@ -484,7 +484,7 @@ defmodule Cyfr.Execution.Events do
 
   # Direct fallback for when GenServer infrastructure isn't available
   defp buffer_event_direct(execution_id, athanor_id, event) do
-    key = Arca.Cache.Keys.exec_events(Cyfr.Actor.in_athanor(athanor_id), execution_id)
+    key = Arca.Cache.Keys.exec_events(Prima.Actor.in_athanor(athanor_id), execution_id)
 
     events =
       case Arca.Cache.get(key) do

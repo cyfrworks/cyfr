@@ -57,7 +57,7 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
   # A whole revision no row names, begun `days` ago by its name's own time.
   defp lay_orphan(ctx, unit, days) do
     begun = System.system_time(:millisecond) - days * 86_400_000
-    revision = "rev_" <> Cyfr.UUID7.generate_at(begun)
+    revision = "rev_" <> Prima.UUID7.generate_at(begun)
 
     for {rel, bytes} <- [{[@sentinel], "{}"}, {["a.txt"], "a"}] do
       :ok =

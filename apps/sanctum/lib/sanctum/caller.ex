@@ -279,7 +279,7 @@ defmodule Sanctum.Caller do
       source: source_row(claims)
     }
 
-    case Arca.CredentialBindings.check(Cyfr.Actor.system(), binding,
+    case Arca.CredentialBindings.check(Prima.Actor.system(), binding,
            verify: &derived_policy(&1, claims, Keyword.get(opts, :client_ip))
          ) do
       {:ok, standing} -> {:ok, standing}
@@ -575,7 +575,7 @@ defmodule Sanctum.Caller do
       source: {:session, hash}
     }
 
-    case Arca.CredentialBindings.check(Cyfr.Actor.system(), binding,
+    case Arca.CredentialBindings.check(Prima.Actor.system(), binding,
            verify: &session_standing(&1, ctx)
          ) do
       :ok ->
@@ -624,7 +624,7 @@ defmodule Sanctum.Caller do
       source: {:api_key, id}
     }
 
-    case Arca.CredentialBindings.check(Cyfr.Actor.system(), binding,
+    case Arca.CredentialBindings.check(Prima.Actor.system(), binding,
            verify: &key_standing(&1, ctx)
          ) do
       :ok -> {:ok, validated(ctx)}
@@ -673,7 +673,7 @@ defmodule Sanctum.Caller do
   defp key_creator(%{}, _user_id), do: :ok
 
   defp key_creator(nil, user_id) when is_binary(user_id) do
-    if Cyfr.PersonId.person?(user_id), do: {:error, :not_standing}, else: :ok
+    if Prima.PersonId.person?(user_id), do: {:error, :not_standing}, else: :ok
   end
 
   defp key_creator(nil, _user_id), do: :ok
@@ -853,10 +853,10 @@ defmodule Sanctum.Caller do
   # Best effort: a pool that is not up (a standalone build that never
   # started this application) costs the slide, never the establish.
   defp start_refresh(supervisor, token) do
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     case Task.Supervisor.start_child(supervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+           Prima.LoggerContext.restore(logger_metadata)
            slide(token)
          end) do
       {:ok, _pid} ->
@@ -887,7 +887,7 @@ defmodule Sanctum.Caller do
   defp decode_allowlist(""), do: nil
 
   defp decode_allowlist(json) when is_binary(json) do
-    case Cyfr.Json.decode(json) do
+    case Prima.Json.decode(json) do
       {:ok, list} when is_list(list) ->
         if Enum.all?(list, &is_binary/1),
           do: list,

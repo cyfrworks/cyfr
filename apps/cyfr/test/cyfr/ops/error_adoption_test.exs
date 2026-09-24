@@ -3,7 +3,7 @@
 
 defmodule Cyfr.Ops.ErrorAdoptionTest do
   @moduledoc """
-  A ratchet on the conversion to `Cyfr.Refusal`, the one refusal
+  A ratchet on the conversion to `Prima.Refusal`, the one refusal
   vocabulary.
 
   Limits plain-string error returns per module and rejects unlisted
@@ -39,7 +39,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
   # module path => string-returning `{:error, "…"}` sites remaining.
   # Ordered by size, which is also the order worth converting them in.
   @worklist %{
-    "apps/cyfr_contracts/lib/cyfr/component_ref.ex" => 20,
+    "apps/prima/lib/prima/component_ref.ex" => 20,
     "apps/cyfr/lib/emissary/mcp/external_server.ex" => 19,
     # The concurrency argument's own refusal is a sentence about the value
     # offered; the two that were the tool's catch-alls are typed now, so
@@ -51,7 +51,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     # this vocabulary's.
     "apps/cyfr/lib/compendium/oci/client.ex" => 12,
     "apps/cyfr/lib/emissary/mcp/tools/system_provider.ex" => 12,
-    "apps/cyfr_contracts/lib/cyfr/authority/blob.ex" => 11,
+    "apps/prima/lib/prima/authority/blob.ex" => 11,
     "apps/sanctum/lib/sanctum/mcp/key_tool.ex" => 11,
     # What is wrong with a cron expression, said in the expression's own
     # terms.
@@ -67,7 +67,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     "apps/cyfr/lib/emissary/mcp/mcp_servers_tool.ex" => 6,
     "apps/cyfr/lib/compendium/fork.ex" => 5,
     "apps/cyfr/lib/compendium/oci/reference.ex" => 5,
-    "apps/cyfr_contracts/lib/cyfr/limits.ex" => 5,
+    "apps/prima/lib/prima/limits.ex" => 5,
     "apps/sanctum/lib/sanctum/provider_credentials.ex" => 5,
     "apps/cyfr/lib/aqua/approvals.ex" => 4,
     "apps/cyfr/lib/compendium/component.ex" => 4,
@@ -90,7 +90,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     # caller reached, with the seconds to wait.
     "apps/cyfr/lib/compendium/builds/provider.ex" => 2,
     "apps/cyfr/lib/cyfr/execution/record.ex" => 2,
-    "apps/cyfr_contracts/lib/cyfr/ops/arg.ex" => 2,
+    "apps/prima/lib/prima/arg.ex" => 2,
     "apps/sanctum/lib/sanctum/mcp.ex" => 1,
     "apps/cyfr/lib/compendium/pull.ex" => 1,
     "apps/sanctum/lib/sanctum/api_key.ex" => 1,
@@ -104,15 +104,15 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
 
   defp lib_files do
     root()
-    |> Cyfr.Test.SourceTree.app_libs()
-    |> Enum.flat_map(&Cyfr.Test.SourceTree.files!(Path.join([root(), &1, "**/*.ex"])))
+    |> Prima.Test.SourceTree.app_libs()
+    |> Enum.flat_map(&Prima.Test.SourceTree.files!(Path.join([root(), &1, "**/*.ex"])))
   end
 
   # A module that defines a tool: where a refusal that reaches a renderer
   # is answered.
   defp tool_modules do
     Enum.filter(lib_files(), fn path ->
-      source = Cyfr.Test.SourceTree.read(path)
+      source = Prima.Test.SourceTree.read(path)
       String.contains?(source, "def definition") or String.contains?(source, "def handle(")
     end)
   end
@@ -132,7 +132,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
 
     reached =
       for tool <- tools,
-          {name, _line} <- Cyfr.Test.SourceTree.aliases(tool),
+          {name, _line} <- Prima.Test.SourceTree.aliases(tool),
           path = Map.get(by_module, name),
           do: path
 
@@ -141,7 +141,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
 
   defp defmodule_name(path) do
     path
-    |> Cyfr.Test.SourceTree.code_lines()
+    |> Prima.Test.SourceTree.code_lines()
     |> Enum.find_value(fn {line, _n} ->
       case Regex.run(~r/^defmodule ([A-Z][\w.]*) do$/, line, capture: :all_but_first) do
         [name] -> name
@@ -152,7 +152,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
 
   defp string_error_count(path) do
     path
-    |> Cyfr.Test.SourceTree.code_lines()
+    |> Prima.Test.SourceTree.code_lines()
     |> Enum.count(fn {line, _n} -> String.contains?(line, ~s|{:error, "|) end)
   end
 
@@ -189,7 +189,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
            #{Enum.join(Enum.sort(grown), "\n")}
 
            A refusal that a caller might branch on belongs in the
-           `Cyfr.Refusal` vocabulary — `{:not_found, kind, name}`,
+           `Prima.Refusal` vocabulary — `{:not_found, kind, name}`,
            `{:invalid_argument, msg}`, `{:unavailable, service}` — so the
            wire, the console and the guest all render one decision.
 

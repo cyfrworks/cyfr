@@ -80,7 +80,7 @@ defmodule Sanctum.Tenancy.UsersTest do
     key = "github|https://github.com|minted-#{n}"
     user = person(n, %{id: key})
 
-    assert Cyfr.PersonId.person?(user.id)
+    assert Prima.PersonId.person?(user.id)
     refute user.id == key
     assert {:ok, %{id: same}} = Users.get_by_identity(key)
     assert same == user.id
@@ -99,9 +99,9 @@ defmodule Sanctum.Tenancy.UsersTest do
     end
 
     # A row's id is a person's, never a synthetic principal's.
-    refute Cyfr.PersonId.person?("system")
-    refute Cyfr.PersonId.person?("webhook:orders")
-    assert Cyfr.PersonId.person?("usr_01")
+    refute Prima.PersonId.person?("system")
+    refute Prima.PersonId.person?("webhook:orders")
+    assert Prima.PersonId.person?("usr_01")
   end
 
   test "list/1 pages the people the server knows" do

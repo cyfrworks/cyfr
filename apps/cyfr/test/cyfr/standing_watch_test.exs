@@ -13,7 +13,7 @@ defmodule Cyfr.StandingWatchTest do
   """
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}

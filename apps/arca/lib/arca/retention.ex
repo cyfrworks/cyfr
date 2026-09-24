@@ -37,7 +37,7 @@ defmodule Arca.Retention do
 
   ## Usage
 
-      actor = Cyfr.Actor.in_athanor("ath_test")
+      actor = Prima.Actor.in_athanor("ath_test")
 
       {:ok, settings} = Arca.Retention.get_settings(actor)
       {:ok, settings} = Arca.Retention.set_settings(actor, %{"executions" => 5})
@@ -81,10 +81,10 @@ defmodule Arca.Retention do
   none: a webhook's under `webhook`, the server's own under `system`,
   everything else under `api`. A turn's own dispatches name `chat_step`.
   """
-  @spec default_class(Cyfr.Actor.t()) :: String.t()
-  def default_class(%Cyfr.Actor{user_id: "webhook:" <> _}), do: "webhook"
-  def default_class(%Cyfr.Actor{system: true}), do: "system"
-  def default_class(%Cyfr.Actor{}), do: "api"
+  @spec default_class(Prima.Actor.t()) :: String.t()
+  def default_class(%Prima.Actor{user_id: "webhook:" <> _}), do: "webhook"
+  def default_class(%Prima.Actor{system: true}), do: "system"
+  def default_class(%Prima.Actor{}), do: "api"
 
   # ============================================================================
   # Settings
@@ -94,8 +94,8 @@ defmodule Arca.Retention do
   The actor's athanor's settings — one key per kind, a key it never set
   read as the kind's default.
   """
-  @spec get_settings(Cyfr.Actor.t()) :: {:ok, settings()} | {:error, settings_refusal()}
-  def get_settings(%Cyfr.Actor{} = actor) do
+  @spec get_settings(Prima.Actor.t()) :: {:ok, settings()} | {:error, settings_refusal()}
+  def get_settings(%Prima.Actor{} = actor) do
     with {:ok, %{patch: patch}} <- Arca.RetentionSettings.get(actor) do
       {:ok, fill(patch)}
     end
@@ -108,14 +108,14 @@ defmodule Arca.Retention do
   rather than silently keeping the old value. Keys not named keep their
   values, including under a patch another caller lands at the same time.
   """
-  @spec set_settings(Cyfr.Actor.t(), map()) ::
+  @spec set_settings(Prima.Actor.t(), map()) ::
           {:ok, settings()}
           | {:error,
              {:unknown_setting, String.t()}
              | {:invalid_setting, String.t()}
              | settings_refusal()
              | :settings_conflict}
-  def set_settings(%Cyfr.Actor{} = actor, changes) when is_map(changes) do
+  def set_settings(%Prima.Actor{} = actor, changes) when is_map(changes) do
     with {:ok, validated} <- validate(changes),
          {:ok, %{patch: patch}} <- Arca.RetentionSettings.patch(actor, validated) do
       {:ok, fill(patch)}
@@ -164,7 +164,7 @@ defmodule Arca.Retention do
   — an override included, since nothing destructive runs for an estate
   whose settings cannot be established — or the kind's own store error.
   """
-  @spec cleanup(Cyfr.Actor.t(), String.t(), keyword()) ::
+  @spec cleanup(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, non_neg_integer()}
           | {:error,
              {:unknown_kind, String.t()}
@@ -173,11 +173,11 @@ defmodule Arca.Retention do
              | term()}
   def cleanup(actor, key, opts \\ [])
 
-  def cleanup(%Cyfr.Actor{athanor_id: id}, key, _opts)
+  def cleanup(%Prima.Actor{athanor_id: id}, key, _opts)
       when is_binary(key) and (is_nil(id) or id == ""),
       do: {:error, :no_athanor}
 
-  def cleanup(%Cyfr.Actor{} = actor, key, opts) when is_binary(key) and is_list(opts) do
+  def cleanup(%Prima.Actor{} = actor, key, opts) when is_binary(key) and is_list(opts) do
     case Enum.find(@kinds, &(&1.key() == key)) do
       nil ->
         {:error, {:unknown_kind, key}}
@@ -211,15 +211,15 @@ defmodule Arca.Retention do
   that failed; a kind that failed never stops the rest. Settings that are
   corrupt or cannot be read refuse the whole of it, before any kind runs.
   """
-  @spec cleanup_athanor(Cyfr.Actor.t(), keyword()) ::
+  @spec cleanup_athanor(Prima.Actor.t(), keyword()) ::
           {:ok, %{deleted: %{String.t() => non_neg_integer()}, errors: [{String.t(), term()}]}}
           | {:error, :corrupt | :database_error | :forbidden | :no_athanor}
   def cleanup_athanor(actor, opts \\ [])
 
-  def cleanup_athanor(%Cyfr.Actor{athanor_id: id}, _opts) when is_nil(id) or id == "",
+  def cleanup_athanor(%Prima.Actor{athanor_id: id}, _opts) when is_nil(id) or id == "",
     do: {:error, :no_athanor}
 
-  def cleanup_athanor(%Cyfr.Actor{system: true, scope: :athanor} = actor, opts)
+  def cleanup_athanor(%Prima.Actor{system: true, scope: :athanor} = actor, opts)
       when is_list(opts) do
     dry_run = Keyword.get(opts, :dry_run, false)
 
@@ -236,5 +236,5 @@ defmodule Arca.Retention do
     end
   end
 
-  def cleanup_athanor(%Cyfr.Actor{}, _opts), do: {:error, :forbidden}
+  def cleanup_athanor(%Prima.Actor{}, _opts), do: {:error, :forbidden}
 end

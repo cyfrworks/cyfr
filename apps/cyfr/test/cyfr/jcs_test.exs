@@ -3,9 +3,9 @@
 defmodule Cyfr.JCSTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.JCS
+  alias Prima.JCS
 
-  doctest Cyfr.JCS
+  doctest Prima.JCS
 
   defp encode!(term) do
     {:ok, encoded} = JCS.encode(term)
@@ -200,7 +200,7 @@ defmodule Cyfr.JCSTest do
     fixture =
       [
         __DIR__,
-        "../../../cyfr_contracts/test/support/fixtures/authority/resolved_policy_golden.json"
+        "../../../prima/test/support/fixtures/authority/resolved_policy_golden.json"
       ]
       |> Path.join()
       |> File.read!()

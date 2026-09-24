@@ -21,19 +21,19 @@ defmodule Cyfr.LowerAppStartTest do
           """
           missing =
             try do
-              Cyfr.Boot.id()
+              Prima.Boot.id()
               false
             rescue
-              Cyfr.Boot.NotInitializedError -> true
+              Prima.Boot.NotInitializedError -> true
             end
 
-          limiter = Process.whereis(Cyfr.RateLimiter)
+          limiter = Process.whereis(Prima.RateLimiter)
           owned = Enum.any?(Supervisor.which_children(Sanctum.Supervisor), fn
-            {Cyfr.RateLimiter, pid, _, _} -> pid == limiter
+            {Prima.RateLimiter, pid, _, _} -> pid == limiter
             _ -> false
           end)
 
-          {missing, owned, Cyfr.RateLimiter.check(:cold_start, 1, 1_000)}
+          {missing, owned, Prima.RateLimiter.check(:cold_start, 1, 1_000)}
           """
         ])
 

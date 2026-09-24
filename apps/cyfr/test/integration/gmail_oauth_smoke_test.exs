@@ -117,8 +117,8 @@ defmodule Cyfr.GmailOAuthSmokeTest do
 
   defp edge_resource!(ctx, profile_id) do
     {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
-    {:ok, blob} = Cyfr.Authority.Blob.parse(consent.resolved_policy)
-    {:ok, edge} = Cyfr.Authority.Blob.ingress(blob, "catalyst:local.gmail")
+    {:ok, blob} = Prima.Authority.Blob.parse(consent.resolved_policy)
+    {:ok, edge} = Prima.Authority.Blob.ingress(blob, "catalyst:local.gmail")
     edge.vault
   end
 

@@ -425,7 +425,7 @@ defmodule Sanctum.MCPTest do
       # no client composes the route shape itself.
       assert result.athanor == ctx.athanor_id
       segment = Sanctum.Tenancy.Athanors.route_slug(athanor)
-      assert result.url == Cyfr.TinctureUrl.path(segment, "local", "vis-test")
+      assert result.url == Prima.TinctureUrl.path(segment, "local", "vis-test")
     end
   end
 

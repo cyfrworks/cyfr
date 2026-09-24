@@ -22,9 +22,9 @@ defmodule Arca.Test.Actor do
   A person's caller inside the well-known test athanor: athanor scope, no
   system authority, an identity to attribute a row to.
   """
-  @spec local(keyword()) :: Cyfr.Actor.t()
+  @spec local(keyword()) :: Prima.Actor.t()
   def local(opts \\ []) do
-    %Cyfr.Actor{
+    %Prima.Actor{
       athanor_id: Keyword.get(opts, :athanor_id, @athanor_id),
       user_id: Keyword.get(opts, :user_id, "local|local|testns"),
       authenticated: true,
@@ -37,10 +37,10 @@ defmodule Arca.Test.Actor do
   The server's own caller: platform scope, so it reads across tenants, and
   system authority, so it may mutate the seed and global paths.
   """
-  @spec platform(keyword()) :: Cyfr.Actor.t()
+  @spec platform(keyword()) :: Prima.Actor.t()
   def platform(opts \\ []) do
-    %Cyfr.Actor{
-      Cyfr.Actor.system()
+    %Prima.Actor{
+      Prima.Actor.system()
       | athanor_id: Keyword.get(opts, :athanor_id),
         user_id: Keyword.get(opts, :user_id)
     }
@@ -80,19 +80,19 @@ defmodule Arca.Test.Actor do
   def stored, do: [grant: :stored, verify: &admits/1]
 
   @doc "A check that admits every grant: the storage test's stand-in for the decision."
-  @spec admits(Cyfr.ExecutionGrant.t()) :: :ok
-  def admits(%Cyfr.ExecutionGrant{}), do: :ok
+  @spec admits(Prima.ExecutionGrant.t()) :: :ok
+  def admits(%Prima.ExecutionGrant{}), do: :ok
 
   @doc "The grant of `athanor_id` at the generation its row carries now."
-  @spec grant(String.t()) :: Cyfr.ExecutionGrant.t()
+  @spec grant(String.t()) :: Prima.ExecutionGrant.t()
   def grant(athanor_id \\ @athanor_id) do
     generation =
-      case Arca.ExecutionStanding.current(Cyfr.Actor.in_athanor(athanor_id), athanor_id) do
+      case Arca.ExecutionStanding.current(Prima.Actor.in_athanor(athanor_id), athanor_id) do
         {:ok, %{security_generation: generation}} -> generation
         _none -> 1
       end
 
-    {:ok, grant} = Cyfr.ExecutionGrant.new(athanor_id, generation)
+    {:ok, grant} = Prima.ExecutionGrant.new(athanor_id, generation)
     grant
   end
 
@@ -101,9 +101,9 @@ defmodule Arca.Test.Actor do
   exercises it: the estate row locked and read at the grant's generation
   (`Sanctum.ExecutionStanding.verify/1` spells the same rule).
   """
-  @spec verify(Cyfr.ExecutionGrant.t()) :: :ok | {:error, :not_standing | :unavailable}
-  def verify(%Cyfr.ExecutionGrant{athanor_id: athanor_id, generation: generation}) do
-    case Arca.ExecutionStanding.locked(Cyfr.Actor.in_athanor(athanor_id), athanor_id) do
+  @spec verify(Prima.ExecutionGrant.t()) :: :ok | {:error, :not_standing | :unavailable}
+  def verify(%Prima.ExecutionGrant{athanor_id: athanor_id, generation: generation}) do
+    case Arca.ExecutionStanding.locked(Prima.Actor.in_athanor(athanor_id), athanor_id) do
       {:ok, %{status: "active", security_generation: ^generation}} -> :ok
       {:ok, _retired} -> {:error, :not_standing}
       {:error, _reason} -> {:error, :unavailable}
@@ -111,8 +111,8 @@ defmodule Arca.Test.Actor do
   end
 
   @doc "A bare tenant caller — an athanor, and nothing else."
-  @spec in_athanor(String.t()) :: Cyfr.Actor.t()
-  def in_athanor(athanor_id), do: Cyfr.Actor.in_athanor(athanor_id)
+  @spec in_athanor(String.t()) :: Prima.Actor.t()
+  def in_athanor(athanor_id), do: Prima.Actor.in_athanor(athanor_id)
 
   @doc """
   The `athanors` row `local/0` names, minted if the suite has not already.
@@ -170,7 +170,7 @@ defmodule Arca.Test.Actor do
   """
   @spec ensure_athanor_row(String.t(), keyword()) :: Arca.Schemas.Athanor.t()
   def ensure_athanor_row(athanor_id, opts \\ []) do
-    system = Cyfr.Actor.system()
+    system = Prima.Actor.system()
 
     case Arca.Athanors.get(system, athanor_id) do
       {:ok, athanor} ->

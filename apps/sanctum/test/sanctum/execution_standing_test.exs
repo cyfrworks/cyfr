@@ -47,7 +47,7 @@ defmodule Sanctum.ExecutionStandingTest do
     {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "reagent:local.standing:0.1.0",
           user_id: "usr_standing",
           athanor_id: athanor_id,
@@ -61,7 +61,7 @@ defmodule Sanctum.ExecutionStandingTest do
   end
 
   test "a capture is the estate's active standing now", %{estate: estate} do
-    assert {:ok, %Cyfr.ExecutionGrant{athanor_id: id, generation: generation}} =
+    assert {:ok, %Prima.ExecutionGrant{athanor_id: id, generation: generation}} =
              ExecutionStanding.capture(ctx(estate.id))
 
     assert id == estate.id
@@ -133,19 +133,19 @@ defmodule Sanctum.ExecutionStandingTest do
     refute Enum.any?(found, &(elem(&1, 0) == standing_id))
 
     # One page at a time, in attempt-id order, each after the last.
-    {:ok, [first]} = ExecutionStanding.retired_attempts(Cyfr.Actor.system(), nil, 1)
-    {:ok, [second]} = ExecutionStanding.retired_attempts(Cyfr.Actor.system(), elem(first, 1), 1)
+    {:ok, [first]} = ExecutionStanding.retired_attempts(Prima.Actor.system(), nil, 1)
+    {:ok, [second]} = ExecutionStanding.retired_attempts(Prima.Actor.system(), elem(first, 1), 1)
     assert elem(second, 1) > elem(first, 1)
   end
 
   test "the scan is the server's own", %{estate: estate} do
     assert {:error, :cross_tenant} =
-             ExecutionStanding.retired_attempts(Cyfr.Actor.in_athanor(estate.id), nil, 10)
+             ExecutionStanding.retired_attempts(Prima.Actor.in_athanor(estate.id), nil, 10)
   end
 
   # Every page of the scan, narrowed to one estate's rows.
   defp scan_of(athanor_id, cursor \\ nil, acc \\ []) do
-    case ExecutionStanding.retired_attempts(Cyfr.Actor.system(), cursor, 2) do
+    case ExecutionStanding.retired_attempts(Prima.Actor.system(), cursor, 2) do
       {:ok, []} ->
         {:ok, Enum.filter(acc, &(elem(&1, 2) == athanor_id))}
 

@@ -177,7 +177,7 @@ defmodule Emissary.MCP.McpServersConsentTest do
 
   test "a running chain reaches no mcp_servers action", %{ctx: ctx} do
     guest = Sanctum.Context.enter_guest(ctx)
-    authority = Cyfr.Test.AuthorityFixtures.root!()
+    authority = Prima.Test.AuthorityFixtures.root!()
 
     for action <- @defining ++ @operating do
       args = %{"action" => action, "name" => "wired", "config" => http_config("gh-token")}

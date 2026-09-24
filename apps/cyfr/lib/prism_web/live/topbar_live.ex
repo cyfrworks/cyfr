@@ -303,7 +303,7 @@ defmodule PrismWeb.TopbarLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -979,14 +979,14 @@ defmodule PrismWeb.TopbarLive do
       previous = MapSet.new(socket.assigns[:athanors] || [], & &1.id)
 
       for gone <- MapSet.difference(previous, ids) do
-        actor = Cyfr.Actor.in_athanor(gone)
+        actor = Prima.Actor.in_athanor(gone)
         Bus.unsubscribe(actor, Bus.notify(actor))
       end
 
       # Each seat's own tray topic, keyed by the estate the person's
       # membership list names.
       for a <- athanors do
-        actor = Cyfr.Actor.in_athanor(a.id)
+        actor = Prima.Actor.in_athanor(a.id)
         Bus.unsubscribe(actor, Bus.notify(actor))
         Bus.subscribe(actor, Bus.notify(actor))
       end

@@ -40,14 +40,14 @@ defmodule Cyfr.TwoWorkersTest do
       seen: 1
     ]
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Cyfr.Execution.{Attempt, Keys, WorkerClient}
-  alias Cyfr.Slots
+  alias Prima.Slots
   alias Cyfr.Test.{AttemptFixtures, OpusService, ScriptedWorker, TwoServices}
   alias Cyfr.Test.TwoServices.Wire
-  alias Cyfr.{WorkerAuth, WorkerWire}
+  alias Prima.{WorkerAuth, WorkerWire}
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
 
@@ -120,7 +120,7 @@ defmodule Cyfr.TwoWorkersTest do
       arm!(ctx, key: "k-#{System.unique_integer([:positive])}", token: "t-unused")
       answer = %{"content" => [%{"type" => "text", "text" => "scripted"}]}
       start_supervised!({ScriptedWorker, ref: @scripted, script: [answer]})
-      opus_id = Cyfr.UUID7.execution_id()
+      opus_id = Prima.UUID7.execution_id()
 
       on_opus =
         Task.async(fn ->
@@ -168,7 +168,7 @@ defmodule Cyfr.TwoWorkersTest do
       # tainted runners among it: neither service holds one after its run.
       for endpoint <- [OpusService.endpoint(), ScriptedWorker.endpoint()] do
         assert {:ok, %{runners: %{tainted: 0}} = status} = WorkerClient.status(endpoint)
-        assert Cyfr.WorkerAPI.valid_status?(status)
+        assert Prima.WorkerAPI.valid_status?(status)
       end
     end
 
@@ -219,7 +219,7 @@ defmodule Cyfr.TwoWorkersTest do
       plan!(:push_deltas, [:drop])
       plan!(:complete, [:forward_then_drop])
 
-      id = Cyfr.UUID7.execution_id()
+      id = Prima.UUID7.execution_id()
       :ok = Cyfr.Execution.subscribe_events(id, ctx)
 
       assert {:ok, result} =
@@ -351,7 +351,7 @@ defmodule Cyfr.TwoWorkersTest do
 
     test "a run cancelled mid-flight releases nothing its masking set covers", %{ctx: ctx} do
       secrets = arm!(ctx, key: "stub answers", token: "at once")
-      id = Cyfr.UUID7.execution_id()
+      id = Prima.UUID7.execution_id()
       :ok = Cyfr.Execution.subscribe_events(id, ctx)
       hold!(:push_deltas, id, once: true)
 
@@ -396,7 +396,7 @@ defmodule Cyfr.TwoWorkersTest do
 
     test "cancelling a formula over the wire ends its children with it", %{ctx: ctx} do
       children_before = Slots.status(@slots).child_active
-      root_id = Cyfr.UUID7.execution_id()
+      root_id = Prima.UUID7.execution_id()
 
       # Each child asks for a catalog tool, and is held at that call.
       hold!(:tool_call, fn row, _call -> row && row.parent_execution_id == root_id end, [])
@@ -452,7 +452,7 @@ defmodule Cyfr.TwoWorkersTest do
          workers: [OpusService.endpoint()], poll_ms: 50, misses: 3, name: :two_workers_watch}
       )
 
-      root_id = Cyfr.UUID7.execution_id()
+      root_id = Prima.UUID7.execution_id()
       hold!(:complete, root_id, once: true)
 
       root =
@@ -524,7 +524,7 @@ defmodule Cyfr.TwoWorkersTest do
 
     request = %{
       service: service,
-      boot: Cyfr.Boot.id(),
+      boot: Prima.Boot.id(),
       ts: System.system_time(:millisecond),
       nonce: nonce()
     }

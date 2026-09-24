@@ -69,10 +69,10 @@ defmodule Opus.AsyncTracker do
     # Captured here, in the caller — the tracker process has its own
     # (empty) Logger metadata, so capturing at the spawn site inside
     # handle_call would tag the task with nothing.
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     task_fun = fn ->
-      Cyfr.LoggerContext.restore(logger_metadata)
+      Prima.LoggerContext.restore(logger_metadata)
       fun.()
     end
 
@@ -395,7 +395,7 @@ defmodule Opus.AsyncTracker do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -546,7 +546,7 @@ defmodule Opus.AsyncTracker do
   # These strings reach the guest: `store_result/3` puts them where
   # `Opus.FormulaHandler.format_task_result/2` picks them up, and because
   # they arrive already-stringified they pass through `stringify_reason/1`
-  # and `Cyfr.GuestError.render/1` unchanged — the renderers' binary clause is the
+  # and `Prima.GuestError.render/1` unchanged — the renderers' binary clause is the
   # identity. `inspect/1` on an exit reason carries the exception struct, the
   # term that failed to match and a stack trace, so it handed Elixir internals
   # to a component. The detail goes to the log, where the operator can read

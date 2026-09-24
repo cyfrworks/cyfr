@@ -15,7 +15,7 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
     {:ok, %{execution: execution}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "reagent:local.sse:0.1.0",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
@@ -39,7 +39,7 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
 
   defp durable!(exec, type, data) do
     {:ok, row} =
-      Arca.ExecutionEvents.append(Cyfr.Actor.in_athanor(exec.athanor_id), exec.id, type,
+      Arca.ExecutionEvents.append(Prima.Actor.in_athanor(exec.athanor_id), exec.id, type,
         data: data
       )
 

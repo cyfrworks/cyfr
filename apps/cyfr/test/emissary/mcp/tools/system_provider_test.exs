@@ -453,7 +453,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
   end
 
-  # One action's own declaration, as `Cyfr.Ops.Operation.cast/2` applies it;
+  # One action's own declaration, as `Prima.Operation.cast/2` applies it;
   # the tool's discovery schema merges every action into one flat object.
   defp action_schema(tool, action) do
     case Enum.find(tool.operations, &(&1.action == action)) do
@@ -462,7 +462,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
       operation ->
         operation.args
-        |> Cyfr.Ops.Arg.schema()
+        |> Prima.Arg.schema()
         |> put_in(["properties", "action"], %{"type" => "string", "const" => action})
         |> Map.update!("required", &["action" | &1])
     end

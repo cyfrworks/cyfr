@@ -130,7 +130,7 @@ defmodule Aqua.Loop.Worker do
   end
 
   def handle_info(message, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, message)
+    Prima.LoggerContext.unexpected(__MODULE__, message)
     {:noreply, state}
   end
 

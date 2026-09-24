@@ -11,6 +11,10 @@ defmodule Arca.Supervisor do
 
   @impl true
   def start(_type, _args) do
+    # The contract structs a facade may answer are read before anything
+    # starts: an unreadable `:prima` module list is a boot refusal.
+    :ok = Arca.Data.load_prima!()
+
     # Everything below runs before the pool, in this order: the directory
     # the database file needs, a writability probe that says what a Docker
     # bind mount got wrong, and the migration — DDL on a temporary pool of

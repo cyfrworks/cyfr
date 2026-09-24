@@ -29,7 +29,7 @@ defmodule Cyfr.Execution.MCP do
       Develop in components/ → Register via `cyfr register` → Execute by name
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   def service, do: "opus"
 
@@ -59,7 +59,7 @@ defmodule Cyfr.Execution.MCP do
         uriTemplate: "opus://executions/{id}",
         name: "Execution State",
         description: "Get execution state by ID",
-        mimeType: Cyfr.MediaType.json()
+        mimeType: Prima.MediaType.json()
       },
       %{
         uriTemplate: "opus://executions/{id}/logs",
@@ -127,7 +127,7 @@ defmodule Cyfr.Execution.MCP do
 
         case Jason.encode(content, pretty: true) do
           {:ok, json} ->
-            {:ok, %{content: json, mimeType: Cyfr.MediaType.json()}}
+            {:ok, %{content: json, mimeType: Prima.MediaType.json()}}
 
           {:error, err} ->
             Logger.error(
@@ -211,8 +211,8 @@ defmodule Cyfr.Execution.MCP do
       "Status: #{record.status}",
       "Component Type: #{record.component_type}",
       "Component Digest: #{record.component_digest || "unknown"}",
-      "Started: #{Cyfr.Time.iso8601(record.started_at) || "N/A"}",
-      "Completed: #{Cyfr.Time.iso8601(record.completed_at) || "N/A"}",
+      "Started: #{Prima.Time.iso8601(record.started_at) || "N/A"}",
+      "Completed: #{Prima.Time.iso8601(record.completed_at) || "N/A"}",
       "Duration: #{record.duration_ms || 0}ms",
       "",
       "Reference: #{inspect(record.reference)}",
@@ -254,7 +254,7 @@ defmodule Cyfr.Execution.MCP do
   # ============================================================================
 
   def tools do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # External-plane only, and `host: :intercepted`: a running
     # component's execution request never reaches the catalog — the
     # formula host intercepts it and runs it as a CHILD of the
@@ -292,7 +292,7 @@ defmodule Cyfr.Execution.MCP do
               Arg.new("type", :string,
                 description:
                   "Asserted component type — must match the registry's type, which is authoritative (run action)",
-                enum: Cyfr.ComponentRef.executable_types()
+                enum: Prima.ComponentRef.executable_types()
               ),
               Arg.new(
                 "verify",
@@ -332,7 +332,7 @@ defmodule Cyfr.Execution.MCP do
               Arg.new("type", :string,
                 description:
                   "Asserted component type — must match the registry's type, which is authoritative (run action)",
-                enum: Cyfr.ComponentRef.executable_types()
+                enum: Prima.ComponentRef.executable_types()
               ),
               Arg.new(
                 "verify",
@@ -595,7 +595,7 @@ defmodule Cyfr.Execution.MCP do
       %{user_id: ctx.user_id, auth_method: ctx.auth_method}
     )
 
-    case Cyfr.Slots.force_release_all(@slots) do
+    case Prima.Slots.force_release_all(@slots) do
       {:error, :unavailable} ->
         {:error, "Execution slots are not running — nothing was released"}
 
@@ -640,10 +640,10 @@ defmodule Cyfr.Execution.MCP do
     opts = [{:root_execution_id, execution_id} | opts]
 
     # Spawn execution in background, registering PID for cancellation
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     case Task.Supervisor.start_child(Cyfr.Execution.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+           Prima.LoggerContext.restore(logger_metadata)
 
            case Registry.register(Cyfr.Execution.Registry, execution_id, :running) do
              {:ok, _} ->
@@ -716,7 +716,7 @@ defmodule Cyfr.Execution.MCP do
   # not have to know which of the two they are holding;
   # `RootSelect.decode/1` owns the discrimination, and the label grammar
   # is what keeps it from being a guess.
-  defp profile_selector(args), do: Cyfr.Authority.RootSelect.decode(args["profile"])
+  defp profile_selector(args), do: Prima.Authority.RootSelect.decode(args["profile"])
 
   # Keep consent signals typed for protocol codes, structured data and shared rendering.
   defp format_root_result({:error, {tag, payload}})
@@ -737,7 +737,7 @@ defmodule Cyfr.Execution.MCP do
     {:error, "profile_unavailable: #{status}"}
   end
 
-  # The chain wraps a ref-grammar refusal (`Cyfr.ComponentRef`'s crafted
+  # The chain wraps a ref-grammar refusal (`Prima.ComponentRef`'s crafted
   # prose) — client-safe by construction.
   defp format_root_result({:error, {:invalid_reference, reason}}) when is_binary(reason) do
     {:error, "invalid_reference: #{reason}"}
@@ -758,11 +758,11 @@ defmodule Cyfr.Execution.MCP do
 
   defp format_root_result(other), do: other
 
-  # The execution slots' status (`Cyfr.Slots.status/1`) in the operator's
+  # The execution slots' status (`Prima.Slots.status/1`) in the operator's
   # vocabulary: its keys are athanors, so the per-key cap and counts are
   # presented as the per-tenant ones this tool has always shown.
   defp slot_status do
-    {keys, status} = Map.pop!(Cyfr.Slots.status(@slots), :keys)
+    {keys, status} = Map.pop!(Prima.Slots.status(@slots), :keys)
     {key_max, status} = Map.pop!(status, :key_max)
     Map.merge(status, %{tenant_max: key_max, tenants: keys})
   end

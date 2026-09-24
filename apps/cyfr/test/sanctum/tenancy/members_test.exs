@@ -195,7 +195,7 @@ defmodule Sanctum.Tenancy.MembersTest do
 
   # A context focused on the athanor as this person — what a follow is written through.
   defp follow_actor(athanor_id, user_id),
-    do: %{Cyfr.Actor.in_athanor(athanor_id) | user_id: user_id}
+    do: %{Prima.Actor.in_athanor(athanor_id) | user_id: user_id}
 
   describe "add/3 by user id" do
     test "seats a known active person; refuses an unknown or denied id", %{athanor: athanor} do
@@ -417,8 +417,8 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       :ok = Members.remove_member(athanor, user_id: leaver.id)
 
-      refute Subs.follows?(Cyfr.Actor.in_athanor(athanor.id), thread, leaver.id)
-      assert Subs.follows?(Cyfr.Actor.in_athanor(athanor.id), thread, stayer.id)
+      refute Subs.follows?(Prima.Actor.in_athanor(athanor.id), thread, leaver.id)
+      assert Subs.follows?(Prima.Actor.in_athanor(athanor.id), thread, stayer.id)
     end
 
     test "a denial drops the follows in every athanor the person sat in", %{

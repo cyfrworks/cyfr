@@ -111,7 +111,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
 
     assert {:error, :lost} =
              ExecutionAttempts.claim(
-               Cyfr.Actor.in_athanor("ath_gamma"),
+               Prima.Actor.in_athanor("ath_gamma"),
                attempt.attempt,
                1,
                "runner_a",
@@ -156,7 +156,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
 
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(actor, execution.id,
-        boot_id: Cyfr.Boot.id(),
+        boot_id: Prima.Boot.id(),
         lease_until: ExecutionAttempts.lease_until(),
         grant: :stored,
         verify: &Arca.Test.Actor.admits/1
@@ -215,7 +215,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     refute ExecutionAttempts.held?(actor, attempt.attempt, 2, "runner_a")
 
     refute ExecutionAttempts.held?(
-             Cyfr.Actor.in_athanor("ath_gamma"),
+             Prima.Actor.in_athanor("ath_gamma"),
              attempt.attempt,
              1,
              "runner_a"
@@ -266,7 +266,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
         ] do
       assert {:error, :lost} =
                ExecutionAttempts.while_held(
-                 Cyfr.Actor.in_athanor(athanor),
+                 Prima.Actor.in_athanor(athanor),
                  attempt.attempt,
                  fence,
                  runner,
@@ -320,7 +320,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     refute ExecutionAttempts.live?(actor, attempt.attempt, 2, "runner_a")
 
     refute ExecutionAttempts.live?(
-             Cyfr.Actor.in_athanor("ath_gamma"),
+             Prima.Actor.in_athanor("ath_gamma"),
              attempt.attempt,
              1,
              "runner_a"
@@ -372,7 +372,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     {_execution, attempt} = admit!(actor, %{kind: "turn", component_type: "agent"})
 
     assert claimed_by(attempt.attempt) == nil
-    refute ExecutionAttempts.held?(actor, attempt.attempt, 1, Cyfr.Boot.id())
+    refute ExecutionAttempts.held?(actor, attempt.attempt, 1, Prima.Boot.id())
 
     refute ExecutionAttempts.held?(
              actor,

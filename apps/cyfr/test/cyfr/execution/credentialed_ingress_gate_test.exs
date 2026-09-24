@@ -12,8 +12,8 @@ defmodule Cyfr.Execution.CredentialedIngressGateTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Sanctum.CipherAAD
   alias Sanctum.Vault.Payload
   alias Sanctum.VaultReader
@@ -26,7 +26,7 @@ defmodule Cyfr.Execution.CredentialedIngressGateTest do
   end
 
   defp seeded_entry(ctx) do
-    id = Cyfr.UUID7.generate_id("vlt")
+    id = Prima.UUID7.generate_id("vlt")
     aad = CipherAAD.vault_entry(ctx.athanor_id, id, "")
     {:ok, json} = Payload.encode_material(%{"api_key" => "sk-operator-only"}, nil)
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)

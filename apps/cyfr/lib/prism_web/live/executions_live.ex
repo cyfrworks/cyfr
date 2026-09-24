@@ -210,7 +210,7 @@ defmodule PrismWeb.ExecutionsLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -221,7 +221,7 @@ defmodule PrismWeb.ExecutionsLive do
   defp fetch_executions(socket) do
     args =
       %{"action" => "list", "limit" => @page_size}
-      |> Cyfr.MapUtil.put_present("status", socket.assigns.status_filter)
+      |> Prima.MapUtil.put_present("status", socket.assigns.status_filter)
 
     case call_tool(socket, "execution", args) do
       {:ok, %{executions: list}} when is_list(list) ->
@@ -414,7 +414,7 @@ defmodule PrismWeb.ExecutionsLive do
           >
             <option value="" selected={is_nil(@type_filter)}>All types</option>
             <option
-              :for={type <- Cyfr.ComponentRef.executable_types()}
+              :for={type <- Prima.ComponentRef.executable_types()}
               value={type}
               selected={@type_filter == type}
             >

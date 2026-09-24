@@ -13,7 +13,7 @@ defmodule Cyfr.Cluster.ProvisioningTest do
   reaches, and a second member is told `:provisioning_busy` rather than
   filling it again beside the first.
 
-  The owner is boot-scoped (`Cyfr.Boot.id() <> "/" <> …`), so a member
+  The owner is boot-scoped (`Prima.Boot.id() <> "/" <> …`), so a member
   that comes back never resumes its predecessor's claim: it waits the
   lease out like any other successor.
   """

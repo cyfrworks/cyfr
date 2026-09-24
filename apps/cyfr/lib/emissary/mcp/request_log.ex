@@ -336,10 +336,10 @@ defmodule Emissary.MCP.RequestLog do
   @doc """
   Sanitize input data to redact sensitive values.
 
-  Delegates to `Cyfr.Sanitizer.sanitize/1`.
+  Delegates to `Prima.Sanitizer.sanitize/1`.
   """
   @spec sanitize_input(term()) :: term()
-  defdelegate sanitize_input(input), to: Cyfr.Sanitizer, as: :sanitize
+  defdelegate sanitize_input(input), to: Prima.Sanitizer, as: :sanitize
 
   # The tools/call wire shape re-encodes the tool's structured result as an
   # opaque JSON string under `"content"[]."text"`. Key-based redaction cannot
@@ -379,5 +379,5 @@ defmodule Emissary.MCP.RequestLog do
 
   # Never inspect/1 into a stored column — Elixir term syntax in a JSON
   # field reads as data to every later decoder.
-  defp encode_json(value), do: Cyfr.Json.safe_encode(value)
+  defp encode_json(value), do: Prima.Json.safe_encode(value)
 end

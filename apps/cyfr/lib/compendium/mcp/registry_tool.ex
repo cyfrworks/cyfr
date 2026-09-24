@@ -29,7 +29,7 @@ defmodule Compendium.MCP.RegistryTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Compendium.MCP assembles its roster from these.
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # Bootstrap/spec reads stay open (they run before a session
     # exists per the cyfr.run spec); identity mutations mirror
     # RegistryTool's gate.
@@ -662,7 +662,7 @@ defmodule Compendium.MCP.RegistryTool do
   # already typed is the caller's answer as-is; everything else — an
   # `OCI.Errors` struct above all — keeps the shared registry sentence.
   defp refuse(reason) do
-    if Cyfr.Refusal.reason?(reason),
+    if Prima.Refusal.reason?(reason),
       do: {:error, reason},
       else: {:error, Shared.to_error_string(reason)}
   end
@@ -798,7 +798,7 @@ defmodule Compendium.MCP.RegistryTool do
   defp resolve_component_id(""), do: {:ok, nil}
 
   defp resolve_component_id(ref) when is_binary(ref) do
-    with {:ok, %Cyfr.ComponentRef{} = r} <- Cyfr.ComponentRef.parse(ref),
+    with {:ok, %Prima.ComponentRef{} = r} <- Prima.ComponentRef.parse(ref),
          :ok <- Shared.ensure_fully_qualified(r),
          {:ok, comp} <-
            Compendium.Registry.Client.get_component(

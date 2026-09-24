@@ -20,7 +20,7 @@ defmodule Cyfr.Execution.Emit do
 
   ## Where the emit budget is counted
 
-  In this member's memory (`Cyfr.RateLimiter`), and that is the right
+  In this member's memory (`Prima.RateLimiter`), and that is the right
   place for it. A root execution runs on exactly one member — every
   execution under it reports to the attempt that member holds — so its
   events are counted where they are produced and there is no second
@@ -40,7 +40,7 @@ defmodule Cyfr.Execution.Emit do
   Streamed text is masked across event boundaries. Each logical stream —
   the answer's `text.delta` text, and each index's `tool_call.delta`
   arguments — holds back only the tail that could begin a credential's
-  masked form (`Cyfr.SecretMasker.pending_prefix/2`), so a credential split
+  masked form (`Prima.SecretMasker.pending_prefix/2`), so a credential split
   over two deltas is masked whole whatever events arrive between them, and
   text that ends in no such prefix goes out at once. A stream's held text
   goes out when that stream ends: a call's arguments ahead of its own
@@ -50,9 +50,9 @@ defmodule Cyfr.Execution.Emit do
 
   require Logger
 
-  alias Cyfr.Authority
+  alias Prima.Authority
   alias Cyfr.Execution.{Events, StepSpans, Telemetry}
-  alias Cyfr.SecretMasker
+  alias Prima.SecretMasker
 
   @budget_max 3000
   @budget_window_ms :timer.minutes(1)
@@ -241,7 +241,7 @@ defmodule Cyfr.Execution.Emit do
   end
 
   defp spend(bucket) do
-    case Cyfr.RateLimiter.check(bucket, @budget_max, @budget_window_ms) do
+    case Prima.RateLimiter.check(bucket, @budget_max, @budget_window_ms) do
       :ok -> :ok
       {:deny, _retry_after_s} -> {:error, :emit_rate_limited}
     end
@@ -265,6 +265,6 @@ defmodule Cyfr.Execution.Emit do
     end
   end
 
-  defp safe_encode(data), do: Cyfr.WitResponse.safe_encode(data)
-  defp encode_error(type, message), do: Cyfr.WitResponse.encode_error(type, message)
+  defp safe_encode(data), do: Prima.WitResponse.safe_encode(data)
+  defp encode_error(type, message), do: Prima.WitResponse.encode_error(type, message)
 end

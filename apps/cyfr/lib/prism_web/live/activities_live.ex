@@ -190,7 +190,7 @@ defmodule PrismWeb.ActivitiesLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -201,9 +201,9 @@ defmodule PrismWeb.ActivitiesLive do
   defp fetch_logs(socket) do
     args =
       %{"action" => "list", "limit" => @page_size}
-      |> Cyfr.MapUtil.put_present("status", socket.assigns.status_filter)
-      |> Cyfr.MapUtil.put_present("tool", socket.assigns.source_filter)
-      |> Cyfr.MapUtil.put_present("since", time_filter_to_since(socket.assigns.time_filter))
+      |> Prima.MapUtil.put_present("status", socket.assigns.status_filter)
+      |> Prima.MapUtil.put_present("tool", socket.assigns.source_filter)
+      |> Prima.MapUtil.put_present("since", time_filter_to_since(socket.assigns.time_filter))
 
     case call_tool(socket, "mcp_log", args) do
       {:ok, %{logs: logs}} when is_list(logs) ->
@@ -311,7 +311,7 @@ defmodule PrismWeb.ActivitiesLive do
         name = input["tincture_name"] || input[:tincture_name]
 
         if publisher && name,
-          do: Cyfr.ComponentRef.build("tincture", publisher, name),
+          do: Prima.ComponentRef.build("tincture", publisher, name),
           else: "tincture/invoke"
 
       "schedule" ->

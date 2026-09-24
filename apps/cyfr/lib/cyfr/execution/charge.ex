@@ -17,7 +17,7 @@ defmodule Cyfr.Execution.Charge do
   attempt at all holds the slot alone.
   """
 
-  alias Cyfr.Authority
+  alias Prima.Authority
 
   @doc """
   The call's options with a charge identity: the given one, or, for a
@@ -37,7 +37,7 @@ defmodule Cyfr.Execution.Charge do
         opts
         |> Keyword.put(:execution_id, execution_id)
         |> Keyword.put(:charge, %{
-          id: Cyfr.UUID7.generate_id("chg"),
+          id: Prima.UUID7.generate_id("chg"),
           attempt: attempt,
           generation: 0,
           holder_execution_id: execution_id
@@ -52,7 +52,7 @@ defmodule Cyfr.Execution.Charge do
   @spec take(Authority.t(), keyword()) :: :ok | {:error, term()}
   def take(%Authority{budget: budget}, opts) do
     with %{id: _} = charge <- Keyword.get(opts, :charge),
-         %Cyfr.Actor{} = actor <- actor_of(opts) do
+         %Prima.Actor{} = actor <- actor_of(opts) do
       case Arca.BudgetReservations.charge(actor, budget.id, charge, 1) do
         :ok ->
           :ok
@@ -70,7 +70,7 @@ defmodule Cyfr.Execution.Charge do
   @spec give_back(Authority.t(), keyword()) :: :ok
   def give_back(%Authority{budget: budget}, opts) do
     with %{id: id} <- Keyword.get(opts, :charge),
-         %Cyfr.Actor{} = actor <- actor_of(opts) do
+         %Prima.Actor{} = actor <- actor_of(opts) do
       Arca.BudgetReservations.release(actor, budget.id, id)
       :ok
     else

@@ -4,22 +4,22 @@
 defmodule Opus.WorkerListener do
   @moduledoc """
   Where CYFR's requests reach this worker service: one `POST` route per
-  callback of `Cyfr.WorkerAPI`, as `Cyfr.WorkerWire` spells them, served
+  callback of `Prima.WorkerAPI`, as `Prima.WorkerWire` spells them, served
   by Bandit on the address `Opus.Credentials` names.
 
   A request is verified before its body is read. The `x-cyfr-auth` header
   must verify under this service's dispatch key
-  (`Cyfr.WorkerAuth.verify_request_header/3`), name this service, and carry
+  (`Prima.WorkerAuth.verify_request_header/3`), name this service, and carry
   a nonce not presented within the header window; anything else is refused
   `401` without reading what the caller sent. The body is then read up to
-  `Cyfr.HostAPI.max_body_bytes/0`, checked against the hash the header
-  named (`Cyfr.WorkerAuth.verify_body/2`), and read as the request of the
-  route's callback (`Cyfr.WorkerWire.read_request_body/2`): `start` with
+  `Prima.HostAPI.max_body_bytes/0`, checked against the hash the header
+  named (`Prima.WorkerAuth.verify_body/2`), and read as the request of the
+  route's callback (`Prima.WorkerWire.read_request_body/2`): `start` with
   `assignment`, `input` and `sealed_keys`, `kill` with `execution_id`,
   `status` with nothing. The callback runs on `Opus.WorkerService`, and its
-  answer is the plain `Cyfr.WorkerWire` answer: `{"ok": true}` for a
+  answer is the plain `Prima.WorkerWire` answer: `{"ok": true}` for a
   start or a kill, `{"ok": status}` for the status as
-  `Cyfr.WorkerAPI.status_to_wire/1` writes it, `{"error": name}` for a
+  `Prima.WorkerAPI.status_to_wire/1` writes it, `{"error": name}` for a
   start that is `malformed` or a kill that finds nothing. A start no
   runner can take is refused `503` `unavailable`, with a `message` naming
   why while the keeper refuses runners.
@@ -31,7 +31,7 @@ defmodule Opus.WorkerListener do
 
   require Logger
 
-  alias Cyfr.{HostAPI, WorkerAPI, WorkerAuth, WorkerWire}
+  alias Prima.{HostAPI, WorkerAPI, WorkerAuth, WorkerWire}
 
   @nonces __MODULE__.Nonces
 

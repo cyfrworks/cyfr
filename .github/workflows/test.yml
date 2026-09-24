@@ -305,6 +305,44 @@ jobs:
         if: failure()
         run: docker logs minio
 
+  prima-independence:
+    name: Prima compiles and tests alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '29'
+          elixir-version: '1.20.3'
+      - name: Cache deps
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-prima-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-prima-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Install dependencies
+        run: mix deps.get
+      # The shared contracts depend on no other application: a checkout
+      # holding only the lock, Prima, the fetched deps, the WIT tree
+      # (`Prima.WIT` embeds it), the protocol vectors and the shipped
+      # components the Wasm validator's suite reads compiles it with
+      # warnings as errors and runs its suite. Standalone, the application
+      # loads only its own empty configuration.
+      - name: Compile and test Prima alone
+        run: |
+          set -euo pipefail
+          island="$RUNNER_TEMP/prima-island"
+          mkdir -p "$island/apps" "$island/tests" "$island/seed"
+          cp mix.lock "$island/"
+          cp -R apps/prima "$island/apps/"
+          cp -R deps wit "$island/"
+          cp -R tests/fixtures "$island/tests/"
+          cp -R seed/components "$island/seed/"
+          cd "$island/apps/prima"
+          mix compile --warnings-as-errors
+          mix test
+
   opus-independence:
     name: Opus compiles and tests from its declared apps alone
     runs-on: ubuntu-latest
@@ -325,7 +363,7 @@ jobs:
         run: mix deps.get
       # The worker service releases without the control plane: a checkout
       # holding only the lock, the contracts, Opus, the fetched deps, the
-      # WIT tree (`Compendium.WITSource` embeds it; `Opus.Runtime` reads the
+      # WIT tree (`Prima.WIT` embeds it; `Opus.Runtime` reads the
       # same tree) and the protocol vectors compiles it with warnings as
       # errors and runs its suite, against a scripted host and no database.
       # The vector tests fail rather than skip without their fixture.
@@ -335,7 +373,7 @@ jobs:
           island="$RUNNER_TEMP/opus-island"
           mkdir -p "$island/apps" "$island/tests"
           cp mix.lock "$island/"
-          cp -R apps/cyfr_contracts apps/opus "$island/apps/"
+          cp -R apps/prima apps/opus "$island/apps/"
           cp -R deps wit "$island/"
           cp -R tests/fixtures "$island/tests/"
           cd "$island/apps/opus"
@@ -373,7 +411,7 @@ jobs:
           island="$RUNNER_TEMP/arca-island"
           mkdir -p "$island/apps" "$island/config"
           cp mix.lock "$island/"
-          cp -R apps/cyfr_contracts apps/arca "$island/apps/"
+          cp -R apps/prima apps/arca "$island/apps/"
           cp -R deps wit "$island/"
           cp config/database_choice.exs "$island/config/"
           cd "$island/apps/arca"
@@ -413,7 +451,7 @@ jobs:
           island="$RUNNER_TEMP/sanctum-island"
           mkdir -p "$island/apps" "$island/config"
           cp mix.lock "$island/"
-          cp -R apps/cyfr_contracts apps/arca apps/sanctum "$island/apps/"
+          cp -R apps/prima apps/arca apps/sanctum "$island/apps/"
           cp -R deps wit "$island/"
           cp config/database_choice.exs "$island/config/"
           cd "$island/apps/sanctum"
@@ -440,7 +478,7 @@ jobs:
         run: mix deps.get
       # The builder releases without the control plane: a checkout holding
       # only the lock, the contracts, Locus, the fetched deps, the WIT tree
-      # (`Compendium.WITSource` embeds it), the vector files its wire and
+      # (`Prima.WIT` embeds it), the vector files its wire and
       # spawner tests read (tests/fixtures) and the locus release's runtime
       # configuration (config/locus_runtime.exs, which its config test
       # evaluates) compiles it with warnings as errors and runs its suite,
@@ -452,7 +490,7 @@ jobs:
           island="$RUNNER_TEMP/locus-island"
           mkdir -p "$island/apps" "$island/config" "$island/tests"
           cp mix.lock "$island/"
-          cp -R apps/cyfr_contracts apps/locus "$island/apps/"
+          cp -R apps/prima apps/locus "$island/apps/"
           cp -R deps wit "$island/"
           cp -R tests/fixtures "$island/tests/"
           cp config/locus_runtime.exs "$island/config/"
@@ -1068,6 +1106,11 @@ jobs:
             'topic_subscription|TopicSubscription' \
             'Cyfr\.Topics\b' \
             'prism:[a-z_]' \
+            'cyfr_contracts' \
+            'CyfrContracts' \
+            'Compendium\.(WITSource|WasmValidator)\b' \
+            'Cyfr\.Test\.(SourceTree|CodeLines|Wait|AuthorityFixtures)\b' \
+            'Emissary\.MCP\.VaultRef\b' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then

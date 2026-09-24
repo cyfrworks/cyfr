@@ -3,7 +3,7 @@
 
 defmodule Aqua.Models do
   @moduledoc """
-  The assistant's model work over `model/chat@1` (`Cyfr.Model`, which
+  The assistant's model work over `model/chat@1` (`Prima.Model`, which
   names the contract and reads its envelope):
 
     * `capabilities/5` — what one model can do, read from its catalyst's
@@ -46,7 +46,7 @@ defmodule Aqua.Models do
   `reason` `:timeout` when it outran `:timeout`. No error is cached.
   """
   @spec capabilities(Context.t(), String.t(), String.t(), String.t() | nil, keyword()) ::
-          {:ok, Cyfr.Model.capabilities()} | {:error, term()}
+          {:ok, Prima.Model.capabilities()} | {:error, term()}
   def capabilities(%Context{} = ctx, resolved_ref, model, binding_digest, opts)
       when is_binary(model) do
     run = opts |> Keyword.fetch!(:run) |> bounded(Keyword.get(opts, :timeout))
@@ -83,7 +83,7 @@ defmodule Aqua.Models do
 
   defp describe_model(model, run) do
     with {:ok, result} <- ran(run.(%{"operation" => "describe", "params" => %{"model" => model}})),
-         {:ok, described} <- described(Cyfr.Model.decode_envelope(result), model),
+         {:ok, described} <- described(Prima.Model.decode_envelope(result), model),
          {:ok, window} <- window(described, model) do
       {:ok,
        %{
@@ -175,20 +175,20 @@ defmodule Aqua.Models do
   # The newest installed version of every catalyst declaring the contract,
   # as `{provider, versionless_ref}`.
   defp newest_speaking(rows) do
-    chat = Cyfr.Model.chat_contract()
+    chat = Prima.Model.chat_contract()
 
     rows
     |> Enum.filter(&(chat in &1.contracts))
     |> Enum.group_by(&{&1.publisher, &1.name})
     |> Enum.map(fn {{publisher, name}, versions} ->
-      newest = versions |> Cyfr.Semver.sort_desc_by(&(&1.version || "0")) |> hd()
+      newest = versions |> Prima.Semver.sort_desc_by(&(&1.version || "0")) |> hd()
       {provider_key(publisher, name), newest.node_key}
     end)
     |> Enum.sort()
   end
 
   defp provider_key(publisher, name) do
-    case Cyfr.ComponentPath.normalize_publisher(publisher) do
+    case Prima.ComponentPath.normalize_publisher(publisher) do
       "local" -> name
       namespace -> "#{namespace}.#{name}"
     end
@@ -204,7 +204,7 @@ defmodule Aqua.Models do
       })
 
     with {:ok, result} <- run,
-         {:ok, %{"models" => models}} when is_list(models) <- Cyfr.Model.decode_envelope(result) do
+         {:ok, %{"models" => models}} when is_list(models) <- Prima.Model.decode_envelope(result) do
       {:ok,
        models
        |> Enum.map(&(is_map(&1) && &1["id"]))
@@ -271,12 +271,12 @@ defmodule Aqua.Models do
   end
 
   defp lent_to_assistant?(ctx, catalyst_ref) do
-    soul = Cyfr.AgentRef.soul_ref()
+    soul = Prima.AgentRef.soul_ref()
 
     with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, soul),
          {:ok, edge} <-
-           Cyfr.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
-      Cyfr.Authority.Blob.bound_vault?(edge.vault)
+           Prima.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
+      Prima.Authority.Blob.bound_vault?(edge.vault)
     else
       _ -> false
     end

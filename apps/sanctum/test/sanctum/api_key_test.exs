@@ -711,7 +711,7 @@ defmodule Sanctum.ApiKeyTest do
             # The display default: the column as it decodes, nil when it
             # does not.
             displayed =
-              case Cyfr.Json.decode(stored) do
+              case Prima.Json.decode(stored) do
                 {:ok, value} -> value
                 {:error, :invalid_json} -> nil
               end

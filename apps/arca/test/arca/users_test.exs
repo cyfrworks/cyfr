@@ -17,9 +17,9 @@ defmodule Arca.UsersTest do
     :ok
   end
 
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
-  defp in_athanor(id), do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
+  defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
   defp person!(overrides \\ %{}) do
     n = System.unique_integer([:positive])
@@ -28,7 +28,7 @@ defmodule Arca.UsersTest do
     user_attrs =
       Map.merge(
         %{
-          id: Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix()),
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           provider: "github",
           email: "p#{n}@example.com",
           email_verified: true,
@@ -113,7 +113,7 @@ defmodule Arca.UsersTest do
       user = person!()
       drain_queries!()
 
-      # A map carrying the actor's own fields is still not a `%Cyfr.Actor{}`:
+      # A map carrying the actor's own fields is still not a `%Prima.Actor{}`:
       # every head matches the struct, so the shape is refused rather than
       # read for the scope it claims.
       not_an_actor = %{user_id: user.id, scope: :platform}
@@ -139,7 +139,7 @@ defmodule Arca.UsersTest do
 
     test "an identity that cannot be written leaves no person behind" do
       now = DateTime.utc_now()
-      id = Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix())
+      id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
 
       assert {:error, {:invalid, %{subject: [_ | _]}}} =
                Users.mint(
@@ -174,7 +174,7 @@ defmodule Arca.UsersTest do
                Users.mint(
                  server(),
                  %{
-                   id: Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix()),
+                   id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
                    provider: "github",
                    first_seen_at: now,
                    last_seen_at: now,

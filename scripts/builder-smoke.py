@@ -6,7 +6,7 @@
 Starts the image with the locus-builds service's own settings (the
 `locus-builds` profile of docker-compose.yml, layered with
 tests/builder-image/compose.locus-builds.yml for the image and a loopback
-port), then drives the build wire (`Cyfr.BuilderProtocol`, signed by
+port), then drives the build wire (`Prima.BuilderProtocol`, signed by
 tests/builder-image/stack.py) through a component's life: a Rust build
 that streams its progress and resolves its Cargo.lock, a dependency added
 without re-resolving (refused by `--locked`), a re-resolve, a locked

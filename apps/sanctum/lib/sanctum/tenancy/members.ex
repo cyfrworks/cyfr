@@ -433,7 +433,7 @@ defmodule Sanctum.Tenancy.Members do
     with {:ok, row} <- find(user_id, "athanor", athanor_id),
          :ok <- end_if_frozen(athanor),
          :ok <-
-           Arca.ThreadSubscriptionStorage.unfollow_all(Cyfr.Actor.in_athanor(athanor_id), user_id),
+           Arca.ThreadSubscriptionStorage.unfollow_all(Prima.Actor.in_athanor(athanor_id), user_id),
          {:ok, _} <- remove(row) do
       # Invalidate cached contexts after membership removal; retain sessions for revalidation.
       Sanctum.Session.invalidate_memo_for_user(user_id)
@@ -540,12 +540,12 @@ defmodule Sanctum.Tenancy.Members do
 
   # A person's seats span athanors and a platform row names none, so the
   # fabric reads as the server.
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
   # The server narrowed to one athanor — the actor a read or write of that
   # athanor's own roster runs as. A nil athanor is refused by the facade
   # before any query.
-  defp in_athanor(id), do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
+  defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
   # A frozen estate ends when ANYONE leaves, not when the last person does.
   # Waiting for empty would leave a one-member pair standing: a second You

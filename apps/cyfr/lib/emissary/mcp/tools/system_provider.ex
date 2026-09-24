@@ -27,7 +27,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   context and nothing the caller sends.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   @impl true
   def service, do: "emissary"
@@ -46,7 +46,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   @impl true
   def tools do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # Anonymous-allowed: the health check a client calls before
     # logging in.
     # Authenticated-only, matching the HTTP surface (which has always
@@ -154,7 +154,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
             Enum.map_join(Arca.Storage.tenant_roots(), ", ", &(&1 <> "/")) <>
             "); a key scoped to :storage_read reaches " <>
             Enum.map_join(Arca.Storage.key_read_roots(), " and ", &(&1 <> "/")),
-        mimeType: Cyfr.MediaType.binary()
+        mimeType: Prima.MediaType.binary()
       }
     ]
   end
@@ -246,7 +246,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     {:ok,
      %{
        status: overall,
-       version: Cyfr.Version.current(),
+       version: Prima.Version.current(),
        uptime_seconds: uptime(),
        services: services,
        mcp: %{
@@ -264,7 +264,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
       {:ok,
        %{
          status: if(service_status in ["ok", "stub", "unknown"], do: "ok", else: "degraded"),
-         version: Cyfr.Version.current(),
+         version: Prima.Version.current(),
          uptime_seconds: uptime(),
          # `scope` was just checked against the closed derived set, so the
          # atom table stays bounded.
@@ -335,14 +335,14 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   defp reason_text(reason) when is_binary(reason), do: reason
-  defp reason_text(reason), do: inspect(Cyfr.Sanitizer.sanitize(reason))
+  defp reason_text(reason), do: inspect(Prima.Sanitizer.sanitize(reason))
 
   # ============================================================================
   # Tools List Filtering
   # ============================================================================
 
   defp handle_tools_list_for(tools, component_ref) do
-    case Cyfr.ComponentRef.parse(component_ref) do
+    case Prima.ComponentRef.parse(component_ref) do
       {:ok, %{type: "formula"}} ->
         filtered = Cyfr.Ops.Catalog.in_chain_view(tools)
         {:ok, %{tools: filtered, component_ref: component_ref, filtered: true}}
@@ -458,7 +458,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
       {:ok, body} ->
         headers = [
           {"content-type", "application/json"},
-          {"user-agent", "CYFR/" <> Cyfr.Version.current()}
+          {"user-agent", "CYFR/" <> Prima.Version.current()}
         ]
 
         # The pinned path resolves-validates once, connects to the validated

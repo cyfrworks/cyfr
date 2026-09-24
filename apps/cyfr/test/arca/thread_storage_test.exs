@@ -339,7 +339,7 @@ defmodule Arca.ThreadStorageTest do
     Application.put_env(:sanctum, :caps, Keyword.put(original, :max_threads_per_athanor, 1))
     on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
 
-    # The refusal is the port's vocabulary (`Cyfr.Caps`), not the tenancy
+    # The refusal is the port's vocabulary (`Prima.Caps`), not the tenancy
     # domain named from below it, and the row it refused is not there.
     assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
              Threads.create(ctx, %{title: "One too many"})
@@ -347,7 +347,7 @@ defmodule Arca.ThreadStorageTest do
     assert Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort() == before
 
     # Another estate's count is its own.
-    other = Cyfr.Actor.in_athanor("ath_b")
+    other = Prima.Actor.in_athanor("ath_b")
     assert {:ok, _} = Threads.create(other, %{title: "Theirs"})
   end
 end

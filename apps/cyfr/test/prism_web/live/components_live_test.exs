@@ -113,7 +113,7 @@ defmodule PrismWeb.ComponentsLiveTest do
 
     # The copy lands, registered, and the page shows it as the latest
     # version with nothing left to update to.
-    Cyfr.Test.Wait.wait_until(fn ->
+    Prima.Test.Wait.wait_until(fn ->
       render(view) =~ "Pulled reagent:local.shelf-tool:1.1.0"
     end)
 

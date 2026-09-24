@@ -6,7 +6,7 @@ defmodule Cyfr.MixProject do
   def project do
     [
       apps_path: "apps",
-      apps: [:cyfr_contracts, :arca, :sanctum, :cyfr, :locus, :opus],
+      apps: [:prima, :arca, :sanctum, :cyfr, :locus, :opus],
       version: "0.5.8",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -62,7 +62,7 @@ defmodule Cyfr.MixProject do
       # control plane starts neither.
       cyfr: [
         applications: [
-          cyfr_contracts: :permanent,
+          prima: :permanent,
           arca: :permanent,
           sanctum: :permanent,
           cyfr: :permanent
@@ -74,17 +74,17 @@ defmodule Cyfr.MixProject do
       # reaches CYFR's host API over HTTP.
       opus: [
         applications: [
-          cyfr_contracts: :permanent,
+          prima: :permanent,
           opus: :permanent
         ]
       ],
       # The builder: Locus on the shared contracts, and nothing of the
       # control plane (`Locus.HostSurfaceTest`). It holds one builds key,
       # reads `LOCUS_BUILDS_*` through its own runtime configuration, and is
-      # reached by CYFR over the build wire (`Cyfr.BuilderProtocol`).
+      # reached by CYFR over the build wire (`Prima.BuilderProtocol`).
       locus: [
         applications: [
-          cyfr_contracts: :permanent,
+          prima: :permanent,
           locus: :permanent
         ],
         runtime_config_path: "config/locus_runtime.exs"

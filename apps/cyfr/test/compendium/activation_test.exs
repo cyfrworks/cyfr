@@ -147,7 +147,7 @@ defmodule Compendium.ActivationTest do
         end)
 
       assert {:ok, _blob} =
-               Cyfr.Authority.Blob.parse(%{"canonical" => "jcs-1", "nodes" => nodes})
+               Prima.Authority.Blob.parse(%{"canonical" => "jcs-1", "nodes" => nodes})
     end
 
     test "a version-pinned dependency resolves to that exact release", %{ctx: ctx} do
@@ -276,7 +276,7 @@ defmodule Compendium.ActivationTest do
       {:ok, %{digest: digest, graph: graph}} = Activation.resolve(ctx, root)
       {:ok, encoded} = Activation.encode_graph(graph)
 
-      assert Cyfr.JCS.hash_binary(encoded) == digest
+      assert Prima.JCS.hash_binary(encoded) == digest
       assert Jason.decode!(encoded) == graph
     end
 

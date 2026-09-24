@@ -21,7 +21,7 @@ defmodule Arca.RecordSinkTest do
   defp policy_attrs(overrides) do
     Map.merge(
       %{
-        id: Cyfr.UUID7.generate_id("plog"),
+        id: Prima.UUID7.generate_id("plog"),
         user_id: "u1",
         athanor_id: "ath_a",
         timestamp: DateTime.utc_now(),
@@ -34,7 +34,7 @@ defmodule Arca.RecordSinkTest do
   end
 
   test "queued rows land on flush, in one batch" do
-    ids = for _ <- 1..5, do: Cyfr.UUID7.generate_id("plog")
+    ids = for _ <- 1..5, do: Prima.UUID7.generate_id("plog")
     for id <- ids, do: :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: id})})
 
     # Nothing is written until the sink drains.
@@ -45,7 +45,7 @@ defmodule Arca.RecordSinkTest do
   end
 
   test "an invalid row is dropped without taking the batch with it" do
-    good = Cyfr.UUID7.generate_id("plog")
+    good = Prima.UUID7.generate_id("plog")
     :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: good})})
     :ok = RecordSink.enqueue({:policy_log, %{id: "plog_bad"}})
     :ok = RecordSink.flush()
@@ -57,7 +57,7 @@ defmodule Arca.RecordSinkTest do
 
   test "an MCP log completion reaches the started row" do
     ctx = Sanctum.TestContext.local()
-    call_id = Cyfr.UUID7.generate_id("call")
+    call_id = Prima.UUID7.generate_id("call")
 
     :ok =
       Emissary.MCP.RequestLog.log_started(ctx, call_id, %{
@@ -75,14 +75,14 @@ defmodule Arca.RecordSinkTest do
 
   test "vault touches are deduplicated into one update per entry" do
     {:ok, entry} =
-      Arca.VaultStorage.put(%Cyfr.Actor{athanor_id: "ath_a"}, %{
+      Arca.VaultStorage.put(%Prima.Actor{athanor_id: "ath_a"}, %{
         name: "sink-probe",
         kind: "api_key",
         status: "active",
         sealed_payload: <<4, 2, "k1", 0>>
       })
 
-    actor = %Cyfr.Actor{athanor_id: "ath_a"}
+    actor = %Prima.Actor{athanor_id: "ath_a"}
 
     assert entry.last_used_at == nil
     for _ <- 1..3, do: :ok = Arca.VaultStorage.touch_last_used(actor, entry.id)
@@ -94,7 +94,7 @@ defmodule Arca.RecordSinkTest do
 
   test "inline mode writes in the caller" do
     Application.put_env(:arca, :record_sink_inline, true)
-    id = Cyfr.UUID7.generate_id("plog")
+    id = Prima.UUID7.generate_id("plog")
     :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: id})})
     assert {:ok, sink_rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
     assert Enum.any?(sink_rows, &(&1.id == id))
@@ -106,7 +106,7 @@ defmodule Arca.RecordSinkTest do
   # lost; only casts left in the mailbox are, which is the write-behind's
   # stated cost.
   test "a row still buffered at shutdown is drained by terminate/2, not lost" do
-    id = Cyfr.UUID7.generate_id("plog")
+    id = Prima.UUID7.generate_id("plog")
     pid = Process.whereis(Arca.RecordSink)
 
     :ok = RecordSink.flush()

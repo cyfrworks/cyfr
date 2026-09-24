@@ -26,7 +26,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
 
   defp mint_oauth_entry(ctx, oauth, over \\ %{}) do
-    id = Cyfr.UUID7.generate_id("vlt")
+    id = Prima.UUID7.generate_id("vlt")
     aad = CipherAAD.vault_entry(ctx.athanor_id, id, "google")
 
     {:ok, json} = Payload.encode_material(%{}, oauth)

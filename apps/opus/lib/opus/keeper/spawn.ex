@@ -28,7 +28,7 @@ defmodule Opus.Keeper.Spawn do
   streams as frames: a stream byte (0 stdin, 1 stdout, 2 stderr, 3 the
   token, 4 the control channel), a 4-byte big-endian length and at most
   64 KiB of payload; a zero-length frame ends its stream. Control bytes
-  go both ways on stream 4: a `Cyfr.RunnerControl` line longer than a
+  go both ways on stream 4: a `Prima.RunnerControl` line longer than a
   frame is split across frames and reassembled by its newline on the far
   side. A zero-length control frame from the relay means the runner
   closed its fd 3 or exited.
@@ -499,7 +499,7 @@ defmodule Opus.Keeper.Spawn do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

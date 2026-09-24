@@ -699,7 +699,7 @@ defmodule Sanctum.ContextTest do
     test "projects an authenticated external context one field each" do
       ctx = Context.build(@external)
 
-      assert Context.actor(ctx) == %Cyfr.Actor{
+      assert Context.actor(ctx) == %Prima.Actor{
                athanor_id: "ath_1",
                plane: :external,
                anonymous: false,
@@ -797,6 +797,6 @@ defmodule Sanctum.ContextTest do
 
   # The clause a facade that takes the actor matches: a resolved tenant is a
   # binary, and nothing else is admitted before a query.
-  defp tenant_resolved?(%Cyfr.Actor{athanor_id: id}) when is_binary(id), do: true
-  defp tenant_resolved?(%Cyfr.Actor{}), do: false
+  defp tenant_resolved?(%Prima.Actor{athanor_id: id}) when is_binary(id), do: true
+  defp tenant_resolved?(%Prima.Actor{}), do: false
 end

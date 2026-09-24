@@ -57,7 +57,7 @@ defmodule Emissary.MCP.ResourceRegistryTest do
         assert {:ok, tool, action} = ResourceRegistry.resolve(uri)
         assert {:ok, {_module, meta}} = Cyfr.Ops.Catalog.lookup(tool)
         operation = Enum.find(meta.operations, &(&1.action == action))
-        {:ok, scheme} = Cyfr.Ops.Provider.resource_scheme(uri)
+        {:ok, scheme} = Prima.Provider.resource_scheme(uri)
         assert scheme in operation.resource_schemes
       end
     end

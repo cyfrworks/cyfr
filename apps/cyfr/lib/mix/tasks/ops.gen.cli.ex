@@ -80,7 +80,7 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   end
 
   @doc "Render explicit declarations, without starting the catalog."
-  @spec render([Cyfr.Ops.Operation.t()]) :: String.t()
+  @spec render([Prima.Operation.t()]) :: String.t()
   def render(operations) do
     operations = Enum.sort_by(operations, &{&1.tool, &1.action})
 

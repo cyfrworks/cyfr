@@ -65,7 +65,7 @@ defmodule Opus.RunnerBoundaryTest do
 
     ScriptedHost.attempt!(
       host,
-      [boot: boot, component_type: :reagent, digest: Cyfr.Digest.sha256(@echo)] ++ opts
+      [boot: boot, component_type: :reagent, digest: Prima.Digest.sha256(@echo)] ++ opts
     )
   end
 
@@ -74,7 +74,7 @@ defmodule Opus.RunnerBoundaryTest do
 
     ScriptedHost.attempt!(
       host,
-      [boot: boot, component_type: :reagent, digest: Cyfr.Digest.sha256(@spin)] ++ opts
+      [boot: boot, component_type: :reagent, digest: Prima.Digest.sha256(@spin)] ++ opts
     )
   end
 
@@ -148,12 +148,12 @@ defmodule Opus.RunnerBoundaryTest do
 
   test "the status has the contract's shape", %{host: host, boot: boot} do
     {:ok, status} = WorkerService.status()
-    assert Cyfr.WorkerAPI.valid_status?(status)
+    assert Prima.WorkerAPI.valid_status?(status)
 
     assert :ok = start(spin!(host, boot))
     wait_until(fn -> ScriptedHost.requests(host, "attach") != [] end, @boot_ms)
     {:ok, status} = WorkerService.status()
-    assert Cyfr.WorkerAPI.valid_status?(status)
+    assert Prima.WorkerAPI.valid_status?(status)
     assert %{busy: 1} = status.runners
   end
 

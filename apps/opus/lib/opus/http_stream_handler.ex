@@ -44,8 +44,8 @@ defmodule Opus.HttpStreamHandler do
 
   require Logger
 
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Limits
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Limits
   alias Opus.{HostClient, HttpHandler, HttpRequestValidation}
 
   # Fallback stream timeout, used only when the node limits carry an
@@ -257,11 +257,11 @@ defmodule Opus.HttpStreamHandler do
     # Carry the tenant correlators into the task — the one spawn in the
     # tree that skipped the capture/restore convention, so guest streaming
     # logs arrived with no athanor_id or execution_id.
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     start =
       Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
+        Prima.LoggerContext.restore(logger_metadata)
 
         try do
           perform_streaming_request(request, buffer, component_ref, timeout_ms, max_response_size)
@@ -543,7 +543,7 @@ defmodule Opus.HttpStreamHandler do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
   end
 
-  defp safe_encode(data), do: Cyfr.WitResponse.safe_encode(data)
+  defp safe_encode(data), do: Prima.WitResponse.safe_encode(data)
 
-  defp encode_error(type, message), do: Cyfr.WitResponse.encode_error(type, message)
+  defp encode_error(type, message), do: Prima.WitResponse.encode_error(type, message)
 end

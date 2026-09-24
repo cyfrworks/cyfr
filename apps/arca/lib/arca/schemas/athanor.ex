@@ -107,7 +107,7 @@ defmodule Arca.Schemas.Athanor do
     |> validate_inclusion(:status, @statuses)
     # The slug grammar is the namespace grammar: a person's athanor slug is
     # their cyfr.run namespace, a group's slug is chosen from its name.
-    |> validate_format(:slug, Cyfr.ComponentRef.personal_slug_regex(),
+    |> validate_format(:slug, Prima.ComponentRef.personal_slug_regex(),
       message: "must be lowercase alphanumeric with single hyphens"
     )
     |> validate_owner()

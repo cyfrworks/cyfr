@@ -6,7 +6,7 @@ defmodule Cyfr.Execution.Assignments do
   The signed assignment of an admitted execution attempt, and the keys its
   runner signs and seals host calls with.
 
-  `issue/1` builds a `Cyfr.Assignment` from what admission settled and
+  `issue/1` builds a `Prima.Assignment` from what admission settled and
   signs it with the assign key (`Cyfr.Execution.Keys`). The runner presents
   the token at attach (`Cyfr.Execution.Host`), which verifies it, checks
   it names the attempt its header does and claims the attempt.
@@ -14,7 +14,7 @@ defmodule Cyfr.Execution.Assignments do
   An assignment is issued under the current generation
   (`Cyfr.Execution.Keys.generation/0`), to the worker service and the boot
   of it the run is dispatched to, and may be claimed within the claim
-  window (`Cyfr.Assignment.claim_window_ms/0`). Its deadline is the
+  window (`Prima.Assignment.claim_window_ms/0`). Its deadline is the
   subtree deadline admission settled, and its lease runs one lease period
   from issue. Its attempt's keys are bound to that worker
   service as well as to the attempt, its fence and its generation.
@@ -27,7 +27,7 @@ defmodule Cyfr.Execution.Assignments do
   posted and the member is what every other member refuses them by.
   """
 
-  alias Cyfr.{Actor, Assignment, Authority}
+  alias Prima.{Actor, Assignment, Authority}
   alias Cyfr.Execution.{Keys, Record}
   alias Sanctum.Context
 
@@ -56,13 +56,13 @@ defmodule Cyfr.Execution.Assignments do
   An issued assignment: its token and its attempt's keys, naming the
   attempt as a host call header carries it.
   """
-  @type issued :: %{assignment: Assignment.token(), attempt_keys: Cyfr.WorkerAuth.attempt_keys()}
+  @type issued :: %{assignment: Assignment.token(), attempt_keys: Prima.WorkerAuth.attempt_keys()}
 
   @doc """
   Sign the assignment of the admitted attempt at fence 1. Answers
   `{:error, :unavailable}` when the control-plane generation is not known
   (`Cyfr.Execution.Keys.generation/0`), and `{:error, reason}` when what
-  admission settled is not a valid assignment (`Cyfr.Assignment.sign/2`).
+  admission settled is not a valid assignment (`Prima.Assignment.sign/2`).
   """
   @spec issue(admitted()) :: {:ok, issued()} | {:error, term()}
   def issue(%{record: %Record{} = record} = admitted) do
@@ -101,7 +101,7 @@ defmodule Cyfr.Execution.Assignments do
       actor: actor(admitted.ctx),
       authority: Authority.to_wire(admitted.authority),
       component: admitted.component,
-      input_digest: Cyfr.Digest.sha256(Jason.encode!(admitted.input)),
+      input_digest: Prima.Digest.sha256(Jason.encode!(admitted.input)),
       timeout_ms: admitted.timeout_ms,
       # The subtree deadline admission settled, already capped by the
       # parent's; a run admitted with none has its own timeout from now.

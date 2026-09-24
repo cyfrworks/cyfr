@@ -4,7 +4,7 @@
 defmodule Cyfr.Execution.Host.Children do
   @moduledoc """
   The host calls a formula's runner makes for its guest's children and
-  catalog tools: `admit_child` and `tool_call` (`Cyfr.HostAPI`).
+  catalog tools: `admit_child` and `tool_call` (`Prima.HostAPI`).
 
   `Cyfr.Execution.Host` verifies the call, decodes its body
   (`operation/2`) and checks its nonce before `call/2` acts. Both act under
@@ -21,7 +21,7 @@ defmodule Cyfr.Execution.Host.Children do
   ## admit_child
 
   The body names the child's `child_key`, the key the runner minted for
-  it (`t:Cyfr.HostAPI.child_key/0`); a body without one, or with a
+  it (`t:Prima.HostAPI.child_key/0`); a body without one, or with a
   malformed one, is refused as a guest error before anything is read. The
   child's input is checked against the formula's roster
   (`Cyfr.Execution.Delegation.input/4`), then the child is admitted for the
@@ -32,14 +32,14 @@ defmodule Cyfr.Execution.Host.Children do
   claimed for the calling runner, its vault edge unsealed and handed to
   that runner. The answer carries the child's signed assignment, its
   attempt's keys sealed with the calling attempt's seal key
-  (`Cyfr.WorkerAuth.seal_attempt_keys/3`), the JSON of the input it was
+  (`Prima.WorkerAuth.seal_attempt_keys/3`), the JSON of the input it was
   admitted with, which its assignment's `input_digest` binds, and its
   vault fields. The child runs in the calling runner, which closes its
   attempt; its execution slot, invoke-budget slot and charge row go back
   at its terminal write.
 
   A repeat with the same key — a runner retrying a lost answer
-  (`Cyfr.HostAPI.retry/1`, `:keyed`) — admits nothing and answers the child
+  (`Prima.HostAPI.retry/1`, `:keyed`) — admits nothing and answers the child
   already admitted under it, decided by its row: the same child, its
   assignment signed afresh, its keys and the input it was admitted with. A
   key whose child has ended is `lost`; a different key admits another
@@ -70,13 +70,13 @@ defmodule Cyfr.Execution.Host.Children do
   formula's invoke functions hand their guest:
   `{:guest_error, type, message}`, and
   `{:guest_error, "setup_required", message, remediation}` for a setup
-  refusal (`Cyfr.Remediation`). An internal term never reaches a message.
+  refusal (`Prima.Remediation`). An internal term never reaches a message.
   """
 
   require Logger
 
   alias Cyfr.Execution.{Attempt, Delegation, Events, Keys}
-  alias Cyfr.WorkerAuth
+  alias Prima.WorkerAuth
 
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :service]
   @guest_fns %{"call" => :call, "spawn" => :spawn}
@@ -91,7 +91,7 @@ defmodule Cyfr.Execution.Host.Children do
              need: term(),
              input: map(),
              guest_fn: :call | :spawn,
-             child_key: Cyfr.HostAPI.child_key()
+             child_key: Prima.HostAPI.child_key()
            }}
           | {:tool_call, %{name: String.t(), args: map(), guest_fn: :call | :spawn}}
           | {:release_child, String.t()}
@@ -101,7 +101,8 @@ defmodule Cyfr.Execution.Host.Children do
   for one that is not an operation, or the guest error an `admit_child`
   without a well-formed `child_key` is refused with.
   """
-  @spec operation(String.t(), map()) :: {:ok, op()} | {:error, :lost | Cyfr.HostAPI.guest_error()}
+  @spec operation(String.t(), map()) ::
+          {:ok, op()} | {:error, :lost | Prima.HostAPI.guest_error()}
   def operation("admit_child", %{"reference" => reference, "input" => %{} = input} = args)
       when is_binary(reference) do
     with {:ok, guest_fn} <- guest_fn(args),
@@ -138,7 +139,7 @@ defmodule Cyfr.Execution.Host.Children do
   # The key is the runner's, so a runner that sends none, or one outside
   # the contract's shape, is told so rather than losing its attempt.
   defp child_key(%{"child_key" => key}) do
-    if Cyfr.HostAPI.valid_child_key?(key),
+    if Prima.HostAPI.valid_child_key?(key),
       do: {:ok, key},
       else: {:error, guest_error(:invalid_request, "Invalid child_key: not a child key")}
   end
@@ -302,7 +303,7 @@ defmodule Cyfr.Execution.Host.Children do
     do: guest_error(:invalid_request, "Invalid reference: #{guest_reason(reason)}")
 
   defp child_refusal({:setup_required, %{node_ref: node_ref}} = reason) do
-    {:setup_required, remediation} = Cyfr.Remediation.analyze(reason)
+    {:setup_required, remediation} = Prima.Remediation.analyze(reason)
     {:guest_error, "setup_required", "Dependency cannot be satisfied: #{node_ref}", remediation}
   end
 
@@ -324,7 +325,7 @@ defmodule Cyfr.Execution.Host.Children do
   defp tool_refusal(reason, chain) do
     message = render(reason)
 
-    case Cyfr.Remediation.analyze(reason) do
+    case Prima.Remediation.analyze(reason) do
       {:setup_required, remediation} ->
         announce_setup(chain, remediation, message)
         {:guest_error, "setup_required", message, remediation}

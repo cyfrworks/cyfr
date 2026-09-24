@@ -319,7 +319,7 @@ defmodule EmissaryWeb.MCPTransportTest do
     test "a listener is addressed by request id, not by session", %{conn: _conn} do
       :ok = Progress.listen("req_scoped", "tok")
       on_exit(fn -> Progress.forget("req_scoped") end)
-      actor = Cyfr.Actor.in_athanor("ath_scoped")
+      actor = Prima.Actor.in_athanor("ath_scoped")
 
       mine = Cyfr.Bus.Progress.new(actor, {:pull, "p"}, request_id: "req_scoped", phase: :x)
       theirs = Cyfr.Bus.Progress.new(actor, {:pull, "p"}, request_id: "req_other", phase: :x)
@@ -362,7 +362,7 @@ defmodule EmissaryWeb.MCPTransportTest do
     cond do
       is_binary(topic) ->
         ["tenant", athanor_id, "progress", "request", request_id] = String.split(topic, ":")
-        actor = Cyfr.Actor.in_athanor(athanor_id)
+        actor = Prima.Actor.in_athanor(athanor_id)
 
         for phase <- phases do
           step =

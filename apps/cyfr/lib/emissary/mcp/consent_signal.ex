@@ -10,7 +10,7 @@ defmodule Emissary.MCP.ConsentSignal do
   `error.data` shaped as `{"tag": ..., "payload": ...}`.
 
   The GUEST wire is not this: in-chain formula children keep the
-  remediation object shape `Cyfr.Remediation` owns (component-guide
+  remediation object shape `Prima.Remediation` owns (component-guide
   documents it), and the tincture iframe bridge keeps its own protocol.
   """
 

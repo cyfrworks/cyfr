@@ -4,7 +4,7 @@
 defmodule Cyfr.Execution.Keys do
   @moduledoc """
   The keys CYFR and its execution workers authenticate each other with
-  (`Cyfr.WorkerAuth`).
+  (`Prima.WorkerAuth`).
 
   The worker root is `config :cyfr, :worker_key` (`CYFR_WORKER_KEY`, 32
   bytes). Without one, the root is 32 random bytes minted when the
@@ -20,17 +20,17 @@ defmodule Cyfr.Execution.Keys do
   A generation the control plane cannot answer is a refusal, never `1`:
   no assignment is issued and no host call verifies under it.
 
-  `member/0` is this member's identity in the cell, `Cyfr.Boot.id/0`.
+  `member/0` is this member's identity in the cell, `Prima.Boot.id/0`.
   Every assignment carries it and every host call of that assignment's
   attempt presents it, so the calls of an attempt reach the one member
   holding it: `standing/0` pairs it with the generation, and that pair is
-  what a host call is verified against (`Cyfr.WorkerAuth.verify_host_call/5`).
+  what a host call is verified against (`Prima.WorkerAuth.verify_host_call/5`).
   The generation alone cannot do this work — it is each member's own, and
   in a freshly formed cell every member holds generation 1 — so a peer
   would answer from the rows a call it holds no process for.
   """
 
-  alias Cyfr.WorkerAuth
+  alias Prima.WorkerAuth
 
   @key {__MODULE__, :root}
 
@@ -57,16 +57,16 @@ defmodule Cyfr.Execution.Keys do
     root
   end
 
-  @doc "The key assignments are MAC'd with (`Cyfr.Assignment`)."
+  @doc "The key assignments are MAC'd with (`Prima.Assignment`)."
   @spec assign_key() :: binary()
   def assign_key, do: WorkerAuth.assign_key(root())
 
   @doc """
   The key of the worker service `service` (its configured id, never its
   boot), from which its dispatch and dispatch seal keys derive
-  (`Cyfr.WorkerAuth.worker_key/2`).
+  (`Prima.WorkerAuth.worker_key/2`).
   """
-  @spec worker_key(String.t()) :: {:ok, binary()} | {:error, Cyfr.MacEnvelope.invalid_field()}
+  @spec worker_key(String.t()) :: {:ok, binary()} | {:error, Prima.MacEnvelope.invalid_field()}
   def worker_key(service) when is_binary(service), do: WorkerAuth.worker_key(root(), service)
 
   @doc """
@@ -75,7 +75,7 @@ defmodule Cyfr.Execution.Keys do
   them with.
   """
   @spec attempt_keys(WorkerAuth.attempt()) ::
-          {:ok, WorkerAuth.attempt_keys()} | {:error, Cyfr.MacEnvelope.invalid_field()}
+          {:ok, WorkerAuth.attempt_keys()} | {:error, Prima.MacEnvelope.invalid_field()}
   def attempt_keys(attempt) when is_map(attempt), do: WorkerAuth.attempt_keys(root(), attempt)
 
   @doc """
@@ -103,11 +103,11 @@ defmodule Cyfr.Execution.Keys do
   names, and the one a host call of that attempt must present.
   """
   @spec member() :: String.t()
-  def member, do: Cyfr.Boot.id()
+  def member, do: Prima.Boot.id()
 
   @doc """
   What this member holds, as a host call is verified against
-  (`t:Cyfr.WorkerAuth.standing/0`): its generation and its own boot.
+  (`t:Prima.WorkerAuth.standing/0`): its generation and its own boot.
   Refused exactly as `generation/0` is.
   """
   @spec standing() :: {:ok, WorkerAuth.standing()} | {:error, :unavailable}

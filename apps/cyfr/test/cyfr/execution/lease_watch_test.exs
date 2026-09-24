@@ -14,7 +14,7 @@ defmodule Cyfr.Execution.LeaseWatchTest do
     {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "peer:probe",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
@@ -111,7 +111,7 @@ defmodule Cyfr.Execution.LeaseWatchTest do
 
     :ok = LeaseWatch.resume(watch)
 
-    Cyfr.Test.Wait.wait_until(fn ->
+    Prima.Test.Wait.wait_until(fn ->
       %{lease_until: renewed} = Arca.ExecutionAttempts.get(Sanctum.Context.actor(ctx), attempt)
       DateTime.compare(renewed, suspended) == :gt
     end)
@@ -124,7 +124,7 @@ defmodule Cyfr.Execution.LeaseWatchTest do
   test "suspending a keeper that is gone answers at once", %{id: id, attempt: attempt} do
     {pid, _ref, watch} = holder!(id, attempt)
     send(pid, :stop_watch)
-    Cyfr.Test.Wait.wait_until(fn -> not Process.alive?(watch) end)
+    Prima.Test.Wait.wait_until(fn -> not Process.alive?(watch) end)
     assert :ok = LeaseWatch.suspend(watch)
     send(pid, :release)
   end

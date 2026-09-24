@@ -203,7 +203,7 @@ defmodule Cyfr.ApplicationTest do
       assert Cyfr.Test.OpusService.host_url() == "http://127.0.0.1:#{port}"
 
       {:ok, %Req.Response{status: 401, body: body}} =
-        Req.post("http://127.0.0.1:#{port}" <> Cyfr.WorkerWire.host_route(:attach),
+        Req.post("http://127.0.0.1:#{port}" <> Prima.WorkerWire.host_route(:attach),
           body: "{}",
           retry: false,
           decode_body: false

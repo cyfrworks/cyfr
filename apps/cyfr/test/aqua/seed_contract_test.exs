@@ -198,7 +198,7 @@ defmodule Aqua.SeedContractTest do
     |> Enum.flat_map(fn agent ->
       agent
       |> Compendium.AgentSource.manifest(roster)
-      |> Cyfr.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
+      |> Prima.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
       |> Map.fetch!(:tools)
     end)
     |> Enum.uniq()
@@ -209,7 +209,7 @@ defmodule Aqua.SeedContractTest do
     roles = Path.join(@seed, Compendium.AquaPath.roles_dirname())
 
     files =
-      [Path.join(@seed, "aqua.md") | Cyfr.Test.SourceTree.files!(Path.join(roles, "*.md"))]
+      [Path.join(@seed, "aqua.md") | Prima.Test.SourceTree.files!(Path.join(roles, "*.md"))]
 
     for path <- files,
         name = Path.basename(path, ".md"),

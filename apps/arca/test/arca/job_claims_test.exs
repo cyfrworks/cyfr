@@ -21,7 +21,7 @@ defmodule Arca.JobClaimsTest do
   # the database is busy — so this one runs alone.
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import Ecto.Query
 
   alias Arca.JobClaims

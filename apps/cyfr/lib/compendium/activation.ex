@@ -12,7 +12,7 @@ defmodule Compendium.Activation do
   digest alone says nothing about declared capability.
 
   Nodes are keyed by **name-level ref** (`type:namespace.name`, no version),
-  matching `Cyfr.Authority.Blob`'s node-key grammar — code identity lives
+  matching `Prima.Authority.Blob`'s node-key grammar — code identity lives
   in the digest, never in the key.
 
   Only static dependencies are walked. Dynamic dispatch is deliberately
@@ -38,7 +38,7 @@ defmodule Compendium.Activation do
   """
 
   alias Sanctum.Context
-  alias Cyfr.JCS
+  alias Prima.JCS
 
   require Logger
 
@@ -107,7 +107,11 @@ defmodule Compendium.Activation do
        when is_binary(athanor_id) and athanor_id != "" do
     case release_digest(component) do
       digest when is_binary(digest) ->
-        Arca.Cache.Keys.activation(Cyfr.Actor.in_athanor(athanor_id), node_key(component), digest)
+        Arca.Cache.Keys.activation(
+          Prima.Actor.in_athanor(athanor_id),
+          node_key(component),
+          digest
+        )
 
       _ ->
         nil
@@ -173,11 +177,11 @@ defmodule Compendium.Activation do
   @doc """
   The name-level key a component row occupies in an activation graph.
 
-  The shape is `Cyfr.ComponentRow`'s, where consent reads it too: a
+  The shape is `Prima.ComponentRow`'s, where consent reads it too: a
   stored graph and the key a consent names it by are one spelling.
   """
   @spec node_key(map()) :: String.t()
-  defdelegate node_key(component), to: Cyfr.ComponentRow
+  defdelegate node_key(component), to: Prima.ComponentRow
 
   # ============================================================================
   # Private
@@ -262,7 +266,7 @@ defmodule Compendium.Activation do
   # a release digest that no longer matches. The line names the component,
   # never the manifest's bytes.
   defp manifest(row) do
-    case Cyfr.Manifest.decode_strict(field(row, :manifest)) do
+    case Prima.Manifest.decode_strict(field(row, :manifest)) do
       {:ok, manifest} ->
         manifest
 

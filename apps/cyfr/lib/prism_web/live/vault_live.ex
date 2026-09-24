@@ -224,7 +224,7 @@ defmodule PrismWeb.VaultLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

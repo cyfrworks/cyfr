@@ -410,7 +410,7 @@ defmodule Aqua.Loop.Request do
     # as the person's words.
     task? = Tape.payload(row)["as"] == "task"
 
-    if row.author in Cyfr.Author.reserved() and not task? do
+    if row.author in Prima.Author.reserved() and not task? do
       step = step_of(row)
       block = %{"type" => "text", "text" => row.content || ""}
 

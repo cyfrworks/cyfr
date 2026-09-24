@@ -18,7 +18,7 @@ defmodule Locus.BuildsVectorsTest do
   # Installs the vectors' key as the service's and replaces PATH.
   use ExUnit.Case, async: false
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
   alias Locus.Test.Wire
 
   @vectors Path.expand("../../../../tests/fixtures/locus_builds.json", __DIR__)

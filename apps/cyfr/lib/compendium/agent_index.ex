@@ -108,7 +108,7 @@ defmodule Compendium.AgentIndex do
            {:ok,
             [
               %{
-                id: Cyfr.UUID7.generate_id("agt"),
+                id: Prima.UUID7.generate_id("agt"),
                 athanor_id: athanor_id,
                 name: snap.agent.name,
                 kind: AquaAgent.type_of(snap.agent),

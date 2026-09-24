@@ -7,7 +7,7 @@ defmodule Cyfr.Execution.Admission do
   authority it runs under, and the admission of one run under it.
 
   A root selects a profile for its reference and loads that profile's head
-  consent into a `Cyfr.Authority`, fail-closed (`authority_for/4`,
+  consent into a `Prima.Authority`, fail-closed (`authority_for/4`,
   `authority_and_stamp_for/4`, `root_edge/4`). A child advances its
   caller's authority through the transition relation and runs under the
   child authority that falls out — bound, or zero (`step_invoke/4`).
@@ -34,9 +34,9 @@ defmodule Cyfr.Execution.Admission do
 
   require Logger
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Authority.RootSelect
+  alias Prima.Authority
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Authority.RootSelect
   alias Cyfr.Execution.{Artifacts, Assignments, Attempt, Attestation, Close, Delegation}
   alias Cyfr.Execution.{Record, Telemetry}
   alias Sanctum.Context
@@ -71,7 +71,7 @@ defmodule Cyfr.Execution.Admission do
   Load the root authority a reference would execute under, without
   executing anything.
 
-  `profile_selector` is a `t:Cyfr.Authority.RootSelect.selector/0`:
+  `profile_selector` is a `t:Prima.Authority.RootSelect.selector/0`:
   `{:id, _}` or `{:label, _}` to pin, `:default` for the single active
   owner profile — which fails on ambiguity rather than choosing.
 
@@ -251,7 +251,7 @@ defmodule Cyfr.Execution.Admission do
   (`Cyfr.Execution.Attempt.open/1`): `:service_id` and `:boot_id` (the
   worker service the run is dispatched to and the boot of it dispatch
   selected, which are also the row's and the assignment's), `:worker`
-  (that worker service's `Cyfr.WorkerAPI` module) and `:held_invoke` (true
+  (that worker service's `Prima.WorkerAPI` module) and `:held_invoke` (true
   when the calling
   process holds the charged invoke-budget slot of a spawned child, with
   `:charge` naming its row).
@@ -275,7 +275,7 @@ defmodule Cyfr.Execution.Admission do
     # Every road into the engine — root, child, cron, webhook — is admitted
     # here, so a member that holds no slot in the cell admits nothing.
     if Arca.ControlPlane.held?() do
-      ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Cyfr.UUID7.request_id()}
+      ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Prima.UUID7.request_id()}
       admit_owned(ctx, reference, input, opts)
     else
       {:error,
@@ -293,7 +293,7 @@ defmodule Cyfr.Execution.Admission do
         |> new_record(pinned, input, opts, component_type, component, resolution)
         |> Map.put(:grant, grant)
 
-      Cyfr.LoggerContext.set_execution_id(record.id)
+      Prima.LoggerContext.set_execution_id(record.id)
 
       run = %{
         ctx: ctx,
@@ -408,7 +408,7 @@ defmodule Cyfr.Execution.Admission do
       _ ->
         {:error,
          "Invalid component type: #{inspect(type)}. " <>
-           "Must be one of: #{Enum.join(Cyfr.ComponentRef.executable_types(), ", ")}"}
+           "Must be one of: #{Enum.join(Prima.ComponentRef.executable_types(), ", ")}"}
     end
   end
 
@@ -531,7 +531,7 @@ defmodule Cyfr.Execution.Admission do
   end
 
   defp node_timeout_ms(limits, component_ref) do
-    case Cyfr.Limits.timeout_ms(limits) do
+    case Prima.Limits.timeout_ms(limits) do
       {:ok, ms} -> {:ok, ms}
       {:error, reason} -> {:error, "invalid consented timeout for #{component_ref}: #{reason}"}
     end
@@ -578,14 +578,14 @@ defmodule Cyfr.Execution.Admission do
   defp cursor_state(:unbound), do: "unbound"
 
   defp value_source(%Edge{vault: %{entry_id: entry_id}}),
-    do: Emissary.MCP.VaultRef.build(entry_id)
+    do: Prima.VaultRef.build(entry_id)
 
   defp value_source(_resources), do: nil
 
   # The enforced edge and limits, for forensic replay of what a run was
   # allowed to do. The key names are stable serialization labels that audit
   # consumers read.
-  defp host_policy(edge, %Cyfr.Limits{} = limits) do
+  defp host_policy(edge, %Prima.Limits{} = limits) do
     %{
       allowed_domains: Edge.domains(edge),
       rate_limit: limits.rate_limit,
@@ -597,7 +597,7 @@ defmodule Cyfr.Execution.Admission do
     }
   end
 
-  defp check_input_size(run, input, %Cyfr.Limits{max_request_size: max_size}) do
+  defp check_input_size(run, input, %Prima.Limits{max_request_size: max_size}) do
     case Jason.encode(input) do
       {:ok, input_json} when byte_size(input_json) > max_size ->
         size = byte_size(input_json)
@@ -640,7 +640,7 @@ defmodule Cyfr.Execution.Admission do
   # count lives. A rate authority that cannot answer refuses: a configured
   # limit must be enforceable. A refusal of the limit is recorded as a
   # policy denial.
-  defp check_rate(ctx, bucket, %Cyfr.Limits{} = limits) do
+  defp check_rate(ctx, bucket, %Prima.Limits{} = limits) do
     case Cyfr.Execution.Rates.check(Context.actor(ctx), bucket, %{rate_limit: limits.rate_limit}) do
       {:ok, _remaining} ->
         :ok
@@ -870,7 +870,7 @@ defmodule Cyfr.Execution.Admission do
   # A manifest that does not decode declares no needs. The line names the
   # component, never the manifest's bytes.
   defp manifest(run) do
-    case Cyfr.Manifest.decode_strict(run.component["manifest"]) do
+    case Prima.Manifest.decode_strict(run.component["manifest"]) do
       {:ok, manifest} ->
         manifest
 
@@ -921,7 +921,7 @@ defmodule Cyfr.Execution.Admission do
   end
 
   defp name_level(reference) do
-    case Cyfr.ComponentRef.to_name_ref(reference) do
+    case Prima.ComponentRef.to_name_ref(reference) do
       {:ok, name_ref} -> {:ok, name_ref}
       {:error, reason} -> {:error, {:invalid_reference, reason}}
     end

@@ -33,7 +33,7 @@ defmodule Emissary.MCP.Bridge do
     * the claim's **fence** — has the row been written since this
       controller read it? Every write is a compare-and-set on it, so a
       renew that lands is proof no peer has interleaved;
-    * the claim's **owner**, this member's boot id (`Cyfr.Boot.id/0`) —
+    * the claim's **owner**, this member's boot id (`Prima.Boot.id/0`) —
       whose the row is. A member that restarted, or that lost and won its
       slot back, does not inherit its predecessor's claim, and the same
       fence number means nothing across two owners;
@@ -59,7 +59,7 @@ defmodule Emissary.MCP.Bridge do
   ## Messages
 
   Control messages are POSTed to `<url>/control` one at a time, each signed
-  with the control key (`Cyfr.BridgeAuth.control_header/3`) under a sequence
+  with the control key (`Prima.BridgeAuth.control_header/3`) under a sequence
   number that only grows, so the bridge refuses a replayed, reordered or
   delayed one. The bridge answers each without waiting on a backend, so no
   message holds the channel for longer than a store read and a round trip.
@@ -73,7 +73,7 @@ defmodule Emissary.MCP.Bridge do
     * `sync` when a server process starts: the row is read again (fenced:
       the same epoch, enabled, stdio, its athanor active), its env templates
       are resolved through `Sanctum.VaultReader` and sealed for the owner
-      and the bridge's lifetime (`Cyfr.BridgeAuth.seal/5`). The resolved
+      and the bridge's lifetime (`Prima.BridgeAuth.seal/5`). The resolved
       values live only in the task that sends the message. The bridge
       admits the version and answers at once; its backends start on their
       own time;
@@ -111,7 +111,7 @@ defmodule Emissary.MCP.Bridge do
 
   A server process receives a **grant** for its owner — the bridge's `/mcp`
   URL, the generation, epoch and bridge boot id, and the owner key
-  (`Cyfr.BridgeAuth.owner_key/2`) it signs its requests with — as the answer
+  (`Prima.BridgeAuth.owner_key/2`) it signs its requests with — as the answer
   to `sync/1`, once every backend of the owner has been ready or failed, or
   15 s after the bridge admitted it, whichever comes first. A re-sync the
   controller starts itself sends the process `{:bridge_owner, grant}`; a
@@ -133,10 +133,10 @@ defmodule Emissary.MCP.Bridge do
   require Logger
 
   alias Arca.JobClaims
-  alias Cyfr.BridgeAuth
+  alias Prima.BridgeAuth
   alias Emissary.MCP.BackendDefinition
   alias Emissary.MCP.StatusRedaction
-  alias Emissary.MCP.VaultRef
+  alias Prima.VaultRef
 
   # The cell's claim on one backend. Its key carries no epoch: a restart at
   # a new epoch is the same backend, and the claim carries across it.
@@ -337,7 +337,7 @@ defmodule Emissary.MCP.Bridge do
       root: root,
       control_key: BridgeAuth.control_key(root),
       seal_key: BridgeAuth.seal_key(root),
-      cyfr_boot: Cyfr.Boot.id(),
+      cyfr_boot: Prima.Boot.id(),
       lease_ms: lease_ms,
       idle_ms:
         Keyword.get(
@@ -485,7 +485,7 @@ defmodule Emissary.MCP.Bridge do
   end
 
   def handle_info(message, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, message)
+    Prima.LoggerContext.unexpected(__MODULE__, message)
     {:noreply, state}
   end
 

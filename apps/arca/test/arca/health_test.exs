@@ -23,7 +23,7 @@ defmodule Arca.HealthTest do
     end
 
     test "the server's own actor gets :ok" do
-      assert :ok = Health.check(Cyfr.Actor.system())
+      assert :ok = Health.check(Prima.Actor.system())
     end
 
     test "an empty database is ready — absent data is not unavailable infrastructure" do
@@ -34,22 +34,22 @@ defmodule Arca.HealthTest do
       Arca.Repo.delete_all(BuildRecord)
       assert Arca.Repo.aggregate(BuildRecord, :count) == 0
 
-      assert :ok = Health.check(Cyfr.Actor.system())
+      assert :ok = Health.check(Prima.Actor.system())
     end
 
     test "a tenant actor is refused, and the refusal is not an outage" do
-      tenant = %Cyfr.Actor{athanor_id: "ath_probe", user_id: "usr_probe"}
+      tenant = %Prima.Actor{athanor_id: "ath_probe", user_id: "usr_probe"}
 
       assert {:error, :not_system} = Health.check(tenant)
       # Same call, same moment, with the system actor: the database is up,
       # so the refusal above said something about authority and nothing
       # about reachability.
-      assert :ok = Health.check(Cyfr.Actor.system())
+      assert :ok = Health.check(Prima.Actor.system())
     end
 
     test "an actor that carries a tenant but not the system flag is still refused" do
       assert {:error, :not_system} =
-               Health.check(%Cyfr.Actor{athanor_id: "ath_probe", scope: :platform})
+               Health.check(%Prima.Actor{athanor_id: "ath_probe", scope: :platform})
     end
   end
 
@@ -65,17 +65,17 @@ defmodule Arca.HealthTest do
     end
 
     test "the probe answers unavailable, with a sentence for the log" do
-      assert {:error, {:unavailable, why}} = Health.check(Cyfr.Actor.system())
+      assert {:error, {:unavailable, why}} = Health.check(Prima.Actor.system())
       assert is_binary(why)
       assert why != ""
     end
 
     test "a refused caller is told about its authority, not about the database" do
-      assert {:error, :not_system} = Health.check(%Cyfr.Actor{athanor_id: "ath_probe"})
+      assert {:error, :not_system} = Health.check(%Prima.Actor{athanor_id: "ath_probe"})
     end
 
     test "nothing in the answer can be mistaken for :ok" do
-      refute Health.check(Cyfr.Actor.system()) == :ok
+      refute Health.check(Prima.Actor.system()) == :ok
     end
   end
 end

@@ -124,7 +124,7 @@ defmodule Opus.BootstrapFirstRunTest do
     assert http_auth.resources.egress.domains == ["*"]
     # The one component allowed plaintext says so explicitly.
     assert Enum.sort(http_auth.resources.egress.schemes) == ["http", "https"]
-    assert Cyfr.Authority.limits(http_auth).rate_limit == %{requests: 60, window: "1m"}
+    assert Prima.Authority.limits(http_auth).rate_limit == %{requests: 60, window: "1m"}
   end
 
   test "a needs-declaring catalyst is not ready until its vault entry binds", %{ctx: ctx} do

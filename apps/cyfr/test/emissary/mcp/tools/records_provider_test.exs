@@ -70,7 +70,7 @@ defmodule Arca.Providers.RecordsTest do
     end
 
     test "the record tools and the retention tool take the actor" do
-      assert Cyfr.Ops.Provider.context_kind(MCP) == :actor
+      assert Prima.Provider.context_kind(MCP) == :actor
     end
   end
 
@@ -1085,7 +1085,7 @@ defmodule Arca.Providers.RecordsTest do
 
   defp drop_executions!, do: Arca.Repo.query!(@drop_executions)
 
-  # One action's own declaration, as `Cyfr.Ops.Operation.cast/2` applies it;
+  # One action's own declaration, as `Prima.Operation.cast/2` applies it;
   # the tool's discovery schema merges every action into one flat object.
   defp action_schema(tool, action) do
     case Enum.find(tool.operations, &(&1.action == action)) do
@@ -1094,7 +1094,7 @@ defmodule Arca.Providers.RecordsTest do
 
       operation ->
         operation.args
-        |> Cyfr.Ops.Arg.schema()
+        |> Prima.Arg.schema()
         |> put_in(["properties", "action"], %{"type" => "string", "const" => action})
         |> Map.update!("required", &["action" | &1])
     end

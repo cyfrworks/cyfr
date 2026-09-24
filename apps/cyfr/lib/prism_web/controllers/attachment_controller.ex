@@ -71,7 +71,7 @@ defmodule PrismWeb.AttachmentController do
   end
 
   defp serve_type(type) when type in @inline_types, do: type
-  defp serve_type(_), do: Cyfr.MediaType.binary()
+  defp serve_type(_), do: Prima.MediaType.binary()
 
   defp disposition(filename) do
     # More than quotes must go: a CR/LF here splits the header, and any

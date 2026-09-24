@@ -309,7 +309,7 @@ defmodule Cyfr.Execution.RecordTest do
 
       assert output["envelope"] == "v1"
       assert output["usage"] == %{"input_tokens" => 9, "output_tokens" => 2}
-      assert output["output_hash"] == Cyfr.Digest.sha256(Jason.encode!(reply))
+      assert output["output_hash"] == Prima.Digest.sha256(Jason.encode!(reply))
       refute String.contains?(Jason.encode!(output), "the reply")
 
       # The bytes are the attempt's payload, under the record's class; the
@@ -843,7 +843,7 @@ defmodule Cyfr.Execution.RecordTest do
 
   describe "executable_type/1" do
     test "names each executable type by its atom" do
-      for type <- Cyfr.ComponentRef.executable_types() do
+      for type <- Prima.ComponentRef.executable_types() do
         assert {:ok, atom} = Record.executable_type(type)
         assert Atom.to_string(atom) == type
       end

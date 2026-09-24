@@ -156,7 +156,7 @@ class Stack:
     # ------------------------------------------------------------------
 
     def status(self):
-        """The service's status request: its HTTP status and answer; a 200 whose answer `Cyfr.WorkerAPI.read_status/1` refuses raises."""
+        """The service's status request: its HTTP status and answer; a 200 whose answer `Prima.WorkerAPI.read_status/1` refuses raises."""
         code, answer = self.plane.status(self.base)
         if code == 200 and auth.read_status(answer.get("ok")) is None:
             raise AssertionError(f"the service answered a status the contract refuses\n{json.dumps(answer, indent=2)}")

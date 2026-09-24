@@ -262,7 +262,7 @@ defmodule Sanctum.Tenancy.CapsTest do
     # and leaves the total alone.
     assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 1)
     assert {:ok, rewalked} = Arca.Cache.get(key)
-    sys = %{Cyfr.Actor.system() | user_id: "_s", athanor_id: ctx.athanor_id, scope: :athanor}
+    sys = %{Prima.Actor.system() | user_id: "_s", athanor_id: ctx.athanor_id, scope: :athanor}
     :ok = Arca.put(sys, ["cache", "cap-probe.txt"], "bytes")
     assert Arca.Cache.get(key) == {:ok, rewalked}
   end

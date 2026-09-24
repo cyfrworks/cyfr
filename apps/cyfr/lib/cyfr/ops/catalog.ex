@@ -54,7 +54,7 @@ defmodule Cyfr.Ops.Catalog do
   authentication, consent, argument validation and lineage have run does
   the handler receive its input, projected once in `route/5`'s handler
   closure: a provider declaring `context_kind: :actor`
-  (`Cyfr.Ops.Provider.context_kind/1`) is given `Sanctum.Context.actor/1`
+  (`Prima.Provider.context_kind/1`) is given `Sanctum.Context.actor/1`
   of that context and nothing else, on either plane; every other provider
   is given the context. The boot audit refuses a provider that declares
   anything else.
@@ -65,7 +65,8 @@ defmodule Cyfr.Ops.Catalog do
   @behaviour Sanctum.Catalog
   require Logger
 
-  alias Cyfr.Ops.{Annotations, Operation}
+  alias Cyfr.Ops.Annotations
+  alias Prima.Operation
   alias Sanctum.Context
 
   # 24 hours
@@ -125,10 +126,10 @@ defmodule Cyfr.Ops.Catalog do
         "description" => meta.description,
         "inputSchema" => meta.input_schema
       }
-      |> Cyfr.MapUtil.put_present("title", meta[:title])
-      |> Cyfr.MapUtil.put_present("icons", meta[:icons])
-      |> Cyfr.MapUtil.put_present("outputSchema", meta[:output_schema])
-      |> Cyfr.MapUtil.put_present("annotations", meta[:annotations])
+      |> Prima.MapUtil.put_present("title", meta[:title])
+      |> Prima.MapUtil.put_present("icons", meta[:icons])
+      |> Prima.MapUtil.put_present("outputSchema", meta[:output_schema])
+      |> Prima.MapUtil.put_present("annotations", meta[:annotations])
     end)
     |> Enum.sort_by(& &1["name"])
   end
@@ -225,10 +226,10 @@ defmodule Cyfr.Ops.Catalog do
             "description" => meta.description,
             "inputSchema" => meta.input_schema
           }
-          |> Cyfr.MapUtil.put_present("title", meta[:title])
-          |> Cyfr.MapUtil.put_present("icons", meta[:icons])
-          |> Cyfr.MapUtil.put_present("outputSchema", meta[:output_schema])
-          |> Cyfr.MapUtil.put_present("annotations", meta[:annotations])
+          |> Prima.MapUtil.put_present("title", meta[:title])
+          |> Prima.MapUtil.put_present("icons", meta[:icons])
+          |> Prima.MapUtil.put_present("outputSchema", meta[:output_schema])
+          |> Prima.MapUtil.put_present("annotations", meta[:annotations])
 
         {:ok, tool_def}
 
@@ -323,7 +324,7 @@ defmodule Cyfr.Ops.Catalog do
   """
   def call_in_chain(name, ctx, args, authority, opts \\ [])
 
-  def call_in_chain(name, %Context{} = ctx, args, %Cyfr.Authority{} = authority, opts)
+  def call_in_chain(name, %Context{} = ctx, args, %Prima.Authority{} = authority, opts)
       when is_map(args) do
     guest_fn = Keyword.get(opts, :guest_fn, :call)
 
@@ -332,7 +333,7 @@ defmodule Cyfr.Ops.Catalog do
     # stamp the hold admitted.
     opts =
       if String.contains?(name, ":") and guest_fn == :spawn,
-        do: Keyword.put_new_lazy(opts, :execution_id, &Cyfr.UUID7.execution_id/0),
+        do: Keyword.put_new_lazy(opts, :execution_id, &Prima.UUID7.execution_id/0),
         else: opts
 
     opts = opts |> Keyword.put_new(:runner, :supervised) |> with_charge_identity(guest_fn)
@@ -387,7 +388,7 @@ defmodule Cyfr.Ops.Catalog do
 
               {:error,
                "Denied by chain authority: " <>
-                 "#{Cyfr.Authority.Transition.deny_message(reason)} for '#{name}'"}
+                 "#{Prima.Authority.Transition.deny_message(reason)} for '#{name}'"}
           end
 
         {:deny, reason} ->
@@ -395,7 +396,7 @@ defmodule Cyfr.Ops.Catalog do
           # `inspect`, which put internal terms on the guest's wire.
           {:error,
            "Denied by chain authority: " <>
-             "#{Cyfr.Authority.Transition.deny_message(reason)} for '#{name}'"}
+             "#{Prima.Authority.Transition.deny_message(reason)} for '#{name}'"}
 
         {:invalid, {:malformed_target, fun, tag}} ->
           {:error, "Invalid in-chain call: #{fun}/#{tag}"}
@@ -403,7 +404,7 @@ defmodule Cyfr.Ops.Catalog do
     end
   end
 
-  def call_in_chain(_name, %Context{}, _args, %Cyfr.Authority{}, _opts),
+  def call_in_chain(_name, %Context{}, _args, %Prima.Authority{}, _opts),
     do: {:error, {:invalid_argument, "Arguments must be an object"}}
 
   # The calling execution's grant, found by the host's lineage: an open
@@ -442,7 +443,7 @@ defmodule Cyfr.Ops.Catalog do
 
       {nil, attempt} when is_binary(attempt) ->
         Keyword.put(opts, :charge, %{
-          id: Cyfr.UUID7.generate_id("chg"),
+          id: Prima.UUID7.generate_id("chg"),
           attempt: attempt,
           generation: 0,
           holder_execution_id: Keyword.get(opts, :execution_id)
@@ -457,7 +458,7 @@ defmodule Cyfr.Ops.Catalog do
 
   # The hold an outbound execution's admission stamps: the reservation the
   # chain's authority was minted with and the charge row taken at the gate.
-  defp hold_of(%Cyfr.Authority{budget: %{id: reservation_id}}, %{id: id}),
+  defp hold_of(%Prima.Authority{budget: %{id: reservation_id}}, %{id: id}),
     do: %{reservation_id: reservation_id, id: id}
 
   defp hold_of(_authority, _charge), do: nil
@@ -505,15 +506,15 @@ defmodule Cyfr.Ops.Catalog do
 
   defp put_lineage(args, lineage) when is_map(lineage) do
     args
-    |> Cyfr.MapUtil.put_present("parent_execution_id", Map.get(lineage, :parent_execution_id))
-    |> Cyfr.MapUtil.put_present("root_execution_id", Map.get(lineage, :root_execution_id))
+    |> Prima.MapUtil.put_present("parent_execution_id", Map.get(lineage, :parent_execution_id))
+    |> Prima.MapUtil.put_present("root_execution_id", Map.get(lineage, :root_execution_id))
     # The attempt of the calling execution, so a provider answering the
     # caller its own payload knows which attempt's it is.
-    |> Cyfr.MapUtil.put_present("attempt", Map.get(lineage, :attempt))
+    |> Prima.MapUtil.put_present("attempt", Map.get(lineage, :attempt))
     # The thread an approved card came from — host-stamped like the
     # execution ids, so a tool that records provenance reads it from here
     # and never from what the model wrote.
-    |> Cyfr.MapUtil.put_present("thread_id", Map.get(lineage, :thread_id))
+    |> Prima.MapUtil.put_present("thread_id", Map.get(lineage, :thread_id))
   end
 
   @doc """
@@ -646,7 +647,7 @@ defmodule Cyfr.Ops.Catalog do
     reachable =
       for {action, %{planes: planes}} <- actions,
           :in_chain in planes,
-          Cyfr.Authority.Transition.tool_granted?(authority, name, action),
+          Prima.Authority.Transition.tool_granted?(authority, name, action),
           do: action
 
     case {reachable, get_in(tool_def, ["inputSchema", "properties", "action", "enum"])} do
@@ -678,7 +679,7 @@ defmodule Cyfr.Ops.Catalog do
           Enum.filter(tools, fn t ->
             case String.split(t["name"], ":", parts: 2) do
               [_, remote] ->
-                Cyfr.Authority.Transition.external_tool_granted?(authority, digest, remote)
+                Prima.Authority.Transition.external_tool_granted?(authority, digest, remote)
 
               _ ->
                 false
@@ -949,7 +950,7 @@ defmodule Cyfr.Ops.Catalog do
     # transport already carries it; an internal caller has none, so it becomes
     # its own root.
     own_root? = is_nil(ctx.request_id)
-    ctx = if own_root?, do: %{ctx | request_id: Cyfr.UUID7.request_id()}, else: ctx
+    ctx = if own_root?, do: %{ctx | request_id: Prima.UUID7.request_id()}, else: ctx
 
     # Transports log incoming requests; in-chain calls log themselves even
     # when they inherit the root request id, and their start row is written
@@ -972,7 +973,7 @@ defmodule Cyfr.Ops.Catalog do
     call_id =
       cond do
         not should_log? -> nil
-        in_chain? -> Cyfr.UUID7.generate_id("call")
+        in_chain? -> Prima.UUID7.generate_id("call")
         true -> ctx.request_id
       end
 
@@ -1058,7 +1059,7 @@ defmodule Cyfr.Ops.Catalog do
   # permission set, no session reaches a handler that declared it needs
   # none.
   defp handler_input(module, ctx) do
-    case Cyfr.Ops.Provider.context_kind(module) do
+    case Prima.Provider.context_kind(module) do
       :actor -> Context.actor(ctx)
       :context -> ctx
     end
@@ -1086,7 +1087,7 @@ defmodule Cyfr.Ops.Catalog do
 
   @doc """
   Audit every internal provider's canonical operations and permissions.
-  `Cyfr.Ops.Operation` validates the declaration structure; this catalog
+  `Prima.Operation` validates the declaration structure; this catalog
   additionally requires each permission to be known by Sanctum.
 
   The taxonomy is only as good as its coverage: an unannotated action has
@@ -1167,7 +1168,7 @@ defmodule Cyfr.Ops.Catalog do
 
   @doc """
   Audit every provider's declared handler input
-  (`c:Cyfr.Ops.Provider.context_kind/0`). A value outside
+  (`c:Prima.Provider.context_kind/0`). A value outside
   `:context | :actor`, or a declaration that cannot be read, is a finding:
   the gate cannot tell what such a handler may be given, so the catalog
   refuses to boot rather than hand it the full context by default.
@@ -1185,7 +1186,7 @@ defmodule Cyfr.Ops.Catalog do
   end
 
   defp context_kind_valid?(module) do
-    Cyfr.Ops.Provider.context_kind(module) in [:context, :actor]
+    Prima.Provider.context_kind(module) in [:context, :actor]
   rescue
     _ -> false
   end
@@ -1267,7 +1268,7 @@ defmodule Cyfr.Ops.Catalog do
           do: {module, Map.get(entry, key) || Map.get(entry, Atom.to_string(key))}
 
     Enum.reduce(entries, {[], []}, fn {module, uri}, {advertised, malformed} ->
-      case Cyfr.Ops.Provider.resource_scheme(uri) do
+      case Prima.Provider.resource_scheme(uri) do
         {:ok, scheme} ->
           {Enum.uniq(advertised ++ [{scheme, module}]), malformed}
 
@@ -1307,7 +1308,7 @@ defmodule Cyfr.Ops.Catalog do
   @doc """
   The planes an action may be annotated with.
   """
-  @spec valid_planes() :: [Cyfr.Ops.Provider.plane()]
+  @spec valid_planes() :: [Prima.Provider.plane()]
   defdelegate valid_planes(), to: Operation
 
   # ============================================================================
@@ -1471,7 +1472,7 @@ defmodule Cyfr.Ops.Catalog do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -1539,11 +1540,11 @@ defmodule Cyfr.Ops.Catalog do
     request_id = ctx.request_id
     trackable? = is_binary(request_id)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     task =
       Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
+        Prima.LoggerContext.restore(logger_metadata)
 
         if handle && Emissary.MCP.RunningTasks.register_handle(handle, self()) == :cancelled,
           do: exit(:cancelled),
@@ -1582,7 +1583,7 @@ defmodule Cyfr.Ops.Catalog do
 
           # The tuple carries only the tool's name — the exception's own
           # message can hold a query, a path, or the offending bytes, and
-          # this tuple renders verbatim on the wire (`Cyfr.Refusal.message/1`).
+          # this tuple renders verbatim on the wire (`Prima.Refusal.message/1`).
           if uncertain?,
             do: {:error, {:uncertain, "Tool #{name} crashed; its outcome is unknown"}},
             else: {:error, {:crashed, "Tool #{name} crashed"}}

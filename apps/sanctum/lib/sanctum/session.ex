@@ -598,8 +598,8 @@ defmodule Sanctum.Session do
       user_id: row.user_id,
       email: row.email,
       provider: row.provider,
-      created_at: Cyfr.Time.iso8601(row.inserted_at),
-      expires_at: Cyfr.Time.iso8601(row.expires_at)
+      created_at: Prima.Time.iso8601(row.inserted_at),
+      expires_at: Prima.Time.iso8601(row.expires_at)
     }
   end
 

@@ -19,11 +19,11 @@ defmodule Sanctum.Tenancy.Users do
 
   The statements are `Arca.Users`'. What stays here is the deciding: which
   provider claims are recorded and which are left as they stand, that a
-  person's id is minted with `Cyfr.PersonId.prefix/0` and that only an IdP
+  person's id is minted with `Prima.PersonId.prefix/0` and that only an IdP
   identity may sign in, what an eject costs the person, and what an
   unanswerable read should read as. A person is not a row inside an
   athanor — they exist before any athanor does and sit in several at once
-  — so every call runs as the server (`Cyfr.Actor.system/0`), which is
+  — so every call runs as the server (`Prima.Actor.system/0`), which is
   what `Arca.Users` requires and says why.
   """
 
@@ -47,7 +47,7 @@ defmodule Sanctum.Tenancy.Users do
 
   @doc """
   The person an admitted identity names: their row refreshed, or a new
-  person minted (an id of this server's, `Cyfr.PersonId.prefix/0`) with
+  person minted (an id of this server's, `Prima.PersonId.prefix/0`) with
   the identity recorded as theirs.
 
   `first_seen_at` is set once; `last_seen_at`, `email`, `email_verified`
@@ -68,8 +68,8 @@ defmodule Sanctum.Tenancy.Users do
         last_seen_at: now,
         updated_at: now
       }
-      |> Cyfr.MapUtil.put_present(:email, Map.get(info, :email))
-      |> Cyfr.MapUtil.put_present(:display_name, Map.get(info, :name))
+      |> Prima.MapUtil.put_present(:email, Map.get(info, :email))
+      |> Prima.MapUtil.put_present(:display_name, Map.get(info, :name))
 
     case get_by_identity(key) do
       {:ok, user} ->
@@ -91,7 +91,7 @@ defmodule Sanctum.Tenancy.Users do
     with {:ok, %{provider: provider, issuer: issuer, subject: subject}} <- Identity.parse(key) do
       user_attrs =
         Map.merge(seen, %{
-          id: Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix()),
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           first_seen_at: now,
           created_at: now,
           prefs: Jason.encode!(%{})
@@ -348,7 +348,7 @@ defmodule Sanctum.Tenancy.Users do
 
   # A person is not a row inside an athanor: the row is written before any
   # athanor exists and read from every one the person sits in.
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
   defp rows_or_empty({:ok, rows}), do: rows
   defp rows_or_empty({:error, _}), do: []

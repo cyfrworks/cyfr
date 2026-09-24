@@ -77,7 +77,7 @@ defmodule Cyfr.TelemetryBridge do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -296,7 +296,7 @@ defmodule Cyfr.TelemetryBridge do
   defp tenant(meta, topic, build, scope \\ :tenant) do
     case meta[:athanor_id] do
       athanor_id when is_binary(athanor_id) and athanor_id != "" ->
-        actor = Cyfr.Actor.in_athanor(athanor_id)
+        actor = Prima.Actor.in_athanor(athanor_id)
         {scope, actor, topic.(actor), build}
 
       _none ->

@@ -101,7 +101,7 @@ defmodule Opus.ReleaseTest do
     paths = Release.code_paths()
     root = to_string(:code.root_dir())
 
-    for app <- [:opus, :cyfr_contracts, :wasmex, :jason, :req, :elixir, :logger] do
+    for app <- [:opus, :prima, :wasmex, :jason, :req, :elixir, :logger] do
       assert Path.join(to_string(:code.lib_dir(app)), "ebin") in paths,
              "#{app}'s ebin is not on the runner's path"
     end
@@ -123,16 +123,20 @@ defmodule Opus.ReleaseTest do
     {:ok, fd} = :socket.getopt(runner_end, {:otp, :fd})
 
     port = Release.open_control(fd)
-    line = Cyfr.RunnerControl.encode(%{type: :cancel_child, execution_id: "exec_1"})
+    line = Prima.RunnerControl.encode(%{type: :cancel_child, execution_id: "exec_1"})
     :ok = :socket.send(service, line)
     assert_receive {^port, {:data, data}}
-    assert {:ok, %{type: :cancel_child, execution_id: "exec_1"}} = Cyfr.RunnerControl.decode(data)
+
+    assert {:ok, %{type: :cancel_child, execution_id: "exec_1"}} =
+             Prima.RunnerControl.decode(data)
 
     true =
-      Port.command(port, Cyfr.RunnerControl.encode(%{type: :exit, runner: "runner_1", open: []}))
+      Port.command(port, Prima.RunnerControl.encode(%{type: :exit, runner: "runner_1", open: []}))
 
     assert {:ok, answer} = :socket.recv(service, 0, 2_000)
-    assert {:ok, %{type: :exit, runner: "runner_1", open: []}} = Cyfr.RunnerControl.decode(answer)
+
+    assert {:ok, %{type: :exit, runner: "runner_1", open: []}} =
+             Prima.RunnerControl.decode(answer)
 
     :socket.close(service)
     assert_receive {^port, :eof}, 2_000

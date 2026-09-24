@@ -53,7 +53,7 @@ defmodule Opus.ComponentCacheTest do
   describe "get_or_compile/3" do
     test "bytes that hash to the digest are compiled, and ones that do not compile are cached under nothing" do
       # A core module, not a component: it verifies and then fails to compile.
-      digest = Cyfr.Digest.sha256(@wasm)
+      digest = Prima.Digest.sha256(@wasm)
       test = self()
 
       fetch = fn ->
@@ -71,7 +71,7 @@ defmodule Opus.ComponentCacheTest do
     end
 
     test "bytes that do not hash to the digest are refused before compilation and never cached" do
-      digest = Cyfr.Digest.sha256("the component this attempt was assigned")
+      digest = Prima.Digest.sha256("the component this attempt was assigned")
 
       assert {:error, {:artifact, message}} =
                ComponentCache.get_or_compile(digest, fn -> {:ok, @wasm} end, store())
@@ -84,7 +84,7 @@ defmodule Opus.ComponentCacheTest do
     end
 
     test "a fetch that refuses is answered as it is" do
-      digest = Cyfr.Digest.sha256("unfetchable")
+      digest = Prima.Digest.sha256("unfetchable")
 
       assert {:error, {:artifact, "no"}} =
                ComponentCache.get_or_compile(

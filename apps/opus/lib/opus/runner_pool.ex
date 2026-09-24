@@ -4,7 +4,7 @@
 defmodule Opus.RunnerPool do
   @moduledoc """
   The worker service's runners, each an OS process (`Opus.RunnerProcess`
-  over `Opus.Keeper`), in the four states `Cyfr.WorkerAPI` counts:
+  over `Opus.Keeper`), in the four states `Prima.WorkerAPI` counts:
 
     * `fresh` — spawned ahead, or spawning, and never assigned: it
       belongs to no athanor. The pool keeps `:pool_size` of them.
@@ -99,7 +99,7 @@ defmodule Opus.RunnerPool do
   @spec take(GenServer.server(), String.t(), String.t()) ::
           {:ok, pid(), String.t()}
           | {:error,
-             {:refused, Cyfr.WorkerAPI.refusal()} | :not_serving | {:spawn_failed, term()}}
+             {:refused, Prima.WorkerAPI.refusal()} | :not_serving | {:spawn_failed, term()}}
   def take(pool, athanor, execution_id) when is_binary(athanor) and is_binary(execution_id),
     do: GenServer.call(pool, {:take, athanor, execution_id})
 
@@ -131,7 +131,7 @@ defmodule Opus.RunnerPool do
     do: GenServer.call(pool, {:cancel_child, pid, execution_id})
 
   @doc """
-  The pool's part of `t:Cyfr.WorkerAPI.status/0`: its runners counted by
+  The pool's part of `t:Prima.WorkerAPI.status/0`: its runners counted by
   state, the memory bound its keeper holds every runner to, and the
   keeper's refusal while it refuses runners.
   """
@@ -143,7 +143,7 @@ defmodule Opus.RunnerPool do
             tainted: non_neg_integer()
           },
           memory_bytes: pos_integer() | nil,
-          refusal: Cyfr.WorkerAPI.refusal() | nil
+          refusal: Prima.WorkerAPI.refusal() | nil
         }
   def status(pool), do: GenServer.call(pool, :status)
 
@@ -306,7 +306,7 @@ defmodule Opus.RunnerPool do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -462,7 +462,7 @@ defmodule Opus.RunnerPool do
   end
 
   defp spawn_runner(%{service: service} = state) do
-    id = Cyfr.UUID7.generate_id("runner")
+    id = Prima.UUID7.generate_id("runner")
 
     env =
       Map.merge(

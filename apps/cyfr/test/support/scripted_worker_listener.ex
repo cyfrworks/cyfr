@@ -3,26 +3,26 @@
 
 defmodule Cyfr.Test.ScriptedWorkerListener do
   @moduledoc """
-  A worker service's listener for the test suite: the `Cyfr.WorkerWire`
+  A worker service's listener for the test suite: the `Prima.WorkerWire`
   worker routes, served by Bandit on a loopback port of the system's
-  choosing, in front of any `Cyfr.WorkerAPI` module. It is what
+  choosing, in front of any `Prima.WorkerAPI` module. It is what
   `Cyfr.Test.ScriptedWorker` is reached through, and what a test's own
   worker module is served by, so `Cyfr.Execution.Dispatch` reaches either
   exactly as it reaches Opus.
 
-  `start_link/1` takes `worker:` (the `Cyfr.WorkerAPI` module it serves)
+  `start_link/1` takes `worker:` (the `Prima.WorkerAPI` module it serves)
   and `service:` (that worker service's configured id, whose dispatch key
   CYFR derives for it: `Cyfr.Execution.Keys.worker_key/1`); `url/1` is the
-  base URL a `t:Cyfr.WorkerAPI.endpoint/0` names.
+  base URL a `t:Prima.WorkerAPI.endpoint/0` names.
 
   A request is answered as Opus's listener answers it: the `x-cyfr-auth`
   header is verified with the service's dispatch key before the body is
-  read (`Cyfr.WorkerAuth.verify_request_header/3`, `401` with the
-  refusal), the body is read up to `Cyfr.HostAPI.max_body_bytes/0` (`413`
+  read (`Prima.WorkerAuth.verify_request_header/3`, `401` with the
+  refusal), the body is read up to `Prima.HostAPI.max_body_bytes/0` (`413`
   past it) and checked against the hash the header named (`400`
   `bad_mac`), and a body whose `op` is not the route's callback, or whose
   `args` are not the callback's, is `400` `malformed`. What the module
-  answers crosses as `Cyfr.WorkerWire.ok/1` or `error/2` with status
+  answers crosses as `Prima.WorkerWire.ok/1` or `error/2` with status
   `200`; a route that is no worker route is `404`.
   """
 
@@ -30,7 +30,7 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
 
   import Plug.Conn
 
-  alias Cyfr.{HostAPI, WorkerAPI, WorkerAuth, WorkerWire}
+  alias Prima.{HostAPI, WorkerAPI, WorkerAuth, WorkerWire}
   alias Cyfr.Execution.Keys
 
   @doc "A child spec for `start_link/1`, one listener per `worker:`."
@@ -65,7 +65,7 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
     "http://127.0.0.1:#{port}"
   end
 
-  @doc "The endpoint entry (`t:Cyfr.WorkerAPI.endpoint/0`) for the listener `pid` serving `service`."
+  @doc "The endpoint entry (`t:Prima.WorkerAPI.endpoint/0`) for the listener `pid` serving `service`."
   @spec endpoint(pid(), String.t(), [String.t()] | nil) :: WorkerAPI.endpoint()
   def endpoint(pid, service, components \\ nil) when is_pid(pid) and is_binary(service),
     do: %{id: service, url: url(pid), components: components}

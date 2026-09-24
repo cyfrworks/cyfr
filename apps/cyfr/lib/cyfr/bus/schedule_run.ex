@@ -37,8 +37,8 @@ defmodule Cyfr.Bus.ScheduleRun do
   this struct does not declare raises.
   `reason` is projected through `Cyfr.Bus.bounded_reason/1`.
   """
-  @spec new(Cyfr.Actor.t(), kind(), map() | keyword()) :: t()
-  def new(%Cyfr.Actor{} = actor, kind, fields \\ %{}) do
+  @spec new(Prima.Actor.t(), kind(), map() | keyword()) :: t()
+  def new(%Prima.Actor{} = actor, kind, fields \\ %{}) do
     fields = Map.new(fields)
 
     fields =

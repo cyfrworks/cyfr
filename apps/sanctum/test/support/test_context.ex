@@ -194,7 +194,7 @@ defmodule Sanctum.TestContext do
   """
   def issuer!(%Context{} = ctx, attrs \\ %{}) do
     ctx =
-      if Cyfr.PersonId.person?(ctx.user_id),
+      if Prima.PersonId.person?(ctx.user_id),
         do: ctx,
         else: ctx |> person!(attrs) |> elem(0)
 

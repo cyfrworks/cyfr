@@ -638,7 +638,7 @@ defmodule Compendium.Registry.Client do
   # response bodies are redacted here, by the same vocabulary.
   defp log_token_returning_result(op, {:ok, body}) do
     Logger.info(
-      "[Compendium.Registry.Client] #{op} succeeded — body=#{inspect(Cyfr.Sanitizer.sanitize(body))}"
+      "[Compendium.Registry.Client] #{op} succeeded — body=#{inspect(Prima.Sanitizer.sanitize(body))}"
     )
 
     {:ok, body}

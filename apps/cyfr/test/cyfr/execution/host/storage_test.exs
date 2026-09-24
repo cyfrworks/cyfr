@@ -74,8 +74,8 @@ defmodule Cyfr.Execution.Host.StorageTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
+  alias Prima.Authority
+  alias Prima.Authority.Blob.Edge
   alias Cyfr.Execution.Host.StorageTest.{AnsweringAdapter, GatedAdapter}
   alias Cyfr.Test.AttemptFixtures
 
@@ -124,7 +124,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
   defp intents(fixture),
     do:
       Arca.ExecutionAttempts.write_intents(
-        Cyfr.Actor.in_athanor(fixture.athanor_id),
+        Prima.Actor.in_athanor(fixture.athanor_id),
         fixture.attempt
       )
 
@@ -199,9 +199,9 @@ defmodule Cyfr.Execution.Host.StorageTest do
 
       {:ok, _successor} =
         Arca.ExecutionAttempts.takeover(
-          Cyfr.Actor.in_athanor(taken.athanor_id),
+          Prima.Actor.in_athanor(taken.athanor_id),
           taken.execution_id,
-          boot_id: Cyfr.Boot.id(),
+          boot_id: Prima.Boot.id(),
           lease_until: Arca.ExecutionAttempts.lease_until(),
           grant: :stored,
           verify: &Sanctum.ExecutionStanding.verify/1
@@ -280,9 +280,9 @@ defmodule Cyfr.Execution.Host.StorageTest do
 
       {:ok, %{attempt: %{fence: 2}}} =
         Arca.ExecutionAttempts.takeover(
-          Cyfr.Actor.in_athanor(fixture.athanor_id),
+          Prima.Actor.in_athanor(fixture.athanor_id),
           fixture.execution_id,
-          boot_id: Cyfr.Boot.id(),
+          boot_id: Prima.Boot.id(),
           lease_until: Arca.ExecutionAttempts.lease_until(),
           grant: :stored,
           verify: &Sanctum.ExecutionStanding.verify/1
@@ -381,7 +381,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
           type: "reagent"
         })
 
-      digest = Cyfr.Digest.sha256(wasm)
+      digest = Prima.Digest.sha256(wasm)
       fixture = AttemptFixtures.attached!(ctx: ctx, digest: digest)
 
       assert %{"ok" => encoded} =
@@ -397,7 +397,7 @@ defmodule Cyfr.Execution.Host.StorageTest do
       # The attempt's own digest, with no artifact in the registry.
       assert %{"error" => "not_found"} =
                AttemptFixtures.call(other, "fetch_artifact", %{
-                 "digest" => Cyfr.Digest.sha256(other.component_ref)
+                 "digest" => Prima.Digest.sha256(other.component_ref)
                })
 
       assert %{"error" => "lost"} =

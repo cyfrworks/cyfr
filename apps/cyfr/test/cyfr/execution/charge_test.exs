@@ -12,7 +12,7 @@ defmodule Cyfr.Execution.ChargeTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Execution.Charge
-  alias Cyfr.Test.AuthorityFixtures
+  alias Prima.Test.AuthorityFixtures
 
   setup do
     Arca.Cache.init()

@@ -90,7 +90,7 @@ defmodule PrismWeb.FilesLiveTest do
   # ends while one is mid-query leaves the shared sandbox connection busy
   # for the next test.
   defp settle_session_refresh do
-    Cyfr.Test.Wait.wait_until(fn -> Task.Supervisor.children(Aqua.TaskSupervisor) == [] end)
+    Prima.Test.Wait.wait_until(fn -> Task.Supervisor.children(Aqua.TaskSupervisor) == [] end)
   end
 
   test "a shaped folder says so, and a shipped unit refuses to go in words", %{conn: conn} do

@@ -32,8 +32,8 @@ defmodule Opus.HttpRequestValidation do
 
   alias Opus.EdgeGuard
   alias Opus.HostClient
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Limits
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Limits
 
   @valid_http_methods %{
     "GET" => :get,

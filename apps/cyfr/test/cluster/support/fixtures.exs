@@ -30,12 +30,12 @@ defmodule Cyfr.Cluster.Fixtures do
               Arca.Cache,
               Arca.Cache.Keys,
               Arca.ExecutionEvents,
-              Cyfr.Actor,
-              Cyfr.Authority.Budget,
-              Cyfr.Boot,
+              Prima.Actor,
+              Prima.Authority.Budget,
+              Prima.Boot,
               Cyfr.Execution,
               Cyfr.Execution.Events,
-              Cyfr.UUID7,
+              Prima.UUID7,
               CyfrWeb.ContextGuard,
               Sanctum.Authority.BudgetCounter,
               Sanctum.Caller,
@@ -56,11 +56,11 @@ defmodule Cyfr.Cluster.Fixtures do
   """
   @spec athanor!(String.t()) :: map()
   def athanor!(label) do
-    id = Cyfr.UUID7.generate_id("ath")
+    id = Prima.UUID7.generate_id("ath")
     slug = "cell-#{label}-#{unique_of(id)}"
 
     {:ok, athanor} =
-      Arca.Athanors.insert(Cyfr.Actor.system(), %{
+      Arca.Athanors.insert(Prima.Actor.system(), %{
         id: id,
         kind: "group",
         name: "Cluster #{label}",
@@ -77,7 +77,7 @@ defmodule Cyfr.Cluster.Fixtures do
 
   @doc "An actor in `athanor_id`, as every fixture here writes under."
   @spec actor(String.t()) :: struct()
-  def actor(athanor_id), do: Cyfr.Actor.in_athanor(athanor_id)
+  def actor(athanor_id), do: Prima.Actor.in_athanor(athanor_id)
 
   @doc "A thread of `athanor_id`, with no turn holding it."
   @spec thread!(String.t(), String.t()) :: map()
@@ -148,7 +148,7 @@ defmodule Cyfr.Cluster.Fixtures do
     {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "formula:local.cluster-turn:1.0.0",
           user_id: "usr_cluster",
           athanor_id: athanor_id,
@@ -245,7 +245,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "A pending approval on `thread_id`, as a row a decision is a compare-and-set on."
   @spec approval!(String.t(), String.t()) :: String.t()
   def approval!(athanor_id, thread_id) do
-    id = Cyfr.UUID7.generate_id("msg")
+    id = Prima.UUID7.generate_id("msg")
 
     {:ok, _row} =
       Arca.ThreadStorage.append(actor(athanor_id), thread_id, %{
@@ -314,7 +314,7 @@ defmodule Cyfr.Cluster.Fixtures do
 
   @doc "This member's boot id."
   @spec boot() :: String.t()
-  def boot, do: Cyfr.Boot.id()
+  def boot, do: Prima.Boot.id()
 
   # ---------------------------------------------------------------------------
   # Budgets, rates and schedules — the tenant's durable ceilings
@@ -331,7 +331,7 @@ defmodule Cyfr.Cluster.Fixtures do
     {:ok, %{execution: root, attempt: attempt}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "formula:local.cluster:1.0.0",
           user_id: "usr_cluster",
           athanor_id: athanor_id,
@@ -364,7 +364,10 @@ defmodule Cyfr.Cluster.Fixtures do
   @spec try_acquire(String.t(), pos_integer()) :: :ok | {:error, atom()}
   def try_acquire(budget_id, cap),
     do:
-      Sanctum.Authority.BudgetCounter.try_acquire(%Cyfr.Authority.Budget{id: budget_id, cap: cap})
+      Sanctum.Authority.BudgetCounter.try_acquire(%Prima.Authority.Budget{
+        id: budget_id,
+        cap: cap
+      })
 
   @doc "Claim one of `bucket`'s allowance from this member."
   @spec take_rate(String.t(), String.t(), non_neg_integer(), pos_integer()) :: term()
@@ -589,7 +592,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "Archive `athanor_id` from this member, which announces the invalidation."
   @spec archive!(String.t()) :: atom()
   def archive!(athanor_id) do
-    {:ok, athanor} = Arca.Athanors.get(Cyfr.Actor.system(), athanor_id)
+    {:ok, athanor} = Arca.Athanors.get(Prima.Actor.system(), athanor_id)
     {:ok, archived} = Sanctum.Tenancy.Athanors.archive(athanor)
     archived.status
   end
@@ -601,7 +604,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @spec archive_unheard!(String.t()) :: String.t()
   def archive_unheard!(athanor_id) do
     {:ok, change} =
-      Arca.SecurityTransitions.archive_athanor(Cyfr.Actor.system(), athanor_id,
+      Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), athanor_id,
         verify: fn _rows -> :ok end
       )
 
@@ -611,7 +614,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "Reopen `athanor_id` from this member."
   @spec reopen!(String.t()) :: String.t()
   def reopen!(athanor_id) do
-    {:ok, athanor} = Arca.Athanors.get(Cyfr.Actor.system(), athanor_id)
+    {:ok, athanor} = Arca.Athanors.get(Prima.Actor.system(), athanor_id)
     {:ok, reopened} = Sanctum.Tenancy.Athanors.unarchive(athanor)
     reopened.status
   end
@@ -622,7 +625,7 @@ defmodule Cyfr.Cluster.Fixtures do
     {:ok, %{execution: execution}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "reagent:local.cluster-stream:0.1.0",
           user_id: "usr_cluster",
           athanor_id: athanor_id,
@@ -677,7 +680,7 @@ defmodule Cyfr.Cluster.Fixtures do
   def claim_occurrence(schedule_id, next_run) do
     {:ok, schedule} = Arca.CronSchedule.get_for_daemon(schedule_id)
 
-    case Arca.ScheduleOccurrences.claim(schedule, Cyfr.Boot.id(), next_run) do
+    case Arca.ScheduleOccurrences.claim(schedule, Prima.Boot.id(), next_run) do
       {:ok, occurrence} ->
         {:ok, %{id: occurrence.id, state: occurrence.state, claimed_by: occurrence.claimed_by}}
 

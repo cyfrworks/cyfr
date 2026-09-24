@@ -256,7 +256,7 @@ defmodule Aqua.Loop do
   (`Aqua.Loop.Worker`); then the dispatched steps of the turn and of its
   open clones are cancel-marked, every child execution and every
   in-process catalog handler is cancelled, dispatched steps settle by
-  `Cyfr.TurnStep.unresolved/1` — a call whose effect is unknown is
+  `Prima.TurnStep.unresolved/1` — a call whose effect is unknown is
   marked `uncertain`, since a cancel does not prove the effect never
   happened — unstarted steps are skipped, each open clone ends
   `cancelled`, and the aborted mark is written. The caller then ends the
@@ -330,7 +330,7 @@ defmodule Aqua.Loop do
         guest = Context.enter_guest(ctx)
 
         result =
-          case Cyfr.TurnStep.unresolved(step) do
+          case Prima.TurnStep.unresolved(step) do
             :uncertain -> Tape.mark_uncertain(guest, turn, step, reason)
             :unknown -> Tape.close_step(guest, turn, step, "uncertain", %{error: reason})
             _ -> Tape.close_step(guest, turn, step, "error", %{error: reason})
@@ -600,7 +600,7 @@ defmodule Aqua.Loop do
   end
 
   defp agent_or_system?(author),
-    do: author in Cyfr.Author.reserved()
+    do: author in Prima.Author.reserved()
 
   # The model step is dispatched before the call: a recovery finds it
   # without a response and never replays it.
@@ -615,7 +615,7 @@ defmodule Aqua.Loop do
            Tape.record_model_intent(guest(state), state.turn, %{
              idempotency_key:
                "model:#{state.turn.id}:#{System.unique_integer([:positive, :monotonic])}",
-             child_execution_id: Cyfr.UUID7.execution_id(),
+             child_execution_id: Prima.UUID7.execution_id(),
              tool: state.spec.catalyst,
              action: "chat",
              purpose: purpose
@@ -656,7 +656,7 @@ defmodule Aqua.Loop do
         {:halt, {:failed, message}, state}
 
       # A model request that died left nothing a person must judge
-      # (`Cyfr.TurnStep.unresolved/1`): it ends the turn like a refusal.
+      # (`Prima.TurnStep.unresolved/1`): it ends the turn like a refusal.
       {failure, reason} when failure in [:error, :exit] ->
         text = describe(reason)
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: text})
@@ -704,8 +704,8 @@ defmodule Aqua.Loop do
 
     result =
       case answer do
-        {:ok, {:ok, %{output: output}}} -> Cyfr.Model.decode_envelope(output)
-        {:ok, {:ok, output}} -> Cyfr.Model.decode_envelope(output)
+        {:ok, {:ok, %{output: output}}} -> Prima.Model.decode_envelope(output)
+        {:ok, {:ok, output}} -> Prima.Model.decode_envelope(output)
         {:ok, {:error, reason}} -> {:error, reason}
         {:exit, reason} -> {:exit, reason}
       end
@@ -794,7 +794,7 @@ defmodule Aqua.Loop do
   defp call_attrs(%State{} = state, model_step, block, call) do
     name = block["name"] || ""
     args = if is_map(block["arguments"]), do: block["arguments"], else: %{}
-    id = block["id"] || Cyfr.UUID7.generate_id("call")
+    id = block["id"] || Prima.UUID7.generate_id("call")
 
     {tool, action, kind, recovery, child, step_kind} =
       case call do
@@ -836,7 +836,7 @@ defmodule Aqua.Loop do
   defp recovery_of(%Call{} = call), do: if(replay_safe?(call), do: "replay_safe", else: nil)
 
   defp child_id_for(%Call{kind: kind}) when kind in [:hand, :launch, :external],
-    do: Cyfr.UUID7.execution_id()
+    do: Prima.UUID7.execution_id()
 
   defp child_id_for(_call), do: nil
 
@@ -1001,7 +1001,7 @@ defmodule Aqua.Loop do
 
   defp open_card(%State{} = state, step, %Call{} = call) do
     intent =
-      Policy.card(call, id: Cyfr.UUID7.generate_id("apr"))
+      Policy.card(call, id: Prima.UUID7.generate_id("apr"))
       |> Map.put("tool_call_id", call.tool_call_id)
 
     case Tape.open_approval(guest(state), state.turn, step, %{
@@ -1352,7 +1352,7 @@ defmodule Aqua.Loop do
   defp render(%Call{} = call, result), do: Binding.render(call, result)
 
   # A worker that died or timed out: a step it never dispatched is
-  # skipped; a dispatched one settles by `Cyfr.TurnStep.unresolved/1` — one safe
+  # skipped; a dispatched one settles by `Prima.TurnStep.unresolved/1` — one safe
   # to run again closes as an error the model may retry, a flush's closes
   # with its outcome unknown, and one whose effect is unknown is reported
   # (`:report`, the default) so the loop stops the turn on it, or marked in
@@ -1375,7 +1375,7 @@ defmodule Aqua.Loop do
 
         why = describe(reason)
 
-        case Cyfr.TurnStep.unresolved(fresh) do
+        case Prima.TurnStep.unresolved(fresh) do
           :uncertain ->
             unknown(state, fresh, why, mode)
 
@@ -1614,7 +1614,7 @@ defmodule Aqua.Loop do
   # Settling open steps on a continuation
   # ---------------------------------------------------------------------------
 
-  # A step found open settles by `Cyfr.TurnStep.unresolved/1`: a model step
+  # A step found open settles by `Prima.TurnStep.unresolved/1`: a model step
   # without its response closes as an error (its request cannot be
   # rebuilt); a dispatched call that is safe to run again is opened afresh;
   # a flush's dispatched call closes with its outcome unknown and its
@@ -1632,7 +1632,7 @@ defmodule Aqua.Loop do
             if step.child_execution_id,
               do: Cyfr.Execution.cancel(ctx(state), step.child_execution_id)
 
-            case Cyfr.TurnStep.unresolved(step) do
+            case Prima.TurnStep.unresolved(step) do
               :unanswered ->
                 _ =
                   Tape.close_step(guest, state.turn, step, "error", %{error: "not reproducible"})
@@ -1640,7 +1640,7 @@ defmodule Aqua.Loop do
                 open
 
               :replay ->
-                _ = Tape.next_generation(guest, state.turn, step, Cyfr.UUID7.execution_id())
+                _ = Tape.next_generation(guest, state.turn, step, Prima.UUID7.execution_id())
                 open
 
               :unknown ->
@@ -2018,9 +2018,9 @@ defmodule Aqua.Loop do
   # that. A versioned key finds nothing, and a cap of nil is a check that
   # never fires.
   def catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do
-    with {:ok, name_ref} <- Cyfr.ComponentRef.to_name_ref(catalyst),
-         {:ok, %Cyfr.Limits{max_request_size: cap}} <-
-           Cyfr.Authority.node_limits(authority, name_ref) do
+    with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst),
+         {:ok, %Prima.Limits{max_request_size: cap}} <-
+           Prima.Authority.node_limits(authority, name_ref) do
       cap
     else
       _ -> nil
@@ -2068,7 +2068,7 @@ defmodule Aqua.Loop do
          declared_needs: []
        }}
 
-    match?({:child, _}, Cyfr.Authority.Transition.step(spec.authority, :call, target))
+    match?({:child, _}, Prima.Authority.Transition.step(spec.authority, :call, target))
   rescue
     ArgumentError -> false
   end
@@ -2150,7 +2150,7 @@ defmodule Aqua.Loop do
 
   defp system_row(%State{} = state, text) do
     Tape.append(guest(state), state.turn.thread_id, %{
-      author: Cyfr.Author.system(),
+      author: Prima.Author.system(),
       kind: "system",
       content: text,
       turn_id: state.turn.id,
@@ -2178,7 +2178,7 @@ defmodule Aqua.Loop do
   defp retained(request, _excerpt), do: Request.without_excerpt(request)
 
   defp digest(request) do
-    case Cyfr.JCS.hash(request) do
+    case Prima.JCS.hash(request) do
       {:ok, digest} -> digest
       _ -> nil
     end

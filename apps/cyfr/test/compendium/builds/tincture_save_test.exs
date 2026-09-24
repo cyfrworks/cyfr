@@ -146,7 +146,7 @@ defmodule Compendium.Builds.TinctureSaveTest do
       ])
 
       assert {:ok, result} = compile(ctx)
-      assert {result.digest, result.size} == Cyfr.Digest.file_set(first)
+      assert {result.digest, result.size} == Prima.Digest.file_set(first)
       assert Enum.sort(result.files) == ["assets/app-one.js", "index.html"]
       assert result.language == "javascript" and result.target_type == "tincture"
 

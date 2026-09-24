@@ -4,7 +4,7 @@
 defmodule Cyfr.Test.LocusService do
   @moduledoc """
   The Locus builds service of the test boot, reached as CYFR reaches it:
-  over the build wire (`Cyfr.BuilderProtocol`), on a loopback port of the
+  over the build wire (`Prima.BuilderProtocol`), on a loopback port of the
   system's choosing.
 
   The umbrella starts the Locus application beside CYFR, and a node whose
@@ -24,7 +24,7 @@ defmodule Cyfr.Test.LocusService do
   sent, signed and answered over the wire.
   """
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
 
   # Locus is a sibling application, not a dependency: CYFR names it here
   # as the suite's, never in its own code.

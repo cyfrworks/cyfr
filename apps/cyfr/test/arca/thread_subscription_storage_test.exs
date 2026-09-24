@@ -61,7 +61,7 @@ defmodule Arca.ThreadSubscriptionStorageTest do
 
     :ok = Subs.follow(bob, thread.id, bob.user_id)
     :ok = Subs.follow(bob, thread.id, bob.user_id)
-    assert Subs.follows?(Cyfr.Actor.in_athanor(bob.athanor_id), thread.id, bob.user_id)
+    assert Subs.follows?(Prima.Actor.in_athanor(bob.athanor_id), thread.id, bob.user_id)
 
     :ok = Subs.unfollow(bob, thread.id, bob.user_id)
     :ok = Subs.unfollow(bob, thread.id, bob.user_id)
@@ -157,7 +157,7 @@ defmodule Arca.ThreadSubscriptionStorageTest do
 
     # Until the athanor's own destroy, nothing else reclaimed these — a
     # deleted thread left rows naming it forever.
-    refute Subs.follows?(Cyfr.Actor.in_athanor(alice.athanor_id), thread.id, alice.user_id)
+    refute Subs.follows?(Prima.Actor.in_athanor(alice.athanor_id), thread.id, alice.user_id)
     refute MapSet.member?(Subs.followed(bob, bob.user_id), thread.id)
 
     remaining = Aqua.ToolGrants.for_thread(alice_ctx, thread.id, "aqua")

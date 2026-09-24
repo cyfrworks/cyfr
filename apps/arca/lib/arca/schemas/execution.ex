@@ -67,7 +67,7 @@ defmodule Arca.Schemas.Execution do
     field :output, :string
     field :host_policy, :string
     field :parent_execution_id, :string
-    # The key the parent's runner minted for this child (`Cyfr.HostAPI`
+    # The key the parent's runner minted for this child (`Prima.HostAPI`
     # `t:child_key/0`): unique under the parent, so a retried admission is
     # answered with this row (`child_by_key/3`). Nil for a root.
     field :child_key, :string
@@ -162,7 +162,7 @@ defmodule Arca.Schemas.Execution do
       key ->
         changeset
         |> validate_change(:child_key, fn :child_key, _key ->
-          if Cyfr.HostAPI.valid_child_key?(key), do: [], else: [child_key: "is malformed"]
+          if Prima.HostAPI.valid_child_key?(key), do: [], else: [child_key: "is malformed"]
         end)
         |> validate_required([:parent_execution_id])
         |> unique_constraint(:child_key,
@@ -180,7 +180,7 @@ defmodule Arca.Schemas.Execution do
     case get_field(changeset, :kind) do
       "turn" -> validate_inclusion(changeset, :component_type, ["agent"])
       "tool_call" -> validate_inclusion(changeset, :component_type, ["tool_server"])
-      _ -> validate_inclusion(changeset, :component_type, Cyfr.ComponentRef.executable_types())
+      _ -> validate_inclusion(changeset, :component_type, Prima.ComponentRef.executable_types())
     end
   end
 

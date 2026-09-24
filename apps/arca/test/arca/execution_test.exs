@@ -47,7 +47,7 @@ defmodule Arca.ExecutionTest do
       # Tinctures are browser-side and never execute through Opus.
       refute Row.start_changeset(Map.put(base, :component_type, "tincture")).valid?
 
-      for type <- Cyfr.ComponentRef.executable_types() do
+      for type <- Prima.ComponentRef.executable_types() do
         assert Row.start_changeset(Map.put(base, :component_type, type)).valid?
       end
     end
@@ -360,7 +360,7 @@ defmodule Arca.ExecutionTest do
         })
 
       # Complete the child
-      actor = %Cyfr.Actor{
+      actor = %Prima.Actor{
         athanor_id: @athanor,
         user_id: "user_test",
         authenticated: true,
@@ -437,7 +437,7 @@ defmodule Arca.ExecutionTest do
         })
 
       # Complete it first
-      actor = %Cyfr.Actor{
+      actor = %Prima.Actor{
         athanor_id: @athanor,
         user_id: "user_test",
         authenticated: true,
@@ -557,7 +557,7 @@ defmodule Arca.ExecutionTest do
                )
 
       assert %{state: "completed", outcome: "ok"} =
-               Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(@athanor), live)
+               Arca.ExecutionAttempts.get(Prima.Actor.in_athanor(@athanor), live)
     end
 
     test "a renewed lease takes an execution out of the sweep" do
@@ -608,7 +608,7 @@ defmodule Arca.ExecutionTest do
                )
 
       assert %{state: "lapsed", outcome: "uncertain"} =
-               Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(@athanor), attempt)
+               Arca.ExecutionAttempts.get(Prima.Actor.in_athanor(@athanor), attempt)
 
       assert Arca.Repo.get!(Row, id).status == "failed"
     end

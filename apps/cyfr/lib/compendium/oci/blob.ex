@@ -23,7 +23,7 @@ defmodule Compendium.OCI.Blob do
   # in. Its DEFAULT is the tincture decompressed cap — a compressed archive
   # cannot legitimately exceed its own decompressed cap, and that cap is
   # the largest blob any pull may carry (WASM is bounded lower again, by
-  # Compendium.WasmValidator, after download) — but it is its own knob:
+  # Prima.Wasm, after download) — but it is its own knob:
   # an operator lowering the tincture cap for memory reasons must not
   # silently cap the WASM components they can pull.
   defp max_blob_bytes do
@@ -64,7 +64,7 @@ defmodule Compendium.OCI.Blob do
           {:ok, binary()} | {:error, term()}
   def download(ctx, %Reference{} = ref, digest) do
     path = "/v2/#{ref.repository}/blobs/#{digest}"
-    headers = [{"accept", Cyfr.MediaType.binary()}]
+    headers = [{"accept", Prima.MediaType.binary()}]
 
     case Transport.request(ctx, :get, path, ref, headers, nil,
            max_response_bytes: max_blob_bytes()
@@ -115,7 +115,7 @@ defmodule Compendium.OCI.Blob do
   """
   @spec upload(Context.t() | nil, Reference.t(), binary(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
-  def upload(ctx, %Reference{} = ref, content, content_type \\ Cyfr.MediaType.binary()) do
+  def upload(ctx, %Reference{} = ref, content, content_type \\ Prima.MediaType.binary()) do
     digest = compute_digest(content)
 
     # Check if blob already exists
@@ -271,7 +271,7 @@ defmodule Compendium.OCI.Blob do
   end
 
   @doc false
-  defdelegate compute_digest(content), to: Cyfr.Digest, as: :sha256
+  defdelegate compute_digest(content), to: Prima.Digest, as: :sha256
 
   defp get_header(headers, name) do
     Enum.find_value(headers, fn

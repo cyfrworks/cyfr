@@ -112,7 +112,7 @@ defmodule Arca.Providers.FilesTest do
 
   test "the handler is declared for the actor, and a context is not one", %{ctx: ctx} do
     assert Tool.context_kind() == :actor
-    assert Cyfr.Ops.Provider.context_kind(Tool) == :actor
+    assert Prima.Provider.context_kind(Tool) == :actor
     assert Tool.service() == "files"
 
     assert_raise FunctionClauseError, fn ->

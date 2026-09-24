@@ -22,9 +22,9 @@ defmodule Cyfr.Execution.StartRefusalTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
-  alias Cyfr.WorkerWire
+  alias Prima.Authority
+  alias Prima.Authority.Blob
+  alias Prima.WorkerWire
 
   @compile {:no_warn_undefined, [Opus.Keeper.Spawn]}
 
@@ -160,7 +160,7 @@ defmodule Cyfr.Execution.StartRefusalTest do
   end
 
   defp run(ctx) do
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
 
     result =
       Cyfr.Execution.Dispatch.run(ctx, @ref, %{"a" => 1, "b" => 2},

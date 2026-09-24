@@ -16,7 +16,7 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert [_ | _] = units
 
     for unit <- units do
-      assert Cyfr.Model.speaks_chat?(unit.manifest)
+      assert Prima.Model.speaks_chat?(unit.manifest)
       assert unit.type == "catalyst"
       assert unit.ref == "catalyst:local.#{unit.name}"
       assert unit.rel == "catalysts/local/#{unit.name}/#{unit.version}"
@@ -29,7 +29,7 @@ defmodule Cyfr.Test.SeedBundleTest do
 
   test "local_unit! takes the newest shipped version of a named hand" do
     files = SeedBundle.local_unit!("catalysts", "files")
-    refute Cyfr.Model.speaks_chat?(files.manifest)
+    refute Prima.Model.speaks_chat?(files.manifest)
     assert files.ref == "catalyst:local.files"
     assert files.rel == "catalysts/local/files/#{files.version}"
   end

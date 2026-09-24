@@ -88,7 +88,7 @@ const TIMESTAMP_WINDOW_MS = 30_000;
 // sixteen backend definitions and their sealed environment; CYFR refuses to
 // send a larger one (Emissary.MCP.Bridge). An MCP request carries one tool
 // call's arguments, at most the 10 MiB request ceiling of a CYFR call
-// (Cyfr.Limits.Ceiling), and its JSON-RPC envelope.
+// (Prima.Limits.Ceiling), and its JSON-RPC envelope.
 export const CONTROL_BODY_LIMIT = 1024 * 1024;
 export const MCP_BODY_LIMIT = 10 * 1024 * 1024 + 64 * 1024;
 

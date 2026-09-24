@@ -19,7 +19,7 @@ defmodule Sanctum.MCP.ProfileTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # Dispatch applies the coarse consent class; the domain applies
     # the exact one (commit's digest-pinned key-capability arm lives
     # in Sanctum.Consent.Commit and stays there).
@@ -214,7 +214,7 @@ defmodule Sanctum.MCP.ProfileTool do
     with {:ok, kind} <- kind(args) do
       params =
         %{ref: ref, kind: kind}
-        |> Cyfr.MapUtil.put_present(:label, args["label"])
+        |> Prima.MapUtil.put_present(:label, args["label"])
 
       case Plan.plan(ctx, params) do
         {:ok, plan} -> {:ok, plan}
@@ -346,7 +346,7 @@ defmodule Sanctum.MCP.ProfileTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Cyfr.Ops.Provider.invalid_action("profile", action_enum())}
+    {:error, Prima.Provider.invalid_action("profile", action_enum())}
   end
 
   # ---------------------------------------------------------------------------
@@ -370,9 +370,9 @@ defmodule Sanctum.MCP.ProfileTool do
           selections: selections,
           tool_servers: tool_servers
         }
-        |> Cyfr.MapUtil.put_present(:label, raw["label"])
-        |> Cyfr.MapUtil.put_present(:scope, scope)
-        |> Cyfr.MapUtil.put_present(:invoke_mode, invoke_mode)
+        |> Prima.MapUtil.put_present(:label, raw["label"])
+        |> Prima.MapUtil.put_present(:scope, scope)
+        |> Prima.MapUtil.put_present(:invoke_mode, invoke_mode)
         |> Map.put(:override, raw["override"] == true)
         |> maybe_publish_passthrough(raw)
 
@@ -412,7 +412,7 @@ defmodule Sanctum.MCP.ProfileTool do
     decoded =
       Enum.map(list, fn grant ->
         %{server_name: grant["server_name"]}
-        |> Cyfr.MapUtil.put_present(:tool_patterns, grant["tool_patterns"])
+        |> Prima.MapUtil.put_present(:tool_patterns, grant["tool_patterns"])
       end)
 
     {:ok, decoded}
@@ -427,11 +427,11 @@ defmodule Sanctum.MCP.ProfileTool do
     decoded =
       Enum.map(list, fn binding ->
         %{
-          need: Map.get(binding, "need", Cyfr.Authority.Blob.ingress_key()),
+          need: Map.get(binding, "need", Prima.Authority.Blob.ingress_key()),
           entry_id: binding["entry_id"]
         }
-        |> Cyfr.MapUtil.put_present(:fields, binding["fields"])
-        |> Cyfr.MapUtil.put_present(:scopes, binding["scopes"])
+        |> Prima.MapUtil.put_present(:fields, binding["fields"])
+        |> Prima.MapUtil.put_present(:scopes, binding["scopes"])
       end)
 
     {:ok, decoded}
@@ -447,8 +447,8 @@ defmodule Sanctum.MCP.ProfileTool do
     decoded =
       Enum.map(list, fn selection ->
         %{dep: selection["dep"], label: selection["label"] || "default"}
-        |> Cyfr.MapUtil.put_present(:from, selection["from"])
-        |> Cyfr.MapUtil.put_present(:fields, selection["fields"])
+        |> Prima.MapUtil.put_present(:from, selection["from"])
+        |> Prima.MapUtil.put_present(:fields, selection["fields"])
       end)
 
     {:ok, decoded}
@@ -550,5 +550,5 @@ defmodule Sanctum.MCP.ProfileTool do
   defp fmt({:invalid_ref, reason}), do: "invalid_ref: #{reason}"
   defp fmt(reason), do: inspect(reason)
 
-  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
+  defp action_enum, do: Prima.Provider.action_enum(definition())
 end

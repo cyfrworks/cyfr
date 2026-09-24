@@ -54,7 +54,7 @@ defmodule Opus.Keeper.Direct do
 
   @impl Opus.Keeper
   def spawn(%{runner: runner, argv: argv, env: env}) do
-    home = Path.join(System.tmp_dir!(), "opus_runner_#{Cyfr.Hex.short()}")
+    home = Path.join(System.tmp_dir!(), "opus_runner_#{Prima.Hex.short()}")
     log = Path.join(home, "log")
 
     with :ok <- File.mkdir_p(Path.join(home, "tmp")),
@@ -248,7 +248,7 @@ defmodule Opus.Keeper.Direct do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

@@ -30,7 +30,7 @@ defmodule Compendium.ComponentId do
 
     hash =
       "#{athanor_id}:#{publisher}:#{name}:#{version}:#{component_type}"
-      |> Cyfr.Digest.sha256_hex()
+      |> Prima.Digest.sha256_hex()
       |> binary_part(0, 16)
 
     "comp_#{hash}"

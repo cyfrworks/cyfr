@@ -23,7 +23,7 @@
   {"lib/compendium/registry/client.ex", :pattern_match_cov},
   {"lib/compendium/registry/credential_store.ex", :pattern_match_cov},
   {"lib/cyfr/execution/events/sequence.ex", :missing_range},
-  {"lib/cyfr/json_formatter.ex", :unknown_type},
+  {"lib/prima/json_formatter.ex", :unknown_type},
   {"lib/cyfr/retention_scheduler.ex", :pattern_match},
   {"lib/emissary/mcp/tools/system_provider.ex", :pattern_match_cov},
   {"lib/emissary_web/controllers/auth_controller.ex", :pattern_match_cov},
@@ -43,9 +43,9 @@
   {"lib/prism_web/controllers/legal_accept_controller.ex", :pattern_match_cov},
   {"lib/prism_web/minimal_page.ex", :extra_range},
   {"lib/sanctum/auth/device_flow.ex", :pattern_match},
-  {"lib/cyfr/cidr.ex", :pattern_match_cov},
+  {"lib/prima/cidr.ex", :pattern_match_cov},
   {"lib/sanctum/consent/shape_diff.ex", :guard_fail},
-  {"lib/cyfr/jcs.ex", :no_return},
+  {"lib/prima/jcs.ex", :no_return},
   {"lib/sanctum/mcp/key_tool.ex", :guard_fail},
   {"lib/sanctum/mcp/session_tool.ex", :guard_fail},
   {"lib/sanctum/mcp/webhook_tool.ex", :pattern_match},
@@ -60,10 +60,5 @@
   # noise from the loose `%__MODULE__{}` schema types, not a defect.
   ~r{lib/arca/adapters/s3\.ex:\d+:\d+:.*opaque},
   ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque},
-  ~r{lib/emissary_web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque},
-  # `Sanctum.Provisioning.held/3` answers whatever the closure it holds the
-  # claim for answers, and the seed sync's closure answers `:ok`. Dialyzer
-  # types a private function once, over every caller, so it reads that `:ok`
-  # into the two entry points whose closures cannot answer it. Matched by
-  # function, so any other missing range in the file still reports.
+  ~r{lib/emissary_web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}
 ]

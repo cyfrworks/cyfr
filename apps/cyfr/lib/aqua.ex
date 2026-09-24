@@ -57,7 +57,7 @@ defmodule Aqua do
 
   @doc "What one model can do, read from its catalyst. See `Aqua.Models.capabilities/5`."
   @spec model_capabilities(Context.t(), String.t(), String.t(), String.t() | nil, keyword()) ::
-          {:ok, Cyfr.Model.capabilities()} | {:error, term()}
+          {:ok, Prima.Model.capabilities()} | {:error, term()}
   defdelegate model_capabilities(ctx, resolved_ref, model, binding_digest, opts),
     to: Models,
     as: :capabilities
@@ -69,7 +69,7 @@ defmodule Aqua do
   @doc "Whether the soul's consent still covers its source. See `Aqua.ConsentStatus.state/2`."
   @spec consent_state(Context.t()) ::
           {:ok, ConsentStatus.state()} | {:error, ConsentStatus.refusal()}
-  def consent_state(%Context{} = ctx), do: ConsentStatus.state(ctx, Cyfr.AgentRef.soul_ref())
+  def consent_state(%Context{} = ctx), do: ConsentStatus.state(ctx, Prima.AgentRef.soul_ref())
 
   @doc "Whether the consent of `ref` still covers its source. See `Aqua.ConsentStatus.state/2`."
   @spec consent_state(Context.t(), String.t()) ::

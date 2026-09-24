@@ -30,8 +30,8 @@ defmodule Cyfr.Execution.GuestStorage do
     4. A write, append or delete names a file inside a scope; inside an
        overlaid scope it lands inside a unit (`Arca.Storage.locate/1`), and
        under a component publisher only `local/`
-       (`Cyfr.ComponentNamespace.require_local_guest_write/1`).
-    5. The path is relative, with no traversal (`Cyfr.PathSafety`).
+       (`Prima.ComponentNamespace.require_local_guest_write/1`).
+    5. The path is relative, with no traversal (`Prima.PathSafety`).
     6. The edge's `storage.paths` allow the path: `"*"` allows every path,
        an entry ending in `/` a prefix, anything else that exact path. An
        empty list, a nil storage group and a nil edge allow nothing.
@@ -79,13 +79,13 @@ defmodule Cyfr.Execution.GuestStorage do
 
   require Logger
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Limits
+  alias Prima.Authority
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Limits
   alias Sanctum.Context
 
   @typedoc "An operation a guest asks of its storage."
-  @type op :: Cyfr.HostAPI.storage_op()
+  @type op :: Prima.HostAPI.storage_op()
 
   @typedoc "The public profile's ceilings on one guest scope."
   @type quota :: %{max_bytes: non_neg_integer(), max_files: non_neg_integer()}
@@ -261,19 +261,19 @@ defmodule Cyfr.Execution.GuestStorage do
   end
 
   defp unit_publisher(["components", _plural, publisher | _]) do
-    case Cyfr.ComponentNamespace.require_local_guest_write(publisher) do
+    case Prima.ComponentNamespace.require_local_guest_write(publisher) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        guest_error(:storage_path_denied, Cyfr.ComponentNamespace.message(reason, publisher))
+        guest_error(:storage_path_denied, Prima.ComponentNamespace.message(reason, publisher))
     end
   end
 
   defp unit_publisher(_unit), do: :ok
 
   defp path_safe(path) do
-    case Cyfr.PathSafety.validate_relative_path(path) do
+    case Prima.PathSafety.validate_relative_path(path) do
       :ok -> :ok
       {:error, {_reason, message}} -> guest_error(:storage_path_denied, message)
     end

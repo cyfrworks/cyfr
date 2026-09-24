@@ -111,7 +111,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
           "local"
         )
 
-      assert row.digest == Compendium.WasmValidator.compute_digest(@wasm_a)
+      assert row.digest == Prima.Wasm.compute_digest(@wasm_a)
     end
 
     test "different versions of the same component are unaffected", %{ctx: ctx} do
@@ -164,7 +164,7 @@ defmodule Compendium.ReleaseImmutabilityTest do
           "local"
         )
 
-      assert row.digest == Compendium.WasmValidator.compute_digest(@wasm_b)
+      assert row.digest == Prima.Wasm.compute_digest(@wasm_b)
       assert row.release_digest != nil
     end
   end

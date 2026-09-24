@@ -3,11 +3,11 @@
 defmodule Sanctum.Test.AuthorityFixtures do
   @moduledoc """
   Authority fixtures that need the running store. The consented graph and
-  its root authority are `Cyfr.Test.AuthorityFixtures`.
+  its root authority are `Prima.Test.AuthorityFixtures`.
   """
 
-  alias Cyfr.Authority
-  alias Cyfr.Test.AuthorityFixtures
+  alias Prima.Authority
+  alias Prima.Test.AuthorityFixtures
 
   @doc """
   Mint the reservation row an authority's budget names — the root's, as
@@ -22,7 +22,7 @@ defmodule Sanctum.Test.AuthorityFixtures do
     {:ok, _} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "#{AuthorityFixtures.formula_ref()}:1.0.0",
           user_id: "usr_wire",
           athanor_id: athanor_id,

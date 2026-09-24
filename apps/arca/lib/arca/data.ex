@@ -30,6 +30,13 @@ defmodule Arca.Data do
   # Cache values and streamed `Plug.Conn` handles are opaque pass-through
   # APIs, not rows, and never run through here.
 
+  defmodule PrimaUnavailableError do
+    @moduledoc false
+    defexception message:
+                   "the :prima application's module list cannot be read, so Arca " <>
+                     "cannot tell a contract struct from any other struct"
+  end
+
   @scalars [Date, Time, NaiveDateTime, DateTime, Decimal]
 
   @prima_key {__MODULE__, :prima_structs}
@@ -87,24 +94,42 @@ defmodule Arca.Data do
   defp schema?(module),
     do: Code.ensure_loaded?(module) and function_exported?(module, :__schema__, 1)
 
-  # The Prima contract structs are exactly those the contracts application
-  # ships; the set is read once and kept.
+  # The Prima contract structs are exactly those the Prima application
+  # ships; the set is read once, at Arca's boot, and kept.
   defp prima?(module) do
     case :persistent_term.get(@prima_key, nil) do
       nil ->
-        set = prima_structs()
-        :persistent_term.put(@prima_key, set)
-        Map.has_key?(set, module)
+        :ok = load_prima!()
+        Map.has_key?(:persistent_term.get(@prima_key), module)
 
       set ->
         Map.has_key?(set, module)
     end
   end
 
-  defp prima_structs do
-    _ = Application.load(:cyfr_contracts)
+  @doc false
+  # Fills the set of Prima contract structs, or raises. `Arca.Supervisor`
+  # calls it before it starts anything, so a build whose `:prima`
+  # application cannot be read refuses the boot rather than refusing every
+  # contract struct a facade answers.
+  @spec load_prima!() :: :ok
+  def load_prima! do
+    :persistent_term.put(@prima_key, prima_structs(prima_modules()))
+  end
 
-    (Application.spec(:cyfr_contracts, :modules) || [])
+  @doc false
+  @spec prima_modules() :: [module()] | nil
+  def prima_modules do
+    _ = Application.load(:prima)
+    Application.spec(:prima, :modules)
+  end
+
+  @doc false
+  @spec prima_structs([module()] | nil) :: %{module() => true}
+  def prima_structs(nil), do: raise(PrimaUnavailableError)
+
+  def prima_structs(modules) when is_list(modules) do
+    modules
     |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :__struct__, 0)))
     |> Map.new(&{&1, true})
   end

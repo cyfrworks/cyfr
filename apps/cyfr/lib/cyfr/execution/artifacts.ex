@@ -38,7 +38,7 @@ defmodule Cyfr.Execution.Artifacts do
         with {:ok, bytes} <- Compendium.Component.get_blob(ctx, digest) do
           fetched(reference, true)
 
-          with :ok <- verify(digest, Cyfr.Digest.sha256(bytes), reference) do
+          with :ok <- verify(digest, Prima.Digest.sha256(bytes), reference) do
             Arca.Cache.put(cache_key, bytes, @ttl_ms)
             {:ok, bytes}
           end
@@ -53,7 +53,7 @@ defmodule Cyfr.Execution.Artifacts do
     })
   end
 
-  # `Cyfr.Digest` is the only producer of both digests, so they carry the
+  # `Prima.Digest` is the only producer of both digests, so they carry the
   # same sha256:-prefixed spelling and one comparison decides.
   defp verify(expected, expected, _reference), do: :ok
 

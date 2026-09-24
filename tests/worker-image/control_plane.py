@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 """CYFR's host API as the worker image tests script it: the host routes
-`Cyfr.WorkerWire` names, served on the host machine where the container
+`Prima.WorkerWire` names, served on the host machine where the container
 reaches them as `host.docker.internal`, each request verified as CYFR
-verifies it (`Cyfr.WorkerAuth`: a runner's call under the attempt's call
+verifies it (`Prima.WorkerAuth`: a runner's call under the attempt's call
 key, its sealed body opened and its answer sealed back; a worker service's
 plain report under the service's dispatch key) under the tests' own root,
 recorded with its time, and answered from a script.
@@ -11,7 +11,7 @@ recorded with its time, and answered from a script.
 `mint` makes an attempt as CYFR would — its keys, a signed assignment, the
 keys sealed for the worker service, the artifact the runner fetches by the
 assignment's digest and the vault fields its attach answers — and `start`,
-`kill` and `status` post `Cyfr.WorkerAPI` requests to the service signed
+`kill` and `status` post `Prima.WorkerAPI` requests to the service signed
 with its dispatch key. `script` sets what an operation answers for one
 execution or for all: a value the runner reads as `{"ok": value}`, a
 refusal, `DROP` (a 500 with no body: an answer that never arrives, which
@@ -34,7 +34,7 @@ import worker_auth as auth
 
 DROP = object()
 LEASE_MS = 60_000
-# The authority every minted assignment carries: `Cyfr.Authority.zero/0` as
+# The authority every minted assignment carries: `Prima.Authority.zero/0` as
 # `tests/fixtures/worker_auth.json` spells it on the wire.
 ZERO_AUTHORITY = {
     "activation": {},

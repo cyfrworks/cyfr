@@ -153,7 +153,7 @@ defmodule Locus.SpawnerTest do
       assert {{:error, {:unavailable, sentence}}, []} = run(name, "true")
       assert sentence =~ "writable-cgroups=true"
       assert sentence =~ "Docker Engine 28"
-      assert {:ok, _} = Cyfr.BuilderProtocol.encode_refusal({:unavailable, sentence}, [])
+      assert {:ok, _} = Prima.BuilderProtocol.encode_refusal({:unavailable, sentence}, [])
     end
 
     test "a cancelled run releases the spawn with no grace and answers cancelled", %{

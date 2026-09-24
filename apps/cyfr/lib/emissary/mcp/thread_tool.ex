@@ -59,7 +59,7 @@ defmodule Emissary.MCP.ThreadTool do
   pending until somebody answers it through `approve` or `decline`.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   # The most lines one `aloud` may carry: each one copies bytes into the
   # target estate, so a call moves a slice, never a thread.
@@ -81,7 +81,7 @@ defmodule Emissary.MCP.ThreadTool do
 
   @doc false
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # `:external` on every action: a running agent must not be able to
     # read or post into threads, its own included. And
     # `:interactive` on every action: only a person's own session may
@@ -441,7 +441,7 @@ defmodule Emissary.MCP.ThreadTool do
 
   @doc false
   def turn_definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # `:external` for the reason every `thread` action is: a running agent
     # must not be able to set a turn down or pick one up, its own
     # included. `:interactive` because only a person's own session may
@@ -619,7 +619,7 @@ defmodule Emissary.MCP.ThreadTool do
         message_id =
           case args["id"] do
             mid when is_binary(mid) and mid != "" -> mid
-            _ -> Cyfr.UUID7.generate_id("msg")
+            _ -> Prima.UUID7.generate_id("msg")
           end
 
         opts =
@@ -944,7 +944,7 @@ defmodule Emissary.MCP.ThreadTool do
   # catch-all passes anything it does not name through untouched, a
   # reason already in the vocabulary included; what it does name is this
   # domain's spelling and wins over a shared one — `:unavailable` here is
-  # the thread store, not the storage-unit outcome `Cyfr.Refusal` maps.
+  # the thread store, not the storage-unit outcome `Prima.Refusal` maps.
   defp refusal(reason, id), do: translate(reason, id)
 
   defp translate(:not_found, id), do: {:not_found, "thread", id}

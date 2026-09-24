@@ -6,7 +6,7 @@ defmodule Cyfr.SeedWitDriftTest do
   Every WIT file a seed component vendors matches the canonical `wit/`
   tree — the ABI is the host's, not the component's.
 
-  Checks source-local seed WIT matches Compendium.WITSource.
+  Checks source-local seed WIT matches Prima.WIT.
   Locus.Builder uses source-local WIT when present.
 
   Two rules, matching what the copies actually are:
@@ -34,7 +34,7 @@ defmodule Cyfr.SeedWitDriftTest do
   defp seed_wit_files do
     [@root, "seed/components/*/local/*/*/src/wit/**/*.wit"]
     |> Path.join()
-    |> Cyfr.Test.SourceTree.files!()
+    |> Prima.Test.SourceTree.files!()
   end
 
   # "catalysts" | "formulas" | ... from the seed path → the canonical

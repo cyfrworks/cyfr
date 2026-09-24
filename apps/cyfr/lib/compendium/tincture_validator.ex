@@ -8,7 +8,7 @@ defmodule Compendium.TinctureValidator do
   @moduledoc """
   Validate tincture bundles and compute content digests.
 
-  Unlike `Compendium.WasmValidator` (which validates WASM binaries),
+  Unlike `Prima.Wasm` (which validates WASM binaries),
   this validates HTML/JS/CSS tincture packages.
 
   ## Two entry points
@@ -43,7 +43,7 @@ defmodule Compendium.TinctureValidator do
          :ok <- check_no_symlinks(directory_path, directory_path) do
       {digest, size} = compute_digest(directory_path)
       # exports always [] — tinctures have no WASM exports; kept for return-shape
-      # compatibility with WasmValidator so Registry can use either validator uniformly
+      # compatibility with Prima.Wasm so Registry can use either validator uniformly
       {:ok, %{digest: digest, size: size, exports: []}}
     end
   end
@@ -67,7 +67,7 @@ defmodule Compendium.TinctureValidator do
          :ok <- check_type(manifest),
          :ok <- check_entry_in_pairs(files, manifest),
          :ok <- check_reserved_dirs_in_pairs(files) do
-      {digest, size} = Cyfr.Digest.file_set(files)
+      {digest, size} = Prima.Digest.file_set(files)
       {:ok, %{digest: digest, size: size, exports: []}}
     end
   end
@@ -88,7 +88,7 @@ defmodule Compendium.TinctureValidator do
     end
   end
 
-  # Kept on Jason directly (not Cyfr.Json.decode/1): the validator's
+  # Kept on Jason directly (not Prima.Json.decode/1): the validator's
   # message carries the parser's own detail, which the strict helper
   # deliberately flattens.
   defp decode_json(raw) do
@@ -124,7 +124,7 @@ defmodule Compendium.TinctureValidator do
     end
   end
 
-  # Traversal rules come from Cyfr.PathSafety (the repo-wide SSOT); keep the
+  # Traversal rules come from Prima.PathSafety (the repo-wide SSOT); keep the
   # user-facing messages this validator has always produced.
   # _s is reserved by the tincture asset router for signed-token path prefixes.
   @reserved_dirs ~w(_s)
@@ -163,7 +163,7 @@ defmodule Compendium.TinctureValidator do
       |> Enum.reject(fn {segs, _bytes} -> segs |> List.last() |> excluded?() end)
       |> Map.new(fn {segs, bytes} -> {Enum.join(segs, "/"), bytes} end)
 
-    Cyfr.Digest.file_set(Map.merge(bundle, extra_pairs))
+    Prima.Digest.file_set(Map.merge(bundle, extra_pairs))
   end
 
   # arca:bypass-ok=D — tar-extract tmp dir scan; see module note.
@@ -186,7 +186,7 @@ defmodule Compendium.TinctureValidator do
     |> list_files_recursive()
     |> Enum.reject(&excluded?/1)
     |> Enum.map(&{Path.relative_to(&1, directory_path), File.read!(&1)})
-    |> Cyfr.Digest.file_set()
+    |> Prima.Digest.file_set()
   end
 
   # Symlinks are refused before any walk: the digest and store walkers use

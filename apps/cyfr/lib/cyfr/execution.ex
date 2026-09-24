@@ -28,8 +28,8 @@ defmodule Cyfr.Execution do
   opens gives them back at once.
   """
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.RootSelect
+  alias Prima.Authority
+  alias Prima.Authority.RootSelect
 
   alias Cyfr.Execution.{
     Admission,
@@ -190,8 +190,8 @@ defmodule Cyfr.Execution do
   child was admitted with, which its assignment's `input_digest` binds.
   """
   @type admitted_child :: %{
-          assignment: Cyfr.Assignment.token(),
-          attempt_keys: Cyfr.WorkerAuth.attempt_keys(),
+          assignment: Prima.Assignment.token(),
+          attempt_keys: Prima.WorkerAuth.attempt_keys(),
           secrets: %{optional(String.t()) => String.t()},
           input: map()
         }
@@ -207,7 +207,7 @@ defmodule Cyfr.Execution do
   nothing. A refusal charges nothing and admits nothing.
 
   `:child_key` (required) is the key the runner minted for this child
-  (`t:Cyfr.HostAPI.child_key/0`), which the child's row carries under its
+  (`t:Prima.HostAPI.child_key/0`), which the child's row carries under its
   parent. The row decides a repeat, never anything held in a process: a
   key already carried by a child of `:parent_execution_id`
   (`Arca.Execution.child_by_key/3`) admits nothing and answers that child
@@ -223,7 +223,7 @@ defmodule Cyfr.Execution do
   `:parent_execution_id`, `:root_execution_id`, `:attempt`, `:guest_fn`,
   `:declared_needs`, `:activation_digest`), and the runner the child is
   claimed for: `:runner`, with `:service_id`, `:boot_id` and `:worker`
-  naming its worker service, that service's boot and its `Cyfr.WorkerAPI`
+  naming its worker service, that service's boot and its `Prima.WorkerAPI`
   module, and `:parent_deadline` (Unix ms), which caps the child's
   timeout at what remains of its parent's. Answers `{:ok, child}`
   (`t:admitted_child/0`) or `{:error, reason}`.

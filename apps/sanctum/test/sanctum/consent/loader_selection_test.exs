@@ -12,14 +12,14 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
-  alias Cyfr.Authority.Transition
+  alias Prima.Authority
+  alias Prima.Authority.Blob
+  alias Prima.Authority.Transition
   alias Sanctum.Consent.Loader
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
-  alias Cyfr.JCS
-  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
+  alias Prima.JCS
+  alias Prima.Test.AuthorityFixtures, as: Fixtures
 
   @formula "formula:local.assistant"
   @catalyst "catalyst:local.claude"

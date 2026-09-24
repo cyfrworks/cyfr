@@ -169,7 +169,7 @@ defmodule Aqua.Intents do
   # its owner, or a bare dotted name.
 
   defp component_focus_ref(ref) do
-    case Cyfr.ComponentRef.parse(ref) do
+    case Prima.ComponentRef.parse(ref) do
       {:ok, _} -> :ok
       {:error, _} -> check_id_shape(ref, "ui.component.focus", "ref")
     end

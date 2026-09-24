@@ -17,7 +17,7 @@ defmodule Arca.TenantArgumentOrderTest do
 
   Putting the tenant first was the first half of the answer. This is the
   second: the tenant is not an argument at all. Every tenant-scoped
-  facade matches a `%Cyfr.Actor{}` in its head and reads the athanor out
+  facade matches a `%Prima.Actor{}` in its head and reads the athanor out
   of it, so the athanor comes from the caller the identity domain
   established and no argument a caller passes can move a read or a write
   to another tenant's rows. A `%Sanctum.Context{}` or a bare id matches
@@ -65,7 +65,7 @@ defmodule Arca.TenantArgumentOrderTest do
 
   defp sources do
     Enum.flat_map(@storage_globs, fn glob ->
-      root() |> Path.join(glob) |> Cyfr.Test.SourceTree.files!()
+      root() |> Path.join(glob) |> Prima.Test.SourceTree.files!()
     end)
   end
 
@@ -105,7 +105,7 @@ defmodule Arca.TenantArgumentOrderTest do
     for {name, text, n} <- heads(source),
         name not in exempt,
         text =~ ~r/athanor_id|%Sanctum\.Context\{|%Context\{/,
-        not (text =~ ~r/^  def [a-z_]+[!?]?\(\s*%Cyfr\.Actor\{/),
+        not (text =~ ~r/^  def [a-z_]+[!?]?\(\s*%Prima\.Actor\{/),
         do: "#{file}:#{n}: #{text |> String.split("\n") |> hd() |> String.trim()}"
   end
 
@@ -116,7 +116,7 @@ defmodule Arca.TenantArgumentOrderTest do
 
     for {name, text, n} <- heads(source),
         name not in exempt,
-        text =~ ~r/%Cyfr\.Actor\{athanor_id: athanor_id\}/,
+        text =~ ~r/%Prima\.Actor\{athanor_id: athanor_id\}/,
         not (text =~ ~r/athanor_id\s*!=\s*""/ or text =~ ~r/\bresolved\(athanor_id\)/),
         do: "#{file}:#{n}: #{text |> String.split("\n") |> hd() |> String.trim()}"
   end
@@ -124,13 +124,13 @@ defmodule Arca.TenantArgumentOrderTest do
   test "every tenant-scoped storage function takes the actor first" do
     found =
       Enum.flat_map(sources(), fn path ->
-        offending(Path.basename(path), Cyfr.Test.SourceTree.read(path))
+        offending(Path.basename(path), Prima.Test.SourceTree.read(path))
       end)
 
     assert found == [],
            """
            These storage functions name a tenant but do not take a
-           %Cyfr.Actor{} in the first position:
+           %Prima.Actor{} in the first position:
 
            #{Enum.map_join(found, "\n", &"  #{&1}")}
 
@@ -145,7 +145,7 @@ defmodule Arca.TenantArgumentOrderTest do
   test "a head that binds the athanor refuses the empty string in its guard" do
     found =
       Enum.flat_map(sources(), fn path ->
-        unguarded(Path.basename(path), Cyfr.Test.SourceTree.read(path))
+        unguarded(Path.basename(path), Prima.Test.SourceTree.read(path))
       end)
 
     assert found == [],
@@ -165,41 +165,41 @@ defmodule Arca.TenantArgumentOrderTest do
   test "the detector sees a tenant that is not in the first position" do
     planted = """
     defmodule Arca.Planted do
-      def by_actor(%Cyfr.Actor{athanor_id: athanor_id}, key)
+      def by_actor(%Prima.Actor{athanor_id: athanor_id}, key)
           when is_binary(athanor_id) and athanor_id != "",
           do: {athanor_id, key}
 
       def by_context(%Context{athanor_id: athanor_id}, key), do: {athanor_id, key}
       def by_id(athanor_id, key), do: {athanor_id, key}
-      def actor_second(key, %Cyfr.Actor{athanor_id: athanor_id}), do: {athanor_id, key}
+      def actor_second(key, %Prima.Actor{athanor_id: athanor_id}), do: {athanor_id, key}
       def id_second(key, athanor_id), do: {athanor_id, key}
-      def actor_in_a_map(%{actor: %Cyfr.Actor{athanor_id: athanor_id}}), do: athanor_id
+      def actor_in_a_map(%{actor: %Prima.Actor{athanor_id: athanor_id}}), do: athanor_id
     end
     """
 
     assert offending("planted.ex", planted) == [
              "planted.ex:6: def by_context(%Context{athanor_id: athanor_id}, key), do: {athanor_id, key}",
              "planted.ex:7: def by_id(athanor_id, key), do: {athanor_id, key}",
-             "planted.ex:8: def actor_second(key, %Cyfr.Actor{athanor_id: athanor_id}), do: {athanor_id, key}",
+             "planted.ex:8: def actor_second(key, %Prima.Actor{athanor_id: athanor_id}), do: {athanor_id, key}",
              "planted.ex:9: def id_second(key, athanor_id), do: {athanor_id, key}",
-             "planted.ex:10: def actor_in_a_map(%{actor: %Cyfr.Actor{athanor_id: athanor_id}}), do: athanor_id"
+             "planted.ex:10: def actor_in_a_map(%{actor: %Prima.Actor{athanor_id: athanor_id}}), do: athanor_id"
            ]
   end
 
   test "the detector sees a head that admits the empty athanor" do
     planted = """
     defmodule Arca.Planted do
-      def guarded(%Cyfr.Actor{athanor_id: athanor_id}, key)
+      def guarded(%Prima.Actor{athanor_id: athanor_id}, key)
           when is_binary(athanor_id) and athanor_id != "",
           do: {athanor_id, key}
 
-      def loose(%Cyfr.Actor{athanor_id: athanor_id}, key) when is_binary(athanor_id),
+      def loose(%Prima.Actor{athanor_id: athanor_id}, key) when is_binary(athanor_id),
         do: {athanor_id, key}
     end
     """
 
     assert unguarded("planted.ex", planted) == [
-             "planted.ex:6: def loose(%Cyfr.Actor{athanor_id: athanor_id}, key) when is_binary(athanor_id),"
+             "planted.ex:6: def loose(%Prima.Actor{athanor_id: athanor_id}, key) when is_binary(athanor_id),"
            ]
   end
 end

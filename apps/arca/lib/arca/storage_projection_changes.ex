@@ -55,7 +55,7 @@ defmodule Arca.StorageProjectionChanges do
 
   ## Tenancy
 
-  Every function takes the `Cyfr.Actor` first and refuses one with no
+  Every function takes the `Prima.Actor` first and refuses one with no
   athanor as `{:error, :no_athanor}` before any query, except
   `pending_athanors/2`, the recovery walk across estates, which a
   platform-scope actor alone may make. A token names its athanor, and a
@@ -122,8 +122,8 @@ defmodule Arca.StorageProjectionChanges do
   `units:` names unit keys to include whether pending or not — a caller
   deriving those units whatever the rows say.
   """
-  @spec snapshot(Cyfr.Actor.t(), String.t(), keyword()) :: {:ok, token()} | refusal()
-  def snapshot(%Cyfr.Actor{} = actor, root, opts \\ []) when is_binary(root) and is_list(opts) do
+  @spec snapshot(Prima.Actor.t(), String.t(), keyword()) :: {:ok, token()} | refusal()
+  def snapshot(%Prima.Actor{} = actor, root, opts \\ []) when is_binary(root) and is_list(opts) do
     requested = opts |> Keyword.get(:units, []) |> MapSet.new()
 
     with {:ok, athanor} <- tenant(actor) do
@@ -204,10 +204,10 @@ defmodule Arca.StorageProjectionChanges do
   # hold and check the token, run `write` (which may roll back with its
   # own reason), then acknowledge. The acknowledgment never lowers a
   # generation or an epoch.
-  @spec replace(Cyfr.Actor.t(), String.t(), token(), (-> result)) ::
+  @spec replace(Prima.Actor.t(), String.t(), token(), (-> result)) ::
           {:ok, result} | {:error, term()}
         when result: term()
-  def replace(%Cyfr.Actor{} = actor, root, token, write)
+  def replace(%Prima.Actor{} = actor, root, token, write)
       when is_binary(root) and is_function(write, 0) do
     with {:ok, athanor} <- tenant(actor),
          :ok <- token_for(athanor, root, token) do
@@ -304,9 +304,9 @@ defmodule Arca.StorageProjectionChanges do
   `{:error, :stale_generation}` when a later change has overtaken it:
   that change is the one to mark.
   """
-  @spec mark_ready(Cyfr.Actor.t(), String.t(), String.t(), pos_integer(), String.t() | nil) ::
+  @spec mark_ready(Prima.Actor.t(), String.t(), String.t(), pos_integer(), String.t() | nil) ::
           :ok | {:error, :stale_generation} | refusal()
-  def mark_ready(%Cyfr.Actor{} = actor, root, unit_key, generation, source_revision)
+  def mark_ready(%Prima.Actor{} = actor, root, unit_key, generation, source_revision)
       when is_binary(root) and is_binary(unit_key) and is_integer(generation) and
              (is_nil(source_revision) or is_binary(source_revision)) do
     with {:ok, athanor} <- tenant(actor) do
@@ -347,9 +347,9 @@ defmodule Arca.StorageProjectionChanges do
   The change names the unit's committed revision, if a commit published
   it.
   """
-  @spec begin_edit(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec begin_edit(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, pos_integer()} | refusal()
-  def begin_edit(%Cyfr.Actor{} = actor, root, unit_key)
+  def begin_edit(%Prima.Actor{} = actor, root, unit_key)
       when is_binary(root) and is_binary(unit_key) do
     with {:ok, athanor} <- tenant(actor) do
       "begin_edit"
@@ -373,9 +373,9 @@ defmodule Arca.StorageProjectionChanges do
   row another writer has since made pending is that writer's to mark,
   and its generation covers this write: `{:ok, :covered}`.
   """
-  @spec finish_edit(Cyfr.Actor.t(), String.t(), String.t(), pos_integer()) ::
+  @spec finish_edit(Prima.Actor.t(), String.t(), String.t(), pos_integer()) ::
           {:ok, pos_integer() | :covered} | refusal()
-  def finish_edit(%Cyfr.Actor{} = actor, root, unit_key, pending_generation)
+  def finish_edit(%Prima.Actor{} = actor, root, unit_key, pending_generation)
       when is_binary(root) and is_binary(unit_key) and is_integer(pending_generation) do
     with {:ok, athanor} <- tenant(actor) do
       answer =
@@ -410,9 +410,9 @@ defmodule Arca.StorageProjectionChanges do
   the unit's pending generation, the revision unchanged. Answers the
   generation `mark_ready/5` is handed when the move finishes.
   """
-  @spec begin_repair(Cyfr.Actor.t(), String.t(), String.t(), String.t()) ::
+  @spec begin_repair(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
           {:ok, pos_integer()} | refusal()
-  def begin_repair(%Cyfr.Actor{} = actor, root, unit_key, revision)
+  def begin_repair(%Prima.Actor{} = actor, root, unit_key, revision)
       when is_binary(root) and is_binary(unit_key) and is_binary(revision) do
     with {:ok, athanor} <- tenant(actor) do
       "begin_repair"
@@ -449,9 +449,9 @@ defmodule Arca.StorageProjectionChanges do
   journal that names another revision, a store that does not answer — is
   left pending. Answers how many changes are ready now.
   """
-  @spec settle_stale(Cyfr.Actor.t(), String.t(), keyword()) ::
+  @spec settle_stale(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, non_neg_integer()} | refusal()
-  def settle_stale(%Cyfr.Actor{} = actor, root, opts) when is_binary(root) and is_list(opts) do
+  def settle_stale(%Prima.Actor{} = actor, root, opts) when is_binary(root) and is_list(opts) do
     after_ms = Keyword.fetch!(opts, :settle_after_ms)
     cutoff = DateTime.add(Keyword.get(opts, :now, DateTime.utc_now()), -after_ms, :millisecond)
 
@@ -523,16 +523,16 @@ defmodule Arca.StorageProjectionChanges do
   (`{:error, :forbidden}` for any other). `limit:` bounds it (default
   1000).
   """
-  @spec pending_athanors(Cyfr.Actor.t(), keyword()) ::
+  @spec pending_athanors(Prima.Actor.t(), keyword()) ::
           {:ok, [String.t()]} | {:error, :forbidden | :unavailable}
   def pending_athanors(actor, opts \\ [])
 
-  def pending_athanors(%Cyfr.Actor{scope: :platform}, opts) when is_list(opts) do
+  def pending_athanors(%Prima.Actor{scope: :platform}, opts) when is_list(opts) do
     limit = Keyword.get(opts, :limit, 1000)
     rescuing_db("pending_athanors", fn -> {:ok, behind(limit)} end)
   end
 
-  def pending_athanors(%Cyfr.Actor{}, _opts), do: {:error, :forbidden}
+  def pending_athanors(%Prima.Actor{}, _opts), do: {:error, :forbidden}
 
   # arca:unscoped-ok the recovery walk reads every estate's root rows to find a projection behind its epoch before any caller is known (Cyfr.Boundaries.system_responsibilities/0).
   defp behind(limit) do
@@ -554,9 +554,9 @@ defmodule Arca.StorageProjectionChanges do
   Answers the count removed; with `dry_run: true`, the count the same
   rows would be, removing nothing.
   """
-  @spec prune_acknowledged_tombstones(Cyfr.Actor.t(), String.t(), keyword()) ::
+  @spec prune_acknowledged_tombstones(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, non_neg_integer()} | refusal()
-  def prune_acknowledged_tombstones(%Cyfr.Actor{} = actor, root, opts)
+  def prune_acknowledged_tombstones(%Prima.Actor{} = actor, root, opts)
       when is_binary(root) and is_list(opts) do
     before = Keyword.fetch!(opts, :before)
 
@@ -645,8 +645,8 @@ defmodule Arca.StorageProjectionChanges do
     |> Arca.Repo.one()
   end
 
-  defp tenant(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
-  defp tenant(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  defp tenant(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
+  defp tenant(%Prima.Actor{}), do: {:error, :no_athanor}
 
   defp rescuing_db(entry, fun) do
     case Arca.Repo.Errors.with_db_rescue("Arca.StorageProjectionChanges.#{entry}", fun) do

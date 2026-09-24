@@ -33,8 +33,8 @@ defmodule Cyfr.Bus.Schedules do
   The payload for `actor`'s athanor. A kind outside `kinds/0` or a field
   this struct does not declare raises.
   """
-  @spec new(Cyfr.Actor.t(), kind(), map() | keyword()) :: t()
-  def new(%Cyfr.Actor{} = actor, kind, fields \\ %{}) do
+  @spec new(Prima.Actor.t(), kind(), map() | keyword()) :: t()
+  def new(%Prima.Actor{} = actor, kind, fields \\ %{}) do
     Payload.build(__MODULE__, @fields, fields, %{
       athanor_id: Payload.athanor!(actor),
       kind: Payload.kind!(__MODULE__, kind, @kinds)

@@ -80,7 +80,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
           invoke_mode: :open_inert,
           shape_digest: "sha256:shape",
           commit_digest: "sha256:commit",
-          blob_digest: Cyfr.JCS.hash_binary(policy),
+          blob_digest: Prima.JCS.hash_binary(policy),
           resolved_policy: policy,
           activation: %{}
         }

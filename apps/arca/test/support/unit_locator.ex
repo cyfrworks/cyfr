@@ -15,7 +15,7 @@ defmodule Arca.Test.UnitLocator do
   What it has to be faithful about is the SHAPE the storage layer
   branches on, not the grammar the domain enforces: a components path is
   a directory unit at the version directory the contracts spell
-  (`Cyfr.ComponentPath.version_dir/4`, five segments) with a sentinel
+  (`Prima.ComponentPath.version_dir/4`, five segments) with a sentinel
   that marks a completed copy; an aqua role is a file unit and an aqua
   skill a directory unit. A path that names neither sits above any unit.
   A refusal the real grammar would make — a malformed name, an unknown
@@ -28,7 +28,7 @@ defmodule Arca.Test.UnitLocator do
     @behaviour Arca.Storage.UnitLocator
 
     # The version directory is the shadow unit, and the contracts spell it.
-    @depth length(Cyfr.ComponentPath.version_dir("catalyst", "local", "n", "1.0.0"))
+    @depth length(Prima.ComponentPath.version_dir("catalyst", "local", "n", "1.0.0"))
     @sentinel "cyfr-manifest.json"
 
     @impl Arca.Storage.UnitLocator
@@ -37,7 +37,7 @@ defmodule Arca.Test.UnitLocator do
       # `.staging` — laid beside the units, never inside one — above every
       # unit. The pluralisation is the contracts', read rather than
       # respelled.
-      if Cyfr.ComponentPath.type_plural(Cyfr.ComponentPath.singular(type_plural)) ==
+      if Prima.ComponentPath.type_plural(Prima.ComponentPath.singular(type_plural)) ==
            type_plural do
         {:dir, Enum.take(path, @depth), @sentinel}
       else
@@ -53,10 +53,10 @@ defmodule Arca.Test.UnitLocator do
 
     @behaviour Arca.Storage.UnitLocator
 
-    # The soul's reserved name is the contracts' (`Cyfr.AgentRef`), which
+    # The soul's reserved name is the contracts' (`Prima.AgentRef`), which
     # is the same name the real locator reads it from.
     @root "aqua"
-    @soul Cyfr.AgentRef.soul_name() <> ".md"
+    @soul Prima.AgentRef.soul_name() <> ".md"
     @skill_manifest "SKILL.md"
 
     @impl Arca.Storage.UnitLocator

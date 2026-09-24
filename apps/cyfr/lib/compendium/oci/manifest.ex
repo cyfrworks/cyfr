@@ -22,8 +22,8 @@ defmodule Compendium.OCI.Manifest do
   @readme_media_type "application/vnd.cyfr.readme.v1+markdown"
   @source_media_type "application/vnd.cyfr.source.v1.tar+gzip"
 
-  # Derive OCI media types from Cyfr.ComponentRef.valid_types/0.
-  @type_media_types Map.new(Cyfr.ComponentRef.valid_types(), fn
+  # Derive OCI media types from Prima.ComponentRef.valid_types/0.
+  @type_media_types Map.new(Prima.ComponentRef.valid_types(), fn
                       "tincture" -> {"tincture", "application/vnd.cyfr.tincture.v1.tar+gzip"}
                       type -> {type, "application/vnd.cyfr.#{type}.v1+wasm"}
                     end)
@@ -283,15 +283,15 @@ defmodule Compendium.OCI.Manifest do
     }
 
     base
-    |> Cyfr.MapUtil.put_present(
+    |> Prima.MapUtil.put_present(
       "org.opencontainers.image.description",
       metadata[:description] || metadata["description"]
     )
-    |> Cyfr.MapUtil.put_present(
+    |> Prima.MapUtil.put_present(
       "org.opencontainers.image.licenses",
       metadata[:license] || metadata["license"]
     )
-    |> Cyfr.MapUtil.put_present(
+    |> Prima.MapUtil.put_present(
       "dev.cyfr.component.category",
       metadata[:category] || metadata["category"]
     )

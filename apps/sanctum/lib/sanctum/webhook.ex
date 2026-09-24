@@ -34,16 +34,16 @@ defmodule Sanctum.Webhook do
 
   require Logger
 
-  # The default HMAC header is a wire shape (`Cyfr.Webhook`), read the same
+  # The default HMAC header is a wire shape (`Prima.Webhook`), read the same
   # way by webhook creation, the row store, the console and request
   # redaction.
-  @default_signature_header Cyfr.Webhook.default_signature_header()
+  @default_signature_header Prima.Webhook.default_signature_header()
 
   @doc false
-  defdelegate default_signature_header(), to: Cyfr.Webhook
+  defdelegate default_signature_header(), to: Prima.Webhook
 
   alias Arca.WebhookStorage
-  alias Cyfr.ComponentRef
+  alias Prima.ComponentRef
   alias Sanctum.Consent.Components
   alias Sanctum.Context
 
@@ -202,7 +202,7 @@ defmodule Sanctum.Webhook do
          :ok <- maybe_validate_target_ref(ctx, normalized),
          :ok <- maybe_authorize_profile_binding(ctx, name, athanor_id, normalized),
          :ok <- check_replay_transition(athanor_id, name, normalized, attrs),
-         :ok <- WebhookStorage.update_webhook(Cyfr.Actor.in_athanor(athanor_id), name, normalized) do
+         :ok <- WebhookStorage.update_webhook(Prima.Actor.in_athanor(athanor_id), name, normalized) do
       get(ctx, name)
     end
   end
@@ -224,7 +224,7 @@ defmodule Sanctum.Webhook do
         Map.has_key?(normalized, :idempotency_key_header)
 
     if touches_headers? do
-      case WebhookStorage.get_by_name(Cyfr.Actor.in_athanor(athanor_id), name) do
+      case WebhookStorage.get_by_name(Prima.Actor.in_athanor(athanor_id), name) do
         {:ok, row} ->
           resulting = %{
             timestamp_header: resulting_header(normalized, row, :timestamp_header),
@@ -269,7 +269,7 @@ defmodule Sanctum.Webhook do
               {:ok, ref}
 
             _ ->
-              case WebhookStorage.get_by_name(Cyfr.Actor.in_athanor(athanor_id), name) do
+              case WebhookStorage.get_by_name(Prima.Actor.in_athanor(athanor_id), name) do
                 {:ok, row} -> {:ok, row.target_ref}
                 {:error, _} = error -> error
               end
@@ -425,7 +425,7 @@ defmodule Sanctum.Webhook do
            Sanctum.Cipher.encrypt(new_secret, Sanctum.CipherAAD.webhook_secret(athanor_id, name)),
          :ok <-
            WebhookStorage.rotate_secret(
-             Cyfr.Actor.in_athanor(athanor_id),
+             Prima.Actor.in_athanor(athanor_id),
              name,
              new_secret_encrypted,
              previous_expires_at
@@ -811,8 +811,8 @@ defmodule Sanctum.Webhook do
       description: row.description,
       enabled: row.enabled,
       rate_limit: row.rate_limit,
-      created_at: Cyfr.Time.iso8601(row.inserted_at),
-      rotated_at: Cyfr.Time.iso8601(row.rotated_at)
+      created_at: Prima.Time.iso8601(row.inserted_at),
+      rotated_at: Prima.Time.iso8601(row.rotated_at)
     }
   end
 

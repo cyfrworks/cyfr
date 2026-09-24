@@ -679,7 +679,7 @@ def fixture_request():
 
 
 def bound_authority(ref, tasks):
-    """An authority bound to `ref` whose node allows `tasks` concurrent children (`Cyfr.Authority` on the wire)."""
+    """An authority bound to `ref` whose node allows `tasks` concurrent children (`Prima.Authority` on the wire)."""
     name = ref.rsplit(":", 1)[0]
     return {
         "activation": {}, "budget": {"id": "bgt_AAAAAAAAAAHKmY6r"}, "chain": [], "cursor": {"bound": name}, "depth": 0,

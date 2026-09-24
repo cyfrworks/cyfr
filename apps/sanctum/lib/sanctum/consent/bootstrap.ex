@@ -58,9 +58,9 @@ defmodule Sanctum.Consent.Bootstrap do
   alias Sanctum.Consent.Components
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
-  alias Cyfr.AgentRef
-  alias Cyfr.ComponentRow
-  alias Cyfr.JCS
+  alias Prima.AgentRef
+  alias Prima.ComponentRow
+  alias Prima.JCS
 
   @type result :: %{
           minted: [String.t()],
@@ -194,10 +194,10 @@ defmodule Sanctum.Consent.Bootstrap do
     # Every valid type is profile-bearing: tinctures are not executable,
     # but a profile is what makes one invocable at all — the route selects
     # it. Owner profiles mint here; public ones only via profile.publish.
-    types = Cyfr.ComponentRef.valid_types()
+    types = Prima.ComponentRef.valid_types()
 
     case Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
-           publisher: Cyfr.ComponentPath.default_publisher(),
+           publisher: Prima.ComponentPath.default_publisher(),
            limit: :none
          ) do
       {:ok, rows} ->
@@ -290,7 +290,7 @@ defmodule Sanctum.Consent.Bootstrap do
         {:ok, %{"nodes" => nodes}} when is_map(nodes) ->
           for {from, node} <- nodes,
               {key, %{"vault" => %{"via" => _}}} <- node["edges"] || %{},
-              {:ok, dep} <- [Cyfr.Authority.Blob.edge_target(key)],
+              {:ok, dep} <- [Prima.Authority.Blob.edge_target(key)],
               into: MapSet.new(),
               do: {from, dep}
 
@@ -337,7 +337,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp release_digest(row), do: Map.get(row, :release_digest) || Map.get(row, "release_digest")
 
   defp credential_needs?(manifest) do
-    case Cyfr.Manifest.Needs.from_manifest(manifest) do
+    case Prima.Manifest.Needs.from_manifest(manifest) do
       needs when is_list(needs) -> Enum.any?(needs, &(&1.kind in ~w(api_key oauth bundle)))
       _ -> false
     end
@@ -449,7 +449,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp granted_by(_), do: "system:bootstrap"
 
   defp insert(ctx, source_ref, blob_json, digests, activation_json, vault_refs) do
-    profile_id = Cyfr.UUID7.generate_id("prof")
+    profile_id = Prima.UUID7.generate_id("prof")
 
     # Profile and first revision commit together — a failed consent leg
     # must not leave an orphan profile with a NULL head.

@@ -7,7 +7,7 @@ defmodule Arca.AgentStorage do
   (`Compendium.AgentIndex` derives them; this module is the only place
   they are read and written).
 
-  Both functions take the `Cyfr.Actor` first and match it in the head, so
+  Both functions take the `Prima.Actor` first and match it in the head, so
   the estate whose index is rewritten comes from the caller; an actor
   whose athanor is nil or the empty string is `{:error, :no_athanor}`
   before any query.
@@ -48,7 +48,7 @@ defmodule Arca.AgentStorage do
   a provisioning attempt's claim can lapse while a sync is running.
   """
   @spec replace_projection(
-          Cyfr.Actor.t(),
+          Prima.Actor.t(),
           StorageProjectionChanges.token(),
           [map()],
           keyword()
@@ -63,7 +63,7 @@ defmodule Arca.AgentStorage do
              | term()}
   def replace_projection(actor, token, rows, opts \\ [])
 
-  def replace_projection(%Cyfr.Actor{athanor_id: athanor_id} = actor, token, rows, opts)
+  def replace_projection(%Prima.Actor{athanor_id: athanor_id} = actor, token, rows, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_map(token) and is_list(rows) and
              is_list(opts) do
     claim = Keyword.get(opts, :claim)
@@ -83,7 +83,7 @@ defmodule Arca.AgentStorage do
     |> Arca.Data.project()
   end
 
-  def replace_projection(%Cyfr.Actor{}, _token, _rows, _opts), do: {:error, :no_athanor}
+  def replace_projection(%Prima.Actor{}, _token, _rows, _opts), do: {:error, :no_athanor}
 
   defp holding?(_actor, nil), do: true
 
@@ -91,8 +91,8 @@ defmodule Arca.AgentStorage do
     do: Arca.ProvisioningClaims.hold?(actor, owner, fence)
 
   @doc "The athanor's rows, by name."
-  @spec list(Cyfr.Actor.t()) :: {:ok, [map()]} | {:error, term()}
-  def list(%Cyfr.Actor{athanor_id: athanor_id}) when is_binary(athanor_id) and athanor_id != "" do
+  @spec list(Prima.Actor.t()) :: {:ok, [map()]} | {:error, term()}
+  def list(%Prima.Actor{athanor_id: athanor_id}) when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.AgentStorage.list", fn ->
       {:ok,
        Arca.Repo.all(
@@ -102,5 +102,5 @@ defmodule Arca.AgentStorage do
     |> Arca.Data.project()
   end
 
-  def list(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def list(%Prima.Actor{}), do: {:error, :no_athanor}
 end

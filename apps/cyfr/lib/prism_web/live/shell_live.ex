@@ -131,10 +131,10 @@ defmodule PrismWeb.ShellLive do
 
       :miss ->
         Arca.Cache.put(scan_key, true, :timer.seconds(60))
-        logger_metadata = Cyfr.LoggerContext.capture()
+        logger_metadata = Prima.LoggerContext.capture()
 
         Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-          Cyfr.LoggerContext.restore(logger_metadata)
+          Prima.LoggerContext.restore(logger_metadata)
 
           try do
             # Through the tool surface, like ComponentsLive's register
@@ -161,7 +161,7 @@ defmodule PrismWeb.ShellLive do
       # The public address: the one origin plus the tincture's path.
       url =
         EmissaryWeb.Endpoint.url() <>
-          Cyfr.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
+          Prima.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
 
       {:noreply,
        socket
@@ -211,7 +211,7 @@ defmodule PrismWeb.ShellLive do
 
       tincture ->
         ref =
-          Cyfr.ComponentRef.build(
+          Prima.ComponentRef.build(
             "tincture",
             tincture.publisher,
             tincture.name,
@@ -321,7 +321,7 @@ defmodule PrismWeb.ShellLive do
     tinctures =
       Prism.TinctureRegistry.list_tinctures(ctx)
       |> Enum.map(fn t ->
-        ref = Cyfr.ComponentRef.build("tincture", t.publisher, t.name)
+        ref = Prima.ComponentRef.build("tincture", t.publisher, t.name)
         access = mint_access(socket, t)
 
         public = visibility(ctx, ref)
@@ -395,7 +395,7 @@ defmodule PrismWeb.ShellLive do
   # Same origin as the shell itself: a relative path, so the iframe is
   # never cross-origin whatever hostname or proxy the browser came in through.
   defp build_tincture_url({:ok, token}, t) do
-    base = Cyfr.TinctureUrl.path(t.athanor_segment, t.publisher, t.name)
+    base = Prima.TinctureUrl.path(t.athanor_segment, t.publisher, t.name)
     "#{base}?_t=#{token}"
   end
 
@@ -417,7 +417,7 @@ defmodule PrismWeb.ShellLive do
       encoded = path |> String.split("/") |> Enum.map_join("/", &URI.encode/1)
 
       base =
-        Cyfr.TinctureUrl.path(t.athanor_segment, t.publisher, t.name) <> "/" <> encoded
+        Prima.TinctureUrl.path(t.athanor_segment, t.publisher, t.name) <> "/" <> encoded
 
       "#{base}?_t=#{token}"
     end
@@ -428,7 +428,7 @@ defmodule PrismWeb.ShellLive do
   defp safe_asset_path?(path) do
     ext = path |> Path.extname() |> String.downcase()
 
-    Cyfr.PathSafety.validate_relative_path(path) == :ok and
+    Prima.PathSafety.validate_relative_path(path) == :ok and
       ext in Compendium.tincture_asset_rules().image_extensions
   end
 
@@ -566,7 +566,7 @@ defmodule PrismWeb.ShellLive do
 
     match?(
       {:deny, _},
-      Cyfr.RateLimiter.check(key, max, Cyfr.RuntimeConfig.tincture_rate_window_ms())
+      Prima.RateLimiter.check(key, max, Cyfr.RuntimeConfig.tincture_rate_window_ms())
     )
   end
 
@@ -651,7 +651,7 @@ defmodule PrismWeb.ShellLive do
   def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

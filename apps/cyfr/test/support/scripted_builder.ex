@@ -10,7 +10,7 @@ defmodule Cyfr.Test.ScriptedBuilder do
 
   Everything but the build is the contract's. It is served by Bandit on a
   loopback port of the system's choosing (`url/0`), and a request is
-  answered as `Cyfr.BuilderProtocol` says a builds service answers it: a
+  answered as `Prima.BuilderProtocol` says a builds service answers it: a
   `POST` to a route of the protocol, the `x-cyfr-auth` header verified
   with the request key before the body is read (`401` `unauthorized` with
   the refusal, and `replayed` for a nonce seen before), the body read up
@@ -58,7 +58,7 @@ defmodule Cyfr.Test.ScriptedBuilder do
 
   use GenServer
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
 
   @fixture_path Path.expand("../../../../tests/fixtures/locus_builds.json", __DIR__)
   @external_resource @fixture_path
@@ -111,7 +111,7 @@ defmodule Cyfr.Test.ScriptedBuilder do
   """
   @spec await_builds(non_neg_integer()) :: :ok
   def await_builds(timeout \\ 10_000) do
-    Cyfr.Test.Wait.wait_until(
+    Prima.Test.Wait.wait_until(
       fn -> Task.Supervisor.children(@supervisor) == [] end,
       timeout,
       "the builds' tasks to finish"
@@ -212,7 +212,7 @@ defmodule Cyfr.Test.ScriptedBuilder do
 
     import Plug.Conn
 
-    alias Cyfr.BuilderProtocol
+    alias Prima.BuilderProtocol
 
     @impl Plug
     def init(opts), do: Map.new(opts)

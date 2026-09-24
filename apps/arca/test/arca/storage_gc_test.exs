@@ -231,7 +231,7 @@ defmodule Arca.StorageGCTest do
   end
 
   defp start_build(actor) do
-    id = Cyfr.UUID7.build_id()
+    id = Prima.UUID7.build_id()
     :ok = Arca.BuildRecords.record_started(actor, id, "c:local.gc:1.0.0")
     id
   end
@@ -295,7 +295,7 @@ defmodule Arca.StorageGCTest do
 
       identity = %{
         new_revision: revision,
-        content_identity: Cyfr.Digest.sha256("slow"),
+        content_identity: Prima.Digest.sha256("slow"),
         commit_identity: "usr_slow"
       }
 
@@ -325,7 +325,7 @@ defmodule Arca.StorageGCTest do
       assert :committed =
                StorageUnits.commit(actor, draft, nil, token, %{
                  new_revision: revision,
-                 content_identity: Cyfr.Digest.sha256("late"),
+                 content_identity: Prima.Digest.sha256("late"),
                  commit_identity: "usr_late"
                })
 
@@ -701,7 +701,7 @@ defmodule Arca.StorageGCTest do
         :pass
       end)
 
-      nobody = %Cyfr.Actor{athanor_id: nil, user_id: "usr_nobody"}
+      nobody = %Prima.Actor{athanor_id: nil, user_id: "usr_nobody"}
 
       # No connection to query with: a query would raise, not refuse.
       Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
@@ -720,7 +720,7 @@ defmodule Arca.StorageGCTest do
                  pins: MapSet.new()
                })
 
-      assert {:error, :no_athanor} = StorageGC.sweep(%Cyfr.Actor{athanor_id: ""})
+      assert {:error, :no_athanor} = StorageGC.sweep(%Prima.Actor{athanor_id: ""})
       refute_received {:storage, _op, _path}
     end
 
@@ -741,7 +741,7 @@ defmodule Arca.StorageGCTest do
       :committed =
         StorageUnits.commit(other, draft, nil, token, %{
           new_revision: mine,
-          content_identity: Cyfr.Digest.sha256("theirs"),
+          content_identity: Prima.Digest.sha256("theirs"),
           commit_identity: "usr_other"
         })
 

@@ -89,7 +89,7 @@ defmodule Emissary.MCP.SubscriptionsTest do
       assert Subscriptions.notification_for({:progress, %{}}) == :ignore
 
       progress =
-        Cyfr.Bus.Progress.new(Cyfr.Actor.in_athanor("ath_1"), {:pull, "p1"}, phase: :pulling)
+        Cyfr.Bus.Progress.new(Prima.Actor.in_athanor("ath_1"), {:pull, "p1"}, phase: :pulling)
 
       assert Subscriptions.notification_for(progress) == :ignore
     end

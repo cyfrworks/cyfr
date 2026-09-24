@@ -14,7 +14,7 @@ defmodule Aqua.Attachments do
   back through `PrismWeb.AttachmentController`, and the model call
   receives them base64-encoded from `load/3`.
 
-  Filenames are the uploader's and are reduced to a safe basename: `Cyfr.PathSafety`
+  Filenames are the uploader's and are reduced to a safe basename: `Prima.PathSafety`
   refuses traversal but not an embedded `/`, and the local adapter would turn one
   into a subdirectory. Two uploads with the same name in one message get
   distinct paths (an index prefix). The athanor's storage cap
@@ -73,7 +73,7 @@ defmodule Aqua.Attachments do
             ref = %{
               "filename" => safe_filename(file["filename"]),
               "stored_name" => stored_name,
-              "media_type" => file["media_type"] || Cyfr.MediaType.binary(),
+              "media_type" => file["media_type"] || Prima.MediaType.binary(),
               "size" => byte_size(bytes)
             }
 

@@ -37,7 +37,7 @@ defmodule Cyfr.Execution.Attempt do
   - what its assignment is signed from, so a child admitted under a key
     its runner minted is handed to that runner again (`admitted/2`);
   - the worker service the run is dispatched to (its
-    `t:Cyfr.WorkerAPI.endpoint/0` and boot id) and the digest of the
+    `t:Prima.WorkerAPI.endpoint/0` and boot id) and the digest of the
     component its runner runs;
   - what the run holds while it is open: its execution slot
     (`take_slot/3`), and, for a spawned child, the invoke-budget slot its
@@ -51,14 +51,14 @@ defmodule Cyfr.Execution.Attempt do
 
   ## The execution slot
 
-  `Cyfr.Slots.acquire/4` blocks its caller for as long as the run is
+  `Prima.Slots.acquire/4` blocks its caller for as long as the run is
   queued, so the attempt does not call it: a slot holder, a process linked
   to the attempt, waits for the slot and then holds it for the attempt,
   and the attempt answers `take_slot/3` when the holder reports. While its
   run is queued the attempt therefore hears everything it hears at any
   other time: its waiter's exit, a row that ended (`stop_ended/1`,
   `stop_unclosed/2`), its owner check and its supervisor's stop. Whatever
-  stops the attempt ends the holder, and `Cyfr.Slots` takes a dead process
+  stops the attempt ends the holder, and `Prima.Slots` takes a dead process
   out of its queue or takes its slot back, whichever it had, so the slot
   goes back once on every path and a run that leaves its wait never takes
   one.
@@ -84,7 +84,7 @@ defmodule Cyfr.Execution.Attempt do
   its row was ended before a runner attached (`stop_ended/1`), when
   its row lapsed (`stop_unclosed/2`), and when its waiter exits. A
   waiter that exits kills the run: the attempt asks its worker service to
-  kill the runner (`c:Cyfr.WorkerAPI.kill/1`), unless the run is still
+  kill the runner (`c:Prima.WorkerAPI.kill/1`), unless the run is still
   waiting for its slot and so has none, counts a kill of a runner
   that had attached against the athanor (`note_unreaped/2`), and lapses
   its row (`Cyfr.Execution.Lapse`). A waiter whose attempt stops without closing
@@ -127,7 +127,7 @@ defmodule Cyfr.Execution.Attempt do
   ## The grant
 
   An attempt holds the grant its run was admitted under
-  (`Cyfr.ExecutionGrant`), which its row stores. Every effect a call asks
+  (`Prima.ExecutionGrant`), which its row stores. Every effect a call asks
   for is admitted only while that grant stands
   (`Sanctum.ExecutionStanding.verify/1`), checked in the same transaction
   as the row's hold. Three effects write no row, and are checked in a
@@ -157,11 +157,12 @@ defmodule Cyfr.Execution.Attempt do
 
   require Logger
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Delta
-  alias Cyfr.Execution.{Charge, Close, Emit, Host, Lapse, Outcome, StepSpans}
-  alias Cyfr.Slots
+  alias Prima.Authority
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Delta
+  alias Cyfr.Execution.{Charge, Close, Emit, Host, Lapse, StepSpans}
+  alias Prima.Outcome
+  alias Prima.Slots
   alias Sanctum.Context
 
   @registry __MODULE__.Registry
@@ -227,8 +228,8 @@ defmodule Cyfr.Execution.Attempt do
                 nonces: %{}
               ]
 
-  @typedoc "A verified host call's header fields (`Cyfr.WorkerAuth.host_call/0`)."
-  @type caller :: Cyfr.WorkerAuth.host_call()
+  @typedoc "A verified host call's header fields (`Prima.WorkerAuth.host_call/0`)."
+  @type caller :: Prima.WorkerAuth.host_call()
 
   @typedoc "An operation a runner calls on its attempt once it has attached."
   @type op ::
@@ -255,7 +256,7 @@ defmodule Cyfr.Execution.Attempt do
           declared_needs: [String.t()],
           activation_digest: String.t() | nil,
           roster: [map()],
-          worker: Cyfr.WorkerAPI.endpoint() | nil,
+          worker: Prima.WorkerAPI.endpoint() | nil,
           deadline: non_neg_integer() | nil
         }
 
@@ -274,7 +275,7 @@ defmodule Cyfr.Execution.Attempt do
   `:declared_needs` (default `[]`) and `:activation_digest` (the
   resolver's, for its guest's children), `:roster` (the delegation roster
   of its admitted input, default `[]`), `:step_spans`, `:worker`,
-  `:service_id` and `:boot_id` (the `t:Cyfr.WorkerAPI.endpoint/0`, the id
+  `:service_id` and `:boot_id` (the `t:Prima.WorkerAPI.endpoint/0`, the id
   and the boot of the worker service the run is dispatched to), `:deadline` (the
   run's subtree deadline in Unix ms, which caps its children's), `:digest` (the digest of the
   component's artifact, which the runner fetches), `:held_invoke` (true
@@ -283,7 +284,7 @@ defmodule Cyfr.Execution.Attempt do
   slot holds, `%{id: charge_id}`) and `:assignment` (what the run's
   assignment is signed from, `t:Cyfr.Execution.Assignments.admitted/0`,
   which `admitted/2` answers to the runner holding the claim) and `:grant`
-  (the `Cyfr.ExecutionGrant` the run was admitted under; without one,
+  (the `Prima.ExecutionGrant` the run was admitted under; without one,
   every effect is refused).
 
   Answers `{:error, {:already_started, pid}}` when the execution already
@@ -295,7 +296,7 @@ defmodule Cyfr.Execution.Attempt do
       Keyword.merge(opts,
         owner: self(),
         callers: [self() | Process.get(:"$callers", [])],
-        logger: Cyfr.LoggerContext.capture()
+        logger: Prima.LoggerContext.capture()
       )
 
     case DynamicSupervisor.start_child(@supervisor, {__MODULE__, opts}) do
@@ -321,12 +322,12 @@ defmodule Cyfr.Execution.Attempt do
 
   @doc """
   Take the run's execution slot of `class` for this attempt, keyed by its
-  athanor, waiting at most `timeout` ms (`Cyfr.Slots.acquire/4` on
+  athanor, waiting at most `timeout` ms (`Prima.Slots.acquire/4` on
   `Cyfr.Execution.Slots`, in the attempt's slot holder). Answers `:ok`
   when the attempt holds the slot and its row, read once the slot was
   granted, is still its to run: the caller may start the run. A refusal
   closes the run failed with the refusal's sentence
-  (`Cyfr.Slots.refusal/1`) and answers `:closed`, as does a row that
+  (`Prima.Slots.refusal/1`) and answers `:closed`, as does a row that
   cannot be read. An attempt whose row had ended when it was asked, that
   stops while the run is queued, or whose row ended by the time the slot
   was granted, answers `:closed` without closing the run, and holds no
@@ -376,7 +377,7 @@ defmodule Cyfr.Execution.Attempt do
   @doc """
   Close the run of the attempt `pid` failed with `sentence` and stop,
   whether or not a runner has attached: the runner that claimed it gives
-  it back (`c:Cyfr.HostAPI.release_child/2`), which `Cyfr.Execution.Host`
+  it back (`c:Prima.HostAPI.release_child/2`), which `Cyfr.Execution.Host`
   verifies before calling. Answers `:closed`.
   """
   @spec release(pid(), String.t()) :: :closed
@@ -538,7 +539,7 @@ defmodule Cyfr.Execution.Attempt do
 
   @doc """
   Count a kill of `execution_id` whose native work may still run against
-  `tenant`'s execution slots (`Cyfr.Slots.note_unreaped/3`), and emit
+  `tenant`'s execution slots (`Prima.Slots.note_unreaped/3`), and emit
   `[:cyfr, :opus, :execution, :unreaped_kill]` with the tenant's live
   count. From any process: a cancel runs in the canceller's, never the
   holder's, and the note is acknowledged before the kill it precedes. A
@@ -584,7 +585,7 @@ defmodule Cyfr.Execution.Attempt do
     # The opener's callers, so its database sandbox allowance covers the
     # writes and reads made here.
     Process.put(:"$callers", Keyword.fetch!(opts, :callers))
-    Cyfr.LoggerContext.restore(Keyword.fetch!(opts, :logger))
+    Prima.LoggerContext.restore(Keyword.fetch!(opts, :logger))
 
     # Trapped, so a supervisor's stop runs `terminate/2` instead of cutting
     # off a reaction to the waiter partway.
@@ -861,7 +862,7 @@ defmodule Cyfr.Execution.Attempt do
   end
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -948,7 +949,7 @@ defmodule Cyfr.Execution.Attempt do
     end)
   end
 
-  # Ending the holder gives back whichever it had: `Cyfr.Slots` takes a dead
+  # Ending the holder gives back whichever it had: `Prima.Slots` takes a dead
   # process out of its queue, and takes back the slot it held or was handed
   # meanwhile. A call still waiting for the slot is answered.
   defp give_back_slot(nil), do: :ok
@@ -1188,7 +1189,7 @@ defmodule Cyfr.Execution.Attempt do
   # that is gone.
   defp held(state, caller, :chain) do
     case Arca.ExecutionAttempts.live?(
-           Cyfr.Actor.in_athanor(caller.athanor_id),
+           Prima.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
            caller.fence,
            caller.runner,
@@ -1203,7 +1204,7 @@ defmodule Cyfr.Execution.Attempt do
   # A failure retires the run: it needs the hold, never a standing grant.
   defp held(_state, caller, {:fail, _outcome}) do
     case Arca.ExecutionAttempts.held?(
-           Cyfr.Actor.in_athanor(caller.athanor_id),
+           Prima.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
            caller.fence,
            caller.runner
@@ -1216,7 +1217,7 @@ defmodule Cyfr.Execution.Attempt do
 
   defp held(state, caller, op) do
     case Arca.ExecutionAttempts.held?(
-           Cyfr.Actor.in_athanor(caller.athanor_id),
+           Prima.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
            caller.fence,
            caller.runner,
@@ -1427,7 +1428,7 @@ defmodule Cyfr.Execution.Attempt do
       {emit_failed(), emit}
   end
 
-  defp emit_failed, do: Cyfr.WitResponse.encode_error(:dispatch_error, "The emit call failed.")
+  defp emit_failed, do: Prima.WitResponse.encode_error(:dispatch_error, "The emit call failed.")
 
   defp masking_set(state), do: Map.values(state.secrets) ++ state.tokens
 

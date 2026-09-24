@@ -21,7 +21,7 @@ defmodule Sanctum.Tenancy.Athanors do
   which cap a mint must pass, what a slug may be, when an archive is
   refused, what an unanswerable read should read as, and who is told
   afterwards. Every call names the actor it runs as — the server
-  (`Cyfr.Actor.system/0`) for the fabric reads that choose an athanor,
+  (`Prima.Actor.system/0`) for the fabric reads that choose an athanor,
   and the server narrowed to one athanor for every write that must land
   in exactly that one.
   """
@@ -521,7 +521,7 @@ defmodule Sanctum.Tenancy.Athanors do
   # what lets the purge reach the whole tree, `scope: :athanor` is what
   # keeps it inside this one estate.
   defp internal_actor(%{id: id}),
-    do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
+    do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
   @doc """
   Reopen an archived athanor, if the server still has room for it
@@ -746,11 +746,11 @@ defmodule Sanctum.Tenancy.Athanors do
 
   # The tenancy fabric reads as the server: which athanor a caller works
   # in is what these reads decide, so they cannot be filtered by one.
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
   # The server narrowed to one athanor — the actor a write that must land
   # in exactly that athanor, and nowhere else, runs as.
-  defp in_athanor(id), do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
+  defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
   defp rows_or_empty({:ok, rows}), do: rows
   defp rows_or_empty({:error, _}), do: []
@@ -825,7 +825,7 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   Whether `value` is an athanor id (`"ath_..."`) rather than a route slug.
   Discriminating by prefix is sound: the slug grammar (`Sanctum.Slug` /
-  `Cyfr.ComponentRef.personal_slug_regex/0`) admits only lowercase
+  `Prima.ComponentRef.personal_slug_regex/0`) admits only lowercase
   alphanumerics and hyphens — a slug can never contain `"_"`.
   """
   @spec athanor_id?(term()) :: boolean()

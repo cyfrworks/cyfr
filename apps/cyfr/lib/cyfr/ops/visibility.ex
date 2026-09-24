@@ -179,7 +179,7 @@ defmodule Cyfr.Ops.Visibility do
   them; without them only the action enum narrows. A definition with no
   `inputSchema` keeps its shape.
   """
-  @spec restrict_actions(map(), [String.t()], [Cyfr.Ops.Operation.t()] | nil) :: map()
+  @spec restrict_actions(map(), [String.t()], [Prima.Operation.t()] | nil) :: map()
   def restrict_actions(tool_def, actions, operations \\ nil)
       when is_map(tool_def) and is_list(actions) do
     tool_def =
@@ -202,9 +202,9 @@ defmodule Cyfr.Ops.Visibility do
 
   defp restrict_schema(schema, actions, operations) when is_list(operations) do
     kept = Enum.filter(operations, &(&1.action in actions))
-    Map.merge(schema, Cyfr.Ops.Operation.schema(kept))
+    Map.merge(schema, Prima.Operation.schema(kept))
   end
 
   defp restrict_schema(schema, actions, nil),
-    do: Cyfr.Ops.Operation.restrict_schema(schema, actions)
+    do: Prima.Operation.restrict_schema(schema, actions)
 end

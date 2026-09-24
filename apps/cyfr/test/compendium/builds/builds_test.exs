@@ -29,7 +29,7 @@ defmodule Compendium.BuildsTest do
   alias Cyfr.Bus.Progress
   alias Cyfr.Test.ScriptedBuilder
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
   @reference "reagent:local.adder:0.1.0"
@@ -89,7 +89,7 @@ defmodule Compendium.BuildsTest do
     test "sends the unit's sources, publishes the verified bytes and the lock, and registers", %{
       ctx: ctx
     } do
-      {:ok, real} = Compendium.WasmValidator.validate(@wasm)
+      {:ok, real} = Prima.Wasm.validate(@wasm)
 
       ScriptedBuilder.script([
         {:stream,

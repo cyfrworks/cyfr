@@ -49,9 +49,9 @@ defmodule Arca.ProvisioningClaims do
   Take the actor's athanor's claim for `owner`, entering through
   `entry_kind`, for `lease_ms`.
   """
-  @spec claim(Cyfr.Actor.t(), String.t(), String.t(), pos_integer()) ::
+  @spec claim(Prima.Actor.t(), String.t(), String.t(), pos_integer()) ::
           {:ok, map()} | {:busy, map()} | refusal()
-  def claim(%Cyfr.Actor{athanor_id: athanor_id}, owner, entry_kind, lease_ms)
+  def claim(%Prima.Actor{athanor_id: athanor_id}, owner, entry_kind, lease_ms)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and
              is_binary(entry_kind) and
              is_integer(lease_ms) and lease_ms > 0 do
@@ -64,12 +64,12 @@ defmodule Arca.ProvisioningClaims do
     |> Arca.Data.project()
   end
 
-  def claim(%Cyfr.Actor{}, _owner, _entry_kind, _lease_ms), do: {:error, :no_athanor}
+  def claim(%Prima.Actor{}, _owner, _entry_kind, _lease_ms), do: {:error, :no_athanor}
 
   @doc "Move the lease `lease_ms` past now, while `owner` still holds `fence`."
-  @spec renew(Cyfr.Actor.t(), String.t(), pos_integer(), pos_integer()) ::
+  @spec renew(Prima.Actor.t(), String.t(), pos_integer(), pos_integer()) ::
           :ok | :stale | refusal()
-  def renew(%Cyfr.Actor{athanor_id: athanor_id}, owner, fence, lease_ms)
+  def renew(%Prima.Actor{athanor_id: athanor_id}, owner, fence, lease_ms)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) and
              is_integer(lease_ms) and lease_ms > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.renew", fn ->
@@ -82,16 +82,16 @@ defmodule Arca.ProvisioningClaims do
     end)
   end
 
-  def renew(%Cyfr.Actor{}, _owner, _fence, _lease_ms), do: {:error, :no_athanor}
+  def renew(%Prima.Actor{}, _owner, _fence, _lease_ms), do: {:error, :no_athanor}
 
   @doc """
   Write the attempt's `outcome` (`ready`, `failed` or `released`) and its
   `detail`, while `owner` still holds `fence`. A claim that was taken over,
   or already settled, answers `:stale` and keeps what it reads.
   """
-  @spec settle(Cyfr.Actor.t(), String.t(), pos_integer(), String.t(), String.t() | nil) ::
+  @spec settle(Prima.Actor.t(), String.t(), pos_integer(), String.t(), String.t() | nil) ::
           :ok | :stale | refusal()
-  def settle(%Cyfr.Actor{athanor_id: athanor_id}, owner, fence, outcome, detail)
+  def settle(%Prima.Actor{athanor_id: athanor_id}, owner, fence, outcome, detail)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) and
              is_binary(outcome) and (is_binary(detail) or is_nil(detail)) do
     if outcome not in ProvisioningClaim.outcomes(),
@@ -105,17 +105,17 @@ defmodule Arca.ProvisioningClaims do
     end)
   end
 
-  def settle(%Cyfr.Actor{}, _owner, _fence, _outcome, _detail), do: {:error, :no_athanor}
+  def settle(%Prima.Actor{}, _owner, _fence, _outcome, _detail), do: {:error, :no_athanor}
 
   @doc "Give the claim up with no verdict on readiness: `settle/5` as `released`."
-  @spec release(Cyfr.Actor.t(), String.t(), pos_integer()) :: :ok | :stale | refusal()
-  def release(%Cyfr.Actor{} = actor, owner, fence),
+  @spec release(Prima.Actor.t(), String.t(), pos_integer()) :: :ok | :stale | refusal()
+  def release(%Prima.Actor{} = actor, owner, fence),
     do: settle(actor, owner, fence, "released", nil)
 
   @doc "The athanor's claim row as it reads now."
-  @spec current(Cyfr.Actor.t()) ::
+  @spec current(Prima.Actor.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
-  def current(%Cyfr.Actor{athanor_id: athanor_id})
+  def current(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.current", fn ->
       case read(athanor_id) do
@@ -126,7 +126,7 @@ defmodule Arca.ProvisioningClaims do
     |> Arca.Data.project()
   end
 
-  def current(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def current(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   Hold the athanor's claim for the rest of the caller's transaction:
@@ -145,9 +145,9 @@ defmodule Arca.ProvisioningClaims do
   guarantee lives; it raises like anything else there, and the caller's
   `Arca.Repo.Errors.with_db_rescue/2` reports it.
   """
-  @spec hold?(Cyfr.Actor.t(), String.t(), pos_integer()) :: boolean()
+  @spec hold?(Prima.Actor.t(), String.t(), pos_integer()) :: boolean()
   # arca:db-raise-ok inside the caller's transaction
-  def hold?(%Cyfr.Actor{athanor_id: athanor_id}, owner, fence)
+  def hold?(%Prima.Actor{athanor_id: athanor_id}, owner, fence)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) do
     athanor_id
     |> held(owner, fence)
@@ -156,7 +156,7 @@ defmodule Arca.ProvisioningClaims do
     |> Kernel.==(:ok)
   end
 
-  def hold?(%Cyfr.Actor{}, _owner, _fence),
+  def hold?(%Prima.Actor{}, _owner, _fence),
     do: Arca.QueryHelpers.no_athanor!("Arca.ProvisioningClaims.hold?/3")
 
   @doc """
@@ -229,10 +229,10 @@ defmodule Arca.ProvisioningClaims do
   # claims: the loser inserts nothing and reads the winner's row.
   defp insert(athanor_id, owner, entry_kind, lease_ms, now) do
     row = %{
-      id: Cyfr.UUID7.generate_id("pc"),
+      id: Prima.UUID7.generate_id("pc"),
       athanor_id: athanor_id,
       owner: owner,
-      attempt: Cyfr.UUID7.generate_id("att"),
+      attempt: Prima.UUID7.generate_id("att"),
       entry_kind: entry_kind,
       lease_until: lease_end(now, lease_ms),
       fence: 1,
@@ -258,7 +258,7 @@ defmodule Arca.ProvisioningClaims do
       Arca.Repo.update_all(query,
         set: [
           owner: owner,
-          attempt: Cyfr.UUID7.generate_id("att"),
+          attempt: Prima.UUID7.generate_id("att"),
           entry_kind: entry_kind,
           lease_until: lease_end(now, lease_ms),
           fence: claim.fence + 1,

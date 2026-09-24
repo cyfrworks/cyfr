@@ -22,13 +22,13 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Cyfr.Execution.Attempt
   alias Cyfr.Test.{AttemptFixtures, ScriptedWorker}
-  alias Cyfr.Test.AuthorityFixtures, as: Graph
+  alias Prima.Test.AuthorityFixtures, as: Graph
 
   @math_wasm_path Path.expand("../../../support/test_wasm/math.wasm", __DIR__)
   @formula "formula:local.children-formula"
@@ -46,7 +46,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       if previous,
@@ -106,7 +106,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
           source_ref: @formula,
           kind: kind,
           invoke_mode: if(kind == :public, do: :edge_only, else: :open_inert),
-          activation: %{@formula => Cyfr.Digest.sha256("children-formula")}
+          activation: %{@formula => Prima.Digest.sha256("children-formula")}
         },
         blob,
         ceiling: Graph.ceiling()
@@ -147,9 +147,9 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
   # it runs with and a fixture its host calls are signed with.
   defp child!(fixture, answer) do
     assert %{"assignment" => token, "attempt_keys" => sealed, "input" => input} = answer
-    {:ok, keys} = Cyfr.WorkerAuth.open_attempt_keys(fixture.keys.seal, sealed)
-    {:ok, assignment} = Cyfr.Assignment.read(token)
-    assert Cyfr.Digest.sha256(input) == assignment.input_digest
+    {:ok, keys} = Prima.WorkerAuth.open_attempt_keys(fixture.keys.seal, sealed)
+    {:ok, assignment} = Prima.Assignment.read(token)
+    assert Prima.Digest.sha256(input) == assignment.input_digest
 
     keys.attempt
     |> Map.merge(%{
@@ -191,7 +191,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
          %{ctx: ctx} do
       authority = authority(edges: %{@target => %{}})
       fixture = formula!(ctx, authority)
-      children_before = Cyfr.Slots.status(Cyfr.Execution.Slots).child_active
+      children_before = Prima.Slots.status(Cyfr.Execution.Slots).child_active
 
       assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{"a" => 1})
       child = child!(fixture, answer)
@@ -222,14 +222,14 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       assert Sanctum.Authority.budget(authority).in_flight == 1
       assert [%{holder_execution_id: holder, admitted_at: %DateTime{}}] = charges(ctx, authority)
       assert holder == child.execution_id
-      assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before + 1
+      assert Prima.Slots.status(Cyfr.Execution.Slots).child_active == children_before + 1
 
       assert %{"ok" => "gave up"} = fail!(child, "gave up")
 
       wait_until(fn -> Attempt.whereis(child.execution_id) == nil end)
       assert Sanctum.Authority.budget(authority).in_flight == 0
       assert charges(ctx, authority) == []
-      assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before
+      assert Prima.Slots.status(Cyfr.Execution.Slots).child_active == children_before
       assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, child.execution_id)
     end
 
@@ -274,7 +274,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       [payload, mac] = String.split(fixture.assignment, ".")
       wire = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
       widened = put_in(wire, ["authority", "invoke_mode"], "open_inert")
-      {:ok, jcs} = Cyfr.JCS.encode(widened)
+      {:ok, jcs} = Prima.JCS.encode(widened)
       tampered = Base.url_encode64(jcs, padding: false) <> "." <> mac
 
       assert %{"error" => "bad_mac"} =
@@ -464,7 +464,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
          %{ctx: ctx} do
       authority = authority(edges: %{@target => %{}})
       fixture = formula!(ctx, authority)
-      children_before = Cyfr.Slots.status(Cyfr.Execution.Slots).child_active
+      children_before = Prima.Slots.status(Cyfr.Execution.Slots).child_active
 
       assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{"a" => 1})
       child = child!(fixture, answer)
@@ -486,7 +486,7 @@ defmodule Cyfr.Execution.Host.ChildrenTest do
       refute Process.alive?(pid)
       assert Sanctum.Authority.budget(authority).in_flight == 0
       assert charges(ctx, authority) == []
-      assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before
+      assert Prima.Slots.status(Cyfr.Execution.Slots).child_active == children_before
 
       # A repeat finds it ended and is harmless; the child's own host calls
       # are lost.

@@ -16,10 +16,10 @@ defmodule Arca.Providers.Files do
 
   The provider declares `context_kind: :actor`: the gate authorizes the
   call with the caller's full context and hands this handler the
-  `Cyfr.Actor` it projects, and nothing else.
+  `Prima.Actor` it projects, and nothing else.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   alias Arca.Files
 
@@ -34,7 +34,7 @@ defmodule Arca.Providers.Files do
 
   @doc false
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
 
     path =
       Arg.new("path", :string, description: "A folder-relative path, like data/reports/q3.csv")
@@ -90,8 +90,8 @@ defmodule Arca.Providers.Files do
   end
 
   @impl true
-  def handle("file", %Cyfr.Actor{} = actor, args), do: dispatch(actor, args)
-  def handle(tool, %Cyfr.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
+  def handle("file", %Prima.Actor{} = actor, args), do: dispatch(actor, args)
+  def handle(tool, %Prima.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
 
   defp dispatch(actor, %{"action" => "list"} = args),
     do: Files.list(actor, Map.get(args, "path", ""))

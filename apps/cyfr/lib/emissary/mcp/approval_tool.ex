@@ -15,7 +15,7 @@ defmodule Emissary.MCP.ApprovalTool do
   decision as a replay, with no second effect.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   alias Aqua.Approvals
   alias Aqua.Tape
@@ -29,7 +29,7 @@ defmodule Emissary.MCP.ApprovalTool do
 
   @doc false
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
 
     Operation.tool(
       [

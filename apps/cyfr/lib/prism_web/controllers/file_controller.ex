@@ -71,7 +71,7 @@ defmodule PrismWeb.FileController do
 
   defp serve_type(name) do
     type = MIME.from_path(name)
-    if type in @inline_types, do: type, else: Cyfr.MediaType.binary()
+    if type in @inline_types, do: type, else: Prima.MediaType.binary()
   end
 
   defp disposition(name) do

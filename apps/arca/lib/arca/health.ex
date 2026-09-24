@@ -22,7 +22,7 @@ defmodule Arca.Health do
   Every other Arca facade takes the caller's actor and works on that
   actor's athanor. A readiness check has no athanor to work on — it is
   the server asking about its own connection, for no caller — so it takes
-  `Cyfr.Actor.system/0`, the actor the control plane holds when it acts as
+  `Prima.Actor.system/0`, the actor the control plane holds when it acts as
   itself, and matches `system: true` in the head. An ordinary tenant
   actor is refused and reaches no connection: accepting one would imply
   the probe had checked something on that tenant's behalf, and it has
@@ -48,11 +48,11 @@ defmodule Arca.Health do
   @doc """
   Ask the database for one computed value and say whether it came back.
 
-  Takes the server's own actor (`Cyfr.Actor.system/0`).
+  Takes the server's own actor (`Prima.Actor.system/0`).
   """
-  @spec check(Cyfr.Actor.t()) :: :ok | refusal()
+  @spec check(Prima.Actor.t()) :: :ok | refusal()
   # arca:unscoped-ok a reachability probe — `SELECT 1` reads no table, so there is no tenant to scope to.
-  def check(%Cyfr.Actor{system: true}) do
+  def check(%Prima.Actor{system: true}) do
     case Arca.Repo.query("SELECT 1") do
       {:ok, _} -> :ok
       {:error, reason} -> unavailable(reason)
@@ -67,7 +67,7 @@ defmodule Arca.Health do
     e -> unavailable(Exception.message(e))
   end
 
-  def check(%Cyfr.Actor{}), do: {:error, :not_system}
+  def check(%Prima.Actor{}), do: {:error, :not_system}
 
   # One shape for the reason, whatever raised or was returned: a string, so
   # the operator's log never mixes Ecto structs, atoms and exception

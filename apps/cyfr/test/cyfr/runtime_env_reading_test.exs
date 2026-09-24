@@ -67,13 +67,13 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
     assert src =~ "env_str = fn key, default -> env!(key, :string?, nil) || default end"
     assert src =~ "env_int = fn key, default -> env!(key, :integer?, nil) || default end"
-    assert src =~ "case Cyfr.EnvValue.switch(getenv, key, default) do"
+    assert src =~ "case Prima.EnvValue.switch(getenv, key, default) do"
   end
 
   test "no switch is read by comparing its string" do
     offenders =
       for path <- [@runtime_exs, @runtime_config_ex],
-          {line, n} <- path |> File.read!() |> Cyfr.Test.CodeLines.code_lines(),
+          {line, n} <- path |> File.read!() |> Prima.Test.CodeLines.code_lines(),
           Regex.match?(@env_read, line) and Regex.match?(@string_compared_switch, line),
           do: "#{Path.basename(path)}:#{n}: #{String.trim(line)}"
 
@@ -185,7 +185,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     # The runner's memory bound is a byte count, whose range the bound
     # reader cannot hold: it is read by the byte reader, in the keeper's range.
     assert src =~ ~S|runner_memory_bytes: opus_bytes.("OPUS_RUNNER_MEMORY_BYTES")|
-    assert src =~ ~S|Cyfr.EnvValue.bytes(getenv, key, Opus.Settings.runner_memory_range())|
+    assert src =~ ~S|Prima.EnvValue.bytes(getenv, key, Opus.Settings.runner_memory_range())|
     refute src =~ ~S|env_int.("OPUS_RUNNER_MEMORY_BYTES"|
     refute src =~ ~S|opus_bound.("OPUS_RUNNER_MEMORY_BYTES"|
 

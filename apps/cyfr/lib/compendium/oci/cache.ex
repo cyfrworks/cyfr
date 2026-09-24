@@ -26,7 +26,7 @@ defmodule Compendium.OCI.Cache do
   # All cache operations run under a single global storage context.
   # The `cache/` prefix is in `Arca.Storage.global_prefixes/0`, so the
   # adapter writes to root rather than user-scoping by `user_id`.
-  defp actor, do: Cyfr.Actor.system()
+  defp actor, do: Prima.Actor.system()
 
   @doc """
   Get a cached blob by digest.

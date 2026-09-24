@@ -99,7 +99,7 @@ defmodule Sanctum.Vault do
          {:ok, kind} <- required_kind(params),
          :ok <- check_name_free(ctx, name),
          {:ok, json} <- Payload.encode_material(fields, Map.get(params, :oauth)),
-         id = Cyfr.UUID7.generate_id("vlt"),
+         id = Prima.UUID7.generate_id("vlt"),
          hint = Map.get(params, :provider_hint, ""),
          aad = CipherAAD.vault_entry(Context.athanor!(ctx), id, hint),
          {:ok, sealed} <- seal(json, aad) do
@@ -444,7 +444,7 @@ defmodule Sanctum.Vault do
   defp decode_stored("", default, _field), do: default
 
   defp decode_stored(json, default, field) when is_binary(json) do
-    case Cyfr.Json.decode(json) do
+    case Prima.Json.decode(json) do
       {:ok, value} ->
         value
 

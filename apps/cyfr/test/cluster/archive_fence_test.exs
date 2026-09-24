@@ -19,8 +19,8 @@ defmodule Cyfr.Cluster.ArchiveFenceTest do
 
   use Cyfr.Cluster.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
+  alias Prima.Authority
+  alias Prima.Authority.Blob.Edge
   alias Cyfr.Cluster.{Fixtures, Holder}
 
   test "a missed archive retires the peer's running work, and the sweep settles it once" do

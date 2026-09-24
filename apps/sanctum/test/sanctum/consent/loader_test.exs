@@ -3,12 +3,12 @@
 defmodule Sanctum.Consent.LoaderTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
+  alias Prima.Authority
   alias Sanctum.Consent.Loader
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
-  alias Cyfr.JCS
-  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
+  alias Prima.JCS
+  alias Prima.Test.AuthorityFixtures, as: Fixtures
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -65,7 +65,7 @@ defmodule Sanctum.Consent.LoaderTest do
     # loader refuses a mismatch, and every case below is about some other
     # failure. A test that wants the mismatch itself passes `:blob_digest`.
     Map.put_new_lazy(merged, :blob_digest, fn ->
-      Cyfr.JCS.hash_binary(merged.resolved_policy)
+      Prima.JCS.hash_binary(merged.resolved_policy)
     end)
   end
 

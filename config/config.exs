@@ -99,9 +99,9 @@ config :logger, :default_formatter,
 config :phoenix, :json_library, Jason
 
 # The worker services runs are dispatched to (`Cyfr.Execution.Dispatch`):
-# each entry is a `Cyfr.WorkerAPI.endpoint/0` — the worker service's
-# configured id (the id `Cyfr.WorkerAuth` derives its keys over), the base
-# URL of its listener (`Cyfr.WorkerWire`) and the components it alone runs
+# each entry is a `Prima.WorkerAPI.endpoint/0` — the worker service's
+# configured id (the id `Prima.WorkerAuth` derives its keys over), the base
+# URL of its listener (`Prima.WorkerWire`) and the components it alone runs
 # (nil for any). A run goes to the first entry whose status answers its id,
 # over `Cyfr.Execution.WorkerClient`. With none, a run is refused as
 # :execution_unavailable. The runtime configuration replaces this list with
@@ -111,7 +111,7 @@ config :cyfr, :workers, [%{id: "wrk_local", url: "http://127.0.0.1:4200", compon
 # The Opus worker service's own id, which every assignment it accepts must
 # name, where it reaches CYFR's host API, and where its listener binds (the
 # `wrk_local` entry above). Its service key is the worker key CYFR derives
-# for that id (`Cyfr.WorkerAuth.worker_key/2`, 64 hex): the test
+# for that id (`Prima.WorkerAuth.worker_key/2`, 64 hex): the test
 # configuration derives it from the test worker root, a development boot
 # derives it from its root in `config/runtime.exs`, and the `opus` release
 # receives it from `OPUS_SERVICE_KEY`.
@@ -126,10 +126,10 @@ config :opus,
 config :arca, :execution_payload_store, Arca.ExecutionPayloads.Store.Overlay
 
 # Inbound request-param redaction (:filter_parameters) is set at boot by
-# Cyfr.Application from Cyfr.Sanitizer.filter_parameters/0 — the one
+# Cyfr.Application from Prima.Sanitizer.filter_parameters/0 — the one
 # redaction vocabulary. It is not spelled here so it cannot drift from it.
 # Outbound response bodies are redacted at their call sites with
-# Cyfr.Sanitizer.sanitize/1.
+# Prima.Sanitizer.sanitize/1.
 
 # Arca Repo adapter is selected at build time — Ecto can't swap adapters at
 # runtime. The one CYFR_DATABASE parse lives in database_choice.exs (shared
@@ -283,7 +283,7 @@ config :arca, Arca.Retention,
   staging_sweep_limit: 200
 
 # Read-but-not-set here, deliberately: `:webhook_max_body_bytes` derives
-# its default from `Cyfr.Limits.default_max_request_size/0` (a literal
+# its default from `Prima.Limits.default_max_request_size/0` (a literal
 # here would be a second spelling of a derived value), and
 # `:platform_ceiling` is a structured policy override
 # (`Sanctum.Policy.Ceiling`), not a scalar knob.

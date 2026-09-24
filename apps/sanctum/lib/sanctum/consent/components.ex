@@ -18,8 +18,8 @@ defmodule Sanctum.Consent.Components do
   `needs` and `caps` blocks, a component path, an activation node key, the
   ordering that picks a name's newest row and an agent ref are data both
   sides read from
-  `Cyfr.Manifest.Needs`, `Cyfr.Manifest.Caps`, `Cyfr.ComponentPath`,
-  `Cyfr.ComponentRow` and `Cyfr.AgentRef`. Carrying them through a
+  `Prima.Manifest.Needs`, `Prima.Manifest.Caps`, `Prima.ComponentPath`,
+  `Prima.ComponentRow` and `Prima.AgentRef`. Carrying them through a
   callback would be an indirection around data that changes nothing.
   What is here takes a context and reads state.
 

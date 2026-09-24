@@ -17,7 +17,7 @@ defmodule Sanctum.Supervisor do
     children =
       [
         # Advisory counters also serve identity flows before Host starts.
-        Cyfr.RateLimiter,
+        Prima.RateLimiter,
         # Releases a charged invoke-budget slot when its holder dies
         # without running its `after` (the brutal-kill cancel/timeout
         # paths).

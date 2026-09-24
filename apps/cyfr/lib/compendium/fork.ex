@@ -18,7 +18,7 @@ defmodule Compendium.Fork do
   source component's storage — components must be pulled locally first.
   """
 
-  alias Cyfr.ComponentRef
+  alias Prima.ComponentRef
   alias Sanctum.Context
   alias Compendium.ComponentPath
 

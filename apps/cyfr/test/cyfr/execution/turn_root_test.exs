@@ -12,13 +12,13 @@ defmodule Cyfr.Execution.TurnRootTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import Ecto.Query, only: [from: 2]
 
   alias Arca.ExecutionAttempts
   alias Arca.TurnStorage
   alias Cyfr.Execution.{LeaseWatch, TurnRoot}
-  alias Cyfr.Slots
+  alias Prima.Slots
   alias Sanctum.Consent.{Bootstrap}
 
   @seed_root Path.expand("../../../../../seed", __DIR__)

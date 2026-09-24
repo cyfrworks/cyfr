@@ -20,7 +20,7 @@ ExUnit.configure(exclude: [:public_dns])
 # runs in this VM (the runtime, the handlers, `Opus.Runner`) runs on the
 # engine the suite starts here (`Opus.Test.Engine`).
 root = Opus.Test.ScriptedHost.root()
-{:ok, worker_key} = Cyfr.WorkerAuth.worker_key(root, Opus.Test.ScriptedHost.service())
+{:ok, worker_key} = Prima.WorkerAuth.worker_key(root, Opus.Test.ScriptedHost.service())
 
 Application.put_env(:opus, :service_id, Opus.Test.ScriptedHost.service())
 Application.put_env(:opus, :service_key, Base.encode16(worker_key, case: :lower))

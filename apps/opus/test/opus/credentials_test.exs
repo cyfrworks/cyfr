@@ -14,7 +14,7 @@ defmodule Opus.CredentialsTest do
   # was started from, so this module runs alone.
   use ExUnit.Case, async: false
 
-  alias Cyfr.WorkerAuth
+  alias Prima.WorkerAuth
   alias Opus.Credentials
 
   @worker_key :crypto.hash(:sha256, "credentials-test")

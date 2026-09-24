@@ -35,13 +35,13 @@ defmodule Arca.StorageProjectionChangesTest do
 
     athanor = "ath_changes_#{System.unique_integer([:positive])}"
     key = "catalysts/local/unit-#{System.unique_integer([:positive])}/1.0.0"
-    {:ok, actor: %Cyfr.Actor{athanor_id: athanor, user_id: "usr_changes"}, key: key}
+    {:ok, actor: %Prima.Actor{athanor_id: athanor, user_id: "usr_changes"}, key: key}
   end
 
   defp identity(revision) do
     %{
       new_revision: revision,
-      content_identity: Cyfr.Digest.sha256(revision),
+      content_identity: Prima.Digest.sha256(revision),
       commit_identity: "usr_changes"
     }
   end
@@ -291,7 +291,7 @@ defmodule Arca.StorageProjectionChangesTest do
     test "pending_athanors/2 names an estate behind its epoch, to a platform-scope actor alone",
          %{actor: actor, key: key} do
       generation = commit!(actor, key, "rev_1")
-      platform = %Cyfr.Actor{scope: :platform, system: true}
+      platform = %Prima.Actor{scope: :platform, system: true}
 
       assert {:ok, behind} = StorageProjectionChanges.pending_athanors(platform, limit: 100_000)
       assert actor.athanor_id in behind
@@ -360,7 +360,7 @@ defmodule Arca.StorageProjectionChangesTest do
       assert standing(actor).epoch == epoch
 
       assert {:error, :no_athanor} =
-               StorageProjectionChanges.prune_acknowledged_tombstones(%Cyfr.Actor{}, @root,
+               StorageProjectionChanges.prune_acknowledged_tombstones(%Prima.Actor{}, @root,
                  before: later,
                  dry_run: true
                )
@@ -369,7 +369,7 @@ defmodule Arca.StorageProjectionChangesTest do
 
   describe "refusals" do
     test "an actor without an athanor is refused before any query", %{key: key} do
-      for nobody <- [%Cyfr.Actor{athanor_id: nil}, %Cyfr.Actor{athanor_id: ""}] do
+      for nobody <- [%Prima.Actor{athanor_id: nil}, %Prima.Actor{athanor_id: ""}] do
         assert {:error, :no_athanor} = StorageProjectionChanges.snapshot(nobody, @root)
         assert {:error, :no_athanor} = StorageProjectionChanges.mark_ready(nobody, @root, key, 1, nil)
         assert {:error, :no_athanor} = StorageProjectionChanges.begin_edit(nobody, @root, key)

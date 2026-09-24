@@ -257,7 +257,7 @@ defmodule PrismWeb.ChatLive do
 
       previous ->
         if previous do
-          left = Cyfr.Actor.in_athanor(previous.id)
+          left = Prima.Actor.in_athanor(previous.id)
           Cyfr.Bus.unsubscribe(left, Cyfr.Bus.notify(left))
         end
 
@@ -749,7 +749,7 @@ defmodule PrismWeb.ChatLive do
   def handle_info(%Cyfr.Bus.Notify{}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

@@ -3,7 +3,7 @@
 
 defmodule Cyfr.Execution.SlotsTest do
   @moduledoc """
-  The execution slots CYFR boots: one `Cyfr.Slots` instance named
+  The execution slots CYFR boots: one `Prima.Slots` instance named
   `Cyfr.Execution.Slots` under the infra tier, on the caps the operator
   configured, keyed by athanor, with a child reserve the authority depth
   cap fits inside, and the boot warning that says when one athanor's
@@ -14,9 +14,9 @@ defmodule Cyfr.Execution.SlotsTest do
   # instance.
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
-  alias Cyfr.Slots
+  alias Prima.Slots
 
   @slots Cyfr.Execution.Slots
 
@@ -35,7 +35,7 @@ defmodule Cyfr.Execution.SlotsTest do
     assert %{max: ^max, key_max: ^key_max, child_reserve: reserve} = Slots.status(@slots)
     assert reserve == Slots.child_reserve(max)
 
-    assert {@slots, pid, :worker, [Cyfr.Slots]} =
+    assert {@slots, pid, :worker, [Prima.Slots]} =
              Cyfr.InfraSupervisor |> Supervisor.which_children() |> List.keyfind(@slots, 0)
 
     assert pid == Process.whereis(@slots)
@@ -49,7 +49,7 @@ defmodule Cyfr.Execution.SlotsTest do
   # deployment configures. If this test is red, the configuration is unsafe
   # (or the cap grew); do not weaken the assertion.
   test "the authority depth cap fits inside the child reserve, shipped and configured" do
-    cap = Cyfr.Authority.depth_cap()
+    cap = Prima.Authority.depth_cap()
     {configured, _key_max} = Cyfr.Application.execution_slot_caps()
 
     assert cap <= Slots.child_reserve(Slots.default_max())
@@ -57,7 +57,7 @@ defmodule Cyfr.Execution.SlotsTest do
   end
 
   test "the boot warns when one athanor's roots times the depth cap reach the pool" do
-    depth = Cyfr.Authority.depth_cap()
+    depth = Prima.Authority.depth_cap()
 
     assert {:warn, message} = Cyfr.Application.execution_slot_footprint(16 * depth, 16)
     assert message =~ "one athanor can hold every slot"

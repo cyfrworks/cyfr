@@ -28,7 +28,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
   tenant+component via `Cyfr.Execution.Rates`, while this plug always bounds
   per-IP request volume — including for tinctures with no policy limit.
 
-  Counters live in `Cyfr.RateLimiter` (ETS) so the plug is single-node only; the
+  Counters live in `Prima.RateLimiter` (ETS) so the plug is single-node only; the
   off-by-concurrency overshoot on boundary requests (N concurrent readers
   can each pass the cap check) is acceptable for rate limits (not a
   security boundary).
@@ -87,7 +87,7 @@ defmodule EmissaryWeb.Plugs.TinctureRateLimit do
 
     key = {:rate_limit, bucket, ip, athanor, publisher, tincture_name}
 
-    case Cyfr.RateLimiter.check(key, max_requests, window_ms) do
+    case Prima.RateLimiter.check(key, max_requests, window_ms) do
       :ok ->
         conn
 

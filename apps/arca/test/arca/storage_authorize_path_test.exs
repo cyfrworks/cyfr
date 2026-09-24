@@ -7,13 +7,13 @@ defmodule Arca.StorageAuthorizePathTest do
   structural — no path spelling names another athanor's tree. What
   `authorize_path/2` still guards is the server's own: the seed bundle and
   the global roots, and the authority it reads for them is
-  `Cyfr.Actor.system`, which is not a wire member and so cannot be
+  `Prima.Actor.system`, which is not a wire member and so cannot be
   claimed by anything a worker returns.
   """
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Actor
+  alias Prima.Actor
 
   setup do
     # A write inside a unit stamps the unit's pending generation for the
@@ -96,9 +96,9 @@ defmodule Arca.StorageAuthorizePathTest do
     File.write!(seed_file, ~s({"shipped": true}))
 
     snapshot = fn ->
-      Cyfr.Test.SourceTree.files!(Path.join(seed_root, "**"))
+      Prima.Test.SourceTree.files!(Path.join(seed_root, "**"))
       |> Enum.sort()
-      |> Enum.map(&{&1, File.dir?(&1) || Cyfr.Test.SourceTree.read(&1)})
+      |> Enum.map(&{&1, File.dir?(&1) || Prima.Test.SourceTree.read(&1)})
     end
 
     before = snapshot.()

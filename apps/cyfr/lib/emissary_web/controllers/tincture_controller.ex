@@ -131,7 +131,7 @@ defmodule EmissaryWeb.TinctureController do
       {:ok, tincture, :public, ctx} ->
         case Compendium.tincture_entry(tincture) do
           {:ok, entry} ->
-            base_href = Cyfr.TinctureUrl.path(athanor, publisher, tincture_name) <> "/"
+            base_href = Prima.TinctureUrl.path(athanor, publisher, tincture_name) <> "/"
 
             csp = build_csp(tincture.manifest)
 
@@ -155,7 +155,7 @@ defmodule EmissaryWeb.TinctureController do
             case Sanctum.TinctureAuth.issue_asset_token(ctx, publisher, tincture_name) do
               {:ok, token} ->
                 base_href =
-                  Cyfr.TinctureUrl.path(athanor, publisher, tincture_name) <> "/_s/#{token}/"
+                  Prima.TinctureUrl.path(athanor, publisher, tincture_name) <> "/_s/#{token}/"
 
                 csp = build_csp(tincture.manifest)
 

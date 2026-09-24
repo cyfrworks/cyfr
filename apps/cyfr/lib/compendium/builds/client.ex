@@ -3,7 +3,7 @@
 
 defmodule Compendium.Builds.Client do
   @moduledoc """
-  CYFR's client of the Locus builds service, over `Cyfr.BuilderProtocol`.
+  CYFR's client of the Locus builds service, over `Prima.BuilderProtocol`.
   `Compendium.Builds` reaches the service through it and nothing else
   does.
 
@@ -12,7 +12,7 @@ defmodule Compendium.Builds.Client do
   `CYFR_LOCUS_BUILDS_KEY`); with either missing every function answers
   `{:error, :not_configured}` and no request is made. A request is a
   `POST` to its route whose body the protocol encodes and whose
-  `x-cyfr-auth` header is `Cyfr.BuilderProtocol.request_header/3` over
+  `x-cyfr-auth` header is `Prima.BuilderProtocol.request_header/3` over
   that body, signed with the key derived from the service key, under a
   fresh nonce. The key reaches no log, outcome or message.
 
@@ -22,16 +22,16 @@ defmodule Compendium.Builds.Client do
   status: each progress line is handed to `:on_progress` in the order the
   builder wrote it, and the first result or refusal ends the answer — the
   client stops reading there. The whole answer is held to
-  `Cyfr.BuilderProtocol.max_response_bytes/0` while it streams
-  (`Cyfr.BoundedBody`), and every line is read strictly
-  (`Cyfr.BuilderProtocol.read_line/1`): the builder is another trust
+  `Prima.BuilderProtocol.max_response_bytes/0` while it streams
+  (`Prima.BoundedBody`), and every line is read strictly
+  (`Prima.BuilderProtocol.read_line/1`): the builder is another trust
   domain, so a line that does not read, a path that is not a safe relative
   one, outputs past their bounds and a digest that is not its bytes' each
   end the request as `:malformed`. A result is then verified here before
   it is answered: it must be of the language and type asked for, a
-  component's bytes must validate (`Compendium.WasmValidator`) and its
+  component's bytes must validate (`Prima.Wasm`) and its
   digest, size and exports are derived from that validation, never taken
-  from the builder; a tincture's digest is `Cyfr.Digest.file_set/1` of the
+  from the builder; a tincture's digest is `Prima.Digest.file_set/1` of the
   files read.
 
   ## How a build ends
@@ -42,14 +42,14 @@ defmodule Compendium.Builds.Client do
     * `:not_configured` — this server has no builds service.
     * `{:sources, error}` — the request cannot be written: the sources
       pass a bound of the protocol or name an unsafe path
-      (`t:Cyfr.BuilderProtocol.read_error/0`). Nothing was sent.
+      (`t:Prima.BuilderProtocol.read_error/0`). Nothing was sent.
     * `:unreachable` — no connection was made. Nothing was asked.
     * `:disconnected` — the connection, or the answer, ended before a
       result or a refusal arrived. The build may have run.
     * `:deadline` — the deadline passed with the answer still open, and
       the request was ended here.
     * `{:refused, refusal, diagnostics}` — the builder's own refusal by
-      class (`t:Cyfr.BuilderProtocol.refusal/0`): `capacity`, `timeout`,
+      class (`t:Prima.BuilderProtocol.refusal/0`): `capacity`, `timeout`,
       `memory` with its bound, `unavailable`, `failed` with a status or a
       signal, `unauthorized`, `malformed`; with the build's log lines.
     * `{:protocol_mismatch, builder, client}` — the builder speaks another
@@ -72,7 +72,8 @@ defmodule Compendium.Builds.Client do
 
   require Logger
 
-  alias Cyfr.{BoundedBody, BuilderProtocol, RuntimeConfig}
+  alias Cyfr.RuntimeConfig
+  alias Prima.{BoundedBody, BuilderProtocol}
 
   @supervisor Compendium.Builds.TaskSupervisor
   @connect_timeout_ms 5_000
@@ -155,7 +156,7 @@ defmodule Compendium.Builds.Client do
 
   @doc """
   The toolchains the builds service reports on its health route, by
-  language (`t:Cyfr.BuilderProtocol.health/0`).
+  language (`t:Prima.BuilderProtocol.health/0`).
   """
   @spec toolchains() ::
           {:ok, %{BuilderProtocol.language() => BuilderProtocol.toolchain()}}
@@ -246,11 +247,11 @@ defmodule Compendium.Builds.Client do
   # never the key.
   defp stream(url, header, body, on_progress, deadline, grace_ms) do
     wait_ms = max(deadline - System.system_time(:millisecond), 0) + grace_ms
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     task =
       Task.Supervisor.async(@supervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
+        Prima.LoggerContext.restore(logger_metadata)
 
         url
         |> request_options(:build, header, body)
@@ -290,7 +291,7 @@ defmodule Compendium.Builds.Client do
   # The answer, a line at a time
   # ---------------------------------------------------------------------------
 
-  # The line being received is collected by `Cyfr.BoundedBody` against
+  # The line being received is collected by `Prima.BoundedBody` against
   # what is left of the answer's bound, so the bound holds over the whole
   # answer without a second copy of it.
   defp reader(on_progress) do
@@ -477,7 +478,7 @@ defmodule Compendium.Builds.Client do
   end
 
   defp verify_outputs(:javascript, %{outputs: outputs} = result) do
-    {digest, size} = Cyfr.Digest.file_set(outputs)
+    {digest, size} = Prima.Digest.file_set(outputs)
 
     {:ok,
      result
@@ -494,7 +495,7 @@ defmodule Compendium.Builds.Client do
   end
 
   defp validate(wasm) do
-    case Compendium.WasmValidator.validate(wasm) do
+    case Prima.Wasm.validate(wasm) do
       {:ok, validation} -> {:ok, validation}
       {:error, reason} -> {:error, {:malformed, {:invalid_wasm, reason}}}
     end

@@ -32,7 +32,7 @@ defmodule Cyfr.Execution.EmitTest do
   end
 
   defp new(ctx, stream_id, opts \\ []) do
-    Emit.new(stream_id, [ctx: ctx, authority: Cyfr.Authority.zero()] ++ opts)
+    Emit.new(stream_id, [ctx: ctx, authority: Prima.Authority.zero()] ++ opts)
   end
 
   # Emit each event in turn with `secrets`, answering the last reply and the
@@ -232,12 +232,12 @@ defmodule Cyfr.Execution.EmitTest do
     # The count is the limiter's, and it is spent: against a cap of five,
     # this member's bucket has nothing left.
     assert {:deny, _retry_after_s} =
-             Cyfr.RateLimiter.check({:emit, ctx.athanor_id, root}, 5, :timer.minutes(1))
+             Prima.RateLimiter.check({:emit, ctx.athanor_id, root}, 5, :timer.minutes(1))
   end
 
   test "an oversized or malformed event is refused", %{ctx: ctx, stream_id: stream_id} do
     emitter = new(ctx, stream_id)
-    max = Cyfr.Authority.limits(Cyfr.Authority.zero()).max_request_size
+    max = Prima.Authority.limits(Prima.Authority.zero()).max_request_size
 
     {oversized, ^emitter} =
       Emit.emit(emitter, Jason.encode!(%{"text" => String.duplicate("x", max)}), [])

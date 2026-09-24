@@ -86,7 +86,7 @@ defmodule Cyfr.Execution.Delegation do
   defp put_if_binary(input, _key, _value), do: input
 
   defp same_component?(a, b) do
-    case {Cyfr.ComponentRef.to_name_ref(a), Cyfr.ComponentRef.to_name_ref(b)} do
+    case {Prima.ComponentRef.to_name_ref(a), Prima.ComponentRef.to_name_ref(b)} do
       {{:ok, name_a}, {:ok, name_b}} -> name_a == name_b
       _ -> false
     end

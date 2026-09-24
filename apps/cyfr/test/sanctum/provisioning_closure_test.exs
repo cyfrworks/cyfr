@@ -90,7 +90,7 @@ defmodule Sanctum.ProvisioningClosureTest do
       assert {:ok, [_profile]} =
                Arca.ConsentStorage.profiles(Sanctum.Context.actor(in_group), "agent:local.aqua")
 
-      assert {:ok, %Cyfr.Authority{} = auth} =
+      assert {:ok, %Prima.Authority{} = auth} =
                Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua")
 
       assert auth.cursor == {:bound, "agent:local.aqua"}
@@ -105,7 +105,7 @@ defmodule Sanctum.ProvisioningClosureTest do
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Cyfr.Test.SourceTree.files!(match_dot: false)
+    |> Prima.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       rel = Path.relative_to(src, @bundle)

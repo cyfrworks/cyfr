@@ -16,7 +16,7 @@ defmodule Arca.CronSchedule do
 
   import Ecto.Query, except: [update: 2]
   import Arca.QueryHelpers, only: [where_tenant_unless_platform: 2]
-  # Every function that names a tenant takes the `Cyfr.Actor` first and
+  # Every function that names a tenant takes the `Prima.Actor` first and
   # reads a schedule through `get_tenant/2`, whose platform bypass is the
   # shared `where_tenant_unless_platform/2`. A platform-scope actor
   # carries no athanor by design, so these match the actor and leave the
@@ -41,7 +41,7 @@ defmodule Arca.CronSchedule do
 
       attrs =
         attrs
-        |> Map.put_new(:id, Cyfr.UUID7.generate_id("sched"))
+        |> Map.put_new(:id, Prima.UUID7.generate_id("sched"))
         |> Map.put_new(:created_at, now)
         |> Map.put_new(:updated_at, now)
 
@@ -54,11 +54,11 @@ defmodule Arca.CronSchedule do
   end
 
   @doc "Updates an existing cron schedule with tenant-scoped lookup."
-  @spec update(Cyfr.Actor.t(), String.t(), map()) ::
+  @spec update(Prima.Actor.t(), String.t(), map()) ::
           {:ok, map()}
           | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
-  def update(%Cyfr.Actor{} = actor, id, attrs) do
+  def update(%Prima.Actor{} = actor, id, attrs) do
     Errors.with_db_rescue("CronSchedule.update", fn ->
       with {:ok, schedule} <- get_tenant(actor, id) do
         attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
@@ -73,9 +73,9 @@ defmodule Arca.CronSchedule do
   end
 
   @doc "Gets a schedule by ID with tenant-scoped lookup."
-  @spec get(Cyfr.Actor.t(), String.t()) ::
+  @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found | :database_error}
-  def get(%Cyfr.Actor{} = actor, id) do
+  def get(%Prima.Actor{} = actor, id) do
     Errors.with_db_rescue("CronSchedule.get", fn -> get_tenant(actor, id) end)
     |> Arca.Data.project()
   end
@@ -102,9 +102,9 @@ defmodule Arca.CronSchedule do
   end
 
   @doc "Gets one of the athanor's schedules by either ID or name."
-  @spec get_by_id_or_name(Cyfr.Actor.t(), String.t()) ::
+  @spec get_by_id_or_name(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found | :database_error}
-  def get_by_id_or_name(%Cyfr.Actor{} = actor, id_or_name) do
+  def get_by_id_or_name(%Prima.Actor{} = actor, id_or_name) do
     Errors.with_db_rescue("CronSchedule.get_by_id_or_name", fn ->
       from(s in Row,
         where: s.status != "deleted",
@@ -121,11 +121,11 @@ defmodule Arca.CronSchedule do
   end
 
   @doc "Lists the athanor's schedules, newest first."
-  @spec list(Cyfr.Actor.t(), keyword()) ::
+  @spec list(Prima.Actor.t(), keyword()) ::
           {:ok, [map()]} | {:error, :database_error}
   def list(actor, opts \\ [])
 
-  def list(%Cyfr.Actor{} = actor, opts) do
+  def list(%Prima.Actor{} = actor, opts) do
     Errors.with_db_rescue("CronSchedule.list", fn ->
       limit = Keyword.get(opts, :limit, 50)
 
@@ -167,12 +167,12 @@ defmodule Arca.CronSchedule do
   end
 
   @doc "Records a successful run with tenant-scoped lookup."
-  @spec record_run(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec record_run(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, map()}
           | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok get_tenant/2 in the same with establishes row ownership.
   # Increment atomically; concurrent runs must not overwrite each other’s counts.
-  def record_run(%Cyfr.Actor{} = actor, id, execution_id) do
+  def record_run(%Prima.Actor{} = actor, id, execution_id) do
     Errors.with_db_rescue("CronSchedule.record_run", fn ->
       with {:ok, schedule} <- get_tenant(actor, id) do
         now = DateTime.utc_now()
@@ -190,12 +190,12 @@ defmodule Arca.CronSchedule do
   end
 
   @doc "Records an error with tenant-scoped lookup."
-  @spec record_error(Cyfr.Actor.t(), String.t(), term()) ::
+  @spec record_error(Prima.Actor.t(), String.t(), term()) ::
           {:ok, map()}
           | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
   # arca:unscoped-ok the row was fetched tenant-scoped by get_tenant/2 in the same with.
   # Atomic increment, for the reason spelled out at `record_run/3`.
-  def record_error(%Cyfr.Actor{} = actor, id, _reason) do
+  def record_error(%Prima.Actor{} = actor, id, _reason) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
       with {:ok, schedule} <- get_tenant(actor, id) do
         from(s in Row, where: s.id == ^schedule.id)
@@ -211,10 +211,10 @@ defmodule Arca.CronSchedule do
   end
 
   @doc "Soft-deletes a schedule with tenant-scoped lookup."
-  @spec soft_delete(Cyfr.Actor.t(), String.t()) ::
+  @spec soft_delete(Prima.Actor.t(), String.t()) ::
           {:ok, map()}
           | {:error, :not_found | {:validation, %{atom() => [String.t()]}} | :database_error}
-  def soft_delete(%Cyfr.Actor{} = actor, id) do
+  def soft_delete(%Prima.Actor{} = actor, id) do
     Errors.with_db_rescue("CronSchedule.soft_delete", fn ->
       with {:ok, schedule} <- get_tenant(actor, id) do
         schedule
@@ -230,9 +230,9 @@ defmodule Arca.CronSchedule do
   Counts non-deleted schedules occupying the athanor’s cap slots.
   Paused schedules retain their slots; resuming does not require a cap check.
   """
-  @spec count_active(Cyfr.Actor.t()) ::
+  @spec count_active(Prima.Actor.t()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
-  def count_active(%Cyfr.Actor{} = actor) do
+  def count_active(%Prima.Actor{} = actor) do
     Errors.with_db_rescue("CronSchedule.count_active", fn ->
       count =
         from(s in Row,
@@ -249,7 +249,7 @@ defmodule Arca.CronSchedule do
   # The tenant-scoped single-row read every mutation goes through. The
   # platform bypass is the shared `where_tenant_unless_platform/2` — the
   # one spelling the other record readers use, not a hand-rolled fourth.
-  defp get_tenant(%Cyfr.Actor{} = actor, id) do
+  defp get_tenant(%Prima.Actor{} = actor, id) do
     from(s in Row, where: s.id == ^id)
     |> where_tenant_unless_platform(actor)
     |> Arca.Repo.one()

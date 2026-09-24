@@ -6,8 +6,9 @@ defmodule Cyfr.Ops.ProviderTest do
   # catalog and the boot case swaps the provider roster.
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.{Arg, Catalog, Operation, Provider}
-  alias Cyfr.Test.AuthorityFixtures
+  alias Cyfr.Ops.Catalog
+  alias Prima.{Arg, Operation, Provider}
+  alias Prima.Test.AuthorityFixtures
 
   # A handler that answers what it was given, so a test can see exactly
   # the input the gate handed it.
@@ -24,7 +25,7 @@ defmodule Cyfr.Ops.ProviderTest do
 
   defmodule BadKind do
     @moduledoc false
-    @behaviour Cyfr.Ops.Provider
+    @behaviour Prima.Provider
 
     @impl true
     def service, do: "bad_kind"
@@ -51,7 +52,7 @@ defmodule Cyfr.Ops.ProviderTest do
   end
 
   defmodule MockToolProvider do
-    @behaviour Cyfr.Ops.Provider
+    @behaviour Prima.Provider
 
     @impl true
     def service, do: "mock"
@@ -206,10 +207,10 @@ defmodule Cyfr.Ops.ProviderTest do
 
   # What a handler may learn from an actor: who and where, never how the
   # caller proved it or what it may do.
-  @actor_fields MapSet.new(Map.keys(Map.from_struct(%Cyfr.Actor{})))
+  @actor_fields MapSet.new(Map.keys(Map.from_struct(%Prima.Actor{})))
 
   defp actor_only!(input, ctx, plane) do
-    assert %Cyfr.Actor{} = input
+    assert %Prima.Actor{} = input
     refute is_struct(input, Sanctum.Context)
     assert MapSet.new(Map.keys(Map.from_struct(input))) == @actor_fields
     assert input == %{Sanctum.Context.actor(ctx) | plane: plane, request_id: input.request_id}
@@ -232,10 +233,10 @@ defmodule Cyfr.Ops.ProviderTest do
           "context_probe.peek"
         ])
 
-      {:ok, blob} = Cyfr.Authority.Blob.parse(graph)
+      {:ok, blob} = Prima.Authority.Blob.parse(graph)
 
       {:ok, authority} =
-        Cyfr.Authority.root(AuthorityFixtures.profile(), blob,
+        Prima.Authority.root(AuthorityFixtures.profile(), blob,
           ceiling: AuthorityFixtures.ceiling()
         )
 

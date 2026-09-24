@@ -61,7 +61,7 @@ defmodule Compendium.MCP.AquaTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Compendium.MCP assembles its roster from these.
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # The soul and the roles are the athanor's own. Reading them is
     # open to any authenticated caller, a running chain included —
     # a turn resolves its agent through `get`, so the reads
@@ -828,7 +828,7 @@ defmodule Compendium.MCP.AquaTool do
   # A refusal the `with` head already typed is the caller's answer; anything
   # else reaching an else arm is a storage term — logged, never reflected.
   defp passthrough_or_unavailable(reason, where) do
-    if Cyfr.Refusal.reason?(reason) do
+    if Prima.Refusal.reason?(reason) do
       {:error, reason}
     else
       Logger.error("[AquaTool] #{where} failed: #{inspect(reason)}")
@@ -984,7 +984,7 @@ defmodule Compendium.MCP.AquaTool do
   which version it edited.
   """
   @spec content_digest(String.t()) :: String.t()
-  def content_digest(content) when is_binary(content), do: Cyfr.Digest.sha256_hex(content)
+  def content_digest(content) when is_binary(content), do: Prima.Digest.sha256_hex(content)
 
   defp check_expected_digest(_agent, nil), do: :ok
 

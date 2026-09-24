@@ -108,7 +108,7 @@ defmodule Arca.Storage.TestDouble do
 
   @doc "The double's precondition: the SHA-256 of the object's bytes."
   @spec precondition(binary()) :: String.t()
-  def precondition(bytes) when is_binary(bytes), do: Cyfr.Digest.sha256_hex(bytes)
+  def precondition(bytes) when is_binary(bytes), do: Prima.Digest.sha256_hex(bytes)
 
   @doc """
   Run `fun` as the one conditional write in flight at `path` on this

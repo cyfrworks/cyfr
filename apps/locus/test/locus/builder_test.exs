@@ -14,7 +14,7 @@ defmodule Locus.BuilderTest do
   # Replaces PATH for the duration of one test.
   use ExUnit.Case, async: false
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
   alias Locus.Builder
 
   defp rust(sources, fields \\ %{}) do
@@ -262,7 +262,7 @@ defmodule Locus.BuilderTest do
       wasm = BuilderProtocol.component_wasm()
       lock = BuilderProtocol.component_lockfile()
       assert Map.keys(outputs) |> Enum.sort() == Enum.sort([wasm, lock])
-      assert {:ok, _} = Compendium.WasmValidator.validate(outputs[wasm])
+      assert {:ok, _} = Prima.Wasm.validate(outputs[wasm])
       assert outputs[lock] =~ ~s(name = "wit-bindgen-rt")
 
       assert Enum.dedup(Enum.map(progress.(), &elem(&1, 0))) --

@@ -65,7 +65,7 @@ defmodule Compendium.Registry do
   require Logger
 
   alias Sanctum.Context
-  alias Compendium.WasmValidator, as: Validator
+  alias Prima.Wasm, as: Validator
   alias Compendium.DependencyResolver
   alias Compendium.ComponentPath
   alias Compendium.ProjectionReconciler
@@ -219,7 +219,7 @@ defmodule Compendium.Registry do
         unverifiable
 
       {:error, reason} = refusal ->
-        if Cyfr.Refusal.reason?(reason),
+        if Prima.Refusal.reason?(reason),
           do: refusal,
           else: {:error, {write_failure, reason}}
     end
@@ -646,7 +646,7 @@ defmodule Compendium.Registry do
   first (see `get_latest/4`).
 
   When looking up by namespace.name:version reference, pass the name and version
-  extracted by `Cyfr.ComponentRef.parse/1`. Optionally pass a publisher and
+  extracted by `Prima.ComponentRef.parse/1`. Optionally pass a publisher and
   component_type to disambiguate.
   """
   def get(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
@@ -738,12 +738,12 @@ defmodule Compendium.Registry do
   @doc """
   The semver-latest of a list of rows, `inserted_at` as the tiebreak —
   the one place ROWS (not bare strings) are ordered. Registered versions
-  are validated semver; the comparator (`Cyfr.Semver`) is total
-  regardless. The ordering is `Cyfr.ComponentRow`'s, where the consent
+  are validated semver; the comparator (`Prima.Semver`) is total
+  regardless. The ordering is `Prima.ComponentRow`'s, where the consent
   bootstrap picks a name's newest row with the same rule.
   """
   @spec latest_of([map()]) :: map() | nil
-  defdelegate latest_of(rows), to: Cyfr.ComponentRow
+  defdelegate latest_of(rows), to: Prima.ComponentRow
 
   @doc """
   Get component WASM binary by digest.
@@ -783,7 +783,7 @@ defmodule Compendium.Registry do
             # allow_overwrite republish, an overlay materialization), and
             # verifying inside the one reader means every caller inherits
             # the guarantee instead of one (the executor) re-doing it.
-            actual = Cyfr.Digest.sha256(content)
+            actual = Prima.Digest.sha256(content)
 
             if actual == digest do
               Logger.debug("[Registry.get_blob] OK: read #{byte_size(content)} bytes")
@@ -1277,7 +1277,7 @@ defmodule Compendium.Registry do
   # A manifest that does not decode reads as none. The line names the
   # component, never the manifest's bytes.
   defp decode_manifest_json(value, row) when is_binary(value) do
-    case Cyfr.Json.decode(value) do
+    case Prima.Json.decode(value) do
       {:ok, map} when is_map(map) ->
         map
 
@@ -1291,7 +1291,7 @@ defmodule Compendium.Registry do
     do: Map.put(component, :component_ref, component_ref(component))
 
   defp component_ref(component) do
-    Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
+    Prima.ComponentRef.to_string(%Prima.ComponentRef{
       type: component[:component_type],
       namespace: ComponentPath.normalize_publisher(component[:publisher]),
       name: component[:name],
@@ -1303,7 +1303,7 @@ defmodule Compendium.Registry do
   defp decode_json(value) when is_list(value), do: value
 
   defp decode_json(value) when is_binary(value) do
-    case Cyfr.Json.decode(value) do
+    case Prima.Json.decode(value) do
       {:ok, list} when is_list(list) ->
         list
 
@@ -1381,14 +1381,14 @@ defmodule Compendium.Registry do
   defp validate_publish_origin(_publisher, _origin), do: :ok
 
   defp validate_name(name) do
-    case Cyfr.ComponentRef.validate_name(name) do
+    case Prima.ComponentRef.validate_name(name) do
       :ok -> :ok
       {:error, msg} -> {:error, {:invalid_name, msg}}
     end
   end
 
   defp validate_version(version) do
-    case Cyfr.ComponentRef.validate_version(version) do
+    case Prima.ComponentRef.validate_version(version) do
       :ok -> :ok
       {:error, msg} -> {:error, {:invalid_version, msg}}
     end
@@ -1400,7 +1400,7 @@ defmodule Compendium.Registry do
   Component-identity rules live here, with the registry (the component domain) —
   not in the Arca storage layer, which persists already-validated bytes. Checks
   that name/version/component_type/publisher are present and each passes its
-  `Cyfr.ComponentRef` field validator. Returns `:ok` or `{:error, reason}`.
+  `Prima.ComponentRef` field validator. Returns `:ok` or `{:error, reason}`.
   """
   @spec validate_attrs(map()) :: :ok | {:error, term()}
   def validate_attrs(attrs) when is_map(attrs) do
@@ -1408,10 +1408,10 @@ defmodule Compendium.Registry do
          {:ok, version} <- require_field(attrs, :version),
          {:ok, type} <- require_field(attrs, :component_type),
          {:ok, publisher} <- require_field(attrs, :publisher),
-         :ok <- Cyfr.ComponentRef.validate_name(name),
-         :ok <- Cyfr.ComponentRef.validate_version(version),
-         :ok <- Cyfr.ComponentRef.validate_type(type),
-         :ok <- Cyfr.ComponentRef.validate_publisher(publisher) do
+         :ok <- Prima.ComponentRef.validate_name(name),
+         :ok <- Prima.ComponentRef.validate_version(version),
+         :ok <- Prima.ComponentRef.validate_type(type),
+         :ok <- Prima.ComponentRef.validate_publisher(publisher) do
       :ok
     end
   end
@@ -1428,7 +1428,7 @@ defmodule Compendium.Registry do
   # the input is always nil or a map — a malformed manifest is rejected
   # upstream instead of silently passing validation with zero declarations.
   defp decode_manifest_strict(manifest) do
-    case Cyfr.Manifest.decode_strict(manifest) do
+    case Prima.Manifest.decode_strict(manifest) do
       {:ok, map} -> {:ok, map}
       {:error, :malformed_manifest} -> {:error, {:invalid_manifest, "manifest is not valid JSON"}}
     end
@@ -1436,12 +1436,12 @@ defmodule Compendium.Registry do
 
   # The needs/caps blocks are digest-covered manifest vocabulary; a manifest
   # carrying a malformed block is refused at every register/publish ingress
-  # — through the ONE validator, `Cyfr.Manifest.validate/2` (closed key
+  # — through the ONE validator, `Prima.Manifest.validate/2` (closed key
   # roster, needs/caps owners), with the storage layer's guest-path
   # predicate. Its first failure is this surface's refusal, as the block
   # spelled it.
   defp validate_manifest_capability_blocks(manifest) do
-    case Cyfr.Manifest.validate(manifest, &Arca.Storage.valid_guest_path?/1) do
+    case Prima.Manifest.validate(manifest, &Arca.Storage.valid_guest_path?/1) do
       :ok -> :ok
       {:error, {:invalid_manifest, [{block, detail} | _]}} -> {:error, {block, detail}}
     end
@@ -1666,11 +1666,11 @@ defmodule Compendium.Registry do
     # registry. Compiled components are keyed by digest and need no sweep: a
     # changed component is a changed digest.
     Arca.Cache.delete_match(
-      Arca.Cache.Keys.match_component_meta(Cyfr.Actor.in_athanor(athanor_id))
+      Arca.Cache.Keys.match_component_meta(Prima.Actor.in_athanor(athanor_id))
     )
 
-    Arca.Cache.delete_match(Arca.Cache.Keys.match_activation(Cyfr.Actor.in_athanor(athanor_id)))
-    Arca.Cache.delete_match(Arca.Cache.Keys.match_live_shape(Cyfr.Actor.in_athanor(athanor_id)))
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_activation(Prima.Actor.in_athanor(athanor_id)))
+    Arca.Cache.delete_match(Arca.Cache.Keys.match_live_shape(Prima.Actor.in_athanor(athanor_id)))
 
     Logger.debug(
       "[Compendium.Registry] Invalidated component execution caches for athanor #{athanor_id}"

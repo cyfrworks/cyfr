@@ -17,7 +17,7 @@ defmodule Arca.Retention.McpLogs do
   def unit, do: :days
 
   @impl true
-  def prune(%Cyfr.Actor{athanor_id: athanor}, days, dry_run) when is_binary(athanor) do
+  def prune(%Prima.Actor{athanor_id: athanor}, days, dry_run) when is_binary(athanor) do
     cutoff = Kind.days_cutoff(days)
     opts = [athanor_id: athanor]
 

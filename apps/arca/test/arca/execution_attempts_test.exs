@@ -373,7 +373,7 @@ defmodule Arca.ExecutionAttemptsTest do
         fn parent, _attempt ->
           {:ok, _} =
             ExecutionAttempts.takeover(actor, parent.id,
-              boot_id: Cyfr.Boot.id(),
+              boot_id: Prima.Boot.id(),
               lease_until: ExecutionAttempts.lease_until(),
               grant: :stored,
               verify: &Arca.Test.Actor.admits/1

@@ -48,7 +48,7 @@ defmodule Cyfr.Bus.ScheduleCompleted do
   @type t :: %__MODULE__{
           kind: kind(),
           athanor_id: String.t(),
-          actor: Cyfr.Actor.t(),
+          actor: Prima.Actor.t(),
           issuer_member: issuer(),
           schedule_id: String.t(),
           execution_id: String.t(),
@@ -74,8 +74,11 @@ defmodule Cyfr.Bus.ScheduleCompleted do
   `completed_at`, `keep_outcome`, `note_name` and the raw `output`, which
   is kept, encoded and capped as the module doc says.
   """
-  @spec new(Cyfr.Actor.t(), map()) :: t()
-  def new(%Cyfr.Actor{} = actor, %{schedule_id: schedule_id, execution_id: execution_id} = fields)
+  @spec new(Prima.Actor.t(), map()) :: t()
+  def new(
+        %Prima.Actor{} = actor,
+        %{schedule_id: schedule_id, execution_id: execution_id} = fields
+      )
       when is_binary(schedule_id) and is_binary(execution_id) do
     keep? = Map.get(fields, :keep_outcome) == true
     {output, truncated?} = if keep?, do: output(Map.get(fields, :output)), else: {nil, false}
@@ -114,5 +117,5 @@ defmodule Cyfr.Bus.ScheduleCompleted do
 
   defp output(nil), do: {nil, false}
   defp output(text) when is_binary(text), do: Payload.cap(text, @max_output_bytes)
-  defp output(value), do: value |> Cyfr.Json.safe_encode() |> Payload.cap(@max_output_bytes)
+  defp output(value), do: value |> Prima.Json.safe_encode() |> Payload.cap(@max_output_bytes)
 end

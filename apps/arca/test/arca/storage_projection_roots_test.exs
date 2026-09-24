@@ -20,7 +20,7 @@ defmodule Arca.StorageProjectionRootsTest do
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     athanor = "ath_roots_#{System.unique_integer([:positive])}"
-    {:ok, actor: %Cyfr.Actor{athanor_id: athanor, user_id: "usr_roots"}, athanor: athanor}
+    {:ok, actor: %Prima.Actor{athanor_id: athanor, user_id: "usr_roots"}, athanor: athanor}
   end
 
   defp change(key, attrs \\ %{}),
@@ -91,7 +91,7 @@ defmodule Arca.StorageProjectionRootsTest do
         StorageProjectionRoots.advance!(actor, "components", change("catalysts/local/a/1.0.0"))
       end
 
-      nobody = %Cyfr.Actor{athanor_id: nil}
+      nobody = %Prima.Actor{athanor_id: nil}
 
       assert_raise ArgumentError, ~r/resolved athanor/, fn ->
         Arca.Repo.locking_transaction(fn ->

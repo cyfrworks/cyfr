@@ -29,10 +29,10 @@ defmodule Cyfr.Execution.WorkerWatchTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Cyfr.Execution.{Attempt, Dispatch, Lapse, WorkerWatch}
-  alias Cyfr.Slots
+  alias Prima.Slots
   alias Cyfr.Test.{AttemptFixtures, ScriptedWorkerListener}
 
   @moduletag :capture_log
@@ -49,7 +49,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
   # Each request is reported to the test with what it answered.
   defmodule Worker do
     @moduledoc false
-    @behaviour Cyfr.WorkerAPI
+    @behaviour Prima.WorkerAPI
 
     def script!(test, items) when is_pid(test) and is_list(items) and items != [],
       do: Agent.update(__MODULE__, fn _state -> %{test: test, script: items} end)
@@ -77,7 +77,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
   # member that can still reach the service sees while another cannot.
   defmodule Peer do
     @moduledoc false
-    @behaviour Cyfr.WorkerAPI
+    @behaviour Prima.WorkerAPI
 
     def script!(test, items) when is_pid(test) and is_list(items) and items != [],
       do: Agent.update(__MODULE__, fn _state -> %{test: test, script: items} end)
@@ -159,7 +159,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
   defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 
   defp attempt_row(fixture),
-    do: Arca.ExecutionAttempts.get(Cyfr.Actor.in_athanor(fixture.athanor_id), fixture.attempt)
+    do: Arca.ExecutionAttempts.get(Prima.Actor.in_athanor(fixture.athanor_id), fixture.attempt)
 
   defp seen(watch), do: Map.fetch!(WorkerWatch.seen(watch), @service)
 

@@ -12,10 +12,10 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Cyfr.Execution.Attempt
-  alias Cyfr.Slots
+  alias Prima.Slots
   alias Cyfr.Test.{AttemptFixtures, ScriptedWorkerListener}
 
   @service "wrk_shutdown_test"
@@ -27,7 +27,7 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
   # HTTP by the scripted listener as any worker service is.
   defmodule KillRecorder do
     @moduledoc false
-    @behaviour Cyfr.WorkerAPI
+    @behaviour Prima.WorkerAPI
 
     @impl true
     def start(_token, _input, _sealed_keys), do: {:error, :malformed}
@@ -110,7 +110,7 @@ defmodule Cyfr.Execution.AttemptShutdownTest do
 
     assert %{state: "lapsed", outcome: "uncertain"} =
              Arca.ExecutionAttempts.get(
-               Cyfr.Actor.in_athanor(fixture.athanor_id),
+               Prima.Actor.in_athanor(fixture.athanor_id),
                fixture.attempt
              )
 

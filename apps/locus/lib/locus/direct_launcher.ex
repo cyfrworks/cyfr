@@ -39,7 +39,7 @@ defmodule Locus.DirectLauncher do
 
   @impl Locus.Executor
   def run(%{argv: argv, env: env, stdin: stdin}, opts) do
-    root = Path.join(System.tmp_dir!(), "locus_build_#{Cyfr.Hex.short()}")
+    root = Path.join(System.tmp_dir!(), "locus_build_#{Prima.Hex.short()}")
     home = Path.join(root, "home")
     input = Path.join(root, "stdin")
     output = Path.join(root, "stdout")

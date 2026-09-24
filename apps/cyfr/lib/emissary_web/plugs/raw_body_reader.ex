@@ -36,9 +36,9 @@ defmodule EmissaryWeb.Plugs.RawBodyReader do
   payloads that exceed the per-chunk read length.
   """
 
-  # The shared 1 MiB default (`Cyfr.Limits.default_max_request_size/0`),
+  # The shared 1 MiB default (`Prima.Limits.default_max_request_size/0`),
   # spelled by its owner rather than a sixth literal.
-  @default_webhook_max_body_bytes Cyfr.Limits.default_max_request_size()
+  @default_webhook_max_body_bytes Prima.Limits.default_max_request_size()
 
   @doc """
   Plug.Parsers `:body_reader` callback.

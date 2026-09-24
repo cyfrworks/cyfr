@@ -46,7 +46,7 @@ defmodule Cyfr.Boundaries do
     * `ports/0` and `internal_strategies/0` — the five ports of
       `AGENTS.md`, and the two behaviours Sanctum declares that are not
       ports.
-    * `actor_paths/0` — every way a `%Cyfr.Actor{}` is constructed, with
+    * `actor_paths/0` — every way a `%Prima.Actor{}` is constructed, with
       the reason for each. Four is how you get six.
     * `system_responsibilities/0` — every write the server makes on work
       whose standing it does not require, and every read it makes before
@@ -56,7 +56,7 @@ defmodule Cyfr.Boundaries do
       Opus module, and why.
 
   Every check here takes a tree already read through
-  `Cyfr.Test.CodeLines`: the module names a file names, for the namespace
+  `Prima.Test.CodeLines`: the module names a file names, for the namespace
   rows, and its code lines for the rest — beside the file's text for the
   filesystem seam, whose marker is a comment the filter drops. A name is
   read from the token stream rather than matched in a line, so a module
@@ -71,13 +71,13 @@ defmodule Cyfr.Boundaries do
   # ---------------------------------------------------------------------------
 
   @typedoc "A layer of the dependency graph, or `:outside` for everything else."
-  @type layer :: :contracts | :arca | :sanctum | :host | :opus | :locus | :outside
+  @type layer :: :prima | :arca | :sanctum | :host | :opus | :locus | :outside
 
   @applications [
     %{
-      app: :cyfr_contracts,
-      layer: :contracts,
-      lib: "apps/cyfr_contracts/lib",
+      app: :prima,
+      layer: :prima,
+      lib: "apps/prima/lib",
       umbrella_deps: [],
       note: "pure contracts and the explicit shared runtime primitives; no owned processes"
     },
@@ -85,30 +85,30 @@ defmodule Cyfr.Boundaries do
       app: :arca,
       layer: :arca,
       lib: "apps/arca/lib",
-      umbrella_deps: [:cyfr_contracts],
+      umbrella_deps: [:prima],
       note: "persistence, at the bottom of the graph"
     },
     %{
       app: :sanctum,
       layer: :sanctum,
       lib: "apps/sanctum/lib",
-      umbrella_deps: [:arca, :cyfr_contracts],
+      umbrella_deps: [:arca, :prima],
       note: "identity, tenancy, authority, consent and the vault, over Arca's rows"
     },
     %{
       app: :cyfr,
       layer: :host,
       lib: "apps/cyfr/lib",
-      umbrella_deps: [:arca, :cyfr_contracts, :sanctum],
+      umbrella_deps: [:arca, :prima, :sanctum],
       note:
         "the host and everything above it. It declares neither island: " <>
-          "`Cyfr.Execution` is the seam to Opus and `Cyfr.BuilderProtocol` to Locus"
+          "`Cyfr.Execution` is the seam to Opus and `Prima.BuilderProtocol` to Locus"
     },
     %{
       app: :opus,
       layer: :opus,
       lib: "apps/opus/lib",
-      umbrella_deps: [:cyfr_contracts],
+      umbrella_deps: [:prima],
       note: "the WASM engine island; it reaches CYFR over its host API alone",
       dependency_roots: ~w(Jason Req Plug Bandit Wasmex)
     },
@@ -116,7 +116,7 @@ defmodule Cyfr.Boundaries do
       app: :locus,
       layer: :locus,
       lib: "apps/locus/lib",
-      umbrella_deps: [:cyfr_contracts],
+      umbrella_deps: [:prima],
       note: "the builds island; CYFR reaches it over the build wire alone",
       dependency_roots: ~w(Jason Plug Bandit ThousandIsland)
     }
@@ -172,7 +172,7 @@ defmodule Cyfr.Boundaries do
   # from one of Elixir, OTP or a fetched dependency.
   @product_roots ~w(
     Arca Sanctum Aqua Compendium Crucible Emissary EmissaryWeb Grimoire
-    Prism PrismWeb Cyfr CyfrWeb Opus Locus Codex
+    Prism PrismWeb Cyfr CyfrWeb Opus Locus Codex Prima
   )
 
   @doc "The namespace roots this repository owns."
@@ -183,14 +183,14 @@ defmodule Cyfr.Boundaries do
   The layer a module name sits in.
 
   `contracts` is the set of module names the contracts application
-  defines, read from the tree rather than listed here: `Cyfr.Actor` is a
+  defines, read from the tree rather than listed here: `Prima.Actor` is a
   contract and `Cyfr.Ops.Catalog` is the host's, and only the tree knows
   which is which.
   """
   @spec layer(String.t(), MapSet.t(String.t())) :: layer()
   def layer(module, contracts) do
     cond do
-      MapSet.member?(contracts, module) -> :contracts
+      MapSet.member?(contracts, module) -> :prima
       root?(module, "Sanctum") -> :sanctum
       root?(module, "Arca") -> :arca
       root?(module, "Opus") -> :opus
@@ -204,7 +204,7 @@ defmodule Cyfr.Boundaries do
 
   @typedoc """
   A scanned tree: each file with the module names it names and the lines
-  it names them on, as `Cyfr.Test.CodeLines.aliases/1` returns them.
+  it names them on, as `Prima.Test.CodeLines.aliases/1` returns them.
 
   Every namespace check below takes one of these rather than raw sources,
   so this module holds the rules and the one reader holds the filter — and
@@ -463,7 +463,7 @@ defmodule Cyfr.Boundaries do
       reason:
         "the overlay's locators were wired through `Arca.Storage.UnitLocator` so the " <>
           "storage layer would not compile against the component domain; the closed " <>
-          "`source` roster it enforces on write is `Cyfr.ComponentSource` now."
+          "`source` roster it enforces on write is `Prima.ComponentSource` now."
     },
     %{
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
@@ -509,7 +509,7 @@ defmodule Cyfr.Boundaries do
     },
     %{
       from: [
-        "apps/cyfr_contracts/lib/**/*.ex",
+        "apps/prima/lib/**/*.ex",
         "apps/opus/lib/**/*.ex",
         "apps/locus/lib/**/*.ex",
         "apps/arca/lib/**/*.ex",
@@ -523,12 +523,12 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "an engine does not depend on a user interface. A shared primitive both the " <>
-          "engine and the console need is glue and belongs under `Cyfr.` — that is " <>
-          "what `Cyfr.Bus` and `Cyfr.UUID7` are."
+          "engine and the console need lives in Prima, as `Prima.UUID7` does, or in " <>
+          "the host's glue, as `Cyfr.Bus` does."
     },
     %{
       from: [
-        "apps/cyfr_contracts/lib/**/*.ex",
+        "apps/prima/lib/**/*.ex",
         "apps/opus/lib/**/*.ex",
         "apps/locus/lib/**/*.ex",
         "apps/arca/lib/**/*.ex",
@@ -546,7 +546,7 @@ defmodule Cyfr.Boundaries do
     },
     %{
       from: [
-        "apps/cyfr_contracts/lib/**/*.ex",
+        "apps/prima/lib/**/*.ex",
         "apps/opus/lib/**/*.ex",
         "apps/locus/lib/**/*.ex",
         "apps/sanctum/lib/**/*.ex",
@@ -564,7 +564,7 @@ defmodule Cyfr.Boundaries do
     },
     %{
       from: [
-        "apps/cyfr_contracts/lib/**/*.ex",
+        "apps/prima/lib/**/*.ex",
         "apps/opus/lib/**/*.ex",
         "apps/locus/lib/**/*.ex",
         "apps/arca/lib/**/*.ex",
@@ -607,14 +607,14 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "`apps/cyfr/mix.exs` declares no dependency on `opus`: `Cyfr.Execution` is " <>
-          "the seam, and a run reaches a worker over `Cyfr.WorkerWire`."
+          "the seam, and a run reaches a worker over `Prima.WorkerWire`."
     },
     %{
       from: ["apps/cyfr/lib/**/*.ex"],
       into: "Locus",
       allow: [],
       reason:
-        "`apps/cyfr/mix.exs` declares no dependency on `locus`: `Cyfr.BuilderProtocol` " <>
+        "`apps/cyfr/mix.exs` declares no dependency on `locus`: `Prima.BuilderProtocol` " <>
           "is the seam, and CYFR reaches the builder over the build wire."
     }
   ]
@@ -1113,9 +1113,9 @@ defmodule Cyfr.Boundaries do
       written_at_boot_by: "config :sanctum, :consent_components"
     },
     %{
-      behaviour: "Cyfr.Caps",
+      behaviour: "Prima.Caps",
       what: "the storage and counted cap decision",
-      declared_by: :cyfr_contracts,
+      declared_by: :prima,
       implemented_by: "Sanctum.Tenancy.Caps",
       written_at_boot_by: "Cyfr.Application"
     },
@@ -1180,7 +1180,7 @@ defmodule Cyfr.Boundaries do
 
   @doc "The one call that installs the cap port's implementation, and where it is."
   @spec caps_boot_write() :: {String.t(), Path.t()}
-  def caps_boot_write, do: {"Cyfr.Caps.install!(", "apps/cyfr/lib/cyfr/application.ex"}
+  def caps_boot_write, do: {"Prima.Caps.install!(", "apps/cyfr/lib/cyfr/application.ex"}
 
   # ---------------------------------------------------------------------------
   # 6. The actor construction paths
@@ -1196,16 +1196,16 @@ defmodule Cyfr.Boundaries do
           "`auth_method == :system`; a hand-assembled actor could claim either."
     },
     %{
-      path: "Cyfr.Actor.system/0",
-      file: "apps/cyfr_contracts/lib/cyfr/actor.ex",
+      path: "Prima.Actor.system/0",
+      file: "apps/prima/lib/prima/actor.ex",
       reason:
         "the control plane acting as itself, for work no caller asked for. It carries " <>
           "no tenant and no person, and its authority is the `system` flag rather than " <>
           "a credential someone presented."
     },
     %{
-      path: "Cyfr.Actor.in_athanor/1",
-      file: "apps/cyfr_contracts/lib/cyfr/actor.ex",
+      path: "Prima.Actor.in_athanor/1",
+      file: "apps/prima/lib/prima/actor.ex",
       reason:
         "row work inside one athanor for a caller established by other means than a " <>
           "context — a MAC-verified host call naming its attempt, a schedule's own " <>
@@ -1224,7 +1224,7 @@ defmodule Cyfr.Boundaries do
   ]
 
   @doc """
-  Every way a `%Cyfr.Actor{}` is constructed in production code, with the
+  Every way a `%Prima.Actor{}` is constructed in production code, with the
   reason for each.
 
   There are four. Each is defensible and in the right layer, and four is
@@ -1437,7 +1437,7 @@ defmodule Cyfr.Boundaries do
     if marked?, do: patterns, else: patterns ++ [Regex.source(entire_module)]
   end
 
-  # Numbered as `Cyfr.Test.CodeLines` numbers them: 1-based, split on "\n".
+  # Numbered as `Prima.Test.CodeLines` numbers them: 1-based, split on "\n".
   defp marked_lines(source, marker) do
     for {text, n} <- source |> String.split("\n") |> Enum.with_index(1),
         String.contains?(text, marker),

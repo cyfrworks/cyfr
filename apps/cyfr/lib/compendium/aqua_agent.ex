@@ -239,13 +239,13 @@ defmodule Compendium.AquaAgent do
       "disabled" => agent.disabled == true,
       "tool_policy" => agent.tool_policy
     }
-    |> Cyfr.MapUtil.put_present("catalyst_ref", agent.catalyst_ref)
-    |> Cyfr.MapUtil.put_present("model", agent.model)
+    |> Prima.MapUtil.put_present("catalyst_ref", agent.catalyst_ref)
+    |> Prima.MapUtil.put_present("model", agent.model)
   end
 
   @doc "The digest of `to_manifest/1`: the agent's capability revision."
   @spec capability_digest(t()) :: {:ok, String.t()} | {:error, term()}
-  def capability_digest(agent), do: Cyfr.JCS.hash(to_manifest(agent))
+  def capability_digest(agent), do: Prima.JCS.hash(to_manifest(agent))
 
   @doc "One agent by name — the soul or a role, whichever the name is — through the overlay union."
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}

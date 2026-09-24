@@ -17,7 +17,7 @@ defmodule Opus.RunnerTest do
 
   import Opus.Test.Wait
 
-  alias Cyfr.{Assignment, RunnerControl}
+  alias Prima.{Assignment, RunnerControl}
   alias Opus.Test.ScriptedHost
 
   @echo File.read!(Path.expand("../support/test_wasm/echo.wasm", __DIR__))
@@ -104,7 +104,7 @@ defmodule Opus.RunnerTest do
 
     ScriptedHost.attempt!(
       host,
-      [boot: @boot, component_type: :reagent, digest: Cyfr.Digest.sha256(@echo)] ++ opts
+      [boot: @boot, component_type: :reagent, digest: Prima.Digest.sha256(@echo)] ++ opts
     )
   end
 
@@ -113,7 +113,7 @@ defmodule Opus.RunnerTest do
 
     ScriptedHost.attempt!(
       host,
-      [boot: @boot, component_type: :reagent, digest: Cyfr.Digest.sha256(@spin)] ++ opts
+      [boot: @boot, component_type: :reagent, digest: Prima.Digest.sha256(@spin)] ++ opts
     )
   end
 
@@ -123,7 +123,7 @@ defmodule Opus.RunnerTest do
   # would never ask for it.
   defp hold_artifact!(host, bytes) do
     test = self()
-    Opus.Cache.invalidate({:compiled_component, Cyfr.Digest.sha256(bytes)})
+    Opus.Cache.invalidate({:compiled_component, Prima.Digest.sha256(bytes)})
 
     ScriptedHost.script(host, "fetch_artifact", fn _args, _caller ->
       send(test, {:held, self()})

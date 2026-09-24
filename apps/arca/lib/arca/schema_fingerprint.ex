@@ -29,7 +29,7 @@ defmodule Arca.SchemaFingerprint do
   # arca:bypass-ok=C — compile-time read of the tracked migration sources.
   @fingerprint @migrations
                |> Enum.map_join(fn path -> Path.basename(path) <> "\n" <> File.read!(path) end)
-               |> Cyfr.Digest.sha256_hex()
+               |> Prima.Digest.sha256_hex()
 
   @doc "The `server_meta` key the fingerprint is recorded under."
   @spec key() :: String.t()

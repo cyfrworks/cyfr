@@ -48,8 +48,8 @@ defmodule Cyfr.Bus.Execution do
   this struct does not declare raises.
   `error` is projected through `Cyfr.Bus.bounded_reason/1`.
   """
-  @spec new(Cyfr.Actor.t(), kind(), map() | keyword()) :: t()
-  def new(%Cyfr.Actor{} = actor, kind, fields \\ %{}) do
+  @spec new(Prima.Actor.t(), kind(), map() | keyword()) :: t()
+  def new(%Prima.Actor{} = actor, kind, fields \\ %{}) do
     fields = Map.new(fields)
 
     fields =

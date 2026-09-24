@@ -22,7 +22,7 @@ defmodule PrismWeb.SignInTraceTest do
   """
   use PrismWeb.ConnCase, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   @moduletag timeout: 240_000
 
@@ -79,7 +79,7 @@ defmodule PrismWeb.SignInTraceTest do
     end)
 
     # The sign-in budgets are node-wide counters another test may have spent.
-    Cyfr.RateLimiter.reset()
+    Prima.RateLimiter.reset()
 
     # A fill still running when the paths are restored would provision
     # against the repository's own seed and data trees.

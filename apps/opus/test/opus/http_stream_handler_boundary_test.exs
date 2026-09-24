@@ -20,7 +20,7 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
     {imports, exec_ref} =
       HttpStreamHandler.build_stream_imports(
         nil,
-        Cyfr.Limits.defaults(:catalyst),
+        Prima.Limits.defaults(:catalyst),
         attempt.client,
         "catalyst:local.streamer:0.1.0"
       )

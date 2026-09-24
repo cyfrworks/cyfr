@@ -57,7 +57,7 @@ defmodule Cyfr.Cell do
   holds its attempt's process. So the assignment it issues carries its own
   address (`CYFR_HOST_API_URL`) and its own boot, and the worker posts
   that attempt's host calls there and names that member in every header
-  (`Cyfr.Execution.Assignments`, `Cyfr.WorkerAuth`). This is not placement
+  (`Cyfr.Execution.Assignments`, `Prima.WorkerAuth`). This is not placement
   — nothing decided where the work would run — but the return path of work
   already placed. A member that is not the one named refuses the call,
   including a lease renewal it could have written from the rows, so a
@@ -335,7 +335,7 @@ defmodule Cyfr.Cell do
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
     renew_ms = Keyword.get(opts, :renew_ms, @renew_ms)
     cluster? = Keyword.get(opts, :cluster, Application.get_env(:cyfr, :cluster, false)) == true
-    me = Cyfr.Boot.id()
+    me = Prima.Boot.id()
     slot = Keyword.get(opts, :node_name, node_name())
 
     if cluster?,
@@ -395,7 +395,7 @@ defmodule Cyfr.Cell do
   end
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

@@ -38,8 +38,9 @@ defmodule Cyfr.Test.TwoServices do
 
   import ExUnit.Callbacks, only: [on_exit: 1]
 
-  alias Cyfr.Authority
-  alias Cyfr.Test.{AttemptFixtures, AuthorityFixtures, ScriptedWorker}
+  alias Prima.Authority
+  alias Cyfr.Test.{AttemptFixtures, ScriptedWorker}
+  alias Prima.Test.AuthorityFixtures
   alias Sanctum.Consent.{Commit, Plan}
 
   @stub_wasm Path.expand("test_wasm/step_stub/step_stub.wasm", __DIR__)
@@ -104,7 +105,7 @@ defmodule Cyfr.Test.TwoServices do
     import Plug.Conn
 
     alias Cyfr.Execution.Keys
-    alias Cyfr.{WorkerAuth, WorkerWire}
+    alias Prima.{WorkerAuth, WorkerWire}
 
     @max_hold_ms 60_000
 
@@ -442,7 +443,7 @@ defmodule Cyfr.Test.TwoServices do
       "version" => @version,
       "publisher" => "local",
       "description" => "A model/chat@1 catalyst the two-service matrix runs",
-      "contracts" => [Cyfr.Model.chat_contract()],
+      "contracts" => [Prima.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:step-stub",
@@ -525,7 +526,7 @@ defmodule Cyfr.Test.TwoServices do
         dispense(ctx, ref, id, token)
 
       %{callback: :admit_child, answer: %{"ok" => %{"assignment" => assignment}}} ->
-        {:ok, %{execution_id: id}} = Cyfr.Assignment.read(assignment)
+        {:ok, %{execution_id: id}} = Prima.Assignment.read(assignment)
         dispense(ctx, ref, id, token)
 
       _call ->
@@ -619,7 +620,7 @@ defmodule Cyfr.Test.TwoServices do
   @spec spawn_child!(Sanctum.Context.t(), Authority.t(), root(), String.t(), map(), keyword()) ::
           {{:ok, map()} | {:error, term()}, String.t()}
   def spawn_child!(ctx, %Authority{} = authority, root, reference, input, opts \\ []) do
-    child_id = Keyword.get_lazy(opts, :execution_id, &Cyfr.UUID7.execution_id/0)
+    child_id = Keyword.get_lazy(opts, :execution_id, &Prima.UUID7.execution_id/0)
 
     charge = %{
       id: "call:t:1:c#{System.unique_integer([:positive])}:g0",
@@ -716,12 +717,12 @@ defmodule Cyfr.Test.TwoServices do
   @spec plan!(atom(), [atom()]) :: :ok
   def plan!(callback, actions) do
     wire = watch!()
-    Wire.plan(wire, Cyfr.WorkerWire.host_route(callback), actions)
+    Wire.plan(wire, Prima.WorkerWire.host_route(callback), actions)
   end
 
   @doc "What the suite's wire did with each call of `callback`, in order."
   @spec seen(atom()) :: [atom()]
-  def seen(callback), do: Wire.seen(wire(), Cyfr.WorkerWire.host_route(callback))
+  def seen(callback), do: Wire.seen(wire(), Prima.WorkerWire.host_route(callback))
 
   @doc """
   Hold each host call of `callback` that `which` accepts — an execution
@@ -781,7 +782,7 @@ defmodule Cyfr.Test.TwoServices do
         authority_of(token)
 
       %{callback: :admit_child, answer: %{"ok" => %{"assignment" => token}}} ->
-        case Cyfr.Assignment.read(token) do
+        case Prima.Assignment.read(token) do
           {:ok, %{execution_id: ^execution_id}} -> authority_of(token)
           _ -> nil
         end
@@ -792,7 +793,7 @@ defmodule Cyfr.Test.TwoServices do
   end
 
   defp authority_of(token) do
-    {:ok, assignment} = Cyfr.Assignment.read(token)
+    {:ok, assignment} = Prima.Assignment.read(token)
     {:ok, authority} = Authority.from_wire(assignment.authority)
     authority
   end

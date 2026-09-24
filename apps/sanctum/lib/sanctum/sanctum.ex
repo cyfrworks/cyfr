@@ -106,7 +106,7 @@ defmodule Sanctum do
       when is_list(opts) do
     with {:ok, operators} <- operator_snapshot(),
          {:ok, %{claim: renewed, revoked: revoked}} <-
-           Arca.Members.reconcile_platform(Cyfr.Actor.system(), claim,
+           Arca.Members.reconcile_platform(Prima.Actor.system(), claim,
              slot: Keyword.fetch!(opts, :slot),
              lease_ms: Keyword.fetch!(opts, :lease_ms),
              operators: operators,
@@ -144,7 +144,7 @@ defmodule Sanctum do
   defp operator_email?(_email), do: false
 
   defp policy_digest(operators),
-    do: Cyfr.Digest.sha256(Jason.encode!(%{version: 1, operators: operators}))
+    do: Prima.Digest.sha256(Jason.encode!(%{version: 1, operators: operators}))
 
   @doc """
   Server-internal context for background/system operations — sweepers, health
@@ -199,7 +199,7 @@ defmodule Sanctum do
   """
   @spec build_tincture_context(Context.t(), map()) :: Context.t()
   def build_tincture_context(%Context{} = caller_ctx, tincture) do
-    tincture_id = Cyfr.ComponentRef.build("tincture", tincture.publisher, tincture.name)
+    tincture_id = Prima.ComponentRef.build("tincture", tincture.publisher, tincture.name)
 
     # Key on `authenticated` (the real signal), NOT on namespace presence — an
     # authenticated user may legitimately have a nil namespace (identity-only,

@@ -28,7 +28,7 @@ defmodule Aqua.Ops do
   dropped); the helper forwards them so the runner can name a card's own
   execution without the argument map carrying it.
   """
-  @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Cyfr.Authority.t(), keyword()) ::
+  @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Prima.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def call_in_chain(tool, %Sanctum.Context{} = ctx, args, authority, opts \\ []) do
     Cyfr.Ops.Catalog.call_in_chain(tool, ctx, args, authority, opts)
@@ -125,7 +125,7 @@ defmodule Aqua.Ops do
   @spec render_refusal(term()) :: String.t()
   def render_refusal(reason) do
     case Cyfr.Ops.Error.render(reason) do
-      nil -> inspect(Cyfr.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
+      nil -> inspect(Prima.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
       sentence -> sentence
     end
   end

@@ -10,7 +10,8 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.{Arg, Catalog, Operation}
+  alias Cyfr.Ops.Catalog
+  alias Prima.{Arg, Operation}
 
   defmodule Provider do
     # Records exactly what it was handed, so the test can tell "refused before

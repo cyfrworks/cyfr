@@ -89,7 +89,7 @@ defmodule PrismWeb.FocusIntentTest do
   test "every focus intent the assistant can mint is on the roster" do
     minted =
       Path.join(root(), "apps/cyfr/lib/aqua/intents.ex")
-      |> Cyfr.Test.SourceTree.read()
+      |> Prima.Test.SourceTree.read()
       |> then(&Regex.scan(~r/validate\(%\{"kind" => "(ui\.[a-z_]+\.focus)"\}/, &1))
       |> Enum.map(fn [_, kind] -> kind end)
       |> Enum.sort()
@@ -126,7 +126,7 @@ defmodule PrismWeb.FocusIntentTest do
       source =
         root()
         |> Path.join(Path.relative_to(module.__info__(:compile)[:source], root()))
-        |> Cyfr.Test.SourceTree.read()
+        |> Prima.Test.SourceTree.read()
 
       # A path-segment intent (`/components/:ref`) needs no query key: the
       # route itself carries the resource and Phoenix hands it over.

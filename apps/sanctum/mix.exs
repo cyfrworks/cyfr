@@ -47,7 +47,7 @@ defmodule Sanctum.MixProject do
   # needs is a facade call downward.
   defp deps do
     [
-      {:cyfr_contracts, in_umbrella: true},
+      {:prima, in_umbrella: true},
       {:arca, in_umbrella: true},
       {:jason, "~> 1.4"},
       # Contexts are established at the authentication boundary, which is

@@ -6,7 +6,7 @@ defmodule Cyfr.Execution.Dispatch do
   Runs an execution on a worker service, and stops one.
 
   `run/4` dispatches to the first worker service in
-  `config :cyfr, :workers` (each a `t:Cyfr.WorkerAPI.endpoint/0`, reached
+  `config :cyfr, :workers` (each a `t:Prima.WorkerAPI.endpoint/0`, reached
   through `Cyfr.Execution.WorkerClient`) whose status answers its
   configured id: the status `Cyfr.Execution.WorkerWatch` heard from it
   within the last poll interval (`Cyfr.Execution.WorkerWatch.fresh_boot/2`),
@@ -28,7 +28,7 @@ defmodule Cyfr.Execution.Dispatch do
     4. the waiter's registration becomes `{:dispatched, endpoint}`, the
        assignment is signed (`Cyfr.Execution.Assignments.issue/1`), its
        attempt's keys are sealed with the worker service's dispatch seal key
-       (`Cyfr.WorkerAuth.seal_attempt_keys/3`), and it is started on the
+       (`Prima.WorkerAuth.seal_attempt_keys/3`), and it is started on the
        worker service (`Cyfr.Execution.WorkerClient.start/4`) with the
        input's JSON; a run that is not started is closed failed, and a
        start the worker service refused (`{:unavailable, sentence}`: its
@@ -73,7 +73,7 @@ defmodule Cyfr.Execution.Dispatch do
 
   alias Cyfr.Execution.{Admission, Assignments, Attempt, Cascade, Charge, Close, Keys, Record}
   alias Cyfr.Execution.{WorkerClient, WorkerWatch}
-  alias Cyfr.{WorkerAPI, WorkerAuth}
+  alias Prima.{WorkerAPI, WorkerAuth}
   alias Sanctum.Context
 
   @slot_wait_ms 30_000
@@ -83,7 +83,7 @@ defmodule Cyfr.Execution.Dispatch do
   attempt's keys and the fields its vault edge projects.
   """
   @type claimed :: %{
-          assignment: Cyfr.Assignment.token(),
+          assignment: Prima.Assignment.token(),
           attempt_keys: WorkerAuth.attempt_keys(),
           secrets: %{optional(String.t()) => String.t()}
         }
@@ -127,7 +127,7 @@ defmodule Cyfr.Execution.Dispatch do
   on a worker service, and hand it the run. `opts` are
   `Cyfr.Execution.Admission.admit/4`'s, with `:service_id`, `:boot_id` and
   `:worker` naming the worker service the runner belongs to (its id, its
-  boot and its `t:Cyfr.WorkerAPI.endpoint/0`), and `:runner` the runner.
+  boot and its `t:Prima.WorkerAPI.endpoint/0`), and `:runner` the runner.
 
   In order: the run is admitted with the calling process as its waiter;
   its attempt takes a `:child` execution slot, waiting as `run/4` does; its
@@ -273,7 +273,7 @@ defmodule Cyfr.Execution.Dispatch do
 
   @doc """
   The worker service runs are dispatched to: the first entry of
-  `config :cyfr, :workers` (a `t:Cyfr.WorkerAPI.endpoint/0`, whose
+  `config :cyfr, :workers` (a `t:Prima.WorkerAPI.endpoint/0`, whose
   `components` list names the name-level references it alone runs, or is
   nil) whose status answers its configured id, with the boot that status
   names; an entry that does not answer, or answers as another service, is
@@ -328,7 +328,7 @@ defmodule Cyfr.Execution.Dispatch do
   end
 
   defp name_of(reference) do
-    case Cyfr.ComponentRef.to_name_ref(reference) do
+    case Prima.ComponentRef.to_name_ref(reference) do
       {:ok, name} -> name
       {:error, _reason} -> nil
     end
@@ -453,7 +453,7 @@ defmodule Cyfr.Execution.Dispatch do
 
   defp claim_row(admitted, claimant) do
     case Arca.ExecutionAttempts.claim(
-           Cyfr.Actor.in_athanor(claimant.athanor_id),
+           Prima.Actor.in_athanor(claimant.athanor_id),
            claimant.attempt,
            claimant.fence,
            claimant.runner,
@@ -537,7 +537,7 @@ defmodule Cyfr.Execution.Dispatch do
 
   defp give_back_invoke(ctx, opts) do
     with true <- opts[:held_invoke] == true,
-         %Cyfr.Authority{} = authority <- opts[:authority] do
+         %Prima.Authority{} = authority <- opts[:authority] do
       Sanctum.Authority.release_invoke(authority)
       Charge.give_back(authority, charge: opts[:charge], ctx: ctx)
     end

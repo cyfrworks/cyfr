@@ -80,7 +80,7 @@ var stackVars = []string{
 // serviceIDPattern is the service id grammar Opus.Credentials accepts.
 var serviceIDPattern = regexp.MustCompile(`^wrk_[A-Za-z0-9_-]{1,64}$`)
 
-// decodeHexKey is Cyfr.MacEnvelope.decode_root/1: exactly 64 hexadecimal
+// decodeHexKey is Prima.MacEnvelope.decode_root/1: exactly 64 hexadecimal
 // digits, in either case, spelling 32 bytes.
 func decodeHexKey(text string) ([]byte, bool) {
 	if len(text) != 64 {
@@ -90,7 +90,7 @@ func decodeHexKey(text string) ([]byte, bool) {
 	return b, err == nil
 }
 
-// workerKey is Cyfr.WorkerAuth.worker_key/2, the key of the worker service
+// workerKey is Prima.WorkerAuth.worker_key/2, the key of the worker service
 // `serviceID`: HMAC-SHA256 keyed by the root over its label and the service
 // id, one per line.
 func workerKey(root []byte, serviceID string) []byte {

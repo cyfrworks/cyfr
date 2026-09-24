@@ -26,12 +26,12 @@ defmodule Arca.SanctumSurfaceTest do
   #
   # What was vocabulary is gone rather than forgotten: the tenancy scope
   # list and the webhook signature header's default are shapes two sides
-  # agree on, so they live in the contracts (`Cyfr.TenancyScope`,
-  # `Cyfr.Webhook`) and the storage layer reads them there, while the auth
+  # agree on, so they live in the contracts (`Prima.TenancyScope`,
+  # `Prima.Webhook`) and the storage layer reads them there, while the auth
   # domain keeps its names over the same declaration. The tenancy carrier
-  # was the last row: every facade now takes the `%Cyfr.Actor{}` the
-  # context projects, the caps are asked through `Cyfr.Caps`, and the
-  # server's own work carries `Cyfr.Actor.system/0`.
+  # was the last row: every facade now takes the `%Prima.Actor{}` the
+  # context projects, the caps are asked through `Prima.Caps`, and the
+  # server's own work carries `Prima.Actor.system/0`.
   @surface []
 
   @namespace ~r/\bSanctum(?:\.[A-Z]\w+)+\b/
@@ -39,8 +39,8 @@ defmodule Arca.SanctumSurfaceTest do
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp reached do
-    for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/arca/lib/arca/**/*.ex")),
-        line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
+    for path <- Prima.Test.SourceTree.files!(Path.join(root(), "apps/arca/lib/arca/**/*.ex")),
+        line <- path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.lines(),
         [module] <- Regex.scan(@namespace, line, capture: :first),
         into: MapSet.new(),
         do: module |> String.split(".") |> Enum.take(2) |> Enum.join(".")
@@ -51,8 +51,8 @@ defmodule Arca.SanctumSurfaceTest do
     # having checked nothing. The same reader, over the same tree, has to
     # come back with code.
     read =
-      for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/arca/lib/arca/**/*.ex")),
-          line <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
+      for path <- Prima.Test.SourceTree.files!(Path.join(root(), "apps/arca/lib/arca/**/*.ex")),
+          line <- path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.lines(),
           do: line
 
     assert length(read) > 100, "the scan read no code line under lib/arca — it is not reading"
@@ -68,7 +68,7 @@ defmodule Arca.SanctumSurfaceTest do
            This cycle spans the license boundary (Apache-2.0 storage calling
            the FSL auth domain), so it widens only by decision: add the
            namespace with a line saying why the storage layer needs it, or
-           move the shared piece to the glue namespace (`Cyfr.`).
+           move the shared piece to Prima (`Prima.`).
            """
   end
 

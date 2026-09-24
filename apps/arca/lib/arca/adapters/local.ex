@@ -22,7 +22,7 @@ defmodule Arca.Adapters.Local do
   ## Conditional writes
 
   The precondition this adapter mints is the SHA-256 of the object's bytes
-  (`Cyfr.Digest.sha256_hex/1`, the digest `Arca.Storage.TestDouble` mints
+  (`Prima.Digest.sha256_hex/1`, the digest `Arca.Storage.TestDouble` mints
   too). A create writes the bytes whole at a temporary name and hard-links
   them to the target: `link(2)` refuses with `EEXIST` when anything is at
   the target, so the existence check and the publication are one syscall
@@ -72,7 +72,7 @@ defmodule Arca.Adapters.Local do
   require Logger
 
   @impl true
-  def get(%Cyfr.Actor{} = actor, path) do
+  def get(%Prima.Actor{} = actor, path) do
     full_path = build_path(actor, path)
 
     # `File.read` follows symlinks; nothing tenant-reachable can create one
@@ -109,7 +109,7 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def put(%Cyfr.Actor{} = actor, path, content) do
+  def put(%Prima.Actor{} = actor, path, content) do
     refuse_seed_write!(path)
     write_via_rename(build_path(actor, path), content)
   end
@@ -142,7 +142,7 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def append(%Cyfr.Actor{} = actor, path, content) do
+  def append(%Prima.Actor{} = actor, path, content) do
     refuse_seed_write!(path)
     full_path = build_path(actor, path)
 
@@ -176,7 +176,7 @@ defmodule Arca.Adapters.Local do
         _ -> 0
       end
 
-    if existing + byte_size(content) > Cyfr.Limits.default_max_response_size() do
+    if existing + byte_size(content) > Prima.Limits.default_max_response_size() do
       {:error, :object_too_large}
     else
       :ok
@@ -189,7 +189,7 @@ defmodule Arca.Adapters.Local do
   mechanism and the result vocabulary.
   """
   @impl true
-  def put_if_none_match(%Cyfr.Actor{} = actor, path, content) do
+  def put_if_none_match(%Prima.Actor{} = actor, path, content) do
     refuse_seed_write!(path)
     full_path = build_path(actor, path)
     bytes = IO.iodata_to_binary(content)
@@ -239,7 +239,7 @@ defmodule Arca.Adapters.Local do
   the mechanism and the result vocabulary.
   """
   @impl true
-  def put_if_match(%Cyfr.Actor{} = actor, path, content, precondition) do
+  def put_if_match(%Prima.Actor{} = actor, path, content, precondition) do
     refuse_seed_write!(path)
     full_path = build_path(actor, path)
     bytes = IO.iodata_to_binary(content)
@@ -264,7 +264,7 @@ defmodule Arca.Adapters.Local do
   the bytes it answers.
   """
   @impl true
-  def get_for_update(%Cyfr.Actor{} = actor, path) do
+  def get_for_update(%Prima.Actor{} = actor, path) do
     with {:ok, bytes} <- get(actor, path), do: {:ok, bytes, precondition(bytes)}
   end
 
@@ -286,7 +286,7 @@ defmodule Arca.Adapters.Local do
     end
   end
 
-  defp precondition(bytes), do: Cyfr.Digest.sha256_hex(bytes)
+  defp precondition(bytes), do: Prima.Digest.sha256_hex(bytes)
 
   # One conditional write (or tree swap) in flight per physical path on
   # this node: its check and its write cannot interleave with another's.
@@ -302,7 +302,7 @@ defmodule Arca.Adapters.Local do
   for a prefix that is one file, `[]` for nothing (or a symlink).
   """
   @impl true
-  def list_prefix(%Cyfr.Actor{} = actor, prefix) do
+  def list_prefix(%Prima.Actor{} = actor, prefix) do
     full_path = build_path(actor, prefix)
 
     case lstat_type(full_path) do
@@ -313,7 +313,7 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def delete(%Cyfr.Actor{} = actor, path) do
+  def delete(%Prima.Actor{} = actor, path) do
     refuse_seed_write!(path)
     full_path = build_path(actor, path)
 
@@ -325,13 +325,13 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def ensure_dir(%Cyfr.Actor{} = actor, path) do
+  def ensure_dir(%Prima.Actor{} = actor, path) do
     refuse_seed_write!(path)
     File.mkdir_p(build_path(actor, path))
   end
 
   @impl true
-  def list_typed(%Cyfr.Actor{} = actor, path) do
+  def list_typed(%Prima.Actor{} = actor, path) do
     full_path = build_path(actor, path)
 
     case File.ls(full_path) do
@@ -363,7 +363,7 @@ defmodule Arca.Adapters.Local do
   defp tmp_name?(name), do: Arca.Storage.tmp_name?(name)
 
   @impl true
-  def exists?(%Cyfr.Actor{} = actor, path) do
+  def exists?(%Prima.Actor{} = actor, path) do
     full_path = build_path(actor, path)
     # Files only, matching the S3 adapter's HEAD probe: a directory "exists"
     # on a filesystem but has no object-store counterpart, and the two
@@ -374,7 +374,7 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def delete_tree(%Cyfr.Actor{} = actor, path) do
+  def delete_tree(%Prima.Actor{} = actor, path) do
     refuse_seed_write!(path)
     full_path = build_path(actor, path)
 
@@ -385,7 +385,7 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def list_recursive(%Cyfr.Actor{} = actor, path) do
+  def list_recursive(%Prima.Actor{} = actor, path) do
     full_path = build_path(actor, path)
 
     if File.dir?(full_path) do
@@ -405,14 +405,14 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def usage(%Cyfr.Actor{} = actor, path) do
+  def usage(%Prima.Actor{} = actor, path) do
     full_path = build_path(actor, path)
 
     if File.dir?(full_path) do
       # Strict, unlike the listing walk: the storage cap rides this
       # number, and an unreadable subtree silently read as empty would
       # weaken it — the cap layer fails CLOSED on a usage error
-      # (`Cyfr.Caps.check_storage/2`), so the error must reach
+      # (`Prima.Caps.check_storage/2`), so the error must reach
       # it. A missing root stays zero (nothing stored is honestly zero).
       case walk_files_sized(full_path) do
         {:ok, sized} ->
@@ -482,7 +482,7 @@ defmodule Arca.Adapters.Local do
   end
 
   @impl true
-  def serve_to_conn(conn, %Cyfr.Actor{} = actor, path, opts) do
+  def serve_to_conn(conn, %Prima.Actor{} = actor, path, opts) do
     full_path = build_path(actor, path)
     status = Keyword.get(opts, :status, 200)
 
@@ -522,7 +522,7 @@ defmodule Arca.Adapters.Local do
   are not fsynced, as `put/3` is not.
   """
   @impl true
-  def replace_tree(%Cyfr.Actor{} = actor, path, files)
+  def replace_tree(%Prima.Actor{} = actor, path, files)
       when is_list(files) do
     refuse_seed_write!(path)
     swap = swap_names(build_path(actor, path))
@@ -856,7 +856,7 @@ defmodule Arca.Adapters.Local do
   it before any I/O, so `Arca.Storage.validate_path!/1` runs exactly once
   per operation — never per callback on top.
   """
-  def build_path(%Cyfr.Actor{} = actor, segments) do
+  def build_path(%Prima.Actor{} = actor, segments) do
     Arca.Storage.validate_path!(segments)
 
     {root, relative} =

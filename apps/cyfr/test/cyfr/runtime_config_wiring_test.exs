@@ -416,7 +416,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "a boot that runs Opus beside CYFR derives the service key from the root, minting one if unset" do
       root = :crypto.strong_rand_bytes(32)
-      {:ok, derived} = Cyfr.WorkerAuth.worker_key(root, "wrk_local")
+      {:ok, derived} = Prima.WorkerAuth.worker_key(root, "wrk_local")
 
       with_env(
         %{
@@ -440,7 +440,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           config = read_prod_config!()
           minted = config[:cyfr][:worker_key]
           assert byte_size(minted) == 32
-          {:ok, key} = Cyfr.WorkerAuth.worker_key(minted, "wrk_local")
+          {:ok, key} = Prima.WorkerAuth.worker_key(minted, "wrk_local")
           assert config[:opus][:service_key] == Base.encode16(key, case: :lower)
         end
       )
