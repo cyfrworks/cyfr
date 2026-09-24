@@ -393,7 +393,9 @@ defmodule Cyfr.Execution.GuestStorageTest do
             "secrets/key.json"
           ] do
         manifest = %{"caps" => %{"storage" => %{"paths" => [path]}}}
-        parses? = Compendium.Manifest.Caps.validate(manifest) == :ok
+
+        parses? =
+          Cyfr.Manifest.Caps.validate(manifest, &Arca.Storage.valid_guest_path?/1) == :ok
 
         honored? =
           not match?(
@@ -409,7 +411,10 @@ defmodule Cyfr.Execution.GuestStorageTest do
       # `"*"` is grant grammar and never a request path; `""` is the scope
       # listing and never a grant.
       assert :ok =
-               Compendium.Manifest.Caps.validate(%{"caps" => %{"storage" => %{"paths" => ["*"]}}})
+               Cyfr.Manifest.Caps.validate(
+                 %{"caps" => %{"storage" => %{"paths" => ["*"]}}},
+                 &Arca.Storage.valid_guest_path?/1
+               )
 
       assert {"storage_path_denied", _} =
                refused(run(ctx, edge(["*"]), %{"action" => "exists", "path" => "*"}))

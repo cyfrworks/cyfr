@@ -16,11 +16,15 @@ defmodule Cyfr.Ops.ServicesTest do
     assert names == names |> Enum.uniq() |> Enum.sort()
   end
 
-  test "the records provider is arca's, everywhere it is named" do
+  test "the storage providers are arca's and files', everywhere they are named" do
     # routed_to and system.status read the same map, so the same module
-    # cannot be one service in the log and another in the report.
-    assert Services.service_name(Emissary.MCP.Tools.RecordsProvider) == "arca"
-    assert Emissary.MCP.Tools.RecordsProvider in Services.providers_for("arca")
+    # cannot be one service in the log and another in the report. Several
+    # providers may share a service.
+    assert Services.service_name(Arca.Providers.Records) == "arca"
+    assert Services.service_name(Cyfr.Retention) == "arca"
+    assert Services.providers_for("arca") == [Arca.Providers.Records, Cyfr.Retention]
+    assert Services.service_name(Arca.Providers.Files) == "files"
+    assert Services.providers_for("files") == [Arca.Providers.Files]
   end
 
   test "an unlisted module is emissary's" do

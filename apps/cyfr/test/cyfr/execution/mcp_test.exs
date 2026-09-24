@@ -862,7 +862,16 @@ defmodule Cyfr.Execution.MCPTest do
   # reads return the failed execution record with status "failed" and no output.
   # ============================================================================
 
-  describe "read/2 - execution state resource" do
+  # A resource read is the declared `execution.read_resource`, admitted by
+  # the gate like any other call; the answer is `%{content:, mimeType:}`.
+  defp read(ctx, uri),
+    do:
+      Cyfr.Ops.Catalog.call_external("execution", ctx, %{
+        "action" => "read_resource",
+        "uri" => uri
+      })
+
+  describe "execution.read_resource - execution state resource" do
     test "returns execution state for existing execution", %{ctx: ctx, ref: ref} do
       _exec_result =
         MCP.handle("execution", ctx, %{
@@ -877,7 +886,7 @@ defmodule Cyfr.Execution.MCPTest do
       execution_id = hd(list_result.executions).execution_id
 
       uri = "opus://executions/#{execution_id}"
-      {:ok, content} = MCP.read(ctx, uri)
+      {:ok, %{content: content, mimeType: "application/json"}} = read(ctx, uri)
 
       # Content should be valid JSON
       {:ok, parsed} = Jason.decode(content)
@@ -890,7 +899,7 @@ defmodule Cyfr.Execution.MCPTest do
 
     test "returns error for non-existent execution", %{ctx: ctx} do
       uri = "opus://executions/exec_nonexistent"
-      {:error, reason} = MCP.read(ctx, uri)
+      {:error, reason} = read(ctx, uri)
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
       assert Cyfr.Refusal.message(reason) =~ "not found"
@@ -911,14 +920,14 @@ defmodule Cyfr.Execution.MCPTest do
 
       # URI with just ID
       uri = "opus://executions/#{execution_id}"
-      {:ok, content} = MCP.read(ctx, uri)
+      {:ok, %{content: content}} = read(ctx, uri)
 
       {:ok, parsed} = Jason.decode(content)
       assert parsed["execution_id"] == execution_id
     end
   end
 
-  describe "read/2 - execution logs resource" do
+  describe "execution.read_resource - execution logs resource" do
     test "returns logs for existing execution", %{ctx: ctx, ref: ref} do
       _exec_result =
         MCP.handle("execution", ctx, %{
@@ -933,7 +942,7 @@ defmodule Cyfr.Execution.MCPTest do
       execution_id = hd(list_result.executions).execution_id
 
       uri = "opus://executions/#{execution_id}/logs"
-      {:ok, content} = MCP.read(ctx, uri)
+      {:ok, %{content: content, mimeType: "text/plain"}} = read(ctx, uri)
 
       # Content should be text logs
       assert is_binary(content)
@@ -945,7 +954,7 @@ defmodule Cyfr.Execution.MCPTest do
 
     test "returns error for non-existent execution logs", %{ctx: ctx} do
       uri = "opus://executions/exec_nonexistent/logs"
-      {:error, reason} = MCP.read(ctx, uri)
+      {:error, reason} = read(ctx, uri)
 
       assert reason == {:not_found, "Execution", "exec_nonexistent"}
       assert Cyfr.Refusal.message(reason) =~ "not found"
@@ -968,7 +977,7 @@ defmodule Cyfr.Execution.MCPTest do
 
         if exec.status == "failed" do
           uri = "opus://executions/#{exec.execution_id}/logs"
-          {:ok, content} = MCP.read(ctx, uri)
+          {:ok, %{content: content}} = read(ctx, uri)
 
           assert content =~ "Error:"
         end
@@ -976,16 +985,16 @@ defmodule Cyfr.Execution.MCPTest do
     end
   end
 
-  describe "read/2 - unknown URIs" do
-    test "returns error for unknown URI scheme", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "unknown://resource")
-      assert err_msg(msg) =~ "Unknown resource URI"
+  describe "execution.read_resource - unknown URIs" do
+    test "a URI outside opus://executions/ is a typed argument refusal", %{ctx: ctx} do
+      {:error, {:invalid_argument, msg}} = read(ctx, "unknown://resource")
+      assert msg =~ "Unknown resource URI"
     end
 
     test "returns error for invalid execution URI format", %{ctx: ctx} do
       # Empty execution ID
-      {:error, msg} = MCP.read(ctx, "opus://executions/")
-      assert err_msg(msg) =~ "Invalid" or err_msg(msg) =~ "not found"
+      {:error, {:invalid_argument, msg}} = read(ctx, "opus://executions/")
+      assert msg =~ "Invalid execution URI format"
     end
   end
 

@@ -23,6 +23,9 @@ defmodule Sanctum.MCP do
   - `sanctum://identity` - Current user identity
   - `sanctum://permissions` - Current user permissions
 
+  Both are read through `session.read_resource`, which answers from the
+  caller's established context alone and reads no stored tenant data.
+
   ## Architecture Note
 
   Tool definitions live next to their implementation under `lib/sanctum`.
@@ -34,15 +37,14 @@ defmodule Sanctum.MCP do
 
   def service, do: "sanctum"
 
-  alias Sanctum.Context
-  alias Sanctum.MCP.Shared
-
   # ============================================================================
-  # ResourceProvider Protocol
+  # Resources
   # ============================================================================
 
   @doc """
-  Returns available Sanctum resources (concrete URIs only).
+  Returns available Sanctum resources (concrete URIs only). A read of
+  either is the `session.read_resource` operation, which answers any
+  caller its own self-description.
   """
   def resources do
     [
@@ -66,33 +68,6 @@ defmodule Sanctum.MCP do
   """
   def resource_templates do
     []
-  end
-
-  @doc """
-  Read a resource by URI.
-  """
-  def read(%Context{} = ctx, "sanctum://identity") do
-    content =
-      case Jason.encode(%{user_id: ctx.user_id, athanor_id: ctx.athanor_id, scope: ctx.scope}) do
-        {:ok, json} -> json
-        {:error, _} -> ~s({"error":"encoding_error"})
-      end
-
-    {:ok, %{content: content, mimeType: Cyfr.MediaType.json()}}
-  end
-
-  def read(%Context{} = ctx, "sanctum://permissions") do
-    content =
-      case Jason.encode(%{permissions: Shared.format_permissions(ctx.permissions)}) do
-        {:ok, json} -> json
-        {:error, _} -> ~s({"error":"encoding_error"})
-      end
-
-    {:ok, %{content: content, mimeType: Cyfr.MediaType.json()}}
-  end
-
-  def read(_ctx, uri) do
-    {:error, "Unknown resource URI: #{uri}"}
   end
 
   # ============================================================================

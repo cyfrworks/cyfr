@@ -212,6 +212,58 @@ defmodule Cyfr.BoundariesTest do
     end
   end
 
+  describe "the storage doors" do
+    # The files and records doors moved below the identity and component
+    # domains: they take the actor the gate projects and name only Arca,
+    # the contracts and Elixir. A reach back up (a namespace policy, the
+    # context, a manifest owner above) is refused here as well as by the
+    # graph, with the door named.
+    test "Arca.Files and the Arca providers name nothing above Arca" do
+      named = names(["apps/arca/lib/arca/files.ex", "apps/arca/lib/arca/providers/*.ex"])
+      contracts = contracts_modules()
+
+      assert Enum.map(named, &elem(&1, 0)) |> Enum.sort() ==
+               ~w(apps/arca/lib/arca/files.ex apps/arca/lib/arca/providers/files.ex
+                  apps/arca/lib/arca/providers/records.ex)
+
+      reached =
+        for {_path, names} <- named,
+            {module, _line} <- names,
+            uniq: true,
+            do: {module, Boundaries.layer(module, contracts)}
+
+      assert reached != [], "the scan of the storage doors found no names"
+      assert {"Cyfr.Manifest", :contracts} in reached
+      assert {"Cyfr.ComponentNamespace", :contracts} in reached
+
+      above =
+        for {module, layer} <- reached, layer not in [:arca, :contracts, :outside], do: module
+
+      assert above == [], "a storage door names a module above Arca: #{inspect(above)}"
+
+      assert Boundaries.dependency_violations(:arca, named, contracts) == []
+    end
+
+    test "a door that reaches back up is reported" do
+      planted = [
+        {"apps/arca/lib/arca/files.ex",
+         CodeLines.aliases(~S'''
+         defmodule Arca.Files do
+           def local(p), do: Compendium.NamespacePolicy.require_local_register(p)
+           def actor(ctx), do: Sanctum.Context.actor(ctx)
+         end
+         ''')}
+      ]
+
+      assert Enum.sort(Boundaries.dependency_violations(:arca, planted, contracts_modules())) == [
+               "apps/arca/lib/arca/files.ex:2 names Compendium.NamespacePolicy (host); " <>
+                 "arca may name [:arca, :contracts, :outside]",
+               "apps/arca/lib/arca/files.ex:3 names Sanctum.Context (sanctum); " <>
+                 "arca may name [:arca, :contracts, :outside]"
+             ]
+    end
+  end
+
   describe "the islands" do
     test "each names only its own modules, the contracts, and its declared dependencies' roots" do
       contracts = contracts_modules()

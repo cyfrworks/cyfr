@@ -197,11 +197,12 @@ defmodule Sanctum.ContextFocusTest do
     refute Enum.any?(listed, &(&1.id == b_exec))
 
     # and so is B's storage: a URI is rooted in the focused athanor, never another
-    assert {:error, {:not_found, "File", _}} =
-             Emissary.MCP.Tools.RecordsProvider.read(focused, "arca://files/data/secret.txt")
+    read = %{"action" => "read", "uri" => "arca://files/data/secret.txt"}
 
-    assert {:ok, %{content: content}} =
-             Emissary.MCP.Tools.RecordsProvider.read(b_ctx, "arca://files/data/secret.txt")
+    assert {:error, {:not_found, "File", _}} =
+             Cyfr.Ops.Catalog.call_external("resource", focused, read)
+
+    assert {:ok, %{content: content}} = Cyfr.Ops.Catalog.call_external("resource", b_ctx, read)
 
     assert Base.decode64!(content) == "b's bytes"
   end

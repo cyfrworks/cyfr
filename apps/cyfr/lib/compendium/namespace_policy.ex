@@ -18,7 +18,10 @@ defmodule Compendium.NamespacePolicy do
   (`Compendium.ComponentPath.local_publisher?/1`); this module owns the
   refusals and their one canonical message each, so the policy is written
   down once instead of restated at every ingress (OCI pull, publish,
-  directory registration, fork).
+  directory registration, fork, build). The storage-write rule — a pulled
+  component is fork-to-modify, never rewritten in place — is the shared
+  contract `Cyfr.ComponentNamespace`, which the storage doors below this
+  domain apply too.
   """
 
   alias Compendium.ComponentPath
@@ -83,26 +86,6 @@ defmodule Compendium.NamespacePolicy do
       {:error,
        "build.compile builds only the local namespace, got: #{namespace}. " <>
          "Fork the component into local/ first, then build."}
-    end
-  end
-
-  @doc """
-  Require the `local` namespace for a guest storage write into
-  `components/` — the sandbox boundary's rule: a pulled component is
-  fork-to-modify, never rewritten in place. The scanner would refuse to
-  re-register the rewrite anyway (`require_local_register/1`) and the
-  digest checks would refuse to execute the bytes, so the write could
-  only brick the component against its row — refused at the boundary,
-  with the fork path named instead.
-  """
-  @spec require_local_guest_write(String.t() | nil) :: :ok | {:error, String.t()}
-  def require_local_guest_write(publisher) do
-    if ComponentPath.local_publisher?(publisher) do
-      :ok
-    else
-      {:error,
-       "Components under '#{publisher}/' are pulled from the registry and " <>
-         "never modified in place — fork into local/ to make changes."}
     end
   end
 end

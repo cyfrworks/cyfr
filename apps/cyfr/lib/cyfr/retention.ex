@@ -13,9 +13,15 @@ defmodule Cyfr.Retention do
   `kinds/0` names every retainable kind (`Cyfr.Retention.Kind` adapters
   — the row mechanics live with each kind's store), and the settings
   document, the scheduler loop (`Cyfr.RetentionScheduler`) and the MCP
-  `retention` tool's vocabulary
-  (`Emissary.MCP.Tools.RecordsProvider`) all derive from that roster, so
-  none of them can fall behind it.
+  `retention` tool's vocabulary all derive from that roster, so none of
+  them can fall behind it.
+
+  ## The `retention` tool
+
+  This module is also the provider of the `retention` tool (service
+  `arca`, handed the caller's context): `get` reads the settings, `set`
+  patches them (`storage_write`), and `cleanup` runs one kind's policy now
+  (`admin`), `executions` when no `cleanup_type` is named.
 
   ## Storage
 
@@ -47,6 +53,8 @@ defmodule Cyfr.Retention do
       {:ok, would_delete} = Cyfr.Retention.cleanup(ctx, "executions", dry_run: true)
   """
 
+  @behaviour Cyfr.Ops.Provider
+
   alias Sanctum.Context
 
   @kinds [
@@ -67,6 +75,165 @@ defmodule Cyfr.Retention do
   @doc "The closed roster of retainable kinds — everything else derives from it."
   @spec kinds() :: [module()]
   def kinds, do: @kinds
+
+  # ============================================================================
+  # The `retention` tool
+  # ============================================================================
+
+  @impl Cyfr.Ops.Provider
+  def service, do: "arca"
+
+  @impl Cyfr.Ops.Provider
+  def context_kind, do: :context
+
+  @impl Cyfr.Ops.Provider
+  def tools do
+    alias Cyfr.Ops.{Arg, Operation}
+    # Both the settable keys and the cleanup vocabulary derive from the
+    # roster, so a new kind is on this surface the moment it exists — the
+    # enum cannot fall behind the policy module again.
+    [
+      Operation.tool(
+        [
+          Operation.new("retention", "get", "Get retention", [],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read
+          ),
+          Operation.new(
+            "retention",
+            "set",
+            "Set retention",
+            [
+              Arg.new(
+                "settings",
+                {:record,
+                 Enum.map(@kinds, fn kind ->
+                   Arg.new(kind.key(), :integer, description: setting_description(kind))
+                 end)},
+                required: true,
+                description: "Retention settings"
+              )
+            ],
+            kind: :write,
+            planes: [:external],
+            permission: :storage_write
+          ),
+          Operation.new(
+            "retention",
+            "cleanup",
+            "Cleanup retention",
+            [
+              Arg.new("cleanup_type", :string,
+                enum: Enum.map(@kinds, & &1.key()),
+                description: "Kind of records to clean up"
+              ),
+              Arg.new("dry_run", :boolean,
+                description: "If true, show what would be deleted without actually deleting"
+              )
+            ],
+            kind: :destructive,
+            planes: [:external],
+            permission: :admin
+          )
+        ],
+        description:
+          "Manage data retention policies - get settings, set settings, or run cleanup",
+        title: "Retention"
+      )
+    ]
+  end
+
+  @impl Cyfr.Ops.Provider
+  def handle("retention", %Context{} = ctx, %{"action" => "get"}) do
+    with :ok <- Context.tenant_ok(ctx),
+         {:ok, settings} <- get_settings(ctx) do
+      {:ok, %{action: "get", settings: settings}}
+    else
+      {:error, reason} ->
+        Logger.error("[Cyfr.Retention] retention settings read failed: #{inspect(reason)}")
+        {:error, {:unavailable, "Retention settings"}}
+    end
+  end
+
+  def handle("retention", %Context{} = ctx, %{"action" => "set", "settings" => settings})
+      when is_map(settings) do
+    with :ok <- Context.tenant_ok(ctx) do
+      case set_settings(ctx, settings) do
+        :ok ->
+          {:ok, new_settings} = get_settings(ctx)
+          {:ok, %{action: "set", updated: true, settings: new_settings}}
+
+        {:error, {:unknown_setting, key}} ->
+          {:error, {:invalid_argument, "Unknown retention setting: #{key}"}}
+
+        {:error, {:invalid_setting, key}} ->
+          {:error,
+           {:invalid_argument,
+            "Invalid value for retention setting #{key} — use a positive integer"}}
+
+        {:error, reason} ->
+          Logger.error("[Cyfr.Retention] Failed to update retention settings: #{inspect(reason)}")
+
+          {:error, "Failed to update retention settings"}
+      end
+    end
+  end
+
+  def handle("retention", %Context{} = ctx, %{"action" => "cleanup"} = args) do
+    with :ok <- Context.tenant_ok(ctx) do
+      cleanup_type = Map.get(args, "cleanup_type", "executions")
+      dry_run = Map.get(args, "dry_run", false)
+
+      # One dispatch for every kind — the roster is this module's.
+      case cleanup(ctx, cleanup_type, dry_run: dry_run) do
+        {:ok, count} when dry_run ->
+          {:ok,
+           %{action: "cleanup", cleanup_type: cleanup_type, dry_run: true, would_delete: count}}
+
+        {:ok, count} ->
+          {:ok, %{action: "cleanup", cleanup_type: cleanup_type, deleted: count}}
+
+        {:error, {:unknown_kind, _}} ->
+          {:error, {:invalid_argument, "Unknown cleanup_type: #{cleanup_type}"}}
+
+        {:error, reason} ->
+          Logger.error("[Cyfr.Retention] Cleanup failed: #{inspect(reason)}")
+          {:error, "Cleanup failed"}
+      end
+    else
+      # The only clause above is the tenant gate — pass its refusal term
+      # through; the dispatcher renders the vocabulary at the wire.
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def handle("retention", _ctx, %{"action" => "set"}) do
+    {:error, {:invalid_argument, "Missing required parameter: settings (must be a JSON object)"}}
+  end
+
+  def handle("retention", _ctx, _args) do
+    {:error, Cyfr.Ops.Provider.invalid_action("retention", action_enum("retention"))}
+  end
+
+  def handle(tool, _ctx, _args) do
+    {:error, "Unknown tool: #{tool}"}
+  end
+
+  # The wire description of one retention setting, from its unit — no
+  # per-kind prose to keep in step with the roster.
+  defp setting_description(kind) do
+    case kind.unit() do
+      :keep -> "Newest records kept per athanor"
+      :days -> "Days of records kept per athanor"
+    end
+  end
+
+  defp action_enum(tool) do
+    [tool_def] = for t <- tools(), t.name == tool, do: t
+    get_in(tool_def, [:input_schema, "properties", "action", "enum"])
+  end
 
   @doc """
   The class an execution's payloads are kept under when its caller names

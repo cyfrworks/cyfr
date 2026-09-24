@@ -527,7 +527,7 @@ defmodule Emissary.MCP.NotesToolTest do
     # notes action the soul may propose survives the expansion.
     manifest = shipped_soul_manifest()
 
-    caps = Compendium.Manifest.Caps.from_manifest(manifest)
+    caps = Cyfr.Manifest.Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)
     granted = Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
 
     for action <- ~w(keep pin forget list read search) do

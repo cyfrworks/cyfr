@@ -18,7 +18,7 @@ defmodule Cyfr.Retention.StagedRevisions do
   a commit whose move did not finish leaves the row committed with its
   bytes not yet where readers read — so a role published by such a commit
   is absent from the index until something writes the tree again. Its
-  three writers are the aqua tool, `Cyfr.Files` and provisioning, and none
+  three writers are the aqua tool, `Arca.Files` and provisioning, and none
   of them runs because a sweep repaired something. This is where the
   repair is known, and it is the lowest place above `Arca.StorageGC` that
   may name the component domain: the sweep itself sits below it.

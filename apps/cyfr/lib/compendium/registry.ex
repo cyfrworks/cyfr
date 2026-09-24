@@ -1439,10 +1439,15 @@ defmodule Compendium.Registry do
 
   # The needs/caps blocks are digest-covered manifest vocabulary; a manifest
   # carrying a malformed block is refused at every register/publish ingress
-  # — through the ONE validator, `Compendium.Manifest.validate/1` (closed
-  # key roster, legacy-block refusal, needs/caps owners).
+  # — through the ONE validator, `Cyfr.Manifest.validate/2` (closed key
+  # roster, needs/caps owners), with the storage layer's guest-path
+  # predicate. Its first failure is this surface's refusal, as the block
+  # spelled it.
   defp validate_manifest_capability_blocks(manifest) do
-    Compendium.Manifest.validate(manifest)
+    case Cyfr.Manifest.validate(manifest, &Arca.Storage.valid_guest_path?/1) do
+      :ok -> :ok
+      {:error, {:invalid_manifest, [{block, detail} | _]}} -> {:error, {block, detail}}
+    end
   end
 
   # ============================================================================

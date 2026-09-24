@@ -86,9 +86,18 @@ defmodule Sanctum.MCPTest do
     end
   end
 
-  describe "read/2" do
+  # A resource read is the declared `session.read_resource`, through the
+  # gate like any other call.
+  defp read(ctx, uri),
+    do:
+      Cyfr.Ops.Catalog.call_external("session", ctx, %{
+        "action" => "read_resource",
+        "uri" => uri
+      })
+
+  describe "session.read_resource" do
     test "reads identity resource", %{ctx: ctx} do
-      {:ok, result} = MCP.read(ctx, "sanctum://identity")
+      {:ok, result} = read(ctx, "sanctum://identity")
       assert result.mimeType == "application/json"
 
       content = Jason.decode!(result.content)
@@ -98,7 +107,7 @@ defmodule Sanctum.MCPTest do
     end
 
     test "reads permissions resource", %{ctx: ctx} do
-      {:ok, result} = MCP.read(ctx, "sanctum://permissions")
+      {:ok, result} = read(ctx, "sanctum://permissions")
       assert result.mimeType == "application/json"
 
       content = Jason.decode!(result.content)
@@ -106,8 +115,8 @@ defmodule Sanctum.MCPTest do
     end
 
     test "returns error for unknown resource", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "sanctum://unknown")
-      assert err_msg(msg) =~ "Unknown resource"
+      {:error, {:invalid_argument, msg}} = read(ctx, "sanctum://unknown")
+      assert msg =~ "Unknown resource"
     end
   end
 

@@ -35,7 +35,7 @@ defmodule PrismWeb.FilesLive do
      |> allow_upload(:files,
        accept: :any,
        max_entries: 10,
-       max_file_size: Cyfr.Files.max_write()
+       max_file_size: Arca.Files.max_write()
      )}
   end
 

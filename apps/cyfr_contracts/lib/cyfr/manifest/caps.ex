@@ -34,8 +34,8 @@ defmodule Cyfr.Manifest.Caps do
   `caps.storage.paths` must name a guest scope, or no runtime would
   honour the grant. Which roots a guest may name is the storage
   boundary's fact (`Arca.Storage.valid_guest_path?/1`), not this
-  grammar's, so both callers pass it in and neither restates it:
-  `Compendium.Manifest.Caps` for the publish path and the consent
+  grammar's, so every caller passes it in and none restates it:
+  `Cyfr.Manifest.validate/2` for the write boundaries and the consent
   derivation for a stored manifest. A predicate is required — there is no
   default that quietly admits a path no runtime would serve.
   """

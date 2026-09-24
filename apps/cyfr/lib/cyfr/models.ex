@@ -161,7 +161,7 @@ defmodule Cyfr.Models do
   @doc "Whether a manifest declares the chat contract."
   @spec speaks_chat?(map() | nil | binary()) :: boolean()
   def speaks_chat?(manifest) do
-    @chat in Compendium.Manifest.contracts(Cyfr.Manifest.decode(manifest))
+    @chat in Cyfr.Manifest.contracts(Cyfr.Manifest.decode(manifest))
   end
 
   @doc """

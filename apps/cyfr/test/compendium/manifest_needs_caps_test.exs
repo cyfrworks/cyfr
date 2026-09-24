@@ -7,8 +7,30 @@ defmodule Compendium.ManifestNeedsCapsTest do
   # cannot run beside others.
   use ExUnit.Case, async: false
 
-  alias Compendium.Manifest.Caps
-  alias Compendium.Manifest.Needs
+  alias Cyfr.Manifest.Needs
+
+  # The caps grammar under the storage layer's guest-path predicate — the
+  # composition every write boundary validates with.
+  defmodule Caps do
+    @moduledoc false
+    def validate(manifest),
+      do: Cyfr.Manifest.Caps.validate(manifest, &Arca.Storage.valid_guest_path?/1)
+
+    def from_manifest(manifest),
+      do: Cyfr.Manifest.Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)
+  end
+
+  # The one validator as a write boundary runs it, its first failure
+  # unwrapped as the registry answers it.
+  defmodule Manifest do
+    @moduledoc false
+    def validate(manifest) do
+      case Cyfr.Manifest.validate(manifest, &Arca.Storage.valid_guest_path?/1) do
+        :ok -> :ok
+        {:error, {:invalid_manifest, [failure]}} -> {:error, failure}
+      end
+    end
+  end
 
   @good_needs %{
     "needs" => %{
@@ -332,8 +354,6 @@ defmodule Compendium.ManifestNeedsCapsTest do
   end
 
   describe "tincture and dependencies blocks refuse at the one validator" do
-    alias Compendium.Manifest
-
     test "a non-map tincture block refuses instead of raising at the CSP builder" do
       assert {:error, {:invalid_tincture, _}} = Manifest.validate(%{"tincture" => "oops"})
     end

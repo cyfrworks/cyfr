@@ -21,7 +21,11 @@ config :cyfr,
   tool_providers: [
     # Foundation services
     Sanctum.MCP,
-    Emissary.MCP.Tools.RecordsProvider,
+    # The records the storage layer keeps (executions, MCP and policy
+    # logs), handed the caller's actor alone.
+    Arca.Providers.Records,
+    # Retention policy, until the storage layer owns it.
+    Cyfr.Retention,
     # Chat on the wire, so Prism is a client of the agent runtime rather
     # than the only way to reach it.
     Emissary.MCP.ThreadTool,
@@ -31,7 +35,7 @@ config :cyfr,
     # which is what lets a thread be erased honestly.
     Emissary.MCP.NotesTool,
     # The athanor's files as the Files page shows them, one tier per folder.
-    Emissary.MCP.FileTool,
+    Arca.Providers.Files,
     # A component's own source, for the agent authoring it — host-side and
     # scoped, because the files catalyst's grant is `data/` and widening it
     # would widen it for every agent.

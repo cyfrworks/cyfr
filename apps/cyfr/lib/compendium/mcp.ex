@@ -14,6 +14,7 @@ defmodule Compendium.MCP do
     - `categories` - List available categories
     - `list` - List all installed components (local-only)
     - `delete` - Delete a component from the registry
+    - `read_resource` - Read a `compendium://` resource
   - `aqua` - AQUA agent system and documentation guides (list, get, create, update, delete)
 
   ## Architecture Note
@@ -35,7 +36,7 @@ defmodule Compendium.MCP do
   alias Compendium.MCP.Shared
 
   # ============================================================================
-  # ResourceProvider Protocol
+  # Resources
   # ============================================================================
 
   @doc """
@@ -46,7 +47,9 @@ defmodule Compendium.MCP do
   end
 
   @doc """
-  Returns Compendium resource templates (RFC 6570 URI templates).
+  Returns Compendium resource templates (RFC 6570 URI templates). A read
+  of either is the `component.read_resource` operation, admitted by the
+  gate under `:component_read`.
   """
   def resource_templates do
     [
@@ -65,39 +68,21 @@ defmodule Compendium.MCP do
     ]
   end
 
-  @doc """
-  Read a resource by URI.
+  # The gate admitted the read (authenticated, `:component_read`, the
+  # external plane); what is left is the domain's own tenant and asset
+  # semantics, answered under the caller's context.
+  defp read_resource(%Context{} = ctx, "compendium://components/" <> reference),
+    do: read_component_metadata(ctx, reference)
 
-  Anonymous reads are refused before any tenant resolution: an
-  unauthenticated context carries no athanor of its own, so letting it
-  through would serve component metadata and asset bytes to anyone who can
-  reach `POST /mcp` with an exact reference.
-  """
-  def read(%Context{authenticated: false}, "compendium://" <> _rest) do
-    # Typed, so the router renders the one auth prose AND answers with the
-    # auth_required code (the bare string was mislabeled resource_not_found).
-    {:error, :unauthenticated}
-  end
+  defp read_resource(%Context{} = ctx, "compendium://assets/" <> rest),
+    do: read_component_asset(ctx, rest)
 
-  def read(%Context{} = ctx, "compendium://components/" <> reference) do
-    with :ok <- Context.require_permission(ctx, :component_read) do
-      read_component_metadata(ctx, reference)
-    end
-  end
+  defp read_resource(_ctx, uri) when is_binary(uri),
+    do: {:error, {:invalid_argument, "Unknown resource URI: #{uri}"}}
 
-  def read(%Context{} = ctx, "compendium://assets/" <> rest) do
-    with :ok <- Context.require_permission(ctx, :component_read) do
-      read_component_asset(ctx, rest)
-    end
-  end
+  defp read_resource(_ctx, _uri),
+    do: {:error, {:invalid_argument, "Missing required argument: uri"}}
 
-  def read(_ctx, uri) do
-    {:error, "Unknown resource URI: #{uri}"}
-  end
-
-  # Resources bypass the tool-annotation chokepoint (the router delegates
-  # authorization to each handler), so the `:component_read` the sibling
-  # component tool actions declare is enforced above, per clause.
   defp read_component_metadata(ctx, reference) do
     case Shared.resolve_component(ctx, reference) do
       {:ok, component, _ref} ->
@@ -170,6 +155,9 @@ defmodule Compendium.MCP do
   # ============================================================================
   # Tool Handlers — delegated to per-tool modules
   # ============================================================================
+
+  def handle("component", ctx, %{"action" => "read_resource"} = args),
+    do: ctx |> read_resource(args["uri"]) |> index("Component index")
 
   def handle("component", ctx, args),
     do: ctx |> Compendium.MCP.ComponentTool.handle(args) |> index("Component index")

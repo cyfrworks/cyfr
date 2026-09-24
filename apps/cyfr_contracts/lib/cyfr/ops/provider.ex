@@ -10,10 +10,16 @@ defmodule Cyfr.Ops.Provider do
   and access/effect annotations derive from those declarations. The host
   catalog performs contextual authorization before invoking `handle/3`.
 
-  The context is opaque at this shared boundary. Concrete providers must
-  require their authenticated domain context; worker actor projections do
-  not substitute for it. This behaviour contains no running catalog or
+  What `handle/3` receives is declared by the provider (`c:context_kind/0`):
+  the caller's authenticated domain context by default, or the actor the
+  gate projects from it once the call is authorized. The context is opaque
+  at this shared boundary. This behaviour contains no running catalog or
   infrastructure dependency.
+
+  A provider that serves MCP resources advertises them with
+  `c:resources/0` and `c:resource_templates/0`; each advertised scheme is
+  read through the one operation that declares it in `resource_schemes`
+  (`Cyfr.Ops.Operation`).
 
   Handlers return `{:ok, result}` or `{:error, reason}`. List results use a
   plural resource key with optional count or pagination metadata; single
@@ -106,6 +112,19 @@ defmodule Cyfr.Ops.Provider do
 
   @type handle_result :: {:ok, term()} | {:error, term()}
 
+  @typedoc """
+  What a provider's `handle/3` is given as its second argument.
+
+  `:context` — the caller's authenticated domain context, as the gate
+  authorized it (the default). `:actor` — the `Cyfr.Actor` the gate
+  projects from that context after authentication, consent, argument
+  validation and lineage, and nothing else: no credential, no permission
+  set, no session. A provider below the identity domain declares `:actor`.
+  """
+  @type context_kind :: :context | :actor
+
+  @context_kinds [:context, :actor]
+
   @doc """
   Returns the service label used by `system.status` grouping and request-log `routed_to`.
   """
@@ -131,6 +150,65 @@ defmodule Cyfr.Ops.Provider do
   """
   @callback handle(tool_name :: String.t(), ctx :: term(), args :: map()) ::
               handle_result()
+
+  @doc """
+  What `handle/3` receives: `:context` (the default when not exported) or
+  `:actor`. Any other value refuses the catalog's boot.
+  """
+  @callback context_kind() :: context_kind()
+
+  @doc """
+  The concrete resources a provider advertises for MCP `resources/list`:
+  maps with `:uri`, `:name` and optionally `:description` and `:mimeType`.
+  """
+  @callback resources() :: [map()]
+
+  @doc """
+  The RFC 6570 resource templates a provider advertises for MCP
+  `resources/templates/list`: maps with `:uriTemplate`, `:name` and
+  optionally `:description` and `:mimeType`.
+  """
+  @callback resource_templates() :: [map()]
+
+  @optional_callbacks context_kind: 0, resources: 0, resource_templates: 0
+
+  @doc """
+  A provider's declared `c:context_kind/0`: `:context` when it exports
+  none. A value outside `:context | :actor` raises, so a provider that
+  declares something the gate cannot honour is refused rather than handed
+  a full context by default.
+  """
+  @spec context_kind(module()) :: context_kind()
+  def context_kind(module) when is_atom(module) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :context_kind, 0) do
+      case module.context_kind() do
+        kind when kind in @context_kinds ->
+          kind
+
+        other ->
+          raise ArgumentError,
+                "#{inspect(module)}.context_kind/0 answered #{inspect(other)}; " <>
+                  "a provider's handler input is :context or :actor"
+      end
+    else
+      :context
+    end
+  end
+
+  @doc """
+  The scheme an advertised resource URI or URI template names: the text
+  before `://`, when there is some. The one reading of an advertised URI,
+  shared by the catalog's boot audit and the resource adapter's lookup.
+  """
+  @spec resource_scheme(term()) :: {:ok, String.t()} | :error
+  def resource_scheme(uri) when is_binary(uri) do
+    case String.split(uri, "://", parts: 2) do
+      [scheme, _rest] when scheme != "" -> {:ok, scheme}
+      _ -> :error
+    end
+  end
+
+  def resource_scheme(_uri), do: :error
 
   @doc """
   The canonical invalid-action refusal, derived from the tool's action

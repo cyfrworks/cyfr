@@ -107,7 +107,7 @@ defmodule Cyfr.Ops.VisibilityTest do
 
     test "sees every session action — the anonymous ones and `use`" do
       assert Enum.sort(visible_actions("session", ctx_with([:execute]))) ==
-               ~w(device_init device_poll login logout use whoami)
+               ~w(device_init device_poll login logout read_resource use whoami)
     end
 
     test "operator-only actions are shown to platform admins alone" do
@@ -309,7 +309,7 @@ defmodule Cyfr.Ops.VisibilityTest do
       expected =
         MapSet.new(~w(
           session.login session.logout session.whoami
-          session.device_init session.device_poll
+          session.device_init session.device_poll session.read_resource
           system.status
         ))
 

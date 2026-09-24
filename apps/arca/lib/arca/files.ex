@@ -1,14 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Files do
+defmodule Arca.Files do
   @moduledoc """
   The athanor's files as a person sees them: one tree whose folders are
   the console tier of the storage layout (`Arca.Storage.console_folders/0`),
   spoken in the console's names — `data/`, `components/`, `aqua/`,
   `notes/`, `threads/`. The server's own storage has no name here
   and is never listed; another athanor's tree is unreachable because the
-  athanor is the context's, never the path's.
+  athanor is the actor's, never the path's. Every operation takes the
+  `Cyfr.Actor` first and refuses one with no athanor as
+  `{:error, :missing_tenant}` before it reads or writes anything.
 
   What a folder allows is its tier:
 
@@ -18,11 +20,17 @@ defmodule Cyfr.Files do
       component version directory of the `local` publisher, the soul, a
       role or a scroll. Units are made and removed by their own verbs
       (scaffold, pull, fork, the AQUA page); a unit the server ships is
-      restored, never deleted. The storage layer stamps a write here for
-      the registry and the agent index, and their next read reflects it
-      (`Compendium.ProjectionReconciler`).
+      restored, never deleted. The storage layer stamps a write here with
+      a pending projection generation (`Arca.StorageProjectionChanges`),
+      so the component and agent indexes' next read reflects it or
+      answers unavailable.
     * `:read` (`notes/`, `threads/`) — listed, read and downloaded;
       written only by their own surfaces.
+
+  A write into a component's manifest must decode and pass the one
+  manifest validator (`Cyfr.Manifest.validate/2`, with this layer's
+  guest-path predicate), and a write under another publisher's component
+  is refused by the shared namespace rule (`Cyfr.ComponentNamespace`).
 
   Every operation answers the typed refusals `Cyfr.Refusal` names,
   so the `file` tool, the Files page and the download route speak one
@@ -30,8 +38,6 @@ defmodule Cyfr.Files do
   """
 
   require Logger
-
-  alias Sanctum.Context
 
   @max_inline_read 2_000_000
   @max_write 20_000_000
@@ -60,29 +66,35 @@ defmodule Cyfr.Files do
   by name; files carry their size. The empty path lists the folders
   themselves. `truncated` says the listing was cut at its ceiling.
   """
-  @spec list(Context.t(), String.t()) ::
+  @spec list(Cyfr.Actor.t(), String.t()) ::
           {:ok, %{path: String.t(), tier: tier() | nil, entries: [entry()], truncated: boolean()}}
           | {:error, term()}
-  def list(%Context{} = ctx, path) when is_binary(path) do
-    case split(path) do
-      [] ->
-        entries = for %{name: name} <- folders(), do: %{name: name, kind: :dir, size: nil}
-        {:ok, %{path: "", tier: nil, entries: entries, truncated: false}}
+  def list(%Cyfr.Actor{} = actor, path) when is_binary(path) do
+    with :ok <- tenant(actor) do
+      case split(path) do
+        [] ->
+          entries = for %{name: name} <- folders(), do: %{name: name, kind: :dir, size: nil}
+          {:ok, %{path: "", tier: nil, entries: entries, truncated: false}}
 
-      segments ->
-        with {:ok, physical, tier} <- resolve(segments),
-             {:ok, listed} <- list_typed(ctx, physical, path) do
-          {shown, truncated} = Enum.split(listed, @max_entries)
+        segments ->
+          list_folder(actor, path, segments)
+      end
+    end
+  end
 
-          entries =
-            shown
-            |> Enum.map(fn {name, kind} ->
-              %{name: name, kind: kind, size: size(ctx, physical, name, kind)}
-            end)
-            |> Enum.sort_by(&{&1.kind != :dir, &1.name})
+  defp list_folder(actor, path, segments) do
+    with {:ok, physical, tier} <- resolve(segments),
+         {:ok, listed} <- list_typed(actor, physical, path) do
+      {shown, truncated} = Enum.split(listed, @max_entries)
 
-          {:ok, %{path: join(segments), tier: tier, entries: entries, truncated: truncated != []}}
-        end
+      entries =
+        shown
+        |> Enum.map(fn {name, kind} ->
+          %{name: name, kind: kind, size: size(actor, physical, name, kind)}
+        end)
+        |> Enum.sort_by(&{&1.kind != :dir, &1.name})
+
+      {:ok, %{path: join(segments), tier: tier, entries: entries, truncated: truncated != []}}
     end
   end
 
@@ -91,13 +103,14 @@ defmodule Cyfr.Files do
   past `max_inline_read/0` is refused in words — the download route
   serves it whole.
   """
-  @spec read(Context.t(), String.t()) ::
+  @spec read(Cyfr.Actor.t(), String.t()) ::
           {:ok,
            %{path: String.t(), size: non_neg_integer(), content: String.t(), encoding: String.t()}}
           | {:error, term()}
-  def read(%Context{} = ctx, path) when is_binary(path) do
-    with {:ok, segments, physical, _tier} <- resolve_file(path),
-         {:ok, bytes} <- get(ctx, physical, path) do
+  def read(%Cyfr.Actor{} = actor, path) when is_binary(path) do
+    with :ok <- tenant(actor),
+         {:ok, segments, physical, _tier} <- resolve_file(path),
+         {:ok, bytes} <- get(actor, physical, path) do
       cond do
         byte_size(bytes) > @max_inline_read ->
           {:error,
@@ -124,9 +137,12 @@ defmodule Cyfr.Files do
   The physical segments the download route streams for a console path,
   with the folder's tier — a file in any shown folder.
   """
-  @spec locate(String.t()) :: {:ok, Arca.Storage.path(), tier()} | {:error, term()}
-  def locate(path) when is_binary(path) do
-    with {:ok, _segments, physical, tier} <- resolve_file(path), do: {:ok, physical, tier}
+  @spec locate(Cyfr.Actor.t(), String.t()) ::
+          {:ok, Arca.Storage.path(), tier()} | {:error, term()}
+  def locate(%Cyfr.Actor{} = actor, path) when is_binary(path) do
+    with :ok <- tenant(actor),
+         {:ok, _segments, physical, tier} <- resolve_file(path),
+         do: {:ok, physical, tier}
   end
 
   @doc """
@@ -135,16 +151,17 @@ defmodule Cyfr.Files do
   a read of the registry or the agent index after it observes it. A
   component's manifest must decode and validate as one.
   """
-  @spec write(Context.t(), String.t(), String.t(), String.t()) ::
+  @spec write(Cyfr.Actor.t(), String.t(), String.t(), String.t()) ::
           {:ok, %{written: String.t(), size: non_neg_integer()}} | {:error, term()}
-  def write(%Context{} = ctx, path, content, encoding \\ "utf8")
+  def write(%Cyfr.Actor{} = actor, path, content, encoding \\ "utf8")
       when is_binary(path) and is_binary(content) do
-    with {:ok, bytes} <- decode(content, encoding),
+    with :ok <- tenant(actor),
+         {:ok, bytes} <- decode(content, encoding),
          :ok <- check_write_size(bytes),
          {:ok, segments, physical, tier} <- resolve_file(path),
          :ok <- writable(tier, physical, segments),
          :ok <- valid_content(physical, bytes),
-         :ok <- put(ctx, physical, path, bytes) do
+         :ok <- put(actor, physical, path, bytes) do
       {:ok, %{written: join(segments), size: byte_size(bytes)}}
     end
   end
@@ -160,12 +177,17 @@ defmodule Cyfr.Files do
   conflict the caller may retry. The tier, size and content checks are
   `write/4`'s.
   """
-  @spec update(Context.t(), String.t(), (String.t() -> {:ok, String.t()} | {:error, term()})) ::
+  @spec update(
+          Cyfr.Actor.t(),
+          String.t(),
+          (String.t() -> {:ok, String.t()} | {:error, term()})
+        ) ::
           {:ok, %{written: String.t()}} | {:error, term()}
-  def update(%Context{} = ctx, path, fun) when is_binary(path) and is_function(fun, 1) do
-    with {:ok, segments, physical, tier} <- resolve_file(path),
+  def update(%Cyfr.Actor{} = actor, path, fun) when is_binary(path) and is_function(fun, 1) do
+    with :ok <- tenant(actor),
+         {:ok, segments, physical, tier} <- resolve_file(path),
          :ok <- writable(tier, physical, segments),
-         :ok <- serialized_update(ctx, physical, path, fun) do
+         :ok <- serialized_update(actor, physical, path, fun) do
       {:ok, %{written: join(segments)}}
     end
   end
@@ -175,14 +197,20 @@ defmodule Cyfr.Files do
   ships refuses; a shaped folder above its units refuses too — units go
   one at a time, by their own verbs.
   """
-  @spec delete(Context.t(), String.t()) :: {:ok, %{deleted: String.t()}} | {:error, term()}
-  def delete(%Context{} = ctx, path) when is_binary(path) do
-    with {:ok, segments, physical, tier} <- resolve_file(path),
+  @spec delete(Cyfr.Actor.t(), String.t()) :: {:ok, %{deleted: String.t()}} | {:error, term()}
+  def delete(%Cyfr.Actor{} = actor, path) when is_binary(path) do
+    with :ok <- tenant(actor),
+         {:ok, segments, physical, tier} <- resolve_file(path),
          :ok <- deletable(tier, physical, segments),
-         :ok <- remove(ctx, physical, path) do
+         :ok <- remove(actor, physical, path) do
       {:ok, %{deleted: join(segments)}}
     end
   end
+
+  # The tree is the actor's athanor's; with none resolved there is no tree
+  # to name, and nothing is read or written.
+  defp tenant(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok
+  defp tenant(%Cyfr.Actor{}), do: {:error, :missing_tenant}
 
   # ---- paths -----------------------------------------------------------------
 
@@ -264,9 +292,14 @@ defmodule Cyfr.Files do
   # A pulled component is fork-to-modify, never rewritten in place — the
   # same rule the guest boundary applies.
   defp local_unit(["components", _plural, publisher | _], segments) do
-    case Compendium.NamespacePolicy.require_local_guest_write(publisher) do
-      :ok -> :ok
-      {:error, message} -> {:error, {:invalid_argument, "'#{join(segments)}': #{message}"}}
+    case Cyfr.ComponentNamespace.require_local_guest_write(publisher) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         {:invalid_argument,
+          "'#{join(segments)}': #{Cyfr.ComponentNamespace.message(reason, publisher)}"}}
     end
   end
 
@@ -291,8 +324,8 @@ defmodule Cyfr.Files do
 
   # ---- storage ---------------------------------------------------------------
 
-  defp list_typed(ctx, physical, path) do
-    case Arca.list_typed(Sanctum.Context.actor(ctx), physical) do
+  defp list_typed(actor, physical, path) do
+    case Arca.list_typed(actor, physical) do
       {:ok, entries} -> {:ok, entries}
       {:error, :enotdir} -> {:error, {:invalid_argument, "'#{path}' is a file — read it"}}
       {:error, :not_found} -> {:ok, []}
@@ -300,31 +333,31 @@ defmodule Cyfr.Files do
     end
   end
 
-  defp size(_ctx, _physical, _name, :dir), do: nil
+  defp size(_actor, _physical, _name, :dir), do: nil
 
-  defp size(ctx, physical, name, :file) do
-    case Arca.usage(Sanctum.Context.actor(ctx), physical ++ [name]) do
+  defp size(actor, physical, name, :file) do
+    case Arca.usage(actor, physical ++ [name]) do
       {:ok, %{bytes: bytes}} -> bytes
       {:error, _} -> nil
     end
   end
 
-  defp get(ctx, physical, path) do
-    case Arca.get(Sanctum.Context.actor(ctx), physical) do
+  defp get(actor, physical, path) do
+    case Arca.get(actor, physical) do
       {:ok, bytes} -> {:ok, bytes}
       {:error, :not_found} -> {:error, {:not_found, "File", path}}
       {:error, reason} -> storage_error("read", path, reason)
     end
   end
 
-  defp put(ctx, physical, path, bytes) do
-    case Arca.put(Sanctum.Context.actor(ctx), physical, bytes) do
+  defp put(actor, physical, path, bytes) do
+    case Arca.put(actor, physical, bytes) do
       :ok -> :ok
       {:error, reason} -> write_error(path, reason)
     end
   end
 
-  defp serialized_update(ctx, physical, path, fun) do
+  defp serialized_update(actor, physical, path, fun) do
     rewrite = fn current ->
       with :ok <- text(current, path),
            {:ok, next} <- fun.(current),
@@ -334,7 +367,7 @@ defmodule Cyfr.Files do
       end
     end
 
-    case Arca.Overlay.update(Sanctum.Context.actor(ctx), physical, rewrite) do
+    case Arca.Overlay.update(actor, physical, rewrite) do
       :ok ->
         :ok
 
@@ -376,26 +409,26 @@ defmodule Cyfr.Files do
   end
 
   # A folder goes whole; a file goes alone; a missing path is not found.
-  defp remove(ctx, physical, path) do
-    case Arca.list_typed(Sanctum.Context.actor(ctx), physical) do
+  defp remove(actor, physical, path) do
+    case Arca.list_typed(actor, physical) do
       {:ok, [_ | _]} ->
-        delete_tree(ctx, physical, path)
+        delete_tree(actor, physical, path)
 
       {:ok, []} ->
-        if Arca.exists?(Sanctum.Context.actor(ctx), physical),
-          do: delete_tree(ctx, physical, path),
+        if Arca.exists?(actor, physical),
+          do: delete_tree(actor, physical, path),
           else: {:error, {:not_found, "File", path}}
 
       {:error, :enotdir} ->
-        delete_file(ctx, physical, path)
+        delete_file(actor, physical, path)
 
       {:error, reason} ->
         storage_error("delete", path, reason)
     end
   end
 
-  defp delete_file(ctx, physical, path) do
-    case Arca.delete(Sanctum.Context.actor(ctx), physical) do
+  defp delete_file(actor, physical, path) do
+    case Arca.delete(actor, physical) do
       :ok -> :ok
       {:error, :not_found} -> {:error, {:not_found, "File", path}}
       {:error, :bundled} -> {:error, {:invalid_argument, bundled_message(path)}}
@@ -403,8 +436,8 @@ defmodule Cyfr.Files do
     end
   end
 
-  defp delete_tree(ctx, physical, path) do
-    case Arca.delete_tree(Sanctum.Context.actor(ctx), physical) do
+  defp delete_tree(actor, physical, path) do
+    case Arca.delete_tree(actor, physical) do
       :ok ->
         :ok
 
@@ -427,7 +460,7 @@ defmodule Cyfr.Files do
     do: "The athanor's storage is at its limit (#{cap} bytes) — remove something first"
 
   defp storage_error(verb, path, reason) do
-    Logger.error("[Cyfr.Files] #{verb} #{path} failed: #{inspect(reason)}")
+    Logger.error("[Arca.Files] #{verb} #{path} failed: #{inspect(reason)}")
     {:error, {:unavailable, "Storage"}}
   end
 
@@ -471,17 +504,17 @@ defmodule Cyfr.Files do
 
   defp valid_manifest(bytes, name) do
     with {:ok, manifest} <- Cyfr.Manifest.decode_strict(bytes),
-         :ok <- Compendium.Manifest.validate(manifest) do
+         :ok <- Cyfr.Manifest.validate(manifest, &Arca.Storage.valid_guest_path?/1) do
       :ok
     else
       {:error, :malformed_manifest} ->
         {:error, {:invalid_argument, "#{name} is not a JSON object"}}
 
-      {:error, {_block, message}} when is_binary(message) ->
-        {:error, {:invalid_argument, "#{name}: #{message}"}}
+      {:error, {:invalid_manifest, [{_block, detail} | _]}} when is_binary(detail) ->
+        {:error, {:invalid_argument, "#{name}: #{detail}"}}
 
-      {:error, reason} ->
-        {:error, {:invalid_argument, "#{name}: #{inspect(reason)}"}}
+      {:error, {:invalid_manifest, [{block, detail} | _]}} ->
+        {:error, {:invalid_argument, "#{name}: #{inspect({block, detail})}"}}
     end
   end
 

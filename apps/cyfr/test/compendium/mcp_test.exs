@@ -158,7 +158,16 @@ defmodule Compendium.MCPTest do
     end
   end
 
-  describe "read/2" do
+  # A resource read is the declared `component.read_resource`, admitted by
+  # the gate like any other call.
+  defp read(ctx, uri),
+    do:
+      Cyfr.Ops.Catalog.call_external("component", ctx, %{
+        "action" => "read_resource",
+        "uri" => uri
+      })
+
+  describe "component.read_resource" do
     test "reads component metadata resource", %{ctx: ctx} do
       {:ok, _component} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
@@ -168,7 +177,7 @@ defmodule Compendium.MCPTest do
           description: "A test component for read"
         })
 
-      {:ok, result} = MCP.read(ctx, "compendium://components/r:local.read-test:1.0.0")
+      {:ok, result} = read(ctx, "compendium://components/r:local.read-test:1.0.0")
       assert result.mimeType == "application/json"
 
       content = Jason.decode!(result.content)
@@ -179,7 +188,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "returns error for non-existent component", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "compendium://components/r:local.nonexistent:1.0.0")
+      {:error, msg} = read(ctx, "compendium://components/r:local.nonexistent:1.0.0")
       assert err_msg(msg) =~ "not found"
     end
 
@@ -205,13 +214,14 @@ defmodule Compendium.MCPTest do
           authenticated: false
         )
 
-      assert {:error, msg} =
-               MCP.read(anon, "compendium://components/r:local.anon-read:1.0.0")
+      # Refused at the gate, before any tenant resolution or read.
+      assert {:error, {:tool_auth_required, "component"} = msg} =
+               read(anon, "compendium://components/r:local.anon-read:1.0.0")
 
-      assert err_msg(msg) =~ "Unauthorized: authentication required"
+      assert err_msg(msg) =~ "requires authentication"
 
-      assert {:error, _} =
-               MCP.read(anon, "compendium://assets/r:local.anon-read:1.0.0/README.md")
+      assert {:error, {:tool_auth_required, "component"}} =
+               read(anon, "compendium://assets/r:local.anon-read:1.0.0/README.md")
     end
 
     test "reads asset from component directory", %{ctx: ctx} do
@@ -233,13 +243,13 @@ defmodule Compendium.MCPTest do
       asset_content = ~s({"key": "value"})
       File.write!(Path.join(asset_dir, "config.json"), asset_content)
 
-      {:ok, result} = MCP.read(ctx, "compendium://assets/r:local.asset-test:1.0.0/config.json")
+      {:ok, result} = read(ctx, "compendium://assets/r:local.asset-test:1.0.0/config.json")
       assert result.mimeType == "application/octet-stream"
       assert Base.decode64!(result.content) == asset_content
     end
 
     test "returns error for non-existent asset", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "compendium://assets/r:local.nocomp:1.0.0/missing.txt")
+      {:error, msg} = read(ctx, "compendium://assets/r:local.nocomp:1.0.0/missing.txt")
       assert err_msg(msg) =~ "not found"
     end
 
@@ -259,19 +269,39 @@ defmodule Compendium.MCPTest do
             String.duplicate("a", 300)
           ] do
         assert {:error, msg} =
-                 MCP.read(ctx, "compendium://assets/r:local.asset-guard:1.0.0/#{hostile}")
+                 read(ctx, "compendium://assets/r:local.asset-guard:1.0.0/#{hostile}")
 
         assert err_msg(msg) =~ "Invalid asset path"
       end
 
       # A path of only empty segments refuses as empty, not as a read.
-      assert {:error, msg} = MCP.read(ctx, "compendium://assets/r:local.asset-guard:1.0.0///")
+      assert {:error, msg} = read(ctx, "compendium://assets/r:local.asset-guard:1.0.0///")
       assert err_msg(msg) =~ "Invalid asset path"
     end
 
     test "returns error for unknown resource", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "compendium://unknown")
-      assert err_msg(msg) =~ "Unknown resource"
+      {:error, {:invalid_argument, msg}} = read(ctx, "compendium://unknown")
+      assert msg =~ "Unknown resource"
+    end
+
+    test "requires :component_read, and a storage key does not have it", %{ctx: ctx} do
+      {:ok, _component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "perm-read",
+          version: "1.0.0",
+          type: "reagent"
+        })
+
+      uri = "compendium://components/r:local.perm-read:1.0.0"
+
+      key = fn permissions ->
+        %{ctx | auth_method: :api_key, permissions: MapSet.new(permissions)}
+      end
+
+      assert {:ok, _} = read(key.([:component_read]), uri)
+
+      assert {:error, {:missing_permission, :component_read}} =
+               read(key.([:storage_read]), uri)
     end
   end
 

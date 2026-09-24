@@ -196,7 +196,10 @@ defmodule Aqua.SeedContractTest do
 
     agents
     |> Enum.flat_map(fn agent ->
-      Compendium.Manifest.Caps.from_manifest(Compendium.AgentSource.manifest(agent, roster)).tools
+      agent
+      |> Compendium.AgentSource.manifest(roster)
+      |> Cyfr.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
+      |> Map.fetch!(:tools)
     end)
     |> Enum.uniq()
     |> Enum.reject(fn key -> key |> split() |> elem(0) |> Hands.hand?() end)

@@ -3,31 +3,28 @@
 
 defmodule Emissary.MCP.ResourceRegistry do
   @moduledoc """
-  Registry for MCP resource providers.
+  The MCP resource catalogue: a discovery cache derived from the operation
+  table, and the lookup that names which declared operation admits a read.
 
-  Discovers and aggregates resources from all configured providers.
-  Handles routing of `resources/read` calls to the appropriate provider.
-
-  ## Configuration
-
-  Resource providers derive from `config :cyfr, :tool_providers`: a
-  provider must export `read/2` and declare a non-empty resource surface.
-
-  Providers must implement the `Emissary.MCP.ResourceProvider` behaviour.
+  `resources/list` and `resources/templates/list` read the advertised
+  lists (`c:Cyfr.Ops.Provider.resources/0` and
+  `c:Cyfr.Ops.Provider.resource_templates/0` of every configured
+  provider). `resolve/1` maps a URI's scheme to the one operation that
+  declares it in `resource_schemes`, so `resources/read` becomes a call of
+  that operation through the catalog's gate
+  (`Cyfr.Ops.Catalog.call_external/4`) — this module reads nothing and
+  authorizes nothing. That every advertised scheme has exactly one owner
+  is `Cyfr.Ops.Catalog.audit_resource_schemes/1`'s boot check.
   """
 
   use GenServer
   require Logger
 
-  alias Emissary.MCP.ResourceProvider
-  alias Sanctum.Context
-
   # 24 hours
   @cache_ttl :timer.hours(24)
   # Refresh 1 hour before TTL expires to prevent cache misses
   @refresh_interval :timer.hours(23)
-  # Timeout for resource read calls (matches Cyfr.Ops.Catalog)
-  @resource_timeout_ms :timer.minutes(5)
+
   # ============================================================================
   # Public API
   # ============================================================================
@@ -59,50 +56,22 @@ defmodule Emissary.MCP.ResourceRegistry do
   end
 
   @doc """
-  Read a resource by URI.
-
-  Routes the request to the appropriate provider based on URI scheme.
+  The declared operation that admits a read of `uri`: `{:ok, tool, action}`,
+  or a typed argument refusal for a URI that names no scheme or a scheme
+  no operation declares.
   """
-  def read(%Context{} = ctx, uri) when is_binary(uri) do
-    case parse_uri_scheme(uri) do
+  @spec resolve(String.t()) ::
+          {:ok, String.t(), String.t()} | {:error, {:invalid_argument, String.t()}}
+  def resolve(uri) when is_binary(uri) do
+    case Cyfr.Ops.Provider.resource_scheme(uri) do
       {:ok, scheme} ->
-        case find_provider_for_scheme(scheme) do
-          {:ok, provider} ->
-            # `async_nolink`, not `Task.async`: the caller is the request process
-            # and does not trap exits, so a linked provider crash would kill the
-            # request instead of returning an error. Unlinked, it arrives here as
-            # `{:exit, reason}`.
-            logger_metadata = Cyfr.LoggerContext.capture()
-
-            task =
-              Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
-                Cyfr.LoggerContext.restore(logger_metadata)
-                provider.read(ctx, uri)
-              end)
-
-            case Task.yield(task, @resource_timeout_ms) ||
-                   Task.shutdown(task, :brutal_kill) do
-              {:ok, result} ->
-                result
-
-              {:exit, reason} ->
-                Logger.error("[ResourceRegistry] read crashed for #{uri}: #{inspect(reason)}")
-                {:error, "Resource read failed for #{uri}"}
-
-              nil ->
-                Logger.error(
-                  "[ResourceRegistry] read timed out after #{@resource_timeout_ms}ms for #{uri}"
-                )
-
-                {:error, "Resource read timed out after #{@resource_timeout_ms}ms"}
-            end
-
-          {:error, :not_found} ->
-            {:error, "No provider found for scheme: #{scheme}"}
+        case Arca.Cache.get({:mcp_resource_scheme, scheme}) do
+          {:ok, {tool, action}} -> {:ok, tool, action}
+          :miss -> {:error, {:invalid_argument, "No provider found for scheme: #{scheme}"}}
         end
 
-      {:error, reason} ->
-        {:error, reason}
+      :error ->
+        {:error, {:invalid_argument, "Invalid URI format: #{uri}"}}
     end
   end
 
@@ -112,12 +81,10 @@ defmodule Emissary.MCP.ResourceRegistry do
 
   @impl true
   def init(_opts) do
-    # Derived from the ONE roster (`:tool_providers`): the providers that
-    # actually serve resources are the configured tool providers exporting
-    # `read/2` with a non-empty resource surface. The separate
-    # `:resource_providers` key was set by nothing anywhere and fell back
-    # to a second, shorter hardcoded list.
-    providers = resource_providers()
+    # Derived from the ONE roster (`:tool_providers`): every loadable
+    # configured provider, whose advertised resources and declared
+    # resource operations are the catalogue.
+    providers = Cyfr.Ops.Catalog.available_providers()
     # Watched before the catalogue is written, for the reason `handle_info
     # (:rebuild_cache, …)` gives: an owner lost mid-load must leave a
     # `:DOWN` in the mailbox, not a live monitor over a half-written table.
@@ -206,86 +173,45 @@ defmodule Emissary.MCP.ResourceRegistry do
     Process.send_after(self(), :refresh_cache, @refresh_interval)
   end
 
-  defp resource_providers do
-    Cyfr.Ops.Catalog.available_providers()
-    |> Enum.filter(fn provider ->
-      function_exported?(provider, :read, 2) and
-        (non_empty?(provider, :resources) or non_empty?(provider, :resource_templates))
-    end)
-  end
-
-  defp non_empty?(provider, fun) do
-    function_exported?(provider, fun, 0) and provider |> apply(fun, []) |> Enum.any?()
-  end
-
+  # The advertised lists per provider, and the scheme index the operation
+  # table declares. A provider whose declarations cannot be read is
+  # skipped with a warning rather than taking the catalogue down; the
+  # catalog's boot audit is where a broken declaration refuses.
   defp register_providers(providers) do
     for provider <- providers do
-      if ResourceProvider.implements?(provider) do
-        try do
-          resources = provider.resources()
-          Arca.Cache.put({:mcp_resource, provider}, resources, @cache_ttl)
+      try do
+        resources = advertised(provider, :resources)
+        Arca.Cache.put({:mcp_resource, provider}, resources, @cache_ttl)
 
-          Logger.debug(
-            "[ResourceRegistry] Registered #{length(resources)} resources from #{provider}"
+        templates = advertised(provider, :resource_templates)
+        Arca.Cache.put({:mcp_resource_template, provider}, templates, @cache_ttl)
+
+        for tool <- provider.tools(),
+            %Cyfr.Ops.Operation{} = operation <- Map.get(tool, :operations, []),
+            scheme <- operation.resource_schemes do
+          Arca.Cache.put(
+            {:mcp_resource_scheme, scheme},
+            {operation.tool, operation.action},
+            @cache_ttl
           )
-
-          # Also cache resource templates if the provider implements them
-          if function_exported?(provider, :resource_templates, 0) do
-            templates = provider.resource_templates()
-            Arca.Cache.put({:mcp_resource_template, provider}, templates, @cache_ttl)
-
-            Logger.debug(
-              "[ResourceRegistry] Registered #{length(templates)} resource templates from #{provider}"
-            )
-          end
-        rescue
-          e ->
-            Logger.warning(
-              "[ResourceRegistry] Failed to load resources from #{provider}: #{inspect(e)}"
-            )
         end
+
+        Logger.debug(
+          "[ResourceRegistry] Registered #{length(resources)} resources and " <>
+            "#{length(templates)} resource templates from #{inspect(provider)}"
+        )
+      rescue
+        e ->
+          Logger.warning(
+            "[ResourceRegistry] Failed to load resources from #{inspect(provider)}: " <>
+              inspect(e)
+          )
       end
     end
   end
 
-  defp find_provider_for_scheme(scheme) do
-    # Check concrete resources first
-    result =
-      Arca.Cache.match({:mcp_resource, :_})
-      |> Enum.find(fn {_key, resources} ->
-        Enum.any?(resources, fn r ->
-          uri = Map.get(r, :uri) || Map.get(r, "uri") || ""
-          String.starts_with?(uri, "#{scheme}://")
-        end)
-      end)
-
-    case result do
-      {{:mcp_resource, provider}, _resources} ->
-        {:ok, provider}
-
-      nil ->
-        # Fall back to template cache (templates still need routing for resources/read)
-        template_result =
-          Arca.Cache.match({:mcp_resource_template, :_})
-          |> Enum.find(fn {_key, templates} ->
-            Enum.any?(templates, fn t ->
-              uri = Map.get(t, :uriTemplate) || Map.get(t, "uriTemplate") || ""
-              String.starts_with?(uri, "#{scheme}://")
-            end)
-          end)
-
-        case template_result do
-          {{:mcp_resource_template, provider}, _templates} -> {:ok, provider}
-          nil -> {:error, :not_found}
-        end
-    end
-  end
-
-  defp parse_uri_scheme(uri) do
-    case String.split(uri, "://", parts: 2) do
-      [scheme, _rest] when byte_size(scheme) > 0 -> {:ok, scheme}
-      _ -> {:error, "Invalid URI format: #{uri}"}
-    end
+  defp advertised(provider, fun) do
+    if function_exported?(provider, fun, 0), do: apply(provider, fun, []), else: []
   end
 
   defp format_resource(resource) do

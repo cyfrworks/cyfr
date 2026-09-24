@@ -8,8 +8,23 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   Provides:
   - `system` tool: Health checks (`status`) and webhook notifications (`notify`)
   - `tools` tool: Tool discovery (`list`) — returns all registered tools and schemas
+  - `resource` tool: `read` admits an MCP `resources/read` of an
+    `arca://files/{path}` URI, the resource template this provider
+    advertises
 
   This provider stays in Emissary because it needs cross-service visibility.
+
+  ## The files resource
+
+  `resource.read` requires `:storage_read`, and the gate decides it with
+  the caller's context like any other operation. The handler then chooses
+  which roots the caller reads — every tenant root
+  (`Arca.Storage.tenant_roots/0`) for a caller holding `:admin` (a
+  person's session holds every permission), only `threads/` and `data/`
+  (`Arca.Storage.key_read_roots/0`) for a narrower key — and hands the
+  projected actor, the URI and those roots to
+  `Arca.Providers.Records.read/3`. The roots come from the admitted
+  context and nothing the caller sends.
   """
 
   @behaviour Cyfr.Ops.Provider
@@ -98,7 +113,49 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         description:
           "Discover available MCP tools and their schemas. Optionally pass a component_ref to see the filtered view for that component (formulas see their in-chain plane).",
         title: "Tools"
+      ),
+      Operation.tool(
+        [
+          Operation.new(
+            "resource",
+            "read",
+            "Read an arca://files/{path} resource",
+            [
+              Arg.new("uri", :string,
+                required: true,
+                description: "The resource URI, like arca://files/data/reports/q3.csv"
+              )
+            ],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read,
+            recovery: :replay_safe,
+            resource_schemes: ["arca"]
+          )
+        ],
+        description:
+          "Read a file of the athanor's storage by its arca://files/{path} resource URI",
+        title: "Resources"
       )
+    ]
+  end
+
+  @impl true
+  def resources, do: []
+
+  @impl true
+  def resource_templates do
+    [
+      %{
+        uriTemplate: "arca://files/{path}",
+        name: "Arca Files",
+        description:
+          "Read a file in the athanor's storage by path. A person reads every root (" <>
+            Enum.map_join(Arca.Storage.tenant_roots(), ", ", &(&1 <> "/")) <>
+            "); a key scoped to :storage_read reaches " <>
+            Enum.map_join(Arca.Storage.key_read_roots(), " and ", &(&1 <> "/")),
+        mimeType: Cyfr.MediaType.binary()
+      }
     ]
   end
 
@@ -148,6 +205,24 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   def handle("tools", _ctx, _args) do
     {:error, "Missing required parameter: action"}
+  end
+
+  def handle("resource", %Context{} = ctx, %{"action" => "read", "uri" => uri})
+      when is_binary(uri) do
+    roots =
+      if Context.has_permission?(ctx, :admin),
+        do: Arca.Storage.tenant_roots(),
+        else: Arca.Storage.key_read_roots()
+
+    Arca.Providers.Records.read(Context.actor(ctx), uri, roots)
+  end
+
+  def handle("resource", _ctx, %{"action" => "read"}) do
+    {:error, {:invalid_argument, "Missing required argument: uri"}}
+  end
+
+  def handle("resource", _ctx, %{"action" => action}) do
+    {:error, {:unknown_action, "resource.#{action}"}}
   end
 
   def handle(tool, _ctx, _args) do

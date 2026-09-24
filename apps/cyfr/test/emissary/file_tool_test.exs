@@ -1,17 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.FileToolTest do
+defmodule Arca.Providers.FilesTest do
   @moduledoc """
-  The `file` tool is `Cyfr.Files` on the wire: the same folders, the same
+  The `file` tool is `Arca.Files` on the wire: the same folders, the same
   refusals, reads behind `storage_read` and changes behind
-  `storage_write`, external-plane only.
+  `storage_write`, external-plane only, and a handler given the caller's
+  actor alone.
   """
 
   use ExUnit.Case, async: false
 
   alias Cyfr.Ops.Catalog
-  alias Emissary.MCP.FileTool, as: Tool
+  alias Arca.Providers.Files, as: Tool
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -95,16 +96,36 @@ defmodule Emissary.MCP.FileToolTest do
   end
 
   test "a missing argument and an unknown action answer in words", %{ctx: ctx} do
+    actor = Sanctum.Context.actor(ctx)
+
     assert {:error, {:invalid_argument, "Missing required argument: path"}} =
-             Tool.handle("file", ctx, %{"action" => "read"})
+             Tool.handle("file", actor, %{"action" => "read"})
 
     assert {:error, {:invalid_argument, "write needs path and content"}} =
-             Tool.handle("file", ctx, %{"action" => "write", "path" => "data/x"})
+             Tool.handle("file", actor, %{"action" => "write", "path" => "data/x"})
 
     assert {:error, {:unknown_action, "file.move"}} =
-             Tool.handle("file", ctx, %{"action" => "move"})
+             Tool.handle("file", actor, %{"action" => "move"})
 
-    assert {:error, :action_missing} = Tool.handle("file", ctx, %{})
+    assert {:error, :action_missing} = Tool.handle("file", actor, %{})
+  end
+
+  test "the handler is declared for the actor, and a context is not one", %{ctx: ctx} do
+    assert Tool.context_kind() == :actor
+    assert Cyfr.Ops.Provider.context_kind(Tool) == :actor
+    assert Tool.service() == "files"
+
+    assert_raise FunctionClauseError, fn ->
+      Tool.handle("file", ctx, %{"action" => "list"})
+    end
+  end
+
+  test "an actor with no athanor is refused at the door", %{ctx: ctx} do
+    tenantless = %{Sanctum.Context.actor(ctx) | athanor_id: nil}
+    assert {:error, :missing_tenant} = Tool.handle("file", tenantless, %{"action" => "list"})
+
+    assert {:error, :missing_tenant} =
+             Tool.handle("file", tenantless, %{"action" => "read", "path" => "data/x"})
   end
 
   test "a key with storage_read reads and cannot write", %{ctx: ctx} do

@@ -203,9 +203,42 @@ defmodule Emissary.MCP.RouterTest do
       }
 
       assert {:error, :resource_not_found, message} = Router.dispatch(ctx, msg)
-      # A handler's crafted string diagnosis passes through; an internal
-      # term would have been masked.
-      assert message =~ "No provider found"
+      # The typed argument refusal renders through its vocabulary.
+      assert message =~ "No provider found for scheme: unknown"
+    end
+
+    test "returns error for a URI with no scheme", %{context: ctx} do
+      msg = %Message{
+        type: :request,
+        id: 8,
+        method: "resources/read",
+        params: %{"uri" => "invalid-uri-no-scheme"}
+      }
+
+      assert {:error, :resource_not_found, message} = Router.dispatch(ctx, msg)
+      assert message =~ "Invalid URI format"
+    end
+
+    test "a declared read answers its content in the MCP shape", %{context: ctx} do
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "router.txt"], "bytes")
+
+      msg = %Message{
+        type: :request,
+        id: 8,
+        method: "resources/read",
+        params: %{"uri" => "arca://files/data/router.txt"}
+      }
+
+      assert {:ok, %{"contents" => [entry], "cacheScope" => "private"}} =
+               Router.dispatch(ctx, msg)
+
+      assert entry["uri"] == "arca://files/data/router.txt"
+      assert entry["mimeType"] == Cyfr.MediaType.binary()
+      assert Base.decode64!(entry["blob"]) == "bytes"
+
+      msg = %{msg | params: %{"uri" => "sanctum://identity"}}
+      assert {:ok, %{"contents" => [%{"text" => text}]}} = Router.dispatch(ctx, msg)
+      assert Jason.decode!(text)["user_id"] == ctx.user_id
     end
 
     # Reject missing or non-string resource URIs as invalid_params.

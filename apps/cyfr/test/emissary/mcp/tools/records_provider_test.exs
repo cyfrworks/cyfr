@@ -1,11 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.Tools.RecordsProviderTest do
+defmodule Arca.Providers.RecordsTest do
+  @moduledoc """
+  The record tools (`Arca.Providers.Records`), handed the caller's actor
+  alone; its files-resource reader, given the roots the admitted caller
+  may read; and the `retention` tool, which `Cyfr.Retention` serves with
+  the caller's context until the storage layer owns retention.
+  """
+
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
-  alias Emissary.MCP.Tools.RecordsProvider, as: MCP
+  alias Arca.Providers.Records, as: MCP
+  alias Cyfr.Retention
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -32,20 +40,17 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns retention and record tools" do
+    test "returns the three record tools; retention is its own provider's" do
       tools = MCP.tools()
-      assert length(tools) == 4
+      assert Enum.map(tools, & &1.name) == ["record", "mcp_log", "policy_log"]
 
-      tool_names = Enum.map(tools, & &1.name)
-      assert "retention" in tool_names
-      assert "record" in tool_names
-      assert "mcp_log" in tool_names
-      assert "policy_log" in tool_names
+      assert [%{name: "retention"}] = Retention.tools()
+      assert Retention.service() == "arca"
+      assert MCP.service() == "arca"
     end
 
     test "retention tool has 3 actions" do
-      tools = MCP.tools()
-      tool = Enum.find(tools, &(&1.name == "retention"))
+      tool = Enum.find(Retention.tools(), &(&1.name == "retention"))
       actions = tool.input_schema["properties"]["action"]["enum"]
       assert actions == ["get", "set", "cleanup"]
     end
@@ -58,7 +63,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "each tool has required schema fields" do
-      for tool <- MCP.tools() do
+      for tool <- MCP.tools() ++ Retention.tools() do
         assert is_binary(tool.name)
         assert is_binary(tool.title)
         assert is_binary(tool.description)
@@ -67,78 +72,118 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
         assert "action" in tool.input_schema["required"]
       end
     end
-  end
 
-  # ============================================================================
-  # Resources
-  # ============================================================================
-
-  describe "resources/0" do
-    test "returns no concrete resources" do
-      resources = MCP.resources()
-      assert resources == []
+    test "the record tools take the actor; retention takes the context" do
+      assert Cyfr.Ops.Provider.context_kind(MCP) == :actor
+      assert Cyfr.Ops.Provider.context_kind(Retention) == :context
     end
   end
 
-  describe "resource_templates/0" do
-    test "returns files resource template" do
-      templates = MCP.resource_templates()
-      assert length(templates) == 1
+  # ============================================================================
+  # The files resource
+  # ============================================================================
 
-      template = hd(templates)
-      assert template.uriTemplate == "arca://files/{path}"
-    end
+  describe "the arca://files/{path} template" do
+    test "is advertised by the system provider that declares its read" do
+      refute function_exported?(MCP, :resource_templates, 0)
+      templates = Emissary.MCP.Tools.SystemProvider.resource_templates()
+      assert [%{uriTemplate: "arca://files/{path}"} = template] = templates
 
-    test "the description names exactly the tenant roster" do
-      # Rendered from Arca.Storage.tenant_roots/0, so the advertised
-      # vocabulary can never drift from the layout table.
-      %{description: description} = hd(MCP.resource_templates())
-
-      for root <- Arca.Storage.tenant_roots() do
-        assert description =~ root <> "/"
+      # Rendered from the layout table, so the advertised vocabulary can
+      # never drift from it.
+      for root <- Arca.Storage.tenant_roots() ++ Arca.Storage.key_read_roots() do
+        assert template.description =~ root <> "/"
       end
     end
+
+    test "the key roots are tenant roots" do
+      assert Arca.Storage.key_read_roots() == ["threads", "data"]
+      assert Arca.Storage.key_read_roots() -- Arca.Storage.tenant_roots() == []
+    end
   end
 
-  describe "read/2" do
+  describe "read/3" do
     test "reads file resource", %{ctx: ctx} do
-      # Create a test file using Arca API
-      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "test.txt"], "hello world")
+      :ok = Arca.put(actor(ctx), ["data", "test.txt"], "hello world")
 
-      {:ok, result} = MCP.read(ctx, "arca://files/data/test.txt")
+      {:ok, result} = MCP.read(actor(ctx), "arca://files/data/test.txt", all_roots())
       assert result.mimeType == "application/octet-stream"
       assert Base.decode64!(result.content) == "hello world"
     end
 
     test "returns error for missing file", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "arca://files/data/missing.txt")
+      {:error, msg} = MCP.read(actor(ctx), "arca://files/data/missing.txt", all_roots())
       assert err_msg(msg) =~ "not found"
     end
 
-    test "returns error for unknown resource", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "arca://unknown/path")
-      assert err_msg(msg) =~ "Unknown resource"
+    test "an unknown resource is a typed argument refusal", %{ctx: ctx} do
+      assert {:error, {:invalid_argument, msg}} =
+               MCP.read(actor(ctx), "arca://unknown/path", all_roots())
+
+      assert msg =~ "Unknown resource"
     end
 
     # The path is caller input — the boundary answers, it never raises.
     test "a traversal path answers a typed error, never raises", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "arca://files/data/../aqua/agent.json")
+      {:error, msg} = MCP.read(actor(ctx), "arca://files/data/../aqua/agent.json", all_roots())
       assert err_msg(msg) =~ "Invalid path"
     end
 
     test "an unknown root answers a typed error", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "arca://files/nope/x")
+      {:error, msg} = MCP.read(actor(ctx), "arca://files/nope/x", all_roots())
       assert err_msg(msg) =~ "Forbidden path"
     end
 
-    test "a platform context without an athanor answers a typed error, never raises" do
-      ctx = Sanctum.Context.internal()
+    test "an actor with no athanor is refused before any blob is read", %{ctx: ctx} do
+      :ok = Arca.put(actor(ctx), ["data", "x"], "bytes")
 
-      assert {:error, :missing_tenant} = MCP.read(ctx, "arca://files/data/x")
+      for tenantless <- [
+            Sanctum.Context.actor(Sanctum.Context.internal()),
+            %{actor(ctx) | athanor_id: nil},
+            %{actor(ctx) | athanor_id: ""}
+          ] do
+        assert {:error, :missing_tenant} =
+                 MCP.read(tenantless, "arca://files/data/x", all_roots())
+      end
     end
 
-    # A person reads the athanor's whole tree; a key scoped to storage reads
-    # sees what an agent could have written or a thread attached.
+    test "the roots it is given are the reach, intersected with the tenant roots", %{ctx: ctx} do
+      :ok = Arca.put(actor(ctx), ["data", "reach.txt"], "g")
+      :ok = Arca.put(actor(ctx), ["threads", "thread_r", "reach.bin"], "t")
+      :ok = Arca.put(actor(ctx), ["aqua", "reach.md"], "a")
+
+      key_roots = Arca.Storage.key_read_roots()
+      assert {:ok, _} = MCP.read(actor(ctx), "arca://files/data/reach.txt", key_roots)
+      assert {:ok, _} = MCP.read(actor(ctx), "arca://files/threads/thread_r/reach.bin", key_roots)
+
+      # A root outside the list, a traversal out of a listed root and the
+      # empty path refuse before any read.
+      for uri <- [
+            "arca://files/aqua/reach.md",
+            "arca://files/data/../aqua/reach.md",
+            "arca://files/data/../threads/thread_r/reach.bin",
+            "arca://files/",
+            "arca://files///"
+          ] do
+        assert {:error, {:invalid_argument, msg}} = MCP.read(actor(ctx), uri, key_roots)
+        assert msg =~ "Forbidden path" or msg =~ "Invalid path", "#{uri}: #{msg}"
+      end
+
+      assert {:error, {:invalid_argument, "Forbidden path: aqua"}} =
+               MCP.read(actor(ctx), "arca://files/aqua/reach.md", key_roots)
+
+      # A root the layout does not know is no reach, whoever names it.
+      assert {:error, {:invalid_argument, "Forbidden path: cache"}} =
+               MCP.read(actor(ctx), "arca://files/cache/x", ["cache" | all_roots()])
+
+      assert {:ok, _} = MCP.read(actor(ctx), "arca://files/aqua/reach.md", all_roots())
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.read(actor(ctx), "arca://files/aqua/reach.md", [])
+    end
+  end
+
+  describe "record.payload" do
     # A completed execution's result is a payload a member reads by the
     # execution's id; another estate reads nothing.
     test "record.payload answers a retained result to a member of the athanor", %{ctx: ctx} do
@@ -167,15 +212,19 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
         )
 
       assert {:ok, %{execution_id: ^exec, kind: "result", bytes: 13, content: content}} =
-               MCP.handle("record", ctx, %{"action" => "payload", "id" => exec})
+               MCP.handle("record", actor(ctx), %{"action" => "payload", "id" => exec})
 
       assert Base.decode64!(content) == ~s({"answer":42})
 
       assert {:error, {:not_found, "Payload", _}} =
-               MCP.handle("record", ctx, %{"action" => "payload", "id" => exec, "kind" => "input"})
+               MCP.handle("record", actor(ctx), %{
+                 "action" => "payload",
+                 "id" => exec,
+                 "kind" => "input"
+               })
 
       assert {:error, {:not_found, "Payload", _}} =
-               MCP.handle("record", %{ctx | athanor_id: "ath_elsewhere"}, %{
+               MCP.handle("record", actor(%{ctx | athanor_id: "ath_elsewhere"}), %{
                  "action" => "payload",
                  "id" => exec
                })
@@ -218,50 +267,28 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
         "attempt" => "att_1"
       }
 
-      assert {:ok, %{content: content}} = MCP.handle("record", guest, stamped)
+      assert {:ok, %{content: content}} = MCP.handle("record", actor(guest), stamped)
       assert Base.decode64!(content) == ~s({"given":1})
 
       # Another execution's payload, a stale attempt, or no attempt at all.
       assert {:error, {:invalid_argument, _}} =
-               MCP.handle("record", guest, %{stamped | "parent_execution_id" => "exec_other"})
+               MCP.handle("record", actor(guest), %{
+                 stamped
+                 | "parent_execution_id" => "exec_other"
+               })
 
       assert {:error, {:invalid_argument, _}} =
-               MCP.handle("record", guest, %{stamped | "attempt" => "att_0"})
+               MCP.handle("record", actor(guest), %{stamped | "attempt" => "att_0"})
 
       assert {:error, {:invalid_argument, _}} =
-               MCP.handle("record", guest, Map.delete(stamped, "attempt"))
+               MCP.handle("record", actor(guest), Map.delete(stamped, "attempt"))
 
       # A member names an attempt outright, and reads that attempt's.
       member = %{"action" => "payload", "id" => exec, "kind" => "input", "attempt" => "att_1"}
-      assert {:ok, _} = MCP.handle("record", ctx, member)
+      assert {:ok, _} = MCP.handle("record", actor(ctx), member)
 
       assert {:error, {:not_found, "Payload", _}} =
-               MCP.handle("record", ctx, %{member | "attempt" => "att_0"})
-    end
-
-    test "a key scoped to storage reads reaches data/ and threads/, a person everything",
-         %{ctx: ctx} do
-      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "reach.txt"], "g")
-      :ok = Arca.put(Sanctum.Context.actor(ctx), ["threads", "thread_r", "reach.bin"], "t")
-      :ok = Arca.put(Sanctum.Context.actor(ctx), ["aqua", "reach.md"], "a")
-
-      key = %{ctx | permissions: MapSet.new([:storage_read]), auth_method: :api_key}
-
-      assert {:ok, _} = MCP.read(key, "arca://files/data/reach.txt")
-      assert {:ok, _} = MCP.read(key, "arca://files/threads/thread_r/reach.bin")
-      assert {:error, msg} = MCP.read(key, "arca://files/aqua/reach.md")
-      assert err_msg(msg) =~ "Forbidden path"
-
-      assert {:ok, _} = MCP.read(ctx, "arca://files/aqua/reach.md")
-
-      # The retired name for threads/ (spelled split for the vocabulary
-      # gate) reaches nothing, for a key or a person.
-      retired = "arca://files/" <> "conver" <> "sations/thread_r/reach.bin"
-
-      for reader <- [key, ctx] do
-        assert {:error, msg} = MCP.read(reader, retired)
-        assert err_msg(msg) =~ "Forbidden path"
-      end
+               MCP.handle("record", actor(ctx), %{member | "attempt" => "att_0"})
     end
   end
 
@@ -272,7 +299,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "retention get action" do
     test "get returns default settings", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "get"
         })
 
@@ -286,7 +313,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "retention set action" do
     test "set updates settings", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "set",
           "settings" => %{"executions" => 5, "builds" => 3}
         })
@@ -297,7 +324,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
       # Verify persisted
       {:ok, get_result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "get"
         })
 
@@ -308,7 +335,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "retention cleanup action" do
     test "cleanup runs with dry_run", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => true
@@ -323,7 +350,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
       # A kind added to Cyfr.Retention.kinds/0 must be on this surface the
       # moment it exists — the enum fell two kinds behind once.
       retention =
-        Emissary.MCP.Tools.RecordsProvider.tools()
+        Retention.tools()
         |> Enum.find(&(&1.name == "retention"))
 
       roster = Enum.map(Cyfr.Retention.kinds(), & &1.key())
@@ -338,7 +365,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     test "every kind is cleanable through the tool", %{ctx: ctx} do
       for kind <- Cyfr.Retention.kinds() do
         assert {:ok, %{deleted: n}} =
-                 MCP.handle("retention", ctx, %{
+                 Retention.handle("retention", ctx, %{
                    "action" => "cleanup",
                    "cleanup_type" => kind.key()
                  })
@@ -349,7 +376,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "cleanup runs for executions", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions"
         })
@@ -360,7 +387,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "returns error for invalid action", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("retention", ctx, %{"action" => "invalid"})
+      {:error, msg} = Retention.handle("retention", ctx, %{"action" => "invalid"})
       assert err_msg(msg) =~ "Invalid retention action"
     end
   end
@@ -387,7 +414,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
         })
 
       {:ok, result} =
-        MCP.handle("record", ctx, %{
+        MCP.handle("record", actor(ctx), %{
           "action" => "get",
           "id" => exec_id
         })
@@ -398,7 +425,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "returns error for nonexistent execution", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("record", ctx, %{
+        MCP.handle("record", actor(ctx), %{
           "action" => "get",
           "id" => "nonexistent_id"
         })
@@ -407,14 +434,14 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "returns error without id", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("record", ctx, %{"action" => "get"})
+      {:error, msg} = MCP.handle("record", actor(ctx), %{"action" => "get"})
       assert err_msg(msg) =~ "Missing required"
     end
   end
 
   describe "record.list action" do
     test "returns empty list when no executions", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("record", ctx, %{"action" => "list"})
+      {:ok, result} = MCP.handle("record", actor(ctx), %{"action" => "list"})
       assert is_list(result.executions)
     end
 
@@ -435,7 +462,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
         })
 
       {:ok, result} =
-        MCP.handle("record", ctx, %{
+        MCP.handle("record", actor(ctx), %{
           "action" => "list"
         })
 
@@ -444,7 +471,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("record", ctx, %{"action" => "invalid"})
+      {:error, msg} = MCP.handle("record", actor(ctx), %{"action" => "invalid"})
       assert err_msg(msg) =~ "Invalid record action"
     end
   end
@@ -454,9 +481,11 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   # ============================================================================
 
   describe "error handling" do
-    test "returns error for unknown tool", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("unknown_tool", ctx, %{})
-      assert err_msg(msg) =~ "Unknown tool"
+    test "returns a typed not-found for an unknown tool", %{ctx: ctx} do
+      assert {:error, {:not_found, "tool", "unknown_tool"} = msg} =
+               MCP.handle("unknown_tool", actor(ctx), %{})
+
+      assert err_msg(msg) == "tool not found: unknown_tool"
     end
   end
 
@@ -485,7 +514,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "can get retention settings", %{app_ctx: app_ctx} do
-      {:ok, result} = MCP.handle("retention", app_ctx, %{"action" => "get"})
+      {:ok, result} = Retention.handle("retention", app_ctx, %{"action" => "get"})
       assert is_map(result.settings)
     end
 
@@ -525,7 +554,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "can set retention settings", %{oidc_ctx: oidc_ctx} do
       {:ok, result} =
-        MCP.handle("retention", oidc_ctx, %{
+        Retention.handle("retention", oidc_ctx, %{
           "action" => "set",
           "settings" => %{"executions" => 5}
         })
@@ -535,7 +564,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "can run cleanup", %{oidc_ctx: oidc_ctx} do
       {:ok, result} =
-        MCP.handle("retention", oidc_ctx, %{
+        Retention.handle("retention", oidc_ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => true
@@ -604,7 +633,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
         )
 
       {:error, msg} =
-        MCP.handle("record", ctx_b, %{
+        MCP.handle("record", actor(ctx_b), %{
           "action" => "get",
           "id" => exec_id
         })
@@ -613,7 +642,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
       # Original tenant can still get it
       {:ok, result} =
-        MCP.handle("record", ctx_a, %{
+        MCP.handle("record", actor(ctx_a), %{
           "action" => "get",
           "id" => exec_id
         })
@@ -642,7 +671,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
       # A fellow member of the same tenant can read it (members interchangeable).
       assert {:ok, _result} =
-               MCP.handle("record", non_admin_ctx, %{
+               MCP.handle("record", actor(non_admin_ctx), %{
                  "action" => "get",
                  "id" => exec_id
                })
@@ -656,7 +685,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   describe "retention edge cases" do
     test "cleanup with unknown type returns error", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "unknown_type"
         })
@@ -666,7 +695,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "defaults cleanup_type to executions", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "cleanup",
           "dry_run" => true
         })
@@ -676,7 +705,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "cleanup with builds type works", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "builds",
           "dry_run" => true
@@ -687,7 +716,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "cleanup returns integer count when not dry_run", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => false
@@ -762,18 +791,17 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
   # ============================================================================
 
   describe "resource read error paths" do
-    test "handles get error other than not_found", %{ctx: ctx} do
-      # read/2 with valid file
-      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "resource_test.txt"], "content")
+    test "reads a file whole", %{ctx: ctx} do
+      :ok = Arca.put(actor(ctx), ["data", "resource_test.txt"], "content")
 
-      {:ok, result} = MCP.read(ctx, "arca://files/data/resource_test.txt")
+      {:ok, result} = MCP.read(actor(ctx), "arca://files/data/resource_test.txt", all_roots())
       assert Base.decode64!(result.content) == "content"
     end
 
     test "handles nested path in resource URI", %{ctx: ctx} do
-      :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "nested", "file.txt"], "nested content")
+      :ok = Arca.put(actor(ctx), ["data", "nested", "file.txt"], "nested content")
 
-      {:ok, result} = MCP.read(ctx, "arca://files/data/nested/file.txt")
+      {:ok, result} = MCP.read(actor(ctx), "arca://files/data/nested/file.txt", all_roots())
       assert Base.decode64!(result.content) == "nested content"
     end
   end
@@ -811,10 +839,13 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
 
     test "correlate succeeds for a :storage_read context", %{ctx: ctx} do
       assert {:ok, %{request_id: "req_none"}} =
-               MCP.handle("mcp_log", ctx, %{"action" => "correlate", "request_id" => "req_none"})
+               MCP.handle("mcp_log", actor(ctx), %{
+                 "action" => "correlate",
+                 "request_id" => "req_none"
+               })
 
       assert {:ok, %{request_id: "req_none"}} =
-               MCP.handle("policy_log", ctx, %{
+               MCP.handle("policy_log", actor(ctx), %{
                  "action" => "correlate",
                  "request_id" => "req_none"
                })
@@ -842,7 +873,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     end
 
     test "stats succeeds for a :storage_read context", %{ctx: ctx} do
-      assert {:ok, result} = MCP.handle("mcp_log", ctx, %{"action" => "stats"})
+      assert {:ok, result} = MCP.handle("mcp_log", actor(ctx), %{"action" => "stats"})
       assert is_integer(result.total)
       assert is_integer(result.errors)
     end
@@ -877,7 +908,7 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
         _ -> %{}
       end
 
-      for tool <- MCP.tools(),
+      for tool <- MCP.tools() ++ Retention.tools(),
           action <- tool.input_schema["properties"]["action"]["enum"] do
         args = Map.put(extra_args.({tool.name, action}), "action", action)
 
@@ -905,17 +936,25 @@ defmodule Emissary.MCP.Tools.RecordsProviderTest do
     test "record.get", %{ctx: ctx} do
       drop_executions!()
 
-      assert {:error, reason} = MCP.handle("record", ctx, %{"action" => "get", "id" => "exec_x"})
+      assert {:error, reason} =
+               MCP.handle("record", actor(ctx), %{"action" => "get", "id" => "exec_x"})
+
       assert err_msg(reason) =~ "unavailable"
     end
 
     test "mcp_log.get", %{ctx: ctx} do
       Arca.Repo.query!("DROP TABLE mcp_logs")
 
-      assert {:error, reason} = MCP.handle("mcp_log", ctx, %{"action" => "get", "id" => "req_x"})
+      assert {:error, reason} =
+               MCP.handle("mcp_log", actor(ctx), %{"action" => "get", "id" => "req_x"})
+
       assert err_msg(reason) =~ "unavailable"
     end
   end
+
+  defp actor(ctx), do: Sanctum.Context.actor(ctx)
+
+  defp all_roots, do: Arca.Storage.tenant_roots()
 
   # The provider answers typed reasons where the class is clear; the shared
   # renderer is the one spelling of every sentence, so assert through it.

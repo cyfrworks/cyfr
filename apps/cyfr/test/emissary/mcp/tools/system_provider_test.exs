@@ -18,14 +18,15 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
   end
 
   describe "tools/0" do
-    test "returns a list with system and tools tools" do
+    test "returns a list with the system, tools and resource tools" do
       tools = SystemProvider.tools()
 
       assert is_list(tools)
-      assert length(tools) == 2
+      assert length(tools) == 3
       names = Enum.map(tools, & &1.name)
       assert "system" in names
       assert "tools" in names
+      assert "resource" in names
     end
 
     test "system tool has correct name" do
