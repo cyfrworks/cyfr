@@ -243,6 +243,99 @@ defmodule Cyfr.RetentionSchedulerTest do
     end
   end
 
+  describe "the estates it walks" do
+    test "an estate archived after the list was read is passed over, and its rows freeze", %{
+      key: key
+    } do
+      # Ids minted in one millisecond are not ordered, so the walk's order
+      # is read off them rather than assumed from the creation order.
+      [first, archived] = Enum.sort_by([group!("walked"), group!("archived")], & &1.id)
+
+      for athanor <- [first, archived] do
+        over_limit!(athanor.id)
+      end
+
+      # Archived while the walk is on an earlier estate: after the list of
+      # active estates was read, before the walk reaches this one.
+      on_first_athanor(fn ->
+        {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived)
+      end)
+
+      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+
+      refute archived.id in summary.athanors
+      assert first.id in summary.athanors
+      assert executions(archived.id) == 3
+      assert executions(first.id) == 1
+    end
+
+    test "an estate whose settings are corrupt is logged against it, and the walk goes on", %{
+      key: key
+    } do
+      [corrupt, next] = Enum.sort_by([group!("corrupt"), group!("next")], & &1.id)
+
+      over_limit!(corrupt.id)
+      over_limit!(next.id)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.RetentionSettings, where: r.athanor_id == ^corrupt.id),
+          set: [settings: "not valid json {{{"]
+        )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+          assert corrupt.id in summary.athanors
+          assert next.id in summary.athanors
+        end)
+
+      assert log =~ "Retention skipped: :corrupt"
+      assert log =~ "athanor_id=#{corrupt.id}"
+      assert executions(corrupt.id) == 3
+      assert executions(next.id) == 1
+    end
+  end
+
+  defp group!(name) do
+    {:ok, athanor} =
+      Sanctum.Tenancy.Athanors.create(%{
+        kind: "group",
+        name: name,
+        slug: "#{name}-#{System.unique_integer([:positive])}",
+        created_by: "test"
+      })
+
+    athanor
+  end
+
+  # Three finished executions in an estate whose settings keep one.
+  defp over_limit!(athanor_id) do
+    actor = %Cyfr.Actor{athanor_id: athanor_id, user_id: "usr_retention"}
+
+    {:ok, _} =
+      Arca.Retention.set_settings(actor, %{"executions" => 1, "execution_days" => 10_000})
+
+    for i <- 1..3 do
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: "#{athanor_id}_exec_#{i}",
+          request_id: "req_retention",
+          user_id: actor.user_id,
+          athanor_id: athanor_id,
+          reference: "reagent:local.test:0.1.0",
+          component_type: "reagent",
+          started_at: DateTime.add(DateTime.utc_now(), -i, :minute),
+          status: "completed"
+        })
+    end
+
+    :ok
+  end
+
+  defp executions(athanor_id),
+    do: length(Arca.Execution.list(athanor_id: athanor_id, limit: 100))
+
   defp active_ids,
     do: Sanctum.Tenancy.Athanors.list_active() |> Enum.map(& &1.id) |> Enum.sort()
 

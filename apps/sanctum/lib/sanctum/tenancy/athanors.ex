@@ -464,11 +464,11 @@ defmodule Sanctum.Tenancy.Athanors do
 
   The one verb that actually deletes a tenant's data.
   `purge_storage/1` above reclaims the volume and leaves every row
-  standing; `Cyfr.Retention` skips archived athanors because purging is
-  supposed to be the reclaim. So nothing deleted rows at all, and after
-  archive + purge every sealed vault payload, webhook secret, OAuth
-  ciphertext, execution, message and log stayed in the database and in
-  every backup taken afterwards.
+  standing; retention (`Cyfr.RetentionScheduler`) skips archived athanors
+  because purging is supposed to be the reclaim. So nothing deleted rows
+  at all, and after archive + purge every sealed vault payload, webhook
+  secret, OAuth ciphertext, execution, message and log stayed in the
+  database and in every backup taken afterwards.
 
   ## What it keeps, and why
 
@@ -681,9 +681,10 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   Merge `patch` into the athanor's settings document, one level deep: a map
-  under a key merges into the map already there (so a `"retention"` patch
-  naming one window leaves the other windows alone), a `nil` deletes the
-  key, anything else replaces.
+  under a key merges into the map already there (so an `"approvals"` patch
+  naming one value leaves the others alone), a `nil` deletes the key,
+  anything else replaces. Retention settings are not here: they are the
+  storage layer's own rows (`Arca.RetentionSettings`).
   Every member's open views hear of the change on the athanor's notify
   topic.
   """

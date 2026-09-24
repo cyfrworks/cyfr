@@ -3,17 +3,15 @@
 
 defmodule Arca.Providers.RecordsTest do
   @moduledoc """
-  The record tools (`Arca.Providers.Records`), handed the caller's actor
-  alone; its files-resource reader, given the roots the admitted caller
-  may read; and the `retention` tool, which `Cyfr.Retention` serves with
-  the caller's context until the storage layer owns retention.
+  The record tools (`Arca.Providers.Records`) and its `retention` tool,
+  handed the caller's actor alone; and its files-resource reader, given
+  the roots the admitted caller may read.
   """
 
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
   alias Arca.Providers.Records, as: MCP
-  alias Cyfr.Retention
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -40,17 +38,15 @@ defmodule Arca.Providers.RecordsTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns the three record tools; retention is its own provider's" do
+    test "returns the three record tools and the retention tool" do
       tools = MCP.tools()
-      assert Enum.map(tools, & &1.name) == ["record", "mcp_log", "policy_log"]
-
-      assert [%{name: "retention"}] = Retention.tools()
-      assert Retention.service() == "arca"
+      assert Enum.map(tools, & &1.name) == ["record", "mcp_log", "policy_log", "retention"]
       assert MCP.service() == "arca"
+      refute Code.ensure_loaded?(Cyfr.Retention)
     end
 
     test "retention tool has 3 actions" do
-      tool = Enum.find(Retention.tools(), &(&1.name == "retention"))
+      tool = Enum.find(MCP.tools(), &(&1.name == "retention"))
       actions = tool.input_schema["properties"]["action"]["enum"]
       assert actions == ["get", "set", "cleanup"]
     end
@@ -63,7 +59,7 @@ defmodule Arca.Providers.RecordsTest do
     end
 
     test "each tool has required schema fields" do
-      for tool <- MCP.tools() ++ Retention.tools() do
+      for tool <- MCP.tools() do
         assert is_binary(tool.name)
         assert is_binary(tool.title)
         assert is_binary(tool.description)
@@ -73,9 +69,8 @@ defmodule Arca.Providers.RecordsTest do
       end
     end
 
-    test "the record tools take the actor; retention takes the context" do
+    test "the record tools and the retention tool take the actor" do
       assert Cyfr.Ops.Provider.context_kind(MCP) == :actor
-      assert Cyfr.Ops.Provider.context_kind(Retention) == :context
     end
   end
 
@@ -298,10 +293,7 @@ defmodule Arca.Providers.RecordsTest do
 
   describe "retention get action" do
     test "get returns default settings", %{ctx: ctx} do
-      {:ok, result} =
-        Retention.handle("retention", ctx, %{
-          "action" => "get"
-        })
+      {:ok, result} = MCP.handle("retention", actor(ctx), %{"action" => "get"})
 
       assert result.action == "get"
       assert is_map(result.settings)
@@ -313,7 +305,7 @@ defmodule Arca.Providers.RecordsTest do
   describe "retention set action" do
     test "set updates settings", %{ctx: ctx} do
       {:ok, result} =
-        Retention.handle("retention", ctx, %{
+        MCP.handle("retention", actor(ctx), %{
           "action" => "set",
           "settings" => %{"executions" => 5, "builds" => 3}
         })
@@ -323,19 +315,36 @@ defmodule Arca.Providers.RecordsTest do
       assert result.settings["builds"] == 3
 
       # Verify persisted
-      {:ok, get_result} =
-        Retention.handle("retention", ctx, %{
-          "action" => "get"
-        })
+      {:ok, get_result} = MCP.handle("retention", actor(ctx), %{"action" => "get"})
 
       assert get_result.settings["executions"] == 5
+    end
+
+    test "set refuses an unknown key and a bad value in today's words", %{ctx: ctx} do
+      assert {:error, {:invalid_argument, "Unknown retention setting: made_up"}} =
+               MCP.handle("retention", actor(ctx), %{
+                 "action" => "set",
+                 "settings" => %{"made_up" => 5}
+               })
+
+      assert {:error,
+              {:invalid_argument,
+               "Invalid value for retention setting executions — use a positive integer"}} =
+               MCP.handle("retention", actor(ctx), %{
+                 "action" => "set",
+                 "settings" => %{"executions" => 0}
+               })
+
+      assert {:error,
+              {:invalid_argument, "Missing required parameter: settings (must be a JSON object)"}} =
+               MCP.handle("retention", actor(ctx), %{"action" => "set"})
     end
   end
 
   describe "retention cleanup action" do
     test "cleanup runs with dry_run", %{ctx: ctx} do
       {:ok, result} =
-        Retention.handle("retention", ctx, %{
+        MCP.handle("retention", actor(ctx), %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => true
@@ -347,13 +356,13 @@ defmodule Arca.Providers.RecordsTest do
     end
 
     test "the cleanup vocabulary and settable keys are the retention roster", %{ctx: _ctx} do
-      # A kind added to Cyfr.Retention.kinds/0 must be on this surface the
+      # A kind added to Arca.Retention.kinds/0 must be on this surface the
       # moment it exists — the enum fell two kinds behind once.
       retention =
-        Retention.tools()
+        MCP.tools()
         |> Enum.find(&(&1.name == "retention"))
 
-      roster = Enum.map(Cyfr.Retention.kinds(), & &1.key())
+      roster = Enum.map(Arca.Retention.kinds(), & &1.key())
 
       assert action_schema(retention, "cleanup")["properties"]["cleanup_type"]["enum"] == roster
 
@@ -363,9 +372,9 @@ defmodule Arca.Providers.RecordsTest do
     end
 
     test "every kind is cleanable through the tool", %{ctx: ctx} do
-      for kind <- Cyfr.Retention.kinds() do
+      for kind <- Arca.Retention.kinds() do
         assert {:ok, %{deleted: n}} =
-                 Retention.handle("retention", ctx, %{
+                 MCP.handle("retention", actor(ctx), %{
                    "action" => "cleanup",
                    "cleanup_type" => kind.key()
                  })
@@ -376,7 +385,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "cleanup runs for executions", %{ctx: ctx} do
       {:ok, result} =
-        Retention.handle("retention", ctx, %{
+        MCP.handle("retention", actor(ctx), %{
           "action" => "cleanup",
           "cleanup_type" => "executions"
         })
@@ -386,9 +395,106 @@ defmodule Arca.Providers.RecordsTest do
       assert is_integer(result.deleted)
     end
 
+    test "a kind whose store refuses renders as retention cleanup unavailable", %{ctx: ctx} do
+      Arca.ControlPlane.record(:lost)
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+      assert {:error, {:unavailable, "Retention cleanup"} = reason} =
+               MCP.handle("retention", actor(ctx), %{
+                 "action" => "cleanup",
+                 "cleanup_type" => "staging_days"
+               })
+
+      assert err_msg(reason) =~ "unavailable"
+    end
+
     test "returns error for invalid action", %{ctx: ctx} do
-      {:error, msg} = Retention.handle("retention", ctx, %{"action" => "invalid"})
+      {:error, msg} = MCP.handle("retention", actor(ctx), %{"action" => "invalid"})
       assert err_msg(msg) =~ "Invalid retention action"
+    end
+  end
+
+  # The tool as the wire reaches it: the gate authorizes with the caller's
+  # context and hands the handler the actor it projects.
+  describe "retention through the gate" do
+    test "an actor with no athanor is refused, whatever its scope" do
+      platform =
+        Sanctum.internal_context(permissions: [:storage_read, :storage_write, :admin])
+
+      tenantless = %Context{
+        user_id: "no_tenant_user",
+        athanor_id: nil,
+        permissions: MapSet.new([:storage_read, :storage_write, :admin]),
+        scope: :athanor,
+        auth_method: :oidc,
+        authenticated: true
+      }
+
+      for ctx <- [platform, tenantless],
+          args <- [
+            %{"action" => "get"},
+            %{"action" => "set", "settings" => %{"executions" => 5}},
+            %{"action" => "cleanup", "cleanup_type" => "executions"}
+          ] do
+        assert {:error, :missing_tenant} = Cyfr.Ops.Catalog.call_external("retention", ctx, args),
+               "#{inspect(ctx.scope)} #{args["action"]}"
+      end
+    end
+
+    test "set answers the merged settings", %{ctx: ctx} do
+      assert {:ok, _} =
+               Cyfr.Ops.Catalog.call_external("retention", ctx, %{
+                 "action" => "set",
+                 "settings" => %{"executions" => 5}
+               })
+
+      assert {:ok, %{action: "set", updated: true, settings: settings}} =
+               Cyfr.Ops.Catalog.call_external("retention", ctx, %{
+                 "action" => "set",
+                 "settings" => %{"builds" => 3}
+               })
+
+      assert settings["executions"] == 5
+      assert settings["builds"] == 3
+      assert settings["mcp_log_days"] == Arca.Retention.McpLogs.default()
+      assert map_size(settings) == length(Arca.Retention.kinds())
+    end
+
+    test "corrupt settings render as corrupt, from every action", %{ctx: ctx} do
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.RetentionSettings, [
+          %{
+            athanor_id: ctx.athanor_id,
+            settings: ~s({"executions": 0}),
+            revision: 1,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+      for args <- [
+            %{"action" => "get"},
+            %{"action" => "set", "settings" => %{"builds" => 3}},
+            %{"action" => "cleanup", "cleanup_type" => "executions"}
+          ] do
+        assert {:error, {:corrupt, "Retention settings"} = reason} =
+                 Cyfr.Ops.Catalog.call_external("retention", ctx, args),
+               args["action"]
+
+        assert err_msg(reason) =~ "Retention settings"
+      end
+    end
+
+    test "settings that cannot be read render as unavailable", %{ctx: ctx} do
+      # Dropped inside the sandbox transaction, which rolls it back.
+      Arca.Repo.query!("DROP TABLE retention_settings")
+
+      assert {:error, {:unavailable, "Retention settings"} = reason} =
+               Cyfr.Ops.Catalog.call_external("retention", ctx, %{"action" => "get"})
+
+      assert err_msg(reason) =~ "unavailable"
     end
   end
 
@@ -514,7 +620,7 @@ defmodule Arca.Providers.RecordsTest do
     end
 
     test "can get retention settings", %{app_ctx: app_ctx} do
-      {:ok, result} = Retention.handle("retention", app_ctx, %{"action" => "get"})
+      {:ok, result} = Cyfr.Ops.Catalog.call_external("retention", app_ctx, %{"action" => "get"})
       assert is_map(result.settings)
     end
 
@@ -554,7 +660,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "can set retention settings", %{oidc_ctx: oidc_ctx} do
       {:ok, result} =
-        Retention.handle("retention", oidc_ctx, %{
+        Cyfr.Ops.Catalog.call_external("retention", oidc_ctx, %{
           "action" => "set",
           "settings" => %{"executions" => 5}
         })
@@ -564,7 +670,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "can run cleanup", %{oidc_ctx: oidc_ctx} do
       {:ok, result} =
-        Retention.handle("retention", oidc_ctx, %{
+        Cyfr.Ops.Catalog.call_external("retention", oidc_ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => true
@@ -685,7 +791,7 @@ defmodule Arca.Providers.RecordsTest do
   describe "retention edge cases" do
     test "cleanup with unknown type returns error", %{ctx: ctx} do
       {:error, msg} =
-        Retention.handle("retention", ctx, %{
+        MCP.handle("retention", actor(ctx), %{
           "action" => "cleanup",
           "cleanup_type" => "unknown_type"
         })
@@ -695,7 +801,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "defaults cleanup_type to executions", %{ctx: ctx} do
       {:ok, result} =
-        Retention.handle("retention", ctx, %{
+        MCP.handle("retention", actor(ctx), %{
           "action" => "cleanup",
           "dry_run" => true
         })
@@ -705,7 +811,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "cleanup with builds type works", %{ctx: ctx} do
       {:ok, result} =
-        Retention.handle("retention", ctx, %{
+        MCP.handle("retention", actor(ctx), %{
           "action" => "cleanup",
           "cleanup_type" => "builds",
           "dry_run" => true
@@ -716,7 +822,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "cleanup returns integer count when not dry_run", %{ctx: ctx} do
       {:ok, result} =
-        Retention.handle("retention", ctx, %{
+        MCP.handle("retention", actor(ctx), %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => false
@@ -908,7 +1014,7 @@ defmodule Arca.Providers.RecordsTest do
         _ -> %{}
       end
 
-      for tool <- MCP.tools() ++ Retention.tools(),
+      for tool <- MCP.tools(),
           action <- tool.input_schema["properties"]["action"]["enum"] do
         args = Map.put(extra_args.({tool.name, action}), "action", action)
 

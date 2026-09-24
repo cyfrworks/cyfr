@@ -66,6 +66,7 @@ defmodule Arca.TenantTables do
     "executions",
     "mcp_logs",
     "policy_logs",
+    "retention_settings",
     "oauth_provider_credentials",
     "mcp_servers",
     "schedule_occurrences",

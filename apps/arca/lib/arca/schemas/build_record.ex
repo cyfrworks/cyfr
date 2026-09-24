@@ -4,7 +4,7 @@
 defmodule Arca.Schemas.BuildRecord do
   @moduledoc """
   One build's lifecycle row. `Arca.BuildRecords` owns the surface —
-  `Compendium.Builds` writes through it and `Cyfr.Retention` prunes through it.
+  `Compendium.Builds` writes through it and `Arca.Retention.Builds` prunes through it.
   """
 
   use Ecto.Schema

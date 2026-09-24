@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Retention.ExecutionsAgeTest do
+defmodule Arca.Retention.ExecutionsAgeTest do
   use ExUnit.Case, async: false
 
   alias Arca.Execution
-  alias Cyfr.Retention.ExecutionsAge
+  alias Arca.Retention.ExecutionsAge
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -52,8 +52,8 @@ defmodule Cyfr.Retention.ExecutionsAgeTest do
 
     assert ExecutionsAge.key() == "execution_days"
     assert ExecutionsAge.unit() == :days
-    assert {:ok, 1} = ExecutionsAge.prune(ctx, 90, true)
-    assert {:ok, 1} = ExecutionsAge.prune(ctx, 90, false)
+    assert {:ok, 1} = ExecutionsAge.prune(Sanctum.Context.actor(ctx), 90, true)
+    assert {:ok, 1} = ExecutionsAge.prune(Sanctum.Context.actor(ctx), 90, false)
 
     assert is_nil(Execution.get_tenant(Sanctum.Context.actor(ctx), old))
     refute is_nil(Execution.get_tenant(Sanctum.Context.actor(ctx), old_running))
@@ -61,8 +61,11 @@ defmodule Cyfr.Retention.ExecutionsAgeTest do
   end
 
   test "the kind is on the roster the settings document derives from" do
-    assert ExecutionsAge in Cyfr.Retention.kinds()
-    {:ok, settings} = Cyfr.Retention.get_settings(Sanctum.TestContext.local())
+    assert ExecutionsAge in Arca.Retention.kinds()
+
+    {:ok, settings} =
+      Arca.Retention.get_settings(Sanctum.Context.actor(Sanctum.TestContext.local()))
+
     assert settings["execution_days"] == 90
   end
 end

@@ -503,7 +503,7 @@ defmodule Arca.ExecutionAttempts do
 
   @doc """
   Delete an athanor's SETTLED write intents that were recorded before
-  `cutoff` — the retention kind's write (`Cyfr.Retention.WriteIntents`).
+  `cutoff` — the retention kind's write (`Arca.Retention.WriteIntents`).
 
   A `pending` intent is never deleted here whatever its age. It is the
   only record that a write may be in the store and was never settled, so

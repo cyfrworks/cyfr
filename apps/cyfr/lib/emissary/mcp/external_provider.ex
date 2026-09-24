@@ -349,7 +349,9 @@ defmodule Emissary.MCP.ExternalProvider do
     id = Keyword.get(opts, :execution_id) || Cyfr.UUID7.execution_id()
     started_at = DateTime.utc_now()
     input = Map.drop(args, ["action", "parent_execution_id", "root_execution_id", "attempt"])
-    class = Keyword.get(opts, :retention_class) || Cyfr.Retention.default_class(ctx)
+
+    class =
+      Keyword.get(opts, :retention_class) || Arca.Retention.default_class(Context.actor(ctx))
 
     attrs = %{
       id: id,

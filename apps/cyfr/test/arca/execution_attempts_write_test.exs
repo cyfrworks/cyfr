@@ -431,7 +431,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
 
       # Both are older than the cutoff; only the settled one may go.
       Arca.Repo.update_all(StorageWriteIntent, set: [inserted_at: days_ago(40)])
-      cutoff = Cyfr.Retention.Kind.days_cutoff(30)
+      cutoff = Arca.Retention.Kind.days_cutoff(30)
       opts = [athanor_id: actor.athanor_id]
 
       assert {:ok, 1} = ExecutionAttempts.count_intents_before(cutoff, opts)
@@ -451,7 +451,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       %{actor: actor} = test
       assert {:ok, {:confirmed, :ok}} = write(test, put(test))
 
-      cutoff = Cyfr.Retention.Kind.days_cutoff(30)
+      cutoff = Arca.Retention.Kind.days_cutoff(30)
       opts = [athanor_id: actor.athanor_id]
 
       assert {:ok, 0} = ExecutionAttempts.count_intents_before(cutoff, opts)
@@ -464,14 +464,15 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       assert {:ok, {:confirmed, :ok}} = write(test, put(test))
       Arca.Repo.update_all(StorageWriteIntent, set: [inserted_at: days_ago(40)])
 
-      assert Cyfr.Retention.WriteIntents.key() == "write_intent_days"
-      assert Cyfr.Retention.WriteIntents.unit() == :days
-      assert Cyfr.Retention.WriteIntents in Cyfr.Retention.kinds()
+      assert Arca.Retention.WriteIntents.key() == "write_intent_days"
+      assert Arca.Retention.WriteIntents.unit() == :days
+      assert Arca.Retention.WriteIntents in Arca.Retention.kinds()
 
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "write_intent_days", dry_run: true)
+      actor = Sanctum.Context.actor(ctx)
+      assert {:ok, 1} = Arca.Retention.cleanup(actor, "write_intent_days", dry_run: true)
       assert [{"confirmed", nil}] = states(test)
 
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "write_intent_days")
+      assert {:ok, 1} = Arca.Retention.cleanup(actor, "write_intent_days")
       assert states(test) == []
     end
 

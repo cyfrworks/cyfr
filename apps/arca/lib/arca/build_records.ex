@@ -5,7 +5,7 @@ defmodule Arca.BuildRecords do
   @moduledoc """
   One `build_records` row per build (`Arca.Schemas.BuildRecord`), from
   `started` through `compiled` or `failed`. `Compendium.Builds` writes
-  them and `Cyfr.Retention` prunes them — two writers, one owner of the
+  them and `Arca.Retention.Builds` prunes them — two writers, one owner of the
   shape both rely on.
 
   Build status is stored in rows. WASM and tincture artifacts remain

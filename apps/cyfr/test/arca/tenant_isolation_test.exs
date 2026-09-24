@@ -431,7 +431,8 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # Cleanup for tenant A with 1-day retention
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx_a, "mcp_log_days", value: 1)
+      assert {:ok, 1} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx_a), "mcp_log_days", value: 1)
 
       # Tenant A's log is gone
       assert Arca.Repo.get(Arca.Schemas.McpLog, "log_tenant_a") == nil
@@ -463,8 +464,17 @@ defmodule Arca.TenantIsolationTest do
           status: "success"
         })
 
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx_a, "mcp_log_days", value: 1, dry_run: true)
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx_b, "mcp_log_days", value: 1, dry_run: true)
+      assert {:ok, 1} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx_a), "mcp_log_days",
+                 value: 1,
+                 dry_run: true
+               )
+
+      assert {:ok, 1} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx_b), "mcp_log_days",
+                 value: 1,
+                 dry_run: true
+               )
     end
   end
 
@@ -502,7 +512,7 @@ defmodule Arca.TenantIsolationTest do
       end
 
       # Cleanup tenant A, keeping 2
-      {:ok, count} = Cyfr.Retention.cleanup(ctx_a, "executions", value: 2)
+      {:ok, count} = Arca.Retention.cleanup(Sanctum.Context.actor(ctx_a), "executions", value: 2)
       assert count == 3
 
       # Tenant A has 2
@@ -546,7 +556,8 @@ defmodule Arca.TenantIsolationTest do
       end
 
       # Cleanup scoped to tenant A — retention is per-athanor.
-      assert {:ok, 3} = Cyfr.Retention.cleanup(ctx_a, "executions", value: 1)
+      assert {:ok, 3} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx_a), "executions", value: 1)
 
       # Tenant B unaffected
       b_results =
@@ -582,7 +593,11 @@ defmodule Arca.TenantIsolationTest do
           })
       end
 
-      assert {:ok, 2} = Cyfr.Retention.cleanup(ctx_a, "executions", value: 1, dry_run: true)
+      assert {:ok, 2} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx_a), "executions",
+                 value: 1,
+                 dry_run: true
+               )
 
       # All records still exist
       all_a = Arca.Execution.list(athanor_id: ctx_a.athanor_id, limit: 100)

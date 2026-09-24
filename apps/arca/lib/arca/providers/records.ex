@@ -4,8 +4,9 @@
 defmodule Arca.Providers.Records do
   @moduledoc """
   The record tools — `record`, `mcp_log` and `policy_log` — over what Arca
-  persists about executions, MCP requests and policy consultations, and
-  the reader behind the `arca://files/{path}` resource.
+  persists about executions, MCP requests and policy consultations, the
+  `retention` tool over what the athanor keeps of them, and the reader
+  behind the `arca://files/{path}` resource.
 
   The provider declares `context_kind: :actor`: the gate authorizes every
   call with the caller's full context and hands these handlers the
@@ -15,6 +16,15 @@ defmodule Arca.Providers.Records do
   of `:platform` scope reads across athanors and is not), and in-chain an
   execution reads its own payload alone, for the attempt the host stamped
   on its lineage and only while that attempt is its current one.
+
+  ## The `retention` tool
+
+  `get` reads the athanor's retention settings, `set` patches them
+  (`storage_write`) and answers them as they now stand, and `cleanup`
+  runs one kind's policy now (`admin`), `executions` when no
+  `cleanup_type` is named (`Arca.Retention`). The settable keys and the
+  cleanup vocabulary derive from the retention roster. Settings are an
+  athanor's, so an actor with no athanor is refused whatever its scope.
 
   ## The files resource
 
@@ -216,8 +226,72 @@ defmodule Arca.Providers.Records do
         ],
         description: "Query policy consultation logs - list, get, or correlate logs",
         title: "Policy Logs"
-      )
+      ),
+      retention_tool()
     ]
+  end
+
+  # Both the settable keys and the cleanup vocabulary derive from the
+  # roster, so a new kind is on this surface the moment it exists.
+  defp retention_tool do
+    alias Cyfr.Ops.{Arg, Operation}
+
+    Operation.tool(
+      [
+        Operation.new("retention", "get", "Get retention", [],
+          kind: :read,
+          planes: [:external],
+          permission: :storage_read
+        ),
+        Operation.new(
+          "retention",
+          "set",
+          "Set retention",
+          [
+            Arg.new(
+              "settings",
+              {:record,
+               Enum.map(Arca.Retention.kinds(), fn kind ->
+                 Arg.new(kind.key(), :integer, description: setting_description(kind))
+               end)},
+              required: true,
+              description: "Retention settings"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :storage_write
+        ),
+        Operation.new(
+          "retention",
+          "cleanup",
+          "Cleanup retention",
+          [
+            Arg.new("cleanup_type", :string,
+              enum: Enum.map(Arca.Retention.kinds(), & &1.key()),
+              description: "Kind of records to clean up"
+            ),
+            Arg.new("dry_run", :boolean,
+              description: "If true, show what would be deleted without actually deleting"
+            )
+          ],
+          kind: :destructive,
+          planes: [:external],
+          permission: :admin
+        )
+      ],
+      description: "Manage data retention policies - get settings, set settings, or run cleanup",
+      title: "Retention"
+    )
+  end
+
+  # The wire description of one retention setting, from its unit — no
+  # per-kind prose to keep in step with the roster.
+  defp setting_description(kind) do
+    case kind.unit() do
+      :keep -> "Newest records kept per athanor"
+      :days -> "Days of records kept per athanor"
+    end
   end
 
   # ============================================================================
@@ -546,7 +620,84 @@ defmodule Arca.Providers.Records do
     {:error, Cyfr.Ops.Provider.invalid_action("policy_log", action_enum("policy_log"))}
   end
 
+  # ============================================================================
+  # Retention Tool
+  # ============================================================================
+
+  def handle("retention", %Cyfr.Actor{} = actor, %{"action" => "get"}) do
+    with :ok <- athanor_ok(actor) do
+      case Arca.Retention.get_settings(actor) do
+        {:ok, settings} -> {:ok, %{action: "get", settings: settings}}
+        {:error, reason} -> {:error, settings_refusal(reason)}
+      end
+    end
+  end
+
+  def handle("retention", %Cyfr.Actor{} = actor, %{"action" => "set", "settings" => settings})
+      when is_map(settings) do
+    with :ok <- athanor_ok(actor) do
+      case Arca.Retention.set_settings(actor, settings) do
+        {:ok, merged} ->
+          {:ok, %{action: "set", updated: true, settings: merged}}
+
+        {:error, {:unknown_setting, key}} ->
+          {:error, {:invalid_argument, "Unknown retention setting: #{key}"}}
+
+        {:error, {:invalid_setting, key}} ->
+          {:error,
+           {:invalid_argument,
+            "Invalid value for retention setting #{key} — use a positive integer"}}
+
+        {:error, reason} ->
+          {:error, settings_refusal(reason)}
+      end
+    end
+  end
+
+  def handle("retention", %Cyfr.Actor{}, %{"action" => "set"}) do
+    {:error, {:invalid_argument, "Missing required parameter: settings (must be a JSON object)"}}
+  end
+
+  def handle("retention", %Cyfr.Actor{} = actor, %{"action" => "cleanup"} = args) do
+    with :ok <- athanor_ok(actor) do
+      cleanup_type = Map.get(args, "cleanup_type", "executions")
+      dry_run = Map.get(args, "dry_run", false)
+
+      case Arca.Retention.cleanup(actor, cleanup_type, dry_run: dry_run) do
+        {:ok, count} when dry_run ->
+          {:ok,
+           %{action: "cleanup", cleanup_type: cleanup_type, dry_run: true, would_delete: count}}
+
+        {:ok, count} ->
+          {:ok, %{action: "cleanup", cleanup_type: cleanup_type, deleted: count}}
+
+        {:error, {:unknown_kind, _}} ->
+          {:error, {:invalid_argument, "Unknown cleanup_type: #{cleanup_type}"}}
+
+        {:error, :corrupt} ->
+          {:error, {:corrupt, "Retention settings"}}
+
+        {:error, reason} ->
+          Logger.error("[Arca.Providers.Records] Retention cleanup failed: #{inspect(reason)}")
+          {:error, {:unavailable, "Retention cleanup"}}
+      end
+    end
+  end
+
+  def handle("retention", %Cyfr.Actor{}, _args) do
+    {:error, Cyfr.Ops.Provider.invalid_action("retention", action_enum("retention"))}
+  end
+
   def handle(tool, %Cyfr.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
+
+  # A settings refusal as the wire renders it.
+  defp settings_refusal(:corrupt), do: {:corrupt, "Retention settings"}
+  defp settings_refusal(:no_athanor), do: :missing_tenant
+
+  defp settings_refusal(reason) do
+    Logger.error("[Arca.Providers.Records] Retention settings unavailable: #{inspect(reason)}")
+    {:unavailable, "Retention settings"}
+  end
 
   # ============================================================================
   # The files resource
@@ -620,6 +771,11 @@ defmodule Arca.Providers.Records do
   defp tenant_ok(%Cyfr.Actor{scope: :platform}), do: :ok
   defp tenant_ok(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok
   defp tenant_ok(%Cyfr.Actor{}), do: {:error, :missing_tenant}
+
+  # Retention settings belong to one athanor, so every actor without one —
+  # a `:platform` scope actor included — is refused before they are read.
+  defp athanor_ok(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: :ok
+  defp athanor_ok(%Cyfr.Actor{}), do: {:error, :missing_tenant}
 
   # Blob reads are tenant-relative, so even a platform actor must carry the
   # athanor whose bytes it reads.

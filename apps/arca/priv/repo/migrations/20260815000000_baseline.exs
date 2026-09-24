@@ -44,6 +44,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     agents()
     executions()
     logs()
+    retention()
     vault_and_consent()
     registrations()
     schedules()
@@ -996,6 +997,36 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:policy_logs, [:athanor_id])
     create index(:policy_logs, [:athanor_id, :timestamp])
     create index(:policy_logs, [:consent_id])
+  end
+
+  # ==========================================================================
+  # Retention settings
+  # ==========================================================================
+
+  # One row per athanor: the retention values it has set, as the RFC 8785
+  # encoding of a map from retention key to a positive integer
+  # (`Arca.RetentionSettings`). A patch lands only while the row still
+  # holds the revision it read, so two patches of different keys both
+  # land. Positive, starting at 1; spelled once per adapter for the same
+  # reason as the standing counters.
+  defp retention do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    revision_positive = %{name: "retention_settings_revision_positive", expr: "revision > 0"}
+
+    create table(:retention_settings, primary_key: false) do
+      add :athanor_id, :string, primary_key: true, null: false
+      add :settings, :text, null: false
+      add :revision, :bigint, null: false, check: if(sqlite?, do: revision_positive)
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    unless sqlite? do
+      create constraint(:retention_settings, revision_positive.name,
+               check: revision_positive.expr
+             )
+    end
   end
 
   # ==========================================================================

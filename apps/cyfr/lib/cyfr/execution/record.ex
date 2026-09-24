@@ -128,7 +128,7 @@ defmodule Cyfr.Execution.Record do
     # admission; nil for a child.
     :reservation,
     # The class the execution's retained payloads are swept under
-    # (`Cyfr.Retention.Payloads` and its siblings): `api`, `webhook`,
+    # (`Arca.Retention.Payloads` and its siblings): `api`, `webhook`,
     # `schedule`, `system`, or `chat_step` for a turn's own dispatches.
     # Not a column — the payload rows carry it.
     :retention_class,
@@ -206,7 +206,8 @@ defmodule Cyfr.Execution.Record do
     }
   end
 
-  defp default_retention_class(%Context{} = ctx), do: Cyfr.Retention.default_class(ctx)
+  defp default_retention_class(%Context{} = ctx),
+    do: Arca.Retention.default_class(Context.actor(ctx))
 
   @doc "Mark execution as completed with output."
   @spec complete(t(), map()) :: t()
