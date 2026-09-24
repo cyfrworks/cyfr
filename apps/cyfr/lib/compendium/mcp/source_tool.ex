@@ -7,8 +7,9 @@ defmodule Compendium.MCP.SourceTool do
 
   Paths are `components/{type}s/local/{name}/{version}/…`. The tool reads,
   searches and edits the files inside a version directory, through
-  `Cyfr.Files`, so the tier rules, the storage cap and the component's
-  re-registration are the ones the Files page applies. It refuses:
+  `Arca.Files` under the caller's actor, so the tier rules, the storage
+  cap and the component's re-registration are the ones the Files page
+  applies. It refuses:
 
     * another publisher's component — a pulled component is forked, not
       rewritten;
@@ -24,7 +25,7 @@ defmodule Compendium.MCP.SourceTool do
   `scoped/2` is the one decision. It validates the segments with
   `Cyfr.PathSafety` and compares names after Unicode compatibility
   normalisation and case folding, so no spelling a case-insensitive
-  filesystem resolves to a refused file reaches `Cyfr.Files`.
+  filesystem resolves to a refused file reaches `Arca.Files`.
 
   The tool is in-chain only; a person edits through Files. Its actions are
   their own policy keys, so a grant for `files.write` on `data/` never
@@ -35,7 +36,7 @@ defmodule Compendium.MCP.SourceTool do
 
   @behaviour Cyfr.Ops.Provider
 
-  alias Cyfr.Files
+  alias Arca.Files
   alias Sanctum.Context
 
   @max_grep_matches 200
@@ -191,7 +192,7 @@ defmodule Compendium.MCP.SourceTool do
   @impl true
   def handle("source", %Context{} = ctx, %{"action" => action} = args) do
     with {:ok, path} <- scoped(Map.get(args, "path"), action) do
-      dispatch(action, ctx, path, args)
+      dispatch(action, Context.actor(ctx), path, args)
     end
   end
 
@@ -292,19 +293,19 @@ defmodule Compendium.MCP.SourceTool do
   # Actions
   # ---------------------------------------------------------------------------
 
-  defp dispatch("read", ctx, path, _args), do: Files.read(ctx, path)
+  defp dispatch("read", actor, path, _args), do: Files.read(actor, path)
 
-  defp dispatch("write", ctx, path, args) do
+  defp dispatch("write", actor, path, args) do
     case Map.get(args, "content") do
-      content when is_binary(content) -> Files.write(ctx, path, content)
+      content when is_binary(content) -> Files.write(actor, path, content)
       _ -> {:error, {:invalid_argument, "write needs content"}}
     end
   end
 
-  defp dispatch("delete", ctx, path, _args), do: Files.delete(ctx, path)
+  defp dispatch("delete", actor, path, _args), do: Files.delete(actor, path)
 
-  defp dispatch("tree", ctx, path, _args) do
-    case walk(ctx, path, "", @max_tree_entries) do
+  defp dispatch("tree", actor, path, _args) do
+    case walk(actor, path, "", @max_tree_entries) do
       {:ok, files} ->
         {shown, rest} = Enum.split(Enum.sort(files), @max_tree_entries)
         {:ok, %{path: path, files: shown, truncated: rest != []}}
@@ -314,24 +315,24 @@ defmodule Compendium.MCP.SourceTool do
     end
   end
 
-  defp dispatch("grep", ctx, path, args) do
+  defp dispatch("grep", actor, path, args) do
     with {:ok, pattern} <- compile_pattern(Map.get(args, "pattern")),
-         {:ok, %{files: files}} <- dispatch("tree", ctx, path, args) do
+         {:ok, %{files: files}} <- dispatch("tree", actor, path, args) do
       include = Map.get(args, "include")
 
       matches =
         files
         |> Enum.filter(&included?(&1, include))
-        |> Enum.flat_map(&grep_file(ctx, path, &1, pattern))
+        |> Enum.flat_map(&grep_file(actor, path, &1, pattern))
         |> Enum.take(@max_grep_matches)
 
       {:ok, %{path: path, matches: matches, count: length(matches)}}
     end
   end
 
-  defp dispatch("edit", ctx, path, args) do
+  defp dispatch("edit", actor, path, args) do
     with {:ok, edits} <- edit_list(Map.get(args, "edits")) do
-      Files.update(ctx, path, fn content ->
+      Files.update(actor, path, fn content ->
         with {:ok, edited} <- apply_edits(String.split(content, "\n"), edits) do
           {:ok, Enum.join(edited, "\n")}
         end
@@ -339,7 +340,7 @@ defmodule Compendium.MCP.SourceTool do
     end
   end
 
-  defp dispatch(action, _ctx, _path, _args),
+  defp dispatch(action, _actor, _path, _args),
     do: {:error, {:invalid_argument, "unknown source action: #{action}"}}
 
   # ---------------------------------------------------------------------------
@@ -348,19 +349,19 @@ defmodule Compendium.MCP.SourceTool do
 
   # Recursion through the domain's own listing, so a folder this tool may
   # not see stays unseen here too.
-  defp walk(_ctx, _base, _prefix, budget) when budget <= 0, do: {:ok, []}
+  defp walk(_actor, _base, _prefix, budget) when budget <= 0, do: {:ok, []}
 
-  defp walk(ctx, base, prefix, budget) do
+  defp walk(actor, base, prefix, budget) do
     path = if prefix == "", do: base, else: base <> "/" <> prefix
 
-    case Files.list(ctx, path) do
+    case Files.list(actor, path) do
       {:ok, %{entries: entries}} ->
         Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
           rel = if prefix == "", do: entry.name, else: prefix <> "/" <> entry.name
 
           case entry.kind do
             :dir ->
-              case walk(ctx, base, rel, budget - length(acc)) do
+              case walk(actor, base, rel, budget - length(acc)) do
                 {:ok, nested} -> {:cont, {:ok, acc ++ nested}}
                 error -> {:halt, error}
               end
@@ -387,8 +388,8 @@ defmodule Compendium.MCP.SourceTool do
   defp included?(_file, nil), do: true
   defp included?(file, suffix) when is_binary(suffix), do: String.ends_with?(file, suffix)
 
-  defp grep_file(ctx, base, relative, pattern) do
-    case Files.read(ctx, base <> "/" <> relative) do
+  defp grep_file(actor, base, relative, pattern) do
+    case Files.read(actor, base <> "/" <> relative) do
       {:ok, %{content: content, encoding: "utf8"}} ->
         content
         |> String.split("\n")

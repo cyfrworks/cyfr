@@ -2,145 +2,96 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Emissary.MCP.ResourceProviderTest do
+  @moduledoc """
+  A resource is advertised by an operation provider
+  (`c:Cyfr.Ops.Provider.resources/0`, `c:Cyfr.Ops.Provider.resource_templates/0`)
+  and read through the one operation that declares its scheme. There is no
+  separate resource behaviour and no read callback: every provider that
+  advertises a resource is read through the gate.
+  """
+
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.ResourceProvider
+  alias Cyfr.Ops.{Arg, Catalog, Operation, Provider}
 
-  describe "behaviour definition" do
-    test "defines resources/0 callback" do
-      callbacks = ResourceProvider.behaviour_info(:callbacks)
+  defmodule Advertiser do
+    @moduledoc false
+    @behaviour Cyfr.Ops.Provider
 
-      assert {:resources, 0} in callbacks
+    @impl true
+    def service, do: "advertiser"
+
+    @impl true
+    def tools do
+      [
+        Operation.tool([
+          Operation.new(
+            "advertiser",
+            "read_resource",
+            "Read an adv:// resource",
+            [Arg.new("uri", :string, required: true)],
+            kind: :read,
+            planes: [:external],
+            recovery: :replay_safe,
+            resource_schemes: ["adv"]
+          )
+        ])
+      ]
     end
 
-    test "defines read/2 callback" do
-      callbacks = ResourceProvider.behaviour_info(:callbacks)
+    @impl true
+    def resources, do: [%{uri: "adv://one", name: "One"}]
 
-      assert {:read, 2} in callbacks
-    end
+    @impl true
+    def resource_templates, do: [%{uriTemplate: "adv://items/{id}", name: "Item"}]
+
+    @impl true
+    def handle("advertiser", _ctx, %{"uri" => uri}), do: {:ok, %{content: uri}}
   end
 
-  describe "implements?/1" do
-    defmodule ValidProvider do
-      @behaviour Emissary.MCP.ResourceProvider
+  test "resources and templates are optional provider callbacks; there is no read callback" do
+    callbacks = Provider.behaviour_info(:callbacks)
+    optional = Provider.behaviour_info(:optional_callbacks)
 
-      @impl true
-      def resources do
-        [
-          %{
-            uri: "test://config",
-            name: "Test Config",
-            description: "Test configuration resource"
-          }
-        ]
-      end
-
-      @impl true
-      def read(_ctx, "test://config") do
-        {:ok, %{content: %{setting: "value"}}}
-      end
-
-      def read(_ctx, _uri), do: {:error, :not_found}
+    for callback <- [resources: 0, resource_templates: 0, context_kind: 0] do
+      assert callback in callbacks
+      assert callback in optional
     end
 
-    defmodule PartialProvider do
-      def resources, do: []
-      # Missing read/2
-    end
-
-    defmodule NoResourcesProvider do
-      def read(_ctx, _uri), do: {:error, :not_found}
-      # Missing resources/0
-    end
-
-    test "returns true for valid provider" do
-      assert ResourceProvider.implements?(ValidProvider)
-    end
-
-    test "returns false for module with only resources/0" do
-      refute ResourceProvider.implements?(PartialProvider)
-    end
-
-    test "returns false for module with only read/2" do
-      refute ResourceProvider.implements?(NoResourcesProvider)
-    end
-
-    test "returns false for non-existent module" do
-      refute ResourceProvider.implements?(NonExistentModule)
-    end
+    refute {:read, 2} in callbacks
+    refute Code.ensure_loaded?(Emissary.MCP.ResourceProvider)
   end
 
-  describe "provider implementation verification" do
-    defmodule MockResourceProvider do
-      @behaviour Emissary.MCP.ResourceProvider
-
-      @impl true
-      def resources do
-        [
-          %{
-            uri: "mock://data",
-            name: "Mock Data",
-            description: "A mock resource for testing",
-            mimeType: "application/json"
-          }
-        ]
-      end
-
-      @impl true
-      def read(_ctx, "mock://data") do
-        {:ok, %{content: %{key: "value"}}}
-      end
-
-      def read(_ctx, _uri), do: {:error, :not_found}
-    end
-
-    test "mock provider implements resources/0 correctly" do
-      resources = MockResourceProvider.resources()
-
-      assert is_list(resources)
-      assert length(resources) == 1
-
-      [resource] = resources
-      assert resource.uri == "mock://data"
-      assert resource.name == "Mock Data"
-      assert is_binary(resource.description)
-    end
-
-    test "mock provider implements read/2 correctly" do
-      ctx = Sanctum.TestContext.local()
-
-      assert {:ok, result} = MockResourceProvider.read(ctx, "mock://data")
-      assert result.content.key == "value"
-    end
-
-    test "mock provider returns error for unknown URI" do
-      ctx = Sanctum.TestContext.local()
-
-      assert {:error, :not_found} = MockResourceProvider.read(ctx, "mock://unknown")
-    end
+  test "an advertised scheme names its declared reader" do
+    assert Provider.resource_scheme("adv://items/{id}") == {:ok, "adv"}
+    assert Provider.resource_scheme("no-scheme") == :error
+    assert Provider.resource_scheme("://x") == :error
+    assert Provider.resource_scheme(nil) == :error
+    assert :ok = Catalog.audit_resource_schemes([Advertiser])
   end
 
-  describe "resource definition structure" do
-    test "required fields are uri and name" do
-      valid_resource = %{
-        uri: "service://path",
-        name: "Resource Name"
-      }
+  test "every configured provider that advertises a resource declares its reader" do
+    advertisers =
+      for module <- Catalog.available_providers(),
+          fun <- [:resources, :resource_templates],
+          function_exported?(module, fun, 0),
+          apply(module, fun, []) != [],
+          uniq: true,
+          do: module
 
-      assert Map.has_key?(valid_resource, :uri)
-      assert Map.has_key?(valid_resource, :name)
+    assert Enum.sort(advertisers) ==
+             Enum.sort([
+               Compendium.MCP,
+               Cyfr.Execution.MCP,
+               Emissary.MCP.Tools.SystemProvider,
+               Sanctum.MCP
+             ])
+
+    for module <- Catalog.available_providers() do
+      refute function_exported?(module, :read, 2) and module in advertisers,
+             "#{inspect(module)} still exports a read/2 beside its declared reader"
     end
 
-    test "optional fields include description and mimeType" do
-      full_resource = %{
-        uri: "service://path",
-        name: "Resource Name",
-        description: "Description of the resource",
-        mimeType: "application/json"
-      }
-
-      assert Map.has_key?(full_resource, :description)
-      assert Map.has_key?(full_resource, :mimeType)
-    end
+    assert :ok = Catalog.audit_resource_schemes()
   end
 end

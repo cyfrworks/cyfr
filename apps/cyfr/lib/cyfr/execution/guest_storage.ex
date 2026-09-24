@@ -30,7 +30,7 @@ defmodule Cyfr.Execution.GuestStorage do
     4. A write, append or delete names a file inside a scope; inside an
        overlaid scope it lands inside a unit (`Arca.Storage.locate/1`), and
        under a component publisher only `local/`
-       (`Compendium.NamespacePolicy.require_local_guest_write/1`).
+       (`Cyfr.ComponentNamespace.require_local_guest_write/1`).
     5. The path is relative, with no traversal (`Cyfr.PathSafety`).
     6. The edge's `storage.paths` allow the path: `"*"` allows every path,
        an entry ending in `/` a prefix, anything else that exact path. An
@@ -261,9 +261,12 @@ defmodule Cyfr.Execution.GuestStorage do
   end
 
   defp unit_publisher(["components", _plural, publisher | _]) do
-    case Compendium.NamespacePolicy.require_local_guest_write(publisher) do
-      :ok -> :ok
-      {:error, message} -> guest_error(:storage_path_denied, message)
+    case Cyfr.ComponentNamespace.require_local_guest_write(publisher) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        guest_error(:storage_path_denied, Cyfr.ComponentNamespace.message(reason, publisher))
     end
   end
 

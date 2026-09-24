@@ -9,7 +9,7 @@ defmodule PrismWeb.FileController do
 
   The session cookie names the person; the URL's athanor is focused the
   way a LiveView mount focuses it (so a non-member gets nothing); the
-  path is resolved by `Cyfr.Files.locate/1`, so only a shown folder can
+  path is resolved by `Arca.Files.locate/2`, so only a shown folder can
   be named and the server's own storage has no address. What comes back
   is a download with a content type from a short allowlist (anything
   else is `application/octet-stream`), `nosniff`, and no caching.
@@ -28,7 +28,7 @@ defmodule PrismWeb.FileController do
 
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, ctx} <- authenticate(token, athanor.id),
-         {:ok, physical} <- located(Enum.join(segments, "/")) do
+         {:ok, physical} <- located(ctx, Enum.join(segments, "/")) do
       name = List.last(segments)
 
       conn
@@ -55,8 +55,8 @@ defmodule PrismWeb.FileController do
     end
   end
 
-  defp located(path) do
-    case Cyfr.Files.locate(path) do
+  defp located(ctx, path) do
+    case Arca.Files.locate(Sanctum.Context.actor(ctx), path) do
       {:ok, physical, _tier} -> {:ok, physical}
       {:error, _} -> :not_found
     end

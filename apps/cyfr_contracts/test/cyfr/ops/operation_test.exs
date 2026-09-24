@@ -172,6 +172,80 @@ defmodule Cyfr.Ops.OperationTest do
     assert_raise ArgumentError, fn -> Operation.tool([%{op | description: ""}]) end
   end
 
+  defp resource_read(opts \\ []) do
+    Operation.new(
+      "sample",
+      "read_resource",
+      "Read a sample:// resource",
+      Keyword.get(opts, :args, [Arg.new("uri", :string, required: true)]),
+      Keyword.merge(
+        [
+          kind: :read,
+          planes: [:external],
+          permission: :storage_read,
+          recovery: :replay_safe,
+          resource_schemes: ["sample"]
+        ],
+        Keyword.delete(opts, :args)
+      )
+    )
+  end
+
+  describe "resource_schemes" do
+    test "default to none, and stay out of the annotation and discovery views" do
+      plain = Operation.new("sample", "list", "List", [], kind: :read, planes: [:external])
+      assert plain.resource_schemes == []
+
+      op = resource_read()
+      assert op.resource_schemes == ["sample"]
+
+      definition = Operation.tool([op])
+      refute Map.has_key?(definition.annotations.actions["read_resource"], :resource_schemes)
+      refute Map.has_key?(Operation.annotations(op), :resource_schemes)
+      refute inspect(definition.input_schema) =~ "resource_schemes"
+      assert definition.input_schema["required"] == ["action", "uri"]
+    end
+
+    test "a scheme is a unique lowercase URI scheme" do
+      assert resource_read(resource_schemes: ["sample", "sample+v2", "a.b-c"]).resource_schemes ==
+               ["sample", "sample+v2", "a.b-c"]
+
+      for bad <- [["Sample"], ["sample", "sample"], ["1sample"], [""], ["sam ple"], [:sample]] do
+        assert_raise ArgumentError, fn -> resource_read(resource_schemes: bad) end
+      end
+
+      op = resource_read()
+      assert_raise ArgumentError, fn -> Operation.validate!(%{op | resource_schemes: nil}) end
+    end
+
+    test "a resource read is an external, consent-free, replay-safe read of one required uri" do
+      for opts <- [
+            [kind: :write, recovery: nil],
+            [planes: [:external, :in_chain]],
+            [consent: :interactive],
+            [recovery: nil],
+            [args: []],
+            [args: [Arg.new("uri", :string)]],
+            [args: [Arg.new("uri", :string, required: true, nullable: true)]],
+            [args: [Arg.new("uri", :integer, required: true)]],
+            [args: [Arg.new("path", :string, required: true)]],
+            [args: [Arg.new("uri", :string, required: true), Arg.new("extra", :string)]]
+          ] do
+        assert_raise ArgumentError, fn -> resource_read(opts) end
+      end
+    end
+
+    test "an unknown option still refuses" do
+      assert_raise ArgumentError, ~r/unknown operation annotations/, fn ->
+        Operation.new("sample", "list", "List", [],
+          kind: :read,
+          planes: [:external],
+          resource_scheme: ["sample"]
+        )
+      end
+    end
+  end
+
   test "wire restriction narrows the action enum and keeps everything else" do
     original = Map.put(tool().input_schema, "description", "Unchanged")
     restricted = Operation.restrict_schema(original, ["list", "unknown"])

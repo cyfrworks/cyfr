@@ -4,9 +4,13 @@
 defmodule Sanctum.MCP.SessionTool do
   @moduledoc """
   Session tool handlers for the Sanctum MCP provider — login, logout,
-  whoami, and device-flow OAuth.
+  whoami, device-flow OAuth, and the caller's self-description resources.
 
-  Extracted from `Sanctum.MCP`; behaviour preserved exactly.
+  `read_resource` admits an MCP `resources/read` of `sanctum://identity`
+  or `sanctum://permissions`. It is `auth: :anonymous` and needs no
+  permission: it answers from the caller's established context alone and
+  reads no stored tenant data, so an anonymous caller is told only its
+  own empty identity.
   """
 
   require Logger
@@ -84,6 +88,24 @@ defmodule Sanctum.MCP.SessionTool do
           ],
           kind: :write,
           planes: [:external]
+        ),
+        # The admission of an MCP `resources/read` of the caller's own
+        # self-description (`Sanctum.MCP.resources/0`).
+        Operation.new(
+          "session",
+          "read_resource",
+          "Read a sanctum:// self-description",
+          [
+            Arg.new("uri", :string,
+              required: true,
+              description: "sanctum://identity or sanctum://permissions"
+            )
+          ],
+          auth: :anonymous,
+          kind: :read,
+          planes: [:external],
+          recovery: :replay_safe,
+          resource_schemes: ["sanctum"]
         )
       ],
       description:
@@ -284,6 +306,25 @@ defmodule Sanctum.MCP.SessionTool do
     {:error, {:invalid_argument, "Missing required argument: device_code"}}
   end
 
+  # The caller's own self-description, from the context the transport
+  # established and nothing stored: an anonymous caller reads its own
+  # empty identity, never a tenant's data.
+  def handle(%Context{} = ctx, %{"action" => "read_resource", "uri" => "sanctum://identity"}) do
+    self_description(%{user_id: ctx.user_id, athanor_id: ctx.athanor_id, scope: ctx.scope})
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "read_resource", "uri" => "sanctum://permissions"}) do
+    self_description(%{permissions: Sanctum.MCP.Shared.format_permissions(ctx.permissions)})
+  end
+
+  def handle(_ctx, %{"action" => "read_resource", "uri" => uri}) when is_binary(uri) do
+    {:error, {:invalid_argument, "Unknown resource URI: #{uri}"}}
+  end
+
+  def handle(_ctx, %{"action" => "read_resource"}) do
+    {:error, {:invalid_argument, "Missing required argument: uri"}}
+  end
+
   # The terminal clause answers both shapes the dispatcher already
   # distinguishes: no `action` at all, and one this tool does not know.
   def handle(_ctx, args) do
@@ -299,6 +340,16 @@ defmodule Sanctum.MCP.SessionTool do
   defp unknown_provider_message(name) do
     "Unknown sign-in provider #{inspect(to_string(name))}. " <>
       "This server knows: #{Enum.join(Sanctum.Auth.DeviceFlow.providers(), ", ")}."
+  end
+
+  defp self_description(fields) do
+    content =
+      case Jason.encode(fields) do
+        {:ok, json} -> json
+        {:error, _} -> ~s({"error":"encoding_error"})
+      end
+
+    {:ok, %{content: content, mimeType: Cyfr.MediaType.json()}}
   end
 
   # session.whoami helpers: the display fields the Context carries.

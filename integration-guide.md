@@ -406,7 +406,7 @@ one annotation. It is short:
 
 | Tool | Actions | Why Public |
 |------|---------|------------|
-| `session` | `login`, `logout`, `whoami`, `device_init`, `device_poll` | Needed to authenticate in the first place |
+| `session` | `login`, `logout`, `whoami`, `device_init`, `device_poll`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions |
 | `system` | `status` | Health checks |
 
 That is the whole list, and it does **not** widen on a server without an
@@ -416,13 +416,25 @@ either way. In particular `component.search`/`inspect`/`categories`,
 or an API key, and `session.use` — switching which athanor you work in —
 needs one too, since there has to be a session to switch.
 
+MCP resources follow the same rule. `resources/list` and
+`resources/templates/list` are open metadata, but a `resources/read` is
+admitted by the one operation that declares the URI's scheme, through the
+same gate as a tool call: `compendium://` by `component.read_resource`
+(`component_read`), `opus://` by `execution.read_resource` and `arca://` by
+`resource.read` (both `storage_read`), and `sanctum://identity` and
+`sanctum://permissions` by `session.read_resource`, the one resource read an
+uncredentialed caller may make. A read the gate refuses for authentication
+or permission answers the same `-33001` or `-33004` a tool call gets; an
+unknown scheme or a missing file answers the JSON-RPC `-32002` resource
+error.
+
 A second tier sits between public and fully authenticated: actions
 annotated `auth: :signed_in` serve a caller holding a live session that
 has not yet claimed a namespace, which is how the first-login flow
 (`registry.probe`, `registry.claim_personal`) completes. Those are not
 public — they need the session — but they do not need a claimed identity.
 
-Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
+Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
 ---
 

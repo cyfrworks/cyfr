@@ -256,7 +256,7 @@ defmodule Compendium.Component do
   # ============================================================================
 
   defp declared_needs(manifest) do
-    Compendium.Manifest.Needs.from_manifest(manifest) || []
+    Cyfr.Manifest.Needs.from_manifest(manifest) || []
   end
 
   defp extract_dependency_refs(component) do

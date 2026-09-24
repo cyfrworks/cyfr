@@ -14,7 +14,6 @@ defmodule Arca.IntegrationTest do
 
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.Tools.RecordsProvider, as: MCP
   alias Cyfr.Retention
   alias Sanctum.Context
 
@@ -172,7 +171,7 @@ defmodule Arca.IntegrationTest do
     test "retention workflow via MCP", %{ctx: ctx, actor: actor} do
       # 1. Set retention via MCP
       {:ok, set_result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "set",
           "settings" => %{"executions" => 2}
         })
@@ -200,7 +199,7 @@ defmodule Arca.IntegrationTest do
 
       # 3. Dry run via MCP
       {:ok, dry_result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => true
@@ -210,7 +209,7 @@ defmodule Arca.IntegrationTest do
 
       # 4. Actual cleanup via MCP
       {:ok, cleanup_result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions"
         })
@@ -219,7 +218,7 @@ defmodule Arca.IntegrationTest do
 
       # 5. Verify via MCP get
       {:ok, get_result} =
-        MCP.handle("retention", ctx, %{
+        Retention.handle("retention", ctx, %{
           "action" => "get"
         })
 

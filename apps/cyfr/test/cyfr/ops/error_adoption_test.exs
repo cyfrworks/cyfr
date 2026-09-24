@@ -46,7 +46,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     # the action-coverage case reads one vocabulary.
     "apps/cyfr/lib/cyfr/schedules/provider.ex" => 18,
     "apps/sanctum/lib/sanctum/mcp/webhook_tool.ex" => 18,
-    "apps/cyfr/lib/cyfr/execution/mcp.ex" => 14,
+    "apps/cyfr/lib/cyfr/execution/mcp.ex" => 13,
     # An upstream registry's own diagnostics, which are its words and not
     # this vocabulary's.
     "apps/cyfr/lib/compendium/oci/client.ex" => 12,
@@ -57,13 +57,12 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     # terms.
     "apps/cyfr/lib/cyfr/schedules/cron.ex" => 10,
     "apps/cyfr/lib/compendium/scaffold.ex" => 8,
-    "apps/cyfr/lib/compendium/mcp.ex" => 7,
+    "apps/cyfr/lib/compendium/mcp.ex" => 6,
     "apps/cyfr/lib/compendium/mcp/component_tool.ex" => 7,
     "apps/cyfr/lib/cyfr/tincture_helpers.ex" => 7,
     "apps/sanctum/lib/sanctum/mcp/profile_tool.ex" => 7,
     "apps/sanctum/lib/sanctum/webhook.ex" => 7,
     "apps/cyfr/lib/emissary/mcp/mcp_servers_tool.ex" => 6,
-    "apps/cyfr/lib/emissary/mcp/tools/records_provider.ex" => 6,
     "apps/cyfr/lib/compendium/fork.ex" => 5,
     "apps/cyfr/lib/compendium/oci/reference.ex" => 5,
     "apps/cyfr_contracts/lib/cyfr/limits.ex" => 5,
@@ -73,12 +72,14 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/mcp/shared.ex" => 4,
     "apps/cyfr/lib/compendium/registry.ex" => 4,
     "apps/cyfr/lib/cyfr/ops/catalog.ex" => 4,
-    "apps/cyfr/lib/emissary/mcp/resource_registry.ex" => 4,
     # The build orchestration behind `Compendium.Builds.Provider`: the
     # three this ratchet could not see until the scan followed a tool
     # module into what it calls.
     "apps/cyfr/lib/compendium/builds.ex" => 3,
     "apps/cyfr/lib/emissary/mcp/external_provider.ex" => 3,
+    # The retention tool's handlers, moved with their sentences until the
+    # storage layer owns retention.
+    "apps/cyfr/lib/cyfr/retention.ex" => 3,
     "apps/sanctum/lib/sanctum/mcp/oauth_tool.ex" => 3,
     # Two of the three are the capacity refusals a poller sees when the
     # server will not mint them an athanor: remediation prose (wait, or ask
@@ -91,7 +92,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/builds/provider.ex" => 2,
     "apps/cyfr/lib/cyfr/execution/record.ex" => 2,
     "apps/cyfr_contracts/lib/cyfr/ops/arg.ex" => 2,
-    "apps/sanctum/lib/sanctum/mcp.ex" => 2,
+    "apps/sanctum/lib/sanctum/mcp.ex" => 1,
     "apps/cyfr/lib/compendium/pull.ex" => 1,
     "apps/sanctum/lib/sanctum/api_key.ex" => 1,
     "apps/sanctum/lib/sanctum/auth/device_flow.ex" => 1,

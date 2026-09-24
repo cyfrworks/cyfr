@@ -202,6 +202,8 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
                  {"session", "whoami"},
                  {"session", "device_init"},
                  {"session", "device_poll"},
+                 # The caller's own self-description, from its context alone.
+                 {"session", "read_resource"},
                  {"system", "status"}
                ])
              )

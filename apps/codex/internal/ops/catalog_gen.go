@@ -30,6 +30,7 @@ const (
 	Profile            = "profile"
 	Record             = "record"
 	Registry           = "registry"
+	Resource           = "resource"
 	Retention          = "retention"
 	Schedule           = "schedule"
 	Session            = "session"
@@ -85,6 +86,7 @@ const (
 	ComponentList           = "list"
 	ComponentPull           = "pull"
 	ComponentPush           = "push"
+	ComponentReadResource   = "read_resource"
 	ComponentRegister       = "register"
 	ComponentReset          = "reset"
 	ComponentSearch         = "search"
@@ -101,6 +103,7 @@ const (
 	ExecutionForceRelease   = "force_release"
 	ExecutionList           = "list"
 	ExecutionLogs           = "logs"
+	ExecutionReadResource   = "read_resource"
 	ExecutionRun            = "run"
 	ExecutionRunStream      = "run_stream"
 	ExecutionStatus         = "status"
@@ -173,6 +176,7 @@ const (
 	RegistryTokensRevoke    = "tokens_revoke"
 	RegistryVerifyPublisher = "verify_publisher"
 	RegistryWhoami          = "whoami"
+	ResourceRead            = "read"
 	RetentionCleanup        = "cleanup"
 	RetentionGet            = "get"
 	RetentionSet            = "set"
@@ -188,6 +192,7 @@ const (
 	SessionDevicePoll       = "device_poll"
 	SessionLogin            = "login"
 	SessionLogout           = "logout"
+	SessionReadResource     = "read_resource"
 	SessionUse              = "use"
 	SessionWhoami           = "whoami"
 	SystemNotify            = "notify"
@@ -234,9 +239,9 @@ var Actions = map[string][]string{
 	"aqua":                {"create", "delete", "get", "list", "reset", "skill_create", "skill_delete", "skill_get", "skill_list", "skill_reset", "skill_update", "status", "update"},
 	"athanor":             {"archive", "create", "destroy", "get", "list", "pair", "provision", "purge", "rename", "settings", "unarchive"},
 	"build":               {"compile", "status", "toolchains", "validate"},
-	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "register", "reset", "search", "setup_plan", "status", "yank"},
+	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
-	"execution":           {"cancel", "force_release", "list", "logs", "run", "run_stream", "status"},
+	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status"},
 	"file":                {"delete", "list", "read", "write"},
 	"key":                 {"create", "get", "list", "revoke", "rotate"},
 	"mcp_log":             {"correlate", "fan_outs", "get", "list", "stats"},
@@ -248,9 +253,10 @@ var Actions = map[string][]string{
 	"profile":             {"commit", "grant", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
 	"registry":            {"appeal", "claim_personal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "probe", "report", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"device_init", "device_poll", "login", "logout", "use", "whoami"},
+	"session":             {"device_init", "device_poll", "login", "logout", "read_resource", "use", "whoami"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "events", "follow", "get", "list", "messages", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
 	"tincture_visibility": {"get"},
@@ -951,6 +957,21 @@ func (args ComponentPushArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ComponentPush, fields: fields(args)})
 }
 
+// ComponentReadResourceArgs carries arguments for component.read_resource.
+type ComponentReadResourceArgs struct {
+	// compendium://components/{reference} for a component's metadata, or compendium://assets/{reference}/{path} for one of its files
+	Uri string `json:"uri"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ComponentReadResourceArgs) MarshalJSON() ([]byte, error) {
+	type fields ComponentReadResourceArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ComponentReadResource, fields: fields(args)})
+}
+
 // ComponentRegisterArgs carries arguments for component.register.
 type ComponentRegisterArgs struct {
 	// Correlation ID for registration progress events
@@ -1209,6 +1230,21 @@ func (args ExecutionLogsArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ExecutionLogs, fields: fields(args)})
+}
+
+// ExecutionReadResourceArgs carries arguments for execution.read_resource.
+type ExecutionReadResourceArgs struct {
+	// opus://executions/{id} for an execution's state, or opus://executions/{id}/logs for its logs
+	Uri string `json:"uri"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ExecutionReadResourceArgs) MarshalJSON() ([]byte, error) {
+	type fields ExecutionReadResourceArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ExecutionReadResource, fields: fields(args)})
 }
 
 // ExecutionRunArgs carries arguments for execution.run.
@@ -2752,6 +2788,21 @@ func (args RegistryWhoamiArgs) MarshalJSON() ([]byte, error) {
 	}{Action: RegistryWhoami, fields: fields(args)})
 }
 
+// ResourceReadArgs carries arguments for resource.read.
+type ResourceReadArgs struct {
+	// The resource URI, like arca://files/data/reports/q3.csv
+	Uri string `json:"uri"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ResourceReadArgs) MarshalJSON() ([]byte, error) {
+	type fields ResourceReadArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ResourceRead, fields: fields(args)})
+}
+
 // RetentionCleanupArgs carries arguments for retention.cleanup.
 type RetentionCleanupArgs struct {
 	// Kind of records to clean up
@@ -3037,6 +3088,21 @@ func (args SessionLogoutArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionLogout, fields: fields(args)})
+}
+
+// SessionReadResourceArgs carries arguments for session.read_resource.
+type SessionReadResourceArgs struct {
+	// sanctum://identity or sanctum://permissions
+	Uri string `json:"uri"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionReadResourceArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionReadResourceArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionReadResource, fields: fields(args)})
 }
 
 // SessionUseArgs carries arguments for session.use.

@@ -13,6 +13,7 @@ defmodule Cyfr.Execution.MCP do
   - `cancel` - Cancel a running execution
   - `status` - Execution slot diagnostics
   - `force_release` - Release every athanor's execution slots (operator only)
+  - `read_resource` - Read an `opus://executions/…` resource
 
   Runs and cancels go through `Cyfr.Execution`; reads
   come from the execution records (`Cyfr.Execution.Record`). Its service
@@ -40,7 +41,7 @@ defmodule Cyfr.Execution.MCP do
   @slots Cyfr.Execution.Slots
 
   # ============================================================================
-  # ResourceProvider Protocol
+  # Resources
   # ============================================================================
 
   def resources do
@@ -48,7 +49,9 @@ defmodule Cyfr.Execution.MCP do
   end
 
   @doc """
-  Returns the execution resource templates (RFC 6570 URI templates).
+  Returns the execution resource templates (RFC 6570 URI templates). A
+  read of either is the `execution.read_resource` operation, admitted by
+  the gate under `:storage_read`.
   """
   def resource_templates do
     [
@@ -67,33 +70,24 @@ defmodule Cyfr.Execution.MCP do
     ]
   end
 
-  def read(%Context{authenticated: false}, "opus://executions/" <> _rest) do
-    # Return a typed auth refusal for the router to render.
-    {:error, :unauthenticated}
-  end
+  # The gate admitted the read (authenticated, `:storage_read`, the
+  # external plane); `Cyfr.Execution.Record.get/2` supplies the tenant
+  # scoping under the caller's own context.
+  defp read_resource(%Context{} = ctx, "opus://executions/" <> rest) do
+    case parse_execution_uri(rest) do
+      {:execution, exec_id} ->
+        get_execution_resource(ctx, exec_id)
 
-  def read(%Context{} = ctx, "opus://executions/" <> rest) do
-    # Resources have no annotation chokepoint — the router delegates
-    # authorization to each handler, so the `:storage_read` the execution
-    # record tools declare is enforced here; `Cyfr.Execution.Record.get/2`
-    # supplies the tenant scoping.
-    with :ok <- Context.require_permission(ctx, :storage_read) do
-      case parse_execution_uri(rest) do
-        {:execution, exec_id} ->
-          get_execution_resource(ctx, exec_id)
+      {:execution_logs, exec_id} ->
+        get_execution_logs_resource(ctx, exec_id)
 
-        {:execution_logs, exec_id} ->
-          get_execution_logs_resource(ctx, exec_id)
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  def read(_ctx, uri) do
-    {:error, "Unknown resource URI: #{uri}"}
-  end
+  defp read_resource(_ctx, uri),
+    do: {:error, {:invalid_argument, "Unknown resource URI: #{uri}"}}
 
   # Parse the URI path after "opus://executions/"
   # Supports: {id} -> execution state, {id}/logs -> execution logs
@@ -107,7 +101,8 @@ defmodule Cyfr.Execution.MCP do
 
       _ ->
         {:error,
-         "Invalid execution URI format. Expected: opus://executions/{id} or opus://executions/{id}/logs"}
+         {:invalid_argument,
+          "Invalid execution URI format. Expected: opus://executions/{id} or opus://executions/{id}/logs"}}
     end
   end
 
@@ -132,7 +127,7 @@ defmodule Cyfr.Execution.MCP do
 
         case Jason.encode(content, pretty: true) do
           {:ok, json} ->
-            {:ok, json}
+            {:ok, %{content: json, mimeType: Cyfr.MediaType.json()}}
 
           {:error, err} ->
             Logger.error(
@@ -144,6 +139,9 @@ defmodule Cyfr.Execution.MCP do
 
       {:error, :not_found} ->
         {:error, {:not_found, "Execution", exec_id}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -155,10 +153,13 @@ defmodule Cyfr.Execution.MCP do
         # In the future, this will also include component-emitted debug
         # output via the planned `cyfr:debug/log` WIT interface.
         logs = format_execution_logs(record)
-        {:ok, logs}
+        {:ok, %{content: logs, mimeType: "text/plain"}}
 
       {:error, :not_found} ->
         {:error, {:not_found, "Execution", exec_id}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -412,6 +413,25 @@ defmodule Cyfr.Execution.MCP do
             scope: :platform,
             kind: :destructive,
             planes: [:external]
+          ),
+          # The admission of an MCP `resources/read` of an opus:// URI
+          # (`resource_templates/0`).
+          Operation.new(
+            "execution",
+            "read_resource",
+            "Read an opus://executions/ resource",
+            [
+              Arg.new("uri", :string,
+                required: true,
+                description:
+                  "opus://executions/{id} for an execution's state, or opus://executions/{id}/logs for its logs"
+              )
+            ],
+            kind: :read,
+            planes: [:external],
+            permission: :storage_read,
+            recovery: :replay_safe,
+            resource_schemes: ["opus"]
           )
         ],
         description: "Execute WASM components and manage execution instances",
@@ -582,6 +602,14 @@ defmodule Cyfr.Execution.MCP do
       {:ok, _released} ->
         {:ok, Map.put(scoped_slot_status(ctx, slot_status()), :force_released, true)}
     end
+  end
+
+  def handle("execution", %Context{} = ctx, %{"action" => "read_resource", "uri" => uri})
+      when is_binary(uri),
+      do: read_resource(ctx, uri)
+
+  def handle("execution", _ctx, %{"action" => "read_resource"}) do
+    {:error, {:invalid_argument, "Missing required argument: uri"}}
   end
 
   # Invalid action

@@ -17,7 +17,15 @@ defmodule Sanctum.MCPDispatchContractTest do
   @tool_names ~w(session athanor member door oauth key tincture_visibility webhook vault profile)
 
   @action_enums %{
-    "session" => ["login", "logout", "whoami", "device_init", "device_poll", "use"],
+    "session" => [
+      "login",
+      "logout",
+      "whoami",
+      "device_init",
+      "device_poll",
+      "use",
+      "read_resource"
+    ],
     "athanor" => [
       "list",
       "get",
@@ -107,7 +115,7 @@ defmodule Sanctum.MCPDispatchContractTest do
     end
   end
 
-  describe "read/2 — contract" do
+  describe "session.read_resource — contract" do
     setup do
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -116,7 +124,7 @@ defmodule Sanctum.MCPDispatchContractTest do
 
     test "sanctum://identity returns JSON with user_id/athanor_id/scope", %{ctx: ctx} do
       assert {:ok, %{content: content, mimeType: "application/json"}} =
-               MCP.read(ctx, "sanctum://identity")
+               read(ctx, "sanctum://identity")
 
       decoded = Jason.decode!(content)
       assert decoded["user_id"] == ctx.user_id
@@ -126,15 +134,33 @@ defmodule Sanctum.MCPDispatchContractTest do
 
     test "sanctum://permissions returns JSON with a permissions key", %{ctx: ctx} do
       assert {:ok, %{content: content, mimeType: "application/json"}} =
-               MCP.read(ctx, "sanctum://permissions")
+               read(ctx, "sanctum://permissions")
 
       assert Map.has_key?(Jason.decode!(content), "permissions")
     end
 
-    test "unknown URI → exact error string", %{ctx: ctx} do
-      assert MCP.read(ctx, "sanctum://nope") == {:error, "Unknown resource URI: sanctum://nope"}
+    test "unknown URI → exact typed refusal", %{ctx: ctx} do
+      assert read(ctx, "sanctum://nope") ==
+               {:error, {:invalid_argument, "Unknown resource URI: sanctum://nope"}}
+    end
+
+    test "the declaration: anonymous, no permission, external, replay-safe, one uri" do
+      [session] = Enum.filter(MCP.tools(), &(&1.name == "session"))
+      op = Enum.find(session.operations, &(&1.action == "read_resource"))
+
+      assert %{auth: :anonymous, permission: nil, planes: [:external], kind: :read} = op
+      assert op.recovery == :replay_safe
+      assert op.resource_schemes == ["sanctum"]
+      assert [%{name: "uri", type: :string, required: true}] = op.args
     end
   end
+
+  defp read(ctx, uri),
+    do:
+      Cyfr.Ops.Catalog.call_external("session", ctx, %{
+        "action" => "read_resource",
+        "uri" => uri
+      })
 
   describe "handle/3 — terminal clauses (the split tripwires)" do
     setup do

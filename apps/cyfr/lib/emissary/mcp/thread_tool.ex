@@ -22,9 +22,8 @@ defmodule Emissary.MCP.ThreadTool do
   `Arca.ThreadSubscriptionStorage` for the caller alone, and `aloud` is
   `Aqua.Aloud.post/5` with every rule decided there.
 
-  It lives in Emissary rather than beside the runner for the same reason
-  `Emissary.MCP.Tools.RecordsProvider` does: the tool surface is the
-  transport's, and it calls *into* a domain. `Aqua.ToolSeamTest` keeps the
+  It lives in Emissary rather than beside the runner because the tool
+  surface is the transport's, and it calls *into* a domain. `Aqua.ToolSeamTest` keeps the
   arrow pointing this way — the assistant reaches MCP only through
   `Aqua.Ops`, never by owning a provider.
 

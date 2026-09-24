@@ -353,6 +353,26 @@ defmodule Compendium.MCP.ComponentTool do
           kind: :destructive,
           planes: [:external, :in_chain],
           permission: :component_manage
+        ),
+        # The admission of an MCP `resources/read` of a compendium:// URI
+        # (`Compendium.MCP.resource_templates/0`): the gate decides it
+        # like any other read, and the handler serves it.
+        Operation.new(
+          "component",
+          "read_resource",
+          "Read a compendium:// resource",
+          [
+            Arg.new("uri", :string,
+              required: true,
+              description:
+                "compendium://components/{reference} for a component's metadata, or compendium://assets/{reference}/{path} for one of its files"
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          permission: :component_read,
+          recovery: :replay_safe,
+          resource_schemes: ["compendium"]
         )
       ],
       description:

@@ -12,13 +12,13 @@ defmodule Cyfr.Ops.Catalog do
   ## Architecture
 
   ```
-  ┌─────────────────────────────────────────────────────────────────┐
-  │  Cyfr.Ops.Catalog (GenServer)                          │
-  │  ├── Arca.Cache keys: {:mcp_tool, name}                         │
-  │  │   └── {:mcp_tool, "retention"} => {Emissary.MCP.Tools.RecordsProvider, %{desc, ...}}   │
-  │  │   └── {:mcp_tool, "execution"} => {Cyfr.Execution.MCP, %{...}}        │
-  │  └── Providers: [Emissary.MCP.Tools.RecordsProvider, Cyfr.Execution.MCP, ...]                       │
-  └─────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  Cyfr.Ops.Catalog (GenServer)                                        │
+  │  ├── Arca.Cache keys: {:mcp_tool, name}                              │
+  │  │   └── {:mcp_tool, "record"} => {Arca.Providers.Records, %{...}}   │
+  │  │   └── {:mcp_tool, "execution"} => {Cyfr.Execution.MCP, %{...}}    │
+  │  └── Providers: [Arca.Providers.Records, Cyfr.Execution.MCP, ...]    │
+  └──────────────────────────────────────────────────────────────────────┘
   ```
 
   ## Usage
@@ -47,6 +47,17 @@ defmodule Cyfr.Ops.Catalog do
   key, is judged by the annotations alone: plane, auth, permission,
   consent class, scope. There is no rule that depends on which runner is
   asking.
+
+  ## What a handler is given
+
+  The gate decides with the caller's full context. Only after
+  authentication, consent, argument validation and lineage have run does
+  the handler receive its input, projected once in `route/5`'s handler
+  closure: a provider declaring `context_kind: :actor`
+  (`Cyfr.Ops.Provider.context_kind/1`) is given `Sanctum.Context.actor/1`
+  of that context and nothing else, on either plane; every other provider
+  is given the context. The boot audit refuses a provider that declares
+  anything else.
   """
 
   use GenServer
@@ -990,7 +1001,10 @@ defmodule Cyfr.Ops.Catalog do
           with :ok <- authorize_declared_action(name, ctx, args, in_chain?),
                {:ok, args} <- Operation.cast(meta, args) do
             args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
-            execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
+
+            execute_tool_call(name, ctx, opts, fn ->
+              module.handle(name, handler_input(module, ctx), args)
+            end)
           else
             {:error, _} = refusal -> refusal
           end
@@ -1036,6 +1050,17 @@ defmodule Cyfr.Ops.Catalog do
           result ->
             {result, %{routed_to: "external:#{name}"}}
         end
+    end
+  end
+
+  # The one projection: after the gate has decided with the full context,
+  # an `:actor` provider is handed the actor alone — no credential, no
+  # permission set, no session reaches a handler that declared it needs
+  # none.
+  defp handler_input(module, ctx) do
+    case Cyfr.Ops.Provider.context_kind(module) do
+      :actor -> Context.actor(ctx)
+      :context -> ctx
     end
   end
 
@@ -1141,6 +1166,119 @@ defmodule Cyfr.Ops.Catalog do
     ]
 
   @doc """
+  Audit every provider's declared handler input
+  (`c:Cyfr.Ops.Provider.context_kind/0`). A value outside
+  `:context | :actor`, or a declaration that cannot be read, is a finding:
+  the gate cannot tell what such a handler may be given, so the catalog
+  refuses to boot rather than hand it the full context by default.
+
+  Returns `:ok`, or `{:error, [%{provider: module, reason: :invalid_context_kind}]}`.
+  """
+  @spec audit_context_kinds([module()]) :: :ok | {:error, [map()]}
+  def audit_context_kinds(providers \\ available_providers()) do
+    findings =
+      for module <- providers,
+          not context_kind_valid?(module),
+          do: %{provider: module, reason: :invalid_context_kind}
+
+    if findings == [], do: :ok, else: {:error, findings}
+  end
+
+  defp context_kind_valid?(module) do
+    Cyfr.Ops.Provider.context_kind(module) in [:context, :actor]
+  rescue
+    _ -> false
+  end
+
+  @doc """
+  Audit the MCP resource surface against the operation table, so what
+  `resources/list` advertises and what `resources/read` can dispatch are
+  one declaration.
+
+  The findings:
+
+    * `:unowned_scheme` — a provider advertises a resource URI or template
+      whose scheme no operation of that provider declares in
+      `resource_schemes`;
+    * `:unadvertised_scheme` — an operation declares a scheme its provider
+      advertises no resource or template for;
+    * `:scheme_declared_twice` — two operations declare one scheme, so a
+      read of it could not name one gate;
+    * `:malformed_resource_uri` — an advertised URI or template names no
+      scheme;
+    * `:tool_registered_twice` — two providers (or one, twice) declare the
+      same tool name, which the catalog would otherwise overwrite silently.
+
+  Returns `:ok` or `{:error, findings}`; the catalog refuses to boot on
+  any finding.
+  """
+  @spec audit_resource_schemes([module()]) :: :ok | {:error, [map()]}
+  def audit_resource_schemes(providers \\ available_providers()) do
+    tools = for module <- providers, tool <- module.tools(), do: {module, tool}
+
+    declared =
+      for {module, tool} <- tools,
+          %Operation{} = operation <- Map.get(tool, :operations, []),
+          scheme <- operation.resource_schemes,
+          do: {scheme, module, "#{operation.tool}.#{operation.action}"}
+
+    {advertised, malformed} = advertised_schemes(providers)
+    owned = MapSet.new(declared, fn {scheme, module, _} -> {scheme, module} end)
+
+    findings =
+      malformed ++
+        for(
+          {scheme, module} <- advertised,
+          not MapSet.member?(owned, {scheme, module}),
+          do: %{provider: module, scheme: scheme, reason: :unowned_scheme}
+        ) ++
+        for(
+          {scheme, module, operation} <- declared,
+          {scheme, module} not in advertised,
+          do: %{
+            provider: module,
+            scheme: scheme,
+            operation: operation,
+            reason: :unadvertised_scheme
+          }
+        ) ++
+        for(
+          {scheme, owners} <- Enum.group_by(declared, &elem(&1, 0), &elem(&1, 2)),
+          length(owners) > 1,
+          do: %{scheme: scheme, operations: Enum.sort(owners), reason: :scheme_declared_twice}
+        ) ++
+        for(
+          {name, modules} <- Enum.group_by(tools, &elem(&1, 1).name, &elem(&1, 0)),
+          length(modules) > 1,
+          do: %{tool: name, providers: modules, reason: :tool_registered_twice}
+        )
+
+    if findings == [], do: :ok, else: {:error, findings}
+  end
+
+  # Every `{scheme, provider}` the providers advertise, and a finding for
+  # each advertised URI that names no scheme.
+  defp advertised_schemes(providers) do
+    entries =
+      for module <- providers,
+          {fun, key} <- [resources: :uri, resource_templates: :uriTemplate],
+          function_exported?(module, fun, 0),
+          entry <- apply(module, fun, []),
+          do: {module, Map.get(entry, key) || Map.get(entry, Atom.to_string(key))}
+
+    Enum.reduce(entries, {[], []}, fn {module, uri}, {advertised, malformed} ->
+      case Cyfr.Ops.Provider.resource_scheme(uri) do
+        {:ok, scheme} ->
+          {Enum.uniq(advertised ++ [{scheme, module}]), malformed}
+
+        :error ->
+          {advertised,
+           malformed ++ [%{provider: module, uri: uri, reason: :malformed_resource_uri}]}
+      end
+    end)
+  end
+
+  @doc """
   Every `tool.action` declared `recovery: :replay_safe`, derived from the
   providers' declarations: the operations a recovered turn may still
   dispatch past an uncertain step. There is no second list.
@@ -1207,6 +1345,30 @@ defmodule Cyfr.Ops.Catalog do
         lines = Enum.map(findings, &"  - #{&1.tool}.#{&1.action}: #{&1.reason}")
 
         raise "tool annotations failed the catalog audit; refusing to boot:\n" <>
+                Enum.join(lines, "\n")
+    end
+
+    # A handler input the gate cannot honour, or a resource read the gate
+    # cannot name, is the same kind of boot failure.
+    case audit_context_kinds() do
+      :ok ->
+        :ok
+
+      {:error, findings} ->
+        lines = Enum.map(findings, &"  - #{inspect(&1.provider)}: #{&1.reason}")
+
+        raise "provider handler inputs failed the catalog audit; refusing to boot:\n" <>
+                Enum.join(lines, "\n")
+    end
+
+    case audit_resource_schemes() do
+      :ok ->
+        :ok
+
+      {:error, findings} ->
+        lines = Enum.map(findings, &"  - #{inspect(&1)}")
+
+        raise "resource declarations failed the catalog audit; refusing to boot:\n" <>
                 Enum.join(lines, "\n")
     end
 

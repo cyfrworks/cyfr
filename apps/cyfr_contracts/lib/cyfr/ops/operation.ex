@@ -6,6 +6,14 @@ defmodule Cyfr.Ops.Operation do
   One tool action's identity, description, arguments and access/effect
   declaration. Discovery schemas and annotation views derive from these
   values. Contextual authorization belongs to the calling catalog gate.
+
+  `resource_schemes` names the MCP resource URI schemes this operation
+  reads (`compendium`, `arca`, …): an MCP `resources/read` of such a URI
+  is admitted as a call of this operation, through the same gate. It is
+  metadata for the resource adapter, not an access annotation, so it is
+  absent from the annotation view and from discovery. A resource read is
+  an external, consent-free, replay-safe read taking exactly one required
+  string argument, `uri`.
   """
 
   alias Cyfr.Ops.Arg
@@ -24,7 +32,8 @@ defmodule Cyfr.Ops.Operation do
     :standing,
     :recovery,
     :host,
-    auth: :required
+    auth: :required,
+    resource_schemes: []
   ]
 
   @type t :: %__MODULE__{
@@ -40,7 +49,8 @@ defmodule Cyfr.Ops.Operation do
           scope: :platform | nil,
           standing: :thread | false | nil,
           recovery: :replay_safe | nil,
-          host: :intercepted | nil
+          host: :intercepted | nil,
+          resource_schemes: [String.t()]
         }
 
   @valid_planes [:external, :in_chain]
@@ -64,7 +74,7 @@ defmodule Cyfr.Ops.Operation do
   @doc "Declare an action, refusing invalid or contradictory declarations."
   @spec new(String.t(), String.t(), String.t(), [Arg.t()], keyword()) :: t()
   def new(tool, action, description, args, opts) do
-    unknown = Keyword.keys(opts) -- @annotation_fields
+    unknown = Keyword.keys(opts) -- [:resource_schemes | @annotation_fields]
     if unknown != [], do: raise(ArgumentError, "unknown operation annotations")
 
     op =
@@ -108,8 +118,38 @@ defmodule Cyfr.Ops.Operation do
     if op.scope == :platform and op.planes != [:external],
       do: raise(ArgumentError, "platform actions must be external")
 
+    validate_resource_schemes!(op)
+  end
+
+  # A URI scheme as RFC 3986 spells it, lowercase only, so one scheme has
+  # one spelling in the index the resource adapter derives.
+  @scheme ~r/\A[a-z][a-z0-9+.\-]*\z/
+
+  defp validate_resource_schemes!(%__MODULE__{resource_schemes: []}), do: :ok
+
+  defp validate_resource_schemes!(%__MODULE__{resource_schemes: [_ | _] = schemes} = op) do
+    unless Enum.all?(schemes, &(is_binary(&1) and Regex.match?(@scheme, &1))) and
+             length(Enum.uniq(schemes)) == length(schemes),
+           do: raise(ArgumentError, "resource schemes must be unique lowercase URI schemes")
+
+    unless op.kind == :read and op.planes == [:external] and is_nil(op.consent) and
+             op.recovery == :replay_safe and uri_argument?(op.args),
+           do:
+             raise(
+               ArgumentError,
+               "a resource read is an external, consent-free, replay-safe read of one required uri"
+             )
+
     :ok
   end
+
+  defp validate_resource_schemes!(%__MODULE__{}),
+    do: raise(ArgumentError, "resource schemes must be a list")
+
+  defp uri_argument?([%Arg{name: "uri", type: :string, required: true, nullable: false}]),
+    do: true
+
+  defp uri_argument?(_args), do: false
 
   @doc "Materialize a tool's discovery and annotation views from its operations."
   @spec tool([t()], keyword()) :: map()

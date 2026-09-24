@@ -35,9 +35,14 @@ defmodule Emissary.MCP.Router do
 
   ## Resource Methods
 
-  `resources/list`, `resources/templates/list` are intentionally unauthenticated
-  at the Router level. Resource metadata is non-sensitive; individual `resources/read`
-  handlers enforce their own authorization.
+  `resources/list` and `resources/templates/list` are unauthenticated
+  metadata. `resources/read` is an ordinary operation call:
+  `Emissary.MCP.ResourceRegistry.resolve/1` names the operation that
+  declares the URI's scheme, and the Router calls it once through
+  `Cyfr.Ops.Catalog.call_external/4` with the URI as its one argument —
+  the same gate, plane, authentication, permission and runner a
+  `tools/call` gets. The Router makes no authorization decision of its
+  own; it renders the answer.
 
   ## Dispatch Flow
 
@@ -250,8 +255,8 @@ defmodule Emissary.MCP.Router do
 
   # ============================================================================
   # Resource Methods
-  # Intentionally unauthenticated at Router level — resource metadata is
-  # non-sensitive. Individual read handlers enforce their own authorization.
+  # The lists are unauthenticated metadata; a read is admitted by the
+  # declared operation's gate (`read_resource/3`).
   # ============================================================================
 
   defp dispatch_method(_ctx, "resources/list", params, _id) do
@@ -287,7 +292,12 @@ defmodule Emissary.MCP.Router do
   end
 
   defp read_resource(ctx, uri, _id) do
-    case ResourceRegistry.read(ctx, uri) do
+    read =
+      with {:ok, tool, action} <- ResourceRegistry.resolve(uri) do
+        Catalog.call_external(tool, ctx, %{"action" => action, "uri" => uri}, runner: :supervised)
+      end
+
+    case read do
       {:ok, content} ->
         mime_type = Map.get(content, :mimeType, Cyfr.MediaType.json())
         encoded = encode_content(content)
@@ -319,7 +329,7 @@ defmodule Emissary.MCP.Router do
             {:error, :resource_not_found, Cyfr.Refusal.message(reason)}
 
           # A binary reason is a handler's crafted, client-safe diagnosis
-          # ("Invalid URI format: …", "No provider found for scheme …").
+          # ("Asset not found: …").
           is_binary(reason) ->
             {:error, :resource_not_found, reason}
 

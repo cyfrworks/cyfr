@@ -69,9 +69,15 @@ defmodule Cyfr.Ops.ReplaySafeAuditTest do
              "aqua.skill_list",
              "component.inspect",
              "component.list",
+             # The four declared resource reads: a resource read is always
+             # replay-safe (`Cyfr.Ops.Operation.validate!/1`).
+             "component.read_resource",
+             "execution.read_resource",
              "notes.list",
              "notes.read",
              "notes.search",
+             "resource.read",
+             "session.read_resource",
              # A component's own source, read: re-reading it after an unknown
              # outcome tells the model what is there now, and changes nothing.
              "source.grep",

@@ -220,7 +220,7 @@ defmodule Arca.Storage do
   #   A future overlaid root is one row here plus one locator module
   #   (and, if its media has validity rules, a provisioning seed-check).
   # - console tier: how the Files page and the `file` tool show the root
-  #   to a person (`Cyfr.Files`). `:open` is theirs to fill and clear;
+  #   to a person (`Arca.Files`). `:open` is theirs to fill and clear;
   #   `:shaped` holds units a grammar shapes — files are edited in
   #   place, units are made and removed by the domain's own verbs;
   #   `:read` is shown and downloaded here, managed on its own page;
@@ -298,6 +298,25 @@ defmodule Arca.Storage do
   """
   @spec tenant_roots() :: [String.t()]
   def tenant_roots, do: @tenant_roots
+
+  # What a narrow storage key reads through the `arca://files/` resource:
+  # the roots an agent or a thread could have filled. A person reads every
+  # tenant root; the estate's components, its assistant tree, its notes
+  # and its payloads stay out of a key's reach.
+  @key_read_roots ["threads", "data"]
+
+  unless Enum.all?(@key_read_roots, &(&1 in @tenant_roots)),
+    do: raise(CompileError, description: "a key read root is not a tenant root")
+
+  @doc """
+  The tenant roots a key holding `:storage_read` without `:admin` reads
+  through the `arca://files/` resource — `threads/` and `data/`, a subset
+  of `tenant_roots/0`. The caller that admitted the read chooses between
+  the two lists; the reader intersects whatever it is given with
+  `tenant_roots/0`.
+  """
+  @spec key_read_roots() :: [String.t()]
+  def key_read_roots, do: @key_read_roots
 
   # Tenant roots only the server's own machinery may mutate: `payloads/`
   # holds bytes an `execution_payloads` row names by digest, so a
@@ -533,7 +552,7 @@ defmodule Arca.Storage do
   Whether a guest-facing storage path names a guest scope: the empty string
   (the scope listing), a bare scope (`"data"`, `"components"`), or anything
   under one (`"data/notes.txt"`). One predicate shared by the manifest
-  parser (`Compendium.Manifest.Caps`) and the guest storage boundary
+  validator (`Cyfr.Manifest.validate/2`) and the guest storage boundary
   (`Cyfr.Execution.GuestStorage`), so a grant no runtime
   would honor is refused at parse — and the two layers cannot drift.
 

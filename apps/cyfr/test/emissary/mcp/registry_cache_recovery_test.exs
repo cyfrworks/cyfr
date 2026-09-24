@@ -31,7 +31,7 @@ defmodule Emissary.MCP.RegistryCacheRecoveryTest do
     # up a tool that is no longer there.
     declared = declared_tools()
     refute declared == [], "no tools declared — the fixture proves nothing"
-    resources = length(ResourceRegistry.list_resources())
+    resources = resource_catalogue()
 
     on_exit(fn ->
       unless wait_until(fn -> whole?(declared, resources) end) do
@@ -49,6 +49,27 @@ defmodule Emissary.MCP.RegistryCacheRecoveryTest do
     |> Enum.map(& &1.name)
   end
 
+  # The resource catalogue is three things: the advertised resources and
+  # templates, and the scheme index a `resources/read` is dispatched by —
+  # a rebuild missing the index answers "No provider found" for a scheme
+  # the lists still advertise.
+  defp resource_catalogue do
+    schemes =
+      for module <- Catalog.available_providers(),
+          tool <- module.tools(),
+          operation <- tool.operations,
+          scheme <- operation.resource_schemes,
+          do: scheme
+
+    refute schemes == [], "no resource schemes declared — the fixture proves nothing"
+
+    %{
+      resources: length(ResourceRegistry.list_resources()),
+      templates: length(ResourceRegistry.list_resource_templates()),
+      schemes: schemes
+    }
+  end
+
   # The registries wait on the replacement owner's table before rebuilding,
   # so a case polls rather than asserting at once. Both registries watch
   # the owner, so the guarantee is that BOTH are back — and a case that
@@ -57,7 +78,9 @@ defmodule Emissary.MCP.RegistryCacheRecoveryTest do
   defp whole?(declared, resources) do
     is_pid(Process.whereis(Arca.Cache.Sweeper)) and
       Enum.all?(declared, &(Catalog.lookup(&1) != :miss)) and
-      length(ResourceRegistry.list_resources()) >= resources
+      length(ResourceRegistry.list_resources()) >= resources.resources and
+      length(ResourceRegistry.list_resource_templates()) >= resources.templates and
+      Enum.all?(resources.schemes, &match?({:ok, _, _}, ResourceRegistry.resolve(&1 <> "://x")))
   end
 
   defp wait_until(fun, remaining \\ 200)
@@ -120,6 +143,7 @@ defmodule Emissary.MCP.RegistryCacheRecoveryTest do
 
   test "the resource catalogue is rebuilt too", %{declared: declared, resources: resources} do
     refute ResourceRegistry.list_resources() == []
+    refute ResourceRegistry.list_resource_templates() == []
 
     owner = Process.whereis(Arca.Cache.Sweeper)
     ref = Process.monitor(owner)

@@ -1,27 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.FileTool do
+defmodule Arca.Providers.Files do
   @moduledoc """
   The `file` tool: the athanor's files on the wire, exactly as the Files
   page shows them.
 
-  The domain is `Cyfr.Files`; this module is its door. Paths are the
-  console's — `data/…`, `components/…`, `aqua/…`, `notes/…`,
-  `threads/…` — and what each folder allows is its tier, decided
-  in the domain. Reads take `storage_read`, writes and deletes
-  `storage_write`; a key with the permission may use them, so a
-  script can fill `data/` unattended. The actions are external-plane
-  only: a chain reaches files through its own consented hands.
+  The door is `Arca.Files`; this module is its operation declaration.
+  Paths are the console's — `data/…`, `components/…`, `aqua/…`,
+  `notes/…`, `threads/…` — and what each folder allows is its tier,
+  decided at the door. Reads take `storage_read`, writes and deletes
+  `storage_write`; a key with the permission may use them, so a script can
+  fill `data/` unattended. The actions are external-plane only: a chain
+  reaches files through its own consented hands.
+
+  The provider declares `context_kind: :actor`: the gate authorizes the
+  call with the caller's full context and hands this handler the
+  `Cyfr.Actor` it projects, and nothing else.
   """
 
   @behaviour Cyfr.Ops.Provider
 
-  alias Cyfr.Files
-  alias Sanctum.Context
+  alias Arca.Files
 
   @impl true
   def service, do: "files"
+
+  @impl true
+  def context_kind, do: :actor
 
   @impl true
   def tools, do: [definition()]
@@ -84,27 +90,28 @@ defmodule Emissary.MCP.FileTool do
   end
 
   @impl true
-  def handle("file", %Context{} = ctx, args), do: dispatch(ctx, args)
-  def handle(tool, _ctx, _args), do: {:error, {:not_found, "tool", tool}}
+  def handle("file", %Cyfr.Actor{} = actor, args), do: dispatch(actor, args)
+  def handle(tool, %Cyfr.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
 
-  defp dispatch(ctx, %{"action" => "list"} = args), do: Files.list(ctx, Map.get(args, "path", ""))
+  defp dispatch(actor, %{"action" => "list"} = args),
+    do: Files.list(actor, Map.get(args, "path", ""))
 
-  defp dispatch(ctx, %{"action" => "read", "path" => path}) when is_binary(path),
-    do: Files.read(ctx, path)
+  defp dispatch(actor, %{"action" => "read", "path" => path}) when is_binary(path),
+    do: Files.read(actor, path)
 
-  defp dispatch(ctx, %{"action" => "write", "path" => path, "content" => content} = args)
+  defp dispatch(actor, %{"action" => "write", "path" => path, "content" => content} = args)
        when is_binary(path) and is_binary(content),
-       do: Files.write(ctx, path, content, Map.get(args, "encoding", "utf8"))
+       do: Files.write(actor, path, content, Map.get(args, "encoding", "utf8"))
 
-  defp dispatch(ctx, %{"action" => "delete", "path" => path}) when is_binary(path),
-    do: Files.delete(ctx, path)
+  defp dispatch(actor, %{"action" => "delete", "path" => path}) when is_binary(path),
+    do: Files.delete(actor, path)
 
-  defp dispatch(_ctx, %{"action" => action}) when action in ~w(read delete),
+  defp dispatch(_actor, %{"action" => action}) when action in ~w(read delete),
     do: {:error, {:invalid_argument, "Missing required argument: path"}}
 
-  defp dispatch(_ctx, %{"action" => "write"}),
+  defp dispatch(_actor, %{"action" => "write"}),
     do: {:error, {:invalid_argument, "write needs path and content"}}
 
-  defp dispatch(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "file.#{action}"}}
-  defp dispatch(_ctx, _args), do: {:error, :action_missing}
+  defp dispatch(_actor, %{"action" => action}), do: {:error, {:unknown_action, "file.#{action}"}}
+  defp dispatch(_actor, _args), do: {:error, :action_missing}
 end
