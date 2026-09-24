@@ -52,7 +52,7 @@ defmodule PrismWeb.ChatLive do
      # The session's own estate, as the mount found it: where the chat
      # opens when the address names none. The page's context moves with
      # the estate it has open.
-     |> assign(:default_athanor_id, socket.assigns.context.athanor_id)
+     |> assign(:session_athanor_id, socket.assigns.context.athanor_id)
      |> assign(:mine, personal_athanor(socket.assigns.context))
      |> assign(:room_feed, PrismWeb.RoomFeed.topic(socket.id))
      |> assign(:room, nil)
@@ -101,7 +101,7 @@ defmodule PrismWeb.ChatLive do
     athanors = Sanctum.Tenancy.list_athanors(ctx)
 
     with {:ok, focus, athanor} <-
-           focus_on(ctx, socket.assigns.default_athanor_id, params["a"], athanors),
+           focus_on(ctx, socket.assigns.session_athanor_id, params["a"], athanors),
          {:ok, refocused} <- CyfrWeb.ContextGuard.refocus(socket, focus) do
       open_estate(refocused, athanor, athanors, params["c"])
     else
