@@ -34,7 +34,7 @@ defmodule Compendium.AquaPath do
   @skills "skills"
   @skill_manifest "SKILL.md"
   # The one grammar for role and scroll names — the tool boundary
-  # (`Compendium.MCP.AquaTool.validate_name`) and the unit locator both
+  # (`Compendium.Providers.Aqua.validate_name`) and the unit locator both
   # speak it, so a name the tools refuse can never mint a unit.
   @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9_-]*\z/
 

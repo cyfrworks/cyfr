@@ -30,7 +30,7 @@ defmodule Sanctum.TenancyMCPTest do
 
   use ExUnit.Case, async: false
 
-  alias Sanctum.MCP
+  alias Sanctum.Provider
   alias Sanctum.Tenancy.Athanors
   alias Sanctum.Tenancy.Members
 
@@ -61,7 +61,7 @@ defmodule Sanctum.TenancyMCPTest do
 
   defp group!(ctx, name \\ nil) do
     name = name || "Group #{System.unique_integer([:positive])}"
-    {:ok, result} = MCP.handle("athanor", ctx, %{"action" => "create", "name" => name})
+    {:ok, result} = Provider.handle("athanor", ctx, %{"action" => "create", "name" => name})
     result
   end
 
@@ -76,27 +76,27 @@ defmodule Sanctum.TenancyMCPTest do
       assert created.name == "Bells"
 
       assert {:ok, fetched} =
-               MCP.handle("athanor", ctx, %{"action" => "get", "athanor" => created.id})
+               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => created.id})
 
       assert fetched.id == created.id
 
       assert {:ok, %{members: [member], count: 1}} =
-               MCP.handle("member", ctx, %{"action" => "list", "athanor" => created.id})
+               Provider.handle("member", ctx, %{"action" => "list", "athanor" => created.id})
 
       assert member.user_id == ctx.user_id
     end
 
     test "create without a name is refused before anything is made", %{ctx: ctx} do
       assert {:error, {:invalid_argument, "Missing required argument: name"}} =
-               MCP.handle("athanor", ctx, %{"action" => "create"})
+               Provider.handle("athanor", ctx, %{"action" => "create"})
     end
 
     test "an unknown action names itself rather than falling through", %{ctx: ctx} do
       assert {:error, {:unknown_action, "athanor.explode"}} =
-               MCP.handle("athanor", ctx, %{"action" => "explode"})
+               Provider.handle("athanor", ctx, %{"action" => "explode"})
 
       assert {:error, {:unknown_action, "member.explode"}} =
-               MCP.handle("member", ctx, %{"action" => "explode"})
+               Provider.handle("member", ctx, %{"action" => "explode"})
     end
   end
 
@@ -108,34 +108,34 @@ defmodule Sanctum.TenancyMCPTest do
         Athanors.create_group(stranger, "Not Yours #{System.unique_integer([:positive])}")
 
       assert {:error, {:invalid_argument, "Not a member of that athanor"}} =
-               MCP.handle("athanor", ctx, %{"action" => "get", "athanor" => theirs.id})
+               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => theirs.id})
 
       assert {:error, {:invalid_argument, "Not a member of that athanor"}} =
-               MCP.handle("member", ctx, %{"action" => "list", "athanor" => theirs.id})
+               Provider.handle("member", ctx, %{"action" => "list", "athanor" => theirs.id})
     end
 
     test "an archived athanor is a hard stop except where the action asks for it", %{ctx: ctx} do
       created = group!(ctx)
 
       assert {:ok, %{status: "archived"}} =
-               MCP.handle("athanor", ctx, %{"action" => "archive", "athanor" => created.id})
+               Provider.handle("athanor", ctx, %{"action" => "archive", "athanor" => created.id})
 
       # The reads and `unarchive` pass `include_archived: true` and still work.
       assert {:ok, %{status: "archived"}} =
-               MCP.handle("athanor", ctx, %{"action" => "get", "athanor" => created.id})
+               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => created.id})
 
-      assert {:ok, _} = MCP.handle("member", ctx, %{"action" => "list", "athanor" => created.id})
+      assert {:ok, _} = Provider.handle("member", ctx, %{"action" => "list", "athanor" => created.id})
 
       # Everything that would change it does not.
       assert {:error, _} =
-               MCP.handle("athanor", ctx, %{
+               Provider.handle("athanor", ctx, %{
                  "action" => "rename",
                  "athanor" => created.id,
                  "name" => "Renamed"
                })
 
       assert {:error, _} =
-               MCP.handle("member", ctx, %{
+               Provider.handle("member", ctx, %{
                  "action" => "add",
                  "athanor" => created.id,
                  "email" => "someone@example.com"
@@ -143,7 +143,7 @@ defmodule Sanctum.TenancyMCPTest do
 
       # And it reopens.
       assert {:ok, %{status: "active"}} =
-               MCP.handle("athanor", ctx, %{"action" => "unarchive", "athanor" => created.id})
+               Provider.handle("athanor", ctx, %{"action" => "unarchive", "athanor" => created.id})
     end
   end
 
@@ -151,7 +151,7 @@ defmodule Sanctum.TenancyMCPTest do
     test "a member who is not the operator is refused on the transport, not in the result",
          %{ctx: ctx} do
       created = group!(ctx)
-      MCP.handle("athanor", ctx, %{"action" => "archive", "athanor" => created.id})
+      Provider.handle("athanor", ctx, %{"action" => "archive", "athanor" => created.id})
 
       # `:platform_admin_required` is what `Sanctum.Unauthorized` recognises,
       # so the router answers a JSON-RPC error rather than an `isError`
@@ -159,7 +159,7 @@ defmodule Sanctum.TenancyMCPTest do
       # `{:invalid_argument, _}` — would put an authorization failure back
       # inside a successful response.
       assert {:error, :platform_admin_required} =
-               MCP.handle("athanor", ctx, %{"action" => "purge", "athanor" => created.id})
+               Provider.handle("athanor", ctx, %{"action" => "purge", "athanor" => created.id})
 
       assert Sanctum.Unauthorized.reason?(:platform_admin_required),
              "the purge refusal is no longer on the shared authorization vocabulary"
@@ -170,14 +170,14 @@ defmodule Sanctum.TenancyMCPTest do
       admin = %{ctx | platform_admin: true}
 
       assert {:error, {:invalid_argument, message}} =
-               MCP.handle("athanor", admin, %{"action" => "purge", "athanor" => created.id})
+               Provider.handle("athanor", admin, %{"action" => "purge", "athanor" => created.id})
 
       assert message =~ "archive it first"
 
-      MCP.handle("athanor", ctx, %{"action" => "archive", "athanor" => created.id})
+      Provider.handle("athanor", ctx, %{"action" => "archive", "athanor" => created.id})
 
       assert {:ok, purged} =
-               MCP.handle("athanor", admin, %{"action" => "purge", "athanor" => created.id})
+               Provider.handle("athanor", admin, %{"action" => "purge", "athanor" => created.id})
 
       assert purged["purged"] == true
 
@@ -196,7 +196,7 @@ defmodule Sanctum.TenancyMCPTest do
       created = group!(ctx)
 
       assert {:ok, %{member: %{email: "newcomer@example.com"}, state: "added"}} =
-               MCP.handle("member", ctx, %{
+               Provider.handle("member", ctx, %{
                  "action" => "add",
                  "athanor" => created.id,
                  "email" => "Newcomer@Example.com"
@@ -207,10 +207,10 @@ defmodule Sanctum.TenancyMCPTest do
       created = group!(ctx)
 
       assert {:error, {:invalid_argument, "Missing required argument: email or user_id"}} =
-               MCP.handle("member", ctx, %{"action" => "add", "athanor" => created.id})
+               Provider.handle("member", ctx, %{"action" => "add", "athanor" => created.id})
 
       assert {:error, {:invalid_argument, "That is not an email address"}} =
-               MCP.handle("member", ctx, %{
+               Provider.handle("member", ctx, %{
                  "action" => "add",
                  "athanor" => created.id,
                  "email" => "not-an-email"
@@ -223,7 +223,7 @@ defmodule Sanctum.TenancyMCPTest do
       created = group!(ctx)
 
       assert {:error, {:not_found, "Member", "ghost@example.com"}} =
-               MCP.handle("member", ctx, %{
+               Provider.handle("member", ctx, %{
                  "action" => "remove",
                  "athanor" => created.id,
                  "email" => "Ghost@Example.com"
@@ -236,7 +236,7 @@ defmodule Sanctum.TenancyMCPTest do
       assert Members.member?(user, created.id)
 
       assert {:ok, %{state: "left"}} =
-               MCP.handle("member", ctx, %{"action" => "leave", "athanor" => created.id})
+               Provider.handle("member", ctx, %{"action" => "leave", "athanor" => created.id})
 
       refute Members.member?(user, created.id)
 
@@ -244,13 +244,13 @@ defmodule Sanctum.TenancyMCPTest do
       # second attempt is stopped by the archive rather than by the missing
       # seat — a group with no members is not a group anyone can act in.
       assert {:ok, %{status: "archived"}} =
-               MCP.handle("athanor", %{ctx | platform_admin: true}, %{
+               Provider.handle("athanor", %{ctx | platform_admin: true}, %{
                  "action" => "get",
                  "athanor" => created.id
                })
 
       assert {:error, {:invalid_argument, "That athanor is archived"}} =
-               MCP.handle("member", ctx, %{"action" => "leave", "athanor" => created.id})
+               Provider.handle("member", ctx, %{"action" => "leave", "athanor" => created.id})
     end
 
     test "a person's own athanor takes no members and cannot be left" do
@@ -283,10 +283,10 @@ defmodule Sanctum.TenancyMCPTest do
         )
 
       assert {:error, {:invalid_argument, "You cannot leave your own athanor"}} =
-               MCP.handle("member", ctx, %{"action" => "leave", "athanor" => own.id})
+               Provider.handle("member", ctx, %{"action" => "leave", "athanor" => own.id})
 
       assert {:error, {:invalid_argument, message}} =
-               MCP.handle("member", ctx, %{
+               Provider.handle("member", ctx, %{
                  "action" => "add",
                  "athanor" => own.id,
                  "email" => "someone@example.com"
@@ -295,7 +295,7 @@ defmodule Sanctum.TenancyMCPTest do
       assert message =~ "add people to a group"
 
       assert {:error, {:invalid_argument, remove_message}} =
-               MCP.handle("member", ctx, %{
+               Provider.handle("member", ctx, %{
                  "action" => "remove",
                  "athanor" => own.id,
                  "user_id" => user.id
@@ -311,7 +311,7 @@ defmodule Sanctum.TenancyMCPTest do
 
       for action <- ["add", "remove", "leave"] do
         assert {:error, {:invalid_argument, message}} =
-                 MCP.handle("member", key_ctx, %{
+                 Provider.handle("member", key_ctx, %{
                    "action" => action,
                    "athanor" => "ath_does_not_exist",
                    "email" => "someone@example.com"
@@ -322,7 +322,7 @@ defmodule Sanctum.TenancyMCPTest do
       end
 
       # A read is not a person's act, so the key still gets it.
-      assert {:ok, _} = MCP.handle("member", key_ctx, %{"action" => "list"})
+      assert {:ok, _} = Provider.handle("member", key_ctx, %{"action" => "list"})
     end
   end
 end

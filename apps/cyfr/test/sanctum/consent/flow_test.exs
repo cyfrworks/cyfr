@@ -8,7 +8,7 @@ defmodule Sanctum.Consent.FlowTest do
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Plan
-  alias Sanctum.MCP.ProfileTool
+  alias Sanctum.Providers.Profile
   alias Sanctum.Vault
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
@@ -730,11 +730,11 @@ defmodule Sanctum.Consent.FlowTest do
 
       decisions = %{"bindings" => [%{"need" => "api_key", "entry_id" => entry.id}], "ref" => ref}
 
-      {:ok, plan} = ProfileTool.handle(ctx, %{"action" => "plan", "ref" => ref})
-      {:ok, preview} = ProfileTool.handle(ctx, %{"action" => "preview", "decisions" => decisions})
+      {:ok, plan} = Profile.handle(ctx, %{"action" => "plan", "ref" => ref})
+      {:ok, preview} = Profile.handle(ctx, %{"action" => "preview", "decisions" => decisions})
 
       {:ok, _} =
-        ProfileTool.handle(ctx, %{
+        Profile.handle(ctx, %{
           "action" => "commit",
           "decisions" => decisions,
           "plan_token" => plan.plan_token,

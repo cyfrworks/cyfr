@@ -286,7 +286,7 @@ defmodule Grimoire.ProviderContractTest do
   end
 
   test "thread consent restarts accept committed integer revisions and absent result metadata" do
-    tool = Emissary.MCP.ThreadTool.definition()
+    tool = Aqua.Providers.Thread.definition()
 
     for metadata <- [
           %{},

@@ -5,7 +5,7 @@ defmodule Compendium.ComponentTest do
   @moduledoc """
   Component resolution returns human-readable `{:error, binary}` results
   for malformed references, missing components, and storage faults.
-  `Compendium.MCP.Shared` delegates resolution to this module.
+  `Compendium.Providers.Shared` delegates resolution to this module.
   """
 
   use ExUnit.Case, async: false
@@ -34,11 +34,11 @@ defmodule Compendium.ComponentTest do
 
   test "the MCP tool surface delegates — the two resolvers cannot drift", %{ctx: ctx} do
     for reference <- ["not a ref !!", "reagent:local.no-such-thing:9.9.9"] do
-      assert Compendium.MCP.Shared.resolve_component(ctx, reference) ==
+      assert Compendium.Providers.Shared.resolve_component(ctx, reference) ==
                Component.resolve_component(ctx, reference)
     end
 
-    assert Compendium.MCP.Shared.parse_reference("c:local.tool:1.0.0") ==
+    assert Compendium.Providers.Shared.parse_reference("c:local.tool:1.0.0") ==
              Component.parse_reference("c:local.tool:1.0.0")
   end
 end

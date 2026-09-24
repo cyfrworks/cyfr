@@ -82,10 +82,10 @@ defmodule Emissary.MCP.ResourceProviderTest do
 
     assert Enum.sort(advertisers) ==
              Enum.sort([
-               Compendium.MCP,
+               Compendium.Provider,
                Crucible.Provider,
                Grimoire.Provider,
-               Sanctum.MCP
+               Sanctum.Provider
              ])
 
     for module <- Catalog.available_providers() do

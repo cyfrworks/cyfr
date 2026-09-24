@@ -32,7 +32,7 @@ COPY config/ config/
 # Copy application source
 COPY apps/ apps/
 
-# Copy top-level guides (embedded at compile time by Compendium.MCP) and the
+# Copy top-level guides (embedded at compile time by Compendium.Provider) and the
 # WIT definitions (embedded by Prima.WIT — the compile fails if
 # the tree is missing, so an image can never ship an empty ABI)
 COPY component-guide.md tincture-guide.md integration-guide.md ./

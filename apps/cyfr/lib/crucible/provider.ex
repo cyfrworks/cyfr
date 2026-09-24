@@ -13,11 +13,11 @@ defmodule Crucible.Provider do
   - `cancel` - Cancel a running execution
   - `status` - Execution slot diagnostics
   - `force_release` - Release every athanor's execution slots (operator only)
-  - `read_resource` - Read an `crucible://executions/…` resource
+  - `read_resource` - Read a `crucible://executions/…` resource
 
   Runs and cancels go through `Crucible`; reads
   come from the execution records (`Crucible.Record`). Its service
-  name is `"opus"` and its resources are `crucible://executions/…`.
+  name is `"crucible"` and its resources are `crucible://executions/…`.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
   which is validated at runtime by Grimoire.Catalog.
@@ -31,7 +31,7 @@ defmodule Crucible.Provider do
 
   @behaviour Prima.Provider
 
-  def service, do: "opus"
+  def service, do: "crucible"
 
   require Logger
 

@@ -88,7 +88,7 @@ defmodule Sanctum.ToolServerDigest do
 
   Some upstream servers publish `parameters` instead of `inputSchema`; both
   the descriptions digest (here) and the exposed tool definition
-  (`Emissary.MCP.ExternalProvider`) must apply the identical mapping, or the
+  (`Emissary.External.Proxy`) must apply the identical mapping, or the
   digest silently stops covering the schema it is supposed to pin.
   """
   def normalize_input_schema(tool) when is_map(tool) do

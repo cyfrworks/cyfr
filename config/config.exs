@@ -19,35 +19,40 @@ config :mime, :types, %{
 # Order doesn't matter, tools are indexed by name
 config :cyfr,
   tool_providers: [
-    # Foundation services
-    Sanctum.MCP,
-    # The records the storage layer keeps (executions, MCP and policy
-    # logs) and its retention policy, handed the caller's actor alone.
+    # Each provider answers its namespace's service label (`service/0`),
+    # and a namespace with several providers is one service. Identity and
+    # authority, `sanctum`:
+    Sanctum.Provider,
+    # `arca`: the records the storage layer keeps (executions, MCP and
+    # policy logs) and its retention policy, handed the caller's actor alone.
     Arca.Providers.Records,
-    # Chat on the wire, so Prism is a client of the agent runtime rather
-    # than the only way to reach it.
-    Emissary.MCP.ThreadTool,
+    # `aqua`: chat on the wire, so Prism is a client of the agent runtime
+    # rather than the only way to reach it.
+    Aqua.Providers.Thread,
     # A card decided from the wire: the same door the console's buttons use.
-    Emissary.MCP.ApprovalTool,
+    Aqua.Providers.Approval,
     # What was kept out of a thread — a separate object from the tape,
     # which is what lets a thread be erased honestly.
-    Emissary.MCP.NotesTool,
-    # The athanor's files as the Files page shows them, one tier per folder.
+    Aqua.Providers.Notes,
+    # `arca`: the athanor's files as the Files page shows them, one tier
+    # per folder.
     Arca.Providers.Files,
-    # A component's own source, for the agent authoring it — host-side and
-    # scoped, because the files catalyst's grant is `data/` and widening it
-    # would widen it for every agent.
-    Compendium.MCP.SourceTool,
-    # Domain services
+    # `compendium`: a component's own source, for the agent authoring it —
+    # host-side and scoped, because the files catalyst's grant is `data/`
+    # and widening it would widen it for every agent.
+    Compendium.Providers.Source,
+    # `crucible`: executions and schedules.
     Crucible.Provider,
     Crucible.Schedules.Provider,
+    # `compendium`: builds and components.
     Compendium.Builds.Provider,
-    Compendium.MCP,
-    # External MCP server management. `Emissary.MCP.ExternalProvider` is not
-    # here: it owns no tool of its own — the tools it discovers are the
-    # upstream servers', reached through `Grimoire.Catalog` on a lookup miss.
-    Emissary.MCP.McpServersTool,
-    # System/transport (cross-cutting)
+    Compendium.Provider,
+    # `emissary`: external MCP server management. `Emissary.External.Proxy`
+    # is not here: it owns no tool of its own — the tools it discovers are
+    # the upstream servers', reached through `Grimoire.Catalog` on a lookup
+    # miss.
+    Emissary.External.Provider,
+    # `grimoire`: the operation table's own `system` tool.
     Grimoire.Provider
   ]
 
@@ -203,7 +208,7 @@ config :arca, :cache_max_compiled_components, 32
 
 # External MCP server connections per athanor, concurrent in-flight calls
 # one server process admits before refusing (`Emissary.MCP`), and the
-# backends one stdio server may define (`Emissary.MCP.BackendDefinition`).
+# backends one stdio server may define (`Emissary.External.BackendDefinition`).
 config :cyfr, :max_external_servers, 50
 config :cyfr, :external_server_max_in_flight, 8
 config :cyfr, :max_backends_per_server, 4

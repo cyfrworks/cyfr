@@ -3,7 +3,7 @@
 
 defmodule Compendium.Builds.Provider do
   @moduledoc """
-  The `build` tool (`Prima.Provider`), under the `locus` service label:
+  The `build` tool (`Prima.Provider`), under the `compendium` service label:
 
   - `compile` — build a component by reference on the builds service,
     publish its output and register it (`Compendium.Builds.compile/3`);
@@ -25,7 +25,7 @@ defmodule Compendium.Builds.Provider do
   alias Sanctum.Context
 
   @impl true
-  def service, do: "locus"
+  def service, do: "compendium"
 
   @impl true
   def tools do

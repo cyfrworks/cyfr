@@ -39,11 +39,20 @@ defmodule Grimoire.Error do
     cond do
       # The method rides along so the API-key remediation hint renders on
       # every surface, not only the wire router's own refusal path.
-      Sanctum.Unauthorized.reason?(reason) -> Sanctum.Unauthorized.message(reason, auth_method)
-      Prima.Refusal.reason?(reason) -> Prima.Refusal.message(reason)
-      match?(%Compendium.OCI.Errors{}, reason) -> Compendium.MCP.Shared.to_error_string(reason)
-      Emissary.MCP.ConsentSignal.signal?(reason) -> Emissary.MCP.ConsentSignal.message(reason)
-      true -> nil
+      Sanctum.Unauthorized.reason?(reason) ->
+        Sanctum.Unauthorized.message(reason, auth_method)
+
+      Prima.Refusal.reason?(reason) ->
+        Prima.Refusal.message(reason)
+
+      match?(%Compendium.OCI.Errors{}, reason) ->
+        Compendium.Providers.Shared.to_error_string(reason)
+
+      Emissary.MCP.ConsentSignal.signal?(reason) ->
+        Emissary.MCP.ConsentSignal.message(reason)
+
+      true ->
+        nil
     end
   end
 end

@@ -53,7 +53,7 @@ defmodule Cyfr.Test.Sandbox do
     Sanctum.TaskSupervisor,
     Crucible.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
-    Emissary.MCP.ExternalServerSupervisor,
+    Emissary.External.ServerSupervisor,
     Crucible.Attempt.Supervisor,
     Opus.RunnerPool.Runners,
     Crucible.Events.Supervisor

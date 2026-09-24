@@ -16,7 +16,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   alias Prima.Authority.Transition
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
-  alias Sanctum.MCP.ProfileTool
+  alias Sanctum.Providers.Profile
   alias Prima.Test.AuthorityFixtures, as: Fixtures
   alias Sanctum.Vault
 
@@ -285,7 +285,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   test "the profile tool decodes selections on the wire", %{ctx: ctx} do
     _lenders = lenders!(ctx)
     ref = "reagent:local.sel-source"
-    {:ok, plan} = ProfileTool.handle(ctx, %{"action" => "plan", "ref" => ref})
+    {:ok, plan} = Profile.handle(ctx, %{"action" => "plan", "ref" => ref})
 
     decisions = %{
       "ref" => ref,
@@ -293,10 +293,10 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     }
 
     {:ok, preview} =
-      ProfileTool.handle(ctx, %{"action" => "preview", "decisions" => decisions})
+      Profile.handle(ctx, %{"action" => "preview", "decisions" => decisions})
 
     {:ok, %{status: "committed"}} =
-      ProfileTool.handle(ctx, %{
+      Profile.handle(ctx, %{
         "action" => "commit",
         "decisions" => decisions,
         "plan_token" => plan.plan_token,
@@ -308,7 +308,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert %{projection: %{fields: ["KEY"]}} = edge_vault(ctx, ref)
 
     {:ok, with_from} =
-      ProfileTool.handle(ctx, %{
+      Profile.handle(ctx, %{
         "action" => "preview",
         "decisions" => %{
           "ref" => ref,
@@ -319,7 +319,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert is_binary(with_from.commit_digest)
 
     assert {:error, msg} =
-             ProfileTool.handle(ctx, %{
+             Profile.handle(ctx, %{
                "action" => "preview",
                "decisions" => %{
                  "ref" => ref,

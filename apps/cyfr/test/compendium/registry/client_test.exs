@@ -5,7 +5,7 @@ defmodule Compendium.Registry.ClientTest do
   use ExUnit.Case, async: false
 
   alias Compendium.Registry.Client
-  alias Compendium.MCP
+  alias Compendium.Provider
   alias Compendium.OCI.Errors
 
   setup do
@@ -96,7 +96,7 @@ defmodule Compendium.Registry.ClientTest do
          %{ctx: ctx} do
       fn ->
         {:ok, result} =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "search",
             "query" => "nonexistent-component-xyz"
           })
@@ -114,7 +114,7 @@ defmodule Compendium.Registry.ClientTest do
     test "multi-tenant does not attempt cyfr.run search", %{ctx: ctx} do
       fn ->
         {:ok, result} =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "search",
             "query" => "nonexistent-component-xyz"
           })
@@ -136,7 +136,7 @@ defmodule Compendium.Registry.ClientTest do
     } do
       fn ->
         {:error, reason} =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "discover"
           })
 
@@ -148,7 +148,7 @@ defmodule Compendium.Registry.ClientTest do
     test "single-user rejects non-cyfr.run registry for discover", %{ctx: ctx} do
       fn ->
         {:error, msg} =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "discover",
             "registry" => "ghcr.io"
           })
@@ -160,7 +160,7 @@ defmodule Compendium.Registry.ClientTest do
     test "multi-tenant uses OCI.Client for discover (not Registry.Client)", %{ctx: ctx} do
       fn ->
         result =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "discover"
           })
 
@@ -181,7 +181,7 @@ defmodule Compendium.Registry.ClientTest do
     test "multi-tenant allows custom registry for discover", %{ctx: ctx} do
       fn ->
         result =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "discover",
             "registry" => "ghcr.io"
           })
@@ -858,7 +858,7 @@ defmodule Compendium.Registry.ClientTest do
   describe "MCP component.deprecate" do
     test "rejects missing reason", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("component", ctx, %{
+        Provider.handle("component", ctx, %{
           "action" => "deprecate",
           "reference" => "c:alice.widget:1.0.0"
         })
@@ -868,7 +868,7 @@ defmodule Compendium.Registry.ClientTest do
 
     test "rejects empty reason", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("component", ctx, %{
+        Provider.handle("component", ctx, %{
           "action" => "deprecate",
           "reference" => "c:alice.widget:1.0.0",
           "reason" => ""
@@ -879,7 +879,7 @@ defmodule Compendium.Registry.ClientTest do
 
     test "rejects unpinned ref (no version)", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("component", ctx, %{
+        Provider.handle("component", ctx, %{
           "action" => "deprecate",
           "reference" => "c:alice.widget",
           "reason" => "use v2"
@@ -902,7 +902,7 @@ defmodule Compendium.Registry.ClientTest do
   describe "MCP registry.report" do
     test "rejects missing category", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("registry", ctx, %{
+        Provider.handle("registry", ctx, %{
           "action" => "report",
           "target_namespace" => "alice",
           "details" => "d"
@@ -913,7 +913,7 @@ defmodule Compendium.Registry.ClientTest do
 
     test "rejects missing target", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("registry", ctx, %{
+        Provider.handle("registry", ctx, %{
           "action" => "report",
           "category" => "malware",
           "details" => "d"
@@ -924,7 +924,7 @@ defmodule Compendium.Registry.ClientTest do
 
     test "rejects missing details", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("registry", ctx, %{
+        Provider.handle("registry", ctx, %{
           "action" => "report",
           "category" => "malware",
           "target_namespace" => "alice"
@@ -936,13 +936,13 @@ defmodule Compendium.Registry.ClientTest do
 
   describe "MCP component.yank" do
     test "rejects missing reference", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{"action" => "yank"})
+      {:error, msg} = Provider.handle("component", ctx, %{"action" => "yank"})
       assert err_msg(msg) =~ "reference"
     end
 
     test "rejects unpinned ref", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("component", ctx, %{
+        Provider.handle("component", ctx, %{
           "action" => "yank",
           "reference" => "c:alice.widget"
         })
@@ -957,7 +957,7 @@ defmodule Compendium.Registry.ClientTest do
       fn ->
         # the code path that checks for result[:warning]
         result =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "pull",
             "reference" => "#{Compendium.RegistryHost.canonical_host()}/cyfr/reagents/test:1.0.0"
           })
@@ -970,7 +970,7 @@ defmodule Compendium.Registry.ClientTest do
     test "multi-tenant surfaces pull warnings from OCI.Client", %{ctx: ctx} do
       fn ->
         result =
-          MCP.handle("component", ctx, %{
+          Provider.handle("component", ctx, %{
             "action" => "pull",
             "reference" => "ghcr.io/alice/reagents/test:1.0.0"
           })

@@ -5,7 +5,7 @@ defmodule Compendium.GuideProtocolDriftTest do
   @moduledoc """
   The guides are not just documentation — `integration-guide.md`,
   `component-guide.md` and `tincture-guide.md` are compiled into
-  `Compendium.MCP.AquaTool` as `@external_resource` and served to the AQUA agent
+  `Compendium.Providers.Aqua` as `@external_resource` and served to the AQUA agent
   as its reference material.
 
   Validate guide samples against the server protocol so copied requests are accepted.
@@ -66,7 +66,7 @@ defmodule Compendium.GuideProtocolDriftTest do
                """
                #{unquote(name)} still shows protocol version #{version}.
 
-               This file is compiled into Compendium.MCP.AquaTool, so the agent
+               This file is compiled into Compendium.Providers.Aqua, so the agent
                reads it as authoritative. Use #{Protocol.version()}.
                """
       end

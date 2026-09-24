@@ -158,7 +158,7 @@ defmodule Grimoire.Visibility do
   end
 
   # One shape reaches here. `Grimoire.Catalog` emits the wire
-  # spelling for registered tools and `ExternalProvider` maps a peer's
+  # spelling for registered tools and `Emissary.External.Proxy` maps a peer's
   # "parameters" onto it at ingest, so this reads "inputSchema" and nothing
   # else — a second accepted spelling only invites a third.
   defp extract_actions(tool_def) do

@@ -43,8 +43,8 @@ defmodule Cyfr.GenServerCatchallTest do
     Crucible.Sweeper => "gated by :execution_sweeper_enabled",
     Crucible.ArchiveWatch => "gated by :execution_archive_watch_enabled",
     Crucible.WorkerWatch => "gated by :worker_watch_enabled",
-    Emissary.MCP.ExternalServerReconciler => "gated by :external_server_reconciler_enabled",
-    Emissary.MCP.Bridge => "started only when an MCP bridge URL and key are configured",
+    Emissary.External.Reconciler => "gated by :external_server_reconciler_enabled",
+    Emissary.External.Backends => "started only when an MCP bridge URL and key are configured",
     Grimoire.RunningTasks => "probing would race real request tracking",
     Sanctum.Consent.Proof.Memory => "started only when the memory proof store is configured",
     Sanctum.Authority.BudgetGuard => "guards live invoke budgets"

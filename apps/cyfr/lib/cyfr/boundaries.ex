@@ -1129,7 +1129,7 @@ defmodule Cyfr.Boundaries do
       behaviour: nil,
       what: "proxied tool resolution",
       declared_by: :cyfr,
-      implemented_by: "Emissary.MCP.ExternalProvider",
+      implemented_by: "Emissary.External.Proxy",
       written_at_boot_by: nil,
       note:
         "the operation table asks the transport for a tool an upstream server " <>
@@ -1249,7 +1249,7 @@ defmodule Cyfr.Boundaries do
       modules: ~w(
         Sanctum.ExecutionStanding Crucible.Record Crucible.Lapse
         Crucible.Cascade Crucible.Sweeper Crucible.TurnRoot
-        Emissary.MCP.ExternalProvider Aqua.Tape
+        Emissary.External.Proxy Aqua.Tape
       ),
       check: "Sanctum.ExecutionStanding.stamp_only/1",
       reason:

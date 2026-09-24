@@ -101,7 +101,7 @@ defmodule Cyfr.Bus do
       struct: Components,
       match: {:exact, "bus:components"},
       template: "tenant:<athanor_id>:bus:components",
-      producers: ["Cyfr.TelemetryBridge", "Compendium.MCP.ComponentTool"],
+      producers: ["Cyfr.TelemetryBridge", "Compendium.Providers.Component"],
       consumers: [
         "PrismWeb.ComponentsLive",
         "PrismWeb.ComponentDetailLive",
@@ -176,7 +176,7 @@ defmodule Cyfr.Bus do
       struct: McpServers,
       match: {:exact, "bus:mcp_servers"},
       template: "tenant:<athanor_id>:bus:mcp_servers",
-      producers: ["Emissary.MCP.McpServersTool", "Emissary.MCP.ExternalServer"],
+      producers: ["Emissary.External.Provider", "Emissary.External.Server"],
       consumers: ["PrismWeb.McpServersLive", "Emissary.MCP.Subscriptions"],
       reason: "the athanor's external MCP servers or their tool lists changed"
     },
@@ -226,7 +226,7 @@ defmodule Cyfr.Bus do
       match: {:prefix, "progress:"},
       template: "tenant:<athanor_id>:progress:<build|register|pull|request>:<id>",
       dispatcher: BoundedDispatcher,
-      producers: ["Compendium.Builds.Provider", "Compendium.MCP.ComponentTool"],
+      producers: ["Compendium.Builds.Provider", "Compendium.Providers.Component"],
       consumers: ["PrismWeb.BuildsLive", "PrismWeb.ComponentsLive", "EmissaryWeb.MCPController"],
       reason:
         "one build's, registration's or pull's progress, on its own topic and on the " <>
@@ -262,7 +262,7 @@ defmodule Cyfr.Bus do
       match: {:exact, "sanctum:vault_changed"},
       template: "sanctum:vault_changed",
       producers: ["Cyfr.TelemetryBridge"],
-      consumers: ["Emissary.MCP.ExternalServerReconciler"],
+      consumers: ["Emissary.External.Reconciler"],
       reason:
         "server-wide credential reconciliation: one reconciler restarts any external " <>
           "server whose headers named the entry, whichever athanor owns it"
@@ -276,7 +276,7 @@ defmodule Cyfr.Bus do
       producers: ["Cyfr.TelemetryBridge"],
       consumers: [
         "Crucible.ArchiveWatch",
-        "Emissary.MCP.ExternalServerReconciler",
+        "Emissary.External.Reconciler",
         "CyfrWeb.ContextGuard"
       ],
       reason: "stops the processes serving an archived athanor from outside any tenant topic"

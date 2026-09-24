@@ -138,7 +138,7 @@ defmodule Compendium.Component do
   human-readable `{:error, binary}`, never a raise.
 
   The one resolver: the MCP tool modules delegate here
-  (`Compendium.MCP.Shared`) and `Compendium.Resolver` is its
+  (`Compendium.Providers.Shared`) and `Compendium.Resolver` is its
   string-in/string-out adapter, so no caller and no surface can drift.
   """
   @spec resolve_component(Context.t(), term()) :: {:ok, map(), map()} | {:error, String.t()}

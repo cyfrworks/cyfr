@@ -31,7 +31,7 @@ defmodule Sanctum.EstablishBoundaryTest do
     "apps/sanctum/lib/sanctum/context.ex" => 1,
     # The context a tincture invocation runs under, derived from an
     # already established caller's, or the public identity.
-    "apps/sanctum/lib/sanctum/sanctum.ex" => 1,
+    "apps/sanctum/lib/sanctum.ex" => 1,
     # `Provisioning`'s person context: the server filling an admitted
     # person's estate with their pull credential; no credential of its own.
     "apps/sanctum/lib/sanctum/provisioning.ex" => 1,

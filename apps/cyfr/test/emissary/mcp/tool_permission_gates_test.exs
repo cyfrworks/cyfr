@@ -44,7 +44,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = execute_only_ctx()
 
       assert {:ok, %{servers: _}} =
-               Emissary.MCP.McpServersTool.handle(
+               Emissary.External.Provider.handle(
                  "mcp_servers",
                  ctx,
                  %{"action" => "list"}
@@ -71,7 +71,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
     test "whoami stays open" do
       ctx = execute_only_ctx()
-      assert {:ok, _identity} = Compendium.MCP.RegistryTool.handle(ctx, %{"action" => "whoami"})
+      assert {:ok, _identity} = Compendium.Providers.Registry.handle(ctx, %{"action" => "whoami"})
     end
   end
 
@@ -88,7 +88,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = Sanctum.TestContext.local()
 
       assert {:error, message} =
-               Emissary.MCP.McpServersTool.handle(
+               Emissary.External.Provider.handle(
                  "mcp_servers",
                  ctx,
                  create_args(%{"Authorization" => "Bearer sk-live-plaintext"})
@@ -103,7 +103,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
       for header <- ["X-Api-Key", "X-Access-Token", "My-Secret"] do
         assert {:error, _} =
-                 Emissary.MCP.McpServersTool.handle(
+                 Emissary.External.Provider.handle(
                    "mcp_servers",
                    ctx,
                    create_args(%{header => "literal-value"})
@@ -115,7 +115,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = Sanctum.TestContext.local()
 
       assert {:ok, _} =
-               Emissary.MCP.McpServersTool.handle(
+               Emissary.External.Provider.handle(
                  "mcp_servers",
                  ctx,
                  create_args(%{
@@ -127,7 +127,7 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
       for unresolved <- ["secret:my-token", "Token secret:my-token", "Bearer vault:"] do
         assert {:error, message} =
-                 Emissary.MCP.McpServersTool.handle(
+                 Emissary.External.Provider.handle(
                    "mcp_servers",
                    ctx,
                    create_args(%{"X-Client-Version" => unresolved})

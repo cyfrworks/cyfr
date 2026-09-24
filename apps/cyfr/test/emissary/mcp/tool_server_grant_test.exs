@@ -224,7 +224,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
       })
 
     # The digest cache is tenant-invalidated on config mutation.
-    Emissary.MCP.ExternalProvider.invalidate_external_tools_cache(ctx)
+    Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
 
     {:error, message} =
       Catalog.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,

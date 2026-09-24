@@ -302,7 +302,7 @@ if config_env() != :test do
       {:error, message} -> raise "[Cyfr] FATAL: " <> message
     end
 
-    # The MCP bridge that runs stdio MCP servers (`Emissary.MCP.Bridge`):
+    # The MCP bridge that runs stdio MCP servers (`Emissary.External.Backends`):
     # its base URL (compose: http://mcp-bridge:8001) and the root key this
     # server and the bridge both derive their signing and sealing keys from
     # — 32 random bytes as 64 hexadecimal digits, the same value in the

@@ -204,7 +204,7 @@ defmodule Sanctum.Auth.DeviceFlow do
             # `Sanctum.Door.admit_identity/2` answers `{:error, {:door, reason}}`;
             # nothing produces a bare `:user_not_allowed`, so the arm that
             # matched it never ran. The door refusal falls through to `error`
-            # and `Sanctum.MCP.SessionTool` renders it uniformly, which is
+            # and `Sanctum.Providers.Session` renders it uniformly, which is
             # what a poller is meant to see.
             error ->
               error

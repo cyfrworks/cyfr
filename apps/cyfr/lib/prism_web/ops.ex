@@ -16,7 +16,7 @@ defmodule PrismWeb.Ops do
   admission changes use the operation catalog and its authorization gate.
 
   UI preferences, cache invalidation, and authenticated chat operations
-  call their domain functions directly. ThreadTool exposes chat
+  call their domain functions directly. `Aqua.Providers.Thread` exposes chat
   operations separately to external OIDC-interactive clients.
 
   PrismWeb.ToolSeamTest checks the allowed direct domain calls.

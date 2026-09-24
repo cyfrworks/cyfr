@@ -159,7 +159,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   end
 
   # The caller's address, carried on the context so an ANONYMOUS action can
-  # charge a per-address budget without a conn. `Sanctum.MCP.SessionTool`'s
+  # charge a per-address budget without a conn. `Sanctum.Providers.Session`'s
   # device flows are the case: they are `auth: :anonymous` and reached only
   # over `/mcp`, where the transport meters all methods together — so
   # several addresses could still exhaust the global sign-in ceiling

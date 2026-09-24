@@ -268,7 +268,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     # And the difference matters to the caller: busy is not the typed
     # failure a fill that ran and stopped would have answered.
     assert {:error, :not_provisioned} =
-             Sanctum.MCP.AthanorTool.handle(ctx, %{"action" => "provision"})
+             Sanctum.Providers.Athanor.handle(ctx, %{"action" => "provision"})
 
     # The first member goes on and fills it, under the claim it never lost.
     Agent.update(stall, fn _ -> nil end)
@@ -291,7 +291,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     # The verb renders it as the same typed answer a turn gives while the
     # estate is being prepared — in progress, not a failure.
     assert {:error, :not_provisioned} =
-             Sanctum.MCP.AthanorTool.handle(ctx, %{"action" => "provision"})
+             Sanctum.Providers.Athanor.handle(ctx, %{"action" => "provision"})
   end
 
   describe "a background fill in flight" do
@@ -329,7 +329,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
       assert {:error, :provisioning_busy} = Provisioning.provision(group, ctx)
 
       assert {:error, :not_provisioned} =
-               Sanctum.MCP.AthanorTool.handle(ctx, %{"action" => "provision"})
+               Sanctum.Providers.Athanor.handle(ctx, %{"action" => "provision"})
 
       assert {:error, :provisioning_busy} =
                Filler.install_shipped(ctx, "catalyst:local.foo")

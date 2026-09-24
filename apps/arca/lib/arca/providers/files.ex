@@ -24,7 +24,7 @@ defmodule Arca.Providers.Files do
   alias Arca.Files
 
   @impl true
-  def service, do: "files"
+  def service, do: "arca"
 
   @impl true
   def context_kind, do: :actor

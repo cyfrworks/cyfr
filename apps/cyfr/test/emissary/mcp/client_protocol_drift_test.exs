@@ -48,7 +48,7 @@ defmodule Emissary.MCP.ClientProtocolDriftTest do
 
   describe "outbound legacy support names one revision" do
     @legacy_sources [
-      {"apps/cyfr/lib/emissary/mcp/external_server.ex",
+      {"apps/cyfr/lib/emissary/external/server.ex",
        ~r/@legacy_protocol_version\s+"(\d{4}-\d{2}-\d{2})"/},
       {"apps/mcp-bridge/server.mjs", ~r/const CHILD_PROTOCOL_VERSION\s*=\s*"(\d{4}-\d{2}-\d{2})"/}
     ]

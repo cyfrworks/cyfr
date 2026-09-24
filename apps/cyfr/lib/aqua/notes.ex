@@ -37,7 +37,7 @@ defmodule Aqua.Notes do
   one the agent files share, `Compendium.AquaAgent.parse_frontmatter/1`.
 
   This module is the domain. Four callers read or write here:
-  `Emissary.MCP.NotesTool`, the door people and agents come through;
+  `Aqua.Providers.Notes`, the door people and agents come through;
   `Aqua.Prompt`, which reads the pinned page and the index into every
   turn; `Aqua.ScheduleNotes`, which keeps a schedule's outcome where no
   person is at the keyboard; and `PrismWeb.AquaLive`, which edits the
