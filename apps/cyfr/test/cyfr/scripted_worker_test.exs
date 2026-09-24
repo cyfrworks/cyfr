@@ -21,7 +21,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   import Prima.Test.Wait
 
   alias Prima.Authority
-  alias Cyfr.Execution.{Attempt, Dispatch, WorkerClient}
+  alias Crucible.{Attempt, Dispatch, WorkerClient}
   alias Cyfr.Test.{AttemptFixtures, ScriptedWorker}
   alias Prima.Test.AuthorityFixtures
   alias Prima.{WorkerAuth, WorkerWire}
@@ -50,7 +50,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
       for {{app, key}, value} <- previous, do: Application.put_env(app, key, value)
     end)
@@ -106,7 +106,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   end
 
   defp run(%{ctx: ctx, auth: auth, root_id: root_id, child_id: child_id, charge: charge}) do
-    Cyfr.Execution.run_child(auth, "#{@scripted}:1.0.0", nil, %{"messages" => []},
+    Crucible.run_child(auth, "#{@scripted}:1.0.0", nil, %{"messages" => []},
       ctx: ctx,
       execution_id: child_id,
       parent_execution_id: root_id,
@@ -161,7 +161,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     # The slot is held for the attempt by its slot holder, a process linked
     # to it.
-    status = Prima.Slots.status(Cyfr.Execution.Slots)
+    status = Prima.Slots.status(Crucible.Slots)
     {:links, linked} = Process.info(Attempt.whereis(child_id), :links)
     held_for = Enum.map(linked, &inspect/1)
     assert status.child_active == 1
@@ -183,7 +183,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
              Arca.ExecutionAttempts.current(Prima.Actor.in_athanor(athanor_id), child_id)
 
     assert %{status: "completed"} = Arca.Repo.get(Arca.Schemas.Execution, child_id)
-    assert Prima.Slots.status(Cyfr.Execution.Slots).child_active == 0
+    assert Prima.Slots.status(Crucible.Slots).child_active == 0
 
     assert [%{execution_id: ^child_id, input: %{"messages" => []}, authority: %Authority{}}] =
              ScriptedWorker.calls()
@@ -211,7 +211,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert %{status: "failed"} = Arca.Repo.get(Arca.Schemas.Execution, child_id)
 
     wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
-    wait_until(fn -> Prima.Slots.status(Cyfr.Execution.Slots).child_active == 0 end)
+    wait_until(fn -> Prima.Slots.status(Crucible.Slots).child_active == 0 end)
 
     assert {:ok, []} =
              Arca.BudgetReservations.charges(Prima.Actor.in_athanor(athanor_id), auth.budget.id)
@@ -280,7 +280,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
              Dispatch.run(ctx, "#{@scripted}:1.0.0", %{}, authority: authority, execution_id: id)
 
     emitted =
-      for %{type: "emit", data: data} <- Cyfr.Execution.events_since(id, {0, 0}, ctx.athanor_id),
+      for %{type: "emit", data: data} <- Crucible.events_since(id, {0, 0}, ctx.athanor_id),
           do: data
 
     assert [%{"type" => "text.delta", "text" => "the key is [REDACTED]"}] = emitted
@@ -301,7 +301,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     wait_until(fn -> match?([_], ScriptedWorker.calls()) end, 5_000)
 
-    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, id)
+    assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, id)
     assert {:error, _cancelled} = Task.await(task)
 
     assert id in ScriptedWorker.kills()
@@ -388,17 +388,17 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     assert_receive {:scripted_probe, _runner, ^id}, 10_000
 
-    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, id)
+    assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, id)
     assert {:error, _cancelled} = Task.await(task)
 
     assert id in ScriptedWorker.kills()
     assert_received {:unreaped_kill, ^id, 1}
-    assert Prima.Slots.status(Cyfr.Execution.Slots).unreaped[athanor_id] == 1
+    assert Prima.Slots.status(Crucible.Slots).unreaped[athanor_id] == 1
   end
 
   # Every unreaped kill noted from here on, forwarded to this process.
   defp unreaped_count(athanor_id) do
-    Prima.Slots.status(Cyfr.Execution.Slots).unreaped
+    Prima.Slots.status(Crucible.Slots).unreaped
     |> Map.get(athanor_id, 0)
   end
 
@@ -518,7 +518,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   end
 
   defp dispatch_key do
-    {:ok, worker_key} = Cyfr.Execution.Keys.worker_key(ScriptedWorker.service())
+    {:ok, worker_key} = Crucible.Keys.worker_key(ScriptedWorker.service())
     WorkerAuth.dispatch_key(worker_key)
   end
 

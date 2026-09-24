@@ -13,7 +13,7 @@ defmodule EmissaryWeb.WebhookController do
 
   Build the invoke envelope, merge with the webhook's stored
   `input_template`, and **fire** the target component asynchronously through
-  `Cyfr.Execution.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
+  `Crucible.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
   returns `200 {"status":"accepted","request_id":...}` immediately — webhook
   senders only need a 2xx ack to consider delivery successful (Stripe /
   GitHub / Twilio / PayPal docs all converge on this). Component outcome is
@@ -187,7 +187,7 @@ defmodule EmissaryWeb.WebhookController do
     # up the execution machinery — refuse the request cleanly in that
     # window instead of accepting work that noproc-crashes in the task.
     spawn_result =
-      if Cyfr.Execution.available?() do
+      if Crucible.available?() do
         claim = conn.assigns[:webhook_delivery_claim]
 
         Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
@@ -210,7 +210,7 @@ defmodule EmissaryWeb.WebhookController do
         RequestLog.safe_log_failed(ctx, request_id, %{
           error: "task_spawn_failed: #{inspect(Prima.Sanitizer.sanitize(reason))}",
           duration_ms: duration_ms,
-          routed_to: "opus"
+          routed_to: Crucible.service()
         })
 
         :telemetry.execute(
@@ -231,7 +231,7 @@ defmodule EmissaryWeb.WebhookController do
   end
 
   # Task body. Wrapped in try/rescue so the audit trail (`RequestLog` row +
-  # `:invoke, :stop` telemetry) closes whether `Cyfr.Execution.run_root/5` returns
+  # `:invoke, :stop` telemetry) closes whether `Crucible.run_root/5` returns
   # `{:ok, _}`, `{:error, _}`, or raises. The supervisor would log a crash
   # otherwise, but the structured audit row would dangle in `pending`.
   defp run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time, claim) do
@@ -270,7 +270,7 @@ defmodule EmissaryWeb.WebhookController do
       # A webhook fires under its bound profile's consent — the binding is
       # enforced at create/update and by the NOT NULL column.
       run_result =
-        Cyfr.Execution.run_root(ctx, {:id, webhook.profile_id}, webhook.target_ref, input,
+        Crucible.run_root(ctx, {:id, webhook.profile_id}, webhook.target_ref, input,
           class: :background
         )
 
@@ -281,7 +281,7 @@ defmodule EmissaryWeb.WebhookController do
           RequestLog.safe_log_completed(ctx, request_id, %{
             output: result.output,
             duration_ms: duration_ms,
-            routed_to: "opus"
+            routed_to: Crucible.service()
           })
 
           :telemetry.execute(
@@ -303,7 +303,7 @@ defmodule EmissaryWeb.WebhookController do
                 else: inspect(Prima.Sanitizer.sanitize(reason))
               ),
             duration_ms: duration_ms,
-            routed_to: "opus"
+            routed_to: Crucible.service()
           })
 
           # A fixed slug, never the raw term: telemetry metadata fans out
@@ -333,7 +333,7 @@ defmodule EmissaryWeb.WebhookController do
         RequestLog.safe_log_failed(ctx, request_id, %{
           error: inspect(Prima.Sanitizer.sanitize(e)),
           duration_ms: duration_ms,
-          routed_to: "opus"
+          routed_to: Crucible.service()
         })
 
         :telemetry.execute(

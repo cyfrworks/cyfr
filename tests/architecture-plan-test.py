@@ -191,6 +191,36 @@ class ArchitecturePlanTest(unittest.TestCase):
         self.assertIn("future input: old/future.ex (produced by B1)", out)
         self.assertIn("1 future inputs", out)
 
+    def test_a_completed_move_passes_and_is_counted(self):
+        # Moved: the source untracked and the destination tracked.
+        os.makedirs(os.path.join(self.repo.root, "new"))
+        self.repo.git("mv", "old/moved.ex", "new/moved.ex")
+        self.repo.commit([], "move")
+        code, out, err = self.run_script("--check")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("0 future inputs, 1 moves complete", out)
+        self.assertNotIn("error:", out)
+
+        # Both tracked is a collision, whichever side came back.
+        self.repo.commit(["old/moved.ex"], "source back")
+        code, out, _err = self.run_script("--check")
+        self.assertEqual(code, 1, out)
+        self.assertIn("error: move destination new/moved.ex already exists beside its source", out)
+
+        # Neither tracked is a missing source unless an earlier target produces it.
+        self.repo.git("rm", "-q", "old/moved.ex", "new/moved.ex")
+        self.repo.commit([], "both gone")
+        code, out, _err = self.run_script("--check")
+        self.assertEqual(code, 1, out)
+        self.assertIn("error: move source old/moved.ex does not exist", out)
+
+        permissions = dict(PERMISSIONS, **{"old/moved.ex": ["B1", "N0"]})
+        self.write_plan(plan_text(permissions=permissions))
+        code, out, err = self.run_script("--check")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("future input: old/moved.ex (produced by B1)", out)
+        self.assertIn("1 future inputs, 0 moves complete", out)
+
     def test_a_repository_that_tracks_nothing_fails(self):
         empty = os.path.join(self.tmp.name, "empty")
         os.makedirs(empty)

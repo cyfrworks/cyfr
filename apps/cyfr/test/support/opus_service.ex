@@ -9,14 +9,14 @@ defmodule Cyfr.Test.OpusService do
   of their own (the `Direct` keeper, `config/test.exs`), pooled and reused
   across tests.
 
-  The umbrella starts CYFR's host API listener (`Cyfr.Execution.HostListener`,
+  The umbrella starts CYFR's host API listener (`Crucible.HostListener`,
   port 0 under `config/test.exs`) and the Opus application, whose listener
   (`Opus.WorkerListener`) also binds port 0. Neither knows the other's port
   until both are up, so `wire!/1`, run once by `test_helper.exs` and by the
   step bench, gives the service `wrk_local` its credentials — the key CYFR
   derives for it and where its runners reach CYFR — restarting it when they
   are not the ones it holds, and puts the service's endpoint in
-  `config :cyfr, :workers`, where `Cyfr.Execution.Dispatch` finds it. For
+  `config :cyfr, :workers`, where `Crucible.Dispatch` finds it. For
   the suite, the runners reach the host listener through the suite's wire
   (`Cyfr.Test.TwoServices.Wire`), which a test watches, holds a call on or
   loses a call on without restarting the service; the bench run alone
@@ -29,7 +29,7 @@ defmodule Cyfr.Test.OpusService do
   restart does.
   """
 
-  alias Cyfr.Execution.{HostListener, Keys, WorkerClient}
+  alias Crucible.{HostListener, Keys, WorkerClient}
   alias Cyfr.Test.TwoServices
   alias Prima.{WorkerAPI, WorkerAuth, WorkerWire}
 

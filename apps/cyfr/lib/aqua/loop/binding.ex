@@ -217,7 +217,7 @@ defmodule Aqua.Loop.Binding do
   @spec dispatch(Call.t(), map()) :: {:ok, term()} | {:error, term()}
   def dispatch(%Call{kind: :hand} = call, dispatch) do
     with {:ok, %{catalyst: catalyst, input: input}} <- child_input(call) do
-      Cyfr.Execution.run_child(
+      Crucible.run_child(
         Map.fetch!(dispatch, :authority),
         catalyst,
         nil,

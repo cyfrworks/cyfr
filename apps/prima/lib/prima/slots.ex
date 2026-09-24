@@ -13,7 +13,7 @@ defmodule Prima.Slots do
   A slot is **held**: the holder keeps it for as long as its work runs and
   the count drops only when the holder gives it back, dies, or is swept.
   That is a different thing from a consumed **rate allowance**
-  (`Cyfr.Execution.Rates`): an allowance is spent at admission and comes
+  (`Crucible.Rates`): an allowance is spent at admission and comes
   back with the clock, whether or not the work still runs. Nothing in this
   module counts rates.
 
@@ -79,7 +79,7 @@ defmodule Prima.Slots do
   `start_link/1` takes a name and the numbers. Every option defaults to what
   the execution slots use, so one implementation serves each use:
 
-  - The execution slots (CYFR's instance, `Cyfr.Execution.Slots`):
+  - The execution slots (CYFR's instance, `Crucible.Slots`):
     `max: 128, key_max: 16` and every other option default — a quarter of
     the slots reserved for children, every class waits, a 30 s sweep with a
     10 min hold, a 10 min unreaped decay with a threshold of half the key

@@ -52,7 +52,7 @@ defmodule PrismWeb.ConnCase do
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
     # The soul roots: the consent a turn pins exists, whoever minted it.
-    {:ok, _} = Cyfr.Execution.authority_for(ctx, :default, Compendium.AgentSource.soul_ref())
+    {:ok, _} = Crucible.authority_for(ctx, :default, Compendium.AgentSource.soul_ref())
 
     Sanctum.Test.ConsentFixtures.bind_key!(ctx, "catalyst:local.claude", %{
       "ANTHROPIC_API_KEY" => "sk-test"

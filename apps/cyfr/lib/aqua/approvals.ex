@@ -354,7 +354,7 @@ defmodule Aqua.Approvals do
   end
 
   defp consent_holds(ctx, turn) do
-    case Cyfr.Execution.authority_for(
+    case Crucible.authority_for(
            ctx,
            {:id, turn.profile_id},
            Compendium.AgentSource.soul_ref()

@@ -420,7 +420,7 @@ MCP resources follow the same rule. `resources/list` and
 `resources/templates/list` are open metadata, but a `resources/read` is
 admitted by the one operation that declares the URI's scheme, through the
 same gate as a tool call: `compendium://` by `component.read_resource`
-(`component_read`), `opus://` by `execution.read_resource` and `arca://` by
+(`component_read`), `crucible://` by `execution.read_resource` and `arca://` by
 `resource.read` (both `storage_read`), and `sanctum://identity` and
 `sanctum://permissions` by `session.read_resource`, the one resource read an
 uncredentialed caller may make. A read the gate refuses for authentication

@@ -4,7 +4,7 @@
 defmodule Opus.TimeoutTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Execution.{Dispatch, MCP}
+  alias Crucible.{Dispatch, Provider}
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
@@ -65,14 +65,14 @@ defmodule Opus.TimeoutTest do
     test "default timeout applied when not specified", %{ctx: ctx, ref: ref} do
       # Execution creates a record with the policy timeout even on failure
       _result =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
         })
 
       # Retrieve execution record to verify policy was applied
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 1
     end
 
@@ -88,14 +88,14 @@ defmodule Opus.TimeoutTest do
     test "policy-derived timeout is used when available", %{ctx: ctx, ref: ref} do
       # Execute — policy is applied regardless of whether WASM execution succeeds
       _result =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 1}
         })
 
       # Verify a record was created (policy was applied during execution setup)
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 1
     end
   end
@@ -105,14 +105,14 @@ defmodule Opus.TimeoutTest do
       # Run multiple executions — each creates a record
       for _i <- 1..3 do
         _result =
-          MCP.handle("execution", ctx, %{
+          Provider.handle("execution", ctx, %{
             "action" => "run",
             "reference" => ref,
             "input" => %{"a" => 1, "b" => 1}
           })
       end
 
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 3
     end
   end

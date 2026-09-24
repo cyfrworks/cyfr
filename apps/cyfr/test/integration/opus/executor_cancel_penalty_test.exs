@@ -29,7 +29,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
 
   @moduletag timeout: 180_000
 
-  @slots Cyfr.Execution.Slots
+  @slots Crucible.Slots
   @probe_node "formula:local.nested-probe"
   @unreaped_kill [:cyfr, :opus, :execution, :unreaped_kill]
 
@@ -111,13 +111,13 @@ defmodule Opus.ExecutorCancelPenaltyTest do
     # dispatched it, or a turn root's holder, looks like to the cancel.
     {pid, ref} =
       spawn_monitor(fn ->
-        {:ok, _} = Registry.register(Cyfr.Execution.Registry, id, :running)
+        {:ok, _} = Registry.register(Crucible.Registry, id, :running)
         Process.sleep(:infinity)
       end)
 
     wait_until_registered(id)
 
-    assert {:ok, %{cancelled: true, execution_id: ^id}} = Cyfr.Execution.cancel(ctx, id)
+    assert {:ok, %{cancelled: true, execution_id: ^id}} = Crucible.cancel(ctx, id)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
     assert noted(id) == 0
     refute Map.has_key?(Slots.status(@slots).unreaped, ctx.athanor_id)
@@ -133,7 +133,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
     waiter = start_root(ctx, id, %{"op" => "echo"})
     assert_receive {:held, ^id, close}, 30_000
 
-    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, id)
+    assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, id)
     TwoServices.release!(close)
 
     assert_receive {:root, ^waiter, {:error, _cancelled}}, 30_000
@@ -147,7 +147,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
 
     spawn(fn ->
       answer =
-        Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: id)
+        Crucible.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: id)
 
       send(test_pid, {:root, self(), answer})
     end)
@@ -180,7 +180,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
 
   defp wait_until_registered(id) do
     Prima.Test.Wait.wait_until(
-      fn -> match?([{_pid, :running}], Registry.lookup(Cyfr.Execution.Registry, id)) end,
+      fn -> match?([{_pid, :running}], Registry.lookup(Crucible.Registry, id)) end,
       5_000,
       "the holder registered"
     )

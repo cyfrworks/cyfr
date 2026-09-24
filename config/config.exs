@@ -39,8 +39,8 @@ config :cyfr,
     # would widen it for every agent.
     Compendium.MCP.SourceTool,
     # Domain services
-    Cyfr.Execution.MCP,
-    Cyfr.Schedules.Provider,
+    Crucible.Provider,
+    Crucible.Schedules.Provider,
     Compendium.Builds.Provider,
     Compendium.MCP,
     # External MCP server management. `Emissary.MCP.ExternalProvider` is not
@@ -98,12 +98,12 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# The worker services runs are dispatched to (`Cyfr.Execution.Dispatch`):
+# The worker services runs are dispatched to (`Crucible.Dispatch`):
 # each entry is a `Prima.WorkerAPI.endpoint/0` — the worker service's
 # configured id (the id `Prima.WorkerAuth` derives its keys over), the base
 # URL of its listener (`Prima.WorkerWire`) and the components it alone runs
 # (nil for any). A run goes to the first entry whose status answers its id,
-# over `Cyfr.Execution.WorkerClient`. With none, a run is refused as
+# over `Crucible.WorkerClient`. With none, a run is refused as
 # :execution_unavailable. The runtime configuration replaces this list with
 # `CYFR_WORKERS`; the default names the Opus service of a local boot.
 config :cyfr, :workers, [%{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}]

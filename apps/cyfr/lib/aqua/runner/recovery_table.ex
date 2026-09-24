@@ -120,7 +120,7 @@ defmodule Aqua.Runner.RecoveryTable do
   defp consent_holds(_ctx, %{profile_id: nil}), do: :ok
 
   defp consent_holds(ctx, turn) do
-    case Cyfr.Execution.authority_for(ctx, {:id, turn.profile_id}, source_ref(turn)) do
+    case Crucible.authority_for(ctx, {:id, turn.profile_id}, source_ref(turn)) do
       {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id ->
         :ok
 

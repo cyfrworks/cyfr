@@ -111,7 +111,7 @@ defmodule Cyfr.Test.SandboxTest do
       TwoServices.hold!(:tool_call, root_id, once: true)
 
       spawn(fn ->
-        Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), Probe.held_input(),
+        Crucible.run_root(ctx, :default, Probe.probe_ref(), Probe.held_input(),
           execution_id: root_id
         )
       end)

@@ -151,7 +151,7 @@ defmodule Aqua.Loop.Clone do
   # next transition; a clone is one. The pinned profile is loaded again:
   # its head must still be the pinned consent.
   defp intact(ctx, %Authority{profile_id: profile_id, consent_id: consent_id, source_ref: ref}) do
-    case Cyfr.Execution.authority_for(ctx, {:id, profile_id}, ref) do
+    case Crucible.authority_for(ctx, {:id, profile_id}, ref) do
       {:ok, %Authority{consent_id: ^consent_id}} -> :ok
       _ -> {:error, :consent_moved}
     end

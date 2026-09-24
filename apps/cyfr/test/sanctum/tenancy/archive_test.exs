@@ -12,7 +12,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
   The credentials and the memos are authorization properties and go
   synchronously. The running work is the execution domain's: the archive
-  announces and `Cyfr.Execution.ArchiveWatch` reacts, so the cases that
+  announces and `Crucible.ArchiveWatch` reacts, so the cases that
   assert a cancel start that watch and wait for it. It is off by default
   under test (its queries would outlive the sandbox connection its test
   owns), which is why they turn it on here rather than relying on the
@@ -90,7 +90,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
         else: Application.put_env(:cyfr, :execution_archive_watch_enabled, previous)
     end)
 
-    start_supervised!(Cyfr.Execution.ArchiveWatch)
+    start_supervised!(Crucible.ArchiveWatch)
     :ok
   end
 
@@ -120,7 +120,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     id = Prima.UUID7.execution_id()
 
     Task.start(fn ->
-      Cyfr.Execution.Dispatch.run(ctx, @reference, %{},
+      Crucible.Dispatch.run(ctx, @reference, %{},
         authority: Prima.Authority.zero(),
         execution_id: id
       )

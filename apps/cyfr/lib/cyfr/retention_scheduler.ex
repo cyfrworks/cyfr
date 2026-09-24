@@ -428,7 +428,7 @@ defmodule Cyfr.RetentionScheduler do
 
   # The rate-window rows whose window and prior window are both past —
   # the buckets nobody claims any more. It is not housekeeping: a bucket
-  # is whatever a caller names, and `Cyfr.Execution.Admission` names one
+  # is whatever a caller names, and `Crucible.Admission` names one
   # per client address, so the rows an athanor can open are as wide as
   # the addresses that reach it. A claim that opens a new bucket already
   # reclaims its own athanor's dead rows, which bounds a tenant that is

@@ -7,7 +7,7 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
   import Ecto.Query, only: [from: 2]
 
   alias EmissaryWeb.ExecutionEventsController
-  alias Cyfr.Execution.Events
+  alias Crucible.Events
 
   setup %{conn: conn} do
     ctx = Sanctum.TestContext.local()

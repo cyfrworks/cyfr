@@ -1,0 +1,171 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Crucible.AttemptRecoveryTest do
+  @moduledoc """
+  A runner that died mid-execution leaves an attempt whose lease lapses:
+  the sweeper retires it and fails the row, its late result is refused by
+  the fence, and a successor opens with the next fence and the pointer.
+
+  The lease is written and read on the cell's clock, never the sweeping
+  member's: two members could disagree about whether it has run out, and
+  the disagreement would let both take the attempt over.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.ExecutionAttempts
+  alias Crucible.Record
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Sanctum.TestContext.athanor!()
+    {:ok, ctx: Sanctum.TestContext.local()}
+  end
+
+  test "a lapsed attempt under a foreign runner is swept, refused, and succeeded", %{ctx: ctx} do
+    record =
+      Record.new(ctx, "catalyst:local.test:1.0.0", %{"x" => 1}, component_type: :catalyst)
+
+    :ok = Record.write_started(record)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(a in Arca.Schemas.ExecutionAttempt, where: a.attempt == ^record.attempt),
+        set: [
+          boot_id: "boot-that-died",
+          lease_until: DateTime.add(DateTime.utc_now(), -5, :second)
+        ]
+      )
+
+    :ok = Crucible.Sweeper.sweep()
+
+    assert %{state: "lapsed", outcome: "uncertain"} =
+             ExecutionAttempts.get(Sanctum.Context.actor(ctx), record.attempt)
+
+    assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
+
+    # The dead runner's result arrives late and is refused by the fence.
+    assert {:error, :not_running} =
+             Record.write_completed(Record.complete(record, %{"late" => true}))
+
+    assert %{status: "failed", output: nil} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
+
+    {:ok, %{attempt: successor}} =
+      ExecutionAttempts.takeover(Sanctum.Context.actor(ctx), record.id,
+        boot_id: Record.boot_id(),
+        lease_until: Record.lease_until(),
+        grant: :stored,
+        verify: &Sanctum.ExecutionStanding.verify/1
+      )
+
+    assert successor.fence == 2
+    assert Arca.Repo.get!(Arca.Schemas.Execution, record.id).current_attempt == successor.attempt
+    assert :lost = Record.renew_lease(record.id, record.attempt)
+    assert {:ok, _} = Record.renew_lease(record.id, successor.attempt)
+  end
+
+  test "an attempt's lease is written and read on the cell's clock, never the member's", %{
+    ctx: ctx
+  } do
+    record = Record.new(ctx, "catalyst:local.test:1.0.0", %{"x" => 1}, component_type: :catalyst)
+    :ok = Record.write_started(record)
+
+    # The lease a member writes is `lease_seconds` past the CELL's clock.
+    # A member reading its own would fold its drift from the database into
+    # every lease it issued, and a member whose clock runs slow would go on
+    # believing it held a row that had already become takeable.
+    now = Arca.ServerMetaStorage.now!()
+    until = ExecutionAttempts.lease_until()
+
+    assert_in_delta DateTime.diff(until, now, :millisecond),
+                    ExecutionAttempts.lease_seconds() * 1000,
+                    2_000
+
+    # A lease that stands on the cell's clock is not takeable...
+    assert ExecutionAttempts.list_stale(Arca.ServerMetaStorage.now!())
+           |> Enum.find(&(&1.attempt == record.attempt)) == nil
+
+    assert Arca.Execution.list_stale_running(Arca.ServerMetaStorage.now!())
+           |> Enum.find(&(&1.id == record.id)) == nil
+
+    assert :ok = Crucible.Sweeper.sweep()
+    assert %{status: "running"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
+
+    # ...and a member whose own clock ran fast would find it takeable,
+    # which is the disagreement the cell's clock exists to prevent: the
+    # same scan, an instant past the lease, lists live work.
+    skewed = DateTime.add(now, ExecutionAttempts.lease_seconds() + 60, :second)
+
+    assert %{attempt: _} =
+             Enum.find(ExecutionAttempts.list_stale(skewed), &(&1.attempt == record.attempt))
+
+    # A lease that has run out on the cell's clock is takeable.
+    {1, _} =
+      Arca.Repo.update_all(
+        from(a in Arca.Schemas.ExecutionAttempt, where: a.attempt == ^record.attempt),
+        set: [lease_until: DateTime.add(Arca.ServerMetaStorage.now!(), -1, :second)]
+      )
+
+    assert %{attempt: _} =
+             Enum.find(
+               ExecutionAttempts.list_stale(Arca.ServerMetaStorage.now!()),
+               &(&1.attempt == record.attempt)
+             )
+
+    assert :ok = Crucible.Sweeper.sweep()
+    assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
+  end
+
+  test "the sweep tick of a boot that does not own the control plane marks nothing", %{ctx: ctx} do
+    record =
+      Record.new(ctx, "catalyst:local.test:1.0.0", %{"x" => 1}, component_type: :catalyst)
+
+    :ok = Record.write_started(record)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(a in Arca.Schemas.ExecutionAttempt, where: a.attempt == ^record.attempt),
+        set: [
+          boot_id: "boot-that-died",
+          lease_until: DateTime.add(DateTime.utc_now(), -5, :second)
+        ]
+      )
+
+    Arca.ControlPlane.record(:lost)
+    on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+
+    assert {:noreply, %{}} = Crucible.Sweeper.handle_info(:sweep, %{})
+    assert %{status: "running"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
+
+    Arca.ControlPlane.record(:unclaimed)
+    assert {:noreply, %{}} = Crucible.Sweeper.handle_info(:sweep, %{})
+    assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
+  end
+
+  test "a completion closes the attempt with the row, and a cancel from a read-back record closes the current one",
+       %{ctx: ctx} do
+    record = Record.new(ctx, "catalyst:local.test:1.0.0", %{}, component_type: :catalyst)
+    :ok = Record.write_started(record)
+
+    assert :ok =
+             Record.write_completed(Record.complete(record, %{"ok" => true}))
+
+    assert %{state: "completed", outcome: "ok"} =
+             ExecutionAttempts.get(Sanctum.Context.actor(ctx), record.attempt)
+
+    other = Record.new(ctx, "catalyst:local.test:1.0.0", %{}, component_type: :catalyst)
+    :ok = Record.write_started(other)
+    {:ok, read_back} = Record.get(ctx, other.id)
+    assert read_back.attempt == other.attempt
+    assert {:ok, %{status: :cancelled}} = Record.cancel(ctx, other.id)
+
+    assert %{state: "cancelled", outcome: "cancelled"} =
+             ExecutionAttempts.get(Sanctum.Context.actor(ctx), other.attempt)
+
+    assert {:error, :not_cancellable} = Record.cancel(ctx, other.id)
+  end
+end

@@ -51,7 +51,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do
@@ -73,7 +73,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   test "a cancelled formula leaves one cancelled row, failed children and nothing held", %{
     ctx: ctx
   } do
-    slots_before = Prima.Slots.status(Cyfr.Execution.Slots).active
+    slots_before = Prima.Slots.status(Crucible.Slots).active
     root_id = Prima.UUID7.execution_id()
     hold_children!(root_id)
 
@@ -109,7 +109,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     host_side =
       [root] ++
         for id <- [root_id, spawned_id, stream_id],
-            process <- [waiter(id), Cyfr.Execution.Attempt.whereis(id)],
+            process <- [waiter(id), Crucible.Attempt.whereis(id)],
             do: process
 
     assert Enum.all?(host_side, &is_pid/1)
@@ -117,7 +117,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     assert %{runners: %{busy: busy}} = OpusService.status()
     assert busy >= 1
 
-    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root_id)
+    assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, root_id)
 
     assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Schemas.Execution, root_id)
     assert ["execution.cancelled"] = terminal_events(ctx, root_id)
@@ -135,7 +135,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     wait_until(fn -> not Enum.any?(host_side, &Process.alive?/1) end, 30_000)
     wait_until(fn -> reported_exit?(runner) end, 30_000, "the runner's exit report")
     wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
-    wait_until(fn -> Prima.Slots.status(Cyfr.Execution.Slots).active == slots_before end)
+    wait_until(fn -> Prima.Slots.status(Crucible.Slots).active == slots_before end)
     assert Sanctum.Authority.budget(authority).in_flight == 0
 
     assert {:ok, _reclaimed} = Arca.BudgetReservations.sweep(Sanctum.Context.actor(ctx))
@@ -171,7 +171,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
 
       spawn(fn ->
         Process.sleep(delay)
-        send(test_pid, {:cancelled, Cyfr.Execution.cancel(ctx, root_id)})
+        send(test_pid, {:cancelled, Crucible.cancel(ctx, root_id)})
       end)
 
       TwoServices.release!(close)
@@ -205,8 +205,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     spawn(fn ->
       send(
         test_pid,
-        {:root,
-         Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
+        {:root, Crucible.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
       )
     end)
   end
@@ -245,7 +244,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
   # The process registered under `id`: its run's waiter, registered with
   # the endpoint of the worker service the run was dispatched to.
   defp waiter(id) do
-    [{pid, {:dispatched, %{id: "wrk_local"}}}] = Registry.lookup(Cyfr.Execution.Registry, id)
+    [{pid, {:dispatched, %{id: "wrk_local"}}}] = Registry.lookup(Crucible.Registry, id)
     pid
   end
 

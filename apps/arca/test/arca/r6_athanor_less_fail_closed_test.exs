@@ -72,7 +72,7 @@ defmodule Arca.R6AthanorLessFailClosedTest do
 
   describe "athanor_ready?/1 — the boundary spelling of the same invariant" do
     # Total predicates (`Arca.exists?/2`) and guest-facing refusals
-    # (`Cyfr.Execution.GuestStorage`) consume this instead of catching the raise.
+    # (`Crucible.GuestStorage`) consume this instead of catching the raise.
     test "answers exactly where tenant_segments/1 raises" do
       refute Arca.Storage.athanor_ready?(%Actor{athanor_id: nil})
       # The corrupted-row shapes a resolved identity never carries.

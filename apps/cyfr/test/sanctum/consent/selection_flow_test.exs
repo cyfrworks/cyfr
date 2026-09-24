@@ -120,7 +120,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   defp edge_vault(ctx, source_ref) do
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, source_ref)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, source_ref)
     {:ok, edge} = Blob.lookup_edge(authority.policy, source_ref, @dep, "")
     edge.vault
   end
@@ -370,7 +370,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert %{entry_id: ^home_id} = root_edge_vault(ctx, @role_a)
     assert %{entry_id: ^work_id} = root_edge_vault(ctx, @role_b)
 
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @root)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @root)
 
     {:child, via_a} =
       authority
@@ -425,7 +425,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   defp root_edge_vault(ctx, from) do
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @root)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @root)
     {:ok, edge} = Blob.lookup_edge(authority.policy, from, @dep, "")
     edge.vault
   end

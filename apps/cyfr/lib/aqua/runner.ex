@@ -618,7 +618,7 @@ defmodule Aqua.Runner do
       Sanctum.Provisioning.ready(ctx) != :ok ->
         {:reply, {:error, :not_provisioned}, state}
 
-      not Cyfr.Execution.available?() ->
+      not Crucible.available?() ->
         {:reply, {:error, :execution_unavailable}, state}
 
       busy?(state) and length(state.queue) >= @queue_max ->

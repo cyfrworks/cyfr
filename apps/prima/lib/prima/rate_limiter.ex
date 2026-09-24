@@ -24,7 +24,7 @@ defmodule Prima.RateLimiter do
   none away.
 
   One bucket is node-local for a stronger reason than the rest: a root
-  execution's emit budget (`Cyfr.Execution.Emit`) counts the events one
+  execution's emit budget (`Crucible.Emit`) counts the events one
   guest run produces, and a root runs on exactly one member, so there is
   no second count in the cell for its own to disagree with. It is
   counted here because this is where it happens, and because it sits on
@@ -34,7 +34,7 @@ defmodule Prima.RateLimiter do
 
   **Nothing consented is enforced here.** An athanor's consented
   invocation rate is claimed in a row every member shares
-  (`Arca.RateWindows`, through `Cyfr.Execution.Rates`), where two
+  (`Arca.RateWindows`, through `Crucible.Rates`), where two
   members cannot admit it twice and a restart forgets nothing. A limit
   someone agreed to belongs there; a flood control on a transport, or on
   work one member is already doing, belongs here. A later reader wanting

@@ -206,7 +206,7 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   Whether unsigned OCI components are refused. Read at both ends of a
   component's life — `Compendium.OCI.Client` refuses the pull, and
-  `Cyfr.Execution.Admission` refuses to run a row that carries no verified
+  `Crucible.Admission` refuses to run a row that carries no verified
   signature (a component pulled before the knob was set).
   """
   @spec require_signed_pulls?() :: boolean()
@@ -559,7 +559,7 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve where CYFR's host API listener binds (`Cyfr.Execution.HostListener`)
+  Resolve where CYFR's host API listener binds (`Crucible.HostListener`)
   and the address this member is reached at: `CYFR_HOST_API_BIND`, an IPv4
   or IPv6 address (default `127.0.0.1`), `CYFR_HOST_API_PORT`, a port from
   1 to 65535 (default 4300), and `CYFR_HOST_API_URL`, the base URL a
@@ -623,7 +623,7 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve the worker watch's bounds (`Cyfr.Execution.WorkerWatch`):
+  Resolve the worker watch's bounds (`Crucible.WorkerWatch`):
   `CYFR_WORKER_WATCH_POLL_MS`, the interval between its status polls of
   each worker service, a whole number of milliseconds from 1000 to 60000
   (default 5000), and `CYFR_WORKER_WATCH_MISSES`, the misses in a row

@@ -207,7 +207,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       listen(Bus.executions(@actor))
       listen(Bus.notify(@actor))
 
-      record = %Cyfr.Execution.Record{
+      record = %Crucible.Record{
         id: "exec_cancelled",
         athanor_id: @athanor,
         user_id: @user,
@@ -217,7 +217,7 @@ defmodule Cyfr.TelemetryBridgeTest do
         duration_ms: 7
       }
 
-      :ok = Cyfr.Execution.Telemetry.execute_cancelled(record, "system")
+      :ok = Crucible.Telemetry.execute_cancelled(record, "system")
 
       assert_receive %Execution{
         kind: :cancelled,
@@ -340,20 +340,20 @@ defmodule Cyfr.TelemetryBridgeTest do
 
       # Admitted nowhere: the terminal write has no running row to close.
       record =
-        Cyfr.Execution.Record.new(ctx, "reagent:local.never-admitted:0.1.0", %{},
+        Crucible.Record.new(ctx, "reagent:local.never-admitted:0.1.0", %{},
           component_type: :reagent,
           grant: grant
         )
 
-      close = %Cyfr.Execution.Close{
+      close = %Crucible.Close{
         ctx: ctx,
         record: record,
         limits: Prima.Authority.zero_limits(),
         started: true
       }
 
-      Cyfr.Execution.Close.complete(close, [], %{"ok" => true}, %{})
-      Cyfr.Execution.Close.fail(close, [], "it failed")
+      Crucible.Close.complete(close, [], %{"ok" => true}, %{})
+      Crucible.Close.fail(close, [], "it failed")
 
       id = record.id
       refute_receive %Execution{execution_id: ^id}, 200

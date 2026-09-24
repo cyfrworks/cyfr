@@ -109,7 +109,7 @@ defmodule Opus.HttpHandlerEnforcementTest do
 
   test "a refusal reported for an attempt that is no longer held records nothing" do
     {attempt, host} = attached("catalyst:local.audited-closed:1.0.0")
-    assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(attempt.ctx, attempt.execution_id)
+    assert {:ok, %{cancelled: true}} = Crucible.cancel(attempt.ctx, attempt.execution_id)
 
     assert {:error, :lost} = Opus.HostClient.record_denial(host, "domain_blocked", "blocked")
     assert rows_for(attempt) == []

@@ -197,7 +197,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       key_ctx = %{ctx | auth_method: :api_key}
 
       assert {:error, message} =
-               Cyfr.Schedules.Provider.handle("schedule", key_ctx, %{
+               Crucible.Schedules.Provider.handle("schedule", key_ctx, %{
                  "action" => "create",
                  "name" => "bound-sched",
                  "cron_expression" => "0 * * * *",
@@ -208,7 +208,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       assert message =~ "profile binding refused"
 
       assert {:ok, created} =
-               Cyfr.Schedules.Provider.handle("schedule", ctx, %{
+               Crucible.Schedules.Provider.handle("schedule", ctx, %{
                  "action" => "create",
                  "name" => "bound-sched",
                  "cron_expression" => "0 * * * *",

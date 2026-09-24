@@ -26,7 +26,7 @@ defmodule Opus.RunnerReuseTest do
 
   import Prima.Test.Wait
 
-  alias Cyfr.Execution.WorkerClient
+  alias Crucible.WorkerClient
   alias Cyfr.Test.{OpusService, TwoServices}
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
@@ -58,7 +58,7 @@ defmodule Opus.RunnerReuseTest do
     ctx = %{Sanctum.TestContext.local() | athanor_id: athanor.id}
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do
@@ -81,7 +81,7 @@ defmodule Opus.RunnerReuseTest do
     first_id = Prima.UUID7.execution_id()
 
     {:ok, first} =
-      Cyfr.Execution.run_root(
+      Crucible.run_root(
         ctx,
         :default,
         Probe.probe_ref(),
@@ -112,7 +112,7 @@ defmodule Opus.RunnerReuseTest do
       send(
         test_pid,
         {:second,
-         Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: second_id)}
+         Crucible.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: second_id)}
       )
     end)
 

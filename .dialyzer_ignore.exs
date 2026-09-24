@@ -22,7 +22,7 @@
   {"lib/compendium/provenance.ex", :extra_range},
   {"lib/compendium/registry/client.ex", :pattern_match_cov},
   {"lib/compendium/registry/credential_store.ex", :pattern_match_cov},
-  {"lib/cyfr/execution/events/sequence.ex", :missing_range},
+  {"lib/crucible/events/sequence.ex", :missing_range},
   {"lib/prima/json_formatter.ex", :unknown_type},
   {"lib/cyfr/retention_scheduler.ex", :pattern_match},
   {"lib/grimoire/provider.ex", :pattern_match_cov},

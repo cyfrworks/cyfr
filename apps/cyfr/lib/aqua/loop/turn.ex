@@ -280,7 +280,7 @@ defmodule Aqua.Loop.Turn do
     fn input ->
       task =
         Aqua.Loop.Worker.async(fn ->
-          Cyfr.Execution.run_child(authority, catalyst, nil, input,
+          Crucible.run_child(authority, catalyst, nil, input,
             ctx: guest,
             parent_execution_id: turn.root_execution_id,
             root_execution_id: turn.root_execution_id,

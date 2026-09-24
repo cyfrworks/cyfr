@@ -67,13 +67,13 @@ defmodule Aqua.LoopTest do
   test "the catalyst's consented cap answers to a name, not to the ref the spec carries", %{
     ctx: ctx
   } do
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
 
     # What `Aqua.AgentConfig` resolves, and so what the spec holds.
     versioned = @model <> ":1.3.1"
     {:ok, name_ref} = Prima.ComponentRef.to_name_ref(versioned)
 
-    # The graph is keyed the way `Cyfr.Execution.Admission` steps: by name. Asking with
+    # The graph is keyed the way `Crucible.Admission` steps: by name. Asking with
     # the version answers nothing, and a cap of nil is a size check that
     # never fires — which is what the loop did while it asked that way.
     assert {:error, :unknown_node} = Prima.Authority.node_limits(authority, versioned)
@@ -87,7 +87,7 @@ defmodule Aqua.LoopTest do
   test "the loop resolves a cap for the spec it actually holds", %{ctx: ctx, thread: thread} do
     start_supervised!({ScriptedWorker, ref: @model, script: []})
     turn = accept!(ctx, thread, "hello")
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
     {:ok, spec} = Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
 
     # The spec holds a versioned ref, and the graph is keyed by name. Asking
@@ -209,7 +209,7 @@ defmodule Aqua.LoopTest do
     ref
   end
 
-  defp roots, do: Prima.Slots.status(Cyfr.Execution.Slots).root_active
+  defp roots, do: Prima.Slots.status(Crucible.Slots).root_active
 
   test "a reply lands as rows before the turn ends, and the root is let go", %{
     ctx: ctx,
@@ -225,7 +225,7 @@ defmodule Aqua.LoopTest do
     assert_receive {:scripted_probe, worker, _child}, 10_000
 
     assert roots() == before + 1
-    holders = Prima.Slots.status(Cyfr.Execution.Slots).holders
+    holders = Prima.Slots.status(Crucible.Slots).holders
     assert Enum.any?(holders, &(&1.pid == inspect(task.pid) and &1.class == :root))
     refute Enum.any?(holders, &(&1.pid == inspect(task.pid) and &1.class == :child))
     assert {:ok, %{status: "running", root_execution_id: root}} = Tape.turn(ctx, turn.id)
@@ -441,7 +441,7 @@ defmodule Aqua.LoopTest do
 
     # A spec is built on the pinned release alone, and only on one that
     # speaks the chat contract.
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
 
     for {ref, refusal} <- [
           {"catalyst:local.claude:0.0.1", :catalyst_not_in_estate},

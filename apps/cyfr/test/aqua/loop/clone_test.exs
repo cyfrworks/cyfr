@@ -242,7 +242,7 @@ defmodule Aqua.Loop.CloneTest do
 
   test "a clone's authority is the soul's stepped to the role, and only along a consented edge",
        %{ctx: ctx} do
-    {:ok, soul} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
     {:ok, roster} = AgentSource.enabled_roster(ctx)
     {:ok, planner} = AgentIndex.snapshot(ctx, "planner")
     {:ok, web} = AgentIndex.snapshot(ctx, "web")
@@ -386,7 +386,7 @@ defmodule Aqua.Loop.CloneTest do
     :ok = Arca.put(Sanctum.Context.actor(ctx), path, bytes <> "\n\nLIVE-EDIT-MARKER\n")
     {:ok, _} = AgentIndex.sync(ctx)
 
-    {:ok, soul} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    {:ok, soul} = Crucible.authority_for(ctx, :default, @soul)
     {:ok, roster} = AgentSource.enabled_roster(ctx)
     {:ok, live} = AgentIndex.snapshot(ctx, "planner")
     assert live.revision_digest != clone.agent_revision_digest

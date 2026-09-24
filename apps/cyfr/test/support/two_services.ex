@@ -104,7 +104,7 @@ defmodule Cyfr.Test.TwoServices do
 
     import Plug.Conn
 
-    alias Cyfr.Execution.Keys
+    alias Crucible.Keys
     alias Prima.{WorkerAuth, WorkerWire}
 
     @max_hold_ms 60_000
@@ -630,7 +630,7 @@ defmodule Cyfr.Test.TwoServices do
     }
 
     result =
-      Cyfr.Execution.run_child(authority, reference, nil, input,
+      Crucible.run_child(authority, reference, nil, input,
         ctx: ctx,
         execution_id: child_id,
         parent_execution_id: root.id,

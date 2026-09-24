@@ -48,15 +48,15 @@ defmodule Cyfr.Test.Sandbox do
     Emissary.TaskSupervisor,
     Sanctum.ProvisioningSupervisor,
     Compendium.ProvisioningSupervisor,
-    Cyfr.Schedules.TaskSupervisor,
+    Crucible.Schedules.TaskSupervisor,
     Sanctum.OAuth.RefreshTaskSupervisor,
     Sanctum.TaskSupervisor,
-    Cyfr.Execution.TaskSupervisor,
+    Crucible.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
     Emissary.MCP.ExternalServerSupervisor,
-    Cyfr.Execution.Attempt.Supervisor,
+    Crucible.Attempt.Supervisor,
     Opus.RunnerPool.Runners,
-    Cyfr.Execution.Events.Supervisor
+    Crucible.Events.Supervisor
   ]
 
   # Swept through the pool whose runners' handles it supervises, never by

@@ -101,7 +101,7 @@ defmodule Opus.ActivationStampingTest do
     # stamping is exercised where it still runs: a direct execution under
     # an authority that carries no activation of its own.
     {:ok, result} =
-      Cyfr.Execution.Dispatch.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
+      Crucible.Dispatch.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
         type: :formula,
         authority: Prima.Authority.zero()
       )

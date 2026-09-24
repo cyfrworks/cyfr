@@ -74,7 +74,7 @@ defmodule Emissary.MCP.ThreadTool do
   # Two tools, one service. The service label is the provider's, so
   # `system.status` and the request log's `routed_to` read one label for
   # both; a tool name and a service name are already different things
-  # (`Cyfr.Execution.MCP` answers `"opus"`, `Emissary.MCP.McpServersTool`
+  # (`Crucible.Provider` answers `"opus"`, `Emissary.MCP.McpServersTool`
   # answers `"emissary"`).
   @impl true
   def tools, do: [definition(), turn_definition()]
@@ -750,7 +750,7 @@ defmodule Emissary.MCP.ThreadTool do
     do: {:error, {:invalid_argument, "decline requires 'message_id'"}}
 
   # The durable truth of a thread is `messages.seq`, so replay is a
-  # cursor over rows. Deliberately NOT `Cyfr.Execution.events_since/3`:
+  # cursor over rows. Deliberately NOT `Crucible.events_since/3`:
   # that is keyed by execution id and carries a turn's in-flight tool
   # deltas, which are the runner's business. A client that reconnects wants
   # what was SAID, and the final rows are enough.

@@ -18,7 +18,7 @@ defmodule Aqua.ConsentStatus do
   (`Compendium.agent_source_refs/1`, `Compendium.local_formula_refs/1`),
   what a source declares is read through consent's own derivation
   (`Sanctum.Consent.ShapeDerivation`), and what was consented is the
-  authority a turn would pin (`Cyfr.Execution.authority_for/3`). A source
+  authority a turn would pin (`Crucible.authority_for/3`). A source
   that cannot be read is a typed refusal, never a silent absence: a page
   that cannot tell says so rather than showing a clean bill. The status
   grants nothing; it only reports.
@@ -79,7 +79,7 @@ defmodule Aqua.ConsentStatus do
 
   def state(%Context{} = ctx, ref) when is_binary(ref) do
     with {:ok, _needs, caps} <- ShapeDerivation.manifest_blocks(ctx, ref),
-         {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, ref) do
+         {:ok, authority} <- Crucible.authority_for(ctx, :default, ref) do
       declared = ShapeDerivation.expand_tools((caps && caps.tools) || [])
 
       case missing(declared, consented(authority)) do

@@ -16,7 +16,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Execution.MCP
+  alias Crucible.Provider
   alias Sanctum.Consent.{Bootstrap}
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
@@ -78,7 +78,7 @@ defmodule Opus.SeedModelCatalystsTest do
       assert Prima.Model.speaks_chat?(component.manifest)
 
       assert {:ok, %{result: described}} =
-               MCP.handle("execution", ctx, %{
+               Provider.handle("execution", ctx, %{
                  "action" => "run",
                  "reference" => ref,
                  "input" => %{"operation" => "describe", "params" => %{}}
@@ -90,7 +90,7 @@ defmodule Opus.SeedModelCatalystsTest do
       assert is_list(capabilities["provider_tools"]) and is_list(capabilities["media_types"])
 
       describe_model = fn model ->
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"operation" => "describe", "params" => %{"model" => model}}
@@ -112,7 +112,7 @@ defmodule Opus.SeedModelCatalystsTest do
       end
 
       assert {:error, "'model' is required"} =
-               MCP.handle("execution", ctx, %{
+               Provider.handle("execution", ctx, %{
                  "action" => "run",
                  "reference" => ref,
                  "input" => %{"operation" => "chat", "params" => %{"messages" => []}}
@@ -143,7 +143,7 @@ defmodule Opus.SeedModelCatalystsTest do
       # surfaces as the error: the key read succeeded first (a denied read
       # answers "Failed to read #{field}" instead), and nothing was dialled.
       assert {:error, "Unknown operation: nothing.here"} =
-               MCP.handle("execution", ctx, %{
+               Provider.handle("execution", ctx, %{
                  "action" => "run",
                  "reference" => ref,
                  "input" => %{"operation" => "nothing.here", "params" => %{}}
@@ -185,10 +185,10 @@ defmodule Opus.SeedModelCatalystsTest do
 
     input = %{"operation" => "nothing.here", "params" => %{}}
 
-    {:ok, before} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, before} = Crucible.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{node_ref: "catalyst:local.claude:" <> _, reason: reason}}} =
-             Cyfr.Execution.run_child(before, "catalyst:local.claude", nil, input, child_opts)
+             Crucible.run_child(before, "catalyst:local.claude", nil, input, child_opts)
 
     assert reason == "vault_selection_unbound"
 
@@ -220,20 +220,20 @@ defmodule Opus.SeedModelCatalystsTest do
 
     # The assistant's authority, loaded again, lends the key on its edge;
     # the child reads it and runs to its own refusal.
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, authority} = Crucible.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, "Unknown operation: nothing.here"} =
-             Cyfr.Execution.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
+             Crucible.run_child(authority, "catalyst:local.claude", nil, input, child_opts)
 
     # Revoking the catalyst's profile cuts the assistant off at the next load.
     {:ok, [claude_profile]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.claude")
 
     :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), claude_profile.id, "revoked")
-    {:ok, revoked} = Cyfr.Execution.authority_for(ctx, :default, "agent:local.aqua")
+    {:ok, revoked} = Crucible.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
-             Cyfr.Execution.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
+             Crucible.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
   end
 
   defp newest_shipped(plural, name) do

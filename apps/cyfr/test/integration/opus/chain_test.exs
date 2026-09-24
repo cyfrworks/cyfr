@@ -3,8 +3,8 @@
 Code.require_file("support/formula_host_helper.exs", __DIR__)
 
 defmodule Opus.ChainTest do
-  # Runs under the authority `Cyfr.Execution.Admission` decides (whose own
-  # cases are `Cyfr.Execution.AdmissionTest`), against the in-memory consent
+  # Runs under the authority `Crucible.Admission` decides (whose own
+  # cases are `Crucible.AdmissionTest`), against the in-memory consent
   # source and a real published component (math.wasm — a core module that
   # fails at component compile, which is irrelevant: every property
   # asserted here is decided before compilation). What a run entered with
@@ -218,7 +218,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_root_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
+        Crucible.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
           execution_id: execution_id,
           type: :reagent
         )
@@ -269,7 +269,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_route_row_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+        Crucible.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
           route: :protected,
           execution_id: execution_id
         )
@@ -287,7 +287,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_route_pub_row_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+        Crucible.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
           route: :public,
           execution_id: execution_id
         )
@@ -358,7 +358,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_child_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_child(
+        Crucible.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -384,7 +384,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_zero_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_child(
+        Crucible.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -402,7 +402,7 @@ defmodule Opus.ChainTest do
       auth = authority_with_edges(%{"reagent:local.gone" => %{}})
 
       assert {:error, {:setup_required, payload}} =
-               Cyfr.Execution.run_child(
+               Crucible.run_child(
                  auth,
                  "reagent:local.gone:1.0.0",
                  nil,
@@ -448,7 +448,7 @@ defmodule Opus.ChainTest do
         })
 
       assert {:error, {:setup_required, payload}} =
-               Cyfr.Execution.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
+               Crucible.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
 
       assert payload.profile_id == "prof-chain"
       assert payload.node_ref == "#{@target_node}:0.1.0"
@@ -515,14 +515,14 @@ defmodule Opus.ChainTest do
       # nothing executes, so the blob below is provably the only policy in
       # play.
       assert {:error, no_authority_error} =
-               Cyfr.Execution.Dispatch.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
+               Crucible.Dispatch.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
 
       assert no_authority_error =~ "without an authority is not a thing"
 
       execution_id = "exec_chain_cat_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
+        Crucible.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
           type: :catalyst,
           execution_id: execution_id
         )
@@ -695,7 +695,7 @@ defmodule Opus.ChainTest do
       assert Sanctum.Authority.budget(auth).in_flight == 0
 
       _result =
-        Cyfr.Execution.run_child(
+        Crucible.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -733,7 +733,7 @@ defmodule Opus.ChainTest do
       }
 
       _result =
-        Cyfr.Execution.run_child(
+        Crucible.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -759,7 +759,7 @@ defmodule Opus.ChainTest do
         )
 
       assert {:error, {:invoke_denied, :invoke_budget_exhausted}} =
-               Cyfr.Execution.run_child(
+               Crucible.run_child(
                  auth,
                  "#{@target_node}:0.1.0",
                  nil,
@@ -808,7 +808,7 @@ defmodule Opus.ChainTest do
         |> Arca.Repo.update_all(set: [admit_by: past])
 
       assert {:error, _} =
-               Cyfr.Execution.run_child(
+               Crucible.run_child(
                  auth,
                  "#{@target_node}:0.1.0",
                  nil,

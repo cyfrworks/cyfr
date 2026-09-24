@@ -61,7 +61,7 @@ defmodule Arca.Storage do
     module owns both planes' spellings); `data/` — what components
     store — has none by design (the guest names its own paths inside it;
     `guest_scopes/0` says which roots a guest may name at all, applied by
-    `Cyfr.Execution.GuestStorage` at the guest boundary, so a `data/` grant can
+    `Crucible.GuestStorage` at the guest boundary, so a `data/` grant can
     never see a host scope). The
     global roots keep their literal at their single consumer, with a
     roster-membership witness in that consumer's test.
@@ -347,7 +347,7 @@ defmodule Arca.Storage do
 
   @doc """
   The guest storage scopes: what a WASM guest may name in a path, mapped
-  to the tenant scope each one stores under. `Cyfr.Execution.GuestStorage`
+  to the tenant scope each one stores under. `Crucible.GuestStorage`
   applies this at the guest boundary; keeping the map here means the
   roots a guest may reach are written down in the one layout table.
   """
@@ -554,7 +554,7 @@ defmodule Arca.Storage do
   (the scope listing), a bare scope (`"data"`, `"components"`), or anything
   under one (`"data/notes.txt"`). One predicate shared by the manifest
   validator (`Prima.Manifest.validate/2`) and the guest storage boundary
-  (`Cyfr.Execution.GuestStorage`), so a grant no runtime
+  (`Crucible.GuestStorage`), so a grant no runtime
   would honor is refused at parse — and the two layers cannot drift.
 
   ## Examples
@@ -591,7 +591,7 @@ defmodule Arca.Storage do
   grammar. The boundary spelling of the invariant `tenant_segments/1`
   enforces by raising, and what `Arca`'s own gate answers
   `{:error, :no_athanor}` on; total predicates (`Arca.exists?/2`) and
-  guest-facing refusals (`Cyfr.Execution.GuestStorage`) consume this,
+  guest-facing refusals (`Crucible.GuestStorage`) consume this,
   and everything else keeps the fail-closed raise.
   """
   @spec athanor_ready?(Prima.Actor.t()) :: boolean()

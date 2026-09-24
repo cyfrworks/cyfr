@@ -9,7 +9,7 @@ defmodule Cyfr.IngressInventoryTest do
   test. Instead the code is scanned for callers of the run family and
   compared against a literal allowlist — so a NEW ingress fails here
   until someone classifies it, which is the fail-closed direction. The
-  second arm (`Cyfr.Execution.CredentialedIngressGateTest`) proves each
+  second arm (`Crucible.CredentialedIngressGateTest`) proves each
   classified ingress yields no credentials without a profile.
   """
 
@@ -21,11 +21,11 @@ defmodule Cyfr.IngressInventoryTest do
   @allowed %{
     # Where execution is defined: the run family, and the dispatch every
     # run goes through.
-    "apps/cyfr/lib/cyfr/execution.ex" => :internal,
-    "apps/cyfr/lib/cyfr/execution/dispatch.ex" => :internal,
+    "apps/cyfr/lib/crucible.ex" => :internal,
+    "apps/cyfr/lib/crucible/dispatch.ex" => :internal,
     # Ingresses proper.
-    "apps/cyfr/lib/cyfr/execution/mcp.ex" => :mcp,
-    "apps/cyfr/lib/cyfr/schedules/scheduler.ex" => :cron,
+    "apps/cyfr/lib/crucible/provider.ex" => :mcp,
+    "apps/cyfr/lib/crucible/schedules/scheduler.ex" => :cron,
     "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex" => :webhook,
     # One implementation behind two tincture surfaces (the HTTP controller
     # and the console shell render its outcomes; neither calls run_root
@@ -33,7 +33,7 @@ defmodule Cyfr.IngressInventoryTest do
     "apps/cyfr/lib/emissary/tincture/invoke.ex" => :tincture,
     # Formula children run under the authority CYFR holds for the parent's
     # attempt, never their own, admitted for the parent's runner.
-    "apps/cyfr/lib/cyfr/execution/host/children.ex" => :in_chain,
+    "apps/cyfr/lib/crucible/host/children.ex" => :in_chain,
     # The agent loop: the turn's root is claimed without a guest, and every
     # call it dispatches is a child of that root.
     "apps/cyfr/lib/aqua/loop.ex" => :in_chain,
@@ -42,13 +42,13 @@ defmodule Cyfr.IngressInventoryTest do
   }
 
   @patterns [
-    "Cyfr.Execution.run_root(",
-    "Cyfr.Execution.run_root_edge(",
-    "Cyfr.Execution.claim_turn_root(",
-    "Cyfr.Execution.run_child(",
-    "&Cyfr.Execution.run_child/",
-    "Cyfr.Execution.admit_child(",
-    "&Cyfr.Execution.admit_child/",
+    "Crucible.run_root(",
+    "Crucible.run_root_edge(",
+    "Crucible.claim_turn_root(",
+    "Crucible.run_child(",
+    "&Crucible.run_child/",
+    "Crucible.admit_child(",
+    "&Crucible.admit_child/",
     "Admission.step_invoke(",
     "Admission.admit(",
     "Dispatch.run(",
@@ -83,7 +83,7 @@ defmodule Cyfr.IngressInventoryTest do
 
     Every ingress must run under a consent-rooted authority. Add it to
     @allowed here AND to the per-ingress credential gate in
-    apps/cyfr/test/cyfr/execution/credentialed_ingress_gate_test.exs.
+    apps/cyfr/test/crucible/credentialed_ingress_gate_test.exs.
     """
 
     assert MapSet.size(stale) == 0, """
@@ -93,12 +93,12 @@ defmodule Cyfr.IngressInventoryTest do
     """
   end
 
-  # The ingresses proper. Each starts its root through `Cyfr.Execution`,
+  # The ingresses proper. Each starts its root through `Crucible`,
   # which derives the authority a run is admitted under from the selected
   # profile's consent; admitting or dispatching directly would skip that.
   @ingress_files ~w(
-    apps/cyfr/lib/cyfr/execution/mcp.ex
-    apps/cyfr/lib/cyfr/schedules/scheduler.ex
+    apps/cyfr/lib/crucible/provider.ex
+    apps/cyfr/lib/crucible/schedules/scheduler.ex
     apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex
     apps/cyfr/lib/emissary/tincture/invoke.ex
   )
@@ -106,12 +106,12 @@ defmodule Cyfr.IngressInventoryTest do
   # Where execution is defined, and where a formula's children are
   # admitted under their parent's authority.
   @engine_internals ~w(
-    apps/cyfr/lib/cyfr/execution.ex
-    apps/cyfr/lib/cyfr/execution/dispatch.ex
-    apps/cyfr/lib/cyfr/execution/host/children.ex
+    apps/cyfr/lib/crucible.ex
+    apps/cyfr/lib/crucible/dispatch.ex
+    apps/cyfr/lib/crucible/host/children.ex
   )
 
-  test "every ingress starts its root through Cyfr.Execution" do
+  test "every ingress starts its root through Crucible" do
     direct =
       Enum.filter(@ingress_files, fn file ->
         root()
@@ -123,7 +123,7 @@ defmodule Cyfr.IngressInventoryTest do
     assert direct == [],
            """
            These ingresses admit or dispatch a run directly instead of
-           starting it through Cyfr.Execution:
+           starting it through Crucible:
 
              #{Enum.join(direct, "\n  ")}
 

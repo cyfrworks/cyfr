@@ -95,7 +95,7 @@ defmodule Aqua.Loop.Stream do
       spawn_monitor(fn ->
         owner_monitor = Process.monitor(owner)
 
-        case Cyfr.Execution.subscribe_events(execution_id, ctx) do
+        case Crucible.subscribe_events(execution_id, ctx) do
           :ok ->
             send(owner, {ref, :subscribed})
             forward(ctx, attrs, owner_monitor, {-1, -1})

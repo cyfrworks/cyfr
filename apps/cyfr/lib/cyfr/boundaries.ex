@@ -102,7 +102,7 @@ defmodule Cyfr.Boundaries do
       umbrella_deps: [:arca, :prima, :sanctum],
       note:
         "the host and everything above it. It declares neither island: " <>
-          "`Cyfr.Execution` is the seam to Opus and `Prima.BuilderProtocol` to Locus"
+          "`Crucible` is the seam to Opus and `Prima.BuilderProtocol` to Locus"
     },
     %{
       app: :opus,
@@ -320,7 +320,12 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Tenancy`."
     },
     %{
-      from: ["apps/cyfr/lib/cyfr/**/*.ex", "apps/cyfr/lib/grimoire/**/*.ex"],
+      from: [
+        "apps/cyfr/lib/cyfr/**/*.ex",
+        "apps/cyfr/lib/grimoire/**/*.ex",
+        "apps/cyfr/lib/crucible/**/*.ex",
+        "apps/cyfr/lib/crucible.ex"
+      ],
       into: "Sanctum",
       allow: ~w(
         Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller
@@ -480,7 +485,7 @@ defmodule Cyfr.Boundaries do
     },
     %{
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
-      into: "Cyfr.Execution",
+      into: "Crucible",
       allow: [],
       reason:
         "the component domain answers facts about components and runs none: a " <>
@@ -607,7 +612,7 @@ defmodule Cyfr.Boundaries do
       into: "Opus",
       allow: [],
       reason:
-        "`apps/cyfr/mix.exs` declares no dependency on `opus`: `Cyfr.Execution` is " <>
+        "`apps/cyfr/mix.exs` declares no dependency on `opus`: `Crucible` is " <>
           "the seam, and a run reaches a worker over `Prima.WorkerWire`."
     },
     %{
@@ -721,7 +726,7 @@ defmodule Cyfr.Boundaries do
     from: ["apps/cyfr/lib/cyfr/bus.ex", "apps/cyfr/lib/cyfr/bus/**/*.ex"],
     roots:
       ~w(Sanctum Aqua Compendium Crucible Grimoire Emissary EmissaryWeb Prism PrismWeb CyfrWeb),
-    namespaces: ~w(Cyfr.Execution Cyfr.Schedules),
+    namespaces: ~w(Crucible Crucible.Schedules),
     reason:
       "`Cyfr.Bus` owns every topic and payload and checks every publish against the " <>
         "actor it is handed; naming the identity domain, a domain or a surface would " <>
@@ -1242,8 +1247,8 @@ defmodule Cyfr.Boundaries do
     %{
       responsibility: "retire execution work under its stored grant",
       modules: ~w(
-        Sanctum.ExecutionStanding Cyfr.Execution.Record Cyfr.Execution.Lapse
-        Cyfr.Execution.Cascade Cyfr.Execution.Sweeper Cyfr.Execution.TurnRoot
+        Sanctum.ExecutionStanding Crucible.Record Crucible.Lapse
+        Crucible.Cascade Crucible.Sweeper Crucible.TurnRoot
         Emissary.MCP.ExternalProvider Aqua.Tape
       ),
       check: "Sanctum.ExecutionStanding.stamp_only/1",
@@ -1329,7 +1334,7 @@ defmodule Cyfr.Boundaries do
     "apps/cyfr/test/cyfr/test_sandbox_test.exs" =>
       "the sandbox helper's own case: what it drains IS the pool, so the assertion " <>
         "has to name it.",
-    "apps/cyfr/test/cyfr/execution/start_refusal_test.exs" =>
+    "apps/cyfr/test/crucible/start_refusal_test.exs" =>
       "the refusal a keeper gives is `Opus.Keeper.Spawn.refusal/1`'s shape, and this " <>
         "case holds CYFR's rendering of it to that shape.",
     "apps/cyfr/test/grimoire/error_renderers_test.exs" =>

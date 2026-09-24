@@ -37,7 +37,7 @@ defmodule Opus.WorkerServiceWireTest do
   import Prima.Test.Wait
 
   alias Prima.Authority.Budget
-  alias Cyfr.Execution.{Attempt, Keys}
+  alias Crucible.{Attempt, Keys}
   alias Prima.Slots
   alias Cyfr.Test.{AttemptFixtures, OpusService, TwoServices}
   alias Opus.Test.NestedExecution, as: Probe
@@ -46,7 +46,7 @@ defmodule Opus.WorkerServiceWireTest do
   @moduletag timeout: 120_000
 
   @probe_node "formula:local.nested-probe"
-  @slots Cyfr.Execution.Slots
+  @slots Crucible.Slots
   @lapsed "Execution terminated: runner stopped without cleanup"
 
   setup tags do
@@ -79,7 +79,7 @@ defmodule Opus.WorkerServiceWireTest do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @probe_node in minted
 
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @probe_node)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @probe_node)
     authority = %{authority | budget: Budget.new(2)}
     root_id = Prima.UUID7.execution_id()
 
@@ -189,7 +189,7 @@ defmodule Opus.WorkerServiceWireTest do
       send(
         test_pid,
         {:root,
-         Cyfr.Execution.run_root(
+         Crucible.run_root(
            ctx,
            :default,
            Probe.probe_ref(),
@@ -316,7 +316,7 @@ defmodule Opus.WorkerServiceWireTest do
 
   # A child of the root: the probe asking for a catalog tool, held there.
   defp child!(ctx, authority, root_id, attempt, opts) do
-    Cyfr.Execution.run_child(
+    Crucible.run_child(
       authority,
       Probe.probe_ref(),
       nil,

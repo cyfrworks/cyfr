@@ -97,8 +97,8 @@ defmodule Emissary.Tincture.Invoke do
     # execution machinery; a request in that window is refused cleanly
     # rather than noproc-crashing mid-flight.
     run_result =
-      if Cyfr.Execution.available?() do
-        Cyfr.Execution.run_root_edge(ctx, tincture_ref, reference, input,
+      if Crucible.available?() do
+        Crucible.run_root_edge(ctx, tincture_ref, reference, input,
           route: route,
           client_ip: Keyword.get(opts, :client_ip)
         )
@@ -116,7 +116,7 @@ defmodule Emissary.Tincture.Invoke do
     RequestLog.safe_log_completed(ctx, ctx.request_id, %{
       output: result.output,
       duration_ms: duration_ms,
-      routed_to: "opus"
+      routed_to: Crucible.service()
     })
 
     emit_stop(telemetry_meta, duration_ms, :ok, nil)
@@ -169,7 +169,7 @@ defmodule Emissary.Tincture.Invoke do
     RequestLog.safe_log_failed(ctx, ctx.request_id, %{
       error: error,
       duration_ms: duration_ms,
-      routed_to: "opus"
+      routed_to: Crucible.service()
     })
   end
 

@@ -40,7 +40,7 @@ defmodule Opus.ExecutionProvenanceTest do
 
   defp run(ctx, opts) do
     {:ok, result} =
-      Cyfr.Execution.Dispatch.run(
+      Crucible.Dispatch.run(
         ctx,
         Probe.probe_ref(),
         %{"op" => "echo"},
@@ -87,7 +87,7 @@ defmodule Opus.ExecutionProvenanceTest do
              Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), row.id, "result")
 
     assert Prima.Digest.sha256(bytes) == digest
-    assert {:ok, %{output: %{"op" => "echo"} = joined}} = Cyfr.Execution.get(ctx, row.id)
+    assert {:ok, %{output: %{"op" => "echo"} = joined}} = Crucible.get(ctx, row.id)
     assert Jason.decode!(bytes) == joined
   end
 end

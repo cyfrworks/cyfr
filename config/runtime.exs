@@ -138,7 +138,7 @@ if config_env() != :test do
       end
     end
 
-  # Where CYFR's host API listener binds (`Cyfr.Execution.HostListener`):
+  # Where CYFR's host API listener binds (`Crucible.HostListener`):
   # the address and port the worker services post their host calls and
   # exit reports to, and CYFR_HOST_API_URL, the address a worker reaches
   # this member at, which every assignment it issues carries. Default
@@ -331,7 +331,7 @@ if config_env() != :test do
     # The worker root every key CYFR issues derives from, resolved above.
     config :cyfr, :worker_key, worker_root
 
-    # The worker services runs are dispatched to (`Cyfr.Execution.Dispatch`):
+    # The worker services runs are dispatched to (`Crucible.Dispatch`):
     # `CYFR_WORKERS`, comma-separated `<service_id>=<url>` entries, each the
     # configured id of a worker service and the base URL of its listener,
     # tried in order. Default the Opus service of a local boot; a malformed
@@ -347,7 +347,7 @@ if config_env() != :test do
     config :cyfr, :host_api_port, host_api.port
     config :cyfr, :host_api_url, host_api.url
 
-    # How the worker watch (`Cyfr.Execution.WorkerWatch`) hears from each
+    # How the worker watch (`Crucible.WorkerWatch`) hears from each
     # worker service: CYFR_WORKER_WATCH_POLL_MS, the interval between its
     # status polls (1000 to 60000, default 5000), and
     # CYFR_WORKER_WATCH_MISSES, the misses in a row after which the boot

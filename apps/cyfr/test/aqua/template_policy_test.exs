@@ -31,7 +31,7 @@ defmodule Prism.AquaTemplatePolicyTest do
              Enum.join(unreachable, "\n")
   end
 
-  # The "execution" entries come from Cyfr.Execution.MCP's registered tool.
+  # The "execution" entries come from Crucible.Provider's registered tool.
   test "the capability matrix offers reachable actions, with their real kinds" do
     catalog = Map.new(PrismWeb.AquaLive.Catalog.enumerate_tool_actions())
 

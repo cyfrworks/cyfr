@@ -158,7 +158,7 @@ defmodule Cyfr.Cluster.Boot do
 
     watcher =
       spawn(fn ->
-        :ok = Cyfr.Execution.subscribe_events(execution_id, %{athanor_id: athanor_id})
+        :ok = Crucible.subscribe_events(execution_id, %{athanor_id: athanor_id})
         send(caller, {:subscribed, self()})
         collect([])
       end)
@@ -219,10 +219,10 @@ defmodule Cyfr.Cluster.Boot do
 
   @doc """
   Run one sweep of the stale-attempt pass on this member, as its own timer
-  would (`Cyfr.Execution.Sweeper.sweep/0`).
+  would (`Crucible.Sweeper.sweep/0`).
   """
   @spec sweep() :: :ok
-  def sweep, do: Cyfr.Execution.Sweeper.sweep()
+  def sweep, do: Crucible.Sweeper.sweep()
 
   # ---------------------------------------------------------------------------
   # The worker watch
@@ -244,7 +244,7 @@ defmodule Cyfr.Cluster.Boot do
     stop_watch!()
 
     {:ok, pid} =
-      Cyfr.Execution.WorkerWatch.start_link(
+      Crucible.WorkerWatch.start_link(
         Keyword.merge(
           [
             name: @watch,
