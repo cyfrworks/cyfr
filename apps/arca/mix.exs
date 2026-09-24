@@ -38,7 +38,7 @@ defmodule Arca.MixProject do
   # `:arca, :storage_adapter`.
   defp deps do
     [
-      {:cyfr_contracts, in_umbrella: true},
+      {:prima, in_umbrella: true},
       {:ecto_sql, "~> 3.12"},
       {:ecto_sqlite3, "~> 0.22.0"},
       {:exqlite, "~> 0.22"},

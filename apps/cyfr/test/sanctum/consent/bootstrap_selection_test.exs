@@ -69,8 +69,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   end
 
   defp edge!(policy, from, to) do
-    {:ok, blob} = Cyfr.Authority.Blob.parse(policy)
-    {:ok, edge} = Cyfr.Authority.Blob.lookup_edge(blob, from, to, "")
+    {:ok, blob} = Prima.Authority.Blob.parse(policy)
+    {:ok, edge} = Prima.Authority.Blob.lookup_edge(blob, from, to, "")
     edge
   end
 
@@ -262,7 +262,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Cyfr.Test.SourceTree.files!(match_dot: false)
+    |> Prima.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       target = Path.join(dest, Path.relative_to(src, @bundle))

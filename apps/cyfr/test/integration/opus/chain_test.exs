@@ -12,18 +12,18 @@ defmodule Opus.ChainTest do
   # admission, read on the suite's wire.
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Cyfr.Test.TwoServices
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
-  alias Cyfr.JCS
+  alias Prima.JCS
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   # Activation digests as the resolver spells them; an assignment carries
   # nothing else.
-  @root_act Cyfr.Digest.sha256("root-act")
-  @root_activation Cyfr.Digest.sha256("root-activation")
+  @root_act Prima.Digest.sha256("root-act")
+  @root_activation Prima.Digest.sha256("root-activation")
 
   setup tags do
     Arca.Cache.init()
@@ -99,7 +99,7 @@ defmodule Opus.ChainTest do
           fields: %{execution_id: ^parent_id},
           answer: %{"ok" => %{"assignment" => token}}
         } <- TwoServices.calls(),
-        {:ok, %{execution_id: id}} <- [Cyfr.Assignment.read(token)],
+        {:ok, %{execution_id: id}} <- [Prima.Assignment.read(token)],
         do: id
   end
 
@@ -330,7 +330,7 @@ defmodule Opus.ChainTest do
     end
 
     defp revoked_vault_entry(ctx) do
-      id = Cyfr.UUID7.generate_id("vlt")
+      id = Prima.UUID7.generate_id("vlt")
       aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, id, "")
       {:ok, json} = Sanctum.Vault.Payload.encode_material(%{"api_key" => "sk-gone"}, nil)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
@@ -789,7 +789,7 @@ defmodule Opus.ChainTest do
           verify: &Sanctum.ExecutionStanding.verify/1
         )
 
-      child_id = Cyfr.UUID7.execution_id()
+      child_id = Prima.UUID7.execution_id()
 
       charge = %{
         id: "call:t:1:c2:g0",

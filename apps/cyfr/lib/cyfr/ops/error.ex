@@ -6,7 +6,7 @@ defmodule Cyfr.Ops.Error do
   The host's renderer for any refusal a tool can produce, whichever
   vocabulary it came from.
 
-  The refusal vocabulary itself is `Cyfr.Refusal`, in the contracts, where
+  The refusal vocabulary itself is `Prima.Refusal`, in the contracts, where
   the runner's renderer reads it too — one vocabulary, and this is one of
   its readers. What this module adds is the product vocabularies only the
   control plane knows: an unauthorized caller (`Sanctum.Unauthorized`), an
@@ -40,7 +40,7 @@ defmodule Cyfr.Ops.Error do
       # The method rides along so the API-key remediation hint renders on
       # every surface, not only the wire router's own refusal path.
       Sanctum.Unauthorized.reason?(reason) -> Sanctum.Unauthorized.message(reason, auth_method)
-      Cyfr.Refusal.reason?(reason) -> Cyfr.Refusal.message(reason)
+      Prima.Refusal.reason?(reason) -> Prima.Refusal.message(reason)
       match?(%Compendium.OCI.Errors{}, reason) -> Compendium.MCP.Shared.to_error_string(reason)
       Emissary.MCP.ConsentSignal.signal?(reason) -> Emissary.MCP.ConsentSignal.message(reason)
       true -> nil

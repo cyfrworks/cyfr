@@ -3,8 +3,8 @@
 defmodule Sanctum.AuthorityTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
 
   @formula "formula:local.daily-report"
   @catalyst "catalyst:supabase.com.database"

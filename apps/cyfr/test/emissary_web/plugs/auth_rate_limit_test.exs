@@ -7,13 +7,13 @@ defmodule EmissaryWeb.Plugs.AuthRateLimitTest do
   alias EmissaryWeb.Plugs.AuthRateLimit
 
   setup do
-    # Counters live in Cyfr.RateLimiter's own table; start each test clean.
-    Cyfr.RateLimiter.reset()
+    # Counters live in Prima.RateLimiter's own table; start each test clean.
+    Prima.RateLimiter.reset()
 
     original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)
 
     on_exit(fn ->
-      Cyfr.RateLimiter.reset()
+      Prima.RateLimiter.reset()
 
       case original_trust do
         nil -> Application.delete_env(:sanctum, :trust_x_forwarded_for)
@@ -95,10 +95,10 @@ defmodule EmissaryWeb.Plugs.AuthRateLimitTest do
       assert AuthRateLimit.call(conn_from(ip), opts).halted
 
       # Backdate the stored counter past the window so the plug opens a fresh
-      # window on the next call. The Cyfr.RateLimiter row is {key, count, start}.
+      # window on the next call. The Prima.RateLimiter row is {key, count, start}.
       key = {:rate_limit, :test_bucket, :inet.ntoa(ip) |> to_string()}
       past = System.monotonic_time(:millisecond) - 90_000
-      :ets.insert(Cyfr.RateLimiter.table_name(), {key, 3, past})
+      :ets.insert(Prima.RateLimiter.table_name(), {key, 3, past})
 
       result = AuthRateLimit.call(conn_from(ip), opts)
       refute result.halted

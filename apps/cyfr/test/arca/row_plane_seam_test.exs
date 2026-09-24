@@ -43,12 +43,12 @@ defmodule Arca.RowPlaneSeamTest do
   defp repo_calls do
     @surface_dirs
     |> Enum.flat_map(fn dir ->
-      root() |> Path.join(dir) |> Path.join("**/*.ex") |> Cyfr.Test.SourceTree.files!()
+      root() |> Path.join(dir) |> Path.join("**/*.ex") |> Prima.Test.SourceTree.files!()
     end)
     |> Enum.flat_map(fn path ->
       hits =
         path
-        |> Cyfr.Test.SourceTree.read()
+        |> Prima.Test.SourceTree.read()
         |> String.split("\n")
         |> Enum.reject(&String.match?(&1, ~r/^\s*#/))
         |> Enum.count(&String.match?(&1, ~r/\bArca\.Repo\./))

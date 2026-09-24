@@ -47,8 +47,8 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
 
   import Ecto.Query
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
+  alias Prima.Authority
+  alias Prima.Authority.Blob.Edge
   alias Cyfr.Execution.{Dispatch, Record, Sweeper}
   alias Cyfr.Test.AttemptFixtures
   alias Sanctum.Tenancy.Athanors
@@ -143,7 +143,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
   defp intents(fixture),
     do:
       Arca.ExecutionAttempts.write_intents(
-        Cyfr.Actor.in_athanor(fixture.athanor_id),
+        Prima.Actor.in_athanor(fixture.athanor_id),
         fixture.attempt
       )
 
@@ -208,7 +208,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
         end,
         fetch_artifact: fn f ->
           AttemptFixtures.call(f, "fetch_artifact", %{
-            "digest" => Cyfr.Digest.sha256(f.component_ref)
+            "digest" => Prima.Digest.sha256(f.component_ref)
           })
         end,
         admit_child: fn f ->
@@ -312,7 +312,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
 
     test "missing generation refuses; no default repairs it", %{ctx: ctx} do
       attrs = %{
-        id: Cyfr.UUID7.execution_id(),
+        id: Prima.UUID7.execution_id(),
         reference: "reagent:local.fence:0.1.0",
         user_id: ctx.user_id,
         athanor_id: ctx.athanor_id,
@@ -505,7 +505,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
     {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "reagent:local.fence-root:0.1.0",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
@@ -522,7 +522,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
     {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "reagent:local.fence-child:0.1.0",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
@@ -552,7 +552,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
     {:ok, %{execution: root, attempt: attempt}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "agent:local.aqua",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
@@ -589,7 +589,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
   end
 
   defp scan(athanor_id, cursor \\ nil, acc \\ []) do
-    case Sanctum.ExecutionStanding.retired_attempts(Cyfr.Actor.system(), cursor, 50) do
+    case Sanctum.ExecutionStanding.retired_attempts(Prima.Actor.system(), cursor, 50) do
       {:ok, []} -> {:ok, Enum.filter(acc, &(elem(&1, 2) == athanor_id))}
       {:ok, page} -> scan(athanor_id, page |> List.last() |> elem(1), acc ++ page)
     end

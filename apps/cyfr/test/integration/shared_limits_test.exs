@@ -27,14 +27,14 @@ defmodule Cyfr.SharedLimitsTest do
   use ExUnit.Case, async: false
 
   import Cyfr.Test.TwoServices
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
-  alias Cyfr.Authority
+  alias Prima.Authority
   alias Cyfr.Execution.{Attempt, Keys, Rates, Sweeper}
-  alias Cyfr.Slots
+  alias Prima.Slots
   alias Cyfr.Test.{OpusService, ScriptedWorker}
   alias Cyfr.Test.TwoServices.Wire
-  alias Cyfr.{WorkerAuth, WorkerWire}
+  alias Prima.{WorkerAuth, WorkerWire}
   alias Sanctum.Consent.{Bootstrap}
 
   @moduletag timeout: 180_000
@@ -114,7 +114,7 @@ defmodule Cyfr.SharedLimitsTest do
     admitted =
       for n <- 1..@rate.requests do
         service = if rem(n, 2) == 1, do: @local, else: @other
-        id = Cyfr.UUID7.execution_id()
+        id = Prima.UUID7.execution_id()
         route!(service)
         assert {:ok, %{status: :completed}} = invoke(ctx, id)
         assert %{state: "completed", service_id: ^service} = attempt(ctx, id)
@@ -130,7 +130,7 @@ defmodule Cyfr.SharedLimitsTest do
 
     # A refused invocation is recorded failed, and no runner claims it.
     for service <- [@local, @other] do
-      id = Cyfr.UUID7.execution_id()
+      id = Prima.UUID7.execution_id()
       route!(service)
       assert {:error, "Rate limit exceeded. Retry in " <> _} = invoke(ctx, id)
       assert %{state: "failed", service_id: ^service, claimed_by: nil} = attempt(ctx, id)
@@ -207,7 +207,7 @@ defmodule Cyfr.SharedLimitsTest do
     # CYFR asks of the scripted service crosses the wire, which keeps it.
     route!(@other)
     through!(wire)
-    queued = Cyfr.UUID7.execution_id()
+    queued = Prima.UUID7.execution_id()
     waiter = Task.async(fn -> spawn!(ctx, authority, root, queued) end)
 
     wait_until(
@@ -276,7 +276,7 @@ defmodule Cyfr.SharedLimitsTest do
 
     # Admitted, charged and waiting: no slot is free for its attempt.
     route!(@other)
-    queued = Cyfr.UUID7.execution_id()
+    queued = Prima.UUID7.execution_id()
     waiter = Task.async(fn -> spawn!(ctx, authority, root, queued) end)
 
     wait_until(
@@ -430,7 +430,7 @@ defmodule Cyfr.SharedLimitsTest do
     do: Cyfr.Execution.run_root(ctx, :default, @stub, chat(), execution_id: id)
 
   # One task of `root`: the stub again, under the authority it runs under.
-  defp spawn!(ctx, authority, root, id \\ Cyfr.UUID7.execution_id()),
+  defp spawn!(ctx, authority, root, id \\ Prima.UUID7.execution_id()),
     do: spawn_child!(ctx, authority, root, @stub_ref, chat(), execution_id: id)
 
   defp route!(@local), do: route!(:opus, @stub)
@@ -452,7 +452,7 @@ defmodule Cyfr.SharedLimitsTest do
   # A task the Opus service runs, held at the first delta its guest
   # pushes: attached, its guest run, nothing of it written yet.
   defp hold_on_opus!(ctx, authority, root) do
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
     hold!(:push_deltas, id, once: true)
     route!(@local)
     task = Task.async(fn -> spawn!(ctx, authority, root, id) end)
@@ -463,7 +463,7 @@ defmodule Cyfr.SharedLimitsTest do
 
   # A task the scripted service runs, which never answers.
   defp hold_on_scripted!(ctx, authority, root) do
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
     route!(@other)
     task = Task.async(fn -> spawn!(ctx, authority, root, id) end)
 

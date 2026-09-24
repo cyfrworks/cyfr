@@ -261,11 +261,11 @@ defmodule Aqua.Loop.CloneTest do
        %{reference: "catalyst:local.http", need: nil, activation_digest: nil, declared_needs: []}}
 
     {:ok, as_web} = Clone.authority(soul, "web", web, roster)
-    assert {:child, _} = Cyfr.Authority.Transition.step(as_web, :call, http)
+    assert {:child, _} = Prima.Authority.Transition.step(as_web, :call, http)
 
     refute match?(
              {:child, %{cursor: {:bound, _}}},
-             Cyfr.Authority.Transition.step(as_planner, :call, http)
+             Prima.Authority.Transition.step(as_planner, :call, http)
            )
 
     # A role the soul's consent does not name.

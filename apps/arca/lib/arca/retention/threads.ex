@@ -21,7 +21,7 @@ defmodule Arca.Retention.Threads do
   def unit, do: :days
 
   @impl true
-  def prune(%Cyfr.Actor{} = actor, days, dry_run) do
+  def prune(%Prima.Actor{} = actor, days, dry_run) do
     cutoff = Kind.days_cutoff(days)
 
     if dry_run,

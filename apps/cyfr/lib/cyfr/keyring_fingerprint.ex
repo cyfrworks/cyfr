@@ -33,7 +33,9 @@ defmodule Cyfr.KeyringFingerprint do
   @doc "The fingerprint of a keyring's primary key."
   @spec compute(keyring()) :: String.t()
   def compute(%{primary: label, keys: keys}) when is_binary(label) and is_map(keys) do
-    Cyfr.Digest.sha256_hex("cyfr-keyring-fingerprint|" <> label <> "|" <> Map.fetch!(keys, label))
+    Prima.Digest.sha256_hex(
+      "cyfr-keyring-fingerprint|" <> label <> "|" <> Map.fetch!(keys, label)
+    )
   end
 
   @doc """

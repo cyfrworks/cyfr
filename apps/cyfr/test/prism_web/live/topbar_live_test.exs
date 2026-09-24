@@ -9,7 +9,7 @@ defmodule PrismWeb.TopbarLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Sanctum.Tenancy.Athanors
 
@@ -180,7 +180,7 @@ defmodule PrismWeb.TopbarLiveTest do
     bar = topbar(view)
 
     # Coalesce bursts of telemetry into one reload.
-    actor = Cyfr.Actor.in_athanor(seated_athanor().id)
+    actor = Prima.Actor.in_athanor(seated_athanor().id)
     for _ <- 1..10, do: send(bar.pid, Cyfr.Bus.Request.new(actor, :logged))
     :sys.get_state(bar.pid)
 

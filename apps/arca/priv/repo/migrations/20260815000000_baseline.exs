@@ -369,7 +369,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # retired.
     create table(:cell_leases, primary_key: false) do
       add :node, :string, primary_key: true
-      # The boot holding the slot (`Cyfr.Boot.id/0`).
+      # The boot holding the slot (`Prima.Boot.id/0`).
       add :owner, :string, null: false
       # What this member stamps on what it issues outward — worker
       # assignments, host-call bindings, bridge grants. Raised by one on
@@ -743,7 +743,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # The fence: one row per attempt at an execution.
     # The estate standing an attempt was admitted under
-    # (`Cyfr.ExecutionGrant`): the athanor's `security_generation` its
+    # (`Prima.ExecutionGrant`): the athanor's `security_generation` its
     # root read, inherited unchanged by every child and successor. No
     # default: an attempt whose admission named no generation is not
     # written. Positive, spelled once per adapter as above.
@@ -770,7 +770,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :fence, :integer, null: false
       # The worker service the attempt was dispatched to (its configured
-      # service id, `Cyfr.WorkerAuth`); null for an attempt the control
+      # service id, `Prima.WorkerAuth`); null for an attempt the control
       # plane holds itself, such as a turn root.
       add :service_id, :string
       # The boot holding the attempt: the worker service's incarnation, or

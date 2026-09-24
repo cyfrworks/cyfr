@@ -175,7 +175,7 @@ defmodule Prism.TinctureRegistry do
     if MapSet.member?(state.watching, athanor_id) do
       state
     else
-      actor = Cyfr.Actor.in_athanor(athanor_id)
+      actor = Prima.Actor.in_athanor(athanor_id)
       :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.tinctures(actor))
       %{state | watching: MapSet.put(state.watching, athanor_id)}
     end
@@ -217,7 +217,7 @@ defmodule Prism.TinctureRegistry do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -333,7 +333,7 @@ defmodule Prism.TinctureRegistry do
   end
 
   defp put_segment(tincture, segment) do
-    entry_url = Cyfr.TinctureUrl.path(segment, tincture.publisher, tincture.name)
+    entry_url = Prima.TinctureUrl.path(segment, tincture.publisher, tincture.name)
     %{tincture | athanor_segment: segment, entry_url: entry_url}
   end
 

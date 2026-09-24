@@ -197,7 +197,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert turn.status == "accepted"
       assert turn.message_id == message.id
       assert turn.fence != ""
-      assert turn.runner_id == Cyfr.Boot.id()
+      assert turn.runner_id == Prima.Boot.id()
 
       assert {:ok, %{turn_seq: 1, agent: "aqua"}} = Threads.get(actor, thread.id)
 

@@ -22,8 +22,8 @@ defmodule Sanctum.DoorPlacementTest do
   @minters ["apps/cyfr/lib/prism_web/sign_in_response.ex", @device_flow]
 
   defp lib_files do
-    for dir <- Cyfr.Test.SourceTree.app_libs(@root),
-        file <- Cyfr.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
+    for dir <- Prima.Test.SourceTree.app_libs(@root),
+        file <- Prima.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
         do: file
   end
 
@@ -31,7 +31,7 @@ defmodule Sanctum.DoorPlacementTest do
     callers =
       lib_files()
       |> Enum.reject(&String.ends_with?(&1, "sanctum/session.ex"))
-      |> Enum.filter(&(Cyfr.Test.SourceTree.read(&1) =~ ~r/\bSession\.create\(/))
+      |> Enum.filter(&(Prima.Test.SourceTree.read(&1) =~ ~r/\bSession\.create\(/))
       |> Enum.map(&Path.relative_to(&1, @root))
       |> Enum.sort()
 
@@ -39,7 +39,7 @@ defmodule Sanctum.DoorPlacementTest do
            "Session.create/1 is called from #{inspect(callers)}; only the sign-in paths may mint"
 
     # The device flow asks the door itself.
-    assert Cyfr.Test.SourceTree.read(Path.join(@root, @device_flow)) =~
+    assert Prima.Test.SourceTree.read(Path.join(@root, @device_flow)) =~
              "Door.admit_identity",
            "#{@device_flow} mints sessions without asking the door"
 
@@ -48,7 +48,7 @@ defmodule Sanctum.DoorPlacementTest do
     # callback must ask the door before it does.
     mint_handers =
       lib_files()
-      |> Enum.filter(&(Cyfr.Test.SourceTree.read(&1) =~ ~r/session: \{:mint,/))
+      |> Enum.filter(&(Prima.Test.SourceTree.read(&1) =~ ~r/session: \{:mint,/))
       |> Enum.map(&Path.relative_to(&1, @root))
       |> Enum.sort()
 
@@ -56,7 +56,7 @@ defmodule Sanctum.DoorPlacementTest do
            "session: {:mint, ...} is produced from #{inspect(mint_handers)}; " <>
              "only the browser callback may hand the responder a context to mint for"
 
-    assert Cyfr.Test.SourceTree.read(Path.join(@root, @browser_callback)) =~
+    assert Prima.Test.SourceTree.read(Path.join(@root, @browser_callback)) =~
              "Door.admit_identity",
            "the browser callback mints sessions without asking the door"
   end

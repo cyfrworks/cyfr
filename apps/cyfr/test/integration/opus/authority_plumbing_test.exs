@@ -63,7 +63,7 @@ defmodule Opus.AuthorityPlumbingTest do
   # The authority as an assignment carries it to its runner: every member
   # but the budget's cap, which a decoded copy never charges.
   defp as_assigned(authority) do
-    {:ok, decoded} = Cyfr.Authority.from_wire(Cyfr.Authority.to_wire(authority))
+    {:ok, decoded} = Prima.Authority.from_wire(Prima.Authority.to_wire(authority))
     decoded
   end
 
@@ -73,7 +73,7 @@ defmodule Opus.AuthorityPlumbingTest do
 
   test "an :authority passed to a dispatched run reaches its runner as its assignment carries it",
        %{ctx: ctx} do
-    authority = Cyfr.Authority.zero()
+    authority = Prima.Authority.zero()
     execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
 
     _result =
@@ -108,7 +108,7 @@ defmodule Opus.AuthorityPlumbingTest do
   end
 
   test "authority_required with an authority proceeds to its runner", %{ctx: ctx} do
-    authority = Cyfr.Authority.zero()
+    authority = Prima.Authority.zero()
     execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
 
     _result =

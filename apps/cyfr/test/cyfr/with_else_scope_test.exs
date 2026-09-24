@@ -22,7 +22,7 @@ defmodule Cyfr.WithElseScopeTest do
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp source_files do
-    Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
+    Prima.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
   end
 
   # Every variable name appearing anywhere in an AST fragment. `_`-prefixed
@@ -114,7 +114,7 @@ defmodule Cyfr.WithElseScopeTest do
   defp offenders(path) do
     ast =
       path
-      |> Cyfr.Test.SourceTree.read()
+      |> Prima.Test.SourceTree.read()
       |> Code.string_to_quoted!(columns: true)
 
     {_, found} =

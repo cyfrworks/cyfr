@@ -20,8 +20,9 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
   use ExUnit.Case, async: false
 
   alias Arca.ControlPlane
-  alias Cyfr.Ops.{Arg, Catalog, Operation}
-  alias Cyfr.Test.AuthorityFixtures
+  alias Cyfr.Ops.Catalog
+  alias Prima.{Arg, Operation}
+  alias Prima.Test.AuthorityFixtures
   alias Emissary.MCP.{Message, ResourceRegistry, Router}
   alias Sanctum.Context
 
@@ -309,7 +310,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
                  Catalog.call_external(tool, ctx, %{"action" => action, "uri" => uri})
 
         assert {:error, :resource_not_found, message} = read(ctx, uri)
-        assert message == Cyfr.Refusal.message(:control_plane_lost)
+        assert message == Prima.Refusal.message(:control_plane_lost)
       end
 
       ControlPlane.record(:unclaimed)
@@ -483,10 +484,12 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
     {:ok, blob} =
       AuthorityFixtures.graph_map()
       |> put_in(["nodes", source, "edges", "@ingress", "tools"], Enum.sort(tools))
-      |> Cyfr.Authority.Blob.parse()
+      |> Prima.Authority.Blob.parse()
 
     {:ok, authority} =
-      Cyfr.Authority.root(AuthorityFixtures.profile(), blob, ceiling: AuthorityFixtures.ceiling())
+      Prima.Authority.root(AuthorityFixtures.profile(), blob,
+        ceiling: AuthorityFixtures.ceiling()
+      )
 
     authority
   end

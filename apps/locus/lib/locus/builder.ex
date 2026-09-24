@@ -6,7 +6,7 @@ defmodule Locus.Builder do
   Builds a component from its sources: Rust to a WASM component with
   `cargo-component`, a tincture's JavaScript to a static bundle with npm
   and Vite. It takes a build request as the build wire reads it
-  (`Cyfr.BuilderProtocol`) and answers output files, or the wire's refusal
+  (`Prima.BuilderProtocol`) and answers output files, or the wire's refusal
   for why there are none.
 
   ## arca:bypass-ok=D — entire module
@@ -19,7 +19,7 @@ defmodule Locus.Builder do
 
   `prepare/1` checks the request and packs it, running nothing: the
   sources a language needs, their total size and every path
-  (`Cyfr.PathSafety`), the toolchain, an executor to run under, the Cargo
+  (`Prima.PathSafety`), the toolchain, an executor to run under, the Cargo
   seed. `run/2` runs what it prepared.
 
   A build is one POSIX shell script run by an executor
@@ -57,15 +57,15 @@ defmodule Locus.Builder do
   dependency the lock does not cover fails with cargo's own message — and
   one carrying none, or asked to `resolve`, resolves one. npm runs with
   `--ignore-scripts`, so a dependency's lifecycle script never executes.
-  The compiled WASM is validated (`Compendium.WasmValidator`) before it is
+  The compiled WASM is validated (`Prima.Wasm`) before it is
   answered; it executes only inside the Opus sandbox.
 
   ## What a build answers
 
   `{:ok, %{language, target_type, outputs}}`, where a component's outputs
-  are `Cyfr.BuilderProtocol.component_wasm/0` and, when the build left
+  are `Prima.BuilderProtocol.component_wasm/0` and, when the build left
   one, `component_lockfile/0`, and a tincture's are the files of its
-  `dist/`; or `{:error, refusal}`, a `t:Cyfr.BuilderProtocol.refusal/0`:
+  `dist/`; or `{:error, refusal}`, a `t:Prima.BuilderProtocol.refusal/0`:
 
   | Refusal | When |
   |---|---|
@@ -82,7 +82,7 @@ defmodule Locus.Builder do
 
   require Logger
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
 
   # The output archive adds headers, padding and a Cargo.lock to its files.
   @max_output_archive_bytes BuilderProtocol.max_output_bytes() + 4 * 1024 * 1024
@@ -235,10 +235,10 @@ defmodule Locus.Builder do
   @doc """
   Return the Cargo.toml content for a given component type.
 
-  Delegates to `Cyfr.CargoToml.template/2` — the canonical
+  Delegates to `Prima.CargoToml.template/2` — the canonical
   template — omitting the `cyfr:oauth` WIT dep from the GENERATED
   Cargo.toml. The build still receives the full catalyst WIT tree
-  (`wit_files/2` includes everything `Compendium.WITSource.files/1`
+  (`wit_files/2` includes everything `Prima.WIT.files/1`
   returns, oauth included — the world imports it, so the files must
   exist); what this omission controls is only which packages the
   generated manifest binds. A user project that uses oauth carries its
@@ -246,7 +246,7 @@ defmodule Locus.Builder do
   WIT deps.
   """
   def cargo_toml_for(type) do
-    Cyfr.CargoToml.template(type, include_oauth_wit: false)
+    Prima.CargoToml.template(type, include_oauth_wit: false)
   end
 
   # ============================================================================
@@ -295,7 +295,7 @@ defmodule Locus.Builder do
     sources
     |> Map.keys()
     |> Enum.reduce_while(:ok, fn path, :ok ->
-      case Cyfr.PathSafety.validate_relative_path(path) do
+      case Prima.PathSafety.validate_relative_path(path) do
         :ok -> {:cont, :ok}
         {:error, _reason} -> {:halt, malformed({:unsafe_path, path})}
       end
@@ -495,7 +495,7 @@ defmodule Locus.Builder do
   end
 
   defp validate(wasm_bytes, on_progress) do
-    case Compendium.WasmValidator.validate(wasm_bytes) do
+    case Prima.Wasm.validate(wasm_bytes) do
       {:ok, _validation} ->
         :ok
 
@@ -585,13 +585,13 @@ defmodule Locus.Builder do
   end
 
   # The WIT definitions are the host ABI, release-embedded
-  # (`Compendium.WITSource`): a build compiles against exactly what the
+  # (`Prima.WIT`): a build compiles against exactly what the
   # running host implements. Sources that carry their own `wit/` use it.
   defp wit_files(sources, target_type) do
     if Enum.any?(Map.keys(sources), &String.starts_with?(&1, "wit/")) do
       {:ok, %{}}
     else
-      case Compendium.WITSource.files(target_type) do
+      case Prima.WIT.files(target_type) do
         [] ->
           {:error, {:unavailable, "this release embeds no WIT for a #{target_type}"}}
 

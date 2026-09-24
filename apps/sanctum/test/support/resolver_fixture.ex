@@ -10,7 +10,7 @@ defmodule Sanctum.Test.Resolver do
   answers that day.
 
   The names, each with the class of address the code under test decides
-  on (`Cyfr.Cidr`):
+  on (`Prima.Cidr`):
 
     * `public.test` — an A answer, `203.0.113.10`, public
     * `private.test` — an A answer, `10.0.0.5`, private

@@ -69,8 +69,8 @@ defmodule Cyfr.Bus.Notify do
   def payload_keys, do: @payload_keys
 
   @doc "A tray entry for `actor`'s athanor. A kind outside `kinds/0` raises."
-  @spec new(Cyfr.Actor.t(), kind(), map()) :: t()
-  def new(%Cyfr.Actor{} = actor, kind, payload \\ %{}) when is_map(payload) do
+  @spec new(Prima.Actor.t(), kind(), map()) :: t()
+  def new(%Prima.Actor{} = actor, kind, payload \\ %{}) when is_map(payload) do
     %__MODULE__{
       athanor_id: Payload.athanor!(actor),
       kind: Payload.kind!(__MODULE__, kind, @kinds),

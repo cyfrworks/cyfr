@@ -4,7 +4,7 @@ defmodule Sanctum.RedactionRosterTest do
   use ExUnit.Case, async: true
 
   @moduledoc """
-  Pins Cyfr.Sanitizer as the one redaction vocabulary.
+  Pins Prima.Sanitizer as the one redaction vocabulary.
 
   Three lists existed: the Sanitizer's, Phoenix `:filter_parameters` (six
   strings, missing `api_key`, `authorization` and twenty more), and a
@@ -12,7 +12,7 @@ defmodule Sanctum.RedactionRosterTest do
   first — these tests keep a fourth from growing back.
   """
 
-  alias Cyfr.Sanitizer
+  alias Prima.Sanitizer
 
   # apps/sanctum/test/sanctum -> umbrella root
   @umbrella_root Path.expand("../../../..", __DIR__)
@@ -87,12 +87,12 @@ defmodule Sanctum.RedactionRosterTest do
 
   test "no module outside the Sanitizer declares a sensitive-key roster" do
     offenders =
-      Cyfr.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
-      |> Enum.filter(fn path -> Cyfr.Test.SourceTree.read(path) =~ "@sensitive_keys" end)
+      Prima.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
+      |> Enum.filter(fn path -> Prima.Test.SourceTree.read(path) =~ "@sensitive_keys" end)
       |> Enum.map(&Path.relative_to(&1, @umbrella_root))
-      |> Enum.reject(&(&1 == "apps/cyfr_contracts/lib/cyfr/sanitizer.ex"))
+      |> Enum.reject(&(&1 == "apps/prima/lib/prima/sanitizer.ex"))
 
     assert offenders == [],
-           "redaction roster declared outside Cyfr.Sanitizer: #{inspect(offenders)}"
+           "redaction roster declared outside Prima.Sanitizer: #{inspect(offenders)}"
   end
 end

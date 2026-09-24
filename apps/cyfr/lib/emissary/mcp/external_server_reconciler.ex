@@ -17,7 +17,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
        owner of the athanor whose env templates reference a changed name
        (`Emissary.MCP.Bridge.release_referencing/2`), which needs no store;
     2. then the tenant's servers whose header or env templates reference one
-       (`Emissary.MCP.VaultRef.names/1`) have their processes stopped —
+       (`Prima.VaultRef.names/1`) have their processes stopped —
        which ends their calls in flight and releases their backends — and
        their epochs raised, so no grant issued before the change is honoured
        again; the tenant caches are dropped. The next call re-resolves
@@ -125,7 +125,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
   end
 
   def handle_info(message, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, message)
+    Prima.LoggerContext.unexpected(__MODULE__, message)
     {:noreply, state}
   end
 
@@ -295,7 +295,7 @@ defmodule Emissary.MCP.ExternalServerReconciler do
 
     headers =
       case config["headers"] do
-        %{} = headers -> Emissary.MCP.VaultRef.names(headers)
+        %{} = headers -> Prima.VaultRef.names(headers)
         _ -> []
       end
 

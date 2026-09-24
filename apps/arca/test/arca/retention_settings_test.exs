@@ -18,7 +18,7 @@ defmodule Arca.RetentionSettingsTest do
 
   setup do
     athanor = "ath_settings_#{System.unique_integer([:positive])}"
-    {:ok, actor: %Cyfr.Actor{athanor_id: athanor, user_id: "usr_settings"}, athanor: athanor}
+    {:ok, actor: %Prima.Actor{athanor_id: athanor, user_id: "usr_settings"}, athanor: athanor}
   end
 
   defp row(athanor), do: Arca.Repo.one(from(r in Row, where: r.athanor_id == ^athanor))
@@ -80,7 +80,7 @@ defmodule Arca.RetentionSettingsTest do
             ]) do
         estate = "#{athanor}_#{n}"
         store!(estate, settings)
-        actor = %Cyfr.Actor{athanor_id: estate}
+        actor = %Prima.Actor{athanor_id: estate}
 
         assert {:error, :corrupt} = RetentionSettings.get(actor), settings
         assert {:error, :corrupt} = RetentionSettings.patch(actor, %{"builds" => 3}), settings
@@ -116,7 +116,7 @@ defmodule Arca.RetentionSettingsTest do
     end
 
     test "an actor with no athanor is refused before any query" do
-      for nobody <- [%Cyfr.Actor{}, %Cyfr.Actor{athanor_id: ""}, %Cyfr.Actor{scope: :platform}] do
+      for nobody <- [%Prima.Actor{}, %Prima.Actor{athanor_id: ""}, %Prima.Actor{scope: :platform}] do
         {answers, %{total: 0}} =
           Arca.Test.QueryCounter.count(fn ->
             {RetentionSettings.get(nobody), RetentionSettings.patch(nobody, %{"executions" => 5})}

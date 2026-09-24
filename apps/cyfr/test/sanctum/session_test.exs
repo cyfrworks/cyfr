@@ -262,7 +262,7 @@ defmodule Sanctum.SessionTest do
       assert {:ok, %Context{}, true} = Session.load_sliding(session.token, surface: :console)
       {:ok, _} = Sanctum.Caller.establish(session.token)
 
-      Cyfr.Test.Wait.wait_until(fn ->
+      Prima.Test.Wait.wait_until(fn ->
         {:ok, at, _} = DateTime.from_iso8601(expiry.())
         DateTime.diff(at, DateTime.utc_now(), :hour) >= 719
       end)

@@ -352,13 +352,13 @@ defmodule Sanctum.Provisioning do
 
   # The owner a claim is taken under: this boot, and a token of the
   # attempt's own — never another boot's, and never another attempt's.
-  defp owner, do: Cyfr.Boot.id() <> "/" <> Cyfr.UUID7.generate_id("own")
+  defp owner, do: Prima.Boot.id() <> "/" <> Prima.UUID7.generate_id("own")
 
   @doc """
   The actor a claim on `athanor_id` is taken under. The claim is the
   athanor's, whoever acts: the actor names the tenant and nothing else.
   """
-  @spec actor(String.t()) :: Cyfr.Actor.t()
+  @spec actor(String.t()) :: Prima.Actor.t()
   def actor(athanor_id), do: Context.actor(seed_ctx(athanor_id))
 
   @doc """
@@ -809,7 +809,7 @@ defmodule Sanctum.Provisioning do
 
   defp all_minted(%{skipped: skipped}) do
     case Enum.reject(skipped, fn {ref, reason} ->
-           reason in [:already_bootstrapped, :not_vouched] or Cyfr.AgentRef.agent_ref?(ref)
+           reason in [:already_bootstrapped, :not_vouched] or Prima.AgentRef.agent_ref?(ref)
          end) do
       [] -> :ok
       unminted -> {:unminted, unminted}
@@ -817,8 +817,8 @@ defmodule Sanctum.Provisioning do
   end
 
   defp same_component?(a, b) do
-    with {:ok, a_name} <- Cyfr.ComponentRef.to_name_ref(a),
-         {:ok, b_name} <- Cyfr.ComponentRef.to_name_ref(b) do
+    with {:ok, a_name} <- Prima.ComponentRef.to_name_ref(a),
+         {:ok, b_name} <- Prima.ComponentRef.to_name_ref(b) do
       a_name == b_name
     else
       _ -> a == b

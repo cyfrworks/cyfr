@@ -57,8 +57,8 @@ defmodule Arca.McpServerStorage do
   @doc """
   List all MCP server configs for the given tenant context.
   """
-  @spec list(Cyfr.Actor.t()) :: {:ok, [map()]} | {:error, term()}
-  def list(%Cyfr.Actor{athanor_id: athanor_id} = actor)
+  @spec list(Prima.Actor.t()) :: {:ok, [map()]} | {:error, term()}
+  def list(%Prima.Actor{athanor_id: athanor_id} = actor)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.list", fn ->
       query =
@@ -70,14 +70,14 @@ defmodule Arca.McpServerStorage do
     |> Arca.Data.project()
   end
 
-  def list(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def list(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   Get a single MCP server config by name, scoped to the given tenant.
   """
-  @spec get(Cyfr.Actor.t(), String.t()) ::
+  @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
-  def get(%Cyfr.Actor{athanor_id: athanor_id} = actor, name)
+  def get(%Prima.Actor{athanor_id: athanor_id} = actor, name)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(name) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.get", fn ->
       query =
@@ -92,14 +92,14 @@ defmodule Arca.McpServerStorage do
     |> Arca.Data.project()
   end
 
-  def get(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+  def get(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   Get a single MCP server config by its row id, scoped to the given tenant.
   """
-  @spec get_by_id(Cyfr.Actor.t(), String.t()) ::
+  @spec get_by_id(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
-  def get_by_id(%Cyfr.Actor{athanor_id: athanor_id} = actor, id)
+  def get_by_id(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.get_by_id", fn ->
       query =
@@ -114,7 +114,7 @@ defmodule Arca.McpServerStorage do
     |> Arca.Data.project()
   end
 
-  def get_by_id(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
+  def get_by_id(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc """
   Create an MCP server config, scoped to the given tenant, at epoch 1, and
@@ -126,16 +126,16 @@ defmodule Arca.McpServerStorage do
   serializes; Arca stores it verbatim). Optional: `:enabled`. The row's
   `created_by` is the context's user.
   """
-  @spec insert(Cyfr.Actor.t(), map()) :: {:ok, map()} | {:error, :no_athanor | term()}
+  @spec insert(Prima.Actor.t(), map()) :: {:ok, map()} | {:error, :no_athanor | term()}
   # arca:unscoped-ok the actor's athanor is stamped onto the row below before the write.
-  def insert(%Cyfr.Actor{athanor_id: athanor_id, user_id: user_id} = actor, attrs)
+  def insert(%Prima.Actor{athanor_id: athanor_id, user_id: user_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.insert", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       attrs =
         attrs
-        |> Map.put_new(:id, Cyfr.UUID7.generate_id("mcp"))
+        |> Map.put_new(:id, Prima.UUID7.generate_id("mcp"))
         |> Map.put_new(:transport, "http")
         |> Map.put_new(:enabled, true)
         |> Map.put_new(:config_json, "{}")
@@ -157,15 +157,15 @@ defmodule Arca.McpServerStorage do
     |> Arca.Data.project()
   end
 
-  def insert(%Cyfr.Actor{}, attrs) when is_map(attrs), do: {:error, :no_athanor}
+  def insert(%Prima.Actor{}, attrs) when is_map(attrs), do: {:error, :no_athanor}
 
   @doc """
   Delete an MCP server config by name, scoped to the given tenant, and
   answer the row that was deleted.
   """
-  @spec delete(Cyfr.Actor.t(), String.t()) ::
+  @spec delete(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
-  def delete(%Cyfr.Actor{athanor_id: athanor_id} = actor, name)
+  def delete(%Prima.Actor{athanor_id: athanor_id} = actor, name)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(name) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.delete", fn ->
       query =
@@ -180,7 +180,7 @@ defmodule Arca.McpServerStorage do
     |> Arca.Data.project()
   end
 
-  def delete(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+  def delete(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   Update fields of a server config (`:transport`, `:url`, `:config_json`,
@@ -189,12 +189,12 @@ defmodule Arca.McpServerStorage do
   With `expected_epoch`, the write happens only while the row is still at
   that epoch; a row that moved on answers `{:error, :stale_epoch}`.
   """
-  @spec update(Cyfr.Actor.t(), String.t(), map(), pos_integer() | nil) ::
+  @spec update(Prima.Actor.t(), String.t(), map(), pos_integer() | nil) ::
           {:ok, map()}
           | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
   def update(actor, name, updates, expected_epoch \\ nil)
 
-  def update(%Cyfr.Actor{athanor_id: athanor_id} = actor, name, updates, expected_epoch)
+  def update(%Prima.Actor{athanor_id: athanor_id} = actor, name, updates, expected_epoch)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and is_map(updates) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.update", fn ->
       set =
@@ -210,18 +210,18 @@ defmodule Arca.McpServerStorage do
     |> Arca.Data.project()
   end
 
-  def update(%Cyfr.Actor{}, _name, _updates, _expected_epoch), do: {:error, :no_athanor}
+  def update(%Prima.Actor{}, _name, _updates, _expected_epoch), do: {:error, :no_athanor}
 
   @doc """
   Raise a row's epoch, found by id, with nothing else changed. With
   `expected_epoch`, only while the row is still at that epoch.
   """
-  @spec bump_epoch(Cyfr.Actor.t(), String.t(), pos_integer() | nil) ::
+  @spec bump_epoch(Prima.Actor.t(), String.t(), pos_integer() | nil) ::
           {:ok, map()}
           | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
   def bump_epoch(actor, id, expected_epoch \\ nil)
 
-  def bump_epoch(%Cyfr.Actor{athanor_id: athanor_id} = actor, id, expected_epoch)
+  def bump_epoch(%Prima.Actor{athanor_id: athanor_id} = actor, id, expected_epoch)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.bump_epoch", fn ->
       from(s in McpServer, where: s.id == ^id, select: s)
@@ -231,7 +231,7 @@ defmodule Arca.McpServerStorage do
     |> Arca.Data.project()
   end
 
-  def bump_epoch(%Cyfr.Actor{}, _id, _expected_epoch), do: {:error, :no_athanor}
+  def bump_epoch(%Prima.Actor{}, _id, _expected_epoch), do: {:error, :no_athanor}
 
   @doc """
   The named rows, read in one statement with the status of each row's

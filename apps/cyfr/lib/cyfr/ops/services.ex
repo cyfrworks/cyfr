@@ -4,7 +4,7 @@
 defmodule Cyfr.Ops.Services do
   @moduledoc """
   The service vocabulary over the tool providers. Each provider declares
-  its own service (`c:Cyfr.Ops.Provider.service/0`); this module
+  its own service (`c:Prima.Provider.service/0`); this module
   only aggregates — `system.status` derives its scopes and per-service
   checks from the same answers the request log's `routed_to` label reads.
   """
@@ -15,7 +15,7 @@ defmodule Cyfr.Ops.Services do
 
   @doc """
   The service a provider module belongs to — asked of the module itself
-  (`c:Cyfr.Ops.Provider.service/0`), so a provider cannot be one
+  (`c:Prima.Provider.service/0`), so a provider cannot be one
   service in the status report and another in the log, and a renamed
   module cannot silently fall out of a central map. A module that answers
   nothing is labeled emissary's, LOUDLY — that fallback is a defect, not

@@ -6,7 +6,7 @@ defmodule Compendium do
   Component registry and lifecycle: publishing, resolution and activation of
   the four component kinds (catalyst, reagent, formula, tincture), local and
   OCI storage, manifests, dependency resolution, and the registry client for
-  cyfr.run. Component references are parsed by `Cyfr.ComponentRef`.
+  cyfr.run. Component references are parsed by `Prima.ComponentRef`.
 
   The functions below are the domain's door for callers outside it: the
   tincture rules (`Compendium.Tincture`), and the component facts the
@@ -51,7 +51,7 @@ defmodule Compendium do
   @spec tincture_asset_rules() :: Tincture.asset_rules()
   defdelegate tincture_asset_rules(), to: Tincture, as: :asset_rules
 
-  @doc "Whether a `tincture.connect` entry is a bare domain. See `Cyfr.Manifest`."
+  @doc "Whether a `tincture.connect` entry is a bare domain. See `Prima.Manifest`."
   @spec valid_tincture_connect_domain?(term()) :: boolean()
   defdelegate valid_tincture_connect_domain?(domain), to: Tincture, as: :valid_connect_domain?
 
@@ -93,12 +93,12 @@ defmodule Compendium do
 
   defp catalyst(row) do
     %{
-      node_key: Cyfr.ComponentRow.node_key(row),
+      node_key: Prima.ComponentRow.node_key(row),
       ref: row.component_ref,
       publisher: row.publisher,
       name: row.name,
       version: row.version,
-      contracts: Cyfr.Manifest.contracts(Cyfr.Manifest.decode(row.manifest))
+      contracts: Prima.Manifest.contracts(Prima.Manifest.decode(row.manifest))
     }
   end
 
@@ -118,7 +118,7 @@ defmodule Compendium do
         {:ok,
          Enum.map(
            rows,
-           &%{ref: Cyfr.AgentRef.ref(&1.name), name: &1.name, soul?: &1.kind == soul}
+           &%{ref: Prima.AgentRef.ref(&1.name), name: &1.name, soul?: &1.kind == soul}
          )}
 
       {:error, :no_athanor} ->
@@ -139,7 +139,7 @@ defmodule Compendium do
           {:ok, [String.t()]} | {:error, :unavailable | :forbidden}
   def local_formula_refs(%Context{} = ctx) do
     case Arca.ComponentStorage.list_components(Context.actor(ctx),
-           publisher: Cyfr.ComponentPath.default_publisher(),
+           publisher: Prima.ComponentPath.default_publisher(),
            component_type: "formula",
            limit: :none
          ) do
@@ -147,7 +147,7 @@ defmodule Compendium do
         {:ok,
          rows
          |> Enum.map(
-           &Cyfr.ComponentRef.build("formula", Cyfr.ComponentPath.default_publisher(), &1.name)
+           &Prima.ComponentRef.build("formula", Prima.ComponentPath.default_publisher(), &1.name)
          )
          |> Enum.uniq()}
 

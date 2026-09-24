@@ -27,7 +27,7 @@ defmodule Sanctum.MCP.MemberTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
 
     Operation.tool(
       [

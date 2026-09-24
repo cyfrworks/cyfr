@@ -41,7 +41,7 @@ defmodule Aqua.ScheduleNotesTest do
   # What the scheduler publishes once the occurrence's close and the run's
   # record committed, from this member's own slot.
   defp completed(estate, user, overrides \\ %{}) do
-    actor = %{Cyfr.Actor.in_athanor(estate.id) | user_id: user}
+    actor = %{Prima.Actor.in_athanor(estate.id) | user_id: user}
 
     fields =
       Map.merge(
@@ -180,7 +180,7 @@ defmodule Aqua.ScheduleNotesTest do
       assert_receive {:DOWN, ^ref, :process, ^before, :killed}
 
       :ok =
-        Cyfr.Test.Wait.wait_until(
+        Prima.Test.Wait.wait_until(
           fn -> Process.whereis(ScheduleNotes) not in [nil, before] end,
           5_000,
           "the notes keeper to restart"
@@ -197,7 +197,7 @@ defmodule Aqua.ScheduleNotesTest do
 
     test "survives a completion that cannot be kept" do
       completion =
-        ScheduleCompleted.new(Cyfr.Actor.in_athanor("ath_nowhere"), %{
+        ScheduleCompleted.new(Prima.Actor.in_athanor("ath_nowhere"), %{
           schedule_id: "s",
           execution_id: "e",
           keep_outcome: true,

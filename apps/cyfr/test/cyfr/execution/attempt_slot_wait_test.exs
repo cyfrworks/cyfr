@@ -32,11 +32,12 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
   use ExUnit.Case, async: false
 
   import Cyfr.Test.TwoServices, only: [root!: 3, spawn_child!: 5, spawn_child!: 6]
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Cyfr.Execution.{Attempt, Dispatch, Record}
-  alias Cyfr.Slots
-  alias Cyfr.Test.{AttemptFixtures, AuthorityFixtures, ScriptedWorker, ScriptedWorkerListener}
+  alias Prima.Slots
+  alias Cyfr.Test.{AttemptFixtures, ScriptedWorker, ScriptedWorkerListener}
+  alias Prima.Test.AuthorityFixtures
   alias Sanctum.Test.ConsentFixtures
 
   @moduletag :capture_log
@@ -56,7 +57,7 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
   # service's.
   defmodule Gate do
     @moduledoc false
-    @behaviour Cyfr.WorkerAPI
+    @behaviour Prima.WorkerAPI
 
     def start_link(test),
       do:
@@ -79,7 +80,7 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
 
     @impl true
     def start(token, input, sealed_keys) do
-      {:ok, %{execution_id: id}} = Cyfr.Assignment.read(token)
+      {:ok, %{execution_id: id}} = Prima.Assignment.read(token)
       %{test: test, closed: closed?} = Agent.get(__MODULE__, & &1)
       send(test, {:start, id, self()})
 
@@ -169,7 +170,7 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
       # A sibling of the same root, attached and holding its slot, its
       # budget slot and its charge row throughout. Its waiter is linked to
       # the test, and ends with it.
-      sibling = Cyfr.UUID7.execution_id()
+      sibling = Prima.UUID7.execution_id()
 
       Task.async(fn ->
         spawn_child!(ctx, authority, root, @ref, input(), execution_id: sibling)
@@ -179,7 +180,7 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
       wait_until(fn -> attached?(sibling) end, 10_000, "the sibling's runner attached")
 
       filler = fill_slots!()
-      queued = Cyfr.UUID7.execution_id()
+      queued = Prima.UUID7.execution_id()
 
       waiter =
         Task.async(fn ->
@@ -261,7 +262,7 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
       # (the queued task's hold came back), not one over (the sibling's did
       # not come back with it).
       release_slots!(filler, filler.held)
-      third = Cyfr.UUID7.execution_id()
+      third = Prima.UUID7.execution_id()
 
       Task.async(fn ->
         spawn_child!(ctx, authority, root, @ref, input(), execution_id: third)
@@ -415,7 +416,7 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
       assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, queued)
       assert {{:error, @cancelled}, ^queued} = Task.await(waiter, 10_000)
 
-      timed_out = Cyfr.UUID7.execution_id()
+      timed_out = Prima.UUID7.execution_id()
       assert {:error, refusal} = spawn_within(ctx, authority, root, timed_out, 1_000)
       assert refusal == Slots.refusal(:timeout)
 
@@ -475,11 +476,11 @@ defmodule Cyfr.Execution.AttemptSlotWaitTest do
       share = Slots.background_ceiling(Slots.status(@slots).key_max)
       holders = for _ <- 1..share, do: hold!(ctx.athanor_id, :background)
 
-      first = Cyfr.UUID7.execution_id()
+      first = Prima.UUID7.execution_id()
       first_task = Task.async(fn -> background(ctx, first) end)
       wait_until(fn -> Slots.status(@slots).queued_by_class.background == 1 end, 10_000)
 
-      second = Cyfr.UUID7.execution_id()
+      second = Prima.UUID7.execution_id()
       second_task = Task.async(fn -> background(ctx, second) end)
       wait_until(fn -> Slots.status(@slots).queued_by_class.background == 2 end, 10_000)
 

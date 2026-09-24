@@ -6,7 +6,7 @@ defmodule Opus.Credentials do
   What this worker service is and how it reaches CYFR, read from
   `config :opus` and nothing else: its service id (`:service_id`), the
   worker key CYFR derived for that id (`:service_key`, 64 hexadecimal
-  digits; `Cyfr.WorkerAuth.worker_key/2` on CYFR's side), the base URL of
+  digits; `Prima.WorkerAuth.worker_key/2` on CYFR's side), the base URL of
   CYFR's host API (`:host_url`), and the address its own listener binds
   (`:bind`, `:port`).
 
@@ -24,7 +24,7 @@ defmodule Opus.Credentials do
   The worker key is the one secret a worker service holds. Its dispatch
   key signs the requests CYFR sends it and the reports it sends CYFR, and
   its dispatch seal key opens the keys of the attempts CYFR starts on it
-  (`Cyfr.WorkerAuth`); both derive here, once, and the root they derive
+  (`Prima.WorkerAuth`); both derive here, once, and the root they derive
   from is never seen by this service. A missing or malformed value refuses
   the boot (`load!/0`): a worker service that cannot say who it is or
   where CYFR is runs nothing. So does CYFR's own configuration in the
@@ -82,8 +82,8 @@ defmodule Opus.Credentials do
        %__MODULE__{
          service_id: service_id,
          worker_key: worker_key,
-         dispatch_key: Cyfr.WorkerAuth.dispatch_key(worker_key),
-         dispatch_seal_key: Cyfr.WorkerAuth.dispatch_seal_key(worker_key),
+         dispatch_key: Prima.WorkerAuth.dispatch_key(worker_key),
+         dispatch_seal_key: Prima.WorkerAuth.dispatch_seal_key(worker_key),
          host_url: host_url,
          bind: bind,
          port: port
@@ -141,7 +141,7 @@ defmodule Opus.Credentials do
 
   @doc "The 32 bytes `text`, a worker key as 64 hexadecimal digits, spells."
   @spec decode_key(term()) :: {:ok, binary()} | :error
-  def decode_key(text), do: Cyfr.MacEnvelope.decode_root(text)
+  def decode_key(text), do: Prima.MacEnvelope.decode_root(text)
 
   defp service_id(nil), do: {:error, {:missing, :service_id}}
 
@@ -163,7 +163,7 @@ defmodule Opus.Credentials do
   defp host_url(nil), do: {:error, {:missing, :host_url}}
 
   defp host_url(url) do
-    case Cyfr.WorkerWire.base_url(url) do
+    case Prima.WorkerWire.base_url(url) do
       {:ok, base} -> {:ok, base}
       :error -> {:error, {:malformed, :host_url}}
     end

@@ -101,7 +101,7 @@ defmodule Aqua.TapeTest do
 
   test "a message id already taken is the same send by its client id, and another's otherwise",
        %{ctx: ctx, thread: thread} do
-    id = Cyfr.UUID7.generate_id("msg")
+    id = Prima.UUID7.generate_id("msg")
 
     attrs = %{
       message: %{author: ctx.user_id, content: "@aqua go", id: id, client_id: "c-id"},

@@ -18,9 +18,9 @@ defmodule Arca.MembersTest do
     :ok
   end
 
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
-  defp in_athanor(id), do: %{Cyfr.Actor.system() | athanor_id: id, scope: :athanor}
+  defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
   defp group! do
     n = System.unique_integer([:positive])
@@ -72,7 +72,7 @@ defmodule Arca.MembersTest do
   describe "the actor is the first argument, and a wrong one refuses before any query" do
     test "an actor with no athanor is refused by every inside-the-tenant function" do
       watch_queries!()
-      nobody = %Cyfr.Actor{athanor_id: nil, user_id: "someone"}
+      nobody = %Prima.Actor{athanor_id: nil, user_id: "someone"}
 
       assert {:error, :no_athanor} = Members.seat(nobody, %{user_id: "usr_1"})
       assert {:error, :no_athanor} = Members.find(nobody, "usr_1")
@@ -94,7 +94,7 @@ defmodule Arca.MembersTest do
       # layer that establishes identity refuses outright. Taking it would
       # filter on `athanor_id == ""`, match nothing, and answer an empty
       # roster where the refusal belongs.
-      unresolved = %{Cyfr.Actor.system() | athanor_id: "", scope: :athanor}
+      unresolved = %{Prima.Actor.system() | athanor_id: "", scope: :athanor}
 
       assert {:error, :no_athanor} = Members.seat(unresolved, %{user_id: "usr_1"})
       assert {:error, :no_athanor} = Members.find(unresolved, "usr_1")
@@ -535,7 +535,7 @@ defmodule Arca.MembersTest do
     user_attrs =
       Map.merge(
         %{
-          id: Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix()),
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
           provider: "github",
           email: "m#{n}@example.com",
           email_verified: true,
@@ -655,12 +655,12 @@ defmodule Arca.MembersLockTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
 
   setup do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
-    id = Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix())
+    id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
 
     {:ok, user} =
       unboxed(fn ->

@@ -6,13 +6,13 @@ defmodule Cyfr.ComponentRefGrammarTest do
   Checks construction uses the shared type:namespace.name grammar
   with an optional :version suffix.
 
-  `Cyfr.ComponentRef.build/4` is the one author now. This test keeps it
+  `Prima.ComponentRef.build/4` is the one author now. This test keeps it
   that way, and pins the grammar it produces.
   """
 
   use ExUnit.Case, async: true
 
-  alias Cyfr.ComponentRef
+  alias Prima.ComponentRef
 
   # The shape a hand-spelled ref takes: a literal type prefix, a colon, an
   # interpolation, a dot, an interpolation. Anything matching this is a
@@ -46,12 +46,12 @@ defmodule Cyfr.ComponentRefGrammarTest do
   test "nothing else spells the grammar" do
     offenders =
       root()
-      |> Cyfr.Test.SourceTree.app_libs()
-      |> Enum.flat_map(&Cyfr.Test.SourceTree.files!(Path.join([root(), &1, "**/*.ex"])))
+      |> Prima.Test.SourceTree.app_libs()
+      |> Enum.flat_map(&Prima.Test.SourceTree.files!(Path.join([root(), &1, "**/*.ex"])))
       |> Enum.reject(&String.ends_with?(&1, "component_ref.ex"))
       |> Enum.flat_map(fn path ->
         path
-        |> Cyfr.Test.SourceTree.read()
+        |> Prima.Test.SourceTree.read()
         |> String.split("\n")
         |> Enum.with_index(1)
         |> Enum.reject(fn {line, _n} -> String.match?(line, ~r/^\s*#/) end)
@@ -67,7 +67,7 @@ defmodule Cyfr.ComponentRefGrammarTest do
 
            #{Enum.map_join(offenders, "\n", &"  #{&1}")}
 
-           Use `Cyfr.ComponentRef.build/4` so the one place that knows a
+           Use `Prima.ComponentRef.build/4` so the one place that knows a
            ref is `type:namespace.name` stays one place.
            """
   end

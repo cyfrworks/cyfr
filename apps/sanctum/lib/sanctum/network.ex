@@ -34,10 +34,10 @@ defmodule Sanctum.Network do
   `:operator` uses the configured private-egress allowlist; `:allow_all` and
   `{:fun, predicate}` retain their explicit meanings. Metadata addresses are
   always refused. `:resolver` defaults to `:inet`; remaining transport options
-  are the pure `Cyfr.Network.pin/3` options.
+  are the pure `Prima.Network.pin/3` options.
   """
   @spec pin(String.t(), keyword()) ::
-          {:ok, Cyfr.Network.pinned()} | {:error, atom(), String.t()}
+          {:ok, Prima.Network.pinned()} | {:error, atom(), String.t()}
   def pin(url, opts \\ []) do
     policy =
       case Keyword.get(opts, :private_policy, :deny) do
@@ -47,15 +47,15 @@ defmodule Sanctum.Network do
 
     resolver = Keyword.get(opts, :resolver, :inet)
 
-    with {:ok, uri} <- Cyfr.Network.parse_url(url),
+    with {:ok, uri} <- Prima.Network.parse_url(url),
          {:ok, ip} <- resolve_typed(uri.host, resolver) do
-      Cyfr.Network.pin(uri, ip, Keyword.put(opts, :private_policy, policy))
+      Prima.Network.pin(uri, ip, Keyword.put(opts, :private_policy, policy))
     end
   end
 
   @spec private_allowed?(String.t() | nil, :inet.ip_address()) :: boolean()
   def private_allowed?(hostname, ip),
-    do: Cyfr.Network.private_allowed?(hostname, ip, private_egress_targets())
+    do: Prima.Network.private_allowed?(hostname, ip, private_egress_targets())
 
   @doc """
   The operator's hostnames, IPs and CIDRs from `CYFR_PRIVATE_EGRESS_TARGETS`.
@@ -77,8 +77,8 @@ defmodule Sanctum.Network do
   defp valid_target?(target) when is_binary(target) and target != "" do
     cond do
       Regex.match?(~r/[\x00-\x1f\x7f]/, target) -> false
-      String.contains?(target, "/") -> match?({:ok, _}, Cyfr.Cidr.parse_cidr(target))
-      match?({:ok, _}, Cyfr.Cidr.parse_ip(target)) -> true
+      String.contains?(target, "/") -> match?({:ok, _}, Prima.Cidr.parse_cidr(target))
+      match?({:ok, _}, Prima.Cidr.parse_ip(target)) -> true
       true -> valid_hostname?(target)
     end
   end

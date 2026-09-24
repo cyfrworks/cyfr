@@ -21,7 +21,7 @@ defmodule Sanctum.MCP.SessionTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # Anonymous-allowed: `whoami` and the device-flow login actions need
     # to work before a credential exists, and `logout` only ever
     # destroys the caller's own session.
@@ -349,7 +349,7 @@ defmodule Sanctum.MCP.SessionTool do
         {:error, _} -> ~s({"error":"encoding_error"})
       end
 
-    {:ok, %{content: content, mimeType: Cyfr.MediaType.json()}}
+    {:ok, %{content: content, mimeType: Prima.MediaType.json()}}
   end
 
   # session.whoami helpers: the display fields the Context carries.

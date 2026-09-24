@@ -3,13 +3,13 @@
 defmodule Sanctum.Authority.SchemaFreezeTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Authority.Blob.Node
-  alias Cyfr.Authority.Transition
-  alias Cyfr.Limits
-  alias Cyfr.Limits.Ceiling
+  alias Prima.Authority
+  alias Prima.Authority.Blob
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Authority.Blob.Node
+  alias Prima.Authority.Transition
+  alias Prima.Limits
+  alias Prima.Limits.Ceiling
 
   # The authority schema freeze, as a machine gate. Every surface pinned
   # here is frozen — the blob shape, the transition relation, the limit and
@@ -18,12 +18,12 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
   # editing these assertions in the same diff as the change, never an
   # incidental refactor.
 
-  # The blob is a contracts shape (`Cyfr.Authority.Blob`), so the golden
+  # The blob is a contracts shape (`Prima.Authority.Blob`), so the golden
   # file it is pinned against lives with the contracts and both suites
   # that read it name one copy.
   @golden_path Path.join([
                  __DIR__,
-                 "../../../../cyfr_contracts/test/support/fixtures/authority/resolved_policy_golden.json"
+                 "../../../../prima/test/support/fixtures/authority/resolved_policy_golden.json"
                ])
 
   test "Limits fields are locked to the ceiling-clamped set" do

@@ -7,8 +7,8 @@ defmodule Emissary.MCP.ResourceRegistry do
   table, and the lookup that names which declared operation admits a read.
 
   `resources/list` and `resources/templates/list` read the advertised
-  lists (`c:Cyfr.Ops.Provider.resources/0` and
-  `c:Cyfr.Ops.Provider.resource_templates/0` of every configured
+  lists (`c:Prima.Provider.resources/0` and
+  `c:Prima.Provider.resource_templates/0` of every configured
   provider). `resolve/1` maps a URI's scheme to the one operation that
   declares it in `resource_schemes`, so `resources/read` becomes a call of
   that operation through the catalog's gate
@@ -63,7 +63,7 @@ defmodule Emissary.MCP.ResourceRegistry do
   @spec resolve(String.t()) ::
           {:ok, String.t(), String.t()} | {:error, {:invalid_argument, String.t()}}
   def resolve(uri) when is_binary(uri) do
-    case Cyfr.Ops.Provider.resource_scheme(uri) do
+    case Prima.Provider.resource_scheme(uri) do
       {:ok, scheme} ->
         case Arca.Cache.get({:mcp_resource_scheme, scheme}) do
           {:ok, {tool, action}} -> {:ok, tool, action}
@@ -161,7 +161,7 @@ defmodule Emissary.MCP.ResourceRegistry do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -187,7 +187,7 @@ defmodule Emissary.MCP.ResourceRegistry do
         Arca.Cache.put({:mcp_resource_template, provider}, templates, @cache_ttl)
 
         for tool <- provider.tools(),
-            %Cyfr.Ops.Operation{} = operation <- Map.get(tool, :operations, []),
+            %Prima.Operation{} = operation <- Map.get(tool, :operations, []),
             scheme <- operation.resource_schemes do
           Arca.Cache.put(
             {:mcp_resource_scheme, scheme},
@@ -220,7 +220,7 @@ defmodule Emissary.MCP.ResourceRegistry do
       "name" => Map.get(resource, :name) || Map.get(resource, "name"),
       "description" => Map.get(resource, :description) || Map.get(resource, "description"),
       "mimeType" =>
-        Map.get(resource, :mimeType) || Map.get(resource, "mimeType") || Cyfr.MediaType.json()
+        Map.get(resource, :mimeType) || Map.get(resource, "mimeType") || Prima.MediaType.json()
     }
   end
 
@@ -230,7 +230,7 @@ defmodule Emissary.MCP.ResourceRegistry do
       "name" => Map.get(template, :name) || Map.get(template, "name"),
       "description" => Map.get(template, :description) || Map.get(template, "description"),
       "mimeType" =>
-        Map.get(template, :mimeType) || Map.get(template, "mimeType") || Cyfr.MediaType.json()
+        Map.get(template, :mimeType) || Map.get(template, "mimeType") || Prima.MediaType.json()
     }
   end
 end

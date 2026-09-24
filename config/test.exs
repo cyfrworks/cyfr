@@ -203,10 +203,10 @@ config :sanctum,
   # CredentialStore via the session-resolution path.
   default_test_namespace: "testns"
 
-# The worker root every key CYFR issues derives from (`Cyfr.WorkerAuth`),
+# The worker root every key CYFR issues derives from (`Prima.WorkerAuth`),
 # fixed for the suite so the Opus worker service of a test boot holds the
 # key CYFR derives for its id: `worker_key(root, "wrk_local")`, spelled
-# here as the HMAC it is (`Cyfr.MacEnvelope.derive/4`: the label, then the
+# here as the HMAC it is (`Prima.MacEnvelope.derive/4`: the label, then the
 # service id, one per line) because the contracts are not compiled when
 # this file is read. `Cyfr.ExecutionTest` pins the two spellings to each
 # other.

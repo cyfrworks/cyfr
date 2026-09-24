@@ -4,7 +4,7 @@
 defmodule Cyfr.Ops.CliGenerationTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.{Arg, Operation}
+  alias Prima.{Arg, Operation}
   alias Mix.Tasks.Ops.Gen.Cli
 
   test "argument declarations determine Go field types, presence and nested records" do

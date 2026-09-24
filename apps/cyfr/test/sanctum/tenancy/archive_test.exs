@@ -20,7 +20,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   """
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Context
@@ -117,11 +117,11 @@ defmodule Sanctum.Tenancy.ArchiveTest do
         type: "reagent"
       })
 
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
 
     Task.start(fn ->
       Cyfr.Execution.Dispatch.run(ctx, @reference, %{},
-        authority: Cyfr.Authority.zero(),
+        authority: Prima.Authority.zero(),
         execution_id: id
       )
     end)
@@ -165,8 +165,8 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     running = running!(group.id, owner.id)
 
     Cyfr.Bus.subscribe(
-      Cyfr.Actor.in_athanor(group.id),
-      Cyfr.Bus.notify(Cyfr.Actor.in_athanor(group.id))
+      Prima.Actor.in_athanor(group.id),
+      Cyfr.Bus.notify(Prima.Actor.in_athanor(group.id))
     )
 
     assert {:ok, %{status: "archived"}} = Athanors.archive(group)

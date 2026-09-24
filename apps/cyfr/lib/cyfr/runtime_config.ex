@@ -373,7 +373,7 @@ defmodule Cyfr.RuntimeConfig do
          # Use the configured receive timeout for object-store requests.
          {:ok, receive_timeout_ms} <-
            positive_int(getenv.("CYFR_S3_RECEIVE_TIMEOUT_MS"), "CYFR_S3_RECEIVE_TIMEOUT_MS"),
-         {:ok, path_style} <- Cyfr.EnvValue.switch(getenv, "CYFR_S3_PATH_STYLE", false) do
+         {:ok, path_style} <- Prima.EnvValue.switch(getenv, "CYFR_S3_PATH_STYLE", false) do
       opts =
         [
           bucket: resolved.bucket,
@@ -412,7 +412,7 @@ defmodule Cyfr.RuntimeConfig do
 
       url ->
         with {:ok, pool_size} <- parse_pool_size(getenv.("CYFR_DB_POOL_SIZE")),
-             {:ok, ssl} <- Cyfr.EnvValue.switch(getenv, "CYFR_DB_SSL", false) do
+             {:ok, ssl} <- Prima.EnvValue.switch(getenv, "CYFR_DB_SSL", false) do
           {:ok, [url: url, pool_size: pool_size, ssl: ssl]}
         end
     end
@@ -423,12 +423,12 @@ defmodule Cyfr.RuntimeConfig do
   comma-separated `<service_id>=<url>` entries, default
   `wrk_local=http://127.0.0.1:4200`. A service id is `wrk_` followed by 1
   to 64 letters, digits, `_` or `-`, the id its key derives over
-  (`Cyfr.WorkerAuth.worker_key/2`), and a URL is the base URL of its
-  listener (`Cyfr.WorkerWire.base_url/1`). Answers the
-  `t:Cyfr.WorkerAPI.endpoint/0` entries in order, each running any
+  (`Prima.WorkerAuth.worker_key/2`), and a URL is the base URL of its
+  listener (`Prima.WorkerWire.base_url/1`). Answers the
+  `t:Prima.WorkerAPI.endpoint/0` entries in order, each running any
   component; a malformed entry or a repeated id is an error naming it.
   """
-  @spec resolve_workers(getenv) :: {:ok, [Cyfr.WorkerAPI.endpoint()]} | {:error, String.t()}
+  @spec resolve_workers(getenv) :: {:ok, [Prima.WorkerAPI.endpoint()]} | {:error, String.t()}
   def resolve_workers(getenv) when is_function(getenv, 1) do
     entries =
       (blank_to_nil(getenv.("CYFR_WORKERS")) || @default_workers)
@@ -457,7 +457,7 @@ defmodule Cyfr.RuntimeConfig do
     with [id, url] <- String.split(entry, "=", parts: 2),
          id = String.trim(id),
          true <- Regex.match?(@service_id, id),
-         {:ok, base} <- Cyfr.WorkerWire.base_url(String.trim(url)) do
+         {:ok, base} <- Prima.WorkerWire.base_url(String.trim(url)) do
       {:ok, %{id: id, url: base, components: nil}}
     else
       _ -> :error
@@ -589,7 +589,7 @@ defmodule Cyfr.RuntimeConfig do
   defp host_api_url(nil), do: {:ok, nil}
 
   defp host_api_url(text) do
-    case Cyfr.WorkerWire.base_url(text) do
+    case Prima.WorkerWire.base_url(text) do
       {:ok, url} ->
         {:ok, url}
 
@@ -636,9 +636,9 @@ defmodule Cyfr.RuntimeConfig do
   @spec resolve_worker_watch(getenv) :: {:ok, keyword()} | {:error, String.t()}
   def resolve_worker_watch(getenv) when is_function(getenv, 1) do
     with {:ok, poll_ms} <-
-           Cyfr.EnvValue.milliseconds(getenv, "CYFR_WORKER_WATCH_POLL_MS", 1_000..60_000),
+           Prima.EnvValue.milliseconds(getenv, "CYFR_WORKER_WATCH_POLL_MS", 1_000..60_000),
          {:ok, misses} <-
-           Cyfr.EnvValue.whole_number(getenv, "CYFR_WORKER_WATCH_MISSES", 1..100, "misses") do
+           Prima.EnvValue.whole_number(getenv, "CYFR_WORKER_WATCH_MISSES", 1..100, "misses") do
       {:ok,
        Enum.reject([poll_ms: poll_ms, misses: misses], fn {_key, value} -> is_nil(value) end)}
     end
@@ -659,8 +659,8 @@ defmodule Cyfr.RuntimeConfig do
   @spec resolve_locus_builds(getenv) ::
           {:ok, %{url: String.t(), key: <<_::256>>} | nil} | {:error, String.t()}
   def resolve_locus_builds(getenv) when is_function(getenv, 1) do
-    with {:ok, url} <- Cyfr.EnvValue.url(getenv, "CYFR_LOCUS_BUILDS_URL"),
-         {:ok, key} <- Cyfr.EnvValue.hex_key(getenv, "CYFR_LOCUS_BUILDS_KEY") do
+    with {:ok, url} <- Prima.EnvValue.url(getenv, "CYFR_LOCUS_BUILDS_URL"),
+         {:ok, key} <- Prima.EnvValue.hex_key(getenv, "CYFR_LOCUS_BUILDS_KEY") do
       case {url, key} do
         {nil, nil} ->
           {:ok, nil}

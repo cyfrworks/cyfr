@@ -5,7 +5,7 @@ defmodule Compendium.ForkTest do
   use ExUnit.Case, async: false
 
   alias Compendium.Fork
-  alias Cyfr.ComponentRef
+  alias Prima.ComponentRef
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

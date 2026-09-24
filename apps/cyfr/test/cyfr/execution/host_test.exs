@@ -21,10 +21,10 @@ defmodule Cyfr.Execution.HostTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import ExUnit.CaptureLog
 
-  alias Cyfr.Assignment
+  alias Prima.Assignment
   alias Cyfr.Execution.{Close, Dispatch, Keys}
   alias Cyfr.Test.AttemptFixtures
 
@@ -337,9 +337,9 @@ defmodule Cyfr.Execution.HostTest do
 
       {:ok, %{attempt: successor}} =
         Arca.ExecutionAttempts.takeover(
-          Cyfr.Actor.in_athanor(fixture.athanor_id),
+          Prima.Actor.in_athanor(fixture.athanor_id),
           fixture.execution_id,
-          boot_id: Cyfr.Boot.id(),
+          boot_id: Prima.Boot.id(),
           lease_until: Arca.ExecutionAttempts.lease_until(),
           grant: :stored,
           verify: &Sanctum.ExecutionStanding.verify/1
@@ -387,7 +387,7 @@ defmodule Cyfr.Execution.HostTest do
       {:ok, %{execution: execution, attempt: attempt}} =
         Arca.Execution.admit(
           %{
-            id: Cyfr.UUID7.execution_id(),
+            id: Prima.UUID7.execution_id(),
             reference: "agent:local.aqua:0.1.0",
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
@@ -401,7 +401,7 @@ defmodule Cyfr.Execution.HostTest do
 
       # Held by the control plane: dispatched to no worker service.
       assert attempt.service_id == nil
-      assert attempt.boot_id == Cyfr.Boot.id()
+      assert attempt.boot_id == Prima.Boot.id()
 
       fixture =
         Map.merge(AttemptFixtures.current!(ctx.athanor_id, execution.id), %{
@@ -422,7 +422,7 @@ defmodule Cyfr.Execution.HostTest do
 
   describe "rates and tokens" do
     test "take_rate counts the node's consented rate, only under its own bucket" do
-      limits = %{Cyfr.Limits.defaults(:catalyst) | rate_limit: %{requests: 1, window: "1m"}}
+      limits = %{Prima.Limits.defaults(:catalyst) | rate_limit: %{requests: 1, window: "1m"}}
       fixture = AttemptFixtures.attached!(limits: limits)
       bucket = "http:" <> fixture.component_ref
 
@@ -507,7 +507,7 @@ defmodule Cyfr.Execution.HostTest do
 
       assert {:ok, %{last_used_at: nil}} =
                Arca.VaultStorage.get(
-                 %Cyfr.Actor{athanor_id: fixture.athanor_id},
+                 %Prima.Actor{athanor_id: fixture.athanor_id},
                  fixture.entry.id
                )
 
@@ -570,7 +570,7 @@ defmodule Cyfr.Execution.HostTest do
 
       assert %{state: "running"} =
                Arca.ExecutionAttempts.get(
-                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 Prima.Actor.in_athanor(fixture.athanor_id),
                  fixture.attempt
                )
     end
@@ -600,13 +600,13 @@ defmodule Cyfr.Execution.HostTest do
       }
 
       key = Keyword.get_lazy(opts, :key, fn -> dispatch_key(opts[:signer] || service) end)
-      {:ok, header} = Cyfr.WorkerAuth.report_header(key, fields, body)
+      {:ok, header} = Prima.WorkerAuth.report_header(key, fields, body)
       header |> Cyfr.Execution.Host.runner_exited(body) |> Jason.decode!()
     end
 
     defp dispatch_key(service) do
       {:ok, worker_key} = Keys.worker_key(service)
-      Cyfr.WorkerAuth.dispatch_key(worker_key)
+      Prima.WorkerAuth.dispatch_key(worker_key)
     end
 
     test "lapses the reporting worker's running attempts at once and stops their attempts" do
@@ -622,13 +622,13 @@ defmodule Cyfr.Execution.HostTest do
 
       assert %{state: "lapsed", outcome: "uncertain"} =
                Arca.ExecutionAttempts.get(
-                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 Prima.Actor.in_athanor(fixture.athanor_id),
                  fixture.attempt
                )
 
       assert {:ok, events} =
                Arca.ExecutionEvents.since(
-                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 Prima.Actor.in_athanor(fixture.athanor_id),
                  fixture.execution_id,
                  0
                )
@@ -667,7 +667,7 @@ defmodule Cyfr.Execution.HostTest do
 
       forged_body = AttemptFixtures.body("renew", %{"attempts" => [fixture.attempt]})
       fields = %{service: @service, boot: fixture.boot, ts: now(), nonce: "n_forged"}
-      {:ok, header} = Cyfr.WorkerAuth.report_header(dispatch_key(@service), fields, forged_body)
+      {:ok, header} = Prima.WorkerAuth.report_header(dispatch_key(@service), fields, forged_body)
 
       assert %{"error" => "lost"} =
                header |> Cyfr.Execution.Host.runner_exited(forged_body) |> Jason.decode!()
@@ -688,7 +688,7 @@ defmodule Cyfr.Execution.HostTest do
 
       assert %{state: "running"} =
                Arca.ExecutionAttempts.get(
-                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 Prima.Actor.in_athanor(fixture.athanor_id),
                  fixture.attempt
                )
 
@@ -711,7 +711,7 @@ defmodule Cyfr.Execution.HostTest do
   defp terminal_events(fixture) do
     {:ok, rows} =
       Arca.ExecutionEvents.since(
-        Cyfr.Actor.in_athanor(fixture.athanor_id),
+        Prima.Actor.in_athanor(fixture.athanor_id),
         fixture.execution_id,
         0
       )
@@ -726,10 +726,10 @@ defmodule Cyfr.Execution.HostTest do
 
   defp move_head!(profile) do
     Arca.ProfileStorage.advance_head(
-      Cyfr.Actor.in_athanor(profile.athanor_id),
+      Prima.Actor.in_athanor(profile.athanor_id),
       profile.id,
       profile.head_consent_id,
-      Cyfr.UUID7.generate_id("cons")
+      Prima.UUID7.generate_id("cons")
     )
   end
 
@@ -737,7 +737,7 @@ defmodule Cyfr.Execution.HostTest do
     {:ok, %{execution: child}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "reagent:local.child:0.1.0",
           user_id: fixture.ctx.user_id,
           athanor_id: fixture.athanor_id,

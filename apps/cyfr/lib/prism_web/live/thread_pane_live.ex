@@ -37,8 +37,8 @@ defmodule PrismWeb.ThreadPaneLive do
   alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Users
 
-  @agent_author Cyfr.Author.agent()
-  @system_author Cyfr.Author.system()
+  @agent_author Prima.Author.agent()
+  @system_author Prima.Author.system()
 
   # How many pages the assistant may leave pointed at in the panel at once.
   @max_links 5
@@ -559,7 +559,7 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -772,14 +772,14 @@ defmodule PrismWeb.ThreadPaneLive do
   # the message; the runner then only records the refs.
   defp send_message(socket, message, files) do
     ctx = socket.assigns.context
-    message_id = Cyfr.UUID7.generate_id("msg")
+    message_id = Prima.UUID7.generate_id("msg")
 
     with {:ok, thread, created?} <- current_or_new(socket),
          {room, socket} = room_context(socket, thread),
          {:ok, refs} <- Aqua.Attachments.store(ctx, thread.id, message_id, files) do
       envelope = %{
         thread_id: thread.id,
-        client_id: Cyfr.UUID7.generate_id("snd"),
+        client_id: Prima.UUID7.generate_id("snd"),
         message_id: message_id,
         text: message,
         attachments: refs,

@@ -4,10 +4,10 @@
 defmodule Opus.Test.ScriptedHost do
   @moduledoc """
   CYFR's host API as a test scripts it, served on a loopback port: the
-  routes `Cyfr.WorkerWire` names, each request verified as CYFR verifies
-  it (`Cyfr.WorkerAuth.verify_host_call/5` for a runner's call, whose
+  routes `Prima.WorkerWire` names, each request verified as CYFR verifies
+  it (`Prima.WorkerAuth.verify_host_call/5` for a runner's call, whose
   sealed body is then opened and whose answer is sealed back;
-  `Cyfr.WorkerAuth.verify_report/4` for a worker service's plain report)
+  `Prima.WorkerAuth.verify_report/4` for a worker service's plain report)
   under a root of the test's choosing, and answered from the test's script.
 
   `start!/1` serves one host for the calling test and answers where it is.
@@ -28,7 +28,7 @@ defmodule Opus.Test.ScriptedHost do
   reports; a host started with another root is a stranger to it.
   """
 
-  alias Cyfr.{Assignment, WorkerAuth, WorkerWire}
+  alias Prima.{Assignment, WorkerAuth, WorkerWire}
 
   @root :crypto.hash(:sha256, "opus-test-root")
   @service "wrk_local"
@@ -64,7 +64,7 @@ defmodule Opus.Test.ScriptedHost do
     generation = Keyword.get(opts, :generation, @generation)
 
     member =
-      Keyword.get_lazy(opts, :member, fn -> "host@test#" <> Cyfr.UUID7.generate_id("boot") end)
+      Keyword.get_lazy(opts, :member, fn -> "host@test#" <> Prima.UUID7.generate_id("boot") end)
 
     service = Keyword.get(opts, :service, @service)
     unique = System.unique_integer([:positive])
@@ -151,13 +151,13 @@ defmodule Opus.Test.ScriptedHost do
 
   @doc """
   An attempt on this host, as CYFR mints one: its fields, its keys
-  (`Cyfr.WorkerAuth.attempt_keys/2`), a signed assignment (`:assignment`),
+  (`Prima.WorkerAuth.attempt_keys/2`), a signed assignment (`:assignment`),
   the keys sealed for the worker service (`:sealed_keys`), the input JSON
   the assignment's digest binds (`:input`) and the `:client` a runner of
   it holds. Options: `:boot` (default `"boot_test"`), `:runner` (default a
   fresh id), `:service` (default the host's), `:component_type` (default
   `:catalyst`), `:component_ref`, `:digest`, `:input` (default
-  `%{"fixture" => true}`), `:authority` (default `Cyfr.Authority.zero/0`),
+  `%{"fixture" => true}`), `:authority` (default `Prima.Authority.zero/0`),
   `:timeout_ms` (default 60 s), `:intercepted` (default `[]`),
   `:athanor_id` (default `"ath_test"`).
   """
@@ -166,7 +166,7 @@ defmodule Opus.Test.ScriptedHost do
     now = System.system_time(:millisecond)
     service = Keyword.get(opts, :service, host.service)
     boot = Keyword.get(opts, :boot, "boot_test")
-    runner = Keyword.get(opts, :runner, Cyfr.UUID7.generate_id("runner"))
+    runner = Keyword.get(opts, :runner, Prima.UUID7.generate_id("runner"))
     component_type = Keyword.get(opts, :component_type, :catalyst)
 
     component_ref =
@@ -174,16 +174,16 @@ defmodule Opus.Test.ScriptedHost do
         "#{component_type}:local.fixture-#{System.unique_integer([:positive])}:0.1.0"
       end)
 
-    digest = Keyword.get_lazy(opts, :digest, fn -> Cyfr.Digest.sha256(component_ref) end)
+    digest = Keyword.get_lazy(opts, :digest, fn -> Prima.Digest.sha256(component_ref) end)
     input = Keyword.get(opts, :input, %{"fixture" => true})
     input_json = Jason.encode!(input)
     timeout_ms = Keyword.get(opts, :timeout_ms, 60_000)
-    execution_id = Cyfr.UUID7.execution_id()
+    execution_id = Prima.UUID7.execution_id()
 
     attempt = %{
       athanor_id: Keyword.get(opts, :athanor_id, "ath_test"),
       execution_id: execution_id,
-      attempt: Cyfr.UUID7.generate_id("att"),
+      attempt: Prima.UUID7.generate_id("att"),
       fence: 1,
       generation: host.generation,
       service: service
@@ -202,8 +202,8 @@ defmodule Opus.Test.ScriptedHost do
       fence: 1,
       root_execution_id: execution_id,
       athanor_id: attempt.athanor_id,
-      actor: %Cyfr.Actor{},
-      authority: Cyfr.Authority.to_wire(Keyword.get(opts, :authority, Cyfr.Authority.zero())),
+      actor: %Prima.Actor{},
+      authority: Prima.Authority.to_wire(Keyword.get(opts, :authority, Prima.Authority.zero())),
       component: %{
         ref: component_ref,
         type: Atom.to_string(component_type),
@@ -211,7 +211,7 @@ defmodule Opus.Test.ScriptedHost do
         declared_needs: [],
         activation_digest: nil
       },
-      input_digest: Cyfr.Digest.sha256(input_json),
+      input_digest: Prima.Digest.sha256(input_json),
       timeout_ms: timeout_ms,
       deadline: now + timeout_ms,
       lease_until: now + 60_000,

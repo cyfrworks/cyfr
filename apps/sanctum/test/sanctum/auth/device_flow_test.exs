@@ -62,8 +62,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     test "polls beyond the per-code budget answer slow_down without provider contact" do
       Application.delete_env(:sanctum, :github_client_id)
       System.delete_env("CYFR_GITHUB_CLIENT_ID")
-      Cyfr.RateLimiter.reset()
-      on_exit(fn -> Cyfr.RateLimiter.reset() end)
+      Prima.RateLimiter.reset()
+      on_exit(fn -> Prima.RateLimiter.reset() end)
 
       code = "budget_test_code"
 
@@ -95,8 +95,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     setup do
       Application.delete_env(:sanctum, :github_client_id)
       System.delete_env("CYFR_GITHUB_CLIENT_ID")
-      Cyfr.RateLimiter.reset()
-      on_exit(fn -> Cyfr.RateLimiter.reset() end)
+      Prima.RateLimiter.reset()
+      on_exit(fn -> Prima.RateLimiter.reset() end)
       :ok
     end
 

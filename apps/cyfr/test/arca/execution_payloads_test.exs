@@ -80,7 +80,7 @@ defmodule Arca.ExecutionPayloadsTest do
 
     assert row.athanor_id == actor.athanor_id
     assert row.attempt == "att_#{exec}"
-    assert row.digest == Cyfr.Digest.sha256(~s({"ok":true}))
+    assert row.digest == Prima.Digest.sha256(~s({"ok":true}))
     assert row.bytes == 11
     "sha256:" <> hex = row.digest
     assert row.blob_ref == "payloads/#{exec}/result.#{hex}"

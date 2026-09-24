@@ -18,12 +18,13 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
-  alias Cyfr.Authority
+  alias Prima.Authority
   alias Cyfr.Execution.{Attempt, Dispatch, WorkerClient}
-  alias Cyfr.Test.{AttemptFixtures, AuthorityFixtures, ScriptedWorker}
-  alias Cyfr.{WorkerAuth, WorkerWire}
+  alias Cyfr.Test.{AttemptFixtures, ScriptedWorker}
+  alias Prima.Test.AuthorityFixtures
+  alias Prima.{WorkerAuth, WorkerWire}
 
   @scripted "reagent:local.ta"
   @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
@@ -49,7 +50,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
       for {{app, key}, value} <- previous, do: Application.put_env(app, key, value)
     end)
@@ -78,7 +79,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
         verify: &Sanctum.ExecutionStanding.verify/1
       )
 
-    child_id = Cyfr.UUID7.execution_id()
+    child_id = Prima.UUID7.execution_id()
 
     charge = %{
       id: "call:t:1:c1:g0",
@@ -140,7 +141,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert Sanctum.Authority.budget(auth).in_flight == 1
 
     assert {:ok, [charge_row]} =
-             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(athanor_id), auth.budget.id)
+             Arca.BudgetReservations.charges(Prima.Actor.in_athanor(athanor_id), auth.budget.id)
 
     assert charge_row.admitted_at != nil
     assert charge_row.holder_execution_id == child_id
@@ -153,14 +154,14 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
              service_id: service_id,
              boot_id: boot_id
            } =
-             Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id)
+             Arca.ExecutionAttempts.current(Prima.Actor.in_athanor(athanor_id), child_id)
 
     assert service_id == ScriptedWorker.service()
     assert boot_id == boot()
 
     # The slot is held for the attempt by its slot holder, a process linked
     # to it.
-    status = Cyfr.Slots.status(Cyfr.Execution.Slots)
+    status = Prima.Slots.status(Cyfr.Execution.Slots)
     {:links, linked} = Process.info(Attempt.whereis(child_id), :links)
     held_for = Enum.map(linked, &inspect/1)
     assert status.child_active == 1
@@ -176,13 +177,13 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert Sanctum.Authority.budget(auth).in_flight == 0
 
     assert {:ok, []} =
-             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(athanor_id), auth.budget.id)
+             Arca.BudgetReservations.charges(Prima.Actor.in_athanor(athanor_id), auth.budget.id)
 
     assert %{state: "completed", outcome: "ok"} =
-             Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id)
+             Arca.ExecutionAttempts.current(Prima.Actor.in_athanor(athanor_id), child_id)
 
     assert %{status: "completed"} = Arca.Repo.get(Arca.Schemas.Execution, child_id)
-    assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == 0
+    assert Prima.Slots.status(Cyfr.Execution.Slots).child_active == 0
 
     assert [%{execution_id: ^child_id, input: %{"messages" => []}, authority: %Authority{}}] =
              ScriptedWorker.calls()
@@ -203,17 +204,17 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     wait_until(fn ->
       match?(
         %{state: "lapsed"},
-        Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id)
+        Arca.ExecutionAttempts.current(Prima.Actor.in_athanor(athanor_id), child_id)
       )
     end)
 
     assert %{status: "failed"} = Arca.Repo.get(Arca.Schemas.Execution, child_id)
 
     wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
-    wait_until(fn -> Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == 0 end)
+    wait_until(fn -> Prima.Slots.status(Cyfr.Execution.Slots).child_active == 0 end)
 
     assert {:ok, []} =
-             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(athanor_id), auth.budget.id)
+             Arca.BudgetReservations.charges(Prima.Actor.in_athanor(athanor_id), auth.budget.id)
   end
 
   test "an exhausted script fails the child and releases everything", fx do
@@ -225,12 +226,12 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert {:error, "script exhausted"} = run(fx)
 
     assert %{state: "failed", outcome: "error"} =
-             Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id)
+             Arca.ExecutionAttempts.current(Prima.Actor.in_athanor(athanor_id), child_id)
 
     assert Sanctum.Authority.budget(auth).in_flight == 0
 
     assert {:ok, []} =
-             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(athanor_id), auth.budget.id)
+             Arca.BudgetReservations.charges(Prima.Actor.in_athanor(athanor_id), auth.budget.id)
   end
 
   test "an expired hold refuses admission before anything is dispatched", fx do
@@ -240,12 +241,17 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     start_supervised!({ScriptedWorker, ref: @scripted, script: [%{"content" => []}]})
 
     :ok =
-      Arca.BudgetReservations.charge(Cyfr.Actor.in_athanor(athanor_id), auth.budget.id, charge, 1)
+      Arca.BudgetReservations.charge(
+        Prima.Actor.in_athanor(athanor_id),
+        auth.budget.id,
+        charge,
+        1
+      )
 
     expire_hold(athanor_id, charge.id)
 
     assert {:error, :hold_expired} = run(fx)
-    assert Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), child_id) == nil
+    assert Arca.ExecutionAttempts.current(Prima.Actor.in_athanor(athanor_id), child_id) == nil
     assert Arca.Repo.get(Arca.Schemas.Execution, child_id) == nil
     assert Sanctum.Authority.budget(auth).in_flight == 0
     assert ScriptedWorker.calls() == []
@@ -268,7 +274,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
        ]}
     )
 
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
 
     assert {:ok, %{output: %{"data" => %{"echo" => "[REDACTED]"}}}} =
              Dispatch.run(ctx, "#{@scripted}:1.0.0", %{}, authority: authority, execution_id: id)
@@ -283,7 +289,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   test "a cancel kills the runner through the worker service, and its exit report stops the attempt",
        %{ctx: ctx} do
     start_supervised!({ScriptedWorker, ref: @scripted, script: [:hang]})
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
 
     task =
       Task.async(fn ->
@@ -308,17 +314,17 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   # run and is reported: the work the tenant would be charged an unreaped
   # kill for is over, and the worker service said so. The waiter's kill of
   # its lost run would find the runner ended and be answered `:ok`, as a
-  # kill of a live runner is (`c:Cyfr.WorkerAPI.kill/1`), so a count taken
+  # kill of a live runner is (`c:Prima.WorkerAPI.kill/1`), so a count taken
   # there is a refusal the tenant did not earn.
   test "a runner that ends on its own closes the run and costs the athanor no unreaped kill", %{
     ctx: ctx
   } do
     start_supervised!({ScriptedWorker, ref: @scripted, script: [{:probe, self()}, :hang]})
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
     athanor_id = ctx.athanor_id
     watch_unreaped!()
 
-    # `Cyfr.Slots`'s unreaped map is node-global and keyed by athanor, and
+    # `Prima.Slots`'s unreaped map is node-global and keyed by athanor, and
     # this suite runs under the well-known `ath_test` that thirty test files
     # share. Asking whether the key is absent asks whether any test anywhere
     # in the run has noted an unreaped kill for it, which is a fact about
@@ -368,7 +374,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   # still noted, however the runner's exit is reported afterwards.
   test "a cancel of the same run is still counted against the athanor", %{ctx: ctx} do
     start_supervised!({ScriptedWorker, ref: @scripted, script: [{:probe, self()}, :hang]})
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
     athanor_id = ctx.athanor_id
     watch_unreaped!()
 
@@ -387,12 +393,12 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     assert id in ScriptedWorker.kills()
     assert_received {:unreaped_kill, ^id, 1}
-    assert Cyfr.Slots.status(Cyfr.Execution.Slots).unreaped[athanor_id] == 1
+    assert Prima.Slots.status(Cyfr.Execution.Slots).unreaped[athanor_id] == 1
   end
 
   # Every unreaped kill noted from here on, forwarded to this process.
   defp unreaped_count(athanor_id) do
-    Cyfr.Slots.status(Cyfr.Execution.Slots).unreaped
+    Prima.Slots.status(Cyfr.Execution.Slots).unreaped
     |> Map.get(athanor_id, 0)
   end
 
@@ -422,7 +428,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
       {ScriptedWorker, ref: @scripted, script: [{:crash, :after_persist}, %{"done" => true}]}
     )
 
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
     test = self()
 
     {_pid, ref} =
@@ -469,7 +475,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
       {ScriptedWorker, ref: @scripted, script: [%{"content" => "once"}], lose_start_answer: true}
     )
 
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
 
     assert {:ok, %{status: :completed, output: %{"data" => %{"content" => "once"}}}} =
              Dispatch.run(ctx, "#{@scripted}:1.0.0", %{},
@@ -554,7 +560,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     end
 
     test "refuses a body past the host API's bound without serving it" do
-      body = String.duplicate("x", Cyfr.HostAPI.max_body_bytes() + 1)
+      body = String.duplicate("x", Prima.HostAPI.max_body_bytes() + 1)
 
       assert {413, %{"error" => "malformed"}} =
                post(WorkerWire.worker_route(:kill), signed(dispatch_key(), body), body)

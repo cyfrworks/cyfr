@@ -8,7 +8,7 @@ defmodule Arca.ApiKeyStorage do
   This module provides the database layer for API key storage.
   It's called by `Sanctum.ApiKey` which handles key generation and hashing.
 
-  Every function that names an athanor takes the `Cyfr.Actor` first and
+  Every function that names an athanor takes the `Prima.Actor` first and
   matches it in its head, refusing an actor whose athanor is nil or the
   empty string with `{:error, :no_athanor}` before any query.
   `get_key_by_hash/1` and `revoke_all_created_by/1` name no athanor: one
@@ -85,7 +85,7 @@ defmodule Arca.ApiKeyStorage do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     row = %{
-      id: Cyfr.UUID7.generate_id("key"),
+      id: Prima.UUID7.generate_id("key"),
       name: attrs.name,
       key_hash: attrs.key_hash,
       key_prefix: attrs.key_prefix,
@@ -114,9 +114,9 @@ defmodule Arca.ApiKeyStorage do
   presence asks for the predicate rather than the value. It gates an
   admission decision, so an unanswerable store refuses rather than defaults.
   """
-  @spec capability_bearing?(Cyfr.Actor.t(), String.t()) ::
+  @spec capability_bearing?(Prima.Actor.t(), String.t()) ::
           {:ok, boolean()} | {:error, :no_athanor | :database_error}
-  def capability_bearing?(%Cyfr.Actor{athanor_id: athanor_id}, name)
+  def capability_bearing?(%Prima.Actor{athanor_id: athanor_id}, name)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.capability_bearing?", fn ->
       found =
@@ -132,16 +132,16 @@ defmodule Arca.ApiKeyStorage do
     end)
   end
 
-  def capability_bearing?(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+  def capability_bearing?(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   Get a key by name within an athanor. Excludes revoked keys.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  @spec get_key(Cyfr.Actor.t(), String.t()) ::
+  @spec get_key(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
-  def get_key(%Cyfr.Actor{athanor_id: athanor_id}, name)
+  def get_key(%Prima.Actor{athanor_id: athanor_id}, name)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key", fn ->
       query =
@@ -160,15 +160,15 @@ defmodule Arca.ApiKeyStorage do
     |> Arca.Data.project()
   end
 
-  def get_key(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+  def get_key(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   Get an unrevoked key row by its id within an athanor — the lookup a
   key-authenticated context uses to read its own key's attributes.
   """
-  @spec get_key_by_id(Cyfr.Actor.t(), String.t()) ::
+  @spec get_key_by_id(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
-  def get_key_by_id(%Cyfr.Actor{athanor_id: athanor_id}, id)
+  def get_key_by_id(%Prima.Actor{athanor_id: athanor_id}, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key_by_id", fn ->
       query =
@@ -183,7 +183,7 @@ defmodule Arca.ApiKeyStorage do
     |> Arca.Data.project()
   end
 
-  def get_key_by_id(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
+  def get_key_by_id(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc """
   Get a key by its hash. Used for validate() lookups.
@@ -219,8 +219,8 @@ defmodule Arca.ApiKeyStorage do
   @doc """
   List all non-revoked keys of an athanor, sorted by inserted_at.
   """
-  @spec list_keys(Cyfr.Actor.t()) :: {:ok, [map()]} | {:error, :no_athanor | :database_error}
-  def list_keys(%Cyfr.Actor{athanor_id: athanor_id})
+  @spec list_keys(Prima.Actor.t()) :: {:ok, [map()]} | {:error, :no_athanor | :database_error}
+  def list_keys(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.list_keys", fn ->
       query =
@@ -236,14 +236,14 @@ defmodule Arca.ApiKeyStorage do
     |> Arca.Data.project()
   end
 
-  def list_keys(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def list_keys(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   Revoke a key by name within an athanor.
   """
-  @spec revoke_key(Cyfr.Actor.t(), String.t()) ::
+  @spec revoke_key(Prima.Actor.t(), String.t()) ::
           :ok | {:error, :no_athanor | :not_found | :database_error}
-  def revoke_key(%Cyfr.Actor{athanor_id: athanor_id}, name)
+  def revoke_key(%Prima.Actor{athanor_id: athanor_id}, name)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_key", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -259,7 +259,7 @@ defmodule Arca.ApiKeyStorage do
     end)
   end
 
-  def revoke_key(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+  def revoke_key(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   Revoke every live key a person created, across athanors. Returns the count.
@@ -286,9 +286,9 @@ defmodule Arca.ApiKeyStorage do
   token derived from it) is retired with it, and no row that follows can
   take that id back.
   """
-  @spec rotate_key(Cyfr.Actor.t(), String.t(), binary(), String.t(), keyword()) ::
+  @spec rotate_key(Prima.Actor.t(), String.t(), binary(), String.t(), keyword()) ::
           :ok | {:error, term()}
-  def rotate_key(%Cyfr.Actor{athanor_id: athanor_id}, name, new_key_hash, new_key_prefix, opts)
+  def rotate_key(%Prima.Actor{athanor_id: athanor_id}, name, new_key_hash, new_key_prefix, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
     lock = Keyword.fetch!(opts, :lock)
     verify = Keyword.fetch!(opts, :verify)
@@ -304,7 +304,7 @@ defmodule Arca.ApiKeyStorage do
     end)
   end
 
-  def rotate_key(%Cyfr.Actor{}, _name, _new_key_hash, _new_key_prefix, _opts),
+  def rotate_key(%Prima.Actor{}, _name, _new_key_hash, _new_key_prefix, _opts),
     do: {:error, :no_athanor}
 
   defp rotate_row(athanor_id, name, new_key_hash, new_key_prefix) do
@@ -335,7 +335,7 @@ defmodule Arca.ApiKeyStorage do
 
         Arca.Repo.insert_all(ApiKey, [
           %{
-            id: Cyfr.UUID7.generate_id("key"),
+            id: Prima.UUID7.generate_id("key"),
             name: old.name,
             key_hash: new_key_hash,
             key_prefix: new_key_prefix,

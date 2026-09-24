@@ -23,7 +23,7 @@ defmodule Cyfr.Test.OpusService do
   (`mix cyfr.bench.step`) reaches it directly. A test that replaces `:workers` restores what it found.
 
   `status/0` and `boot/0` ask the service over the wire, `request!/3` and
-  `start!/3` post a `Cyfr.WorkerAPI` request to the service's listener
+  `start!/3` post a `Prima.WorkerAPI` request to the service's listener
   signed as CYFR signs it, and `restart!/0` restarts the service, a new boot
   holding no attempt and a pool refilled from nothing, as an operator's
   restart does.
@@ -31,7 +31,7 @@ defmodule Cyfr.Test.OpusService do
 
   alias Cyfr.Execution.{HostListener, Keys, WorkerClient}
   alias Cyfr.Test.TwoServices
-  alias Cyfr.{WorkerAPI, WorkerAuth, WorkerWire}
+  alias Prima.{WorkerAPI, WorkerAuth, WorkerWire}
 
   # The service is a sibling application, not a dependency: CYFR names it
   # here as the suite's, never in its own code.
@@ -46,9 +46,9 @@ defmodule Cyfr.Test.OpusService do
   @doc """
   Point Opus at the running host listener — through the suite's wire
   unless `proxy: false` — and CYFR at Opus's listener. Answers the
-  service's endpoint (`t:Cyfr.WorkerAPI.endpoint/0`).
+  service's endpoint (`t:Prima.WorkerAPI.endpoint/0`).
   """
-  @spec wire!(keyword()) :: Cyfr.WorkerAPI.endpoint()
+  @spec wire!(keyword()) :: Prima.WorkerAPI.endpoint()
   def wire!(opts \\ []) do
     unless Process.whereis(Opus.Supervisor),
       do: raise("the Opus worker service is not running: run the suite from the umbrella root")
@@ -102,7 +102,7 @@ defmodule Cyfr.Test.OpusService do
   end
 
   @doc "The service's endpoint entry, running any component."
-  @spec endpoint() :: Cyfr.WorkerAPI.endpoint()
+  @spec endpoint() :: Prima.WorkerAPI.endpoint()
   def endpoint, do: %{id: @service, url: url(), components: nil}
 
   @doc "The service's status, asked over the wire by CYFR's own client."

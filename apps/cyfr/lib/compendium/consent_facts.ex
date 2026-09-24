@@ -52,14 +52,14 @@ defmodule Compendium.ConsentFacts do
     # row names its clone edges, and which roles exist decides them.
     roster =
       rows
-      |> Enum.filter(&(to_string(Cyfr.ComponentRow.field(&1, :component_type)) == agent_type()))
-      |> MapSet.new(&Cyfr.ComponentRow.field(&1, :name))
+      |> Enum.filter(&(to_string(Prima.ComponentRow.field(&1, :component_type)) == agent_type()))
+      |> MapSet.new(&Prima.ComponentRow.field(&1, :name))
 
     {:ok,
      Enum.reduce(rows, %{}, fn row, acc ->
        case shipped_digest(ctx, row, roster) do
          {:ok, digest} when is_binary(digest) ->
-           Map.put(acc, Cyfr.ComponentRow.node_key(row), digest)
+           Map.put(acc, Prima.ComponentRow.node_key(row), digest)
 
          _not_shipped ->
            acc
@@ -70,10 +70,10 @@ defmodule Compendium.ConsentFacts do
   defp agent_type, do: AgentSource.type()
 
   defp shipped_digest(ctx, row, roster) do
-    type = to_string(Cyfr.ComponentRow.field(row, :component_type))
+    type = to_string(Prima.ComponentRow.field(row, :component_type))
 
     cond do
-      type == agent_type() -> seed_agent_digest(Cyfr.ComponentRow.field(row, :name), roster)
+      type == agent_type() -> seed_agent_digest(Prima.ComponentRow.field(row, :name), roster)
       type == "tincture" -> pristine_tincture_digest(ctx, row)
       type in @wasm_types -> Provenance.shipped_release_digest(row)
       true -> :error
@@ -86,9 +86,9 @@ defmodule Compendium.ConsentFacts do
   defp seed_agent_digest(name, roster) do
     path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit(name), 1)
 
-    with {:ok, bytes} <- Arca.get(Cyfr.Actor.system(), path),
+    with {:ok, bytes} <- Arca.get(Prima.Actor.system(), path),
          {:ok, row} <- AgentSource.shipped_row(name, bytes, roster) do
-      {:ok, Cyfr.ComponentRow.field(row, :release_digest)}
+      {:ok, Prima.ComponentRow.field(row, :release_digest)}
     end
   end
 
@@ -98,16 +98,16 @@ defmodule Compendium.ConsentFacts do
     unit =
       ComponentPath.version_dir(
         "tincture",
-        Cyfr.ComponentRow.field(row, :publisher),
-        Cyfr.ComponentRow.field(row, :name),
-        Cyfr.ComponentRow.field(row, :version)
+        Prima.ComponentRow.field(row, :publisher),
+        Prima.ComponentRow.field(row, :name),
+        Prima.ComponentRow.field(row, :version)
       )
 
     actor = Context.actor(ctx)
 
     with {:ok, :shipped} <- Arca.Overlay.unit_status(actor, unit),
          {:ok, false} <- Arca.Overlay.edited?(actor, unit),
-         digest when is_binary(digest) <- Cyfr.ComponentRow.field(row, :release_digest) do
+         digest when is_binary(digest) <- Prima.ComponentRow.field(row, :release_digest) do
       {:ok, digest}
     else
       _ -> :error

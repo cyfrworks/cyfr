@@ -4,7 +4,7 @@
 #
 # Build nested_probe.wasm from src/lib.rs and Cargo.lock: the crate is laid
 # out in a scratch directory with the canonical formula Cargo.toml
-# (`Cyfr.CargoToml`) and the formula world's WIT (`wit/formula`), built
+# (`Prima.CargoToml`) and the formula world's WIT (`wit/formula`), built
 # `--locked`, and the scratch directory and the Cargo home are remapped out
 # of the paths rustc embeds, so the bytes carry nothing of where they were
 # built.
@@ -29,7 +29,7 @@ cp "$here/Cargo.lock" "$work/Cargo.lock"
 cp -R "$root/wit/formula" "$work/wit"
 
 (cd "$root" && CARGO_TOML="$work/Cargo.toml" MIX_ENV=test mix run --no-start -e \
-  'File.write!(System.fetch_env!("CARGO_TOML"), Cyfr.CargoToml.template(:formula))' >&2)
+  'File.write!(System.fetch_env!("CARGO_TOML"), Prima.CargoToml.template(:formula))' >&2)
 
 (cd "$work" && RUSTFLAGS="--remap-path-prefix=$work=/nested-probe --remap-path-prefix=$cargo_home=/cargo" \
   cargo component build --release --target wasm32-wasip2 --locked >&2)

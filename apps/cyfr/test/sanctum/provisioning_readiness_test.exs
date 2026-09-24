@@ -20,7 +20,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
   # Another attempt — another boot's — holding the estate's claim.
   defp held_elsewhere!(athanor_id) do
-    actor = %Cyfr.Actor{athanor_id: athanor_id}
+    actor = %Prima.Actor{athanor_id: athanor_id}
     {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_held", "first_need", 60_000)
     claim
   end
@@ -88,7 +88,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # reader reads it, and only a fill takes it.
     assert {:ok, %{provisioned_at: nil} = untouched} = Athanors.get(group.id)
     refute Athanors.provisioning_failure(untouched)
-    assert {:ok, current} = Claims.current(%Cyfr.Actor{athanor_id: group.id})
+    assert {:ok, current} = Claims.current(%Prima.Actor{athanor_id: group.id})
 
     assert {current.owner, current.fence, current.attempt} ==
              {held.owner, held.fence, held.attempt}
@@ -122,7 +122,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user)
     assert {:ok, %{provisioned_at: nil}} = Athanors.get(own.id)
     assert Athanors.provisioning_failure(Athanors.get(own.id) |> elem(1)) == nil
-    assert {:ok, %{fence: fence, outcome: nil}} = Claims.current(%Cyfr.Actor{athanor_id: own.id})
+    assert {:ok, %{fence: fence, outcome: nil}} = Claims.current(%Prima.Actor{athanor_id: own.id})
     assert fence == held.fence
   end
 
@@ -141,11 +141,11 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     # This suite ships no bundle, so the fill failed — under the sign-in's
     # own claim, which says so and no longer stands.
-    assert {:ok, claim} = Claims.current(%Cyfr.Actor{athanor_id: own.id})
+    assert {:ok, claim} = Claims.current(%Prima.Actor{athanor_id: own.id})
     assert claim.entry_kind == "sign_in"
     assert claim.outcome == "failed"
     assert claim.outcome_detail =~ "seed"
-    assert String.starts_with?(claim.owner, Cyfr.Boot.id() <> "/")
+    assert String.starts_with?(claim.owner, Prima.Boot.id() <> "/")
     refute Claims.live?(claim)
   end
 
@@ -167,7 +167,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # Neither claim outlives its own attempt: each is settled, and the next
     # caller takes the estate at once.
     for id <- [first.id, second.id] do
-      actor = %Cyfr.Actor{athanor_id: id}
+      actor = %Prima.Actor{athanor_id: id}
       assert {:ok, %{entry_kind: "first_need", outcome: outcome} = claim} = Claims.current(actor)
       assert outcome in ["ready", "failed"]
       refute Claims.live?(claim)
@@ -195,7 +195,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # The reader is told the fill failed, from the claim the failed attempt
     # settled — which no reader took again.
     assert Provisioning.status(ctx) == :failed
-    actor = %Cyfr.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: group.id}
     assert {:ok, %{fence: 1, outcome: "failed", entry_kind: "first_need"}} = Claims.current(actor)
 
     # A person who asks is never told to wait: the explicit verb fills now.
@@ -211,7 +211,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert Provisioning.status(ctx) == :failed
 
     # The same failure, a minute and a second ago, on the claim and the row.
-    actor = %Cyfr.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: group.id}
     {:ok, claim} = Claims.current(actor)
     long_ago = DateTime.add(DateTime.utc_now(), -61, :second)
 

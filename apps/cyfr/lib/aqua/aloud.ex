@@ -48,7 +48,7 @@ defmodule Aqua.Aloud do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Members, Users}
 
-  @agent_author Cyfr.Author.agent()
+  @agent_author Prima.Author.agent()
 
   @type error ::
           :not_a_member
@@ -179,7 +179,7 @@ defmodule Aqua.Aloud do
   # hear of the row the way they hear of the runner's own — the copy has
   # to appear on the tape it was said onto.
   defp say(source_ctx, target_ctx, source_id, target_id, row) do
-    message_id = Cyfr.UUID7.generate_id("msg")
+    message_id = Prima.UUID7.generate_id("msg")
 
     with {:ok, files} <- carry(source_ctx, source_id, row),
          {:ok, refs} <- Attachments.store(target_ctx, target_id, message_id, files) do
@@ -190,7 +190,7 @@ defmodule Aqua.Aloud do
 
       case Threads.append(Sanctum.Context.actor(target_ctx), target_id, %{
              id: message_id,
-             author: target_ctx.user_id || Cyfr.Author.system(),
+             author: target_ctx.user_id || Prima.Author.system(),
              kind: "text",
              content: row.content || "",
              payload: payload

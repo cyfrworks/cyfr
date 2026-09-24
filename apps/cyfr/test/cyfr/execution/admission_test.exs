@@ -14,8 +14,8 @@ defmodule Cyfr.Execution.AdmissionTest do
 
   require Ecto.Query
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Cyfr.Execution.Admission
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures

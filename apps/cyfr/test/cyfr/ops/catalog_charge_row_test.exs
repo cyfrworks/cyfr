@@ -12,8 +12,8 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Ops.Catalog
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Sanctum.Context
 
   @node "formula:local.charge-row"
@@ -123,10 +123,10 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
     assert Sanctum.Authority.budget(auth).in_flight == 0
 
     assert %{charged: 0} =
-             Arca.BudgetReservations.lookup(Cyfr.Actor.in_athanor(@athanor), auth.budget.id)
+             Arca.BudgetReservations.lookup(Prima.Actor.in_athanor(@athanor), auth.budget.id)
 
     assert {:ok, []} =
-             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(@athanor), auth.budget.id)
+             Arca.BudgetReservations.charges(Prima.Actor.in_athanor(@athanor), auth.budget.id)
   end
 
   test "a full reservation refuses the call and gives the slot back", %{
@@ -137,7 +137,7 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
   } do
     :ok =
       Arca.BudgetReservations.charge(
-        Cyfr.Actor.in_athanor(@athanor),
+        Prima.Actor.in_athanor(@athanor),
         auth.budget.id,
         %{charge | id: "other"},
         1
@@ -148,7 +148,7 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
     assert Sanctum.Authority.budget(auth).in_flight == 0
 
     assert {:ok, [%{id: "other"}]} =
-             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(@athanor), auth.budget.id)
+             Arca.BudgetReservations.charges(Prima.Actor.in_athanor(@athanor), auth.budget.id)
   end
 
   test "a call under the chain's attempt with no identity of its own holds a row of its own", %{
@@ -174,15 +174,15 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
 
     # Charged for the call, released after it.
     assert %{charged: 0} =
-             Arca.BudgetReservations.lookup(Cyfr.Actor.in_athanor(@athanor), auth.budget.id)
+             Arca.BudgetReservations.lookup(Prima.Actor.in_athanor(@athanor), auth.budget.id)
 
     assert {:ok, []} =
-             Arca.BudgetReservations.charges(Cyfr.Actor.in_athanor(@athanor), auth.budget.id)
+             Arca.BudgetReservations.charges(Prima.Actor.in_athanor(@athanor), auth.budget.id)
 
     # The row is the authority: a full reservation refuses the call.
     :ok =
       Arca.BudgetReservations.charge(
-        Cyfr.Actor.in_athanor(@athanor),
+        Prima.Actor.in_athanor(@athanor),
         auth.budget.id,
         %{charge | id: "other"},
         1

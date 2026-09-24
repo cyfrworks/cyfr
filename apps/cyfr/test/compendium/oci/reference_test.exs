@@ -105,7 +105,7 @@ defmodule Compendium.OCI.ReferenceTest do
 
   describe "from_component_ref/2" do
     test "builds OCI reference from ComponentRef" do
-      cref = %Cyfr.ComponentRef{
+      cref = %Prima.ComponentRef{
         type: "reagent",
         namespace: "cyfr",
         name: "data-processor",
@@ -119,7 +119,7 @@ defmodule Compendium.OCI.ReferenceTest do
     end
 
     test "builds for catalyst type" do
-      cref = %Cyfr.ComponentRef{
+      cref = %Prima.ComponentRef{
         type: "catalyst",
         namespace: "local",
         name: "claude",
@@ -131,7 +131,7 @@ defmodule Compendium.OCI.ReferenceTest do
     end
 
     test "builds for formula type" do
-      cref = %Cyfr.ComponentRef{
+      cref = %Prima.ComponentRef{
         type: "formula",
         namespace: "alice",
         name: "pipeline",
@@ -179,7 +179,7 @@ defmodule Compendium.OCI.ReferenceTest do
 
   describe "roundtrip" do
     test "ComponentRef -> OCI Reference -> ComponentRef" do
-      original = %Cyfr.ComponentRef{
+      original = %Prima.ComponentRef{
         type: "reagent",
         namespace: "cyfr",
         name: "sentiment",

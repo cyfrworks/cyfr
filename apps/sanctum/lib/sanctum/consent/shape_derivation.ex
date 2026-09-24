@@ -25,11 +25,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
   same shape.
   """
 
-  alias Cyfr.Manifest.Caps
-  alias Cyfr.Manifest.Needs
+  alias Prima.Manifest.Caps
+  alias Prima.Manifest.Needs
   alias Sanctum.Consent.Components
   alias Sanctum.Consent.ShapeDigest
-  alias Cyfr.ToolPattern
+  alias Prima.ToolPattern
 
   require Logger
 
@@ -65,7 +65,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   defp live_shape_key(%Sanctum.Context{athanor_id: athanor_id}, source_ref)
        when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref),
-       do: Arca.Cache.Keys.live_shape(Cyfr.Actor.in_athanor(athanor_id), source_ref)
+       do: Arca.Cache.Keys.live_shape(Prima.Actor.in_athanor(athanor_id), source_ref)
 
   defp live_shape_key(_ctx, _source_ref), do: nil
 
@@ -90,8 +90,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
          slots: Enum.sort(Enum.map(needs, & &1.name)),
          dependency_releases: dependency_releases(ctx, row, source_ref)
        }
-       |> Cyfr.MapUtil.put_present(:model_target, model_target(row, source_ref))
-       |> Cyfr.MapUtil.put_present(:tool_policy, tool_policy(row, source_ref))}
+       |> Prima.MapUtil.put_present(:model_target, model_target(row, source_ref))
+       |> Prima.MapUtil.put_present(:tool_policy, tool_policy(row, source_ref))}
     end
   end
 
@@ -181,7 +181,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # activation closure; `manifest_blocks/2` above keeps the narrower shape
   # its other callers read.
   defp manifest_row(ctx, source_ref) do
-    with {:ok, ref} <- Cyfr.ComponentRef.parse(source_ref),
+    with {:ok, ref} <- Prima.ComponentRef.parse(source_ref),
          {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
       manifest = manifest(row, source_ref)
 
@@ -251,7 +251,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # A manifest that does not decode declares nothing. The line names the
   # component, never the manifest's bytes.
   defp manifest(row, ref) do
-    case Cyfr.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
       {:ok, manifest} ->
         manifest
 

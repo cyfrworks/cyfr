@@ -10,7 +10,7 @@ defmodule Cyfr.Execution.WorkerWatch do
   default) the watch asks each worker service of `config :cyfr, :workers`
   for its status (`Cyfr.Execution.WorkerClient.status/1`), every entry at
   once, each poll bounded by the client. A status of the contract's shape
-  (`Cyfr.WorkerAPI.valid_status?/1`) that names the entry's configured id
+  (`Prima.WorkerAPI.valid_status?/1`) that names the entry's configured id
   is heard. Anything else is a miss for the entry: an answer the transport
   lost, a worker service it could not reach, a refusal, a status of
   another shape or one naming another service.
@@ -135,7 +135,7 @@ defmodule Cyfr.Execution.WorkerWatch do
 
   alias Arca.JobClaims
   alias Cyfr.Execution.{Attempt, Lapse, WorkerClient}
-  alias Cyfr.WorkerAPI
+  alias Prima.WorkerAPI
 
   @kind "worker_watch"
   @defaults [poll_ms: 5_000, misses: 3]
@@ -168,7 +168,7 @@ defmodule Cyfr.Execution.WorkerWatch do
   `:poll_ms` and `:misses` (default `config :cyfr, :worker_watch`, then
   5 000 and 3), `:lease_ms` (default twice the poll interval; see the
   module doc for why the width is what makes a partitioned member
-  harmless), `:owner` (default `Cyfr.Boot.id/0`) and `:name` (default
+  harmless), `:owner` (default `Prima.Boot.id/0`) and `:name` (default
   this module). `{:error, reason}` names the setting that refused the
   start.
   """
@@ -268,7 +268,7 @@ defmodule Cyfr.Execution.WorkerWatch do
   end
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -687,7 +687,7 @@ defmodule Cyfr.Execution.WorkerWatch do
          poll_ms: poll_ms,
          misses: misses,
          lease_ms: lease_ms,
-         owner: Keyword.get_lazy(opts, :owner, &Cyfr.Boot.id/0),
+         owner: Keyword.get_lazy(opts, :owner, &Prima.Boot.id/0),
          workers: workers
        }}
     end

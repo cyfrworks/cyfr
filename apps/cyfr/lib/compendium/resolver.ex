@@ -36,7 +36,7 @@ defmodule Compendium.Resolver do
   require Logger
 
   alias Sanctum.Context
-  alias Cyfr.ComponentRef
+  alias Prima.ComponentRef
 
   @type resolution_metadata :: %{
           resolved_from: String.t(),

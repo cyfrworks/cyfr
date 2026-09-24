@@ -143,9 +143,9 @@ defmodule Arca.TenantTables do
   rather than a promise of atomicity across two stores that have no shared
   transaction.
   """
-  @spec delete_all_for(Cyfr.Actor.t()) ::
+  @spec delete_all_for(Prima.Actor.t()) ::
           {:ok, %{String.t() => non_neg_integer()}} | {:error, term()}
-  def delete_all_for(%Cyfr.Actor{athanor_id: athanor_id})
+  def delete_all_for(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.TenantTables.delete_all_for", fn ->
       Arca.Repo.transaction(fn ->
@@ -172,7 +172,7 @@ defmodule Arca.TenantTables do
     end)
   end
 
-  def delete_all_for(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def delete_all_for(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   Every table the live schema says carries `athanor_id`.

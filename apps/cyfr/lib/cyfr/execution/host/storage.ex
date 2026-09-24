@@ -35,7 +35,7 @@ defmodule Cyfr.Execution.Host.Storage do
   for, and ignores any other refusal type. A denial is attributed to the
   attempt the call was checked against, under the identity it was
   admitted with, whatever the runner sent; a `secret_denied` whose name is
-  no field name (`Cyfr.HostAPI.valid_field_name?/1`) is `lost` and
+  no field name (`Prima.HostAPI.valid_field_name?/1`) is `lost` and
   audits nothing.
   """
 
@@ -85,8 +85,8 @@ defmodule Cyfr.Execution.Host.Storage do
   @type attempt :: %{
           ctx: Sanctum.Context.t(),
           admission_ctx: Sanctum.Context.t(),
-          authority: Cyfr.Authority.t(),
-          limits: Cyfr.Limits.t() | nil,
+          authority: Prima.Authority.t(),
+          limits: Prima.Limits.t() | nil,
           component_ref: String.t(),
           digest: String.t() | nil,
           audit: map(),
@@ -108,7 +108,7 @@ defmodule Cyfr.Execution.Host.Storage do
     do: {:ok, {:fetch_artifact, digest}}
 
   def operation("record_denial", %{"type" => "secret_denied", "message" => name}) do
-    if Cyfr.HostAPI.valid_field_name?(name),
+    if Prima.HostAPI.valid_field_name?(name),
       do: {:ok, {:record_denial, %{type: "secret_denied", message: name}}},
       else: {:error, :lost}
   end

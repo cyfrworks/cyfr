@@ -12,7 +12,7 @@ defmodule Sanctum.Door.Store do
   email in `CYFR_PLATFORM_ADMIN_EMAILS` — the operators can only be removed
   from that list.
 
-  The rows are `Arca.Doors`', asked as the server (`Cyfr.Actor.system/0`).
+  The rows are `Arca.Doors`', asked as the server (`Prima.Actor.system/0`).
   The door is consulted **before** a session exists, so at admission time
   there is no caller actor to pass: the question "does this server admit
   this identity?" is the server's own, whoever prompted it. An entry is a
@@ -221,7 +221,7 @@ defmodule Sanctum.Door.Store do
   # The door is asked before anyone has signed in, so there is no caller
   # actor to carry: the server asks its own question, with the platform
   # scope `Arca.Doors` gates the table on.
-  defp actor, do: Cyfr.Actor.system()
+  defp actor, do: Prima.Actor.system()
 
   defp find(kind, value), do: Doors.find(actor(), kind, value)
 

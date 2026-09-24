@@ -53,7 +53,7 @@ defmodule Emissary.Tincture.Invoke do
   defp do_run(auth_ctx, tincture, reference, input, opts) do
     route = Keyword.fetch!(opts, :route)
     method = Keyword.fetch!(opts, :method)
-    tincture_ref = Cyfr.ComponentRef.build("tincture", tincture.publisher, tincture.name)
+    tincture_ref = Prima.ComponentRef.build("tincture", tincture.publisher, tincture.name)
 
     ctx = %{Sanctum.build_tincture_context(auth_ctx, tincture) | request_id: request_id()}
 
@@ -61,8 +61,8 @@ defmodule Emissary.Tincture.Invoke do
     # and the tenant metadata with it: this ingress never runs the
     # Authenticate plug (the stamping site), and the roster exists so an
     # aggregator can filter these lines by athanor.
-    Cyfr.LoggerContext.set_request_id(ctx.request_id)
-    Cyfr.LoggerContext.set_from_context(ctx)
+    Prima.LoggerContext.set_request_id(ctx.request_id)
+    Prima.LoggerContext.set_from_context(ctx)
 
     telemetry_meta = %{
       request_id: ctx.request_id,
@@ -147,13 +147,13 @@ defmodule Emissary.Tincture.Invoke do
 
   defp finish({:error, reason}, ctx, telemetry_meta, duration_ms, _route) do
     # Sanitize structured payloads before inspect removes their field boundaries.
-    Logger.warning("[Tincture.Invoke] error: #{inspect(Cyfr.Sanitizer.sanitize(reason))}")
+    Logger.warning("[Tincture.Invoke] error: #{inspect(Prima.Sanitizer.sanitize(reason))}")
 
     # Sanitize BEFORE inspect: once flattened to a string, the sanitizer's
     # sensitive-key redaction can no longer see the map it protects.
     log_failed(
       ctx,
-      if(is_binary(reason), do: reason, else: inspect(Cyfr.Sanitizer.sanitize(reason))),
+      if(is_binary(reason), do: reason, else: inspect(Prima.Sanitizer.sanitize(reason))),
       duration_ms
     )
 
@@ -184,7 +184,7 @@ defmodule Emissary.Tincture.Invoke do
     )
   end
 
-  defp request_id, do: Cyfr.UUID7.request_id()
+  defp request_id, do: Prima.UUID7.request_id()
 
   defp route_name(:public), do: "public"
   defp route_name(_), do: "protected"

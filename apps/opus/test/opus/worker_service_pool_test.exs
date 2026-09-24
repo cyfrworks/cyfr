@@ -28,7 +28,7 @@ defmodule Opus.WorkerServicePoolTest do
 
   import Opus.Test.Wait
 
-  alias Cyfr.{RunnerControl, WorkerAPI, WorkerAuth, WorkerWire}
+  alias Prima.{RunnerControl, WorkerAPI, WorkerAuth, WorkerWire}
   alias Opus.Test.{ScriptedHost, ScriptedKeeper}
   alias Opus.WorkerService
 

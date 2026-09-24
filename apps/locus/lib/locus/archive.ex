@@ -13,7 +13,7 @@ defmodule Locus.Archive do
 
   An output archive is written by the build and is untrusted: only its
   regular files are read, each name must be a safe relative path
-  (`Cyfr.PathSafety`), and the caller bounds the bytes it hands in.
+  (`Prima.PathSafety`), and the caller bounds the bytes it hands in.
   """
 
   @doc "A tar archive of `files` (`%{relative_path => content}`), in path order."
@@ -82,7 +82,7 @@ defmodule Locus.Archive do
     Enum.reduce_while(entries, {:ok, %{}}, fn {name, content}, {:ok, acc} ->
       name = to_name(name)
 
-      case is_binary(name) and Cyfr.PathSafety.validate_relative_path(name) do
+      case is_binary(name) and Prima.PathSafety.validate_relative_path(name) do
         :ok -> {:cont, {:ok, Map.put(acc, name, content)}}
         _ -> {:halt, {:error, {:unsafe_path, inspect(name)}}}
       end

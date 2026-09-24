@@ -22,7 +22,7 @@ defmodule Locus.Config do
   | `LOCUS_BUILDS_LOG_FORMAT` | `:log_format` | `text` or `json` | `text` |
 
   `:request_key` is the key requests are verified with
-  (`Cyfr.BuilderProtocol.request_key/1`), derived once here; the
+  (`Prima.BuilderProtocol.request_key/1`), derived once here; the
   configured key itself is kept nowhere. A set variable that does not
   parse, or a missing key, refuses the boot with a message naming the
   variable. So does the control plane's configuration in the builder's
@@ -44,7 +44,7 @@ defmodule Locus.Config do
   (`Locus.Application`).
   """
 
-  alias Cyfr.EnvValue
+  alias Prima.EnvValue
 
   # 30 s under the build tool's five-minute limit on a synchronous compile,
   # so a build that exhausts its budget ends here as timed out.
@@ -114,7 +114,7 @@ defmodule Locus.Config do
          {:ok, log_format} <- log_format(getenv) do
       {:ok,
        [
-         request_key: Cyfr.BuilderProtocol.request_key(key),
+         request_key: Prima.BuilderProtocol.request_key(key),
          bind: bind || @defaults[:bind],
          port: port || @defaults[:port],
          timeout_ms: timeout_ms || @defaults[:timeout_ms],
@@ -228,15 +228,15 @@ defmodule Locus.Config do
   @spec log_level() :: Logger.level()
   def log_level, do: get(:log_level)
 
-  @doc "How the builder's log lines are written: plain text, or JSON (`Cyfr.JsonFormatter`)."
+  @doc "How the builder's log lines are written: plain text, or JSON (`Prima.JsonFormatter`)."
   @spec log_format() :: :text | :json
   def log_format, do: get(:log_format)
 
-  @doc "The `:logger` formatter `log_format/0` names: `Cyfr.JsonFormatter` for JSON, none for text."
+  @doc "The `:logger` formatter `log_format/0` names: `Prima.JsonFormatter` for JSON, none for text."
   @spec log_formatter() :: {module(), atom()} | nil
   def log_formatter do
     case log_format() do
-      :json -> {Cyfr.JsonFormatter, :format}
+      :json -> {Prima.JsonFormatter, :format}
       :text -> nil
     end
   end

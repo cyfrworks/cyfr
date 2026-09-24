@@ -21,13 +21,13 @@ defmodule Aqua.TapeSeamTest do
 
   defp files(globs) do
     globs
-    |> Enum.flat_map(&Cyfr.Test.SourceTree.files!(Path.join(@root, &1)))
+    |> Enum.flat_map(&Prima.Test.SourceTree.files!(Path.join(@root, &1)))
     |> Enum.sort()
   end
 
   defp offenders(globs, pattern) do
     for path <- files(globs),
-        {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
+        {line, n} <- path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.code_lines(),
         line =~ pattern,
         do: "#{Path.relative_to(path, @root)}:#{n}: #{String.trim(line)}"
   end

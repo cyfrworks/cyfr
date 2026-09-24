@@ -130,7 +130,7 @@ defmodule Cyfr.Ops.Annotations do
 
   @doc """
   The derived action map from a provider's atom-keyed `tools/0` definition.
-  `Cyfr.Ops.Operation` materializes it from the canonical operations.
+  `Prima.Operation` materializes it from the canonical operations.
   """
   @spec declared_actions(map()) :: %{optional(String.t()) => map()}
   def declared_actions(%{annotations: %{actions: actions}}) when is_map(actions), do: actions

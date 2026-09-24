@@ -41,7 +41,7 @@ defmodule Arca.ToolGrantStorage do
 
       row =
         attrs
-        |> Map.put_new(:id, Cyfr.UUID7.generate_id("grant"))
+        |> Map.put_new(:id, Prima.UUID7.generate_id("grant"))
         |> Map.put_new(:granted_at, DateTime.utc_now())
 
       # One transaction: the delete and the insert are two statements, and
@@ -95,9 +95,9 @@ defmodule Arca.ToolGrantStorage do
   Read whole and filtered in memory — a thread has a handful of
   grants, and one indexed read beats a query per agent per turn.
   """
-  @spec list_for_thread(Cyfr.Actor.t(), String.t()) ::
+  @spec list_for_thread(Prima.Actor.t(), String.t()) ::
           {:ok, [map()]} | {:error, term()}
-  def list_for_thread(%Cyfr.Actor{athanor_id: athanor_id}, thread_id)
+  def list_for_thread(%Prima.Actor{athanor_id: athanor_id}, thread_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
     # A read that cannot reach the store is an ERROR, never an empty list:
     # "no standing answers" would drop every deny and leave an authored
@@ -116,7 +116,7 @@ defmodule Arca.ToolGrantStorage do
     |> Arca.Data.project()
   end
 
-  def list_for_thread(%Cyfr.Actor{}, _thread_id), do: {:error, :no_athanor}
+  def list_for_thread(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
 
   # ---------------------------------------------------------------------------
   # Internal

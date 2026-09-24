@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Consent.Loader do
   @moduledoc """
-  Fail-closed construction of a root `Cyfr.Authority` from a profile's
+  Fail-closed construction of a root `Prima.Authority` from a profile's
   head consent.
 
   The checks run in a fixed order, each refusing rather than degrading:
@@ -11,7 +11,7 @@ defmodule Sanctum.Consent.Loader do
   2. head consent exists
   3. consent internal validity (pinned ⟺ non-empty version — the database
      cannot enforce it portably, so the loader is the gate)
-  4. the resolved policy blob parses (`Cyfr.Authority.Blob.parse/1`)
+  4. the resolved policy blob parses (`Prima.Authority.Blob.parse/1`)
   5. **blob/refs equality** — every bound vault reference inside the blob
      must exactly equal the consent's stored `vault_refs`; any asymmetry
      means the blob and the reverse index disagree about what was
@@ -26,7 +26,7 @@ defmodule Sanctum.Consent.Loader do
      with unequal binding digests is refused; the loader never picks
   8. the `Sanctum.Consent.Loader.Decision` table over granted vs installed
      activation
-  9. `Cyfr.Authority.root/3` — ceiling clamping happens inside
+  9. `Prima.Authority.root/3` — ceiling clamping happens inside
 
   The live side of the integrity evaluation (`live` and `live_shape_digest`)
   is supplied by the caller, because resolving installed components is
@@ -37,12 +37,12 @@ defmodule Sanctum.Consent.Loader do
 
   require Logger
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Sanctum.Consent.Loader.Decision
-  alias Cyfr.ComponentRef
+  alias Prima.ComponentRef
   alias Sanctum.Context
-  alias Cyfr.JCS
+  alias Prima.JCS
 
   @type load_error ::
           Sanctum.Consent.error()
@@ -421,7 +421,7 @@ defmodule Sanctum.Consent.Loader do
   defp local_source?(%{source_ref: source_ref}) do
     case ComponentRef.parse(source_ref) do
       {:ok, %ComponentRef{namespace: namespace}} ->
-        Cyfr.ComponentPath.local_publisher?(namespace)
+        Prima.ComponentPath.local_publisher?(namespace)
 
       _ ->
         false

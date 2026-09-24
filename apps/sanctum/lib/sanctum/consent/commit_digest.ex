@@ -22,7 +22,7 @@ defmodule Sanctum.Consent.CommitDigest do
 
   ## Policy blob
 
-  `blob_digest` hashes the resolved policy bytes enforced by `Cyfr.Authority`.
+  `blob_digest` hashes the resolved policy bytes enforced by `Prima.Authority`.
 
   Requires `blob_digest` and rejects keys outside the declared input set.
 
@@ -37,7 +37,7 @@ defmodule Sanctum.Consent.CommitDigest do
   """
 
   alias Sanctum.Consent.Normalize
-  alias Cyfr.JCS
+  alias Prima.JCS
 
   @type binding :: %{
           required(:need) => String.t(),

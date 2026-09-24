@@ -106,7 +106,7 @@ defmodule Compendium.Provisioning do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -181,10 +181,10 @@ defmodule Compendium.Provisioning do
         :ok
 
       true ->
-        logger_metadata = Cyfr.LoggerContext.capture()
+        logger_metadata = Prima.LoggerContext.capture()
 
         task_fun = fn ->
-          Cyfr.LoggerContext.restore(logger_metadata)
+          Prima.LoggerContext.restore(logger_metadata)
           fun.()
         end
 

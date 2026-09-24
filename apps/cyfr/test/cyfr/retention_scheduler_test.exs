@@ -311,7 +311,7 @@ defmodule Cyfr.RetentionSchedulerTest do
 
   # Three finished executions in an estate whose settings keep one.
   defp over_limit!(athanor_id) do
-    actor = %Cyfr.Actor{athanor_id: athanor_id, user_id: "usr_retention"}
+    actor = %Prima.Actor{athanor_id: athanor_id, user_id: "usr_retention"}
 
     {:ok, _} =
       Arca.Retention.set_settings(actor, %{"executions" => 1, "execution_days" => 10_000})

@@ -6,7 +6,7 @@ defmodule Arca.AppendParityTest do
   Append and conditional-write semantics are the same on both adapters,
   asserted with one body per case:
 
-  - an append past `Cyfr.Limits.default_max_response_size/0` is
+  - an append past `Prima.Limits.default_max_response_size/0` is
     `{:error, :object_too_large}`;
   - concurrent appends to one path serialize into a total order: every
     append that answered `:ok` is in the object once, whole, and one
@@ -28,7 +28,7 @@ defmodule Arca.AppendParityTest do
   # ---------------------------------------------------------------------------
 
   defp parity_append_ceiling(adapter, actor, dir) do
-    ceiling = Cyfr.Limits.default_max_response_size()
+    ceiling = Prima.Limits.default_max_response_size()
     path = dir ++ ["ceiling.log"]
 
     :ok = adapter.put(actor, path, :binary.copy(<<0>>, ceiling))
@@ -192,7 +192,7 @@ defmodule Arca.AppendParityTest do
     end
 
     test "the facade refuses an append past the shared ceiling, like S3 does", %{actor: actor} do
-      ceiling = Cyfr.Limits.default_max_response_size()
+      ceiling = Prima.Limits.default_max_response_size()
       path = ["data", "parity.log"]
 
       # A file already at the ceiling: the cheapest way is to write it whole

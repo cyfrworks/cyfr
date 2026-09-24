@@ -31,7 +31,7 @@ defmodule Arca.DbRescueCoverageTest do
   @tag_marker ~r/#\s*arca:db-raise-ok\s+\S/
 
   defp sources do
-    [@root, "apps/arca/lib/arca", "**/*.ex"] |> Path.join() |> Cyfr.Test.SourceTree.files!()
+    [@root, "apps/arca/lib/arca", "**/*.ex"] |> Path.join() |> Prima.Test.SourceTree.files!()
   end
 
   # Same per-function segmentation as Arca.UnscopedQuerySeamTest: heads at
@@ -69,7 +69,7 @@ defmodule Arca.DbRescueCoverageTest do
   test "every public row-plane entry that touches the repo is rescued or says why" do
     offenders =
       for path <- sources(),
-          source = Cyfr.Test.SourceTree.read(path),
+          source = Prima.Test.SourceTree.read(path),
           {line, body} <- functions(String.split(source, "\n")),
           public?(body),
           body =~ @repo_call,

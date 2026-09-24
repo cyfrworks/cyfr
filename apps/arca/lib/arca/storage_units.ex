@@ -44,7 +44,7 @@ defmodule Arca.StorageUnits do
 
   ## Tenancy
 
-  Every function takes the `Cyfr.Actor` first and scopes every query to
+  Every function takes the `Prima.Actor` first and scopes every query to
   its athanor. An actor with no athanor is refused as
   `{:error, :no_athanor}` before any query. A store that cannot answer is
   `{:error, :unavailable}`: the outcome is unknown and nothing may be
@@ -75,11 +75,11 @@ defmodule Arca.StorageUnits do
 
   @doc "A fresh revision name: time-ordered, and safe as one path segment."
   @spec new_revision() :: String.t()
-  def new_revision, do: Cyfr.UUID7.generate_id("rev")
+  def new_revision, do: Prima.UUID7.generate_id("rev")
 
   @doc "A fresh writer token."
   @spec new_writer_token() :: String.t()
-  def new_writer_token, do: Cyfr.UUID7.generate_id("wrt")
+  def new_writer_token, do: Prima.UUID7.generate_id("wrt")
 
   @doc """
   Give the unit's draft to `writer_token`, answering the row as the writer
@@ -93,9 +93,9 @@ defmodule Arca.StorageUnits do
   token holds. `{:error, :stale_writer}` when another writer's live draft
   holds the unit.
   """
-  @spec register_draft(Cyfr.Actor.t(), String.t(), String.t(), String.t()) ::
+  @spec register_draft(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
           {:ok, StorageUnit.t()} | {:error, :stale_writer} | refusal()
-  def register_draft(%Cyfr.Actor{} = actor, root, unit_key, writer_token)
+  def register_draft(%Prima.Actor{} = actor, root, unit_key, writer_token)
       when is_binary(root) and is_binary(unit_key) and is_binary(writer_token) and
              writer_token != "" do
     with {:ok, athanor} <- tenant(actor) do
@@ -112,8 +112,8 @@ defmodule Arca.StorageUnits do
   still `writer_token`, and a unit that was never committed is retired.
   Idempotent — a draft another writer has since taken is left alone.
   """
-  @spec abandon_draft(Cyfr.Actor.t(), StorageUnit.t(), String.t()) :: :ok | refusal()
-  def abandon_draft(%Cyfr.Actor{} = actor, %StorageUnit{} = unit, writer_token)
+  @spec abandon_draft(Prima.Actor.t(), StorageUnit.t(), String.t()) :: :ok | refusal()
+  def abandon_draft(%Prima.Actor{} = actor, %StorageUnit{} = unit, writer_token)
       when is_binary(writer_token) do
     with {:ok, athanor} <- tenant(actor) do
       rescuing_db("abandon_draft", fn -> release_draft(athanor, unit.id, writer_token) end)
@@ -126,9 +126,9 @@ defmodule Arca.StorageUnits do
   prefix's in-progress marker before its first upload. A unit of another
   athanor is `{:error, :missing_unit}`.
   """
-  @spec stage_prefix(Cyfr.Actor.t(), StorageUnit.t(), String.t()) ::
+  @spec stage_prefix(Prima.Actor.t(), StorageUnit.t(), String.t()) ::
           {:ok, Arca.Storage.path()} | {:error, :missing_unit | :no_athanor}
-  def stage_prefix(%Cyfr.Actor{} = actor, %StorageUnit{} = unit, revision)
+  def stage_prefix(%Prima.Actor{} = actor, %StorageUnit{} = unit, revision)
       when is_binary(revision) do
     with {:ok, athanor} <- tenant(actor),
          :ok <- owned(athanor, unit) do
@@ -146,9 +146,9 @@ defmodule Arca.StorageUnits do
   is no longer the writer's, `:missing_unit` for a row that is absent,
   retired or another athanor's.
   """
-  @spec commit(Cyfr.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
+  @spec commit(Prima.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
           StorageUnit.commit_result() | {:error, :no_athanor}
-  def commit(%Cyfr.Actor{} = actor, %StorageUnit{} = unit, expected_revision, writer_token, identity) do
+  def commit(%Prima.Actor{} = actor, %StorageUnit{} = unit, expected_revision, writer_token, identity) do
     case stamped_commit(actor, unit, expected_revision, writer_token, identity) do
       {:committed, _generation} -> :committed
       {:error, _} = refusal -> refusal
@@ -160,11 +160,11 @@ defmodule Arca.StorageUnits do
   the unit — the one `Arca.StorageProjectionChanges.mark_ready/5` is
   handed once the committed revision is served.
   """
-  @spec stamped_commit(Cyfr.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
+  @spec stamped_commit(Prima.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
           {:committed, pos_integer()}
           | {:error, :stale_revision | :stale_writer | :missing_unit | :unavailable | :no_athanor}
   def stamped_commit(
-        %Cyfr.Actor{} = actor,
+        %Prima.Actor{} = actor,
         %StorageUnit{} = unit,
         expected_revision,
         writer_token,
@@ -185,9 +185,9 @@ defmodule Arca.StorageUnits do
   operation. A draft never committed and a retired unit are
   `{:error, :not_found}`: readers see no unit.
   """
-  @spec current(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec current(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
-  def current(%Cyfr.Actor{} = actor, root, unit_key)
+  def current(%Prima.Actor{} = actor, root, unit_key)
       when is_binary(root) and is_binary(unit_key) do
     with {:ok, athanor} <- tenant(actor) do
       rescuing_db("current", fn ->
@@ -201,9 +201,9 @@ defmodule Arca.StorageUnits do
   end
 
   @doc "Every committed pointer under a root, by unit key — the batch form of `current/3`."
-  @spec current_under(Cyfr.Actor.t(), String.t()) ::
+  @spec current_under(Prima.Actor.t(), String.t()) ::
           {:ok, %{String.t() => map()}} | refusal()
-  def current_under(%Cyfr.Actor{} = actor, root) when is_binary(root) do
+  def current_under(%Prima.Actor{} = actor, root) when is_binary(root) do
     with {:ok, athanor} <- tenant(actor) do
       rescuing_db("current_under", fn -> {:ok, committed_under(athanor, root)} end)
     end
@@ -216,8 +216,8 @@ defmodule Arca.StorageUnits do
   journal's sake. `{:error, :not_found}` for a unit with no row or one
   already retired.
   """
-  @spec retire(Cyfr.Actor.t(), String.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
-  def retire(%Cyfr.Actor{} = actor, root, unit_key) do
+  @spec retire(Prima.Actor.t(), String.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
+  def retire(%Prima.Actor{} = actor, root, unit_key) do
     case stamped_retire(actor, root, unit_key) do
       {:retired, _generation} -> :ok
       {:not_found, _generation} -> {:error, :not_found}
@@ -233,9 +233,9 @@ defmodule Arca.StorageUnits do
   The deleter marks the tombstone ready once the tenant delete returns
   (`Arca.StorageProjectionChanges.mark_ready/5`, revision nil).
   """
-  @spec stamped_retire(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec stamped_retire(Prima.Actor.t(), String.t(), String.t()) ::
           {:retired | :not_found, pos_integer()} | refusal()
-  def stamped_retire(%Cyfr.Actor{} = actor, root, unit_key)
+  def stamped_retire(%Prima.Actor{} = actor, root, unit_key)
       when is_binary(root) and is_binary(unit_key) do
     with {:ok, athanor} <- tenant(actor) do
       answer =
@@ -271,9 +271,9 @@ defmodule Arca.StorageUnits do
   tell a committed revision from a loser's staging. `{:error, :not_found}`
   for a unit with no row; a retired unit keeps its journal.
   """
-  @spec journal(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec journal(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, [map()]} | {:error, :not_found} | refusal()
-  def journal(%Cyfr.Actor{} = actor, root, unit_key)
+  def journal(%Prima.Actor{} = actor, root, unit_key)
       when is_binary(root) and is_binary(unit_key) do
     with {:ok, athanor} <- tenant(actor) do
       rescuing_db("journal", fn ->
@@ -291,8 +291,8 @@ defmodule Arca.StorageUnits do
   # ---------------------------------------------------------------------------
 
   # The refusal that precedes every query: no athanor, no rows.
-  defp tenant(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
-  defp tenant(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  defp tenant(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
+  defp tenant(%Prima.Actor{}), do: {:error, :no_athanor}
 
   # A row handed back by a caller is still checked against the actor: a
   # struct is not proof of whose unit it is.
@@ -326,7 +326,7 @@ defmodule Arca.StorageUnits do
     now = DateTime.utc_now()
 
     row = %{
-      id: Cyfr.UUID7.generate_id("unit"),
+      id: Prima.UUID7.generate_id("unit"),
       athanor_id: athanor,
       root: root,
       unit_key: unit_key,
@@ -496,7 +496,7 @@ defmodule Arca.StorageUnits do
   defp append_journal!(athanor, id, expected_revision, identity, now) do
     %StorageCommit{}
     |> StorageCommit.changeset(%{
-      id: Cyfr.UUID7.generate_id("cmt"),
+      id: Prima.UUID7.generate_id("cmt"),
       athanor_id: athanor,
       storage_unit_id: id,
       prior_revision: expected_revision,

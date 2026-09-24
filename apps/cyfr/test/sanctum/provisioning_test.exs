@@ -16,7 +16,7 @@ defmodule Sanctum.ProvisioningTest do
 
   # Another attempt — another boot's — holding the estate's claim.
   defp held_elsewhere!(athanor_id, entry_kind \\ "first_need") do
-    actor = %Cyfr.Actor{athanor_id: athanor_id}
+    actor = %Prima.Actor{athanor_id: athanor_id}
     {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_held", entry_kind, 60_000)
     claim
   end
@@ -115,13 +115,13 @@ defmodule Sanctum.ProvisioningTest do
     assert row.name == "foo"
 
     {:ok, [profile]} =
-      Arca.ProfileStorage.list_for_source(Cyfr.Actor.in_athanor(group.id), "catalyst:local.foo")
+      Arca.ProfileStorage.list_for_source(Prima.Actor.in_athanor(group.id), "catalyst:local.foo")
 
     assert profile.kind == "owner"
 
     # the mint is attributed to the person who created the group
     {:ok, consent, _refs} =
-      Arca.ConsentStorage.get_head(Cyfr.Actor.in_athanor(group.id), profile.id)
+      Arca.ConsentStorage.get_head(Prima.Actor.in_athanor(group.id), profile.id)
 
     assert consent.granted_by == ctx.user_id
 
@@ -282,7 +282,10 @@ defmodule Sanctum.ProvisioningTest do
     assert Enum.any?(rows, &(&1.name == "fresh"))
 
     {:ok, [profile]} =
-      Arca.ProfileStorage.list_for_source(Cyfr.Actor.in_athanor(group.id), "catalyst:local.fresh")
+      Arca.ProfileStorage.list_for_source(
+        Prima.Actor.in_athanor(group.id),
+        "catalyst:local.fresh"
+      )
 
     assert profile.kind == "owner"
   end
@@ -325,7 +328,7 @@ defmodule Sanctum.ProvisioningTest do
 
     # The holder's claim is as it was, and once it lets go the install runs
     # — and gives the claim back with no verdict on readiness.
-    actor = %Cyfr.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: group.id}
     assert {:ok, %{outcome: nil, fence: fence}} = Claims.current(actor)
     assert fence == held.fence
     :ok = Claims.release(actor, held.owner, held.fence)
@@ -361,7 +364,7 @@ defmodule Sanctum.ProvisioningTest do
     assert group.provisioned_at
 
     {:ok, [profile]} =
-      Arca.ProfileStorage.list_for_source(Cyfr.Actor.in_athanor(group.id), "catalyst:local.foo")
+      Arca.ProfileStorage.list_for_source(Prima.Actor.in_athanor(group.id), "catalyst:local.foo")
 
     assert profile.kind == "owner"
   end
@@ -387,7 +390,7 @@ defmodule Sanctum.ProvisioningTest do
     refute Athanors.provisioning_failure(group)
 
     {:ok, [profile]} =
-      Arca.ProfileStorage.list_for_source(Cyfr.Actor.in_athanor(group.id), "catalyst:local.foo")
+      Arca.ProfileStorage.list_for_source(Prima.Actor.in_athanor(group.id), "catalyst:local.foo")
 
     assert profile.kind == "owner"
   end
@@ -478,9 +481,9 @@ defmodule Sanctum.ProvisioningTest do
     # An attempt that lost its lease mid-fill, and its successor: the first
     # claim's lease runs out, the second takes the estate at the next fence.
     defp overtaken!(athanor_id) do
-      actor = %Cyfr.Actor{athanor_id: athanor_id}
+      actor = %Prima.Actor{athanor_id: athanor_id}
       {:ok, stale} = Claims.claim(actor, "boot_elsewhere/own_stale", "first_need", 1)
-      Cyfr.Test.Wait.wait_until(fn -> not Claims.live?(stale) end, 2_000, "the lease to run out")
+      Prima.Test.Wait.wait_until(fn -> not Claims.live?(stale) end, 2_000, "the lease to run out")
       {:ok, successor} = Claims.claim(actor, "boot_elsewhere/own_successor", "provision", 60_000)
       assert successor.fence == stale.fence + 1
       {actor, stale, successor}
@@ -538,7 +541,7 @@ defmodule Sanctum.ProvisioningTest do
 
       assert {:ok, []} =
                Arca.ProfileStorage.list_for_source(
-                 Cyfr.Actor.in_athanor(group.id),
+                 Prima.Actor.in_athanor(group.id),
                  "catalyst:local.foo"
                )
 
@@ -547,7 +550,7 @@ defmodule Sanctum.ProvisioningTest do
 
       assert {:ok, [_profile]} =
                Arca.ProfileStorage.list_for_source(
-                 Cyfr.Actor.in_athanor(group.id),
+                 Prima.Actor.in_athanor(group.id),
                  "catalyst:local.foo"
                )
     end
@@ -564,12 +567,12 @@ defmodule Sanctum.ProvisioningTest do
       # the fence last thing before it runs.
       assert {:error, :claim_lost} = Provisioning.holding(group.id, stale)
       assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
-      assert {:ok, []} = Arca.AgentStorage.list(Cyfr.Actor.in_athanor(group.id))
+      assert {:ok, []} = Arca.AgentStorage.list(Prima.Actor.in_athanor(group.id))
 
       # The successor's index lands: the tree the seed lays is the same one.
       assert :ok = Provisioning.holding(group.id, successor)
       assert {:ok, %{provisioned_at: %DateTime{}}} = Filler.fill(successor, group, in_group)
-      assert {:ok, [_ | _]} = Arca.AgentStorage.list(Cyfr.Actor.in_athanor(group.id))
+      assert {:ok, [_ | _]} = Arca.AgentStorage.list(Prima.Actor.in_athanor(group.id))
     end
 
     test "records no failure over its successor's" do
@@ -610,7 +613,7 @@ defmodule Sanctum.ProvisioningTest do
 
     # Something for the sync to heal, and another attempt holding the estate.
     :ok = Arca.delete_tree(Sanctum.Context.actor(in_group), ["notes"])
-    actor = %Cyfr.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: group.id}
     held = held_elsewhere!(group.id, "install_shipped")
 
     sync = Task.async(fn -> Filler.sync_seeds() end)
@@ -642,7 +645,7 @@ defmodule Sanctum.ProvisioningTest do
     ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|init-#{n}"}
     {:ok, group} = Athanors.create_group(ctx.user_id, "Init #{n}")
     in_group = %{ctx | athanor_id: group.id}
-    actor = %Cyfr.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: group.id}
 
     # A claim that reads `ready` on an estate the row does not mark filled
     # makes nothing ready.
@@ -678,7 +681,7 @@ defmodule Sanctum.ProvisioningTest do
     # module in the standalone Sanctum suite — and the seam between the
     # halves would be a call rather than an announcement.
     path = Path.expand("../../../sanctum/lib/sanctum/provisioning.ex", __DIR__)
-    named = Cyfr.Test.SourceTree.aliases(path)
+    named = Prima.Test.SourceTree.aliases(path)
     file = Path.relative_to_cwd(path)
 
     # The scan read code before its answer is believed: a moved file would
@@ -686,7 +689,7 @@ defmodule Sanctum.ProvisioningTest do
     assert length(named) > 20
 
     contracts =
-      :cyfr_contracts
+      :prima
       |> Application.app_dir("ebin")
       |> Path.join("*.beam")
       |> Path.wildcard()

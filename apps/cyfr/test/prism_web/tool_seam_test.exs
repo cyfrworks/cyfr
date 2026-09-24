@@ -21,11 +21,11 @@ defmodule PrismWeb.ToolSeamTest do
     offenders =
       root()
       |> Path.join("apps/cyfr/lib/prism_web/**/*.ex")
-      |> Cyfr.Test.SourceTree.files!()
+      |> Prima.Test.SourceTree.files!()
       |> Enum.reject(&String.ends_with?(&1, "/ops.ex"))
       |> Enum.flat_map(fn path ->
         path
-        |> Cyfr.Test.SourceTree.read()
+        |> Prima.Test.SourceTree.read()
         |> String.split("\n")
         |> Enum.with_index(1)
         |> Enum.filter(fn {line, _n} ->
@@ -146,10 +146,10 @@ defmodule PrismWeb.ToolSeamTest do
     found =
       root()
       |> Path.join("apps/cyfr/lib/prism_web/**/*.ex")
-      |> Cyfr.Test.SourceTree.files!()
+      |> Prima.Test.SourceTree.files!()
       |> Enum.flat_map(fn path ->
         rel = Path.relative_to(path, root())
-        source = Cyfr.Test.SourceTree.read(path)
+        source = Prima.Test.SourceTree.read(path)
         aliases = aliases(source)
 
         source
@@ -208,7 +208,7 @@ defmodule PrismWeb.ToolSeamTest do
 
   test "the chat's turn writes go through the thread tool" do
     for {rel, verbs} <- @chat_verbs, verb <- verbs do
-      source = Cyfr.Test.SourceTree.read(Path.join(root(), rel))
+      source = Prima.Test.SourceTree.read(Path.join(root(), rel))
 
       assert source =~ ~s(call_tool(#{if rel =~ "chat_live", do: "focus", else: ""}) or
                source =~ "thread/#{verb}",
@@ -219,7 +219,7 @@ defmodule PrismWeb.ToolSeamTest do
     end
 
     pane =
-      Cyfr.Test.SourceTree.read(
+      Prima.Test.SourceTree.read(
         Path.join(root(), "apps/cyfr/lib/prism_web/live/thread_pane_live.ex")
       )
 

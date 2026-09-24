@@ -273,7 +273,7 @@ defmodule Cyfr.StackShapeTest do
     assert File.regular?(Path.join(@root, "seed/aqua/#{soul}"))
     assert File.dir?(Path.join(@root, "seed/aqua/#{roles}"))
 
-    # WITSource embeds the WIT tree at build time; runtime images need no wit directory.
+    # Prima.WIT embeds the WIT tree at build time; runtime images need no wit directory.
     stages = String.split(dockerfile, ~r/^FROM /m)
     builder = Enum.find(stages, &String.contains?(&1, "AS builder"))
     runner = Enum.find(stages, &String.contains?(&1, "AS runner"))

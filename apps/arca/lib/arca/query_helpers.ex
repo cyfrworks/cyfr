@@ -54,13 +54,13 @@ defmodule Arca.QueryHelpers do
   ONE definition so record readers (executions, MCP logs, policy logs)
   cannot drift in how they spell the bypass.
 
-  `scope` is not a wire member of `Cyfr.Actor`, so nothing a worker
+  `scope` is not a wire member of `Prima.Actor`, so nothing a worker
   returns can claim it.
   """
-  @spec where_tenant_unless_platform(Ecto.Queryable.t(), Cyfr.Actor.t()) :: Ecto.Query.t()
-  def where_tenant_unless_platform(query, %Cyfr.Actor{scope: :platform}), do: query
+  @spec where_tenant_unless_platform(Ecto.Queryable.t(), Prima.Actor.t()) :: Ecto.Query.t()
+  def where_tenant_unless_platform(query, %Prima.Actor{scope: :platform}), do: query
 
-  def where_tenant_unless_platform(query, %Cyfr.Actor{} = actor),
+  def where_tenant_unless_platform(query, %Prima.Actor{} = actor),
     do: where_tenant(query, actor)
 
   @doc """
@@ -91,8 +91,8 @@ defmodule Arca.QueryHelpers do
   `where_tenant_unless_platform/2`; a platform task working inside one
   athanor carries that athanor on its actor.
   """
-  @spec where_tenant(Ecto.Queryable.t(), Cyfr.Actor.t()) :: Ecto.Query.t()
-  def where_tenant(query, %Cyfr.Actor{athanor_id: athanor_id} = actor) do
+  @spec where_tenant(Ecto.Queryable.t(), Prima.Actor.t()) :: Ecto.Query.t()
+  def where_tenant(query, %Prima.Actor{athanor_id: athanor_id} = actor) do
     if athanor_id in [nil, ""] do
       raise ArgumentError,
             "Arca.QueryHelpers.where_tenant/2: a resolved athanor_id is required " <>
@@ -107,8 +107,8 @@ defmodule Arca.QueryHelpers do
   Stamps the actor's athanor into write attributes. Raises for an
   unresolved actor, using the same backstop as `where_tenant/2`.
   """
-  @spec stamp_tenant!(Cyfr.Actor.t(), map()) :: map()
-  def stamp_tenant!(%Cyfr.Actor{athanor_id: athanor_id} = actor, attrs)
+  @spec stamp_tenant!(Prima.Actor.t(), map()) :: map()
+  def stamp_tenant!(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
       when is_map(attrs) do
     if athanor_id in [nil, ""] do
       raise ArgumentError,

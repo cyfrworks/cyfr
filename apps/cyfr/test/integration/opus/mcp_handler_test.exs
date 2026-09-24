@@ -18,8 +18,8 @@ defmodule Opus.FormulaHandlerMcpTest do
 
   alias Opus.FormulaHandler
   alias Opus.Test.FormulaHost
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
 
   @mcp_node "formula:local.mcp-root"
 

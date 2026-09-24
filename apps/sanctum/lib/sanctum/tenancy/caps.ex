@@ -32,13 +32,13 @@ defmodule Sanctum.Tenancy.Caps do
 
   ## The port
 
-  This module is the one implementation of `Cyfr.Caps`, the contract the
+  This module is the one implementation of `Prima.Caps`, the contract the
   layers below the tenancy domain ask their ceilings through. The port's
-  two callbacks take the `%Cyfr.Actor{}` first — `check_counted/3` and
+  two callbacks take the `%Prima.Actor{}` first — `check_counted/3` and
   `check_storage/2` — because a cap bounds what one tenant or one person
   holds, and which one that is comes from the authenticated caller and
   never from an argument. `Cyfr.Application` installs this module at
-  boot; until it does, `Cyfr.Caps.impl/0` raises rather than reading an
+  boot; until it does, `Prima.Caps.impl/0` raises rather than reading an
   uninstalled port as a server with no caps.
 
   `check_counted/2` is the tenancy domain's own spelling, for the mints
@@ -57,7 +57,7 @@ defmodule Sanctum.Tenancy.Caps do
   would serialize all tenant writes to close that sliver.
   """
 
-  @behaviour Cyfr.Caps
+  @behaviour Prima.Caps
 
   @type key ::
           :max_athanors
@@ -137,7 +137,7 @@ defmodule Sanctum.Tenancy.Caps do
   end
 
   @doc """
-  `Cyfr.Caps.check_counted/3`: the port's door onto `check_counted/2`.
+  `Prima.Caps.check_counted/3`: the port's door onto `check_counted/2`.
 
   The actor is matched and not otherwise read. What a counted cap bounds
   is counted by the caller's own `count` — Arca counts an athanor's
@@ -146,9 +146,9 @@ defmodule Sanctum.Tenancy.Caps do
   Matching the actor is what keeps a caller from passing a bare key or a
   context in its place.
   """
-  @impl Cyfr.Caps
-  @spec check_counted(Cyfr.Actor.t(), key(), Cyfr.Caps.count()) :: Cyfr.Caps.counted_decision()
-  def check_counted(%Cyfr.Actor{}, key, count) when key in @keys and is_function(count, 0),
+  @impl Prima.Caps
+  @spec check_counted(Prima.Actor.t(), key(), Prima.Caps.count()) :: Prima.Caps.counted_decision()
+  def check_counted(%Prima.Actor{}, key, count) when key in @keys and is_function(count, 0),
     do: check_counted(key, count)
 
   # `Arca` keeps this current without re-walking: every successful tenant
@@ -180,14 +180,14 @@ defmodule Sanctum.Tenancy.Caps do
   (bytes bumped on writes,
   dropped on deletes), so the hot path pays no walk at all.
   """
-  @impl Cyfr.Caps
-  @spec check_storage(Cyfr.Actor.t(), non_neg_integer()) :: Cyfr.Caps.storage_decision()
+  @impl Prima.Caps
+  @spec check_storage(Prima.Actor.t(), non_neg_integer()) :: Prima.Caps.storage_decision()
   # Read-then-write without a lock (the cached total, then the caller's
   # write): N concurrent writes can each pass before any lands, so the cap
   # can overshoot by at most (per-tenant execution slots × max write size)
-  # — bounded and accepted, the same call Cyfr.RateLimiter documents for
+  # — bounded and accepted, the same call Prima.RateLimiter documents for
   # its ingress buckets.
-  def check_storage(%Cyfr.Actor{} = actor, incoming) when is_integer(incoming) do
+  def check_storage(%Prima.Actor{} = actor, incoming) when is_integer(incoming) do
     case get(:athanor_storage_bytes) do
       nil ->
         :ok
@@ -210,7 +210,7 @@ defmodule Sanctum.Tenancy.Caps do
   # this cap's own: a walk that cannot answer must refuse the write —
   # treating an unreadable tree as empty would let writes march past the
   # ceiling. The failure is never cached: the next check walks again.
-  defp athanor_bytes(%Cyfr.Actor{athanor_id: id} = actor) when is_binary(id) and id != "" do
+  defp athanor_bytes(%Prima.Actor{athanor_id: id} = actor) when is_binary(id) and id != "" do
     case Arca.Usage.athanor_bytes(actor) do
       {:ok, bytes} ->
         {:ok, bytes}
@@ -233,5 +233,5 @@ defmodule Sanctum.Tenancy.Caps do
   # admit the write, which is the refusal-as-silence the tenancy rules
   # forbid. Nothing reaches it through the `Arca` gate, which refuses such
   # an actor first; it is the backstop for a direct caller.
-  defp athanor_bytes(%Cyfr.Actor{}), do: {:error, :storage_unverifiable}
+  defp athanor_bytes(%Prima.Actor{}), do: {:error, :storage_unverifiable}
 end

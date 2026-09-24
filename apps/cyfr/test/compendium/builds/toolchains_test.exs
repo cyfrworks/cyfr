@@ -12,7 +12,7 @@ defmodule Compendium.Builds.ToolchainsTest do
   use ExUnit.Case, async: false
 
   alias Compendium.Builds.Provider
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
   alias Cyfr.Test.ScriptedBuilder
 
   setup do

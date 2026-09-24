@@ -4,8 +4,9 @@
 defmodule Cyfr.Ops.TypedDispatchTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.{Arg, Catalog, Operation, Visibility}
-  alias Cyfr.Test.AuthorityFixtures
+  alias Cyfr.Ops.{Catalog, Visibility}
+  alias Prima.{Arg, Operation}
+  alias Prima.Test.AuthorityFixtures
   alias Emissary.MCP.{Message, Router}
 
   defmodule Echo do
@@ -70,10 +71,12 @@ defmodule Cyfr.Ops.TypedDispatchTest do
         "typed_probe.admin_echo"
       ])
 
-    {:ok, blob} = Cyfr.Authority.Blob.parse(graph)
+    {:ok, blob} = Prima.Authority.Blob.parse(graph)
 
     {:ok, authority} =
-      Cyfr.Authority.root(AuthorityFixtures.profile(), blob, ceiling: AuthorityFixtures.ceiling())
+      Prima.Authority.root(AuthorityFixtures.profile(), blob,
+        ceiling: AuthorityFixtures.ceiling()
+      )
 
     {:ok, ctx: Sanctum.TestContext.local(), authority: authority}
   end
@@ -131,7 +134,7 @@ defmodule Cyfr.Ops.TypedDispatchTest do
       assert {:error, reason} = PrismWeb.Ops.call_tool(ctx, "typed_probe", args)
       assert {:error, ^reason} = chain(ctx, args, authority)
       assert {:error, :invalid_params, message} = wire(ctx, args)
-      assert message == Cyfr.Refusal.message(reason)
+      assert message == Prima.Refusal.message(reason)
     end
   end
 

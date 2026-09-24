@@ -55,7 +55,7 @@ defmodule Cyfr.Execution.ArchiveWatch do
   end
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

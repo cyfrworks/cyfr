@@ -58,12 +58,12 @@ defmodule Cyfr.IngressInventoryTest do
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp code(path) do
-    path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines() |> Enum.join("\n")
+    path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.lines() |> Enum.join("\n")
   end
 
   test "every execution entry point is a classified ingress" do
     found =
-      Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
+      Prima.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
       |> Enum.filter(fn path ->
         code = code(path)
         Enum.any?(@patterns, &String.contains?(code, &1))

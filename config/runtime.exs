@@ -50,7 +50,7 @@ if config_env() != :test do
   # A switch is `on`/`off` (or true/false, yes/no, 1/0); an unrecognised
   # spelling refuses the boot rather than reading as the default.
   env_bool = fn key, default ->
-    case Cyfr.EnvValue.switch(getenv, key, default) do
+    case Prima.EnvValue.switch(getenv, key, default) do
       {:ok, value} -> value
       {:error, message} -> raise "[Cyfr] FATAL: #{message}"
     end
@@ -79,7 +79,7 @@ if config_env() != :test do
     # Only the format changes. `Config` deep-merges keyword values, so the
     # `metadata:` roster set in config.exs carries through — repeating it
     # here is a second copy that would go stale the first time one moved.
-    config :logger, :default_formatter, format: {Cyfr.JsonFormatter, :format}
+    config :logger, :default_formatter, format: {Prima.JsonFormatter, :format}
   end
 
   # Which side of the worker wire this boot is: the `cyfr` release and a
@@ -103,7 +103,7 @@ if config_env() != :test do
 
   opus_boot? = opus_role == :service
 
-  # The root key the execution workers' keys derive from (`Cyfr.WorkerAuth`):
+  # The root key the execution workers' keys derive from (`Prima.WorkerAuth`):
   # 32 random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), the
   # one secret `mix cyfr.worker.key <service_id>` derives a worker service's
   # key from. A malformed key refuses the boot. Unset, a development boot
@@ -127,7 +127,7 @@ if config_env() != :test do
           nil
 
         text ->
-          case Cyfr.WorkerAuth.decode_root(text) do
+          case Prima.WorkerAuth.decode_root(text) do
             {:ok, root} ->
               root
 
@@ -167,7 +167,7 @@ if config_env() != :test do
     opus_service_key =
       env_str.("OPUS_SERVICE_KEY", nil) ||
         with true <- release_name == nil,
-             {:ok, key} <- Cyfr.WorkerAuth.worker_key(worker_root, opus_service_id) do
+             {:ok, key} <- Prima.WorkerAuth.worker_key(worker_root, opus_service_id) do
           Base.encode16(key, case: :lower)
         else
           _ -> nil
@@ -225,20 +225,20 @@ if config_env() != :test do
           raise "[Cyfr] FATAL: OPUS_KEEPER=#{inspect(other)} names no keeper; use spawn or direct"
       end
 
-    # A bound is read strictly (`Cyfr.EnvValue`): a set value that is not a
+    # A bound is read strictly (`Prima.EnvValue`): a set value that is not a
     # whole number in its range refuses the boot naming it.
     opus_bound = fn key, range, unit ->
-      case Cyfr.EnvValue.whole_number(getenv, key, range, unit) do
+      case Prima.EnvValue.whole_number(getenv, key, range, unit) do
         {:ok, value} -> value
         {:error, message} -> raise "[Cyfr] FATAL: #{message}"
       end
     end
 
-    # A memory bound is a byte count (`Cyfr.EnvValue.bytes/3`), whose range
+    # A memory bound is a byte count (`Prima.EnvValue.bytes/3`), whose range
     # reaches past what the bound reader above takes: 1 TiB is thirteen
     # digits.
     opus_bytes = fn key ->
-      case Cyfr.EnvValue.bytes(getenv, key, Opus.Settings.runner_memory_range()) do
+      case Prima.EnvValue.bytes(getenv, key, Opus.Settings.runner_memory_range()) do
         {:ok, value} -> value
         {:error, message} -> raise "[Cyfr] FATAL: #{message}"
       end
@@ -318,7 +318,7 @@ if config_env() != :test do
                 nil
 
               text ->
-                case Cyfr.BridgeAuth.decode_root(text) do
+                case Prima.BridgeAuth.decode_root(text) do
                   {:ok, root} ->
                     root
 
@@ -366,7 +366,7 @@ if config_env() != :test do
     # reach the bridge are retired within one lease. Anything but a whole
     # number in the range refuses the boot.
     mcp_bridge_ms = fn key, range ->
-      case Cyfr.EnvValue.milliseconds(getenv, key, range) do
+      case Prima.EnvValue.milliseconds(getenv, key, range) do
         {:ok, ms} -> ms
         {:error, message} -> raise "[Cyfr] FATAL: #{message}"
       end

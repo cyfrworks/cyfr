@@ -7,7 +7,7 @@ defmodule PrismWeb.ChatLiveTest do
   # closed. Driven against the real loop and a scripted model.
   use PrismWeb.ConnCase, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Arca.ThreadStorage, as: Threads
 
@@ -620,7 +620,7 @@ defmodule PrismWeb.ChatLiveTest do
     # The fill's claim is held: the estate stays unfilled while the pane sends.
     {:ok, _held} =
       Arca.ProvisioningClaims.claim(
-        %Cyfr.Actor{athanor_id: group.id},
+        %Prima.Actor{athanor_id: group.id},
         "boot_elsewhere/own_held",
         "first_need",
         60_000
@@ -717,7 +717,7 @@ defmodule PrismWeb.ChatLiveTest do
     # database without the sandbox connection the test owns.
     {:ok, _held} =
       Arca.ProvisioningClaims.claim(
-        %Cyfr.Actor{athanor_id: group.id},
+        %Prima.Actor{athanor_id: group.id},
         "boot_elsewhere/own_held",
         "first_need",
         60_000
@@ -860,13 +860,13 @@ defmodule PrismWeb.ChatLiveTest do
     assert render_click(view, "follow_thread", %{"id" => foreign.id}) =~ "That thread isn"
 
     refute Arca.ThreadSubscriptionStorage.follows?(
-             Cyfr.Actor.in_athanor(estate().id),
+             Prima.Actor.in_athanor(estate().id),
              foreign.id,
              alice.user_id
            )
 
     refute Arca.ThreadSubscriptionStorage.follows?(
-             Cyfr.Actor.in_athanor(group.id),
+             Prima.Actor.in_athanor(group.id),
              foreign.id,
              alice.user_id
            )

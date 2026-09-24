@@ -17,18 +17,18 @@ defmodule Cyfr.Application do
     # The storage and counted cap port's one write, before every domain
     # this application starts. A capped write asks it on the first tenant
     # byte, and an uninstalled port refuses rather than reading as a
-    # server with no ceilings (`Cyfr.Caps.NotInstalledError`).
-    Cyfr.Caps.install!(Sanctum.Tenancy.Caps)
+    # server with no ceilings (`Prima.Caps.NotInstalledError`).
+    Prima.Caps.install!(Sanctum.Tenancy.Caps)
 
     # One redaction vocabulary: Phoenix's inbound request-param filter is
     # fed from its owner (config/config.exs deliberately does not spell a
     # list — config files run before this module exists).
-    Application.put_env(:phoenix, :filter_parameters, Cyfr.Sanitizer.filter_parameters())
+    Application.put_env(:phoenix, :filter_parameters, Prima.Sanitizer.filter_parameters())
 
     # This boot's name, before any row can carry it, and the worker root
     # every assignment, worker and attempt key this boot issues derives
     # from.
-    Cyfr.Boot.mint()
+    Prima.Boot.mint()
     Cyfr.Execution.Keys.mint()
 
     # Resolve the at-rest cipher keyring before anything seals a row. The
@@ -304,7 +304,7 @@ defmodule Cyfr.Application do
 
   defp boot_work_enabled?, do: Application.get_env(:cyfr, :provisioning_boot_enabled, true)
 
-  # The execution slots: one `Cyfr.Slots` instance, keyed by athanor, on
+  # The execution slots: one `Prima.Slots` instance, keyed by athanor, on
   # the caps the operator configured (`CYFR_MAX_CONCURRENT_EXECUTIONS`,
   # `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT`), else the shipped ones.
   # The ratio warning is said once here, at boot, where an operator can
@@ -317,7 +317,7 @@ defmodule Cyfr.Application do
       {:warn, message} -> Logger.warning(message)
     end
 
-    {Cyfr.Slots, name: Cyfr.Execution.Slots, max: max, key_max: key_max}
+    {Prima.Slots, name: Cyfr.Execution.Slots, max: max, key_max: key_max}
   end
 
   @doc false
@@ -325,11 +325,11 @@ defmodule Cyfr.Application do
   # athanor may hold.
   @spec execution_slot_caps() :: {pos_integer(), pos_integer()}
   def execution_slot_caps do
-    {Application.get_env(:cyfr, :max_concurrent_executions, Cyfr.Slots.default_max()),
+    {Application.get_env(:cyfr, :max_concurrent_executions, Prima.Slots.default_max()),
      Application.get_env(
        :cyfr,
        :max_concurrent_executions_per_tenant,
-       Cyfr.Slots.default_key_max()
+       Prima.Slots.default_key_max()
      )}
   end
 
@@ -342,12 +342,12 @@ defmodule Cyfr.Application do
   # Capping children is not the fix; the lever is the ratio.
   @spec execution_slot_footprint(pos_integer(), pos_integer()) :: :ok | {:warn, String.t()}
   def execution_slot_footprint(max, key_max) do
-    footprint = Cyfr.Slots.max_key_footprint(key_max)
+    footprint = Prima.Slots.max_key_footprint(key_max)
 
     if footprint >= max do
       {:warn,
        "[Cyfr.Execution.Slots] one athanor can hold every slot on this node: " <>
-         "#{key_max} roots x depth #{Cyfr.Authority.depth_cap()} = #{footprint} >= " <>
+         "#{key_max} roots x depth #{Prima.Authority.depth_cap()} = #{footprint} >= " <>
          "#{max} slots. Children are exempt from the per-athanor cap by design (a chain " <>
          "must be able to finish), so the cap bounds roots, not footprint. Lower " <>
          "CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT or raise " <>

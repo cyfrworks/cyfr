@@ -44,7 +44,7 @@ defmodule Opus.ExecutionProvenanceTest do
         ctx,
         Probe.probe_ref(),
         %{"op" => "echo"},
-        [type: :formula, authority: Cyfr.Authority.zero()] ++ opts
+        [type: :formula, authority: Prima.Authority.zero()] ++ opts
       )
 
     assert result.status == :completed
@@ -86,7 +86,7 @@ defmodule Opus.ExecutionProvenanceTest do
     assert {:ok, _payload, bytes} =
              Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), row.id, "result")
 
-    assert Cyfr.Digest.sha256(bytes) == digest
+    assert Prima.Digest.sha256(bytes) == digest
     assert {:ok, %{output: %{"op" => "echo"} = joined}} = Cyfr.Execution.get(ctx, row.id)
     assert Jason.decode!(bytes) == joined
   end

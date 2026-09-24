@@ -100,7 +100,7 @@ defmodule PrismWeb.EnforcementsLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -111,7 +111,7 @@ defmodule PrismWeb.EnforcementsLive do
   defp fetch_logs(socket) do
     args =
       %{"action" => "list", "limit" => @page_size}
-      |> Cyfr.MapUtil.put_present("event_type", socket.assigns.event_type_filter)
+      |> Prima.MapUtil.put_present("event_type", socket.assigns.event_type_filter)
 
     case call_tool(socket, "policy_log", args) do
       {:ok, %{logs: logs}} when is_list(logs) ->

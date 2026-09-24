@@ -26,14 +26,14 @@ defmodule Arca.CredentialIssuanceTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
-  defp server, do: Cyfr.Actor.system()
+  defp server, do: Prima.Actor.system()
   defp admit, do: fn _rows -> :ok end
 
   setup do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
-    user_id = Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix())
-    athanor_id = Cyfr.UUID7.generate_id("ath")
+    user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+    athanor_id = Prima.UUID7.generate_id("ath")
 
     unboxed(fn ->
       {:ok, _} =
@@ -69,7 +69,7 @@ defmodule Arca.CredentialIssuanceTest do
         })
 
       {:ok, _} =
-        Arca.Members.seat(Cyfr.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
+        Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
     end)
 
     on_exit(fn ->
@@ -197,10 +197,10 @@ defmodule Arca.CredentialIssuanceTest do
 
       # The estate stays open: the person is one of two, so the denial
       # leaves the group standing and the refusal is the person's.
-      other = Cyfr.UUID7.generate_id(Cyfr.PersonId.prefix())
+      other = Prima.UUID7.generate_id(Prima.PersonId.prefix())
 
       unboxed(fn ->
-        Arca.Members.seat(Cyfr.Actor.in_athanor(athanor_id), %{user_id: other, added_by: "x"})
+        Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: other, added_by: "x"})
       end)
 
       denier = paused_denial(user_id)
@@ -261,7 +261,7 @@ defmodule Arca.CredentialIssuanceTest do
         Task.async(fn ->
           unboxed(fn ->
             Arca.ApiKeyStorage.rotate_key(
-              Cyfr.Actor.in_athanor(athanor_id),
+              Prima.Actor.in_athanor(athanor_id),
               attrs.name,
               :crypto.hash(:sha256, "rotated"),
               "cyfr_sk_rot",
@@ -334,7 +334,7 @@ defmodule Arca.CredentialIssuanceTest do
         Task.async(fn ->
           unboxed(fn ->
             Arca.ApiKeyStorage.rotate_key(
-              Cyfr.Actor.in_athanor(athanor_id),
+              Prima.Actor.in_athanor(athanor_id),
               attrs.name,
               rotated,
               "cyfr_sk_rot",

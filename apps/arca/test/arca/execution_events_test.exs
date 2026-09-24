@@ -63,7 +63,7 @@ defmodule Arca.ExecutionEventsTest do
   test "an execution of another estate takes no event", %{actor: actor, exec: exec} do
     assert {:error, _} =
              ExecutionEvents.append(
-               Cyfr.Actor.in_athanor("ath_elsewhere"),
+               Prima.Actor.in_athanor("ath_elsewhere"),
                exec.id,
                "step.closed"
              )

@@ -38,7 +38,7 @@ defmodule Arca.UnscopedQuerySeamTest do
   # wider glob costs nothing — and the first engine-side query would
   # otherwise escape the roster by construction.
   defp sources do
-    [@root, "apps/*/lib", "**/*.ex"] |> Path.join() |> Cyfr.Test.SourceTree.files!()
+    [@root, "apps/*/lib", "**/*.ex"] |> Path.join() |> Prima.Test.SourceTree.files!()
   end
 
   # Modules whose schema declares an athanor column — the tables a query can
@@ -49,7 +49,7 @@ defmodule Arca.UnscopedQuerySeamTest do
   # roster.
   defp tenant_schemas do
     for path <- sources(),
-        source = Cyfr.Test.SourceTree.read(path),
+        source = Prima.Test.SourceTree.read(path),
         source =~ ~r/^\s*(field :athanor_id|belongs_to :athanor)\b/m,
         [_, module] = Regex.run(~r/^defmodule ([\w.]+) do/m, source),
         into: MapSet.new(),
@@ -117,7 +117,7 @@ defmodule Arca.UnscopedQuerySeamTest do
 
     offenders =
       for path <- sources(),
-          source = Cyfr.Test.SourceTree.read(path),
+          source = Prima.Test.SourceTree.read(path),
           [_, enclosing] = Regex.run(~r/^defmodule ([\w.]+) do/m, source) || [nil, nil],
           {line, body} <- functions(String.split(source, "\n")),
           body =~ @repo_verbs,
@@ -147,7 +147,7 @@ defmodule Arca.UnscopedQuerySeamTest do
   test "the tag is only on functions that actually query" do
     stale =
       for path <- sources(),
-          source = Cyfr.Test.SourceTree.read(path),
+          source = Prima.Test.SourceTree.read(path),
           {line, body} <- functions(String.split(source, "\n")),
           body =~ @tag_marker,
           not (body =~ @repo_verbs) do
@@ -193,7 +193,7 @@ defmodule Arca.UnscopedQuerySeamTest do
   test "every schema without an athanor column is classified" do
     schemas =
       for path <- sources(),
-          source = Cyfr.Test.SourceTree.read(path),
+          source = Prima.Test.SourceTree.read(path),
           source =~ ~r/^\s*schema "/m,
           not (source =~ ~r/^\s*(field :athanor_id|belongs_to :athanor)\b/m),
           [_, module] = Regex.run(~r/^defmodule ([\w.]+) do/m, source),

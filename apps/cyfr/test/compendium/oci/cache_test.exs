@@ -38,7 +38,7 @@ defmodule Compendium.OCI.CacheTest do
 
       assert :miss = Cache.get_blob(digest)
       # The corrupt entry is removed on detection, not left to be re-read.
-      refute Arca.exists?(Cyfr.Actor.system(), blob_segments(digest))
+      refute Arca.exists?(Prima.Actor.system(), blob_segments(digest))
     end
 
     defp blob_segments("sha256:" <> hex), do: ["cache", "oci", "blobs", "sha256", hex]

@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-"""`Cyfr.WorkerAuth` and `Cyfr.Assignment` as the worker image tests spell
+"""`Prima.WorkerAuth` and `Prima.Assignment` as the worker image tests spell
 them, so a scripted control plane can mint what CYFR mints and verify what
 a worker sends, with nothing but the standard library.
 
 Every key is HMAC-SHA256 of the root over a label and field values one per
-line (`Cyfr.MacEnvelope`); a header is `v1 kind=<kind> name=value … body=<hex>
+line (`Prima.MacEnvelope`); a header is `v1 kind=<kind> name=value … body=<hex>
 mac=<b64url>` signed over the envelope's canonical string; a sealed value is
 `base64url(iv ‖ tag ‖ ciphertext)` under AES-256-GCM with the label and
 fields as additional data; an assignment token is `base64url(jcs) "."
@@ -410,7 +410,7 @@ def read_assignment(token):
 
 
 # ---------------------------------------------------------------------------
-# A worker service's status (`Cyfr.WorkerAPI.read_status/1`)
+# A worker service's status (`Prima.WorkerAPI.read_status/1`)
 # ---------------------------------------------------------------------------
 
 STATUS_MEMBERS = {"service", "boot", "runners", "attempts", "memory_bytes", "refusal"}

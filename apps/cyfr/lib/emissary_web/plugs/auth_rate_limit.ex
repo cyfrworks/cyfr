@@ -17,7 +17,7 @@ defmodule EmissaryWeb.Plugs.AuthRateLimit do
         max_requests: 10,
         window_ms: 60_000
 
-  Counters live in `Cyfr.RateLimiter` (ETS) so the plug is single-node only; the
+  Counters live in `Prima.RateLimiter` (ETS) so the plug is single-node only; the
   off-by-one on concurrent boundary requests is acceptable for rate limits
   (not a security boundary). For multi-node deployments the counter needs
   a shared store, out of scope here.
@@ -39,7 +39,7 @@ defmodule EmissaryWeb.Plugs.AuthRateLimit do
     ip = Sanctum.ClientIp.resolve(conn)
     key = {:rate_limit, bucket, ip}
 
-    case Cyfr.RateLimiter.check(key, max_requests, window_ms) do
+    case Prima.RateLimiter.check(key, max_requests, window_ms) do
       :ok ->
         conn
 

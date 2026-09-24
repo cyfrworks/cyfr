@@ -23,7 +23,7 @@ defmodule Opus.Attempt do
        attempt to CYFR. A child, claimed at its admission, is already
        attached;
     2. reads the authority the assignment carries
-       (`Cyfr.Authority.from_wire/1`) for its own egress checks and its
+       (`Prima.Authority.from_wire/1`) for its own egress checks and its
        guest's host functions: the edge a guest's HTTP requests are checked
        against and the node's limits. It grants nothing: CYFR decides every
        child and catalog tool call under the authority it holds;
@@ -51,8 +51,8 @@ defmodule Opus.Attempt do
 
   require Logger
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
+  alias Prima.Authority
+  alias Prima.Authority.Blob.Edge
   alias Opus.{HostClient, Subtree}
 
   # A renewal every minute pushes the row's lease out, so the sweeper knows
@@ -69,8 +69,8 @@ defmodule Opus.Attempt do
   its answer (`:waiter`, nil when none does).
   """
   @type start :: %{
-          required(:token) => Cyfr.Assignment.token(),
-          required(:assignment) => Cyfr.Assignment.t(),
+          required(:token) => Prima.Assignment.token(),
+          required(:assignment) => Prima.Assignment.t(),
           required(:input) => map(),
           required(:client) => HostClient.t(),
           required(:callers) => [pid()],
@@ -111,8 +111,8 @@ defmodule Opus.Attempt do
     # The starting caller's callers, so its database sandbox allowance
     # covers what this process and the component's calls read and write.
     Process.put(:"$callers", start.callers)
-    Cyfr.LoggerContext.restore(start.logger)
-    Cyfr.LoggerContext.set_execution_id(start.assignment.execution_id)
+    Prima.LoggerContext.restore(start.logger)
+    Prima.LoggerContext.set_execution_id(start.assignment.execution_id)
 
     {reason, answer} = run_attempt(start)
 
@@ -322,14 +322,14 @@ defmodule Opus.Attempt do
     ref = make_ref()
     start_time = System.monotonic_time(:millisecond)
     runtime_opts = Keyword.put(runtime_opts, :notify_cleanup_refs, {runner, ref})
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
     callers = Process.get(:"$callers", [])
 
     pid =
       spawn_link(fn ->
         Process.flag(:trap_exit, true)
         Process.put(:"$callers", [runner | callers])
-        Cyfr.LoggerContext.restore(logger_metadata)
+        Prima.LoggerContext.restore(logger_metadata)
 
         receive do
           {:go, ^ref} -> :ok

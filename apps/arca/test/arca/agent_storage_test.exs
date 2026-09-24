@@ -32,12 +32,12 @@ defmodule Arca.AgentStorageTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     athanor_id = "ath_agents_#{System.unique_integer([:positive])}"
-    {:ok, actor: %Cyfr.Actor{athanor_id: athanor_id}, athanor_id: athanor_id}
+    {:ok, actor: %Prima.Actor{athanor_id: athanor_id}, athanor_id: athanor_id}
   end
 
   defp row(athanor_id, name) do
     %{
-      id: Cyfr.UUID7.generate_id("agt"),
+      id: Prima.UUID7.generate_id("agt"),
       athanor_id: athanor_id,
       name: name,
       kind: "role",
@@ -211,14 +211,14 @@ defmodule Arca.AgentStorageTest do
 
   test "an actor without an athanor, and another athanor's token, are refused before any write",
        %{actor: actor, athanor_id: athanor_id} do
-    nobody = %Cyfr.Actor{athanor_id: nil, user_id: "someone"}
+    nobody = %Prima.Actor{athanor_id: nil, user_id: "someone"}
     assert AgentStorage.replace_projection(nobody, token(actor), []) == {:error, :no_athanor}
     assert AgentStorage.replace_projection(%{nobody | athanor_id: ""}, token(actor), []) ==
              {:error, :no_athanor}
 
     assert AgentStorage.list(nobody) == {:error, :no_athanor}
 
-    other = %Cyfr.Actor{athanor_id: "#{athanor_id}_other"}
+    other = %Prima.Actor{athanor_id: "#{athanor_id}_other"}
     assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
 
     assert {:error, :cross_tenant} =

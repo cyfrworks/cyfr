@@ -33,7 +33,7 @@ defmodule Arca.RetentionSettings do
 
   ## Tenancy
 
-  Every function takes the `Cyfr.Actor` first and refuses one with no
+  Every function takes the `Prima.Actor` first and refuses one with no
   athanor as `{:error, :no_athanor}` before any query. A store that
   cannot answer is `{:error, :database_error}`.
   """
@@ -52,9 +52,9 @@ defmodule Arca.RetentionSettings do
   The athanor's patch and the revision of its row: `%{patch: %{}, revision:
   0}` when it has none.
   """
-  @spec get(Cyfr.Actor.t()) ::
+  @spec get(Prima.Actor.t()) ::
           {:ok, stored()} | {:error, :no_athanor | :corrupt | :database_error}
-  def get(%Cyfr.Actor{} = actor) do
+  def get(%Prima.Actor{} = actor) do
     with {:ok, athanor} <- tenant(actor),
          {:ok, row} <- read(athanor) do
       decode(row)
@@ -66,10 +66,10 @@ defmodule Arca.RetentionSettings do
   caller (`Arca.Retention.set_settings/2`) — over the athanor's patch,
   answering the merged patch and the revision it landed at.
   """
-  @spec patch(Cyfr.Actor.t(), %{String.t() => pos_integer()}) ::
+  @spec patch(Prima.Actor.t(), %{String.t() => pos_integer()}) ::
           {:ok, stored()}
           | {:error, :no_athanor | :corrupt | :database_error | :settings_conflict}
-  def patch(%Cyfr.Actor{} = actor, changes) when is_map(changes) do
+  def patch(%Prima.Actor{} = actor, changes) when is_map(changes) do
     with {:ok, athanor} <- tenant(actor) do
       merge(athanor, changes, @retries)
     end
@@ -99,7 +99,7 @@ defmodule Arca.RetentionSettings do
   # still holds the revision the merge read: either statement changes no
   # row when another patch landed first, and the merge is read again.
   defp write(athanor, merged, 0) do
-    {:ok, settings} = Cyfr.JCS.encode(merged)
+    {:ok, settings} = Prima.JCS.encode(merged)
     now = DateTime.utc_now()
 
     Arca.Repo.Errors.with_db_rescue("Arca.RetentionSettings.write", fn ->
@@ -119,7 +119,7 @@ defmodule Arca.RetentionSettings do
   end
 
   defp write(athanor, merged, revision) do
-    {:ok, settings} = Cyfr.JCS.encode(merged)
+    {:ok, settings} = Prima.JCS.encode(merged)
 
     Arca.Repo.Errors.with_db_rescue("Arca.RetentionSettings.write", fn ->
       from(r in where_athanor(Row, athanor), where: r.revision == ^revision)
@@ -161,6 +161,6 @@ defmodule Arca.RetentionSettings do
     end)
   end
 
-  defp tenant(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
-  defp tenant(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  defp tenant(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
+  defp tenant(%Prima.Actor{}), do: {:error, :no_athanor}
 end

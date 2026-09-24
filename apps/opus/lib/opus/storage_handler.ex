@@ -21,7 +21,7 @@ defmodule Opus.StorageHandler do
   (`Opus.EdgeGuard.check_envelope_size/2`), parses it, and asks CYFR to run
   the operation (`Opus.HostClient.storage/3`). What the operation may reach
   — the consented actions and paths, the guest scopes, the size limits and
-  the quotas — is decided by CYFR (`c:Cyfr.HostAPI.storage/3`), which runs
+  the quotas — is decided by CYFR (`c:Prima.HostAPI.storage/3`), which runs
   it only while the attempt still holds its row.
 
   ## Answers
@@ -47,7 +47,7 @@ defmodule Opus.StorageHandler do
   (`Opus.Telemetry.storage_call/4`).
   """
 
-  alias Cyfr.Limits
+  alias Prima.Limits
   alias Opus.{EdgeGuard, HostClient}
 
   @actions %{
@@ -182,6 +182,6 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  defp encode({:ok, members}), do: Cyfr.WitResponse.safe_encode(Map.put(members, "status", "ok"))
-  defp encode({:error, type, message}), do: Cyfr.WitResponse.encode_error(type, message)
+  defp encode({:ok, members}), do: Prima.WitResponse.safe_encode(Map.put(members, "status", "ok"))
+  defp encode({:error, type, message}), do: Prima.WitResponse.encode_error(type, message)
 end

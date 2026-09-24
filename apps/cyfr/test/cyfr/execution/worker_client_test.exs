@@ -15,7 +15,7 @@ defmodule Cyfr.Execution.WorkerClientTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Execution.{Keys, WorkerClient}
-  alias Cyfr.{WorkerAPI, WorkerAuth, WorkerWire}
+  alias Prima.{WorkerAPI, WorkerAuth, WorkerWire}
 
   @service "wrk_client_test"
 
@@ -105,7 +105,7 @@ defmodule Cyfr.Execution.WorkerClientTest do
                       }
                     }}
 
-    assert boot == Cyfr.Boot.id()
+    assert boot == Prima.Boot.id()
 
     assert {:error, :not_found} = WorkerClient.kill(endpoint, "exec_1")
 

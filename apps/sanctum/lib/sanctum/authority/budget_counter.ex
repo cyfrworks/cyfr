@@ -3,7 +3,7 @@
 
 defmodule Sanctum.Authority.BudgetCounter do
   @moduledoc """
-  The node-local count behind a `Cyfr.Authority.Budget`.
+  The node-local count behind a `Prima.Authority.Budget`.
 
   The counter lives in a table keyed by the budget's id: the count is
   shared by every Authority in the tree that carries the id, and a slot
@@ -11,7 +11,7 @@ defmodule Sanctum.Authority.BudgetCounter do
   with work in flight.
   """
 
-  alias Cyfr.Authority.Budget
+  alias Prima.Authority.Budget
 
   @table __MODULE__
 

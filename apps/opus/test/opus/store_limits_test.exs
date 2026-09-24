@@ -24,7 +24,7 @@ defmodule Opus.StoreLimitsTest do
 
   defp run(name, max_memory_bytes) do
     Opus.Runtime.execute_component(guest(name), %{"hostile" => true},
-      authority: Cyfr.Authority.zero(),
+      authority: Prima.Authority.zero(),
       max_memory_bytes: max_memory_bytes
     )
   end
@@ -39,7 +39,7 @@ defmodule Opus.StoreLimitsTest do
                Regex.run(~r/^#{Regex.escape(file)}\s+(sha256:[0-9a-f]{64})$/m, readme),
              file
 
-      assert Cyfr.Digest.sha256(File.read!(Path.join(@dir, file))) == recorded, file
+      assert Prima.Digest.sha256(File.read!(Path.join(@dir, file))) == recorded, file
     end
   end
 
@@ -85,12 +85,12 @@ defmodule Opus.StoreLimitsTest do
     math = File.read!(Path.expand("../support/test_wasm/math.wasm", __DIR__))
 
     assert {:error, "Component compilation failed: " <> _} =
-             Opus.Runtime.execute_component(math, %{}, authority: Cyfr.Authority.zero())
+             Opus.Runtime.execute_component(math, %{}, authority: Prima.Authority.zero())
 
     # A catalyst run as a reagent is linked without the vault it imports.
     assert {:error, "Component instantiation failed: " <> _} =
              Opus.Runtime.execute_component(guest("vault_probe"), %{},
-               authority: Cyfr.Authority.zero()
+               authority: Prima.Authority.zero()
              )
   end
 end

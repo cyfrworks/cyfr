@@ -16,7 +16,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   """
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Arca.ProvisioningClaims, as: Claims
   alias Compendium.Provisioning, as: Filler
@@ -205,7 +205,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
     # The deadline settled the claim: failed, saying where and why, and no
     # longer standing — the retry below takes the estate at once.
-    actor = %Cyfr.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: group.id}
     assert {:ok, %{outcome: "failed", outcome_detail: settled} = claim} = Claims.current(actor)
     assert settled =~ "closure"
     assert settled =~ "timeout"
@@ -247,7 +247,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
   test "two members on one athanor's first touch: one fills it, the other pulls nothing and is told which case it is",
        %{ctx: ctx, group: group, stall: stall} do
-    actor = %Cyfr.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: group.id}
 
     # The first member's attempt holds the estate's claim and is parked in
     # its required pull. It runs in a process of its own so the second
@@ -281,7 +281,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
        %{ctx: ctx, group: group} do
     # Another caller's attempt holds the claim — a background fill in
     # flight. The explicit verb does not queue behind it.
-    actor = %Cyfr.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: group.id}
     {:ok, _held} = Claims.claim(actor, "boot_elsewhere/own_held", "first_need", 60_000)
 
     started = System.monotonic_time(:millisecond)
@@ -313,7 +313,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
     test "an explicit retry and an install are told busy at once; the deadline settles it failed, and readers back off",
          %{ctx: ctx, group: group} do
-      actor = %Cyfr.Actor{athanor_id: group.id}
+      actor = %Prima.Actor{athanor_id: group.id}
 
       # The reader answers at once and the fill goes on without it.
       started = System.monotonic_time(:millisecond)
@@ -377,7 +377,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
     test "an attempt killed where it stands is released by its keeper, once its pull has stopped",
          %{ctx: ctx, group: group} do
-      actor = %Cyfr.Actor{athanor_id: group.id}
+      actor = %Prima.Actor{athanor_id: group.id}
       before = MapSet.new(Task.Supervisor.children(Compendium.ProvisioningSupervisor))
 
       # An explicit attempt, so the process to kill is known: it stalls in
@@ -424,7 +424,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
       assert {:ok, []} =
                Arca.ProfileStorage.list_for_source(
-                 Cyfr.Actor.in_athanor(group.id),
+                 Prima.Actor.in_athanor(group.id),
                  "catalyst:local.foo"
                )
 

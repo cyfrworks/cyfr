@@ -21,7 +21,7 @@ defmodule Locus.BuilderServiceTest do
   # Serves on the application's build slots and, in places, as its spawner.
   use ExUnit.Case, async: false
 
-  alias Cyfr.{BuilderProtocol, Slots}
+  alias Prima.{BuilderProtocol, Slots}
   alias Locus.Test.{FakeSpawner, Wire}
 
   @slots Locus.BuildSlots
@@ -574,8 +574,8 @@ defmodule Locus.BuilderServiceTest do
   # The build slots restarted with caps of the test's own, so the numbers
   # asserted here are the test's and not the environment's.
   defp restart_build_slots(opts) do
-    {Cyfr.Slots, booted} = Locus.Application.build_slots()
-    replace_build_slots({Cyfr.Slots, Keyword.merge(booted, opts)})
+    {Prima.Slots, booted} = Locus.Application.build_slots()
+    replace_build_slots({Prima.Slots, Keyword.merge(booted, opts)})
   end
 
   defp replace_build_slots(spec) do

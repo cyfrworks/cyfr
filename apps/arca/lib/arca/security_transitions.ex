@@ -105,56 +105,56 @@ defmodule Arca.SecurityTransitions do
   nothing moves their generation, and the retirement is re-run and its
   postconditions checked, so a retry finishes what a failure left.
   """
-  @spec deny_user(Cyfr.Actor.t(), String.t(), keyword()) :: {:ok, change()} | {:error, term()}
-  def deny_user(%Cyfr.Actor{scope: :platform, system: true}, user_id, opts)
+  @spec deny_user(Prima.Actor.t(), String.t(), keyword()) :: {:ok, change()} | {:error, term()}
+  def deny_user(%Prima.Actor{scope: :platform, system: true}, user_id, opts)
       when is_binary(user_id) and user_id != "" and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
     run("Arca.SecurityTransitions.deny_user", fn -> deny(user_id, verify) end)
   end
 
-  def deny_user(%Cyfr.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
+  def deny_user(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
 
   @doc """
   Restore the person `user_id`: their standing, their own estate when it
   is archived, and their seat in it. Sessions, keys, group seats and
   invitations the denial took stay taken.
   """
-  @spec allow_user(Cyfr.Actor.t(), String.t(), keyword()) :: {:ok, change()} | {:error, term()}
-  def allow_user(%Cyfr.Actor{scope: :platform, system: true}, user_id, opts)
+  @spec allow_user(Prima.Actor.t(), String.t(), keyword()) :: {:ok, change()} | {:error, term()}
+  def allow_user(%Prima.Actor{scope: :platform, system: true}, user_id, opts)
       when is_binary(user_id) and user_id != "" and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
     run("Arca.SecurityTransitions.allow_user", fn -> allow(user_id, verify) end)
   end
 
-  def allow_user(%Cyfr.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
+  def allow_user(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
 
   @doc """
   Archive the estate `athanor_id` and revoke its keys. An estate already
   archived keeps its generation; its keys are revoked again and checked.
   """
-  @spec archive_athanor(Cyfr.Actor.t(), String.t(), keyword()) ::
+  @spec archive_athanor(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, change()} | {:error, term()}
-  def archive_athanor(%Cyfr.Actor{scope: :platform, system: true}, athanor_id, opts)
+  def archive_athanor(%Prima.Actor{scope: :platform, system: true}, athanor_id, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
     run("Arca.SecurityTransitions.archive_athanor", fn -> archive(athanor_id, verify) end)
   end
 
-  def archive_athanor(%Cyfr.Actor{}, _athanor_id, _opts), do: {:error, :cross_tenant}
+  def archive_athanor(%Prima.Actor{}, _athanor_id, _opts), do: {:error, :cross_tenant}
 
   @doc """
   Reopen the archived estate `athanor_id`. Its revoked keys stay revoked.
   An estate already active is answered unchanged.
   """
-  @spec unarchive_athanor(Cyfr.Actor.t(), String.t(), keyword()) ::
+  @spec unarchive_athanor(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, change()} | {:error, term()}
-  def unarchive_athanor(%Cyfr.Actor{scope: :platform, system: true}, athanor_id, opts)
+  def unarchive_athanor(%Prima.Actor{scope: :platform, system: true}, athanor_id, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
     run("Arca.SecurityTransitions.unarchive_athanor", fn -> unarchive(athanor_id, verify) end)
   end
 
-  def unarchive_athanor(%Cyfr.Actor{}, _athanor_id, _opts), do: {:error, :cross_tenant}
+  def unarchive_athanor(%Prima.Actor{}, _athanor_id, _opts), do: {:error, :cross_tenant}
 
   # ---- the runner ------------------------------------------------------------
 
@@ -479,7 +479,7 @@ defmodule Arca.SecurityTransitions do
     else
       %Membership{}
       |> Membership.changeset(%{
-        id: Cyfr.UUID7.generate_id("mem"),
+        id: Prima.UUID7.generate_id("mem"),
         user_id: user_id,
         scope: "athanor",
         status: "active",

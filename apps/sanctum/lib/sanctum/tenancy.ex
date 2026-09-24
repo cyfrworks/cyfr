@@ -473,7 +473,7 @@ defmodule Sanctum.Tenancy do
           true
 
         {:error, :not_found} ->
-          not Cyfr.PersonId.person?(user_id)
+          not Prima.PersonId.person?(user_id)
 
         {:error, reason} ->
           Logger.warning(

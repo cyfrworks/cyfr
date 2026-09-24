@@ -37,7 +37,7 @@ defmodule Arca.WebhookStorageTest do
       assert :ok = WebhookStorage.create_webhook(attrs)
 
       assert {:ok, hook} =
-               WebhookStorage.get_by_name(Cyfr.Actor.in_athanor(athanor_id), "test-hook")
+               WebhookStorage.get_by_name(Prima.Actor.in_athanor(athanor_id), "test-hook")
 
       assert hook.name == "test-hook"
       assert hook.slug == attrs.slug
@@ -48,7 +48,7 @@ defmodule Arca.WebhookStorageTest do
 
     test "returns not_found for missing webhook", %{athanor_id: athanor_id} do
       assert {:error, :not_found} =
-               WebhookStorage.get_by_name(Cyfr.Actor.in_athanor(athanor_id), "missing")
+               WebhookStorage.get_by_name(Prima.Actor.in_athanor(athanor_id), "missing")
     end
 
     test "duplicate name returns already_exists", %{athanor_id: athanor_id} do
@@ -81,7 +81,7 @@ defmodule Arca.WebhookStorageTest do
          %{athanor_id: athanor_id} do
       attrs = wh_attrs("disabled-hook", athanor_id)
       :ok = WebhookStorage.create_webhook(attrs)
-      :ok = WebhookStorage.set_disabled(Cyfr.Actor.in_athanor(athanor_id), "disabled-hook")
+      :ok = WebhookStorage.set_disabled(Prima.Actor.in_athanor(athanor_id), "disabled-hook")
 
       assert {:ok, hook} = WebhookStorage.get_by_slug(attrs.slug)
       assert hook.enabled == false
@@ -97,7 +97,7 @@ defmodule Arca.WebhookStorageTest do
       :ok = WebhookStorage.create_webhook(wh_attrs("list-a", athanor_id))
       :ok = WebhookStorage.create_webhook(wh_attrs("list-b", athanor_id))
 
-      {:ok, hooks} = WebhookStorage.list_webhooks(Cyfr.Actor.in_athanor(athanor_id))
+      {:ok, hooks} = WebhookStorage.list_webhooks(Prima.Actor.in_athanor(athanor_id))
       names = Enum.map(hooks, & &1.name)
       assert "list-a" in names
       assert "list-b" in names
@@ -105,9 +105,9 @@ defmodule Arca.WebhookStorageTest do
 
     test "excludes disabled webhooks", %{athanor_id: athanor_id} do
       :ok = WebhookStorage.create_webhook(wh_attrs("hidden", athanor_id))
-      :ok = WebhookStorage.set_disabled(Cyfr.Actor.in_athanor(athanor_id), "hidden")
+      :ok = WebhookStorage.set_disabled(Prima.Actor.in_athanor(athanor_id), "hidden")
 
-      {:ok, hooks} = WebhookStorage.list_webhooks(Cyfr.Actor.in_athanor(athanor_id))
+      {:ok, hooks} = WebhookStorage.list_webhooks(Prima.Actor.in_athanor(athanor_id))
       refute Enum.any?(hooks, &(&1.name == "hidden"))
     end
   end
@@ -118,12 +118,12 @@ defmodule Arca.WebhookStorageTest do
       :ok = WebhookStorage.create_webhook(attrs)
 
       assert :ok =
-               WebhookStorage.update_webhook(Cyfr.Actor.in_athanor(athanor_id), "update-me", %{
+               WebhookStorage.update_webhook(Prima.Actor.in_athanor(athanor_id), "update-me", %{
                  input_template: ~s({"channel":"alerts"})
                })
 
       assert {:ok, hook} =
-               WebhookStorage.get_by_name(Cyfr.Actor.in_athanor(athanor_id), "update-me")
+               WebhookStorage.get_by_name(Prima.Actor.in_athanor(athanor_id), "update-me")
 
       assert hook.input_template == ~s({"channel":"alerts"})
       assert hook.secret_encrypted == attrs.secret_encrypted
@@ -133,14 +133,14 @@ defmodule Arca.WebhookStorageTest do
       :ok = WebhookStorage.create_webhook(wh_attrs("no-fields", athanor_id))
 
       assert {:error, :no_fields} =
-               WebhookStorage.update_webhook(Cyfr.Actor.in_athanor(athanor_id), "no-fields", %{
+               WebhookStorage.update_webhook(Prima.Actor.in_athanor(athanor_id), "no-fields", %{
                  not_allowed: "x"
                })
     end
 
     test "returns not_found for missing webhook", %{athanor_id: athanor_id} do
       assert {:error, :not_found} =
-               WebhookStorage.update_webhook(Cyfr.Actor.in_athanor(athanor_id), "missing", %{
+               WebhookStorage.update_webhook(Prima.Actor.in_athanor(athanor_id), "missing", %{
                  description: "x"
                })
     end
@@ -152,17 +152,17 @@ defmodule Arca.WebhookStorageTest do
       attrs = wh_attrs("dis", athanor_id)
       :ok = WebhookStorage.create_webhook(attrs)
 
-      assert :ok = WebhookStorage.set_disabled(Cyfr.Actor.in_athanor(athanor_id), "dis")
+      assert :ok = WebhookStorage.set_disabled(Prima.Actor.in_athanor(athanor_id), "dis")
 
       assert {:error, :not_found} =
-               WebhookStorage.get_by_name(Cyfr.Actor.in_athanor(athanor_id), "dis")
+               WebhookStorage.get_by_name(Prima.Actor.in_athanor(athanor_id), "dis")
 
       assert {:ok, %{enabled: false}} = WebhookStorage.get_by_slug(attrs.slug)
     end
 
     test "returns not_found for missing webhook", %{athanor_id: athanor_id} do
       assert {:error, :not_found} =
-               WebhookStorage.set_disabled(Cyfr.Actor.in_athanor(athanor_id), "nope")
+               WebhookStorage.set_disabled(Prima.Actor.in_athanor(athanor_id), "nope")
     end
   end
 
@@ -170,7 +170,7 @@ defmodule Arca.WebhookStorageTest do
     test "disables the actor's enabled hooks among the ids, and answers them", %{
       athanor_id: athanor_id
     } do
-      actor = Cyfr.Actor.in_athanor(athanor_id)
+      actor = Prima.Actor.in_athanor(athanor_id)
       a = wh_attrs("all-a", athanor_id)
       b = wh_attrs("all-b", athanor_id)
       done = wh_attrs("all-done", athanor_id)
@@ -195,7 +195,7 @@ defmodule Arca.WebhookStorageTest do
     end
 
     test "an actor with no athanor is refused before any query" do
-      assert {:error, :no_athanor} = WebhookStorage.disable_all(%Cyfr.Actor{}, ["whk_x"])
+      assert {:error, :no_athanor} = WebhookStorage.disable_all(%Prima.Actor{}, ["whk_x"])
     end
 
     @tag :capture_log
@@ -203,7 +203,7 @@ defmodule Arca.WebhookStorageTest do
       Arca.Repo.query!("ALTER TABLE webhooks RENAME TO webhooks_unavailable")
 
       assert {:error, :database_error} =
-               WebhookStorage.disable_all(Cyfr.Actor.in_athanor(athanor_id), ["whk_x"])
+               WebhookStorage.disable_all(Prima.Actor.in_athanor(athanor_id), ["whk_x"])
     end
   end
 
@@ -219,7 +219,7 @@ defmodule Arca.WebhookStorageTest do
 
       assert :ok =
                WebhookStorage.rotate_secret(
-                 Cyfr.Actor.in_athanor(athanor_id),
+                 Prima.Actor.in_athanor(athanor_id),
                  "rotate-me",
                  new_secret,
                  grace_until
@@ -239,7 +239,7 @@ defmodule Arca.WebhookStorageTest do
 
       assert {:error, :not_found} =
                WebhookStorage.rotate_secret(
-                 Cyfr.Actor.in_athanor(athanor_id),
+                 Prima.Actor.in_athanor(athanor_id),
                  "nope",
                  new_secret,
                  grace_until
@@ -253,13 +253,13 @@ defmodule Arca.WebhookStorageTest do
       :ok = WebhookStorage.create_webhook(wh_attrs("shared-name", "ath_beta"))
 
       {:ok, hook_a} =
-        WebhookStorage.get_by_name(Cyfr.Actor.in_athanor("ath_alpha"), "shared-name")
+        WebhookStorage.get_by_name(Prima.Actor.in_athanor("ath_alpha"), "shared-name")
 
-      {:ok, hook_b} = WebhookStorage.get_by_name(Cyfr.Actor.in_athanor("ath_beta"), "shared-name")
+      {:ok, hook_b} = WebhookStorage.get_by_name(Prima.Actor.in_athanor("ath_beta"), "shared-name")
       assert hook_a.athanor_id != hook_b.athanor_id
 
-      {:ok, list_a} = WebhookStorage.list_webhooks(Cyfr.Actor.in_athanor("ath_alpha"))
-      {:ok, list_b} = WebhookStorage.list_webhooks(Cyfr.Actor.in_athanor("ath_beta"))
+      {:ok, list_a} = WebhookStorage.list_webhooks(Prima.Actor.in_athanor("ath_alpha"))
+      {:ok, list_b} = WebhookStorage.list_webhooks(Prima.Actor.in_athanor("ath_beta"))
       assert length(list_a) == 1
       assert length(list_b) == 1
     end

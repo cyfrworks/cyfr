@@ -43,7 +43,7 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
   unverified requests indefinitely. The lookup is a single indexed query
   against `webhooks.slug` (UNIQUE).
 
-  Counters live in `Cyfr.RateLimiter` (ETS) — single-node only; same caveats as
+  Counters live in `Prima.RateLimiter` (ETS) — single-node only; same caveats as
   `EmissaryWeb.Plugs.AuthRateLimit`.
   """
 
@@ -77,7 +77,7 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
     ]
 
     case Enum.find_value(checks, fn {key, max, window} ->
-           case Cyfr.RateLimiter.check(key, max, window) do
+           case Prima.RateLimiter.check(key, max, window) do
              :ok -> nil
              {:deny, retry_after} -> retry_after
            end
@@ -169,10 +169,10 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimit do
     end
   end
 
-  # One duration grammar for every enforcement window (Cyfr.Limits) —
+  # One duration grammar for every enforcement window (Prima.Limits) —
   # this also gains ms support the local parser lacked.
   defp parse_window(spec) do
-    case Cyfr.Limits.parse_duration(spec) do
+    case Prima.Limits.parse_duration(spec) do
       {:ok, ms} when ms > 0 -> {:ok, ms}
       _ -> :error
     end

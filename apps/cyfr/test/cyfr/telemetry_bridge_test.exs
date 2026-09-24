@@ -35,7 +35,7 @@ defmodule Cyfr.TelemetryBridgeTest do
   alias Cyfr.Telemetry.Catalog
 
   @athanor "ath_bridge"
-  @actor Cyfr.Actor.in_athanor(@athanor)
+  @actor Prima.Actor.in_athanor(@athanor)
   @user "user_bridge"
 
   # Every bridged event: the metadata it is emitted with, the topic its
@@ -348,7 +348,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       close = %Cyfr.Execution.Close{
         ctx: ctx,
         record: record,
-        limits: Cyfr.Authority.zero_limits(),
+        limits: Prima.Authority.zero_limits(),
         started: true
       }
 

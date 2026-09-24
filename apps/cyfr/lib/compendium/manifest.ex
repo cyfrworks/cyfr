@@ -6,7 +6,7 @@ defmodule Compendium.Manifest do
   The component domain's manifest vocabulary: the suggested categories.
 
   What a manifest may declare, its contracts and the one validator every
-  write boundary runs are the shared contract `Cyfr.Manifest`.
+  write boundary runs are the shared contract `Prima.Manifest`.
   """
 
   @doc """

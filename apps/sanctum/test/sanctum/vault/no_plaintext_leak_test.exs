@@ -97,7 +97,7 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
             %{oauth_scopes: ~s(["x"])},
             Vault.blocked_profile_status()
           ),
-          Arca.VaultStorage.get(%Cyfr.Actor{athanor_id: "ath_other"}, view.id),
+          Arca.VaultStorage.get(%Prima.Actor{athanor_id: "ath_other"}, view.id),
           VaultReader.fetch(ctx, %{entry_id: view.id, binding_digest: "sha256:wrong"}),
           VaultReader.fetch(%{ctx | anonymous: true}, %{
             entry_id: view.id,
@@ -135,7 +135,7 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
 
     # A tampered payload: the decode refusal names the shape it rejected
     # and never the material inside it.
-    id = Cyfr.UUID7.generate_id("vlt")
+    id = Prima.UUID7.generate_id("vlt")
     aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, id, "")
     {:ok, sealed} = Sanctum.Cipher.encrypt(~s({"v":2,"fields":{},"extra":"#{value}"}), aad)
 

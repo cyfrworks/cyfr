@@ -48,9 +48,9 @@ defmodule Sanctum.Atoms do
   @spec providers() :: [String.t()]
   def providers, do: @known_providers
 
-  # The tenancy scopes are `Cyfr.TenancyScope`'s: the stored membership row
+  # The tenancy scopes are `Prima.TenancyScope`'s: the stored membership row
   # is held to the same list, so the two sides read one declaration.
-  @known_scopes Cyfr.TenancyScope.values()
+  @known_scopes Prima.TenancyScope.values()
 
   # Force every allowlisted atom to exist at compile time so the
   # membership-first converter below can use String.to_atom/1 without ever
@@ -66,11 +66,11 @@ defmodule Sanctum.Atoms do
 
   @doc "The tenancy scope vocabulary as strings: `[\"platform\", \"athanor\"]`."
   @spec scopes() :: [String.t()]
-  defdelegate scopes(), to: Cyfr.TenancyScope, as: :values
+  defdelegate scopes(), to: Prima.TenancyScope, as: :values
 
   @doc "The tenancy scope vocabulary as atoms: `[:platform, :athanor]`."
   @spec scope_atoms() :: [atom()]
-  defdelegate scope_atoms(), to: Cyfr.TenancyScope, as: :atoms
+  defdelegate scope_atoms(), to: Prima.TenancyScope, as: :atoms
 
   @doc """
   Convert a string to a permission atom safely.

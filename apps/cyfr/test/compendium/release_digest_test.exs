@@ -96,7 +96,7 @@ defmodule Compendium.ReleaseDigestTest do
   # ============================================================================
 
   describe "bundled and vendored manifests" do
-    @manifests Cyfr.Test.SourceTree.files!(
+    @manifests Prima.Test.SourceTree.files!(
                  Path.join([__DIR__, "../../../../seed/components/**/cyfr-manifest.json"])
                )
 

@@ -34,7 +34,7 @@ defmodule Sanctum.VaultReader do
 
   alias Sanctum.CipherAAD
   alias Sanctum.Context
-  alias Cyfr.JCS
+  alias Prima.JCS
 
   @type vault_resource :: %{
           required(:entry_id) => String.t(),
@@ -257,7 +257,7 @@ defmodule Sanctum.VaultReader do
   # row outside that athanor, and binding the ciphertext to the reader's
   # tenant means a row that reached a foreign context by any path fails to
   # unseal instead of decrypting under the tenant it brought with it.
-  defp unseal_material(%Cyfr.Actor{athanor_id: athanor_id}, %{sealed_payload: sealed} = entry)
+  defp unseal_material(%Prima.Actor{athanor_id: athanor_id}, %{sealed_payload: sealed} = entry)
        when is_binary(sealed) do
     aad = CipherAAD.vault_entry(athanor_id, entry.id, entry.provider_hint)
 
@@ -267,7 +267,7 @@ defmodule Sanctum.VaultReader do
     end
   end
 
-  defp unseal_material(%Cyfr.Actor{}, _entry), do: {:error, :unseal_failed}
+  defp unseal_material(%Prima.Actor{}, _entry), do: {:error, :unseal_failed}
 
   # The one place a bare athanor becomes an actor, and it is inside the
   # layer that owns tenancy. `usable/3` and `unseal_by_name/2` are reached
@@ -278,7 +278,7 @@ defmodule Sanctum.VaultReader do
   # authority. Nothing here widens a caller; it names the tenant it was
   # already given.
   defp tenant_actor(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
-    %Cyfr.Actor{athanor_id: athanor_id}
+    %Prima.Actor{athanor_id: athanor_id}
   end
 
   defp decode_payload(plaintext), do: Sanctum.Vault.Payload.decode(plaintext)
@@ -367,7 +367,7 @@ defmodule Sanctum.VaultReader do
   defp decode_stored("", default, _field), do: default
 
   defp decode_stored(json, default, field) when is_binary(json) do
-    case Cyfr.Json.decode(json) do
+    case Prima.Json.decode(json) do
       {:ok, value} ->
         value
 

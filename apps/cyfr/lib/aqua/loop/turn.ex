@@ -17,7 +17,7 @@ defmodule Aqua.Loop.Turn do
 
   alias Aqua.Loop.Request
   alias Aqua.Tape
-  alias Cyfr.Authority
+  alias Prima.Authority
   alias Sanctum.Context
 
   @default_deadline_ms 15 * 60 * 1000
@@ -255,7 +255,7 @@ defmodule Aqua.Loop.Turn do
   defp speaks_chat(listing, catalyst) do
     row = Enum.find(listing, &(&1["component_ref"] == catalyst)) || %{}
 
-    if Cyfr.Model.speaks_chat?(row["manifest"]),
+    if Prima.Model.speaks_chat?(row["manifest"]),
       do: :ok,
       else: {:error, {:catalyst_not_chat, catalyst}}
   end
@@ -315,7 +315,7 @@ defmodule Aqua.Loop.Turn do
   end
 
   defp deadline_ms(%Authority{} = authority) do
-    case Cyfr.Limits.timeout_ms(Authority.limits(authority)) do
+    case Prima.Limits.timeout_ms(Authority.limits(authority)) do
       {:ok, ms} when ms > 0 -> ms
       _ -> @default_deadline_ms
     end

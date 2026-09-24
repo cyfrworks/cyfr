@@ -220,10 +220,10 @@ defmodule Cyfr.Execution.ChainScopeTest do
       }
     }
 
-    {:ok, blob} = Cyfr.Authority.Blob.parse(graph)
+    {:ok, blob} = Prima.Authority.Blob.parse(graph)
 
     {:ok, auth} =
-      Cyfr.Authority.root(
+      Prima.Authority.root(
         %{
           profile_id: "prof-scope",
           consent_id: "consent-scope",

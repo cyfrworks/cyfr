@@ -58,7 +58,7 @@ defmodule Cyfr.CellTest do
   defp restore(key, :absent), do: :persistent_term.erase(key)
   defp restore(key, value), do: :persistent_term.put(key, value)
 
-  defp me, do: Cyfr.Boot.id()
+  defp me, do: Prima.Boot.id()
 
   # One renew tick, sent and then waited on: the claimant's own timer is
   # set beyond every case in this file, so a tick happens when a case

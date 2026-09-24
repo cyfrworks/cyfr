@@ -269,7 +269,7 @@ defmodule Aqua.AloudTest do
     private: private,
     shared: shared
   } do
-    message_id = Cyfr.UUID7.generate_id("msg")
+    message_id = Prima.UUID7.generate_id("msg")
 
     {:ok, refs} =
       Aqua.Attachments.store(ctx, private.id, message_id, [
@@ -304,7 +304,7 @@ defmodule Aqua.AloudTest do
     private: private,
     shared: shared
   } do
-    message_id = Cyfr.UUID7.generate_id("msg")
+    message_id = Prima.UUID7.generate_id("msg")
 
     {:ok, refs} =
       Aqua.Attachments.store(ctx, private.id, message_id, [

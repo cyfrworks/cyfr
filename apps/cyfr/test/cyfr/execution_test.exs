@@ -14,14 +14,15 @@ defmodule Cyfr.ExecutionTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Execution.{Dispatch, Keys}
-  alias Cyfr.Test.{AuthorityFixtures, ScriptedWorker, ScriptedWorkerListener}
-  alias Cyfr.WorkerAuth
+  alias Cyfr.Test.{ScriptedWorker, ScriptedWorkerListener}
+  alias Prima.Test.AuthorityFixtures
+  alias Prima.WorkerAuth
 
   # A worker service that answers as a service other than the one it is
   # configured as.
   defmodule Elsewhere do
     @moduledoc false
-    @behaviour Cyfr.WorkerAPI
+    @behaviour Prima.WorkerAPI
 
     @impl true
     def start(_token, _input, _sealed_keys), do: {:error, :malformed}

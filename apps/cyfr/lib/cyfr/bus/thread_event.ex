@@ -88,8 +88,8 @@ defmodule Cyfr.Bus.ThreadEvent do
   An event of `thread_id` in `actor`'s athanor. A kind outside `kinds/0`
   raises.
   """
-  @spec new(Cyfr.Actor.t(), String.t(), kind(), term()) :: t()
-  def new(%Cyfr.Actor{} = actor, thread_id, kind, data \\ nil) when is_binary(thread_id) do
+  @spec new(Prima.Actor.t(), String.t(), kind(), term()) :: t()
+  def new(%Prima.Actor{} = actor, thread_id, kind, data \\ nil) when is_binary(thread_id) do
     %__MODULE__{
       athanor_id: Payload.athanor!(actor),
       thread_id: thread_id,

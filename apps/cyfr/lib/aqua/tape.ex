@@ -134,7 +134,7 @@ defmodule Aqua.Tape do
   @spec append_aborted(Context.t(), turn(), String.t()) :: {:ok, row()} | {:error, term()}
   def append_aborted(%Context{} = ctx, turn, reason) when is_binary(reason) do
     turn_row(ctx, turn, %{
-      author: Cyfr.Author.system(),
+      author: Prima.Author.system(),
       kind: "turn_aborted",
       content: reason
     })
@@ -163,7 +163,7 @@ defmodule Aqua.Tape do
   @spec append_compaction(Context.t(), turn(), map()) :: {:ok, row()} | {:error, term()}
   def append_compaction(%Context{} = ctx, turn, attrs) when is_map(attrs) do
     turn_row(ctx, turn, %{
-      author: Cyfr.Author.system(),
+      author: Prima.Author.system(),
       kind: "compaction",
       content: Map.get(attrs, :summary, ""),
       payload: %{

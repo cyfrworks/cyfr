@@ -77,8 +77,8 @@ unless Code.ensure_loaded?(Opus.Test.FormulaHost) do
     def intercepted, do: Cyfr.Ops.Catalog.host_intercepted_actions()
 
     @doc "The options a formula's host functions run with under `authority`."
-    @spec opts(Cyfr.Authority.t()) :: keyword()
+    @spec opts(Prima.Authority.t()) :: keyword()
     def opts(authority),
-      do: [limits: Cyfr.Authority.limits(authority), intercepted: intercepted()]
+      do: [limits: Prima.Authority.limits(authority), intercepted: intercepted()]
   end
 end

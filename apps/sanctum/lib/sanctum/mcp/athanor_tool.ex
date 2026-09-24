@@ -29,7 +29,7 @@ defmodule Sanctum.MCP.AthanorTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # A pair is minted BY a person, WITH a person — interactive on
     # the annotation so dispatch, discovery and the typed refusal all
     # read one declaration; no standing credential mints a DM.

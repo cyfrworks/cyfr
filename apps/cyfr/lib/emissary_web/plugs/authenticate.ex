@@ -47,7 +47,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
     # own, so no server-side session is involved either way.
     case resolve_bearer_credential(conn) do
       {:ok, context, kind} ->
-        Cyfr.LoggerContext.set_from_context(context)
+        Prima.LoggerContext.set_from_context(context)
 
         conn
         |> assign(:context, stamp_client_ip(conn, context))
@@ -81,7 +81,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
 
           context ->
             context = stamp_client_ip(conn, context)
-            Cyfr.LoggerContext.set_from_context(context)
+            Prima.LoggerContext.set_from_context(context)
             assign(conn, :context, context)
         end
 

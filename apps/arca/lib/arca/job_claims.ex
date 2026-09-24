@@ -353,7 +353,7 @@ defmodule Arca.JobClaims do
   # claims: the loser inserts nothing and reads the winner's row.
   defp insert(kind, key, owner, lease_ms, now) do
     row = %{
-      id: Cyfr.UUID7.generate_id("jcl"),
+      id: Prima.UUID7.generate_id("jcl"),
       kind: kind,
       key: key,
       owner: owner,

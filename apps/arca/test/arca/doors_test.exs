@@ -15,7 +15,7 @@ defmodule Arca.DoorsTest do
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    {:ok, actor: Cyfr.Actor.system()}
+    {:ok, actor: Prima.Actor.system()}
   end
 
   defp entry(actor, kind, value, over \\ %{}) do
@@ -30,7 +30,7 @@ defmodule Arca.DoorsTest do
 
   describe "who may ask" do
     test "an athanor-scoped actor is refused, before any query", %{actor: system} do
-      tenant = %Cyfr.Actor{athanor_id: "ath_doors_#{System.unique_integer([:positive])}"}
+      tenant = %Prima.Actor{athanor_id: "ath_doors_#{System.unique_integer([:positive])}"}
       handler = "doors-not-platform-#{System.unique_integer([:positive])}"
       parent = self()
 

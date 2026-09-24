@@ -4,9 +4,9 @@ defmodule Sanctum.Authority.NeedDispatchPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
-  alias Cyfr.Authority.Transition
+  alias Prima.Authority
+  alias Prima.Authority.Blob
+  alias Prima.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   # Reject undeclared or ambiguous needs and omissions when needs are declared; match each need to its edge.

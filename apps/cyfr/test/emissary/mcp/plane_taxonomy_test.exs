@@ -5,7 +5,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest.Probes do
   # Start from valid declarations, then corrupt one field to exercise the
   # catalog's refusal of malformed provider output independently of constructors.
   defp tool(changes) do
-    op = Cyfr.Ops.Operation.new("probe", "act", "Probe", [], kind: :read, planes: [:external])
+    op = Prima.Operation.new("probe", "act", "Probe", [], kind: :read, planes: [:external])
     %{name: "probe", operations: [struct!(op, changes)]}
   end
 

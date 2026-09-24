@@ -2,7 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 // How CYFR and the bridge authenticate each other: the bridge's half. The
-// server's half is Cyfr.BridgeAuth (apps/cyfr_contracts), and
+// server's half is Prima.BridgeAuth (apps/prima), and
 // tests/fixtures/bridge_auth.json holds the vectors both must reproduce.
 //
 // One 32-byte root secret (CYFR_MCP_BRIDGE_KEY, 64 hexadecimal digits) is

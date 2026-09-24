@@ -13,7 +13,7 @@ defmodule Cyfr.Execution.KeysTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Execution.Keys
-  alias Cyfr.WorkerAuth
+  alias Prima.WorkerAuth
 
   setup do
     previous = Keys.root()

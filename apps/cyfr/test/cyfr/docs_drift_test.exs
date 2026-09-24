@@ -45,9 +45,9 @@ defmodule Cyfr.DocsDriftTest do
   test "component-guide's manifest field table documents the closed key roster" do
     source = File.read!(Path.join(@repo_root, "component-guide.md"))
 
-    for key <- Cyfr.Manifest.known_keys() do
+    for key <- Prima.Manifest.known_keys() do
       assert source =~ "| `#{key}` |",
-             "manifest key `#{key}` (Cyfr.Manifest.known_keys/0) is missing " <>
+             "manifest key `#{key}` (Prima.Manifest.known_keys/0) is missing " <>
                "from component-guide.md's field table"
     end
   end

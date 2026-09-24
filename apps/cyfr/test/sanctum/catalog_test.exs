@@ -41,10 +41,10 @@ defmodule Sanctum.CatalogTest do
 
     reaches =
       for file <-
-            Cyfr.Test.SourceTree.files!(
+            Prima.Test.SourceTree.files!(
               Path.join(root, "apps/sanctum/lib/sanctum/consent/**/*.ex")
             ),
-          line <- file |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.lines(),
+          line <- file |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.lines(),
           line =~ ~r/\bEmissary\./,
           do: "#{Path.relative_to(file, root)}: #{String.trim(line)}"
 

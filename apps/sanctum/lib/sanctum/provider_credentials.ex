@@ -91,7 +91,7 @@ defmodule Sanctum.ProviderCredentials do
   @spec fetch_for_oauth(String.t(), String.t()) :: {:ok, map()} | {:error, String.t()}
   def fetch_for_oauth(athanor_id, provider) do
     with :ok <- validate_provider(provider) do
-      case Arca.ProviderCredentialStorage.get(Cyfr.Actor.in_athanor(athanor_id), provider) do
+      case Arca.ProviderCredentialStorage.get(Prima.Actor.in_athanor(athanor_id), provider) do
         {:ok, row} ->
           emit_fetch(provider, :store)
           unseal(row)

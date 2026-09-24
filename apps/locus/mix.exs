@@ -38,7 +38,7 @@ defmodule Locus.MixProject do
       {:jason, "~> 1.4"},
       {:plug, "~> 1.16"},
       {:bandit, "~> 1.5"},
-      {:cyfr_contracts, in_umbrella: true}
+      {:prima, in_umbrella: true}
     ]
   end
 end

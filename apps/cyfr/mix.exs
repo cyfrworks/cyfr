@@ -56,7 +56,7 @@ defmodule Cyfr.App.MixProject do
 
   defp deps do
     [
-      {:cyfr_contracts, in_umbrella: true},
+      {:prima, in_umbrella: true},
       # Persistence and the auth domain, each its own application: Arca
       # owns every row, blob and lease; Sanctum owns identity, tenancy,
       # authority, consent and the vault, and reaches Arca downward.

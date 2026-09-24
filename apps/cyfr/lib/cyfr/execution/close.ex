@@ -33,7 +33,7 @@ defmodule Cyfr.Execution.Close do
   require Logger
 
   alias Cyfr.Execution.{Cascade, Events, Record, StepSpans, Telemetry}
-  alias Cyfr.SecretMasker
+  alias Prima.SecretMasker
   alias Sanctum.Context
 
   @enforce_keys [:ctx, :record]
@@ -55,7 +55,7 @@ defmodule Cyfr.Execution.Close do
   `setup_stream` the stream a setup refusal is announced on (the run's root,
   else its parent); `signature_verified` the registry's attestation flag;
   `started` whether the row was admitted; `envelope` whether the output is
-  the component's catalyst envelope (`Cyfr.Model.decode_envelope/1`),
+  the component's catalyst envelope (`Prima.Model.decode_envelope/1`),
   whose error is a refusal the component answers rather than a failure of
   the run; `admission` the barriers (`:charge`, `:step`, `:occurrence_id`)
   a row admitted only on failure passes through.
@@ -63,7 +63,7 @@ defmodule Cyfr.Execution.Close do
   @type t :: %__MODULE__{
           ctx: Context.t(),
           record: Record.t(),
-          limits: Cyfr.Limits.t() | nil,
+          limits: Prima.Limits.t() | nil,
           step_spans: StepSpans.t() | nil,
           setup_stream: String.t() | nil,
           signature_verified: boolean(),
@@ -261,7 +261,7 @@ defmodule Cyfr.Execution.Close do
   # The limits are set when policy is enforced; a close without them was
   # never admitted, and matching raises rather than substituting a ceiling.
   defp check_response_size(close, secrets, masked_output) do
-    %Cyfr.Limits{max_response_size: max_response} = close.limits
+    %Prima.Limits{max_response_size: max_response} = close.limits
 
     case Jason.encode(masked_output) do
       {:ok, output_json} when byte_size(output_json) > max_response ->
@@ -427,7 +427,7 @@ defmodule Cyfr.Execution.Close do
   defp announce_setup(%__MODULE__{setup_stream: nil}, _typed), do: :ok
 
   defp announce_setup(%__MODULE__{setup_stream: stream_id} = close, typed) do
-    case Cyfr.Remediation.analyze(typed) do
+    case Prima.Remediation.analyze(typed) do
       {:setup_required, remediation} ->
         _ =
           Events.push(

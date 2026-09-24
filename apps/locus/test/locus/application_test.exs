@@ -24,14 +24,14 @@ defmodule Locus.ApplicationTest do
   end
 
   test "a node that holds no builds key serves nothing, whoever started it" do
-    assert ids(App.children(false, false)) == [Cyfr.Slots]
-    assert ids(App.children(false, true)) == [Cyfr.Slots, Locus.Spawner]
-    assert ids(App.children(false, false, @release_executors)) == [Cyfr.Slots]
+    assert ids(App.children(false, false)) == [Prima.Slots]
+    assert ids(App.children(false, true)) == [Prima.Slots, Locus.Spawner]
+    assert ids(App.children(false, false, @release_executors)) == [Prima.Slots]
   end
 
   test "a node that serves under cyfr-spawn starts the spawner before the listener that depends on it" do
     for executors <- [Locus.Executor.executors(), @release_executors] do
-      assert ids(App.children(true, true, executors)) == [Cyfr.Slots, Locus.Spawner, Bandit]
+      assert ids(App.children(true, true, executors)) == [Prima.Slots, Locus.Spawner, Bandit]
     end
   end
 
@@ -42,7 +42,7 @@ defmodule Locus.ApplicationTest do
 
     # The test build knows the launcher, and serves through it.
     assert Locus.DirectLauncher in Locus.Executor.executors()
-    assert ids(App.children(true, false)) == [Cyfr.Slots, Bandit]
+    assert ids(App.children(true, false)) == [Prima.Slots, Bandit]
   end
 
   test "the running tree restarts a child with everything started after it" do
@@ -51,7 +51,7 @@ defmodule Locus.ApplicationTest do
   end
 
   test "the build slots take their caps from the builder's settings and refuse, never queue" do
-    assert {Cyfr.Slots, opts} = App.build_slots()
+    assert {Prima.Slots, opts} = App.build_slots()
     assert opts[:name] == Locus.BuildSlots
     assert opts[:max] == Locus.Config.max_concurrent()
     assert opts[:key_max] == Locus.Config.max_concurrent_per_tenant()
@@ -66,7 +66,7 @@ defmodule Locus.ApplicationTest do
       Application.delete_env(:locus, :max_concurrent_per_tenant)
     end)
 
-    assert {Cyfr.Slots, opts} = App.build_slots()
+    assert {Prima.Slots, opts} = App.build_slots()
     assert {opts[:max], opts[:key_max]} == {5, 3}
   end
 
@@ -98,7 +98,7 @@ defmodule Locus.ApplicationTest do
 
     assert Logger.level() == :error
     assert {:ok, %{formatter: {Logger.Formatter, config}}} = :logger.get_handler_config(:default)
-    assert inspect(config) =~ "Cyfr.JsonFormatter"
+    assert inspect(config) =~ "Prima.JsonFormatter"
 
     # Text leaves the handler's formatter as it was configured.
     :logger.update_handler_config(:default, :formatter, formatter)

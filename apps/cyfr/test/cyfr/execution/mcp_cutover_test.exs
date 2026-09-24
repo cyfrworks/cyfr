@@ -9,7 +9,7 @@ defmodule Cyfr.Execution.MCPCutoverTest do
   # attach was handed, read on the suite's wire.
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Cyfr.Test.TwoServices
   alias Sanctum.Context

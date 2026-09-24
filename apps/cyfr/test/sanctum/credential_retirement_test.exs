@@ -466,7 +466,7 @@ defmodule Sanctum.CredentialRetirementLockTest do
     denier =
       Task.async(fn ->
         unboxed(fn ->
-          Arca.SecurityTransitions.deny_user(Cyfr.Actor.system(), user.id,
+          Arca.SecurityTransitions.deny_user(Prima.Actor.system(), user.id,
             verify: fn _rows ->
               send(test, :denial_holds)
 

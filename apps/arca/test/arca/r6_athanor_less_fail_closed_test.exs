@@ -18,7 +18,7 @@ defmodule Arca.R6AthanorLessFailClosedTest do
   use ExUnit.Case, async: true
 
   alias Arca.QueryHelpers
-  alias Cyfr.Actor
+  alias Prima.Actor
 
   import Ecto.Query
 

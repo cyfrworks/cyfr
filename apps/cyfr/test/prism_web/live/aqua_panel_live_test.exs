@@ -11,7 +11,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
   # scripted model.
   use PrismWeb.ConnCase, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Arca.ThreadStorage, as: Threads
   alias Aqua.Runner

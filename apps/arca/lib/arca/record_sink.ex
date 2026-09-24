@@ -56,7 +56,7 @@ defmodule Arca.RecordSink do
 
   @type item ::
           {:policy_log, map()}
-          | {:mcp_log_update, Cyfr.Actor.t(), String.t(), map()}
+          | {:mcp_log_update, Prima.Actor.t(), String.t(), map()}
           | {:mcp_log_started, map()}
           | {:mcp_log_close, map(), map()}
           | {:vault_touch, String.t(), String.t()}
@@ -144,7 +144,7 @@ defmodule Arca.RecordSink do
   def handle_info(:tick, state), do: {:noreply, drain(%{state | timer: nil})}
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

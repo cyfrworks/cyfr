@@ -13,7 +13,7 @@ defmodule Cyfr.EgressInventoryTest do
   A new `Req`/`Finch`/`httpc` call fails here until someone classifies
   it — the fail-closed direction.
 
-  The pure `Cyfr.Network` policy validates a supplied address and constructs
+  The pure `Prima.Network` policy validates a supplied address and constructs
   pinned options. Sanctum and Opus own their DNS resolution; Sanctum.Egress
   sends control-plane requests, and Opus owns the guest HTTP handlers.
 
@@ -40,18 +40,18 @@ defmodule Cyfr.EgressInventoryTest do
     "apps/opus/lib/opus/http_handler.ex" => :guest_fetch,
     # Guest streaming HTTP — `into: :self` with an append-time byte budget.
     "apps/opus/lib/opus/http_stream_handler.ex" => :guest_stream,
-    # The worker wire, CYFR's side: `Cyfr.WorkerAPI` requests to the
+    # The worker wire, CYFR's side: `Prima.WorkerAPI` requests to the
     # operator-configured worker services (CYFR_WORKERS), signed with each
-    # service's dispatch key, bounded answers (`Cyfr.WorkerWire`).
+    # service's dispatch key, bounded answers (`Prima.WorkerWire`).
     "apps/cyfr/lib/cyfr/execution/worker_client.ex" => :worker_client,
     # The worker wire, Opus's side: a runner's host calls and the service's
     # exit reports to CYFR's host API (OPUS_HOST_URL), sealed and signed
     # with the attempt's keys, bounded answers.
     "apps/opus/lib/opus/host_client.ex" => :host_client,
-    # The builds wire, CYFR's side: `Cyfr.BuilderProtocol` requests to the
+    # The builds wire, CYFR's side: `Prima.BuilderProtocol` requests to the
     # operator-configured Locus builds service (CYFR_LOCUS_BUILDS_URL),
     # signed with the key derived from the service's, the answer bounded
-    # while it streams (`Cyfr.BoundedBody`) and read strictly.
+    # while it streams (`Prima.BoundedBody`) and read strictly.
     "apps/cyfr/lib/compendium/builds/client.ex" => :builds_client
   }
 
@@ -70,11 +70,11 @@ defmodule Cyfr.EgressInventoryTest do
 
   test "every outbound HTTP site is classified" do
     found =
-      Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
+      Prima.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
       |> Enum.filter(fn path ->
         source =
           path
-          |> Cyfr.Test.SourceTree.read()
+          |> Prima.Test.SourceTree.read()
           |> String.replace(~r/"""[\s\S]*?"""/, "")
           |> String.split("\n")
           |> Enum.reject(&String.match?(&1, ~r/^\s*#/))

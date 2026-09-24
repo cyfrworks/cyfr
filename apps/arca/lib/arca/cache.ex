@@ -9,7 +9,7 @@ defmodule Arca.Cache do
   `Arca.Cache` directly for short-lived, non-persistent state.
 
   Attacker-cardinality state does **not** belong here — request rate-limit
-  counters live in `Cyfr.RateLimiter`'s own table, so a flood cannot evict
+  counters live in `Prima.RateLimiter`'s own table, so a flood cannot evict
   sessions or OAuth state from this shared one. Eviction and expiry run on
   `Arca.Cache.Sweeper`'s timer, never on the `put/3` hot path.
 

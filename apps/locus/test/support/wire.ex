@@ -6,7 +6,7 @@ defmodule Locus.Test.Wire do
   The client's end of the build wire, for the suite: it serves the real
   builds service (`Locus.Application.listener/1`, under the test's own
   supervisor, on a port the system chose), signs requests as CYFR does
-  (`Cyfr.BuilderProtocol`), and speaks HTTP/1.1 to it over a plain socket,
+  (`Prima.BuilderProtocol`), and speaks HTTP/1.1 to it over a plain socket,
   so a test can read an answer's lines as they arrive and leave in the
   middle of one. Nothing here is CYFR's client; it is a second, minimal
   reading of the same contract.
@@ -14,7 +14,7 @@ defmodule Locus.Test.Wire do
 
   import ExUnit.Assertions
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
 
   @key :binary.copy(<<0x5A>>, 32)
   @athanor "ath_01a09fee-045b-770b-b745-a62792bb8798"

@@ -21,7 +21,7 @@ defmodule Cyfr.Execution.HostListenerTest do
 
   alias Cyfr.Execution.{Attempt, Dispatch, HostListener, Keys}
   alias Cyfr.Test.AttemptFixtures
-  alias Cyfr.{WorkerAuth, WorkerWire}
+  alias Prima.{WorkerAuth, WorkerWire}
 
   @service "wrk_listener_test"
   @auth WorkerWire.auth_header()
@@ -223,7 +223,7 @@ defmodule Cyfr.Execution.HostListenerTest do
 
       assert %{state: "lapsed"} =
                Arca.ExecutionAttempts.get(
-                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 Prima.Actor.in_athanor(fixture.athanor_id),
                  fixture.attempt
                )
     end
@@ -323,7 +323,7 @@ defmodule Cyfr.Execution.HostListenerTest do
 
       assert %{state: "running"} =
                Arca.ExecutionAttempts.get(
-                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 Prima.Actor.in_athanor(fixture.athanor_id),
                  fixture.attempt
                )
 
@@ -345,7 +345,7 @@ defmodule Cyfr.Execution.HostListenerTest do
 
       assert %{state: "running"} =
                Arca.ExecutionAttempts.get(
-                 Cyfr.Actor.in_athanor(fixture.athanor_id),
+                 Prima.Actor.in_athanor(fixture.athanor_id),
                  fixture.attempt
                )
     end
@@ -451,7 +451,7 @@ defmodule Cyfr.Execution.HostListenerTest do
          %{url: url} do
       fixture = AttemptFixtures.attached!(service_id: @service)
       :ok = Cyfr.Execution.Events.subscribe(fixture.execution_id, fixture.ctx)
-      max = Cyfr.HostAPI.max_body_bytes()
+      max = Prima.HostAPI.max_body_bytes()
       text = String.duplicate("x", max)
 
       json =

@@ -12,13 +12,13 @@ defmodule Arca.LockingSeamTest do
   ignores, and a mode or a lock-taking write spelled elsewhere bypasses
   the hook's bounded wait, so each is refused here.
 
-  The scan reads code lines only (`Cyfr.Test.CodeLines`): a comment or a
+  The scan reads code lines only (`Prima.Test.CodeLines`): a comment or a
   doc naming a lock is prose, not a lock.
   """
 
   use ExUnit.Case, async: true
 
-  alias Cyfr.Test.{CodeLines, SourceTree}
+  alias Prima.Test.{CodeLines, SourceTree}
 
   @root Path.expand("../../../..", __DIR__)
 

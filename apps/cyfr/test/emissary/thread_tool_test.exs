@@ -256,7 +256,7 @@ defmodule Emissary.MCP.ThreadToolTest do
       assert {:error, :message_too_long} =
                call(ctx, %{"action" => "send", "thread" => thread.id, "message" => long})
 
-      assert Cyfr.Refusal.message(:message_too_long) =~ "32 KiB"
+      assert Prima.Refusal.message(:message_too_long) =~ "32 KiB"
     end
   end
 
@@ -599,7 +599,7 @@ defmodule Emissary.MCP.ThreadToolTest do
       ctx: ctx,
       thread: thread
     } do
-      message_id = Cyfr.UUID7.generate_id("msg")
+      message_id = Prima.UUID7.generate_id("msg")
 
       assert {:ok, %{message_id: ^message_id, attachments: [ref]}} =
                call(ctx, %{
@@ -726,7 +726,7 @@ defmodule Emissary.MCP.ThreadToolTest do
     end
   end
 
-  # One action's own declaration, as `Cyfr.Ops.Operation.cast/2` applies it;
+  # One action's own declaration, as `Prima.Operation.cast/2` applies it;
   # the tool's discovery schema merges every action into one flat object.
   defp action_schema(tool, action) do
     case Enum.find(tool.operations, &(&1.action == action)) do
@@ -735,7 +735,7 @@ defmodule Emissary.MCP.ThreadToolTest do
 
       operation ->
         operation.args
-        |> Cyfr.Ops.Arg.schema()
+        |> Prima.Arg.schema()
         |> put_in(["properties", "action"], %{"type" => "string", "const" => action})
         |> Map.update!("required", &["action" | &1])
     end

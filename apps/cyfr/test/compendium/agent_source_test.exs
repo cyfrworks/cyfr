@@ -143,11 +143,11 @@ defmodule Compendium.AgentSourceTest do
 
     # The node keys are the blob's grammar.
     assert {:ok, _} =
-             Cyfr.Authority.Blob.parse(%{
+             Prima.Authority.Blob.parse(%{
                "canonical" => "jcs-1",
                "nodes" =>
                  Map.new(keys, fn key ->
-                   {key, %{"limits" => Cyfr.Test.AuthorityFixtures.limits_map(), "edges" => %{}}}
+                   {key, %{"limits" => Prima.Test.AuthorityFixtures.limits_map(), "edges" => %{}}}
                  end)
              })
   end
@@ -197,7 +197,7 @@ defmodule Compendium.AgentSourceTest do
     {:ok, rows} = AgentSource.rows(ctx)
     roster = MapSet.new(rows, & &1.name)
     path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit("web"), 1)
-    {:ok, bytes} = Arca.get(Cyfr.Actor.system(), path)
+    {:ok, bytes} = Arca.get(Prima.Actor.system(), path)
     assert {:ok, ^tenant} = AgentSource.shipped_row("web", bytes, roster)
   end
 
@@ -210,7 +210,7 @@ defmodule Compendium.AgentSourceTest do
     {:ok, rows} = AgentSource.rows(ctx)
     roster = MapSet.new(rows, & &1.name)
     path = Arca.Storage.seed_prefix("aqua") ++ Enum.drop(AgentSource.unit("web"), 1)
-    {:ok, bytes} = Arca.get(Cyfr.Actor.system(), path)
+    {:ok, bytes} = Arca.get(Prima.Actor.system(), path)
     assert {:ok, seed} = AgentSource.shipped_row("web", bytes, roster)
     assert seed.release_digest == before.release_digest
     refute seed.release_digest == edited.release_digest

@@ -10,7 +10,7 @@ defmodule Opus.Keeper do
     * `Opus.Keeper.Spawn` — the client of `cyfr-spawn` (`apps/spawn`),
       the keeper the image starts the service under: each runner is
       spawned in the keeper's `runner` uid pool with an explicit
-      environment, and its control channel (`Cyfr.RunnerControl`) is the
+      environment, and its control channel (`Prima.RunnerControl`) is the
       socket on its file descriptor 3, relayed over the attach connection
       as stream 4. Refused where no channel was inherited.
     * `Opus.Keeper.Direct` — a launcher for a machine without a keeper (a
@@ -88,9 +88,9 @@ defmodule Opus.Keeper do
   What `reason`, the reason a spawn was refused before any runner process
   started (`t:event/0`'s `{:refused, reason}`, or `c:spawn/1`'s error),
   means for an operator: a code and a sentence, as
-  `t:Cyfr.WorkerAPI.refusal/0` spells them.
+  `t:Prima.WorkerAPI.refusal/0` spells them.
   """
-  @callback refusal(term()) :: Cyfr.WorkerAPI.refusal()
+  @callback refusal(term()) :: Prima.WorkerAPI.refusal()
 
   @doc "The keeper's own view of its runner pool, when it has one."
   @callback stats() ::

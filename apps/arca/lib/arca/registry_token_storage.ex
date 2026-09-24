@@ -56,7 +56,7 @@ defmodule Arca.RegistryTokenStorage do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       row = %{
-        id: Cyfr.UUID7.generate_id("rtk"),
+        id: Prima.UUID7.generate_id("rtk"),
         user_id: Map.fetch!(attrs, :user_id),
         registry: Map.fetch!(attrs, :registry),
         namespace_slug: Map.fetch!(attrs, :namespace_slug),

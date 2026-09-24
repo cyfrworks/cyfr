@@ -140,7 +140,7 @@ defmodule Arca.CopyTreeTest do
     Process.register(self(), :copy_tree_recorder)
 
     internal = %{
-      Cyfr.Actor.system()
+      Prima.Actor.system()
       | user_id: "_overlay",
         athanor_id: "ath_seeded",
         scope: :athanor

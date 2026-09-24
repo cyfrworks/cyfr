@@ -15,7 +15,7 @@ defmodule Opus.FormulaHandler do
   formula's attempt (`Opus.HostClient`), decided by CYFR under the
   authority it holds for that attempt; the runner holds no authority that
   grants anything. An action the assignment names as intercepted
-  (`Cyfr.Assignment`'s `intercepted`) is a child the host runs:
+  (`Prima.Assignment`'s `intercepted`) is a child the host runs:
   `execution.run` and `execution.run_stream` are admitted by CYFR
   (`Opus.HostClient.admit_child/5`) and run in a runner of the formula's
   own runner group (`Opus.Subtree.start_child/2`). Every other action
@@ -81,7 +81,7 @@ defmodule Opus.FormulaHandler do
 
   require Logger
 
-  alias Cyfr.Limits
+  alias Prima.Limits
   alias Opus.{AsyncTracker, HostClient, Subtree}
 
   @ended "Execution attempt ended before it closed"
@@ -102,7 +102,7 @@ defmodule Opus.FormulaHandler do
 
   ## Options
 
-  - `:limits` - The node's `Cyfr.Limits` (batch timeout, max concurrent
+  - `:limits` - The node's `Prima.Limits` (batch timeout, max concurrent
     tasks, request size)
   - `:intercepted` - The `tool.action` names the formula's assignment says
     its host runs rather than the catalog (default `[]`)
@@ -290,7 +290,7 @@ defmodule Opus.FormulaHandler do
 
   ## Options
 
-  - `:limits` - The node's `Cyfr.Limits` (request size)
+  - `:limits` - The node's `Prima.Limits` (request size)
   - `:intercepted` - The `tool.action` names the host runs (default `[]`)
   """
   @spec execute(String.t(), HostClient.t(), keyword()) :: String.t()
@@ -858,7 +858,7 @@ defmodule Opus.FormulaHandler do
   # Private: Response Encoding
   # ============================================================================
 
-  defp safe_encode(data), do: Cyfr.WitResponse.safe_encode(data)
+  defp safe_encode(data), do: Prima.WitResponse.safe_encode(data)
 
   defp encode_success(output) do
     safe_encode(%{
@@ -869,7 +869,7 @@ defmodule Opus.FormulaHandler do
 
   @doc false
   def encode_error(type, message),
-    do: Cyfr.WitResponse.encode_error(type, stringify_reason(message))
+    do: Prima.WitResponse.encode_error(type, stringify_reason(message))
 
   defp encode_error_with_remediation(type, message, remediation) do
     safe_encode(%{
@@ -970,7 +970,7 @@ defmodule Opus.FormulaHandler do
   defp stringify_reason(reason), do: render_reason(reason)
 
   # Guest-facing reason text, through the one vocabulary: a crafted binary
-  # passes, and everything else renders through `Cyfr.GuestError` or is
+  # passes, and everything else renders through `Prima.GuestError` or is
   # logged and generalized — never `inspect/1`, and never an atom's own
   # name. Spelling an unrecognised atom was how `:busy` and `:archived`
   # reached a guest as internal vocabulary; a refusal either has a
@@ -979,7 +979,7 @@ defmodule Opus.FormulaHandler do
   defp guest_reason(reason) when is_binary(reason), do: reason
 
   defp guest_reason(reason) do
-    case Cyfr.GuestError.render(reason) do
+    case Prima.GuestError.render(reason) do
       nil ->
         Logger.warning("[FormulaHandler] unrenderable guest reason: #{inspect(reason)}")
         "the call failed"
@@ -990,7 +990,7 @@ defmodule Opus.FormulaHandler do
   end
 
   @doc """
-  The guest's view of a refusal: the sentence `Cyfr.GuestError` renders
+  The guest's view of a refusal: the sentence `Prima.GuestError` renders
   from the reason's data, and never an internal term. A refusal CYFR wants
   a guest to see crosses the wire already rendered, as a guest error's
   `type` and `message`.
@@ -999,6 +999,6 @@ defmodule Opus.FormulaHandler do
   def render_reason(reason) do
     # `nil` means the term is internal — logged where it was produced, never
     # handed to the guest.
-    Cyfr.GuestError.render(reason) || "The call failed."
+    Prima.GuestError.render(reason) || "The call failed."
   end
 end

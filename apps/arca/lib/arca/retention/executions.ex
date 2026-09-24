@@ -17,7 +17,7 @@ defmodule Arca.Retention.Executions do
   def unit, do: :keep
 
   @impl true
-  def prune(%Cyfr.Actor{athanor_id: athanor} = actor, keep, dry_run) when is_binary(athanor) do
+  def prune(%Prima.Actor{athanor_id: athanor} = actor, keep, dry_run) when is_binary(athanor) do
     opts = [athanor_id: athanor]
 
     if dry_run,

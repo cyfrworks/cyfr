@@ -14,7 +14,7 @@ defmodule Arca.ProvisioningClaimsTest do
   # the database is busy — so this one runs alone.
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Arca.ProvisioningClaims, as: Claims
 
@@ -23,7 +23,7 @@ defmodule Arca.ProvisioningClaimsTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     athanor_id = "ath_claims_#{System.unique_integer([:positive])}"
-    {:ok, actor: %Cyfr.Actor{athanor_id: athanor_id}, athanor_id: athanor_id}
+    {:ok, actor: %Prima.Actor{athanor_id: athanor_id}, athanor_id: athanor_id}
   end
 
   # A claim with a lease this short has run out by the time anyone looks.
@@ -34,7 +34,7 @@ defmodule Arca.ProvisioningClaimsTest do
   end
 
   test "an actor without an athanor is refused by every function, before any query" do
-    nobody = %Cyfr.Actor{athanor_id: nil, user_id: "someone"}
+    nobody = %Prima.Actor{athanor_id: nil, user_id: "someone"}
     handler = "claims-no-athanor-#{System.unique_integer([:positive])}"
     parent = self()
 
@@ -57,7 +57,7 @@ defmodule Arca.ProvisioningClaimsTest do
     refute_received :queried
 
     # The probe is live: an actor with an athanor does query.
-    assert {:error, :not_found} = Claims.current(%Cyfr.Actor{athanor_id: "ath_claims_probe"})
+    assert {:error, :not_found} = Claims.current(%Prima.Actor{athanor_id: "ath_claims_probe"})
     assert_received :queried
   end
 
@@ -122,7 +122,7 @@ defmodule Arca.ProvisioningClaimsTest do
   end
 
   test "one estate's claim is nothing to another's", %{actor: actor} do
-    other = %Cyfr.Actor{athanor_id: "ath_claims_other_#{System.unique_integer([:positive])}"}
+    other = %Prima.Actor{athanor_id: "ath_claims_other_#{System.unique_integer([:positive])}"}
 
     {:ok, _} = Claims.claim(actor, "boot_1/a", "first_need", @lease_ms)
     assert {:ok, %{fence: 1}} = Claims.claim(other, "boot_1/b", "first_need", @lease_ms)

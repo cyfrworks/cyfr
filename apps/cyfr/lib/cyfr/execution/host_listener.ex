@@ -4,7 +4,7 @@
 defmodule Cyfr.Execution.HostListener do
   @moduledoc """
   The HTTP face of `Cyfr.Execution.Host`: one Bandit listener of its own,
-  serving the host routes `Cyfr.WorkerWire` declares, on the bind address
+  serving the host routes `Prima.WorkerWire` declares, on the bind address
   and port its child spec is given. A worker service's runners post their
   host calls here, and the service posts its runner exit reports; nothing
   else is served.
@@ -21,23 +21,23 @@ defmodule Cyfr.Execution.HostListener do
        of the attempt it names, at this member's standing
        (`Cyfr.Execution.Keys.standing/0`: its generation and its own boot,
        so a call addressed to a peer is refused here,
-       `Cyfr.WorkerAuth.verify_host_call_header/4`), a report under the
+       `Prima.WorkerAuth.verify_host_call_header/4`), a report under the
        dispatch key of the worker service it names
-       (`Cyfr.WorkerAuth.verify_report_header/3`) — within the timestamp
+       (`Prima.WorkerAuth.verify_report_header/3`) — within the timestamp
        window, else `401`;
-    4. for a callback that is not idempotent (`Cyfr.HostAPI.retry/1`), the
+    4. for a callback that is not idempotent (`Prima.HostAPI.retry/1`), the
        header's nonce has not been presented for its attempt within the
        window before, else `401`;
-    5. the body is at most `Cyfr.HostAPI.max_body_bytes/0`, else `413`,
-       and is the one the header named (`Cyfr.WorkerAuth.verify_body/2`),
+    5. the body is at most `Prima.HostAPI.max_body_bytes/0`, else `413`,
+       and is the one the header named (`Prima.WorkerAuth.verify_body/2`),
        else `401`;
     6. a host call's body opens as the `:body` of the call the header
        names, under the attempt's seal key derived from the root
-       (`Cyfr.WorkerAuth.open_call/4`), else `401`;
+       (`Prima.WorkerAuth.open_call/4`), else `401`;
     7. the body's `op` is the route's callback, else `400`.
 
   A host call crosses sealed: its HTTP body is
-  `Cyfr.WorkerAuth.seal_call/5` of the `{"op", "args"}` JSON in the
+  `Prima.WorkerAuth.seal_call/5` of the `{"op", "args"}` JSON in the
   `:body` direction, the header is computed over those sealed bytes, and
   the answer is the JSON `Cyfr.Execution.Host.call/2` produces sealed in
   the `:answer` direction under the same call. `Host.call/2` reads the
@@ -48,7 +48,7 @@ defmodule Cyfr.Execution.HostListener do
   the whole call again itself. A report (`runner_exited`) crosses as
   plain JSON under its report header, and its answer is plain.
 
-  Every listener refusal is `{"error": "lost"}` (`Cyfr.WorkerWire.error/2`)
+  Every listener refusal is `{"error": "lost"}` (`Prima.WorkerWire.error/2`)
   but the unknown route's `not_found`, the mismatched body's `malformed`
   and an unowned report's `unavailable`; the reason is logged, the header
   and body never. An answer, sealed or plain, is sent as `200` whatever
@@ -65,7 +65,7 @@ defmodule Cyfr.Execution.HostListener do
 
   require Logger
 
-  alias Cyfr.{HostAPI, WorkerAuth, WorkerWire}
+  alias Prima.{HostAPI, WorkerAuth, WorkerWire}
   alias Cyfr.Execution.{Host, Keys}
 
   plug(:match)
@@ -366,13 +366,13 @@ defmodule Cyfr.Execution.HostListener do
 
     use GenServer
 
-    @window_ms Cyfr.WorkerAuth.window_ms()
+    @window_ms Prima.WorkerAuth.window_ms()
 
     @doc "A new, empty nonce table, owned by the calling process."
     def new, do: :ets.new(__MODULE__, [:public, :set, write_concurrency: true])
 
     @doc "Whether the header's nonce was not presented for its attempt within the window, remembering it if so."
-    @spec fresh?(:ets.table(), Cyfr.WorkerAuth.host_call(), integer()) :: boolean()
+    @spec fresh?(:ets.table(), Prima.WorkerAuth.host_call(), integer()) :: boolean()
     def fresh?(table, %{attempt: attempt, nonce: nonce}, now),
       do: :ets.insert_new(table, {{attempt, nonce}, now + 2 * @window_ms})
 

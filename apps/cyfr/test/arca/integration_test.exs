@@ -230,12 +230,12 @@ defmodule Arca.IntegrationTest do
   describe "user isolation" do
     test "members of the same athanor share files; different athanors are isolated" do
       # Same athanor, different users — interchangeable members share storage.
-      member1 = Cyfr.Actor.in_athanor("ath_test")
+      member1 = Prima.Actor.in_athanor("ath_test")
 
-      member2 = Cyfr.Actor.in_athanor("ath_test")
+      member2 = Prima.Actor.in_athanor("ath_test")
 
       # A different athanor must remain isolated.
-      other_tenant = Cyfr.Actor.in_athanor("ath_other")
+      other_tenant = Prima.Actor.in_athanor("ath_other")
 
       :ok = Arca.put(member1, ["data", "private", "secret.txt"], "shared secret")
 
@@ -345,11 +345,11 @@ defmodule Arca.IntegrationTest do
       }
 
       # The server caches a blob under the global root...
-      :ok = Arca.put(Cyfr.Actor.system(), ["cache", "oci", "sha256_abc"], "cached blob")
+      :ok = Arca.put(Prima.Actor.system(), ["cache", "oci", "sha256_abc"], "cached blob")
 
       # ...another internal context reads it back...
       {:ok, content} =
-        Arca.get(%{Cyfr.Actor.system() | user_id: "_probe"}, ["cache", "oci", "sha256_abc"])
+        Arca.get(%{Prima.Actor.system() | user_id: "_probe"}, ["cache", "oci", "sha256_abc"])
 
       assert content == "cached blob"
 

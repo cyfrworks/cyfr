@@ -30,7 +30,7 @@ defmodule PrismWeb.BuildsLive do
   end
 
   def handle_event("compile", %{"reference" => reference}, socket) do
-    build_id = Cyfr.Hex.short()
+    build_id = Prima.Hex.short()
 
     # Keep only the selected build subscription active.
     unsubscribe_build(socket)
@@ -51,10 +51,10 @@ defmodule PrismWeb.BuildsLive do
     ctx = socket.assigns.context
     tag = CyfrWeb.ContextGuard.capture(ctx)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+           Prima.LoggerContext.restore(logger_metadata)
            args = %{"reference" => reference, "build_id" => build_id}
            result = call_tool(ctx, "build/compile", args)
            send(lv, {:deliver, tag, {:build_complete, result}})
@@ -183,7 +183,7 @@ defmodule PrismWeb.BuildsLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -200,7 +200,7 @@ defmodule PrismWeb.BuildsLive do
           case Compendium.ComponentPath.parse(segments) do
             {:ok, %{type: type, publisher: publisher, name: name, version: version}} ->
               [
-                Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
+                Prima.ComponentRef.to_string(%Prima.ComponentRef{
                   type: type,
                   namespace: publisher,
                   name: name,

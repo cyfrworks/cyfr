@@ -20,7 +20,7 @@ defmodule Cyfr.Execution.TurnRoot do
   keeper is always the one a later pause or release stops. A resume takes
   the slot first and moves the rows only once it holds one.
 
-  The slot is one of the execution slots (`Cyfr.Slots`, the instance
+  The slot is one of the execution slots (`Prima.Slots`, the instance
   `Cyfr.Execution.Slots`), keyed by the athanor. It is taken together with
   the registry entry that lets a cancel find the holder
   (`Cyfr.Execution.Dispatch.stop/2`), and both are given back together. A
@@ -32,7 +32,7 @@ defmodule Cyfr.Execution.TurnRoot do
   """
 
   alias Cyfr.Execution.{Admission, LeaseWatch, Record}
-  alias Cyfr.Slots
+  alias Prima.Slots
   alias Sanctum.Context
 
   @slots Cyfr.Execution.Slots
@@ -48,7 +48,7 @@ defmodule Cyfr.Execution.TurnRoot do
   @type claim :: %{
           execution_id: String.t(),
           attempt: String.t(),
-          authority: Cyfr.Authority.t(),
+          authority: Prima.Authority.t(),
           activation_digest: String.t() | nil,
           lease_until: DateTime.t(),
           budget_id: String.t(),

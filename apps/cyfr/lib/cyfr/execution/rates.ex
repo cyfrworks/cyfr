@@ -26,11 +26,11 @@ defmodule Cyfr.Execution.Rates do
   Every bucket here is one two members could otherwise admit twice. A
   budget that bounds a member's own work — the events one root emits,
   the slots one member runs at once — is counted in that member's memory
-  instead (`Cyfr.RateLimiter`, `Cyfr.Slots`), where losing the count on a
+  instead (`Prima.RateLimiter`, `Prima.Slots`), where losing the count on a
   restart is looser and never stricter.
 
   Rate allowance is distinct from the execution slots
-  `Cyfr.Execution.Slots` holds (`Cyfr.Slots`): nothing here holds,
+  `Cyfr.Execution.Slots` holds (`Prima.Slots`): nothing here holds,
   charges or releases a slot. An allowance is spent at admission and
   comes back with the clock, whether or not the work it admitted still
   runs.
@@ -99,8 +99,8 @@ defmodule Cyfr.Execution.Rates do
       iex> Cyfr.Execution.Rates.check(actor, "component", %{rate_limit: %{requests: 10, window: "1m"}})
       {:error, :rate_limited, 45000}
   """
-  @spec check(Cyfr.Actor.t(), String.t(), map() | nil) :: verdict()
-  def check(%Cyfr.Actor{athanor_id: athanor_id} = actor, bucket, limit_source)
+  @spec check(Prima.Actor.t(), String.t(), map() | nil) :: verdict()
+  def check(%Prima.Actor{athanor_id: athanor_id} = actor, bucket, limit_source)
       when is_binary(athanor_id) and athanor_id != "" do
     case consented(limit_source) do
       :unlimited -> {:ok, :unlimited}
@@ -109,14 +109,14 @@ defmodule Cyfr.Execution.Rates do
     end
   end
 
-  def check(%Cyfr.Actor{}, _bucket, _limit_source), do: missing_tenant("check")
+  def check(%Prima.Actor{}, _bucket, _limit_source), do: missing_tenant("check")
 
   # `check/3` at an explicit instant, for tests that pin a claim to a
   # window's edge; a running cell takes the instant from its own clock.
   @doc false
-  @spec claim_at(Cyfr.Actor.t(), String.t(), map() | nil, DateTime.t()) :: verdict()
+  @spec claim_at(Prima.Actor.t(), String.t(), map() | nil, DateTime.t()) :: verdict()
   def claim_at(
-        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        %Prima.Actor{athanor_id: athanor_id} = actor,
         bucket,
         limit_source,
         %DateTime{} = now
@@ -134,15 +134,15 @@ defmodule Cyfr.Execution.Rates do
     end
   end
 
-  def claim_at(%Cyfr.Actor{}, _bucket, _limit_source, _now), do: missing_tenant("check")
+  def claim_at(%Prima.Actor{}, _bucket, _limit_source, _now), do: missing_tenant("check")
 
   @doc """
   Forget the bucket's window: the next claim opens a fresh one.
   Administrative, and what a test uses to start a bucket from nothing.
   """
-  @spec reset(Cyfr.Actor.t(), String.t()) ::
+  @spec reset(Prima.Actor.t(), String.t()) ::
           :ok | {:error, :missing_tenant} | {:error, :unavailable}
-  def reset(%Cyfr.Actor{athanor_id: athanor_id} = actor, bucket)
+  def reset(%Prima.Actor{athanor_id: athanor_id} = actor, bucket)
       when is_binary(athanor_id) and athanor_id != "" do
     case Arca.RateWindows.clear(actor, bucket) do
       :ok -> :ok
@@ -150,18 +150,18 @@ defmodule Cyfr.Execution.Rates do
     end
   end
 
-  def reset(%Cyfr.Actor{}, _bucket), do: missing_tenant("reset")
+  def reset(%Prima.Actor{}, _bucket), do: missing_tenant("reset")
 
   @doc """
   What the bucket reads now, counting nothing: `{:ok, used, remaining,
   window_ms}`, or `{:ok, :unlimited}` when no limit is configured.
   """
-  @spec status(Cyfr.Actor.t(), String.t(), map() | nil) ::
+  @spec status(Prima.Actor.t(), String.t(), map() | nil) ::
           {:ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
           | {:ok, :unlimited}
           | {:error, :missing_tenant}
           | {:error, :unavailable}
-  def status(%Cyfr.Actor{athanor_id: athanor_id} = actor, bucket, limit_source)
+  def status(%Prima.Actor{athanor_id: athanor_id} = actor, bucket, limit_source)
       when is_binary(athanor_id) and athanor_id != "" do
     case consented(limit_source) do
       :unlimited ->
@@ -181,7 +181,7 @@ defmodule Cyfr.Execution.Rates do
     end
   end
 
-  def status(%Cyfr.Actor{}, _bucket, _limit_source), do: missing_tenant("status")
+  def status(%Prima.Actor{}, _bucket, _limit_source), do: missing_tenant("status")
 
   # ---- internal --------------------------------------------------------------
 
@@ -212,7 +212,7 @@ defmodule Cyfr.Execution.Rates do
 
   # The cap and the window a limit source consents to. Any map carrying a
   # `:rate_limit` key of `%{requests: n, window: "1m"}` — callers pass the
-  # node's consented `Cyfr.Limits.rate_limit`, or a platform-config bucket
+  # node's consented `Prima.Limits.rate_limit`, or a platform-config bucket
   # like the emit cap. A nil map or a nil `:rate_limit` is unlimited.
   defp consented(nil), do: :unlimited
   defp consented(%{rate_limit: nil}), do: :unlimited
@@ -232,13 +232,13 @@ defmodule Cyfr.Execution.Rates do
 
   defp consented(_), do: :unlimited
 
-  # Duration grammar is Cyfr.Limits' — one parser for every enforcement
+  # Duration grammar is Prima.Limits' — one parser for every enforcement
   # window, so "1h" cannot mean an hour in one limiter and a fallback minute
   # in another. Unparseable is unparseable, never a default.
   defp parse_window(window) when is_integer(window), do: {:ok, window}
 
   defp parse_window(window) do
-    case Cyfr.Limits.parse_duration(window) do
+    case Prima.Limits.parse_duration(window) do
       {:ok, ms} ->
         {:ok, ms}
 

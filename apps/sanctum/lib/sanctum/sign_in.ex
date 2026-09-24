@@ -157,7 +157,7 @@ defmodule Sanctum.SignIn do
           {:ok, Sanctum.Tenancy.Users.user()}
           | {:error, :not_found | :invalid_slug | :namespace_owned_by_another_identity | term()}
   def record_namespace(user_id, slug) when is_binary(user_id) and is_binary(slug) do
-    with true <- Cyfr.ComponentRef.valid_personal_slug?(slug) || {:error, :invalid_slug},
+    with true <- Prima.ComponentRef.valid_personal_slug?(slug) || {:error, :invalid_slug},
          {:ok, user} <- Users.get(user_id) do
       cond do
         user.namespace == slug ->

@@ -185,11 +185,11 @@ defmodule Aqua.Runner.RecoveryTable do
   defp classify(_ctx, turn),
     do: {:uncertain, turn, "the turn is in no state a runner can continue"}
 
-  # A launch is never replayed (`Cyfr.TurnStep.unresolved/1`):
+  # A launch is never replayed (`Prima.TurnStep.unresolved/1`):
   # whether the application started is not known from here, and the turn
   # stops on it. The continuation settles any other open step.
   defp settle_launch(ctx, turn, step) do
-    with :uncertain <- Cyfr.TurnStep.unresolved(step),
+    with :uncertain <- Prima.TurnStep.unresolved(step),
          {:ok, %{turn: paused}} <-
            Tape.pause_uncertain(ctx, turn, %{
              step_id: step.id,

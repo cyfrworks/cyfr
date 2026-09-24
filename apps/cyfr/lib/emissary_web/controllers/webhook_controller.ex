@@ -22,7 +22,7 @@ defmodule EmissaryWeb.WebhookController do
   HTTP response by `request_id`.
 
   No controller-level timeout: the executor enforces the consented node
-  timeout (`Cyfr.Limits`). A layered controller timeout would just
+  timeout (`Prima.Limits`). A layered controller timeout would just
   produce inconsistent error reasons for the same kill.
   """
 
@@ -56,9 +56,9 @@ defmodule EmissaryWeb.WebhookController do
         EmissaryWeb.ApiError.send(conn, 500, :internal_error, "Internal error")
 
       webhook ->
-        request_id = Cyfr.UUID7.request_id()
+        request_id = Prima.UUID7.request_id()
         # Same key on the log lines as on the RequestLog row this run files.
-        Cyfr.LoggerContext.set_request_id(request_id)
+        Prima.LoggerContext.set_request_id(request_id)
 
         case Sanctum.Caller.establish({:webhook, webhook}, request_id: request_id) do
           {:ok, ctx} ->
@@ -92,7 +92,7 @@ defmodule EmissaryWeb.WebhookController do
     # This pipeline never runs Authenticate (the plug that stamps), so the
     # tenant metadata lands here — the roster exists so an aggregator can
     # filter by athanor, and webhook lines are exactly the ones that need it.
-    Cyfr.LoggerContext.set_from_context(ctx)
+    Prima.LoggerContext.set_from_context(ctx)
 
     case Webhook.decode_input_template(webhook.input_template) do
       {:ok, template} ->
@@ -181,7 +181,7 @@ defmodule EmissaryWeb.WebhookController do
 
     # Capture Logger metadata before spawn — `Task.Supervisor.start_child` does
     # not inherit it. Same idiom as `EmissaryWeb.Plugs.Authenticate`.
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     # The release starts :cyfr (binding this endpoint) before :opus brings
     # up the execution machinery — refuse the request cleanly in that
@@ -191,7 +191,7 @@ defmodule EmissaryWeb.WebhookController do
         claim = conn.assigns[:webhook_delivery_claim]
 
         Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
-          Cyfr.LoggerContext.restore(logger_metadata)
+          Prima.LoggerContext.restore(logger_metadata)
           run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time, claim)
         end)
       else
@@ -208,7 +208,7 @@ defmodule EmissaryWeb.WebhookController do
         duration_ms = duration_ms(start_time)
 
         RequestLog.safe_log_failed(ctx, request_id, %{
-          error: "task_spawn_failed: #{inspect(Cyfr.Sanitizer.sanitize(reason))}",
+          error: "task_spawn_failed: #{inspect(Prima.Sanitizer.sanitize(reason))}",
           duration_ms: duration_ms,
           routed_to: "opus"
         })
@@ -218,7 +218,7 @@ defmodule EmissaryWeb.WebhookController do
           %{duration_ms: duration_ms},
           telemetry_meta
           |> Map.put(:status, :error)
-          |> Map.put(:error, "task_spawn_failed: #{inspect(Cyfr.Sanitizer.sanitize(reason))}")
+          |> Map.put(:error, "task_spawn_failed: #{inspect(Prima.Sanitizer.sanitize(reason))}")
         )
 
         EmissaryWeb.ApiError.send(
@@ -300,7 +300,7 @@ defmodule EmissaryWeb.WebhookController do
             error:
               if(is_binary(reason),
                 do: reason,
-                else: inspect(Cyfr.Sanitizer.sanitize(reason))
+                else: inspect(Prima.Sanitizer.sanitize(reason))
               ),
             duration_ms: duration_ms,
             routed_to: "opus"
@@ -331,7 +331,7 @@ defmodule EmissaryWeb.WebhookController do
         # it), and telemetry gets the fixed slug — its consumers must not
         # see internal reasons.
         RequestLog.safe_log_failed(ctx, request_id, %{
-          error: inspect(Cyfr.Sanitizer.sanitize(e)),
+          error: inspect(Prima.Sanitizer.sanitize(e)),
           duration_ms: duration_ms,
           routed_to: "opus"
         })

@@ -20,11 +20,11 @@ defmodule Cyfr.TelemetryCatalogTest do
   @event_re ~r/\[:cyfr(?:,\s*:[a-z_0-9]+)+\]/
 
   defp source_events do
-    Cyfr.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
+    Prima.Test.SourceTree.files!(Path.join(@umbrella_root, "apps/*/lib/**/*.ex"))
     |> Enum.reject(&String.ends_with?(&1, "lib/cyfr/telemetry/catalog.ex"))
     |> Enum.flat_map(fn path ->
       # Collapse formatting so a list wrapped across lines still matches.
-      source = path |> Cyfr.Test.SourceTree.read() |> String.replace(~r/\n\s*/, " ")
+      source = path |> Prima.Test.SourceTree.read() |> String.replace(~r/\n\s*/, " ")
 
       Regex.scan(@event_re, source)
       |> Enum.map(fn [match] ->

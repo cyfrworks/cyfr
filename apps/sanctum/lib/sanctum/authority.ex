@@ -2,10 +2,10 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Authority do
   @moduledoc """
-  The live half of `Cyfr.Authority`: what an authority does against this
+  The live half of `Prima.Authority`: what an authority does against this
   node's running state rather than as data.
 
-    * `step/3` is `Cyfr.Authority.Transition.step/3` with the root budget
+    * `step/3` is `Prima.Authority.Transition.step/3` with the root budget
       charged. Every `spawn` outcome that starts work — a bound child, a
       zero child, or an allowed tool dispatch — takes one slot of the
       root-keyed invoke budget at this single chokepoint; exhaustion turns
@@ -21,9 +21,9 @@ defmodule Sanctum.Authority do
       flight; the counter on this node is a pre-check.
   """
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Budget
-  alias Cyfr.Authority.Transition
+  alias Prima.Authority
+  alias Prima.Authority.Budget
+  alias Prima.Authority.Transition
   alias Sanctum.Authority.BudgetCounter
   alias Sanctum.Authority.BudgetGuard
 
@@ -35,7 +35,7 @@ defmodule Sanctum.Authority do
   Apply one guest function to a target under an Authority, charging the
   root budget for every `spawn` that starts work.
 
-  The decision is `Cyfr.Authority.Transition.step/3`'s; a caller that
+  The decision is `Prima.Authority.Transition.step/3`'s; a caller that
   dispatches the outcome as spawned work steps through here so no handler
   can forget the charge and no deny path needs a rollback.
   """

@@ -111,16 +111,16 @@ jobs:
               fail=1
             fi
             roster="$(awk -v app="$app" '$0 ~ "^      " app ": \\[$" { inblk = 1; next } inblk && /applications: \[/ { inapps = 1; next } inapps && /\]/ { exit } inapps { sub(/^ +/, ""); sub(/:.*/, ""); print }' mix.exs | sort | tr '\n' ' ')"
-            if [ "$roster" != "cyfr_contracts $app " ]; then
-              echo "::error file=mix.exs::the $app release must hold cyfr_contracts and $app alone, found: ${roster:-nothing}"
+            if [ "$roster" != "$app prima " ]; then
+              echo "::error file=mix.exs::the $app release must hold prima and $app alone, found: ${roster:-nothing}"
               fail=1
             fi
             deps="$(grep -oE '\{:[a-z_]+, in_umbrella: true' "apps/$app/mix.exs" | sed -E 's/^\{:([a-z_]+).*/\1/' | sort -u | tr '\n' ' ')"
-            if [ "$deps" != "cyfr_contracts " ]; then
-              echo "::error file=apps/$app/mix.exs::$app may depend in the umbrella on cyfr_contracts alone, found: ${deps:-nothing}"
+            if [ "$deps" != "prima " ]; then
+              echo "::error file=apps/$app/mix.exs::$app may depend in the umbrella on prima alone, found: ${deps:-nothing}"
               fail=1
             fi
-            fsl="$(grep -rlF 'SPDX-License-Identifier: FSL-1.1-Apache-2.0' "apps/$app" apps/cyfr_contracts || true)"
+            fsl="$(grep -rlF 'SPDX-License-Identifier: FSL-1.1-Apache-2.0' "apps/$app" apps/prima || true)"
             if [ -n "$fsl" ]; then
               echo "::error::FSL-licensed files in what the $app image releases:"
               echo "$fsl"

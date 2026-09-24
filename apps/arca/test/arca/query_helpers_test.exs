@@ -8,7 +8,7 @@ defmodule Arca.QueryHelpersTest do
   `where_tenant/2` scopes to the actor's athanor and raises for one that
   carries none; `where_tenant_unless_platform/2` is the one spelling of
   the platform bypass, and it reads `scope`, which is not a wire member
-  of `Cyfr.Actor` — nothing a worker returns can claim it.
+  of `Prima.Actor` — nothing a worker returns can claim it.
   """
   use ExUnit.Case, async: true
 
@@ -18,8 +18,8 @@ defmodule Arca.QueryHelpersTest do
 
   defp base_query, do: from(e in Arca.Schemas.Execution)
 
-  defp in_athanor(id), do: Cyfr.Actor.in_athanor(id)
-  defp platform, do: Cyfr.Actor.system()
+  defp in_athanor(id), do: Prima.Actor.in_athanor(id)
+  defp platform, do: Prima.Actor.system()
 
   describe "where_tenant/2" do
     test "applies the athanor filter" do
@@ -37,7 +37,7 @@ defmodule Arca.QueryHelpersTest do
 
   describe "where_tenant/2 athanor-less fail-closed backstop" do
     test "an actor with a nil athanor raises" do
-      actor = %Cyfr.Actor{athanor_id: nil, authenticated: true}
+      actor = %Prima.Actor{athanor_id: nil, authenticated: true}
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
         apply(QueryHelpers, :where_tenant, [base_query(), actor])
@@ -48,7 +48,7 @@ defmodule Arca.QueryHelpersTest do
       # "" is an identity that was never resolved. Admitting it would
       # filter on athanor_id == "", match nothing, and answer an ordinary
       # empty result — a refusal turned into silence.
-      actor = %Cyfr.Actor{athanor_id: "", authenticated: true}
+      actor = %Prima.Actor{athanor_id: "", authenticated: true}
 
       assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
         apply(QueryHelpers, :where_tenant, [base_query(), actor])
@@ -102,7 +102,7 @@ defmodule Arca.QueryHelpersTest do
     test "stamps the actor's athanor and raises for one that carries none" do
       assert %{athanor_id: "ath_1"} = QueryHelpers.stamp_tenant!(in_athanor("ath_1"), %{})
 
-      for unresolved <- [%Cyfr.Actor{athanor_id: nil}, %Cyfr.Actor{athanor_id: ""}] do
+      for unresolved <- [%Prima.Actor{athanor_id: nil}, %Prima.Actor{athanor_id: ""}] do
         assert_raise ArgumentError, ~r/a resolved athanor_id is required/, fn ->
           QueryHelpers.stamp_tenant!(unresolved, %{})
         end

@@ -233,7 +233,7 @@ defmodule Emissary.MCP.RouterTest do
                Router.dispatch(ctx, msg)
 
       assert entry["uri"] == "arca://files/data/router.txt"
-      assert entry["mimeType"] == Cyfr.MediaType.binary()
+      assert entry["mimeType"] == Prima.MediaType.binary()
       assert Base.decode64!(entry["blob"]) == "bytes"
 
       msg = %{msg | params: %{"uri" => "sanctum://identity"}}

@@ -22,7 +22,7 @@ defmodule Arca.CipherRotationTest do
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    {:ok, actor: Cyfr.Actor.system()}
+    {:ok, actor: Prima.Actor.system()}
   end
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -96,7 +96,7 @@ defmodule Arca.CipherRotationTest do
   describe "who may ask" do
     @tag :capture_log
     test "an athanor-scoped actor is refused, before any query", %{actor: system} do
-      tenant = %Cyfr.Actor{athanor_id: @athanor}
+      tenant = %Prima.Actor{athanor_id: @athanor}
       put_token("rt_probe", bytes("k1"))
 
       # With the table gone, a facade that queried first would answer

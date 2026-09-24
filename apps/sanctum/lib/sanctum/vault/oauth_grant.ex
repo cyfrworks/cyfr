@@ -29,7 +29,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   (delete-on-read, 2-minute TTL) plus the server-held PKCE verifier, and
   the interactive-class check happened at `authorize_url/2` when the
   pending record was minted. The pending record carries the Context that
-  check passed for and the `Cyfr.Actor` it projects, so the callback acts
+  check passed for and the `Prima.Actor` it projects, so the callback acts
   with authority derived from the session that started the grant and
   never from a tenant named in a row it reads — and that standing is read
   again before the credential is written: a session-backed context is
@@ -179,7 +179,7 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   defp same_estate(%Context{}, actor), do: channel(actor)
 
-  defp channel(%Cyfr.Actor{athanor_id: athanor_id, user_id: user_id}) do
+  defp channel(%Prima.Actor{athanor_id: athanor_id, user_id: user_id}) do
     if Sanctum.Tenancy.channel_active?(athanor_id, user_id),
       do: :ok,
       else: {:error, :not_standing}
@@ -351,7 +351,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   end
 
   defp apply_grant(%{target: %{kind: :new} = target, actor: actor} = pending, bundle) do
-    id = Cyfr.UUID7.generate_id("vlt")
+    id = Prima.UUID7.generate_id("vlt")
     aad = CipherAAD.vault_entry(actor.athanor_id, id, target.provider)
 
     with {:ok, json} <- Payload.encode_material(%{}, bundle),

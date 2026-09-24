@@ -521,7 +521,7 @@ defmodule Sanctum.TinctureAuth do
   @doc """
   The credential query params this surface accepts or has to scrub.
 
-  `Sanctum.RedactionRosterTest` holds `Cyfr.Sanitizer` to this list: the
+  `Sanctum.RedactionRosterTest` holds `Prima.Sanitizer` to this list: the
   same names arrive again as decoded params, where the query-string scrub
   below cannot reach them.
   """

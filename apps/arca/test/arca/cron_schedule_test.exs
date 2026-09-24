@@ -12,7 +12,7 @@ defmodule Arca.CronScheduleTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    actor = %Cyfr.Actor{
+    actor = %Prima.Actor{
       athanor_id: @athanor,
       user_id: "test_user",
       authenticated: true,
@@ -84,7 +84,7 @@ defmodule Arca.CronScheduleTest do
     test "finds a fellow member's schedule in the same athanor (interchangeable)" do
       {:ok, created} = CronSchedule.create(valid_attrs(%{name: "private", user_id: "other_user"}))
 
-      actor = %Cyfr.Actor{
+      actor = %Prima.Actor{
         athanor_id: @athanor,
         user_id: "test_user",
         authenticated: true,

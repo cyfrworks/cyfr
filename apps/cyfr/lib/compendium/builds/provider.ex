@@ -3,7 +3,7 @@
 
 defmodule Compendium.Builds.Provider do
   @moduledoc """
-  The `build` tool (`Cyfr.Ops.Provider`), under the `locus` service label:
+  The `build` tool (`Prima.Provider`), under the `locus` service label:
 
   - `compile` — build a component by reference on the builds service,
     publish its output and register it (`Compendium.Builds.compile/3`);
@@ -19,7 +19,7 @@ defmodule Compendium.Builds.Provider do
   it to the caller.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   alias Compendium.Builds
   alias Sanctum.Context
@@ -29,7 +29,7 @@ defmodule Compendium.Builds.Provider do
 
   @impl true
   def tools do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
 
     [
       Operation.tool(
@@ -108,11 +108,11 @@ defmodule Compendium.Builds.Provider do
   # Public (no permission): stateless validation of bytes the caller
   # supplies; no server-side data is exposed. The base64 input is bounded
   # by the shared memory ceiling's spelling
-  # (`Cyfr.Limits.default_max_memory_bytes/0`), so the two cannot drift
+  # (`Prima.Limits.default_max_memory_bytes/0`), so the two cannot drift
   # apart, and since decoding and walking the bytes is real CPU no build
   # accounts for, each caller identity has a rate, the anonymous public
   # sharing one.
-  @max_base64_size Cyfr.Limits.default_max_memory_bytes()
+  @max_base64_size Prima.Limits.default_max_memory_bytes()
   @validate_per_minute 10
 
   def handle("build", %Context{} = ctx, %{"action" => "validate", "wasm_base64" => wasm_base64})
@@ -173,7 +173,7 @@ defmodule Compendium.Builds.Provider do
     else
       case Base.decode64(wasm_base64) do
         {:ok, bytes} ->
-          case Compendium.WasmValidator.validate(bytes) do
+          case Prima.Wasm.validate(bytes) do
             {:ok, meta} ->
               {:ok,
                %{
@@ -203,7 +203,7 @@ defmodule Compendium.Builds.Provider do
   defp check_validate_rate(ctx) do
     who = ctx.user_id || ctx.athanor_id || "public"
 
-    case Cyfr.RateLimiter.check("build:validate:#{who}", @validate_per_minute, 60_000) do
+    case Prima.RateLimiter.check("build:validate:#{who}", @validate_per_minute, 60_000) do
       :ok -> :ok
       {:deny, retry_s} -> {:error, "Validation rate limit reached — retry in #{retry_s}s"}
     end

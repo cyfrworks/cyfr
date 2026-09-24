@@ -26,7 +26,7 @@ defmodule Arca.StorageProjectionRoots do
 
   ## Tenancy
 
-  Every function takes the `Cyfr.Actor` first. `epoch/2` refuses an actor
+  Every function takes the `Prima.Actor` first. `epoch/2` refuses an actor
   with no athanor as `{:error, :no_athanor}` before any query; `advance!/3`
   runs inside a caller's transaction and raises instead
   (`Arca.QueryHelpers.no_athanor!/1`).
@@ -57,10 +57,10 @@ defmodule Arca.StorageProjectionRoots do
   The unit's `acknowledged_generation` is kept: a projection that
   acknowledged an earlier generation of the unit has not seen this one.
   """
-  @spec advance!(Cyfr.Actor.t(), String.t(), change()) :: pos_integer()
+  @spec advance!(Prima.Actor.t(), String.t(), change()) :: pos_integer()
   # arca:db-raise-ok a step of the caller's transaction: a fault must roll
   # the change it stamps back with it.
-  def advance!(%Cyfr.Actor{} = actor, root, %{unit_key: unit_key} = change)
+  def advance!(%Prima.Actor{} = actor, root, %{unit_key: unit_key} = change)
       when is_binary(root) and is_binary(unit_key) do
     athanor = athanor!(actor, "advance!/3")
 
@@ -92,9 +92,9 @@ defmodule Arca.StorageProjectionRoots do
   `%{epoch: 0, acknowledged_epoch: 0}`. `{:error, :unavailable}` when the
   store cannot answer.
   """
-  @spec epoch(Cyfr.Actor.t(), String.t()) ::
+  @spec epoch(Prima.Actor.t(), String.t()) ::
           {:ok, standing()} | {:error, :no_athanor | :unavailable}
-  def epoch(%Cyfr.Actor{} = actor, root) when is_binary(root) do
+  def epoch(%Prima.Actor{} = actor, root) when is_binary(root) do
     with {:ok, athanor} <- tenant(actor) do
       rescuing_db("epoch", fn ->
         Arca.Repo.read_transaction(fn -> standing(athanor, root) end)
@@ -124,7 +124,7 @@ defmodule Arca.StorageProjectionRoots do
       StorageProjectionRoot,
       [
         %{
-          id: Cyfr.UUID7.generate_id("spr"),
+          id: Prima.UUID7.generate_id("spr"),
           athanor_id: athanor,
           root: root,
           epoch: 1,
@@ -141,7 +141,7 @@ defmodule Arca.StorageProjectionRoots do
       StorageProjectionChange,
       [
         %{
-          id: Cyfr.UUID7.generate_id("spc"),
+          id: Prima.UUID7.generate_id("spc"),
           athanor_id: athanor,
           root: root,
           unit_key: change.unit_key,
@@ -159,8 +159,8 @@ defmodule Arca.StorageProjectionRoots do
     )
   end
 
-  defp tenant(%Cyfr.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
-  defp tenant(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  defp tenant(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}
+  defp tenant(%Prima.Actor{}), do: {:error, :no_athanor}
 
   defp athanor!(actor, fun) do
     case tenant(actor) do

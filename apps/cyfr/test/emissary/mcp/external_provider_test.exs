@@ -363,7 +363,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
     test "the row is the step's execution when one is handed in, its input retained under the caller's class",
          %{ctx: ctx} do
-      id = Cyfr.UUID7.execution_id()
+      id = Prima.UUID7.execution_id()
 
       assert {:error, _unreachable} =
                ExternalProvider.try_handle(
@@ -438,7 +438,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
           "content" => [%{"type" => "text", "text" => "hi"}]
         })
 
-      id = Cyfr.UUID7.execution_id()
+      id = Prima.UUID7.execution_id()
 
       assert {:ok, %{"content" => [_]} = answer} =
                ExternalProvider.try_handle(
@@ -456,7 +456,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
       assert Jason.decode!(bytes) == answer
       assert %{"output_hash" => hash} = Jason.decode!(row.output)
-      assert hash == Cyfr.Digest.sha256(bytes)
+      assert hash == Prima.Digest.sha256(bytes)
       GenServer.stop(pid)
     end
 
@@ -466,7 +466,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       args = chained(ctx, %{})
       __MODULE__.OnceStore.reset()
       Application.put_env(:arca, :execution_payload_store, __MODULE__.OnceStore)
-      id = Cyfr.UUID7.execution_id()
+      id = Prima.UUID7.execution_id()
 
       assert {:error, {:result_lost, _}} =
                ExternalProvider.try_handle("kept:probe", ctx, args, :in_chain, execution_id: id)

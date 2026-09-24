@@ -54,9 +54,9 @@ defmodule Arca.BuildRecords do
   anyone who knew a build id reset another athanor's row to "started" and
   blank its result.
   """
-  @spec record_started(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec record_started(Prima.Actor.t(), String.t(), String.t()) ::
           :ok | {:error, :not_found | :invalid | {:invalid, map()}} | refusal()
-  def record_started(%Cyfr.Actor{athanor_id: athanor_id} = actor, build_id, reference)
+  def record_started(%Prima.Actor{athanor_id: athanor_id} = actor, build_id, reference)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(build_id) and
              is_binary(reference) do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.record_started", fn ->
@@ -65,7 +65,7 @@ defmodule Arca.BuildRecords do
     |> Arca.Data.project()
   end
 
-  def record_started(%Cyfr.Actor{}, _build_id, _reference), do: {:error, :no_athanor}
+  def record_started(%Prima.Actor{}, _build_id, _reference), do: {:error, :no_athanor}
 
   # arca:db-raise-ok the public entry that wraps it rescues.
   defp start_row(athanor_id, user_id, build_id, reference, now) do
@@ -123,9 +123,9 @@ defmodule Arca.BuildRecords do
   with an error string. Tenant-scoped — a foreign or unknown id is
   `{:error, :not_found}`.
   """
-  @spec record_finished(Cyfr.Actor.t(), String.t(), String.t(), map() | String.t()) ::
+  @spec record_finished(Prima.Actor.t(), String.t(), String.t(), map() | String.t()) ::
           :ok | {:error, :not_found} | refusal()
-  def record_finished(%Cyfr.Actor{athanor_id: athanor_id}, build_id, status, outcome)
+  def record_finished(%Prima.Actor{athanor_id: athanor_id}, build_id, status, outcome)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(build_id) and
              status in ["compiled", "failed"] do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.record_finished", fn ->
@@ -145,7 +145,7 @@ defmodule Arca.BuildRecords do
     |> Arca.Data.project()
   end
 
-  def record_finished(%Cyfr.Actor{}, _build_id, status, _outcome)
+  def record_finished(%Prima.Actor{}, _build_id, status, _outcome)
       when status in ["compiled", "failed"],
       do: {:error, :no_athanor}
 
@@ -154,8 +154,8 @@ defmodule Arca.BuildRecords do
   with the stored `result` column decoded and the columns it has nothing
   in left out.
   """
-  @spec get(Cyfr.Actor.t(), String.t()) :: {:ok, map()} | {:error, :not_found} | refusal()
-  def get(%Cyfr.Actor{athanor_id: athanor_id}, build_id)
+  @spec get(Prima.Actor.t(), String.t()) :: {:ok, map()} | {:error, :not_found} | refusal()
+  def get(%Prima.Actor{athanor_id: athanor_id}, build_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(build_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.get", fn ->
       case row(athanor_id, build_id) do
@@ -166,7 +166,7 @@ defmodule Arca.BuildRecords do
     |> Arca.Data.project()
   end
 
-  def get(%Cyfr.Actor{}, _build_id), do: {:error, :no_athanor}
+  def get(%Prima.Actor{}, _build_id), do: {:error, :no_athanor}
 
   @doc """
   Record the post-compile registration outcome onto a finished build's
@@ -178,11 +178,11 @@ defmodule Arca.BuildRecords do
   is retried briefly rather than dropped. A build with no row (sync mode)
   is a no-op — its caller got the outcome inline.
   """
-  @spec record_registration(Cyfr.Actor.t(), String.t(), String.t(), non_neg_integer()) ::
+  @spec record_registration(Prima.Actor.t(), String.t(), String.t(), non_neg_integer()) ::
           :ok | refusal()
   def record_registration(actor, build_id, outcome, attempts \\ @registration_attempts)
 
-  def record_registration(%Cyfr.Actor{athanor_id: athanor_id}, build_id, outcome, attempts)
+  def record_registration(%Prima.Actor{athanor_id: athanor_id}, build_id, outcome, attempts)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(build_id) and
              is_binary(outcome) and attempts > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.record_registration", fn ->
@@ -191,11 +191,11 @@ defmodule Arca.BuildRecords do
     |> Arca.Data.project()
   end
 
-  def record_registration(%Cyfr.Actor{athanor_id: athanor_id}, _build_id, _outcome, _attempts)
+  def record_registration(%Prima.Actor{athanor_id: athanor_id}, _build_id, _outcome, _attempts)
       when is_binary(athanor_id) and athanor_id != "",
       do: :ok
 
-  def record_registration(%Cyfr.Actor{}, _build_id, _outcome, _attempts),
+  def record_registration(%Prima.Actor{}, _build_id, _outcome, _attempts),
     do: {:error, :no_athanor}
 
   # arca:db-raise-ok the public entry that wraps it rescues.
@@ -207,12 +207,12 @@ defmodule Arca.BuildRecords do
       %{status: "compiled", result: result} when is_binary(result) ->
         # A stored column, so a bang decode here turns one corrupt row into a
         # crash in whatever process is recording a registration.
-        case Cyfr.Json.decode(result) do
+        case Prima.Json.decode(result) do
           {:ok, decoded} when is_map(decoded) ->
             patched =
               decoded
               |> Map.put("registration", outcome)
-              |> Cyfr.Json.safe_encode()
+              |> Prima.Json.safe_encode()
 
             BuildRecord
             |> where([b], b.id == ^build_id and b.athanor_id == ^athanor_id)
@@ -245,11 +245,11 @@ defmodule Arca.BuildRecords do
   row-plane retention convention: `{:ok, affected_count}` — or
   `{:error, :database_error}` when the store cannot answer.
   """
-  @spec prune(Cyfr.Actor.t(), non_neg_integer(), keyword()) ::
+  @spec prune(Prima.Actor.t(), non_neg_integer(), keyword()) ::
           {:ok, non_neg_integer()} | refusal()
   def prune(actor, keep, opts \\ [])
 
-  def prune(%Cyfr.Actor{athanor_id: athanor_id}, keep, opts)
+  def prune(%Prima.Actor{athanor_id: athanor_id}, keep, opts)
       when is_binary(athanor_id) and athanor_id != "" and is_integer(keep) and keep >= 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.BuildRecords.prune", fn ->
       # Keep the newest rows and recently started builds. Started rows also
@@ -280,7 +280,7 @@ defmodule Arca.BuildRecords do
     |> Arca.Data.project()
   end
 
-  def prune(%Cyfr.Actor{}, keep, _opts) when is_integer(keep) and keep >= 0,
+  def prune(%Prima.Actor{}, keep, _opts) when is_integer(keep) and keep >= 0,
     do: {:error, :no_athanor}
 
   # arca:db-raise-ok the public entry that wraps it rescues.
@@ -297,12 +297,12 @@ defmodule Arca.BuildRecords do
       "status" => r.status,
       "started_at" => DateTime.to_iso8601(r.started_at)
     }
-    |> Cyfr.MapUtil.put_present(
+    |> Prima.MapUtil.put_present(
       "finished_at",
       r.finished_at && DateTime.to_iso8601(r.finished_at)
     )
-    |> Cyfr.MapUtil.put_present("error", r.error)
-    |> Cyfr.MapUtil.put_present("result", decoded_result(r.result))
+    |> Prima.MapUtil.put_present("error", r.error)
+    |> Prima.MapUtil.put_present("result", decoded_result(r.result))
   end
 
   # Serializing a row must not crash on a corrupt column: the listing that
@@ -311,7 +311,7 @@ defmodule Arca.BuildRecords do
   defp decoded_result(nil), do: nil
 
   defp decoded_result(result) when is_binary(result) do
-    case Cyfr.Json.decode(result) do
+    case Prima.Json.decode(result) do
       {:ok, decoded} -> decoded
       {:error, _} -> %{"_unreadable" => true}
     end

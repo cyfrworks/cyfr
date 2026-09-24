@@ -15,7 +15,7 @@ defmodule Aqua.RunnerTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Aqua.{Approvals, Runner, Tape}
   alias Arca.ThreadStorage, as: Threads
@@ -640,7 +640,7 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, first)
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, second)
     assert %{running: false, queued: 0} = Runner.state(thread.id, ctx.athanor_id)
-    assert Cyfr.Slots.status(Cyfr.Execution.Slots).root_active == 0
+    assert Prima.Slots.status(Cyfr.Execution.Slots).root_active == 0
 
     ScriptedWorker.script([reply("new work")])
     {:ok, %{turn_id: fresh}} = Runner.send_message(ctx, thread.id, "@aqua again")
@@ -1166,7 +1166,7 @@ defmodule Aqua.RunnerTest do
 
         send(
           pids.runner,
-          Cyfr.Bus.Notify.new(Cyfr.Actor.in_athanor(ctx.athanor_id), :athanor_changed)
+          Cyfr.Bus.Notify.new(Prima.Actor.in_athanor(ctx.athanor_id), :athanor_changed)
         )
 
         await_retired(pids.runner, runner_ref)

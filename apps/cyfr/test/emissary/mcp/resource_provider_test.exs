@@ -4,7 +4,7 @@
 defmodule Emissary.MCP.ResourceProviderTest do
   @moduledoc """
   A resource is advertised by an operation provider
-  (`c:Cyfr.Ops.Provider.resources/0`, `c:Cyfr.Ops.Provider.resource_templates/0`)
+  (`c:Prima.Provider.resources/0`, `c:Prima.Provider.resource_templates/0`)
   and read through the one operation that declares its scheme. There is no
   separate resource behaviour and no read callback: every provider that
   advertises a resource is read through the gate.
@@ -12,11 +12,12 @@ defmodule Emissary.MCP.ResourceProviderTest do
 
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.{Arg, Catalog, Operation, Provider}
+  alias Cyfr.Ops.Catalog
+  alias Prima.{Arg, Operation, Provider}
 
   defmodule Advertiser do
     @moduledoc false
-    @behaviour Cyfr.Ops.Provider
+    @behaviour Prima.Provider
 
     @impl true
     def service, do: "advertiser"

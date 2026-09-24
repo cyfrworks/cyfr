@@ -13,7 +13,7 @@ defmodule Opus.Test.ScriptedKeeper do
   which a pool's command carries to it as the `KEEPER` variable of the
   spec's env. `spawns/1` lists every runner spawned, newest first, each
   with its spec and its runner process. `write/2` makes a runner write bytes on
-  its channel (the test encodes frames with `Cyfr.RunnerControl`),
+  its channel (the test encodes frames with `Prima.RunnerControl`),
   `read/2` answers what the service wrote it so far, `close/1` closes its
   channel and `exit/2` ends its process with a status, which the keeper
   reports as `exited` and then `released`. A release from the service

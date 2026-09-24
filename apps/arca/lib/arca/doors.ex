@@ -13,14 +13,14 @@ defmodule Arca.Doors do
 
   ## The first argument
 
-  Every facade here takes `%Cyfr.Actor{}` first, and matches `scope:
+  Every facade here takes `%Prima.Actor{}` first, and matches `scope:
   :platform` in the head rather than an athanor id.
 
   A door entry carries no athanor and cannot: the door is asked **before**
   a session exists, so at admission time there is no tenant, no person and
   no credential to scope a read to. What a door row belongs to is the
   server, and the authority that reaches it is the platform scope.
-  `Cyfr.Actor.system/0` carries it — that is how `Sanctum.Door` asks at
+  `Prima.Actor.system/0` carries it — that is how `Sanctum.Door` asks at
   sign-in, the server asking its own question on behalf of someone who is
   not yet anyone here. A platform admin's context projects the same scope
   (`Sanctum.Context.actor/1`), so the operator verbs that edit the door
@@ -86,19 +86,19 @@ defmodule Arca.Doors do
   def kinds, do: Entry.kinds()
 
   @doc "Every entry, allowed and requested, newest first."
-  @spec list(Cyfr.Actor.t()) :: {:ok, [entry()]} | refusal()
-  def list(%Cyfr.Actor{scope: :platform}) do
+  @spec list(Prima.Actor.t()) :: {:ok, [entry()]} | refusal()
+  def list(%Prima.Actor{scope: :platform}) do
     Arca.Repo.Errors.with_db_rescue("Arca.Doors.list", fn ->
       {:ok, Arca.Repo.all(from(e in Entry, order_by: [desc: e.created_at])) |> Enum.map(&row/1)}
     end)
     |> Arca.Data.project()
   end
 
-  def list(%Cyfr.Actor{}), do: {:error, :not_platform}
+  def list(%Prima.Actor{}), do: {:error, :not_platform}
 
   @doc "The entries still waiting on an operator, oldest first."
-  @spec requests(Cyfr.Actor.t()) :: {:ok, [entry()]} | refusal()
-  def requests(%Cyfr.Actor{scope: :platform}) do
+  @spec requests(Prima.Actor.t()) :: {:ok, [entry()]} | refusal()
+  def requests(%Prima.Actor{scope: :platform}) do
     Arca.Repo.Errors.with_db_rescue("Arca.Doors.requests", fn ->
       query = from(e in Entry, where: e.status == "requested", order_by: [asc: e.created_at])
       {:ok, Arca.Repo.all(query) |> Enum.map(&row/1)}
@@ -106,11 +106,11 @@ defmodule Arca.Doors do
     |> Arca.Data.project()
   end
 
-  def requests(%Cyfr.Actor{}), do: {:error, :not_platform}
+  def requests(%Prima.Actor{}), do: {:error, :not_platform}
 
   @doc "One entry by id."
-  @spec get(Cyfr.Actor.t(), String.t()) :: {:ok, entry()} | {:error, :not_found} | refusal()
-  def get(%Cyfr.Actor{scope: :platform}, id) when is_binary(id) do
+  @spec get(Prima.Actor.t(), String.t()) :: {:ok, entry()} | {:error, :not_found} | refusal()
+  def get(%Prima.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Doors.get", fn ->
       case Arca.Repo.get(Entry, id) do
         nil -> {:error, :not_found}
@@ -120,7 +120,7 @@ defmodule Arca.Doors do
     |> Arca.Data.project()
   end
 
-  def get(%Cyfr.Actor{}, id) when is_binary(id), do: {:error, :not_platform}
+  def get(%Prima.Actor{}, id) when is_binary(id), do: {:error, :not_platform}
 
   @doc """
   The one entry for `kind` and `value`, the pair the unique index is on.
@@ -129,9 +129,9 @@ defmodule Arca.Doors do
   is "we could not look" — the door is where that difference decides who
   gets in, so the two are never collapsed here.
   """
-  @spec find(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec find(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, entry()} | {:error, :not_found} | refusal()
-  def find(%Cyfr.Actor{scope: :platform}, kind, value)
+  def find(%Prima.Actor{scope: :platform}, kind, value)
       when is_binary(kind) and is_binary(value) do
     Arca.Repo.Errors.with_db_rescue("Arca.Doors.find", fn ->
       case Arca.Repo.get_by(Entry, kind: kind, value: value) do
@@ -142,7 +142,7 @@ defmodule Arca.Doors do
     |> Arca.Data.project()
   end
 
-  def find(%Cyfr.Actor{}, kind, value) when is_binary(kind) and is_binary(value),
+  def find(%Prima.Actor{}, kind, value) when is_binary(kind) and is_binary(value),
     do: {:error, :not_platform}
 
   @doc """
@@ -152,9 +152,9 @@ defmodule Arca.Doors do
   the unique index is the arbiter of a race between two writers of the
   same entry, and the caller decides what to do with the row that landed.
   """
-  @spec insert(Cyfr.Actor.t(), map()) ::
+  @spec insert(Prima.Actor.t(), map()) ::
           {:ok, entry()} | {:error, :already_exists | {:invalid, map()}} | refusal()
-  def insert(%Cyfr.Actor{scope: :platform}, attrs) when is_map(attrs) do
+  def insert(%Prima.Actor{scope: :platform}, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Doors.insert", fn ->
       now = DateTime.utc_now()
 
@@ -162,7 +162,7 @@ defmodule Arca.Doors do
       |> Entry.changeset(
         attrs
         |> Map.take(@columns)
-        |> Map.merge(%{id: Cyfr.UUID7.generate_id("door"), created_at: now, updated_at: now})
+        |> Map.merge(%{id: Prima.UUID7.generate_id("door"), created_at: now, updated_at: now})
       )
       |> Arca.Repo.insert()
       |> written()
@@ -170,7 +170,7 @@ defmodule Arca.Doors do
     |> Arca.Data.project()
   end
 
-  def insert(%Cyfr.Actor{}, attrs) when is_map(attrs), do: {:error, :not_platform}
+  def insert(%Prima.Actor{}, attrs) when is_map(attrs), do: {:error, :not_platform}
 
   @doc """
   Change the entry `id` names, stamping `updated_at`.
@@ -179,9 +179,9 @@ defmodule Arca.Doors do
   first and writes into the gap learns that it lost, rather than being
   answered with the row it remembered.
   """
-  @spec update(Cyfr.Actor.t(), String.t(), map()) ::
+  @spec update(Prima.Actor.t(), String.t(), map()) ::
           {:ok, entry()} | {:error, :not_found | :already_exists | {:invalid, map()}} | refusal()
-  def update(%Cyfr.Actor{scope: :platform}, id, attrs) when is_binary(id) and is_map(attrs) do
+  def update(%Prima.Actor{scope: :platform}, id, attrs) when is_binary(id) and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Doors.update", fn ->
       case Arca.Repo.get(Entry, id) do
         nil ->
@@ -201,12 +201,12 @@ defmodule Arca.Doors do
     |> Arca.Data.project()
   end
 
-  def update(%Cyfr.Actor{}, id, attrs) when is_binary(id) and is_map(attrs),
+  def update(%Prima.Actor{}, id, attrs) when is_binary(id) and is_map(attrs),
     do: {:error, :not_platform}
 
   @doc "Delete the entry `id` names."
-  @spec delete(Cyfr.Actor.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
-  def delete(%Cyfr.Actor{scope: :platform}, id) when is_binary(id) do
+  @spec delete(Prima.Actor.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
+  def delete(%Prima.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Doors.delete", fn ->
       case Arca.Repo.delete_all(from(e in Entry, where: e.id == ^id)) do
         {0, _} -> {:error, :not_found}
@@ -216,7 +216,7 @@ defmodule Arca.Doors do
     |> Arca.Data.project()
   end
 
-  def delete(%Cyfr.Actor{}, id) when is_binary(id), do: {:error, :not_platform}
+  def delete(%Prima.Actor{}, id) when is_binary(id), do: {:error, :not_platform}
 
   # ---- internal --------------------------------------------------------------
 

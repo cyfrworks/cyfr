@@ -12,8 +12,8 @@ defmodule Sanctum.Test.AuthorityGen do
   import StreamData
   import ExUnitProperties, only: [gen: 2]
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
 
   @types ~w(formula catalyst reagent)
   @names ~w(alpha bravo charlie delta echo)

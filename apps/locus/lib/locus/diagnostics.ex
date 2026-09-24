@@ -3,7 +3,7 @@
 
 defmodule Locus.Diagnostics do
   @moduledoc """
-  A build's log as the build wire carries it (`Cyfr.BuilderProtocol`): the
+  A build's log as the build wire carries it (`Prima.BuilderProtocol`): the
   progress lines a build's answer streams, and the same lines as the
   `diagnostics` of its terminal line, each `stage: message`.
 
@@ -19,7 +19,7 @@ defmodule Locus.Diagnostics do
   explained at the end of a loud build.
   """
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
 
   # The longest `stage: ` a line is prefixed with.
   @prefix_bytes BuilderProtocol.stages()
@@ -38,7 +38,7 @@ defmodule Locus.Diagnostics do
 
   @doc """
   The lines `message` makes at `stage` within what is left of `budget`, as
-  `{stage, message}` pairs ready for `Cyfr.BuilderProtocol.encode_progress/2`:
+  `{stage, message}` pairs ready for `Prima.BuilderProtocol.encode_progress/2`:
   none for an empty message or a spent budget, several for a long one.
   """
   @spec admit(budget(), BuilderProtocol.stage(), String.t()) ::

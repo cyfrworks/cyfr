@@ -16,11 +16,11 @@ defmodule Arca.CipherRotation do
 
   ## The first argument
 
-  Every function takes `%Cyfr.Actor{}` first and matches `scope:
+  Every function takes `%Prima.Actor{}` first and matches `scope:
   :platform` in the head. A rotation retires a key everywhere or nowhere,
   so its walk crosses every athanor by construction; the one authority a
-  `Cyfr.Actor` carries for a read that is not scoped to a tenant is the
-  platform scope (`Cyfr.Actor.system/0` holds it, and the operator's
+  `Prima.Actor` carries for a read that is not scoped to a tenant is the
+  platform scope (`Prima.Actor.system/0` holds it, and the operator's
   `bin/cyfr eval` runs as the server). An athanor-scoped actor is refused
   with `{:error, :not_platform}` before any query, so walking every
   tenant's sealed rows is not something a tenant's own caller can ask for.
@@ -118,9 +118,9 @@ defmodule Arca.CipherRotation do
   as a cursor and behave as the beginning, which is how a lost resume
   point turns into a silent restart of the walk; it matches no head here.
   """
-  @spec page(Cyfr.Actor.t(), atom(), String.t() | nil, pos_integer()) ::
+  @spec page(Prima.Actor.t(), atom(), String.t() | nil, pos_integer()) ::
           {:ok, [row()]} | refusal()
-  def page(%Cyfr.Actor{scope: :platform}, table, cursor, limit)
+  def page(%Prima.Actor{scope: :platform}, table, cursor, limit)
       when is_map_key(@tables, table) and is_cursor(cursor) and is_page_limit(limit) do
     spec = @tables[table]
 
@@ -135,11 +135,11 @@ defmodule Arca.CipherRotation do
     |> Arca.Data.project()
   end
 
-  def page(%Cyfr.Actor{scope: :platform}, table, cursor, limit)
+  def page(%Prima.Actor{scope: :platform}, table, cursor, limit)
       when is_cursor(cursor) and is_page_limit(limit),
       do: unknown(table)
 
-  def page(%Cyfr.Actor{scope: scope}, _table, _cursor, _limit) when scope != :platform,
+  def page(%Prima.Actor{scope: scope}, _table, _cursor, _limit) when scope != :platform,
     do: {:error, :not_platform}
 
   @doc """
@@ -149,9 +149,9 @@ defmodule Arca.CipherRotation do
   The audit reads labels off these bytes without decrypting; the labels
   are the caller's vocabulary, not this module's.
   """
-  @spec ciphertext_page(Cyfr.Actor.t(), atom(), String.t() | nil, pos_integer()) ::
+  @spec ciphertext_page(Prima.Actor.t(), atom(), String.t() | nil, pos_integer()) ::
           {:ok, [%{id: String.t(), ciphertext: binary()}]} | refusal()
-  def ciphertext_page(%Cyfr.Actor{scope: :platform}, table, cursor, limit)
+  def ciphertext_page(%Prima.Actor{scope: :platform}, table, cursor, limit)
       when is_map_key(@tables, table) and is_cursor(cursor) and is_page_limit(limit) do
     cas = @tables[table].cas
 
@@ -166,11 +166,11 @@ defmodule Arca.CipherRotation do
     |> Arca.Data.project()
   end
 
-  def ciphertext_page(%Cyfr.Actor{scope: :platform}, table, cursor, limit)
+  def ciphertext_page(%Prima.Actor{scope: :platform}, table, cursor, limit)
       when is_cursor(cursor) and is_page_limit(limit),
       do: unknown(table)
 
-  def ciphertext_page(%Cyfr.Actor{scope: scope}, _table, _cursor, _limit) when scope != :platform,
+  def ciphertext_page(%Prima.Actor{scope: scope}, _table, _cursor, _limit) when scope != :platform,
     do: {:error, :not_platform}
 
   @doc """
@@ -194,9 +194,9 @@ defmodule Arca.CipherRotation do
   would report a race that never happened and leave the row unrotated with
   nothing to say so.
   """
-  @spec swap(Cyfr.Actor.t(), atom(), String.t(), binary(), %{atom() => binary()}) ::
+  @spec swap(Prima.Actor.t(), atom(), String.t(), binary(), %{atom() => binary()}) ::
           {:ok, :swapped | :stale} | {:error, :unknown_column} | refusal()
-  def swap(%Cyfr.Actor{scope: :platform}, table, id, cas, sealed)
+  def swap(%Prima.Actor{scope: :platform}, table, id, cas, sealed)
       when is_map_key(@tables, table) and is_token(id) and is_token(cas) and is_map(sealed) and
              map_size(sealed) > 0 do
     spec = @tables[table]
@@ -216,11 +216,11 @@ defmodule Arca.CipherRotation do
     end
   end
 
-  def swap(%Cyfr.Actor{scope: :platform}, table, id, cas, sealed)
+  def swap(%Prima.Actor{scope: :platform}, table, id, cas, sealed)
       when is_token(id) and is_token(cas) and is_map(sealed) and map_size(sealed) > 0,
       do: unknown(table)
 
-  def swap(%Cyfr.Actor{scope: scope}, _table, _id, _cas, _sealed) when scope != :platform,
+  def swap(%Prima.Actor{scope: scope}, _table, _id, _cas, _sealed) when scope != :platform,
     do: {:error, :not_platform}
 
   # ---- queries ---------------------------------------------------------------

@@ -110,7 +110,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
       assert second.slug != first.slug
       refute second.slug =~ "--"
-      assert second.slug =~ Cyfr.ComponentRef.personal_slug_regex()
+      assert second.slug =~ Prima.ComponentRef.personal_slug_regex()
     end
 
     test "one person, one personal athanor" do
@@ -210,8 +210,8 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       athanor = group!()
 
       Cyfr.Bus.subscribe(
-        Cyfr.Actor.in_athanor(athanor.id),
-        Cyfr.Bus.notify(Cyfr.Actor.in_athanor(athanor.id))
+        Prima.Actor.in_athanor(athanor.id),
+        Cyfr.Bus.notify(Prima.Actor.in_athanor(athanor.id))
       )
 
       {:ok, _} = Athanors.put_settings(athanor, %{"theme" => "dark"})

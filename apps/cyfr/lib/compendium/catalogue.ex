@@ -21,12 +21,12 @@ defmodule Compendium.Catalogue do
   @doc """
   Assemble a component reference from its parts:
   `("catalyst", "alice", "api", "1.0.0")` → `"catalyst:alice.api:1.0.0"`.
-  A thin adapter over the ONE constructor (`Cyfr.ComponentRef.build/4`):
+  A thin adapter over the ONE constructor (`Prima.ComponentRef.build/4`):
   an absent publisher normalizes to `local` rather than being omitted,
   because an omitted namespace produced a ref the parser refuses.
   """
   def build_ref(type, publisher, name, version) do
-    Cyfr.ComponentRef.build(
+    Prima.ComponentRef.build(
       type,
       Compendium.ComponentPath.normalize_publisher(presence(publisher)),
       name,
@@ -93,7 +93,7 @@ defmodule Compendium.Catalogue do
     |> Enum.group_by(fn row ->
       ref = field(row, :component_ref) || field(row, :id) || "-"
 
-      case Cyfr.ComponentRef.to_name_ref(ref) do
+      case Prima.ComponentRef.to_name_ref(ref) do
         {:ok, nr} -> nr
         _ -> ref
       end

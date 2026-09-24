@@ -61,7 +61,7 @@ defmodule Opus.ExecutorRateLimitTest do
       result =
         Cyfr.Execution.Dispatch.run(ctx, ref, input,
           type: :reagent,
-          authority: Cyfr.Authority.zero()
+          authority: Prima.Authority.zero()
         )
 
       case result do
@@ -77,7 +77,7 @@ defmodule Opus.ExecutorRateLimitTest do
       _result =
         Cyfr.Execution.Dispatch.run(ctx, ref, %{"a" => 1, "b" => 2},
           type: :reagent,
-          authority: Cyfr.Authority.zero()
+          authority: Prima.Authority.zero()
         )
 
       rows =

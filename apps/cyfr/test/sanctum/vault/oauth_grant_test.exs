@@ -105,7 +105,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   end
 
   defp unseal!(entry_id, athanor_id) do
-    {:ok, entry} = Arca.VaultStorage.get(%Cyfr.Actor{athanor_id: athanor_id}, entry_id)
+    {:ok, entry} = Arca.VaultStorage.get(%Prima.Actor{athanor_id: athanor_id}, entry_id)
     aad = CipherAAD.vault_entry(athanor_id, entry.id, entry.provider_hint)
     {:ok, plaintext} = Sanctum.Cipher.decrypt(entry.sealed_payload, aad)
     {:ok, payload} = Payload.decode(plaintext)

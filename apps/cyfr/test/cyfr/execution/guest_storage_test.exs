@@ -21,8 +21,8 @@ defmodule Cyfr.Execution.GuestStorageTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
+  alias Prima.Authority
+  alias Prima.Authority.Blob.Edge
   alias Cyfr.Execution.GuestStorage
   alias Cyfr.Execution.GuestStorageTest.UnreadableUsageAdapter
 
@@ -395,7 +395,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
         manifest = %{"caps" => %{"storage" => %{"paths" => [path]}}}
 
         parses? =
-          Cyfr.Manifest.Caps.validate(manifest, &Arca.Storage.valid_guest_path?/1) == :ok
+          Prima.Manifest.Caps.validate(manifest, &Arca.Storage.valid_guest_path?/1) == :ok
 
         honored? =
           not match?(
@@ -411,7 +411,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
       # `"*"` is grant grammar and never a request path; `""` is the scope
       # listing and never a grant.
       assert :ok =
-               Cyfr.Manifest.Caps.validate(
+               Prima.Manifest.Caps.validate(
                  %{"caps" => %{"storage" => %{"paths" => ["*"]}}},
                  &Arca.Storage.valid_guest_path?/1
                )
@@ -532,7 +532,7 @@ defmodule Cyfr.Execution.GuestStorageTest do
   end
 
   describe "size limits" do
-    defp small_limits, do: %Cyfr.Limits{max_request_size: 16, max_response_size: 16}
+    defp small_limits, do: %Prima.Limits{max_request_size: 16, max_response_size: 16}
 
     test "a write past max_request_size is refused on its decoded size", %{ctx: ctx} do
       # 24 decoded bytes are 32 base64 characters.

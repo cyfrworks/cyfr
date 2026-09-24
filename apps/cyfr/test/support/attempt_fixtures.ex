@@ -12,7 +12,7 @@ defmodule Cyfr.Test.AttemptFixtures do
   `athanor_id`, `execution_id`, `attempt`, `fence`, `generation` and
   `service`, the `boot` and `runner` presenting its calls, the `member`
   its assignment was issued by and every call is addressed to, the
-  attempt's `keys` as `Cyfr.WorkerAuth.attempt_keys/2` answers them and
+  attempt's `keys` as `Prima.WorkerAuth.attempt_keys/2` answers them and
   its `call_key`)
   together with the row's `record`, its `close` state, the attempt `pid`,
   the `ctx`, `authority` and `component_ref` it runs under, its `input`,
@@ -23,15 +23,15 @@ defmodule Cyfr.Test.AttemptFixtures do
 
   import ExUnit.Assertions
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob.Edge
+  alias Prima.Authority
+  alias Prima.Authority.Blob.Edge
   alias Cyfr.Execution.{Assignments, Attempt, Close, Delegation, Keys, Record}
 
   @doc """
   Admit, open, sign and attach. Options:
 
   - `:ctx` — the admission context (default `Sanctum.TestContext.local/0`);
-  - `:authority` — default `Cyfr.Authority.zero/0`;
+  - `:authority` — default `Prima.Authority.zero/0`;
   - `:vault` — attributes of a vault entry to create
     (`Sanctum.Vault.create/2`); the authority's edge is bound to it and
     pinned to an active profile, so attach unseals its fields;
@@ -48,7 +48,7 @@ defmodule Cyfr.Test.AttemptFixtures do
     assignment's, which every host call presents (default this boot's id);
   - `:timeout_ms` — the run's timeout, from which its subtree deadline is
     set (default 60 s);
-  - `:worker` — the worker service's endpoint (`t:Cyfr.WorkerAPI.endpoint/0`)
+  - `:worker` — the worker service's endpoint (`t:Prima.WorkerAPI.endpoint/0`)
     the attempt kills its runner through (default none);
   - `:digest` — the digest of the component's artifact, in the assignment
     and the attempt (default the digest of the reference's own bytes);
@@ -74,7 +74,7 @@ defmodule Cyfr.Test.AttemptFixtures do
       end)
 
     limits = Keyword.get_lazy(opts, :limits, fn -> Authority.limits(authority) end)
-    digest = Keyword.get_lazy(opts, :digest, fn -> Cyfr.Digest.sha256(component_ref) end)
+    digest = Keyword.get_lazy(opts, :digest, fn -> Prima.Digest.sha256(component_ref) end)
     input = Keyword.get(opts, :input, %{"fixture" => true})
     {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
 
@@ -137,7 +137,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         boot: boot_id,
         member: Keys.member(),
         deadline: deadline,
-        runner: Keyword.get_lazy(opts, :runner, fn -> Cyfr.UUID7.generate_id("runner") end),
+        runner: Keyword.get_lazy(opts, :runner, fn -> Prima.UUID7.generate_id("runner") end),
         keys: issued.attempt_keys,
         call_key: issued.attempt_keys.call,
         assignment: issued.assignment,
@@ -171,7 +171,7 @@ defmodule Cyfr.Test.AttemptFixtures do
     do: [grant: grant(athanor_id), verify: &Sanctum.ExecutionStanding.verify/1]
 
   @doc "The grant of `athanor_id` as a root's admission reads it now."
-  @spec grant(String.t()) :: Cyfr.ExecutionGrant.t()
+  @spec grant(String.t()) :: Prima.ExecutionGrant.t()
   def grant(athanor_id) when is_binary(athanor_id) do
     {:ok, grant} =
       Sanctum.ExecutionStanding.capture(
@@ -249,12 +249,12 @@ defmodule Cyfr.Test.AttemptFixtures do
     }
 
     key = Keyword.get(opts, :call_key, fixture.call_key)
-    {:ok, header} = Cyfr.WorkerAuth.host_call_header(key, fields, body)
+    {:ok, header} = Prima.WorkerAuth.host_call_header(key, fields, body)
     header
   end
 
   @doc "The verified header fields a host call of `fixture`'s runner carries."
-  @spec caller(map()) :: Cyfr.WorkerAuth.host_call()
+  @spec caller(map()) :: Prima.WorkerAuth.host_call()
   def caller(fixture) do
     fixture
     |> Map.take([
@@ -282,7 +282,7 @@ defmodule Cyfr.Test.AttemptFixtures do
   @spec current!(String.t(), String.t()) :: map()
   def current!(athanor_id, execution_id) do
     %{attempt: _} =
-      row = Arca.ExecutionAttempts.current(Cyfr.Actor.in_athanor(athanor_id), execution_id)
+      row = Arca.ExecutionAttempts.current(Prima.Actor.in_athanor(athanor_id), execution_id)
 
     {:ok, generation} = Keys.generation()
 
@@ -358,7 +358,7 @@ defmodule Cyfr.Test.AttemptFixtures do
 
     {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
     {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
-    consent_id = Cyfr.UUID7.generate_id("cons")
+    consent_id = Prima.UUID7.generate_id("cons")
 
     {:ok, profile} =
       Arca.ProfileStorage.put(%{

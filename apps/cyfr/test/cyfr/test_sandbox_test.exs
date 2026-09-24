@@ -107,7 +107,7 @@ defmodule Cyfr.Test.SandboxTest do
     end
 
     test "a runner left busy is ended and the fresh ones stay pooled", %{ctx: ctx, seen: seen} do
-      root_id = Cyfr.UUID7.execution_id()
+      root_id = Prima.UUID7.execution_id()
       TwoServices.hold!(:tool_call, root_id, once: true)
 
       spawn(fn ->

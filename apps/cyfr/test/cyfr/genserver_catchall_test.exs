@@ -6,7 +6,7 @@ defmodule Cyfr.GenServerCatchallTest do
   Every named GenServer with a catch-all `handle_info/2` survives an
   unexpected message and logs its shape, bounded and without its values.
 
-  Discovers named GenServers using `Cyfr.LoggerContext.unexpected/3` and
+  Discovers named GenServers using `Prima.LoggerContext.unexpected/3` and
   requires each to have a behavioral probe or an explicit exemption.
   """
   use ExUnit.Case, async: false
@@ -27,7 +27,7 @@ defmodule Cyfr.GenServerCatchallTest do
     {Arca.AuditHandler, "AuditHandler"},
     {Prism.TinctureRegistry, "TinctureRegistry"},
     {Arca.RecordSink, "RecordSink"},
-    {Cyfr.RateLimiter, "RateLimiter"},
+    {Prima.RateLimiter, "RateLimiter"},
     {Cyfr.Execution.Slots, "Slots"},
     {Cyfr.Execution.Events.Sequence, "Events.Sequence"},
     {Compendium.Provisioning, "Provisioning"},
@@ -125,7 +125,7 @@ defmodule Cyfr.GenServerCatchallTest do
             execution_id: record.id,
             attempt: record.attempt,
             ctx: ctx,
-            authority: Cyfr.Authority.zero(),
+            authority: Prima.Authority.zero(),
             component_ref: "catalyst:local.catchall:0.1.0",
             close: %Cyfr.Execution.Close{ctx: ctx, record: record}
           )
@@ -156,9 +156,9 @@ defmodule Cyfr.GenServerCatchallTest do
 
       adopters =
         for dir <- @release_libs,
-            path <- Cyfr.Test.SourceTree.files!(Path.join([root, dir, "**/*.ex"])),
-            source = Cyfr.Test.SourceTree.read(path),
-            String.contains?(source, "Cyfr.LoggerContext.unexpected(__MODULE__"),
+            path <- Prima.Test.SourceTree.files!(Path.join([root, dir, "**/*.ex"])),
+            source = Prima.Test.SourceTree.read(path),
+            String.contains?(source, "Prima.LoggerContext.unexpected(__MODULE__"),
             # Two spellings register the app-wide name, and matching only the
             # first hid `Sanctum.Authority.BudgetGuard` — a real adopter —
             # from this roster entirely, which made its `@not_probed` row
@@ -171,7 +171,7 @@ defmodule Cyfr.GenServerCatchallTest do
       missing = Enum.reject(adopters, &MapSet.member?(rostered, &1))
 
       assert missing == [],
-             "named GenServers adopted Cyfr.LoggerContext.unexpected/3 without joining this " <>
+             "named GenServers adopted Prima.LoggerContext.unexpected/3 without joining this " <>
                "test's roster (probe them, or excuse them with a reason): #{inspect(missing)}"
     end
   end
@@ -187,7 +187,7 @@ defmodule Cyfr.GenServerCatchallTest do
     test "a huge term logs a bounded line" do
       huge = %{blob: String.duplicate("x", 1_000_000), list: Enum.to_list(1..100_000)}
 
-      log = capture_log(fn -> Cyfr.LoggerContext.unexpected(__MODULE__, huge) end)
+      log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, huge) end)
 
       assert log =~ "unexpected message"
       refute log =~ "xxxx"
@@ -210,7 +210,7 @@ defmodule Cyfr.GenServerCatchallTest do
       ]
 
       for message <- messages do
-        log = capture_log(fn -> Cyfr.LoggerContext.unexpected(__MODULE__, message) end)
+        log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, message) end)
 
         assert log =~ "unexpected message"
         refute log =~ "sk-live", "the log carried the secret: #{log}"
@@ -218,15 +218,15 @@ defmodule Cyfr.GenServerCatchallTest do
     end
 
     test "the shape names the tuple's tag and arity, the struct's module and keys" do
-      log = capture_log(fn -> Cyfr.LoggerContext.unexpected(__MODULE__, {:ping, 1, 2}) end)
+      log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, {:ping, 1, 2}) end)
       assert helper_line(log) =~ "tuple :ping/3"
 
-      log = capture_log(fn -> Cyfr.LoggerContext.unexpected(__MODULE__, %URI{host: "h"}) end)
+      log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, %URI{host: "h"}) end)
       assert helper_line(log) =~ "%URI{:authority, :fragment, :host"
       refute log =~ ~s("h")
 
       map = Map.new(1..20, &{:"key_#{String.pad_leading(to_string(&1), 2, "0")}", &1})
-      log = capture_log(fn -> Cyfr.LoggerContext.unexpected(__MODULE__, map) end)
+      log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, map) end)
       assert helper_line(log) =~ "map/20 [:key_01,"
       assert log =~ ":key_10]"
       refute log =~ ":key_11"
@@ -241,7 +241,7 @@ defmodule Cyfr.GenServerCatchallTest do
 
       log =
         capture_log([level: :debug], fn ->
-          Cyfr.LoggerContext.unexpected(__MODULE__, :sibling_broadcast, :debug)
+          Prima.LoggerContext.unexpected(__MODULE__, :sibling_broadcast, :debug)
         end)
 
       assert log =~ "[debug]"

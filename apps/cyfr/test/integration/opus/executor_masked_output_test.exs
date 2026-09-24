@@ -30,7 +30,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Cyfr.Test.TwoServices
   alias Opus.Test.NestedExecution, as: Probe
@@ -60,7 +60,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
 
       for {key, value} <- previous do
         if value,
@@ -86,7 +86,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   test "a completed run's output, stream, payload, events and result are masked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
     :ok = Cyfr.Execution.subscribe_events(id, ctx)
 
     assert {:ok, result} =
@@ -119,7 +119,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   test "a failed run's message is masked in the row, its event and the result", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "describe")
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
     :ok = Cyfr.Execution.subscribe_events(id, ctx)
 
     assert {:error, message} =
@@ -146,7 +146,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     # The budget is what remains of the absolute deadline at receipt, so the
     # milliseconds vary; the words around them are the planted secrets.
     secrets = arm!(ctx, @brief, key: "Execution timeout", token: "after")
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
     hold_attach_past_deadline!(id)
 
     assert {:error, message} =
@@ -165,7 +165,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   test "what a parent is handed of its child is masked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
-    parent_id = Cyfr.UUID7.execution_id()
+    parent_id = Prima.UUID7.execution_id()
 
     request = %{
       "tool" => "execution",
@@ -205,7 +205,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   test "a run whose attempt ends mid-run records nothing unmasked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
     :ok = Cyfr.Execution.subscribe_events(id, ctx)
     TwoServices.hold!(:push_deltas, id, once: true)
 
@@ -271,7 +271,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
       "version" => @version,
       "publisher" => "local",
       "description" => "A model/chat@1 catalyst the masking matrix runs",
-      "contracts" => [Cyfr.Model.chat_contract()],
+      "contracts" => [Prima.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:#{name}",
@@ -308,7 +308,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
       spawn_link(fn ->
         receive do
           {:attach_held, %{args: %{"assignment" => token}}, conn} ->
-            {:ok, assignment} = Cyfr.Assignment.read(token)
+            {:ok, assignment} = Prima.Assignment.read(token)
 
             wait_until(
               fn -> System.system_time(:millisecond) > assignment.deadline end,

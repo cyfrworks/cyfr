@@ -18,7 +18,7 @@ defmodule Sanctum.MCP.OAuthTool do
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.MCP assembles its roster from these.
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # External only, like every other credential write (key.create,
     # vault.create, webhook.create). This one writes the operator's
     # OAuth *client* secret, so a component reaching it from inside
@@ -126,10 +126,10 @@ defmodule Sanctum.MCP.OAuthTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, Cyfr.Ops.Provider.invalid_action("oauth", action_enum())}
+    {:error, Prima.Provider.invalid_action("oauth", action_enum())}
   end
 
-  defp action_enum, do: Cyfr.Ops.Provider.action_enum(definition())
+  defp action_enum, do: Prima.Provider.action_enum(definition())
 
   # Keep authorization refusals typed for dispatch error rendering.
   defp format_reason(reason) when is_binary(reason), do: reason

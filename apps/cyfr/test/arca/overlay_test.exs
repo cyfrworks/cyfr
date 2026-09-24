@@ -420,7 +420,7 @@ defmodule Arca.OverlayTest do
       :ok = Arca.Overlay.pull_shipped(actor, @version_dir)
 
       shaped = %{
-        Cyfr.Actor.system()
+        Prima.Actor.system()
         | user_id: "_overlay",
           athanor_id: actor.athanor_id,
           scope: :athanor
@@ -1019,7 +1019,7 @@ defmodule Arca.OverlayTest do
   describe "seed stays read-only" do
     test "no write reaches the seed side, whoever asks", %{actor: actor} do
       system = %{
-        Cyfr.Actor.system()
+        Prima.Actor.system()
         | user_id: "_test",
           athanor_id: actor.athanor_id,
           scope: :athanor
@@ -1618,7 +1618,7 @@ defmodule Arca.OverlayTest do
       offenders =
         root
         |> Path.join("apps/*/lib/**/*.ex")
-        |> Cyfr.Test.SourceTree.files!()
+        |> Prima.Test.SourceTree.files!()
         |> Enum.flat_map(fn path ->
           source = File.read!(path)
 

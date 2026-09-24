@@ -71,15 +71,15 @@ defmodule Aqua.LoopTest do
 
     # What `Aqua.AgentConfig` resolves, and so what the spec holds.
     versioned = @model <> ":1.3.1"
-    {:ok, name_ref} = Cyfr.ComponentRef.to_name_ref(versioned)
+    {:ok, name_ref} = Prima.ComponentRef.to_name_ref(versioned)
 
     # The graph is keyed the way `Cyfr.Execution.Admission` steps: by name. Asking with
     # the version answers nothing, and a cap of nil is a size check that
     # never fires — which is what the loop did while it asked that way.
-    assert {:error, :unknown_node} = Cyfr.Authority.node_limits(authority, versioned)
+    assert {:error, :unknown_node} = Prima.Authority.node_limits(authority, versioned)
 
-    assert {:ok, %Cyfr.Limits{max_request_size: cap}} =
-             Cyfr.Authority.node_limits(authority, name_ref)
+    assert {:ok, %Prima.Limits{max_request_size: cap}} =
+             Prima.Authority.node_limits(authority, name_ref)
 
     assert is_integer(cap) and cap > 0
   end
@@ -209,7 +209,7 @@ defmodule Aqua.LoopTest do
     ref
   end
 
-  defp roots, do: Cyfr.Slots.status(Cyfr.Execution.Slots).root_active
+  defp roots, do: Prima.Slots.status(Cyfr.Execution.Slots).root_active
 
   test "a reply lands as rows before the turn ends, and the root is let go", %{
     ctx: ctx,
@@ -225,7 +225,7 @@ defmodule Aqua.LoopTest do
     assert_receive {:scripted_probe, worker, _child}, 10_000
 
     assert roots() == before + 1
-    holders = Cyfr.Slots.status(Cyfr.Execution.Slots).holders
+    holders = Prima.Slots.status(Cyfr.Execution.Slots).holders
     assert Enum.any?(holders, &(&1.pid == inspect(task.pid) and &1.class == :root))
     refute Enum.any?(holders, &(&1.pid == inspect(task.pid) and &1.class == :child))
     assert {:ok, %{status: "running", root_execution_id: root}} = Tape.turn(ctx, turn.id)

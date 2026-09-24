@@ -13,7 +13,7 @@ takes, or a build the kernel kills for the container's limit is lost
 without being over its own.
 
 The service takes the most when it answers the largest result the wire
-allows (`Cyfr.BuilderProtocol.max_output_bytes/0`): it holds the build's
+allows (`Prima.BuilderProtocol.max_output_bytes/0`): it holds the build's
 output archive, the files unpacked from it, their base64 and the line that
 carries them, all at once. This measures it, in one container, the kernel's
 own high-water marks read after each step:

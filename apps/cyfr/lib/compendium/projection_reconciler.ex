@@ -353,7 +353,7 @@ defmodule Compendium.ProjectionReconciler do
     do: {:noreply, state}
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -424,7 +424,7 @@ defmodule Compendium.ProjectionReconciler do
   # goes on.
   defp recover(state) do
     # The one read across estates (`Cyfr.Boundaries.system_responsibilities/0`).
-    case Arca.StorageProjectionChanges.pending_athanors(Cyfr.Actor.system()) do
+    case Arca.StorageProjectionChanges.pending_athanors(Prima.Actor.system()) do
       {:ok, athanors} ->
         for athanor_id <- athanors, root <- @roots do
           ctx = estate(athanor_id)

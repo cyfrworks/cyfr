@@ -69,7 +69,7 @@ defmodule Sanctum.Consent.Proof.DB do
   # Encoding
   # ---------------------------------------------------------------------------
 
-  defp hash(token), do: Cyfr.Digest.sha256_hex(token)
+  defp hash(token), do: Prima.Digest.sha256_hex(token)
 
   defp encode_optional(bindings) do
     bindings

@@ -33,8 +33,8 @@ defmodule Arca.SchemaBaselineTest do
   @retired_columns ["org" <> "_id", "project" <> "_id", "conver" <> "sation_id"]
 
   setup_all do
-    [path] = Cyfr.Test.SourceTree.files!(@migration)
-    {:ok, declared: path |> Cyfr.Test.SourceTree.read() |> declared_tables()}
+    [path] = Prima.Test.SourceTree.files!(@migration)
+    {:ok, declared: path |> Prima.Test.SourceTree.read() |> declared_tables()}
   end
 
   setup do
@@ -369,12 +369,12 @@ defmodule Arca.SchemaBaselineTest do
   test "the recorded fingerprint is the digest of the migration sources on disk" do
     digest =
       @migration
-      |> Cyfr.Test.SourceTree.files!()
+      |> Prima.Test.SourceTree.files!()
       |> Enum.sort()
       |> Enum.map_join(fn path ->
-        Path.basename(path) <> "\n" <> Cyfr.Test.SourceTree.read(path)
+        Path.basename(path) <> "\n" <> Prima.Test.SourceTree.read(path)
       end)
-      |> Cyfr.Digest.sha256_hex()
+      |> Prima.Digest.sha256_hex()
 
     # The baseline is edited in place and records this digest as it builds
     # the schema, so every edit of it — this slice's columns included —

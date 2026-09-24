@@ -124,7 +124,7 @@ defmodule CyfrWeb.ContextGuard do
 
   defp admit(socket, ctx) do
     if LiveView.connected?(socket) do
-      Cyfr.LoggerContext.set_request_id(socket.id)
+      Prima.LoggerContext.set_request_id(socket.id)
       subscribe(ctx)
 
       with {:ok, fresh} <- Caller.revalidate_session(ctx),
@@ -242,7 +242,7 @@ defmodule CyfrWeb.ContextGuard do
   defp focus_of(_), do: nil
 
   defp put_context(socket, %Context{} = ctx) do
-    Cyfr.LoggerContext.set_from_context(ctx)
+    Prima.LoggerContext.set_from_context(ctx)
     assign(socket, :context, ctx)
   end
 
@@ -308,7 +308,7 @@ defmodule CyfrWeb.ContextGuard do
   def authenticate(token, athanor_id \\ nil) do
     with {:ok, ctx} <- Caller.establish(token, focus: athanor_id),
          {:ok, ctx} <- check(ctx) do
-      Cyfr.LoggerContext.set_from_context(ctx)
+      Prima.LoggerContext.set_from_context(ctx)
       {:ok, ctx}
     end
   end

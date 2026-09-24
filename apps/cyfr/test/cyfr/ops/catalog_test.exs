@@ -40,7 +40,7 @@ defmodule Cyfr.Ops.CatalogTest.ReplaySafeWrite do
   def service, do: "poker"
 
   def tools do
-    op = Cyfr.Ops.Operation.new("poker", "poke", "Write", [], kind: :write, planes: [:in_chain])
+    op = Prima.Operation.new("poker", "poke", "Write", [], kind: :write, planes: [:in_chain])
     [%{name: "poker", operations: [%{op | recovery: :replay_safe}]}]
   end
 
@@ -55,7 +55,8 @@ defmodule Cyfr.Ops.CatalogTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.{Arg, Catalog, Operation}
+  alias Cyfr.Ops.Catalog
+  alias Prima.{Arg, Operation}
   alias Sanctum.Context
 
   setup do

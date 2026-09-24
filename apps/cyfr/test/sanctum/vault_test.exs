@@ -58,7 +58,7 @@ defmodule Sanctum.VaultTest do
           invoke_mode: "open_inert",
           shape_digest: "sha256:shape",
           commit_digest: "sha256:commit",
-          blob_digest: Cyfr.JCS.hash_binary("{}"),
+          blob_digest: Prima.JCS.hash_binary("{}"),
           resolved_policy: "{}",
           activation: "{}",
           granted_by: "test",

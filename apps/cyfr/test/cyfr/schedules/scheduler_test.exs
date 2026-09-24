@@ -6,13 +6,14 @@ defmodule Cyfr.Schedules.SchedulerTest do
 
   import ExUnit.CaptureLog
   import Ecto.Query, only: [from: 2]
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
   alias Arca.Schemas.CronSchedule, as: ScheduleRow
   alias Cyfr.Bus.ScheduleCompleted
   alias Cyfr.Schedules.Scheduler
-  alias Cyfr.Test.{AuthorityFixtures, ScriptedWorker}
+  alias Cyfr.Test.ScriptedWorker
+  alias Prima.Test.AuthorityFixtures
   alias Sanctum.Test.ConsentFixtures
 
   @reference "reagent:local.test"
@@ -38,7 +39,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {{app, key}, value} <- prev do
@@ -385,7 +386,7 @@ defmodule Cyfr.Schedules.SchedulerTest do
     held_for = Enum.map(linked, &inspect/1)
 
     assert Enum.any?(
-             Cyfr.Slots.status(Cyfr.Execution.Slots).holders,
+             Prima.Slots.status(Cyfr.Execution.Slots).holders,
              &(&1.pid in held_for and &1.class == :background)
            )
 

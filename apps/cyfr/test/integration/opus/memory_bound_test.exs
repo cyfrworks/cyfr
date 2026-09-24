@@ -20,10 +20,10 @@ defmodule Opus.MemoryBoundTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Cyfr.Test.{OpusService, TwoServices}
 
   @moduletag timeout: 120_000
@@ -55,7 +55,7 @@ defmodule Opus.MemoryBoundTest do
     ctx = %{Sanctum.TestContext.local() | athanor_id: athanor.id}
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(run_dir)
 
       case previous do
@@ -121,7 +121,7 @@ defmodule Opus.MemoryBoundTest do
   # its result, its row and the runner that ran it, once the service holds
   # nothing of it.
   defp run!(ctx, name, max_memory_bytes) do
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
 
     result =
       Cyfr.Execution.Dispatch.run(ctx, node_ref(name) <> ":0.1.0", %{"hostile" => true},

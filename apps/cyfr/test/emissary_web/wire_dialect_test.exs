@@ -37,7 +37,7 @@ defmodule EmissaryWeb.WireDialectTest do
   test "every bare send_resp is on the roster with a reason" do
     offenders =
       Path.join(@root, "**/*.ex")
-      |> Cyfr.Test.SourceTree.files!()
+      |> Prima.Test.SourceTree.files!()
       |> Enum.filter(fn file ->
         # send_chunked is the SSE open — a stream, not a body to render.
         file |> File.read!() |> String.match?(~r/\bsend_resp\(/)

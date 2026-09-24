@@ -185,7 +185,7 @@ defmodule Compendium.Builds.BuildRefusalsTest do
                  "async" => true
                })
 
-      Cyfr.Test.Wait.wait_until(fn ->
+      Prima.Test.Wait.wait_until(fn ->
         match?(
           {:ok, %{"status" => "failed"}},
           Provider.handle("build", ctx, %{"action" => "status", "build_id" => build_id})

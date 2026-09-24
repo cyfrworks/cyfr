@@ -44,9 +44,9 @@ defmodule Arca.CredentialBindings do
   answers the same. A store that cannot answer is
   `{:error, :database_error}` — never a verdict either way.
   """
-  @spec check(Cyfr.Actor.t(), binding(), keyword()) ::
+  @spec check(Prima.Actor.t(), binding(), keyword()) ::
           :ok | {:ok, term()} | {:error, term()}
-  def check(%Cyfr.Actor{scope: :platform, system: true}, %{user_id: user_id} = binding, opts)
+  def check(%Prima.Actor{scope: :platform, system: true}, %{user_id: user_id} = binding, opts)
       when is_binary(user_id) and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
 
@@ -68,5 +68,5 @@ defmodule Arca.CredentialBindings do
     |> Arca.Data.project()
   end
 
-  def check(%Cyfr.Actor{}, _binding, _opts), do: {:error, :cross_tenant}
+  def check(%Prima.Actor{}, _binding, _opts), do: {:error, :cross_tenant}
 end

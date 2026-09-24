@@ -27,22 +27,22 @@ defmodule Compendium.ComponentPath do
   tenant.
 
   Vocabulary note: paths and the components table say `publisher`;
-  references and identity (`Cyfr.ComponentRef`) say `namespace` — the
+  references and identity (`Prima.ComponentRef`) say `namespace` — the
   SAME value under two names, one per vocabulary. This module's
   `normalize_publisher/1` / `default_publisher/0` are the bridge.
   """
 
   @behaviour Arca.Storage.UnitLocator
 
-  @type_plurals Enum.map(Cyfr.ComponentRef.valid_types(), &(&1 <> "s"))
+  @type_plurals Enum.map(Prima.ComponentRef.valid_types(), &(&1 <> "s"))
 
   @manifest_name "cyfr-manifest.json"
 
   # The layout both sides agree on — the root, the pluralization and the
-  # publisher default — is `Cyfr.ComponentPath`, read here so the parser
+  # publisher default — is `Prima.ComponentPath`, read here so the parser
   # below and the consent that names a version directory cannot spell it
   # differently.
-  @components_root hd(Cyfr.ComponentPath.base_prefix())
+  @components_root hd(Prima.ComponentPath.base_prefix())
 
   # components/{type}s/{publisher}/{name}/{version} — the shadow unit is
   # the version directory, `version_dir/4`'s exact shape.
@@ -50,7 +50,7 @@ defmodule Compendium.ComponentPath do
 
   @doc "Root prefix segments: `[\"components\"]` — the context's athanor's tree."
   @spec base_prefix() :: [String.t()]
-  defdelegate base_prefix(), to: Cyfr.ComponentPath
+  defdelegate base_prefix(), to: Prima.ComponentPath
 
   @doc """
   Parse tenant-relative component segments against the one layout — the
@@ -81,9 +81,9 @@ defmodule Compendium.ComponentPath do
           | :error
   def parse([@components_root, type_plural, publisher, name, version | rest])
       when type_plural in @type_plurals do
-    with :ok <- Cyfr.ComponentRef.validate_namespace(publisher),
-         :ok <- Cyfr.ComponentRef.validate_name(name),
-         :ok <- Cyfr.ComponentRef.validate_version(version) do
+    with :ok <- Prima.ComponentRef.validate_namespace(publisher),
+         :ok <- Prima.ComponentRef.validate_name(name),
+         :ok <- Prima.ComponentRef.validate_version(version) do
       {:ok,
        %{
          type: singular(type_plural),
@@ -184,7 +184,7 @@ defmodule Compendium.ComponentPath do
       "local"
   """
   @spec default_publisher() :: String.t()
-  defdelegate default_publisher(), to: Cyfr.ComponentPath
+  defdelegate default_publisher(), to: Prima.ComponentPath
 
   @doc """
   Canonical publisher segment default. `nil`/`""` collapse to the seeded
@@ -192,7 +192,7 @@ defmodule Compendium.ComponentPath do
   component's path and its id never disagree about an absent publisher.
   """
   @spec normalize_publisher(String.t() | nil) :: String.t()
-  defdelegate normalize_publisher(publisher), to: Cyfr.ComponentPath
+  defdelegate normalize_publisher(publisher), to: Prima.ComponentPath
 
   @doc """
   Whether a publisher segment names the local namespace.
@@ -215,7 +215,7 @@ defmodule Compendium.ComponentPath do
       true
   """
   @spec local_publisher?(String.t() | nil) :: boolean()
-  defdelegate local_publisher?(publisher), to: Cyfr.ComponentPath
+  defdelegate local_publisher?(publisher), to: Prima.ComponentPath
 
   @doc """
   The plural directory name for a component type — the one pluralization
@@ -227,7 +227,7 @@ defmodule Compendium.ComponentPath do
       "catalysts"
   """
   @spec type_plural(String.t()) :: String.t()
-  defdelegate type_plural(type), to: Cyfr.ComponentPath
+  defdelegate type_plural(type), to: Prima.ComponentPath
 
   @doc """
   The inverse of `type_plural/1` — the one de-pluralization, so the OCI
@@ -237,11 +237,11 @@ defmodule Compendium.ComponentPath do
       "catalyst"
   """
   @spec singular(String.t()) :: String.t()
-  defdelegate singular(type_plural), to: Cyfr.ComponentPath
+  defdelegate singular(type_plural), to: Prima.ComponentPath
 
   @doc "Path segments to a component version directory."
   @spec version_dir(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
-  defdelegate version_dir(type, publisher, name, version), to: Cyfr.ComponentPath
+  defdelegate version_dir(type, publisher, name, version), to: Prima.ComponentPath
 
   @doc "The artifact filename a component type's binary carries."
   @spec wasm_name(String.t()) :: String.t()

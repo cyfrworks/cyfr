@@ -31,7 +31,7 @@ defmodule Opus.ComponentTypeTest do
     end
 
     test "every canonical executable type round-trips as string and atom" do
-      for type <- Cyfr.ComponentRef.executable_types() do
+      for type <- Prima.ComponentRef.executable_types() do
         atom = String.to_existing_atom(type)
         assert {:ok, ^atom} = ComponentType.parse(type)
         assert {:ok, ^atom} = ComponentType.parse(atom)
@@ -97,7 +97,7 @@ defmodule Opus.ComponentTypeTest do
     test "returns list of valid types" do
       # Also the @type t pin: the typespec is hand-written (`:catalyst |
       # :reagent | :formula`) beside a derived value list. A new executable
-      # type in Cyfr.ComponentRef fails this literal until BOTH the
+      # type in Prima.ComponentRef fails this literal until BOTH the
       # assertion and the typespec are updated — the spec cannot go silently
       # stale.
       assert ComponentType.valid_types() == [:catalyst, :reagent, :formula]

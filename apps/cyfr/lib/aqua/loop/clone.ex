@@ -23,8 +23,8 @@ defmodule Aqua.Loop.Clone do
   alias Aqua.Loop.Turn
   alias Aqua.Tape
   alias Compendium.AgentSource
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Transition
+  alias Prima.Authority
+  alias Prima.Authority.Transition
 
   @type refusal ::
           {:no_role_edge, String.t()}
@@ -184,7 +184,7 @@ defmodule Aqua.Loop.Clone do
   defp terminal({:uncertain, reason}), do: {"uncertain", describe(reason)}
 
   defp last_reply(guest, clone) do
-    agent = Cyfr.Author.agent()
+    agent = Prima.Author.agent()
 
     case Tape.projection(guest, clone) do
       {:ok, rows} ->

@@ -136,7 +136,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     {:ok, group} = Athanors.get(group.id)
     assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
 
-    assert {:ok, %Cyfr.Authority{}} =
+    assert {:ok, %Prima.Authority{}} =
              Cyfr.Execution.authority_for(in_group, :default, @formula)
 
     assert Aqua.consent_state(in_group, @formula) == {:ok, :current}
@@ -166,7 +166,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     # ships in the seed, so its consent stands and a turn still pins it.
     assert Aqua.consent_state(in_group) == {:ok, :current}
 
-    assert {:ok, %Cyfr.Authority{}} =
+    assert {:ok, %Prima.Authority{}} =
              Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua")
   end
 
@@ -226,7 +226,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Cyfr.Test.SourceTree.files!(match_dot: false)
+    |> Prima.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       target = Path.join(dest, Path.relative_to(src, @bundle))

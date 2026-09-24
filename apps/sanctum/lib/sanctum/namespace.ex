@@ -50,7 +50,7 @@ defmodule Sanctum.Namespace do
 
   Returns the slug when this server has recorded one for the person AND
   it still satisfies the canonical rule
-  (`Cyfr.ComponentRef.valid_personal_slug?/1`). Otherwise `nil`. Safe to
+  (`Prima.ComponentRef.valid_personal_slug?/1`). Otherwise `nil`. Safe to
   call with `nil` / non-binary user_id (returns `nil`).
 
   Defense-in-depth: the rule is re-checked even though cyfr.run enforced it
@@ -103,7 +103,7 @@ defmodule Sanctum.Namespace do
       :miss ->
         case Users.get(user_id) do
           {:ok, %{namespace: slug}} when is_binary(slug) ->
-            if Cyfr.ComponentRef.valid_personal_slug?(slug) do
+            if Prima.ComponentRef.valid_personal_slug?(slug) do
               if ttl > 0, do: Arca.Cache.put(key, slug, ttl)
               {:ok, slug}
             else

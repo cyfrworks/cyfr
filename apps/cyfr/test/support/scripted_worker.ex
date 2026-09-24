@@ -3,7 +3,7 @@
 
 defmodule Cyfr.Test.ScriptedWorker do
   @moduledoc """
-  A worker service (`Cyfr.WorkerAPI`) whose runners answer from a script
+  A worker service (`Prima.WorkerAPI`) whose runners answer from a script
   instead of running a component. Configure it with `workers/2` inside the
   test; users are `async: false`, since the script is one named process.
 
@@ -30,7 +30,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   a run's process is alive, and `tainted` from a kill until the killed
   process has gone; it keeps no runner fresh or idle, bounds no runner's
   memory and never refuses one. Its kill is idempotent as
-  `c:Cyfr.WorkerAPI.kill/1` says: `:ok` for an execution a runner of this
+  `c:Prima.WorkerAPI.kill/1` says: `:ok` for an execution a runner of this
   boot holds or already ended, whether by a kill or on its own, and
   `{:error, :not_found}` only for one no runner of this boot ever held,
   which CYFR counts as nothing whose native work may still run. A reference it does
@@ -78,13 +78,13 @@ defmodule Cyfr.Test.ScriptedWorker do
   worker service acted.
   """
 
-  @behaviour Cyfr.WorkerAPI
+  @behaviour Prima.WorkerAPI
 
   use GenServer
 
   require Logger
 
-  alias Cyfr.{Assignment, WorkerAuth}
+  alias Prima.{Assignment, WorkerAuth}
   alias Cyfr.Execution.{Host, Keys}
   alias Cyfr.Test.ScriptedWorkerListener
 
@@ -118,15 +118,15 @@ defmodule Cyfr.Test.ScriptedWorker do
   end
 
   @doc """
-  This worker service's endpoint (`t:Cyfr.WorkerAPI.endpoint/0`), running
+  This worker service's endpoint (`t:Prima.WorkerAPI.endpoint/0`), running
   any reference: what a test hands an attempt as its `:worker`.
   """
-  @spec endpoint() :: Cyfr.WorkerAPI.endpoint()
+  @spec endpoint() :: Prima.WorkerAPI.endpoint()
   def endpoint, do: %{id: @service, url: url(), components: nil}
 
   @doc """
   The `config :cyfr, :workers` list that routes the scripted `refs` (any
-  form `Cyfr.ComponentRef.to_name_ref/1` reads) to this worker service and
+  form `Prima.ComponentRef.to_name_ref/1` reads) to this worker service and
   every other reference to the worker services in `configured` (the list
   being replaced, with any earlier entry of this worker service dropped).
   """
@@ -142,7 +142,7 @@ defmodule Cyfr.Test.ScriptedWorker do
     refs
     |> List.wrap()
     |> Enum.map(fn ref ->
-      {:ok, name} = Cyfr.ComponentRef.to_name_ref(ref)
+      {:ok, name} = Prima.ComponentRef.to_name_ref(ref)
       name
     end)
   end
@@ -168,7 +168,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   @doc """
   Start the context's athanor on fresh execution limits: a fresh consented
   rate window (`Cyfr.Execution.Rates`) for the pinned releases of `refs`,
-  and no unreaped-kill penalty (`Cyfr.Slots.forgive_unreaped/2`).
+  and no unreaped-kill penalty (`Prima.Slots.forgive_unreaped/2`).
   Scripted runs are admitted, and their runners killed, for real, so every
   test sharing an athanor draws on the same limits.
   """
@@ -178,14 +178,14 @@ defmodule Cyfr.Test.ScriptedWorker do
       :ok = Cyfr.Execution.Rates.reset(Sanctum.Context.actor(ctx), pinned)
     end
 
-    :ok = Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+    :ok = Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
   end
 
   # ---------------------------------------------------------------------------
-  # Cyfr.WorkerAPI
+  # Prima.WorkerAPI
   # ---------------------------------------------------------------------------
 
-  @impl Cyfr.WorkerAPI
+  @impl Prima.WorkerAPI
   def start(token, input, sealed_keys)
       when is_binary(token) and is_binary(input) and is_binary(sealed_keys) do
     case GenServer.call(__MODULE__, {:start, token, input, sealed_keys}) do
@@ -195,17 +195,17 @@ defmodule Cyfr.Test.ScriptedWorker do
     end
   end
 
-  @impl Cyfr.WorkerAPI
+  @impl Prima.WorkerAPI
   def kill(execution_id) when is_binary(execution_id),
     do: GenServer.call(__MODULE__, {:kill, execution_id})
 
-  @impl Cyfr.WorkerAPI
+  @impl Prima.WorkerAPI
   def status, do: {:ok, GenServer.call(__MODULE__, :status)}
 
   # The lost answer of a start the worker service acted on: answered once
   # the runner attached, so a test sees the reconciliation and not a race.
   defp lose_once_attached(execution_id) do
-    Cyfr.Test.Wait.wait_until(
+    Prima.Test.Wait.wait_until(
       fn -> Enum.any?(calls(), &(&1.execution_id == execution_id)) end,
       @attach_wait_ms,
       "the runner of #{execution_id} attached"
@@ -238,7 +238,7 @@ defmodule Cyfr.Test.ScriptedWorker do
 
     {:ok,
      %{
-       boot: "#{node()}#" <> Cyfr.UUID7.generate_id("boot"),
+       boot: "#{node()}#" <> Prima.UUID7.generate_id("boot"),
        listener: listener,
        url: url,
        refs: refs,
@@ -261,7 +261,7 @@ defmodule Cyfr.Test.ScriptedWorker do
     with {:ok, assignment} <- Assignment.read(token),
          true <- scripted?(state, assignment.component.ref),
          true <- assignment.service == @service and assignment.boot == state.boot,
-         true <- Cyfr.Digest.sha256(input) == assignment.input_digest,
+         true <- Prima.Digest.sha256(input) == assignment.input_digest,
          {:ok, worker_key} <- Keys.worker_key(@service),
          {:ok, %{attempt: attempt} = keys} <-
            WorkerAuth.open_attempt_keys(WorkerAuth.dispatch_seal_key(worker_key), sealed_keys),
@@ -275,7 +275,7 @@ defmodule Cyfr.Test.ScriptedWorker do
         input: decoded,
         keys: keys,
         boot: state.boot,
-        runner: Cyfr.UUID7.generate_id("runner"),
+        runner: Prima.UUID7.generate_id("runner"),
         waiter: waiter,
         callers: List.wrap(waiter)
       }
@@ -381,7 +381,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   end
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -396,7 +396,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   end
 
   defp scripted?(state, reference) do
-    case Cyfr.ComponentRef.to_name_ref(reference) do
+    case Prima.ComponentRef.to_name_ref(reference) do
       {:ok, name} -> name in state.refs
       {:error, _} -> false
     end
@@ -457,7 +457,7 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   defp run(runner) do
     Process.put(:"$callers", runner.callers)
-    Cyfr.LoggerContext.set_execution_id(runner.assignment.execution_id)
+    Prima.LoggerContext.set_execution_id(runner.assignment.execution_id)
 
     case attached(runner) do
       :normal -> :ok
@@ -468,7 +468,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   defp attached(runner) do
     case host(runner, "attach", %{"assignment" => runner.token}) do
       %{"ok" => %{}} ->
-        case Cyfr.Authority.from_wire(runner.assignment.authority) do
+        case Prima.Authority.from_wire(runner.assignment.authority) do
           {:ok, authority} ->
             call = %{
               execution_id: runner.assignment.execution_id,

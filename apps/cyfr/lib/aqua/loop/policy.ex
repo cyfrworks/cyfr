@@ -131,7 +131,7 @@ defmodule Aqua.Loop.Policy do
     consented? = Keyword.get(opts, :consented?, fn _ -> false end)
     touched = Keyword.get(opts, :touched, MapSet.new())
 
-    case Cyfr.ComponentRef.parse(reference) do
+    case Prima.ComponentRef.parse(reference) do
       {:ok, _} ->
         cond do
           MapSet.member?(touched, name_level(reference)) -> :card
@@ -185,7 +185,7 @@ defmodule Aqua.Loop.Policy do
 
     %{
       "kind" => "request_approval",
-      "id" => Keyword.get(opts, :id) || Cyfr.UUID7.generate_id("apr"),
+      "id" => Keyword.get(opts, :id) || Prima.UUID7.generate_id("apr"),
       "title" => Keyword.get(opts, :title) || "#{call.tool}.#{call.action}",
       "summary" => Keyword.get(opts, :summary) || "",
       "action_kind" =>
@@ -208,7 +208,7 @@ defmodule Aqua.Loop.Policy do
   def proposal_digest(%{"proposal" => proposal}), do: proposal_digest(proposal)
 
   def proposal_digest(proposal) when is_map(proposal) do
-    {:ok, digest} = Cyfr.JCS.hash(proposal)
+    {:ok, digest} = Prima.JCS.hash(proposal)
     digest
   end
 

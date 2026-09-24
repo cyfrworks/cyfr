@@ -38,7 +38,7 @@ defmodule Locus.ConfigTest do
     assert {:ok, settings} = Config.from_env(env(full()))
 
     assert settings == [
-             request_key: Cyfr.BuilderProtocol.request_key(@key),
+             request_key: Prima.BuilderProtocol.request_key(@key),
              bind: {127, 0, 0, 1},
              port: 4101,
              timeout_ms: 60_000,
@@ -58,7 +58,7 @@ defmodule Locus.ConfigTest do
     assert {:ok, settings} = Config.from_env(env(%{"LOCUS_BUILDS_KEY" => @key_hex}))
 
     assert settings == [
-             request_key: Cyfr.BuilderProtocol.request_key(@key),
+             request_key: Prima.BuilderProtocol.request_key(@key),
              bind: {0, 0, 0, 0},
              port: 4100,
              timeout_ms: 270_000,
@@ -252,13 +252,13 @@ defmodule Locus.RuntimeConfigFileTest do
     end)
   end
 
-  test "log_formatter names Cyfr.JsonFormatter once the format is json" do
+  test "log_formatter names Prima.JsonFormatter once the format is json" do
     Application.put_env(:locus, :log_format, :json)
     on_exit(fn -> Application.delete_env(:locus, :log_format) end)
 
-    assert Locus.Config.log_formatter() == {Cyfr.JsonFormatter, :format}
+    assert Locus.Config.log_formatter() == {Prima.JsonFormatter, :format}
 
-    assert Code.ensure_loaded?(Cyfr.JsonFormatter) and
-             function_exported?(Cyfr.JsonFormatter, :format, 4)
+    assert Code.ensure_loaded?(Prima.JsonFormatter) and
+             function_exported?(Prima.JsonFormatter, :format, 4)
   end
 end

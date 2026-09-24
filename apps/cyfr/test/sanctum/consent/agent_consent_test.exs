@@ -15,7 +15,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
   use ExUnit.Case, async: false
 
   alias Compendium.{AquaAgent, AquaPath}
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority.Blob
   alias Sanctum.Consent.{Bootstrap, Commit, Plan, ShapeDerivation}
 
   @soul "agent:local.aqua"

@@ -4,13 +4,13 @@
 defmodule Compendium.ManifestTest do
   @moduledoc """
   The manifest contract as the component domain composes it: the shared
-  validator (`Cyfr.Manifest.validate/2`) under the storage layer's
+  validator (`Prima.Manifest.validate/2`) under the storage layer's
   guest-path predicate and the domain's suggested categories.
   """
 
   use ExUnit.Case, async: true
 
-  alias Cyfr.Manifest
+  alias Prima.Manifest
 
   defp validate(manifest), do: Manifest.validate(manifest, &Arca.Storage.valid_guest_path?/1)
 

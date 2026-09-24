@@ -4,7 +4,7 @@
 defmodule Opus.Egress do
   @moduledoc """
   Where a guest's outbound HTTP request may connect: its URL resolved once,
-  the address checked against the address classes in `Cyfr.Cidr` and the
+  the address checked against the address classes in `Prima.Cidr` and the
   guest's consent, and the connection pinned to that address.
 
   A caller that checked a hostname and then connects by name resolves DNS
@@ -16,8 +16,8 @@ defmodule Opus.Egress do
   validated address is the connection target, so there is no second
   resolution to rebind.
 
-  A cloud-metadata address (`Cyfr.Cidr.metadata?/1`) is refused whatever
-  the consent says. A private address (`Cyfr.Cidr.private_ip?/1`) is
+  A cloud-metadata address (`Prima.Cidr.metadata?/1`) is refused whatever
+  the consent says. A private address (`Prima.Cidr.private_ip?/1`) is
   refused unless the `:private_policy` function admits it: the guest's
   `egress.private_ips` grant (`Opus.EdgeGuard.allows_private_ip?/2`).
   """
@@ -28,7 +28,7 @@ defmodule Opus.Egress do
   fail-closed transport policy (no redirect, no retry, no compression, no
   body decoding), ready for the caller's method, headers and body.
   """
-  @type pinned :: Cyfr.Network.pinned()
+  @type pinned :: Prima.Network.pinned()
 
   @type refusal :: :invalid_url | :dns_error | :private_ip_blocked
 
@@ -61,9 +61,9 @@ defmodule Opus.Egress do
 
     resolver = Keyword.get_lazy(opts, :resolver, &default_resolver/0)
 
-    with {:ok, uri} <- Cyfr.Network.parse_url(url),
+    with {:ok, uri} <- Prima.Network.parse_url(url),
          {:ok, ip} <- resolve(uri.host, resolver) do
-      Cyfr.Network.pin(uri, ip, Keyword.put(opts, :private_policy, policy))
+      Prima.Network.pin(uri, ip, Keyword.put(opts, :private_policy, policy))
     end
   end
 

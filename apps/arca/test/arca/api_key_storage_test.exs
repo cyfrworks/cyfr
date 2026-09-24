@@ -37,7 +37,7 @@ defmodule Arca.ApiKeyStorageTest do
       attrs = key_attrs("test-key", athanor_id)
       assert :ok = ApiKeyStorage.create_key(attrs, Arca.Test.Actor.issuance())
 
-      assert {:ok, key} = ApiKeyStorage.get_key(Cyfr.Actor.in_athanor(athanor_id), "test-key")
+      assert {:ok, key} = ApiKeyStorage.get_key(Prima.Actor.in_athanor(athanor_id), "test-key")
       assert key.name == "test-key"
       assert key.type == "secret"
       assert key.revoked == false
@@ -45,7 +45,7 @@ defmodule Arca.ApiKeyStorageTest do
 
     test "returns not_found for missing key", %{athanor_id: athanor_id} do
       assert {:error, :not_found} =
-               ApiKeyStorage.get_key(Cyfr.Actor.in_athanor(athanor_id), "missing")
+               ApiKeyStorage.get_key(Prima.Actor.in_athanor(athanor_id), "missing")
     end
 
     test "duplicate name returns already_exists", %{athanor_id: athanor_id} do
@@ -77,14 +77,14 @@ defmodule Arca.ApiKeyStorageTest do
       :ok = ApiKeyStorage.create_key(key_attrs("list-a", athanor_id), Arca.Test.Actor.issuance())
       :ok = ApiKeyStorage.create_key(key_attrs("list-b", athanor_id), Arca.Test.Actor.issuance())
 
-      {:ok, keys} = ApiKeyStorage.list_keys(Cyfr.Actor.in_athanor(athanor_id))
+      {:ok, keys} = ApiKeyStorage.list_keys(Prima.Actor.in_athanor(athanor_id))
       names = Enum.map(keys, & &1.name)
       assert "list-a" in names
       assert "list-b" in names
     end
 
     test "returns empty list when no keys" do
-      {:ok, keys} = ApiKeyStorage.list_keys(Cyfr.Actor.in_athanor("ath_empty"))
+      {:ok, keys} = ApiKeyStorage.list_keys(Prima.Actor.in_athanor("ath_empty"))
       assert keys == []
     end
   end
@@ -94,24 +94,24 @@ defmodule Arca.ApiKeyStorageTest do
       :ok =
         ApiKeyStorage.create_key(key_attrs("revoke-me", athanor_id), Arca.Test.Actor.issuance())
 
-      assert :ok = ApiKeyStorage.revoke_key(Cyfr.Actor.in_athanor(athanor_id), "revoke-me")
+      assert :ok = ApiKeyStorage.revoke_key(Prima.Actor.in_athanor(athanor_id), "revoke-me")
 
       assert {:error, :not_found} =
-               ApiKeyStorage.get_key(Cyfr.Actor.in_athanor(athanor_id), "revoke-me")
+               ApiKeyStorage.get_key(Prima.Actor.in_athanor(athanor_id), "revoke-me")
     end
 
     test "returns not_found for missing key", %{athanor_id: athanor_id} do
       assert {:error, :not_found} =
-               ApiKeyStorage.revoke_key(Cyfr.Actor.in_athanor(athanor_id), "nope")
+               ApiKeyStorage.revoke_key(Prima.Actor.in_athanor(athanor_id), "nope")
     end
 
     test "revoked key excluded from list", %{athanor_id: athanor_id} do
       :ok =
         ApiKeyStorage.create_key(key_attrs("revoke-list", athanor_id), Arca.Test.Actor.issuance())
 
-      :ok = ApiKeyStorage.revoke_key(Cyfr.Actor.in_athanor(athanor_id), "revoke-list")
+      :ok = ApiKeyStorage.revoke_key(Prima.Actor.in_athanor(athanor_id), "revoke-list")
 
-      {:ok, keys} = ApiKeyStorage.list_keys(Cyfr.Actor.in_athanor(athanor_id))
+      {:ok, keys} = ApiKeyStorage.list_keys(Prima.Actor.in_athanor(athanor_id))
       refute Enum.any?(keys, &(&1.name == "revoke-list"))
     end
   end
@@ -126,7 +126,7 @@ defmodule Arca.ApiKeyStorageTest do
 
       assert :ok =
                ApiKeyStorage.rotate_key(
-                 Cyfr.Actor.in_athanor(athanor_id),
+                 Prima.Actor.in_athanor(athanor_id),
                  "rotate-me",
                  new_hash,
                  new_prefix,
@@ -143,7 +143,7 @@ defmodule Arca.ApiKeyStorageTest do
 
       assert {:error, :not_found} =
                ApiKeyStorage.rotate_key(
-                 Cyfr.Actor.in_athanor(athanor_id),
+                 Prima.Actor.in_athanor(athanor_id),
                  "nope",
                  new_hash,
                  "pfx",
@@ -163,12 +163,12 @@ defmodule Arca.ApiKeyStorageTest do
       :ok =
         ApiKeyStorage.create_key(key_attrs("shared-name", "ath_beta"), Arca.Test.Actor.issuance())
 
-      {:ok, key_a} = ApiKeyStorage.get_key(Cyfr.Actor.in_athanor("ath_alpha"), "shared-name")
-      {:ok, key_b} = ApiKeyStorage.get_key(Cyfr.Actor.in_athanor("ath_beta"), "shared-name")
+      {:ok, key_a} = ApiKeyStorage.get_key(Prima.Actor.in_athanor("ath_alpha"), "shared-name")
+      {:ok, key_b} = ApiKeyStorage.get_key(Prima.Actor.in_athanor("ath_beta"), "shared-name")
       assert key_a.athanor_id != key_b.athanor_id
 
-      {:ok, a_keys} = ApiKeyStorage.list_keys(Cyfr.Actor.in_athanor("ath_alpha"))
-      {:ok, b_keys} = ApiKeyStorage.list_keys(Cyfr.Actor.in_athanor("ath_beta"))
+      {:ok, a_keys} = ApiKeyStorage.list_keys(Prima.Actor.in_athanor("ath_alpha"))
+      {:ok, b_keys} = ApiKeyStorage.list_keys(Prima.Actor.in_athanor("ath_beta"))
       assert length(a_keys) == 1
       assert length(b_keys) == 1
     end

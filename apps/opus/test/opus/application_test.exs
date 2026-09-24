@@ -47,7 +47,7 @@ defmodule Opus.ApplicationTest do
     assert port > 0
 
     {:ok, %Req.Response{status: 401, body: body}} =
-      Req.post("http://127.0.0.1:#{port}" <> Cyfr.WorkerWire.worker_route(:status),
+      Req.post("http://127.0.0.1:#{port}" <> Prima.WorkerWire.worker_route(:status),
         body: "{}",
         retry: false,
         decode_body: false

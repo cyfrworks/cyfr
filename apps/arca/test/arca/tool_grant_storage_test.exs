@@ -36,7 +36,7 @@ defmodule Arca.ToolGrantStorageTest do
     assert [%{effect: "deny"}] =
              elem(
                ToolGrantStorage.list_for_thread(
-                 Cyfr.Actor.in_athanor(row.athanor_id),
+                 Prima.Actor.in_athanor(row.athanor_id),
                  row.thread_id
                ),
                1
@@ -71,7 +71,7 @@ defmodule Arca.ToolGrantStorageTest do
 
     rows =
       elem(
-        ToolGrantStorage.list_for_thread(Cyfr.Actor.in_athanor(row.athanor_id), row.thread_id),
+        ToolGrantStorage.list_for_thread(Prima.Actor.in_athanor(row.athanor_id), row.thread_id),
         1
       )
 
@@ -86,7 +86,7 @@ defmodule Arca.ToolGrantStorageTest do
     assert [%{id: id}] =
              elem(
                ToolGrantStorage.list_for_thread(
-                 Cyfr.Actor.in_athanor(row.athanor_id),
+                 Prima.Actor.in_athanor(row.athanor_id),
                  row.thread_id
                ),
                1
@@ -99,7 +99,7 @@ defmodule Arca.ToolGrantStorageTest do
   # of the race the constraint exists for.
   defp duplicate(row) do
     row
-    |> Map.put(:id, Cyfr.UUID7.generate_id("grant"))
+    |> Map.put(:id, Prima.UUID7.generate_id("grant"))
     |> Map.put(:granted_at, DateTime.utc_now())
     |> ToolGrantStorage.changeset()
     |> Arca.Repo.insert()

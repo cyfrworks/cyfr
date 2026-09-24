@@ -47,7 +47,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
 
   use Cyfr.Cluster.Case, async: false
 
-  alias Cyfr.{Assignment, WorkerAuth, WorkerWire}
+  alias Prima.{Assignment, WorkerAuth, WorkerWire}
 
   # §4.3: the attempt lease (180 s) plus the sweeper's interval (60 s) is
   # the maximum recovery for an execution whose member is gone. The case
@@ -432,7 +432,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       |> Base.url_decode64!(padding: false)
       |> Jason.decode!()
       |> change.()
-      |> Cyfr.JCS.encode()
+      |> Prima.JCS.encode()
 
     mac = :crypto.mac(:hmac, :sha256, "a worker's key", bytes)
     Base.url_encode64(bytes, padding: false) <> "." <> Base.url_encode64(mac, padding: false)

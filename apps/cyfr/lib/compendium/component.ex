@@ -178,7 +178,7 @@ defmodule Compendium.Component do
   Parse a component reference — canonical (`type:namespace.name:version`)
   or the flexible short forms (`c:local.tool`) — into
   `{:ok, namespace, name, version, type}` for registry lookup. The one
-  grammar for every resolver (`Cyfr.ComponentRef.normalize_flexible/1`,
+  grammar for every resolver (`Prima.ComponentRef.normalize_flexible/1`,
   fields validated); the namespace doubles as the publisher filter, and
   version may be nil.
   """
@@ -186,8 +186,8 @@ defmodule Compendium.Component do
           {:ok, String.t(), String.t(), String.t() | nil, String.t() | nil}
           | {:error, String.t()}
   def parse_reference(reference) when is_binary(reference) do
-    case Cyfr.ComponentRef.normalize_flexible(reference) do
-      {:ok, %Cyfr.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
+    case Prima.ComponentRef.normalize_flexible(reference) do
+      {:ok, %Prima.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
         {:ok, namespace, name, version, type}
 
       {:error, reason} ->
@@ -198,7 +198,7 @@ defmodule Compendium.Component do
   def parse_reference(_), do: {:error, "Reference must be a string"}
 
   defp canonical_ref(ref) do
-    Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{
+    Prima.ComponentRef.to_string(%Prima.ComponentRef{
       type: ref.type,
       namespace: ref.namespace,
       name: ref.name,
@@ -254,7 +254,7 @@ defmodule Compendium.Component do
   # A manifest that does not decode declares nothing. The line names the
   # component, never the manifest's bytes.
   defp decode_manifest(value, ref) do
-    case Cyfr.Manifest.decode_strict(value) do
+    case Prima.Manifest.decode_strict(value) do
       {:ok, manifest} ->
         manifest
 
@@ -269,7 +269,7 @@ defmodule Compendium.Component do
   # ============================================================================
 
   defp declared_needs(manifest) do
-    Cyfr.Manifest.Needs.from_manifest(manifest) || []
+    Prima.Manifest.Needs.from_manifest(manifest) || []
   end
 
   defp extract_dependency_refs(component) do

@@ -16,13 +16,13 @@ defmodule Arca.ThreadSubscriptionStorage do
   alias Arca.Schemas.ThreadSubscription
 
   @doc "Follow a thread. Idempotent — following twice is following."
-  @spec follow(Cyfr.Actor.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def follow(%Cyfr.Actor{athanor_id: athanor_id}, thread_id, user_id)
+  @spec follow(Prima.Actor.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def follow(%Prima.Actor{athanor_id: athanor_id}, thread_id, user_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
              is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.ThreadSubscriptionStorage.follow", fn ->
       row = %{
-        id: Cyfr.UUID7.generate_id("sub"),
+        id: Prima.UUID7.generate_id("sub"),
         athanor_id: athanor_id,
         thread_id: thread_id,
         user_id: user_id,
@@ -38,11 +38,11 @@ defmodule Arca.ThreadSubscriptionStorage do
     |> Arca.Data.project()
   end
 
-  def follow(%Cyfr.Actor{}, _thread_id, _user_id), do: {:error, :no_athanor}
+  def follow(%Prima.Actor{}, _thread_id, _user_id), do: {:error, :no_athanor}
 
   @doc "Stop following. Idempotent."
-  @spec unfollow(Cyfr.Actor.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def unfollow(%Cyfr.Actor{athanor_id: athanor_id}, thread_id, user_id)
+  @spec unfollow(Prima.Actor.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def unfollow(%Prima.Actor{athanor_id: athanor_id}, thread_id, user_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
              is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.ThreadSubscriptionStorage.unfollow", fn ->
@@ -58,11 +58,11 @@ defmodule Arca.ThreadSubscriptionStorage do
     |> Arca.Data.project()
   end
 
-  def unfollow(%Cyfr.Actor{}, _thread_id, _user_id), do: {:error, :no_athanor}
+  def unfollow(%Prima.Actor{}, _thread_id, _user_id), do: {:error, :no_athanor}
 
   @doc "The thread ids this person follows in the context's athanor."
-  @spec followed(Cyfr.Actor.t(), String.t()) :: MapSet.t(String.t())
-  def followed(%Cyfr.Actor{athanor_id: athanor_id}, user_id)
+  @spec followed(Prima.Actor.t(), String.t()) :: MapSet.t(String.t())
+  def followed(%Prima.Actor{athanor_id: athanor_id}, user_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) do
     # Deliberate default: an unanswerable read means "following nothing",
     # so the sidebar renders every thread collapsed. Every one is still
@@ -78,18 +78,18 @@ defmodule Arca.ThreadSubscriptionStorage do
     end)
   end
 
-  def followed(%Cyfr.Actor{}, _user_id), do: {:error, :no_athanor}
+  def followed(%Prima.Actor{}, _user_id), do: {:error, :no_athanor}
 
   @doc """
   Whether one person follows one thread — the notify filter's read.
 
   The tray reads it for athanors the person is NOT focused on, so the
   caller names each one with an actor of its own
-  (`Cyfr.Actor.in_athanor/1`) rather than the focused context. Fails
+  (`Prima.Actor.in_athanor/1`) rather than the focused context. Fails
   toward "no", so an unanswerable read costs a badge, never a wrong one.
   """
-  @spec follows?(Cyfr.Actor.t(), String.t(), String.t()) :: boolean()
-  def follows?(%Cyfr.Actor{athanor_id: athanor_id}, thread_id, user_id)
+  @spec follows?(Prima.Actor.t(), String.t(), String.t()) :: boolean()
+  def follows?(%Prima.Actor{athanor_id: athanor_id}, thread_id, user_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
              is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.ThreadSubscriptionStorage.follows?", false, fn ->
@@ -108,7 +108,7 @@ defmodule Arca.ThreadSubscriptionStorage do
   # Fails toward "no" for an actor with no athanor and for an absent
   # thread or person; anything that is not an actor at all matches no head
   # and raises, so a context cannot be read as "does not follow".
-  def follows?(%Cyfr.Actor{}, _thread_id, _user_id), do: false
+  def follows?(%Prima.Actor{}, _thread_id, _user_id), do: false
 
   @doc """
   Drop every follow this person holds in the athanor — what leaving it
@@ -120,8 +120,8 @@ defmodule Arca.ThreadSubscriptionStorage do
   athanor being left. Strict — the leave reports a sweep the store could
   not do rather than answering "done" over surviving rows.
   """
-  @spec unfollow_all(Cyfr.Actor.t(), String.t()) :: :ok | {:error, term()}
-  def unfollow_all(%Cyfr.Actor{athanor_id: athanor_id}, user_id)
+  @spec unfollow_all(Prima.Actor.t(), String.t()) :: :ok | {:error, term()}
+  def unfollow_all(%Prima.Actor{athanor_id: athanor_id}, user_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.ThreadSubscriptionStorage.unfollow_all", fn ->
       from(s in ThreadSubscription, where: s.athanor_id == ^athanor_id and s.user_id == ^user_id)
@@ -132,5 +132,5 @@ defmodule Arca.ThreadSubscriptionStorage do
     |> Arca.Data.project()
   end
 
-  def unfollow_all(%Cyfr.Actor{}, _user_id), do: {:error, :no_athanor}
+  def unfollow_all(%Prima.Actor{}, _user_id), do: {:error, :no_athanor}
 end

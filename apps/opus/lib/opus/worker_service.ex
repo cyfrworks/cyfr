@@ -5,7 +5,7 @@ defmodule Opus.WorkerService do
   @moduledoc """
   The worker service: it takes each assignment CYFR dispatches, hands it
   to a runner, kills runners, and reports each runner that exits leaving
-  attempts open. It implements `Cyfr.WorkerAPI` and runs no guest code.
+  attempts open. It implements `Prima.WorkerAPI` and runs no guest code.
 
   Its service id, its worker key and where CYFR is are its credentials
   (`Opus.Credentials`, from `config :opus`), loaded when it starts; a
@@ -19,11 +19,11 @@ defmodule Opus.WorkerService do
 
   CYFR reaches `start/3`, `kill/1` and `status/0` through
   `Opus.WorkerListener`. `start/3` reads the assignment
-  (`Cyfr.Assignment.read/1`), refuses it as `:malformed` unless it names
+  (`Prima.Assignment.read/1`), refuses it as `:malformed` unless it names
   this service and boot, its input matches its `input_digest` and is a
   JSON object, and the sealed keys open under this worker service's
   dispatch seal key as the attempt it names, on this worker service
-  (`Cyfr.WorkerAuth.open_attempt_keys/2`). The dispatch seal key never
+  (`Prima.WorkerAuth.open_attempt_keys/2`). The dispatch seal key never
   leaves this process: the runner is handed the opened keys.
 
   ## Runners
@@ -31,7 +31,7 @@ defmodule Opus.WorkerService do
   A runner is an OS process of the pool (`Opus.RunnerPool`) the service
   never shares a VM with, and the service loads no component. `start/3`
   takes a runner of the assignment's athanor from the pool and sends it
-  the `assign` over `Cyfr.RunnerControl`; the runner attaches, runs the
+  the `assign` over `Prima.RunnerControl`; the runner attaches, runs the
   subtree with its formula children and reports `complete`, clean or
   not, or `exit` with the attempts still open. A runner that reports
   `exit`, or whose channel closes or process ends with the subtree still
@@ -46,7 +46,7 @@ defmodule Opus.WorkerService do
   with the keeper's account of why; the listener refuses either `503`,
   the second naming the sentence. CYFR reads a `503` naming a sentence as
   a definite refusal and closes the run failed with it; one naming none it
-  reconciles against the attempt's claim (`c:Cyfr.WorkerAPI.start/3`),
+  reconciles against the attempt's claim (`c:Prima.WorkerAPI.start/3`),
   since the listener answers that too when its call into this service
   timed out. Its status counts the pool's runners and carries the bound
   its keeper holds each to and the keeper's refusal
@@ -68,13 +68,13 @@ defmodule Opus.WorkerService do
   it started.
   """
 
-  @behaviour Cyfr.WorkerAPI
+  @behaviour Prima.WorkerAPI
 
   use GenServer
 
   require Logger
 
-  alias Cyfr.{Assignment, WorkerAuth}
+  alias Prima.{Assignment, WorkerAuth}
   alias Opus.{HostClient, RunnerPool, RunnerProcess, Subtree}
 
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
@@ -83,17 +83,17 @@ defmodule Opus.WorkerService do
   @doc false
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @impl Cyfr.WorkerAPI
+  @impl Prima.WorkerAPI
   def start(token, input, sealed_keys)
       when is_binary(token) and is_binary(input) and is_binary(sealed_keys) do
     GenServer.call(__MODULE__, {:start, token, input, sealed_keys, Subtree.caller()})
   end
 
-  @impl Cyfr.WorkerAPI
+  @impl Prima.WorkerAPI
   def kill(execution_id) when is_binary(execution_id),
     do: GenServer.call(__MODULE__, {:kill, execution_id})
 
-  @impl Cyfr.WorkerAPI
+  @impl Prima.WorkerAPI
   def status, do: GenServer.call(__MODULE__, :status)
 
   @doc """
@@ -116,7 +116,7 @@ defmodule Opus.WorkerService do
     credentials = Opus.Credentials.load!()
     :ok = Opus.Credentials.install(credentials)
     settings = Opus.Settings.pool!()
-    boot = "#{node()}#" <> Cyfr.UUID7.generate_id("boot")
+    boot = "#{node()}#" <> Prima.UUID7.generate_id("boot")
 
     :ok =
       RunnerPool.serve(
@@ -143,7 +143,7 @@ defmodule Opus.WorkerService do
   def handle_call({:start, token, input, sealed_keys, caller}, _from, state) do
     with {:ok, assignment} <- Assignment.read(token),
          true <- assignment.service == state.service and assignment.boot == state.boot,
-         true <- Cyfr.Digest.sha256(input) == assignment.input_digest,
+         true <- Prima.Digest.sha256(input) == assignment.input_digest,
          {:ok, %{attempt: attempt} = keys} <-
            WorkerAuth.open_attempt_keys(state.credentials.dispatch_seal_key, sealed_keys),
          true <-
@@ -238,7 +238,7 @@ defmodule Opus.WorkerService do
     do: {:noreply, gone(state, pid, reason)}
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -394,7 +394,7 @@ defmodule Opus.WorkerService do
     {_pid, ref} =
       spawn_monitor(fn ->
         Process.put(:"$callers", context.callers)
-        Cyfr.LoggerContext.restore(context.logger)
+        Prima.LoggerContext.restore(context.logger)
 
         case HostClient.runner_exited(credentials, context.at, boot, runner, attempts) do
           :ok ->

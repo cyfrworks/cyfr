@@ -5,7 +5,7 @@ defmodule Opus.Runner do
   @moduledoc """
   The runner: the process of the runner role that takes one subtree at a
   time from its worker service over the control channel
-  (`Cyfr.RunnerControl`) and runs it in this VM.
+  (`Prima.RunnerControl`) and runs it in this VM.
 
   An `assign` carries the signed assignment, the input its digest binds
   and the attempt's opened keys. The runner reads the assignment, starts
@@ -41,7 +41,7 @@ defmodule Opus.Runner do
 
   require Logger
 
-  alias Cyfr.{Assignment, RunnerControl}
+  alias Prima.{Assignment, RunnerControl}
   alias Opus.{HostClient, Subtree}
 
   # A line past the protocol's bound before its newline is not a frame.
@@ -124,7 +124,7 @@ defmodule Opus.Runner do
   def handle_info({:watchdog, _execution_id}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -250,7 +250,7 @@ defmodule Opus.Runner do
         )
 
       start = %{token: token, assignment: assignment, input: decoded, client: client}
-      caller = %{callers: [self()], logger: Cyfr.LoggerContext.capture()}
+      caller = %{callers: [self()], logger: Prima.LoggerContext.capture()}
 
       case Subtree.start(state, state.supervisor, start, caller, nil) do
         {:ok, _pid, state} ->

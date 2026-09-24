@@ -20,7 +20,7 @@ defmodule Compendium.NamespacePolicy do
   down once instead of restated at every ingress (OCI pull, publish,
   directory registration, fork, build). The storage-write rule — a pulled
   component is fork-to-modify, never rewritten in place — is the shared
-  contract `Cyfr.ComponentNamespace`, which the storage doors below this
+  contract `Prima.ComponentNamespace`, which the storage doors below this
   domain apply too.
   """
 

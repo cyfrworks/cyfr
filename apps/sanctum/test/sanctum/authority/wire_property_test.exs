@@ -4,8 +4,8 @@ defmodule Sanctum.Authority.WirePropertyTest do
   use ExUnit.Case, async: false
   use ExUnitProperties
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   # The budget crosses as its id alone.

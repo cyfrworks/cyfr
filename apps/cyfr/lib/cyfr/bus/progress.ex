@@ -46,8 +46,8 @@ defmodule Cyfr.Bus.Progress do
   A subject kind outside `kinds/0`, an empty subject id or a field this
   struct does not declare raises.
   """
-  @spec new(Cyfr.Actor.t(), {kind(), String.t()}, map() | keyword()) :: t()
-  def new(%Cyfr.Actor{} = actor, {kind, id}, fields \\ %{}) when is_binary(id) and id != "" do
+  @spec new(Prima.Actor.t(), {kind(), String.t()}, map() | keyword()) :: t()
+  def new(%Prima.Actor{} = actor, {kind, id}, fields \\ %{}) when is_binary(id) and id != "" do
     fields = Map.new(fields) |> Map.put_new_lazy(:at, &now/0)
 
     Payload.build(__MODULE__, @fields, fields, %{

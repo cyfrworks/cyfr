@@ -47,7 +47,7 @@ defmodule CyfrWeb.Ingress.TinctureAssets do
       Enum.any?(asset_segs, fn s -> s in reserved or String.starts_with?(s, ".") end) ->
         send_resp(conn, 404, "Not Found")
 
-      Cyfr.PathSafety.validate_relative_path(Enum.join(asset_segs, "/")) != :ok ->
+      Prima.PathSafety.validate_relative_path(Enum.join(asset_segs, "/")) != :ok ->
         send_resp(conn, 404, "Not Found")
 
       true ->

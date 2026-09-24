@@ -72,7 +72,7 @@ defmodule Compendium.Archive do
     # already sitting at the path it is told to write. `:rand.uniform/1` is
     # a seeded per-process PRNG over a million values — cheap to predict and
     # cheap to collide. `scratch_id/0` is 64 bits from the CSPRNG
-    # (`Cyfr.Hex.short/0`), which is neither.
+    # (`Prima.Hex.short/0`), which is neither.
     tmp = Path.join(System.tmp_dir!(), "cyfr_tar_#{scratch_id()}.tar")
 
     try do
@@ -99,5 +99,5 @@ defmodule Compendium.Archive do
   shared temp dir — 64 bits from the CSPRNG, hex-encoded.
   """
   @spec scratch_id() :: String.t()
-  defdelegate scratch_id, to: Cyfr.Hex, as: :short
+  defdelegate scratch_id, to: Prima.Hex, as: :short
 end

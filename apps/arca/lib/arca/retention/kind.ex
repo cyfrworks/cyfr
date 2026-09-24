@@ -37,7 +37,7 @@ defmodule Arca.Retention.Kind do
   Apply the policy inside the actor's athanor: delete — or, on a dry
   run, count — everything past `value`, answering `{:ok, affected}`.
   """
-  @callback prune(Cyfr.Actor.t(), pos_integer(), dry_run :: boolean()) ::
+  @callback prune(Prima.Actor.t(), pos_integer(), dry_run :: boolean()) ::
               {:ok, non_neg_integer()} | {:error, term()}
 
   @doc "The cutoff a `:days` value names, from now."

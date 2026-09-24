@@ -23,7 +23,7 @@ defmodule Emissary.MCP.ExternalServer do
   controller (`Emissary.MCP.Bridge.sync/1`) to run this server's owner at
   its epoch and receives a grant; every request to the bridge's `/mcp` then
   carries a `Cyfr-Bridge-Auth` header signed with the grant's owner key
-  over the exact body sent (`Cyfr.BridgeAuth.invoke_header/3`), with a
+  over the exact body sent (`Prima.BridgeAuth.invoke_header/3`), with a
   fresh nonce and timestamp. The process holds the owner key and never an
   env value: the bridge masks backend credentials in what it answers.
 
@@ -396,10 +396,10 @@ defmodule Emissary.MCP.ExternalServer do
         snapshot = %{state | tools: [], in_flight: %{}, calls: %{}}
         server = self()
 
-        logger_metadata = Cyfr.LoggerContext.capture()
+        logger_metadata = Prima.LoggerContext.capture()
 
         case Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
-               Cyfr.LoggerContext.restore(logger_metadata)
+               Prima.LoggerContext.restore(logger_metadata)
 
                reply =
                  try do
@@ -506,7 +506,7 @@ defmodule Emissary.MCP.ExternalServer do
   def handle_info({:bridge_tools_changed, _another_epoch}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -591,7 +591,7 @@ defmodule Emissary.MCP.ExternalServer do
       Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
     )
 
-    actor = Cyfr.Actor.in_athanor(athanor_id)
+    actor = Prima.Actor.in_athanor(athanor_id)
 
     Cyfr.Bus.broadcast(
       actor,
@@ -733,7 +733,7 @@ defmodule Emissary.MCP.ExternalServer do
   defp vault_names(config) do
     headers =
       case config[:headers] do
-        %{} = headers -> Emissary.MCP.VaultRef.names(headers)
+        %{} = headers -> Prima.VaultRef.names(headers)
         _ -> []
       end
 
@@ -904,7 +904,7 @@ defmodule Emissary.MCP.ExternalServer do
         "capabilities" => %{},
         "clientInfo" => %{
           "name" => "cyfr",
-          "version" => Cyfr.Version.current()
+          "version" => Prima.Version.current()
         }
       })
 
@@ -988,7 +988,7 @@ defmodule Emissary.MCP.ExternalServer do
       nonce: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
     }
 
-    with {:ok, header} <- Cyfr.BridgeAuth.invoke_header(grant.owner_key, invoke, json_body) do
+    with {:ok, header} <- Prima.BridgeAuth.invoke_header(grant.owner_key, invoke, json_body) do
       {:ok, [{"cyfr-bridge-auth", header} | headers]}
     end
   end
@@ -1097,7 +1097,7 @@ defmodule Emissary.MCP.ExternalServer do
 
     meta = %{
       Protocol.meta_protocol_version_key() => Protocol.version(),
-      Protocol.meta_client_info_key() => %{"name" => "cyfr", "version" => Cyfr.Version.current()},
+      Protocol.meta_client_info_key() => %{"name" => "cyfr", "version" => Prima.Version.current()},
       Protocol.meta_client_capabilities_key() => %{}
     }
 
@@ -1304,13 +1304,13 @@ defmodule Emissary.MCP.ExternalServer do
 
   def resolve_headers(_headers, _athanor_id), do: {:ok, %{}}
 
-  # A vault-backed header (`Emissary.MCP.VaultRef.template/1`) resolves the
+  # A vault-backed header (`Prima.VaultRef.template/1`) resolves the
   # entry's single material field. Deliberately single-field — a header
   # carries one value, and picking silently from a bundle would smuggle the
   # wrong credential into the wrong header. Errors stay opaque outward, like
   # secrets.
   defp resolve_value(value, athanor_id) when is_binary(value) do
-    case Emissary.MCP.VaultRef.classify(value) do
+    case Prima.VaultRef.classify(value) do
       {:vault, template} -> resolve_template(template, athanor_id)
       :unresolved -> {:error, :unresolved_ref}
       :literal -> {:ok, value}
@@ -1322,7 +1322,7 @@ defmodule Emissary.MCP.ExternalServer do
       {:ok, fields} ->
         case Map.values(fields) do
           [value] ->
-            {:ok, Emissary.MCP.VaultRef.render(template, value)}
+            {:ok, Prima.VaultRef.render(template, value)}
 
           _ ->
             Logger.debug(
@@ -1366,7 +1366,7 @@ defmodule Emissary.MCP.ExternalServer do
 
       cond do
         not is_binary(resolved) -> []
-        Emissary.MCP.VaultRef.vault_ref?(raw) -> with_bare_token(resolved)
+        Prima.VaultRef.vault_ref?(raw) -> with_bare_token(resolved)
         credential_shaped_header?(key) -> with_bare_token(resolved)
         true -> []
       end

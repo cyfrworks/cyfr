@@ -172,28 +172,28 @@ defmodule Arca.Overlay do
   # ---------------------------------------------------------------------------
 
   @impl true
-  def get(%Cyfr.Actor{} = actor, path), do: tenant().get(actor, path)
+  def get(%Prima.Actor{} = actor, path), do: tenant().get(actor, path)
 
   @impl true
-  def put(%Cyfr.Actor{} = actor, path, content) do
+  def put(%Prima.Actor{} = actor, path, content) do
     with :ok <- writable(path),
          do: edit(actor, path, fn -> tenant().put(actor, path, content) end)
   end
 
   @impl true
-  def append(%Cyfr.Actor{} = actor, path, content) do
+  def append(%Prima.Actor{} = actor, path, content) do
     with :ok <- writable(path),
          do: edit(actor, path, fn -> tenant().append(actor, path, content) end)
   end
 
   @impl true
-  def delete(%Cyfr.Actor{} = actor, path) do
+  def delete(%Prima.Actor{} = actor, path) do
     with :ok <- deletable(path),
          do: removal(actor, path, fn -> tenant().delete(actor, path) end)
   end
 
   @impl true
-  def delete_tree(%Cyfr.Actor{} = actor, path) do
+  def delete_tree(%Prima.Actor{} = actor, path) do
     with :ok <- tree_deletable(actor, path),
          :ok <- deletable(path),
          do: removal(actor, path, fn -> tenant().delete_tree(actor, path) end)
@@ -342,7 +342,7 @@ defmodule Arca.Overlay do
   # populated subtree is cleared one unit at a time, so each unit's row is
   # retired with it. The empty-tree check and deletion are not atomic with
   # a new unit commit.
-  defp tree_deletable(%Cyfr.Actor{} = actor, path) do
+  defp tree_deletable(%Prima.Actor{} = actor, path) do
     if not internal_writes?() and Arca.Storage.locate(path) == :above_unit do
       case tenant().list_recursive(actor, path) do
         {:ok, leaves} ->
@@ -357,7 +357,7 @@ defmodule Arca.Overlay do
   end
 
   @impl true
-  def exists?(%Cyfr.Actor{} = actor, path),
+  def exists?(%Prima.Actor{} = actor, path),
     do: tenant().exists?(actor, path)
 
   # The conditional writes, the versioned read and the prefix listing pass
@@ -369,12 +369,12 @@ defmodule Arca.Overlay do
   # area is exactly what that callback is for.
 
   @impl true
-  def put_if_none_match(%Cyfr.Actor{} = actor, path, content) do
+  def put_if_none_match(%Prima.Actor{} = actor, path, content) do
     with :ok <- writable(path), do: tenant().put_if_none_match(actor, path, content)
   end
 
   @impl true
-  def put_if_match(%Cyfr.Actor{} = actor, path, content, precondition) do
+  def put_if_match(%Prima.Actor{} = actor, path, content, precondition) do
     with :ok <- writable(path),
          do:
            edit(actor, path, fn ->
@@ -383,17 +383,17 @@ defmodule Arca.Overlay do
   end
 
   @impl true
-  def get_for_update(%Cyfr.Actor{} = actor, path),
+  def get_for_update(%Prima.Actor{} = actor, path),
     do: tenant().get_for_update(actor, path)
 
   @impl true
-  def list_prefix(%Cyfr.Actor{} = actor, prefix),
+  def list_prefix(%Prima.Actor{} = actor, prefix),
     do: tenant().list_prefix(actor, prefix)
 
   # Inside a directory unit or outside the units; the tenant adapter
   # decides whether it can swap at all.
   @impl true
-  def replace_tree(%Cyfr.Actor{} = actor, path, files) do
+  def replace_tree(%Prima.Actor{} = actor, path, files) do
     with :ok <- replaceable(path) do
       adapter = tenant()
 
@@ -404,14 +404,14 @@ defmodule Arca.Overlay do
   end
 
   @impl true
-  def usage(%Cyfr.Actor{} = actor, path), do: tenant().usage(actor, path)
+  def usage(%Prima.Actor{} = actor, path), do: tenant().usage(actor, path)
 
   @impl true
-  def ensure_dir(%Cyfr.Actor{} = actor, path),
+  def ensure_dir(%Prima.Actor{} = actor, path),
     do: tenant().ensure_dir(actor, path)
 
   @impl true
-  def serve_to_conn(conn, %Cyfr.Actor{} = actor, path, opts),
+  def serve_to_conn(conn, %Prima.Actor{} = actor, path, opts),
     do: tenant().serve_to_conn(conn, actor, path, opts)
 
   # A root's staging area is this module's bookkeeping, never the
@@ -420,14 +420,14 @@ defmodule Arca.Overlay do
   # revision is validated and repaired. `usage/2` still counts it: staged
   # bytes are bytes the athanor holds.
   @impl true
-  def list_typed(%Cyfr.Actor{} = actor, path) do
+  def list_typed(%Prima.Actor{} = actor, path) do
     with {:ok, entries} <- tenant().list_typed(actor, path) do
       {:ok, Enum.reject(entries, fn {name, _kind} -> UnitLocator.staging?(path ++ [name]) end)}
     end
   end
 
   @impl true
-  def list_recursive(%Cyfr.Actor{} = actor, path) do
+  def list_recursive(%Prima.Actor{} = actor, path) do
     with {:ok, leaves} <- tenant().list_recursive(actor, path) do
       if UnitLocator.staging?(path),
         do: {:ok, leaves},
@@ -453,9 +453,9 @@ defmodule Arca.Overlay do
   `{:error, term}` — a status surface must not misreport the athanor's
   own units as shipped.
   """
-  @spec unit_status(Cyfr.Actor.t(), Arca.Storage.path()) ::
+  @spec unit_status(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, unit_status()} | {:error, term()}
-  def unit_status(%Cyfr.Actor{} = actor, path) do
+  def unit_status(%Prima.Actor{} = actor, path) do
     case Arca.Storage.locate(path) do
       loc when loc in [:not_overlaid, :above_unit] ->
         {:ok, :absent}
@@ -480,9 +480,9 @@ defmodule Arca.Overlay do
   listing or row-store outage answers `{:error, term}`, never a seed-only
   map.
   """
-  @spec unit_statuses(Cyfr.Actor.t(), String.t()) ::
+  @spec unit_statuses(Prima.Actor.t(), String.t()) ::
           {:ok, %{Arca.Storage.path() => unit_status()}} | {:error, term()}
-  def unit_statuses(%Cyfr.Actor{} = actor, root) when is_binary(root) do
+  def unit_statuses(%Prima.Actor{} = actor, root) when is_binary(root) do
     if root in Arca.Storage.overlay_roots() do
       with {:ok, pointers} <- StorageUnits.current_under(actor, root),
            {:ok, tenant_leaves} <- tenant().list_recursive(actor, [root]),
@@ -551,7 +551,7 @@ defmodule Arca.Overlay do
   as the single relative path `[]`. Memory-bounded to one unit — the
   same bound as a copy.
   """
-  @spec diff_unit(Cyfr.Actor.t(), Arca.Storage.path()) ::
+  @spec diff_unit(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok,
            %{
              added: [Arca.Storage.path()],
@@ -559,7 +559,7 @@ defmodule Arca.Overlay do
              changed: [Arca.Storage.path()]
            }}
           | {:error, term()}
-  def diff_unit(%Cyfr.Actor{} = actor, path) do
+  def diff_unit(%Prima.Actor{} = actor, path) do
     case Arca.Storage.locate(path) do
       :not_overlaid ->
         {:error, :not_overlaid}
@@ -587,8 +587,8 @@ defmodule Arca.Overlay do
   as one boolean. A unit the seed does not ship differs by everything the
   athanor holds there.
   """
-  @spec edited?(Cyfr.Actor.t(), Arca.Storage.path()) :: {:ok, boolean()} | {:error, term()}
-  def edited?(%Cyfr.Actor{} = actor, path) do
+  @spec edited?(Prima.Actor.t(), Arca.Storage.path()) :: {:ok, boolean()} | {:error, term()}
+  def edited?(%Prima.Actor{} = actor, path) do
     with {:ok, %{added: added, removed: removed, changed: changed}} <- diff_unit(actor, path) do
       {:ok, added != [] or removed != [] or changed != []}
     end
@@ -628,9 +628,9 @@ defmodule Arca.Overlay do
   A unit the seed does not ship refuses as `{:error, :not_shipped}`; a
   path that is not a unit as `{:error, :not_a_unit}`.
   """
-  @spec pull_shipped(Cyfr.Actor.t(), Arca.Storage.path()) ::
+  @spec pull_shipped(Prima.Actor.t(), Arca.Storage.path()) ::
           :ok | {:error, :not_shipped | :not_a_unit | :not_overlaid | term()}
-  def pull_shipped(%Cyfr.Actor{} = actor, unit) do
+  def pull_shipped(%Prima.Actor{} = actor, unit) do
     case Arca.Storage.locate(unit) do
       loc when loc in [:not_overlaid, :above_unit] ->
         {:error, :not_overlaid}
@@ -670,9 +670,9 @@ defmodule Arca.Overlay do
   tree lost a copy. Answers the units copied; stops at the first unit
   that cannot be copied.
   """
-  @spec materialize_shipped(Cyfr.Actor.t(), String.t()) ::
+  @spec materialize_shipped(Prima.Actor.t(), String.t()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
-  def materialize_shipped(%Cyfr.Actor{} = actor, root)
+  def materialize_shipped(%Prima.Actor{} = actor, root)
       when is_binary(root) do
     with {:ok, statuses} <- unit_statuses(actor, root) do
       statuses
@@ -701,9 +701,9 @@ defmodule Arca.Overlay do
   The unit's row is retired before its objects are removed, and what it
   staged goes with it.
   """
-  @spec drop_unit(Cyfr.Actor.t(), Arca.Storage.path()) ::
+  @spec drop_unit(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, :deleted} | {:error, :bundled | :not_found | :not_overlaid | term()}
-  def drop_unit(%Cyfr.Actor{} = actor, path) do
+  def drop_unit(%Prima.Actor{} = actor, path) do
     case Arca.Storage.locate(path) do
       loc when loc in [:not_overlaid, :above_unit] ->
         {:error, :not_overlaid}
@@ -746,7 +746,7 @@ defmodule Arca.Overlay do
 
     * `cap:` (required) — `:exempt` or `{:checked, bytes}`. Every call
       site states its policy, so the uncapped-by-design set stays
-      explicit (`Cyfr.Caps` documents the roster). Checked
+      explicit (`Prima.Caps` documents the roster). Checked
       before the draft is registered and before any write.
     * `sentinel:` — the sentinel's bytes, overriding any sentinel entry
       the source carries (a fork's re-stamped manifest, a pull's
@@ -774,9 +774,9 @@ defmodule Arca.Overlay do
   `{:error, {:finish_failed, reason}}` is a published unit whose move to
   the served location did not finish (`repair_unit/2`).
   """
-  @spec commit_unit(Cyfr.Actor.t(), Arca.Storage.path(), commit_source(), keyword()) ::
+  @spec commit_unit(Prima.Actor.t(), Arca.Storage.path(), commit_source(), keyword()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
-  def commit_unit(%Cyfr.Actor{} = actor, unit, source, opts) do
+  def commit_unit(%Prima.Actor{} = actor, unit, source, opts) do
     cap = Keyword.fetch!(opts, :cap)
     override = Keyword.get(opts, :sentinel)
 
@@ -837,14 +837,14 @@ defmodule Arca.Overlay do
   path.
   """
   @spec replace_subtree(
-          Cyfr.Actor.t(),
+          Prima.Actor.t(),
           Arca.Storage.path(),
           Arca.Storage.path(),
           [{Arca.Storage.path(), binary() | (-> {:ok, binary()} | {:error, term()})}],
           keyword()
         ) :: :ok | {:error, term()}
   def replace_subtree(
-        %Cyfr.Actor{} = actor,
+        %Prima.Actor{} = actor,
         unit,
         [top | _] = subtree,
         files,
@@ -918,10 +918,10 @@ defmodule Arca.Overlay do
   `{:ok, :nothing_pending}` when the prefix holds nothing;
   `{:error, :not_found}` for a unit no committed row names.
   """
-  @spec repair_unit(Cyfr.Actor.t(), Arca.Storage.path()) ::
+  @spec repair_unit(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, :repaired | :nothing_pending}
           | {:error, :staged_incomplete | :journal_mismatch | term()}
-  def repair_unit(%Cyfr.Actor{} = actor, unit) do
+  def repair_unit(%Prima.Actor{} = actor, unit) do
     case Arca.Storage.locate(unit) do
       loc when loc in [:not_overlaid, :above_unit] ->
         {:error, :not_overlaid}
@@ -985,7 +985,7 @@ defmodule Arca.Overlay do
     relatives
     |> Enum.reduce_while({:ok, []}, fn rel, {:ok, acc} ->
       case Arca.get(internal, UnitLocator.staged_object(unit, revision, rel)) do
-        {:ok, bytes} -> {:cont, {:ok, [{rel, Cyfr.Digest.sha256(bytes), byte_size(bytes)} | acc]}}
+        {:ok, bytes} -> {:cont, {:ok, [{rel, Prima.Digest.sha256(bytes), byte_size(bytes)} | acc]}}
         {:error, _} = error -> {:halt, error}
       end
     end)
@@ -1029,11 +1029,11 @@ defmodule Arca.Overlay do
   last-writer-wins put.
   """
   @spec update(
-          Cyfr.Actor.t(),
+          Prima.Actor.t(),
           Arca.Storage.path(),
           (binary() -> {:ok, binary()} | {:error, term()})
         ) :: :ok | {:error, :conflict | :not_found | :not_overlaid | term()}
-  def update(%Cyfr.Actor{} = actor, path, fun) when is_function(fun, 1) do
+  def update(%Prima.Actor{} = actor, path, fun) when is_function(fun, 1) do
     case Arca.Storage.locate(path) do
       loc when loc in [:not_overlaid, :above_unit] -> {:error, :not_overlaid}
       _inside_a_unit -> compare_and_set(actor, path, fun, 1)
@@ -1142,7 +1142,7 @@ defmodule Arca.Overlay do
   defp check_commit_cap(_ctx, :exempt), do: :ok
 
   defp check_commit_cap(actor, {:checked, bytes}) when is_integer(bytes) and bytes >= 0,
-    do: Cyfr.Caps.check_storage(actor, bytes)
+    do: Prima.Caps.check_storage(actor, bytes)
 
   # Step 1's row half. `gate` is asked while this writer holds the draft,
   # so no other commit can land between its answer and this commit; it
@@ -1272,7 +1272,7 @@ defmodule Arca.Overlay do
   defp stage_object(internal, path, content) do
     with {:ok, bytes} <- resolve_content(content),
          :ok <- Arca.put(internal, path, bytes) do
-      {:ok, Cyfr.Digest.sha256(bytes), byte_size(bytes)}
+      {:ok, Prima.Digest.sha256(bytes), byte_size(bytes)}
     end
   end
 
@@ -1293,7 +1293,7 @@ defmodule Arca.Overlay do
     Enum.reduce_while(manifest, :ok, fn {rel, digest, _size}, :ok ->
       case Arca.get(internal, UnitLocator.staged_object(unit, revision, rel)) do
         {:ok, bytes} ->
-          if Cyfr.Digest.sha256(bytes) == digest,
+          if Prima.Digest.sha256(bytes) == digest,
             do: {:cont, :ok},
             else: {:halt, {:error, :invalid_objects}}
 
@@ -1354,7 +1354,7 @@ defmodule Arca.Overlay do
     |> Enum.flat_map(fn {rel, digest, size} ->
       [Enum.join(rel, "/"), <<0>>, digest, <<0>>, Integer.to_string(size), <<0>>]
     end)
-    |> Cyfr.Digest.sha256_stream()
+    |> Prima.Digest.sha256_stream()
   end
 
   # A refused revision leaves nothing: its prefix goes, and the draft is
@@ -1479,11 +1479,11 @@ defmodule Arca.Overlay do
   # Narrowed, never widened: the server's own actor with this athanor and
   # `scope: :athanor`, so the internal write keeps the system authority it
   # needs for the reserved roots and gives up the cross-tenant read. A bare
-  # `Cyfr.Actor.system/0` here would put every internal overlay write on
+  # `Prima.Actor.system/0` here would put every internal overlay write on
   # platform scope, and no test would fail.
-  defp internal_actor(%Cyfr.Actor{athanor_id: athanor_id}) do
+  defp internal_actor(%Prima.Actor{athanor_id: athanor_id}) do
     %{
-      Cyfr.Actor.system()
+      Prima.Actor.system()
       | athanor_id: athanor_id,
         scope: :athanor,
         user_id: "_overlay"
@@ -1730,5 +1730,5 @@ defmodule Arca.Overlay do
   # The server acting as itself: no athanor, platform scope, and the
   # system authority `Arca.Storage.authorize_path/2` requires of anything
   # that reads the seed roots.
-  defp seed_actor, do: Cyfr.Actor.system()
+  defp seed_actor, do: Prima.Actor.system()
 end

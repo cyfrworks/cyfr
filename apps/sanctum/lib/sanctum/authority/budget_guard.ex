@@ -22,7 +22,7 @@ defmodule Sanctum.Authority.BudgetGuard do
 
   use GenServer
 
-  alias Cyfr.Authority.Budget
+  alias Prima.Authority.Budget
   alias Sanctum.Authority.BudgetCounter
 
   # Explicit rather than inherited: every charge and release in the system
@@ -149,7 +149,7 @@ defmodule Sanctum.Authority.BudgetGuard do
   end
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

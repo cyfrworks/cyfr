@@ -88,7 +88,7 @@ defmodule Cyfr.Execution.Sweeper do
   end
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -140,7 +140,7 @@ defmodule Cyfr.Execution.Sweeper do
   # moves past it; a short page ends the scan. A store that cannot answer
   # ends it too, and the next sweep scans afresh.
   defp retire_retired(cursor) do
-    case Sanctum.ExecutionStanding.retired_attempts(Cyfr.Actor.system(), cursor, @retired_page) do
+    case Sanctum.ExecutionStanding.retired_attempts(Prima.Actor.system(), cursor, @retired_page) do
       {:ok, []} ->
         :ok
 
@@ -165,7 +165,7 @@ defmodule Cyfr.Execution.Sweeper do
   # scan may go on: false once this member no longer holds its slot.
   defp retire({execution_id, _attempt, athanor_id, generation}) do
     if Arca.ControlPlane.held?() do
-      {:ok, grant} = Cyfr.ExecutionGrant.new(athanor_id, generation)
+      {:ok, grant} = Prima.ExecutionGrant.new(athanor_id, generation)
       cancel(execution_id, athanor_id, grant)
       true
     else
@@ -182,7 +182,7 @@ defmodule Cyfr.Execution.Sweeper do
   end
 
   defp cancel(execution_id, athanor_id, grant) do
-    actor = Cyfr.Actor.in_athanor(athanor_id)
+    actor = Prima.Actor.in_athanor(athanor_id)
 
     case Arca.Execution.get_tenant(actor, execution_id) do
       %{kind: "turn", turn_id: turn_id} when is_binary(turn_id) ->

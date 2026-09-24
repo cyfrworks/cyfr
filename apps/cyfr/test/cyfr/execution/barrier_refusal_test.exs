@@ -15,7 +15,7 @@ defmodule Cyfr.Execution.BarrierRefusalTest do
 
   import ExUnit.CaptureLog
 
-  alias Cyfr.Authority
+  alias Prima.Authority
   alias Cyfr.Execution.Admission
 
   @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
@@ -70,7 +70,7 @@ defmodule Cyfr.Execution.BarrierRefusalTest do
   # A parent row whose attempt has since ended, and an attempt id that is
   # not the one owning it.
   defp ended_parent(ctx) do
-    parent_id = Cyfr.UUID7.execution_id()
+    parent_id = Prima.UUID7.execution_id()
 
     {:ok, %{attempt: attempt}} =
       Arca.Execution.admit(
@@ -111,7 +111,7 @@ defmodule Cyfr.Execution.BarrierRefusalTest do
   end
 
   defp admit(ctx, input, barrier_opts) do
-    execution_id = Cyfr.UUID7.execution_id()
+    execution_id = Prima.UUID7.execution_id()
     opts = [authority: Authority.zero(), execution_id: execution_id] ++ barrier_opts
 
     log =

@@ -27,7 +27,7 @@ defmodule Arca.Retention.ProjectionTombstones do
   def unit, do: :days
 
   @impl true
-  def prune(%Cyfr.Actor{} = actor, days, dry_run) do
+  def prune(%Prima.Actor{} = actor, days, dry_run) do
     opts = [before: Kind.days_cutoff(days), dry_run: dry_run]
 
     Enum.reduce_while(Arca.Storage.overlay_roots(), {:ok, 0}, fn root, {:ok, total} ->

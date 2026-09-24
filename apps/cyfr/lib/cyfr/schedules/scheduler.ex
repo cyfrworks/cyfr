@@ -169,7 +169,7 @@ defmodule Cyfr.Schedules.Scheduler do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -303,7 +303,7 @@ defmodule Cyfr.Schedules.Scheduler do
               )
 
               case ScheduleOccurrences.finish(
-                     Cyfr.Actor.in_athanor(occurrence.athanor_id),
+                     Prima.Actor.in_athanor(occurrence.athanor_id),
                      occurrence.id,
                      "uncertain"
                    ) do
@@ -404,7 +404,7 @@ defmodule Cyfr.Schedules.Scheduler do
   defp fail_recovered(occurrence, generation) do
     if still_ours?(generation) do
       ScheduleOccurrences.finish(
-        Cyfr.Actor.in_athanor(occurrence.athanor_id),
+        Prima.Actor.in_athanor(occurrence.athanor_id),
         occurrence.id,
         "failed"
       )
@@ -413,7 +413,7 @@ defmodule Cyfr.Schedules.Scheduler do
 
   defp take_over(occurrence) do
     ScheduleOccurrences.recover(
-      Cyfr.Actor.in_athanor(occurrence.athanor_id),
+      Prima.Actor.in_athanor(occurrence.athanor_id),
       occurrence.id,
       occurrence.claimed_by,
       claimant()
@@ -566,10 +566,10 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   defp start_occurrence(schedule, occurrence, ctx, exec_reference, input, state, generation) do
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     case Task.Supervisor.start_child(Cyfr.Schedules.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+           Prima.LoggerContext.restore(logger_metadata)
 
            if still_ours?(generation),
              do: run(schedule, occurrence, ctx, exec_reference, input, generation)
@@ -596,7 +596,7 @@ defmodule Cyfr.Schedules.Scheduler do
 
           _ =
             ScheduleOccurrences.finish(
-              Cyfr.Actor.in_athanor(occurrence.athanor_id),
+              Prima.Actor.in_athanor(occurrence.athanor_id),
               occurrence.id,
               "failed"
             )
@@ -614,9 +614,9 @@ defmodule Cyfr.Schedules.Scheduler do
   # the execution by its admission; the occurrence closes with the
   # answer, whichever it is.
   defp run(schedule, occurrence, ctx, exec_reference, input, generation) do
-    request_id = Cyfr.UUID7.request_id()
+    request_id = Prima.UUID7.request_id()
     ctx = %{ctx | request_id: request_id}
-    execution_id = Cyfr.UUID7.execution_id()
+    execution_id = Prima.UUID7.execution_id()
 
     Emissary.MCP.RequestLog.safe_log_started(ctx, request_id, %{
       tool: "schedule",
@@ -662,7 +662,7 @@ defmodule Cyfr.Schedules.Scheduler do
 
           finished =
             ScheduleOccurrences.finish(
-              Cyfr.Actor.in_athanor(occurrence.athanor_id),
+              Prima.Actor.in_athanor(occurrence.athanor_id),
               occurrence.id,
               "completed"
             )
@@ -706,7 +706,7 @@ defmodule Cyfr.Schedules.Scheduler do
           # nothing was invoked twice.
           _ =
             ScheduleOccurrences.finish(
-              Cyfr.Actor.in_athanor(occurrence.athanor_id),
+              Prima.Actor.in_athanor(occurrence.athanor_id),
               occurrence.id,
               "failed"
             )
@@ -730,7 +730,7 @@ defmodule Cyfr.Schedules.Scheduler do
     Logger.warning("[Schedules] schedule #{schedule_id} execution failed: #{inspect(reason)}")
 
     _ =
-      ScheduleOccurrences.settle_dead(Cyfr.Actor.in_athanor(task.athanor_id), task.occurrence_id)
+      ScheduleOccurrences.settle_dead(Prima.Actor.in_athanor(task.athanor_id), task.occurrence_id)
 
     record_error(task.ctx, schedule_id, inspect(reason))
   end
@@ -805,7 +805,7 @@ defmodule Cyfr.Schedules.Scheduler do
   defp stored_metadata(""), do: %{}
 
   defp stored_metadata(json) when is_binary(json) do
-    case Cyfr.Json.decode(json) do
+    case Prima.Json.decode(json) do
       {:ok, %{} = decoded} ->
         decoded
 
@@ -889,7 +889,7 @@ defmodule Cyfr.Schedules.Scheduler do
   # The occurrence is this BOOT's, not this node's: it is held while this
   # member is live in the cell, and a restarted node is a different boot
   # whose abandoned occurrences a successor may take.
-  defp claimant, do: Cyfr.Boot.id()
+  defp claimant, do: Prima.Boot.id()
 
   # The timer for the row's cursor. A cursor in the past fires at once;
   # one beyond the longest timer is looked at again later.
@@ -976,7 +976,7 @@ defmodule Cyfr.Schedules.Scheduler do
   defp decode_json(""), do: {:ok, %{}}
 
   defp decode_json(json) when is_binary(json) do
-    case Cyfr.Json.decode(json) do
+    case Prima.Json.decode(json) do
       {:ok, map} when is_map(map) -> {:ok, map}
       _ -> {:error, :invalid_json}
     end

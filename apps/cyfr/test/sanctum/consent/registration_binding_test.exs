@@ -41,7 +41,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
         invoke_mode: :open_inert,
         shape_digest: "sha256:shape-bind",
         commit_digest: "sha256:commit-bind",
-        blob_digest: Cyfr.JCS.hash_binary("{}"),
+        blob_digest: Prima.JCS.hash_binary("{}"),
         resolved_policy: "{}",
         activation: %{@target => "sha256:act"},
         vault_refs: []

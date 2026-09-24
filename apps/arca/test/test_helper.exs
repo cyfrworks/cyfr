@@ -3,17 +3,17 @@
 
 # Independent app suites have no Host. Preserve an umbrella boot's identity.
 try do
-  Cyfr.Boot.id()
+  Prima.Boot.id()
 rescue
-  Cyfr.Boot.NotInitializedError -> Cyfr.Boot.mint()
+  Prima.Boot.NotInitializedError -> Prima.Boot.mint()
 end
 
 # MinIO backs the :s3_integration suites; each runs only when selected.
 ExUnit.configure(exclude: [:s3_integration])
 
 # Owned by the test-runner process so it outlives every test and no two
-# tests race to create it. `Cyfr.Test.SourceTree` fills it lazily.
-Cyfr.Test.SourceTree.ensure_table()
+# tests race to create it. `Prima.Test.SourceTree` fills it lazily.
+Prima.Test.SourceTree.ensure_table()
 
 # The throwaway storage roots `config/config.exs` names: the tenant root
 # and a seed tree with an empty bundle, both removed after the run.
@@ -35,9 +35,9 @@ File.mkdir_p!(Path.join(seed_path, "components"))
 # admitted, which is how `mix test apps/arca/test apps/cyfr/test/arca`
 # found three of them failing.
 try do
-  Cyfr.Caps.impl()
+  Prima.Caps.impl()
 rescue
-  Cyfr.Caps.NotInstalledError -> Cyfr.Caps.install!(Arca.Test.Caps)
+  Prima.Caps.NotInstalledError -> Prima.Caps.install!(Arca.Test.Caps)
 end
 
 # Port 5's wiring, likewise: the overlaid roots' unit boundaries are the

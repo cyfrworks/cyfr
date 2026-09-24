@@ -77,7 +77,7 @@ defmodule Compendium.BuildsDisabledTest do
       assert {:ok, %{toolchains: toolchains}} =
                Provider.handle("build", ctx, %{"action" => "toolchains"})
 
-      assert Enum.sort(Map.keys(toolchains)) == Enum.sort(Cyfr.BuilderProtocol.languages()), what
+      assert Enum.sort(Map.keys(toolchains)) == Enum.sort(Prima.BuilderProtocol.languages()), what
       assert Enum.all?(toolchains, fn {_language, toolchain} -> toolchain.available == false end)
     end
 

@@ -22,7 +22,7 @@ defmodule Arca.Retention.ExecutionsAge do
   def unit, do: :days
 
   @impl true
-  def prune(%Cyfr.Actor{athanor_id: athanor} = actor, days, dry_run) when is_binary(athanor) do
+  def prune(%Prima.Actor{athanor_id: athanor} = actor, days, dry_run) when is_binary(athanor) do
     opts = [athanor_id: athanor]
 
     if dry_run,

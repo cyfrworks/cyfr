@@ -5,7 +5,7 @@ defmodule Arca.ProfileStorage do
   @moduledoc """
   Persistence mechanics for profiles. Validation and consent semantics
   live in the identity domain above, which is the only caller. Every
-  function but `put/1` takes the `Cyfr.Actor` first and matches it in the
+  function but `put/1` takes the `Prima.Actor` first and matches it in the
   head, refusing an actor whose athanor is nil or the empty string with
   `{:error, :no_athanor}` before any query. Every read and
   write is keyed by the owning athanor.
@@ -22,7 +22,7 @@ defmodule Arca.ProfileStorage do
       # A profile without an athanor is a construction bug — fail here, not
       # at the NOT NULL constraint.
       _ = Map.fetch!(attrs, :athanor_id)
-      row = Map.put_new(attrs, :id, Cyfr.UUID7.generate_id("prof"))
+      row = Map.put_new(attrs, :id, Prima.UUID7.generate_id("prof"))
 
       # The schema's changeset holds the row to the profile vocabulary and
       # carries the active-identity index (a bare struct insert declares no
@@ -41,9 +41,9 @@ defmodule Arca.ProfileStorage do
     |> Arca.Data.project()
   end
 
-  @spec get(Cyfr.Actor.t(), String.t()) ::
+  @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
-  def get(%Cyfr.Actor{athanor_id: athanor_id}, id)
+  def get(%Prima.Actor{athanor_id: athanor_id}, id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.get", fn ->
       case Arca.Repo.get_by(Profile, id: id, athanor_id: athanor_id) do
@@ -54,11 +54,11 @@ defmodule Arca.ProfileStorage do
     |> Arca.Data.project()
   end
 
-  def get(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
+  def get(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc "Non-revoked profiles for a name-level source ref within an athanor."
-  @spec list_for_source(Cyfr.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
-  def list_for_source(%Cyfr.Actor{athanor_id: athanor_id}, source_ref)
+  @spec list_for_source(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def list_for_source(%Prima.Actor{athanor_id: athanor_id}, source_ref)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.list_for_source", fn ->
       rows =
@@ -74,10 +74,10 @@ defmodule Arca.ProfileStorage do
     |> Arca.Data.project()
   end
 
-  def list_for_source(%Cyfr.Actor{}, _source_ref), do: {:error, :no_athanor}
+  def list_for_source(%Prima.Actor{}, _source_ref), do: {:error, :no_athanor}
 
-  @spec set_status(Cyfr.Actor.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def set_status(%Cyfr.Actor{athanor_id: athanor_id}, id, status)
+  @spec set_status(Prima.Actor.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def set_status(%Prima.Actor{athanor_id: athanor_id}, id, status)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(status) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.set_status", fn ->
       case Arca.Repo.update_all(
@@ -92,7 +92,7 @@ defmodule Arca.ProfileStorage do
     |> Arca.Data.project()
   end
 
-  def set_status(%Cyfr.Actor{}, _id, _status), do: {:error, :no_athanor}
+  def set_status(%Prima.Actor{}, _id, _status), do: {:error, :no_athanor}
 
   @doc """
   Revoke every profile of a name-level source ref that is not already
@@ -100,9 +100,9 @@ defmodule Arca.ProfileStorage do
   it revoked. Consent revisions and vault entries are untouched: a revoked
   profile keeps its history.
   """
-  @spec revoke_for_source(Cyfr.Actor.t(), String.t()) ::
+  @spec revoke_for_source(Prima.Actor.t(), String.t()) ::
           {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
-  def revoke_for_source(%Cyfr.Actor{athanor_id: athanor_id}, source_ref)
+  def revoke_for_source(%Prima.Actor{athanor_id: athanor_id}, source_ref)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref) do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.revoke_for_source", fn ->
       Arca.Repo.transaction(fn ->
@@ -125,7 +125,7 @@ defmodule Arca.ProfileStorage do
     |> Arca.Data.project()
   end
 
-  def revoke_for_source(%Cyfr.Actor{}, _source_ref), do: {:error, :no_athanor}
+  def revoke_for_source(%Prima.Actor{}, _source_ref), do: {:error, :no_athanor}
 
   @doc """
   Compare-and-swap the head consent pointer. The update counts as applied
@@ -133,9 +133,9 @@ defmodule Arca.ProfileStorage do
   bootstrap revision) — a concurrent advance makes this return
   `{:error, :head_moved}` and the caller re-plans.
   """
-  @spec advance_head(Cyfr.Actor.t(), String.t(), String.t() | nil, String.t()) ::
+  @spec advance_head(Prima.Actor.t(), String.t(), String.t() | nil, String.t()) ::
           :ok | {:error, :no_athanor | :head_moved | term()}
-  def advance_head(%Cyfr.Actor{athanor_id: athanor_id}, id, expected, new_consent_id)
+  def advance_head(%Prima.Actor{athanor_id: athanor_id}, id, expected, new_consent_id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.advance_head", fn ->
       base =
@@ -158,5 +158,5 @@ defmodule Arca.ProfileStorage do
     |> Arca.Data.project()
   end
 
-  def advance_head(%Cyfr.Actor{}, _id, _expected, _new_consent_id), do: {:error, :no_athanor}
+  def advance_head(%Prima.Actor{}, _id, _expected, _new_consent_id), do: {:error, :no_athanor}
 end

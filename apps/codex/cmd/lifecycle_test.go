@@ -77,7 +77,7 @@ func TestGenerateHexKey(t *testing.T) {
 }
 
 // workerAuthVectors is the part of tests/fixtures/worker_auth.json, the
-// vector file of Cyfr.WorkerAuth, that the CLI's derivation consumes.
+// vector file of Prima.WorkerAuth, that the CLI's derivation consumes.
 type workerAuthVectors struct {
 	RootHex  string `json:"root_hex"`
 	Service  string `json:"service"`
@@ -90,7 +90,7 @@ type workerAuthVectors struct {
 	} `json:"keys"`
 }
 
-// The service key init writes is Cyfr.WorkerAuth.worker_key/2's: the value
+// The service key init writes is Prima.WorkerAuth.worker_key/2's: the value
 // the vector file records for its root and service, and the root is read
 // as the platform reads CYFR_WORKER_KEY.
 func TestWorkerKeyReproducesTheVectorFile(t *testing.T) {

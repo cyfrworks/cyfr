@@ -39,7 +39,7 @@ defmodule Sanctum.Cipher.Rotation do
 
   The rows are `Arca.CipherRotation`'s: it holds the table roster, the
   keyset pages and the compare-and-set write, and it is asked as the
-  server (`Cyfr.Actor.system/0`) because a rotation retires a key across
+  server (`Prima.Actor.system/0`) because a rotation retires a key across
   every athanor at once. Nothing below this module sees a key or a
   plaintext — `classify/3` decrypts and re-seals in this process and hands
   ciphertext down.
@@ -121,7 +121,7 @@ defmodule Sanctum.Cipher.Rotation do
   # first row rather than being walked past.
   defp tables, do: Arca.CipherRotation.tables()
 
-  defp actor, do: Cyfr.Actor.system()
+  defp actor, do: Prima.Actor.system()
 
   # ==========================================================================
   # Per-table rotation (keyset pagination by id — bounded memory, resumable)

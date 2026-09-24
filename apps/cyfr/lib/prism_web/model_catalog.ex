@@ -62,10 +62,10 @@ defmodule PrismWeb.ModelCatalog do
 
   defp run(ctx, athanor_id, tag) do
     lv = self()
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-      Cyfr.LoggerContext.restore(logger_metadata)
+      Prima.LoggerContext.restore(logger_metadata)
       result = Aqua.models(ctx)
       with {:ok, catalogue} <- result, do: remember(athanor_id, catalogue)
       send(lv, {:list_models_result, tag, result})

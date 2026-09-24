@@ -6,13 +6,13 @@ defmodule Opus.EdgeGuard do
   Egress checks over a consent edge, shared by the runner's HTTP host
   handlers.
 
-  An execution's capability is the `%Cyfr.Authority.Blob.Edge{}` it runs
-  under plus the node's `%Cyfr.Limits{}`. This module is the runner's home
+  An execution's capability is the `%Prima.Authority.Blob.Edge{}` it runs
+  under plus the node's `%Prima.Limits{}`. This module is the runner's home
   for matching a concrete request against that edge's egress — domains,
   schemes, methods and private IPs — and for the envelope, request and
   response size checks against the limits. Storage grants are checked by
   CYFR when the attempt asks for a storage operation
-  (`c:Cyfr.HostAPI.storage/3`).
+  (`c:Prima.HostAPI.storage/3`).
 
   ## Semantics
 
@@ -27,13 +27,13 @@ defmodule Opus.EdgeGuard do
   tests pin them, so they must not drift.
   """
 
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Limits
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Limits
 
   @type edge :: Edge.t() | nil
 
   # Internal accessors for the checks below; the allowed lists themselves
-  # are `Cyfr.Authority.Blob.Edge`'s.
+  # are `Prima.Authority.Blob.Edge`'s.
   defp methods(edge), do: egress(edge, :methods)
   defp schemes(edge), do: egress(edge, :schemes)
   defp private_ips(edge), do: egress(edge, :private_ips)
@@ -100,7 +100,7 @@ defmodule Opus.EdgeGuard do
   Whether a private IP is allowed by the edge's `private_ips` allowlist.
 
   Supports individual IPs (`"192.168.1.100"`) and CIDR ranges (`"10.0.0.0/8"`).
-  Cloud-metadata addresses (`Cyfr.Cidr.metadata?/1`) are always denied
+  Cloud-metadata addresses (`Prima.Cidr.metadata?/1`) are always denied
   regardless of the allowlist. Empty allowlist denies all.
   """
   @spec allows_private_ip?(edge(), :inet.ip4_address() | :inet.ip6_address()) :: boolean()
@@ -110,7 +110,7 @@ defmodule Opus.EdgeGuard do
         false
 
       entries ->
-        if Cyfr.Cidr.metadata?(ip_tuple) do
+        if Prima.Cidr.metadata?(ip_tuple) do
           false
         else
           ip_string = :inet.ntoa(ip_tuple) |> to_string()
@@ -242,10 +242,10 @@ defmodule Opus.EdgeGuard do
   def check_event_size(_limits, json_event) when is_binary(json_event), do: :ok
 
   # Exact-IP entries compare against the canonical ntoa string; CIDR entries
-  # delegate to the Cyfr.Cidr SSOT (IPv4 + IPv6).
+  # delegate to the Prima.Cidr SSOT (IPv4 + IPv6).
   defp ip_entry_matches?(entry, ip_tuple, ip_string) do
     if String.contains?(entry, "/") do
-      Cyfr.Cidr.ip_in_cidr?(ip_tuple, entry)
+      Prima.Cidr.ip_in_cidr?(ip_tuple, entry)
     else
       entry == ip_string
     end

@@ -108,7 +108,7 @@ defmodule PrismWeb.ShellLiveTest do
 
   describe "tincture iframe URLs" do
     test "entry URL uses the canonical athanor-scoped route" do
-      url = Cyfr.TinctureUrl.path("home", "local", "stock-dashboard")
+      url = Prima.TinctureUrl.path("home", "local", "stock-dashboard")
 
       # Must use the index route (not asset route) for CSP headers
       assert url == "/t/home/local/stock-dashboard"

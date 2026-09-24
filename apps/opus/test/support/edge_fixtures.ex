@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Opus.Test.EdgeFixtures do
   @moduledoc """
-  Builders for `%Cyfr.Authority.Blob.Edge{}` and `%Cyfr.Limits{}`
+  Builders for `%Prima.Authority.Blob.Edge{}` and `%Prima.Limits{}`
   fixtures in handler unit tests.
 
   Defaults mirror the catalyst type defaults, with schemes explicitly
@@ -10,8 +10,8 @@ defmodule Opus.Test.EdgeFixtures do
   tests that are not about scheme enforcement should pass both.
   """
 
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Limits
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Limits
 
   @spec edge(keyword()) :: Edge.t()
   def edge(opts \\ []) do

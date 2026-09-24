@@ -30,7 +30,7 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
   or `CYFR_MCP_RATE_LIMIT_MAX` / `CYFR_MCP_RATE_LIMIT_WINDOW_MS`; the `:api`
   bucket answers to `CYFR_API_RATE_LIMIT_MAX` / `CYFR_API_RATE_LIMIT_WINDOW_MS`.
 
-  Counters live in `Cyfr.RateLimiter` (ETS) — single-node only, same caveat as
+  Counters live in `Prima.RateLimiter` (ETS) — single-node only, same caveat as
   `EmissaryWeb.Plugs.AuthRateLimit`.
   """
 
@@ -66,7 +66,7 @@ defmodule EmissaryWeb.Plugs.MCPRateLimit do
     ip = Sanctum.ClientIp.resolve(conn)
     key = {:rate_limit, bucket, ip}
 
-    case Cyfr.RateLimiter.check(key, max_requests, window_ms) do
+    case Prima.RateLimiter.check(key, max_requests, window_ms) do
       :ok ->
         conn
 

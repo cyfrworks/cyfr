@@ -6,10 +6,10 @@ defmodule Cyfr.Execution.Host do
   Where a runner's host calls reach CYFR: `attach`, `renew`, `complete`,
   `fail`, `push_deltas`, `oauth_token`, `take_rate`, `storage`,
   `fetch_artifact`, `record_denial`, `admit_child` and `tool_call`, as
-  `Cyfr.HostAPI` describes them.
+  `Prima.HostAPI` describes them.
 
   `call/2` is the one entry point. It takes a host call's header
-  (`Cyfr.WorkerAuth.host_call_header/3`) and its JSON body,
+  (`Prima.WorkerAuth.host_call_header/3`) and its JSON body,
   `{"op": name, "args": {...}}`, and answers JSON. The operation is named
   inside the body, so the header's MAC covers it. The tenant, execution,
   attempt and runner a call acts for come from the verified header, never
@@ -23,7 +23,7 @@ defmodule Cyfr.Execution.Host do
        boot that does not has no attempt to answer for: its open attempts
        stop without closing their runs (`Cyfr.Execution.Attempt`), and the
        rows are the holder's to write.
-    1. The header verifies (`Cyfr.WorkerAuth.verify_host_call/5`) under the
+    1. The header verifies (`Prima.WorkerAuth.verify_host_call/5`) under the
        call key of the attempt it names, derived from the worker root, and
        names this member's standing (`Cyfr.Execution.Keys.standing/0`: its
        current generation, which the control plane must be able to answer,
@@ -31,7 +31,7 @@ defmodule Cyfr.Execution.Host do
        well-formed arguments. A call addressed to another member is `lost`
        here, whether or not this member could have answered it from the
        rows: the attempt's process is the member's that issued it.
-    2. `attach`: the assignment verifies (`Cyfr.Assignment.verify/3`), it
+    2. `attach`: the assignment verifies (`Prima.Assignment.verify/3`), it
        names the header's athanor, execution, attempt, fence, generation
        and member, it is addressed to the header's worker service and
        boot, its attempt is open on this member, and the attempt row is
@@ -102,11 +102,11 @@ defmodule Cyfr.Execution.Host do
 
   ## A worker service's report
 
-  `runner_exited/2` takes a report's header (`Cyfr.WorkerAuth.report_header/3`)
+  `runner_exited/2` takes a report's header (`Prima.WorkerAuth.report_header/3`)
   and its JSON body, `{"op": "runner_exited", "args": {"member": boot,
   "runner": id, "attempts": [ids]}}`, and answers JSON. The header must
   verify under the dispatch key of the worker service it names
-  (`Cyfr.WorkerAuth.verify_report/4`), which only that worker service
+  (`Prima.WorkerAuth.verify_report/4`), which only that worker service
   holds, and its `member` must be this member's boot, since every attempt
   one runner holds was issued here; a report is idempotent, so its nonce
   is not checked. A report naming another member lapses nothing: the
@@ -125,8 +125,9 @@ defmodule Cyfr.Execution.Host do
 
   require Logger
 
-  alias Cyfr.{Assignment, Delta, WorkerAuth}
-  alias Cyfr.Execution.{Attempt, Keys, Lapse, Outcome}
+  alias Prima.{Assignment, Delta, WorkerAuth}
+  alias Cyfr.Execution.{Attempt, Keys, Lapse}
+  alias Prima.Outcome
   alias Cyfr.Execution.Host.Children
 
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :member]
@@ -300,7 +301,7 @@ defmodule Cyfr.Execution.Host do
 
   defp claim(caller) do
     case Arca.ExecutionAttempts.claim(
-           Cyfr.Actor.in_athanor(caller.athanor_id),
+           Prima.Actor.in_athanor(caller.athanor_id),
            caller.attempt,
            caller.fence,
            caller.runner,
@@ -323,7 +324,7 @@ defmodule Cyfr.Execution.Host do
     holder = %{service_id: caller.service, boot_id: caller.boot, runner: caller.runner}
 
     case Arca.ExecutionAttempts.renew_held(
-           Cyfr.Actor.in_athanor(caller.athanor_id),
+           Prima.Actor.in_athanor(caller.athanor_id),
            attempt,
            holder,
            grant: :stored,

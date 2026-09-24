@@ -33,7 +33,7 @@ defmodule Sanctum.Test.ConsentFixtures do
   spells the id and replaces whatever is there.
   """
   def bindable_profile(%Context{} = ctx, target_ref, opts \\ []) do
-    {:ok, name_ref} = Cyfr.ComponentRef.to_name_ref(target_ref)
+    {:ok, name_ref} = Prima.ComponentRef.to_name_ref(target_ref)
     policy = "{}"
 
     case {opts[:profile_id], existing_owner(ctx, name_ref)} do
@@ -79,7 +79,7 @@ defmodule Sanctum.Test.ConsentFixtures do
           # Derived, never a literal: `Consent.Loader` refuses a row whose
           # stored digest does not match its policy bytes, so a fixture that
           # hardcoded one would drift the moment the policy changed.
-          blob_digest: Cyfr.JCS.hash_binary(policy),
+          blob_digest: Prima.JCS.hash_binary(policy),
           resolved_policy: policy,
           activation: Jason.encode!(%{name_ref => "sha256:act"}),
           granted_by: "system:fixture",
@@ -147,7 +147,7 @@ defmodule Sanctum.Test.ConsentFixtures do
   def seed_head!(%Context{} = ctx, profile, consent) do
     consent =
       Map.put_new_lazy(consent, :blob_digest, fn ->
-        Cyfr.JCS.hash_binary(consent.resolved_policy)
+        Prima.JCS.hash_binary(consent.resolved_policy)
       end)
 
     forget!(ctx, profile.id)

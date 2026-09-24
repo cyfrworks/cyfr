@@ -363,7 +363,7 @@ defmodule Arca.ComponentStorageTest do
 
     setup do
       athanor = "ath_projection_#{System.unique_integer([:positive])}"
-      {:ok, projector: %Cyfr.Actor{athanor_id: athanor, user_id: "usr_projection"}}
+      {:ok, projector: %Prima.Actor{athanor_id: athanor, user_id: "usr_projection"}}
     end
 
     # A unit published and served: its change ready and pending.
@@ -487,7 +487,7 @@ defmodule Arca.ComponentStorageTest do
       token = token(actor)
       rows = %{put: [component_attrs("mine", "1.0.0")], delete: []}
 
-      for nobody <- [%Cyfr.Actor{athanor_id: nil}, %Cyfr.Actor{athanor_id: ""}] do
+      for nobody <- [%Prima.Actor{athanor_id: nil}, %Prima.Actor{athanor_id: ""}] do
         assert {:error, :no_athanor} = ComponentStorage.replace_projection(nobody, token, rows)
       end
 

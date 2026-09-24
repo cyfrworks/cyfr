@@ -33,7 +33,7 @@ defmodule Sanctum.MCP do
   require browser redirects.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   def service, do: "sanctum"
 
@@ -52,13 +52,13 @@ defmodule Sanctum.MCP do
         uri: "sanctum://identity",
         name: "Current Identity",
         description: "Current authenticated user identity",
-        mimeType: Cyfr.MediaType.json()
+        mimeType: Prima.MediaType.json()
       },
       %{
         uri: "sanctum://permissions",
         name: "User Permissions",
         description: "Current user's granted permissions",
-        mimeType: Cyfr.MediaType.json()
+        mimeType: Prima.MediaType.json()
       }
     ]
   end

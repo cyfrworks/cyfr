@@ -21,8 +21,8 @@ defmodule Sanctum.ToolServerDigest do
   row's epoch (process identity), which consent has no business pinning.
   """
 
-  alias Cyfr.JCS
-  alias Cyfr.ToolPattern
+  alias Prima.JCS
+  alias Prima.ToolPattern
 
   @doc "Compute the digest for a server's stored configuration."
   @spec compute(map()) :: {:ok, String.t()} | {:error, term()}

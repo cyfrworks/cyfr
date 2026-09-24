@@ -24,7 +24,7 @@ defmodule Opus.RunnerReuseTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Cyfr.Execution.WorkerClient
   alias Cyfr.Test.{OpusService, TwoServices}
@@ -58,7 +58,7 @@ defmodule Opus.RunnerReuseTest do
     ctx = %{Sanctum.TestContext.local() | athanor_id: athanor.id}
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do
@@ -78,7 +78,7 @@ defmodule Opus.RunnerReuseTest do
   end
 
   test "a pooled runner reused by a second run carries nothing of the first", %{ctx: ctx} do
-    first_id = Cyfr.UUID7.execution_id()
+    first_id = Prima.UUID7.execution_id()
 
     {:ok, first} =
       Cyfr.Execution.run_root(
@@ -102,7 +102,7 @@ defmodule Opus.RunnerReuseTest do
 
     # The second run asks for a catalog tool and is held at that call, in
     # the middle of its work; then it polls the first run's task by name.
-    second_id = Cyfr.UUID7.execution_id()
+    second_id = Prima.UUID7.execution_id()
     TwoServices.hold!(:tool_call, second_id, once: true)
     test_pid = self()
 
@@ -129,7 +129,7 @@ defmodule Opus.RunnerReuseTest do
     assert :ok = WorkerClient.kill(OpusService.endpoint(), first_id)
 
     assert {:error, :not_found} =
-             WorkerClient.kill(OpusService.endpoint(), Cyfr.UUID7.execution_id())
+             WorkerClient.kill(OpusService.endpoint(), Prima.UUID7.execution_id())
 
     assert %{attempts: [^second_attempt], runners: %{busy: 1, tainted: 0}} = OpusService.status()
 

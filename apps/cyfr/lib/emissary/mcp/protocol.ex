@@ -79,7 +79,7 @@ defmodule Emissary.MCP.Protocol do
 
   # `x-mcp-header` mirrors a tool argument into `Mcp-Param-{Name}`. A preflight
   # cannot advertise a prefix, so each one would have to be named explicitly —
-  # see `Cyfr.Ops.Provider` and the CORS drift test.
+  # see `Prima.Provider` and the CORS drift test.
   # Reserved: no producer or consumer in this revision — a client library
   # may mirror simple params as headers under this prefix for
   # middleboxes; kept so the name is spoken for.
@@ -119,7 +119,7 @@ defmodule Emissary.MCP.Protocol do
   @doc "This server's name and version, for a result's `_meta`."
   @spec server_info() :: %{String.t() => String.t()}
   def server_info do
-    %{"name" => @server_name, "version" => Cyfr.Version.current()}
+    %{"name" => @server_name, "version" => Prima.Version.current()}
   end
 
   @doc """

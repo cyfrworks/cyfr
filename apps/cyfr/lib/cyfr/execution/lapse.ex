@@ -86,7 +86,7 @@ defmodule Cyfr.Execution.Lapse do
 
   # The stamp the lapsing attempt carries, as the scan read it.
   defp stamp(%{athanor_id: athanor_id, athanor_generation: generation}) do
-    case Cyfr.ExecutionGrant.new(athanor_id, generation) do
+    case Prima.ExecutionGrant.new(athanor_id, generation) do
       {:ok, grant} -> grant
       {:error, :invalid_grant} -> :stored
     end

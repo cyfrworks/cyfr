@@ -8,8 +8,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Ops.Catalog
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -148,7 +148,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     # Everything advertised is allowed at call time.
     for {name, action} <- advertised do
       assert {:allow_tool, _} =
-               Cyfr.Authority.Transition.step(
+               Prima.Authority.Transition.step(
                  auth,
                  :call,
                  {:tool, %{tool: name, action: action}}
@@ -165,7 +165,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
         :in_chain in Cyfr.Ops.Annotations.planes(tool_def, action),
         {name, action} not in advertised do
       assert {:deny, :tool_not_granted} =
-               Cyfr.Authority.Transition.step(
+               Prima.Authority.Transition.step(
                  auth,
                  :call,
                  {:tool, %{tool: name, action: action}}

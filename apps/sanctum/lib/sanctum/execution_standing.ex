@@ -4,7 +4,7 @@
 defmodule Sanctum.ExecutionStanding do
   @moduledoc """
   Whether admitted work still stands: the decision over an execution's
-  grant (`Cyfr.ExecutionGrant`).
+  grant (`Prima.ExecutionGrant`).
 
   A root is admitted under a grant `capture/1` reads from its estate's
   current active standing, and every attempt stores it. An archive raises
@@ -42,9 +42,9 @@ defmodule Sanctum.ExecutionStanding do
   `{:error, :unavailable}` when the store cannot answer.
   """
   @spec capture(Context.t()) ::
-          {:ok, Cyfr.ExecutionGrant.t()} | {:error, :not_standing | :unavailable}
+          {:ok, Prima.ExecutionGrant.t()} | {:error, :not_standing | :unavailable}
   def capture(%Context{athanor_id: athanor_id}) when is_binary(athanor_id) and athanor_id != "" do
-    case Arca.ExecutionStanding.current(Cyfr.Actor.in_athanor(athanor_id), athanor_id) do
+    case Arca.ExecutionStanding.current(Prima.Actor.in_athanor(athanor_id), athanor_id) do
       {:ok, row} -> grant_of(row)
       {:error, _reason} -> {:error, :unavailable}
     end
@@ -59,9 +59,9 @@ defmodule Sanctum.ExecutionStanding do
   `{:error, :not_standing}`, or `{:error, :unavailable}` when the store
   cannot answer.
   """
-  @spec verify(Cyfr.ExecutionGrant.t()) :: :ok | {:error, :not_standing | :unavailable}
-  def verify(%Cyfr.ExecutionGrant{athanor_id: athanor_id, generation: generation}) do
-    case Arca.ExecutionStanding.locked(Cyfr.Actor.in_athanor(athanor_id), athanor_id) do
+  @spec verify(Prima.ExecutionGrant.t()) :: :ok | {:error, :not_standing | :unavailable}
+  def verify(%Prima.ExecutionGrant{athanor_id: athanor_id, generation: generation}) do
+    case Arca.ExecutionStanding.locked(Prima.Actor.in_athanor(athanor_id), athanor_id) do
       {:ok, %{status: "active", security_generation: ^generation}} -> :ok
       {:ok, _retired} -> {:error, :not_standing}
       {:error, _reason} -> {:error, :unavailable}
@@ -75,8 +75,8 @@ defmodule Sanctum.ExecutionStanding do
   cancellation pass this; a completion, new output and a renewal pass
   `verify/1`.
   """
-  @spec stamp_only(Cyfr.ExecutionGrant.t()) :: :ok
-  def stamp_only(%Cyfr.ExecutionGrant{}), do: :ok
+  @spec stamp_only(Prima.ExecutionGrant.t()) :: :ok
+  def stamp_only(%Prima.ExecutionGrant{}), do: :ok
 
   @doc """
   Up to `limit` open attempts, after `cursor` in attempt-id order, whose
@@ -84,9 +84,9 @@ defmodule Sanctum.ExecutionStanding do
   stored_generation}`. The server's own actor only; `{:error,
   :unavailable}` when the store cannot answer.
   """
-  @spec retired_attempts(Cyfr.Actor.t(), String.t() | nil, pos_integer()) ::
+  @spec retired_attempts(Prima.Actor.t(), String.t() | nil, pos_integer()) ::
           {:ok, [Arca.ExecutionStanding.retired()]} | {:error, :unavailable | :cross_tenant}
-  def retired_attempts(%Cyfr.Actor{} = actor, cursor, limit) do
+  def retired_attempts(%Prima.Actor{} = actor, cursor, limit) do
     case Arca.ExecutionStanding.retired_attempts(actor, cursor, limit) do
       {:ok, retired} -> {:ok, retired}
       {:error, :cross_tenant} -> {:error, :cross_tenant}
@@ -95,7 +95,7 @@ defmodule Sanctum.ExecutionStanding do
   end
 
   defp grant_of(%{id: athanor_id, status: "active", security_generation: generation}) do
-    case Cyfr.ExecutionGrant.new(athanor_id, generation) do
+    case Prima.ExecutionGrant.new(athanor_id, generation) do
       {:ok, grant} -> {:ok, grant}
       {:error, :invalid_grant} -> {:error, :not_standing}
     end

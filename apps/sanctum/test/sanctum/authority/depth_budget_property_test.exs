@@ -4,8 +4,8 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Transition
+  alias Prima.Authority
+  alias Prima.Authority.Transition
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   # Depth caps apply at the configured level; all spawns share one root invoke budget.

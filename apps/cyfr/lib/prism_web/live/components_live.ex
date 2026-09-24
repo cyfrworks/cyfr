@@ -154,7 +154,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("pull", %{"ref" => ref}, socket) do
-    progress_id = Cyfr.Hex.short()
+    progress_id = Prima.Hex.short()
 
     socket =
       resubscribe(
@@ -173,10 +173,10 @@ defmodule PrismWeb.ComponentsLive do
     ctx = socket.assigns.context
     tag = CyfrWeb.ContextGuard.capture(ctx)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+           Prima.LoggerContext.restore(logger_metadata)
 
            result =
              try do
@@ -215,7 +215,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("register", _params, socket) do
-    register_id = Cyfr.Hex.short()
+    register_id = Prima.Hex.short()
 
     socket =
       resubscribe(
@@ -236,10 +236,10 @@ defmodule PrismWeb.ComponentsLive do
     ctx = socket.assigns.context
     tag = CyfrWeb.ContextGuard.capture(ctx)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+           Prima.LoggerContext.restore(logger_metadata)
 
            result =
              call_tool(ctx, "component", %{
@@ -301,7 +301,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("push", %{"ref" => ref}, socket) do
-    progress_id = Cyfr.Hex.short()
+    progress_id = Prima.Hex.short()
 
     socket =
       resubscribe(
@@ -320,10 +320,10 @@ defmodule PrismWeb.ComponentsLive do
     ctx = socket.assigns.context
     tag = CyfrWeb.ContextGuard.capture(ctx)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+           Prima.LoggerContext.restore(logger_metadata)
 
            result =
              try do
@@ -618,7 +618,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -798,10 +798,10 @@ defmodule PrismWeb.ComponentsLive do
     ctx = socket.assigns.context
     tag = CyfrWeb.ContextGuard.capture(ctx)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-      Cyfr.LoggerContext.restore(logger_metadata)
+      Prima.LoggerContext.restore(logger_metadata)
 
       # Fetch setup plans with bounded concurrency; result ordering is irrelevant.
       readiness =
@@ -908,7 +908,7 @@ defmodule PrismWeb.ComponentsLive do
     # refuses — so every action on a merged remote-search row without a
     # stored ref failed.
     if is_binary(type) and is_binary(name) do
-      Cyfr.ComponentRef.build(
+      Prima.ComponentRef.build(
         type,
         Compendium.ComponentPath.normalize_publisher(publisher),
         name,
@@ -938,12 +938,12 @@ defmodule PrismWeb.ComponentsLive do
 
   # Strip type prefix from a ref: "catalyst:local.claude" -> "local.claude".
   #
-  # Through the grammar's own parser, not by hand: `Cyfr.ComponentRef`
+  # Through the grammar's own parser, not by hand: `Prima.ComponentRef`
   # exists because the publisher/name split is the LAST dot, so a hand-rolled
   # split gets `stripe.com.api` wrong — and display is where a
   # multi-dot publisher is most likely to be seen.
   defp strip_type(ref) when is_binary(ref) do
-    case Cyfr.ComponentRef.parse(ref) do
+    case Prima.ComponentRef.parse(ref) do
       {:ok, %{namespace: ns, name: name}} -> "#{ns}.#{name}"
       {:error, _} -> ref
     end
@@ -960,7 +960,7 @@ defmodule PrismWeb.ComponentsLive do
   # "catalyst:moonmoon69.supabase" -> "supabase". Same reason as above: the
   # grammar owns where the publisher ends.
   defp extract_name(ref) when is_binary(ref) do
-    case Cyfr.ComponentRef.parse(ref) do
+    case Prima.ComponentRef.parse(ref) do
       {:ok, %{name: name}} -> name
       {:error, _} -> strip_type(ref)
     end
@@ -992,16 +992,16 @@ defmodule PrismWeb.ComponentsLive do
          [newest | _] <- comp_field(ver, :shipped_versions) || [],
          true <- Compendium.Semver.strictly_newer?(newest, comp_field(ver, :version)),
          false <- Enum.any?(versions, &(comp_field(&1, :version) == newest)),
-         {:ok, cref} <- Cyfr.ComponentRef.parse(comp_ref(ver)) do
-      Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{cref | version: newest})
+         {:ok, cref} <- Prima.ComponentRef.parse(comp_ref(ver)) do
+      Prima.ComponentRef.to_string(%Prima.ComponentRef{cref | version: newest})
     else
       _ -> nil
     end
   end
 
   defp shipped_version(ref) do
-    case Cyfr.ComponentRef.parse(ref) do
-      {:ok, %Cyfr.ComponentRef{version: version}} -> version
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, %Prima.ComponentRef{version: version}} -> version
       _ -> ref
     end
   end
@@ -1242,7 +1242,7 @@ defmodule PrismWeb.ComponentsLive do
             All
           </button>
           <button
-            :for={type <- Cyfr.ComponentRef.valid_types()}
+            :for={type <- Prima.ComponentRef.valid_types()}
             phx-click="filter_type"
             phx-value-type={type}
             class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == type, do: type_badge_color(type), else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}

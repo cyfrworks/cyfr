@@ -24,7 +24,7 @@ defmodule Sanctum.TinctureAccess do
 
   require Logger
 
-  alias Cyfr.ComponentRef
+  alias Prima.ComponentRef
   alias Sanctum.Consent.Components
   alias Sanctum.Context
 
@@ -123,7 +123,7 @@ defmodule Sanctum.TinctureAccess do
   # public exactly when an active public profile exists for it — what
   # profile.publish mints and profile.revoke retires.
   defp tincture_public?(ctx, publisher, tincture_name) do
-    ref = Cyfr.ComponentRef.build("tincture", publisher, tincture_name)
+    ref = Prima.ComponentRef.build("tincture", publisher, tincture_name)
 
     case Arca.ConsentStorage.profiles(Context.actor(ctx), ref) do
       {:ok, profiles} ->
@@ -173,7 +173,7 @@ defmodule Sanctum.TinctureAccess do
     manifest = decode_manifest(component[:manifest] || component["manifest"])
 
     segments =
-      Cyfr.ComponentPath.version_dir(
+      Prima.ComponentPath.version_dir(
         component.component_type,
         component.publisher,
         component.name,

@@ -5,12 +5,12 @@ defmodule Cyfr.LoggerRosterTest do
   @moduledoc """
   The metadata roster existed in three places: `config/config.exs`,
   `config/runtime.exs`'s JSON branch, and a hardcoded fallback inside
-  `Cyfr.JsonFormatter` — which carried three keys the config never
+  `Prima.JsonFormatter` — which carried three keys the config never
   requested and therefore never emitted.
 
   Config files run before application code is loaded, so the roster cannot
   literally be one expression. It can be one *checked* expression: the keys
-  `Cyfr.LoggerContext` sets must be the keys the formatter is configured to
+  `Prima.LoggerContext` sets must be the keys the formatter is configured to
   print, or the metadata is written and silently dropped.
   """
 
@@ -24,11 +24,11 @@ defmodule Cyfr.LoggerRosterTest do
     assert is_list(configured),
            "config/config.exs must set :logger, :default_formatter, metadata: [...]"
 
-    missing = Cyfr.LoggerContext.keys() -- configured
+    missing = Prima.LoggerContext.keys() -- configured
 
     assert missing == [],
            """
-           `Cyfr.LoggerContext` sets metadata the log roster does not print:
+           `Prima.LoggerContext` sets metadata the log roster does not print:
 
              #{inspect(missing)}
 

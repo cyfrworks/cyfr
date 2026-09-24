@@ -374,6 +374,6 @@ defmodule Arca.FilesTest do
 
     assert message ==
              "'components/reagents/acme/theirs/1.0.0/notes.txt': " <>
-               Cyfr.ComponentNamespace.message(:not_local_namespace, "acme")
+               Prima.ComponentNamespace.message(:not_local_namespace, "acme")
   end
 end

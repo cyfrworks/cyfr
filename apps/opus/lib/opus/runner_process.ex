@@ -5,7 +5,7 @@ defmodule Opus.RunnerProcess do
   @moduledoc """
   The service's handle on one runner: the OS process the keeper started
   for it (`Opus.Keeper`), the control channel to it and the
-  `Cyfr.RunnerControl` lines on that channel.
+  `Prima.RunnerControl` lines on that channel.
 
   Started by `Opus.RunnerPool` with the keeper, the runner's id and what
   to start it with, it spawns the runner from its own process, so the
@@ -34,7 +34,7 @@ defmodule Opus.RunnerProcess do
 
   require Logger
 
-  alias Cyfr.RunnerControl
+  alias Prima.RunnerControl
 
   # A line past the protocol's bound before its newline is not a frame.
   @max_line_bytes RunnerControl.max_line_bytes()
@@ -116,13 +116,13 @@ defmodule Opus.RunnerProcess do
         {:noreply, Enum.reduce(events, %{state | channel: channel}, &on_event/2)}
 
       :unknown ->
-        Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+        Prima.LoggerContext.unexpected(__MODULE__, msg)
         {:noreply, state}
     end
   end
 
   def handle_info(msg, state) do
-    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

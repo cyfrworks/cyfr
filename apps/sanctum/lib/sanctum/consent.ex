@@ -123,7 +123,7 @@ defmodule Sanctum.Consent do
   status is outside the closed vocabulary — only its id and `:corrupt`.
   """
   @type profile_entry ::
-          Cyfr.Authority.RootSelect.profile_summary()
+          Prima.Authority.RootSelect.profile_summary()
           | %{required(:id) => String.t(), required(:status) => :corrupt}
 
   @doc """

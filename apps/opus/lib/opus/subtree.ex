@@ -28,7 +28,7 @@ defmodule Opus.Subtree do
   goes with it, taking the spawned tasks.
   """
 
-  alias Cyfr.Assignment
+  alias Prima.Assignment
   alias Opus.{Attempt, HostClient}
 
   @typedoc "What the owner knows of one attempt process."
@@ -121,7 +121,7 @@ defmodule Opus.Subtree do
   @doc "The calling process's callers and log metadata, carried to the attempt process it starts."
   @spec caller() :: %{callers: [pid()], logger: keyword()}
   def caller do
-    %{callers: [self() | Process.get(:"$callers", [])], logger: Cyfr.LoggerContext.capture()}
+    %{callers: [self() | Process.get(:"$callers", [])], logger: Prima.LoggerContext.capture()}
   end
 
   # ---------------------------------------------------------------------------

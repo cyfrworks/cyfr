@@ -211,8 +211,8 @@ defmodule Aqua.AquaToolEditsTest do
 
     # The refusal is the vocabulary's, not a flattened storage failure,
     # and it says the unit is published.
-    assert Cyfr.Refusal.reason?({:finish_failed, :enospc})
-    assert Cyfr.Refusal.message({:finish_failed, :enospc}) =~ "published"
+    assert Prima.Refusal.reason?({:finish_failed, :enospc})
+    assert Prima.Refusal.message({:finish_failed, :enospc}) =~ "published"
 
     # The commit stamped the role pending and its move never finished: the
     # index is behind the tree, and says so rather than answer the rows it

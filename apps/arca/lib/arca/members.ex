@@ -108,9 +108,9 @@ defmodule Arca.Members do
   in an archived estate: `{:error, :athanor_archived}`, the answer adding
   a member to one already gets.
   """
-  @spec seat(Cyfr.Actor.t(), map()) ::
+  @spec seat(Prima.Actor.t(), map()) ::
           {:ok, map()} | {:error, :no_athanor | :athanor_archived} | write_refusal()
-  def seat(%Cyfr.Actor{athanor_id: athanor_id}, attrs)
+  def seat(%Prima.Actor{athanor_id: athanor_id}, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.seat", fn ->
       fn ->
@@ -127,12 +127,12 @@ defmodule Arca.Members do
     |> Arca.Data.project()
   end
 
-  def seat(%Cyfr.Actor{}, _attrs), do: {:error, :no_athanor}
+  def seat(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
   @doc "The person's ACTIVE-or-invited athanor row in the actor's athanor, if any."
-  @spec find(Cyfr.Actor.t(), String.t()) ::
+  @spec find(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
-  def find(%Cyfr.Actor{athanor_id: athanor_id}, user_id)
+  def find(%Prima.Actor{athanor_id: athanor_id}, user_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.find", fn ->
       found(
@@ -148,12 +148,12 @@ defmodule Arca.Members do
     |> Arca.Data.project()
   end
 
-  def find(%Cyfr.Actor{}, _user_id), do: {:error, :no_athanor}
+  def find(%Prima.Actor{}, _user_id), do: {:error, :no_athanor}
 
   @doc "The invitation this address holds in the actor's athanor, if any."
-  @spec find_invited(Cyfr.Actor.t(), String.t()) ::
+  @spec find_invited(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
-  def find_invited(%Cyfr.Actor{athanor_id: athanor_id}, email)
+  def find_invited(%Prima.Actor{athanor_id: athanor_id}, email)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(email) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.find_invited", fn ->
       found(
@@ -168,7 +168,7 @@ defmodule Arca.Members do
     |> Arca.Data.project()
   end
 
-  def find_invited(%Cyfr.Actor{}, _email), do: {:error, :no_athanor}
+  def find_invited(%Prima.Actor{}, _email), do: {:error, :no_athanor}
 
   @doc """
   The actor's athanor's members — active and invited — as display rows,
@@ -176,11 +176,11 @@ defmodule Arca.Members do
   added_by, since}`. Paged with `limit:` (default and ceiling
   `max_page/0`) and `offset:`.
   """
-  @spec list(Cyfr.Actor.t(), keyword()) ::
+  @spec list(Prima.Actor.t(), keyword()) ::
           {:ok, [map()]} | {:error, :no_athanor | :database_error}
   def list(actor, opts \\ [])
 
-  def list(%Cyfr.Actor{athanor_id: athanor_id}, opts)
+  def list(%Prima.Actor{athanor_id: athanor_id}, opts)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.list", fn ->
       limit = opts |> Keyword.get(:limit, @max_page) |> min(@max_page) |> max(1)
@@ -209,12 +209,12 @@ defmodule Arca.Members do
     end)
   end
 
-  def list(%Cyfr.Actor{}, _opts), do: {:error, :no_athanor}
+  def list(%Prima.Actor{}, _opts), do: {:error, :no_athanor}
 
   @doc "How many ACTIVE members the actor's athanor has."
-  @spec count_active(Cyfr.Actor.t()) ::
+  @spec count_active(Prima.Actor.t()) ::
           {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
-  def count_active(%Cyfr.Actor{athanor_id: athanor_id})
+  def count_active(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.count_active", fn ->
       counted(
@@ -226,7 +226,7 @@ defmodule Arca.Members do
     end)
   end
 
-  def count_active(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def count_active(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   Every ACTIVE member's person id in the actor's athanor, oldest first.
@@ -235,9 +235,9 @@ defmodule Arca.Members do
   full — a member it missed would keep a cached authorization the close
   was supposed to end — and the member cap is what bounds it.
   """
-  @spec active_user_ids(Cyfr.Actor.t()) ::
+  @spec active_user_ids(Prima.Actor.t()) ::
           {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
-  def active_user_ids(%Cyfr.Actor{athanor_id: athanor_id})
+  def active_user_ids(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.active_user_ids", fn ->
       {:ok,
@@ -253,16 +253,16 @@ defmodule Arca.Members do
     end)
   end
 
-  def active_user_ids(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def active_user_ids(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   Every seat the actor's athanor has handed out — active members and
   pending invitations alike, which is what the member cap bounds: an
   invitation is a seat someone will take.
   """
-  @spec count_seats(Cyfr.Actor.t()) ::
+  @spec count_seats(Prima.Actor.t()) ::
           {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
-  def count_seats(%Cyfr.Actor{athanor_id: athanor_id})
+  def count_seats(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.count_seats", fn ->
       counted(
@@ -274,14 +274,14 @@ defmodule Arca.Members do
     end)
   end
 
-  def count_seats(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def count_seats(%Prima.Actor{}), do: {:error, :no_athanor}
 
   # ---- across tenants --------------------------------------------------------
 
   @doc "Write the platform row for a person — the grant that names no athanor."
-  @spec grant_platform(Cyfr.Actor.t(), map()) ::
+  @spec grant_platform(Prima.Actor.t(), map()) ::
           {:ok, map()} | refusal() | write_refusal()
-  def grant_platform(%Cyfr.Actor{scope: :platform}, attrs) when is_map(attrs) do
+  def grant_platform(%Prima.Actor{scope: :platform}, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.grant_platform", fn ->
       attrs
       |> defaults()
@@ -292,26 +292,26 @@ defmodule Arca.Members do
     |> Arca.Data.project()
   end
 
-  def grant_platform(%Cyfr.Actor{}, _attrs), do: {:error, :cross_tenant}
+  def grant_platform(%Prima.Actor{}, _attrs), do: {:error, :cross_tenant}
 
   @doc "A membership by its own id. The athanor may be nil — a platform row names none."
-  @spec get(Cyfr.Actor.t(), String.t()) ::
+  @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
   # arca:unscoped-ok a membership is fabric, read by its own id; the athanor may be nil (platform).
-  def get(%Cyfr.Actor{scope: :platform}, id) when is_binary(id) do
+  def get(%Prima.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.get", fn ->
       found(Arca.Repo.get(Membership, id))
     end)
     |> Arca.Data.project()
   end
 
-  def get(%Cyfr.Actor{}, _id), do: {:error, :cross_tenant}
+  def get(%Prima.Actor{}, _id), do: {:error, :cross_tenant}
 
   @doc "The person's platform row, if any."
-  @spec find_platform(Cyfr.Actor.t(), String.t()) ::
+  @spec find_platform(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
   # arca:unscoped-ok a platform row names no athanor by design.
-  def find_platform(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
+  def find_platform(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.find_platform", fn ->
       found(
         Arca.Repo.one(
@@ -326,16 +326,16 @@ defmodule Arca.Members do
     |> Arca.Data.project()
   end
 
-  def find_platform(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
+  def find_platform(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
   @doc """
   Delete the membership `id` names, as the row reads now, and answer the
   row that went. `{:error, :not_found}` when there is none.
   """
-  @spec delete(Cyfr.Actor.t(), String.t()) ::
+  @spec delete(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal() | write_refusal()
   # arca:unscoped-ok a membership is fabric, deleted by its own id; the athanor may be nil (platform).
-  def delete(%Cyfr.Actor{scope: :platform}, id) when is_binary(id) do
+  def delete(%Prima.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.delete", fn ->
       with {:ok, membership} <- found(Arca.Repo.get(Membership, id)) do
         membership |> Arca.Repo.delete() |> settled()
@@ -344,19 +344,19 @@ defmodule Arca.Members do
     |> Arca.Data.project()
   end
 
-  def delete(%Cyfr.Actor{}, _id), do: {:error, :cross_tenant}
+  def delete(%Prima.Actor{}, _id), do: {:error, :cross_tenant}
 
   @doc "Every platform row — the server's operators, as the rows say."
-  @spec list_platform(Cyfr.Actor.t()) :: {:ok, [map()]} | refusal()
+  @spec list_platform(Prima.Actor.t()) :: {:ok, [map()]} | refusal()
   # arca:unscoped-ok platform memberships carry no athanor by design.
-  def list_platform(%Cyfr.Actor{scope: :platform}) do
+  def list_platform(%Prima.Actor{scope: :platform}) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.list_platform", fn ->
       {:ok, Arca.Repo.all(from(m in Membership, where: m.scope == "platform"))}
     end)
     |> Arca.Data.project()
   end
 
-  def list_platform(%Cyfr.Actor{}), do: {:error, :cross_tenant}
+  def list_platform(%Prima.Actor{}), do: {:error, :cross_tenant}
 
   @doc """
   Hold the person's platform grant, writing it when absent, and answer
@@ -370,12 +370,12 @@ defmodule Arca.Members do
   since changed. Without it, the grant is the server's own act and
   answers to no sign-in. `added_by:` names who wrote the row.
   """
-  @spec ensure_platform(Cyfr.Actor.t(), String.t(), keyword()) ::
+  @spec ensure_platform(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, %{membership: map(), granted: boolean()}}
           | {:error, :stale_identity}
           | refusal()
           | write_refusal()
-  def ensure_platform(%Cyfr.Actor{scope: :platform}, user_id, opts)
+  def ensure_platform(%Prima.Actor{scope: :platform}, user_id, opts)
       when is_binary(user_id) and is_list(opts) do
     expected = Keyword.get(opts, :expected_identity)
 
@@ -410,7 +410,7 @@ defmodule Arca.Members do
     |> Arca.Data.project()
   end
 
-  def ensure_platform(%Cyfr.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
+  def ensure_platform(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
 
   @doc """
   Remove the person's platform grant and, when one went, every session
@@ -421,13 +421,13 @@ defmodule Arca.Members do
   `expected_identity:` checks the person's row as `ensure_platform/3`
   does, answering `{:error, :stale_identity}` with nothing removed.
   """
-  @spec revoke_platform(Cyfr.Actor.t(), String.t(), keyword()) ::
+  @spec revoke_platform(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, %{removed: non_neg_integer(), session_hashes: [binary()]}}
           | {:error, :stale_identity}
           | refusal()
   def revoke_platform(actor, user_id, opts \\ [])
 
-  def revoke_platform(%Cyfr.Actor{scope: :platform}, user_id, opts)
+  def revoke_platform(%Prima.Actor{scope: :platform}, user_id, opts)
       when is_binary(user_id) and is_list(opts) do
     expected = Keyword.get(opts, :expected_identity)
 
@@ -443,7 +443,7 @@ defmodule Arca.Members do
     end)
   end
 
-  def revoke_platform(%Cyfr.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
+  def revoke_platform(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
 
   @doc """
   The boot's operator reconcile: remove every platform grant whose person
@@ -471,9 +471,9 @@ defmodule Arca.Members do
   caller releases. `{:ok, %{claim: renewed, revoked: [revoked()]}}` is
   answered only after commit.
   """
-  @spec reconcile_platform(Cyfr.Actor.t(), JobClaims.held(), keyword()) ::
+  @spec reconcile_platform(Prima.Actor.t(), JobClaims.held(), keyword()) ::
           {:ok, %{claim: map(), revoked: [revoked()]}} | reconcile_refusal()
-  def reconcile_platform(%Cyfr.Actor{scope: :platform}, %{owner: owner} = claim, opts)
+  def reconcile_platform(%Prima.Actor{scope: :platform}, %{owner: owner} = claim, opts)
       when is_binary(owner) and is_list(opts) do
     slot = Keyword.fetch!(opts, :slot)
     operators = opts |> Keyword.fetch!(:operators) |> MapSet.new()
@@ -496,13 +496,13 @@ defmodule Arca.Members do
     |> Arca.Data.project()
   end
 
-  def reconcile_platform(%Cyfr.Actor{}, _claim, _opts), do: {:error, :cross_tenant}
+  def reconcile_platform(%Prima.Actor{}, _claim, _opts), do: {:error, :cross_tenant}
 
   @doc "Every ACTIVE row of a person — platform and athanor alike, newest first."
-  @spec list_active_for_user(Cyfr.Actor.t(), String.t()) ::
+  @spec list_active_for_user(Prima.Actor.t(), String.t()) ::
           {:ok, [map()]} | refusal()
   # arca:unscoped-ok person-keyed by design — resolving a person's seats across athanors is the point.
-  def list_active_for_user(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
+  def list_active_for_user(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.list_active_for_user", fn ->
       {:ok,
        Arca.Repo.all(
@@ -515,7 +515,7 @@ defmodule Arca.Members do
     |> Arca.Data.project()
   end
 
-  def list_active_for_user(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
+  def list_active_for_user(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
   @doc """
   Turn every invitation held for `email` into this person's active
@@ -529,10 +529,10 @@ defmodule Arca.Members do
   or already withdrawn is not there to find, so neither produces a second
   membership.
   """
-  @spec activate_invited(Cyfr.Actor.t(), String.t(), String.t(), DateTime.t()) ::
+  @spec activate_invited(Prima.Actor.t(), String.t(), String.t(), DateTime.t()) ::
           {:ok, [String.t()]} | refusal()
   # arca:unscoped-ok invited rows are email-keyed fabric, activated across athanors.
-  def activate_invited(%Cyfr.Actor{scope: :platform}, user_id, email, %DateTime{} = now)
+  def activate_invited(%Prima.Actor{scope: :platform}, user_id, email, %DateTime{} = now)
       when is_binary(user_id) and is_binary(email) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.activate_invited", fn ->
       invited =
@@ -567,17 +567,17 @@ defmodule Arca.Members do
     end)
   end
 
-  def activate_invited(%Cyfr.Actor{}, _user_id, _email, _now), do: {:error, :cross_tenant}
+  def activate_invited(%Prima.Actor{}, _user_id, _email, _now), do: {:error, :cross_tenant}
 
   @doc """
   Drop every pending invitation for an address, and answer the athanors
   that were holding one. An invited row names an email and no person, so
   a deny's sweep by `user_id` cannot see it.
   """
-  @spec withdraw_invites_for_email(Cyfr.Actor.t(), String.t()) ::
+  @spec withdraw_invites_for_email(Prima.Actor.t(), String.t()) ::
           {:ok, [String.t()]} | refusal()
   # arca:unscoped-ok invites are email-keyed fabric, withdrawn across every athanor that invited.
-  def withdraw_invites_for_email(%Cyfr.Actor{scope: :platform}, email) when is_binary(email) do
+  def withdraw_invites_for_email(%Prima.Actor{scope: :platform}, email) when is_binary(email) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.withdraw_invites_for_email", fn ->
       {_count, athanor_ids} =
         Arca.Repo.delete_all(
@@ -591,15 +591,15 @@ defmodule Arca.Members do
     end)
   end
 
-  def withdraw_invites_for_email(%Cyfr.Actor{}, _email), do: {:error, :cross_tenant}
+  def withdraw_invites_for_email(%Prima.Actor{}, _email), do: {:error, :cross_tenant}
 
   @doc """
   Whether two people currently sit together in at least one ACTIVE estate
   — active memberships in active athanors only, since an invitation is not
   a seat and an archived room is not a room.
   """
-  @spec shared_estate?(Cyfr.Actor.t(), String.t(), String.t()) :: {:ok, boolean()} | refusal()
-  def shared_estate?(%Cyfr.Actor{scope: :platform}, user_a, user_b)
+  @spec shared_estate?(Prima.Actor.t(), String.t(), String.t()) :: {:ok, boolean()} | refusal()
+  def shared_estate?(%Prima.Actor{scope: :platform}, user_a, user_b)
       when is_binary(user_a) and is_binary(user_b) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.shared_estate?", fn ->
       count =
@@ -622,7 +622,7 @@ defmodule Arca.Members do
     end)
   end
 
-  def shared_estate?(%Cyfr.Actor{}, _user_a, _user_b), do: {:error, :cross_tenant}
+  def shared_estate?(%Prima.Actor{}, _user_a, _user_b), do: {:error, :cross_tenant}
 
   # ---- internal --------------------------------------------------------------
 
@@ -760,7 +760,7 @@ defmodule Arca.Members do
 
     attrs
     |> Map.new()
-    |> Map.put_new(:id, Cyfr.UUID7.generate_id("mem"))
+    |> Map.put_new(:id, Prima.UUID7.generate_id("mem"))
     |> Map.put_new(:created_at, now)
     |> Map.put_new(:updated_at, now)
   end

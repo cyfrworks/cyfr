@@ -24,19 +24,19 @@ defmodule Arca.Schemas.Message do
   @kinds ~w(text approval error system tool_call tool_result compaction turn_aborted)
   @statuses ~w(pending running approved declined error expired)
 
-  # The two reserved authors are `Cyfr.Author`'s, where every side of a
+  # The two reserved authors are `Prima.Author`'s, where every side of a
   # thread reads them; the two heads below are this table's spelling.
 
-  @doc "The `author` of a row the assistant wrote — `Cyfr.Author.agent/0`."
+  @doc "The `author` of a row the assistant wrote — `Prima.Author.agent/0`."
   @spec agent_author() :: String.t()
-  defdelegate agent_author(), to: Cyfr.Author, as: :agent
+  defdelegate agent_author(), to: Prima.Author, as: :agent
 
   @doc """
   The `author` of a row written in the server's voice rather than the
-  assistant's — `Cyfr.Author.system/0`.
+  assistant's — `Prima.Author.system/0`.
   """
   @spec system_author() :: String.t()
-  defdelegate system_author(), to: Cyfr.Author, as: :system
+  defdelegate system_author(), to: Prima.Author, as: :system
 
   schema "messages" do
     field :thread_id, :string

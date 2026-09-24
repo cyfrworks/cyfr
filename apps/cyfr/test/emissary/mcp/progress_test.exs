@@ -15,7 +15,7 @@ defmodule Emissary.MCP.ProgressTest do
 
   alias Cyfr.Bus.{BoundedDispatcher, Progress}
 
-  @actor Cyfr.Actor.in_athanor("ath_progress")
+  @actor Prima.Actor.in_athanor("ath_progress")
 
   defp step(request_id, phase, subject \\ {:build, "b1"}),
     do: Progress.new(@actor, subject, request_id: request_id, phase: phase, message: "m")

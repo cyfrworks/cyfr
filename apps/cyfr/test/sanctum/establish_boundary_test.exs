@@ -66,11 +66,11 @@ defmodule Sanctum.EstablishBoundaryTest do
   @caller "apps/sanctum/lib/sanctum/caller.ex"
 
   defp lib_files do
-    for dir <- Cyfr.Test.SourceTree.app_libs(@root),
-        file <- Cyfr.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
+    for dir <- Prima.Test.SourceTree.app_libs(@root),
+        file <- Prima.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
         do:
           {Path.relative_to(file, @root),
-           Cyfr.Test.CodeLines.lines(Cyfr.Test.SourceTree.read(file))}
+           Prima.Test.CodeLines.lines(Prima.Test.SourceTree.read(file))}
   end
 
   # Where a context may be BUILT: every app's lib, plus the two test
@@ -80,10 +80,10 @@ defmodule Sanctum.EstablishBoundaryTest do
   defp builder_files do
     support =
       for glob <- ~w(apps/cyfr/test/support/**/*.ex apps/sanctum/test/support/**/*.ex),
-          file <- Cyfr.Test.SourceTree.files!(Path.join(@root, glob)),
+          file <- Prima.Test.SourceTree.files!(Path.join(@root, glob)),
           do:
             {Path.relative_to(file, @root),
-             Cyfr.Test.CodeLines.lines(Cyfr.Test.SourceTree.read(file))}
+             Prima.Test.CodeLines.lines(Prima.Test.SourceTree.read(file))}
 
     lib_files() ++ support
   end

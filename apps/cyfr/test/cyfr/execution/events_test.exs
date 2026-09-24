@@ -18,7 +18,7 @@ defmodule Cyfr.Execution.EventsTest do
     {:ok, %{execution: execution}} =
       Arca.Execution.admit(
         %{
-          id: Cyfr.UUID7.execution_id(),
+          id: Prima.UUID7.execution_id(),
           reference: "reagent:local.evt:0.1.0",
           user_id: "usr_evt",
           athanor_id: athanor_id,
@@ -32,7 +32,7 @@ defmodule Cyfr.Execution.EventsTest do
 
   defp durable!(record, type, data) do
     {:ok, row} =
-      Arca.ExecutionEvents.append(Cyfr.Actor.in_athanor(record.athanor_id), record.id, type,
+      Arca.ExecutionEvents.append(Prima.Actor.in_athanor(record.athanor_id), record.id, type,
         data: data
       )
 

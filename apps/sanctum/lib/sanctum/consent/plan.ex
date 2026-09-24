@@ -25,7 +25,7 @@ defmodule Sanctum.Consent.Plan do
   bound on that profile rather than a copy of its own.
   """
 
-  alias Cyfr.Authority.RootSelect
+  alias Prima.Authority.RootSelect
   alias Sanctum.Consent.Components
 
   alias Sanctum.Consent.Authz
@@ -120,7 +120,7 @@ defmodule Sanctum.Consent.Plan do
 
   @doc false
   def name_ref(ref) do
-    case Cyfr.ComponentRef.to_name_ref(ref) do
+    case Prima.ComponentRef.to_name_ref(ref) do
       {:ok, name_ref} -> {:ok, name_ref}
       {:error, reason} -> {:error, {:invalid_ref, reason}}
     end
@@ -128,7 +128,7 @@ defmodule Sanctum.Consent.Plan do
 
   @doc false
   def fetch_component(ctx, source_ref) do
-    with {:ok, parsed} <- Cyfr.ComponentRef.parse(source_ref),
+    with {:ok, parsed} <- Prima.ComponentRef.parse(source_ref),
          {:ok, component} <-
            Components.get_latest(ctx, parsed.name, parsed.namespace, parsed.type) do
       {:ok, component}
@@ -144,7 +144,7 @@ defmodule Sanctum.Consent.Plan do
   # A manifest that does not decode declares nothing. The line names the
   # component, never the manifest's bytes.
   defp manifest(row, ref) do
-    case Cyfr.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
       {:ok, manifest} ->
         manifest
 
@@ -158,11 +158,11 @@ defmodule Sanctum.Consent.Plan do
   # need's reason, never the developer's key names. A manifest with no
   # needs block keeps the single ingress slot.
   defp need_rows(manifest) do
-    case Cyfr.Manifest.Needs.from_manifest(manifest) do
+    case Prima.Manifest.Needs.from_manifest(manifest) do
       nil ->
         [
           %{
-            need: Cyfr.Authority.Blob.ingress_key(),
+            need: Prima.Authority.Blob.ingress_key(),
             reason: "credentials this component may use when invoked",
             required: false
           }
@@ -230,7 +230,7 @@ defmodule Sanctum.Consent.Plan do
   end
 
   defp node_manifest(ctx, node_key) do
-    with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
+    with {:ok, ref} <- Prima.ComponentRef.parse(node_key),
          {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
       {:ok, manifest(row, node_key)}
     end
@@ -274,9 +274,9 @@ defmodule Sanctum.Consent.Plan do
       {:ok, profiles} ->
         for %{kind: :owner, status: :active} = profile <- profiles,
             {:ok, head} <- [Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)],
-            {:ok, blob} <- [Cyfr.Authority.Blob.parse(head.resolved_policy)],
-            {:ok, ingress} <- [Cyfr.Authority.Blob.ingress(blob, dep)],
-            Cyfr.Authority.Blob.bound_vault?(ingress.vault),
+            {:ok, blob} <- [Prima.Authority.Blob.parse(head.resolved_policy)],
+            {:ok, ingress} <- [Prima.Authority.Blob.ingress(blob, dep)],
+            Prima.Authority.Blob.bound_vault?(ingress.vault),
             {:ok, entry} <-
               [
                 Sanctum.VaultReader.usable(
@@ -308,7 +308,7 @@ defmodule Sanctum.Consent.Plan do
         athanor_id: ctx.athanor_id,
         expected_revision: expected_revision
       }
-      |> Cyfr.MapUtil.put_present(:profile_id, profile_id)
+      |> Prima.MapUtil.put_present(:profile_id, profile_id)
 
     Proof.mint(bindings, ttl_ms: @plan_ttl_ms)
   end

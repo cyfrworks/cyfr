@@ -49,7 +49,7 @@ defmodule EmissaryWeb.MCPController do
   alias CyfrWeb.ContextGuard
   require CyfrWeb.ContextGuard
   require Logger
-  alias Cyfr.UUID7
+  alias Prima.UUID7
 
   @protocol_version Emissary.MCP.Protocol.version()
   @protocol_version_header Emissary.MCP.Protocol.protocol_version_header()
@@ -77,7 +77,7 @@ defmodule EmissaryWeb.MCPController do
 
   def handle(conn, params) do
     request_id = UUID7.request_id()
-    Cyfr.LoggerContext.set_request_id(request_id)
+    Prima.LoggerContext.set_request_id(request_id)
     start_time = System.monotonic_time()
 
     # Decode every method through Message.decode/1. Authenticate has resolved
@@ -504,11 +504,11 @@ defmodule EmissaryWeb.MCPController do
     topic = progress_topic(context, request_id)
     :ok = Progress.listen(request_id, token)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     task =
       Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
+        Prima.LoggerContext.restore(logger_metadata)
         MCP.handle_message(context, params)
       end)
 

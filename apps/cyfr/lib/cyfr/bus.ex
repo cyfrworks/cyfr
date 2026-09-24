@@ -37,7 +37,7 @@ defmodule Cyfr.Bus do
   sink persists them, numbered for replay.
   """
 
-  alias Cyfr.Actor
+  alias Prima.Actor
 
   alias Cyfr.Bus.{
     ApiKeys,
@@ -420,7 +420,7 @@ defmodule Cyfr.Bus do
   end
 
   def prefix(other) do
-    raise ArgumentError, "a tenant topic requires a Cyfr.Actor, got #{inspect(other, limit: 3)}"
+    raise ArgumentError, "a tenant topic requires a Prima.Actor, got #{inspect(other, limit: 3)}"
   end
 
   @doc """

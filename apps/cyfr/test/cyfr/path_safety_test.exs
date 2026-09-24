@@ -4,7 +4,7 @@
 defmodule Cyfr.PathSafetyTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.PathSafety
+  alias Prima.PathSafety
 
   describe "validate_segments!/1 (Arca contract)" do
     test "accepts ordinary segments" do

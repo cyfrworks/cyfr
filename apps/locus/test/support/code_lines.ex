@@ -4,7 +4,7 @@
 defmodule Locus.Test.CodeLines do
   @moduledoc """
   The line filter behind Locus's architecture tests: Locus's own copy of
-  `Cyfr.Test.CodeLines`, since its suite loads nothing of the control
+  `Prima.Test.CodeLines`, since its suite loads nothing of the control
   plane's. Everything below this moduledoc is that module's body, byte
   for byte, and `Cyfr.BoundariesTest` holds the two to it.
   """

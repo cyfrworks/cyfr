@@ -92,7 +92,7 @@ apps/cyfr/test/support/test_wasm/chat_fixture/build.sh --check  # build and comp
 ```
 
 `build.sh` lays the crate out in a scratch directory with the canonical
-catalyst `Cargo.toml` (`Cyfr.CargoToml.template(:catalyst)`) and the
+catalyst `Cargo.toml` (`Prima.CargoToml.template(:catalyst)`) and the
 catalyst world's WIT (`wit/catalyst`), builds it `--locked` to `Cargo.lock`
 with `cargo component build --release --target wasm32-wasip2`, and remaps
 the scratch directory and the Cargo home out of the paths rustc embeds, so

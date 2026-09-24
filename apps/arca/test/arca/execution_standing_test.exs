@@ -38,7 +38,7 @@ defmodule Arca.ExecutionStandingTest do
     )
   end
 
-  defp unavailable, do: fn %Cyfr.ExecutionGrant{} -> {:error, :unavailable} end
+  defp unavailable, do: fn %Prima.ExecutionGrant{} -> {:error, :unavailable} end
 
   test "an admission stamps its attempt with the grant, and refuses without one", %{actor: actor} do
     grant = Actor.grant(actor.athanor_id)
@@ -282,12 +282,12 @@ defmodule Arca.ExecutionStandingLockTest do
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
 
   setup do
-    athanor_id = Cyfr.UUID7.generate_id("ath")
+    athanor_id = Prima.UUID7.generate_id("ath")
     n = System.unique_integer([:positive])
 
     {:ok, _} =
       unboxed(fn ->
-        Arca.Athanors.insert(Cyfr.Actor.system(), %{
+        Arca.Athanors.insert(Prima.Actor.system(), %{
           id: athanor_id,
           kind: "group",
           name: "Barrier #{n}",
@@ -320,7 +320,7 @@ defmodule Arca.ExecutionStandingLockTest do
 
   defp attrs(athanor_id) do
     %{
-      id: Cyfr.UUID7.execution_id(),
+      id: Prima.UUID7.execution_id(),
       reference: "reagent:local.barrier:0.1.0",
       user_id: "usr_barrier",
       athanor_id: athanor_id,
@@ -342,7 +342,7 @@ defmodule Arca.ExecutionStandingLockTest do
   end
 
   defp archive(athanor_id, verify) do
-    Arca.SecurityTransitions.archive_athanor(Cyfr.Actor.system(), athanor_id, verify: verify)
+    Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), athanor_id, verify: verify)
   end
 
   test "an admission holding the estate retires under the archive that waited for it", %{
@@ -468,7 +468,7 @@ defmodule Arca.ExecutionStandingLockTest do
   end
 
   defp scan(athanor_id, cursor \\ nil, acc \\ []) do
-    case Arca.ExecutionStanding.retired_attempts(Cyfr.Actor.system(), cursor, 50) do
+    case Arca.ExecutionStanding.retired_attempts(Prima.Actor.system(), cursor, 50) do
       {:ok, []} -> {:ok, Enum.filter(acc, &(elem(&1, 2) == athanor_id))}
       {:ok, page} -> scan(athanor_id, page |> List.last() |> elem(1), acc ++ page)
     end

@@ -29,7 +29,7 @@ defmodule Arca.Athanors do
       yet — a mint has no athanor at all, and route resolution is how one
       is chosen — so they match `scope: :platform` and refuse an
       athanor-scoped actor with `{:error, :cross_tenant}`. The widening
-      is asked for rather than assumed, and `Cyfr.Actor.system/0` is the
+      is asked for rather than assumed, and `Prima.Actor.system/0` is the
       server's own actor for the work no caller asked for.
 
   Nothing that belongs to Ecto crosses the boundary: a row is answered,
@@ -53,23 +53,23 @@ defmodule Arca.Athanors do
   # ---- inside one tenant -----------------------------------------------------
 
   @doc "The actor's own athanor row."
-  @spec current(Cyfr.Actor.t()) ::
+  @spec current(Prima.Actor.t()) ::
           {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
-  def current(%Cyfr.Actor{athanor_id: athanor_id})
+  def current(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.current", fn -> read(athanor_id) end)
     |> Arca.Data.project()
   end
 
-  def current(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def current(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   Write `attrs` over the actor's own athanor row through the update
   changeset — the fields that may change after birth.
   """
-  @spec update(Cyfr.Actor.t(), map()) ::
+  @spec update(Prima.Actor.t(), map()) ::
           {:ok, map()} | {:error, :not_found | :no_athanor} | write_refusal()
-  def update(%Cyfr.Actor{athanor_id: athanor_id}, attrs)
+  def update(%Prima.Actor{athanor_id: athanor_id}, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.update", fn ->
       with {:ok, row} <- read(athanor_id) do
@@ -82,7 +82,7 @@ defmodule Arca.Athanors do
     |> Arca.Data.project()
   end
 
-  def update(%Cyfr.Actor{}, _attrs), do: {:error, :no_athanor}
+  def update(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
   @doc """
   Set `fields` on the actor's own athanor row with one statement — the
@@ -91,11 +91,11 @@ defmodule Arca.Athanors do
   (`{:error, {:invalid, %{field => ["is read-only"]}}}`); they move only
   with an archive or a reopen (`Arca.SecurityTransitions`).
   """
-  @spec set(Cyfr.Actor.t(), keyword()) ::
+  @spec set(Prima.Actor.t(), keyword()) ::
           :ok
           | {:error,
              :not_found | :no_athanor | :database_error | {:invalid, %{atom() => [String.t()]}}}
-  def set(%Cyfr.Actor{athanor_id: athanor_id}, fields)
+  def set(%Prima.Actor{athanor_id: athanor_id}, fields)
       when is_binary(athanor_id) and athanor_id != "" and is_list(fields) do
     case Enum.filter(Athanor.standing_fields(), &Keyword.has_key?(fields, &1)) do
       [] ->
@@ -112,16 +112,16 @@ defmodule Arca.Athanors do
     end
   end
 
-  def set(%Cyfr.Actor{}, _fields), do: {:error, :no_athanor}
+  def set(%Prima.Actor{}, _fields), do: {:error, :no_athanor}
 
   @doc """
   Write `encoded` over the actor's athanor's settings document while it
   still reads `expected`, compare-and-set. `:stale` means the row moved
   under the caller and nothing was written — the caller merges again.
   """
-  @spec put_settings(Cyfr.Actor.t(), String.t() | nil, String.t(), DateTime.t()) ::
+  @spec put_settings(Prima.Actor.t(), String.t() | nil, String.t(), DateTime.t()) ::
           :ok | :stale | {:error, :no_athanor | :database_error}
-  def put_settings(%Cyfr.Actor{athanor_id: athanor_id}, expected, encoded, %DateTime{} = now)
+  def put_settings(%Prima.Actor{athanor_id: athanor_id}, expected, encoded, %DateTime{} = now)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(encoded) and
              (is_binary(expected) or is_nil(expected)) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.put_settings", fn ->
@@ -132,7 +132,7 @@ defmodule Arca.Athanors do
     end)
   end
 
-  def put_settings(%Cyfr.Actor{}, _expected, _encoded, _now), do: {:error, :no_athanor}
+  def put_settings(%Prima.Actor{}, _expected, _encoded, _now), do: {:error, :no_athanor}
 
   # ---- across tenants --------------------------------------------------------
 
@@ -140,13 +140,13 @@ defmodule Arca.Athanors do
   Insert an athanor row. `:id`, `:created_at` and `:updated_at` default;
   everything else the create changeset requires must be in `attrs`.
   """
-  @spec insert(Cyfr.Actor.t(), map()) :: {:ok, map()} | refusal() | write_refusal()
-  def insert(%Cyfr.Actor{scope: :platform}, attrs) when is_map(attrs) do
+  @spec insert(Prima.Actor.t(), map()) :: {:ok, map()} | refusal() | write_refusal()
+  def insert(%Prima.Actor{scope: :platform}, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.insert", fn -> do_insert(attrs) end)
     |> Arca.Data.project()
   end
 
-  def insert(%Cyfr.Actor{}, _attrs), do: {:error, :cross_tenant}
+  def insert(%Prima.Actor{}, _attrs), do: {:error, :cross_tenant}
 
   @doc """
   Mint an athanor, the checks that must pass first and the rows that must
@@ -171,8 +171,8 @@ defmodule Arca.Athanors do
       the plain map the mint answers, and answering `:ok` or
       `{:error, reason}`: the memberships an estate is born with.
   """
-  @spec mint(Cyfr.Actor.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def mint(%Cyfr.Actor{scope: :platform}, opts) when is_list(opts) do
+  @spec mint(Prima.Actor.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def mint(%Prima.Actor{scope: :platform}, opts) when is_list(opts) do
     hold = Keyword.get(opts, :hold, [])
     guards = Keyword.get(opts, :guards, [])
     attrs_fun = Keyword.fetch!(opts, :attrs)
@@ -194,37 +194,37 @@ defmodule Arca.Athanors do
     |> Arca.Data.project()
   end
 
-  def mint(%Cyfr.Actor{}, _opts), do: {:error, :cross_tenant}
+  def mint(%Prima.Actor{}, _opts), do: {:error, :cross_tenant}
 
   @doc "The athanor row `id` names, whichever tenant it is."
-  @spec get(Cyfr.Actor.t(), String.t()) ::
+  @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
-  def get(%Cyfr.Actor{scope: :platform}, id) when is_binary(id) do
+  def get(%Prima.Actor{scope: :platform}, id) when is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get", fn -> read(id) end)
     |> Arca.Data.project()
   end
 
-  def get(%Cyfr.Actor{}, _id), do: {:error, :cross_tenant}
+  def get(%Prima.Actor{}, _id), do: {:error, :cross_tenant}
 
   @doc """
   A person's own athanor, by its owner. At most one exists per person (a
   partial unique index on `owner_user_id` where `kind = 'person'`).
   """
-  @spec get_by_owner(Cyfr.Actor.t(), String.t()) ::
+  @spec get_by_owner(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
-  def get_by_owner(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
+  def get_by_owner(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get_by_owner", fn ->
       found(Arca.Repo.get_by(Athanor, kind: "person", owner_user_id: user_id))
     end)
     |> Arca.Data.project()
   end
 
-  def get_by_owner(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
+  def get_by_owner(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
   @doc "The athanor with this kind and slug — how a route segment resolves."
-  @spec get_by_slug(Cyfr.Actor.t(), String.t(), String.t()) ::
+  @spec get_by_slug(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
-  def get_by_slug(%Cyfr.Actor{scope: :platform}, kind, slug)
+  def get_by_slug(%Prima.Actor{scope: :platform}, kind, slug)
       when is_binary(kind) and is_binary(slug) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get_by_slug", fn ->
       found(Arca.Repo.get_by(Athanor, kind: kind, slug: slug))
@@ -232,12 +232,12 @@ defmodule Arca.Athanors do
     |> Arca.Data.project()
   end
 
-  def get_by_slug(%Cyfr.Actor{}, _kind, _slug), do: {:error, :cross_tenant}
+  def get_by_slug(%Prima.Actor{}, _kind, _slug), do: {:error, :cross_tenant}
 
   @doc "The ACTIVE frozen estate with this canonical pair key, if there is one."
-  @spec get_by_pair_key(Cyfr.Actor.t(), String.t()) ::
+  @spec get_by_pair_key(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
-  def get_by_pair_key(%Cyfr.Actor{scope: :platform}, key) when is_binary(key) do
+  def get_by_pair_key(%Prima.Actor{scope: :platform}, key) when is_binary(key) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.get_by_pair_key", fn ->
       found(
         Arca.Repo.one(
@@ -248,24 +248,24 @@ defmodule Arca.Athanors do
     |> Arca.Data.project()
   end
 
-  def get_by_pair_key(%Cyfr.Actor{}, _key), do: {:error, :cross_tenant}
+  def get_by_pair_key(%Prima.Actor{}, _key), do: {:error, :cross_tenant}
 
   @doc "The rows these ids name, oldest first. Ids with no row are simply absent."
-  @spec list_by_ids(Cyfr.Actor.t(), [String.t()]) :: {:ok, [map()]} | refusal()
-  def list_by_ids(%Cyfr.Actor{scope: :platform}, []), do: {:ok, []}
+  @spec list_by_ids(Prima.Actor.t(), [String.t()]) :: {:ok, [map()]} | refusal()
+  def list_by_ids(%Prima.Actor{scope: :platform}, []), do: {:ok, []}
 
-  def list_by_ids(%Cyfr.Actor{scope: :platform}, ids) when is_list(ids) do
+  def list_by_ids(%Prima.Actor{scope: :platform}, ids) when is_list(ids) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.list_by_ids", fn ->
       {:ok, Arca.Repo.all(from(a in Athanor, where: a.id in ^ids, order_by: [asc: a.created_at]))}
     end)
     |> Arca.Data.project()
   end
 
-  def list_by_ids(%Cyfr.Actor{}, _ids), do: {:error, :cross_tenant}
+  def list_by_ids(%Prima.Actor{}, _ids), do: {:error, :cross_tenant}
 
   @doc "Every active athanor on the server, oldest first — the roster a scan walks."
-  @spec list_active(Cyfr.Actor.t()) :: {:ok, [map()]} | refusal()
-  def list_active(%Cyfr.Actor{scope: :platform}) do
+  @spec list_active(Prima.Actor.t()) :: {:ok, [map()]} | refusal()
+  def list_active(%Prima.Actor{scope: :platform}) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.list_active", fn ->
       {:ok,
        Arca.Repo.all(
@@ -275,7 +275,7 @@ defmodule Arca.Athanors do
     |> Arca.Data.project()
   end
 
-  def list_active(%Cyfr.Actor{}), do: {:error, :cross_tenant}
+  def list_active(%Prima.Actor{}), do: {:error, :cross_tenant}
 
   @doc """
   The active athanors a person may work in: their own first, then every
@@ -285,8 +285,8 @@ defmodule Arca.Athanors do
   admits one active row per person and athanor, and Postgres refuses a
   `SELECT DISTINCT` ordered by an expression outside the select list.
   """
-  @spec list_for_user(Cyfr.Actor.t(), String.t()) :: {:ok, [map()]} | refusal()
-  def list_for_user(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
+  @spec list_for_user(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | refusal()
+  def list_for_user(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.list_for_user", fn ->
       {:ok,
        Arca.Repo.all(
@@ -303,22 +303,22 @@ defmodule Arca.Athanors do
     |> Arca.Data.project()
   end
 
-  def list_for_user(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
+  def list_for_user(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
   @doc "How many active athanors this server holds — an archived one frees its place."
-  @spec count_active(Cyfr.Actor.t()) :: {:ok, non_neg_integer()} | refusal()
-  def count_active(%Cyfr.Actor{scope: :platform}) do
+  @spec count_active(Prima.Actor.t()) :: {:ok, non_neg_integer()} | refusal()
+  def count_active(%Prima.Actor{scope: :platform}) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_active", fn ->
       counted(from(a in Athanor, where: a.status == "active", select: count(a.id)))
     end)
   end
 
-  def count_active(%Cyfr.Actor{}), do: {:error, :cross_tenant}
+  def count_active(%Prima.Actor{}), do: {:error, :cross_tenant}
 
   @doc "How many person athanors were minted after `since` — the mint-rate cap's measure."
-  @spec count_people_created_since(Cyfr.Actor.t(), DateTime.t()) ::
+  @spec count_people_created_since(Prima.Actor.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | refusal()
-  def count_people_created_since(%Cyfr.Actor{scope: :platform}, %DateTime{} = since) do
+  def count_people_created_since(%Prima.Actor{scope: :platform}, %DateTime{} = since) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_people_created_since", fn ->
       counted(
         from(a in Athanor,
@@ -329,16 +329,16 @@ defmodule Arca.Athanors do
     end)
   end
 
-  def count_people_created_since(%Cyfr.Actor{}, _since), do: {:error, :cross_tenant}
+  def count_people_created_since(%Prima.Actor{}, _since), do: {:error, :cross_tenant}
 
   @doc """
   The ACTIVE open groups this person created — what the per-person group
   cap counts. A frozen pair is not a group they made and is counted by
   `count_pairs_of/2` instead.
   """
-  @spec count_groups_created_by(Cyfr.Actor.t(), String.t()) ::
+  @spec count_groups_created_by(Prima.Actor.t(), String.t()) ::
           {:ok, non_neg_integer()} | refusal()
-  def count_groups_created_by(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
+  def count_groups_created_by(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_groups_created_by", fn ->
       counted(
         from(a in Athanor,
@@ -351,15 +351,15 @@ defmodule Arca.Athanors do
     end)
   end
 
-  def count_groups_created_by(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
+  def count_groups_created_by(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
   @doc """
   Every ACTIVE pair this person sits in — the pair cap's measure. Counted
   by membership and not by `created_by`: a pair is minted for two, and the
   one who did not click holds it just the same.
   """
-  @spec count_pairs_of(Cyfr.Actor.t(), String.t()) :: {:ok, non_neg_integer()} | refusal()
-  def count_pairs_of(%Cyfr.Actor{scope: :platform}, user_id) when is_binary(user_id) do
+  @spec count_pairs_of(Prima.Actor.t(), String.t()) :: {:ok, non_neg_integer()} | refusal()
+  def count_pairs_of(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_pairs_of", fn ->
       counted(
         from(a in Athanor,
@@ -374,7 +374,7 @@ defmodule Arca.Athanors do
     end)
   end
 
-  def count_pairs_of(%Cyfr.Actor{}, _user_id), do: {:error, :cross_tenant}
+  def count_pairs_of(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
   # ---- internal --------------------------------------------------------------
 
@@ -390,7 +390,7 @@ defmodule Arca.Athanors do
 
     attrs
     |> Map.new()
-    |> Map.put_new(:id, Cyfr.UUID7.generate_id("ath"))
+    |> Map.put_new(:id, Prima.UUID7.generate_id("ath"))
     |> Map.put_new(:created_at, now)
     |> Map.put_new(:updated_at, now)
   end

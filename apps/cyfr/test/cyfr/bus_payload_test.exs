@@ -39,7 +39,7 @@ defmodule Cyfr.BusPayloadTest do
     Webhooks
   }
 
-  @actor Cyfr.Actor.in_athanor("ath_payload")
+  @actor Prima.Actor.in_athanor("ath_payload")
 
   # One representative of every struct, built the way its producer builds it.
   defp samples do
@@ -219,7 +219,7 @@ defmodule Cyfr.BusPayloadTest do
     end
 
     test "a tenant payload refuses an actor that names no athanor, and a field it does not declare" do
-      assert_raise ArgumentError, fn -> Execution.new(%Cyfr.Actor{}, :started) end
+      assert_raise ArgumentError, fn -> Execution.new(%Prima.Actor{}, :started) end
       assert_raise ArgumentError, fn -> Execution.new(@actor, :started, token: "sk") end
       assert_raise ArgumentError, fn -> Request.new(@actor, :logged, __meta__: :x) end
     end
@@ -234,7 +234,7 @@ defmodule Cyfr.BusPayloadTest do
         refute :__meta__ in fields, "#{inspect(module)} is a schema"
 
         for field <- fields do
-          refute Cyfr.Sanitizer.sensitive_key?(field),
+          refute Prima.Sanitizer.sensitive_key?(field),
                  "#{inspect(module)}.#{field} is a field the sanitizer redacts"
         end
       end
@@ -250,7 +250,7 @@ defmodule Cyfr.BusPayloadTest do
 
     test "passes the sanitizer unchanged" do
       for sample <- samples() do
-        assert Cyfr.Sanitizer.sanitize(sample) == sample,
+        assert Prima.Sanitizer.sanitize(sample) == sample,
                "#{inspect(sample.__struct__)} is changed by the sanitizer"
       end
     end
@@ -262,7 +262,7 @@ defmodule Cyfr.BusPayloadTest do
     end
 
     test "a tenant topic refuses another tenant's payload" do
-      other = Cyfr.Actor.in_athanor("ath_other")
+      other = Prima.Actor.in_athanor("ath_other")
 
       for %{scope: :tenant, key: key, struct: module} <- Bus.topics(),
           sample = Enum.find(samples(), &(&1.__struct__ == module)) do

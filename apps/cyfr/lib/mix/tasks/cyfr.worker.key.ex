@@ -6,7 +6,7 @@ defmodule Mix.Tasks.Cyfr.Worker.Key do
 
   @moduledoc """
   Prints the key of one worker service for its operator to configure it
-  with: `OPUS_SERVICE_KEY=<64 hex>`, the `Cyfr.WorkerAuth.worker_key/2` of
+  with: `OPUS_SERVICE_KEY=<64 hex>`, the `Prima.WorkerAuth.worker_key/2` of
   the service id, derived from the root in `CYFR_WORKER_KEY`.
 
       CYFR_WORKER_KEY=… mix cyfr.worker.key opus
@@ -20,7 +20,7 @@ defmodule Mix.Tasks.Cyfr.Worker.Key do
 
   use Mix.Task
 
-  alias Cyfr.WorkerAuth
+  alias Prima.WorkerAuth
 
   @impl Mix.Task
   def run([service_id]) do

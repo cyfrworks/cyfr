@@ -7,7 +7,7 @@ defmodule Locus.BuilderService do
   @cancel_ms 15_000
 
   @moduledoc """
-  The builds service: the listener side of `Cyfr.BuilderProtocol`, and the
+  The builds service: the listener side of `Prima.BuilderProtocol`, and the
   only thing that reaches `Locus.Builder`. It speaks that protocol and
   nothing else: two `POST` routes, versioned bodies, and answers that are
   lines, each at the status the protocol gives its class. Whatever is not
@@ -23,7 +23,7 @@ defmodule Locus.BuilderService do
 
   1. **The header, before any of the body.** The `x-cyfr-auth` header is
      verified under this service's request key
-     (`Cyfr.BuilderProtocol.verify_request_header/3`) and refused as
+     (`Prima.BuilderProtocol.verify_request_header/3`) and refused as
      `unauthorized`, in the protocol's order: `malformed`,
      `outside_window`, `bad_mac`. A service holding no key verifies
      nothing.
@@ -32,7 +32,7 @@ defmodule Locus.BuilderService do
      `replayed`. Only a verified header's nonce is kept, so nobody without
      the key grows the table.
   3. **The bound.** A declared length past
-     `Cyfr.BuilderProtocol.max_request_bytes/0` is refused `malformed`
+     `Prima.BuilderProtocol.max_request_bytes/0` is refused `malformed`
      without reading; the body is then read up to that bound, and one that
      runs past it is refused the same way.
   4. **The body's hash.** The bytes read must be the ones the header named
@@ -88,7 +88,7 @@ defmodule Locus.BuilderService do
 
   require Logger
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
   alias Locus.Diagnostics
 
   @nonces __MODULE__.Nonces
@@ -166,7 +166,7 @@ defmodule Locus.BuilderService do
       try do
         stream(conn, plan, budget_ms)
       after
-        Cyfr.Slots.release(@slots, slot)
+        Prima.Slots.release(@slots, slot)
       end
     else
       {:refused, conn, refusal} -> refuse(conn, refusal)
@@ -264,9 +264,9 @@ defmodule Locus.BuilderService do
   # A build never waits for a slot, so a slot server that does not answer
   # refuses within the call's grace instead of holding the request open.
   defp slot(conn, %{athanor_id: athanor_id}) do
-    case Cyfr.Slots.acquire(@slots, athanor_id, :root, wait_ms: 0) do
+    case Prima.Slots.acquire(@slots, athanor_id, :root, wait_ms: 0) do
       {:ok, slot} -> {:ok, slot}
-      {:error, refusal} -> {:refused, conn, slot_refusal(refusal, Cyfr.Slots.status(@slots))}
+      {:error, refusal} -> {:refused, conn, slot_refusal(refusal, Prima.Slots.status(@slots))}
     end
   end
 

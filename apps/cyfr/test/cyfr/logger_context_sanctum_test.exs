@@ -4,7 +4,7 @@
 defmodule Cyfr.LoggerContextSanctumTest do
   use ExUnit.Case, async: true
 
-  alias Cyfr.LoggerContext
+  alias Prima.LoggerContext
 
   test "set_from_context/1 sets Logger metadata from a Sanctum.Context" do
     ctx =

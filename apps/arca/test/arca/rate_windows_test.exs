@@ -35,7 +35,7 @@ defmodule Arca.RateWindowsTest do
      now: DateTime.utc_now()}
   end
 
-  defp row(%Cyfr.Actor{athanor_id: athanor_id}, bucket) do
+  defp row(%Prima.Actor{athanor_id: athanor_id}, bucket) do
     Arca.Repo.one(
       from(w in RateWindow, where: w.athanor_id == ^athanor_id and w.bucket == ^bucket)
     )
@@ -258,7 +258,7 @@ defmodule Arca.RateWindowsTest do
     end
 
     test "an unresolved athanor is refused before any query", %{bucket: bucket} do
-      for actor <- [%Cyfr.Actor{athanor_id: nil}, %Cyfr.Actor{athanor_id: ""}] do
+      for actor <- [%Prima.Actor{athanor_id: nil}, %Prima.Actor{athanor_id: ""}] do
         assert {:error, :no_athanor} = RateWindows.claim(actor, bucket, 1, 60_000)
         assert {:error, :no_athanor} = RateWindows.estimate(actor, bucket, 1, 60_000)
         assert {:error, :no_athanor} = RateWindows.clear(actor, bucket)

@@ -122,7 +122,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} =
         PolicyLog.record(log_attrs(%{id: "pl_t1", athanor_id: "ath_a"}))
 
-      actor_match = %Cyfr.Actor{
+      actor_match = %Prima.Actor{
         user_id: "u",
         athanor_id: "ath_a",
         authenticated: true,
@@ -157,7 +157,7 @@ defmodule Arca.PolicyLogTest do
           })
         )
 
-      actor_match = %Cyfr.Actor{
+      actor_match = %Prima.Actor{
         user_id: "u",
         athanor_id: "ath_a",
         authenticated: true,

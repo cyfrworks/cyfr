@@ -68,8 +68,8 @@ defmodule Sanctum.PermissionVocabularyTest do
   defp checked_permissions do
     root = Path.expand("../../../..", __DIR__)
 
-    for lib <- Cyfr.Test.SourceTree.app_libs(root),
-        file <- Cyfr.Test.SourceTree.files!(Path.join([root, lib, "**/*.ex"])),
+    for lib <- Prima.Test.SourceTree.app_libs(root),
+        file <- Prima.Test.SourceTree.files!(Path.join([root, lib, "**/*.ex"])),
         [_, perm] <-
           Regex.scan(
             ~r/(?:require_permission|has_permission\?|authorize)\(\s*\w+,\s*:(\w+)/,

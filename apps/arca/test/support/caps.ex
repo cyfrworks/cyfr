@@ -14,11 +14,11 @@ defmodule Arca.Test.Caps do
   the count is only paid for while a ceiling is set.
   """
 
-  @behaviour Cyfr.Caps
+  @behaviour Prima.Caps
 
-  @impl Cyfr.Caps
-  def check_counted(%Cyfr.Actor{}, _key, count) when is_function(count, 0), do: :ok
+  @impl Prima.Caps
+  def check_counted(%Prima.Actor{}, _key, count) when is_function(count, 0), do: :ok
 
-  @impl Cyfr.Caps
-  def check_storage(%Cyfr.Actor{}, incoming) when is_integer(incoming) and incoming >= 0, do: :ok
+  @impl Prima.Caps
+  def check_storage(%Prima.Actor{}, incoming) when is_integer(incoming) and incoming >= 0, do: :ok
 end

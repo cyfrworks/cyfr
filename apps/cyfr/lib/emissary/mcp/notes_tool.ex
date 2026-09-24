@@ -37,7 +37,7 @@ defmodule Emissary.MCP.NotesTool do
   annotation is the one source for every gate that honours it.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   alias Aqua.Notes
   alias Sanctum.Context
@@ -52,7 +52,7 @@ defmodule Emissary.MCP.NotesTool do
 
   @doc false
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
     # In-chain as well as at the door: the writes are `ask` in the
     # soul's policy, so from a chain each one is a card a person
     # clicked; the reads are `auto`, bounded to the room by the

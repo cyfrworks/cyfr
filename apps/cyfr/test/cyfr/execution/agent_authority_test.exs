@@ -105,7 +105,7 @@ defmodule Cyfr.Execution.AgentAuthorityTest do
                child_opts
              )
 
-    assert {:ok, %{"contracts" => ["model/chat@1"]}} = Cyfr.Model.decode_envelope(output)
+    assert {:ok, %{"contracts" => ["model/chat@1"]}} = Prima.Model.decode_envelope(output)
 
     {:ok, [claude]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.claude")
@@ -128,7 +128,7 @@ defmodule Cyfr.Execution.AgentAuthorityTest do
     assert web.source_ref == "agent:local.web"
 
     {:ok, http_edge} =
-      Cyfr.Authority.Blob.lookup_edge(web.policy, "agent:local.web", "catalyst:local.http", "")
+      Prima.Authority.Blob.lookup_edge(web.policy, "agent:local.web", "catalyst:local.http", "")
 
     assert http_edge.egress.domains != []
   end
@@ -170,7 +170,7 @@ defmodule Cyfr.Execution.AgentAuthorityTest do
     {:ok, soul} = Admission.authority_for(ctx, :default, @soul)
 
     {:ok, web_edge} =
-      Cyfr.Authority.Blob.lookup_edge(
+      Prima.Authority.Blob.lookup_edge(
         soul.policy,
         "agent:local.web",
         "catalyst:local.claude",
@@ -178,7 +178,7 @@ defmodule Cyfr.Execution.AgentAuthorityTest do
       )
 
     {:ok, artisan_edge} =
-      Cyfr.Authority.Blob.lookup_edge(
+      Prima.Authority.Blob.lookup_edge(
         soul.policy,
         "agent:local.artisan",
         "catalyst:local.claude",

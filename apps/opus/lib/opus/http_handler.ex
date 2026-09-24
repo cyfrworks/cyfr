@@ -27,7 +27,7 @@ defmodule Opus.HttpHandler do
   calls synchronously. All edge checks happen before any network I/O via
   `Opus.HttpRequestValidation` — the single validation path shared with
   `Opus.HttpStreamHandler`. The private/reserved-IP range policy lives in
-  `Cyfr.Cidr.private_ip?/1`.
+  `Prima.Cidr.private_ip?/1`.
 
   ## Usage
 
@@ -37,8 +37,8 @@ defmodule Opus.HttpHandler do
 
   require Logger
 
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Limits
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Limits
   alias Opus.EdgeGuard
   alias Opus.HostClient
   alias Opus.HttpRequestValidation
@@ -58,8 +58,8 @@ defmodule Opus.HttpHandler do
 
   ## Parameters
 
-  - `edge` - The `Cyfr.Authority.Blob.Edge` to enforce (nil = deny all egress)
-  - `limits` - The node's `Cyfr.Limits` (sizes, timeout)
+  - `edge` - The `Prima.Authority.Blob.Edge` to enforce (nil = deny all egress)
+  - `limits` - The node's `Prima.Limits` (sizes, timeout)
   - `host` - The attached `Opus.HostClient` of the execution's attempt,
     which takes each request from the consented rate and records each
     refusal for the audit trail
@@ -190,11 +190,11 @@ defmodule Opus.HttpHandler do
   @doc """
   Check if an IP tuple is in a private/reserved range.
 
-  Delegates to `Cyfr.Cidr.private_ip?/1` — the single source of truth for
+  Delegates to `Prima.Cidr.private_ip?/1` — the single source of truth for
   the private/reserved-range egress policy. No range table lives in Opus.
   """
   @spec private_ip?(:inet.ip4_address() | :inet.ip6_address()) :: boolean()
-  defdelegate private_ip?(ip_tuple), to: Cyfr.Cidr
+  defdelegate private_ip?(ip_tuple), to: Prima.Cidr
 
   # ============================================================================
   # Private: HTTP Execution
@@ -212,13 +212,13 @@ defmodule Opus.HttpHandler do
     req_opts =
       request
       |> build_req_opts(limits)
-      |> Keyword.put(:into, Cyfr.BoundedBody.collector(max_bytes))
+      |> Keyword.put(:into, Prima.BoundedBody.collector(max_bytes))
 
     case Req.request(req_opts) do
       {:ok, response} ->
         duration_ms = System.monotonic_time(:millisecond) - start_time
 
-        case Cyfr.BoundedBody.read(response, max_bytes) do
+        case Prima.BoundedBody.read(response, max_bytes) do
           {:ok, body} ->
             response_body = normalize_response_body(body)
 
@@ -321,7 +321,7 @@ defmodule Opus.HttpHandler do
   # Never inspect/1 toward the guest: Elixir term syntax in a body reads
   # as data to whatever parses it next.
   defp normalize_response_body(body) when is_map(body) or is_list(body),
-    do: Cyfr.Json.safe_encode(body)
+    do: Prima.Json.safe_encode(body)
 
   defp normalize_response_body(body), do: to_string(body)
 
@@ -329,7 +329,7 @@ defmodule Opus.HttpHandler do
   # Private: Response Encoding
   # ============================================================================
 
-  defp safe_encode(data), do: Cyfr.WitResponse.safe_encode(data)
+  defp safe_encode(data), do: Prima.WitResponse.safe_encode(data)
 
   @doc false
   def encode_response(status, headers, body) do
@@ -366,7 +366,7 @@ defmodule Opus.HttpHandler do
   end
 
   @doc false
-  def encode_error(type, message), do: Cyfr.WitResponse.encode_error(type, message)
+  def encode_error(type, message), do: Prima.WitResponse.encode_error(type, message)
 
   # Replace invalid UTF-8 bytes with the Unicode replacement character (U+FFFD).
   # Some servers (e.g. japan-guide.com) return Windows-1252 or other legacy

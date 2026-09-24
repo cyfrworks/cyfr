@@ -9,8 +9,8 @@ defmodule Emissary.MCP.NotesToolTest do
 
   alias Emissary.MCP.NotesTool, as: Tool
   alias Cyfr.Ops.Catalog
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Sanctum.Context
 
   setup do
@@ -527,7 +527,7 @@ defmodule Emissary.MCP.NotesToolTest do
     # notes action the soul may propose survives the expansion.
     manifest = shipped_soul_manifest()
 
-    caps = Cyfr.Manifest.Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)
+    caps = Prima.Manifest.Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)
     granted = Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
 
     for action <- ~w(keep pin forget list read search) do
@@ -550,7 +550,7 @@ defmodule Emissary.MCP.NotesToolTest do
     names =
       roles
       |> Path.join("*.md")
-      |> Cyfr.Test.SourceTree.files!()
+      |> Prima.Test.SourceTree.files!()
       |> Enum.map(&Path.basename(&1, ".md"))
 
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(seed, "aqua.md")))

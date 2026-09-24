@@ -12,8 +12,8 @@ defmodule Emissary.MCP.ChainLoggingTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Ops.Catalog
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Sanctum.Context
 
   @node "formula:local.chain-logging"
@@ -91,7 +91,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
   end
 
   test "an in-chain call gets its own row, filed under the request that started it", %{ctx: ctx} do
-    request_id = Cyfr.UUID7.request_id()
+    request_id = Prima.UUID7.request_id()
     ctx = %{ctx | request_id: request_id}
 
     # The transport's own row, as `EmissaryWeb.MCPController` writes it: the
@@ -130,7 +130,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
   end
 
   test "a call the transport already logged is not logged twice", %{ctx: ctx} do
-    request_id = Cyfr.UUID7.request_id()
+    request_id = Prima.UUID7.request_id()
     ctx = %{ctx | request_id: request_id}
 
     :ok =

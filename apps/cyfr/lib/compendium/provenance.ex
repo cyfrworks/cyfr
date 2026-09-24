@@ -228,7 +228,7 @@ defmodule Compendium.Provenance do
           | nil
   def upstream_status(%Context{} = ctx, component) do
     with forked when is_binary(forked) <- forked_from(component),
-         {:ok, %Cyfr.ComponentRef{} = cref} <- Cyfr.ComponentRef.parse(forked),
+         {:ok, %Prima.ComponentRef{} = cref} <- Prima.ComponentRef.parse(forked),
          {:ok, rows} <-
            Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
              name: cref.name,
@@ -288,7 +288,7 @@ defmodule Compendium.Provenance do
   # Lineage lives IN the manifest, deliberately: it travels with the
   # content on push and pull, and provenance stays derived, never stored.
   defp forked_from(row) do
-    case Cyfr.Manifest.decode(Map.get(row, :manifest)) do
+    case Prima.Manifest.decode(Map.get(row, :manifest)) do
       %{"forked_from" => forked} when is_binary(forked) -> forked
       _ -> nil
     end
@@ -310,7 +310,7 @@ defmodule Compendium.Provenance do
       Arca.Storage.seed_prefix("components") ++
         [ComponentPath.type_plural(type), ComponentPath.default_publisher(), name]
 
-    with {:ok, entries} <- Arca.list_typed(Cyfr.Actor.system(), prefix) do
+    with {:ok, entries} <- Arca.list_typed(Prima.Actor.system(), prefix) do
       {:ok, sort_versions_desc(for {version, :dir} <- entries, do: version)}
     end
   end
@@ -367,11 +367,11 @@ defmodule Compendium.Provenance do
     prefix = Arca.Storage.seed_prefix("components") ++ rel
 
     with {:ok, manifest} <-
-           Arca.get_json(Cyfr.Actor.system(), prefix ++ [ComponentPath.manifest_name()]),
+           Arca.get_json(Prima.Actor.system(), prefix ++ [ComponentPath.manifest_name()]),
          {:ok, bytes} <-
-           Arca.get(Cyfr.Actor.system(), prefix ++ [ComponentPath.wasm_name(type)]) do
-      digest = Compendium.WasmValidator.compute_digest(bytes)
-      Compendium.ReleaseDigest.compute(digest, Cyfr.Manifest.decode(manifest))
+           Arca.get(Prima.Actor.system(), prefix ++ [ComponentPath.wasm_name(type)]) do
+      digest = Prima.Wasm.compute_digest(bytes)
+      Compendium.ReleaseDigest.compute(digest, Prima.Manifest.decode(manifest))
     else
       {:error, :not_found} -> {:error, :not_shipped}
       {:error, reason} -> {:error, reason}

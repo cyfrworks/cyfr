@@ -71,7 +71,7 @@ defmodule Locus.Application do
   end
 
   @doc """
-  The build slots, `Locus.BuildSlots`: one `Cyfr.Slots` instance whose caps
+  The build slots, `Locus.BuildSlots`: one `Prima.Slots` instance whose caps
   are read once at boot, `Locus.Config.max_concurrent/0` in all and
   `Locus.Config.max_concurrent_per_tenant/0` for one athanor, keyed by a
   request's `athanor_id`. A build past either cap is refused, never queued:
@@ -79,9 +79,9 @@ defmodule Locus.Application do
   The connection serving a build holds its slot, so a connection that dies
   gives the slot back by its monitor.
   """
-  @spec build_slots() :: {Cyfr.Slots, [Cyfr.Slots.option()]}
+  @spec build_slots() :: {Prima.Slots, [Prima.Slots.option()]}
   def build_slots do
-    {Cyfr.Slots,
+    {Prima.Slots,
      name: Locus.BuildSlots,
      max: Locus.Config.max_concurrent(),
      key_max: Locus.Config.max_concurrent_per_tenant(),

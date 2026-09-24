@@ -11,7 +11,7 @@ defmodule Locus.DiagnosticsTest do
 
   use ExUnit.Case, async: true
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
   alias Locus.Diagnostics
 
   defp encodes!(pieces) do

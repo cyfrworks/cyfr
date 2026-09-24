@@ -37,8 +37,8 @@ defmodule PrismWeb.DisplayHelpers do
 
   def principal_label(author) when is_binary(author) do
     cond do
-      author == Cyfr.Author.system() -> "System"
-      author == Cyfr.Author.agent() -> "AQUA"
+      author == Prima.Author.system() -> "System"
+      author == Prima.Author.agent() -> "AQUA"
       true -> PrismWeb.People.label(author, nil)
     end
   end

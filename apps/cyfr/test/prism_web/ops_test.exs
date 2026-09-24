@@ -4,7 +4,8 @@
 defmodule PrismWeb.OpsTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.{Catalog, Operation}
+  alias Cyfr.Ops.Catalog
+  alias Prima.Operation
   alias PrismWeb.Ops
 
   defmodule ListProvider do

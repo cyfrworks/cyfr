@@ -52,7 +52,7 @@ defmodule Cyfr.Execution.Record do
   """
   @type json :: map() | list() | String.t() | number() | boolean() | nil
 
-  @typedoc "The executable component types (`Cyfr.ComponentRef.executable_types/0`)."
+  @typedoc "The executable component types (`Prima.ComponentRef.executable_types/0`)."
   @type component_type :: :catalyst | :reagent | :formula
 
   @type t :: %__MODULE__{
@@ -86,7 +86,7 @@ defmodule Cyfr.Execution.Record do
           reservation: map() | nil,
           retention_class: String.t() | nil,
           retained_input: map() | nil,
-          grant: Cyfr.ExecutionGrant.t() | nil
+          grant: Prima.ExecutionGrant.t() | nil
         }
 
   defstruct [
@@ -107,7 +107,7 @@ defmodule Cyfr.Execution.Record do
     :error,
     :host_policy,
     :parent_execution_id,
-    # The key the parent's runner minted for this child (`Cyfr.HostAPI`
+    # The key the parent's runner minted for this child (`Prima.HostAPI`
     # `t:child_key/0`), unique under the parent; nil for a root.
     :child_key,
     :root_execution_id,
@@ -133,7 +133,7 @@ defmodule Cyfr.Execution.Record do
     # Not a column — the payload rows carry it.
     :retention_class,
     :retained_input,
-    # The standing the run was admitted under (`Cyfr.ExecutionGrant`): a
+    # The standing the run was admitted under (`Prima.ExecutionGrant`): a
     # root's read at admission, a child's its parent's stored stamp. Not
     # a column of this row — its attempt stores it. Nil on a record read
     # back, whose writes name the stored stamp instead.
@@ -158,7 +158,7 @@ defmodule Cyfr.Execution.Record do
   - `:retention_class` - The class the execution's payloads are kept
     under; derived from the caller when absent (`webhook` for a webhook
     identity, `system` for the server's own context, else `api`).
-  - `:grant` - The `Cyfr.ExecutionGrant` the run is admitted under; read
+  - `:grant` - The `Prima.ExecutionGrant` the run is admitted under; read
     at admission when absent (`write_started/2`).
   """
   @spec new(Context.t(), String.t(), map(), keyword()) :: t()
@@ -367,8 +367,8 @@ defmodule Cyfr.Execution.Record do
   unchanged. `{:error, :not_standing}` when neither stands,
   `{:error, :unavailable}` when the store cannot answer.
   """
-  @spec grant(t()) :: {:ok, Cyfr.ExecutionGrant.t()} | {:error, :not_standing | :unavailable}
-  def grant(%__MODULE__{grant: %Cyfr.ExecutionGrant{} = grant}), do: {:ok, grant}
+  @spec grant(t()) :: {:ok, Prima.ExecutionGrant.t()} | {:error, :not_standing | :unavailable}
+  def grant(%__MODULE__{grant: %Prima.ExecutionGrant{} = grant}), do: {:ok, grant}
 
   def grant(%__MODULE__{parent_execution_id: nil} = record),
     do: Sanctum.ExecutionStanding.capture(record_to_ctx(record))
@@ -383,10 +383,10 @@ defmodule Cyfr.Execution.Record do
   :unavailable}` when the store cannot answer.
   """
   @spec inherited_grant(String.t() | nil, String.t()) ::
-          {:ok, Cyfr.ExecutionGrant.t()} | {:error, :not_standing | :unavailable}
+          {:ok, Prima.ExecutionGrant.t()} | {:error, :not_standing | :unavailable}
   def inherited_grant(athanor_id, parent_execution_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(parent_execution_id) do
-    case Arca.ExecutionAttempts.grant(Cyfr.Actor.in_athanor(athanor_id), parent_execution_id) do
+    case Arca.ExecutionAttempts.grant(Prima.Actor.in_athanor(athanor_id), parent_execution_id) do
       {:ok, grant} -> {:ok, grant}
       {:error, :database_error} -> {:error, :unavailable}
       {:error, _none} -> {:error, :not_standing}
@@ -479,7 +479,7 @@ defmodule Cyfr.Execution.Record do
   restart has a different id.
   """
   @spec boot_id() :: String.t()
-  def boot_id, do: Cyfr.Boot.id()
+  def boot_id, do: Prima.Boot.id()
 
   @doc "A fresh lease expiry from now."
   def lease_until, do: Arca.ExecutionAttempts.lease_until()
@@ -872,10 +872,10 @@ defmodule Cyfr.Execution.Record do
   @doc """
   Generate a unique execution ID.
 
-  Uses `Cyfr.UUID7` for time-ordered execution identifiers.
+  Uses `Prima.UUID7` for time-ordered execution identifiers.
   """
   @spec generate_id() :: String.t()
-  def generate_id, do: Cyfr.UUID7.execution_id()
+  def generate_id, do: Prima.UUID7.execution_id()
 
   defp encode_reference(ref) when is_binary(ref), do: ref
   defp encode_reference(nil), do: nil
@@ -883,7 +883,7 @@ defmodule Cyfr.Execution.Record do
   defp encode_json(nil), do: nil
   defp encode_json(value) when is_binary(value), do: value
 
-  defp encode_json(value), do: Cyfr.Json.safe_encode(value)
+  defp encode_json(value), do: Prima.Json.safe_encode(value)
 
   # What the row keeps of the input: enough to say what ran and to tell
   # two inputs apart, nothing of what they said.
@@ -911,7 +911,7 @@ defmodule Cyfr.Execution.Record do
           "filename" => attachment["filename"] || attachment[:filename],
           "media_type" => attachment["media_type"] || attachment[:media_type],
           "bytes" => byte_size(data),
-          "digest" => Cyfr.Digest.sha256(data)
+          "digest" => Prima.Digest.sha256(data)
         }
       end
 
@@ -930,7 +930,7 @@ defmodule Cyfr.Execution.Record do
 
     %{
       "envelope" => "v1",
-      "output_hash" => Cyfr.Digest.sha256(encoded),
+      "output_hash" => Prima.Digest.sha256(encoded),
       "bytes" => byte_size(encoded),
       "usage" => usage_of(output)
     }
@@ -976,7 +976,7 @@ defmodule Cyfr.Execution.Record do
     end)
   end
 
-  @executable_types Map.new(Cyfr.ComponentRef.executable_types(), &{&1, String.to_atom(&1)})
+  @executable_types Map.new(Prima.ComponentRef.executable_types(), &{&1, String.to_atom(&1)})
 
   @doc """
   The executable component type a stored `component_type` column names, as

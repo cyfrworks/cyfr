@@ -162,7 +162,7 @@ defmodule Emissary.MCP.ExternalServerReconcilerTest do
         })
     end
 
-    actor = Cyfr.Actor.in_athanor(ctx.athanor_id)
+    actor = Prima.Actor.in_athanor(ctx.athanor_id)
 
     Cyfr.Bus.broadcast_global(
       Cyfr.Bus.vault_changed_global(),

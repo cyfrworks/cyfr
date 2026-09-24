@@ -11,7 +11,7 @@ project. Everything else (capabilities, security options, read-only root,
 start it without the `writable-cgroups=true` option
 (compose.no-writable-cgroups.yml), as a deployment that lacks it would.
 
-The Stack is a client of the build wire (`Cyfr.BuilderProtocol`): it signs
+The Stack is a client of the build wire (`Prima.BuilderProtocol`): it signs
 every build request under `cyfr-locus/v1` with a builds key it makes for
 the run, which compose hands the service as LOCUS_BUILDS_KEY. What the wire
 fixes (its version, label, header, routes and statuses) is read from the

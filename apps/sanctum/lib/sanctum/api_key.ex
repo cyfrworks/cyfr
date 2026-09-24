@@ -658,14 +658,14 @@ defmodule Sanctum.ApiKey do
   end
 
   # Exact-IP match stays a string compare in ip_matches?/2; only the CIDR
-  # arithmetic is delegated to the Cyfr.Cidr SSOT. The operator-facing
+  # arithmetic is delegated to the Prima.Cidr SSOT. The operator-facing
   # misconfig warning is preserved (fires whenever the IP or CIDR is
   # unparseable, exactly as before). ip_in_network?/3 is used directly (no
   # v4-mapped unwrap) to keep this path's prior behaviour identical.
   defp ip_in_cidr?(ip_string, cidr_string) do
-    case {Cyfr.Cidr.parse_ip(ip_string), Cyfr.Cidr.parse_cidr(cidr_string)} do
+    case {Prima.Cidr.parse_ip(ip_string), Prima.Cidr.parse_cidr(cidr_string)} do
       {{:ok, ip}, {:ok, {network, prefix_length}}} ->
-        Cyfr.Cidr.ip_in_network?(ip, network, prefix_length)
+        Prima.Cidr.ip_in_network?(ip, network, prefix_length)
 
       _ ->
         Logger.warning(
@@ -740,8 +740,8 @@ defmodule Sanctum.ApiKey do
       scope: decode_stored(row.scope, [], "scope"),
       rate_limit: row.rate_limit,
       ip_allowlist: decode_stored(row.ip_allowlist, nil, "ip_allowlist"),
-      created_at: Cyfr.Time.iso8601(row.inserted_at),
-      rotated_at: Cyfr.Time.iso8601(row.rotated_at)
+      created_at: Prima.Time.iso8601(row.inserted_at),
+      rotated_at: Prima.Time.iso8601(row.rotated_at)
     }
   end
 
@@ -772,7 +772,7 @@ defmodule Sanctum.ApiKey do
   defp decode_stored("", default, _field), do: default
 
   defp decode_stored(json, default, field) when is_binary(json) do
-    case Cyfr.Json.decode(json) do
+    case Prima.Json.decode(json) do
       {:ok, value} ->
         value
 
@@ -793,7 +793,7 @@ defmodule Sanctum.ApiKey do
   defp decode_allowlist(""), do: nil
 
   defp decode_allowlist(json) when is_binary(json) do
-    case Cyfr.Json.decode(json) do
+    case Prima.Json.decode(json) do
       {:ok, list} when is_list(list) ->
         if Enum.all?(list, &is_binary/1),
           do: list,

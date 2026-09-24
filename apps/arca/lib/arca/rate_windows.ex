@@ -128,9 +128,9 @@ defmodule Arca.RateWindows do
   `{:refused, retry_after_ms}` is the ceiling: `retry_after_ms` is how
   long until the weighted estimate falls back under the cap.
   """
-  @spec claim(Cyfr.Actor.t(), String.t(), non_neg_integer(), pos_integer()) ::
+  @spec claim(Prima.Actor.t(), String.t(), non_neg_integer(), pos_integer()) ::
           {:ok, non_neg_integer()} | {:refused, non_neg_integer()} | refusal()
-  def claim(%Cyfr.Actor{athanor_id: athanor_id} = actor, bucket, cap, window_ms)
+  def claim(%Prima.Actor{athanor_id: athanor_id} = actor, bucket, cap, window_ms)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(bucket) and bucket != "" and
              is_integer(cap) and cap >= 0 and is_integer(window_ms) and window_ms > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.RateWindows.claim", fn ->
@@ -139,15 +139,15 @@ defmodule Arca.RateWindows do
     |> Arca.Data.project()
   end
 
-  def claim(%Cyfr.Actor{}, _bucket, _cap, _window_ms), do: {:error, :no_athanor}
+  def claim(%Prima.Actor{}, _bucket, _cap, _window_ms), do: {:error, :no_athanor}
 
   # `claim/4` at an explicit instant, for tests that pin a claim to a
   # window's edge. Production reads the cell's clock in `claim/4` above:
   # an instant a caller chose decides no window in a running cell.
   @doc false
-  @spec claim_at(Cyfr.Actor.t(), String.t(), non_neg_integer(), pos_integer(), DateTime.t()) ::
+  @spec claim_at(Prima.Actor.t(), String.t(), non_neg_integer(), pos_integer(), DateTime.t()) ::
           {:ok, non_neg_integer()} | {:refused, non_neg_integer()} | refusal()
-  def claim_at(%Cyfr.Actor{athanor_id: athanor_id}, bucket, cap, window_ms, %DateTime{} = now)
+  def claim_at(%Prima.Actor{athanor_id: athanor_id}, bucket, cap, window_ms, %DateTime{} = now)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(bucket) and bucket != "" and
              is_integer(cap) and cap >= 0 and is_integer(window_ms) and window_ms > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.RateWindows.claim_at", fn ->
@@ -160,7 +160,7 @@ defmodule Arca.RateWindows do
     |> Arca.Data.project()
   end
 
-  def claim_at(%Cyfr.Actor{}, _bucket, _cap, _window_ms, _now), do: {:error, :no_athanor}
+  def claim_at(%Prima.Actor{}, _bucket, _cap, _window_ms, _now), do: {:error, :no_athanor}
 
   @doc """
   What `bucket` reads now, without claiming: `{:ok, used, remaining,
@@ -169,9 +169,9 @@ defmodule Arca.RateWindows do
 
   A read only — it neither counts a claim nor rotates the window.
   """
-  @spec estimate(Cyfr.Actor.t(), String.t(), non_neg_integer(), pos_integer()) ::
+  @spec estimate(Prima.Actor.t(), String.t(), non_neg_integer(), pos_integer()) ::
           {:ok, non_neg_integer(), non_neg_integer(), pos_integer()} | refusal()
-  def estimate(%Cyfr.Actor{athanor_id: athanor_id}, bucket, cap, window_ms)
+  def estimate(%Prima.Actor{athanor_id: athanor_id}, bucket, cap, window_ms)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(bucket) and bucket != "" and
              is_integer(cap) and cap >= 0 and is_integer(window_ms) and window_ms > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.RateWindows.estimate", fn ->
@@ -184,15 +184,15 @@ defmodule Arca.RateWindows do
     |> Arca.Data.project()
   end
 
-  def estimate(%Cyfr.Actor{}, _bucket, _cap, _window_ms), do: {:error, :no_athanor}
+  def estimate(%Prima.Actor{}, _bucket, _cap, _window_ms), do: {:error, :no_athanor}
 
   @doc """
   Forget `bucket`'s window: the row goes, and the next claim opens a
   fresh one. Administrative, and what a test uses to start a bucket from
   nothing.
   """
-  @spec clear(Cyfr.Actor.t(), String.t()) :: :ok | {:error, :no_athanor | :database_error}
-  def clear(%Cyfr.Actor{athanor_id: athanor_id}, bucket)
+  @spec clear(Prima.Actor.t(), String.t()) :: :ok | {:error, :no_athanor | :database_error}
+  def clear(%Prima.Actor{athanor_id: athanor_id}, bucket)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(bucket) and bucket != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.RateWindows.clear", fn ->
       Arca.Repo.delete_all(
@@ -204,7 +204,7 @@ defmodule Arca.RateWindows do
     |> Arca.Data.project()
   end
 
-  def clear(%Cyfr.Actor{}, _bucket), do: {:error, :no_athanor}
+  def clear(%Prima.Actor{}, _bucket), do: {:error, :no_athanor}
 
   @doc """
   Delete every row whose window and prior window are both past, across
@@ -333,7 +333,7 @@ defmodule Arca.RateWindows do
     reclaim(claim.athanor_id, claim.window_ms, claim.now)
 
     row = %{
-      id: Cyfr.UUID7.generate_id("rw"),
+      id: Prima.UUID7.generate_id("rw"),
       athanor_id: claim.athanor_id,
       bucket: claim.bucket,
       window_start: window_start,

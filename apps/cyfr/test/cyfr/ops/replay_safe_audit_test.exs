@@ -14,12 +14,12 @@ defmodule Cyfr.Ops.ReplaySafeAuditTest do
   alias Cyfr.Ops.{Annotations, Catalog}
 
   defmodule Carrier do
-    @behaviour Cyfr.Ops.Provider
+    @behaviour Prima.Provider
 
     def service, do: "carrier"
 
     def tools do
-      alias Cyfr.Ops.Operation
+      alias Prima.Operation
 
       valid =
         for {action, kind} <- [{"peek", :read}, {"poke", :write}, {"odd", :read}] do
@@ -70,7 +70,7 @@ defmodule Cyfr.Ops.ReplaySafeAuditTest do
              "component.inspect",
              "component.list",
              # The four declared resource reads: a resource read is always
-             # replay-safe (`Cyfr.Ops.Operation.validate!/1`).
+             # replay-safe (`Prima.Operation.validate!/1`).
              "component.read_resource",
              "execution.read_resource",
              "notes.list",

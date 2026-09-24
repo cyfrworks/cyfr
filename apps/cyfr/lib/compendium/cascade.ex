@@ -29,7 +29,7 @@ defmodule Compendium.Cascade do
              publisher
            ) do
       component_type = Map.get(comp, :component_type, "")
-      name_ref = Cyfr.ComponentRef.build(component_type, publisher, comp.name)
+      name_ref = Prima.ComponentRef.build(component_type, publisher, comp.name)
 
       revoke_profiles(ctx, name_ref)
       disable_registrations(ctx, name_ref)
@@ -103,7 +103,7 @@ defmodule Compendium.Cascade do
   defp targets?(nil, _name_ref), do: false
 
   defp targets?(target_ref, name_ref) when is_binary(target_ref) do
-    case Cyfr.ComponentRef.to_name_ref(target_ref) do
+    case Prima.ComponentRef.to_name_ref(target_ref) do
       {:ok, ^name_ref} -> true
       _ -> false
     end

@@ -23,7 +23,7 @@ defmodule Opus.NestedProbeFixtureTest do
       assert [_, recorded] =
                Regex.run(~r/^#{Regex.escape(name)}\s+(sha256:[0-9a-f]{64})$/m, readme)
 
-      assert Cyfr.Digest.sha256(File.read!(Path.join(dir, name))) == recorded, name
+      assert Prima.Digest.sha256(File.read!(Path.join(dir, name))) == recorded, name
     end
   end
 end

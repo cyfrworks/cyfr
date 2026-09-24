@@ -52,7 +52,7 @@ defmodule Arca.Schemas.Membership do
       :updated_at
     ])
     |> validate_required([:id, :scope, :status])
-    |> validate_inclusion(:scope, Cyfr.TenancyScope.values())
+    |> validate_inclusion(:scope, Prima.TenancyScope.values())
     |> validate_inclusion(:status, @statuses)
     |> update_change(:email, &downcase/1)
     |> validate_scope_target()

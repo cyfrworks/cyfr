@@ -26,7 +26,7 @@ defmodule Compendium.MCP do
   which is validated at runtime by Cyfr.Ops.Catalog.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   def service, do: "compendium"
 
@@ -57,13 +57,13 @@ defmodule Compendium.MCP do
         uriTemplate: "compendium://components/{reference}",
         name: "Component Metadata",
         description: "Component metadata by OCI reference",
-        mimeType: Cyfr.MediaType.json()
+        mimeType: Prima.MediaType.json()
       },
       %{
         uriTemplate: "compendium://assets/{reference}/{path}",
         name: "Component Assets",
         description: "Static assets from components",
-        mimeType: Cyfr.MediaType.binary()
+        mimeType: Prima.MediaType.binary()
       }
     ]
   end
@@ -87,7 +87,7 @@ defmodule Compendium.MCP do
     case Shared.resolve_component(ctx, reference) do
       {:ok, component, _ref} ->
         case Jason.encode(component) do
-          {:ok, json} -> {:ok, %{content: json, mimeType: Cyfr.MediaType.json()}}
+          {:ok, json} -> {:ok, %{content: json, mimeType: Prima.MediaType.json()}}
           {:error, _} -> {:error, "Failed to encode component as JSON"}
         end
 
@@ -115,7 +115,7 @@ defmodule Compendium.MCP do
 
           case Arca.get(Sanctum.Context.actor(ctx), asset_path) do
             {:ok, content} ->
-              {:ok, %{content: Base.encode64(content), mimeType: Cyfr.MediaType.binary()}}
+              {:ok, %{content: Base.encode64(content), mimeType: Prima.MediaType.binary()}}
 
             {:error, reason} ->
               Logger.warning("[Compendium.MCP] Asset not found: #{rest} (#{inspect(reason)})")
@@ -132,7 +132,7 @@ defmodule Compendium.MCP do
     segments = path |> String.split("/") |> Enum.reject(&(&1 == ""))
 
     with [_ | _] <- segments,
-         :ok <- Cyfr.PathSafety.validate_segments(segments) do
+         :ok <- Prima.PathSafety.validate_segments(segments) do
       {:ok, segments}
     else
       [] -> {:error, "Invalid asset path: empty"}

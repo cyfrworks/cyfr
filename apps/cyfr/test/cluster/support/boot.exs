@@ -106,7 +106,7 @@ defmodule Cyfr.Cluster.Boot do
     %{
       held: Arca.ControlPlane.held?(),
       generation: Arca.ControlPlane.generation(),
-      boot: Cyfr.Boot.id(),
+      boot: Prima.Boot.id(),
       node: node()
     }
   end
@@ -295,7 +295,7 @@ defmodule Cyfr.Cluster.Boot do
   """
   @spec completion(String.t(), String.t(), String.t()) :: struct()
   def completion(athanor_id, schedule_id, execution_id) do
-    Cyfr.Bus.ScheduleCompleted.new(%{Cyfr.Actor.in_athanor(athanor_id) | user_id: "cluster"}, %{
+    Cyfr.Bus.ScheduleCompleted.new(%{Prima.Actor.in_athanor(athanor_id) | user_id: "cluster"}, %{
       issuer_member: Cyfr.Bus.ScheduleCompleted.issuer(Arca.ControlPlane.held()),
       schedule_id: schedule_id,
       execution_id: execution_id,

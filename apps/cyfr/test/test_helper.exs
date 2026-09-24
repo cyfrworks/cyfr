@@ -34,9 +34,9 @@ Cyfr.Test.LocusService.serve!()
 ExUnit.after_suite(fn _ -> Cyfr.Test.LocusService.stop!() end)
 
 # Owned by the test-runner process so it outlives every test and no two
-# tests race to create it. `Cyfr.Test.SourceTree` fills it lazily; see that
+# tests race to create it. `Prima.Test.SourceTree` fills it lazily; see that
 # module for why the architecture tests need to stop re-reading the tree.
-Cyfr.Test.SourceTree.ensure_table()
+Prima.Test.SourceTree.ensure_table()
 
 # The tmp storage roots configured in config/test.exs: the tenant root, and
 # the seed tree with an empty bundle plus a copy of the shipped AQUA

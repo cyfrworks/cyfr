@@ -14,7 +14,7 @@ defmodule Arca.Schemas.ExecutionAttempt do
   is set while the attempt runs and cleared when it pauses or ends, so
   running time is accounted once per interval. `athanor_generation` is
   the estate standing the attempt was admitted under
-  (`Cyfr.ExecutionGrant`), inherited unchanged by a successor and never
+  (`Prima.ExecutionGrant`), inherited unchanged by a successor and never
   written after insert. Owned by the athanor.
   """
 

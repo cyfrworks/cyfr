@@ -23,7 +23,7 @@ defmodule Compendium.MCP.SourceTool do
       a build writes.
 
   `scoped/2` is the one decision. It validates the segments with
-  `Cyfr.PathSafety` and compares names after Unicode compatibility
+  `Prima.PathSafety` and compares names after Unicode compatibility
   normalisation and case folding, so no spelling a case-insensitive
   filesystem resolves to a refused file reaches `Arca.Files`.
 
@@ -34,7 +34,7 @@ defmodule Compendium.MCP.SourceTool do
   run of it later in the turn asks for a card.
   """
 
-  @behaviour Cyfr.Ops.Provider
+  @behaviour Prima.Provider
 
   alias Arca.Files
   alias Sanctum.Context
@@ -53,7 +53,7 @@ defmodule Compendium.MCP.SourceTool do
 
   @doc false
   def definition do
-    alias Cyfr.Ops.{Arg, Operation}
+    alias Prima.{Arg, Operation}
 
     Operation.tool(
       [
@@ -232,7 +232,7 @@ defmodule Compendium.MCP.SourceTool do
 
   # `.`, `..`, empty and encoded segments never reach a name comparison.
   defp safe(segments) do
-    case Cyfr.PathSafety.validate_segments(segments) do
+    case Prima.PathSafety.validate_segments(segments) do
       :ok -> :ok
       {:error, {_refusal, message}} -> {:error, {:invalid_argument, message}}
     end
