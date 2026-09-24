@@ -356,6 +356,149 @@ defmodule Arca.ComponentStorageTest do
     end
   end
 
+  describe "replace_projection/3" do
+    alias Arca.{StorageProjectionChanges, StorageProjectionRoots, StorageUnits}
+
+    @root "components"
+
+    setup do
+      athanor = "ath_projection_#{System.unique_integer([:positive])}"
+      {:ok, projector: %Cyfr.Actor{athanor_id: athanor, user_id: "usr_projection"}}
+    end
+
+    # A unit published and served: its change ready and pending.
+    defp published!(actor, key) do
+      token = StorageUnits.new_writer_token()
+      {:ok, draft} = StorageUnits.register_draft(actor, @root, key, token)
+
+      {:committed, generation} =
+        StorageUnits.stamped_commit(actor, draft, nil, token, %{
+          new_revision: "rev_#{generation_tag()}",
+          content_identity: "sha256:#{key}",
+          commit_identity: "usr_projection"
+        })
+
+      {:ok, %{units: units}} = StorageProjectionChanges.snapshot(actor, @root, units: [key])
+      %{source_revision: revision} = Enum.find(units, &(&1.unit_key == key))
+      :ok = StorageProjectionChanges.mark_ready(actor, @root, key, generation, revision)
+      generation
+    end
+
+    defp generation_tag, do: System.unique_integer([:positive])
+
+    defp token(actor) do
+      {:ok, token} = StorageProjectionChanges.snapshot(actor, @root)
+      token
+    end
+
+    defp standing(actor) do
+      {:ok, standing} = StorageProjectionRoots.epoch(actor, @root)
+      standing
+    end
+
+    defp names(actor) do
+      {:ok, rows} = ComponentStorage.list_components(actor, limit: :none)
+      rows |> Enum.map(&{&1.name, &1.component_type, &1.source}) |> Enum.sort()
+    end
+
+    test "writes the rows and acknowledges the snapshot in one transaction", %{projector: actor} do
+      generation = published!(actor, "catalysts/local/proj/1.0.0")
+      assert %{epoch: ^generation, acknowledged_epoch: 0} = standing(actor)
+
+      assert {:ok, %{put: [_], deleted: []}} =
+               ComponentStorage.replace_projection(actor, token(actor), %{
+                 put: [component_attrs("proj", "1.0.0")],
+                 delete: []
+               })
+
+      assert names(actor) == [{"proj", "catalyst", "filesystem"}]
+      assert %{epoch: ^generation, acknowledged_epoch: ^generation} = standing(actor)
+    end
+
+    test "a removal names publisher, name and version, narrowed by type and source", %{
+      projector: actor
+    } do
+      {:ok, _} = ComponentStorage.put_component(actor, component_attrs("twin", "1.0.0"))
+
+      {:ok, _} =
+        ComponentStorage.put_component(
+          actor,
+          component_attrs("twin", "1.0.0", %{
+            id: Ecto.UUID.generate(),
+            component_type: "reagent",
+            source: Compendium.Source.published()
+          })
+        )
+
+      published!(actor, "catalysts/local/twin/1.0.0")
+
+      assert {:ok, %{deleted: [%{name: "twin", component_type: "catalyst"}]}} =
+               ComponentStorage.replace_projection(actor, token(actor), %{
+                 put: [],
+                 delete: [
+                   %{
+                     publisher: "local",
+                     name: "twin",
+                     version: "1.0.0",
+                     source: Compendium.Source.filesystem()
+                   }
+                 ]
+               })
+
+      assert names(actor) == [{"twin", "reagent", "published"}]
+    end
+
+    @tag :capture_log
+    test "the rows and the acknowledgment roll back together", %{projector: actor} do
+      {:ok, _} = ComponentStorage.put_component(actor, component_attrs("kept", "1.0.0"))
+      generation = published!(actor, "catalysts/local/kept/1.0.0")
+
+      # `digest` is NOT NULL: the put fails after the removal ran, inside
+      # the transaction that would have acknowledged the change.
+      assert {:error, :database_error} =
+               ComponentStorage.replace_projection(actor, token(actor), %{
+                 put: [component_attrs("kept", "2.0.0", %{digest: nil})],
+                 delete: [%{publisher: "local", name: "kept", version: "1.0.0"}]
+               })
+
+      assert names(actor) == [{"kept", "catalyst", "filesystem"}]
+      assert %{epoch: ^generation, acknowledged_epoch: 0} = standing(actor)
+    end
+
+    test "a change the snapshot did not see writes nothing", %{projector: actor} do
+      published!(actor, "catalysts/local/early/1.0.0")
+      stale = token(actor)
+      latest = published!(actor, "catalysts/local/late/1.0.0")
+
+      assert {:error, :generation_conflict} =
+               ComponentStorage.replace_projection(actor, stale, %{
+                 put: [component_attrs("early", "1.0.0")],
+                 delete: []
+               })
+
+      assert names(actor) == []
+      assert %{epoch: ^latest, acknowledged_epoch: 0} = standing(actor)
+    end
+
+    test "an actor without an athanor, and another athanor's token, are refused", %{
+      projector: actor
+    } do
+      published!(actor, "catalysts/local/mine/1.0.0")
+      token = token(actor)
+      rows = %{put: [component_attrs("mine", "1.0.0")], delete: []}
+
+      for nobody <- [%Cyfr.Actor{athanor_id: nil}, %Cyfr.Actor{athanor_id: ""}] do
+        assert {:error, :no_athanor} = ComponentStorage.replace_projection(nobody, token, rows)
+      end
+
+      other = %{actor | athanor_id: actor.athanor_id <> "_other"}
+      assert {:error, :cross_tenant} = ComponentStorage.replace_projection(other, token, rows)
+      assert names(other) == []
+      assert names(actor) == []
+      assert %{acknowledged_epoch: 0} = standing(actor)
+    end
+  end
+
   describe "an athanor-less actor" do
     test "is refused before any query, nil and empty alike", %{actor: actor} do
       for anon <- [%{actor | athanor_id: nil}, %{actor | athanor_id: ""}] do

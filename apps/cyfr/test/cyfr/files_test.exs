@@ -228,6 +228,27 @@ defmodule Cyfr.FilesTest do
     assert row.description == "edited here"
   end
 
+  test "an edit of a role is what the agent index answers next, with nothing delivered", %{
+    ctx: ctx
+  } do
+    assert {:ok, _} =
+             Files.write(ctx, "aqua/roles/courier.md", "---\ntitle: Courier\n---\n\ncourier\n")
+
+    assert {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    courier = Enum.find(rows, &(&1.name == "courier"))
+    assert courier
+
+    assert {:ok, _} =
+             Files.write(
+               ctx,
+               "aqua/roles/courier.md",
+               "---\ntitle: Courier\ndisabled: true\n---\n\ncourier\n"
+             )
+
+    assert {:ok, rows} = Compendium.AgentIndex.list(ctx)
+    assert %{disabled: true} = Enum.find(rows, &(&1.name == "courier"))
+  end
+
   test "aqua/ is shaped: the soul, a role and a scroll are edited in place; nothing else lands",
        %{ctx: ctx} do
     assert {:ok, %{tier: :shaped, entries: entries}} = Files.list(ctx, "aqua")

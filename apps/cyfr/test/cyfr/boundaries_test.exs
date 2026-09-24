@@ -997,6 +997,25 @@ defmodule Cyfr.BoundariesTest do
       end
     end
 
+    test "the projection recovery's read across estates is rostered, and its query says why" do
+      assert %{modules: modules} =
+               Enum.find(
+                 Boundaries.system_responsibilities(),
+                 &(&1.check == "Arca.StorageProjectionChanges.pending_athanors/2")
+               ),
+             "the storage projection recovery walk is not a rostered system responsibility"
+
+      assert "Compendium.ProjectionReconciler" in modules
+
+      # The one cross-estate query behind that check carries the marker the
+      # unscoped-query seam reads, and names the roster row.
+      source =
+        SourceTree.read(Path.join(root(), "apps/arca/lib/arca/storage_projection_changes.ex"))
+
+      assert source =~
+               ~r/# arca:unscoped-ok .*system_responsibilities\/0.*\n\s+defp behind\(/
+    end
+
     test "every module that passes a retirement's check is rostered with it" do
       rostered =
         for row <- Boundaries.system_responsibilities(),

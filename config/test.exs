@@ -123,6 +123,12 @@ config :cyfr, external_server_reconciler_enabled: false
 # stays within the owning test's sandbox lifetime.
 config :cyfr, cron_scheduler_enabled: false
 
+# The projection reconciler starts and attaches nothing: its recovery and
+# its notifications would reconcile from its own process, on a sandbox
+# connection no test owns. Every read's barrier reconciles in the reader,
+# and its own suite starts an instance.
+config :cyfr, Compendium.ProjectionReconciler, enabled: false
+
 # The boot's security reconcile and seed offer write rows before any
 # test's sandbox checkout, so the sandboxed suite boot omits both; their
 # own tests run them directly. Omitting the security gate takes BOTH this

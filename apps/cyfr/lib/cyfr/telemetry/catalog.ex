@@ -23,6 +23,11 @@ defmodule Cyfr.Telemetry.Catalog do
     to the identity domain's "this athanor needs filling". A foundation
     below the host announces and never calls up, and this is the one
     event whose consumer does work rather than fan out.
+  - `:projection` — `Compendium.ProjectionReconciler`, which reconciles
+    the component registry and the agent index when a seeded root's unit
+    changes. Its attach is this roster (`consumed_by(:projection)`), and
+    it only hastens work every read's barrier and the periodic recovery
+    would do anyway.
   - `:operator` — consciously unconsumed by shipped machinery: kept for an
     operator's own monitoring attach, or pinned by tests. The `note` says
     why it earns its place; no event is orphaned silently.
@@ -198,6 +203,13 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :opus, :execution_events, :broadcast_failure] => %{
       consumers: [:operator],
       note: "a guest event could not reach its subscribers; the execution itself continues"
+    },
+    [:cyfr, :storage_projection, :changed] => %{
+      consumers: [:projection],
+      note:
+        "a unit under a seeded root changed, committed: the root's epoch, and whether the " <>
+          "bytes the change names are served yet. The component domain's reconciler " <>
+          "re-derives its projection of the root from it; a lost one costs a read's barrier"
     },
     [:cyfr, :storage_gc, :sweep] => %{
       consumers: [:operator],

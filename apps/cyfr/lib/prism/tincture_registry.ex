@@ -26,6 +26,14 @@ defmodule Prism.TinctureRegistry do
   row remembers it), so boot never walks every athanor's tree and a
   server with a thousand furnaces pays only for the ones whose shell is
   actually opened. `reload/1` remains the full rescan.
+
+  The marker holds the epoch the component registry had acknowledged for
+  the athanor's `components/` root when the scan began
+  (`Compendium.ProjectionReconciler.acknowledged_epoch/3`). A read past
+  the registry's barrier that finds the epoch moved rescans the athanor,
+  so a tincture change reaches the table whether or not the domain's
+  `{:tinctures_changed, id}` announcement on the athanor's tinctures topic
+  did.
   """
 
   use GenServer
@@ -46,10 +54,10 @@ defmodule Prism.TinctureRegistry do
   lists nothing.
   """
   @spec list_tinctures(atom(), Context.t()) :: [map()]
-  def list_tinctures(server \\ __MODULE__, %Context{athanor_id: athanor_id}) do
+  def list_tinctures(server \\ __MODULE__, %Context{athanor_id: athanor_id} = ctx) do
     case athanor_id do
       id when is_binary(id) and id != "" ->
-        ensure_scanned(server, id)
+        ensure_scanned(server, id, current_epoch(ctx))
 
         server
         |> :ets.match_object({{id, :_, :_}, :_})
@@ -60,18 +68,46 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  # First read for an athanor scans exactly that athanor. A busy or
-  # restarting registry lists what the table already holds rather than
-  # crashing the page.
-  defp ensure_scanned(server, athanor_id) do
-    if :ets.lookup(server, {:scanned, athanor_id}) == [] do
-      GenServer.call(server, {:ensure_scanned, athanor_id}, 30_000)
+  # First read for an athanor scans exactly that athanor, and so does a
+  # read that finds the registry's acknowledged epoch moved since the scan.
+  # A busy or restarting registry lists what the table already holds rather
+  # than crashing the page, and so does an epoch that could not be read.
+  defp ensure_scanned(server, athanor_id, epoch) do
+    unless current?(:ets.lookup(server, {:scanned, athanor_id}), epoch) do
+      GenServer.call(server, {:ensure_scanned, athanor_id, epoch}, 30_000)
     end
 
     :ok
   catch
     :exit, _ -> :ok
     :error, :badarg -> :ok
+  end
+
+  defp current?([{_marker, _scanned_at}], :unknown), do: true
+  defp current?([{_marker, epoch}], epoch), do: true
+  defp current?(_absent_or_moved, _epoch), do: false
+
+  # Past the registry's barrier: a change the reader's own write made is
+  # acknowledged before the epoch is read.
+  defp current_epoch(ctx) do
+    case Compendium.ProjectionReconciler.acknowledged_epoch(ctx, "components") do
+      {:ok, epoch} -> epoch
+      {:error, _} -> :unknown
+    end
+  end
+
+  # The epoch a scan starts from, read without reconciling: this process
+  # derives nothing, and a change made while it scans moves the epoch past
+  # what the marker records.
+  defp scan_epoch(athanor_id) do
+    case Compendium.ProjectionReconciler.acknowledged_epoch(
+           scan_context(athanor_id),
+           "components",
+           await: false
+         ) do
+      {:ok, epoch} -> epoch
+      {:error, _} -> :unknown
+    end
   end
 
   @doc """
@@ -116,11 +152,11 @@ defmodule Prism.TinctureRegistry do
   end
 
   @impl true
-  def handle_call({:ensure_scanned, athanor_id}, _from, state) do
+  def handle_call({:ensure_scanned, athanor_id, epoch}, _from, state) do
     # Re-check under the serializing process: a second caller that queued
     # behind the first scan finds the marker and pays nothing.
-    if :ets.lookup(state.table, {:scanned, athanor_id}) == [] do
-      scan_athanor_into(state.table, athanor_id)
+    unless current?(:ets.lookup(state.table, {:scanned, athanor_id}), epoch) do
+      scan_athanor_into(state.table, athanor_id, epoch)
     end
 
     {:reply, :ok, watch(state, athanor_id)}
@@ -128,7 +164,7 @@ defmodule Prism.TinctureRegistry do
 
   @impl true
   def handle_call({:reload_athanor, athanor_id}, _from, state) do
-    count = scan_athanor_into(state.table, athanor_id)
+    count = scan_athanor_into(state.table, athanor_id, scan_epoch(athanor_id))
     Logger.info("[TinctureRegistry] reloaded #{count} tincture(s) for #{athanor_id}")
     {:reply, :ok, watch(state, athanor_id)}
   end
@@ -149,7 +185,7 @@ defmodule Prism.TinctureRegistry do
     |> Enum.reduce(state, &watch(&2, &1))
   end
 
-  defp scan_athanor_into(table, athanor_id) do
+  defp scan_athanor_into(table, athanor_id, epoch) do
     count =
       case Sanctum.Tenancy.Athanors.get(athanor_id) do
         {:ok, %{status: "active"} = athanor} ->
@@ -162,15 +198,16 @@ defmodule Prism.TinctureRegistry do
           store_athanor_tinctures(table, athanor_id, [])
       end
 
-    :ets.insert(table, {{:scanned, athanor_id}, true})
+    :ets.insert(table, {{:scanned, athanor_id}, epoch})
     count
   end
 
-  # The domain announced a change (Compendium.AutoIndexer broadcasts on the
-  # athanor's tinctures topic); this cache follows.
+  # The domain announced a change (`Compendium.ProjectionReconciler`
+  # broadcasts on the athanor's tinctures topic after a replacement that
+  # touched a tincture); this cache follows.
   @impl true
   def handle_info({:tinctures_changed, athanor_id}, state) do
-    scan_athanor_into(state.table, athanor_id)
+    scan_athanor_into(state.table, athanor_id, scan_epoch(athanor_id))
     {:noreply, state}
   end
 
@@ -184,15 +221,15 @@ defmodule Prism.TinctureRegistry do
   # then prune keys that vanished — readers never observe an empty table
   # mid-reload. Returns the fresh tincture count. The 3-tuple match keeps
   # {:scanned, id} marker rows out of the prune; the full scan then marks
-  # every athanor it walked as scanned.
-  defp store_tinctures(table, tinctures) do
+  # every athanor it walked as scanned, at the epoch it began from.
+  defp store_tinctures(table, {tinctures, epochs}) do
     old_keys =
       :ets.select(table, [{{{:"$1", :"$2", :"$3"}, :_}, [], [{{:"$1", :"$2", :"$3"}}]}])
 
     count = replace(table, old_keys, tinctures)
 
     for athanor_id <- Enum.uniq(Enum.map(tinctures, & &1.athanor_id)) do
-      :ets.insert(table, {{:scanned, athanor_id}, true})
+      :ets.insert(table, {{:scanned, athanor_id}, Map.get(epochs, athanor_id, :unknown)})
     end
 
     count
@@ -231,9 +268,15 @@ defmodule Prism.TinctureRegistry do
   # whole-root filesystem walk, so nothing outside a registered athanor is
   # ever read and an archived athanor drops out by not being enumerated.
   defp scan_tinctures do
-    Sanctum.Tenancy.Athanors.list_active()
-    |> Enum.flat_map(&scan_athanor/1)
-    |> pick_latest_versions()
+    athanors = Sanctum.Tenancy.Athanors.list_active()
+    epochs = Map.new(athanors, &{&1.id, scan_epoch(&1.id)})
+
+    tinctures =
+      athanors
+      |> Enum.flat_map(&scan_athanor/1)
+      |> pick_latest_versions()
+
+    {tinctures, epochs}
   end
 
   # One athanor's scan, version-picked the same way the full scan is — the

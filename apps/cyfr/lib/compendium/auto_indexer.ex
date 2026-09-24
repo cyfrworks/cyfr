@@ -19,6 +19,17 @@ defmodule Compendium.AutoIndexer do
   directories (e.g., `cyfr/`, `stripe/`) are ignored — those must be registered
   via `publish_bytes/3` with proper identity verification.
 
+  ## Through the projection
+
+  A scan is one reconciliation of the `components` root
+  (`Compendium.ProjectionReconciler.reconcile/3`) naming every version
+  directory the walk discovered and every unit a `filesystem` row names:
+  each is derived from the tree and replaced with its acknowledgment in
+  one transaction, with every other pending change of the root. A row
+  whose version directory no longer holds a manifest — a unit gone from
+  the athanor's tree, a shipped copy or its own — is removed, and the
+  name-level cascade runs after the replacement commits.
+
   ## Stale Entry Pruning
 
   After scanning, removes registry rows with `source: "filesystem"` the
@@ -28,7 +39,9 @@ defmodule Compendium.AutoIndexer do
 
   require Logger
 
-  alias Compendium.Registry
+  alias Compendium.{ComponentPath, ProjectionReconciler}
+
+  @root "components"
 
   @doc """
   Scan the context's athanor's `components/` tree via
@@ -52,6 +65,8 @@ defmodule Compendium.AutoIndexer do
   cannot be listed at all. A discovery outage registers nothing and —
   critically — prunes nothing: an unreadable tree is not an empty one,
   and treating it as empty would delete every filesystem-sourced row.
+  `{:error, :projection_unavailable}` when three replacements conflicted:
+  nothing was written and the changes stay pending for the next read.
   """
   def scan(opts) do
     start_time = System.monotonic_time(:millisecond)
@@ -59,7 +74,7 @@ defmodule Compendium.AutoIndexer do
 
     case discover(ctx) do
       {:ok, version_segment_lists} ->
-        {:ok, do_scan(ctx, version_segment_lists, start_time)}
+        do_scan(ctx, version_segment_lists, start_time)
 
       {:error, reason} ->
         Logger.warning(
@@ -71,100 +86,52 @@ defmodule Compendium.AutoIndexer do
   end
 
   defp do_scan(ctx, version_segment_lists, start_time) do
-    {results, discovered} =
+    discovered = Enum.map(version_segment_lists, &unit_key/1)
+
+    # The units a filesystem row names, so a row whose directory is gone is
+    # derived — as absent — and removed. A listing fault prunes nothing: the
+    # discovered units still register, and the fault is reported.
+    {rostered, prune_error} =
+      case Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
+             source: Compendium.Source.filesystem(),
+             limit: :none
+           ) do
+        {:ok, rows} ->
+          {for(row <- rows, do: unit_key(Compendium.Provenance.version_dir(row))), nil}
+
+        {:error, reason} ->
+          Logger.warning("[AutoIndexer] Prune skipped: #{inspect(reason)}")
+          {[], reason}
+      end
+
+    units = Enum.uniq(discovered ++ rostered)
+
+    case ProjectionReconciler.reconcile(ctx, @root, units: units) do
+      {:ok, %{outcomes: outcomes, removed: removed}} ->
+        {:ok, summary(version_segment_lists, outcomes, removed, prune_error, start_time)}
+
+      {:error, reason} = error ->
+        Logger.warning("[AutoIndexer] Scan not reconciled: #{inspect(reason)}")
+        error
+    end
+  end
+
+  defp summary(version_segment_lists, outcomes, removed, prune_error, start_time) do
+    results =
       Enum.reduce(
         version_segment_lists,
-        {%{registered: 0, unchanged: 0, errors: 0, by_type: %{}, components: []}, []},
-        fn segs, {stats, disc} ->
-          case Registry.register_from_arca(ctx, segs) do
-            {:ok, :unchanged} ->
-              case extract_segment_metadata(segs) do
-                {:ok, name, version, type, publisher} ->
-                  entry = %{name: name, version: version, type: type, status: "unchanged"}
-
-                  {%{
-                     stats
-                     | unchanged: stats.unchanged + 1,
-                       components: [entry | stats.components]
-                   }, [{name, version, publisher} | disc]}
-
-                _ ->
-                  {%{stats | unchanged: stats.unchanged + 1}, disc}
-              end
-
-            {:ok, component} ->
-              publisher =
-                Compendium.ComponentPath.normalize_publisher(Map.get(component, :publisher))
-
-              type_count = Map.get(stats.by_type, component.component_type, 0) + 1
-              by_type = Map.put(stats.by_type, component.component_type, type_count)
-
-              entry = %{
-                name: component.name,
-                version: component.version,
-                type: component.component_type,
-                status: "registered"
-              }
-
-              {%{
-                 stats
-                 | registered: stats.registered + 1,
-                   by_type: by_type,
-                   components: [entry | stats.components]
-               }, [{component.name, component.version, publisher} | disc]}
-
-            {:error, reason} ->
-              Logger.warning(
-                "[AutoIndexer] Failed to register #{Enum.join(segs, "/")}: #{inspect(reason)}"
-              )
-
-              case extract_segment_metadata(segs) do
-                {:ok, name, version, type, publisher} ->
-                  error_entry = %{
-                    name: name,
-                    version: version,
-                    type: type,
-                    status: "error",
-                    error: inspect(reason)
-                  }
-
-                  {%{
-                     stats
-                     | errors: stats.errors + 1,
-                       components: [error_entry | stats.components]
-                   }, [{name, version, publisher} | disc]}
-
-                _ ->
-                  error_entry = %{
-                    name: List.last(segs) || "unknown",
-                    version: "unknown",
-                    type: "unknown",
-                    status: "error",
-                    error: inspect(reason)
-                  }
-
-                  {%{
-                     stats
-                     | errors: stats.errors + 1,
-                       components: [error_entry | stats.components]
-                   }, disc}
-              end
-          end
+        %{registered: 0, unchanged: 0, errors: 0, by_type: %{}, components: []},
+        fn segs, stats ->
+          count(stats, segs, Map.get(outcomes, unit_key(segs), :pending))
         end
       )
 
-    # Prune stale filesystem entries. A prune fault never fails the scan —
-    # the registrations above already landed — but it is reported, never
-    # read as "nothing was stale".
-    {pruned, prune_error} =
-      case Registry.prune_stale_entries(ctx, discovered) do
-        {:ok, pruned} ->
-          {pruned, nil}
+    discovered = MapSet.new(version_segment_lists, &unit_key/1)
 
-        {:error, reason} ->
-          Logger.warning("[AutoIndexer] Prune failed: #{inspect(reason)}")
-          {0, reason}
-      end
+    pruned =
+      Enum.count(removed, fn row ->
+        not MapSet.member?(discovered, unit_key(Compendium.Provenance.version_dir(row)))
+      end)
 
     elapsed = System.monotonic_time(:millisecond) - start_time
     total = results.registered + results.unchanged
@@ -188,21 +155,6 @@ defmodule Compendium.AutoIndexer do
       Logger.warning("[AutoIndexer] #{results.errors} components failed to register")
     end
 
-    # Keep TinctureRegistry in sync after any tincture changes
-    has_tincture_changes =
-      (results.registered > 0 and Map.get(results.by_type, "tincture", 0) > 0) or pruned > 0
-
-    # This scan is one athanor's, so the announcement is too. The domain
-    # broadcasts; the console's registry (a shell-plane cache) subscribes —
-    # a direct Prism call from here was the one engine→console edge.
-    if has_tincture_changes do
-      Phoenix.PubSub.broadcast(
-        Emissary.PubSub,
-        Cyfr.Bus.tinctures(ctx.athanor_id),
-        {:tinctures_changed, ctx.athanor_id}
-      )
-    end
-
     summary = %{
       components: Enum.reverse(results.components),
       registered: results.registered,
@@ -213,13 +165,76 @@ defmodule Compendium.AutoIndexer do
       elapsed_ms: elapsed,
       scanned_dirs: [
         %{
-          path: Enum.join(Compendium.ComponentPath.base_prefix(), "/") <> "/",
+          path: Enum.join(ComponentPath.base_prefix(), "/") <> "/",
           via: "Arca.list_recursive"
         }
       ]
     }
 
     if prune_error, do: Map.put(summary, :prune_error, inspect(prune_error)), else: summary
+  end
+
+  defp count(stats, _segs, {:registered, component}) do
+    type_count = Map.get(stats.by_type, component.component_type, 0) + 1
+
+    entry = %{
+      name: component.name,
+      version: component.version,
+      type: component.component_type,
+      status: "registered"
+    }
+
+    %{
+      stats
+      | registered: stats.registered + 1,
+        by_type: Map.put(stats.by_type, component.component_type, type_count),
+        components: [entry | stats.components]
+    }
+  end
+
+  defp count(stats, segs, unchanged) when unchanged in [:unchanged, {:kept, :direct}] do
+    case extract_segment_metadata(segs) do
+      {:ok, name, version, type, _publisher} ->
+        entry = %{name: name, version: version, type: type, status: "unchanged"}
+        %{stats | unchanged: stats.unchanged + 1, components: [entry | stats.components]}
+
+      _ ->
+        %{stats | unchanged: stats.unchanged + 1}
+    end
+  end
+
+  defp count(stats, segs, outcome) do
+    reason =
+      case outcome do
+        {:kept, {:error, reason}} -> reason
+        {:removed, reason} -> reason
+        {:kept, reason} -> reason
+        :pending -> :projection_unavailable
+      end
+
+    Logger.warning("[AutoIndexer] Failed to register #{Enum.join(segs, "/")}: #{inspect(reason)}")
+
+    error_entry =
+      case extract_segment_metadata(segs) do
+        {:ok, name, version, type, _publisher} ->
+          %{name: name, version: version, type: type, status: "error", error: inspect(reason)}
+
+        _ ->
+          %{
+            name: List.last(segs) || "unknown",
+            version: "unknown",
+            type: "unknown",
+            status: "error",
+            error: inspect(reason)
+          }
+      end
+
+    %{stats | errors: stats.errors + 1, components: [error_entry | stats.components]}
+  end
+
+  defp unit_key(segments) do
+    {@root, key} = Arca.Storage.UnitLocator.unit_key(segments)
+    key
   end
 
   # ============================================================================
@@ -238,8 +253,8 @@ defmodule Compendium.AutoIndexer do
   same walk; the build picker (`PrismWeb.BuildsLive`) lists it directly.
 
   Each athanor indexes its own subtree — the listing is rooted in `ctx`'s
-  athanor, and `register_from_arca`/`prune_stale_entries` stay keyed on
-  `ctx`, so no scan writes another athanor's rows. The walk is the
+  athanor, and the reconciliation it feeds stays keyed on `ctx`, so no
+  scan writes another athanor's rows. The walk is the
   athanor's own tree: the shipped copies provisioning laid, beside what
   the athanor registered itself.
 

@@ -5,9 +5,10 @@ defmodule Compendium.AgentIndex do
   @moduledoc """
   The `agents` rows: a derived index of the estate's `aqua/` tree.
 
-  The tree is the source. After every write to it — a role created,
-  edited or dropped, the seed synced — the index is rewritten from what
-  the overlay serves: one row per soul or role, with the digest of the
+  The tree is the source. After a write to it — a role created, edited
+  or dropped, the seed synced — the index is rewritten from what the
+  overlay serves before it is read again: one row per soul or role, with
+  the digest of the
   file's bytes (its revision) and of its security-relevant subset
   (`Compendium.AquaAgent.to_manifest/1`, its capability). Every revision's
   bytes are kept by digest (`Arca.AgentRevisions`) before the row names
@@ -16,39 +17,61 @@ defmodule Compendium.AgentIndex do
   second mutable source, and a sync that cannot read the tree leaves the
   rows as they were.
 
-  A sync sweeps the estate's activation and live-shape caches: an agent
+  The index is the `aqua` root's projection, kept by
+  `Compendium.ProjectionReconciler`: every change of a unit under `aqua/`
+  is stamped for it, `list/1` waits for it to reflect every one
+  (`Compendium.ProjectionReconciler.await/2`), and a rewrite is made
+  against a snapshot of the root and acknowledged with it. A unit still
+  pending holds the whole rewrite back.
+
+  A rewrite sweeps the estate's activation and live-shape caches: an agent
   is a consent source (`Compendium.AgentSource`), and its shape must be
   re-derived from the file as it now stands.
   """
 
-  alias Compendium.{AquaAgent, AquaPath}
+  alias Compendium.{AquaAgent, AquaPath, ProjectionReconciler}
   alias Sanctum.Context
 
+  @root "aqua"
+
   @doc """
-  Rewrite the athanor's rows from its tree.
+  Rewrite the athanor's rows from its tree, through the projection
+  reconciler (`Compendium.ProjectionReconciler.reconcile/3`).
 
   `:claim` in `opts` is the provisioning claim the rewrite is made under,
   and then the rows are written in the same transaction that holds it
-  (`Arca.AgentStorage.replace_all/3`): a sync whose claim a successor took
-  publishes nothing and answers `{:error, :claim_lost}`. A sync with no
-  claim — a person editing a role — has none to lose.
+  (`Arca.AgentStorage.replace_projection/4`): a sync whose claim a
+  successor took publishes nothing and answers `{:error, :claim_lost}`. A
+  sync with no claim — a person editing a role — has none to lose.
+  `{:error, :projection_unavailable}` when a unit under `aqua/` is still
+  pending or three rewrites conflicted.
   """
   @spec sync(Context.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def sync(ctx, opts \\ [])
 
   def sync(%Context{} = ctx, opts) when is_list(opts) do
-    with {:ok, agents, _errors} <- AquaAgent.list(ctx),
-         {:ok, rows} <- rows_for(ctx, agents),
-         {:ok, replaced} <- Arca.AgentStorage.replace_all(Context.actor(ctx), rows, opts) do
-      Compendium.Registry.invalidate_executor_caches(ctx)
-      {:ok, replaced}
-    end
+    with {:ok, %{rows: rows}} <-
+           ProjectionReconciler.reconcile(ctx, @root, Keyword.take(opts, [:claim])),
+         do: {:ok, rows}
   end
 
-  @doc "The athanor's rows, the soul first, then the roles by name."
+  @doc false
+  # The rows the tree derives, for the reconciler's rewrite. Reads the tree
+  # directly: this runs behind the barrier.
+  @spec derive(Context.t()) :: {:ok, [map()]} | {:error, term()}
+  def derive(%Context{} = ctx) do
+    with {:ok, agents, _errors} <- AquaAgent.list(ctx), do: rows_for(ctx, agents)
+  end
+
+  @doc """
+  The athanor's rows, the soul first, then the roles by name — once the
+  index reflects every change of the tree, else
+  `{:error, :projection_unavailable}`.
+  """
   @spec list(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def list(%Context{} = ctx) do
-    with {:ok, rows} <- Arca.AgentStorage.list(Context.actor(ctx)) do
+    with :ok <- ProjectionReconciler.await(ctx, @root),
+         {:ok, rows} <- Arca.AgentStorage.list(Context.actor(ctx)) do
       {:ok, Enum.sort_by(rows, &{&1.kind != AquaAgent.soul_type(), &1.name})}
     end
   end

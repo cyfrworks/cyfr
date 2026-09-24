@@ -29,6 +29,19 @@ defmodule Arca.StorageUnits do
 
   `abandon_draft/3` gives a draft back without committing.
 
+  ## The projection generation
+
+  A commit and a retirement each change what the root's domain projection
+  must show, so each raises the root's epoch in its own transaction and
+  writes the unit's change row at that generation, not ready
+  (`Arca.StorageProjectionRoots.advance!/3`); it is announced once the
+  transaction commits. `stamped_commit/5` and `stamped_retire/3` answer
+  the generation, which the writer marks ready when the move or the delete
+  it names has finished (`Arca.StorageProjectionChanges.mark_ready/5`). A
+  retirement writes its tombstone even for a unit no row names: the bytes
+  it deletes may have been laid by hand. Registering, abandoning and
+  releasing a draft change nothing a reader sees, and stamp nothing.
+
   ## Tenancy
 
   Every function takes the `Cyfr.Actor` first and scopes every query to
@@ -43,6 +56,7 @@ defmodule Arca.StorageUnits do
 
   alias Arca.Schemas.{StorageCommit, StorageUnit}
   alias Arca.Storage.UnitLocator
+  alias Arca.{StorageProjectionChanges, StorageProjectionRoots}
 
   @draft_ttl_ms :timer.minutes(15)
 
@@ -134,7 +148,22 @@ defmodule Arca.StorageUnits do
   """
   @spec commit(Cyfr.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
           StorageUnit.commit_result() | {:error, :no_athanor}
-  def commit(
+  def commit(%Cyfr.Actor{} = actor, %StorageUnit{} = unit, expected_revision, writer_token, identity) do
+    case stamped_commit(actor, unit, expected_revision, writer_token, identity) do
+      {:committed, _generation} -> :committed
+      {:error, _} = refusal -> refusal
+    end
+  end
+
+  @doc """
+  `commit/5`, answering the projection generation the commit stamped on
+  the unit — the one `Arca.StorageProjectionChanges.mark_ready/5` is
+  handed once the committed revision is served.
+  """
+  @spec stamped_commit(Cyfr.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
+          {:committed, pos_integer()}
+          | {:error, :stale_revision | :stale_writer | :missing_unit | :unavailable | :no_athanor}
+  def stamped_commit(
         %Cyfr.Actor{} = actor,
         %StorageUnit{} = unit,
         expected_revision,
@@ -146,7 +175,7 @@ defmodule Arca.StorageUnits do
     with {:ok, athanor} <- tenant(actor),
          :ok <- owned(athanor, unit) do
       rescuing_db("commit", fn ->
-        move_pointer(athanor, unit.id, expected_revision, writer_token, identity)
+        move_pointer(actor, athanor, unit, expected_revision, writer_token, identity)
       end)
     end
   end
@@ -188,10 +217,52 @@ defmodule Arca.StorageUnits do
   already retired.
   """
   @spec retire(Cyfr.Actor.t(), String.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
-  def retire(%Cyfr.Actor{} = actor, root, unit_key)
+  def retire(%Cyfr.Actor{} = actor, root, unit_key) do
+    case stamped_retire(actor, root, unit_key) do
+      {:retired, _generation} -> :ok
+      {:not_found, _generation} -> {:error, :not_found}
+      {:error, _} = refusal -> refusal
+    end
+  end
+
+  @doc """
+  `retire/3` as one locking transaction that also writes the unit's
+  tombstone, not ready, at a new projection generation — whether or not a
+  row named the unit — and answers that generation beside what became of
+  the row: `:retired`, or `:not_found` for no row or one already retired.
+  The deleter marks the tombstone ready once the tenant delete returns
+  (`Arca.StorageProjectionChanges.mark_ready/5`, revision nil).
+  """
+  @spec stamped_retire(Cyfr.Actor.t(), String.t(), String.t()) ::
+          {:retired | :not_found, pos_integer()} | refusal()
+  def stamped_retire(%Cyfr.Actor{} = actor, root, unit_key)
       when is_binary(root) and is_binary(unit_key) do
     with {:ok, athanor} <- tenant(actor) do
-      rescuing_db("retire", fn -> retire_row(athanor, root, unit_key) end)
+      answer =
+        rescuing_db("retire", fn ->
+          Arca.Repo.locking_transaction(fn ->
+            retired = retire_row(athanor, root, unit_key)
+
+            generation =
+              StorageProjectionRoots.advance!(actor, root, %{
+                unit_key: unit_key,
+                ready: false,
+                tombstone: true,
+                source_revision: nil
+              })
+
+            {retired, generation}
+          end)
+        end)
+
+      case answer do
+        {:ok, {retired, generation}} ->
+          StorageProjectionChanges.announce(athanor, root, generation, false)
+          {retired, generation}
+
+        {:error, _} = refusal ->
+          refusal
+      end
     end
   end
 
@@ -334,8 +405,8 @@ defmodule Arca.StorageUnits do
     case Arca.Repo.update_all(live,
            set: [state: "retired", draft_writer_token: nil, updated_at: DateTime.utc_now()]
          ) do
-      {0, _} -> {:error, :not_found}
-      {_retired, _} -> :ok
+      {0, _} -> :not_found
+      {_retired, _} -> :retired
     end
   end
 
@@ -359,25 +430,42 @@ defmodule Arca.StorageUnits do
   # The commit transaction
   # ---------------------------------------------------------------------------
 
-  # The pointer move and the journal row share one transaction, so neither
-  # exists without the other. The compare is the update's own WHERE: no
-  # read-then-write window, on either adapter.
-  defp move_pointer(athanor, id, expected_revision, writer_token, identity) do
+  # The pointer move, the journal row and the projection generation share
+  # one transaction, so none exists without the others. The compare is the
+  # update's own WHERE: no read-then-write window, on either adapter. The
+  # unit row is locked by that update before the root's epoch is raised —
+  # the order every storage writer keeps — and the root and key the
+  # generation is stamped on are the row's, never the caller's struct's.
+  # The change is announced once it has committed.
+  defp move_pointer(actor, athanor, %StorageUnit{id: id}, expected_revision, writer_token, identity) do
     now = DateTime.utc_now()
 
-    Arca.Repo.transaction(fn ->
+    Arca.Repo.locking_transaction(fn ->
       case swap(athanor, id, expected_revision, writer_token, identity, now) do
-        1 ->
+        [{root, unit_key}] ->
           append_journal!(athanor, id, expected_revision, identity, now)
-          :committed
 
-        0 ->
+          generation =
+            StorageProjectionRoots.advance!(actor, root, %{
+              unit_key: unit_key,
+              ready: false,
+              tombstone: false,
+              source_revision: identity.new_revision
+            })
+
+          {root, generation}
+
+        [] ->
           Arca.Repo.rollback(refusal(athanor, id, expected_revision))
       end
     end)
     |> case do
-      {:ok, :committed} -> :committed
-      {:error, reason} -> {:error, reason}
+      {:ok, {root, generation}} ->
+        StorageProjectionChanges.announce(athanor, root, generation, false)
+        {:committed, generation}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -392,8 +480,8 @@ defmodule Arca.StorageUnits do
         do: from(u in held, where: is_nil(u.current_revision)),
         else: from(u in held, where: u.current_revision == ^expected_revision)
 
-    {moved, _} =
-      Arca.Repo.update_all(at_expected,
+    {_moved, keys} =
+      Arca.Repo.update_all(from(u in at_expected, select: {u.root, u.unit_key}),
         set: [
           state: "committed",
           current_revision: identity.new_revision,
@@ -402,7 +490,7 @@ defmodule Arca.StorageUnits do
         ]
       )
 
-    moved
+    keys
   end
 
   defp append_journal!(athanor, id, expected_revision, identity, now) do

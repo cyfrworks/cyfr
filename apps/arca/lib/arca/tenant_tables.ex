@@ -58,6 +58,8 @@ defmodule Arca.TenantTables do
     "webhooks",
     "sessions",
     "api_keys",
+    "storage_projection_changes",
+    "storage_projection_roots",
     "storage_commits",
     "storage_units",
     "components",

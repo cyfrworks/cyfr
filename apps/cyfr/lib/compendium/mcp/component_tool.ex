@@ -375,48 +375,9 @@ defmodule Compendium.MCP.ComponentTool do
 
     local_result = if source != "remote", do: Registry.search(ctx, filters), else: nil
 
-    if source != "local" do
-      case Compendium.Registry.Client.search(ctx, filters) do
-        {:ok, remote} ->
-          if local_result do
-            merge_search_results(local_result, remote)
-          else
-            {:ok, %{components: remote[:components] || [], total: remote[:total] || 0}}
-          end
-
-        {:error, %Errors{} = err} ->
-          Logger.error(
-            "[Compendium.MCP] CYFR.RUN SEARCH FAILED — #{Errors.to_log_string(err)}. " <>
-              "Results are incomplete. Only local components are shown."
-          )
-
-          error_msg = format_error(err)
-
-          case local_result do
-            {:ok, local} ->
-              {:ok,
-               local
-               |> Map.put(:incomplete, true)
-               |> Map.put(:registry_error, error_msg)
-               |> Map.put(
-                 :note,
-                 "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}. " <>
-                   "Only local components are shown."
-               )}
-
-            nil ->
-              {:ok,
-               %{
-                 components: [],
-                 total: 0,
-                 incomplete: true,
-                 registry_error: error_msg,
-                 note: "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}."
-               }}
-          end
-      end
-    else
-      local_result || {:ok, %{components: [], total: 0}}
+    case local_result do
+      {:error, :projection_unavailable} -> index_unavailable()
+      _answered -> search_with(ctx, filters, source, local_result)
     end
   end
 
@@ -608,6 +569,15 @@ defmodule Compendium.MCP.ComponentTool do
         broadcast_register_progress(ctx, register_id, :error, "Component scan failed")
         Logger.error("[Compendium.MCP] component scan failed: #{inspect(reason)}")
         {:error, {:unavailable, "Component storage"}}
+
+      {:error, :projection_unavailable} ->
+        broadcast_register_progress(ctx, register_id, :error, "Component index unavailable")
+        index_unavailable()
+
+      {:error, reason} ->
+        broadcast_register_progress(ctx, register_id, :error, "Component scan failed")
+        Logger.error("[Compendium.MCP] component scan failed: #{inspect(reason)}")
+        {:error, {:unavailable, "Component storage"}}
     end
   end
 
@@ -640,6 +610,9 @@ defmodule Compendium.MCP.ComponentTool do
 
       {:ok, enrich_tincture_media(ctx, %{result | components: components})}
     else
+      {:error, :projection_unavailable} ->
+        index_unavailable()
+
       {:error, reason} ->
         Logger.error("[Compendium.MCP] component.list failed: #{inspect(reason)}")
         {:error, "Failed to list components"}
@@ -674,6 +647,9 @@ defmodule Compendium.MCP.ComponentTool do
              "#{reference} ships with the server and cannot be deleted — " <>
                "edit it, or use action=reset to restore it"}
 
+          {:error, :projection_unavailable} ->
+            index_unavailable()
+
           {:error, reason} ->
             Logger.error("[Compendium.MCP] component.delete failed: #{inspect(reason)}")
             {:error, "Failed to delete #{reference}"}
@@ -704,6 +680,9 @@ defmodule Compendium.MCP.ComponentTool do
         {:error, :not_bundled} ->
           {:error, "#{reference} is not a bundled component — nothing shipped to revert to"}
 
+        {:error, :projection_unavailable} ->
+          index_unavailable()
+
         {:error, reason} ->
           Logger.error("[Compendium.MCP] component.reset failed: #{inspect(reason)}")
           {:error, "Failed to reset #{reference}"}
@@ -728,14 +707,7 @@ defmodule Compendium.MCP.ComponentTool do
   def handle(%Context{} = ctx, %{"action" => "status", "reference" => reference}) do
     with {:ok, %{version: version} = cref} when is_binary(version) <-
            Cyfr.ComponentRef.parse(reference),
-         {:ok, component} <-
-           Arca.ComponentStorage.get_component(
-             Sanctum.Context.actor(ctx),
-             cref.name,
-             cref.version,
-             cref.namespace,
-             nil
-           ),
+         {:ok, component} <- Registry.get(ctx, cref.name, cref.version, cref.namespace),
          {:ok, overlay} <- Compendium.Provenance.status(ctx, component),
          {:ok, shipped} <- status_shipped_versions(overlay, component, cref) do
       drift =
@@ -772,6 +744,9 @@ defmodule Compendium.MCP.ComponentTool do
 
       {:error, :not_found} ->
         {:error, {:not_found, "Component", reference}}
+
+      {:error, :projection_unavailable} ->
+        index_unavailable()
 
       {:error, reason} when is_binary(reason) ->
         {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
@@ -840,6 +815,9 @@ defmodule Compendium.MCP.ComponentTool do
 
       {:error, :blob_not_found} ->
         {:error, {:not_found, "Blob for digest", digest}}
+
+      {:error, :projection_unavailable} ->
+        index_unavailable()
 
       {:error, reason} ->
         Logger.error("[Compendium.MCP] Failed to get blob: #{inspect(reason)}")
@@ -994,6 +972,53 @@ defmodule Compendium.MCP.ComponentTool do
     {:error, {:invalid_argument, "Missing required argument: action"}}
   end
 
+  # The local rows beside cyfr.run's, as `source` asks.
+  defp search_with(ctx, filters, source, local_result) do
+    if source != "local" do
+      case Compendium.Registry.Client.search(ctx, filters) do
+        {:ok, remote} ->
+          if local_result do
+            merge_search_results(local_result, remote)
+          else
+            {:ok, %{components: remote[:components] || [], total: remote[:total] || 0}}
+          end
+
+        {:error, %Errors{} = err} ->
+          Logger.error(
+            "[Compendium.MCP] CYFR.RUN SEARCH FAILED — #{Errors.to_log_string(err)}. " <>
+              "Results are incomplete. Only local components are shown."
+          )
+
+          error_msg = format_error(err)
+
+          case local_result do
+            {:ok, local} ->
+              {:ok,
+               local
+               |> Map.put(:incomplete, true)
+               |> Map.put(:registry_error, error_msg)
+               |> Map.put(
+                 :note,
+                 "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}. " <>
+                   "Only local components are shown."
+               )}
+
+            nil ->
+              {:ok,
+               %{
+                 components: [],
+                 total: 0,
+                 incomplete: true,
+                 registry_error: error_msg,
+                 note: "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}."
+               }}
+          end
+      end
+    else
+      local_result || {:ok, %{components: [], total: 0}}
+    end
+  end
+
   defp finish_register(ctx, register_id, result) do
     # Broadcast per-component status
     Enum.each(result.components, fn comp ->
@@ -1099,6 +1124,10 @@ defmodule Compendium.MCP.ComponentTool do
       cref.name
     )
   end
+
+  # The component registry is behind the tree and could not be brought up
+  # to it: said as unavailable, never as an empty or stale answer.
+  defp index_unavailable, do: {:error, {:unavailable, "Component index"}}
 
   # ============================================================================
   # Registry Default
@@ -1233,13 +1262,7 @@ defmodule Compendium.MCP.ComponentTool do
     publisher =
       Compendium.ComponentPath.normalize_publisher(comp[:publisher] || comp["publisher"])
 
-    case Arca.ComponentStorage.get_component(
-           Sanctum.Context.actor(ctx),
-           name,
-           version,
-           publisher,
-           type
-         ) do
+    case Registry.get(ctx, name, version, publisher, type) do
       {:ok, component} ->
         manifest = decode_manifest(component.manifest)
         component_id = component.id || ""

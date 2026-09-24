@@ -107,6 +107,23 @@ defmodule Cyfr.TelemetryCatalogTest do
     end
   end
 
+  test "the projection reconciler attaches exactly the catalog's :projection roster" do
+    assert Catalog.consumed_by(:projection) == [Arca.StorageProjectionChanges.event()]
+
+    # The attach a reconciler makes as it starts, under a name no running
+    # reconciler holds, so what it attaches is this case's alone.
+    name = :"telemetry_catalog_projection_#{System.unique_integer([:positive])}"
+    handler = Compendium.ProjectionReconciler.handler_id(name)
+    on_exit(fn -> Compendium.ProjectionReconciler.detach(name) end)
+
+    assert :ok = Compendium.ProjectionReconciler.attach(name)
+
+    attached =
+      for %{id: ^handler, event_name: event} <- :telemetry.list_handlers([]), do: event
+
+    assert Enum.sort(attached) == Catalog.consumed_by(:projection)
+  end
+
   test "the dedicated log attaches cover the catalog's :log roster" do
     for event <- Catalog.consumed_by(:log) do
       ids = event |> :telemetry.list_handlers() |> Enum.map(& &1.id)

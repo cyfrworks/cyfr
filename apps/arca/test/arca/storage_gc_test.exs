@@ -602,6 +602,61 @@ defmodule Arca.StorageGCTest do
     end
   end
 
+  describe "the root's projection" do
+    defp change(actor, unit) do
+      {root, key} = UnitLocator.unit_key(unit)
+      {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, root, units: [key])
+      Enum.find(token.units, &(&1.unit_key == key))
+    end
+
+    test "a repair with the revision unchanged raises the unit's generation, then marks it ready",
+         %{actor: actor, unit: unit} do
+      commit_unserved(actor, unit, "one")
+      {:ok, %{current_revision: one}} = pointer(actor, unit)
+      committed = change(actor, unit)
+      assert %{ready: false, source_revision: ^one, pending: true} = committed
+
+      assert {:ok, %{repaired: [^unit]}} = StorageGC.repair(actor)
+
+      repaired = change(actor, unit)
+      assert %{ready: true, source_revision: ^one, tombstone: false} = repaired
+      assert repaired.generation > committed.generation
+
+      {root, _key} = UnitLocator.unit_key(unit)
+      assert {:ok, %{epoch: epoch}} = Arca.StorageProjectionRoots.epoch(actor, root)
+      assert epoch == repaired.generation
+    end
+
+    test "a repair whose move fails leaves a pending generation, never a ready one", %{
+      actor: actor,
+      unit: unit
+    } do
+      commit_unserved(actor, unit, "one")
+      committed = change(actor, unit)
+
+      Adapter.hook(fn op, _actor, path ->
+        if op in [:put, :replace_tree] and served?(path, unit), do: {:error, :enospc}, else: :pass
+      end)
+
+      assert {:ok, %{left: [{^unit, {:repair_failed, _}}]}} = StorageGC.repair(actor)
+      Adapter.clear()
+
+      assert %{ready: false} = pending = change(actor, unit)
+      assert pending.generation > committed.generation
+    end
+
+    test "collection changes no projection", %{actor: actor, unit: unit} do
+      assert {:ok, _} = commit(actor, unit, "one")
+      {root, _key} = UnitLocator.unit_key(unit)
+      {:ok, before} = Arca.StorageProjectionRoots.epoch(actor, root)
+
+      lay_prefix(actor, unit, StorageUnits.new_revision(), "dead", marker: false)
+      assert {:ok, %{collected: 1}} = StorageGC.sweep(actor, now: later(2 * @day))
+
+      assert {:ok, ^before} = Arca.StorageProjectionRoots.epoch(actor, root)
+    end
+  end
+
   describe "a sweep's own repair" do
     test "finishes a move that outlived the grace", %{actor: actor, unit: unit} do
       assert {:ok, _} = commit(actor, unit, "one")

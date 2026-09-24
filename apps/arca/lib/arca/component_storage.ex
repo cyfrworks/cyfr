@@ -13,12 +13,33 @@ defmodule Arca.ComponentStorage do
 
   All public functions take a `%Cyfr.Actor{}` as the first argument
   to enforce tenant isolation via `where_tenant/3`.
+
+  The rows are the `components` root's projection: what the tree derives
+  is written by `replace_projection/3`, against a snapshot of that root,
+  and acknowledged in the same transaction. `put_component/2`,
+  `insert_component/2` and `delete_component/5` are the direct writes of
+  the ingresses whose rows the tree cannot derive (a publish, a pull) and
+  of an explicit removal.
   """
 
   import Ecto.Query
   import Arca.QueryHelpers, only: [where_tenant: 2]
 
   alias Arca.Schemas.Component
+  alias Arca.StorageProjectionChanges
+
+  @typedoc """
+  Which rows a projection removes: every row of one publisher, name and
+  version, narrowed to one `component_type` and to one `source` when
+  either is given.
+  """
+  @type removal :: %{
+          required(:publisher) => String.t(),
+          required(:name) => String.t(),
+          required(:version) => String.t(),
+          optional(:component_type) => String.t() | nil,
+          optional(:source) => String.t() | nil
+        }
 
   @doc """
   Get a component by name and version, with optional publisher and component_type filters.
@@ -133,6 +154,85 @@ defmodule Arca.ComponentStorage do
       {1, _} -> {:ok, attrs}
       {0, _} -> {:ok, attrs}
       error -> {:error, error}
+    end
+  end
+
+  @doc """
+  Replace the rows the `components` root's projection derives, against
+  `token`, that root's snapshot (`Arca.StorageProjectionChanges.snapshot/3`):
+  in one transaction the rows each `delete:` removal names go, each
+  `put:` row is written (an upsert on its identity, as `put_component/2`),
+  and every unit the token names that is ready is acknowledged — the
+  root's epoch too, when all of them are. Removals are made before puts.
+
+  The transaction holds the root's row and the token's unit rows first
+  (`Arca.StorageProjectionChanges.replace/4`): a change the token did not
+  see — a unit created after the snapshot included — writes nothing and
+  answers `{:error, :generation_conflict}`, so the rows and their
+  acknowledgment commit together or not at all. A token of another
+  athanor is `{:error, :cross_tenant}`. Answers the rows written and the
+  rows removed, as they stood.
+  """
+  @spec replace_projection(
+          Cyfr.Actor.t(),
+          StorageProjectionChanges.token(),
+          %{put: [map()], delete: [removal()]}
+        ) ::
+          {:ok, %{put: [map()], deleted: [map()]}}
+          | {:error,
+             :no_athanor
+             | :cross_tenant
+             | :invalid_token
+             | :generation_conflict
+             | :database_error}
+  def replace_projection(
+        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        token,
+        %{put: puts, delete: removals}
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_map(token) and is_list(puts) and
+             is_list(removals) do
+    puts = Enum.map(puts, &(&1 |> validate_source!() |> then(fn row -> ensure_tenant_fields(actor, row) end)))
+
+    rescuing_db("replace_projection", fn ->
+      StorageProjectionChanges.replace(actor, "components", token, fn ->
+        deleted = Enum.flat_map(removals, &remove_matching!(actor, &1))
+        Enum.each(puts, &do_put_component/1)
+        %{put: puts, deleted: deleted}
+      end)
+    end)
+  end
+
+  def replace_projection(%Cyfr.Actor{}, _token, _rows), do: {:error, :no_athanor}
+
+  # The rows as they stood, then gone.
+  defp remove_matching!(actor, %{publisher: publisher, name: name, version: version} = removal) do
+    query =
+      from(c in Component,
+        where: c.publisher == ^publisher and c.name == ^name and c.version == ^version
+      )
+      |> where_tenant(actor)
+
+    query =
+      case Map.get(removal, :component_type) do
+        nil -> query
+        type -> from(c in query, where: c.component_type == ^type)
+      end
+
+    query =
+      case Map.get(removal, :source) do
+        nil -> query
+        source -> from(c in query, where: c.source == ^source)
+      end
+
+    case Arca.Repo.all(query) do
+      [] ->
+        []
+
+      rows ->
+        ids = Enum.map(rows, & &1.id)
+        Arca.Repo.delete_all(from(c in Component, where: c.id in ^ids) |> where_tenant(actor))
+        rows
     end
   end
 

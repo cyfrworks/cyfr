@@ -1122,6 +1122,20 @@ defmodule Cyfr.Boundaries do
           "a bucket and the signature plug to verify. Its secrets are opened only by " <>
           "that verification, and the function that opens them leaves the connection " <>
           "once it is done."
+    },
+    %{
+      responsibility: "reconcile storage projections before any caller is known",
+      modules: ~w(Arca.StorageProjectionChanges Compendium.ProjectionReconciler),
+      check: "Arca.StorageProjectionChanges.pending_athanors/2",
+      reason:
+        "the component registry and the agent index must catch up with a change whose " <>
+          "writer died or whose notification was lost, and nobody is asking yet: the " <>
+          "reconciler's recovery reads, under the platform-scope actor alone, which " <>
+          "estates hold a seeded root whose projection is behind its epoch — one column of " <>
+          "the root rows and nothing of any tenant's content. Every estate it names is " <>
+          "then reconciled inside that estate's own context, and every replacement is " <>
+          "checked against the generations it read, so a recovery can do no more than a " <>
+          "reader of that estate would."
     }
   ]
 

@@ -456,8 +456,12 @@ defmodule Cyfr.Schedules.SchedulerTest do
     peer_node = "peer-#{System.unique_integer([:positive])}@cell"
     peer_boot = peer_node <> "#boot_a"
     assert {:ok, _} = Arca.ControlPlane.take(peer_node, peer_boot, 60_000)
+    # `take/3` recorded the peer's generation in this member's term; a
+    # later boot test in the same VM reads "no slot, known generation" as
+    # `:slot_not_held`, so the generation is forgotten with the slot.
     Arca.ControlPlane.record(:unclaimed)
     Arca.ControlPlane.forget()
+    Arca.ControlPlane.forget_generation()
 
     Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
       id: "occ_peers",

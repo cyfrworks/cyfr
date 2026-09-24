@@ -20,9 +20,10 @@ defmodule Compendium.Registry do
   - `publish_tincture_archive/4` (`source: "oci"`) — a tar+gzip tincture
     bundle, decompression-bounded (`Compendium.Archive.gunzip_bounded/2`),
     symlink-refusing, validated before a byte is stored.
-  - `register_from_arca/3` (`source: "filesystem"`) — the scanner's path
-    (`Compendium.AutoIndexer` walks the seed UNION, so bundled versions
-    get rows without a byte copied); `local` publisher only.
+  - `register_from_arca/3` (`source: "filesystem"`) — a unit of the tree
+    derived and written through the projection reconciler
+    (`Compendium.ProjectionReconciler`, `projection_plan/3`), as every
+    change of a unit under `components/` is; `local` publisher only.
   - the OCI pull (`Compendium.OCI.Client`) — stores files then registers
     with `allow_overwrite`, never into `local`.
 
@@ -35,6 +36,28 @@ defmodule Compendium.Registry do
   `:user`/`:remote` component deletes bytes FIRST, then rows, so the DB
   can never claim a deletion the tree didn't make.
 
+  ## Reads pass the projection barrier
+
+  The rows are the `components` root's projection, so `search/2`, `get/5`,
+  `get_latest/4`, `latest_row/4`, `get_blob/2`, `delete/4` and `reset/4`
+  first wait for it (`Compendium.ProjectionReconciler.await/2`): a read
+  after a successful write to the tree observes that write, or answers
+  `{:error, :projection_unavailable}` — never a silently stale row.
+
+  ## What the tree derives, and what it does not
+
+  A unit of the `local` namespace is derived from its tree: a derived row
+  replaces the unit's filesystem rows, an unchanged one is kept, one whose
+  derivation fails (a broken dependency, a missing artifact, an invalid
+  manifest) keeps the existing row, and a unit with no manifest, or
+  deleted, loses its rows and runs the name-level cascade after the
+  replacement commits. A row that was published or pulled
+  (`Compendium.Source.remote?/1`) is not derivable from the tree: a change
+  of its unit keeps it while the unit stands and removes it when the unit
+  is deleted, and its ingress writes it directly. Registering the unit by
+  name (`register_from_arca/3`, a scan) derives it as any unit of the
+  `local` namespace.
+
   Hostname normalization uses `Compendium.RegistryHost`, archive handling
   uses `Compendium.Archive`, and name-level removal uses `Compendium.Cascade`.
   """
@@ -45,6 +68,9 @@ defmodule Compendium.Registry do
   alias Compendium.WasmValidator, as: Validator
   alias Compendium.DependencyResolver
   alias Compendium.ComponentPath
+  alias Compendium.ProjectionReconciler
+
+  @root "components"
 
   # ============================================================================
   # Public API
@@ -323,15 +349,22 @@ defmodule Compendium.Registry do
   end
 
   @doc """
-  Register a component from Arca segments (storage-adapter-agnostic).
-
-  Used by `Compendium.AutoIndexer` after an `Arca.list_recursive/2` scan.
-  Reads manifest + WASM via `Arca`, so it works on the Local FS adapter and
-  any configured object-store adapter without code changes.
+  Register the component a version directory of the tree holds: derive
+  its row from the manifest and artifact there and write it through the
+  projection reconciler, which acknowledges the unit in the same
+  transaction (`Compendium.ProjectionReconciler.reconcile/3`). Every other
+  pending change of the root is reconciled with it.
 
   The directory names the component's identity. A manifest may omit
   `name`/`version`/`type`/`publisher`, but one that disagrees with its
   directory is refused with `{:error, {:manifest_identity_mismatch, _}}`.
+
+  Answers the row written, `{:ok, :unchanged}` when the derivation equals
+  the row that stands (or the row is a published or pulled one the tree
+  does not derive), or why the unit derives no row — the existing row is
+  kept, except for a unit with no manifest, whose rows go.
+  `{:error, :projection_unavailable}` when the unit's change is still
+  pending or three replacements conflicted.
 
   ## Parameters
 
@@ -341,15 +374,183 @@ defmodule Compendium.Registry do
   - `opts` - `:force` re-registers an unchanged component
   """
   def register_from_arca(%Context{} = ctx, segments, opts \\ []) when is_list(segments) do
-    with {:ok, manifest} <- read_manifest_arca(ctx, segments),
-         {:ok, publisher, component_type, name, version} <- infer_segment_metadata(segments),
+    with {:ok, publisher, _type, _name, _version} <- infer_segment_metadata(segments),
+         :ok <- validate_register_namespace(publisher) do
+      {@root, key} = Arca.Storage.UnitLocator.unit_key(segments)
+      force = if Keyword.get(opts, :force, false), do: [key], else: []
+
+      case ProjectionReconciler.reconcile(ctx, @root, units: [key], force: force) do
+        {:ok, %{outcomes: outcomes}} -> registered(Map.get(outcomes, key, :pending))
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  defp registered({:registered, component}), do: {:ok, component}
+  defp registered(:unchanged), do: {:ok, :unchanged}
+  defp registered({:kept, :direct}), do: {:ok, :unchanged}
+  defp registered({:kept, {:error, reason}}), do: {:error, reason}
+  defp registered({:removed, reason}), do: {:error, reason}
+  defp registered(:pending), do: {:error, :projection_unavailable}
+
+  @doc false
+  # The registry's part of a `components` reconciliation: for every ready
+  # unit `token` names, what becomes of its rows — `put:` rows to write,
+  # `delete:` removals, the `outcomes` by unit key and the keys whose rows
+  # `changed`. A unit still pending is `:pending` and left as it is.
+  # Reads the rows and the tree directly: this runs behind the barrier.
+  @spec projection_plan(Context.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def projection_plan(%Context{} = ctx, %{units: units}, opts) do
+    force = MapSet.new(Keyword.get(opts, :force, []))
+    asked = MapSet.new(Keyword.get(opts, :units, []))
+
+    with {:ok, rows} <-
+           Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), limit: :none) do
+      held =
+        Enum.group_by(
+          rows,
+          &{ComponentPath.normalize_publisher(&1.publisher), &1.name, &1.version}
+        )
+
+      steps =
+        for unit <- units do
+          if unit.ready,
+            do: {unit.unit_key, plan_unit(ctx, unit, held, force, asked)},
+            else: {unit.unit_key, {:pending, []}}
+        end
+
+      {:ok,
+       %{
+         outcomes: Map.new(steps, fn {key, {outcome, _ops}} -> {key, outcome} end),
+         put: for({_key, {_outcome, ops}} <- steps, {:put, row} <- ops, do: row),
+         delete: for({_key, {_outcome, ops}} <- steps, {:delete, removal} <- ops, do: removal),
+         changed: for({key, {_outcome, [_ | _]}} <- steps, do: key)
+       }}
+    end
+  end
+
+  # A unit a caller asked for by name (a register, a scan) is derived
+  # whatever its row's source, as the registration it asks for always
+  # was; a change the tree merely made keeps a published or pulled row.
+  defp plan_unit(ctx, %{unit_key: key, tombstone: tombstone?}, held, force, asked) do
+    segments = Arca.Storage.UnitLocator.unit_path(@root, key)
+
+    case ComponentPath.parse(segments) do
+      {:ok, %{rest: [], publisher: publisher, name: name, version: version}} ->
+        identity = %{publisher: publisher, name: name, version: version}
+        existing = Map.get(held, {publisher, name, version}, [])
+
+        cond do
+          tombstone? ->
+            {{:removed, missing_manifest()}, removal(existing, identity)}
+
+          validate_register_namespace(publisher) != :ok ->
+            {{:kept, :not_derivable}, []}
+
+          not MapSet.member?(asked, key) and
+              Enum.any?(existing, &Compendium.Source.remote?(&1.source)) ->
+            {{:kept, :direct}, []}
+
+          true ->
+            derived(ctx, segments, identity, existing, MapSet.member?(force, key))
+        end
+
+      _not_a_version_dir ->
+        {{:kept, :not_a_unit}, []}
+    end
+  end
+
+  defp derived(ctx, segments, identity, existing, force?) do
+    filesystem = Map.put(identity, :source, Compendium.Source.filesystem())
+
+    # The path's type is the truth a derived row follows, so it replaces
+    # whatever this name and version held under any type: every row a
+    # derivation may replace — a published one only when the unit was
+    # asked for, since only then is one there to replace.
+    replaced =
+      if Enum.any?(existing, &Compendium.Source.remote?(&1.source)),
+        do: identity,
+        else: filesystem
+
+    case derive_unit(ctx, segments) do
+      {:ok, component} ->
+        if not force? and Enum.any?(existing, &same_release?(&1, component)),
+          do: {:unchanged, []},
+          else: {{:registered, component}, [{:delete, replaced}, {:put, component}]}
+
+      {:error, {:missing_manifest, _} = reason} ->
+        {{:removed, reason}, removal(existing, filesystem)}
+
+      {:error, reason} ->
+        {{:kept, {:error, reason}}, []}
+    end
+  end
+
+  defp removal([], _identity), do: []
+  defp removal(_existing, identity), do: [{:delete, identity}]
+
+  defp missing_manifest,
+    do: {:missing_manifest, "#{ComponentPath.manifest_name()} not found"}
+
+  defp same_release?(row, component) do
+    row.component_type == component.component_type and row.digest == component.digest and
+      row.manifest == component.manifest
+  end
+
+  @doc false
+  # After a `components` replacement committed: the name-level cascade for
+  # each name that lost a row, the install announcement for each row
+  # written, and this node's execution caches swept.
+  @spec projected(Context.t(), map(), [map()]) :: :ok
+  def projected(%Context{} = ctx, plan, removed) do
+    removed
+    |> Enum.uniq_by(&{&1.name, ComponentPath.normalize_publisher(Map.get(&1, :publisher))})
+    |> Enum.each(&Compendium.Cascade.name_removed(ctx, &1))
+
+    for {:registered, component} <- Map.values(plan.outcomes) do
+      :telemetry.execute(
+        [:cyfr, :compendium, :component, :install],
+        %{system_time: System.system_time()},
+        %{
+          name: component.name,
+          version: component.version,
+          publisher: component.publisher,
+          component_type: component.component_type,
+          digest: component.digest,
+          athanor_id: ctx.athanor_id,
+          user_id: ctx.user_id
+        }
+      )
+    end
+
+    invalidate_executor_caches(ctx)
+    :ok
+  end
+
+  # The row a version directory's tree derives, or why it derives none.
+  # The path is read first, then the manifest, then the artifact.
+  defp derive_unit(ctx, segments) do
+    with {:ok, publisher, component_type, name, version} <- infer_segment_metadata(segments),
+         {:ok, manifest} <- read_manifest_arca(ctx, segments),
          :ok <- validate_register_namespace(publisher),
          :ok <- validate_manifest_identity(manifest, publisher, component_type, name, version),
          :ok <- validate_name(name),
          :ok <- validate_version(version),
          :ok <- validate_manifest_capability_blocks(manifest),
          {:ok, validation} <- validate_artifact_arca(ctx, segments, component_type) do
-      do_register(ctx, manifest, publisher, component_type, name, version, validation, opts)
+      metadata = build_metadata_from_manifest(manifest, component_type)
+      {:ok, manifest_json} = Jason.encode(manifest)
+
+      with {:ok, component} <-
+             build_component(ctx, name, version, metadata, validation, publisher,
+               source: Compendium.Source.filesystem(),
+               manifest: manifest_json,
+               manifest_map: manifest
+             ),
+           # Refs validate before any row moves: a manifest gone
+           # dep-broken keeps the existing row standing.
+           :ok <- validate_dependencies(component, manifest),
+           do: {:ok, component}
     end
   end
 
@@ -387,121 +588,6 @@ defmodule Compendium.Registry do
     end
   end
 
-  defp do_register(ctx, manifest, publisher, component_type, name, version, validation, opts) do
-    force = Keyword.get(opts, :force, false)
-    metadata = build_metadata_from_manifest(manifest, component_type)
-    {:ok, manifest_json} = Jason.encode(manifest)
-
-    if !force &&
-         content_matches?(
-           ctx,
-           name,
-           version,
-           validation.digest,
-           manifest_json,
-           publisher,
-           Map.fetch!(metadata, :type)
-         ) do
-      {:ok, :unchanged}
-    else
-      with {:ok, component} <-
-             build_component(ctx, name, version, metadata, validation, publisher,
-               source: Compendium.Source.filesystem(),
-               manifest: manifest_json,
-               manifest_map: manifest
-             ),
-           # Refs validate BEFORE any row moves: a re-scan of a manifest
-           # gone dep-broken must leave the existing row standing, not
-           # replace it and then report failure.
-           :ok <- validate_dependencies(component, manifest) do
-        # Replace whatever type this name:version held — the path's type
-        # segment is the truth the row follows.
-        Arca.ComponentStorage.delete_component(
-          Sanctum.Context.actor(ctx),
-          name,
-          version,
-          publisher,
-          nil
-        )
-
-        with {:ok, _} <- put_component(ctx, component) do
-          invalidate_executor_caches(ctx)
-
-          :telemetry.execute(
-            [:cyfr, :compendium, :component, :install],
-            %{system_time: System.system_time()},
-            %{
-              name: name,
-              version: version,
-              publisher: publisher,
-              component_type: Map.fetch!(metadata, :type),
-              digest: validation.digest,
-              athanor_id: ctx.athanor_id,
-              user_id: ctx.user_id
-            }
-          )
-
-          {:ok, component}
-        end
-      end
-    end
-  end
-
-  @doc """
-  Prune stale filesystem-registered entries.
-
-  Removes SQLite rows with `source: "filesystem"` that are not in the given
-  set of currently-discovered `{name, version, publisher}` tuples.
-
-  Returns `{:ok, pruned_count}` — or `{:error, term}` when the existing
-  rows cannot be listed (the row-plane convention; a store that cannot
-  answer must not read as "nothing is stale").
-  """
-  @spec prune_stale_entries(Context.t(), [{String.t(), String.t(), String.t()}]) ::
-          {:ok, non_neg_integer()} | {:error, term()}
-  def prune_stale_entries(%Context{} = ctx, discovered_components) do
-    with {:ok, existing} <-
-           Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
-             source: Compendium.Source.filesystem(),
-             limit: :none
-           ) do
-      discovered_set = MapSet.new(discovered_components)
-
-      stale =
-        Enum.filter(existing, fn comp ->
-          publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
-          not MapSet.member?(discovered_set, {comp.name, comp.version, publisher})
-        end)
-
-      for comp <- stale do
-        publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
-        # DB-only cleanup: remove the registry entry.
-        # Do NOT delete filesystem files — prune is an automatic process that runs
-        # during scan/register. If a component temporarily fails to be discovered
-        # (mid-edit, transient error), we must not destroy user source files.
-        # File deletion only happens via explicit `component.delete` (Registry.delete).
-        Arca.ComponentStorage.delete_component(
-          Sanctum.Context.actor(ctx),
-          comp.name,
-          comp.version,
-          publisher,
-          nil
-        )
-      end
-
-      # After all deletions, clean up name-level entries for components with no remaining versions
-      stale
-      |> Enum.uniq_by(fn comp ->
-        {comp.name, ComponentPath.normalize_publisher(Map.get(comp, :publisher))}
-      end)
-      |> Enum.each(fn comp -> Compendium.Cascade.name_removed(ctx, comp) end)
-
-      if stale != [], do: invalidate_executor_caches(ctx)
-
-      {:ok, length(stale)}
-    end
-  end
-
   @doc """
   Search for components in the local registry.
 
@@ -529,6 +615,12 @@ defmodule Compendium.Registry do
 
     opts = if query = filters[:query], do: Keyword.put(opts, :query, query), else: opts
 
+    with :ok <- ProjectionReconciler.await(ctx, @root) do
+      search_rows(ctx, opts, filters, limit)
+    end
+  end
+
+  defp search_rows(ctx, opts, filters, limit) do
     case Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), opts) do
       {:ok, results} ->
         results =
@@ -562,18 +654,24 @@ defmodule Compendium.Registry do
     if version == nil do
       {:error, :version_required}
     else
-      case Arca.ComponentStorage.get_component(
-             Sanctum.Context.actor(ctx),
-             name,
-             version,
-             publisher,
-             component_type
-           ) do
-        {:ok, row} -> {:ok, decode_row_json_fields(row)}
-        {:error, :not_found} -> {:error, :not_found}
-        # Propagate database faults unchanged.
-        {:error, reason} -> {:error, reason}
+      with :ok <- ProjectionReconciler.await(ctx, @root) do
+        get_row(ctx, name, version, publisher, component_type)
       end
+    end
+  end
+
+  defp get_row(ctx, name, version, publisher, component_type) do
+    case Arca.ComponentStorage.get_component(
+           Sanctum.Context.actor(ctx),
+           name,
+           version,
+           publisher,
+           component_type
+         ) do
+      {:ok, row} -> {:ok, decode_row_json_fields(row)}
+      {:error, :not_found} -> {:error, :not_found}
+      # Propagate database faults unchanged.
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -615,7 +713,8 @@ defmodule Compendium.Registry do
       # never a registry row; its one version is the file as it stands.
       Compendium.AgentSource.latest_row(ctx, name)
     else
-      component_latest_row(ctx, name, publisher, component_type)
+      with :ok <- ProjectionReconciler.await(ctx, @root),
+           do: component_latest_row(ctx, name, publisher, component_type)
     end
   end
 
@@ -652,6 +751,10 @@ defmodule Compendium.Registry do
   Searches for a matching component and reads its WASM file from the canonical path.
   """
   def get_blob(%Context{} = ctx, digest) when is_binary(digest) do
+    with :ok <- ProjectionReconciler.await(ctx, @root), do: blob(ctx, digest)
+  end
+
+  defp blob(ctx, digest) do
     # Direct digest lookup via indexed query (replaces O(n) linear scan)
     case Arca.ComponentStorage.get_by_digest(Sanctum.Context.actor(ctx), digest) do
       {:ok, %{component_type: "tincture"}} ->
@@ -723,6 +826,11 @@ defmodule Compendium.Registry do
           {:ok, :deleted} | {:error, :not_found | :bundled | term()}
   def delete(%Context{} = ctx, name, version, publisher_filter \\ nil)
       when is_binary(name) and is_binary(version) do
+    with :ok <- ProjectionReconciler.await(ctx, @root),
+         do: delete_row(ctx, name, version, publisher_filter)
+  end
+
+  defp delete_row(ctx, name, version, publisher_filter) do
     case Arca.ComponentStorage.get_component(
            Sanctum.Context.actor(ctx),
            name,
@@ -794,7 +902,8 @@ defmodule Compendium.Registry do
           {:ok, :reset} | {:error, term()}
   def reset(%Context{} = ctx, name, version, publisher_filter \\ nil)
       when is_binary(name) and is_binary(version) do
-    with {:ok, component} <-
+    with :ok <- ProjectionReconciler.await(ctx, @root),
+         {:ok, component} <-
            Arca.ComponentStorage.get_component(
              Sanctum.Context.actor(ctx),
              name,
@@ -1348,7 +1457,7 @@ defmodule Compendium.Registry do
   end
 
   # ---------------------------------------------------------------------------
-  # Arca-based readers (used by `register_from_arca/3`)
+  # Arca-based readers: the tree a unit's row is derived from
   # ---------------------------------------------------------------------------
 
   defp read_manifest_arca(ctx, segments) do
@@ -1493,16 +1602,6 @@ defmodule Compendium.Registry do
 
       {:error, reason} ->
         {:error, reason}
-    end
-  end
-
-  defp content_matches?(ctx, name, version, digest, manifest_json, publisher, component_type) do
-    case release_status(ctx, name, version, digest, manifest_json, publisher, component_type) do
-      :identical ->
-        true
-
-      _ ->
-        false
     end
   end
 

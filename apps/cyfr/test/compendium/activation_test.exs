@@ -344,4 +344,46 @@ defmodule Compendium.ActivationTest do
       assert nodes[key].release_digest == "sha256:forged"
     end
   end
+
+  describe "a dependency the registry cannot answer for" do
+    test "fails the resolution with its own error, never as an absent dependency", %{ctx: ctx} do
+      root =
+        publish!(ctx, "agent-caller",
+          type: "formula",
+          manifest: %{
+            "dependencies" => %{
+              "static" => [%{"ref" => "agent:local.scout", "optional" => true}]
+            }
+          }
+        )
+
+      # No such agent: an optional dependency that is not there is absent.
+      assert {:ok, %{graph: graph}} = Activation.resolve(ctx, root)
+      assert Map.keys(graph) == ["formula:local.agent-caller"]
+
+      # A roster that cannot be read says nothing about whether the agent
+      # is there.
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["aqua", "roles"], "not a directory")
+      Registry.invalidate_executor_caches(ctx)
+
+      assert {:error, :enotdir} = Activation.resolve(ctx, root)
+      assert {:error, :enotdir} = Activation.resolve_verified(ctx, root)
+    end
+
+    test "a registry behind its tree answers unavailable before the cache is asked", %{ctx: ctx} do
+      component = publish!(ctx, "behind")
+      assert {:ok, _} = Activation.resolve(ctx, component)
+
+      # A change of a unit whose bytes are still moving.
+      {:ok, _pending} =
+        Arca.StorageProjectionChanges.begin_edit(
+          Sanctum.Context.actor(ctx),
+          "components",
+          "reagents/local/behind/1.0.0"
+        )
+
+      assert {:error, :projection_unavailable} = Activation.resolve(ctx, component)
+      assert {:error, :projection_unavailable} = Activation.resolve_verified(ctx, component)
+    end
+  end
 end

@@ -21,12 +21,20 @@ defmodule Compendium.Activation do
 
   Resolution is **all or nothing** over what the manifest requires. A node
   whose release digest is missing (a row published before release digests
-  existed) or whose required dependency cannot be found makes the whole
+  existed) or whose required dependency is not installed makes the whole
   activation `:incomplete`, and nothing is recorded — a partial graph
   would read as a complete attestation. A dependency the manifest marks
   `optional` and that is not installed is simply absent from the graph:
   the attestation covers what can run, and when the component arrives the
-  graph — and so the digest — changes with it.
+  graph — and so the digest — changes with it. Only a dependency the
+  registry answers `:not_found` for is not installed; any other answer —
+  a store that cannot answer, a registry projection not yet caught up —
+  is the resolution's own error, never an absence.
+
+  The rows are the `components` root's projection, so a resolution first
+  waits for it (`Compendium.ProjectionReconciler.await/2`), before its
+  cache is asked: `{:error, :projection_unavailable}` rather than a graph
+  of rows the tree has moved past.
   """
 
   alias Sanctum.Context
@@ -41,6 +49,10 @@ defmodule Compendium.Activation do
   @type error ::
           {:incomplete, :missing_release_digest | :unresolvable_dependency | :depth_exceeded}
           | {:invalid_graph, JCS.error()}
+          | :projection_unavailable
+          | :unavailable
+          | :database_error
+          | :no_athanor
 
   # A resolved graph is a function of the athanor's registered rows; it is
   # cached briefly per root (node key + release digest) and swept when the
@@ -56,6 +68,11 @@ defmodule Compendium.Activation do
   """
   @spec resolve(Context.t(), map()) :: {:ok, t()} | {:error, error()}
   def resolve(%Context{} = ctx, component) when is_map(component) do
+    with :ok <- Compendium.ProjectionReconciler.await(ctx, "components"),
+         do: resolve_current(ctx, component)
+  end
+
+  defp resolve_current(ctx, component) do
     case cache_key(ctx, component) do
       nil ->
         resolve_uncached(ctx, component)
@@ -119,7 +136,8 @@ defmodule Compendium.Activation do
           {:ok, %{digest: String.t(), graph: graph(), nodes: %{String.t() => verified_node()}}}
           | {:error, error()}
   def resolve_verified(%Context{} = ctx, component) when is_map(component) do
-    with {:ok, rows} <- walk(ctx, component, %{}, 0),
+    with :ok <- Compendium.ProjectionReconciler.await(ctx, "components"),
+         {:ok, rows} <- walk(ctx, component, %{}, 0),
          graph = graph_from_rows(rows),
          {:ok, digest} <- hash_graph(graph) do
       # Deliberately uncached (verification must be fresh) — but it is the
@@ -200,14 +218,19 @@ defmodule Compendium.Activation do
             {:error, _} = error -> {:halt, error}
           end
 
-        {:error, _} ->
+        {:error, :not_found} ->
           if dep.optional == true,
             do: {:cont, {:ok, acc}},
             else: {:halt, {:error, {:incomplete, :unresolvable_dependency}}}
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
   end
 
+  # Behind the barrier `resolve/2` passed: the rows read here are the
+  # projection it waited for.
   defp resolve_dependency(ctx, dep) do
     if dep.dep_version do
       Arca.ComponentStorage.get_component(

@@ -18,8 +18,9 @@ defmodule Cyfr.Files do
       component version directory of the `local` publisher, the soul, a
       role or a scroll. Units are made and removed by their own verbs
       (scaffold, pull, fork, the AQUA page); a unit the server ships is
-      restored, never deleted. A write here keeps the registry and the
-      agent index in step with the tree.
+      restored, never deleted. The storage layer stamps a write here for
+      the registry and the agent index, and their next read reflects it
+      (`Compendium.ProjectionReconciler`).
     * `:read` (`notes/`, `threads/`) — listed, read and downloaded;
       written only by their own surfaces.
 
@@ -130,9 +131,9 @@ defmodule Cyfr.Files do
 
   @doc """
   Put `content` at `path` — `utf8` text, or bytes as `base64`. The tier
-  decides whether the write may land, the storage cap whether it fits,
-  and a write inside a shaped unit keeps the unit's row or index in step.
-  A component's manifest must decode and validate as one.
+  decides whether the write may land and the storage cap whether it fits;
+  a read of the registry or the agent index after it observes it. A
+  component's manifest must decode and validate as one.
   """
   @spec write(Context.t(), String.t(), String.t(), String.t()) ::
           {:ok, %{written: String.t(), size: non_neg_integer()}} | {:error, term()}
@@ -144,7 +145,6 @@ defmodule Cyfr.Files do
          :ok <- writable(tier, physical, segments),
          :ok <- valid_content(physical, bytes),
          :ok <- put(ctx, physical, path, bytes) do
-      refresh_unit(ctx, physical)
       {:ok, %{written: join(segments), size: byte_size(bytes)}}
     end
   end
@@ -157,8 +157,8 @@ defmodule Cyfr.Files do
   was given, so a writer that landed in between — another edit, a
   publish, a pull, a reset — is read again rather than overwritten, and
   neither edit is lost. A file still moving after the last attempt is a
-  conflict the caller may retry. The tier, size and content checks and
-  the unit refresh are `write/4`'s.
+  conflict the caller may retry. The tier, size and content checks are
+  `write/4`'s.
   """
   @spec update(Context.t(), String.t(), (String.t() -> {:ok, String.t()} | {:error, term()})) ::
           {:ok, %{written: String.t()}} | {:error, term()}
@@ -166,7 +166,6 @@ defmodule Cyfr.Files do
     with {:ok, segments, physical, tier} <- resolve_file(path),
          :ok <- writable(tier, physical, segments),
          :ok <- serialized_update(ctx, physical, path, fun) do
-      refresh_unit(ctx, physical)
       {:ok, %{written: join(segments)}}
     end
   end
@@ -181,7 +180,6 @@ defmodule Cyfr.Files do
     with {:ok, segments, physical, tier} <- resolve_file(path),
          :ok <- deletable(tier, physical, segments),
          :ok <- remove(ctx, physical, path) do
-      refresh_unit(ctx, physical)
       {:ok, %{deleted: join(segments)}}
     end
   end
@@ -431,44 +429,6 @@ defmodule Cyfr.Files do
   defp storage_error(verb, path, reason) do
     Logger.error("[Cyfr.Files] #{verb} #{path} failed: #{inspect(reason)}")
     {:error, {:unavailable, "Storage"}}
-  end
-
-  # A change inside a shaped unit is reflected where the unit is
-  # indexed: a component's row is re-registered from its tree, the AQUA
-  # index is rewritten. Best effort — a unit mid-edit may not register
-  # yet, and the write itself has already landed.
-  defp refresh_unit(ctx, physical) do
-    case Arca.Storage.locate(physical) do
-      {:dir, ["components" | _] = unit, _sentinel} ->
-        case Compendium.Registry.register_from_arca(ctx, unit) do
-          {:ok, _} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.info(
-              "[Cyfr.Files] #{Enum.join(unit, "/")} not re-registered: #{inspect(reason)}"
-            )
-        end
-
-      {kind, ["aqua" | _] = _unit} when kind == :file ->
-        sync_agents(ctx)
-
-      {:dir, ["aqua" | _], _sentinel} ->
-        sync_agents(ctx)
-
-      _not_a_unit ->
-        :ok
-    end
-  end
-
-  defp sync_agents(ctx) do
-    case Compendium.AgentIndex.sync(ctx) do
-      {:ok, _} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[Cyfr.Files] agent index not synced: #{inspect(reason)}")
-    end
   end
 
   # ---- content ---------------------------------------------------------------
