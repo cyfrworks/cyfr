@@ -56,7 +56,7 @@ defmodule PrismWeb.FilesLive do
   def handle_info(:load, socket), do: {:noreply, load(socket)}
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

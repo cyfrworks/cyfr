@@ -899,12 +899,12 @@ defmodule Arca.ThreadStorage do
   @doc "A message's `payload` decoded (`%{}` when none)."
   @spec payload(map()) :: map()
   def payload(%{payload: nil}), do: %{}
-  def payload(%{payload: json}), do: decode_map(json)
+  def payload(%{payload: json}), do: decode_map(json, "payload")
 
   @doc "A message's `resolution` decoded (`%{}` when none)."
   @spec resolution(map()) :: map()
   def resolution(%{resolution: nil}), do: %{}
-  def resolution(%{resolution: json}), do: decode_map(json)
+  def resolution(%{resolution: json}), do: decode_map(json, "resolution")
 
   # ---------------------------------------------------------------------------
   # Restart recovery / retention
@@ -1011,10 +1011,29 @@ defmodule Arca.ThreadStorage do
   defp encode_json(value) when is_binary(value), do: value
   defp encode_json(value), do: Jason.encode!(value)
 
-  defp decode_map(json) do
-    case Cyfr.Json.decode_or(json, %{}, "Arca.ThreadStorage.decode_map") do
+  defp decode_map(json, field) do
+    case decode_stored(json, %{}, field) do
       %{} = map -> map
       _ -> %{}
+    end
+  end
+
+  # A stored JSON column that does not decode reads as its default. The
+  # line names the column and its size, never its bytes.
+  defp decode_stored(nil, default, _field), do: default
+  defp decode_stored("", default, _field), do: default
+
+  defp decode_stored(json, default, field) when is_binary(json) do
+    case Cyfr.Json.decode(json) do
+      {:ok, value} ->
+        value
+
+      {:error, :invalid_json} ->
+        Logger.warning(
+          "[Arca.ThreadStorage] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
+        )
+
+        default
     end
   end
 end

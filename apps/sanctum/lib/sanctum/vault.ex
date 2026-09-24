@@ -321,8 +321,8 @@ defmodule Sanctum.Vault do
       provider_hint: entry.provider_hint,
       status: entry.status,
       provenance: entry.provenance,
-      field_names: decode_list(entry.field_names),
-      oauth_scopes: decode_list(entry.oauth_scopes),
+      field_names: decode_list(entry.field_names, "field_names"),
+      oauth_scopes: decode_list(entry.oauth_scopes, "oauth_scopes"),
       payload_rev: entry.payload_rev,
       last_used_at: entry.last_used_at
     }
@@ -365,7 +365,7 @@ defmodule Sanctum.Vault do
   end
 
   defp check_schema(entry, fields) do
-    declared = decode_list(entry.field_names)
+    declared = decode_list(entry.field_names, "field_names")
     provided = Enum.sort(Map.keys(fields))
 
     if provided == declared do
@@ -429,14 +429,31 @@ defmodule Sanctum.Vault do
   defp encode_optional_list(list) when is_list(list), do: Jason.encode!(list)
   defp encode_optional_list(json) when is_binary(json), do: json
 
-  defp decode_list(nil), do: []
+  defp decode_list(nil, _field), do: []
 
-  defp decode_list(json) when is_binary(json) do
-    # Through `Cyfr.Json`: corruption in a stored column is logged under a
-    # label, never silently flattened to the default.
-    case Cyfr.Json.decode_or(json, [], "Sanctum.Vault.decode_list") do
+  defp decode_list(json, field) when is_binary(json) do
+    case decode_stored(json, [], field) do
       list when is_list(list) -> Enum.sort(Enum.filter(list, &is_binary/1))
       _ -> []
+    end
+  end
+
+  # A stored JSON column that does not decode reads as its default. The
+  # line names the column and its size, never its bytes. `decode_list/2`
+  # answers nil itself.
+  defp decode_stored("", default, _field), do: default
+
+  defp decode_stored(json, default, field) when is_binary(json) do
+    case Cyfr.Json.decode(json) do
+      {:ok, value} ->
+        value
+
+      {:error, :invalid_json} ->
+        Logger.warning(
+          "[Sanctum.Vault] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
+        )
+
+        default
     end
   end
 

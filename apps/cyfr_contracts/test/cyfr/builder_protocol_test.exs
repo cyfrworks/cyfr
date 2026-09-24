@@ -589,8 +589,8 @@ defmodule Cyfr.BuilderProtocolTest do
       assert_raise FunctionClauseError, fn -> BuilderProtocol.route(:backends) end
     end
 
-    test "the release is this application's version" do
-      assert BuilderProtocol.release() == to_string(Application.spec(:cyfr_contracts, :vsn))
+    test "the release is this build's version" do
+      assert BuilderProtocol.release() == Cyfr.Version.current()
     end
   end
 

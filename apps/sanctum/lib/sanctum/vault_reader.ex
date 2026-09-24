@@ -125,9 +125,9 @@ defmodule Sanctum.VaultReader do
   def binding_digest(entry) do
     input = %{
       "provider_hint" => entry.provider_hint || "",
-      "field_names" => decode_list(entry.field_names),
-      "oauth_endpoints" => decode_map(entry.oauth_endpoints),
-      "oauth_scopes" => decode_list(entry.oauth_scopes)
+      "field_names" => decode_list(entry.field_names, "field_names"),
+      "oauth_endpoints" => decode_map(entry.oauth_endpoints, "oauth_endpoints"),
+      "oauth_scopes" => decode_list(entry.oauth_scopes, "oauth_scopes")
     }
 
     JCS.hash(input)
@@ -266,7 +266,7 @@ defmodule Sanctum.VaultReader do
   # silently served with a broader token.
   defp check_scope_projection(entry, %{projection: %{scopes: scopes}})
        when is_list(scopes) and scopes != [] do
-    case scopes -- decode_list(entry.oauth_scopes) do
+    case scopes -- decode_list(entry.oauth_scopes, "oauth_scopes") do
       [] -> :ok
       missing -> {:error, {:scope_projection_unsatisfiable, Enum.sort(missing)}}
     end
@@ -290,21 +290,40 @@ defmodule Sanctum.VaultReader do
   defp projection_fields(%{projection: %{fields: fields}}) when is_list(fields), do: fields
   defp projection_fields(_), do: :all
 
-  defp decode_list(nil), do: []
+  defp decode_list(nil, _field), do: []
 
-  defp decode_list(json) when is_binary(json) do
-    case Cyfr.Json.decode_or(json, [], "Sanctum.VaultReader.decode_list") do
+  defp decode_list(json, field) when is_binary(json) do
+    case decode_stored(json, [], field) do
       list when is_list(list) -> Enum.sort(Enum.filter(list, &is_binary/1))
       _ -> []
     end
   end
 
-  defp decode_map(nil), do: %{}
+  defp decode_map(nil, _field), do: %{}
 
-  defp decode_map(json) when is_binary(json) do
-    case Cyfr.Json.decode_or(json, %{}, "Sanctum.VaultReader.decode_map") do
+  defp decode_map(json, field) when is_binary(json) do
+    case decode_stored(json, %{}, field) do
       %{} = map -> map
       _ -> %{}
+    end
+  end
+
+  # A stored JSON column that does not decode reads as its default. The
+  # line names the column and its size, never its bytes. `decode_list/2`
+  # and `decode_map/2` answer nil themselves.
+  defp decode_stored("", default, _field), do: default
+
+  defp decode_stored(json, default, field) when is_binary(json) do
+    case Cyfr.Json.decode(json) do
+      {:ok, value} ->
+        value
+
+      {:error, :invalid_json} ->
+        Logger.warning(
+          "[Sanctum.VaultReader] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
+        )
+
+        default
     end
   end
 end

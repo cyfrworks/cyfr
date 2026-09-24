@@ -860,11 +860,24 @@ defmodule Cyfr.Execution.Admission do
   # The needs a manifest declares name the component's own dependency roles
   # — the caller's vocabulary, never the callee's. Sorted for stability.
   defp declared_needs(run) do
-    run.component["manifest"]
-    |> Cyfr.Manifest.decode()
+    run
+    |> manifest()
     |> Map.get("needs", %{})
     |> Map.keys()
     |> Enum.sort()
+  end
+
+  # A manifest that does not decode declares no needs. The line names the
+  # component, never the manifest's bytes.
+  defp manifest(run) do
+    case Cyfr.Manifest.decode_strict(run.component["manifest"]) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Cyfr.Execution.Admission] manifest malformed: #{run.component_ref}")
+        %{}
+    end
   end
 
   defp load(ctx, reference, select, pinned, opts) do

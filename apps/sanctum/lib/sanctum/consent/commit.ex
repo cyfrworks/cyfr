@@ -314,7 +314,7 @@ defmodule Sanctum.Consent.Commit do
          {:ok, shape_digest} <- shape_for_scope(shape_input, scope, component),
          {:ok, profile_id, expected_revision} <-
            Plan.locate_profile(ctx, source_ref, label, kind),
-         declared = declared_needs(component),
+         declared = declared_needs(component, source_ref),
          {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published, declared),
          {:ok, selections} <-
            prepared_selections(ctx, decisions, published, activation, source_ref),
@@ -530,7 +530,7 @@ defmodule Sanctum.Consent.Commit do
   defp node_manifest(ctx, node_key) do
     with {:ok, ref} <- Cyfr.ComponentRef.parse(node_key),
          {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-      {:ok, Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))}
+      {:ok, manifest(row, node_key)}
     end
   end
 
@@ -576,10 +576,23 @@ defmodule Sanctum.Consent.Commit do
 
   defp selected_fields(fields, _unprojected, _dep), do: {:ok, Enum.sort(fields)}
 
-  defp declared_needs(component) do
-    (Map.get(component, :manifest) || Map.get(component, "manifest"))
-    |> Cyfr.Manifest.decode()
+  defp declared_needs(component, source_ref) do
+    component
+    |> manifest(source_ref)
     |> Cyfr.Manifest.Needs.from_manifest()
+  end
+
+  # A manifest that does not decode declares nothing. The line names the
+  # component, never the manifest's bytes.
+  defp manifest(row, ref) do
+    case Cyfr.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Sanctum.Consent.Commit] manifest malformed: #{ref}")
+        %{}
+    end
   end
 
   # Apply public limits to the source and make storage read-only unless

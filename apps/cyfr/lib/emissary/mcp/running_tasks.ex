@@ -238,7 +238,7 @@ defmodule Emissary.MCP.RunningTasks do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

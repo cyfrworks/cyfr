@@ -101,7 +101,7 @@ defmodule PrismWeb.ComponentDetailLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Cyfr.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

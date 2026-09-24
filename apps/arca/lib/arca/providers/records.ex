@@ -840,9 +840,9 @@ defmodule Arca.Providers.Records do
       duration_ms: Map.get(exec, :duration_ms),
       status: Map.get(exec, :status),
       error_message: Map.get(exec, :error_message),
-      input: decode_json(Map.get(exec, :input)),
-      output: decode_json(Map.get(exec, :output)),
-      host_policy: decode_json(Map.get(exec, :host_policy)),
+      input: decode_json(Map.get(exec, :input), "input"),
+      output: decode_json(Map.get(exec, :output), "output"),
+      host_policy: decode_json(Map.get(exec, :host_policy), "host_policy"),
       parent_execution_id: Map.get(exec, :parent_execution_id)
     }
   end
@@ -862,8 +862,8 @@ defmodule Arca.Providers.Records do
       duration_ms: log.duration_ms,
       routed_to: log.routed_to,
       error_code: log.error_code,
-      input: decode_json(log.input),
-      output: decode_json(log.output),
+      input: decode_json(log.input, "input"),
+      output: decode_json(log.output, "output"),
       error: log.error
     }
   end
@@ -879,24 +879,38 @@ defmodule Arca.Providers.Records do
       component_ref: log.component_ref,
       component_type: log.component_type,
       decision: log.decision,
-      host_policy_snapshot: decode_json(log.host_policy_snapshot),
+      host_policy_snapshot: decode_json(log.host_policy_snapshot, "host_policy_snapshot"),
       decision_reason: log.decision_reason
     }
   end
 
-  defp decode_json(nil), do: nil
+  defp decode_json(nil, _field), do: nil
 
-  # A policy-audit field: corrupt JSON must read AS corruption, never
-  # silently pass through as a string where a map was recorded.
-  defp decode_json(str) when is_binary(str) do
-    Cyfr.Json.decode_or(
-      str,
-      %{"_decode_error" => "stored snapshot was not valid JSON"},
-      "Arca.Providers.Records"
-    )
+  # An audit field: corrupt JSON must read AS corruption, never silently
+  # pass through as a string where a map was recorded.
+  defp decode_json(str, field) when is_binary(str),
+    do: decode_stored(str, %{"_decode_error" => "stored snapshot was not valid JSON"}, field)
+
+  defp decode_json(val, _field), do: val
+
+  # A stored JSON column that does not decode reads as its default. The
+  # line names the column and its size, never its bytes. `decode_json/2`
+  # answers nil itself.
+  defp decode_stored("", default, _field), do: default
+
+  defp decode_stored(json, default, field) when is_binary(json) do
+    case Cyfr.Json.decode(json) do
+      {:ok, value} ->
+        value
+
+      {:error, :invalid_json} ->
+        Logger.warning(
+          "[Arca.Providers.Records] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
+        )
+
+        default
+    end
   end
-
-  defp decode_json(val), do: val
 
   defp parse_since_opt(opts, nil), do: {:ok, opts}
 

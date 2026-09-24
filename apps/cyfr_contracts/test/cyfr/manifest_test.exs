@@ -4,6 +4,8 @@
 defmodule Cyfr.ManifestTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Cyfr.Manifest
 
   describe "decode/1" do
@@ -32,6 +34,23 @@ defmodule Cyfr.ManifestTest do
     test "returns empty map for unexpected types" do
       assert Manifest.decode(42) == %{}
       assert Manifest.decode(:atom) == %{}
+    end
+
+    # A malformed manifest may carry anything, a credential included; the
+    # caller for which "no declarations" is a gap logs its component ref.
+    test "logs nothing for a manifest that does not decode" do
+      malformed = ~s({"needs": {"token": "sk-live-abcdef"})
+
+      # Other async modules log while this one runs; only this module's
+      # words and the manifest's bytes are looked for.
+      log =
+        capture_log(fn ->
+          assert Manifest.decode(malformed) == %{}
+          assert Manifest.decode(~s(["sk-live-abcdef"])) == %{}
+        end)
+
+      refute log =~ "Cyfr.Manifest"
+      refute log =~ "sk-live"
     end
   end
 

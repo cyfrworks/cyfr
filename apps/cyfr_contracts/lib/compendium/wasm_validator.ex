@@ -41,8 +41,6 @@ defmodule Compendium.WasmValidator do
       # => {:error, :invalid_magic_bytes}
   """
 
-  require Logger
-
   # WASM magic bytes: \0asm
   @wasm_magic <<0x00, 0x61, 0x73, 0x6D>>
 
@@ -302,20 +300,9 @@ defmodule Compendium.WasmValidator do
         {:error, reason}
     end
   rescue
-    # Pattern match errors indicate malformed WASM structure
-    MatchError ->
-      Logger.warning(
-        "[Compendium.WasmValidator] Could not parse WASM exports section (pattern match failed)"
-      )
-
-      {:error, :wasm_parse_failed}
-
-    FunctionClauseError ->
-      Logger.warning(
-        "[Compendium.WasmValidator] Unexpected section format in WASM (function clause failed)"
-      )
-
-      {:error, :wasm_parse_failed}
+    # A pattern or clause that does not match is a malformed WASM structure.
+    MatchError -> {:error, :wasm_parse_failed}
+    FunctionClauseError -> {:error, :wasm_parse_failed}
   end
 
   # Parse all sections into a map of section_id => content
@@ -353,11 +340,7 @@ defmodule Compendium.WasmValidator do
       {:ok, count, rest} ->
         parse_exports_vec(rest, count, [])
 
-      {:error, reason} ->
-        Logger.warning(
-          "[Compendium.WasmValidator] Failed to parse export section header: #{inspect(reason)}"
-        )
-
+      {:error, _reason} ->
         {:error, :export_section_parse_failed}
     end
   end
@@ -369,11 +352,7 @@ defmodule Compendium.WasmValidator do
       {:ok, name, kind, rest} ->
         parse_exports_vec(rest, count - 1, [{name, kind} | acc])
 
-      {:error, reason} ->
-        Logger.warning(
-          "[Compendium.WasmValidator] Failed to parse export entry (#{count} remaining): #{inspect(reason)}"
-        )
-
+      {:error, _reason} ->
         {:error, :export_entry_parse_failed}
     end
   end

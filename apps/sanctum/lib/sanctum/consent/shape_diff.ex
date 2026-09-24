@@ -20,6 +20,8 @@ defmodule Sanctum.Consent.ShapeDiff do
 
   alias Cyfr.Authority.Blob
 
+  require Logger
+
   @egress ~w(domains methods schemes private_ips)
   @storage ~w(paths actions)
 
@@ -46,8 +48,7 @@ defmodule Sanctum.Consent.ShapeDiff do
 
   defp live_caps(ctx, source_ref) do
     with {:ok, component} <- Sanctum.Consent.Plan.fetch_component(ctx, source_ref),
-         manifest =
-           Cyfr.Manifest.decode(Map.get(component, :manifest) || Map.get(component, "manifest")),
+         manifest = manifest(component, source_ref),
          {:ok, resources, _limits} <-
            Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest) do
       {:ok,
@@ -134,4 +135,17 @@ defmodule Sanctum.Consent.ShapeDiff do
   defp normalize(nil), do: []
   defp normalize(list) when is_list(list), do: list |> Enum.filter(&is_binary/1) |> Enum.sort()
   defp normalize(_), do: []
+
+  # A manifest that does not decode declares nothing. The line names the
+  # component, never the manifest's bytes.
+  defp manifest(row, ref) do
+    case Cyfr.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Sanctum.Consent.ShapeDiff] manifest malformed: #{ref}")
+        %{}
+    end
+  end
 end

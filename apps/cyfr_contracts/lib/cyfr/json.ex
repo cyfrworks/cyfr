@@ -12,10 +12,8 @@ defmodule Cyfr.Json do
   which private copy it reached:
 
     * `decode/1` — `{:ok, term} | {:error, :invalid_json}`. The caller
-      decides what a corrupt column means; execution paths fail closed.
-    * `decode_or/3` — the lenient form for display/rendering paths: the
-      default comes back and the corruption is logged under its owner's
-      label, never silently.
+      decides what a corrupt column means and says so in its own log;
+      execution paths fail closed.
     * `safe_encode/1` — encode, or the one `#{inspect(~s({"_encoding_error":"value not encodable"}))}`
       envelope. An unencodable value must neither crash the caller nor
       masquerade as data.
@@ -24,8 +22,6 @@ defmodule Cyfr.Json do
   (`Cyfr.WitResponse.safe_encode/1` answers the guest protocol's error
   object); this module is for host-side storage and logs.
   """
-
-  require Logger
 
   @encode_failure ~s({"_encoding_error":"value not encodable"})
 
@@ -39,30 +35,6 @@ defmodule Cyfr.Json do
   end
 
   def decode(_), do: {:error, :invalid_json}
-
-  @doc """
-  Lenient decode for display/rendering paths: `nil`/`""` and corrupt JSON
-  answer `default`, corruption logged under `label` — visible, never
-  load-bearing.
-  """
-  @spec decode_or(term(), term(), String.t()) :: term()
-  def decode_or(nil, default, _label), do: default
-  def decode_or("", default, _label), do: default
-
-  def decode_or(json, default, label) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, value} ->
-        value
-
-      {:error, _} ->
-        Logger.warning(
-          "[#{label}] stored JSON did not decode " <>
-            "(#{String.slice(json, 0, 100)}) — using #{inspect(default)}"
-        )
-
-        default
-    end
-  end
 
   @doc "Encode, or the one failure envelope — never `inspect/1` output."
   @spec safe_encode(term()) :: String.t()

@@ -1184,7 +1184,11 @@ defmodule Compendium.MCP.ComponentTool do
 
   # Enrich a local pull result with auto-pulled dependencies.
   defp enrich_pull_with_deps(ctx, component, result) do
-    manifest = decode_manifest(component[:manifest] || component["manifest"])
+    manifest =
+      decode_manifest(
+        component[:manifest] || component["manifest"],
+        result[:component_ref] || result["component_ref"]
+      )
 
     case Compendium.DependencyResolver.extract_from_manifest(manifest, component[:id] || "") do
       {:ok, []} ->
@@ -1284,7 +1288,12 @@ defmodule Compendium.MCP.ComponentTool do
 
     case Registry.get(ctx, name, version, publisher, type) do
       {:ok, component} ->
-        manifest = decode_manifest(component.manifest)
+        manifest =
+          decode_manifest(
+            component.manifest,
+            Cyfr.ComponentRef.build(to_string(type), publisher, name, version)
+          )
+
         component_id = component.id || ""
 
         case Compendium.DependencyResolver.extract_from_manifest(manifest, component_id) do
@@ -1595,7 +1604,18 @@ defmodule Compendium.MCP.ComponentTool do
     |> Map.put(:optional_missing, optional_missing)
   end
 
-  defdelegate decode_manifest(value), to: Cyfr.Manifest, as: :decode
+  # A manifest that does not decode declares nothing. The line names the
+  # component, never the manifest's bytes.
+  defp decode_manifest(value, ref) do
+    case Cyfr.Manifest.decode_strict(value) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Compendium.MCP.ComponentTool] manifest malformed: #{ref}")
+        %{}
+    end
+  end
 
   # ============================================================================
   # Component Resolution

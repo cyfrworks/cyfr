@@ -874,7 +874,7 @@ defmodule Aqua.Runner do
         end
 
       nil ->
-        Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+        Cyfr.LoggerContext.unexpected(__MODULE__, msg)
         {:noreply, state}
     end
   end
@@ -958,7 +958,7 @@ defmodule Aqua.Runner do
   defp handle_owned_info(:idle, state), do: {:noreply, touch(state)}
 
   defp handle_owned_info(msg, state) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    Cyfr.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 

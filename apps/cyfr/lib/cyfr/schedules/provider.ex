@@ -17,6 +17,8 @@ defmodule Cyfr.Schedules.Provider do
 
   alias Sanctum.Context
 
+  require Logger
+
   @max_schedules_per_athanor 25
 
   def resources, do: []
@@ -528,8 +530,8 @@ defmodule Cyfr.Schedules.Provider do
       cron_expression: schedule.cron_expression,
       reference: schedule.reference,
       resolved_reference: schedule.resolved_reference,
-      input: decode_json(schedule.input),
-      metadata: decode_json(schedule.metadata),
+      input: decode_stored(schedule.input, nil, "input"),
+      metadata: decode_stored(schedule.metadata, nil, "metadata"),
       status: schedule.status,
       concurrency: schedule.concurrency,
       next_run_at: schedule.next_run_at && DateTime.to_iso8601(schedule.next_run_at),
@@ -545,7 +547,23 @@ defmodule Cyfr.Schedules.Provider do
   # Display plane: a corrupt stored column renders as null (logged); the
   # scheduler's EXECUTION read of the same columns stays fail-closed
   # (`Cyfr.Schedules.Scheduler` skips the run).
-  defp decode_json(value), do: Cyfr.Json.decode_or(value, nil, "Cyfr.Schedules.Provider")
+  # The line names the column and its size, never its bytes.
+  defp decode_stored(nil, default, _field), do: default
+  defp decode_stored("", default, _field), do: default
+
+  defp decode_stored(json, default, field) when is_binary(json) do
+    case Cyfr.Json.decode(json) do
+      {:ok, value} ->
+        value
+
+      {:error, :invalid_json} ->
+        Logger.warning(
+          "[Cyfr.Schedules.Provider] stored #{field} is not valid JSON (#{byte_size(json)} bytes)"
+        )
+
+        default
+    end
+  end
 
   # The storage layer answers typed reasons; this seam renders them.
   defp format_store_error(reason, id \\ nil)

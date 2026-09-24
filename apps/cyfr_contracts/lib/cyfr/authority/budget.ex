@@ -11,8 +11,6 @@ defmodule Cyfr.Authority.Budget do
   it crosses the wire, and a copy is the same budget.
   """
 
-  import Bitwise, only: [<<<: 2]
-
   @type t :: %__MODULE__{id: String.t(), cap: non_neg_integer()}
   @enforce_keys [:id, :cap]
   defstruct [:id, :cap]
@@ -24,14 +22,6 @@ defmodule Cyfr.Authority.Budget do
   """
   @spec new(non_neg_integer(), String.t() | nil) :: t()
   def new(cap, id \\ nil) when is_integer(cap) and cap >= 0 do
-    %__MODULE__{id: id || unique_id(), cap: cap}
-  end
-
-  defp unique_id do
-    "bgt_" <>
-      Base.url_encode64(
-        <<System.unique_integer([:positive, :monotonic])::64, :rand.uniform(1 <<< 32)::32>>,
-        padding: false
-      )
+    %__MODULE__{id: id || Cyfr.UUID7.generate_id("bgt"), cap: cap}
   end
 end

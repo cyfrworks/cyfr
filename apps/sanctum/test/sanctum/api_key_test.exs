@@ -4,6 +4,9 @@
 defmodule Sanctum.ApiKeyTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+  import ExUnit.CaptureLog
+
   alias Sanctum.ApiKey
   alias Sanctum.Context
 
@@ -674,6 +677,67 @@ defmodule Sanctum.ApiKeyTest do
 
       # Same name in a different athanor is NOT a unique-constraint violation.
       assert {:ok, _} = ApiKey.create(ctx_b, %{name: "dup-name", scope: []})
+    end
+  end
+
+  describe "a stored allowlist that does not read" do
+    # A corrupt allowlist is a corrupt security row, not an absent
+    # restriction: it admits no address. The listing admits nothing and
+    # keeps its display default.
+    for {label, stored} <- [
+          {"not JSON", ~s(["192.168.1.0/24")},
+          {"not a list", ~s({"allow": "192.168.1.0/24"})},
+          {"not strings", "[1, 2]"}
+        ] do
+      test "#{label} refuses every address", %{ctx: ctx} do
+        stored = unquote(stored)
+        name = "corrupt-allowlist-#{System.unique_integer([:positive])}"
+
+        {:ok, %{api_key: key}} =
+          ApiKey.create(ctx, %{name: name, ip_allowlist: ["192.168.1.0/24"]})
+
+        assert {:ok, _} = ApiKey.validate(key, client_ip: "192.168.1.10")
+
+        Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.name == ^name),
+          set: [ip_allowlist: stored]
+        )
+
+        log =
+          capture_log(fn ->
+            assert ApiKey.validate(key, client_ip: "192.168.1.10") == {:error, :ip_not_allowed}
+            assert ApiKey.validate(key, client_ip: "10.0.0.1") == {:error, :ip_not_allowed}
+            assert ApiKey.validate(key, client_ip: nil) == {:error, :ip_not_allowed}
+
+            # The display default: the column as it decodes, nil when it
+            # does not.
+            displayed =
+              case Cyfr.Json.decode(stored) do
+                {:ok, value} -> value
+                {:error, :invalid_json} -> nil
+              end
+
+            {:ok, keys} = ApiKey.list(ctx)
+            assert Enum.find(keys, &(&1.name == name)).ip_allowlist == displayed
+          end)
+
+        assert log =~
+                 ~r/\[Sanctum\.ApiKey\] stored ip_allowlist is not (valid JSON|a list of strings) \(#{byte_size(stored)} bytes\)/
+
+        refute log =~ stored
+      end
+    end
+
+    test "an absent or empty column is no restriction", %{ctx: ctx} do
+      name = "absent-allowlist-#{System.unique_integer([:positive])}"
+      {:ok, %{api_key: key}} = ApiKey.create(ctx, %{name: name, ip_allowlist: ["192.168.1.0/24"]})
+
+      for stored <- [nil, ""] do
+        Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.name == ^name),
+          set: [ip_allowlist: stored]
+        )
+
+        assert {:ok, _} = ApiKey.validate(key, client_ip: "10.0.0.1")
+      end
     end
   end
 

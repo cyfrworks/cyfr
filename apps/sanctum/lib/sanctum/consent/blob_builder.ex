@@ -28,6 +28,8 @@ defmodule Sanctum.Consent.BlobBuilder do
   alias Sanctum.Consent.Components
   alias Cyfr.JCS
 
+  require Logger
+
   @type vault_fn ::
           (node_key :: String.t(), row :: map(), manifest :: map() -> map() | nil)
 
@@ -143,8 +145,7 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   defp build_node(ctx, graph, node_key, source_ref, vault_fn, edge_vault_fn, extras) do
     with {:ok, row} <- node_row(ctx, node_key),
-         manifest =
-           Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest")),
+         manifest = manifest(row, node_key),
          {:ok, resources, limits} <- node_grant(ctx, node_key, manifest) do
       vault = vault_fn.(node_key, row, manifest)
 
@@ -183,7 +184,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   defp edge_vault(edge_vault_fn, from, dep, ctx) do
     case node_row(ctx, dep) do
       {:ok, row} ->
-        manifest = Cyfr.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
+        manifest = manifest(row, dep)
         edge_vault_fn.(from, dep, row, manifest)
 
       {:error, _} ->
@@ -286,6 +287,19 @@ defmodule Sanctum.Consent.BlobBuilder do
     case vault do
       nil -> rest
       vault -> Map.put(rest, "vault", vault)
+    end
+  end
+
+  # A manifest that does not decode declares nothing. The line names the
+  # component, never the manifest's bytes.
+  defp manifest(row, ref) do
+    case Cyfr.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+      {:ok, manifest} ->
+        manifest
+
+      {:error, :malformed_manifest} ->
+        Logger.warning("[Sanctum.Consent.BlobBuilder] manifest malformed: #{ref}")
+        %{}
     end
   end
 end
