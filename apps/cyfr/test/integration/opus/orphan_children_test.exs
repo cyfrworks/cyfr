@@ -59,7 +59,7 @@ defmodule Opus.OrphanChildrenTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do
@@ -85,7 +85,7 @@ defmodule Opus.OrphanChildrenTest do
     test "admits no child once it was cancelled", %{ctx: ctx} do
       {root_id, authority, row} = held_root!(ctx)
 
-      assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root_id)
+      assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, root_id)
       assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Schemas.Execution, root_id)
 
       refute_orphans_admitted(root_id, authority, row)
@@ -172,7 +172,7 @@ defmodule Opus.OrphanChildrenTest do
       assert %{error_message: message} = Arca.Repo.get!(Arca.Schemas.Execution, id)
       assert [_, ms] = Regex.run(timeout, message)
       assert String.to_integer(ms) in 1..1000
-      wait_until(fn -> Cyfr.Execution.Attempt.whereis(id) == nil end)
+      wait_until(fn -> Crucible.Attempt.whereis(id) == nil end)
     end
 
     # The formula's guest was answered each child's end, the called one's
@@ -214,8 +214,7 @@ defmodule Opus.OrphanChildrenTest do
     spawn(fn ->
       send(
         test_pid,
-        {:root,
-         Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
+        {:root, Crucible.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
       )
     end)
   end

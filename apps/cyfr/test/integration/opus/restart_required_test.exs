@@ -5,7 +5,7 @@ defmodule Opus.RestartRequiredTest do
   # Runtime consent ends the current execution with restart_required; only a new root uses the revision.
   use ExUnit.Case, async: false
 
-  alias Cyfr.Execution.Record
+  alias Crucible.Record
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -35,10 +35,10 @@ defmodule Opus.RestartRequiredTest do
   test "the running execution terminates carrying the typed payload", %{ctx: ctx} do
     record = running!(ctx)
 
-    :ok = Cyfr.Execution.Events.subscribe(record.id, ctx)
+    :ok = Crucible.Events.subscribe(record.id, ctx)
 
     assert {:ok, %{cancelled: true}} =
-             Cyfr.Execution.Dispatch.cancel_for_restart(ctx, record.id, @payload)
+             Crucible.Dispatch.cancel_for_restart(ctx, record.id, @payload)
 
     assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2_000
     assert event.type == "execution.cancelled"
@@ -52,22 +52,22 @@ defmodule Opus.RestartRequiredTest do
   test "the execution is really stopped, not re-bound", %{ctx: ctx} do
     record = running!(ctx)
 
-    {:ok, _} = Cyfr.Execution.Dispatch.cancel_for_restart(ctx, record.id, @payload)
+    {:ok, _} = Crucible.Dispatch.cancel_for_restart(ctx, record.id, @payload)
 
     {:ok, reloaded} = Record.get(ctx, record.id)
     assert reloaded.status == :cancelled
 
     # And it cannot be restarted in place — a re-run is a new execution.
     assert {:error, :not_cancellable} =
-             Cyfr.Execution.Dispatch.cancel_for_restart(ctx, record.id, @payload)
+             Crucible.Dispatch.cancel_for_restart(ctx, record.id, @payload)
   end
 
   test "an ordinary cancel still reports as cancelled", %{ctx: ctx} do
     record = running!(ctx)
 
-    :ok = Cyfr.Execution.Events.subscribe(record.id, ctx)
+    :ok = Crucible.Events.subscribe(record.id, ctx)
 
-    assert {:ok, _} = Cyfr.Execution.Dispatch.cancel(ctx, record.id)
+    assert {:ok, _} = Crucible.Dispatch.cancel(ctx, record.id)
 
     assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2_000
     assert event.type == "execution.cancelled"
@@ -77,9 +77,9 @@ defmodule Opus.RestartRequiredTest do
   test "a surface reading the event sees a payload it can act on", %{ctx: ctx} do
     record = running!(ctx)
 
-    :ok = Cyfr.Execution.Events.subscribe(record.id, ctx)
+    :ok = Crucible.Events.subscribe(record.id, ctx)
 
-    {:ok, _} = Cyfr.Execution.Dispatch.cancel_for_restart(ctx, record.id, @payload)
+    {:ok, _} = Crucible.Dispatch.cancel_for_restart(ctx, record.id, @payload)
     assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2_000
 
     # Everything the console needs to say "approved — re-run to continue"

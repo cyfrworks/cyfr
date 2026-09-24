@@ -273,7 +273,7 @@ defmodule Aqua.Models do
   defp lent_to_assistant?(ctx, catalyst_ref) do
     soul = Prima.AgentRef.soul_ref()
 
-    with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, soul),
+    with {:ok, authority} <- Crucible.authority_for(ctx, :default, soul),
          {:ok, edge} <-
            Prima.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
       Prima.Authority.Blob.bound_vault?(edge.vault)

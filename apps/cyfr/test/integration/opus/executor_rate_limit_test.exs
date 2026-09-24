@@ -59,7 +59,7 @@ defmodule Opus.ExecutorRateLimitTest do
       # math.wasm is a core module so Component Model load may fail,
       # but the important thing is the rate limiter allowed it through.
       result =
-        Cyfr.Execution.Dispatch.run(ctx, ref, input,
+        Crucible.Dispatch.run(ctx, ref, input,
           type: :reagent,
           authority: Prima.Authority.zero()
         )
@@ -75,7 +75,7 @@ defmodule Opus.ExecutorRateLimitTest do
 
     test "passing the policy gate records one policy_consultation row", %{ctx: ctx, ref: ref} do
       _result =
-        Cyfr.Execution.Dispatch.run(ctx, ref, %{"a" => 1, "b" => 2},
+        Crucible.Dispatch.run(ctx, ref, %{"a" => 1, "b" => 2},
           type: :reagent,
           authority: Prima.Authority.zero()
         )
@@ -105,16 +105,16 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # First request should succeed
       assert {:ok, _} =
-               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref, limit_source)
+               Crucible.Rates.check(Context.actor(ctx), component_ref, limit_source)
 
       # Second request should be rate limited
       assert {:error, :rate_limited, retry_after} =
-               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref, limit_source)
+               Crucible.Rates.check(Context.actor(ctx), component_ref, limit_source)
 
       assert retry_after > 0
 
       # Clean up
-      Cyfr.Execution.Rates.reset(Context.actor(ctx), component_ref)
+      Crucible.Rates.reset(Context.actor(ctx), component_ref)
     end
 
     test "rate limiter tracks per athanor and component", %{ctx: ctx} do
@@ -125,19 +125,19 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # Request to component A
       assert {:ok, _} =
-               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref_a, limit_source)
+               Crucible.Rates.check(Context.actor(ctx), component_ref_a, limit_source)
 
       # Request to component B should still work (different component)
       assert {:ok, _} =
-               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref_b, limit_source)
+               Crucible.Rates.check(Context.actor(ctx), component_ref_b, limit_source)
 
       # Second request to component A should be rate limited
       assert {:error, :rate_limited, _} =
-               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref_a, limit_source)
+               Crucible.Rates.check(Context.actor(ctx), component_ref_a, limit_source)
 
       # Clean up
-      Cyfr.Execution.Rates.reset(Context.actor(ctx), component_ref_a)
-      Cyfr.Execution.Rates.reset(Context.actor(ctx), component_ref_b)
+      Crucible.Rates.reset(Context.actor(ctx), component_ref_a)
+      Crucible.Rates.reset(Context.actor(ctx), component_ref_b)
     end
 
     test "unlimited requests when no rate limit configured", %{ctx: ctx} do
@@ -148,7 +148,7 @@ defmodule Opus.ExecutorRateLimitTest do
       # Should return :unlimited for all requests
       for _ <- 1..10 do
         assert {:ok, :unlimited} =
-                 Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref, limit_source)
+                 Crucible.Rates.check(Context.actor(ctx), component_ref, limit_source)
       end
     end
 
@@ -159,18 +159,18 @@ defmodule Opus.ExecutorRateLimitTest do
 
       # Check initial status
       assert {:ok, 0, 5, _window} =
-               Cyfr.Execution.Rates.status(Context.actor(ctx), component_ref, limit_source)
+               Crucible.Rates.status(Context.actor(ctx), component_ref, limit_source)
 
       # Make a request
       assert {:ok, 4} =
-               Cyfr.Execution.Rates.check(Context.actor(ctx), component_ref, limit_source)
+               Crucible.Rates.check(Context.actor(ctx), component_ref, limit_source)
 
       # Check status again
       assert {:ok, 1, 4, _window} =
-               Cyfr.Execution.Rates.status(Context.actor(ctx), component_ref, limit_source)
+               Crucible.Rates.status(Context.actor(ctx), component_ref, limit_source)
 
       # Clean up
-      Cyfr.Execution.Rates.reset(Context.actor(ctx), component_ref)
+      Crucible.Rates.reset(Context.actor(ctx), component_ref)
     end
   end
 end

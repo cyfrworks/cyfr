@@ -9,7 +9,7 @@ defmodule Cyfr.WithElseScopeTest do
   hands that arm the updated value. It hands it the *outer* one, silently,
   and the compiler says nothing because the name is bound either way. Where
   the state carries what a failure is masked or closed with — the run
-  `Cyfr.Execution.Admission.admit/4` threads through its stages, the
+  `Crucible.Admission.admit/4` threads through its stages, the
   resolved headers `Emissary.MCP.ExternalServer` masks an upstream error
   with — the outer value closes the failure with the wrong state.
 

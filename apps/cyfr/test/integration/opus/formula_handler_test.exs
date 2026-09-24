@@ -65,7 +65,7 @@ defmodule Opus.FormulaHandlerTest do
       })
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       if original_base_path,
@@ -193,8 +193,7 @@ defmodule Opus.FormulaHandlerTest do
     spawn(fn ->
       send(
         test_pid,
-        {:root,
-         Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
+        {:root, Crucible.run_root(ctx, :default, Probe.probe_ref(), input, execution_id: root_id)}
       )
     end)
   end
@@ -661,7 +660,7 @@ defmodule Opus.FormulaHandlerTest do
       [child] = children(root_id)
       wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
       wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
-      wait_until(fn -> Cyfr.Execution.Attempt.whereis(child.id) == nil end)
+      wait_until(fn -> Crucible.Attempt.whereis(child.id) == nil end)
     end
 
     test "tasks a formula leaves running end with it, and CYFR reclaims their holds", %{ctx: ctx} do
@@ -689,7 +688,7 @@ defmodule Opus.FormulaHandlerTest do
 
       for child <- children(root_id) do
         wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
-        wait_until(fn -> Cyfr.Execution.Attempt.whereis(child.id) == nil end)
+        wait_until(fn -> Crucible.Attempt.whereis(child.id) == nil end)
       end
 
       wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
@@ -796,7 +795,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
-      Cyfr.Execution.Events.subscribe(execution_id, ctx)
+      Crucible.Events.subscribe(execution_id, ctx)
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
@@ -808,7 +807,7 @@ defmodule Opus.FormulaHandlerTest do
       assert event.data["kind"] == "turn_start"
       assert event.data["turn"] == 1
 
-      Cyfr.Execution.Events.unsubscribe(execution_id, ctx)
+      Crucible.Events.unsubscribe(execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
@@ -824,7 +823,7 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
-      Cyfr.Execution.Events.subscribe(execution_id, ctx)
+      Crucible.Events.subscribe(execution_id, ctx)
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
 
@@ -836,7 +835,7 @@ defmodule Opus.FormulaHandlerTest do
       assert event.data["content"] == "key is [REDACTED]"
       refute inspect(event) =~ "sk-super-secret-value"
 
-      Cyfr.Execution.Events.unsubscribe(execution_id, ctx)
+      Crucible.Events.unsubscribe(execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
 
@@ -854,14 +853,14 @@ defmodule Opus.FormulaHandlerTest do
       emit_fn.(Jason.encode!(%{"kind" => "tool_use", "tool" => "read_file"}))
 
       # Flush pending buffer writes before reading
-      Cyfr.Execution.Events.flush(execution_id)
+      Crucible.Events.flush(execution_id)
 
-      events = Cyfr.Execution.Events.since(execution_id, {0, 0}, ctx.athanor_id)
+      events = Crucible.Events.since(execution_id, {0, 0}, ctx.athanor_id)
       assert length(events) == 3
       assert Enum.map(events, & &1.sequence) == ["0.1", "0.2", "0.3"]
       assert Enum.map(events, & &1.data["kind"]) == ["turn_start", "text_delta", "tool_use"]
 
-      events_after_1 = Cyfr.Execution.Events.since(execution_id, {0, 1}, ctx.athanor_id)
+      events_after_1 = Crucible.Events.since(execution_id, {0, 1}, ctx.athanor_id)
       assert length(events_after_1) == 2
       assert Enum.map(events_after_1, & &1.sequence) == ["0.2", "0.3"]
 
@@ -914,8 +913,8 @@ defmodule Opus.FormulaHandlerTest do
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
 
-      Cyfr.Execution.Events.subscribe(root_id, ctx)
-      Cyfr.Execution.Events.subscribe(host.execution_id, ctx)
+      Crucible.Events.subscribe(root_id, ctx)
+      Crucible.Events.subscribe(host.execution_id, ctx)
 
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
@@ -926,24 +925,24 @@ defmodule Opus.FormulaHandlerTest do
 
       refute_receive %Cyfr.Bus.ExecutionEvent{}, 100
 
-      Cyfr.Execution.Events.unsubscribe(root_id, ctx)
-      Cyfr.Execution.Events.unsubscribe(host.execution_id, ctx)
+      Crucible.Events.unsubscribe(root_id, ctx)
+      Crucible.Events.unsubscribe(host.execution_id, ctx)
       FormulaHandler.cleanup_registry(tracker_pid)
     end
   end
 
   # ============================================================================
-  # Cyfr.Execution.Events durable events
+  # Crucible.Events durable events
   # ============================================================================
 
-  describe "Cyfr.Execution.Events durable events" do
+  describe "Crucible.Events durable events" do
     test "a published lifecycle row reaches subscribers with its number", %{ctx: ctx} do
       execution_id = "exec_terminal_#{:rand.uniform(100_000)}"
 
-      Cyfr.Execution.Events.subscribe(execution_id, ctx)
+      Crucible.Events.subscribe(execution_id, ctx)
 
       :ok =
-        Cyfr.Execution.Events.publish(execution_id, ctx, "execution.completed", 7, %{
+        Crucible.Events.publish(execution_id, ctx, "execution.completed", 7, %{
           "status" => "completed",
           "duration_ms" => 1234
         })
@@ -956,7 +955,7 @@ defmodule Opus.FormulaHandlerTest do
       assert event.data["status"] == "completed"
       assert event.data["duration_ms"] == 1234
 
-      Cyfr.Execution.Events.unsubscribe(execution_id, ctx)
+      Crucible.Events.unsubscribe(execution_id, ctx)
     end
   end
 

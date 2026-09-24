@@ -28,8 +28,8 @@ defmodule Cyfr.GenServerCatchallTest do
     {Prism.TinctureRegistry, "TinctureRegistry"},
     {Arca.RecordSink, "RecordSink"},
     {Prima.RateLimiter, "RateLimiter"},
-    {Cyfr.Execution.Slots, "Slots"},
-    {Cyfr.Execution.Events.Sequence, "Events.Sequence"},
+    {Crucible.Slots, "Slots"},
+    {Crucible.Events.Sequence, "Events.Sequence"},
     {Compendium.Provisioning, "Provisioning"},
     {Compendium.ProjectionReconciler, "ProjectionReconciler"}
   ]
@@ -38,11 +38,11 @@ defmodule Cyfr.GenServerCatchallTest do
   # gated off (returns :ignore) or not started in the test environment.
   @not_probed %{
     Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
-    Cyfr.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
+    Crucible.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
     Cyfr.Cell => "gated by :control_plane_claim_enabled",
-    Cyfr.Execution.Sweeper => "gated by :execution_sweeper_enabled",
-    Cyfr.Execution.ArchiveWatch => "gated by :execution_archive_watch_enabled",
-    Cyfr.Execution.WorkerWatch => "gated by :worker_watch_enabled",
+    Crucible.Sweeper => "gated by :execution_sweeper_enabled",
+    Crucible.ArchiveWatch => "gated by :execution_archive_watch_enabled",
+    Crucible.WorkerWatch => "gated by :worker_watch_enabled",
     Emissary.MCP.ExternalServerReconciler => "gated by :external_server_reconciler_enabled",
     Emissary.MCP.Bridge => "started only when an MCP bridge URL and key are configured",
     Grimoire.RunningTasks => "probing would race real request tracking",
@@ -99,7 +99,7 @@ defmodule Cyfr.GenServerCatchallTest do
     for message <- [@unexpected_msg, {:random, "payload"}] do
       test "survives #{inspect(message)} and logs it" do
         id = "exec_catchall_#{System.unique_integer([:positive])}"
-        {:ok, pid} = GenServer.start_link(Cyfr.Execution.Events, {id, "ath_catchall"}, [])
+        {:ok, pid} = GenServer.start_link(Crucible.Events, {id, "ath_catchall"}, [])
 
         assert capture_log(fn ->
                  send(pid, unquote(Macro.escape(message)))
@@ -118,16 +118,16 @@ defmodule Cyfr.GenServerCatchallTest do
     for message <- [@unexpected_msg, {:random, "payload"}] do
       test "survives #{inspect(message)} and logs it" do
         ctx = Sanctum.TestContext.local()
-        record = Cyfr.Execution.Record.new(ctx, "catalyst:local.catchall:0.1.0", %{})
+        record = Crucible.Record.new(ctx, "catalyst:local.catchall:0.1.0", %{})
 
         {:ok, pid} =
-          Cyfr.Execution.Attempt.open(
+          Crucible.Attempt.open(
             execution_id: record.id,
             attempt: record.attempt,
             ctx: ctx,
             authority: Prima.Authority.zero(),
             component_ref: "catalyst:local.catchall:0.1.0",
-            close: %Cyfr.Execution.Close{ctx: ctx, record: record}
+            close: %Crucible.Close{ctx: ctx, record: record}
           )
 
         assert capture_log(fn ->

@@ -186,7 +186,7 @@ defmodule Cyfr.Bus do
       struct: Schedules,
       match: {:exact, "bus:schedules"},
       template: "tenant:<athanor_id>:bus:schedules",
-      producers: ["Cyfr.Schedules.Scheduler"],
+      producers: ["Crucible.Schedules.Scheduler"],
       consumers: ["PrismWeb.SchedulesLive"],
       reason: "a schedule's occurrence started or its run ended"
     },
@@ -238,7 +238,7 @@ defmodule Cyfr.Bus do
       struct: ExecutionEvent,
       match: {:prefix, "execution:events:"},
       template: "tenant:<athanor_id>:execution:events:<execution_id>",
-      producers: ["Cyfr.Execution.Events"],
+      producers: ["Crucible.Events"],
       consumers: ["EmissaryWeb.ExecutionEventsController", "Aqua.Loop.Stream"],
       reason:
         "one execution's stream: durable rows after commit, deltas before the " <>
@@ -275,7 +275,7 @@ defmodule Cyfr.Bus do
       template: "sanctum:athanor_archived",
       producers: ["Cyfr.TelemetryBridge"],
       consumers: [
-        "Cyfr.Execution.ArchiveWatch",
+        "Crucible.ArchiveWatch",
         "Emissary.MCP.ExternalServerReconciler",
         "CyfrWeb.ContextGuard"
       ],
@@ -337,7 +337,7 @@ defmodule Cyfr.Bus do
       struct: ScheduleCompleted,
       match: {:exact, "cyfr:schedule_completions"},
       template: "cyfr:schedule_completions",
-      producers: ["Cyfr.Schedules.Scheduler"],
+      producers: ["Crucible.Schedules.Scheduler"],
       consumers: ["Aqua.ScheduleNotes"],
       reason:
         "a committed completion heard on every member; only the issuing member's " <>

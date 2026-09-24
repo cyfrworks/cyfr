@@ -16,8 +16,8 @@ defmodule Grimoire.Catalog do
   │  Grimoire.Catalog (GenServer)                                        │
   │  ├── Arca.Cache keys: {:mcp_tool, name}                              │
   │  │   └── {:mcp_tool, "record"} => {Arca.Providers.Records, %{...}}   │
-  │  │   └── {:mcp_tool, "execution"} => {Cyfr.Execution.MCP, %{...}}    │
-  │  └── Providers: [Arca.Providers.Records, Cyfr.Execution.MCP, ...]    │
+  │  │   └── {:mcp_tool, "execution"} => {Crucible.Provider, %{...}}    │
+  │  └── Providers: [Arca.Providers.Records, Crucible.Provider, ...]    │
   └──────────────────────────────────────────────────────────────────────┘
   ```
 

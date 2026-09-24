@@ -43,7 +43,7 @@ defmodule Cyfr.EgressInventoryTest do
     # The worker wire, CYFR's side: `Prima.WorkerAPI` requests to the
     # operator-configured worker services (CYFR_WORKERS), signed with each
     # service's dispatch key, bounded answers (`Prima.WorkerWire`).
-    "apps/cyfr/lib/cyfr/execution/worker_client.ex" => :worker_client,
+    "apps/cyfr/lib/crucible/worker_client.ex" => :worker_client,
     # The worker wire, Opus's side: a runner's host calls and the service's
     # exit reports to CYFR's host API (OPUS_HOST_URL), sealed and signed
     # with the attempt's keys, bounded answers.

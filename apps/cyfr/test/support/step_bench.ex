@@ -14,11 +14,11 @@ defmodule Cyfr.Test.StepBench do
   model catalyst's is. Each step is one turn run by `Aqua.Loop` on a
   thread of its own: the loop claims the root, records and dispatches the
   chat step, and runs the catalyst as a child through
-  `Cyfr.Execution.run_child/5` — the chain's transition and invoke charge,
+  `Crucible.run_child/5` — the chain's transition and invoke charge,
   admission with its hold and step barriers, the vault unseal, the slot,
   the WASM runtime, the emit path and the terminal write.
 
-  The step's timings are the `Cyfr.Execution.StepSpans` events of its chat
+  The step's timings are the `Crucible.StepSpans` events of its chat
   step's child execution. Everything runs inside one SQL sandbox
   checkout, rolled back when the run ends, with storage and the seed tree
   in temporary directories removed with it.
@@ -75,7 +75,7 @@ defmodule Cyfr.Test.StepBench do
     # test's holds and reads on a wire no call crosses.
     Cyfr.Test.OpusService.wire!(proxy: Cyfr.Test.TwoServices.wire() != nil)
 
-    unless Cyfr.Execution.available?(),
+    unless Crucible.available?(),
       do:
         raise("the Opus worker service of this boot does not answer; run from the umbrella root")
 
@@ -267,7 +267,7 @@ defmodule Cyfr.Test.StepBench do
     :ok =
       :telemetry.attach_many(
         handler,
-        Cyfr.Execution.StepSpans.events(),
+        Crucible.StepSpans.events(),
         fn event, %{duration: duration}, metadata, _config ->
           send(bench, {:step_span, metadata.execution_id, event, duration})
         end,
@@ -320,7 +320,7 @@ defmodule Cyfr.Test.StepBench do
   end
 
   defp spans(execution_id) do
-    Enum.reduce(Cyfr.Execution.StepSpans.events(), %{}, fn event, acc ->
+    Enum.reduce(Crucible.StepSpans.events(), %{}, fn event, acc ->
       receive do
         {:step_span, ^execution_id, ^event, duration} -> Map.put(acc, name(event), duration)
       after

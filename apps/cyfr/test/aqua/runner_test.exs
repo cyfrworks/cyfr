@@ -640,7 +640,7 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, first)
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, second)
     assert %{running: false, queued: 0} = Runner.state(thread.id, ctx.athanor_id)
-    assert Prima.Slots.status(Cyfr.Execution.Slots).root_active == 0
+    assert Prima.Slots.status(Crucible.Slots).root_active == 0
 
     ScriptedWorker.script([reply("new work")])
     {:ok, %{turn_id: fresh}} = Runner.send_message(ctx, thread.id, "@aqua again")
@@ -738,7 +738,7 @@ defmodule Aqua.RunnerTest do
       })
 
     {:ok, claim} =
-      Cyfr.Execution.claim_turn_root(ctx, @soul, turn_id: turn.id, thread_id: other_thread.id)
+      Crucible.claim_turn_root(ctx, @soul, turn_id: turn.id, thread_id: other_thread.id)
 
     {:ok, %{capability_digest: capability, revision_digest: revision}} =
       Compendium.AgentIndex.snapshot(ctx, "aqua")
@@ -755,7 +755,7 @@ defmodule Aqua.RunnerTest do
       })
 
     # The dead boot's slot and keeper are gone; the rows say running.
-    :ok = Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: claim)
+    :ok = Crucible.release_turn_root(ctx, claim.execution_id, claim: claim)
     assert running.status == "running"
 
     {:ok, _pid} = Runner.ensure(other_thread.id, ctx.athanor_id)

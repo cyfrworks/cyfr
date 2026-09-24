@@ -7,12 +7,12 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
   worker routes, served by Bandit on a loopback port of the system's
   choosing, in front of any `Prima.WorkerAPI` module. It is what
   `Cyfr.Test.ScriptedWorker` is reached through, and what a test's own
-  worker module is served by, so `Cyfr.Execution.Dispatch` reaches either
+  worker module is served by, so `Crucible.Dispatch` reaches either
   exactly as it reaches Opus.
 
   `start_link/1` takes `worker:` (the `Prima.WorkerAPI` module it serves)
   and `service:` (that worker service's configured id, whose dispatch key
-  CYFR derives for it: `Cyfr.Execution.Keys.worker_key/1`); `url/1` is the
+  CYFR derives for it: `Crucible.Keys.worker_key/1`); `url/1` is the
   base URL a `t:Prima.WorkerAPI.endpoint/0` names.
 
   A request is answered as Opus's listener answers it: the `x-cyfr-auth`
@@ -31,7 +31,7 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
   import Plug.Conn
 
   alias Prima.{HostAPI, WorkerAPI, WorkerAuth, WorkerWire}
-  alias Cyfr.Execution.Keys
+  alias Crucible.Keys
 
   @doc "A child spec for `start_link/1`, one listener per `worker:`."
   def child_spec(opts) do

@@ -4,7 +4,7 @@
 defmodule Aqua.ScheduleNotes do
   @moduledoc """
   A schedule that asked to keep what it did. `keep_outcome: true` in a
-  schedule's metadata (`Cyfr.Schedules.Provider`) files every completed run's
+  schedule's metadata (`Crucible.Schedules.Provider`) files every completed run's
   output as a note in the schedule's estate (`Aqua.Notes`) — named by the
   metadata's `note_name`, else by the schedule's id — with the schedule and
   the execution as provenance, capped so one run cannot fill a ledger. Each

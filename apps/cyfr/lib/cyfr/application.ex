@@ -29,7 +29,7 @@ defmodule Cyfr.Application do
     # every assignment, worker and attempt key this boot issues derives
     # from.
     Prima.Boot.mint()
-    Cyfr.Execution.Keys.mint()
+    Crucible.Keys.mint()
 
     # Resolve the at-rest cipher keyring before anything seals a row. The
     # `arca` application has already opened the database and run the
@@ -181,10 +181,10 @@ defmodule Cyfr.Application do
       Aqua.ScheduleNotes,
       # Recurring component executions: the runs the scheduler fires are
       # tasks of their own, monitored by it.
-      Supervisor.child_spec({Task.Supervisor, name: Cyfr.Schedules.TaskSupervisor},
+      Supervisor.child_spec({Task.Supervisor, name: Crucible.Schedules.TaskSupervisor},
         shutdown: 30_000
       ),
-      Cyfr.Schedules.Scheduler,
+      Crucible.Schedules.Scheduler,
       # Execution admission: the slots a member's own work holds. The
       # consented rate has no child here — its window is a row every
       # member of the cell claims in (`Arca.RateWindows`), so there is
@@ -198,36 +198,36 @@ defmodule Cyfr.Application do
       # first and then the buffers that read it; the attempts, which push
       # onto the buffers, come last; a dead registry restarts what
       # registers in it.
-      group(Cyfr.Execution.Tree, [
-        {Registry, keys: :unique, name: Cyfr.Execution.Registry},
-        {Registry, keys: :unique, name: Cyfr.Execution.Events.Registry},
-        Cyfr.Execution.Events.Sequence,
-        {DynamicSupervisor, name: Cyfr.Execution.Events.Supervisor, strategy: :one_for_one},
-        {Registry, keys: :unique, name: Cyfr.Execution.Attempt.Registry},
-        {DynamicSupervisor, name: Cyfr.Execution.Attempt.Supervisor, strategy: :one_for_one}
+      group(Crucible.Tree, [
+        {Registry, keys: :unique, name: Crucible.Registry},
+        {Registry, keys: :unique, name: Crucible.Events.Registry},
+        Crucible.Events.Sequence,
+        {DynamicSupervisor, name: Crucible.Events.Supervisor, strategy: :one_for_one},
+        {Registry, keys: :unique, name: Crucible.Attempt.Registry},
+        {DynamicSupervisor, name: Crucible.Attempt.Supervisor, strategy: :one_for_one}
       ]),
       # Roots run in the background (`execution.run_stream`), after the
       # registry each one registers in; shutdown waits up to 30 s for them.
-      Supervisor.child_spec({Task.Supervisor, name: Cyfr.Execution.TaskSupervisor},
+      Supervisor.child_spec({Task.Supervisor, name: Crucible.TaskSupervisor},
         shutdown: 30_000
       ),
       # Stops an archived athanor's running work. The archive announces and
       # this reacts: what is still running is the execution domain's, and
       # the identity domain must not name it.
-      Cyfr.Execution.ArchiveWatch,
+      Crucible.ArchiveWatch,
       # Periodic sweep that fails running executions whose lease lapsed;
       # started only when `:execution_sweeper_enabled`.
-      Cyfr.Execution.Sweeper,
+      Crucible.Sweeper,
       # Hears from each configured worker service every poll interval and
       # lapses what a boot it stopped hearing from, or saw replaced, was
       # running; started only when `:worker_watch_enabled`, which follows
       # `:execution_sweeper_enabled`.
-      Cyfr.Execution.WorkerWatch,
+      Crucible.WorkerWatch,
       # The host API: where the worker services' runners post their host
       # calls and the services their exit reports (`CYFR_HOST_API_BIND`,
       # `CYFR_HOST_API_PORT`). After the attempt tree it serves, so a
       # shutdown stops taking calls before the attempts they reach go.
-      {Cyfr.Execution.HostListener,
+      {Crucible.HostListener,
        bind: Cyfr.RuntimeConfig.host_api_bind(), port: Cyfr.RuntimeConfig.host_api_port()},
       # subscriptions/listen stream slots — duplicate keys, one entry per open
       # stream, keyed by {athanor_id, user_id}. An entry dies with its conn
@@ -317,7 +317,7 @@ defmodule Cyfr.Application do
       {:warn, message} -> Logger.warning(message)
     end
 
-    {Prima.Slots, name: Cyfr.Execution.Slots, max: max, key_max: key_max}
+    {Prima.Slots, name: Crucible.Slots, max: max, key_max: key_max}
   end
 
   @doc false
@@ -346,7 +346,7 @@ defmodule Cyfr.Application do
 
     if footprint >= max do
       {:warn,
-       "[Cyfr.Execution.Slots] one athanor can hold every slot on this node: " <>
+       "[Crucible.Slots] one athanor can hold every slot on this node: " <>
          "#{key_max} roots x depth #{Prima.Authority.depth_cap()} = #{footprint} >= " <>
          "#{max} slots. Children are exempt from the per-athanor cap by design (a chain " <>
          "must be able to finish), so the cap bounds roots, not footprint. Lower " <>

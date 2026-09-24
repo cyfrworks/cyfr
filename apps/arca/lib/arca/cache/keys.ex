@@ -38,7 +38,7 @@ defmodule Arca.Cache.Keys do
   `compiled_component/1`, equally content-addressed and shared across
   athanors. What makes the sharing safe is the verification on both ends
   of a hit: admission compares the served digest against the
-  REQUESTING tenant's own row (`Cyfr.Execution.Admission`), and
+  REQUESTING tenant's own row (`Crucible.Admission`), and
   `Compendium.Registry.get_blob/2` re-hashes what it reads — a poisoned
   entry fails the requester's check, never runs under their consent.
   """

@@ -7,7 +7,7 @@ defmodule Prima.PathSafety do
 
   Single source of truth shared by `Arca.Storage.validate_path!/1`
   (raising, segment-list contract) and the guest storage boundary,
-  `Cyfr.Execution.GuestStorage` (tuple-returning, string contract).
+  `Crucible.GuestStorage` (tuple-returning, string contract).
 
   It refuses:
 

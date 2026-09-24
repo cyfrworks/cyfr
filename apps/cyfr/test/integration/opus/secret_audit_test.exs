@@ -79,7 +79,7 @@ defmodule Opus.SecretAuditTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
 
       for {{app, key}, value} <- previous do
         case value do
@@ -151,13 +151,13 @@ defmodule Opus.SecretAuditTest do
   # carried, and the log.
   defp probe!(ctx, authority) do
     id = Prima.UUID7.execution_id()
-    :ok = Cyfr.Execution.subscribe_events(id, ctx)
+    :ok = Crucible.subscribe_events(id, ctx)
     actor = Sanctum.Context.actor(ctx)
     :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
 
     {result, log} =
       with_log(fn ->
-        Cyfr.Execution.Dispatch.run(ctx, @ref, %{"operation" => "probe"},
+        Crucible.Dispatch.run(ctx, @ref, %{"operation" => "probe"},
           type: :catalyst,
           authority: authority,
           execution_id: id

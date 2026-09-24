@@ -11,19 +11,19 @@ defmodule Cyfr.Test.ScriptedWorker do
   its own (`service/0`) and a boot of its own, and its keys are its own: it
   never answers as the real worker service. It is served over HTTP by
   `Cyfr.Test.ScriptedWorkerListener` on a loopback port of its own, so
-  `Cyfr.Execution.Dispatch` reaches it through
-  `Cyfr.Execution.WorkerClient` exactly as it reaches Opus: `endpoint/0`
+  `Crucible.Dispatch` reaches it through
+  `Crucible.WorkerClient` exactly as it reaches Opus: `endpoint/0`
   is where. A run of a scripted reference is admitted by CYFR and
   dispatched here; `start/3` checks the assignment is addressed to this
   worker service and this boot, its input matches its digest and its
   sealed keys open as its attempt, then starts a runner. The runner
-  reaches its attempt through `Cyfr.Execution.Host`, in this BEAM, signing
+  reaches its attempt through `Crucible.Host`, in this BEAM, signing
   each call with the attempt's call key: it attaches with the signed
   assignment (the claim, and the unseal of the run's vault edge), records
   the call with the authority its assignment carries, pushes the script's
   events (`push_deltas`, masked by the attempt) and closes the run
   (`complete` or `fail`). A runner that exits leaving its attempt open is
-  reported (`Cyfr.Execution.Host.runner_exited/2`), signed with this
+  reported (`Crucible.Host.runner_exited/2`), signed with this
   worker service's dispatch key.
 
   Its status counts its runners as every worker service does: `busy` while
@@ -37,7 +37,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   not script never reaches it: starting it puts an
   entry for its scripted references alone ahead of the configured worker
   services in `config :cyfr, :workers` (`workers/2`), so
-  `Cyfr.Execution.Dispatch` routes every other reference to the worker
+  `Crucible.Dispatch` routes every other reference to the worker
   services configured after it, and stopping it removes that entry. Tests
   that change `:workers` themselves restore it on exit as they do today.
   Started for a reference the routing did not name, it refuses the
@@ -65,7 +65,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   - `:hang` — never answer.
 
   The process waiting on a run is the one registered under its execution
-  id in `Cyfr.Execution.Registry` when the run is started, as dispatch
+  id in `Crucible.Registry` when the run is started, as dispatch
   registers its waiter before it starts a run.
 
   The catalyst's answers about itself are not the script's: a run's input
@@ -85,7 +85,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   require Logger
 
   alias Prima.{Assignment, WorkerAuth}
-  alias Cyfr.Execution.{Host, Keys}
+  alias Crucible.{Host, Keys}
   alias Cyfr.Test.ScriptedWorkerListener
 
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
@@ -167,7 +167,7 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   @doc """
   Start the context's athanor on fresh execution limits: a fresh consented
-  rate window (`Cyfr.Execution.Rates`) for the pinned releases of `refs`,
+  rate window (`Crucible.Rates`) for the pinned releases of `refs`,
   and no unreaped-kill penalty (`Prima.Slots.forgive_unreaped/2`).
   Scripted runs are admitted, and their runners killed, for real, so every
   test sharing an athanor draws on the same limits.
@@ -175,10 +175,10 @@ defmodule Cyfr.Test.ScriptedWorker do
   def fresh_limits!(%Sanctum.Context{} = ctx, refs) when is_list(refs) do
     for ref <- refs do
       {:ok, pinned, _resolution} = Compendium.Resolver.resolve(ctx, ref)
-      :ok = Cyfr.Execution.Rates.reset(Sanctum.Context.actor(ctx), pinned)
+      :ok = Crucible.Rates.reset(Sanctum.Context.actor(ctx), pinned)
     end
 
-    :ok = Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+    :ok = Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
   end
 
   # ---------------------------------------------------------------------------
@@ -405,7 +405,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   # The process waiting on the run: dispatch registers it under the
   # execution's id before it starts the run.
   defp waiter_of(execution_id) do
-    case Registry.lookup(Cyfr.Execution.Registry, execution_id) do
+    case Registry.lookup(Crucible.Registry, execution_id) do
       [{waiter, _value}] -> waiter
       [] -> nil
     end

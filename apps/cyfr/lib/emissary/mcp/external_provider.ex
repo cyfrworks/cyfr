@@ -332,7 +332,7 @@ defmodule Emissary.MCP.ExternalProvider do
   # barriers — its input retained with admission, its lease kept while
   # the call is in flight, its result retained and the row closed after.
   # A cancel asked of the attempt, or a lease lost, exits the caller
-  # mid-call (`Cyfr.Execution.LeaseWatch`) — the step that made the call
+  # mid-call (`Crucible.LeaseWatch`) — the step that made the call
   # closes uncertain, never with a result that arrived after. The answer
   # is the caller's only once it is kept and the row is closed: a result
   # that cannot be kept is `result_lost`, a close that cannot be written
@@ -377,12 +377,12 @@ defmodule Emissary.MCP.ExternalProvider do
            |> Arca.QueryHelpers.maybe_put(:step, Keyword.get(opts, :step)),
          {:ok, staged} <- stage(ctx, id, "input", input, class),
          {:ok, attempt} <- admit(attrs, [{:payloads, [staged]} | admission], staged) do
-      {:ok, watch} = Cyfr.Execution.LeaseWatch.start(self(), id, attempt)
+      {:ok, watch} = Crucible.LeaseWatch.start(self(), id, attempt)
 
       try do
         close(ctx, id, {attempt, grant}, started_at, class, call.())
       after
-        Cyfr.Execution.LeaseWatch.stop(watch)
+        Crucible.LeaseWatch.stop(watch)
       end
     else
       {:error, {:refused, reason}} ->

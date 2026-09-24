@@ -26,7 +26,7 @@ defmodule Opus.ExecutorCascadeTest do
     record
   end
 
-  describe "Cyfr.Execution.Cascade.fail_children/1" do
+  describe "Crucible.Cascade.fail_children/1" do
     test "parent formula failure cascades to running children" do
       parent_id = "exec_cascade_#{System.unique_integer([:positive])}"
       child1_id = "exec_child1_#{System.unique_integer([:positive])}"
@@ -54,7 +54,7 @@ defmodule Opus.ExecutorCascadeTest do
         started_at: started_at
       })
 
-      record = %Cyfr.Execution.Record{
+      record = %Crucible.Record{
         id: parent_id,
         reference: "formula:local.agent:0.9.0",
         component_type: :formula,
@@ -65,7 +65,7 @@ defmodule Opus.ExecutorCascadeTest do
       }
 
       assert length(Execution.list_running_children(parent_id)) == 2
-      assert :ok = Cyfr.Execution.Cascade.fail_children(record)
+      assert :ok = Crucible.Cascade.fail_children(record)
 
       # Verify children are now failed
       assert Execution.list_running_children(parent_id) == []
@@ -216,9 +216,9 @@ defmodule Opus.ExecutorCascadeTest do
       # Successful parents leave asynchronous children running. Failure and
       # cancellation cascade; abandoned children are reaped by lease expiry.
       read = fn path -> [__DIR__, path] |> Path.join() |> Path.expand() |> File.read!() end
-      dispatch = read.("../../../lib/cyfr/execution/dispatch.ex")
-      lapse = read.("../../../lib/cyfr/execution/lapse.ex")
-      close = read.("../../../lib/cyfr/execution/close.ex")
+      dispatch = read.("../../../lib/crucible/dispatch.ex")
+      lapse = read.("../../../lib/crucible/lapse.ex")
+      close = read.("../../../lib/crucible/close.ex")
 
       callers =
         Enum.join([dispatch, lapse, close], "\n")
@@ -303,7 +303,7 @@ defmodule Opus.ExecutorCascadeTest do
           authenticated: true
         )
 
-      assert {:error, :not_found} = Cyfr.Execution.Dispatch.cancel(foreign_ctx, exec_id)
+      assert {:error, :not_found} = Crucible.Dispatch.cancel(foreign_ctx, exec_id)
 
       # The destructive kill must NOT happen before the tenant check.
       assert Process.alive?(target)
@@ -351,7 +351,7 @@ defmodule Opus.ExecutorCascadeTest do
           authenticated: true
         )
 
-      assert {:ok, %{cancelled: true}} = Cyfr.Execution.Dispatch.cancel(owner_ctx, exec_id)
+      assert {:ok, %{cancelled: true}} = Crucible.Dispatch.cancel(owner_ctx, exec_id)
 
       # The running process is killed and the record is no longer running.
       assert_receive {:DOWN, ^ref, :process, ^target, _}, 1000
@@ -369,14 +369,14 @@ defmodule Opus.ExecutorCascadeTest do
     end
   end
 
-  # Spawn a process that registers itself in Cyfr.Execution.Registry under the
+  # Spawn a process that registers itself in Crucible.Registry under the
   # given id (mimicking a live execution) and idles until killed.
   defp register_fake_execution(execution_id) do
     test_pid = self()
 
     target =
       spawn(fn ->
-        {:ok, _} = Registry.register(Cyfr.Execution.Registry, execution_id, %{})
+        {:ok, _} = Registry.register(Crucible.Registry, execution_id, %{})
         send(test_pid, :registered)
         Process.sleep(:infinity)
       end)

@@ -35,7 +35,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
 
   def stream(conn, %{"id" => execution_id}) do
     cond do
-      not Cyfr.Execution.available?() ->
+      not Crucible.available?() ->
         EmissaryWeb.ApiError.send(
           conn,
           503,
@@ -111,7 +111,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # athanor than the record it was authorized to read. The subscription
   # comes first and the replay once, so replay and live never overlap.
   defp stream_events(conn, ctx, execution_id, cursor, exec) do
-    Cyfr.Execution.subscribe_events(execution_id, exec)
+    Crucible.subscribe_events(execution_id, exec)
     watch = ContextGuard.watch(ctx)
 
     case drain(conn, execution_id, exec, cursor) do
@@ -125,7 +125,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
   end
 
   defp close(conn, execution_id, exec, watch) do
-    Cyfr.Execution.unsubscribe_events(execution_id, exec)
+    Crucible.unsubscribe_events(execution_id, exec)
     ContextGuard.unwatch(watch)
     conn
   end
@@ -135,7 +135,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
   # cursor delivered to, and whether a terminal event ended the stream.
   defp drain(conn, execution_id, exec, cursor) do
     execution_id
-    |> Cyfr.Execution.events_since(cursor, exec.athanor_id)
+    |> Crucible.events_since(cursor, exec.athanor_id)
     |> Enum.reduce_while({conn, cursor, false}, fn event, {acc_conn, acc_cursor, _} ->
       case send_sse_event(acc_conn, event) do
         {:ok, new_conn} ->

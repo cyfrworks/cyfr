@@ -64,7 +64,7 @@ defmodule Opus.ModelContractTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     ctx = Fixture.estate!()
-    on_exit(fn -> Prima.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id) end)
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
     :ok = Fixture.bind_key!(ctx, @canary)
     {:ok, ctx: ctx}
   end
@@ -926,7 +926,7 @@ defmodule Opus.ModelContractTest do
 
         ended? and
           Enum.all?(closed, fn id ->
-            seen.streams |> Map.get(id, []) |> Enum.any?(&Cyfr.Execution.Events.terminal?/1)
+            seen.streams |> Map.get(id, []) |> Enum.any?(&Crucible.Events.terminal?/1)
           end)
       end,
       @settle_ms,

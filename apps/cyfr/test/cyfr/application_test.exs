@@ -129,21 +129,21 @@ defmodule Cyfr.ApplicationTest do
 
       # The consented rate is not among them: its window is a shared row,
       # so this boot starts nothing for it.
-      refute Cyfr.Execution.Rates in started
+      refute Crucible.Rates in started
 
-      for id <- [Cyfr.Execution.Slots, Cyfr.Execution.Tree] do
+      for id <- [Crucible.Slots, Crucible.Tree] do
         assert is_integer(at.(id)) and at.(id) > pubsub,
                "#{inspect(id)} must start under the infra tier after PubSub"
       end
 
       assert [
-               Cyfr.Execution.Registry,
-               Cyfr.Execution.Events.Registry,
-               Cyfr.Execution.Events.Sequence,
-               Cyfr.Execution.Events.Supervisor,
-               Cyfr.Execution.Attempt.Registry,
-               Cyfr.Execution.Attempt.Supervisor
-             ] = started_ids(Cyfr.Execution.Tree)
+               Crucible.Registry,
+               Crucible.Events.Registry,
+               Crucible.Events.Sequence,
+               Crucible.Events.Supervisor,
+               Crucible.Attempt.Registry,
+               Crucible.Attempt.Supervisor
+             ] = started_ids(Crucible.Tree)
     end
 
     test "background roots and the stale-execution sweeper start after the execution group" do
@@ -152,9 +152,9 @@ defmodule Cyfr.ApplicationTest do
 
       # The sweeper is a child even where `:execution_sweeper_enabled` is off
       # and it did not start.
-      for id <- [Cyfr.Execution.TaskSupervisor, Cyfr.Execution.Sweeper] do
-        assert is_integer(at.(id)) and at.(id) > at.(Cyfr.Execution.Tree),
-               "#{inspect(id)} must start under the infra tier after Cyfr.Execution.Tree"
+      for id <- [Crucible.TaskSupervisor, Crucible.Sweeper] do
+        assert is_integer(at.(id)) and at.(id) > at.(Crucible.Tree),
+               "#{inspect(id)} must start under the infra tier after Crucible.Tree"
       end
     end
 
@@ -186,19 +186,19 @@ defmodule Cyfr.ApplicationTest do
 
       # Shutdown is reverse start order: the listener stops taking host
       # calls before the attempt tree and the roots that wait on them go.
-      assert is_integer(at.(Cyfr.Execution.HostListener))
-      assert at.(Cyfr.Execution.HostListener) > at.(Cyfr.Execution.Tree)
-      assert at.(Cyfr.Execution.HostListener) > at.(Cyfr.Execution.TaskSupervisor)
+      assert is_integer(at.(Crucible.HostListener))
+      assert at.(Crucible.HostListener) > at.(Crucible.Tree)
+      assert at.(Crucible.HostListener) > at.(Crucible.TaskSupervisor)
 
       # Bound where the configuration says, on the port the suite asked for
       # (0: one of the system's choosing), and answering as the host API.
       {_, listener, :supervisor, _} =
         Cyfr.InfraSupervisor
         |> Supervisor.which_children()
-        |> List.keyfind(Cyfr.Execution.HostListener, 0)
+        |> List.keyfind(Crucible.HostListener, 0)
 
       assert Cyfr.RuntimeConfig.host_api_port() == 0
-      port = Cyfr.Execution.HostListener.port(listener)
+      port = Crucible.HostListener.port(listener)
       assert port > 0
       assert Cyfr.Test.OpusService.host_url() == "http://127.0.0.1:#{port}"
 

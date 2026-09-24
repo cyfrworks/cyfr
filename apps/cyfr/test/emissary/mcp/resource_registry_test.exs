@@ -48,7 +48,7 @@ defmodule Emissary.MCP.ResourceRegistryTest do
                ResourceRegistry.resolve("compendium://components/r:local.x:1.0.0")
 
       assert {:ok, "execution", "read_resource"} =
-               ResourceRegistry.resolve("opus://executions/exec_1")
+               ResourceRegistry.resolve("crucible://executions/exec_1")
 
       assert {:ok, "resource", "read"} = ResourceRegistry.resolve("arca://files/data/x")
       assert {:ok, "session", "read_resource"} = ResourceRegistry.resolve("sanctum://identity")

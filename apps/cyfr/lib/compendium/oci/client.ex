@@ -543,7 +543,7 @@ defmodule Compendium.OCI.Client do
   # Verify OCI image signature via cosign. By default a verification failure
   # is not fatal: the component is stored as unverified, and what it may then
   # do is decided at execution time by the same knob —
-  # `Cyfr.Execution.Admission` reads the recorded attestation on
+  # `Crucible.Admission` reads the recorded attestation on
   # every path and refuses an unsigned row when signed pulls are required, so
   # a component pulled before the knob was turned on does not keep running.
   # With the knob off, running unsigned is the operator's accepted posture and

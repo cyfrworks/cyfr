@@ -887,7 +887,7 @@ defmodule Cyfr.BoundariesTest do
          defmodule Cyfr.Bus.Planted do
            alias Sanctum.Context
            def a(%Context{} = ctx), do: Aqua.Runner.subscribe(ctx.athanor_id, "t")
-           def b, do: Cyfr.Execution.Events.flush("e")
+           def b, do: Crucible.Events.flush("e")
            def c, do: Prima.Actor.system()
          end
          ''')}
@@ -896,7 +896,7 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.bus_violations(planted) == [
                "apps/cyfr/lib/cyfr/bus/planted.ex:2 names Sanctum.Context",
                "apps/cyfr/lib/cyfr/bus/planted.ex:3 names Aqua.Runner",
-               "apps/cyfr/lib/cyfr/bus/planted.ex:4 names Cyfr.Execution.Events"
+               "apps/cyfr/lib/cyfr/bus/planted.ex:4 names Crucible.Events"
              ]
     end
 
@@ -989,7 +989,7 @@ defmodule Cyfr.BoundariesTest do
       into_execution =
         Enum.find(
           Boundaries.surfaces(),
-          &(&1.into == "Cyfr.Execution" and "apps/cyfr/lib/compendium/**/*.ex" in &1.from)
+          &(&1.into == "Crucible" and "apps/cyfr/lib/compendium/**/*.ex" in &1.from)
         ) || flunk("no surface row fences the component domain out of execution")
 
       planted = [
@@ -998,13 +998,13 @@ defmodule Cyfr.BoundariesTest do
          defmodule Compendium.Planted do
            def models(ctx), do: Aqua.Models.catalogue(ctx)
            def status(ctx), do: Aqua.model_status(ctx, [])
-           def run(ctx, ref), do: Cyfr.Execution.authority_for(ctx, :default, ref)
+           def run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
          end
          ''')}
       ]
 
       assert Boundaries.surface_violations(into_aqua, planted) == ["Aqua", "Aqua.Models"]
-      assert Boundaries.surface_violations(into_execution, planted) == ["Cyfr.Execution"]
+      assert Boundaries.surface_violations(into_execution, planted) == ["Crucible"]
     end
 
     test "the assistant reads consent's derivation and nothing of the plane that writes it" do

@@ -83,7 +83,7 @@ defmodule Emissary.MCP.ResourceProviderTest do
     assert Enum.sort(advertisers) ==
              Enum.sort([
                Compendium.MCP,
-               Cyfr.Execution.MCP,
+               Crucible.Provider,
                Grimoire.Provider,
                Sanctum.MCP
              ])

@@ -16,7 +16,7 @@ defmodule Aqua.TapeSeamTest do
 
   @storage ~r/\bArca\.(\w+Storage|Execution|ExecutionAttempts|ExecutionEvents|ExecutionPayloads|BudgetReservations|AgentRevisions|Repo)\b/
   @catalog ~r/(?<![\w.])Grimoire\./
-  @root_run ~r/\bCyfr\.Execution\.run_root\b/
+  @root_run ~r/\bCrucible\.run_root\b/
   @machine ~r/\bFile\.|\bSystem\.cmd\b|\bReq\./
 
   defp files(globs) do

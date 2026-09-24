@@ -6,7 +6,7 @@ defmodule Opus.SecurityTest do
 
   alias Opus.ComponentType
 
-  alias Cyfr.Execution.MCP
+  alias Crucible.Provider
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
@@ -127,20 +127,20 @@ defmodule Opus.SecurityTest do
     test "execution access is tenant-scoped", %{ctx: ctx, ref: ref} do
       # Execute as user — fails at Component Model load but still writes a record
       _result =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
         })
 
       # List user's executions to find the record
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 1
       execution_id = hd(list_result.executions).execution_id
 
       # Same user can see the execution
       {:ok, logs_result} =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "logs",
           "execution_id" => execution_id
         })
@@ -160,7 +160,7 @@ defmodule Opus.SecurityTest do
         )
 
       {:error, msg} =
-        MCP.handle("execution", other_ctx, %{
+        Provider.handle("execution", other_ctx, %{
           "action" => "logs",
           "execution_id" => execution_id
         })
@@ -171,14 +171,14 @@ defmodule Opus.SecurityTest do
     test "execution listing is tenant-scoped", %{ctx: ctx, ref: ref} do
       # Execute as user — record is created even on failure
       _result =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
         })
 
       # User can see their execution
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 1
 
       # A different tenant sees none of this athanor's executions.
@@ -193,14 +193,14 @@ defmodule Opus.SecurityTest do
           authenticated: true
         )
 
-      {:ok, other_list_result} = MCP.handle("execution", other_ctx, %{"action" => "list"})
+      {:ok, other_list_result} = Provider.handle("execution", other_ctx, %{"action" => "list"})
       assert other_list_result.count == 0
     end
 
     test "execution cancellation is tenant-scoped", %{ctx: ctx} do
       # Create a running execution record directly (no WASM needed)
-      record = Cyfr.Execution.Record.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = Cyfr.Execution.Record.write_started(record)
+      record = Crucible.Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Crucible.Record.write_started(record)
 
       # A different tenant cannot cancel (tenant boundary enforced)
       other_ctx =
@@ -215,7 +215,7 @@ defmodule Opus.SecurityTest do
         )
 
       {:error, msg} =
-        MCP.handle("execution", other_ctx, %{
+        Provider.handle("execution", other_ctx, %{
           "action" => "cancel",
           "execution_id" => record.id
         })
@@ -244,18 +244,18 @@ defmodule Opus.SecurityTest do
     test "execution record includes component_digest", %{ctx: ctx, ref: ref} do
       # Execute — fails at runtime but the digest is computed and stored before execution
       _result =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
         })
 
       # Retrieve the execution record to verify digest was captured
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
       execution_id = hd(list_result.executions).execution_id
 
       {:ok, logs_result} =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "logs",
           "execution_id" => execution_id
         })
@@ -270,26 +270,26 @@ defmodule Opus.SecurityTest do
     test "same component produces same digest", %{ctx: ctx, ref: ref} do
       # Execute twice — both records should have the same digest
       _result1 =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
         })
 
       _result2 =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
         })
 
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
       assert length(list_result.executions) >= 2
 
       digests =
         Enum.map(list_result.executions, fn exec ->
           {:ok, logs} =
-            MCP.handle("execution", ctx, %{
+            Provider.handle("execution", ctx, %{
               "action" => "logs",
               "execution_id" => exec.execution_id
             })
@@ -310,7 +310,7 @@ defmodule Opus.SecurityTest do
       # Normal small input passes validation; execution may fail for other reasons
       # (math.wasm is a core module, not Component Model)
       result =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 5, "b" => 3}
@@ -331,7 +331,7 @@ defmodule Opus.SecurityTest do
       large_input = %{"data" => large_data}
 
       {:error, msg} =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => large_input
@@ -360,7 +360,7 @@ defmodule Opus.SecurityTest do
 
   describe "signature verification" do
     test "verify block schema is present in tool definition" do
-      tools = MCP.tools()
+      tools = Provider.tools()
       tool = Enum.find(tools, &(&1.name == "execution"))
 
       # The discovery schema is one flat object, so `verify` is a top-level
@@ -375,7 +375,7 @@ defmodule Opus.SecurityTest do
     test "verify block is optional (no signature error without it)", %{ctx: ctx, ref: ref} do
       # No verify block — should not fail due to signature verification
       result =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
@@ -390,7 +390,7 @@ defmodule Opus.SecurityTest do
     test "registered components skip signature verification", %{ctx: ctx, ref: ref} do
       # Even with verify block, registered components should not fail on signature verification
       result =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
           "input" => %{"a" => 1, "b" => 2},
@@ -410,7 +410,7 @@ defmodule Opus.SecurityTest do
       # No profile exists for a component that was never published, so the
       # run is refused before resolution — and never as a signature error.
       {:error, msg} =
-        MCP.handle("execution", ctx, %{
+        Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => "reagent:local.nonexistent:0.1.0",
           "input" => %{}

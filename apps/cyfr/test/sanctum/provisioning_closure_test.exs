@@ -91,7 +91,7 @@ defmodule Sanctum.ProvisioningClosureTest do
                Arca.ConsentStorage.profiles(Sanctum.Context.actor(in_group), "agent:local.aqua")
 
       assert {:ok, %Prima.Authority{} = auth} =
-               Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua")
+               Crucible.authority_for(in_group, :default, "agent:local.aqua")
 
       assert auth.cursor == {:bound, "agent:local.aqua"}
 

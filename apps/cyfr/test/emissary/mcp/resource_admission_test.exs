@@ -7,7 +7,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
   owns the URI's scheme, through the catalog's gate, once:
 
     * `compendium://` — `component.read_resource`, `:component_read`;
-    * `opus://` — `execution.read_resource`, `:storage_read`;
+    * `crucible://` — `execution.read_resource`, `:storage_read`;
     * `arca://` — `resource.read`, `:storage_read`, reading only the roots
       the admitted context reaches;
     * `sanctum://` — `session.read_resource`, anonymous, answering the
@@ -36,8 +36,8 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
   @declarations [
     {"component", "read_resource", :component_read, :required, "compendium",
      "compendium://components/r:local.none:1.0.0"},
-    {"execution", "read_resource", :storage_read, :required, "opus",
-     "opus://executions/exec_none"},
+    {"execution", "read_resource", :storage_read, :required, "crucible",
+     "crucible://executions/exec_none"},
     {"resource", "read", :storage_read, :required, "arca", "arca://files/data/none.txt"},
     {"session", "read_resource", nil, :anonymous, "sanctum", "sanctum://identity"}
   ]
@@ -109,7 +109,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
       storage_key = key([:storage_read])
 
       # Refused at the gate, before any read, for the permission it lacks.
-      for uri <- ["arca://files/data/reach.txt", "opus://executions/exec_none"] do
+      for uri <- ["arca://files/data/reach.txt", "crucible://executions/exec_none"] do
         assert {:error, :insufficient_permissions, message} = read(component_key, uri)
         assert message =~ "missing required permission 'storage_read'"
       end
@@ -129,7 +129,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
       assert Base.decode64!(blob) == "data bytes"
 
       assert {:error, :resource_not_found, message} =
-               read(storage_key, "opus://executions/exec_none")
+               read(storage_key, "crucible://executions/exec_none")
 
       assert message =~ "not found"
 

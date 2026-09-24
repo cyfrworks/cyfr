@@ -137,7 +137,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     assert %DateTime{} = group.provisioned_at, inspect(Athanors.settings(group))
 
     assert {:ok, %Prima.Authority{}} =
-             Cyfr.Execution.authority_for(in_group, :default, @formula)
+             Crucible.authority_for(in_group, :default, @formula)
 
     assert Aqua.consent_state(in_group, @formula) == {:ok, :current}
 
@@ -157,7 +157,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
              })
 
     assert {:error, {:consent_required, _}} =
-             Cyfr.Execution.authority_for(in_group, :default, @formula)
+             Crucible.authority_for(in_group, :default, @formula)
 
     assert Aqua.consent_state(in_group, @formula) == {:ok, :stale}
     assert Aqua.stale_consent_refs(in_group) == {:ok, [{@formula, :stale}]}
@@ -167,7 +167,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     assert Aqua.consent_state(in_group) == {:ok, :current}
 
     assert {:ok, %Prima.Authority{}} =
-             Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua")
+             Crucible.authority_for(in_group, :default, "agent:local.aqua")
   end
 
   # A local formula that may use the published provider once it is installed.
