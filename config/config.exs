@@ -60,20 +60,12 @@ config :cyfr,
 # minutes and must survive a restart. Tests override to the ETS store.
 config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
 
-# The two ports the identity domain declares and something above it
-# implements. `:grimoire` is consent's view of the operation table;
-# `:consent_components` is the component facts a consent decision rests
-# on. Sanctum names neither implementation: with the key unset every call
-# through the port refuses, distinguishably from an absent component.
-config :sanctum, :grimoire, Grimoire.Catalog
-
 # How long a read of a caller's credential and standing is trusted: the
 # establish memo's TTL and the age past which a retained context is
 # revalidated before it is acted on (`Sanctum.Caller.fresh?/1`). A security
 # bound, not a tuning knob — it is how long a revocation no announcement
 # reached can go unread anywhere in the cell.
 config :sanctum, :caller_memo_ttl_ms, 2_000
-config :sanctum, :consent_components, Compendium.ConsentFacts
 
 # Where this deployment is reachable when the operator declared nothing:
 # the endpoint's own scheme, host and port. `CYFR_PUBLIC_URL` overrides it
@@ -180,13 +172,6 @@ config :arca,
   storage_adapter: Arca.Adapters.Local,
   base_path: Path.expand("./data"),
   seed_path: Path.expand("../seed", __DIR__)
-
-# Map each overlaid root to its unit locator. Every overlay root requires
-# a locator defining its unit boundaries.
-config :arca, :overlay_locators, %{
-  "aqua" => Compendium.AquaPath,
-  "components" => Compendium.ComponentPath
-}
 
 # Recursive file and byte ceilings for public-profile guest writes.
 # Authenticated tenant storage uses CYFR_ATHANOR_STORAGE_BYTES.

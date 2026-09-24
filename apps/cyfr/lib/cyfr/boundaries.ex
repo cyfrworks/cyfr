@@ -757,6 +757,80 @@ defmodule Cyfr.Boundaries do
       Enum.any?(@bus_free.namespaces, &(module == &1 or String.starts_with?(module, &1 <> ".")))
   end
 
+  # The gate sits below the domains and the surfaces it dispatches for: it
+  # reaches providers through the operation table and the transport's
+  # proxied tools through `Grimoire.Proxy`, so it names neither. Each
+  # allowed reach is exact, names the owner it moves to, and is reported
+  # stale the day the gate stops making it.
+  @gate_free %{
+    from: ["apps/cyfr/lib/grimoire/**/*.ex"],
+    roots: ~w(Emissary EmissaryWeb Aqua Compendium Crucible Prism PrismWeb CyfrWeb),
+    allow: [
+      %{
+        name: "Emissary.MCP.ResourceRegistry",
+        owner: "Grimoire.Resources",
+        reason:
+          "`system.status` counts the resource index, which the transport's registry " <>
+            "holds until the gate holds the index itself."
+      },
+      %{
+        name: "Emissary.TaskSupervisor",
+        owner: "Grimoire.TaskSupervisor",
+        reason:
+          "the gate's supervised calls run under the transport's task supervisor " <>
+            "until the gate starts one of its own."
+      },
+      %{
+        name: "Emissary.MCP.Protocol",
+        owner: "Prima",
+        reason:
+          "`system.status` reports the MCP protocol version, which the transport " <>
+            "spells until the MCP message and protocol shapes are shared contracts."
+      },
+      %{
+        name: "Compendium.RegistryHost",
+        owner: "Compendium.Provider",
+        reason:
+          "`system.status` reports the registry scope from the component domain's " <>
+            "host configuration until the component provider answers its own status."
+      }
+    ],
+    reason:
+      "the operation table dispatches for every domain and surface; naming one " <>
+        "would make the gate depend on what it gates. Proxied tools reach it " <>
+        "through `Grimoire.Proxy`, which `Cyfr.Application` installs."
+  }
+
+  @doc """
+  The gate's own tree and what it may not name: `from` is where to read,
+  `roots` the domain and surface namespaces it stays clear of, and
+  `allow` the exact reaches still moving to their `owner`.
+  """
+  @spec gate_free() :: map()
+  def gate_free, do: @gate_free
+
+  @doc "Every name in `named` the gate may not reach, as `path:line names Module`."
+  @spec gate_violations(named()) :: [String.t()]
+  def gate_violations(named) do
+    allowed = MapSet.new(@gate_free.allow, & &1.name)
+
+    for {path, names} <- named,
+        {module, number} <- names,
+        (module |> String.split(".") |> hd()) in @gate_free.roots,
+        not MapSet.member?(allowed, module),
+        uniq: true,
+        do: "#{path}:#{number} names #{module}"
+  end
+
+  @doc "The allowed reaches `named` no longer makes."
+  @spec stale_gate_allowances(named()) :: [String.t()]
+  def stale_gate_allowances(named) do
+    reached =
+      for {_path, names} <- named, {module, _number} <- names, into: MapSet.new(), do: module
+
+    for %{name: name} <- @gate_free.allow, not MapSet.member?(reached, name), do: name
+  end
+
   # ---------------------------------------------------------------------------
   # 3. The routes
   # ---------------------------------------------------------------------------
@@ -1103,47 +1177,49 @@ defmodule Cyfr.Boundaries do
   # 5. The ports, and the behaviours that are not ports
   # ---------------------------------------------------------------------------
 
+  # Each port is installed the one way: its declaring module's
+  # `install!/1` writes `{Module, :impl}` into `:persistent_term`, its
+  # `impl!/0` reads it and raises `Module.NotInstalledError` when nothing
+  # was written, and `Cyfr.Application.start/2` is the one caller of
+  # `install!/1`, from literals, before its supervisor starts.
+  @boot_writer "Cyfr.Application"
+  @boot_file "apps/cyfr/lib/cyfr/application.ex"
+
   @ports [
+    %{
+      behaviour: "Prima.Caps",
+      what: "the storage and counted cap decision",
+      declared_by: :prima,
+      implemented_by: "Sanctum.Tenancy.Caps",
+      written_at_boot_by: @boot_writer
+    },
     %{
       behaviour: "Sanctum.Grimoire",
       what: "consent's view of the operation table",
       declared_by: :sanctum,
       implemented_by: "Grimoire.Catalog",
-      written_at_boot_by: "config :sanctum, :grimoire"
+      written_at_boot_by: @boot_writer
     },
     %{
       behaviour: "Sanctum.Consent.Components",
       what: "component facts for consent",
       declared_by: :sanctum,
       implemented_by: "Compendium.ConsentFacts",
-      written_at_boot_by: "config :sanctum, :consent_components"
+      written_at_boot_by: @boot_writer
     },
     %{
-      behaviour: "Prima.Caps",
-      what: "the storage and counted cap decision",
-      declared_by: :prima,
-      implemented_by: "Sanctum.Tenancy.Caps",
-      written_at_boot_by: "Cyfr.Application"
-    },
-    %{
-      behaviour: nil,
+      behaviour: "Grimoire.Proxy",
       what: "proxied tool resolution",
       declared_by: :cyfr,
       implemented_by: "Emissary.External.Proxy",
-      written_at_boot_by: nil,
-      note:
-        "the operation table asks the transport for a tool an upstream server " <>
-          "defines, on a lookup miss. It is a direct call from `Grimoire.Catalog` " <>
-          "today rather than a declared behaviour, because the table and the " <>
-          "transport are one application: nothing in the dependency graph rests on " <>
-          "it, and it becomes a behaviour the day they are two."
+      written_at_boot_by: @boot_writer
     },
     %{
       behaviour: "Arca.Storage.UnitLocator",
       what: "where a storage unit's bytes live",
       declared_by: :arca,
       implemented_by: "Compendium.ComponentPath and Compendium.AquaPath",
-      written_at_boot_by: "Arca.Storage.install_locators!/0, from config :arca, :overlay_locators"
+      written_at_boot_by: @boot_writer
     }
   ]
 
@@ -1184,9 +1260,14 @@ defmodule Cyfr.Boundaries do
     Enum.sort(ports ++ Enum.map(@internal_strategies, & &1.behaviour))
   end
 
-  @doc "The one call that installs the cap port's implementation, and where it is."
-  @spec caps_boot_write() :: {String.t(), Path.t()}
-  def caps_boot_write, do: {"Prima.Caps.install!(", "apps/cyfr/lib/cyfr/application.ex"}
+  @doc """
+  Each port's one installation: the call that writes its implementation
+  and the file it is written in, as `{behaviour, call, file}`, in the
+  order the boot writes them.
+  """
+  @spec boot_writes() :: [{String.t(), String.t(), Path.t()}]
+  def boot_writes,
+    do: for(p <- @ports, do: {p.behaviour, p.behaviour <> ".install!(", @boot_file})
 
   # ---------------------------------------------------------------------------
   # 6. The actor construction paths

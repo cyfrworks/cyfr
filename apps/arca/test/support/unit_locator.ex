@@ -74,7 +74,7 @@ defmodule Arca.Test.UnitLocator do
     def locate(_path), do: :above_unit
   end
 
-  @doc "The map `Arca.Storage.install_locators!/0` reads."
+  @doc "The registry the suites install through `Arca.Storage.UnitLocator.install!/1`."
   @spec locators() :: %{String.t() => module()}
   def locators, do: %{"components" => Components, "aqua" => Aqua}
 end

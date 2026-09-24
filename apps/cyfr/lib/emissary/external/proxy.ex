@@ -8,14 +8,21 @@ defmodule Emissary.External.Proxy do
 
   They appear in `tools/list` as `server_name:tool_name` (e.g.
   `notion:create_page`) and are reachable only `:in_chain` — see
-  `default_planes/0`. An upstream catalogue is unbounded and changes without
-  us, so it carries no compile-time annotation; what bounds it instead is the
-  consent a chain's authority holds, which `consent_candidates/1` describes.
+  `Grimoire.Proxy.default_planes/0`. An upstream catalogue is unbounded and
+  changes without us, so it carries no compile-time annotation; what bounds
+  it instead is the consent a chain's authority holds, which
+  `consent_candidates/1` describes.
+
+  This module is the one implementation of `Grimoire.Proxy`, the port the
+  operation table asks about proxied tools through; `Cyfr.Application`
+  installs it at boot.
 
   Managing the connections themselves is the `mcp_servers` tool
   (`Emissary.External.Provider`); the config both build a server from is
   `Emissary.External.Servers`.
   """
+
+  @behaviour Grimoire.Proxy
 
   alias Emissary.External.Servers
   alias Sanctum.Context
@@ -33,6 +40,7 @@ defmodule Emissary.External.Proxy do
   Returns tool definitions with names prefixed as `server_name:tool_name`.
   Called by `Grimoire.Provider.handle("tools", ctx, %{"action" => "list"})`.
   """
+  @impl Grimoire.Proxy
   @spec list_external_tools(Context.t()) :: [map()]
   def list_external_tools(%Context{} = ctx) do
     cache_key = Arca.Cache.Keys.external_tools(Sanctum.Context.actor(ctx))
@@ -57,31 +65,20 @@ defmodule Emissary.External.Proxy do
   end
 
   @doc """
-  The plane every proxied upstream tool is reached from.
-
-  Upstream catalogues are unbounded and change without us, so no
-  compile-time annotation is possible — the whole bucket takes one default
-  instead, and `try_handle/4` enforces it per call: an external-plane
-  caller is refused unless the server's config opts in with
-  `"console": true`. The wiring backstop still holds — the HTTP MCP
-  router rejects any tool name it cannot find in the registered-tool
-  cache, and proxied `server:tool` names are never cached there — but the
-  console's own dispatch path is in-process, so without the explicit gate
-  one dynamic tool name on a page would reach any upstream tool.
-
-  The opt-in is per server, self-set by whoever may create the server
-  row: its job is stopping accidental or attacker-influenced dynamic
-  dispatch, not defending against the member's own deliberate
-  configuration.
+  The tools a server of the caller's athanor answers with now, from its
+  running process; `{:error, :not_running}` when none is running.
   """
-  @spec default_planes() :: [Prima.Provider.plane(), ...]
-  def default_planes, do: [:in_chain]
+  @impl Grimoire.Proxy
+  @spec server_tools(Context.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def server_tools(%Context{} = ctx, server_name) when is_binary(server_name),
+    do: Emissary.External.Server.get_tools(server_name, ctx.athanor_id)
 
   @doc """
   Returns each external server's name, consent digest, exposure patterns
   and, when reachable, matched tool names and baseline descriptions.
   Unreachable servers remain grantable without a catalog baseline.
   """
+  @impl Grimoire.Proxy
   @spec consent_candidates(Context.t()) :: [map()]
   def consent_candidates(%Context{} = ctx) do
     case Arca.McpServerStorage.list(Sanctum.Context.actor(ctx)) do
@@ -116,6 +113,7 @@ defmodule Emissary.External.Proxy do
   end
 
   @doc "The single-server candidate, used at commit to resolve a decision."
+  @impl Grimoire.Proxy
   @spec consent_candidate(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def consent_candidate(%Context{} = ctx, server_name) do
     with {:ok, server} <- Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), server_name) do
@@ -213,8 +211,9 @@ defmodule Emissary.External.Proxy do
                 #
                 # No planes entry: an upstream catalogue is unbounded and
                 # changes without us, so the whole bucket is `:in_chain`
-                # (`default_planes/0`), answered by the dispatch checks from
-                # the name shape rather than carried on the definition.
+                # (`Grimoire.Proxy.default_planes/0`), answered by the
+                # dispatch checks from the name shape rather than carried
+                # on the definition.
                 "annotations" => %{
                   "readOnlyHint" => upstream_ann["readOnlyHint"],
                   "destructiveHint" => upstream_ann["destructiveHint"],
@@ -254,23 +253,36 @@ defmodule Emissary.External.Proxy do
 
   Parses `server_name:tool_name` format and dispatches to the appropriate
   external server. Returns `{:error, :not_external}` if the tool name
-  doesn't match an external server.
+  doesn't match an external server. Every other refusal is a reason the
+  refusal table knows (`Grimoire.Error.classify/1`) or a
+  `%Prima.Refusal{}` already classified — never a bare sentence: a
+  disabled server, a tool its patterns do not expose and an
+  external-plane call to a chain-only server are `{:invalid_argument, _}`;
+  an in-chain call its lineage does not admit is a refusal of the
+  admission's own class; an upstream server's own error sentence is
+  classified as it arrives.
 
   `plane` is the caller's plane — `:in_chain` from a running chain,
   `:external` from the console or any other direct caller. There is
   deliberately no default: proxied tools are in-chain by declaration
-  (`default_planes/0`), and an external-plane call is refused unless the
-  server row opts in with `"console": true` in its config. The flag is
-  not part of the server's consent digest (`Sanctum.ToolServerDigest`
-  pins url/enabled/headers/patterns), so setting it never invalidates
-  existing grants.
+  (`Grimoire.Proxy.default_planes/0`), and an external-plane call is
+  refused unless the server row opts in with `"console": true` in its
+  config. The console's own dispatch path is in-process, so without this
+  gate one dynamic tool name on a page would reach any upstream tool. The
+  opt-in is per server, self-set by whoever may create the server row:
+  its job is stopping accidental or attacker-influenced dynamic dispatch,
+  not defending against the member's own deliberate configuration. The
+  flag is not part of the server's consent digest
+  (`Sanctum.ToolServerDigest` pins url/enabled/headers/patterns), so
+  setting it never invalidates existing grants.
 
   `server:` is the row a caller already read and judged — an in-chain
   call's transition was stepped on that row's digest — and dispatch then
   speaks to exactly that revision; without it the row is read here, once.
   """
+  @impl Grimoire.Proxy
   @spec try_handle(String.t(), Context.t(), map(), :in_chain | :external, keyword()) ::
-          {:ok, map()} | {:error, :not_external | String.t()}
+          {:ok, map()} | {:error, Grimoire.Proxy.reason()}
   def try_handle(tool_name, %Context{} = ctx, args, plane, opts \\ [])
       when plane in [:in_chain, :external] do
     case String.split(tool_name, ":", parts: 2) do
@@ -281,16 +293,19 @@ defmodule Emissary.External.Proxy do
 
             cond do
               not server.enabled ->
-                {:error, "Server '#{server_name}' is disabled"}
+                {:error, {:invalid_argument, "Server '#{server_name}' is disabled"}}
 
               not Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, remote_tool)) ->
-                {:error, "Tool '#{remote_tool}' is not exposed by server '#{server_name}'"}
+                {:error,
+                 {:invalid_argument,
+                  "Tool '#{remote_tool}' is not exposed by server '#{server_name}'"}}
 
               plane == :external and not console_reachable?(server) ->
                 {:error,
-                 "Tool '#{remote_tool}' on server '#{server_name}' is reachable " <>
-                   "only from inside a chain — set \"console\": true in the " <>
-                   "server's config to call it from the console"}
+                 {:invalid_argument,
+                  "Tool '#{remote_tool}' on server '#{server_name}' is reachable " <>
+                    "only from inside a chain — set \"console\": true in the " <>
+                    "server's config to call it from the console"}}
 
               plane == :in_chain ->
                 attempted(ctx, server, server_name, remote_tool, args, opts, fn ->
@@ -304,8 +319,9 @@ defmodule Emissary.External.Proxy do
           {:error, :not_found} ->
             {:error, :not_external}
 
+          # `:no_athanor` or `:database_error`: the table's own words.
           {:error, reason} ->
-            {:error, inspect(reason)}
+            {:error, reason}
         end
 
       _ ->
@@ -385,11 +401,18 @@ defmodule Emissary.External.Proxy do
         Crucible.LeaseWatch.stop(watch)
       end
     else
+      # Nothing ran: the refusal keeps the admission's own class, and says
+      # which call it was.
       {:error, {:refused, reason}} ->
+        refusal = Grimoire.Error.classify(reason)
+
         {:error,
-         {:refused,
-          "Call to #{remote_tool} on server '#{server_name}' not admitted: " <>
-            Grimoire.Error.render(reason)}}
+         %Prima.Refusal{
+           refusal
+           | message:
+               "Call to #{remote_tool} on server '#{server_name}' not admitted: " <>
+                 refusal.message
+         }}
     end
   end
 
@@ -578,10 +601,28 @@ defmodule Emissary.External.Proxy do
         # The process started from THIS row's configuration is the one
         # called — never a lookup by name that a replacement in between
         # could answer with another revision's process.
-        Emissary.External.Server.call_tool(pid, remote_tool, Map.delete(args, "action"))
+        pid
+        |> Emissary.External.Server.call_tool(remote_tool, Map.delete(args, "action"))
+        |> classified()
 
-      {:error, reason} ->
-        {:error, "Failed to start server '#{server_name}': #{inspect(reason)}"}
+      # The start failure itself is the supervisor's report to read; its
+      # reason may carry the row's configuration, so it is not repeated
+      # here or handed to the caller.
+      {:error, _reason} ->
+        Logger.warning("[Emissary.External.Proxy] server '#{server_name}' could not be started")
+        {:error, {:unavailable, "Server '#{server_name}'"}}
     end
   end
+
+  # An upstream call's refusal in the table's terms. A reason the table
+  # knows passes as it is — an `{:uncertain, _}` among them, which the
+  # caller reads as an unknown outcome — and anything else, the server's
+  # own sentence included, is classified here.
+  defp classified({:error, reason} = refused) do
+    if Sanctum.Unauthorized.reason?(reason) or Prima.Refusal.reason?(reason),
+      do: refused,
+      else: {:error, Grimoire.Error.classify(reason)}
+  end
+
+  defp classified(answer), do: answer
 end

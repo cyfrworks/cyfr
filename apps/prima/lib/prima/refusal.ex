@@ -426,6 +426,10 @@ defmodule Prima.Refusal do
   defp row({:unknown_tool, name}) when is_binary(name),
     do: {:not_found, "Unknown tool: #{name}"}
 
+  # A `server:tool` name no external server of the caller's athanor
+  # answers (`Grimoire.Proxy`).
+  defp row(:not_external), do: {:not_found, "Unknown tool"}
+
   defp row(:database_error),
     do: {:unavailable, "The store could not answer — retry shortly"}
 

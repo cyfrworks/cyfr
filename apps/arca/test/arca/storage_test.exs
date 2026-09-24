@@ -304,14 +304,14 @@ defmodule Arca.StorageTest do
 
       # The classes partition: no root is both tenant and global; every
       # seed root, overlay root and guest-scope target is a tenant root;
-      # every overlay root has a configured locator (the unit shapes are
+      # every overlay root has an installed locator (the unit shapes are
       # the locators' own — their tests witness them).
       assert Storage.tenant_roots() -- Storage.global_prefixes() == Storage.tenant_roots()
       assert Enum.all?(Storage.seed_roots(), &(&1 in Storage.tenant_roots()))
       assert Enum.all?(Storage.overlay_roots(), &(&1 in Storage.tenant_roots()))
       assert Enum.all?(Map.values(Storage.guest_scopes()), &(&1 in Storage.tenant_roots()))
 
-      locators = Application.fetch_env!(:arca, :overlay_locators)
+      locators = Arca.Storage.UnitLocator.impl!()
       assert Enum.sort(Map.keys(locators)) == Enum.sort(Storage.overlay_roots())
 
       for {_root, mod} <- locators do
@@ -319,7 +319,7 @@ defmodule Arca.StorageTest do
       end
     end
 
-    test "locate/1 routes through the configured locator, and only there" do
+    test "locate/1 routes through the installed locator, and only there" do
       assert Storage.locate(["data", "x"]) == :not_overlaid
       assert Storage.locate(["payloads", "sha256", "x"]) == :not_overlaid
       assert Storage.locate([]) == :not_overlaid
@@ -461,34 +461,49 @@ defmodule Arca.StorageTest do
 end
 
 defmodule Arca.StorageLocatorWiringTest do
-  # Mutates the global :overlay_locators wiring — must not run beside the
-  # async suites that call locate/1.
+  # Mutates the global unit-locator port — must not run beside the async
+  # suites that call locate/1.
   use ExUnit.Case, async: false
 
-  test "install_locators!/0 fails loud on a wiring that does not match the layout" do
-    original = Application.fetch_env!(:arca, :overlay_locators)
+  alias Arca.Storage.UnitLocator
 
-    on_exit(fn ->
-      Application.put_env(:arca, :overlay_locators, original)
-      Arca.Storage.install_locators!()
-    end)
+  test "install!/1 fails loud on a registry that does not match the layout" do
+    original = UnitLocator.impl!()
+    on_exit(fn -> UnitLocator.install!(original) end)
 
     # A missing root is a boot error, not a first-touch surprise. The
-    # failed install never clobbers the previously installed map, so
+    # failed install never clobbers the previously installed registry, so
     # locate/1 keeps answering while this raises.
-    Application.put_env(:arca, :overlay_locators, Map.delete(original, "aqua"))
-
-    assert_raise ArgumentError, ~r/overlay_locators must name exactly/, fn ->
-      Arca.Storage.install_locators!()
+    assert_raise ArgumentError, ~r/must name exactly the overlaid roots/, fn ->
+      UnitLocator.install!(Map.delete(original, "aqua"))
     end
 
+    assert UnitLocator.impl!() == original
     assert {:file, _} = Arca.Storage.locate(["aqua", "roles", "a.md"])
 
     # A root wired to a module without locate/1 is refused too.
-    Application.put_env(:arca, :overlay_locators, %{original | "aqua" => String})
-
     assert_raise ArgumentError, ~r/does not implement/, fn ->
-      Arca.Storage.install_locators!()
+      UnitLocator.install!(%{original | "aqua" => String})
     end
+
+    assert UnitLocator.impl!() == original
+  end
+
+  test "an overlaid path asked before the boot write raises, and a plain one does not" do
+    original = UnitLocator.impl!()
+    on_exit(fn -> UnitLocator.install!(original) end)
+
+    UnitLocator.reset()
+
+    error =
+      assert_raise UnitLocator.NotInstalledError, fn ->
+        Arca.Storage.locate(["aqua", "roles", "a.md"])
+      end
+
+    assert error.message =~ "Arca.Storage.UnitLocator.install!/1"
+    assert_raise UnitLocator.NotInstalledError, fn -> UnitLocator.impl!() end
+
+    # A path no locator shapes needs none installed to say so.
+    assert Arca.Storage.locate(["data", "x"]) == :not_overlaid
   end
 end

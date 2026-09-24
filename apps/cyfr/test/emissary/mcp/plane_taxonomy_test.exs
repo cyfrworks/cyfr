@@ -53,9 +53,9 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # Require annotations on registered actions and agent virtual tools.
   use ExUnit.Case, async: true
 
-  alias Emissary.External.Proxy
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
   alias Grimoire.Catalog
+  alias Grimoire.Proxy
   alias Aqua.Hands
 
   # Sibling-app providers are unavailable when this app's suite runs alone.

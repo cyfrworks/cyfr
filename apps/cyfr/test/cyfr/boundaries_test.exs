@@ -900,6 +900,54 @@ defmodule Cyfr.BoundariesTest do
              ]
     end
 
+    test "the gate names no domain and no surface beyond its rostered reaches" do
+      named = names(Boundaries.gate_free().from)
+
+      assert Enum.sum(for {_path, names} <- named, do: length(names)) > 50,
+             "the gate's own scan found no names — it is not reading"
+
+      assert Boundaries.gate_violations(named) == []
+      assert Boundaries.stale_gate_allowances(named) == []
+
+      assert Enum.map(Boundaries.gate_free().allow, & &1.name) == [
+               "Emissary.MCP.ResourceRegistry",
+               "Emissary.TaskSupervisor",
+               "Emissary.MCP.Protocol",
+               "Compendium.RegistryHost"
+             ]
+
+      for entry <- Boundaries.gate_free().allow do
+        assert is_binary(entry.reason) and entry.reason != ""
+        assert is_binary(entry.owner) and entry.owner != ""
+      end
+
+      planted = [
+        {"apps/cyfr/lib/grimoire/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Grimoire.Planted do
+           alias Emissary.External.Proxy
+           def a(ctx), do: Proxy.list_external_tools(ctx)
+           def b, do: Aqua.Runner.subscribe("ath", "t")
+           def c, do: Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn -> :ok end)
+           def d(ctx), do: PrismWeb.Focus.current(ctx)
+           def e, do: Grimoire.Proxy.impl!()
+         end
+         ''')}
+      ]
+
+      assert Boundaries.gate_violations(planted) == [
+               "apps/cyfr/lib/grimoire/planted.ex:2 names Emissary.External.Proxy",
+               "apps/cyfr/lib/grimoire/planted.ex:4 names Aqua.Runner",
+               "apps/cyfr/lib/grimoire/planted.ex:6 names PrismWeb.Focus"
+             ]
+
+      assert Boundaries.stale_gate_allowances(planted) == [
+               "Emissary.MCP.ResourceRegistry",
+               "Emissary.MCP.Protocol",
+               "Compendium.RegistryHost"
+             ]
+    end
+
     test "a direct read of a security row in a surface is reported, however it is spelled" do
       row = security_row_seam()
 
@@ -1136,38 +1184,92 @@ defmodule Cyfr.BoundariesTest do
              """
     end
 
-    test "the cap port has exactly one boot write" do
-      {call, expected} = Boundaries.caps_boot_write()
+    test "every port has exactly one installation site, the boot's" do
+      libs = for lib <- SourceTree.app_libs(root()), do: scan(lib <> "/**/*.ex")
 
-      writes =
-        for lib <- SourceTree.app_libs(root()),
-            {path, lines} <- scan(lib <> "/**/*.ex"),
-            {line, n} <- lines,
-            String.contains?(line, call),
-            do: "#{path}:#{n}"
+      counts =
+        for {behaviour, call, expected} <- Boundaries.boot_writes() do
+          writes =
+            for scanned <- libs,
+                {path, lines} <- scanned,
+                {line, n} <- lines,
+                String.contains?(line, call),
+                do: "#{path}:#{n}"
 
-      assert length(writes) == 1 and hd(writes) =~ expected,
+          assert Enum.all?(writes, &String.starts_with?(&1, expected <> ":")),
+                 "`#{call}` is written at #{inspect(writes)}; the boot's write is in #{expected}"
+
+          {behaviour, length(writes)}
+        end
+
+      assert counts == Enum.map(Boundaries.ports(), &{&1.behaviour, 1}),
              """
-             `#{call}` is written at #{inspect(writes)}; it is the boot's one
-             write, in #{expected}. A second writer means a process can read a
-             different implementation depending on when it asked, and the port
-             refuses before the first write rather than reading as a server with
-             no ceilings.
+             Installation sites per port: #{inspect(counts)}. Each port is
+             written once, at boot. A second writer means a process can read a
+             different implementation depending on when it asked; none means
+             the port refuses every call.
              """
     end
 
-    test "every port row names its implementation and where the boot writes it" do
+    test "the boot installs the five in order, before its supervisor starts" do
+      source = SourceTree.read(Path.join(root(), "apps/cyfr/lib/cyfr/application.ex"))
+      calls = for {_behaviour, call, _file} <- Boundaries.boot_writes(), do: call
+
+      offsets =
+        for call <- calls ++ ["Supervisor.start_link("] do
+          {offset, _length} = :binary.match(source, call)
+          offset
+        end
+
+      assert offsets == Enum.sort(offsets)
+    end
+
+    test "every port row names its declaring module, its implementation and the boot" do
+      assert Enum.map(Boundaries.ports(), & &1.behaviour) == [
+               "Prima.Caps",
+               "Sanctum.Grimoire",
+               "Sanctum.Consent.Components",
+               "Grimoire.Proxy",
+               "Arca.Storage.UnitLocator"
+             ]
+
       for port <- Boundaries.ports() do
         assert is_binary(port.what) and is_binary(port.implemented_by)
-
-        if port.behaviour do
-          assert port.written_at_boot_by,
-                 "the port #{port.behaviour} names no boot write"
-        else
-          assert Map.has_key?(port, :note),
-                 "the port #{port.what} declares no behaviour and says nothing about why"
-        end
+        assert port.declared_by in [:prima, :arca, :sanctum, :cyfr]
+        assert port.written_at_boot_by == "Cyfr.Application"
       end
+
+      assert %{declared_by: :cyfr, implemented_by: "Emissary.External.Proxy"} =
+               Enum.find(Boundaries.ports(), &(&1.behaviour == "Grimoire.Proxy"))
+    end
+
+    test "every declaring module installs, reads and refuses the one way" do
+      for %{behaviour: behaviour} <- Boundaries.ports() do
+        port = Module.concat([behaviour])
+        error = Module.concat([behaviour, "NotInstalledError"])
+
+        assert Code.ensure_loaded?(port) and function_exported?(port, :install!, 1) and
+                 function_exported?(port, :impl!, 0),
+               "#{behaviour} has no install!/1 and impl!/0"
+
+        assert Code.ensure_loaded?(error) and function_exported?(error, :exception, 1),
+               "#{behaviour} raises no #{inspect(error)}"
+      end
+    end
+
+    test "the running boot installed each row's implementation" do
+      installed =
+        for %{behaviour: behaviour} <- Boundaries.ports(),
+            do: {behaviour, Module.concat([behaviour]).impl!()}
+
+      assert installed == [
+               {"Prima.Caps", Sanctum.Tenancy.Caps},
+               {"Sanctum.Grimoire", Grimoire.Catalog},
+               {"Sanctum.Consent.Components", Compendium.ConsentFacts},
+               {"Grimoire.Proxy", Emissary.External.Proxy},
+               {"Arca.Storage.UnitLocator",
+                %{"aqua" => Compendium.AquaPath, "components" => Compendium.ComponentPath}}
+             ]
     end
   end
 

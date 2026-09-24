@@ -14,11 +14,24 @@ defmodule Cyfr.Application do
 
   @impl true
   def start(_type, _args) do
-    # The storage and counted cap port's one write, before every domain
-    # this application starts. A capped write asks it on the first tenant
-    # byte, and an uninstalled port refuses rather than reading as a
-    # server with no ceilings (`Prima.Caps.NotInstalledError`).
+    # The five ports' one write each, before every domain this
+    # application starts: each declaring module reads its implementation
+    # from the term written here, and an uninstalled port raises where it
+    # is asked rather than answering as though nothing were there. The
+    # storage and counted caps, asked on the first tenant byte; consent's
+    # view of the operation table; the component facts a consent rests on;
+    # the proxied `server:tool` tools the table resolves on a miss; and
+    # the overlaid roots' unit locators, asserted against the layout here
+    # before Bootstrap or the tincture registry scans the union.
     Prima.Caps.install!(Sanctum.Tenancy.Caps)
+    Sanctum.Grimoire.install!(Grimoire.Catalog)
+    Sanctum.Consent.Components.install!(Compendium.ConsentFacts)
+    Grimoire.Proxy.install!(Emissary.External.Proxy)
+
+    Arca.Storage.UnitLocator.install!(%{
+      "aqua" => Compendium.AquaPath,
+      "components" => Compendium.ComponentPath
+    })
 
     # One redaction vocabulary: Phoenix's inbound request-param filter is
     # fed from its owner (config/config.exs deliberately does not spell a
@@ -42,14 +55,6 @@ defmodule Cyfr.Application do
     # blob encrypted under the derived key — platform deployments should
     # set an explicit keyring.
     resolve_crypto_keyring!()
-
-    # Port 5's wiring: every overlaid root is mapped to the locator that
-    # knows its unit boundaries. It fails loud here — before Bootstrap or
-    # the tincture registry scan the union — not on the first touch of
-    # whichever overlaid root was left without one. The locators are
-    # Compendium's and the roster is this application's, which is why the
-    # install is here and not in `Arca.Supervisor`.
-    Arca.Storage.install_locators!()
 
     # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do

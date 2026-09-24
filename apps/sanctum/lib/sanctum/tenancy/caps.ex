@@ -38,7 +38,7 @@ defmodule Sanctum.Tenancy.Caps do
   `check_storage/2` — because a cap bounds what one tenant or one person
   holds, and which one that is comes from the authenticated caller and
   never from an argument. `Cyfr.Application` installs this module at
-  boot; until it does, `Prima.Caps.impl/0` raises rather than reading an
+  boot; until it does, `Prima.Caps.impl!/0` raises rather than reading an
   uninstalled port as a server with no caps.
 
   `check_counted/2` is the tenancy domain's own spelling, for the mints

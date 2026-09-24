@@ -7,7 +7,7 @@ defmodule Sanctum.GrimoireTest do
   alias Sanctum.Grimoire
 
   test "the one implementation is the operation catalog, and it answers the port" do
-    assert Grimoire.impl() == Elixir.Grimoire.Catalog
+    assert Grimoire.impl!() == Elixir.Grimoire.Catalog
 
     behaviours =
       Elixir.Grimoire.Catalog.__info__(:attributes)
@@ -19,6 +19,24 @@ defmodule Sanctum.GrimoireTest do
     actions = Grimoire.tool_actions()
     assert "system.status" in actions
     assert Enum.all?(actions, &(&1 =~ ~r/^[a-z_]+\.[a-z_]+$/))
+  end
+
+  test "an uninstalled port raises where it is asked, rather than answering an empty roster" do
+    installed = Grimoire.impl!()
+    on_exit(fn -> Grimoire.install!(installed) end)
+    Grimoire.reset()
+
+    error = assert_raise Grimoire.NotInstalledError, fn -> Grimoire.tool_actions() end
+    assert error.message =~ "Sanctum.Grimoire.install!/1"
+    assert_raise Grimoire.NotInstalledError, fn -> Grimoire.impl!() end
+  end
+
+  test "an install that does not answer every callback is refused, and changes nothing" do
+    assert_raise ArgumentError, ~r/does not implement Sanctum.Grimoire: missing/, fn ->
+      Grimoire.install!(Sanctum.Consent.Components)
+    end
+
+    assert Grimoire.impl!() == Elixir.Grimoire.Catalog
   end
 
   test "a shape derives its tool roster through the port" do

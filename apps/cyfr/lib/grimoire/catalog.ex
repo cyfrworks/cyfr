@@ -725,8 +725,7 @@ defmodule Grimoire.Catalog do
     with %{tool_servers: servers} <- authority.resources,
          %{descriptions_digest: baseline} = grant when is_binary(baseline) <-
            Enum.find(servers, &(&1.server_digest == digest)),
-         {:ok, tools} <-
-           Emissary.External.Server.get_tools(grant.server_name, ctx.athanor_id),
+         {:ok, tools} <- Grimoire.Proxy.impl!().server_tools(ctx, grant.server_name),
          {:ok, live} <-
            Sanctum.ToolServerDigest.descriptions_digest(tools, grant.tool_patterns) do
       unless Plug.Crypto.secure_compare(live, baseline) do
@@ -1032,8 +1031,10 @@ defmodule Grimoire.Catalog do
               plane = if Keyword.get(opts, :in_chain, false), do: :in_chain, else: :external
               args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
 
+              proxy = Grimoire.Proxy.impl!()
+
               execute_tool_call(name, ctx, opts, fn ->
-                Emissary.External.Proxy.try_handle(name, ctx, args, plane,
+                proxy.try_handle(name, ctx, args, plane,
                   server: Keyword.get(opts, :server),
                   execution_id: Keyword.get(opts, :execution_id),
                   step: Keyword.get(opts, :step),
@@ -1095,10 +1096,11 @@ defmodule Grimoire.Catalog do
   either gate. The catalog runs this at boot and refuses to start on any
   finding.
 
-  Skips `Emissary.External.Proxy` (its `mcp_servers` definition is
-  audited; the upstream-tool proxy is exempt — those are classified as
-  `:external` by `Aqua.Kinds.kind_for/2` via namespacing, and get
-  their plane from `Emissary.External.Proxy.default_planes/0`).
+  Proxied `server:tool` tools are not audited: they are no provider's
+  declarations (the `mcp_servers` tool that manages the servers is, and
+  is audited). They are classified as `:external` by
+  `Aqua.Kinds.kind_for/2` via namespacing, and get their plane from
+  `Grimoire.Proxy.default_planes/0`.
 
   Returns `:ok` when all tools are clean, or `{:error, [missing]}` where
   each entry is `%{provider: module, tool: name, action: verb, reason: r}`.
@@ -1726,15 +1728,15 @@ defmodule Grimoire.Catalog do
   end
 
   # The external tool servers a grant may name (`Sanctum.Grimoire`). The
-  # proxied `server:tool` entries are the external provider's, so it is
-  # what describes them.
+  # proxied `server:tool` entries are the proxy port's (`Grimoire.Proxy`),
+  # so it is what describes them.
   @impl Sanctum.Grimoire
   def tool_server_candidates(%Context{} = ctx),
-    do: Emissary.External.Proxy.consent_candidates(ctx)
+    do: Grimoire.Proxy.impl!().consent_candidates(ctx)
 
   @impl Sanctum.Grimoire
   def tool_server_candidate(%Context{} = ctx, name) when is_binary(name),
-    do: Emissary.External.Proxy.consent_candidate(ctx, name)
+    do: Grimoire.Proxy.impl!().consent_candidate(ctx, name)
 
   defp loadable?(module),
     do: Code.ensure_loaded?(module) and function_exported?(module, :tools, 0)

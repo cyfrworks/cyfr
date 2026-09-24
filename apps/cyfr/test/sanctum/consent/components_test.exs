@@ -46,16 +46,16 @@ defmodule Sanctum.Consent.ComponentsTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # The port with no implementation written: what a deployment whose
-  # boot did not wire it looks like from inside the auth domain.
+  # The port with no implementation installed: what a deployment whose
+  # boot did not install it looks like from inside the auth domain.
   defp without_facts(fun) do
-    previous = Application.get_env(:sanctum, :consent_components)
-    Application.delete_env(:sanctum, :consent_components)
+    previous = Components.impl!()
+    Components.reset()
 
     try do
       fun.()
     after
-      if previous, do: Application.put_env(:sanctum, :consent_components, previous)
+      Components.install!(previous)
     end
   end
 
@@ -76,7 +76,7 @@ defmodule Sanctum.Consent.ComponentsTest do
   end
 
   test "the one implementation is the component domain's, and it answers the port" do
-    assert Components.impl() == Compendium.ConsentFacts
+    assert Components.impl!() == Compendium.ConsentFacts
 
     behaviours =
       Compendium.ConsentFacts.__info__(:attributes)
@@ -84,6 +84,25 @@ defmodule Sanctum.Consent.ComponentsTest do
       |> List.flatten()
 
     assert Sanctum.Consent.Components in behaviours
+  end
+
+  test "the accessor raises when nothing is installed; the calls answer their word instead" do
+    without_facts(fn ->
+      error = assert_raise Components.NotInstalledError, fn -> Components.impl!() end
+      assert error.message =~ "Sanctum.Consent.Components.install!/1"
+    end)
+  end
+
+  test "an install that does not answer every callback is refused, and changes nothing" do
+    assert_raise ArgumentError, ~r/does not implement Sanctum.Consent.Components/, fn ->
+      Components.install!(Sanctum.Grimoire)
+    end
+
+    assert_raise ArgumentError, ~r/does not implement/, fn ->
+      Components.install!(Sanctum.Consent.ComponentsTest.NoSuchModule)
+    end
+
+    assert Components.impl!() == Compendium.ConsentFacts
   end
 
   test "every call refuses in its own word when no implementation is written", %{ctx: ctx} do

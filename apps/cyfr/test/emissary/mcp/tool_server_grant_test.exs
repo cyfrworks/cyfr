@@ -176,13 +176,15 @@ defmodule Emissary.MCP.ToolServerGrantTest do
   test "a granted server's matching tool passes the transition", %{ctx: ctx, digest: digest} do
     auth = authority_with_server(digest)
 
-    {:error, message} =
+    {:error, reason} =
       Catalog.call_in_chain("ghserver:issues.list", guest(ctx), %{}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest(ctx))
       )
 
-    # It got PAST the authority — the failure is the unreachable upstream.
-    refute message =~ "Denied by chain authority"
+    # It got PAST the authority — the failure is the unreachable upstream,
+    # which the proxy hands back classified rather than as a bare sentence.
+    refute is_binary(reason)
+    refute Grimoire.Error.render(reason) =~ "Denied by chain authority"
   end
 
   test "a tool outside the granted patterns is not callable", %{ctx: ctx, digest: digest} do
