@@ -5,8 +5,7 @@ defmodule Compendium.ManifestTest do
   @moduledoc """
   The manifest contract as the component domain composes it: the shared
   validator (`Cyfr.Manifest.validate/2`) under the storage layer's
-  guest-path predicate, the domain's suggested categories, and the one
-  connect-domain grammar the contract copies from the tincture helper.
+  guest-path predicate and the domain's suggested categories.
   """
 
   use ExUnit.Case, async: true
@@ -71,39 +70,6 @@ defmodule Compendium.ManifestTest do
       names = Enum.map(Compendium.Manifest.known_categories(), & &1.name)
       assert "utilities" in names
       assert names == Enum.uniq(names)
-    end
-  end
-
-  # Until the tincture helper delegates to the contract, two spellings of
-  # one grammar exist; this holds them to the same answers, so the domain
-  # the CSP builder admits and the domain publish admits cannot drift.
-  describe "the connect-domain grammar" do
-    test "the contract's copy answers as the tincture helper does" do
-      probes = [
-        "api.example.com",
-        "*.example.org",
-        "a-b.example.io",
-        "x.co",
-        "*",
-        "*.",
-        "https://x.com",
-        "x.com/path",
-        "x.com:8080",
-        "1.2.3.4",
-        "evil.com\n",
-        " x.com",
-        "-x.com",
-        "x",
-        "",
-        7,
-        nil
-      ]
-
-      for probe <- probes do
-        assert Manifest.valid_connect_domain?(probe) ==
-                 Cyfr.TinctureHelpers.valid_connect_domain?(probe),
-               "the two grammars disagree on #{inspect(probe)}"
-      end
     end
   end
 end

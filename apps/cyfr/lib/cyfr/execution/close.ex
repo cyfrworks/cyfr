@@ -55,7 +55,7 @@ defmodule Cyfr.Execution.Close do
   `setup_stream` the stream a setup refusal is announced on (the run's root,
   else its parent); `signature_verified` the registry's attestation flag;
   `started` whether the row was admitted; `envelope` whether the output is
-  the component's catalyst envelope (`Cyfr.Models.decode_envelope/1`),
+  the component's catalyst envelope (`Cyfr.Model.decode_envelope/1`),
   whose error is a refusal the component answers rather than a failure of
   the run; `admission` the barriers (`:charge`, `:step`, `:occurrence_id`)
   a row admitted only on failure passes through.

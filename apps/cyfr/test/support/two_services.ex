@@ -442,7 +442,7 @@ defmodule Cyfr.Test.TwoServices do
       "version" => @version,
       "publisher" => "local",
       "description" => "A model/chat@1 catalyst the two-service matrix runs",
-      "contracts" => [Cyfr.Models.chat_contract()],
+      "contracts" => [Cyfr.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:step-stub",

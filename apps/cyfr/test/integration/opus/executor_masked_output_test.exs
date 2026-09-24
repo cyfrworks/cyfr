@@ -271,7 +271,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
       "version" => @version,
       "publisher" => "local",
       "description" => "A model/chat@1 catalyst the masking matrix runs",
-      "contracts" => [Cyfr.Models.chat_contract()],
+      "contracts" => [Cyfr.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:#{name}",

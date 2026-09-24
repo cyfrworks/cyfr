@@ -39,7 +39,7 @@ defmodule Aqua.Notes do
   This module is the domain. Four callers read or write here:
   `Emissary.MCP.NotesTool`, the door people and agents come through;
   `Aqua.Prompt`, which reads the pinned page and the index into every
-  turn; `Cyfr.ScheduleNotes`, which keeps a schedule's outcome where no
+  turn; `Aqua.ScheduleNotes`, which keeps a schedule's outcome where no
   person is at the keyboard; and `PrismWeb.AquaLive`, which edits the
   pinned page on the AQUA page.
   """

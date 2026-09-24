@@ -25,7 +25,8 @@ defmodule Cyfr.Boundaries do
       console may name, what the auth domain may name of the transport,
       what reaches back up into the component domain, and which storage
       modules hold security rows only Sanctum may read
-      (`sanctum_only_storage/0`).
+      (`sanctum_only_storage/0`). Beside them, `http_free/0` names the
+      domain trees no line of which names an HTTP type.
     * `route_postures/0` and `public_routes/0` — how every HTTP route is
       authenticated. The posture travels with the route
       (`EmissaryWeb.Router` declares it as route metadata); this catalog
@@ -269,7 +270,7 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Context Sanctum.ExecutionStanding Sanctum.Notify
+        Sanctum Sanctum.Consent Sanctum.Context Sanctum.ExecutionStanding Sanctum.Notify
         Sanctum.Provisioning Sanctum.Tenancy Sanctum.ToolGrants
       ),
       reason:
@@ -281,7 +282,20 @@ defmodule Cyfr.Boundaries do
           "now rather than through the `aqua` tool, and the bundle a group estate " <>
           "is filled with on first read has to be there before the turn roots an " <>
           "authority in it. `Sanctum.ExecutionStanding` is `Aqua.Tape`'s check over " <>
-          "the grant a turn's root attempt stores, handed to the turn's writes."
+          "the grant a turn's root attempt stores, handed to the turn's writes. " <>
+          "`Sanctum.Consent` is `Aqua.ConsentStatus`'s read of what a source " <>
+          "declares, through consent's own derivation; the row below narrows it."
+    },
+    %{
+      from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
+      into: "Sanctum.Consent",
+      depth: 3,
+      allow: ~w(Sanctum.Consent.ShapeDerivation),
+      reason:
+        "the assistant reports whether a consent still covers its source and grants " <>
+          "nothing: it reads what a source declares through " <>
+          "`Sanctum.Consent.ShapeDerivation` and what was consented from the authority " <>
+          "a turn would pin, and names nothing of the plane that writes a consent."
     },
     %{
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
@@ -431,6 +445,27 @@ defmodule Cyfr.Boundaries do
           "`source` roster it enforces on write is `Cyfr.ComponentSource` now."
     },
     %{
+      from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
+      into: "Aqua",
+      allow: ~w(Aqua.Hands Aqua.Policy),
+      reason:
+        "the assistant reads the component domain, never the reverse: the model " <>
+          "catalysts, the agent sources and the local formulas are component facts " <>
+          "Compendium answers and the assistant composes. The two reaches rostered " <>
+          "are the catalyst a tool family runs on (`Aqua.Hands`), which an agent " <>
+          "source's dependencies name, and the authored-policy check " <>
+          "(`Aqua.Policy`) the `aqua` tool holds a write to; nothing else is."
+    },
+    %{
+      from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
+      into: "Cyfr.Execution",
+      allow: [],
+      reason:
+        "the component domain answers facts about components and runs none: a " <>
+          "catalyst runs through the gate under its caller's plane, and a model " <>
+          "listing reads `Compendium.model_catalysts/1` and runs each catalyst there."
+    },
+    %{
       from: ["apps/sanctum/lib/**/*.ex"],
       into: "Compendium",
       allow: [],
@@ -505,6 +540,26 @@ defmodule Cyfr.Boundaries do
         "Emissary — the MCP contract — is the engines' honest dependency; the " <>
           "endpoint, the router and the plugs are not. The auth domain reads key " <>
           "material and the public origin from configuration, not from the endpoint."
+    },
+    %{
+      from: [
+        "apps/cyfr_contracts/lib/**/*.ex",
+        "apps/opus/lib/**/*.ex",
+        "apps/locus/lib/**/*.ex",
+        "apps/arca/lib/**/*.ex",
+        "apps/sanctum/lib/**/*.ex",
+        "apps/cyfr/lib/compendium/**/*.ex",
+        "apps/cyfr/lib/compendium.ex",
+        "apps/cyfr/lib/aqua/**/*.ex",
+        "apps/cyfr/lib/aqua.ex"
+      ],
+      into: "CyfrWeb",
+      allow: [],
+      reason:
+        "`CyfrWeb` is the web tier's own: the context guard and the ingress adapters " <>
+          "that turn a domain's answer into an HTTP response. A domain hands a " <>
+          "surface plain data and a typed refusal and never names the adapter " <>
+          "that renders it."
     },
 
     # --- the security rows: Sanctum is their only reader ---
@@ -600,6 +655,40 @@ defmodule Cyfr.Boundaries do
     |> MapSet.new()
     |> MapSet.difference(surface_reaches(row, named))
     |> Enum.sort()
+  end
+
+  # The domain trees an HTTP type never enters, and what a line that names
+  # one looks like: a module of `Plug`, or a `conn`.
+  @http_free %{
+    from: [
+      "apps/cyfr/lib/compendium/**/*.ex",
+      "apps/cyfr/lib/compendium.ex",
+      "apps/cyfr/lib/aqua/**/*.ex",
+      "apps/cyfr/lib/aqua.ex",
+      "apps/sanctum/lib/sanctum/tincture_access.ex"
+    ],
+    pattern: ~r/\bPlug\.|\bconn\b/,
+    reason:
+      "a domain answers plain data and a typed refusal; the connection, the " <>
+        "response and its headers are the surface adapter's. The tincture rules " <>
+        "are Compendium's and the public tenancy Sanctum's, and neither takes a " <>
+        "request or sends one."
+  }
+
+  @doc """
+  The domain trees no line of which names an HTTP type: `from` is where to
+  read, `pattern` what a line that names one matches.
+  """
+  @spec http_free() :: map()
+  def http_free, do: @http_free
+
+  @doc "The code lines in `scanned` that name an HTTP type, as `path:line: code`."
+  @spec http_violations(scanned()) :: [String.t()]
+  def http_violations(scanned) do
+    for {path, lines} <- scanned,
+        {line, n} <- lines,
+        line =~ @http_free.pattern,
+        do: "#{path}:#{n}: #{String.trim(line)}"
   end
 
   # ---------------------------------------------------------------------------

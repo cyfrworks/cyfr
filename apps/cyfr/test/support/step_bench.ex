@@ -197,7 +197,7 @@ defmodule Cyfr.Test.StepBench do
       "version" => @stub_version,
       "publisher" => "local",
       "description" => "A model/chat@1 catalyst that streams a few deltas and answers at once",
-      "contracts" => [Cyfr.Models.chat_contract()],
+      "contracts" => [Cyfr.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:step-stub",

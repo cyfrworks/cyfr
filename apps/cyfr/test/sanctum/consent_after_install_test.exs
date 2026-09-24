@@ -139,7 +139,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     assert {:ok, %Cyfr.Authority{}} =
              Cyfr.Execution.authority_for(in_group, :default, @formula)
 
-    assert Cyfr.ConsentDrift.state(in_group, @formula) == :ok
+    assert Aqua.consent_state(in_group, @formula) == {:ok, :current}
 
     # The optional provider is installed, as the console's Install does.
     # That widens the closure the formula's consent was minted against, so
@@ -159,12 +159,12 @@ defmodule Sanctum.ConsentAfterInstallTest do
     assert {:error, {:consent_required, _}} =
              Cyfr.Execution.authority_for(in_group, :default, @formula)
 
-    assert Cyfr.ConsentDrift.state(in_group, @formula) == :stale
-    assert Cyfr.ConsentDrift.stale_refs(in_group) == [{@formula, :stale}]
+    assert Aqua.consent_state(in_group, @formula) == {:ok, :stale}
+    assert Aqua.stale_consent_refs(in_group) == {:ok, [{@formula, :stale}]}
 
     # The bundled assistant names nothing the install touched: its closure
     # ships in the seed, so its consent stands and a turn still pins it.
-    assert Cyfr.ConsentDrift.state(in_group) == :ok
+    assert Aqua.consent_state(in_group) == {:ok, :current}
 
     assert {:ok, %Cyfr.Authority{}} =
              Cyfr.Execution.authority_for(in_group, :default, "agent:local.aqua")

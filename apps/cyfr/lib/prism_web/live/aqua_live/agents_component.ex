@@ -464,7 +464,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     |> assign(:soul, soul)
     |> assign(:roles, roles)
     |> assign(:default_start, default_start(roles))
-    |> assign(:model_status, Aqua.AgentConfig.model_status(ctx, agents))
+    |> assign(:model_status, Aqua.model_status(ctx, agents))
     |> ensure_tool_actions_loaded()
   end
 

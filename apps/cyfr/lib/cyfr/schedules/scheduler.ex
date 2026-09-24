@@ -670,7 +670,7 @@ defmodule Cyfr.Schedules.Scheduler do
 
           # What `:fired` carried, plus the outcome and the row's own
           # metadata as stored — a consumer that keeps the outcome
-          # (`Cyfr.ScheduleNotes`) reads `keep_outcome` off it without a
+          # (`Aqua.ScheduleNotes`) reads `keep_outcome` off it without a
           # second read of the row.
           :telemetry.execute(
             [:cyfr, :schedules, :completed],

@@ -109,7 +109,7 @@ defmodule Aqua.RoomExcerpt do
 
       cond do
         bytes + size <= @max_bytes -> {:cont, {[line | acc], bytes + size}}
-        acc == [] -> {:halt, {[Cyfr.Text.cut(line, @max_bytes - 3)], @max_bytes}}
+        acc == [] -> {:halt, {[Aqua.Text.cut(line, @max_bytes - 3)], @max_bytes}}
         true -> {:halt, {acc, bytes}}
       end
     end)

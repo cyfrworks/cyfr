@@ -185,7 +185,7 @@ defmodule Sanctum do
 
   This is the *invoke* path (the tincture's catalyst runs with `:execute`). For
   serving a tincture's static assets / looking it up without executing anything,
-  use `Cyfr.TinctureHelpers.build_public_context/2` instead.
+  use `Sanctum.TinctureAccess.public_context/1` instead.
 
   Uses `:tincture` authentication through the shared authorization path,
   with or without an auth provider configured.

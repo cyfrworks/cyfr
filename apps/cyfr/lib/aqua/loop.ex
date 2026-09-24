@@ -689,8 +689,8 @@ defmodule Aqua.Loop do
 
     result =
       case answer do
-        {:ok, {:ok, %{output: output}}} -> Cyfr.Models.decode_envelope(output)
-        {:ok, {:ok, output}} -> Cyfr.Models.decode_envelope(output)
+        {:ok, {:ok, %{output: output}}} -> Cyfr.Model.decode_envelope(output)
+        {:ok, {:ok, output}} -> Cyfr.Model.decode_envelope(output)
         {:ok, {:error, reason}} -> {:error, reason}
         {:exit, reason} -> {:exit, reason}
       end

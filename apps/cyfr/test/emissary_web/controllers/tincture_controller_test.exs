@@ -419,6 +419,21 @@ defmodule EmissaryWeb.TinctureControllerTest do
       assert get(conn, "/t/other/local/pub-dash").status == 404
       assert get(conn, "/t/nobody/local/pub-dash").status == 404
     end
+
+    test "an athanor the store cannot resolve is a 503, never a 404", %{conn: conn} do
+      assert get(conn, "/t/test/local/pub-dash").status == 200
+
+      # The route's athanor segment is read before any lookup; with the
+      # table gone the store cannot say whether it exists.
+      Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unavailable")
+
+      for path <- ["/t/test/local/pub-dash", "/t/test/local/pub-dash/style.css"] do
+        refused = get(build_conn(), path)
+        assert json_response(refused, 503)["code"] == "unavailable"
+        assert get_resp_header(refused, "retry-after") == ["5"]
+        refute refused.resp_body =~ "Public"
+      end
+    end
   end
 
   # ── Assets (no auth required) ────────────────────────────────────

@@ -92,7 +92,7 @@ defmodule Cyfr.Test.ChatFixture do
       "version" => @version,
       "publisher" => "local",
       "description" => "A model/chat@1 catalyst that plays the script its request carries",
-      "contracts" => [Cyfr.Models.chat_contract()],
+      "contracts" => [Cyfr.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:#{@name}",

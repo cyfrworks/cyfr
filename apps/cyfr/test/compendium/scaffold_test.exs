@@ -134,7 +134,7 @@ defmodule Compendium.ScaffoldTest do
 
     test "what scaffold writes, media discovery finds", %{ctx: ctx} do
       # The `public/media/` convention has one spelling
-      # (Cyfr.TinctureHelpers); the scaffolder's placeholders must land
+      # (Compendium.Tincture); the scaffolder's placeholders must land
       # exactly where discovery probes.
       assert {:ok, _} = Scaffold.create(ctx, "branded", "tincture", "0.1.0")
 
@@ -147,7 +147,7 @@ defmodule Compendium.ScaffoldTest do
         )
 
       assert %{icon: "public/media/icon.svg", previews: ["public/media/preview-1.svg"]} =
-               Cyfr.TinctureHelpers.discover_media_via_arca(ctx, version_segs)
+               Compendium.Tincture.media(ctx, version_segs)
     end
   end
 

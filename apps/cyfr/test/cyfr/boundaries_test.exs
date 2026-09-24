@@ -517,6 +517,32 @@ defmodule Cyfr.BoundariesTest do
                "the surface #{inspect(row.from)} -> #{row.into} carries no reason"
       end
     end
+
+    test "no line of a domain names an HTTP type" do
+      row = Boundaries.http_free()
+      scanned = scan(row.from)
+
+      assert lines_read(scanned) > 100, "the HTTP-type scan read no code — it is not reading"
+
+      assert "apps/sanctum/lib/sanctum/tincture_access.ex" in Enum.map(scanned, &elem(&1, 0))
+      assert "apps/cyfr/lib/compendium/tincture.ex" in Enum.map(scanned, &elem(&1, 0))
+
+      assert Boundaries.http_violations(scanned) == [],
+             """
+             A domain names a Plug connection or response. The request and the
+             response are the surface adapter's (`CyfrWeb.Ingress.*`, a
+             controller); the domain answers plain data and a typed refusal.
+
+             #{Enum.join(Boundaries.http_violations(scanned), "\n")}
+             """
+    end
+
+    test "the surface adapter is the one that does name them" do
+      # A scan that finds nothing in the domains finds nothing because they
+      # name nothing, not because the pattern cannot see a connection.
+      adapter = scan("apps/cyfr/lib/cyfr_web/ingress/tincture_assets.ex")
+      assert Boundaries.http_violations(adapter) != []
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -885,6 +911,73 @@ defmodule Cyfr.BoundariesTest do
       ]
 
       assert Boundaries.surface_violations(row, entries_only) == []
+    end
+
+    test "a component-domain reach into the assistant or into execution is reported" do
+      into_aqua =
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Aqua" and "apps/cyfr/lib/compendium/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences the component domain out of the assistant")
+
+      into_execution =
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Cyfr.Execution" and "apps/cyfr/lib/compendium/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences the component domain out of execution")
+
+      planted = [
+        {"apps/cyfr/lib/compendium/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Compendium.Planted do
+           def models(ctx), do: Aqua.Models.catalogue(ctx)
+           def status(ctx), do: Aqua.model_status(ctx, [])
+           def run(ctx, ref), do: Cyfr.Execution.authority_for(ctx, :default, ref)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(into_aqua, planted) == ["Aqua", "Aqua.Models"]
+      assert Boundaries.surface_violations(into_execution, planted) == ["Cyfr.Execution"]
+    end
+
+    test "the assistant reads consent's derivation and nothing of the plane that writes it" do
+      row =
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Sanctum.Consent" and "apps/cyfr/lib/aqua/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences the assistant out of the consent plane")
+
+      planted = [
+        {"apps/cyfr/lib/aqua/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Aqua.Planted do
+           def declared(ctx, ref), do: Sanctum.Consent.ShapeDerivation.manifest_blocks(ctx, ref)
+           def grant(ctx), do: Sanctum.Consent.Commit.commit(ctx, %{})
+           def profiles(ctx, ref), do: Sanctum.Consent.profiles(ctx, ref)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, planted) ==
+               ["Sanctum.Consent", "Sanctum.Consent.Commit"]
+    end
+
+    test "a domain that takes a connection is reported with its file and line" do
+      planted =
+        {"apps/cyfr/lib/compendium/planted.ex",
+         CodeLines.code_lines(~S'''
+         defmodule Compendium.Planted do
+           # A Plug.Conn in a comment is prose.
+           def serve(conn, bytes), do: Plug.Conn.send_resp(conn, 200, bytes)
+           def connect(domain), do: domain
+         end
+         ''')}
+
+      assert Boundaries.http_violations([planted]) == [
+               "apps/cyfr/lib/compendium/planted.ex:3: " <>
+                 "def serve(conn, bytes), do: Plug.Conn.send_resp(conn, 200, bytes)"
+             ]
     end
 
     test "a route with no declared posture is reported" do
@@ -1533,6 +1626,41 @@ defmodule Cyfr.BoundariesTest do
              Regenerate the copy from the owner: everything from the multi-alias
              comment down is the same bytes.
              """
+    end
+
+    test "the five retired helper modules neither load nor are named in any tracked source" do
+      # Spelled in parts, so this file is not itself a mention.
+      retired = ~w(Models TinctureHelpers ConsentDrift ScheduleNotes Text)
+
+      for suffix <- retired do
+        module = Module.concat(Cyfr, suffix)
+        refute Code.ensure_loaded?(module), "#{inspect(module)} still loads"
+      end
+
+      pattern = Regex.compile!("\\bCyfr\\.(?:" <> Enum.join(retired, "|") <> ")\\b")
+
+      sources =
+        for glob <- [
+              "apps/*/lib/**/*.{ex,heex}",
+              "apps/*/test/**/*.{ex,exs}",
+              "apps/*/mix.exs",
+              "apps/*/*.md",
+              "config/**/*.exs",
+              "mix.exs",
+              "*.md"
+            ],
+            path <- Path.wildcard(Path.join(root(), glob)),
+            do: path
+
+      assert length(sources) > 500,
+             "the scan found #{length(sources)} sources — it is not reading"
+
+      named =
+        for path <- sources,
+            SourceTree.read(path) =~ pattern,
+            do: Path.relative_to(path, root())
+
+      assert named == [], "a retired helper is still named in: #{inspect(named)}"
     end
 
     test "the catalog skips exactly one file, and the compiled scan covers it" do

@@ -26,6 +26,11 @@ defmodule Aqua do
     the console intents (`Aqua.Intents`).
   - `Aqua.AgentConfig` — the soul's and the roles' definitions and prompts;
     `Aqua.Roster` — who may be addressed.
+  - `Aqua.Models` — what a model can do, the model listing and whether
+    each soul's model has a key; `Aqua.ConsentStatus` — whether what the
+    estate consented to still covers its sources.
+  - `Aqua.ScheduleNotes` — a schedule's outcome kept as a note when the
+    schedule asked for it.
   - `Aqua.Aloud` — the one deliberate copy: your own lines, said into an
     estate you belong to.
   - `Aqua.Notes` — what somebody chose to keep out of a thread: the
@@ -39,5 +44,41 @@ defmodule Aqua do
   This is domain, not console: it drives `PrismWeb`'s chat through PubSub
   broadcasts and rows, and never names the console back (pinned by
   `Cyfr.Boundaries`).
+
+  The functions below are the domain's door for callers outside it.
   """
+
+  alias Aqua.{ConsentStatus, Models}
+  alias Sanctum.Context
+
+  @doc "The model listing the console's pickers show. See `Aqua.Models.catalogue/1`."
+  @spec models(Context.t()) :: {:ok, map()} | {:error, :forbidden | :unavailable}
+  defdelegate models(ctx), to: Models, as: :catalogue
+
+  @doc "What one model can do, read from its catalyst. See `Aqua.Models.capabilities/5`."
+  @spec model_capabilities(Context.t(), String.t(), String.t(), String.t() | nil, keyword()) ::
+          {:ok, Cyfr.Model.capabilities()} | {:error, term()}
+  defdelegate model_capabilities(ctx, resolved_ref, model, binding_digest, opts),
+    to: Models,
+    as: :capabilities
+
+  @doc "Whether each soul's model has a key. See `Aqua.Models.model_status/2`."
+  @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
+  defdelegate model_status(ctx, agents), to: Models
+
+  @doc "Whether the soul's consent still covers its source. See `Aqua.ConsentStatus.state/2`."
+  @spec consent_state(Context.t()) ::
+          {:ok, ConsentStatus.state()} | {:error, ConsentStatus.refusal()}
+  def consent_state(%Context{} = ctx), do: ConsentStatus.state(ctx, Cyfr.AgentRef.soul_ref())
+
+  @doc "Whether the consent of `ref` still covers its source. See `Aqua.ConsentStatus.state/2`."
+  @spec consent_state(Context.t(), String.t()) ::
+          {:ok, ConsentStatus.state()} | {:error, ConsentStatus.refusal()}
+  defdelegate consent_state(ctx, ref), to: ConsentStatus, as: :state
+
+  @doc "Every local source whose consent no longer answers. See `Aqua.ConsentStatus.stale_refs/1`."
+  @spec stale_consent_refs(Context.t()) ::
+          {:ok, [{String.t(), :stale | {:drifted, [String.t()]}}]}
+          | {:error, ConsentStatus.refusal()}
+  defdelegate stale_consent_refs(ctx), to: ConsentStatus, as: :stale_refs
 end

@@ -129,36 +129,52 @@ defmodule EmissaryWeb.TinctureController do
       }) do
     case resolve_tincture(conn, athanor, publisher, tincture_name) do
       {:ok, tincture, :public, ctx} ->
-        case Cyfr.TinctureHelpers.resolve_entry(tincture) do
+        case Compendium.tincture_entry(tincture) do
           {:ok, entry} ->
-            base_href =
-              Cyfr.TinctureHelpers.tincture_path(athanor, publisher, tincture_name) <> "/"
+            base_href = Cyfr.TinctureUrl.path(athanor, publisher, tincture_name) <> "/"
 
             csp = build_csp(tincture.manifest)
 
             conn
             |> put_resp_header("x-frame-options", "SAMEORIGIN")
-            |> Cyfr.TinctureHelpers.serve_index(ctx, tincture.segments, entry, base_href, csp)
+            |> CyfrWeb.Ingress.TinctureAssets.serve_index(
+              ctx,
+              tincture.segments,
+              entry,
+              base_href,
+              csp
+            )
 
-          :error ->
+          {:error, _no_entry} ->
             EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
         end
 
       {:ok, tincture, :private, ctx} ->
-        with {:ok, entry} <- Cyfr.TinctureHelpers.resolve_entry(tincture),
-             {:ok, token} <- Sanctum.TinctureAuth.issue_asset_token(ctx, publisher, tincture_name) do
-          base_href =
-            Cyfr.TinctureHelpers.tincture_path(athanor, publisher, tincture_name) <>
-              "/_s/#{token}/"
+        case Compendium.tincture_entry(tincture) do
+          {:ok, entry} ->
+            case Sanctum.TinctureAuth.issue_asset_token(ctx, publisher, tincture_name) do
+              {:ok, token} ->
+                base_href =
+                  Cyfr.TinctureUrl.path(athanor, publisher, tincture_name) <> "/_s/#{token}/"
 
-          csp = build_csp(tincture.manifest)
+                csp = build_csp(tincture.manifest)
 
-          conn
-          |> put_resp_header("x-frame-options", "SAMEORIGIN")
-          |> Cyfr.TinctureHelpers.serve_index(ctx, tincture.segments, entry, base_href, csp)
-        else
-          :error -> EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
-          {:error, reason} -> mint_refused(conn, reason)
+                conn
+                |> put_resp_header("x-frame-options", "SAMEORIGIN")
+                |> CyfrWeb.Ingress.TinctureAssets.serve_index(
+                  ctx,
+                  tincture.segments,
+                  entry,
+                  base_href,
+                  csp
+                )
+
+              {:error, reason} ->
+                mint_refused(conn, reason)
+            end
+
+          {:error, _no_entry} ->
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
         end
 
       {:error, :unavailable} ->
@@ -250,12 +266,16 @@ defmodule EmissaryWeb.TinctureController do
           {:ok, tincture, :public, ctx} ->
             conn
             |> page_csp(tincture, segments)
-            |> Cyfr.TinctureHelpers.serve_asset(ctx, tincture.segments, segments, public: true)
+            |> CyfrWeb.Ingress.TinctureAssets.serve_asset(ctx, tincture.segments, segments,
+              public: true
+            )
 
           {:ok, tincture, :private, ctx} ->
             conn
             |> page_csp(tincture, segments)
-            |> Cyfr.TinctureHelpers.serve_asset(ctx, tincture.segments, segments, public: false)
+            |> CyfrWeb.Ingress.TinctureAssets.serve_asset(ctx, tincture.segments, segments,
+              public: false
+            )
 
           {:error, :unavailable} ->
             unavailable(conn)
@@ -271,7 +291,7 @@ defmodule EmissaryWeb.TinctureController do
   # narrows. A store that cannot answer serves nothing.
   defp serve_signed_asset(conn, athanor, publisher, tincture_name, token, segments) do
     outcome =
-      with {:ok, public_ctx} <- Cyfr.TinctureHelpers.build_public_context(athanor),
+      with {:ok, public_ctx} <- TinctureAccess.public_context(athanor),
            request_ctx = %{public_ctx | client_ip: Sanctum.ClientIp.resolve(conn)},
            {:ok, ctx} <-
              Sanctum.TinctureAuth.verify_asset_token(token, request_ctx, publisher, tincture_name),
@@ -283,7 +303,9 @@ defmodule EmissaryWeb.TinctureController do
       {:serve, ctx, tincture} ->
         conn
         |> page_csp(tincture, segments)
-        |> Cyfr.TinctureHelpers.serve_asset(ctx, tincture.segments, segments, public: false)
+        |> CyfrWeb.Ingress.TinctureAssets.serve_asset(ctx, tincture.segments, segments,
+          public: false
+        )
 
       {:error, :expired_credential} ->
         EmissaryWeb.ApiError.send(
@@ -344,9 +366,10 @@ defmodule EmissaryWeb.TinctureController do
 
   # Look up the tincture and return the auth context too, so callers can pass
   # `ctx` into Arca-routed serving helpers without re-authenticating. An
-  # athanor segment that names no active athanor is a 404 before any lookup.
+  # athanor segment that names no active athanor is a 404 before any lookup,
+  # and one the store cannot resolve is a 503.
   defp resolve_tincture(conn, athanor, publisher, tincture_name) do
-    with {:ok, public_ctx} <- Cyfr.TinctureHelpers.build_public_context(athanor) do
+    with {:ok, public_ctx} <- TinctureAccess.public_context(athanor) do
       case TinctureAccess.get_public(public_ctx, publisher, tincture_name) do
         {:ok, tincture} ->
           {:ok, tincture, :public, public_ctx}
@@ -414,8 +437,8 @@ defmodule EmissaryWeb.TinctureController do
   end
 
   # Validate connect domain entries: allow domain names and wildcard subdomains only.
-  # The grammar lives with the tincture policy (`Cyfr.TinctureHelpers`),
-  # where the manifest validator holds entries to it at publish; this
+  # The grammar is the component domain's (`Compendium.valid_tincture_connect_domain?/1`),
+  # which the manifest validator holds entries to at publish; this
   # filter stays as defense in depth for manifests that predate the gate.
-  defp valid_connect_domain?(domain), do: Cyfr.TinctureHelpers.valid_connect_domain?(domain)
+  defp valid_connect_domain?(domain), do: Compendium.valid_tincture_connect_domain?(domain)
 end

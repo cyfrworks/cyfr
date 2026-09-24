@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.ScheduleNotesTest do
+defmodule Aqua.ScheduleNotesTest do
   # A schedule that asked to keep its outcome: the handler files a note in
   # the schedule's estate with the run as provenance, capped, and writes
   # nothing for a run nobody asked to keep or into a closed furnace.
   use ExUnit.Case, async: false
 
-  alias Cyfr.ScheduleNotes
+  alias Aqua.ScheduleNotes
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -159,5 +159,25 @@ defmodule Cyfr.ScheduleNotesTest do
     assert :ok = ScheduleNotes.attach()
     ids = ScheduleNotes.event() |> :telemetry.list_handlers() |> Enum.map(& &1.id)
     assert Enum.count(ids, &(&1 == "notes-schedule-completed")) == 1
+  end
+
+  test "attaching again keeps one handler, so one completed run files one note",
+       %{estate: estate, user: user, ctx: ctx} do
+    assert :ok = ScheduleNotes.attach()
+    assert :ok = ScheduleNotes.attach()
+
+    handlers =
+      ScheduleNotes.event()
+      |> :telemetry.list_handlers()
+      |> Enum.filter(&(&1.id == "notes-schedule-completed"))
+
+    assert [%{function: function}] = handlers
+    assert function == (&ScheduleNotes.handle_event/4)
+
+    metadata = completed(estate, user)
+    :telemetry.execute(ScheduleNotes.event(), %{}, metadata)
+
+    assert {:ok, %{notes: [%{name: name}]}} = Aqua.Notes.list(ctx)
+    assert name == metadata.schedule_id
   end
 end

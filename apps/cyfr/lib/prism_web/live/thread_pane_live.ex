@@ -1008,7 +1008,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # with a key behind it. A fresh furnace has neither, and the chat is
   # where someone finds that out — not the drawer.
   defp model_ready(ctx, roster) do
-    case Aqua.AgentConfig.model_status(ctx, roster) do
+    case Aqua.model_status(ctx, roster) do
       empty when map_size(empty) == 0 -> :no_model
       statuses -> if Enum.any?(statuses, &match?({_, {:ready, _}}, &1)), do: :ready, else: :no_key
     end
