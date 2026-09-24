@@ -910,7 +910,6 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.stale_gate_allowances(named) == []
 
       assert Enum.map(Boundaries.gate_free().allow, & &1.name) == [
-               "Emissary.MCP.ResourceRegistry",
                "Emissary.TaskSupervisor",
                "Emissary.MCP.Protocol",
                "Compendium.RegistryHost"
@@ -942,7 +941,6 @@ defmodule Cyfr.BoundariesTest do
              ]
 
       assert Boundaries.stale_gate_allowances(planted) == [
-               "Emissary.MCP.ResourceRegistry",
                "Emissary.MCP.Protocol",
                "Compendium.RegistryHost"
              ]

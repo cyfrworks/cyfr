@@ -8,7 +8,6 @@ defmodule Sanctum.PersonPermissionsTest do
   use ExUnit.Case, async: true
 
   alias Grimoire.Annotations
-  alias Grimoire.Catalog
   alias Sanctum.Context
 
   defp root, do: Path.expand("../../../..", __DIR__)
@@ -18,9 +17,9 @@ defmodule Sanctum.PersonPermissionsTest do
     refute :* in person
 
     declared =
-      for pair <- Catalog.tool_actions(),
+      for pair <- Sanctum.Grimoire.tool_actions(),
           [tool, action] = String.split(pair, ".", parts: 2),
-          {:ok, {_module, meta}} <- [Catalog.lookup(tool)],
+          {:ok, {_module, meta}} <- [Grimoire.lookup(tool)],
           permission = Annotations.permission(meta, action),
           not is_nil(permission),
           uniq: true,

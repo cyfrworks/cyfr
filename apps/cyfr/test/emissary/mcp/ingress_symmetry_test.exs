@@ -11,84 +11,54 @@ defmodule Emissary.MCP.IngressSymmetryTest do
   use ExUnit.Case, async: false
 
   alias Grimoire.Catalog
-  alias Prima.{Arg, Operation}
-
-  defmodule Provider do
-    # Records exactly what it was handed, so the test can tell "refused before
-    # dispatch" from "the handler coped".
-    def handle("ingress_probe", _ctx, %{"action" => "echo"} = args) do
-      # The provider runs in a task, not the test process, so the signal goes
-      # through the registered name the test set up.
-      send(:ingress_probe_observer, {:reached_handler, args})
-      {:ok, %{ok: true}}
-    end
-
-    def handle("ingress_probe", _ctx, _args), do: {:error, "unknown action"}
-  end
+  alias Grimoire.Probe
+  alias Prima.Refusal
 
   setup do
     Cyfr.Test.Sandbox.setup!()
-
-    Catalog.register_tool(
-      "ingress_probe",
-      Provider,
-      Operation.tool([
-        Operation.new("ingress_probe", "echo", "Echo", [Arg.new("id", :string)],
-          kind: :read,
-          planes: [:external]
-        )
-      ]),
-      :timer.minutes(1)
-    )
-
     Process.register(self(), :ingress_probe_observer)
-
-    on_exit(fn -> Catalog.unregister_tool("ingress_probe") end)
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
   test "a wrongly-typed argument is refused on the console path too", %{ctx: ctx} do
-    # Require string ids on both HTTP and console dispatch.
-    assert {:error, _} =
-             Catalog.call_external("ingress_probe", ctx, %{
-               "action" => "echo",
-               "id" => 12_345
-             })
+    Catalog.with_providers([Probe.Ingress], fn ->
+      # Require string ids on both HTTP and console dispatch.
+      assert {:error, %Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
+               Grimoire.call_external("ingress_probe", ctx, %{
+                 "action" => "echo",
+                 "id" => 12_345
+               })
 
-    refute_receive {:reached_handler, _}, 200
+      refute_receive {:reached_handler, _}, 200
+    end)
   end
 
   test "an unknown action is still refused in its own vocabulary", %{ctx: ctx} do
-    # The catalog returns unknown_action for undeclared actions before schema validation.
-    assert {:error, {:unknown_action, _}} =
-             Catalog.call_external("ingress_probe", ctx, %{"action" => "nope"})
+    Catalog.with_providers([Probe.Ingress], fn ->
+      # The catalog returns unknown_action for undeclared actions before schema validation.
+      assert {:error, %Refusal{stage: :admission, reason: {:unknown_action, _}}} =
+               Grimoire.call_external("ingress_probe", ctx, %{"action" => "nope"})
 
-    refute_receive {:reached_handler, _}, 200
+      refute_receive {:reached_handler, _}, 200
+    end)
   end
 
   test "a well-formed call still reaches the handler", %{ctx: ctx} do
-    assert {:ok, _} =
-             Catalog.call_external("ingress_probe", ctx, %{
-               "action" => "echo",
-               "id" => "abc"
-             })
+    Catalog.with_providers([Probe.Ingress], fn ->
+      assert {:ok, _} =
+               Grimoire.call_external("ingress_probe", ctx, %{
+                 "action" => "echo",
+                 "id" => "abc"
+               })
 
-    assert_receive {:reached_handler, %{"action" => "echo", "id" => "abc"}}, 2_000
+      assert_receive {:reached_handler, %{"action" => "echo", "id" => "abc"}}, 2_000
+    end)
   end
 
   test "a tool with no additional arguments still refuses unknown actions", %{ctx: ctx} do
-    Catalog.register_tool(
-      "ingress_probe_bare",
-      Provider,
-      Operation.tool([
-        Operation.new("ingress_probe_bare", "echo", "Echo", [], kind: :read, planes: [:external])
-      ]),
-      :timer.minutes(1)
-    )
-
-    on_exit(fn -> Catalog.unregister_tool("ingress_probe_bare") end)
-
-    assert {:error, {:unknown_action, _}} =
-             Catalog.call_external("ingress_probe_bare", ctx, %{"action" => "nope"})
+    Catalog.with_providers([Probe.Ingress], fn ->
+      assert {:error, %Refusal{stage: :admission, reason: {:unknown_action, _}}} =
+               Grimoire.call_external("ingress_probe_bare", ctx, %{"action" => "nope"})
+    end)
   end
 end

@@ -2,12 +2,13 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Grimoire.ProviderContractTest do
-  # Not async: the projection cases register probe tools in the shared
-  # catalog and the boot case swaps the provider roster.
+  # Not async: the projection cases plant probe providers in the member's
+  # operation table and the boot case swaps the provider roster.
   use ExUnit.Case, async: false
 
   alias Grimoire.Catalog
-  alias Prima.{Arg, Operation, Provider}
+  alias Grimoire.Probe
+  alias Prima.{Arg, Operation, Provider, Refusal}
   alias Prima.Test.AuthorityFixtures
 
   # A handler that answers what it was given, so a test can see exactly
@@ -171,25 +172,19 @@ defmodule Grimoire.ProviderContractTest do
 
     test "a provider declaring a handler input the gate cannot honour refuses the catalog's boot" do
       previous = Application.fetch_env!(:cyfr, :tool_providers)
-      Application.put_env(:cyfr, :tool_providers, previous ++ [BadKind])
 
-      try do
-        assert_raise RuntimeError, ~r/handler inputs failed the catalog audit.*BadKind/s, fn ->
-          Catalog.init([])
+      Catalog.with_providers([], fn ->
+        Application.put_env(:cyfr, :tool_providers, previous ++ [BadKind])
+
+        try do
+          assert_raise RuntimeError, ~r/handler inputs failed the catalog audit.*BadKind/s, fn ->
+            Catalog.load!()
+          end
+        after
+          Application.put_env(:cyfr, :tool_providers, previous)
         end
-      after
-        Application.put_env(:cyfr, :tool_providers, previous)
-      end
+      end)
     end
-  end
-
-  defp probe(name) do
-    Operation.tool([
-      Operation.new(name, "peek", "Answer the handler's input", [],
-        kind: :read,
-        planes: [:external, :in_chain]
-      )
-    ])
   end
 
   defp chain(name, ctx, authority) do
@@ -220,11 +215,6 @@ defmodule Grimoire.ProviderContractTest do
     setup do
       Cyfr.Test.Sandbox.setup!()
 
-      for {name, module} <- [{"actor_probe", ActorProbe}, {"context_probe", ContextProbe}] do
-        Catalog.register_tool(name, module, probe(name))
-        on_exit(fn -> Catalog.unregister_tool(name) end)
-      end
-
       source = AuthorityFixtures.formula_ref()
 
       graph =
@@ -244,44 +234,52 @@ defmodule Grimoire.ProviderContractTest do
     end
 
     test "an :actor handler is given the actor alone, on the external plane", %{ctx: ctx} do
-      ctx = %{ctx | session_token_hash: "hash-that-must-not-leak"}
+      Catalog.with_providers([Probe.Input.Actor, Probe.Input.Context], fn ->
+        ctx = %{ctx | session_token_hash: "hash-that-must-not-leak"}
 
-      for runner <- [:inline, :supervised] do
-        assert {:ok, %{input: input}} =
-                 Catalog.call_external("actor_probe", ctx, %{"action" => "peek"}, runner: runner)
+        for runner <- [:inline, :supervised] do
+          assert {:ok, %{input: input}} =
+                   Catalog.call_external("actor_probe", ctx, %{"action" => "peek"},
+                     runner: runner
+                   )
 
-        actor_only!(input, ctx, :external)
-        refute inspect(input) =~ "hash-that-must-not-leak"
-      end
+          actor_only!(input, ctx, :external)
+          refute inspect(input) =~ "hash-that-must-not-leak"
+        end
 
-      # A :context provider is still given the context the gate decided with.
-      assert {:ok, %{input: %Sanctum.Context{session_token_hash: "hash-that-must-not-leak"}}} =
-               Catalog.call_external("context_probe", ctx, %{"action" => "peek"})
+        # A :context provider is still given the context the gate decided with.
+        assert {:ok, %{input: %Sanctum.Context{session_token_hash: "hash-that-must-not-leak"}}} =
+                 Catalog.call_external("context_probe", ctx, %{"action" => "peek"})
+      end)
     end
 
     test "an :actor handler is given the actor alone, in a chain", %{
       ctx: ctx,
       authority: authority
     } do
-      assert {:ok, %{input: input}} = chain("actor_probe", ctx, authority)
-      actor_only!(input, ctx, :guest)
+      Catalog.with_providers([Probe.Input.Actor, Probe.Input.Context], fn ->
+        assert {:ok, %{input: input}} = chain("actor_probe", ctx, authority)
+        actor_only!(input, ctx, :guest)
 
-      assert {:ok, %{input: %Sanctum.Context{plane: :guest}}} =
-               chain("context_probe", ctx, authority)
+        assert {:ok, %{input: %Sanctum.Context{plane: :guest}}} =
+                 chain("context_probe", ctx, authority)
+      end)
     end
 
     test "the projection follows the gate: a refused call reaches no handler", %{ctx: ctx} do
-      anonymous = %{ctx | authenticated: false}
+      Catalog.with_providers([Probe.Input.Actor, Probe.Input.Context], fn ->
+        anonymous = %{ctx | authenticated: false}
 
-      assert {:error, {:tool_auth_required, "actor_probe"}} =
-               Catalog.call_external("actor_probe", anonymous, %{"action" => "peek"})
+        assert {:error, %Refusal{stage: :admission, reason: {:tool_auth_required, "actor_probe"}}} =
+                 Catalog.call_external("actor_probe", anonymous, %{"action" => "peek"})
 
-      assert {:error, {:guest_plane_call, "actor_probe"}} =
-               Catalog.call_external(
-                 "actor_probe",
-                 Sanctum.Context.enter_guest(ctx),
-                 %{"action" => "peek"}
-               )
+        assert {:error, %Refusal{stage: :admission, reason: {:guest_plane_call, "actor_probe"}}} =
+                 Catalog.call_external(
+                   "actor_probe",
+                   Sanctum.Context.enter_guest(ctx),
+                   %{"action" => "peek"}
+                 )
+      end)
     end
   end
 

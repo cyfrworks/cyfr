@@ -12,7 +12,6 @@ defmodule Emissary.MCP.McpServersConsentTest do
   """
   use ExUnit.Case, async: false
 
-  alias Grimoire.Catalog
   alias Grimoire.Visibility
   alias Emissary.External.Provider
 
@@ -55,7 +54,7 @@ defmodule Emissary.MCP.McpServersConsentTest do
   end
 
   defp shown_actions(ctx) do
-    Catalog.list_tools()
+    Grimoire.list_tools()
     |> Visibility.filter_for_context(ctx)
     |> Enum.find(&(&1["name"] == "mcp_servers"))
     |> get_in(["inputSchema", "properties", "action", "enum"])
@@ -84,7 +83,7 @@ defmodule Emissary.MCP.McpServersConsentTest do
     ctx: ctx
   } do
     {:ok, _saved} =
-      Catalog.call_external("mcp_servers", ctx, %{
+      Grimoire.call_external("mcp_servers", ctx, %{
         "action" => "create",
         "name" => "saved",
         "config" => http_config("saved-token")
@@ -105,8 +104,11 @@ defmodule Emissary.MCP.McpServersConsentTest do
       ]
 
       for args <- calls do
-        assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-                 Catalog.call_external("mcp_servers", key, args),
+        assert {:error,
+                %Prima.Refusal{
+                  stage: :admission,
+                  reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+                }} = Grimoire.call_external("mcp_servers", key, args),
                "mcp_servers.#{args["action"]} answered an API key"
       end
     end
@@ -125,13 +127,16 @@ defmodule Emissary.MCP.McpServersConsentTest do
     key = admin_key(ctx, [:admin])
 
     assert {:ok, %{servers: [_]}} =
-             Catalog.call_external("mcp_servers", key, %{"action" => "list"})
+             Grimoire.call_external("mcp_servers", key, %{"action" => "list"})
 
     assert {:ok, %{name: "saved", enabled: false}} =
-             Catalog.call_external("mcp_servers", key, %{"action" => "disable", "name" => "saved"})
+             Grimoire.call_external("mcp_servers", key, %{
+               "action" => "disable",
+               "name" => "saved"
+             })
 
     assert {:ok, %{deleted: "saved"}} =
-             Catalog.call_external("mcp_servers", key, %{"action" => "delete", "name" => "saved"})
+             Grimoire.call_external("mcp_servers", key, %{"action" => "delete", "name" => "saved"})
   end
 
   test "an admin API key is shown the operating actions and not the defining ones", %{ctx: ctx} do
@@ -145,8 +150,12 @@ defmodule Emissary.MCP.McpServersConsentTest do
   test "a tincture session cannot define a server", %{ctx: ctx} do
     session = %{ctx | auth_method: :session}
 
-    assert {:error, {:consent_class_required, {:surface_not_permitted, :session}}} =
-             Catalog.call_external("mcp_servers", session, %{
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              reason: {:consent_class_required, {:surface_not_permitted, :session}}
+            }} =
+             Grimoire.call_external("mcp_servers", session, %{
                "action" => "create",
                "name" => "relay",
                "config" => http_config("prod-db")
@@ -155,14 +164,14 @@ defmodule Emissary.MCP.McpServersConsentTest do
 
   test "a signed-in person defines and changes a server", %{ctx: ctx} do
     assert {:ok, %{name: "wired", epoch: 1}} =
-             Catalog.call_external("mcp_servers", ctx, %{
+             Grimoire.call_external("mcp_servers", ctx, %{
                "action" => "create",
                "name" => "wired",
                "config" => http_config("gh-token")
              })
 
     assert {:ok, %{name: "wired", epoch: 2}} =
-             Catalog.call_external("mcp_servers", ctx, %{
+             Grimoire.call_external("mcp_servers", ctx, %{
                "action" => "update",
                "name" => "wired",
                "epoch" => 1,
@@ -182,13 +191,14 @@ defmodule Emissary.MCP.McpServersConsentTest do
     for action <- @defining ++ @operating do
       args = %{"action" => action, "name" => "wired", "config" => http_config("gh-token")}
 
-      assert {:error, "Tool action 'mcp_servers." <> _} =
-               Catalog.call_in_chain("mcp_servers", guest, args, authority,
+      assert {:error, %Prima.Refusal{stage: :admission, reason: "Tool action 'mcp_servers." <> _}} =
+               Grimoire.call_in_chain("mcp_servers", guest, args, authority,
                  lineage: Cyfr.Test.AttemptFixtures.lineage!(guest)
                )
 
-      assert {:error, {:guest_plane_call, "mcp_servers"}} =
-               Catalog.call_external("mcp_servers", guest, args)
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, "mcp_servers"}}} =
+               Grimoire.call_external("mcp_servers", guest, args)
     end
 
     assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "wired")

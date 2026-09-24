@@ -98,18 +98,14 @@ defmodule Arca.Cache.Sweeper do
       0
   end
 
-  # Protect authentication state, scan locks, and MCP catalogs from
-  # capacity eviction. Removing these entries can interrupt login flows,
-  # admit duplicate scans, or empty tools/list until the next refresh.
+  # Protect authentication state and scan locks from capacity eviction.
+  # Removing these entries can interrupt login flows or admit duplicate
+  # scans.
   @protected_key_heads [
     :vault_oauth_pending,
     :login_device_ticket,
     :established,
-    :tincture_scan_running,
-    :mcp_tool,
-    :mcp_tool_list,
-    :mcp_resource,
-    :mcp_resource_template
+    :tincture_scan_running
   ]
 
   # After expired rows are gone, if the table is still over the cap, drop the

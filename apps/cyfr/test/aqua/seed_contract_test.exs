@@ -25,7 +25,6 @@ defmodule Aqua.SeedContractTest do
   use ExUnit.Case, async: true
 
   alias Aqua.Hands
-  alias Grimoire.Catalog
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
 
@@ -52,7 +51,7 @@ defmodule Aqua.SeedContractTest do
     refused =
       for key <- granted,
           {tool, action} = split(key),
-          not Catalog.chain_reachable?(tool, action),
+          not Grimoire.chain_reachable?(tool, action),
           do: key
 
     assert refused == [], "caps grant actions a chain cannot reach: #{inspect(refused)}"
@@ -178,7 +177,7 @@ defmodule Aqua.SeedContractTest do
 
     [
       if(not MapSet.member?(granted, key), do: "is not in the manifest caps"),
-      if(Catalog.in_chain_refused?(tool, action), do: "is not reachable from a chain")
+      if(Grimoire.in_chain_refused?(tool, action), do: "is not reachable from a chain")
     ]
     |> Enum.reject(&is_nil/1)
   end

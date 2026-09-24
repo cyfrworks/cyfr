@@ -55,9 +55,10 @@ defmodule Prima.Provider do
   @typedoc """
   Per-action access declaration — the gate, not a hint.
 
-  `Grimoire.Catalog.do_call/4` enforces these keys at dispatch and
-  `Grimoire.Visibility` derives discovery from the same map, so what
-  a caller is shown and what a caller may invoke cannot drift apart.
+  The gate (`Grimoire.call_external/4`, `Grimoire.call_in_chain/5`)
+  enforces these keys at dispatch and `Grimoire.Visibility` derives
+  discovery from the same map, so what a caller is shown and what a
+  caller may invoke cannot drift apart.
 
   - `:auth` — `:anonymous` serves uncredentialed callers (device flow,
     health); `:signed_in` serves anyone holding a live session, claimed or

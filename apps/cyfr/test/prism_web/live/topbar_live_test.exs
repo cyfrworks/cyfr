@@ -164,7 +164,7 @@ defmodule PrismWeb.TopbarLiveTest do
       )
 
     assert {:ok, _} =
-             Grimoire.Catalog.call_external("door", ctx, %{
+             Grimoire.call_external("door", ctx, %{
                "action" => "resolve",
                "id" => id,
                "decision" => "reject"

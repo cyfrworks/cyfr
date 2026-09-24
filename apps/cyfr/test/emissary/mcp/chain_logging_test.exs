@@ -11,7 +11,6 @@ defmodule Emissary.MCP.ChainLoggingTest do
   """
   use ExUnit.Case, async: false
 
-  alias Grimoire.Catalog
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context
@@ -109,7 +108,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
     auth = authority_granting(["system.status"])
 
     {:ok, _} =
-      Catalog.call_in_chain("system", guest, %{"action" => "status"}, auth,
+      Grimoire.call_in_chain("system", guest, %{"action" => "status"}, auth,
         lineage: Cyfr.Test.AttemptFixtures.lineage!(guest)
       )
 
@@ -142,7 +141,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
 
     # The dispatch of that very request. It arrives with a request id already
     # on the context and is not in-chain, so the transport owns its row.
-    {:ok, _} = Catalog.call_external("system", ctx, %{"action" => "status"})
+    {:ok, _} = Grimoire.call_external("system", ctx, %{"action" => "status"})
 
     assert length(rows_for(ctx, request_id)) == 1
   end
@@ -150,7 +149,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
   test "an internal caller with no request id becomes its own root", %{ctx: ctx} do
     ctx = %{ctx | request_id: nil}
 
-    {:ok, _} = Catalog.call_external("system", ctx, %{"action" => "status"})
+    {:ok, _} = Grimoire.call_external("system", ctx, %{"action" => "status"})
 
     {:ok, rows} = Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100)
     [row] = Enum.filter(rows, &(&1.tool == "system"))
@@ -166,7 +165,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
   test "mcp_log never logs itself", %{ctx: ctx} do
     ctx = %{ctx | request_id: nil}
 
-    {:ok, _} = Catalog.call_external("mcp_log", ctx, %{"action" => "list"})
+    {:ok, _} = Grimoire.call_external("mcp_log", ctx, %{"action" => "list"})
 
     assert Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100) == {:ok, []},
            "listing the log wrote a row to the log"

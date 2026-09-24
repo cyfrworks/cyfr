@@ -8,7 +8,6 @@ defmodule Aqua.Providers.NotesTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Providers.Notes, as: Tool
-  alias Grimoire.Catalog
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context
@@ -106,7 +105,7 @@ defmodule Aqua.Providers.NotesTest do
   defp in_chain(ctx, args, auth, opts \\ []) do
     caller = caller!(ctx)
     opts = Keyword.update(opts, :lineage, caller, &Map.merge(caller, &1))
-    Catalog.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
+    Grimoire.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
   end
 
   defp caller!(ctx),
@@ -363,7 +362,11 @@ defmodule Aqua.Providers.NotesTest do
 
     retired_args = args |> Map.put("name", "retired") |> Map.put(retired, "thread_1")
 
-    assert {:error, {:invalid_argument, "Unknown field: " <> ^retired}} =
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              reason: {:invalid_argument, "Unknown field: " <> ^retired}
+            }} =
              in_chain(ctx, retired_args, auth, old_lineage)
 
     assert {:ok, _} = in_chain(ctx, Map.delete(retired_args, retired), auth, old_lineage)
@@ -374,18 +377,22 @@ defmodule Aqua.Providers.NotesTest do
     # The same formula started by a key or a schedule is refused inside the
     # chain exactly as it is at the door — the click was a session's.
     for method <- [:api_key, :scheduled] do
-      assert {:error, {:consent_class_required, {:surface_not_permitted, ^method}}} =
+      assert {:error,
+              %Prima.Refusal{
+                stage: :admission,
+                reason: {:consent_class_required, {:surface_not_permitted, ^method}}
+              }} =
                in_chain(%{ctx | auth_method: method}, args, auth)
     end
 
     # And the door still refuses the guest plane outright — before consent
     # is even consulted.
-    assert {:error, {:guest_plane_call, "notes"}} =
-             Catalog.call_external("notes", Context.enter_guest(ctx), args)
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, "notes"}}} =
+             Grimoire.call_external("notes", Context.enter_guest(ctx), args)
 
     # A chain whose authority predates the notes actions is denied before
     # the tool is reached — legibly, so re-consent is the obvious answer.
-    assert {:error, "Denied by chain authority: " <> _} =
+    assert {:error, %Prima.Refusal{stage: :admission, reason: "Denied by chain authority: " <> _}} =
              in_chain(ctx, args, granting([{"notes", "read"}]))
   end
 
@@ -578,15 +585,23 @@ defmodule Aqua.Providers.NotesTest do
     # through "mine" — or the estate's notes through anything.
     star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
-    assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-             Grimoire.Catalog.call_external("notes", star, %{
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+            }} =
+             Grimoire.call_external("notes", star, %{
                "action" => "keep",
                "name" => "sneak",
                "content" => "x"
              })
 
-    assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-             Grimoire.Catalog.call_external("notes", star, %{
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+            }} =
+             Grimoire.call_external("notes", star, %{
                "action" => "list",
                "scope" => "mine"
              })
@@ -594,7 +609,7 @@ defmodule Aqua.Providers.NotesTest do
     # Discovery agrees with dispatch: the key is not shown the tool.
     shown =
       Grimoire.Visibility.filter_for_context(
-        Grimoire.Catalog.list_tools(),
+        Grimoire.list_tools(),
         star
       )
 

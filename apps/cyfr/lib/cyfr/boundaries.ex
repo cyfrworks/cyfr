@@ -763,16 +763,9 @@ defmodule Cyfr.Boundaries do
   # allowed reach is exact, names the owner it moves to, and is reported
   # stale the day the gate stops making it.
   @gate_free %{
-    from: ["apps/cyfr/lib/grimoire/**/*.ex"],
+    from: ["apps/cyfr/lib/grimoire.ex", "apps/cyfr/lib/grimoire/**/*.ex"],
     roots: ~w(Emissary EmissaryWeb Aqua Compendium Crucible Prism PrismWeb CyfrWeb),
     allow: [
-      %{
-        name: "Emissary.MCP.ResourceRegistry",
-        owner: "Grimoire.Resources",
-        reason:
-          "`system.status` counts the resource index, which the transport's registry " <>
-            "holds until the gate holds the index itself."
-      },
       %{
         name: "Emissary.TaskSupervisor",
         owner: "Grimoire.TaskSupervisor",

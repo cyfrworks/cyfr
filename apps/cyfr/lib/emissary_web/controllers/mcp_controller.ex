@@ -676,7 +676,7 @@ defmodule EmissaryWeb.MCPController do
   defp determine_routed_to(nil, _action), do: "grimoire"
 
   defp determine_routed_to(tool, _action) do
-    case Grimoire.Catalog.lookup(tool) do
+    case Grimoire.lookup(tool) do
       {:ok, {module, _meta}} -> Grimoire.Services.service_name(module)
       :miss -> "grimoire"
     end

@@ -9,7 +9,6 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   use ExUnit.Case, async: false
 
   alias Grimoire.Error
-  alias Grimoire.Catalog
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
@@ -53,7 +52,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     {:ok, alice: alice, bob: bob, ops: ops, ctx: ctx, n: n}
   end
 
-  defp call(ctx, tool, args), do: Catalog.call_external(tool, ctx, args)
+  defp call(ctx, tool, args), do: Grimoire.call_external(tool, ctx, args)
 
   test "a person creates a group, is its only member, and the others see it once added",
        %{alice: alice, bob: bob, ctx: ctx, n: n} do
@@ -261,7 +260,9 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   test "door.* is the operator's: refused for a member, hidden from tools/list, open to an admin",
        %{alice: alice, ops: ops, ctx: ctx, n: n} do
     member = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    assert {:error, :platform_admin_required} = call(member, "door", %{"action" => "list"})
+
+    assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
+             call(member, "door", %{"action" => "list"})
 
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
     assert {:ok, %{entries: []}} = call(admin, "door", %{"action" => "list"})
@@ -509,7 +510,11 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       # API key before the handler runs, with the typed code.
       key = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
 
-      assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
+      assert {:error,
+              %Prima.Refusal{
+                stage: :admission,
+                reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+              }} =
                call(key, "athanor", %{"action" => "pair", "user" => "github|x|other"})
     end
   end

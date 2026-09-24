@@ -641,7 +641,7 @@ defmodule Compendium.Builds do
         Prima.LoggerContext.restore(logger_metadata)
 
         outcome =
-          case Grimoire.Catalog.call_external("component", ctx, %{"action" => "register"}) do
+          case Grimoire.call_external("component", ctx, %{"action" => "register"}) do
             {:ok, _} ->
               "done"
 

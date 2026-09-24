@@ -100,7 +100,7 @@ defmodule Grimoire.ProxyTest do
     end
 
     test "a name the port does not know is an unknown tool", %{ctx: ctx} do
-      assert {:error, "Unknown tool: other:echo"} =
+      assert {:error, %Prima.Refusal{stage: :admission, reason: "Unknown tool: other:echo"}} =
                Grimoire.Catalog.call_external("other:echo", ctx, %{})
     end
 

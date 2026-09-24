@@ -8,8 +8,6 @@ defmodule PrismWeb.VaultLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
-  alias Grimoire.Catalog
-
   describe "GET /vault (unauthenticated)" do
     test "redirects to login", %{conn: conn} do
       assert {:error, {:redirect, %{to: "/login"}}} =
@@ -32,7 +30,7 @@ defmodule PrismWeb.VaultLiveTest do
       )
 
     {:ok, _} =
-      Catalog.call_external("vault", ctx, %{
+      Grimoire.call_external("vault", ctx, %{
         "action" => "create",
         "name" => "bridge-token",
         "kind" => "api_key",
@@ -40,7 +38,7 @@ defmodule PrismWeb.VaultLiveTest do
       })
 
     {:ok, _} =
-      Catalog.call_external("mcp_servers", ctx, %{
+      Grimoire.call_external("mcp_servers", ctx, %{
         "action" => "create",
         "name" => "bridge",
         "config" => %{
@@ -56,7 +54,7 @@ defmodule PrismWeb.VaultLiveTest do
 
     # the list verb carries the names — never the header values
     assert {:ok, %{servers: [server]}} =
-             Catalog.call_external("mcp_servers", ctx, %{"action" => "list"})
+             Grimoire.call_external("mcp_servers", ctx, %{"action" => "list"})
 
     assert server.vault_refs == ["bridge-token"]
     refute inspect(server) =~ "Authorization"
@@ -103,7 +101,7 @@ defmodule PrismWeb.VaultLiveTest do
              Sanctum.ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
 
     assert {:ok, %{providers: [%{provider: "google"}]}} =
-             Catalog.call_external("oauth", ctx, %{"action" => "list"})
+             Grimoire.call_external("oauth", ctx, %{"action" => "list"})
 
     view
     |> element("button[phx-click=delete_client][phx-value-provider=google]")
@@ -114,7 +112,7 @@ defmodule PrismWeb.VaultLiveTest do
 
     # removing what is not there says so
     assert {:error, msg} =
-             Catalog.call_external("oauth", ctx, %{
+             Grimoire.call_external("oauth", ctx, %{
                "action" => "delete_client",
                "provider" => "google"
              })

@@ -35,7 +35,7 @@ defmodule Aqua.Providers.Thread do
 
   ## Two gates, on different axes
 
-    * **Plane.** `Grimoire.Catalog.call_external/4` refuses a
+    * **Plane.** `Grimoire.call_external/4` refuses a
       `:guest` context outright, and these actions declare
       `planes: [:external]` so they never appear in-chain. A running agent
       cannot read or post into threads — including other people's in

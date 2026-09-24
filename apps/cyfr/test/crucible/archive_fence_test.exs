@@ -406,7 +406,10 @@ defmodule Crucible.ArchiveFenceTest do
             %{lineage | attempt: "att_forged"},
             elsewhere
           ] do
-        assert {:error, refusal} = status(guest, authority, bad), inspect(bad)
+        assert {:error, %Prima.Refusal{stage: :admission, reason: refusal}} =
+                 status(guest, authority, bad),
+               inspect(bad)
+
         assert refusal in [:archived, {:invalid_argument, refusal_sentence()}]
       end
 
@@ -417,8 +420,8 @@ defmodule Crucible.ArchiveFenceTest do
         "attempt" => lineage.attempt
       }
 
-      assert {:error, {:invalid_argument, _}} =
-               Grimoire.Catalog.call_in_chain("system", guest, forged, authority)
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
+               Grimoire.call_in_chain("system", guest, forged, authority)
     end
 
     test "refuses once the calling execution's estate was archived", %{
@@ -429,7 +432,9 @@ defmodule Crucible.ArchiveFenceTest do
     } do
       lineage = AttemptFixtures.lineage!(ctx)
       archive!(estate)
-      assert {:error, :archived} = status(guest, authority, lineage)
+
+      assert {:error, %Prima.Refusal{stage: :admission, reason: :archived}} =
+               status(guest, authority, lineage)
     end
   end
 
@@ -597,7 +602,7 @@ defmodule Crucible.ArchiveFenceTest do
 
   defp status(guest, authority, lineage) do
     opts = if lineage, do: [lineage: lineage], else: []
-    Grimoire.Catalog.call_in_chain("system", guest, %{"action" => "status"}, authority, opts)
+    Grimoire.call_in_chain("system", guest, %{"action" => "status"}, authority, opts)
   end
 
   defp refusal_sentence, do: "An in-chain call names the execution that makes it"

@@ -148,8 +148,73 @@ defmodule Emissary.MCP.RouterTest do
     end
   end
 
+  # The Router makes no decision of its own: the gate authorizes and casts
+  # once, and the stage of its answer says how the wire carries it. What
+  # the gate refused before the tool ran is a JSON-RPC error by class —
+  # every refusal the Router's own pre-checks used to make, with the same
+  # class and code; what the tool answered is a failed tool result, except
+  # an authentication, permission or consent refusal.
+  describe "dispatch/2 with tools/call refusals" do
+    defp call(ctx, name, arguments) do
+      Router.dispatch(ctx, %Message{
+        type: :request,
+        id: 7,
+        method: "tools/call",
+        params: %{"name" => name, "arguments" => arguments}
+      })
+    end
+
+    test "the gate's refusals are protocol errors by class", %{context: ctx} do
+      Grimoire.Catalog.with_providers([Grimoire.Probe.Refusing], fn ->
+        # A declared argument the gate cannot cast.
+        assert {:error, :invalid_params, message} =
+                 call(ctx, "refusing_probe", %{"action" => "invalid", "n" => "x"})
+
+        assert message =~ "integer"
+
+        # An undeclared argument, an undeclared action, no action at all.
+        assert {:error, :invalid_params, "Unknown field: extra"} =
+                 call(ctx, "refusing_probe", %{"action" => "invalid", "extra" => 1})
+
+        assert {:error, :invalid_params, "Unknown action: refusing_probe.dance"} =
+                 call(ctx, "refusing_probe", %{"action" => "dance"})
+
+        assert {:error, :invalid_params, "Missing required argument: action"} =
+                 call(ctx, "refusing_probe", %{})
+      end)
+
+      # The caller's authorization, refused before the arguments are read:
+      # a caller with no credential, and one without the declared permission.
+      anonymous = %{ctx | authenticated: false}
+
+      assert {:error, :auth_required, _message} =
+               call(anonymous, "component", %{"action" => "list", "extra" => 1})
+
+      no_admin = %{ctx | permissions: MapSet.new([:execute])}
+
+      assert {:error, :insufficient_permissions, message} =
+               call(no_admin, "system", %{"action" => "notify"})
+
+      assert message ==
+               Sanctum.Unauthorized.message({:missing_permission, :admin}, no_admin.auth_method)
+    end
+
+    test "a tool's own refusal is a failed tool result; its permission refusal keeps its code",
+         %{context: ctx} do
+      Grimoire.Catalog.with_providers([Grimoire.Probe.Refusing], fn ->
+        assert {:ok, %{"isError" => true, "content" => [%{"text" => text}]}} =
+                 call(ctx, "refusing_probe", %{"action" => "invalid", "n" => 1})
+
+        assert text == "the handler refused this argument"
+
+        assert {:error, :insufficient_permissions, _message} =
+                 call(ctx, "refusing_probe", %{"action" => "forbidden"})
+      end)
+    end
+  end
+
   describe "dispatch/2 with resources/list" do
-    test "delegates to ResourceRegistry and returns resources list", %{context: ctx} do
+    test "delegates to Grimoire.Resources and returns resources list", %{context: ctx} do
       msg = %Message{
         type: :request,
         id: 7,

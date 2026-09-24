@@ -9,7 +9,6 @@ defmodule Compendium.Providers.AquaConsentTest do
   use ExUnit.Case, async: false
 
   alias Compendium.Providers.Aqua, as: Tool
-  alias Grimoire.Catalog
   alias Grimoire.Visibility
 
   @writes ~w(create update delete reset skill_create skill_update skill_delete skill_reset)
@@ -60,19 +59,23 @@ defmodule Compendium.Providers.AquaConsentTest do
     ]
 
     for {action, args} <- calls do
-      assert {:error, {:consent_class_required, {:surface_not_permitted, :api_key}}} =
-               Catalog.call_external("aqua", star, Map.put(args, "action", action)),
+      assert {:error,
+              %Prima.Refusal{
+                stage: :admission,
+                reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+              }} =
+               Grimoire.call_external("aqua", star, Map.put(args, "action", action)),
              "aqua.#{action} answered a standing credential"
     end
 
     # The reads stay open to the key — a turn resolves its soul and its
     # scrolls through them.
     assert {:ok, %{skills: _}} =
-             Catalog.call_external("aqua", star, %{"action" => "skill_list"})
+             Grimoire.call_external("aqua", star, %{"action" => "skill_list"})
 
     # Discovery agrees with dispatch: the key is shown the reads alone.
     [aqua] =
-      Catalog.list_tools()
+      Grimoire.list_tools()
       |> Visibility.filter_for_context(star)
       |> Enum.filter(&(&1["name"] == "aqua"))
 

@@ -307,8 +307,8 @@ defmodule Compendium.Providers.SourceTest do
     end
 
     test "source is the agent's: the wire does not serve it", %{ctx: ctx} do
-      assert {:error, {:unknown_action, "source.read"}} =
-               Grimoire.Catalog.call_external("source", ctx, %{
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:unknown_action, "source.read"}}} =
+               Grimoire.call_external("source", ctx, %{
                  "action" => "read",
                  "path" => "#{@dir}/src/lib.rs"
                })

@@ -29,8 +29,8 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
       ctx = execute_only_ctx()
 
       for action <- ~w(create delete enable disable test refresh get) do
-        assert {:error, reason} =
-                 Grimoire.Catalog.call_external("mcp_servers", ctx, %{
+        assert {:error, %Prima.Refusal{stage: :admission, reason: reason}} =
+                 Grimoire.call_external("mcp_servers", ctx, %{
                    "action" => action,
                    "name" => "some-server"
                  })
@@ -58,8 +58,8 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
 
       for action <-
             ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove) do
-        assert {:error, reason} =
-                 Grimoire.Catalog.call_external("registry", ctx, %{
+        assert {:error, %Prima.Refusal{stage: :admission, reason: reason}} =
+                 Grimoire.call_external("registry", ctx, %{
                    "action" => action,
                    "slug" => "someslug"
                  })
@@ -143,8 +143,8 @@ defmodule Emissary.MCP.ToolPermissionGatesTest do
     test "denied for an execute-only context" do
       ctx = execute_only_ctx()
 
-      assert {:error, {:missing_permission, :admin}} =
-               Grimoire.Catalog.call_external("system", ctx, %{
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :admin}}} =
+               Grimoire.call_external("system", ctx, %{
                  "action" => "notify",
                  "event" => "test.event"
                })

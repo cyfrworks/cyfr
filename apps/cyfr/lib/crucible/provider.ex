@@ -20,7 +20,7 @@ defmodule Crucible.Provider do
   name is `"crucible"` and its resources are `crucible://executions/…`.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Grimoire.Catalog.
+  which the operation table validates at boot.
 
   ## Simplified Lifecycle
 

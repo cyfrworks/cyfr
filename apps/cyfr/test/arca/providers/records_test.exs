@@ -436,20 +436,20 @@ defmodule Arca.Providers.RecordsTest do
             %{"action" => "set", "settings" => %{"executions" => 5}},
             %{"action" => "cleanup", "cleanup_type" => "executions"}
           ] do
-        assert {:error, :missing_tenant} = Grimoire.Catalog.call_external("retention", ctx, args),
+        assert {:error, :missing_tenant} = Grimoire.call_external("retention", ctx, args),
                "#{inspect(ctx.scope)} #{args["action"]}"
       end
     end
 
     test "set answers the merged settings", %{ctx: ctx} do
       assert {:ok, _} =
-               Grimoire.Catalog.call_external("retention", ctx, %{
+               Grimoire.call_external("retention", ctx, %{
                  "action" => "set",
                  "settings" => %{"executions" => 5}
                })
 
       assert {:ok, %{action: "set", updated: true, settings: settings}} =
-               Grimoire.Catalog.call_external("retention", ctx, %{
+               Grimoire.call_external("retention", ctx, %{
                  "action" => "set",
                  "settings" => %{"builds" => 3}
                })
@@ -480,7 +480,7 @@ defmodule Arca.Providers.RecordsTest do
             %{"action" => "cleanup", "cleanup_type" => "executions"}
           ] do
         assert {:error, {:corrupt, "Retention settings"} = reason} =
-                 Grimoire.Catalog.call_external("retention", ctx, args),
+                 Grimoire.call_external("retention", ctx, args),
                args["action"]
 
         assert err_msg(reason) =~ "Retention settings"
@@ -492,7 +492,7 @@ defmodule Arca.Providers.RecordsTest do
       Arca.Repo.query!("DROP TABLE retention_settings")
 
       assert {:error, {:unavailable, "Retention settings"} = reason} =
-               Grimoire.Catalog.call_external("retention", ctx, %{"action" => "get"})
+               Grimoire.call_external("retention", ctx, %{"action" => "get"})
 
       assert err_msg(reason) =~ "unavailable"
     end
@@ -620,22 +620,23 @@ defmodule Arca.Providers.RecordsTest do
     end
 
     test "can get retention settings", %{app_ctx: app_ctx} do
-      {:ok, result} = Grimoire.Catalog.call_external("retention", app_ctx, %{"action" => "get"})
+      {:ok, result} = Grimoire.call_external("retention", app_ctx, %{"action" => "get"})
       assert is_map(result.settings)
     end
 
     test "cannot set retention settings", %{app_ctx: app_ctx} do
       # The dispatcher must enforce the declared :storage_write permission.
-      assert {:error, {:missing_permission, :storage_write}} =
-               Grimoire.Catalog.call_external("retention", app_ctx, %{
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_write}}} =
+               Grimoire.call_external("retention", app_ctx, %{
                  "action" => "set",
                  "settings" => %{"executions" => 5}
                })
     end
 
     test "cannot run cleanup", %{app_ctx: app_ctx} do
-      assert {:error, {:missing_permission, :admin}} =
-               Grimoire.Catalog.call_external("retention", app_ctx, %{
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:missing_permission, :admin}}} =
+               Grimoire.call_external("retention", app_ctx, %{
                  "action" => "cleanup",
                  "cleanup_type" => "executions"
                })
@@ -660,7 +661,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "can set retention settings", %{oidc_ctx: oidc_ctx} do
       {:ok, result} =
-        Grimoire.Catalog.call_external("retention", oidc_ctx, %{
+        Grimoire.call_external("retention", oidc_ctx, %{
           "action" => "set",
           "settings" => %{"executions" => 5}
         })
@@ -670,7 +671,7 @@ defmodule Arca.Providers.RecordsTest do
 
     test "can run cleanup", %{oidc_ctx: oidc_ctx} do
       {:ok, result} =
-        Grimoire.Catalog.call_external("retention", oidc_ctx, %{
+        Grimoire.call_external("retention", oidc_ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => true
@@ -884,8 +885,8 @@ defmodule Arca.Providers.RecordsTest do
       ]
 
       for {tool, verb} <- retired do
-        {:error, {:unknown_action, name_action}} =
-          Grimoire.Catalog.call_external(tool, ctx, %{"action" => verb})
+        {:error, %Prima.Refusal{stage: :admission, reason: {:unknown_action, name_action}}} =
+          Grimoire.call_external(tool, ctx, %{"action" => verb})
 
         assert name_action == "#{tool}.#{verb}"
       end
@@ -928,16 +929,18 @@ defmodule Arca.Providers.RecordsTest do
     end
 
     test "mcp_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
-      assert {:error, {:missing_permission, :storage_read}} =
-               Grimoire.Catalog.call_external("mcp_log", ctx, %{
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_read}}} =
+               Grimoire.call_external("mcp_log", ctx, %{
                  "action" => "correlate",
                  "request_id" => "req_x"
                })
     end
 
     test "policy_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
-      assert {:error, {:missing_permission, :storage_read}} =
-               Grimoire.Catalog.call_external("policy_log", ctx, %{
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_read}}} =
+               Grimoire.call_external("policy_log", ctx, %{
                  "action" => "correlate",
                  "request_id" => "req_x"
                })
@@ -974,8 +977,9 @@ defmodule Arca.Providers.RecordsTest do
     end
 
     test "stats requires :storage_read like its siblings", %{no_read_ctx: ctx} do
-      assert {:error, {:missing_permission, :storage_read}} =
-               Grimoire.Catalog.call_external("mcp_log", ctx, %{"action" => "stats"})
+      assert {:error,
+              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_read}}} =
+               Grimoire.call_external("mcp_log", ctx, %{"action" => "stats"})
     end
 
     test "stats succeeds for a :storage_read context", %{ctx: ctx} do
@@ -1018,7 +1022,11 @@ defmodule Arca.Providers.RecordsTest do
           action <- tool.input_schema["properties"]["action"]["enum"] do
         args = Map.put(extra_args.({tool.name, action}), "action", action)
 
-        case Grimoire.Catalog.call_external(tool.name, no_perm_ctx, args) do
+        case Grimoire.call_external(tool.name, no_perm_ctx, args) do
+          {:error, %Prima.Refusal{stage: :admission, reason: reason}} ->
+            assert Sanctum.Unauthorized.reason?(reason),
+                   "#{tool.name}.#{action} error is not a permission denial: #{inspect(reason)}"
+
           {:error, reason} ->
             assert Sanctum.Unauthorized.reason?(reason),
                    "#{tool.name}.#{action} error is not a permission denial: #{inspect(reason)}"

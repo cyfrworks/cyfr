@@ -14,11 +14,16 @@ defmodule Emissary.MCP.Router do
 
   ## Authorization Model
 
-  The Router gates; the dispatcher authorizes. For a declared action the
-  Router asks `Grimoire.Catalog.authorize_declared_action/4` before
-  validating remaining fields, so an unauthorized caller receives the
-  catalog's access refusal rather than a schema-detail error. Discovery
-  still reads the same annotations through `Grimoire.Visibility`.
+  The Router decides nothing; the gate authorizes, once. A `tools/call`
+  of a tool the table holds goes to `Grimoire.call_external/4` with the
+  caller's arguments as sent, and the gate authorizes the declared action
+  before it casts the remaining fields, so an unauthorized caller
+  receives the access refusal rather than a schema-detail error. What the
+  gate refused before any handler ran (`stage: :admission`) is answered
+  as a JSON-RPC error by its class; what the tool itself answered is a
+  failed tool result, except an authentication, permission or consent
+  refusal, which keeps its JSON-RPC code wherever it was raised.
+  Discovery reads the same annotations through `Grimoire.Visibility`.
   Handlers keep only the residual checks an annotation cannot express
   (tenant presence, ownership, definition authority, the domain's finer
   consent arms).
@@ -37,9 +42,9 @@ defmodule Emissary.MCP.Router do
 
   `resources/list` and `resources/templates/list` are unauthenticated
   metadata. `resources/read` is an ordinary operation call:
-  `Emissary.MCP.ResourceRegistry.resolve/1` names the operation that
+  `Grimoire.Resources.resolve/1` names the operation that
   declares the URI's scheme, and the Router calls it once through
-  `Grimoire.Catalog.call_external/4` with the URI as its one argument —
+  `Grimoire.call_external/4` with the URI as its one argument —
   the same gate, plane, authentication, permission and runner a
   `tools/call` gets. The Router makes no authorization decision of its
   own; it renders the answer.
@@ -51,8 +56,7 @@ defmodule Emissary.MCP.Router do
 
   require Logger
 
-  alias Grimoire.Catalog
-  alias Emissary.MCP.{Message, Protocol, ResourceRegistry}
+  alias Emissary.MCP.{Message, Protocol}
 
   @server_capabilities %{
     # `listChanged: true` is a promise to actually push. It is true for tools
@@ -146,7 +150,7 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
 
   defp dispatch_method(ctx, "tools/list", params, _id) do
-    Catalog.list_tools()
+    Grimoire.list_tools()
     |> Grimoire.Visibility.filter_for_context(ctx)
     |> paginate("tools", params)
   end
@@ -158,78 +162,27 @@ defmodule Emissary.MCP.Router do
       {:error, :invalid_params, "Missing required field: name"}
     else
       # Check tool existence first — unknown tools are protocol errors per spec
-      case Catalog.get_tool(name) do
+      case Grimoire.get_tool(name) do
         {:error, :not_found} ->
           {:error, :invalid_params, "Unknown tool: #{name}"}
 
         {:ok, tool_def} ->
           arguments = Map.get(params, "arguments", %{})
+          has_output_schema = Map.has_key?(tool_def, "outputSchema")
 
-          case Catalog.authorize_declared_action(name, ctx, arguments) do
+          case Grimoire.call_external(name, ctx, arguments, runner: :supervised) do
+            {:ok, result} ->
+              {:ok, call_result(name, result, has_output_schema)}
+
             {:error, reason} ->
-              protocol_error(ctx, reason, :tools_call)
-
-            :ok ->
-              case Catalog.validate_arguments(name, arguments) do
-                {:error, reason} ->
-                  protocol_error(ctx, reason, :tools_call)
-
-                {:ok, arguments} ->
-                  has_output_schema = Map.has_key?(tool_def, "outputSchema")
-
-                  case Catalog.call_external(name, ctx, arguments, runner: :supervised) do
-                    {:ok, result} ->
-                      text =
-                        case Jason.encode(result) do
-                          {:ok, encoded} ->
-                            encoded
-
-                          {:error, encode_error} ->
-                            require Logger
-
-                            Logger.error(
-                              "[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}"
-                            )
-
-                            ~s({"error":"Tool returned non-serializable result"})
-                        end
-
-                      call_result = %{
-                        "content" => [%{"type" => "text", "text" => text}],
-                        "isError" => false
-                      }
-
-                      # A tool that declares an outputSchema also answers in structuredContent,
-                      # so a client gets the typed value without re-parsing the text block.
-                      call_result =
-                        if has_output_schema and is_map(result) do
-                          Map.put(call_result, "structuredContent", result)
-                        else
-                          call_result
-                        end
-
-                      {:ok, call_result}
-
-                    # An authorization refusal is a protocol-level error with
-                    # the auth code, not a tool result: a client branches on
-                    # `-33004` (and the CLI on `-33001`) where an isError text
-                    # block gives it nothing to branch on. Raised or returned,
-                    # it arrives as the `Sanctum.Unauthorized` vocabulary and
-                    # is rendered here — the wire boundary.
-                    {:error, reason} ->
-                      if Sanctum.Unauthorized.reason?(reason) or
-                           Prima.ConsentSignal.signal?(reason) do
-                        protocol_error(ctx, reason, :tools_call)
-                      else
-                        {:ok,
-                         %{
-                           "content" => [
-                             %{"type" => "text", "text" => Grimoire.Error.render(reason)}
-                           ],
-                           "isError" => true
-                         }}
-                      end
-                  end
+              if protocol_refusal?(reason) do
+                protocol_error(ctx, reason, :tools_call)
+              else
+                {:ok,
+                 %{
+                   "content" => [%{"type" => "text", "text" => Grimoire.Error.render(reason)}],
+                   "isError" => true
+                 }}
               end
           end
       end
@@ -243,12 +196,12 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
 
   defp dispatch_method(_ctx, "resources/list", params, _id) do
-    resources = ResourceRegistry.list_resources()
+    resources = Grimoire.Resources.list_resources()
     paginate(resources, "resources", params)
   end
 
   defp dispatch_method(_ctx, "resources/templates/list", params, _id) do
-    templates = ResourceRegistry.list_resource_templates()
+    templates = Grimoire.Resources.list_resource_templates()
     paginate(templates, "resourceTemplates", params)
   end
 
@@ -276,8 +229,10 @@ defmodule Emissary.MCP.Router do
 
   defp read_resource(ctx, uri, _id) do
     read =
-      with {:ok, tool, action} <- ResourceRegistry.resolve(uri) do
-        Catalog.call_external(tool, ctx, %{"action" => action, "uri" => uri}, runner: :supervised)
+      with {:ok, tool, action} <- Grimoire.Resources.resolve(uri) do
+        Grimoire.call_external(tool, ctx, %{"action" => action, "uri" => uri},
+          runner: :supervised
+        )
       end
 
     case read do
@@ -303,6 +258,44 @@ defmodule Emissary.MCP.Router do
     end
   end
 
+  defp call_result(name, result, has_output_schema) do
+    text =
+      case Jason.encode(result) do
+        {:ok, encoded} ->
+          encoded
+
+        {:error, encode_error} ->
+          Logger.error(
+            "[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}"
+          )
+
+          ~s({"error":"Tool returned non-serializable result"})
+      end
+
+    call_result = %{
+      "content" => [%{"type" => "text", "text" => text}],
+      "isError" => false
+    }
+
+    # A tool that declares an outputSchema also answers in structuredContent,
+    # so a client gets the typed value without re-parsing the text block.
+    if has_output_schema and is_map(result),
+      do: Map.put(call_result, "structuredContent", result),
+      else: call_result
+  end
+
+  # Which refusals are protocol errors rather than a failed tool result:
+  # everything the gate refused before the tool ran — the caller's
+  # authorization, the arguments, the action — answered by its class; and,
+  # raised or returned by the tool itself, an authorization refusal or a
+  # consent signal, which a client branches on (`-33004`, and the CLI on
+  # `-33001`) where an isError text block gives it nothing to branch on.
+  defp protocol_refusal?(%Prima.Refusal{stage: :admission}), do: true
+  defp protocol_refusal?(%Prima.Refusal{reason: reason}), do: protocol_refusal?(reason)
+
+  defp protocol_refusal?(reason),
+    do: Sanctum.Unauthorized.reason?(reason) or Prima.ConsentSignal.signal?(reason)
+
   # A refusal answered as a JSON-RPC error: the code its class (or its
   # row's override, or a consent signal's tag) answers with, and its
   # sentence — an authorization refusal's worded for the caller's
@@ -310,13 +303,14 @@ defmodule Emissary.MCP.Router do
   defp protocol_error(ctx, reason, where) do
     refusal = Grimoire.Error.classify(reason)
     code = Message.refusal_code(refusal, where)
+    inner = refusal.reason
 
     cond do
-      Sanctum.Unauthorized.reason?(reason) ->
-        {:error, code, Sanctum.Unauthorized.message(reason, ctx.auth_method)}
+      Sanctum.Unauthorized.reason?(inner) ->
+        {:error, code, Sanctum.Unauthorized.message(inner, ctx.auth_method)}
 
-      Prima.ConsentSignal.signal?(reason) ->
-        {:error, code, refusal.message, Prima.ConsentSignal.data(reason)}
+      Prima.ConsentSignal.signal?(inner) ->
+        {:error, code, refusal.message, Prima.ConsentSignal.data(inner)}
 
       true ->
         {:error, code, refusal.message}

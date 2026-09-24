@@ -164,8 +164,8 @@ defmodule Sanctum.ProviderCredentialsTest do
       # action's consent annotation is enforced. A permission set — however
       # wide — does not open an outbound-credential write.
       for ctx <- [narrow_ctx([:execute]), key_ctx()] do
-        assert {:error, {:consent_class_required, _}} =
-                 Grimoire.Catalog.call_external("oauth", ctx, %{
+        assert {:error, %Prima.Refusal{stage: :admission, reason: {:consent_class_required, _}}} =
+                 Grimoire.call_external("oauth", ctx, %{
                    "action" => "set_client",
                    "provider" => "google",
                    "client_id" => "x"

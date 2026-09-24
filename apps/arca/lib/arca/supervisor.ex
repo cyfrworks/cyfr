@@ -30,9 +30,7 @@ defmodule Arca.Supervisor do
       # drains before the repo goes down.
       Arca.RecordSink,
       # The shared cache table's one owner. A crash here flushes the
-      # table, harmlessly for a read-through cache — but the catalogues
-      # written into it are rebuilt by their own owners, which watch this
-      # process (`Arca.Cache.monitor_owner/0`).
+      # table, harmlessly for a read-through cache.
       Arca.Cache.Sweeper
     ]
 

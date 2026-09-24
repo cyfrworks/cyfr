@@ -46,8 +46,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Cyfr.KeyringFingerprint.Check,
     Cluster.Supervisor,
     Cyfr.Cell,
-    Grimoire.Catalog,
-    Emissary.MCP.ResourceRegistry,
     Arca.AuditHandler,
     EmissaryWeb.Telemetry,
     Phoenix.PubSub.Supervisor,

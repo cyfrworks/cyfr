@@ -20,10 +20,18 @@ defmodule Prima.Refusal do
   `internal`, reads "The outcome could not be confirmed." and is
   logged by its shape (`Prima.LoggerContext.unexpected/3`), never its
   value.
+
+  A refusal's `stage` says where it was made. The gate's own refusals —
+  of the plane, the caller's authorization, the arguments, the chain's
+  authority, an unknown tool or action — are made before any handler
+  runs and carry `:admission`; everything a handler or the call's own
+  ending answers is `:execution`, the default. A surface that answers the
+  two differently (a JSON-RPC error for an admission refusal, a failed
+  tool result for an execution one) reads the stage, never the reason.
   """
 
   @enforce_keys [:class, :reason, :message]
-  defstruct [:class, :reason, :message]
+  defstruct [:class, :reason, :message, stage: :execution]
 
   @type class ::
           :unauthenticated
@@ -42,7 +50,14 @@ defmodule Prima.Refusal do
           | :uncertain
           | :internal
 
-  @type t :: %__MODULE__{class: class(), reason: term(), message: String.t()}
+  @type stage :: :admission | :execution
+
+  @type t :: %__MODULE__{
+          class: class(),
+          reason: term(),
+          message: String.t(),
+          stage: stage()
+        }
 
   @classes [
     :unauthenticated,
