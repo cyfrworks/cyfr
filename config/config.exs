@@ -22,10 +22,8 @@ config :cyfr,
     # Foundation services
     Sanctum.MCP,
     # The records the storage layer keeps (executions, MCP and policy
-    # logs), handed the caller's actor alone.
+    # logs) and its retention policy, handed the caller's actor alone.
     Arca.Providers.Records,
-    # Retention policy, until the storage layer owns it.
-    Cyfr.Retention,
     # Chat on the wire, so Prism is a client of the agent runtime rather
     # than the only way to reach it.
     Emissary.MCP.ThreadTool,
@@ -241,8 +239,9 @@ config :cyfr, Compendium.ProjectionReconciler,
 # settings under `approvals.expiry_hours`.
 config :cyfr, Aqua.Approvals, expiry_hours: 24
 
-# Default retention windows used by Cyfr.Retention sweeps.
-config :cyfr, Cyfr.Retention,
+# Default retention windows, per kind (`Arca.Retention.Kind`); an athanor's
+# own settings override each. Every kind carries the same default in code.
+config :arca, Arca.Retention,
   # Newest N executions kept per athanor.
   executions: 10_000,
   # Days an execution record is kept, whatever the count.
@@ -272,6 +271,11 @@ config :cyfr, Cyfr.Retention,
   # longer than any commit and short enough that a writer that died does
   # not hold its bytes against the athanor's cap for a week.
   staging_days: 1,
+  # Days the deletion evidence of a seeded unit is kept once the
+  # projection of its root has consumed it
+  # (`Arca.StorageProjectionChanges`). A pending tombstone is kept
+  # whatever its age.
+  projection_tombstone_days: 7,
   # How many staged prefixes one sweep of one athanor collects or
   # repairs. A bound, not a target: the next sweep takes up where this one
   # stopped, so a large backlog is worked off over several runs rather

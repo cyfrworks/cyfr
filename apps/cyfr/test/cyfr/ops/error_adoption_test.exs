@@ -77,9 +77,6 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     # module into what it calls.
     "apps/cyfr/lib/compendium/builds.ex" => 3,
     "apps/cyfr/lib/emissary/mcp/external_provider.ex" => 3,
-    # The retention tool's handlers, moved with their sentences until the
-    # storage layer owns retention.
-    "apps/cyfr/lib/cyfr/retention.ex" => 3,
     "apps/sanctum/lib/sanctum/mcp/oauth_tool.ex" => 3,
     # Two of the three are the capacity refusals a poller sees when the
     # server will not mint them an athanor: remediation prose (wait, or ask

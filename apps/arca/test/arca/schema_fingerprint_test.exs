@@ -91,6 +91,34 @@ defmodule Arca.SchemaFingerprintTest do
     assert :ok = insert_row("storage_projection_changes", %{change | id: "spc_3", root: "aqua"})
   end
 
+  test "the retention settings table is the fingerprinted baseline's, with its constraints" do
+    [baseline] =
+      Path.wildcard(Path.expand("../../priv/repo/migrations/*_baseline.exs", __DIR__))
+
+    assert File.read!(baseline) =~ "create table(:retention_settings"
+    assert "retention_settings" in Arca.TenantTables.roster()
+
+    now = DateTime.utc_now()
+    athanor = "ath_fingerprint_#{System.unique_integer([:positive])}"
+
+    row = %{
+      athanor_id: athanor,
+      settings: "{}",
+      revision: 1,
+      inserted_at: now,
+      updated_at: now
+    }
+
+    # One row per athanor, and a revision that counts from 1.
+    assert :ok = insert_row("retention_settings", row)
+    assert :refused = insert_row("retention_settings", %{row | revision: 2})
+
+    assert :refused =
+             insert_row("retention_settings", %{row | athanor_id: athanor <> "_b", revision: 0})
+
+    assert :refused = insert_row("retention_settings", %{row | athanor_id: nil})
+  end
+
   defp insert_row(table, row) do
     Arca.Repo.transaction(fn -> Arca.Repo.insert_all(table, [row]) end)
     :ok

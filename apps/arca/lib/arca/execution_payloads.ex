@@ -20,7 +20,7 @@ defmodule Arca.ExecutionPayloads do
   One row per `(execution, kind, attempt)`: a successor attempt keeps
   payloads of its own, and `get/4` serves the current attempt's unless
   another is named. Pruned by age per retention class
-  (`Cyfr.Retention.Payloads` and its siblings), and released before the
+  (`Arca.Retention.Payloads` and its siblings), and released before the
   execution rows that name them go (`release/2`). The row is the
   reference and the bytes are the payload — an `executions` row carries
   digests and sizes, never the bytes.

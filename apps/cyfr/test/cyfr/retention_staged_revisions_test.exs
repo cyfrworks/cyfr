@@ -12,7 +12,7 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
 
   alias Arca.Storage.UnitLocator
   alias Arca.ControlPlane
-  alias Cyfr.Retention.StagedRevisions
+  alias Arca.Retention.StagedRevisions
 
   @sentinel "cyfr-manifest.json"
 
@@ -47,7 +47,11 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
       )
 
     name = "kind-#{System.unique_integer([:positive])}"
-    {:ok, ctx: ctx, unit: ["components", "catalysts", "local", name, "1.0.0"]}
+
+    {:ok,
+     ctx: ctx,
+     actor: Sanctum.Context.actor(ctx),
+     unit: ["components", "catalysts", "local", name, "1.0.0"]}
   end
 
   # A whole revision no row names, begun `days` ago by its name's own time.
@@ -75,14 +79,21 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
   end
 
   test "is on the roster, in days, a day by default" do
-    assert StagedRevisions in Cyfr.Retention.kinds()
+    assert StagedRevisions in Arca.Retention.kinds()
     assert StagedRevisions.key() == "staging_days"
     assert StagedRevisions.unit() == :days
     assert StagedRevisions.default() == 1
     assert StagedRevisions.limit() > 0
 
-    Application.put_env(:cyfr, Cyfr.Retention, staging_days: 3, staging_sweep_limit: 7)
-    on_exit(fn -> Application.delete_env(:cyfr, Cyfr.Retention) end)
+    previous = Application.fetch_env(:arca, Arca.Retention)
+    Application.put_env(:arca, Arca.Retention, staging_days: 3, staging_sweep_limit: 7)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, config} -> Application.put_env(:arca, Arca.Retention, config)
+        :error -> Application.delete_env(:arca, Arca.Retention)
+      end
+    end)
 
     assert StagedRevisions.default() == 3
     assert StagedRevisions.limit() == 7
@@ -90,20 +101,21 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
 
   test "collects what is older than the athanor's days, and counts on a dry run", %{
     ctx: ctx,
+    actor: actor,
     unit: unit
   } do
     old = lay_orphan(ctx, unit, 3)
     young = lay_orphan(ctx, unit, 0)
 
-    assert {:ok, 0} = Cyfr.Retention.cleanup(ctx, "staging_days", value: 5)
-    assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "staging_days", dry_run: true)
+    assert {:ok, 0} = Arca.Retention.cleanup(actor, "staging_days", value: 5)
+    assert {:ok, 1} = Arca.Retention.cleanup(actor, "staging_days", dry_run: true)
     assert Enum.sort(staged(ctx, unit)) == Enum.sort([old, young])
 
-    assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "staging_days")
+    assert {:ok, 1} = Arca.Retention.cleanup(actor, "staging_days")
     assert staged(ctx, unit) == [young]
   end
 
-  test "reports each sweep as telemetry", %{ctx: ctx, unit: unit} do
+  test "reports each sweep as telemetry", %{ctx: ctx, actor: actor, unit: unit} do
     lay_orphan(ctx, unit, 3)
     test_pid = self()
     handler = "staged-revisions-#{System.unique_integer([:positive])}"
@@ -119,19 +131,23 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
 
     on_exit(fn -> :telemetry.detach(handler) end)
 
-    assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "staging_days")
+    assert {:ok, 1} = Arca.Retention.cleanup(actor, "staging_days")
     athanor_id = ctx.athanor_id
 
     assert_received {:swept, %{collected: 1, examined: 1, errors: 0},
                      %{athanor_id: ^athanor_id, dry_run: false}}
   end
 
-  test "refuses on a boot that does not own the control plane", %{ctx: ctx, unit: unit} do
+  test "refuses on a boot that does not own the control plane", %{
+    ctx: ctx,
+    actor: actor,
+    unit: unit
+  } do
     old = lay_orphan(ctx, unit, 3)
 
     ControlPlane.record(:lost)
-    assert {:error, :control_plane_lost} = Cyfr.Retention.cleanup(ctx, "staging_days")
-    assert {:error, :control_plane_lost} = StagedRevisions.prune(ctx, 1, true)
+    assert {:error, :control_plane_lost} = Arca.Retention.cleanup(actor, "staging_days")
+    assert {:error, :control_plane_lost} = StagedRevisions.prune(actor, 1, true)
     assert staged(ctx, unit) == [old]
   end
 

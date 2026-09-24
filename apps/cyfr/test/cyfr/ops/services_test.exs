@@ -21,8 +21,7 @@ defmodule Cyfr.Ops.ServicesTest do
     # cannot be one service in the log and another in the report. Several
     # providers may share a service.
     assert Services.service_name(Arca.Providers.Records) == "arca"
-    assert Services.service_name(Cyfr.Retention) == "arca"
-    assert Services.providers_for("arca") == [Arca.Providers.Records, Cyfr.Retention]
+    assert Services.providers_for("arca") == [Arca.Providers.Records]
     assert Services.service_name(Arca.Providers.Files) == "files"
     assert Services.providers_for("files") == [Arca.Providers.Files]
   end

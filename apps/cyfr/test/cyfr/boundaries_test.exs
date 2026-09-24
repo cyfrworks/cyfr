@@ -244,6 +244,52 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.dependency_violations(:arca, named, contracts) == []
     end
 
+    # Retention moved below the host with the doors. It is handed one actor
+    # per estate and decides nothing about which estates are active, so it
+    # names neither a layer above Arca nor the athanor rows that say so.
+    test "retention names nothing above Arca, and not the athanor rows" do
+      named =
+        names([
+          "apps/arca/lib/arca/retention.ex",
+          "apps/arca/lib/arca/retention_settings.ex",
+          "apps/arca/lib/arca/retention/*.ex"
+        ])
+
+      contracts = contracts_modules()
+
+      assert "apps/arca/lib/arca/retention/projection_tombstones.ex" in Enum.map(
+               named,
+               &elem(&1, 0)
+             )
+
+      reached =
+        for {_path, names} <- named,
+            {module, _line} <- names,
+            uniq: true,
+            do: {module, Boundaries.layer(module, contracts)}
+
+      assert {"Arca.StorageProjectionChanges", :arca} in reached,
+             "the scan of retention found no names"
+
+      above =
+        for {module, layer} <- reached, layer not in [:arca, :contracts, :outside], do: module
+
+      assert above == [], "retention names a module above Arca: #{inspect(above)}"
+      assert athanor_rows(named) == []
+      assert Boundaries.dependency_violations(:arca, named, contracts) == []
+
+      planted = [
+        {"apps/arca/lib/arca/retention.ex",
+         CodeLines.aliases(~S'''
+         defmodule Arca.Retention do
+           def active?(actor, id), do: Arca.Athanors.get(actor, id)
+         end
+         ''')}
+      ]
+
+      assert athanor_rows(planted) == ["apps/arca/lib/arca/retention.ex:2 names Arca.Athanors"]
+    end
+
     test "a door that reaches back up is reported" do
       planted = [
         {"apps/arca/lib/arca/files.ex",
@@ -262,6 +308,13 @@ defmodule Cyfr.BoundariesTest do
                  "arca may name [:arca, :contracts, :outside]"
              ]
     end
+  end
+
+  defp athanor_rows(named) do
+    for {path, names} <- named,
+        {module, line} <- names,
+        module == "Arca.Athanors" or String.starts_with?(module, "Arca.Athanors."),
+        do: "#{path}:#{line} names #{module}"
   end
 
   describe "the islands" do
@@ -1066,6 +1119,23 @@ defmodule Cyfr.BoundariesTest do
 
       assert source =~
                ~r/# arca:unscoped-ok .*system_responsibilities\/0.*\n\s+defp behind\(/
+    end
+
+    test "retention's walk across the estates is rostered, and its check refuses any other actor" do
+      assert %{modules: ["Cyfr.RetentionScheduler"]} =
+               Enum.find(
+                 Boundaries.system_responsibilities(),
+                 &(&1.check == "Arca.Retention.cleanup_athanor/2")
+               ),
+             "the retention walk is not a rostered system responsibility"
+
+      # Refused before any query: only the server's own actor, narrowed to
+      # one athanor, is what the row names.
+      estate = %Cyfr.Actor{athanor_id: "ath_boundaries", scope: :athanor, system: true}
+
+      assert {:error, :forbidden} = Arca.Retention.cleanup_athanor(%{estate | system: false})
+      assert {:error, :forbidden} = Arca.Retention.cleanup_athanor(%{estate | scope: :platform})
+      assert {:error, :no_athanor} = Arca.Retention.cleanup_athanor(%{estate | athanor_id: nil})
     end
 
     test "every module that passes a retirement's check is rostered with it" do

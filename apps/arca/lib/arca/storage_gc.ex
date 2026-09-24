@@ -77,7 +77,7 @@ defmodule Arca.StorageGC do
   athanor as `{:error, :no_athanor}` before any query or listing, and
   lists and deletes only inside that athanor's tree. The walk across
   estates belongs to the caller that owns the roster
-  (`Cyfr.Retention.cleanup_all/1`).
+  (`Cyfr.RetentionScheduler`).
   """
 
   import Ecto.Query, only: [from: 2]

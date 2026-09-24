@@ -102,7 +102,7 @@ defmodule Arca do
 
   ## Retention
 
-  See `Cyfr.Retention` for managing data retention policies. Retention
+  See `Arca.Retention` for managing data retention policies. Retention
   settings can also be managed via the MCP `retention` tool.
 
   ## Configuration
@@ -111,8 +111,9 @@ defmodule Arca do
         storage_adapter: Arca.Adapters.Local,
         base_path: "./data"
 
-      # Retention windows are the host's: the sweeps that read them are
-      # `Cyfr.Retention`'s, and this layer only deletes what it is asked to.
+      # Default retention windows, per kind (`Arca.Retention.Kind`); an
+      # athanor's own settings override them.
+      config :arca, Arca.Retention, executions: 10_000, mcp_log_days: 30
   """
 
   @doc """

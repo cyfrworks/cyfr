@@ -398,7 +398,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       assert {:ok, %{retention_class: class}, _} =
                Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), row.id, "input")
 
-      assert class == Cyfr.Retention.default_class(ctx)
+      assert class == Arca.Retention.default_class(Sanctum.Context.actor(ctx))
       Emissary.MCP.ExternalServerSupervisor.stop("kept", ctx.athanor_id)
     end
 

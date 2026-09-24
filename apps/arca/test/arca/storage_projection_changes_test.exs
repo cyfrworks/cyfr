@@ -330,6 +330,41 @@ defmodule Arca.StorageProjectionChangesTest do
       # generation than any it held.
       assert commit!(actor, key, "rev_again") > gone
     end
+
+    test "prune_acknowledged_tombstones/3 on a dry run counts what it would take, and takes nothing",
+         %{actor: actor, key: key} do
+      other = "catalysts/local/kept-#{System.unique_integer([:positive])}/1.0.0"
+      {:not_found, gone} = StorageUnits.stamped_retire(actor, @root, key)
+      :ok = StorageProjectionChanges.mark_ready(actor, @root, key, gone, nil)
+      {:not_found, _unconsumed} = StorageUnits.stamped_retire(actor, @root, other)
+      assert {:ok, :acknowledged} = acknowledge(actor, snapshot(actor))
+
+      later = DateTime.add(DateTime.utc_now(), 1, :second)
+      earlier = DateTime.add(DateTime.utc_now(), -1, :hour)
+      epoch = standing(actor).epoch
+
+      assert {:ok, 1} =
+               StorageProjectionChanges.prune_acknowledged_tombstones(actor, @root,
+                 before: later,
+                 dry_run: true
+               )
+
+      assert {:ok, 0} =
+               StorageProjectionChanges.prune_acknowledged_tombstones(actor, @root,
+                 before: earlier,
+                 dry_run: true
+               )
+
+      assert %{tombstone: true, ready: true} = row(actor, key)
+      assert %{tombstone: true, ready: false} = row(actor, other)
+      assert standing(actor).epoch == epoch
+
+      assert {:error, :no_athanor} =
+               StorageProjectionChanges.prune_acknowledged_tombstones(%Cyfr.Actor{}, @root,
+                 before: later,
+                 dry_run: true
+               )
+    end
   end
 
   describe "refusals" do

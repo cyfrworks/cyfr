@@ -2873,6 +2873,8 @@ type RetentionSetArgsSettings struct {
 	StagingDays Field[int] `json:"staging_days,omitzero"`
 	// Days of records kept per athanor
 	WriteIntentDays Field[int] `json:"write_intent_days,omitzero"`
+	// Days of records kept per athanor
+	ProjectionTombstoneDays Field[int] `json:"projection_tombstone_days,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.

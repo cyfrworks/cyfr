@@ -255,7 +255,7 @@ defmodule Arca.ExecutionPayloadsTest do
              Arca.get(actor, String.split(row.blob_ref, "/"))
   end
 
-  test "a sweep is scoped to its retention classes", %{ctx: ctx, actor: actor} do
+  test "a sweep is scoped to its retention classes", %{actor: actor} do
     api = execution!(actor)
     hook = execution!(actor)
     {:ok, _} = ExecutionPayloads.put(actor, api, "result", "api", "api")
@@ -278,21 +278,21 @@ defmodule Arca.ExecutionPayloadsTest do
     assert {:ok, _, "api"} = ExecutionPayloads.get(actor, api, "result")
 
     # Every class has a retention kind of its own, each with its window.
-    kinds = Cyfr.Retention.kinds()
+    kinds = Arca.Retention.kinds()
 
     for {kind, key} <- [
-          {Cyfr.Retention.Payloads, "payload_days"},
-          {Cyfr.Retention.WebhookPayloads, "webhook_payload_days"},
-          {Cyfr.Retention.SchedulePayloads, "schedule_payload_days"},
-          {Cyfr.Retention.SystemPayloads, "system_payload_days"}
+          {Arca.Retention.Payloads, "payload_days"},
+          {Arca.Retention.WebhookPayloads, "webhook_payload_days"},
+          {Arca.Retention.SchedulePayloads, "schedule_payload_days"},
+          {Arca.Retention.SystemPayloads, "system_payload_days"}
         ] do
       assert kind in kinds
       assert kind.key() == key
       assert kind.unit() == :days
     end
 
-    assert {:ok, 1} = Cyfr.Retention.Payloads.prune(ctx, 30, true)
-    assert {:ok, 0} = Cyfr.Retention.WebhookPayloads.prune(ctx, 30, true)
+    assert {:ok, 1} = Arca.Retention.Payloads.prune(actor, 30, true)
+    assert {:ok, 0} = Arca.Retention.WebhookPayloads.prune(actor, 30, true)
   end
 
   test "a row whose bytes could not be deleted stays for the next sweep", %{

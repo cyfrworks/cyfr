@@ -224,7 +224,9 @@ defmodule Aqua.AquaToolEditsTest do
     # repair marks the role's change ready at a newer generation, so the
     # next read of the index derives the role with nothing else asked.
     # No grace, so the move this commit left is overdue at once.
-    assert {:ok, _collected} = Cyfr.Retention.StagedRevisions.prune(ctx, 0, false)
+    assert {:ok, _collected} =
+             Arca.Retention.StagedRevisions.prune(Sanctum.Context.actor(ctx), 0, false)
+
     assert Arca.exists?(Sanctum.Context.actor(ctx), role)
 
     {:ok, rows} = Compendium.AgentIndex.list(ctx)

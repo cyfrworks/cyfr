@@ -100,8 +100,9 @@ defmodule Sanctum.Policy.EnforcementTest do
         set: [timestamp: old_ts]
       )
 
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "policy_log_days", dry_run: true)
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "policy_log_days")
+      actor = Sanctum.Context.actor(ctx)
+      assert {:ok, 1} = Arca.Retention.cleanup(actor, "policy_log_days", dry_run: true)
+      assert {:ok, 1} = Arca.Retention.cleanup(actor, "policy_log_days")
       assert rows_for(ctx, "catalyst:local.old") == []
     end
   end

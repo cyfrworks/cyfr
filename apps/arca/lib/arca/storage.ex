@@ -94,8 +94,9 @@ defmodule Arca.Storage do
           ├── payloads/                  # retained execution bodies — tenant-reserved, system-written
           └── data/                      # what components store — the guest's `data/` scope
 
-  Per-athanor settings (retention policy included) are rows — the
-  `athanors.settings` document — never blobs; the tree holds only content.
+  Per-athanor settings are rows, never blobs — the `athanors.settings`
+  document, and retention settings in their own `retention_settings` rows;
+  the tree holds only content.
 
   The seed media every athanor is provisioned from is not stored state —
   each root is a same-named subdirectory of the one seed tree

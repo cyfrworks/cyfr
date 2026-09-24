@@ -9,11 +9,23 @@ defmodule Cyfr.RetentionScheduler do
   When retention is disabled, this GenServer returns `:ignore` and never
   starts. When enabled, each tick asks for the cell's `retention` claim
   (`Arca.JobClaims`, key `"cell"`) and, holding it, runs one cycle: every
-  kind in `Cyfr.Retention.kinds/0` inside every active athanor, each in
-  its own context, plus the declared sweeps below. The tick repeats on a
-  configurable interval (default 6 hours) to prevent unbounded storage
-  growth. Every step runs behind one crash barrier: a fault in one is
-  logged and the cycle moves on.
+  kind in `Arca.Retention.kinds/0` inside every active athanor, each
+  under its own settings, plus the declared sweeps below. The tick
+  repeats on a configurable interval (default 6 hours) to prevent
+  unbounded storage growth. Every step runs behind one crash barrier: a
+  fault in one is logged and the cycle moves on.
+
+  ## The estates it walks
+
+  Which athanors are active is the identity domain's
+  (`Sanctum.Tenancy.Athanors.list_active/0`), and the walk asks again
+  (`active?/1`) just before each one: an estate archived after the list
+  was read is passed over, since its records freeze with it. Each estate
+  is cleaned by `Arca.Retention.cleanup_athanor/2` under an actor of its
+  own — the server's, narrowed to that one athanor, reading and writing
+  storage and nothing else. A kind that fails is logged against its
+  athanor; settings that cannot be read refuse the whole estate, which
+  is logged once. Either way the walk goes on to the next.
 
   ## Only a current claimant acts, and only the proposed one asks
 
@@ -312,17 +324,26 @@ defmodule Cyfr.RetentionScheduler do
   end
 
   defp sweep_athanors(state, [athanor_id | rest]) do
-    if Arca.ControlPlane.held?() do
-      deleted = run_step(label("retention"), fn -> run_retention(athanor_id) end)
+    cond do
+      not Arca.ControlPlane.held?() ->
+        _ = JobClaims.release(state.claim)
+        {:stopped, :not_held, state.summary}
 
-      state
-      |> put_cursor(%{state.cursor | athanor: athanor_id})
-      |> tally(:athanors, athanor_id)
-      |> count(deleted)
-      |> renew_then(fn held -> sweep_athanors(held, rest) end)
-    else
-      _ = JobClaims.release(state.claim)
-      {:stopped, :not_held, state.summary}
+      # Archived since the list was read: its records freeze with it. The
+      # cursor still passes it, so a successor does not ask again.
+      not Sanctum.Tenancy.Athanors.active?(athanor_id) ->
+        state
+        |> put_cursor(%{state.cursor | athanor: athanor_id})
+        |> renew_then(fn held -> sweep_athanors(held, rest) end)
+
+      true ->
+        deleted = run_step(label("retention"), fn -> run_retention(athanor_id) end)
+
+        state
+        |> put_cursor(%{state.cursor | athanor: athanor_id})
+        |> tally(:athanors, athanor_id)
+        |> count(deleted)
+        |> renew_then(fn held -> sweep_athanors(held, rest) end)
     end
   end
 
@@ -460,45 +481,75 @@ defmodule Cyfr.RetentionScheduler do
 
   # One athanor's whole policy. Answers what it deleted, per kind, which
   # the cycle sums and reports once rather than a line per tenant.
+  #
+  # The athanor rides as metadata, not as text in the sentence: it is on
+  # the configured log roster, so an aggregator can filter a whole tenant's
+  # retention failures out of a shared server without parsing messages.
   defp run_retention(athanor_id) do
-    {:ok, %{deleted: deleted, errors: errors}} = Cyfr.Retention.cleanup_athanor(athanor_id)
-
-    # The athanor rides as metadata, not as text in the sentence: it is on
-    # the configured log roster, so an aggregator can filter a whole tenant's
-    # retention failures out of a shared server without parsing messages.
-    for {failed_in, kind, reason} <- errors do
-      Logger.warning("[RetentionScheduler] #{kind} cleanup failed: #{inspect(reason)}",
-        athanor_id: failed_in
-      )
-    end
-
-    deleted
-  end
-
-  # Thread blob dirs no row backs (a blob delete that failed after
-  # its rows were reclaimed) — swept so the bytes stop counting against
-  # the athanor's storage cap forever.
-  defp sweep_thread_blob_orphans do
-    case Cyfr.Retention.sweep_thread_blob_orphans() do
-      {:ok, %{dirs_deleted: 0, errors: []}} ->
-        :ok
-
-      {:ok, %{dirs_deleted: deleted, tenants: tenants, errors: errors}} ->
-        if deleted > 0 do
-          Logger.info(
-            "[RetentionScheduler] Reclaimed #{deleted} orphaned thread blob dirs " <>
-              "across #{tenants} tenants"
-          )
-        end
-
-        for {athanor_id, reason} <- errors do
-          Logger.warning("[RetentionScheduler] Blob orphan sweep failed: #{inspect(reason)}",
+    case Arca.Retention.cleanup_athanor(athanor_actor(athanor_id)) do
+      {:ok, %{deleted: deleted, errors: errors}} ->
+        for {kind, reason} <- errors do
+          Logger.warning("[RetentionScheduler] #{kind} cleanup failed: #{inspect(reason)}",
             athanor_id: athanor_id
           )
         end
 
-        :ok
+        deleted
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Retention skipped: #{inspect(reason)}",
+          athanor_id: athanor_id
+        )
+
+        %{}
     end
+  end
+
+  # Thread blob dirs no row backs (a blob delete that failed after
+  # its rows were reclaimed) — swept so the bytes stop counting against
+  # the athanor's storage cap forever. Every active athanor, each inside
+  # its own actor.
+  defp sweep_thread_blob_orphans do
+    athanors = Sanctum.Tenancy.Athanors.list_active()
+
+    reclaimed =
+      Enum.reduce(athanors, 0, fn athanor, reclaimed ->
+        case Arca.ThreadStorage.sweep_orphaned_blobs(athanor_actor(athanor.id)) do
+          {:ok, count} when is_integer(count) ->
+            reclaimed + count
+
+          {:error, reason} ->
+            Logger.warning("[RetentionScheduler] Blob orphan sweep failed: #{inspect(reason)}",
+              athanor_id: athanor.id
+            )
+
+            reclaimed
+        end
+      end)
+
+    if reclaimed > 0 do
+      Logger.info(
+        "[RetentionScheduler] Reclaimed #{reclaimed} orphaned thread blob dirs " <>
+          "across #{length(athanors)} tenants"
+      )
+    end
+
+    :ok
+  end
+
+  # The actor each estate's retention runs under: the server's own, inside
+  # that one athanor; the user_id is audit attribution only. Least
+  # privilege: a deleter reads settings and drops rows and blobs, it
+  # executes nothing.
+  defp athanor_actor(athanor_id) do
+    Sanctum.Context.actor(
+      Sanctum.internal_context(
+        user_id: "_retention",
+        athanor_id: athanor_id,
+        scope: :athanor,
+        permissions: [:storage_read, :storage_write]
+      )
+    )
   end
 
   # Orphaned atomic-write temp files are an adapter artifact; the facade

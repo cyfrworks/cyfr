@@ -551,7 +551,8 @@ defmodule Arca.StorageProjectionChanges do
   tombstones that are ready, acknowledged at their own generation, and
   last written before `before:` (option, required). The root's epoch is
   untouched, so a unit recreated later still takes a newer generation.
-  Answers the count removed.
+  Answers the count removed; with `dry_run: true`, the count the same
+  rows would be, removing nothing.
   """
   @spec prune_acknowledged_tombstones(Cyfr.Actor.t(), String.t(), keyword()) ::
           {:ok, non_neg_integer()} | refusal()
@@ -560,22 +561,30 @@ defmodule Arca.StorageProjectionChanges do
     before = Keyword.fetch!(opts, :before)
 
     with {:ok, athanor} <- tenant(actor) do
-      rescuing_db("prune_acknowledged_tombstones", fn ->
-        Arca.Repo.locking_transaction(fn ->
-          _epoch = lock_root(athanor, root)
-
-          {count, _} =
-            from(c in where_athanor(StorageProjectionChange, athanor),
-              where:
-                c.root == ^root and c.tombstone and c.ready and
-                  c.acknowledged_generation == c.generation and c.updated_at < ^before
-            )
-            |> Arca.Repo.delete_all()
-
-          count
+      if Keyword.get(opts, :dry_run, false) do
+        rescuing_db("prune_acknowledged_tombstones", fn ->
+          {:ok, Arca.Repo.aggregate(consumed_tombstones(athanor, root, before), :count)}
         end)
-      end)
+      else
+        rescuing_db("prune_acknowledged_tombstones", fn ->
+          Arca.Repo.locking_transaction(fn ->
+            _epoch = lock_root(athanor, root)
+            {count, _} = Arca.Repo.delete_all(consumed_tombstones(athanor, root, before))
+            count
+          end)
+        end)
+      end
     end
+  end
+
+  # What fully consumed deletion evidence is, for the prune and its count
+  # alike.
+  defp consumed_tombstones(athanor, root, before) do
+    from(c in where_athanor(StorageProjectionChange, athanor),
+      where:
+        c.root == ^root and c.tombstone and c.ready and
+          c.acknowledged_generation == c.generation and c.updated_at < ^before
+    )
   end
 
   # ---------------------------------------------------------------------------

@@ -1136,6 +1136,21 @@ defmodule Cyfr.Boundaries do
           "then reconciled inside that estate's own context, and every replacement is " <>
           "checked against the generations it read, so a recovery can do no more than a " <>
           "reader of that estate would."
+    },
+    %{
+      responsibility:
+        "apply each active estate's retention policy on the cell's cadence, with no caller",
+      modules: ~w(Cyfr.RetentionScheduler),
+      check: "Arca.Retention.cleanup_athanor/2",
+      reason:
+        "retention deletes what each estate's own settings say it no longer keeps, and " <>
+          "nobody asks for it: the scheduler, holding the cell's retention claim and its " <>
+          "slot, walks the estates the identity domain names active, asks again before " <>
+          "each, and hands the storage layer one actor per estate — the server's, narrowed " <>
+          "to that athanor, reading and writing storage and nothing else. The storage " <>
+          "layer refuses any other actor, and refuses the whole estate when its settings " <>
+          "are corrupt or cannot be read. An archived estate is passed over, so its " <>
+          "records freeze with it."
     }
   ]
 
