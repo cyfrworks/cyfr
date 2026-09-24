@@ -86,7 +86,7 @@ defmodule Cyfr.ApplicationTest do
       # The repo is the `arca` application's now, and so is the cache
       # table's owner; this tier holds the registries that write
       # catalogues into that table and reaches the repo by name.
-      assert Cyfr.Ops.Catalog in ids
+      assert Grimoire.Catalog in ids
       assert Emissary.MCP.ResourceRegistry in ids
       refute Arca.Repo in ids
       refute EmissaryWeb.Endpoint in ids
@@ -172,7 +172,7 @@ defmodule Cyfr.ApplicationTest do
       pubsub = Enum.find_index(started, &(&1 in [Cyfr.PubSub, Phoenix.PubSub.Supervisor]))
       assert builds > pubsub
 
-      for id <- [Cyfr.Ops.Catalog, Emissary.MCP.ResourceRegistry] do
+      for id <- [Grimoire.Catalog, Emissary.MCP.ResourceRegistry] do
         assert builds > at.(id), "#{inspect(id)} must start before the builds' supervisor"
       end
 

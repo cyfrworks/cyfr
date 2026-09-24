@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.Annotations do
+defmodule Grimoire.Annotations do
   @moduledoc """
   One reader for a tool's action-annotation map, wherever it appears.
 

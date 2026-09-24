@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.CatalogChargeRowTest do
+defmodule Grimoire.CatalogChargeRowTest do
   @moduledoc """
   A spawn-shaped in-chain call that carries a charge identity holds a
   reservation row for the call: charged before the handler runs, released
@@ -11,7 +11,7 @@ defmodule Cyfr.Ops.CatalogChargeRowTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context

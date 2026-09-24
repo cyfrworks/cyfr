@@ -47,12 +47,12 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnershipTest do
     ControlPlane.record(:lost)
 
     assert {:error, :control_plane_lost} =
-             Cyfr.Ops.Catalog.call_external("system", ctx, %{"action" => "status"})
+             Grimoire.Catalog.call_external("system", ctx, %{"action" => "status"})
 
-    assert Cyfr.Ops.Error.render(:control_plane_lost) =~ "control plane"
+    assert Grimoire.Error.render(:control_plane_lost) =~ "control plane"
 
     ControlPlane.record(:unclaimed)
-    assert {:ok, _} = Cyfr.Ops.Catalog.call_external("system", ctx, %{"action" => "status"})
+    assert {:ok, _} = Grimoire.Catalog.call_external("system", ctx, %{"action" => "status"})
   end
 
   test "a proxied external server is not dispatched for a member that lost its slot" do
@@ -60,6 +60,6 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnershipTest do
     ControlPlane.record(:lost)
 
     assert {:error, :control_plane_lost} =
-             Cyfr.Ops.Catalog.call_external("notion:create_page", ctx, %{"action" => "create"})
+             Grimoire.Catalog.call_external("notion:create_page", ctx, %{"action" => "create"})
   end
 end

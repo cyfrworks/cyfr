@@ -182,15 +182,15 @@ defmodule Cyfr.Boundaries do
   @doc """
   The layer a module name sits in.
 
-  `contracts` is the set of module names the contracts application
-  defines, read from the tree rather than listed here: `Prima.Actor` is a
-  contract and `Cyfr.Ops.Catalog` is the host's, and only the tree knows
-  which is which.
+  `prima` is the set of module names Prima defines, read from the tree
+  rather than listed here: `Prima.Actor` is Prima's and
+  `Grimoire.Catalog` is the host's, and only the tree knows which is
+  which.
   """
   @spec layer(String.t(), MapSet.t(String.t())) :: layer()
-  def layer(module, contracts) do
+  def layer(module, prima) do
     cond do
-      MapSet.member?(contracts, module) -> :prima
+      MapSet.member?(prima, module) -> :prima
       root?(module, "Sanctum") -> :sanctum
       root?(module, "Arca") -> :arca
       root?(module, "Opus") -> :opus
@@ -320,12 +320,12 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Tenancy`."
     },
     %{
-      from: ["apps/cyfr/lib/cyfr/**/*.ex"],
+      from: ["apps/cyfr/lib/cyfr/**/*.ex", "apps/cyfr/lib/grimoire/**/*.ex"],
       into: "Sanctum",
       allow: ~w(
         Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller
-        Sanctum.Catalog Sanctum.Cipher
-        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.ExecutionStanding
+        Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Egress
+        Sanctum.ExecutionStanding Sanctum.Grimoire
         Sanctum.Policy Sanctum.Session
         Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.VaultReader
@@ -344,7 +344,8 @@ defmodule Cyfr.Boundaries do
           "host's own watch (`Cyfr.StandingWatch`) is what carries the drop to " <>
           "every member and calls back down to make it. `Sanctum.ExecutionStanding` " <>
           "decides whether an admitted execution's grant still stands: admission, " <>
-          "every host effect, the in-chain gate and the sweep ask it."
+          "every host effect, the in-chain gate and the sweep ask it. `Sanctum.Egress` " <>
+          "is `Grimoire.Provider`'s registry probe and `system.notify` webhook."
     },
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
@@ -355,7 +356,7 @@ defmodule Cyfr.Boundaries do
       ),
       reason:
         "the MCP transport carries tenancy, reads a server's vault edge, and uses " <>
-          "Sanctum.Network/Egress for external servers, the bridge and system probes. " <>
+          "Sanctum.Network/Egress for external servers and the bridge. " <>
           "An outbound call's row runs under its caller's grant, checked through " <>
           "Sanctum.ExecutionStanding as it is admitted and closed"
     },
@@ -1099,11 +1100,11 @@ defmodule Cyfr.Boundaries do
 
   @ports [
     %{
-      behaviour: "Sanctum.Catalog",
+      behaviour: "Sanctum.Grimoire",
       what: "consent's view of the operation table",
       declared_by: :sanctum,
-      implemented_by: "Cyfr.Ops.Catalog",
-      written_at_boot_by: "config :sanctum, :catalog"
+      implemented_by: "Grimoire.Catalog",
+      written_at_boot_by: "config :sanctum, :grimoire"
     },
     %{
       behaviour: "Sanctum.Consent.Components",
@@ -1127,7 +1128,7 @@ defmodule Cyfr.Boundaries do
       written_at_boot_by: nil,
       note:
         "the operation table asks the transport for a tool an upstream server " <>
-          "defines, on a lookup miss. It is a direct call from `Cyfr.Ops.Catalog` " <>
+          "defines, on a lookup miss. It is a direct call from `Grimoire.Catalog` " <>
           "today rather than a declared behaviour, because the table and the " <>
           "transport are one application: nothing in the dependency graph rests on " <>
           "it, and it becomes a behaviour the day they are two."
@@ -1331,7 +1332,7 @@ defmodule Cyfr.Boundaries do
     "apps/cyfr/test/cyfr/execution/start_refusal_test.exs" =>
       "the refusal a keeper gives is `Opus.Keeper.Spawn.refusal/1`'s shape, and this " <>
         "case holds CYFR's rendering of it to that shape.",
-    "apps/cyfr/test/cyfr/ops/error_renderers_test.exs" =>
+    "apps/cyfr/test/grimoire/error_renderers_test.exs" =>
       "the in-chain guest's renderer is Opus's, and the one-vocabulary case is that " <>
         "the three renderers agree sentence for sentence.",
     "apps/cyfr/test/cyfr/runtime_env_reading_test.exs" =>

@@ -18,7 +18,7 @@ defmodule Emissary.MCP.RegistryCacheRecoveryTest do
   use ExUnit.Case, async: false
 
   alias Emissary.MCP.ResourceRegistry
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
 
   # This case empties a table the whole node reads. The rebuild is what it
   # proves, but a neighbour must not inherit a half-built catalogue if the

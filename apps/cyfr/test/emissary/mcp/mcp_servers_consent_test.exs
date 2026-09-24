@@ -12,8 +12,8 @@ defmodule Emissary.MCP.McpServersConsentTest do
   """
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
-  alias Cyfr.Ops.Visibility
+  alias Grimoire.Catalog
+  alias Grimoire.Visibility
   alias Emissary.MCP.McpServersTool
 
   @defining ~w(create update)

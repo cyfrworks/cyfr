@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.RunningTasks do
+defmodule Grimoire.RunningTasks do
   @moduledoc """
   Tracks the process doing the work for an in-flight request, so the transport
   can stop it when the caller goes away.
@@ -14,7 +14,7 @@ defmodule Emissary.MCP.RunningTasks do
 
   A server-minted id cannot collide *across* requests, but one request can
   hold more than one task at a time: an in-chain tool call inherits its
-  root's `request_id` rather than minting a new one (`Cyfr.Ops.Catalog` mints one
+  root's `request_id` rather than minting a new one (`Grimoire.Catalog` mints one
   only when no transport did), which is what
   keeps a whole chain attributable to the ingress that started it.
 

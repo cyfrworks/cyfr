@@ -250,7 +250,7 @@ defmodule Aqua.ToolGrantsTest do
     end
 
     test "virtual tools are classified by the catalog, not the registry", %{ctx: ctx} do
-      # `files` lives in the formula, not `Cyfr.Ops.Catalog` — a
+      # `files` lives in the formula, not `Grimoire.Catalog` — a
       # standing allow for its write verb must not read as unknown, and
       # its destructive verb is refused like any other.
       assert {:ok, _} = grant(ctx, %{tool: "files", action: "write"})

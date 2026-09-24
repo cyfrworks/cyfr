@@ -12,7 +12,7 @@ defmodule Emissary.MCP.ApprovalToolTest do
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
-  alias Cyfr.Ops.{Catalog, Visibility}
+  alias Grimoire.{Catalog, Visibility}
   alias Sanctum.Context
 
   setup do

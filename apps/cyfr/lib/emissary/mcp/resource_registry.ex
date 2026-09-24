@@ -12,9 +12,9 @@ defmodule Emissary.MCP.ResourceRegistry do
   provider). `resolve/1` maps a URI's scheme to the one operation that
   declares it in `resource_schemes`, so `resources/read` becomes a call of
   that operation through the catalog's gate
-  (`Cyfr.Ops.Catalog.call_external/4`) — this module reads nothing and
+  (`Grimoire.Catalog.call_external/4`) — this module reads nothing and
   authorizes nothing. That every advertised scheme has exactly one owner
-  is `Cyfr.Ops.Catalog.audit_resource_schemes/1`'s boot check.
+  is `Grimoire.Catalog.audit_resource_schemes/1`'s boot check.
   """
 
   use GenServer
@@ -84,7 +84,7 @@ defmodule Emissary.MCP.ResourceRegistry do
     # Derived from the ONE roster (`:tool_providers`): every loadable
     # configured provider, whose advertised resources and declared
     # resource operations are the catalogue.
-    providers = Cyfr.Ops.Catalog.available_providers()
+    providers = Grimoire.Catalog.available_providers()
     # Watched before the catalogue is written, for the reason `handle_info
     # (:rebuild_cache, …)` gives: an owner lost mid-load must leave a
     # `:DOWN` in the mailbox, not a live monitor over a half-written table.

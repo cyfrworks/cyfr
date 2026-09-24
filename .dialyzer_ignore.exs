@@ -25,7 +25,7 @@
   {"lib/cyfr/execution/events/sequence.ex", :missing_range},
   {"lib/prima/json_formatter.ex", :unknown_type},
   {"lib/cyfr/retention_scheduler.ex", :pattern_match},
-  {"lib/emissary/mcp/tools/system_provider.ex", :pattern_match_cov},
+  {"lib/grimoire/provider.ex", :pattern_match_cov},
   {"lib/emissary_web/controllers/auth_controller.ex", :pattern_match_cov},
   {"lib/emissary_web/plugs/verify_webhook_signature.ex", :pattern_match},
   {"lib/emissary_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},

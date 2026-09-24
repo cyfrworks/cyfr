@@ -12,7 +12,7 @@ defmodule Emissary.MCP.ResourceProviderTest do
 
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Prima.{Arg, Operation, Provider}
 
   defmodule Advertiser do
@@ -84,7 +84,7 @@ defmodule Emissary.MCP.ResourceProviderTest do
              Enum.sort([
                Compendium.MCP,
                Cyfr.Execution.MCP,
-               Emissary.MCP.Tools.SystemProvider,
+               Grimoire.Provider,
                Sanctum.MCP
              ])
 

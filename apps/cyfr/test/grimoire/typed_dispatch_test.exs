@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.TypedDispatchTest do
+defmodule Grimoire.TypedDispatchTest do
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.{Catalog, Visibility}
+  alias Grimoire.{Catalog, Visibility}
   alias Prima.{Arg, Operation}
   alias Prima.Test.AuthorityFixtures
   alias Emissary.MCP.{Message, Router}

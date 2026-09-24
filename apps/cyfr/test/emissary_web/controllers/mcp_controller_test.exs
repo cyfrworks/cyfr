@@ -331,7 +331,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert log.tool == "system"
       assert log.action == "status"
       assert log.status == "success"
-      assert log.routed_to == "emissary"
+      assert log.routed_to == "grimoire"
 
       # Cleanup
       Arca.Repo.delete(log)
@@ -813,7 +813,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       {"retention", "arca"},
       {"session", "sanctum"},
       {"key", "sanctum"},
-      {"system", "emissary"}
+      {"system", "grimoire"}
     ]
 
     for {tool, expected_service} <- @tool_routing_cases do
@@ -876,7 +876,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       end
     end
 
-    test "routes unknown tools to emissary", %{conn: conn} do
+    test "routes unknown tools to grimoire", %{conn: conn} do
       tool_conn =
         conn
         |> recycle()
@@ -896,7 +896,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       # Logging is synchronous — no wait needed
 
       log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
-      assert log.routed_to == "emissary"
+      assert log.routed_to == "grimoire"
 
       # Cleanup
       Arca.Repo.delete(log)

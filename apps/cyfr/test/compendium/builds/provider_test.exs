@@ -238,7 +238,7 @@ defmodule Compendium.Builds.ProviderTest do
   # it — a reason it cannot render is itself a failure. Plain strings pass
   # through unchanged.
   defp err_msg(reason) do
-    Cyfr.Ops.Error.render(reason) ||
+    Grimoire.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

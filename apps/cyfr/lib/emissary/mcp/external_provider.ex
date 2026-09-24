@@ -24,14 +24,14 @@ defmodule Emissary.MCP.ExternalProvider do
   @external_tools_cache_ttl :timer.seconds(30)
 
   # ============================================================================
-  # External Tool Discovery (called by SystemProvider)
+  # External Tool Discovery (called by Grimoire.Provider)
   # ============================================================================
 
   @doc """
   List all tools from enabled external MCP servers for the given tenant.
 
   Returns tool definitions with names prefixed as `server_name:tool_name`.
-  Called by `SystemProvider.handle("tools", ctx, %{"action" => "list"})`.
+  Called by `Grimoire.Provider.handle("tools", ctx, %{"action" => "list"})`.
   """
   @spec list_external_tools(Context.t()) :: [map()]
   def list_external_tools(%Context{} = ctx) do
@@ -246,7 +246,7 @@ defmodule Emissary.MCP.ExternalProvider do
   end
 
   # ============================================================================
-  # External Tool Dispatch (called by Cyfr.Ops.Catalog on a lookup miss)
+  # External Tool Dispatch (called by Grimoire.Catalog on a lookup miss)
   # ============================================================================
 
   @doc """
@@ -389,7 +389,7 @@ defmodule Emissary.MCP.ExternalProvider do
         {:error,
          {:refused,
           "Call to #{remote_tool} on server '#{server_name}' not admitted: " <>
-            (Cyfr.Ops.Error.render(reason) || inspect(reason))}}
+            (Grimoire.Error.render(reason) || inspect(reason))}}
     end
   end
 
@@ -507,7 +507,7 @@ defmodule Emissary.MCP.ExternalProvider do
     now = DateTime.utc_now()
 
     attrs = %{
-      error_message: Cyfr.Ops.Error.render(reason) || inspect(reason),
+      error_message: Grimoire.Error.render(reason) || inspect(reason),
       completed_at: now,
       duration_ms: DateTime.diff(now, started_at, :millisecond)
     }

@@ -25,7 +25,7 @@ defmodule Aqua.SeedContractTest do
   use ExUnit.Case, async: true
 
   alias Aqua.Hands
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
 

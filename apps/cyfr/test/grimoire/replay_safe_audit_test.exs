@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.ReplaySafeAuditTest do
+defmodule Grimoire.ReplaySafeAuditTest do
   @moduledoc """
   `recovery: :replay_safe` is a reviewed property of a read: the boot
   audit refuses it on any other kind, any other value; the reader answers it for a read alone; the set
@@ -11,7 +11,7 @@ defmodule Cyfr.Ops.ReplaySafeAuditTest do
 
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.{Annotations, Catalog}
+  alias Grimoire.{Annotations, Catalog}
 
   defmodule Carrier do
     @behaviour Prima.Provider

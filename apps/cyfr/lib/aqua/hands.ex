@@ -184,7 +184,7 @@ defmodule Aqua.Hands do
   The second arm of the plane taxonomy audit.
 
   Virtual tools are dispatched inside the formula and never reach
-  `Cyfr.Ops.Catalog`, so `audit_action_kinds/0` structurally
+  `Grimoire.Catalog`, so `audit_action_kinds/0` structurally
   cannot see them. Without this arm the taxonomy has a silent hole exactly
   where the agent surface is.
 

@@ -48,7 +48,7 @@ defmodule Cyfr.Execution.Host.Children do
   ## tool_call
 
   The tool runs through the catalog's in-chain entry
-  (`Cyfr.Ops.Catalog.call_in_chain/5`) under the attempt's authority and
+  (`Grimoire.Catalog.call_in_chain/5`) under the attempt's authority and
   context, with the header's execution as its parent, the attempt's root
   and the header's attempt as its lineage. A setup refusal is announced on
   the root's event stream. The answer is the tool's result.
@@ -171,7 +171,7 @@ defmodule Cyfr.Execution.Host.Children do
         attempt: caller.attempt
       }
 
-      case Cyfr.Ops.Catalog.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,
+      case Grimoire.Catalog.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,
              guest_fn: tool.guest_fn,
              lineage: lineage
            ) do
@@ -359,9 +359,9 @@ defmodule Cyfr.Execution.Host.Children do
 
   defp guest_error(type, message), do: {:guest_error, Atom.to_string(type), message}
 
-  # A refusal's one sentence (`Cyfr.Ops.Error.render/1`); an internal term
+  # A refusal's one sentence (`Grimoire.Error.render/1`); an internal term
   # is never rendered.
-  defp render(reason), do: Cyfr.Ops.Error.render(reason) || "The call failed."
+  defp render(reason), do: Grimoire.Error.render(reason) || "The call failed."
 
   # A bare reason atom names itself verbatim: the transition's denial tokens
   # (`edge_only`, `depth_cap`) are what a guest branches on.
@@ -369,7 +369,7 @@ defmodule Cyfr.Execution.Host.Children do
   defp guest_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp guest_reason(reason) do
-    case Cyfr.Ops.Error.render(reason) do
+    case Grimoire.Error.render(reason) do
       nil ->
         Logger.warning(
           "[Cyfr.Execution.Host.Children] unrenderable guest reason: #{inspect(reason)}"

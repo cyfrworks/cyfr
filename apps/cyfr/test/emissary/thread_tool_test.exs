@@ -9,7 +9,7 @@ defmodule Emissary.MCP.ThreadToolTest do
 
   alias Arca.ThreadStorage, as: Threads
   alias Emissary.MCP.ThreadTool, as: Tool
-  alias Cyfr.Ops.{Catalog, Visibility}
+  alias Grimoire.{Catalog, Visibility}
 
   setup do
     Cyfr.Test.Sandbox.setup!()
@@ -90,7 +90,7 @@ defmodule Emissary.MCP.ThreadToolTest do
     test "suspend and recover are declared once, and every derived view follows" do
       annotations =
         Tool.turn_definition()
-        |> Cyfr.Ops.Annotations.actions_of()
+        |> Grimoire.Annotations.actions_of()
 
       assert Map.keys(annotations) |> Enum.sort() == ["recover", "suspend"]
 
@@ -107,8 +107,8 @@ defmodule Emissary.MCP.ThreadToolTest do
       end
 
       # Recovery is never itself replay-safe.
-      assert Cyfr.Ops.Annotations.recovery(Tool.turn_definition(), "recover") == nil
-      assert Cyfr.Ops.Annotations.recovery(Tool.turn_definition(), "suspend") == nil
+      assert Grimoire.Annotations.recovery(Tool.turn_definition(), "recover") == nil
+      assert Grimoire.Annotations.recovery(Tool.turn_definition(), "suspend") == nil
 
       # A turn to recover is named; a turn to suspend need not be.
       schema = Tool.turn_definition().input_schema
@@ -119,7 +119,7 @@ defmodule Emissary.MCP.ThreadToolTest do
       served = MapSet.new(Catalog.tool_actions())
       assert MapSet.member?(served, "turn.suspend")
       assert MapSet.member?(served, "turn.recover")
-      assert Cyfr.Ops.Services.service_name(Tool) == "thread"
+      assert Grimoire.Services.service_name(Tool) == "thread"
     end
 
     test "an API key cannot set a person's turn down, and is not shown the tool", %{

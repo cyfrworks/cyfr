@@ -20,7 +20,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
   use ExUnit.Case, async: false
 
   alias Arca.ControlPlane
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Prima.{Arg, Operation}
   alias Prima.Test.AuthorityFixtures
   alias Emissary.MCP.{Message, ResourceRegistry, Router}

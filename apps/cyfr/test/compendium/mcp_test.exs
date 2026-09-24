@@ -162,7 +162,7 @@ defmodule Compendium.MCPTest do
   # the gate like any other call.
   defp read(ctx, uri),
     do:
-      Cyfr.Ops.Catalog.call_external("component", ctx, %{
+      Grimoire.Catalog.call_external("component", ctx, %{
         "action" => "read_resource",
         "uri" => uri
       })
@@ -2119,7 +2119,7 @@ defmodule Compendium.MCPTest do
 
     test "component.create denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error, {:missing_permission, :component_manage}} =
-               Cyfr.Ops.Catalog.call_external("component", restricted_ctx, %{
+               Grimoire.Catalog.call_external("component", restricted_ctx, %{
                  "action" => "create",
                  "name" => "test-comp",
                  "type" => "reagent"
@@ -2128,7 +2128,7 @@ defmodule Compendium.MCPTest do
 
     test "component.push denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error, {:missing_permission, :component_manage}} =
-               Cyfr.Ops.Catalog.call_external("component", restricted_ctx, %{
+               Grimoire.Catalog.call_external("component", restricted_ctx, %{
                  "action" => "push",
                  "reference" => "reagent:local.test:0.1.0"
                })
@@ -2146,7 +2146,7 @@ defmodule Compendium.MCPTest do
       }
 
       {:error, msg} =
-        Cyfr.Ops.Catalog.call_external("component", key_ctx, %{
+        Grimoire.Catalog.call_external("component", key_ctx, %{
           "action" => "push",
           "reference" => "reagent:local.test:0.1.0"
         })
@@ -2156,14 +2156,14 @@ defmodule Compendium.MCPTest do
 
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error, {:missing_permission, :component_manage}} =
-               Cyfr.Ops.Catalog.call_external("component", restricted_ctx, %{
+               Grimoire.Catalog.call_external("component", restricted_ctx, %{
                  "action" => "register"
                })
     end
 
     test "component.delete denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       assert {:error, {:missing_permission, :component_manage}} =
-               Cyfr.Ops.Catalog.call_external("component", restricted_ctx, %{
+               Grimoire.Catalog.call_external("component", restricted_ctx, %{
                  "action" => "delete",
                  "reference" => "reagent:local.test:0.1.0"
                })
@@ -2312,7 +2312,7 @@ defmodule Compendium.MCPTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Cyfr.Ops.Error.render(reason) ||
+    Grimoire.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 

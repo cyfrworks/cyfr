@@ -219,7 +219,7 @@ defmodule Aqua.Models do
   defp refusal_text(reason) when is_binary(reason), do: reason
 
   defp refusal_text(reason) do
-    Cyfr.Ops.Error.render(reason) || "the catalyst could not be run: #{inspect(reason)}"
+    Grimoire.Error.render(reason) || "the catalyst could not be run: #{inspect(reason)}"
   end
 
   @doc """

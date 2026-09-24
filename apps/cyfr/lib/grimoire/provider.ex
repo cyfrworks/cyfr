@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.Tools.SystemProvider do
+defmodule Grimoire.Provider do
   @moduledoc """
   MCP tool provider for system-wide operations.
 
@@ -12,7 +12,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     `arca://files/{path}` URI, the resource template this provider
     advertises
 
-  This provider stays in Emissary because it needs cross-service visibility.
+  This provider is Grimoire's because it needs cross-service visibility.
 
   ## The files resource
 
@@ -30,7 +30,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   @behaviour Prima.Provider
 
   @impl true
-  def service, do: "emissary"
+  def service, do: "grimoire"
 
   alias Sanctum.Context
   require Logger
@@ -38,7 +38,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # The status scopes are derived from the provider roster — "all" and the
   # registry (an HTTP peer, not a provider) are the two extras.
   defp scope_enum, do: ["all"] ++ service_scopes()
-  defp service_scopes, do: Cyfr.Ops.Services.service_names() ++ ["registry"]
+  defp service_scopes, do: Grimoire.Services.service_names() ++ ["registry"]
 
   # ============================================================================
   # ToolProvider Callbacks
@@ -182,13 +182,13 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   @impl true
   def handle("tools", %Context{} = ctx, %{"action" => "list"} = args) do
-    tools = Cyfr.Ops.Catalog.list_tools()
+    tools = Grimoire.Catalog.list_tools()
 
     # Augment with tenant-specific external MCP server tools
     external_tools = Emissary.MCP.ExternalProvider.list_external_tools(ctx)
 
     all_tools = tools ++ external_tools
-    all_tools = Cyfr.Ops.Visibility.filter_for_context(all_tools, ctx)
+    all_tools = Grimoire.Visibility.filter_for_context(all_tools, ctx)
 
     case args["component_ref"] do
       nil ->
@@ -282,7 +282,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # first provider that is not carries the answer.
   defp check_service_named(service) do
     service
-    |> Cyfr.Ops.Services.providers_for()
+    |> Grimoire.Services.providers_for()
     |> Enum.map(&check_service/1)
     |> Enum.find("ok", &(&1 != "ok"))
   end
@@ -344,7 +344,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   defp handle_tools_list_for(tools, component_ref) do
     case Prima.ComponentRef.parse(component_ref) do
       {:ok, %{type: "formula"}} ->
-        filtered = Cyfr.Ops.Catalog.in_chain_view(tools)
+        filtered = Grimoire.Catalog.in_chain_view(tools)
         {:ok, %{tools: filtered, component_ref: component_ref, filtered: true}}
 
       {:ok, %{type: type}} ->
@@ -362,7 +362,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # ============================================================================
 
   defp check_all_services(_ctx) do
-    Cyfr.Ops.Services.service_names()
+    Grimoire.Services.service_names()
     |> Map.new(fn service -> {String.to_atom(service), check_service_named(service)} end)
     |> Map.put(:registry, check_registry_health())
   end
@@ -414,16 +414,19 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         "ok"
 
       {:ok, status_code, _headers, _body} ->
-        Logger.warning("[SystemProvider] Registry health check returned status #{status_code}")
+        Logger.warning("[Grimoire.Provider] Registry health check returned status #{status_code}")
         "error"
 
       {:error, reason} ->
-        Logger.warning("[SystemProvider] Registry health check failed: #{inspect(reason)}")
+        Logger.warning("[Grimoire.Provider] Registry health check failed: #{inspect(reason)}")
         "unreachable"
     end
   rescue
     e ->
-      Logger.warning("[SystemProvider] Registry health check exception: #{Exception.message(e)}")
+      Logger.warning(
+        "[Grimoire.Provider] Registry health check exception: #{Exception.message(e)}"
+      )
+
       "error"
   end
 
@@ -442,7 +445,10 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     end
   rescue
     e ->
-      Logger.error("[SystemProvider] Service #{inspect(module)} crashed: #{Exception.message(e)}")
+      Logger.error(
+        "[Grimoire.Provider] Service #{inspect(module)} crashed: #{Exception.message(e)}"
+      )
+
       "crashed"
   end
 
@@ -472,15 +478,15 @@ defmodule Emissary.MCP.Tools.SystemProvider do
                max_response_bytes: 1024 * 1024
              ) do
           {:ok, status_code, _resp_headers, _resp_body} ->
-            Logger.debug("[SystemProvider] Webhook sent to #{target}: status #{status_code}")
+            Logger.debug("[Grimoire.Provider] Webhook sent to #{target}: status #{status_code}")
             {:ok, status_code}
 
           {:error, reason} when is_binary(reason) ->
-            Logger.warning("[SystemProvider] Webhook URL blocked: #{reason}")
+            Logger.warning("[Grimoire.Provider] Webhook URL blocked: #{reason}")
             {:error, "Webhook URL validation failed: #{reason}"}
 
           {:error, reason} ->
-            Logger.warning("[SystemProvider] Webhook failed to #{target}: #{inspect(reason)}")
+            Logger.warning("[Grimoire.Provider] Webhook failed to #{target}: #{inspect(reason)}")
             {:error, inspect(reason)}
         end
     end
@@ -498,8 +504,8 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   defp tool_count do
-    if Process.whereis(Cyfr.Ops.Catalog) do
-      Cyfr.Ops.Catalog.list_tools() |> length()
+    if Process.whereis(Grimoire.Catalog) do
+      Grimoire.Catalog.list_tools() |> length()
     else
       0
     end

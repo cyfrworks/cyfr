@@ -308,7 +308,7 @@ defmodule Compendium.MCP.SourceToolTest do
 
     test "source is the agent's: the wire does not serve it", %{ctx: ctx} do
       assert {:error, {:unknown_action, "source.read"}} =
-               Cyfr.Ops.Catalog.call_external("source", ctx, %{
+               Grimoire.Catalog.call_external("source", ctx, %{
                  "action" => "read",
                  "path" => "#{@dir}/src/lib.rs"
                })

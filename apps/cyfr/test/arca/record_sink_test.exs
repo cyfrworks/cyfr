@@ -60,13 +60,13 @@ defmodule Arca.RecordSinkTest do
     call_id = Prima.UUID7.generate_id("call")
 
     :ok =
-      Emissary.MCP.RequestLog.log_started(ctx, call_id, %{
+      Grimoire.RequestLog.log_started(ctx, call_id, %{
         tool: "system",
         action: "status",
         input: %{}
       })
 
-    :ok = Emissary.MCP.RequestLog.log_completed(ctx, call_id, %{duration_ms: 3, output: %{}})
+    :ok = Grimoire.RequestLog.log_completed(ctx, call_id, %{duration_ms: 3, output: %{}})
     assert Arca.McpLog.get_tenant(Sanctum.Context.actor(ctx), call_id).status == "pending"
 
     :ok = RecordSink.flush()

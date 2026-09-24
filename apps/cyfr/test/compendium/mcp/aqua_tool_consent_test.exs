@@ -9,8 +9,8 @@ defmodule Compendium.MCP.AquaToolConsentTest do
   use ExUnit.Case, async: false
 
   alias Compendium.MCP.AquaTool, as: Tool
-  alias Cyfr.Ops.Catalog
-  alias Cyfr.Ops.Visibility
+  alias Grimoire.Catalog
+  alias Grimoire.Visibility
 
   @writes ~w(create update delete reset skill_create skill_update skill_delete skill_reset)
   @reads ~w(list get status skill_list skill_get)

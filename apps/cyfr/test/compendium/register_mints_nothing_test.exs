@@ -17,7 +17,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 

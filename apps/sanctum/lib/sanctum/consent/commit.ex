@@ -423,7 +423,7 @@ defmodule Sanctum.Consent.Commit do
     |> Enum.reduce_while({:ok, []}, fn raw, {:ok, acc} ->
       name = Map.get(raw, :server_name)
 
-      case Sanctum.Catalog.tool_server_candidate(ctx, name || "") do
+      case Sanctum.Grimoire.tool_server_candidate(ctx, name || "") do
         {:ok, %{server_digest: digest} = candidate} when is_binary(digest) ->
           # Intersect granted patterns with the server’s configured patterns.
           # Dispatch also rechecks the live configuration.

@@ -8,7 +8,7 @@ defmodule PrismWeb.VaultLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
 
   describe "GET /vault (unauthenticated)" do
     test "redirects to login", %{conn: conn} do

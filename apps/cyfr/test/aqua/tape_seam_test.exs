@@ -15,7 +15,7 @@ defmodule Aqua.TapeSeamTest do
   @root Path.expand("../../../..", __DIR__)
 
   @storage ~r/\bArca\.(\w+Storage|Execution|ExecutionAttempts|ExecutionEvents|ExecutionPayloads|BudgetReservations|AgentRevisions|Repo)\b/
-  @catalog ~r/\bCyfr\.Ops\b/
+  @catalog ~r/(?<![\w.])Grimoire\./
   @root_run ~r/\bCyfr\.Execution\.run_root\b/
   @machine ~r/\bFile\.|\bSystem\.cmd\b|\bReq\./
 

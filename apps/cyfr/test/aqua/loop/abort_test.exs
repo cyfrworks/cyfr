@@ -50,7 +50,7 @@ defmodule Aqua.Loop.AbortTest do
 
     handler = spawn(fn -> Process.sleep(:infinity) end)
     ref = Process.monitor(handler)
-    :ok = Emissary.MCP.RunningTasks.register_handle({turn.id, call.id, call.generation}, handler)
+    :ok = Grimoire.RunningTasks.register_handle({turn.id, call.id, call.generation}, handler)
 
     assert {:ok, aborted} = Aqua.Loop.abort(ctx, turn, "stopped")
     assert aborted.fence != turn.fence

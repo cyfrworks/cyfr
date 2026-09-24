@@ -17,7 +17,7 @@ defmodule Aqua.Ops do
   @doc "Call a tool on the external plane under `ctx`."
   @spec call_tool(String.t(), Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
   def call_tool(tool, %Sanctum.Context{} = ctx, args) when is_binary(tool) and is_map(args) do
-    Cyfr.Ops.Catalog.call_external(tool, ctx, args)
+    Grimoire.Catalog.call_external(tool, ctx, args)
   end
 
   @doc """
@@ -31,7 +31,7 @@ defmodule Aqua.Ops do
   @spec call_in_chain(String.t(), Sanctum.Context.t(), map(), Prima.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def call_in_chain(tool, %Sanctum.Context{} = ctx, args, authority, opts \\ []) do
-    Cyfr.Ops.Catalog.call_in_chain(tool, ctx, args, authority, opts)
+    Grimoire.Catalog.call_in_chain(tool, ctx, args, authority, opts)
   end
 
   @doc """
@@ -41,19 +41,19 @@ defmodule Aqua.Ops do
   """
   @spec action_kind(String.t(), String.t()) :: atom() | nil
   def action_kind(tool, action) do
-    case Cyfr.Ops.Catalog.get_tool(tool) do
-      {:ok, tool_def} -> Cyfr.Ops.Annotations.kind(tool_def, action)
+    case Grimoire.Catalog.get_tool(tool) do
+      {:ok, tool_def} -> Grimoire.Annotations.kind(tool_def, action)
       _ -> nil
     end
   end
 
   @doc "Stop the supervised handler of the in-chain call named by `handle`, started or not."
   @spec cancel_call(term()) :: :ok
-  def cancel_call(handle), do: Emissary.MCP.RunningTasks.cancel_handle(handle)
+  def cancel_call(handle), do: Grimoire.RunningTasks.cancel_handle(handle)
 
   @doc "Forget a call's cancellation handle once the loop is done with it."
   @spec release_call(term()) :: :ok
-  def release_call(handle), do: Emissary.MCP.RunningTasks.release_handle(handle)
+  def release_call(handle), do: Grimoire.RunningTasks.release_handle(handle)
 
   @doc """
   Whether `tool`/`action` is reviewed as safe to re-dispatch after an
@@ -62,8 +62,8 @@ defmodule Aqua.Ops do
   """
   @spec replay_safe?(String.t(), String.t()) :: boolean()
   def replay_safe?(tool, action) do
-    case Cyfr.Ops.Catalog.get_tool(tool) do
-      {:ok, tool_def} -> Cyfr.Ops.Annotations.recovery(tool_def, action) == :replay_safe
+    case Grimoire.Catalog.get_tool(tool) do
+      {:ok, tool_def} -> Grimoire.Annotations.recovery(tool_def, action) == :replay_safe
       _ -> false
     end
   end
@@ -74,8 +74,8 @@ defmodule Aqua.Ops do
   """
   @spec action_standing(String.t(), String.t()) :: :thread | false | nil
   def action_standing(tool, action) do
-    case Cyfr.Ops.Catalog.get_tool(tool) do
-      {:ok, tool_def} -> Cyfr.Ops.Annotations.standing(tool_def, action)
+    case Grimoire.Catalog.get_tool(tool) do
+      {:ok, tool_def} -> Grimoire.Annotations.standing(tool_def, action)
       _ -> nil
     end
   end
@@ -87,7 +87,7 @@ defmodule Aqua.Ops do
   """
   @spec actions_of(String.t()) :: [String.t()]
   def actions_of(tool) when is_binary(tool) do
-    case Cyfr.Ops.Catalog.get_tool(tool) do
+    case Grimoire.Catalog.get_tool(tool) do
       {:ok, tool_def} ->
         case get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) do
           verbs when is_list(verbs) -> Enum.filter(verbs, &is_binary/1)
@@ -104,7 +104,7 @@ defmodule Aqua.Ops do
   @doc "Whether a running chain would refuse `tool`/`action` (nothing a chain can run)."
   @spec in_chain_refused?(String.t(), String.t()) :: boolean()
   def in_chain_refused?(tool, action),
-    do: Cyfr.Ops.Catalog.in_chain_refused?(tool, action)
+    do: Grimoire.Catalog.in_chain_refused?(tool, action)
 
   @doc """
   Whether an approved `tool`/`action` is an execution the assistant runs
@@ -113,7 +113,7 @@ defmodule Aqua.Ops do
   a card (`Aqua.Loop`).
   """
   @spec child_execution?(String.t(), String.t()) :: boolean()
-  def child_execution?(tool, action), do: Cyfr.Ops.Catalog.host_intercepted?(tool, action)
+  def child_execution?(tool, action), do: Grimoire.Catalog.host_intercepted?(tool, action)
 
   @doc """
   One sentence for a refusal: the shared renderer first (crafted binaries,
@@ -124,7 +124,7 @@ defmodule Aqua.Ops do
   """
   @spec render_refusal(term()) :: String.t()
   def render_refusal(reason) do
-    case Cyfr.Ops.Error.render(reason) do
+    case Grimoire.Error.render(reason) do
       nil -> inspect(Prima.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
       sentence -> sentence
     end

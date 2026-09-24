@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.RequestLog do
+defmodule Grimoire.RequestLog do
   @moduledoc """
   MCP call logging for CYFR.
 
@@ -255,10 +255,10 @@ defmodule Emissary.MCP.RequestLog do
   defp safe_enqueue(item) do
     Arca.RecordSink.enqueue(item)
   rescue
-    e -> Logger.warning("[RequestLog] log row not queued: #{Exception.message(e)}")
+    e -> Logger.warning("[Grimoire.RequestLog] log row not queued: #{Exception.message(e)}")
   catch
     :exit, reason ->
-      Logger.warning("[RequestLog] log row not queued: store exited #{inspect(reason)}")
+      Logger.warning("[Grimoire.RequestLog] log row not queued: store exited #{inspect(reason)}")
   end
 
   defp put_routed(data, %{routed_to: routed}) when not is_nil(routed),
@@ -278,18 +278,24 @@ defmodule Emissary.MCP.RequestLog do
         :ok
 
       {:error, reason} ->
-        Logger.error("[RequestLog] log_started failed for #{call_id}: #{inspect(reason)}")
+        Logger.error(
+          "[Grimoire.RequestLog] log_started failed for #{call_id}: #{inspect(reason)}"
+        )
+
         :ok
     end
   rescue
     e ->
-      Logger.error("[RequestLog] log_started raised for #{call_id}: #{Exception.message(e)}")
+      Logger.error(
+        "[Grimoire.RequestLog] log_started raised for #{call_id}: #{Exception.message(e)}"
+      )
+
       :ok
   catch
     # "Always returns :ok" has to cover an exit too: a store whose
     # connection dies exits its caller rather than raising.
     :exit, reason ->
-      Logger.error("[RequestLog] log_started exited for #{call_id}: #{inspect(reason)}")
+      Logger.error("[Grimoire.RequestLog] log_started exited for #{call_id}: #{inspect(reason)}")
       :ok
   end
 
@@ -301,13 +307,19 @@ defmodule Emissary.MCP.RequestLog do
     log_completed(ctx, call_id, data)
   rescue
     e ->
-      Logger.error("[RequestLog] log_completed raised for #{call_id}: #{Exception.message(e)}")
+      Logger.error(
+        "[Grimoire.RequestLog] log_completed raised for #{call_id}: #{Exception.message(e)}"
+      )
+
       :ok
   catch
     # "Always returns :ok" has to cover an exit too: a store whose
     # connection dies exits its caller rather than raising.
     :exit, reason ->
-      Logger.error("[RequestLog] log_completed exited for #{call_id}: #{inspect(reason)}")
+      Logger.error(
+        "[Grimoire.RequestLog] log_completed exited for #{call_id}: #{inspect(reason)}"
+      )
+
       :ok
   end
 
@@ -319,13 +331,16 @@ defmodule Emissary.MCP.RequestLog do
     log_failed(ctx, call_id, data)
   rescue
     e ->
-      Logger.error("[RequestLog] log_failed raised for #{call_id}: #{Exception.message(e)}")
+      Logger.error(
+        "[Grimoire.RequestLog] log_failed raised for #{call_id}: #{Exception.message(e)}"
+      )
+
       :ok
   catch
     # "Always returns :ok" has to cover an exit too: a store whose
     # connection dies exits its caller rather than raising.
     :exit, reason ->
-      Logger.error("[RequestLog] log_failed exited for #{call_id}: #{inspect(reason)}")
+      Logger.error("[Grimoire.RequestLog] log_failed exited for #{call_id}: #{inspect(reason)}")
       :ok
   end
 

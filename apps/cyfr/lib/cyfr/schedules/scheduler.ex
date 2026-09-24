@@ -618,7 +618,7 @@ defmodule Cyfr.Schedules.Scheduler do
     ctx = %{ctx | request_id: request_id}
     execution_id = Prima.UUID7.execution_id()
 
-    Emissary.MCP.RequestLog.safe_log_started(ctx, request_id, %{
+    Grimoire.RequestLog.safe_log_started(ctx, request_id, %{
       tool: "schedule",
       action: "fire",
       method: "cron/fire",
@@ -669,7 +669,7 @@ defmodule Cyfr.Schedules.Scheduler do
 
           recorded = record_run(ctx, schedule.id, execution_id)
 
-          Emissary.MCP.RequestLog.safe_log_completed(ctx, request_id, %{
+          Grimoire.RequestLog.safe_log_completed(ctx, request_id, %{
             output: output,
             duration_ms: duration_ms,
             routed_to: "opus"
@@ -711,7 +711,7 @@ defmodule Cyfr.Schedules.Scheduler do
               "failed"
             )
 
-          Emissary.MCP.RequestLog.safe_log_failed(ctx, request_id, %{
+          Grimoire.RequestLog.safe_log_failed(ctx, request_id, %{
             error: inspect(reason),
             duration_ms: duration_ms,
             routed_to: "opus"

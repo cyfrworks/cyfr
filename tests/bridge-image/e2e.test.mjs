@@ -243,7 +243,7 @@ async function tool(name, args) {
 
 /**
  * Calls a stdio server's tool as `plane` does: `console` through the
- * catalog's external entry (`Cyfr.Ops.Catalog.call_external/4`, which logs
+ * catalog's external entry (`Grimoire.Catalog.call_external/4`, which logs
  * the call), `in_chain` through the dispatch a chain's call reaches past its
  * authority (`Emissary.MCP.ExternalProvider.try_handle/5`, which keeps it as
  * a tool_call execution with its payloads). Answers `{ok: result}` or
@@ -256,7 +256,7 @@ function callTool(name, args = {}, plane = "console") {
 
     reply =
       case args["plane"] do
-        "console" -> Cyfr.Ops.Catalog.call_external(args["name"], ctx, args["arguments"])
+        "console" -> Grimoire.Catalog.call_external(args["name"], ctx, args["arguments"])
         "in_chain" -> Emissary.MCP.ExternalProvider.try_handle(args["name"], ctx, args["arguments"], :in_chain)
       end
 

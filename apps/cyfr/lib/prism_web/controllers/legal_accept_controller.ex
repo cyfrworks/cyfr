@@ -194,9 +194,9 @@ defmodule PrismWeb.LegalAcceptController do
   defp current_provider(conn, params), do: {:ok, PendingProbe.current_provider(conn, params)}
 
   defp accept_error_message(reason) do
-    # One renderer (Cyfr.Ops.Error.render covers the OCI struct and crafted
+    # One renderer (Grimoire.Error.render covers the OCI struct and crafted
     # binaries too); nil means internal and stays out of the page.
-    Cyfr.Ops.Error.render(reason) ||
+    Grimoire.Error.render(reason) ||
       "The acceptance could not be recorded — try again."
   end
 

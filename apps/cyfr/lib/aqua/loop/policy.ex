@@ -51,7 +51,7 @@ defmodule Aqua.Loop.Policy do
   @spec replay_safe?(Call.t()) :: boolean()
   def replay_safe?(%Call{kind: :hand, tool: tool, action: action}),
     do:
-      Cyfr.Ops.Annotations.recovery_of(get_in(Aqua.Hands.catalog(), [tool, :actions, action])) ==
+      Grimoire.Annotations.recovery_of(get_in(Aqua.Hands.catalog(), [tool, :actions, action])) ==
         :replay_safe
 
   def replay_safe?(%Call{kind: :catalog, tool: tool, action: action}),
@@ -191,7 +191,7 @@ defmodule Aqua.Loop.Policy do
       "action_kind" =>
         Atom.to_string(Aqua.Kinds.kind_for(call.tool, call.action || "") || :external),
       "standing" =>
-        Cyfr.Ops.Annotations.standing_to_wire(
+        Grimoire.Annotations.standing_to_wire(
           Aqua.Kinds.standing_for(call.tool, call.action || "")
         ),
       "proposal" => proposal

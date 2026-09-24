@@ -23,7 +23,7 @@ defmodule Compendium.MCP do
   close to their implementation.
 
   Implements the ToolProvider protocol (tools/0 and handle/3)
-  which is validated at runtime by Cyfr.Ops.Catalog.
+  which is validated at runtime by Grimoire.Catalog.
   """
 
   @behaviour Prima.Provider

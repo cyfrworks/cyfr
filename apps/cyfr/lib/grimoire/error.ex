@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.Error do
+defmodule Grimoire.Error do
   @moduledoc """
   The host's renderer for any refusal a tool can produce, whichever
   vocabulary it came from.

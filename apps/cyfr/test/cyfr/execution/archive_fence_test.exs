@@ -418,7 +418,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
       }
 
       assert {:error, {:invalid_argument, _}} =
-               Cyfr.Ops.Catalog.call_in_chain("system", guest, forged, authority)
+               Grimoire.Catalog.call_in_chain("system", guest, forged, authority)
     end
 
     test "refuses once the calling execution's estate was archived", %{
@@ -597,7 +597,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
 
   defp status(guest, authority, lineage) do
     opts = if lineage, do: [lineage: lineage], else: []
-    Cyfr.Ops.Catalog.call_in_chain("system", guest, %{"action" => "status"}, authority, opts)
+    Grimoire.Catalog.call_in_chain("system", guest, %{"action" => "status"}, authority, opts)
   end
 
   defp refusal_sentence, do: "An in-chain call names the execution that makes it"

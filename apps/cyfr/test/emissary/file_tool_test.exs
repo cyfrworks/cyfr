@@ -11,7 +11,7 @@ defmodule Arca.Providers.FilesTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Arca.Providers.Files, as: Tool
 
   setup do

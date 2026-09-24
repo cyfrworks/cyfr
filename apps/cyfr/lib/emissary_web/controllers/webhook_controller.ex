@@ -30,7 +30,7 @@ defmodule EmissaryWeb.WebhookController do
 
   require Logger
 
-  alias Emissary.MCP.RequestLog
+  alias Grimoire.RequestLog
   alias Sanctum.Webhook
 
   # Headers the component is allowed to see on the inbound POST. Anything

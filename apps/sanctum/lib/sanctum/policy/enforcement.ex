@@ -82,7 +82,7 @@ defmodule Sanctum.Policy.Enforcement do
 
       {:error, reason} ->
         # `:error`, like every other "a security record did not land" site
-        # (`Arca.RecordSink`, `Emissary.MCP.RequestLog`, `Arca.AuditHandler`).
+        # (`Arca.RecordSink`, `Grimoire.RequestLog`, `Arca.AuditHandler`).
         # An operator alarming on level:error over the audit plane was getting
         # an arbitrary subset while this one said :warning.
         Logger.error("[Policy.Enforcement] record failed: #{inspect(reason)}")

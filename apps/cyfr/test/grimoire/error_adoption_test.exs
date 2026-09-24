@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Cyfr.Ops.ErrorAdoptionTest do
+defmodule Grimoire.ErrorAdoptionTest do
   @moduledoc """
   A ratchet on the conversion to `Prima.Refusal`, the one refusal
   vocabulary.
@@ -50,7 +50,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     # An upstream registry's own diagnostics, which are its words and not
     # this vocabulary's.
     "apps/cyfr/lib/compendium/oci/client.ex" => 12,
-    "apps/cyfr/lib/emissary/mcp/tools/system_provider.ex" => 12,
+    "apps/cyfr/lib/grimoire/provider.ex" => 12,
     "apps/prima/lib/prima/authority/blob.ex" => 11,
     "apps/sanctum/lib/sanctum/mcp/key_tool.ex" => 11,
     # What is wrong with a cron expression, said in the expression's own
@@ -73,7 +73,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/component.ex" => 4,
     "apps/cyfr/lib/compendium/mcp/shared.ex" => 4,
     "apps/cyfr/lib/compendium/registry.ex" => 4,
-    "apps/cyfr/lib/cyfr/ops/catalog.ex" => 4,
+    "apps/cyfr/lib/grimoire/catalog.ex" => 4,
     # The build orchestration behind `Compendium.Builds.Provider`: the
     # three this ratchet could not see until the scan followed a tool
     # module into what it calls.
@@ -100,7 +100,7 @@ defmodule Cyfr.Ops.ErrorAdoptionTest do
     "apps/sanctum/lib/sanctum/vault.ex" => 1
   }
 
-  defp root, do: Path.expand("../../../../..", __DIR__)
+  defp root, do: Path.expand("../../../..", __DIR__)
 
   defp lib_files do
     root()

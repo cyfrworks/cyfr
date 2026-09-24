@@ -9,7 +9,7 @@ defmodule Opus.FormulaHandlerMcpTest do
 
   Every dispatch is a host call of the formula's attempt, decided by CYFR
   under the authority it holds for that attempt: a catalog tool goes
-  through `Cyfr.Ops.Catalog.call_in_chain/5`, where the grant is the
+  through `Grimoire.Catalog.call_in_chain/5`, where the grant is the
   consented edge's tool list — exact `tool.action` entries,
   deny-by-default. The telemetry a call emits in its runner's VM is
   `Opus.FormulaHandlerRunnerTest`'s, in Opus's suite.
@@ -33,8 +33,8 @@ defmodule Opus.FormulaHandlerMcpTest do
     Application.put_env(:arca, :base_path, test_dir)
 
     # Ensure the catalog has providers loaded for dispatch tests
-    if Process.whereis(Cyfr.Ops.Catalog) do
-      Cyfr.Ops.Catalog.refresh()
+    if Process.whereis(Grimoire.Catalog) do
+      Grimoire.Catalog.refresh()
     end
 
     ctx = Sanctum.TestContext.local()
@@ -272,7 +272,7 @@ defmodule Opus.FormulaHandlerMcpTest do
   describe "host interception" do
     test "the host has an arm for exactly the actions an assignment names as intercepted" do
       execution = Enum.find(Cyfr.Execution.MCP.tools(), &(&1.name == "execution"))
-      actions = execution |> Cyfr.Ops.Annotations.actions_of() |> Map.keys()
+      actions = execution |> Grimoire.Annotations.actions_of() |> Map.keys()
       intercepted = FormulaHost.intercepted()
 
       assert intercepted != []

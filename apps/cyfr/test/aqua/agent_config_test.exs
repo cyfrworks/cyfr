@@ -32,7 +32,7 @@ defmodule Aqua.AgentConfigTest do
 
   defp policy(ctx, name) do
     {:ok, guide} =
-      Cyfr.Ops.Catalog.call_external("aqua", ctx, %{"action" => "get", "name" => name})
+      Grimoire.Catalog.call_external("aqua", ctx, %{"action" => "get", "name" => name})
 
     Aqua.AgentConfig.stringify_deep(guide)["tool_policy"]
   end

@@ -13,7 +13,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
   # gate that still needs the identity-conjunct branch.
   use ExUnit.Case, async: false
 
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context

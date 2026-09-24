@@ -148,7 +148,7 @@ defmodule Cyfr.Execution.Close do
   is recorded as it is. A typed refusal records its readable message,
   announces a `setup_required` event on the run's root or parent stream,
   and answers `{:error, typed}` whole. An internal term is recorded as the
-  sentence `Cyfr.Ops.Error.render/1` gives it, or `"internal error"`
+  sentence `Grimoire.Error.render/1` gives it, or `"internal error"`
   (logged). Answers `{:error, masked_message}` otherwise.
   """
   @spec fail(t(), [String.t()], term()) :: {:error, term()}
@@ -456,11 +456,11 @@ defmodule Cyfr.Execution.Close do
 
   defp failure_message(reason), do: "Execution failed: #{client_reason(reason)}"
 
-  # A typed refusal gets its one sentence (`Cyfr.Ops.Error.render/1`); an
+  # A typed refusal gets its one sentence (`Grimoire.Error.render/1`); an
   # internal term goes to the log and never into a message that outlives
   # this call.
   defp client_reason(reason) do
-    case Cyfr.Ops.Error.render(reason) do
+    case Grimoire.Error.render(reason) do
       nil ->
         Logger.warning("[Cyfr.Execution.Close] unrenderable failure reason: #{inspect(reason)}")
         "internal error"

@@ -172,9 +172,9 @@ defmodule PrismWeb.ClaimNamespaceController do
   end
 
   defp claim_error_message(other) do
-    # One renderer (Cyfr.Ops.Error.render covers the OCI struct and crafted
+    # One renderer (Grimoire.Error.render covers the OCI struct and crafted
     # binaries too); nil means internal — logged, never reflected.
-    case Cyfr.Ops.Error.render(other) do
+    case Grimoire.Error.render(other) do
       nil ->
         Logger.error("[ClaimNamespaceController] claim failed: #{inspect(other)}")
         "The claim failed — try again."

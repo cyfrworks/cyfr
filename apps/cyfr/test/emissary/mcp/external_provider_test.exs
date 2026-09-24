@@ -148,7 +148,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       })
 
       assert {:error, msg} =
-               Cyfr.Ops.Catalog.call_external("plane-pin:sometool", ctx, %{})
+               Grimoire.Catalog.call_external("plane-pin:sometool", ctx, %{})
 
       assert msg =~ "only from inside a chain"
 

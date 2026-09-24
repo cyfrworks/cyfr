@@ -12,7 +12,7 @@ differs from the license texts, the license texts control.
 | Where | License | Why |
 |-------|---------|-----|
 | `apps/sanctum/**` | FSL-1.1-Apache-2.0 | Sanctum — authentication (OIDC/OAuth/API keys), tenancy, policy enforcement, the cipher that encrypts every secret, and audit. It is the security and multi-tenancy spine, threaded through the majority of the control plane, so any hosted offering of CYFR must redistribute it. |
-| Everything else (`apps/arca/**` including the tenancy migrations under `apps/arca/priv/repo/migrations/`, `apps/cyfr/lib/{emissary*,prism*,compendium,aqua,cyfr}/`, `apps/{prima,locus,opus}/`, web UIs, docs) | Apache-2.0 | Apache by default; the schema DDL every self-hoster must run is not gated. |
+| Everything else (`apps/arca/**` including the tenancy migrations under `apps/arca/priv/repo/migrations/`, `apps/cyfr/lib/{emissary*,prism*,compendium,aqua,cyfr,grimoire}/`, `apps/{prima,locus,opus}/`, web UIs, docs) | Apache-2.0 | Apache by default; the schema DDL every self-hoster must run is not gated. |
 
 The rule is simply the application directory: everything under
 `apps/sanctum/` is FSL-1.1-Apache-2.0, and everything else in the repo is
