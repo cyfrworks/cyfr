@@ -8,10 +8,10 @@ defmodule Aqua.Ops do
 
   Provides the MCP dispatch operations used by the assistant domain.
 
-  Two deliberate exceptions live outside this module: `Emissary.PubSub`
-  used as a process NAME (the application's one supervised PubSub), and
-  `Aqua.Intents`' read of the console route table, rostered in
-  `Cyfr.Boundaries`.
+  One deliberate exception lives outside this module: `Aqua.Intents`'
+  read of the console route table, rostered in `Cyfr.Boundaries`. The
+  assistant's live events go through `Cyfr.Bus`, the host's, never a
+  surface.
   """
 
   @doc "Call a tool on the external plane under `ctx`."

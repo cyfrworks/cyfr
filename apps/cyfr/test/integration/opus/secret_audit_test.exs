@@ -152,7 +152,8 @@ defmodule Opus.SecretAuditTest do
   defp probe!(ctx, authority) do
     id = Cyfr.UUID7.execution_id()
     :ok = Cyfr.Execution.subscribe_events(id, ctx)
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.executions(ctx.athanor_id))
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
 
     {result, log} =
       with_log(fn ->
@@ -170,7 +171,8 @@ defmodule Opus.SecretAuditTest do
   # message but the sink's.
   defp drain do
     receive do
-      message when elem(message, 0) != :audited -> [message | drain()]
+      message when not is_tuple(message) or elem(message, 0) != :audited ->
+        [message | drain()]
     after
       200 -> []
     end

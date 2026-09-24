@@ -63,7 +63,13 @@ defmodule PrismWeb.FocusIntentTest do
   end
 
   defp pushed(%{pane: pane, thread: thread, user: user}, intent) do
-    send(pane.pid, {:thread, thread.id, {:intents, [intent], user.user_id}})
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :intents,
+      data: %{intents: [intent], user_id: user.user_id}
+    })
+
     render(pane)
     assert_push_event(pane, "aqua:intents", %{intents: [%{kind: "navigate", to: to}]})
     to

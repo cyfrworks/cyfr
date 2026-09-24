@@ -644,7 +644,7 @@ defmodule Cyfr.Execution.ArchiveFenceTest do
 
   defp events do
     receive do
-      {:execution_event, event} -> [event | events()]
+      %Cyfr.Bus.ExecutionEvent{} = event -> [Cyfr.Bus.ExecutionEvent.event(event) | events()]
     after
       300 -> []
     end

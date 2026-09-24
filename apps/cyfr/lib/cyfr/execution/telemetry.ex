@@ -7,7 +7,7 @@ defmodule Cyfr.Execution.Telemetry do
   its failure — and the events its guest pushes to a stream.
 
   The lifecycle events are audit-bearing — `Arca.AuditHandler` and
-  `Prism.TelemetryBridge` consume them (`Cyfr.Telemetry.Catalog`) — and are
+  `Cyfr.TelemetryBridge` consume them (`Cyfr.Telemetry.Catalog`) — and are
   distinct from the execution's persistent record (`Cyfr.Execution.Record`).
   `[:cyfr, :opus, :emit]` is for operator metrics. The events a running
   component's storage, tool and formula calls produce are
@@ -19,7 +19,7 @@ defmodule Cyfr.Execution.Telemetry do
   - `[:cyfr, :opus, :execute, :stop]` - an execution completes
   - `[:cyfr, :opus, :execute, :exception]` - an execution fails, or its row
     is failed from outside: a child by its parent's cascade, a lapsed row
-    by the sweeper
+    by the sweeper; or a caller cancelled it (`status: :cancelled`)
   - `[:cyfr, :opus, :emit]` - a guest's event is pushed to an execution's stream
 
   ## Measurements
@@ -126,6 +126,36 @@ defmodule Cyfr.Execution.Telemetry do
         parent_execution_id: record.parent_execution_id,
         outcome: :failure,
         error: format_error(reason),
+        duration_ms: record.duration_ms
+      }
+    )
+  end
+
+  @doc """
+  Emit `[:cyfr, :opus, :execute, :exception]` for a record a caller
+  cancelled, after the cancel's write: the record's `execution_id`,
+  `request_id`, `component`, `reference`, `component_type`, `athanor_id`,
+  `parent_execution_id` and `duration_ms`, with `user_id` the person the
+  cancel ran as (`cancelled_by`, the server's own work names `"system"`),
+  `error: "cancelled"` and `status: :cancelled`, so the bridge announces a
+  cancel and not a failure.
+  """
+  @spec execute_cancelled(Record.t(), String.t() | nil) :: :ok
+  def execute_cancelled(%Record{} = record, cancelled_by) do
+    :telemetry.execute(
+      [:cyfr, :opus, :execute, :exception],
+      %{duration: native_duration(record), system_time: System.system_time()},
+      %{
+        execution_id: record.id,
+        request_id: record.request_id,
+        component: format_reference(record.reference),
+        reference: record.reference,
+        component_type: record.component_type,
+        user_id: cancelled_by,
+        athanor_id: record.athanor_id,
+        parent_execution_id: record.parent_execution_id,
+        error: "cancelled",
+        status: :cancelled,
         duration_ms: record.duration_ms
       }
     )

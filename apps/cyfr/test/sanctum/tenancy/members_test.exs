@@ -63,24 +63,24 @@ defmodule Sanctum.Tenancy.MembersTest do
       uid = person_id()
       {:ok, _} = Members.ensure_platform(uid)
       token = session_for(uid)
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.sessions())
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
 
       assert :ok = Members.revoke_platform(uid)
 
       refute Sanctum.Tenancy.platform_admin?(uid)
       assert {:error, _} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
-      assert_receive {:sessions_revoked, ^uid}
+      assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: ^uid}
     end
 
     test "an absent grant ends no session and announces nothing" do
       uid = person_id()
       token = session_for(uid)
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.sessions())
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
 
       assert :ok = Members.revoke_platform(uid)
 
       assert {:ok, _} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
-      refute_receive {:sessions_revoked, ^uid}, 100
+      refute_receive %Cyfr.Bus.Session{kind: :revoked, user_id: ^uid}, 100
     end
   end
 
@@ -298,12 +298,12 @@ defmodule Sanctum.Tenancy.MembersTest do
           verified: true
         })
 
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Members.topic(user.id))
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.memberships(user.id))
       assert {:ok, 2} = Members.activate_invited(user)
 
       assert Members.member?(user.id, athanor.id)
       assert Members.member?(user.id, other.id)
-      assert_receive {:membership_changed, %{change: :joined}}
+      assert_receive %Cyfr.Bus.Membership{change: :joined}
 
       # the invitations are gone as invitations, and the seat carries no email
       rows = rows!(Members.list_by_athanor(athanor.id))

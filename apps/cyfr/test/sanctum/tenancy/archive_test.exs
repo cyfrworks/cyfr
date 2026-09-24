@@ -163,7 +163,11 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     {:ok, group} = Athanors.create_group(owner.id, "Arch #{n}")
     key = key_in(group.id, owner.id)
     running = running!(group.id, owner.id)
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(group.id))
+
+    Cyfr.Bus.subscribe(
+      Cyfr.Actor.in_athanor(group.id),
+      Cyfr.Bus.notify(Cyfr.Actor.in_athanor(group.id))
+    )
 
     assert {:ok, %{status: "archived"}} = Athanors.archive(group)
 
@@ -171,7 +175,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert_receive {:cancelled, ^running, "system"}, 5_000
     assert :ok = wait_until(fn -> cancelled?(running) end, 5_000)
     athanor_id = group.id
-    assert_receive {:notify, ^athanor_id, :athanor_changed, _}
+    assert_receive %Cyfr.Bus.Notify{athanor_id: ^athanor_id, kind: :athanor_changed}
   end
 
   test "archive drops every member's established-context memo, so a cached caller is refused next call" do

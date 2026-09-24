@@ -125,4 +125,107 @@ defmodule Sanctum.TelemetryTest do
       assert metadata.outcome == :success
     end
   end
+  # The identity domain announces its standing changes as telemetry and
+  # never broadcasts: what it hands the host's bridge is data, and naming
+  # no topic is the point.
+  describe "the standing announcements" do
+    defp capture(events) do
+      test = self()
+      handler = "sanctum-announce-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach_many(
+        handler,
+        events,
+        fn event, measurements, metadata, _config ->
+          send(test, {:announced, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
+    test "a tray entry names its athanor, kind and payload, and the platform's names none" do
+      capture([[:cyfr, :sanctum, :notify]])
+
+      :ok = Sanctum.Notify.broadcast("ath_1", :member_changed, %{name: "x"})
+
+      assert_receive {:announced, [:cyfr, :sanctum, :notify], %{count: 1},
+                      %{athanor_id: "ath_1", kind: :member_changed, payload: %{name: "x"}}}
+
+      :ok = Sanctum.Notify.allowlist_changed()
+
+      assert_receive {:announced, [:cyfr, :sanctum, :notify], _,
+                      %{athanor_id: nil, kind: :allowlist_changed, payload: %{}}}
+    end
+
+    test "the tray's vocabulary is closed and is the kind type's" do
+      assert Sanctum.Notify.kinds() == [
+               :member_changed,
+               :athanor_changed,
+               :allowlist_request,
+               :allowlist_changed,
+               :execution_finished,
+               :execution_failed,
+               :approval_pending,
+               :approval_resolved,
+               :schedule_failed
+             ]
+
+      refute function_exported?(Sanctum.Notify, :topic, 1)
+      refute function_exported?(Sanctum.Notify, :platform_topic, 0)
+    end
+
+    test "a membership change names the person, the athanor and the change" do
+      capture([[:cyfr, :sanctum, :membership, :changed]])
+
+      :ok = Telemetry.membership_changed("user_1", "ath_1", :joined)
+
+      assert_receive {:announced, [:cyfr, :sanctum, :membership, :changed], %{count: 1},
+                      %{user_id: "user_1", athanor_id: "ath_1", change: :joined}}
+
+      refute function_exported?(Sanctum.Tenancy.Members, :topic, 1)
+    end
+
+    test "a session minted carries nothing, and a revocation names only the person" do
+      capture([[:cyfr, :sanctum, :session, :created], [:cyfr, :sanctum, :sessions, :revoked]])
+
+      :ok = Telemetry.session_created()
+      assert_receive {:announced, [:cyfr, :sanctum, :session, :created], %{count: 1}, meta}
+      assert meta == %{}
+
+      :ok = Telemetry.sessions_revoked("user_1")
+
+      assert_receive {:announced, [:cyfr, :sanctum, :sessions, :revoked], %{count: 1},
+                      %{user_id: "user_1"}}
+
+      refute function_exported?(Sanctum.Session, :topic, 0)
+    end
+
+    test "a dropped caller memo names the session row key, never a token" do
+      capture([[:cyfr, :sanctum, :caller, :invalidated]])
+      key = :crypto.hash(:sha256, "a-session-token")
+
+      :ok = Telemetry.caller_invalidated(key)
+
+      assert_receive {:announced, [:cyfr, :sanctum, :caller, :invalidated], %{count: 1},
+                      %{hash: ^key} = meta}
+
+      assert Map.keys(meta) == [:hash]
+    end
+
+    test "nothing in the identity domain names the PubSub server or a topic module" do
+      refute Code.ensure_loaded?(Sanctum.PubSub)
+
+      lib = Path.expand("../../lib", __DIR__)
+
+      found =
+        for path <- Path.wildcard(Path.join(lib, "**/*.ex")),
+            {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
+            line =~ ~r/\bPhoenix\.PubSub\b|\bCyfr\.PubSub\b|\bEmissary\.PubSub\b/,
+            do: "#{Path.relative_to(path, lib)}:#{n}"
+
+      assert found == []
+    end
+  end
 end

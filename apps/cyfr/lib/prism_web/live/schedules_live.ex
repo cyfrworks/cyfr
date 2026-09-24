@@ -27,10 +27,14 @@ defmodule PrismWeb.SchedulesLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.schedules(ctx))
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.executions(ctx))
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.components(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+
+      for topic <- [
+            Cyfr.Bus.schedules(actor),
+            Cyfr.Bus.executions(actor),
+            Cyfr.Bus.components(actor)
+          ],
+          do: Cyfr.Bus.subscribe(actor, topic)
     end
 
     socket =
@@ -164,21 +168,20 @@ defmodule PrismWeb.SchedulesLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info(:schedules_updated, socket) do
+  def handle_info(%Cyfr.Bus.Schedules{}, socket) do
     {:noreply, fetch_schedules(socket)}
   end
 
-  # Refresh schedule stats when executions complete (run_count, last_run_at update)
-  def handle_info({:execution_completed, _metadata, _measurements}, socket) do
+  # Refresh schedule stats when executions end (run_count, last_run_at update)
+  def handle_info(%Cyfr.Bus.Execution{kind: kind}, socket)
+      when kind in [:completed, :failed, :cancelled] do
     {:noreply, fetch_schedules(socket)}
   end
 
-  def handle_info({:execution_failed, _metadata, _measurements}, socket) do
-    {:noreply, fetch_schedules(socket)}
-  end
+  def handle_info(%Cyfr.Bus.Execution{}, socket), do: {:noreply, socket}
 
-  # Refresh component dropdown when components change
-  def handle_info(:components_changed, socket) do
+  # Refresh the component dropdown when the registry changes, whatever changed it
+  def handle_info(%Cyfr.Bus.Components{}, socket) do
     {:noreply, fetch_components(socket)}
   end
 

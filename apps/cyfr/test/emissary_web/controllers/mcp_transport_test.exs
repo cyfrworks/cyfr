@@ -82,11 +82,15 @@ defmodule EmissaryWeb.MCPTransportTest do
     end
 
     # Progress must reach the client while work runs. Phoenix.ConnTest uses
-    # this process as the connection; preload its mailbox to exercise progress
-    # that arrives before the task result.
+    # this process as the connection. The task supervisor is held while a
+    # stand-in for the work publishes two steps on the request's topic the
+    # connection subscribed to, so both are waiting when the pump starts —
+    # progress that arrives before the task's result.
     test "progress reported during the call is written before the response", %{conn: conn} do
-      send(self(), {:mcp_progress, %{"method" => "notifications/progress", "seq" => 1}})
-      send(self(), {:mcp_progress, %{"method" => "notifications/progress", "seq" => 2}})
+      conn_pid = self()
+      :ok = :sys.suspend(Emissary.TaskSupervisor)
+      on_exit(fn -> :sys.resume(Emissary.TaskSupervisor) end)
+      spawn_link(fn -> publish_when_listening(conn_pid, [:one, :two]) end)
 
       conn =
         conn
@@ -108,8 +112,10 @@ defmodule EmissaryWeb.MCPTransportTest do
         |> Enum.map(&(&1 |> String.replace_prefix("data: ", "") |> Jason.decode!()))
 
       assert [first, second, response] = events
-      assert first["seq"] == 1
-      assert second["seq"] == 2
+      assert first["method"] == "notifications/progress"
+      assert first["params"]["phase"] == "one"
+      assert first["params"]["progressToken"] == "tok-3"
+      assert second["params"]["phase"] == "two"
 
       # Order is preserved and the response is the stream's last frame.
       assert response["id"] == 9
@@ -312,11 +318,71 @@ defmodule EmissaryWeb.MCPTransportTest do
   describe "the progress channel is request-scoped" do
     test "a listener is addressed by request id, not by session", %{conn: _conn} do
       :ok = Progress.listen("req_scoped", "tok")
+      on_exit(fn -> Progress.forget("req_scoped") end)
+      actor = Cyfr.Actor.in_athanor("ath_scoped")
 
-      %Sanctum.Context{} = base = Sanctum.TestContext.local()
-      Progress.emit(%Sanctum.Context{base | request_id: "req_scoped"}, %{"phase" => "x"})
+      mine = Cyfr.Bus.Progress.new(actor, {:pull, "p"}, request_id: "req_scoped", phase: :x)
+      theirs = Cyfr.Bus.Progress.new(actor, {:pull, "p"}, request_id: "req_other", phase: :x)
 
-      assert_receive {:mcp_progress, %{"method" => "notifications/progress"}}
+      assert {:ok, %{"method" => "notifications/progress"}} = Progress.notification(mine)
+      assert Progress.notification(theirs) == :ignore
+    end
+
+    test "a streamed request leaves no subscription and no token behind", %{conn: conn} do
+      conn_pid = self()
+      :ok = :sys.suspend(Emissary.TaskSupervisor)
+      on_exit(fn -> :sys.resume(Emissary.TaskSupervisor) end)
+      spawn_link(fn -> publish_when_listening(conn_pid, [:only]) end)
+
+      conn
+      |> put_req_header("content-type", "application/json")
+      |> mcp_post_with_meta(
+        %{"jsonrpc" => "2.0", "id" => 10, "method" => "server/discover"},
+        %{"progressToken" => "tok-done"}
+      )
+
+      refute Enum.any?(Registry.keys(Cyfr.PubSub, self()), &(&1 =~ ":progress:request:"))
+      refute Enum.any?(Process.get_keys(), &match?({Emissary.MCP.Progress, _}, &1))
+
+      # A step for the finished request, published now, reaches nobody here.
+      refute_receive %Cyfr.Bus.Progress{}, 100
+    end
+  end
+
+  # The work behind a streamed request, standing in for a tool: once the
+  # connection `conn_pid` subscribed to its request's progress topic, the
+  # steps named are published there, then the held task supervisor lets
+  # the request's task start.
+  defp publish_when_listening(conn_pid, phases, deadline \\ 200) do
+    topic =
+      conn_pid
+      |> then(&Registry.keys(Cyfr.PubSub, &1))
+      |> Enum.find(&(&1 =~ ":progress:request:"))
+
+    cond do
+      is_binary(topic) ->
+        ["tenant", athanor_id, "progress", "request", request_id] = String.split(topic, ":")
+        actor = Cyfr.Actor.in_athanor(athanor_id)
+
+        for phase <- phases do
+          step =
+            Cyfr.Bus.Progress.new(actor, {:pull, "p"},
+              request_id: request_id,
+              phase: phase,
+              message: "step"
+            )
+
+          :ok = Cyfr.Bus.broadcast_progress(actor, step)
+        end
+
+        :sys.resume(Emissary.TaskSupervisor)
+
+      deadline > 0 ->
+        Process.sleep(10)
+        publish_when_listening(conn_pid, phases, deadline - 1)
+
+      true ->
+        :sys.resume(Emissary.TaskSupervisor)
     end
   end
 

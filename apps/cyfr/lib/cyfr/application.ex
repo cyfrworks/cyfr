@@ -81,7 +81,6 @@ defmodule Cyfr.Application do
     # detaching `"webhook-verify-failed-log"` if they prefer an alternative
     # sink (e.g. forwarding to SIEM via a Telemetry Metrics consumer).
     attach_webhook_verify_failed_logger()
-    Aqua.ScheduleNotes.attach()
 
     # Two tiers under a :rest_for_one root so each has its own restart budget:
     # a crash-looping endpoint exhausts only the web tier (infra keeps running,
@@ -146,14 +145,15 @@ defmodule Cyfr.Application do
       {Arca.AuditHandler, events: Cyfr.Telemetry.Catalog.consumed_by(:audit)},
       # Emissary web layer
       EmissaryWeb.Telemetry,
-      {Phoenix.PubSub, name: Emissary.PubSub},
+      # The bus's server (`Cyfr.Bus`): nothing else names it.
+      {Phoenix.PubSub, name: Cyfr.PubSub},
       # Drops this member's cached authorization decisions when any member
       # says one is no longer good. Right after PubSub, and before
       # anything that establishes a caller.
       Cyfr.StandingWatch,
       # The host's telemetry-to-bus bridge, attached before the reconcile
       # announces a revocation, so the announcement reaches mounted views.
-      Prism.TelemetryBridge
+      Cyfr.TelemetryBridge
     ]
   end
 
@@ -175,6 +175,10 @@ defmodule Cyfr.Application do
   defp post_gate do
     [
       Cyfr.RetentionScheduler,
+      # Keeps a completed schedule's outcome as a note when the schedule
+      # asked for it: subscribed to the committed completions before the
+      # scheduler can fire, and acting only on its own member's.
+      Aqua.ScheduleNotes,
       # Recurring component executions: the runs the scheduler fires are
       # tasks of their own, monitored by it.
       Supervisor.child_spec({Task.Supervisor, name: Cyfr.Schedules.TaskSupervisor},
@@ -239,7 +243,6 @@ defmodule Cyfr.Application do
         {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
         Emissary.MCP.ExternalServerReconciler
       ]),
-      Emissary.MCP.Progress,
       {Task.Supervisor, name: Emissary.TaskSupervisor},
       # Builds (`Compendium.Builds`): a started build, the process watching
       # it, each request to the Locus builds service and the registration

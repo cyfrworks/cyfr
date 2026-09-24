@@ -52,11 +52,12 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     EmissaryWeb.Telemetry,
     Phoenix.PubSub.Supervisor,
     Cyfr.StandingWatch,
-    Prism.TelemetryBridge
+    Cyfr.TelemetryBridge
   ]
 
   @post_gate [
     Cyfr.RetentionScheduler,
+    Aqua.ScheduleNotes,
     Cyfr.Schedules.TaskSupervisor,
     Cyfr.Schedules.Scheduler,
     Cyfr.Execution.Slots,
@@ -68,7 +69,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Cyfr.Execution.HostListener,
     Emissary.MCP.SubscriptionRegistry,
     Emissary.MCP.ExternalServerTree,
-    Emissary.MCP.Progress.Registry,
     Emissary.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
     Emissary.MCP.RunningTasks,
@@ -187,7 +187,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
       on_exit(fn -> :telemetry.detach(handler) end)
 
-      for topic <- rows.topics, do: Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
+      for topic <- rows.topics, do: :ok = Cyfr.Bus.subscribe(rows.actor, topic)
 
       {:ok, slot: slot, rows: rows, delisted: delisted, key: key}
     end
@@ -440,9 +440,9 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       turn: turn,
       backend: backend,
       topics: [
-        Cyfr.Bus.executions(ctx.athanor_id),
-        Cyfr.Bus.schedule_runs(ctx.athanor_id),
-        Cyfr.Bus.thread(thread.id, ctx.athanor_id)
+        Cyfr.Bus.executions(actor),
+        Cyfr.Bus.schedule_runs(actor),
+        Cyfr.Bus.thread(actor, thread.id)
       ]
     }
   end
@@ -461,9 +461,9 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     assert now_backend.epoch == backend.epoch
     assert Registry.lookup(Emissary.MCP.ExternalServerRegistry, backend.id) == []
 
-    refute_receive {:execution_started, _, _}
-    refute_receive {:schedule_fired, _, _}
-    refute_receive {:thread, _, _}
+    refute_receive %Cyfr.Bus.Execution{kind: :started}
+    refute_receive %Cyfr.Bus.ScheduleRun{kind: :fired}
+    refute_receive %Cyfr.Bus.ThreadEvent{}
   end
 
   defp delisted_operator! do

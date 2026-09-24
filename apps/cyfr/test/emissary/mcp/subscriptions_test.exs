@@ -66,16 +66,19 @@ defmodule Emissary.MCP.SubscriptionsTest do
     test "an external MCP server change becomes tools/list_changed", %{ctx: ctx} do
       {:ok, _} = Subscriptions.listen(ctx, %{"toolsListChanged" => true})
 
-      Phoenix.PubSub.broadcast(
-        Emissary.PubSub,
-        Cyfr.Bus.mcp_servers(ctx),
-        :mcp_servers_changed
-      )
+      actor = Context.actor(ctx)
 
-      assert_receive :mcp_servers_changed, 500
+      :ok =
+        Cyfr.Bus.broadcast(
+          actor,
+          Cyfr.Bus.mcp_servers(actor),
+          Cyfr.Bus.McpServers.new(actor, :changed)
+        )
+
+      assert_receive %Cyfr.Bus.McpServers{kind: :changed} = changed, 500
 
       assert {:ok, "notifications/tools/list_changed", %{}} =
-               Subscriptions.notification_for(:mcp_servers_changed)
+               Subscriptions.notification_for(changed)
     end
 
     # Filtering at translation rather than at subscribe time: a topic that grows
@@ -84,6 +87,11 @@ defmodule Emissary.MCP.SubscriptionsTest do
     test "an unrecognised message is ignored rather than forwarded" do
       assert Subscriptions.notification_for(:something_else) == :ignore
       assert Subscriptions.notification_for({:progress, %{}}) == :ignore
+
+      progress =
+        Cyfr.Bus.Progress.new(Cyfr.Actor.in_athanor("ath_1"), {:pull, "p1"}, phase: :pulling)
+
+      assert Subscriptions.notification_for(progress) == :ignore
     end
   end
 
@@ -91,15 +99,23 @@ defmodule Emissary.MCP.SubscriptionsTest do
     test "a listener does not receive another tenant's events", %{ctx: ctx} do
       {:ok, _} = Subscriptions.listen(ctx, %{"toolsListChanged" => true})
 
-      other = %Context{ctx | athanor_id: "ath_other"}
+      other = Context.actor(%{ctx | athanor_id: "ath_other"})
 
-      Phoenix.PubSub.broadcast(
-        Emissary.PubSub,
-        Cyfr.Bus.mcp_servers(other),
-        :mcp_servers_changed
-      )
+      :ok =
+        Cyfr.Bus.broadcast(
+          other,
+          Cyfr.Bus.mcp_servers(other),
+          Cyfr.Bus.McpServers.new(other, :changed)
+        )
 
-      refute_receive :mcp_servers_changed, 200
+      refute_receive %Cyfr.Bus.McpServers{}, 200
+    end
+
+    test "a listener cannot subscribe to another tenant's topic", %{ctx: ctx} do
+      other = Context.actor(%{ctx | athanor_id: "ath_other"})
+      mine = Context.actor(ctx)
+
+      assert {:error, :cross_tenant} = Cyfr.Bus.subscribe(mine, Cyfr.Bus.mcp_servers(other))
     end
   end
 end

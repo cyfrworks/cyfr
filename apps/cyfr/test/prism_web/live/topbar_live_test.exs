@@ -95,11 +95,11 @@ defmodule PrismWeb.TopbarLiveTest do
     viewing = fn -> :sys.get_state(bar.pid).socket.assigns.viewing end
     assert viewing.() == seated_athanor().id
 
-    send(bar.pid, {:viewing, group.id})
+    send(bar.pid, Cyfr.Bus.Viewing.new(group.id))
     assert viewing.() == group.id
 
     # An id that names no seat of theirs is not followed.
-    send(bar.pid, {:viewing, "ath_nobody"})
+    send(bar.pid, Cyfr.Bus.Viewing.new("ath_nobody"))
     assert viewing.() == group.id
   end
 
@@ -180,7 +180,8 @@ defmodule PrismWeb.TopbarLiveTest do
     bar = topbar(view)
 
     # Coalesce bursts of telemetry into one reload.
-    for _ <- 1..10, do: send(bar.pid, {:request, %{}, %{}})
+    actor = Cyfr.Actor.in_athanor(seated_athanor().id)
+    for _ <- 1..10, do: send(bar.pid, Cyfr.Bus.Request.new(actor, :logged))
     :sys.get_state(bar.pid)
 
     # All ten have been seen and none has been served — that is the whole
@@ -192,7 +193,7 @@ defmodule PrismWeb.TopbarLiveTest do
 
     # And the window re-arms: a burst after a drain is coalesced too, rather
     # than the bar going unthrottled or silent for the rest of the session.
-    for _ <- 1..5, do: send(bar.pid, {:execution_started, %{}, %{}})
+    for _ <- 1..5, do: send(bar.pid, Cyfr.Bus.Execution.new(actor, :started))
     :sys.get_state(bar.pid)
     assert pending(bar) == MapSet.new([:executions])
 

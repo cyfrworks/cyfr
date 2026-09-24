@@ -36,6 +36,12 @@ defmodule Cyfr.Schedules.Scheduler do
   captured when the work began. A member taken over raises its successor's
   generation, so a task that outlived the take-over stops where it stands
   instead of writing after the successor has begun.
+
+  A completed occurrence is announced on `Cyfr.Bus.schedule_completions/0`
+  (`Cyfr.Bus.ScheduleCompleted`) once: only when closing it moved the
+  occurrence row, the schedule's run was recorded, and the generation still
+  holds when checked again just before the publish. The row's stored
+  metadata says whether the outcome is kept (`keep_outcome/1`).
   """
 
   use GenServer
@@ -43,6 +49,7 @@ defmodule Cyfr.Schedules.Scheduler do
   require Arca.Repo.Errors
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
+  alias Cyfr.Bus.{ScheduleCompleted, Schedules}
   alias Cyfr.Schedules.Cron
 
   @db_load_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError, RuntimeError]
@@ -131,7 +138,7 @@ defmodule Cyfr.Schedules.Scheduler do
 
         if still_ours?(task.generation) do
           if failed_run?(reason), do: runner_died(schedule_id, task, reason)
-          broadcast_update(task.ctx)
+          broadcast_update(task.ctx, schedule_id)
           {:noreply, schedule_timer(schedule_id, state)}
         else
           {:noreply, defer_occurrence(schedule_id, state)}
@@ -569,7 +576,7 @@ defmodule Cyfr.Schedules.Scheduler do
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
-        if still_ours?(generation), do: broadcast_update(ctx)
+        if still_ours?(generation), do: broadcast_update(ctx, schedule.id)
 
         task = %{
           ref: ref,
@@ -653,14 +660,14 @@ defmodule Cyfr.Schedules.Scheduler do
         {:ok, result} ->
           output = Map.get(result, :output, result)
 
-          _ =
+          finished =
             ScheduleOccurrences.finish(
               Cyfr.Actor.in_athanor(occurrence.athanor_id),
               occurrence.id,
               "completed"
             )
 
-          record_run(ctx, schedule.id, execution_id)
+          recorded = record_run(ctx, schedule.id, execution_id)
 
           Emissary.MCP.RequestLog.safe_log_completed(ctx, request_id, %{
             output: output,
@@ -668,10 +675,6 @@ defmodule Cyfr.Schedules.Scheduler do
             routed_to: "opus"
           })
 
-          # What `:fired` carried, plus the outcome and the row's own
-          # metadata as stored — a consumer that keeps the outcome
-          # (`Aqua.ScheduleNotes`) reads `keep_outcome` off it without a
-          # second read of the row.
           :telemetry.execute(
             [:cyfr, :schedules, :completed],
             %{system_time: System.system_time(), duration_ms: duration_ms},
@@ -682,11 +685,18 @@ defmodule Cyfr.Schedules.Scheduler do
               reference: exec_reference,
               execution_id: execution_id,
               athanor_id: ctx.athanor_id,
-              user_id: ctx.user_id,
-              output: output,
-              metadata: schedule.metadata
+              user_id: ctx.user_id
             }
           )
+
+          completed = %{
+            schedule: schedule,
+            occurrence: occurrence,
+            execution_id: execution_id,
+            output: output
+          }
+
+          publish_completion(ctx, completed, finished, recorded, generation)
 
           Logger.debug("[Schedules] schedule #{schedule.id} completed (#{execution_id})")
 
@@ -727,13 +737,94 @@ defmodule Cyfr.Schedules.Scheduler do
 
   defp record_run(ctx, schedule_id, execution_id) do
     case CronSchedule.record_run(Sanctum.Context.actor(ctx), schedule_id, execution_id) do
-      {:ok, _} ->
-        :ok
+      {:ok, row} ->
+        {:ok, row}
 
       {:error, reason} ->
         Logger.warning("[Schedules] failed to record_run for #{schedule_id}: #{inspect(reason)}")
+        {:error, reason}
     end
   end
+
+  # The completion is announced only after both writes committed — the
+  # occurrence closed by THIS finish (a finish that moved no row found it
+  # already closed, by recovery, and that closer's is the only word) and
+  # the run recorded — and only while the generation still holds, checked
+  # again immediately before the publish: a member taken over announces
+  # nothing its successor might announce too.
+  defp publish_completion(ctx, completed, {:ok, moved}, {:ok, row}, generation)
+       when is_integer(moved) and moved > 0 do
+    %{schedule: schedule, occurrence: occurrence} = completed
+    {keep?, note_name} = keep_outcome(schedule.metadata)
+    actor = Sanctum.Context.actor(ctx)
+
+    if still_ours?(generation) do
+      completion =
+        ScheduleCompleted.new(actor, %{
+          issuer_member: ScheduleCompleted.issuer(Arca.ControlPlane.held()),
+          schedule_id: schedule.id,
+          execution_id: completed.execution_id,
+          occurrence_id: occurrence.id,
+          completed_at: Map.get(row, :last_run_at),
+          keep_outcome: keep?,
+          note_name: note_name,
+          output: completed.output
+        })
+
+      case Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Schedules] completion of #{schedule.id} not announced: #{inspect(reason)}"
+          )
+      end
+    end
+
+    :ok
+  end
+
+  defp publish_completion(_ctx, _completed, _finished, _recorded, _generation), do: :ok
+
+  @doc false
+  # Whether a schedule keeps its outcome, and under which note name, read
+  # from the row's stored metadata. Absent, empty, not a map or not valid
+  # JSON is a run nobody asked to keep; invalid JSON is said in one line
+  # naming the column and its size, never its bytes.
+  @spec keep_outcome(term()) :: {boolean(), String.t() | nil}
+  def keep_outcome(metadata) do
+    case stored_metadata(metadata) do
+      %{"keep_outcome" => true} = wants -> {true, note_name(wants["note_name"])}
+      _ -> {false, nil}
+    end
+  end
+
+  defp stored_metadata(%{} = decoded), do: decoded
+  defp stored_metadata(nil), do: %{}
+  defp stored_metadata(""), do: %{}
+
+  defp stored_metadata(json) when is_binary(json) do
+    case Cyfr.Json.decode(json) do
+      {:ok, %{} = decoded} ->
+        decoded
+
+      {:ok, _other} ->
+        %{}
+
+      {:error, :invalid_json} ->
+        Logger.warning(
+          "[Cyfr.Schedules.Scheduler] stored metadata is not valid JSON (#{byte_size(json)} bytes)"
+        )
+
+        %{}
+    end
+  end
+
+  defp stored_metadata(_other), do: %{}
+
+  defp note_name(name) when is_binary(name) and name != "", do: name
+  defp note_name(_), do: nil
 
   defp record_error(ctx, schedule_id, message) do
     case CronSchedule.record_error(Sanctum.Context.actor(ctx), schedule_id, message) do
@@ -752,7 +843,7 @@ defmodule Cyfr.Schedules.Scheduler do
   end
 
   # A schedule that could not run, or ran and failed: one event the tray
-  # bridges into the athanor's badges (`Prism.TelemetryBridge`).
+  # bridges into the athanor's badges (`Cyfr.TelemetryBridge`).
   defp emit_schedule_failed(schedule_id, ctx, reason, execution_id \\ nil) do
     :telemetry.execute([:cyfr, :schedules, :failed], %{count: 1}, %{
       schedule_id: schedule_id,
@@ -891,13 +982,17 @@ defmodule Cyfr.Schedules.Scheduler do
     end
   end
 
-  defp broadcast_update(ctx) do
-    case Phoenix.PubSub.broadcast(Emissary.PubSub, Cyfr.Bus.schedules(ctx), :schedules_updated) do
+  # An occurrence started or its run ended: the schedules view re-reads.
+  defp broadcast_update(ctx, schedule_id) do
+    actor = Sanctum.Context.actor(ctx)
+    changed = Schedules.new(actor, :changed, schedule_id: schedule_id)
+
+    case Cyfr.Bus.broadcast(actor, Cyfr.Bus.schedules(actor), changed) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        Logger.warning("[Schedules] PubSub broadcast failed: #{inspect(reason)}")
+        Logger.warning("[Schedules] schedule update not announced: #{inspect(reason)}")
     end
   end
 end

@@ -18,6 +18,7 @@ defmodule Aqua.LoopTest do
 
   alias Aqua.{Approvals, Tape}
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap}
 
@@ -59,7 +60,7 @@ defmodule Aqua.LoopTest do
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
   end
 
@@ -182,13 +183,17 @@ defmodule Aqua.LoopTest do
 
   defp keep(events) do
     Enum.reduce(events, Aqua.Loop.Stream.new(), fn
-      {:turn_fence, _, fence}, kept -> Aqua.Loop.Stream.advance(kept, fence)
+      {:turn_fence, %{turn_id: _, fence: fence}}, kept -> Aqua.Loop.Stream.advance(kept, fence)
       {:delta, delta}, kept -> Aqua.Loop.Stream.add(kept, delta)
       {:delta_abandoned, marker}, kept -> Aqua.Loop.Stream.abandoned(kept, marker)
       {:message, row}, kept -> Aqua.Loop.Stream.landed(kept, row)
       _event, kept -> kept
     end)
   end
+
+  # What a viewer of the thread heard, as `{kind, data}` pairs.
+  defp thread_events(messages),
+    do: for(%ThreadEvent{kind: kind, data: data} <- messages, do: {kind, data})
 
   defp drain do
     receive do
@@ -234,9 +239,9 @@ defmodule Aqua.LoopTest do
 
     assert is_binary(digest)
     assert roots() == before
-    assert_receive {:thread, _, {:message, %{kind: "text", content: "hi there"}}}, 5_000
-    assert_receive {:thread, _, {:usage, %{input: 10, output: 5}}}, 5_000
-    assert_receive {:thread, _, {:turn_finished}}, 5_000
+    assert_receive %ThreadEvent{kind: :message, data: %{kind: "text", content: "hi there"}}, 5_000
+    assert_receive %ThreadEvent{kind: :usage, data: %{input: 10, output: 5}}, 5_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 5_000
 
     assert {:ok, [%{kind: "model", dispatch_state: "closed", outcome: "ok"}]} =
              Tape.steps(ctx, turn)
@@ -309,7 +314,7 @@ defmodule Aqua.LoopTest do
     # Nothing stays charged against the turn's reservation.
     {:ok, %{budget_id: budget_id}} = Tape.turn(ctx, turn.id)
     assert {:ok, []} = Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), budget_id)
-    assert_receive {:thread, _, {:tool_activity, [_ | _]}}, 5_000
+    assert_receive %ThreadEvent{kind: :tool_activity, data: [_ | _]}, 5_000
   end
 
   # The files hand is not scripted: it runs on the opus worker service.
@@ -861,7 +866,7 @@ defmodule Aqua.LoopTest do
 
     assert {:failed, :setup_required} = result
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, other.id)
-    assert_receive {:thread, _, {:consent_required, ref, user}}, 5_000
+    assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ref, user_id: user}}, 5_000
     assert ref =~ @model and user == ctx.user_id
   end
 
@@ -885,19 +890,19 @@ defmodule Aqua.LoopTest do
     ])
 
     assert :completed = Task.await(run(ctx, turn), 30_000)
-    assert_receive {:thread, _, {:turn_finished}}, 5_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 5_000
 
     {:ok, %{fence: fence}} = Tape.turn(ctx, turn.id)
 
     streamed =
-      for {:thread, _, event} <- drain(),
-          match?({:turn_fence, _, _}, event) or match?({:delta, _}, event) or
+      for event <- thread_events(drain()),
+          match?({:turn_fence, %{turn_id: _, fence: _}}, event) or match?({:delta, _}, event) or
             match?({:delta_abandoned, _}, event) or
             match?({:message, %{kind: "text", author: "aqua"}}, event),
           do: event
 
     assert [
-             {:turn_fence, ^turn_id, ^fence},
+             {:turn_fence, %{turn_id: ^turn_id, fence: ^fence}},
              {:delta,
               %{
                 turn_id: ^turn_id,
@@ -929,7 +934,7 @@ defmodule Aqua.LoopTest do
 
     assert :completed = Task.await(run(ctx, turn), 60_000)
 
-    events = for {:thread, _, event} <- drain(), do: event
+    events = for event <- thread_events(drain()), do: event
     deltas = for {:delta, delta} <- events, do: delta
 
     assert [
@@ -972,7 +977,7 @@ defmodule Aqua.LoopTest do
               %{kind: "model", outcome: "ok"} = retried
             ]} = Tape.steps(ctx, turn)
 
-    events = for {:thread, _, event} <- drain(), do: event
+    events = for event <- thread_events(drain()), do: event
     deltas = for {:delta, delta} <- events, do: delta
 
     # The attempt's masking holdback may re-chunk a step's text; each step's
@@ -1031,7 +1036,7 @@ defmodule Aqua.LoopTest do
 
     other = accept!(ctx, thread, "@aqua again")
     assert {:failed, :setup_required} = Task.await(run(ctx, other), 30_000)
-    assert_receive {:thread, _, {:consent_required, ref, user}}, 5_000
+    assert_receive %ThreadEvent{kind: :consent_required, data: %{ref: ref, user_id: user}}, 5_000
     assert ref =~ @model and user == ctx.user_id
   end
 
@@ -1040,7 +1045,12 @@ defmodule Aqua.LoopTest do
     script!(List.duplicate(calls([{"u", "ui", %{"kind" => "ui.overlay.close"}}]), 40))
     assert {:failed, :step_cap} = Task.await(run(ctx, turn), 120_000)
     assert {:ok, %{status: "failed"}} = Tape.turn(ctx, turn.id)
-    assert_receive {:thread, _, {:intents, [%{kind: "overlay_close"}], _}}, 5_000
+
+    assert_receive %ThreadEvent{
+                     kind: :intents,
+                     data: %{intents: [%{kind: "overlay_close"}], user_id: _}
+                   },
+                   5_000
   end
 
   defp turn_root(ctx, turn) do

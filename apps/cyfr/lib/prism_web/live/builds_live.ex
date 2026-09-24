@@ -33,17 +33,9 @@ defmodule PrismWeb.BuildsLive do
     build_id = Cyfr.Hex.short()
 
     # Keep only the selected build subscription active.
-    if previous = socket.assigns[:build_id] do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.build(previous, socket.assigns[:context])
-      )
-    end
-
-    Phoenix.PubSub.subscribe(
-      Emissary.PubSub,
-      Cyfr.Bus.build(build_id, socket.assigns[:context])
-    )
+    unsubscribe_build(socket)
+    actor = Sanctum.Context.actor(socket.assigns[:context])
+    Cyfr.Bus.subscribe(actor, Cyfr.Bus.progress(actor, {:build, build_id}))
 
     socket =
       socket
@@ -142,31 +134,20 @@ defmodule PrismWeb.BuildsLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info({:build_progress, %{phase: phase, message: message}}, socket) do
+  def handle_info(
+        %Cyfr.Bus.Progress{subject: {:build, _id}, phase: phase, message: message},
+        socket
+      ) do
     entry = %{phase: phase, message: message, at: DateTime.utc_now()}
     {:noreply, assign(socket, :build_log, socket.assigns.build_log ++ [entry])}
   end
 
   def handle_info({:build_complete, {:ok, result}}, socket) do
     socket = assign(socket, :build_timeout, nil)
+    unsubscribe_build(socket)
 
-    if socket.assigns.build_id do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.build(socket.assigns.build_id, socket.assigns[:context])
-      )
-    end
-
-    topic = Cyfr.Bus.components(socket.assigns[:context])
-
-    case Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[BuildsLive] PubSub broadcast failed: #{inspect(reason)}")
-    end
-
+    # The registration announces itself on the components topic once it
+    # commits (`Compendium.Registry`); this view says nothing of it.
     {:noreply,
      socket
      |> assign(:build_output, result)
@@ -177,13 +158,7 @@ defmodule PrismWeb.BuildsLive do
 
   def handle_info({:build_complete, {:error, reason}}, socket) do
     socket = assign(socket, :build_timeout, nil)
-
-    if socket.assigns.build_id do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.build(socket.assigns.build_id, socket.assigns[:context])
-      )
-    end
+    unsubscribe_build(socket)
 
     {:noreply,
      socket
@@ -350,5 +325,12 @@ defmodule PrismWeb.BuildsLive do
       </.card>
     </div>
     """
+  end
+
+  defp unsubscribe_build(socket) do
+    if build_id = socket.assigns[:build_id] do
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.progress(actor, {:build, build_id}))
+    end
   end
 end

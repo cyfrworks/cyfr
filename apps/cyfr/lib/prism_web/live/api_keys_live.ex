@@ -24,8 +24,8 @@ defmodule PrismWeb.ApiKeysLive do
     # Subscribe once, at mount — handle_params re-fires on every patch,
     # and PubSub's :duplicate registry would deliver every message twice.
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.api_keys(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.api_keys(actor))
     end
 
     socket =
@@ -185,7 +185,7 @@ defmodule PrismWeb.ApiKeysLive do
     {:noreply, socket |> fetch_keys() |> assign(:loading, false)}
   end
 
-  def handle_info(:api_keys_changed, socket) do
+  def handle_info(%Cyfr.Bus.ApiKeys{}, socket) do
     {:noreply, fetch_keys(socket)}
   end
 

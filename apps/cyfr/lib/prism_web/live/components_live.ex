@@ -17,8 +17,8 @@ defmodule PrismWeb.ComponentsLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.components(ctx))
+      actor = bus_actor(socket)
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.components(actor))
     end
 
     socket =
@@ -160,7 +160,7 @@ defmodule PrismWeb.ComponentsLive do
       resubscribe(
         socket,
         :progress_topic,
-        Cyfr.Bus.progress(progress_id, socket.assigns[:context])
+        Cyfr.Bus.progress(bus_actor(socket), {:pull, progress_id})
       )
 
     socket =
@@ -221,7 +221,7 @@ defmodule PrismWeb.ComponentsLive do
       resubscribe(
         socket,
         :register_topic,
-        Cyfr.Bus.register(register_id, socket.assigns[:context])
+        Cyfr.Bus.progress(bus_actor(socket), {:register, register_id})
       )
 
     socket =
@@ -307,7 +307,7 @@ defmodule PrismWeb.ComponentsLive do
       resubscribe(
         socket,
         :progress_topic,
-        Cyfr.Bus.progress(progress_id, socket.assigns[:context])
+        Cyfr.Bus.progress(bus_actor(socket), {:pull, progress_id})
       )
 
     socket =
@@ -391,7 +391,7 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply, socket}
   end
 
-  # --- PubSub handlers ---
+  # --- Bus handlers ---
 
   # A task's answer, taken only under the focus it was started for.
   @impl true
@@ -450,11 +450,14 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply, assign(socket, :consent_sheet_ref, nil)}
   end
 
-  def handle_info(:components_changed, socket) do
+  def handle_info(%Cyfr.Bus.Components{}, socket) do
     {:noreply, fetch_components(socket)}
   end
 
-  def handle_info({:register_progress, %{phase: phase, message: message}}, socket) do
+  def handle_info(
+        %Cyfr.Bus.Progress{subject: {:register, _id}, phase: phase, message: message},
+        socket
+      ) do
     entry = %{phase: phase, message: message, at: DateTime.utc_now()}
     {:noreply, assign(socket, :register_log, socket.assigns.register_log ++ [entry])}
   end
@@ -462,12 +465,7 @@ defmodule PrismWeb.ComponentsLive do
   def handle_info({:register_complete, {:ok, result}}, socket) do
     socket = clear_task_timeout(socket, :register)
 
-    if socket.assigns.register_id do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.register(socket.assigns.register_id, socket.assigns[:context])
-      )
-    end
+    unsubscribe_register(socket)
 
     total = result[:total] || 0
     registered = result[:registered] || 0
@@ -484,12 +482,7 @@ defmodule PrismWeb.ComponentsLive do
   def handle_info({:register_complete, {:error, reason}}, socket) do
     socket = clear_task_timeout(socket, :register)
 
-    if socket.assigns.register_id do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.register(socket.assigns.register_id, socket.assigns[:context])
-      )
-    end
+    unsubscribe_register(socket)
 
     {:noreply,
      socket
@@ -503,7 +496,10 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply, do_registry_search(socket, query)}
   end
 
-  def handle_info({:progress, %{phase: phase, message: message}}, socket) do
+  def handle_info(
+        %Cyfr.Bus.Progress{subject: {:pull, _id}, phase: phase, message: message},
+        socket
+      ) do
     entry = %{phase: phase, message: message, at: DateTime.utc_now()}
     {:noreply, assign(socket, :progress_log, socket.assigns.progress_log ++ [entry])}
   end
@@ -641,13 +637,20 @@ defmodule PrismWeb.ComponentsLive do
   defp register_phase_color(_), do: "bg-gray-600"
 
   defp unsubscribe_progress(socket) do
-    if socket.assigns.progress_id do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.progress(socket.assigns.progress_id, socket.assigns[:context])
-      )
+    if id = socket.assigns.progress_id do
+      actor = bus_actor(socket)
+      Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.progress(actor, {:pull, id}))
     end
   end
+
+  defp unsubscribe_register(socket) do
+    if id = socket.assigns.register_id do
+      actor = bus_actor(socket)
+      Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.progress(actor, {:register, id}))
+    end
+  end
+
+  defp bus_actor(socket), do: Sanctum.Context.actor(socket.assigns[:context])
 
   defp collapse(socket) do
     socket
@@ -1644,11 +1647,13 @@ defmodule PrismWeb.ComponentsLive do
   # from leaking N live subscriptions for the socket's lifetime (the
   # unsub-then-sub idiom the topbar's athanor topics use).
   defp resubscribe(socket, key, topic) do
+    actor = bus_actor(socket)
+
     if old = socket.assigns[key] do
-      Phoenix.PubSub.unsubscribe(Emissary.PubSub, old)
+      Cyfr.Bus.unsubscribe(actor, old)
     end
 
-    Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
+    Cyfr.Bus.subscribe(actor, topic)
     assign(socket, key, topic)
   end
 end

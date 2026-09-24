@@ -35,8 +35,8 @@ defmodule PrismWeb.EnforcementsLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.enforcement(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.enforcement(actor))
     end
 
     {:ok,
@@ -88,7 +88,7 @@ defmodule PrismWeb.EnforcementsLive do
   end
 
   @impl true
-  def handle_info({:policy_decision, _metadata, _measurements}, socket),
+  def handle_info(%Cyfr.Bus.PolicyDecision{}, socket),
     do: schedule_refresh(socket)
 
   def handle_info(:load_data, socket) do

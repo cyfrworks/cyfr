@@ -208,9 +208,14 @@ defmodule Sanctum.Tenancy.AthanorsTest do
 
     test "a settings change is broadcast on the athanor's notify topic" do
       athanor = group!()
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(athanor.id))
+
+      Cyfr.Bus.subscribe(
+        Cyfr.Actor.in_athanor(athanor.id),
+        Cyfr.Bus.notify(Cyfr.Actor.in_athanor(athanor.id))
+      )
+
       {:ok, _} = Athanors.put_settings(athanor, %{"theme" => "dark"})
-      assert_receive {:notify, id, :athanor_changed, _}
+      assert_receive %Cyfr.Bus.Notify{athanor_id: id, kind: :athanor_changed}
       assert id == athanor.id
     end
   end

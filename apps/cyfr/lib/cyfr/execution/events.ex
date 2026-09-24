@@ -27,6 +27,7 @@ defmodule Cyfr.Execution.Events do
 
   require Logger
 
+  alias Cyfr.Bus.ExecutionEvent
   alias Cyfr.Execution.Events.Sequence
 
   @max_events 50
@@ -39,9 +40,6 @@ defmodule Cyfr.Execution.Events do
   @spec terminal?(map()) :: boolean()
   def terminal?(%{type: type}), do: type in @terminal
   def terminal?(_), do: false
-
-  # Use the application's supervised PubSub instance.
-  defp pubsub, do: Emissary.PubSub
 
   # ============================================================================
   # Public API
@@ -181,10 +179,14 @@ defmodule Cyfr.Execution.Events do
     {:error, :missing_athanor}
   end
 
+  # The stream's own map goes on the bus as its struct; a subscriber that
+  # needs the stream's fields reads them back with
+  # `Cyfr.Bus.ExecutionEvent.event/1`, so live and replayed events agree.
   defp broadcast(execution_id, athanor_id, event) do
-    topic = Cyfr.Bus.execution_events(execution_id, athanor_id)
+    actor = Cyfr.Actor.in_athanor(athanor_id)
+    payload = ExecutionEvent.new(actor, ExecutionEvent.kind(event), event)
 
-    case Phoenix.PubSub.broadcast(pubsub(), topic, {:execution_event, event}) do
+    case Cyfr.Bus.broadcast(actor, Cyfr.Bus.execution_events(actor, execution_id), payload) do
       :ok ->
         :ok
 
@@ -280,31 +282,32 @@ defmodule Cyfr.Execution.Events do
   context's athanor.
   """
   def subscribe(execution_id, ctx) do
-    Phoenix.PubSub.subscribe(pubsub(), topic(execution_id, ctx))
+    actor = actor!(execution_id, ctx)
+    Cyfr.Bus.subscribe(actor, Cyfr.Bus.execution_events(actor, execution_id))
   end
 
   @doc "Unsubscribe the calling process from execution events."
   def unsubscribe(execution_id, ctx) do
-    Phoenix.PubSub.unsubscribe(pubsub(), topic(execution_id, ctx))
+    actor = actor!(execution_id, ctx)
+    # The topic is the scope's own, so the bus's prefix check always holds.
+    _ = Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.execution_events(actor, execution_id))
+    :ok
   end
 
-  @doc """
-  PubSub topic for a given execution, scoped by the owning athanor.
-
-  `ctx` may be a full `Sanctum.Context` or anything carrying `:athanor_id`
-  (an `Arca.Execution` record — the natural source at terminal-event sites).
-  A caller without a resolved athanor raises: there is no default tenant to
-  route to.
-  """
-  def topic(execution_id, ctx) do
+  # The actor of the athanor owning the stream. `ctx` may be a full
+  # `Sanctum.Context` or anything carrying `:athanor_id` (an
+  # `Arca.Execution` record — the natural source at terminal-event sites).
+  # A caller without a resolved athanor raises: there is no default tenant
+  # to route to.
+  defp actor!(execution_id, ctx) do
     case extract_athanor_id(ctx) do
       {:ok, athanor_id} ->
-        Cyfr.Bus.execution_events(execution_id, athanor_id)
+        Cyfr.Actor.in_athanor(athanor_id)
 
       :error ->
         raise ArgumentError,
-              "Cyfr.Execution.Events.topic/2: a resolved athanor_id is required " <>
-                "for #{execution_id}, got #{inspect(ctx)}"
+              "Cyfr.Execution.Events: a resolved athanor_id is required " <>
+                "for #{execution_id}, got #{inspect(ctx, limit: 5)}"
     end
   end
 

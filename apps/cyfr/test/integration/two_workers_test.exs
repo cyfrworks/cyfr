@@ -591,7 +591,7 @@ defmodule Cyfr.TwoWorkersTest do
 
   defp live_events do
     receive do
-      {:execution_event, event} -> [event | live_events()]
+      %Cyfr.Bus.ExecutionEvent{} = event -> [Cyfr.Bus.ExecutionEvent.event(event) | live_events()]
     after
       200 -> []
     end

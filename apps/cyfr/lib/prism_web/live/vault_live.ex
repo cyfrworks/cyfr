@@ -23,8 +23,8 @@ defmodule PrismWeb.VaultLive do
     # Subscribe once, at mount — handle_params re-fires on every patch,
     # and PubSub's :duplicate registry would deliver every message twice.
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.vault_changed(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.vault_changed(actor))
     end
 
     socket =
@@ -219,7 +219,7 @@ defmodule PrismWeb.VaultLive do
      socket |> fetch_entries() |> fetch_used_by() |> fetch_clients() |> assign(:loading, false)}
   end
 
-  def handle_info({:vault_entry_changed, _id, _verb}, socket) do
+  def handle_info(%Cyfr.Bus.VaultEntryChanged{}, socket) do
     {:noreply, socket |> fetch_entries() |> assign(:pending_grant, nil)}
   end
 

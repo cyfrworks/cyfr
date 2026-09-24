@@ -63,11 +63,11 @@ defmodule Cyfr.StandingWatchTest do
   } do
     assert {:ok, %Context{}} = Sanctum.Caller.establish(session.token)
 
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.caller_invalidated_global())
+    Cyfr.Bus.subscribe_global(Cyfr.Bus.caller_invalidated_global())
 
     assert {:ok, %{status: "archived"}} = Athanors.archive(group)
 
-    assert_receive {:caller_invalidated, ^hash}, 5_000
+    assert_receive %Cyfr.Bus.CallerInvalidated{session_key: ^hash}, 5_000
   end
 
   test "an athanor archived on another member refuses a caller this one had cached", %{
@@ -88,10 +88,9 @@ defmodule Cyfr.StandingWatchTest do
            "the memo under test is not the one a cached caller is served from"
 
     # The announcement arrives.
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
+    Cyfr.Bus.broadcast_global(
       Cyfr.Bus.caller_invalidated_global(),
-      {:caller_invalidated, hash}
+      Cyfr.Bus.CallerInvalidated.new(hash)
     )
 
     assert :ok =

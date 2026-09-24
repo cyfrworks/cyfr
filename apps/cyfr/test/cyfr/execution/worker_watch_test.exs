@@ -186,7 +186,12 @@ defmodule Cyfr.Execution.WorkerWatchTest do
       assert %{status: "failed", error_message: @lapsed} = row(fixture)
       assert %{state: "lapsed", outcome: "uncertain", boot_id: "boot_1"} = attempt_row(fixture)
       execution_id = fixture.execution_id
-      assert_receive {:execution_event, %{type: "execution.lapsed", execution_id: ^execution_id}}
+
+      assert_receive %Cyfr.Bus.ExecutionEvent{
+        type: "execution.lapsed",
+        execution_id: ^execution_id
+      }
+
       assert %{boot: "boot_1", misses: misses, lapsed: true} = seen(watch)
       assert misses >= 3
       assert WorkerWatch.fresh_boot(endpoint, watch) == :unknown
@@ -197,7 +202,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
       misses!(watch, 3)
       assert %{status: "running"} = row(later)
       assert Process.alive?(later.pid)
-      refute_received {:execution_event, %{type: "execution.lapsed"}}
+      refute_received %Cyfr.Bus.ExecutionEvent{type: "execution.lapsed"}
 
       Worker.script!(self(), [status("boot_1", [later.attempt]), @not_a_status])
       assert {:error, @lapsed} = Dispatch.await(later.pid, later.close)
@@ -347,7 +352,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
 
       assert %{status: "running"} = row(fixture)
       assert Process.alive?(fixture.pid)
-      refute_received {:execution_event, %{type: "execution.lapsed"}}
+      refute_received %Cyfr.Bus.ExecutionEvent{type: "execution.lapsed"}
     end
   end
 
@@ -366,7 +371,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
       assert %{status: "failed", error_message: @lapsed} = row(old)
       assert %{state: "lapsed", outcome: "uncertain", boot_id: "boot_1"} = attempt_row(old)
       old_id = old.execution_id
-      assert_receive {:execution_event, %{type: "execution.lapsed", execution_id: ^old_id}}
+      assert_receive %Cyfr.Bus.ExecutionEvent{type: "execution.lapsed", execution_id: ^old_id}
       wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_2"} end)
       assert %{boot: "boot_2", attempts: [], misses: 0, lapsed: false} = seen(watch)
 
@@ -378,7 +383,7 @@ defmodule Cyfr.Execution.WorkerWatchTest do
       assert %{status: "running"} = row(new)
       assert Process.alive?(new.pid)
       assert %{boot: "boot_2", misses: 0, lapsed: false} = seen(watch)
-      refute_received {:execution_event, %{type: "execution.lapsed"}}
+      refute_received %Cyfr.Bus.ExecutionEvent{type: "execution.lapsed"}
     end
   end
 

@@ -801,7 +801,7 @@ defmodule Opus.FormulaHandlerTest do
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
-      assert_receive {:execution_event, event}, 2000
+      assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2000
       assert event.type == "emit"
       assert event.execution_id == execution_id
       assert event.sequence == "0.1"
@@ -832,7 +832,7 @@ defmodule Opus.FormulaHandlerTest do
         Jason.encode!(%{"kind" => "text_delta", "content" => "key is sk-super-secret-value"})
       )
 
-      assert_receive {:execution_event, event}, 2000
+      assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2000
       assert event.data["content"] == "key is [REDACTED]"
       refute inspect(event) =~ "sk-super-secret-value"
 
@@ -920,11 +920,11 @@ defmodule Opus.FormulaHandlerTest do
       emit_fn = elem(imports["cyfr:formula/invoke@0.1.0"]["emit"], 1)
       emit_fn.(Jason.encode!(%{"kind" => "turn_start", "turn" => 1}))
 
-      assert_receive {:execution_event, event}, 2000
+      assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2000
       assert event.execution_id == root_id
       assert event.data["kind"] == "turn_start"
 
-      refute_receive {:execution_event, _}, 100
+      refute_receive %Cyfr.Bus.ExecutionEvent{}, 100
 
       Cyfr.Execution.Events.unsubscribe(root_id, ctx)
       Cyfr.Execution.Events.unsubscribe(host.execution_id, ctx)
@@ -948,7 +948,7 @@ defmodule Opus.FormulaHandlerTest do
           "duration_ms" => 1234
         })
 
-      assert_receive {:execution_event, event}, 2000
+      assert_receive %Cyfr.Bus.ExecutionEvent{} = event, 2000
       assert event.type == "execution.completed"
       assert event.execution_id == execution_id
       assert event.sequence == "7"

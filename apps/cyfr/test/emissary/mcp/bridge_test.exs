@@ -619,16 +619,20 @@ defmodule Emissary.MCP.BridgeTest do
       row = stdio_row(ctx, "late", %{"NODE_ENV" => "production"})
       FakeBridge.readiness(fake, row.id, "starting", 0)
       FakeBridge.tools(fake, row.id, [])
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.mcp_servers(ctx.athanor_id))
+
+      Cyfr.Bus.subscribe(
+        Sanctum.Context.actor(ctx),
+        Cyfr.Bus.mcp_servers(Sanctum.Context.actor(ctx))
+      )
 
       assert {:ok, []} = ExternalServers.ensure_started(row, ctx)
       pid = server_pid(ctx, row)
-      refute_received :mcp_servers_changed
+      refute_received %Cyfr.Bus.McpServers{}
 
       FakeBridge.tools(fake, row.id, ["github__search"])
       FakeBridge.readiness(fake, row.id, "running", 2)
 
-      assert_receive :mcp_servers_changed, 3_000
+      assert_receive %Cyfr.Bus.McpServers{kind: :changed}, 3_000
       assert [%{"name" => "github__search"}] = :sys.get_state(pid).tools
 
       assert {:ok, [%{"name" => "github__search"}]} =
@@ -951,10 +955,9 @@ defmodule Emissary.MCP.BridgeTest do
       on_exit(fn -> Application.put_env(:cyfr, :external_server_reconciler_enabled, false) end)
       start_supervised!(Emissary.MCP.ExternalServerReconciler)
 
-      Phoenix.PubSub.broadcast(
-        Emissary.PubSub,
+      Cyfr.Bus.broadcast_global(
         Cyfr.Bus.athanor_archived_global(),
-        {:athanor_archived_global, ctx.athanor_id}
+        Cyfr.Bus.AthanorArchived.new(ctx.athanor_id)
       )
 
       assert_released(row, 1)

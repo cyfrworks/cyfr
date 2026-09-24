@@ -27,8 +27,8 @@ defmodule PrismWeb.WebhooksLive do
     # Subscribe once, at mount — handle_params re-fires on every patch,
     # and PubSub's :duplicate registry would deliver every message twice.
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.webhooks(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.webhooks(actor))
     end
 
     {:ok,
@@ -68,7 +68,7 @@ defmodule PrismWeb.WebhooksLive do
     {:noreply, socket |> fetch_webhooks() |> assign(:loading, false)}
   end
 
-  def handle_info(:webhooks_changed, socket) do
+  def handle_info(%Cyfr.Bus.Webhooks{}, socket) do
     {:noreply, fetch_webhooks(socket)}
   end
 

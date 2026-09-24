@@ -168,8 +168,8 @@ defmodule EmissaryWeb.ExecutionEventsController do
       close(conn, execution_id, exec, watch)
     else
       receive do
-        {:execution_event, event} ->
-          case forward(conn, execution_id, exec, cursor, event) do
+        %Cyfr.Bus.ExecutionEvent{} = live ->
+          case forward(conn, execution_id, exec, cursor, Cyfr.Bus.ExecutionEvent.event(live)) do
             {conn, _cursor, true} ->
               close(conn, execution_id, exec, watch)
 

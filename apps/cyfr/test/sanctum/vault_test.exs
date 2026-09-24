@@ -287,21 +287,24 @@ defmodule Sanctum.VaultTest do
 
   describe "broadcasts" do
     test "every mutation announces itself on the tenant vault topic", %{ctx: ctx} do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.vault_changed(ctx))
+      Cyfr.Bus.subscribe(
+        Sanctum.Context.actor(ctx),
+        Cyfr.Bus.vault_changed(Sanctum.Context.actor(ctx))
+      )
 
       view = create!(ctx)
-      assert_receive {:vault_entry_changed, _, :create}
+      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :create}
 
       {:ok, _} =
         Vault.rotate(ctx, %{id: view.id, fields: view_fields(ctx, view), expected_payload_rev: 0})
 
-      assert_receive {:vault_entry_changed, _, :rotate}
+      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :rotate}
 
       :ok = Vault.rename(ctx, view.id, "renamed")
-      assert_receive {:vault_entry_changed, _, :rename}
+      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :rename}
 
       {:ok, _} = Vault.revoke(ctx, view.id)
-      assert_receive {:vault_entry_changed, _, :revoke}
+      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :revoke}
     end
 
     test "every global signal names its entry, and a rename names the name it vacated too", %{
@@ -311,19 +314,22 @@ defmodule Sanctum.VaultTest do
       # NAME at request time, so the reconciler matches servers by the names
       # a signal carries — a deleted row can no longer be read for its name,
       # and a template may still spell the name a rename vacated.
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.vault_changed_global())
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.vault_changed_global())
 
       view = create!(ctx)
       original_name = view.name
-      assert_receive {:vault_entry_changed_global, _, _, :create, %{name: ^original_name}}
+      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :create, name: ^original_name}
 
       :ok = Vault.rename(ctx, view.id, "moved")
 
-      assert_receive {:vault_entry_changed_global, _, _, :rename,
-                      %{name: "moved", old_name: ^original_name}}
+      assert_receive %Cyfr.Bus.VaultEntryChanged{
+        kind: :rename,
+        name: "moved",
+        old_name: ^original_name
+      }
 
       :ok = Vault.delete(ctx, view.id)
-      assert_receive {:vault_entry_changed_global, _, _, :delete, %{name: "moved"}}
+      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :delete, name: "moved"}
 
       assert :rename in Emissary.MCP.ExternalServerReconciler.relevant_verbs()
     end

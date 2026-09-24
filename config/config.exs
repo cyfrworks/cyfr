@@ -87,7 +87,7 @@ config :cyfr, EmissaryWeb.Endpoint,
     formats: [html: PrismWeb.ErrorHTML, json: EmissaryWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: Emissary.PubSub,
+  pubsub_server: Cyfr.PubSub,
   live_view: [signing_salt: "cyfrLVdev"]
 
 # Include module metadata in Logger output for filtering by emitter.

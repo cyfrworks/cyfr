@@ -16,6 +16,7 @@ defmodule Aqua.Loop.FlushTest do
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap}
 
@@ -83,7 +84,7 @@ defmodule Aqua.Loop.FlushTest do
     allow_keep!(ctx, thread)
     turn = accept_large!(ctx, thread)
 
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
 
     script!([
       round_one(),
@@ -99,9 +100,9 @@ defmodule Aqua.Loop.FlushTest do
     assert :completed = Task.await(run(ctx, turn), 60_000)
 
     # Only the chat step's text streams; the flush and the summary say nothing.
-    assert_receive {:thread, _, {:delta, %{text: "done"}}}, 5_000
-    refute_received {:thread, _, {:delta, %{text: "Keeping a note."}}}
-    refute_received {:thread, _, {:delta, %{text: "the story so far"}}}
+    assert_receive %ThreadEvent{kind: :delta, data: %{text: "done"}}, 5_000
+    refute_received %ThreadEvent{kind: :delta, data: %{text: "Keeping a note."}}
+    refute_received %ThreadEvent{kind: :delta, data: %{text: "the story so far"}}
 
     {:ok, steps} = Tape.steps(ctx, turn)
 

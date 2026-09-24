@@ -78,7 +78,6 @@ defmodule EmissaryWeb.HealthController do
       storage: check_storage(),
       tool_registry: check_process(Cyfr.Ops.Catalog),
       resource_registry: check_process(Emissary.MCP.ResourceRegistry),
-      progress: check_process(Emissary.MCP.Progress.Registry),
       # A boot that lost its control-plane lease is not ready: the endpoint
       # answers 503 to everything but this probe until the claim is won back.
       control_plane:
@@ -167,16 +166,21 @@ defmodule EmissaryWeb.HealthController do
   end
 
   defp check_pubsub do
-    topic = Cyfr.Bus.health_check(System.unique_integer([:positive]))
+    nonce = System.unique_integer([:positive])
+    topic = Cyfr.Bus.health_check(nonce)
 
-    Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
-    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :ping)
+    :ok = Cyfr.Bus.subscribe_global(topic)
+    :ok = Cyfr.Bus.broadcast_global(topic, Cyfr.Bus.Ping.new(nonce))
 
-    receive do
-      :ping -> :ok
-    after
-      1_000 -> {:error, :pubsub_timeout}
-    end
+    result =
+      receive do
+        %Cyfr.Bus.Ping{nonce: ^nonce} -> :ok
+      after
+        1_000 -> {:error, :pubsub_timeout}
+      end
+
+    Cyfr.Bus.unsubscribe_global(topic)
+    result
   rescue
     e -> {:error, Exception.message(e)}
   end

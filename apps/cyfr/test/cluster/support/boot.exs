@@ -205,7 +205,7 @@ defmodule Cyfr.Cluster.Boot do
 
   defp collect(seen) do
     receive do
-      {:execution_event, %{sequence: sequence}} ->
+      %Cyfr.Bus.ExecutionEvent{sequence: sequence} ->
         collect(seen ++ [sequence])
 
       {:heard, from} ->
@@ -285,6 +285,64 @@ defmodule Cyfr.Cluster.Boot do
     case Process.whereis(@watch) do
       nil -> :ok
       pid -> GenServer.stop(pid)
+    end
+  end
+
+  @doc """
+  A schedule's committed completion as this member publishes it: issued
+  under the slot it holds now (`Arca.ControlPlane.held/0`), asking for its
+  outcome to be kept.
+  """
+  @spec completion(String.t(), String.t(), String.t()) :: struct()
+  def completion(athanor_id, schedule_id, execution_id) do
+    Cyfr.Bus.ScheduleCompleted.new(%{Cyfr.Actor.in_athanor(athanor_id) | user_id: "cluster"}, %{
+      issuer_member: Cyfr.Bus.ScheduleCompleted.issuer(Arca.ControlPlane.held()),
+      schedule_id: schedule_id,
+      execution_id: execution_id,
+      completed_at: DateTime.utc_now(),
+      keep_outcome: true,
+      output: %{"from" => to_string(node())}
+    })
+  end
+
+  @doc "Publish `completion` on the cell's completion topic, from this member."
+  @spec publish_completion(struct()) :: :ok | {:error, term()}
+  def publish_completion(completion),
+    do: Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
+
+  @doc "Wait until this member's notes keeper has handled what it was sent."
+  @spec settle_notes() :: :ok
+  def settle_notes do
+    _ = :sys.get_state(Aqua.ScheduleNotes, 30_000)
+    :ok
+  end
+
+  @doc "The note `name` of `athanor_id` as this member reads it, or `:none`."
+  @spec note(String.t(), String.t()) :: map() | :none
+  def note(athanor_id, name) do
+    internal = Sanctum.Context.internal(user_id: "cluster", permissions: [:storage_read])
+
+    with {:ok, ctx} <- Sanctum.Context.refocus(internal, athanor_id),
+         {:ok, note} <- Aqua.Notes.read(ctx, name) do
+      note
+    else
+      _ -> :none
+    end
+  end
+
+  @doc """
+  Keep `completion` on this member after it lost its slot, and hold the
+  slot again afterwards; the member's claimant rewrites the real standing
+  on its next renewal.
+  """
+  @spec keep_without_slot(struct()) :: term()
+  def keep_without_slot(completion) do
+    Arca.ControlPlane.record(:lost)
+
+    try do
+      Aqua.ScheduleNotes.keep(completion)
+    after
+      Arca.ControlPlane.record({:held, 5_000})
     end
   end
 

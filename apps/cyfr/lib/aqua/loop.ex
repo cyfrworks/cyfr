@@ -144,7 +144,12 @@ defmodule Aqua.Loop do
 
       catalyst ->
         end_unrun(ctx, claim, turn, "setup_required")
-        Tape.announce(ctx, turn.thread_id, {:consent_required, catalyst, ctx.user_id})
+
+        Tape.announce(ctx, turn.thread_id, :consent_required, %{
+          ref: catalyst,
+          user_id: ctx.user_id
+        })
+
         {:failed, :setup_required}
     end
   end
@@ -163,7 +168,12 @@ defmodule Aqua.Loop do
 
   defp setup_required(ctx, turn) do
     _ = Tape.finish(ctx, turn, "failed", %{error: "setup_required"})
-    Tape.announce(ctx, turn.thread_id, {:consent_required, source_ref(turn), ctx.user_id})
+
+    Tape.announce(ctx, turn.thread_id, :consent_required, %{
+      ref: source_ref(turn),
+      user_id: ctx.user_id
+    })
+
     {:failed, :setup_required}
   end
 
@@ -632,7 +642,12 @@ defmodule Aqua.Loop do
 
       {:error, %{"type" => type} = error} when type in @setup ->
         _ = Tape.close_step(guest(state), state.turn, step, "error", %{error: error["message"]})
-        announce(state, {:consent_required, state.spec.catalyst, ctx(state).user_id})
+
+        announce(state, :consent_required, %{
+          ref: state.spec.catalyst,
+          user_id: ctx(state).user_id
+        })
+
         {:halt, {:failed, :setup_required}, state}
 
       {:error, %{"type" => _type, "message" => message}} ->
@@ -834,7 +849,7 @@ defmodule Aqua.Loop do
     input = usage["input_tokens"] || 0
     output = usage["output_tokens"] || 0
     totals = %{input: state.usage.input + input, output: state.usage.output + output}
-    announce(state, {:usage, totals})
+    announce(state, :usage, totals)
 
     if input > 0 do
       %{state | usage: totals, observed: input, observed_seq: state.sent_upto}
@@ -1231,7 +1246,7 @@ defmodule Aqua.Loop do
   defp execute(%State{} = state, _step, %Call{kind: :ui, args: args}) do
     case Aqua.Intents.validate(args) do
       {:ok, intent} ->
-        announce(state, {:intents, [intent], ctx(state).user_id})
+        announce(state, :intents, %{intents: [intent], user_id: ctx(state).user_id})
         {:ok, "done"}
 
       {:error, message} ->
@@ -1433,7 +1448,7 @@ defmodule Aqua.Loop do
          ) do
       {:ok, %{turn: paused} = moved} ->
         if moved[:aborted],
-          do: announce(state, {:message, moved.aborted})
+          do: announce(state, :message, moved.aborted)
 
         {:ok, %{state | turn: paused, claim: nil, since: nil, active_ms: paused.active_ms}}
 
@@ -2113,7 +2128,7 @@ defmodule Aqua.Loop do
           Enum.reduce(names, state.activity, &mark_done(&2, &1))
       end
 
-    announce(state, {:tool_activity, activity})
+    announce(state, :tool_activity, activity)
     %{state | activity: activity}
   end
 
@@ -2143,8 +2158,8 @@ defmodule Aqua.Loop do
     })
   end
 
-  defp announce(%State{} = state, event),
-    do: Tape.announce(guest(state), state.turn.thread_id, event)
+  defp announce(%State{} = state, kind, data),
+    do: Tape.announce(guest(state), state.turn.thread_id, kind, data)
 
   defp worker(fun, timeout) do
     task = Aqua.Loop.Worker.async(fun)

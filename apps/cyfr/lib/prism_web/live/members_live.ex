@@ -17,7 +17,8 @@ defmodule PrismWeb.MembersLive do
     ctx = socket.assigns[:context]
 
     if connected?(socket) do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(ctx.athanor_id))
+      actor = Sanctum.Context.actor(ctx)
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
     end
 
     {:ok,
@@ -172,7 +173,7 @@ defmodule PrismWeb.MembersLive do
     {:noreply, socket |> load() |> assign(:loading, false)}
   end
 
-  def handle_info({:notify, _athanor_id, kind, _payload}, socket)
+  def handle_info(%Cyfr.Bus.Notify{kind: kind}, socket)
       when kind in [:member_changed, :athanor_changed] do
     {:noreply, load(socket)}
   end
