@@ -905,6 +905,9 @@ defmodule PrismWeb.ThreadPaneLive do
       :busy ->
         put_flash(socket, :error, "Too many turns are already waiting — let one finish first.")
 
+      :held_elsewhere ->
+        put_flash(socket, :error, "Another server is running this thread — try again shortly.")
+
       :not_member ->
         put_flash(socket, :error, "You are no longer a member here.")
 

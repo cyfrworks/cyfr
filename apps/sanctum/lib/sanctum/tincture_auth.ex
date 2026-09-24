@@ -61,15 +61,16 @@ defmodule Sanctum.TinctureAuth do
   alias Sanctum.Context
 
   @typedoc """
-  Why a *presented* credential was refused. Distinct from
-  `:unauthenticated` (nothing presented), so a caller holding a dead
-  credential learns so.
+  Why a *presented* credential was refused. Distinct from the bare
+  `:unauthenticated` answer (nothing presented), so a caller holding a
+  dead credential learns so; `{:error, :unauthenticated}` is a token
+  whose source no longer stands.
   """
   @type refusal ::
           :invalid_credential
           | :expired_token
           | :denied
-          | :not_standing
+          | :unauthenticated
           | :no_athanor
           | :wrong_tincture
           | :ip_not_allowed

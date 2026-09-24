@@ -361,22 +361,12 @@ defmodule Crucible.Host.Children do
 
   # A refusal's one sentence (`Grimoire.Error.render/1`); an internal term
   # is never rendered.
-  defp render(reason), do: Grimoire.Error.render(reason) || "The call failed."
+  defp render(reason), do: Grimoire.Error.render(reason)
 
   # A bare reason atom names itself verbatim: the transition's denial tokens
   # (`edge_only`, `depth_cap`) are what a guest branches on.
   defp guest_reason(reason) when is_binary(reason), do: reason
   defp guest_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
 
-  defp guest_reason(reason) do
-    case Grimoire.Error.render(reason) do
-      nil ->
-        Logger.warning("[Crucible.Host.Children] unrenderable guest reason: #{inspect(reason)}")
-
-        "the call failed"
-
-      message ->
-        message
-    end
-  end
+  defp guest_reason(reason), do: Grimoire.Error.render(reason)
 end

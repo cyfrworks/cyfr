@@ -264,18 +264,26 @@ defmodule Cyfr.BusTest do
     end
   end
 
-  describe "a bounded reason" do
-    test "keeps an atom, cuts a string to 200 bytes on a character boundary, and names anything else" do
-      assert Bus.bounded_reason(:timeout) == :timeout
-      assert Bus.bounded_reason(nil) == nil
-      assert Bus.bounded_reason("short") == "short"
+  describe "a payload's refusal" do
+    test "is a class and a sentence cut to 200 bytes on a character boundary, never the term" do
+      assert Cyfr.Bus.Payload.refusal(nil) == nil
 
-      cut = Bus.bounded_reason(String.duplicate("é", 150))
+      assert Cyfr.Bus.Payload.refusal(:timeout) ==
+               %{class: :timeout, message: Prima.Refusal.message(:timeout)}
+
+      assert %{class: :internal, message: "short"} = Cyfr.Bus.Payload.refusal("short")
+
+      %{message: cut} = Cyfr.Bus.Payload.refusal(String.duplicate("é", 150))
       assert byte_size(cut) <= 200 and String.valid?(cut)
 
-      for other <- [{:error, %{token: "sk"}}, %{a: 1}, [1], 42, self()] do
-        assert Bus.bounded_reason(other) == "error"
-      end
+      ExUnit.CaptureLog.capture_log(fn ->
+        for other <- [{:error, %{token: "sk"}}, %{a: 1}, [1], 42, self()] do
+          assert Cyfr.Bus.Payload.refusal(other) ==
+                   %{class: :internal, message: "The outcome could not be confirmed."}
+        end
+      end)
+
+      refute function_exported?(Bus, :bounded_reason, 1)
     end
   end
 

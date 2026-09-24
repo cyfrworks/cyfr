@@ -53,15 +53,6 @@ defmodule Prima.GuestError do
 
   def render({:failed, message}) when is_binary(message), do: message
 
-  # A host call CYFR could not answer at all. Distinct from
-  # `{:unavailable, what}`, which names a service that was reached and
-  # gave nothing: this one asks the caller to check rather than retry,
-  # because retrying an effect that may have happened is the dangerous
-  # mistake.
-  def render(:lost),
-    do:
-      "The call was lost — what was asked may or may not have been done; check before asking again"
-
   def render(reason) do
     if Prima.Refusal.reason?(reason), do: Prima.Refusal.message(reason)
   end

@@ -53,7 +53,7 @@ defmodule Cyfr.Cluster.ThreadTest do
                second.turn_id,
                second.turn_seq,
                second.fence
-             ]) == {:error, {:busy, first.turn_id}}
+             ]) == {:error, {:held_elsewhere, first.turn_id}}
 
       assert Observer.thread(thread)["active_turn_id"] == first.turn_id
     end
@@ -149,7 +149,7 @@ defmodule Cyfr.Cluster.ThreadTest do
       assert holder.live_peer?, "the peer did not recognise a live member's turn"
 
       assert Cell.call(:b, Cyfr.Cluster.Fixtures, :ensure_runner, [athanor, thread]) ==
-               {:error, :busy},
+               {:error, :held_elsewhere},
              "the peer started a runner for a thread a live member holds"
 
       # Nothing about the peer's look cost the turn a recovery, which is

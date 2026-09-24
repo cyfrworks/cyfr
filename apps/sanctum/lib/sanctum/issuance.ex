@@ -19,7 +19,8 @@ defmodule Sanctum.Issuance do
   # generation read, the membership that authorized the focus still an
   # active seat, and the credential the context holds still live. A
   # generation that moved is `{:error, :stale_generation}`; a row that no
-  # longer stands is `{:error, :not_standing}`.
+  # longer stands is `{:error, :unauthenticated}` — the credential the
+  # issuing context presents opens nothing any more.
 
   alias Sanctum.Context
 
@@ -148,7 +149,7 @@ defmodule Sanctum.Issuance do
        do: :ok
 
   defp person(%{status: "active"}, _expectation), do: {:error, :stale_generation}
-  defp person(_user, _expectation), do: {:error, :not_standing}
+  defp person(_user, _expectation), do: {:error, :unauthenticated}
 
   defp estate(_athanor, %{athanor_id: nil}), do: :ok
 
@@ -158,7 +159,7 @@ defmodule Sanctum.Issuance do
        do: :ok
 
   defp estate(%{status: "active"}, _expectation), do: {:error, :stale_generation}
-  defp estate(_athanor, _expectation), do: {:error, :not_standing}
+  defp estate(_athanor, _expectation), do: {:error, :unauthenticated}
 
   defp seat(_membership, %{membership_id: nil}), do: :ok
 
@@ -171,14 +172,14 @@ defmodule Sanctum.Issuance do
   defp seat(%{status: "active", user_id: user_id, scope: "platform"}, %{user_id: user_id}),
     do: :ok
 
-  defp seat(_membership, _expectation), do: {:error, :not_standing}
+  defp seat(_membership, _expectation), do: {:error, :unauthenticated}
 
   defp holder(nil, _now, %{source: nil}), do: :ok
 
   defp holder(%{kind: :session, row: %{user_id: user_id, expires_at: expires_at}}, now, %{
          user_id: user_id
        }) do
-    if DateTime.compare(expires_at, now) == :gt, do: :ok, else: {:error, :not_standing}
+    if DateTime.compare(expires_at, now) == :gt, do: :ok, else: {:error, :unauthenticated}
   end
 
   defp holder(%{kind: :api_key, row: %{revoked: false, athanor_id: athanor_id}}, _now, %{
@@ -186,5 +187,5 @@ defmodule Sanctum.Issuance do
        }),
        do: :ok
 
-  defp holder(_source, _now, _expectation), do: {:error, :not_standing}
+  defp holder(_source, _now, _expectation), do: {:error, :unauthenticated}
 end

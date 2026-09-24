@@ -298,10 +298,10 @@ defmodule EmissaryWeb.AuthController do
           |> json(%{ok: true, message: "Logged out successfully"})
 
         {:error, reason} ->
-          EmissaryWeb.ApiError.send(conn, 500, :logout_failed, friendly_error_message(reason))
+          EmissaryWeb.ApiError.send(conn, 500, :internal_error, friendly_error_message(reason))
       end
     else
-      EmissaryWeb.ApiError.send(conn, 400, :missing_token, "No session token provided")
+      EmissaryWeb.ApiError.send(conn, 400, :missing_token, nil)
     end
   end
 
@@ -313,7 +313,7 @@ defmodule EmissaryWeb.AuthController do
   def whoami(conn, _params) do
     case get_bearer_token(conn) do
       nil ->
-        EmissaryWeb.ApiError.send(conn, 401, :auth_required, "No session token provided")
+        EmissaryWeb.ApiError.send(conn, 401, :unauthenticated, "No session token provided")
 
       token ->
         case Session.get(token) do
@@ -331,7 +331,7 @@ defmodule EmissaryWeb.AuthController do
             })
 
           {:error, _} ->
-            EmissaryWeb.ApiError.send(conn, 401, :invalid_session, "Invalid session token")
+            EmissaryWeb.ApiError.send(conn, 401, :invalid_session, nil)
         end
     end
   end

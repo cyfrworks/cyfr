@@ -22,7 +22,7 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnershipTest do
     assert conn.halted
     assert conn.status == 503
     assert get_resp_header(conn, "retry-after") == ["5"]
-    assert %{"code" => "control_plane_lost"} = Jason.decode!(conn.resp_body)
+    assert %{"code" => "not_owner"} = Jason.decode!(conn.resp_body)
 
     probe = ControlPlaneOwnership.call(conn(:get, "/api/health/ready"), [])
     refute probe.halted

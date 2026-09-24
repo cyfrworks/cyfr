@@ -559,15 +559,14 @@ defmodule Compendium.ProviderTest do
           credential_ciphertext: ciphertext
         })
 
-      assert {:error, {:invalid_argument, _} = reason} =
+      assert {:error, {:corrupt, :registry_credential} = reason} =
                Provider.handle("component", ctx, %{
                  "action" => "pull",
                  "reference" => "#{registry}/cyfr/reagents/test:1.0.0"
                })
 
       assert err_msg(reason) ==
-               "The push token stored for namespace 'cyfr' could not be opened — " <>
-                 "sign in again to re-mint it"
+               "The stored registry credential is damaged; sign in to the registry again."
     end
 
     @tag :capture_log
@@ -2257,7 +2256,7 @@ defmodule Compendium.ProviderTest do
       {:ok, bypass: bypass}
     end
 
-    test "registry.legal-version surfaces 503 errors as readable string (no inspected struct)",
+    test "registry.legal-version surfaces 503 errors as a readable refusal (no inspected struct)",
          %{bypass: bypass, ctx: ctx} do
       Bypass.expect(bypass, "GET", "/v1/legal/version", fn conn ->
         conn
@@ -2265,8 +2264,9 @@ defmodule Compendium.ProviderTest do
         |> Plug.Conn.resp(503, ~s({"errors":[{"code":"UNAVAILABLE","message":"db down"}]}))
       end)
 
-      assert {:error, msg} = Provider.handle("registry", ctx, %{"action" => "legal_version"})
-      assert is_binary(msg)
+      assert {:error, %Prima.Refusal{class: :unavailable} = msg} =
+               Provider.handle("registry", ctx, %{"action" => "legal_version"})
+
       # Must NOT be an inspected struct dump.
       refute err_msg(msg) =~ "%Compendium.OCI.Errors{"
       # Must include the canonical "(HTTP 503, registry_unavailable)" suffix
@@ -2301,7 +2301,7 @@ defmodule Compendium.ProviderTest do
       assert body["needs_personal_namespace"] == false
     end
 
-    test "registry.probe still surfaces non-policy 4xx errors as readable string",
+    test "registry.probe still surfaces non-policy 4xx errors as a readable refusal",
          %{bypass: bypass, ctx: ctx} do
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn conn ->
         conn
@@ -2316,7 +2316,7 @@ defmodule Compendium.ProviderTest do
                  "access_token" => "gho_x"
                })
 
-      assert is_binary(msg)
+      assert %Prima.Refusal{class: :forbidden} = msg
       refute err_msg(msg) =~ "%Compendium.OCI.Errors{"
       assert err_msg(msg) =~ "403"
     end

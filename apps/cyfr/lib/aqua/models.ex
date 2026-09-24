@@ -216,11 +216,7 @@ defmodule Aqua.Models do
     end
   end
 
-  defp refusal_text(reason) when is_binary(reason), do: reason
-
-  defp refusal_text(reason) do
-    Grimoire.Error.render(reason) || "the catalyst could not be run: #{inspect(reason)}"
-  end
+  defp refusal_text(reason), do: Grimoire.Error.render(reason)
 
   @doc """
   For each soul's catalyst: the installed release it resolves to and

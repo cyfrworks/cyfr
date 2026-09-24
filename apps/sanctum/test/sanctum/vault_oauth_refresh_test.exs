@@ -135,7 +135,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
       assert is_binary(detail)
       assert Sanctum.Unauthorized.reason?(reason)
-      assert Sanctum.Unauthorized.code(reason) == :auth_required
+      assert Sanctum.Unauthorized.class(reason) == :setup_required
+      assert Sanctum.Unauthorized.code_override(reason) == :auth_required
 
       assert :counters.get(counter, 1) == 0
     end

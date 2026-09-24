@@ -882,7 +882,7 @@ defmodule Compendium.Providers.Component do
               "[Compendium.Providers.Component] DISCOVER FAILED — #{Errors.to_log_string(err)}"
             )
 
-            {:error, format_error(err)}
+            {:error, Shared.refusal(err)}
         end
     end
   end
@@ -958,7 +958,7 @@ defmodule Compendium.Providers.Component do
              ) do
         {:ok, body}
       else
-        {:error, err} -> {:error, Shared.to_error_string(err)}
+        {:error, err} -> {:error, Shared.refusal(err)}
       end
     end
   end
@@ -988,7 +988,7 @@ defmodule Compendium.Providers.Component do
            ) do
       {:ok, body}
     else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
+      {:error, err} -> {:error, Shared.refusal(err)}
     end
   end
 
@@ -1023,7 +1023,7 @@ defmodule Compendium.Providers.Component do
               "Results are incomplete. Only local components are shown."
           )
 
-          error_msg = format_error(err)
+          error_msg = Shared.refusal(err).message
 
           case local_result do
             {:ok, local} ->
@@ -1180,16 +1180,6 @@ defmodule Compendium.Providers.Component do
          "Got namespace '#{cref.namespace}'. Use the local namespace " <>
          "(e.g., c:#{Compendium.ComponentPath.default_publisher()}.#{cref.name}:#{cref.version})."}
     end
-  end
-
-  # ============================================================================
-  # Error Formatting
-  # ============================================================================
-
-  defp format_error(%Errors{} = err) do
-    msg = Errors.to_string(err)
-    hint = Errors.actionable_hint(err)
-    if hint != "", do: "#{msg}. #{hint}", else: msg
   end
 
   # ============================================================================
@@ -1508,11 +1498,8 @@ defmodule Compendium.Providers.Component do
               {:error, :unavailable} ->
                 {:error, {:unavailable, "Your registry credential"}}
 
-              {:error, :corrupt} ->
-                {:error,
-                 {:invalid_argument,
-                  "The push token stored for namespace '#{namespace_slug}' could not be " <>
-                    "opened — sign in again to re-mint it"}}
+              {:error, {:corrupt, :registry_credential}} = corrupt ->
+                corrupt
 
               credential ->
                 oci_pull(ctx, reference, credential == :anonymous)

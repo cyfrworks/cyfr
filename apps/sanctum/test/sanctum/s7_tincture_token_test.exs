@@ -114,19 +114,19 @@ defmodule Sanctum.S7TinctureTokenTest do
       # The seat goes: the signature is still valid, the standing is not.
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get("ath_acme")
       :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: person_id())
-      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :not_standing}
+      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :unauthenticated}
 
       # Back in, and the token stays dead: it was bound to the seat that was
       # removed, and a rejoin is a new seat.
       {:ok, _} =
         Sanctum.Tenancy.Members.ensure(person_id(), scope: "athanor", athanor_id: "ath_acme")
 
-      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :not_standing}
+      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :unauthenticated}
 
       # ...and a person the door has denied opens nothing at all.
       {:ok, user} = Sanctum.Tenancy.Users.get(person_id())
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
-      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :not_standing}
+      assert TinctureAuth.authenticate(conn("_t=#{token}")) == {:error, :unauthenticated}
     end
 
     test "a tampered/garbage ?_t= is refused by name" do
@@ -179,7 +179,7 @@ defmodule Sanctum.S7TinctureTokenTest do
       :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: person_id())
 
       assert TinctureAuth.authenticate(conn_for("_t=#{token}", "acme", "dash")) ==
-               {:error, :not_standing}
+               {:error, :unauthenticated}
     end
   end
 

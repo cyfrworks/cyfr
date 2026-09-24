@@ -403,7 +403,7 @@ defmodule Compendium.OCI.ClientTest do
         })
 
       assert {:error, msg} = Client.pull(ctx, "#{registry}/alice/reagents/pinned:1.0.0")
-      assert msg =~ "The push token stored for namespace 'alice' could not be opened"
+      assert msg =~ "The stored registry credential is damaged"
       refute msg =~ "stale"
       refute_received {:registry_contacted, _}
     end

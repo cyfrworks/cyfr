@@ -123,7 +123,6 @@ defmodule Cyfr.BusPayloadTest do
               :topics,
               :global,
               :prefix,
-              :bounded_reason,
               :broadcast,
               :broadcast_global,
               :broadcast_page,
@@ -215,6 +214,54 @@ defmodule Cyfr.BusPayloadTest do
             fn -> ExecutionEvent.new(@actor, :durable, %{delta: 1}) end
           ] do
         assert_raise ArgumentError, build
+      end
+    end
+
+    test "a reason or an error is a refusal's class and public sentence, never a term" do
+      secret = {:shutdown, %{token: "sk-live-payload"}}
+      long = String.duplicate("é", 150)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        for payload <- [
+              Execution.new(@actor, :failed, error: secret),
+              Build.new(@actor, :stopped, error: secret),
+              ScheduleRun.new(@actor, :failed, reason: secret),
+              Tinctures.new(@actor, :invoke_stopped, error: secret)
+            ] do
+          field = if match?(%ScheduleRun{}, payload), do: :reason, else: :error
+
+          assert Map.fetch!(payload, field) ==
+                   %{class: :internal, message: "The outcome could not be confirmed."}
+        end
+
+        assert %Notify{payload: %{reason: %{class: :internal}}} =
+                 Notify.new(@actor, :schedule_failed, %{reason: secret})
+      end)
+
+      assert Build.new(@actor, :stopped, error: :timeout).error ==
+               %{class: :timeout, message: Prima.Refusal.message(:timeout)}
+
+      # A refusal the bridge already classified keeps its class.
+      refusal = %Prima.Refusal{class: :forbidden, reason: :x, message: "Not yours"}
+
+      assert Execution.new(@actor, :failed, error: refusal).error ==
+               %{class: :forbidden, message: "Not yours"}
+
+      assert Execution.new(@actor, :completed).error == nil
+      assert %{class: :internal, message: cut} = Execution.new(@actor, :failed, error: long).error
+      assert byte_size(cut) <= 200 and String.valid?(cut)
+    end
+
+    test "a seat change is one of a closed set, and anything else raises" do
+      for change <- Membership.changes() do
+        assert %Membership{change: ^change} = Membership.new(:changed, "u", nil, change)
+      end
+
+      # Built at runtime, as the bridge builds it from telemetry metadata.
+      for change <- ["joined", {:joined, "sk"}, :deleted] do
+        assert_raise ArgumentError, fn ->
+          apply(Membership, :new, [:changed, "u", nil, change])
+        end
       end
     end
 

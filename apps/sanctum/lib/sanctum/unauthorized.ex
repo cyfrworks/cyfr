@@ -3,11 +3,14 @@
 
 defmodule Sanctum.Unauthorized do
   @moduledoc """
-  The authorization-refusal vocabulary and its one prose renderer.
+  The authorization-refusal vocabulary: each reason's refusal class and
+  its public sentence.
 
-  Authorization gates return typed `{:error, reason}` values. Callers branch
-  on those reasons for status and protocol codes; `message/2` renders the
-  client-facing text.
+  Authorization gates return typed `{:error, reason}` values. `class/1`
+  places each reason in `Prima.Refusal`'s classes, which decide status and
+  code at every surface; `message/2` is the sentence a person reads. This
+  vocabulary classifies its own reasons — `Grimoire.Error.classify/1`
+  tries it before `Prima.Refusal`'s table, which does not know it.
   """
 
   @type reason ::
@@ -54,21 +57,55 @@ defmodule Sanctum.Unauthorized do
   def reason?({:authorization_required, detail}) when is_binary(detail), do: true
   def reason?(_), do: false
 
-  @doc """
-  The JSON-RPC error-code atom a refusal maps to (`Emissary.MCP.Message`'s
-  tables): absent or refused identity is `:auth_required`, everything else
-  `:insufficient_permissions`.
-  """
-  @spec code(reason()) :: :auth_required | :insufficient_permissions
-  def code(:unauthenticated), do: :auth_required
-  def code({:tool_auth_required, _}), do: :auth_required
-  # The stored credential can no longer speak for its owner: the person has
-  # to re-authorize it, which is an identity answer, not a permission one.
-  def code({:authorization_required, _}), do: :auth_required
-  def code(_reason), do: :insufficient_permissions
+  @doc "The refusal class a reason belongs to (`Prima.Refusal.classes/0`)."
+  @spec class(reason()) :: Prima.Refusal.class()
+  def class(:unauthenticated), do: :unauthenticated
+  def class({:tool_auth_required, _name}), do: :unauthenticated
+  def class({:consent_class_required, :not_authenticated}), do: :unauthenticated
+  def class({:authorization_required, _detail}), do: :setup_required
+
+  # A record or resource that cannot be attributed is a fault of the
+  # caller's code, not something the person can change.
+  def class(reason)
+      when reason in [:malformed_record, :untagged_tenant_resource],
+      do: :internal
+
+  def class({:malformed_resource, _tag}), do: :internal
+
+  def class(reason)
+      when reason in [:missing_tenant, :tenant_mismatch, :platform_admin_required],
+      do: :forbidden
+
+  def class({:missing_tenant, :no_membership}), do: :forbidden
+  def class({:missing_permission, _permission}), do: :forbidden
+  def class({:guest_plane, _permission}), do: :forbidden
+  def class({:guest_plane_call, _name}), do: :forbidden
+  def class({:consent_class_required, _refusal}), do: :forbidden
 
   @doc """
-  Render a refusal as the sentence a person (or a log line) reads.
+  The JSON-RPC code name a reason answers with in place of its class's
+  code, or `nil` — the codes these reasons have always carried on the
+  wire: a connection to re-authorize is an identity answer, and a
+  malformed resource or a consent class refused for want of a sign-in
+  keep the permission code.
+  """
+  @spec code_override(reason()) :: atom() | nil
+  def code_override({:authorization_required, _detail}), do: :auth_required
+
+  def code_override(reason)
+      when reason in [:malformed_record, :untagged_tenant_resource],
+      do: :insufficient_permissions
+
+  def code_override({:malformed_resource, _tag}), do: :insufficient_permissions
+
+  def code_override({:consent_class_required, :not_authenticated}),
+    do: :insufficient_permissions
+
+  def code_override(_reason), do: nil
+
+  @doc """
+  Render a refusal as the sentence a person reads. No internal field
+  name, no term syntax.
 
   `auth_method` is the caller's — an API key's missing permission carries
   the recreate-with-scope hint, since the key's scopes are the one thing
@@ -79,20 +116,20 @@ defmodule Sanctum.Unauthorized do
 
   def message(:unauthenticated, _), do: "Unauthorized: authentication required"
 
-  def message(:missing_tenant, _), do: "Unauthorized: a resolved athanor_id is required"
+  def message(:missing_tenant, _),
+    do: "Unauthorized: this request needs an athanor, and none is resolved"
 
   # An authenticated person with no athanor membership needs operator assistance.
   def message({:missing_tenant, :no_membership}, _),
     do: "Unauthorized: your account has no athanor — contact your administrator"
 
-  def message(:tenant_mismatch, _), do: "Unauthorized: tenant mismatch"
+  def message(:tenant_mismatch, _), do: "Unauthorized: this belongs to another athanor"
 
-  def message(:malformed_record, _), do: "Unauthorized: malformed record (no athanor)"
+  def message(:malformed_record, _),
+    do: "Unauthorized: the record could not be attributed to an athanor"
 
-  def message(:untagged_tenant_resource, _) do
-    "Unauthorized: a tenant-bearing resource must be passed tagged " <>
-      "({:execution, record} or {:tenant, record})"
-  end
+  def message(:untagged_tenant_resource, _),
+    do: "Unauthorized: the resource could not be attributed to an athanor"
 
   def message(:platform_admin_required, _), do: "Unauthorized: platform admin required"
 
@@ -106,21 +143,19 @@ defmodule Sanctum.Unauthorized do
   end
 
   def message({:guest_plane, permission}, _) do
-    "Unauthorized: guest-plane context cannot authorize '#{permission}' " <>
-      "(external plane required)"
+    "Unauthorized: a call from inside a running component cannot use '#{permission}'"
   end
 
   def message({:guest_plane_call, name}, _) do
-    "Unauthorized: guest-plane context cannot make external-plane call to '#{name}'"
+    "Unauthorized: a call from inside a running component cannot call '#{name}'"
   end
 
   def message({:tool_auth_required, name}, _) do
     "Unauthorized: tool '#{name}' requires authentication"
   end
 
-  def message({:malformed_resource, tag}, _) do
-    "Unauthorized: malformed #{tag} resource (missing tenant/owner identity)"
-  end
+  def message({:malformed_resource, _tag}, _),
+    do: "Unauthorized: the resource could not be attributed to its owner"
 
   # The consent-class refusal renders through the vocabulary's owner —
   # one spelling whichever layer refused (the dispatch gate here, the
@@ -129,7 +164,8 @@ defmodule Sanctum.Unauthorized do
     Sanctum.Consent.Authz.message(refusal)
   end
 
-  # Render a stored OAuth credential that requires reauthorization with its supplied detail.
+  # A stored OAuth credential that requires reauthorization, with the
+  # producer's own description of why.
   def message({:authorization_required, detail}, _) do
     "Unauthorized: this connection must be re-authorized (#{detail})"
   end

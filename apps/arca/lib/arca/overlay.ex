@@ -769,8 +769,8 @@ defmodule Arca.Overlay do
   first, `{:error, :missing_unit}` when the unit was dropped under this
   writer, `{:error, :invalid_objects}` when what was staged is not what
   was written — in each case nothing is published and the staged objects
-  are removed. `{:error, :unavailable}` from the commit leaves the staged
-  objects where they are: the outcome is unknown.
+  are removed. `{:error, :outcome_unknown}` from the commit leaves the
+  staged objects where they are: the outcome is unknown.
   `{:error, {:finish_failed, reason}}` is a published unit whose move to
   the served location did not finish (`repair_unit/2`).
   """
@@ -1207,7 +1207,7 @@ defmodule Arca.Overlay do
               served
             end
 
-          {:error, :unavailable} = unknown ->
+          {:error, :outcome_unknown} = unknown ->
             unknown
 
           {:error, _} = refused ->

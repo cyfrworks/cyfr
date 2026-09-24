@@ -16,7 +16,9 @@ defmodule Cyfr.TelemetryBridge do
   Each event maps to one payload constructor, which takes only the
   metadata fields it names: telemetry metadata is whatever its emitter
   attached, and the console is a trust boundary. A reason or an error is
-  bounded (`Cyfr.Bus.bounded_reason/1`), never an arbitrary term. A tenant
+  classified here (`Grimoire.Error.classify/1`, which knows the identity
+  domain's vocabulary the bus may not name) and carried as its class and
+  public sentence, never an arbitrary term. A tenant
   event that names no athanor has nowhere to go: it is dropped and counted
   as `[:cyfr, :bus, :bridge_dropped]`.
 
@@ -165,7 +167,12 @@ defmodule Cyfr.TelemetryBridge do
   defp messages([:cyfr, :locus, :build, stage], _measurements, meta)
        when stage in [:start, :progress, :stop] do
     kind = %{start: :started, progress: :progress, stop: :stopped}[stage]
-    fields = Map.take(meta, [:build_id, :reference, :phase, :message, :status, :error])
+
+    fields =
+      meta
+      |> Map.take([:build_id, :reference, :phase, :message, :status, :error])
+      |> classified([:error])
+
     [tenant(meta, &Bus.builds/1, &Build.new(&1, kind, fields))]
   end
 
@@ -181,7 +188,7 @@ defmodule Cyfr.TelemetryBridge do
         Notify.new(
           actor,
           :schedule_failed,
-          Map.take(meta, [:schedule_id, :execution_id, :reason])
+          meta |> Map.take([:schedule_id, :execution_id, :reason]) |> classified([:reason])
         )
       end)
     ]
@@ -197,18 +204,23 @@ defmodule Cyfr.TelemetryBridge do
   defp messages([:cyfr, :emissary, :tincture, :invoke, stage], _measurements, meta)
        when stage in [:start, :stop] do
     kind = if stage == :start, do: :invoke_started, else: :invoke_stopped
-    fields = Map.take(meta, [:request_id, :tincture_ref, :reference, :status, :error])
+
+    fields =
+      meta
+      |> Map.take([:request_id, :tincture_ref, :reference, :status, :error])
+      |> classified([:error])
+
     [tenant(meta, &Bus.tinctures/1, &Tinctures.new(&1, kind, fields))]
   end
 
   # The tray: an athanor's own, or — naming none — the operators'.
   defp messages([:cyfr, :sanctum, :notify], _measurements, %{athanor_id: nil} = meta),
-    do: [{:global, Bus.platform_notify(), Notify.platform(meta[:kind], meta[:payload] || %{})}]
+    do: [{:global, Bus.platform_notify(), Notify.platform(meta[:kind], notify_payload(meta))}]
 
   defp messages([:cyfr, :sanctum, :notify], _measurements, meta) do
     [
       tenant(meta, &Bus.notify/1, fn actor ->
-        Notify.new(actor, meta[:kind], meta[:payload] || %{})
+        Notify.new(actor, meta[:kind], notify_payload(meta))
       end)
     ]
   end
@@ -274,12 +286,33 @@ defmodule Cyfr.TelemetryBridge do
       reference: meta[:reference] || meta[:component],
       component_type: meta[:component_type],
       duration_ms: meta[:duration_ms],
-      error: meta[:error]
+      error: classify(meta[:error])
     }
   end
 
-  defp schedule_run(meta),
-    do: Map.take(meta, [:schedule_id, :occurrence_id, :execution_id, :reference, :reason])
+  defp schedule_run(meta) do
+    meta
+    |> Map.take([:schedule_id, :occurrence_id, :execution_id, :reference, :reason])
+    |> classified([:reason])
+  end
+
+  defp notify_payload(meta) do
+    case meta[:payload] || %{} do
+      %{} = payload -> classified(payload, [:reason])
+      other -> other
+    end
+  end
+
+  # A reason or an error, as the gate classifies it: the payload keeps its
+  # class and sentence and drops the term.
+  defp classified(fields, keys) do
+    Enum.reduce(keys, fields, fn key, acc ->
+      if Map.has_key?(acc, key), do: Map.update!(acc, key, &classify/1), else: acc
+    end)
+  end
+
+  defp classify(nil), do: nil
+  defp classify(reason), do: Grimoire.Error.classify(reason)
 
   # The tray counts only root executions: a chain's children are the same
   # piece of work.

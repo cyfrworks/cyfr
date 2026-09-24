@@ -44,7 +44,9 @@ defmodule Sanctum.Caller do
 
   Refusals:
 
-    * `:unauthenticated` — no token, or not a session this server issued.
+    * `:unauthenticated` — no token, not a session this server issued, or
+      a token or webhook whose principal no longer stands where it was
+      minted: a presented credential that opens nothing.
     * `:invalid_credential` / `:expired_credential` — a key or token that
       is not one of this server's, or one past its life.
     * `:revoked` / `:ip_not_allowed` — a key the store or its allowlist
@@ -52,8 +54,6 @@ defmodule Sanctum.Caller do
     * `{:denied, ctx}` — a session whose person the door no longer
       admits. The context rides along for surfaces that forward it to the
       anonymous surface rather than halting.
-    * `:not_standing` — a token or webhook whose principal no longer
-      stands where it was minted.
     * `:wrong_tincture` — a tincture token presented to another tincture.
     * `:no_athanor` — authenticated, but no athanor resolved.
     * `:not_member` / `:archived` / `:not_found` — the requested focus
@@ -75,7 +75,6 @@ defmodule Sanctum.Caller do
           | :revoked
           | :ip_not_allowed
           | {:denied, Context.t()}
-          | :not_standing
           | :wrong_tincture
           | :no_athanor
           | :not_member
@@ -209,7 +208,7 @@ defmodule Sanctum.Caller do
 
       with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
     else
-      {:error, :not_standing}
+      {:error, :unauthenticated}
     end
   end
 
@@ -230,13 +229,14 @@ defmodule Sanctum.Caller do
   defp names_tincture(_claims, _tincture), do: {:error, :wrong_tincture}
 
   # An access token opens nothing its source no longer would: the refusals
-  # a request is answered with.
+  # a request is answered with. A retired source is a presented credential
+  # that opens nothing.
   defp token_standing(claims, client_ip) do
     case derived_standing(claims, client_ip: client_ip) do
       {:ok, standing} -> {:ok, standing}
       {:error, :unavailable} -> {:error, :unavailable}
       {:error, :ip_not_allowed} -> {:error, :ip_not_allowed}
-      {:error, _retired} -> {:error, :not_standing}
+      {:error, _retired} -> {:error, :unauthenticated}
     end
   end
 

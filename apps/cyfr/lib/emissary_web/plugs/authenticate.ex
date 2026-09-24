@@ -101,16 +101,14 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   end
 
   defp missing_tenant_error_response(conn, errors) do
-    errors.halt(
-      conn,
-      403,
-      Sanctum.Unauthorized.code({:missing_tenant, :no_membership}),
-      Sanctum.Unauthorized.message({:missing_tenant, :no_membership})
-    )
+    reason = {:missing_tenant, :no_membership}
+    errors.halt(conn, 403, reason, Sanctum.Unauthorized.message(reason))
   end
 
+  # The store could not judge the credential: unavailable, never a
+  # verdict on it.
   defp auth_provider_error_response(conn, errors) do
-    errors.halt(conn, 503, :auth_invalid, "Authentication service unavailable")
+    errors.halt(conn, 503, :auth_provider_error, "Authentication service unavailable")
   end
 
   defp get_context(conn) do
@@ -319,21 +317,16 @@ defmodule EmissaryWeb.Plugs.Authenticate do
     end
   end
 
-  defp error_response(conn, :invalid_bearer, errors) do
-    errors.halt(
-      conn,
-      401,
-      :auth_invalid,
-      "The presented credential is not valid. If it expired, sign in again."
-    )
-  end
+  # Each refusal renders with its own sentence (`Prima.Refusal`).
+  defp error_response(conn, :invalid_bearer, errors),
+    do: errors.halt(conn, 401, :invalid_bearer, nil)
 
   defp error_response(conn, :invalid_api_key, errors),
-    do: errors.halt(conn, 401, :auth_invalid, "Invalid API key")
+    do: errors.halt(conn, 401, :invalid_api_key, nil)
 
   defp error_response(conn, :api_key_revoked, errors),
-    do: errors.halt(conn, 401, :auth_invalid, "API key has been revoked")
+    do: errors.halt(conn, 401, :api_key_revoked, nil)
 
   defp error_response(conn, :ip_not_allowed, errors),
-    do: errors.halt(conn, 403, :insufficient_permissions, "Request IP not in API key allowlist")
+    do: errors.halt(conn, 403, :ip_not_allowed, nil)
 end

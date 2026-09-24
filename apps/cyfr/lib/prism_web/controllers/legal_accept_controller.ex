@@ -193,12 +193,11 @@ defmodule PrismWeb.LegalAcceptController do
 
   defp current_provider(conn, params), do: {:ok, PendingProbe.current_provider(conn, params)}
 
-  defp accept_error_message(reason) do
-    # One renderer (Grimoire.Error.render covers the OCI struct and crafted
-    # binaries too); nil means internal and stays out of the page.
-    Grimoire.Error.render(reason) ||
-      "The acceptance could not be recorded — try again."
-  end
+  # One renderer: a registry's own error becomes its refusal first
+  # (`Compendium.Providers.Shared.refusal/1`), and an internal term reads
+  # as the fixed sentence and stays out of the page.
+  defp accept_error_message(reason),
+    do: reason |> Compendium.Providers.Shared.refusal() |> Grimoire.Error.render()
 
   # ============================================================================
   # Rendering — the two pages, in the Prism root layout

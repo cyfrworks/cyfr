@@ -18,16 +18,18 @@ defmodule EmissaryWeb.ErrorRenderer do
   JSON-RPC envelope carrying a null id, which is what `/api/executions/:id/events`
   did while it shared the MCP pipeline.
 
-  `code` is an atom from `Emissary.MCP.Message`'s tables. Each renderer maps it
-  to whatever its wire format calls an error code.
+  `code` is the refusal: a reason term or a `%Prima.Refusal{}`. Each renderer
+  maps it to whatever its wire format calls an error code — its class for
+  `ApiError`, its JSON-RPC code for `MCPError`, which also takes a code name
+  from `Emissary.MCP.Message`'s tables as itself.
 
   The full rejection vocabulary, for every surface:
 
     * **`EmissaryWeb.MCPError`** — `/mcp` and anything else speaking
       JSON-RPC. Every deliberate rejection is a JSON-RPC error object.
     * **`EmissaryWeb.ApiError`** — every *deliberate* rejection on an
-      ordinary HTTP route: `{"code": slug, "error": prose}`, one shape
-      whether the refusal came from a plug or a controller.
+      ordinary HTTP route: `{"code": class, "message": sentence}`, one
+      shape whether the refusal came from a plug or a controller.
     * **`EmissaryWeb.ErrorJSON`** — *unhandled* errors only: an exception
       nobody rescued, a route nobody defined. Phoenix renders it; no code
       in this repo calls it. A deliberate rejection rendered through
@@ -35,10 +37,10 @@ defmodule EmissaryWeb.ErrorRenderer do
   """
 
   @doc "Render an error body and set the status."
-  @callback send(Plug.Conn.t(), non_neg_integer(), atom() | integer(), String.t()) ::
+  @callback send(Plug.Conn.t(), non_neg_integer(), term(), String.t() | nil) ::
               Plug.Conn.t()
 
   @doc "Render an error and halt the pipeline."
-  @callback halt(Plug.Conn.t(), non_neg_integer(), atom() | integer(), String.t()) ::
+  @callback halt(Plug.Conn.t(), non_neg_integer(), term(), String.t() | nil) ::
               Plug.Conn.t()
 end

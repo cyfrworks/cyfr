@@ -194,13 +194,18 @@ defmodule Arca.ThreadStorage do
   A claim that wrote nothing is told which of the two conditions refused
   it, from a second read that decides nothing: `{:error, :stale}` when a
   peer accepted the next message first — re-read, because which turn is
-  next may have changed — and `{:error, {:busy, turn_id}}` when another
-  turn holds it. A thread this turn already holds answers `{:ok, thread}`,
+  next may have changed — and `{:error, {:held_elsewhere, turn_id}}` when
+  another turn holds it. A thread this turn already holds answers `{:ok, thread}`,
   so a claimant that lost track of its own claim may ask again.
   """
   @spec claim(Prima.Actor.t(), String.t(), String.t(), non_neg_integer()) ::
           {:ok, map()}
-          | {:error, :no_athanor | :not_found | :stale | {:busy, String.t()} | :database_error}
+          | {:error,
+             :no_athanor
+             | :not_found
+             | :stale
+             | {:held_elsewhere, String.t()}
+             | :database_error}
   def claim(%Prima.Actor{athanor_id: athanor_id} = actor, thread_id, turn_id, turn_seq)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) and
              is_binary(turn_id) and is_integer(turn_seq) do
@@ -230,7 +235,7 @@ defmodule Arca.ThreadStorage do
         {:ok, thread}
 
       {:ok, %Thread{active_turn_id: held}} when is_binary(held) ->
-        {:error, {:busy, held}}
+        {:error, {:held_elsewhere, held}}
 
       # Nobody holds it now, so the sequence is what refused the claim —
       # or a release landed between the statement and this read. Both say
@@ -307,7 +312,8 @@ defmodule Arca.ThreadStorage do
   first member to name it. A member's own turns are its own — a
   `runner_id` equal to this boot is never a live peer — so a member picks
   up what it left behind without waiting for anything. Rolls the caller's
-  transaction back with `:busy` when a live peer holds the thread.
+  transaction back with `:held_elsewhere` when a live peer holds the
+  thread.
   """
   @spec take_claim!(Prima.Actor.t(), String.t(), String.t()) :: :ok
   # arca:db-raise-ok inside the caller's transaction
@@ -325,7 +331,7 @@ defmodule Arca.ThreadStorage do
 
     case taken do
       {1, _} -> :ok
-      {0, _} -> Repo.rollback(:busy)
+      {0, _} -> Repo.rollback(:held_elsewhere)
     end
   end
 

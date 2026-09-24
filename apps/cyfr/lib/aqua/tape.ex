@@ -189,7 +189,8 @@ defmodule Aqua.Tape do
   not a refusal — a peer accepted the next message, which changes nothing
   about this turn's right to run — so the thread is read again, a bounded
   number of times. A thread another turn holds is
-  `{:error, {:busy, turn_id}}` and is the caller's to queue behind.
+  `{:error, {:held_elsewhere, turn_id}}` and is the caller's to queue
+  behind.
   """
   @spec start_turn(Context.t(), turn(), map()) :: {:ok, turn()} | {:error, term()}
   def start_turn(%Context{} = ctx, turn, attrs) when is_map(attrs),
@@ -232,8 +233,8 @@ defmodule Aqua.Tape do
   @doc """
   Take the thread's claim for an open turn no live member runs and count
   the recovery, in one transaction (`TurnStorage.recover/3`), from the
-  fence `turn` was read with. Refused past the cap, and `{:error, :busy}`
-  for a thread a live peer holds.
+  fence `turn` was read with. Refused past the cap, and `{:error,
+  :held_elsewhere}` for a thread a live peer holds.
   """
   @spec recover(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
   def recover(%Context{} = ctx, turn),

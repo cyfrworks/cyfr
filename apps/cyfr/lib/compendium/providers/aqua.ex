@@ -946,7 +946,7 @@ defmodule Compendium.Providers.Aqua do
 
       # The store could not say whether the commit landed. The resync
       # reads the tree, so it is right either way.
-      {:error, :unavailable} = unknown ->
+      {:error, :outcome_unknown} = unknown ->
         resync_index(ctx)
         unknown
 
@@ -987,7 +987,7 @@ defmodule Compendium.Providers.Aqua do
           cloneable: false,
           note:
             "The soul was not given leave to clone into it: " <>
-              (Grimoire.Error.render(reason) || "the write failed")
+              Grimoire.Error.render(reason)
         }
     end
   end

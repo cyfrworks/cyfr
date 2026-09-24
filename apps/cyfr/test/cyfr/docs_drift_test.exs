@@ -130,13 +130,8 @@ defmodule Cyfr.DocsDriftTest do
   test "every code a client could receive is in the guide's table" do
     documented = guide_error_codes() |> Map.keys() |> MapSet.new()
 
-    # `request_cancelled` is recorded, never sent: by the time it exists the
-    # caller has closed the stream. It is the one code with no reader.
-    internal = [:request_cancelled]
-
     missing =
       for {name, code} <- Emissary.MCP.Message.cyfr_error_codes(),
-          name not in internal,
           not MapSet.member?(documented, code),
           do: "#{code} #{name}"
 

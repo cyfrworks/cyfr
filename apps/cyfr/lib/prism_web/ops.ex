@@ -36,8 +36,6 @@ defmodule PrismWeb.Ops do
   Check the field’s producer before removing mixed-key access handling.
   """
 
-  require Logger
-
   @doc """
   Call an MCP tool with the socket's context, or with a context directly.
 
@@ -93,17 +91,8 @@ defmodule PrismWeb.Ops do
   def error_message(message) when is_binary(message), do: message
   def error_message(:no_context), do: "Not signed in."
 
-  def error_message(reason) do
-    # Use the shared wire, console and guest error renderer.
-    case Grimoire.Error.render(reason) do
-      nil ->
-        Logger.warning("[PrismWeb.Ops] tool call failed: #{inspect(reason)}")
-        "The request failed — try again."
-
-      message ->
-        message
-    end
-  end
+  # The gate's renderer, the same sentence on the wire and the page.
+  def error_message(reason), do: Grimoire.Error.render(reason)
 
   defp normalize_tool_call(tool_name, args) do
     case String.split(tool_name, "/", parts: 2) do

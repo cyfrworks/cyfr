@@ -3,56 +3,47 @@
 
 defmodule Grimoire.Error do
   @moduledoc """
-  The host's renderer for any refusal a tool can produce, whichever
-  vocabulary it came from.
+  The gate's normalization of any refusal a tool can produce, whichever
+  vocabulary it came from, into `%Prima.Refusal{}`.
 
-  The refusal vocabulary itself is `Prima.Refusal`, in the contracts, where
-  the runner's renderer reads it too — one vocabulary, and this is one of
-  its readers. What this module adds is the product vocabularies only the
-  control plane knows: an unauthorized caller (`Sanctum.Unauthorized`), an
-  OCI registry's own error (`Compendium.OCI.Errors`), and a consent signal
-  (`Emissary.MCP.ConsentSignal`, a protocol error with a -335xx code and
-  structured `error.data`, which the wire router emits as a JSON-RPC
-  error).
-
-  Compiler output, upstream error codes and other specific diagnostics may
-  remain client-safe strings, and render as themselves.
+  The authorization vocabulary (`Sanctum.Unauthorized`) classifies its own
+  reasons and is asked first; `Prima.Refusal`'s closed table answers the
+  rest — the consent signals among them — and a `%Prima.Refusal{}` a
+  provider already built (a registry's own error, from
+  `Compendium.Providers.Shared.refusal/1`) is itself. A reason nobody
+  knows is `internal`, with the fixed sentence, logged by its shape.
   """
+
+  @doc "The normalized refusal for `reason`."
+  @spec classify(term()) :: Prima.Refusal.t()
+  def classify(reason) do
+    if Sanctum.Unauthorized.reason?(reason) do
+      %Prima.Refusal{
+        class: Sanctum.Unauthorized.class(reason),
+        reason: reason,
+        message: Sanctum.Unauthorized.message(reason)
+      }
+    else
+      Prima.Refusal.classify(reason)
+    end
+  end
 
   @doc """
-  The client-safe sentence for ANY refusal a tool can produce, or `nil`
-  when the term is internal and must not be reflected.
-
-  Callers log an unknown term where it was produced and hand the caller a
-  generic sentence rather than `inspect/1`'s spelling of it.
-
-  Keeping this here also keeps `apps/opus` off the product vocabularies'
-  own modules: `Cyfr.Boundaries` pins what opus may reach into, and a
-  renderer is not a reason to widen that.
+  The public sentence for any refusal: `classify/1`'s message, never `nil`
+  and never an `inspect/1` of the term.
   """
-  @spec render(term(), atom() | nil) :: String.t() | nil
-  def render(reason, auth_method \\ nil)
+  @spec render(term()) :: String.t()
+  def render(reason), do: classify(reason).message
 
-  def render(reason, _auth_method) when is_binary(reason), do: reason
-
-  def render(reason, auth_method) do
-    cond do
-      # The method rides along so the API-key remediation hint renders on
-      # every surface, not only the wire router's own refusal path.
-      Sanctum.Unauthorized.reason?(reason) ->
-        Sanctum.Unauthorized.message(reason, auth_method)
-
-      Prima.Refusal.reason?(reason) ->
-        Prima.Refusal.message(reason)
-
-      match?(%Compendium.OCI.Errors{}, reason) ->
-        Compendium.Providers.Shared.to_error_string(reason)
-
-      Emissary.MCP.ConsentSignal.signal?(reason) ->
-        Emissary.MCP.ConsentSignal.message(reason)
-
-      true ->
-        nil
-    end
+  @doc """
+  The JSON-RPC code name a refusal's row answers with in place of its
+  class's code, or `nil` (`Sanctum.Unauthorized.code_override/1`,
+  `Prima.Refusal.code_override/1`).
+  """
+  @spec code_override(Prima.Refusal.t()) :: atom() | nil
+  def code_override(%Prima.Refusal{reason: reason} = refusal) do
+    if Sanctum.Unauthorized.reason?(reason),
+      do: Sanctum.Unauthorized.code_override(reason),
+      else: Prima.Refusal.code_override(refusal)
   end
 end

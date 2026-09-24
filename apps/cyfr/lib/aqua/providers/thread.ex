@@ -540,7 +540,7 @@ defmodule Aqua.Providers.Thread do
   # The turn vocabulary on top of the thread one: a turn a live member is
   # running is a conflict, not a refusal; a turn that is not the caller's
   # athanor's is absent, which `translate/2` already answers.
-  defp turn_refusal(:busy, _id),
+  defp turn_refusal(:held_elsewhere, _id),
     do: {:conflict, "That turn is running on another member. Try again once it is down."}
 
   defp turn_refusal(:not_running, _id),

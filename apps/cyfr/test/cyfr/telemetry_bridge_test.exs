@@ -8,7 +8,8 @@ defmodule Cyfr.TelemetryBridgeTest do
   The bridge attaches exactly the catalog's `:bridge` roster, turns each
   event into its one payload from the metadata fields the payload names,
   drops and counts a tenant event that names no athanor, forwards no
-  arbitrary error term, and is never detached by a publish that fails.
+  arbitrary error term — a reason is its class and public sentence — and
+  is never detached by a publish that fails.
   """
   use ExUnit.Case, async: false
 
@@ -49,7 +50,8 @@ defmodule Cyfr.TelemetryBridgeTest do
       {[:cyfr, :opus, :execute, :stop], Map.merge(tenant, %{execution_id: "e1", duration_ms: 3}),
        Bus.executions(@actor), {Execution, %{kind: :completed, duration_ms: 3}}},
       {[:cyfr, :opus, :execute, :exception], Map.merge(tenant, %{error: "boom"}),
-       Bus.executions(@actor), {Execution, %{kind: :failed, error: "boom"}}},
+       Bus.executions(@actor),
+       {Execution, %{kind: :failed, error: %{class: :internal, message: "boom"}}}},
       {[:cyfr, :emissary, :request], Map.put(tenant, :method, "tools/call"), Bus.requests(@actor),
        {Request, %{kind: :logged, method: "tools/call"}}},
       {[:cyfr, :sanctum, :policy, :decision], Map.put(tenant, :decision, "denied"),
@@ -222,7 +224,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       assert_receive %Execution{
         kind: :cancelled,
         execution_id: "exec_cancelled",
-        error: "cancelled"
+        error: %{class: :internal, message: "cancelled"}
       }
 
       refute_receive %Notify{}, 100
@@ -240,7 +242,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       refute_receive %Execution{}, 100
     end
 
-    test "an arbitrary error term reaches no payload" do
+    test "an arbitrary error term reaches no payload, only its class and the fixed sentence" do
       listen(Bus.schedule_runs(@actor))
       listen(Bus.notify(@actor))
       listen(Bus.executions(@actor))
@@ -252,8 +254,9 @@ defmodule Cyfr.TelemetryBridgeTest do
         reason: secret
       })
 
-      assert_receive %ScheduleRun{kind: :failed, reason: "error"}
-      assert_receive %Notify{kind: :schedule_failed, payload: %{reason: "error"}}
+      unconfirmed = %{class: :internal, message: "The outcome could not be confirmed."}
+      assert_receive %ScheduleRun{kind: :failed, reason: ^unconfirmed}
+      assert_receive %Notify{kind: :schedule_failed, payload: %{reason: ^unconfirmed}}
 
       :telemetry.execute([:cyfr, :opus, :execute, :exception], %{}, %{
         athanor_id: @athanor,
@@ -262,7 +265,20 @@ defmodule Cyfr.TelemetryBridgeTest do
         error: secret
       })
 
-      assert_receive %Execution{kind: :failed, error: "error"}
+      assert_receive %Execution{kind: :failed, error: ^unconfirmed}
+    end
+
+    test "an authorization reason is classed by its own vocabulary" do
+      listen(Bus.schedule_runs(@actor))
+
+      :telemetry.execute([:cyfr, :schedules, :failed], %{}, %{
+        athanor_id: @athanor,
+        schedule_id: "s_denied",
+        reason: {:missing_permission, :execute}
+      })
+
+      message = Sanctum.Unauthorized.message({:missing_permission, :execute})
+      assert_receive %ScheduleRun{kind: :failed, reason: %{class: :forbidden, message: ^message}}
     end
 
     test "metadata a payload does not name is not carried" do

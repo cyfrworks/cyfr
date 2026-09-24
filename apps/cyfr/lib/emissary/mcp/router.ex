@@ -167,17 +167,12 @@ defmodule Emissary.MCP.Router do
 
           case Catalog.authorize_declared_action(name, ctx, arguments) do
             {:error, reason} ->
-              if Sanctum.Unauthorized.reason?(reason) do
-                {:error, Sanctum.Unauthorized.code(reason),
-                 Sanctum.Unauthorized.message(reason, ctx.auth_method)}
-              else
-                {:error, :invalid_params, Prima.Refusal.message(reason)}
-              end
+              protocol_error(ctx, reason, :tools_call)
 
             :ok ->
               case Catalog.validate_arguments(name, arguments) do
                 {:error, reason} ->
-                  {:error, :invalid_params, Prima.Refusal.message(reason)}
+                  protocol_error(ctx, reason, :tools_call)
 
                 {:ok, arguments} ->
                   has_output_schema = Map.has_key?(tool_def, "outputSchema")
@@ -222,29 +217,17 @@ defmodule Emissary.MCP.Router do
                     # it arrives as the `Sanctum.Unauthorized` vocabulary and
                     # is rendered here — the wire boundary.
                     {:error, reason} ->
-                      cond do
-                        Sanctum.Unauthorized.reason?(reason) ->
-                          {:error, Sanctum.Unauthorized.code(reason),
-                           Sanctum.Unauthorized.message(reason, ctx.auth_method)}
-
-                        # Return the consent signal as a JSON-RPC code with structured error.data.
-                        Emissary.MCP.ConsentSignal.signal?(reason) ->
-                          {tag, _} = reason
-
-                          {:error, tag, Emissary.MCP.ConsentSignal.message(reason),
-                           Emissary.MCP.ConsentSignal.data(reason)}
-
-                        true ->
-                          {:ok,
-                           %{
-                             "content" => [
-                               %{
-                                 "type" => "text",
-                                 "text" => format_error_reason(reason)
-                               }
-                             ],
-                             "isError" => true
-                           }}
+                      if Sanctum.Unauthorized.reason?(reason) or
+                           Prima.ConsentSignal.signal?(reason) do
+                        protocol_error(ctx, reason, :tools_call)
+                      else
+                        {:ok,
+                         %{
+                           "content" => [
+                             %{"type" => "text", "text" => Grimoire.Error.render(reason)}
+                           ],
+                           "isError" => true
+                         }}
                       end
                   end
               end
@@ -312,50 +295,31 @@ defmodule Emissary.MCP.Router do
 
         {:ok, cacheable(%{"contents" => [content_entry]}, @resource_ttl_ms, @resource_scope)}
 
+      # Each refusal answers by its class: an authorization refusal with
+      # the auth codes, a store outage as unavailable, an absent resource
+      # as the MCP resource error.
       {:error, reason} ->
-        Logger.warning("[MCP.Router] resource read failed: #{inspect(reason)}")
-
-        cond do
-          # An authz refusal or a store outage is not "not found".
-          Sanctum.Unauthorized.reason?(reason) ->
-            {:error, Sanctum.Unauthorized.code(reason),
-             Sanctum.Unauthorized.message(reason, ctx.auth_method)}
-
-          reason == :database_error ->
-            {:error, :internal_error, "Failed to read resource: the store could not answer"}
-
-          # A typed tool refusal renders through its vocabulary.
-          Prima.Refusal.reason?(reason) ->
-            {:error, :resource_not_found, Prima.Refusal.message(reason)}
-
-          # A binary reason is a handler's crafted, client-safe diagnosis
-          # ("Asset not found: …").
-          is_binary(reason) ->
-            {:error, :resource_not_found, reason}
-
-          # Anything else is an internal term (an exit tuple, a struct) —
-          # logged above, never reflected.
-          true ->
-            {:error, :resource_not_found, "Resource not found or unreadable"}
-        end
+        protocol_error(ctx, reason, :resources_read)
     end
   end
 
-  # Render known typed errors through Grimoire.Error and pass client-safe
-  # strings through. Log unknown internal terms and return a generic reply.
-  defp format_error_reason(reason) when is_binary(reason), do: reason
+  # A refusal answered as a JSON-RPC error: the code its class (or its
+  # row's override, or a consent signal's tag) answers with, and its
+  # sentence — an authorization refusal's worded for the caller's
+  # credential, a consent signal's with its `error.data`.
+  defp protocol_error(ctx, reason, where) do
+    refusal = Grimoire.Error.classify(reason)
+    code = Message.refusal_code(refusal, where)
 
-  defp format_error_reason(reason) do
-    # One renderer for every typed vocabulary (`Grimoire.Error.render/2`
-    # — Unauthorized, `Prima.Refusal`, OCI errors); `nil` means the term is
-    # internal and must not be reflected.
-    case Grimoire.Error.render(reason) do
-      nil ->
-        Logger.warning("[MCP.Router] tool call failed: #{inspect(reason)}")
-        "The tool call failed."
+    cond do
+      Sanctum.Unauthorized.reason?(reason) ->
+        {:error, code, Sanctum.Unauthorized.message(reason, ctx.auth_method)}
 
-      message ->
-        message
+      Prima.ConsentSignal.signal?(reason) ->
+        {:error, code, refusal.message, Prima.ConsentSignal.data(reason)}
+
+      true ->
+        {:error, code, refusal.message}
     end
   end
 

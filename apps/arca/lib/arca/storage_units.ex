@@ -47,7 +47,7 @@ defmodule Arca.StorageUnits do
   Every function takes the `Prima.Actor` first and scopes every query to
   its athanor. An actor with no athanor is refused as
   `{:error, :no_athanor}` before any query. A store that cannot answer is
-  `{:error, :unavailable}`: the outcome is unknown and nothing may be
+  `{:error, :outcome_unknown}`: the outcome is unknown and nothing may be
   assumed.
   """
 
@@ -60,7 +60,7 @@ defmodule Arca.StorageUnits do
 
   @draft_ttl_ms :timer.minutes(15)
 
-  @type refusal :: {:error, :no_athanor | :unavailable}
+  @type refusal :: {:error, :no_athanor | :outcome_unknown}
 
   @typedoc "What a commit records beside the pointer move."
   @type identity :: %{
@@ -162,7 +162,8 @@ defmodule Arca.StorageUnits do
   """
   @spec stamped_commit(Prima.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
           {:committed, pos_integer()}
-          | {:error, :stale_revision | :stale_writer | :missing_unit | :unavailable | :no_athanor}
+          | {:error,
+             :stale_revision | :stale_writer | :missing_unit | :outcome_unknown | :no_athanor}
   def stamped_commit(
         %Prima.Actor{} = actor,
         %StorageUnit{} = unit,
@@ -301,7 +302,7 @@ defmodule Arca.StorageUnits do
 
   defp rescuing_db(entry, fun) do
     case Arca.Repo.Errors.with_db_rescue("Arca.StorageUnits.#{entry}", fun) do
-      {:error, :database_error} -> {:error, :unavailable}
+      {:error, :database_error} -> {:error, :outcome_unknown}
       answer -> answer
     end
   end

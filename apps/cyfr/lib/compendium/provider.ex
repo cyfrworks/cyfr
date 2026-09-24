@@ -177,6 +177,12 @@ defmodule Compendium.Provider do
 
   # A projection the tree has moved past, answered by a facade the tool
   # reached without saying so itself: unavailable, in the surface's words.
+  # A registry's own error leaves as its refusal
+  # (`Compendium.Providers.Shared.refusal/1`), never the Compendium struct.
   defp index({:error, :projection_unavailable}, noun), do: {:error, {:unavailable, noun}}
+
+  defp index({:error, reason}, _noun),
+    do: {:error, Compendium.Providers.Shared.refusal(reason)}
+
   defp index(answer, _noun), do: answer
 end

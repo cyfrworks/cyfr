@@ -450,7 +450,7 @@ defmodule Compendium.Providers.Registry do
          }}
 
       {:error, err} ->
-        {:error, Shared.to_error_string(err)}
+        {:error, Shared.refusal(err)}
     end
   end
 
@@ -486,7 +486,7 @@ defmodule Compendium.Providers.Registry do
         {:ok, body_with_warning}
 
       {:error, err} ->
-        {:error, Shared.to_error_string(err)}
+        {:error, Shared.refusal(err)}
     end
   end
 
@@ -658,14 +658,10 @@ defmodule Compendium.Providers.Registry do
   # Private helpers
   # ============================================================================
 
-  # Every registry call answers through one seam. A refusal this module
-  # already typed is the caller's answer as-is; everything else — an
-  # `OCI.Errors` struct above all — keeps the shared registry sentence.
-  defp refuse(reason) do
-    if Prima.Refusal.reason?(reason),
-      do: {:error, reason},
-      else: {:error, Shared.to_error_string(reason)}
-  end
+  # Every registry call answers through one seam: a registry's own error
+  # becomes its refusal here, and any other reason is the gate's to
+  # classify.
+  defp refuse(reason), do: {:error, Shared.refusal(reason)}
 
   defp put_if_int(kw, key, n) when is_integer(n) and n >= 0, do: Keyword.put(kw, key, n)
 

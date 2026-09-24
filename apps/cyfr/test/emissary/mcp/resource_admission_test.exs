@@ -119,8 +119,9 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
 
       assert message =~ "missing required permission 'component_read'"
 
-      # Admitted, and the domain answers what is there.
-      assert {:error, :resource_not_found, _} =
+      # Admitted, and the domain answers what is there — by the class of its
+      # refusal; a bare sentence is internal until its producer types it.
+      assert {:error, :internal, "Component not found: r:local.none:1.0.0"} =
                read(component_key, "compendium://components/r:local.none:1.0.0")
 
       assert {:ok, %{"contents" => [%{"blob" => blob}]}} =
@@ -166,7 +167,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
             {"arca://files/data/../threads/thread_r/reach.bin", "Invalid path"},
             {"arca://files/", "Forbidden path: /"}
           ] do
-        assert {:error, :resource_not_found, message} = read(storage_key, uri)
+        assert {:error, :invalid_params, message} = read(storage_key, uri)
         assert message =~ refusal, "#{uri}: #{message}"
       end
 
@@ -208,7 +209,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
                  Catalog.call_external(tool, guest, %{"action" => action, "uri" => uri})
 
         assert {:error, :insufficient_permissions, message} = read(guest, uri)
-        assert message =~ "guest-plane context cannot make external-plane call"
+        assert message =~ "a call from inside a running component cannot call"
       end
     end
 
@@ -309,7 +310,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
         assert {:error, :control_plane_lost} =
                  Catalog.call_external(tool, ctx, %{"action" => action, "uri" => uri})
 
-        assert {:error, :resource_not_found, message} = read(ctx, uri)
+        assert {:error, :not_owner, message} = read(ctx, uri)
         assert message == Prima.Refusal.message(:control_plane_lost)
       end
 
@@ -352,7 +353,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
       assert Jason.decode!(permissions) == %{"permissions" => []}
       refute_received {:query, _}
 
-      assert {:error, :resource_not_found, message} = read(caller, "sanctum://sessions")
+      assert {:error, :invalid_params, message} = read(caller, "sanctum://sessions")
       assert message =~ "Unknown resource URI"
     end
   end

@@ -8,9 +8,9 @@ defmodule Cyfr.Bus.Notify do
   with `athanor_id: :platform`.
 
   The kinds are the identity domain's tray vocabulary, pinned equal to it
-  by test. The payload keeps only the keys below, and a `reason` is
-  bounded (`Cyfr.Bus.bounded_reason/1`): a tray entry names what happened
-  and where, never an arbitrary term.
+  by test. The payload keeps only the keys below, and a `reason` is a
+  refusal's class and sentence (`%{class, message}`): a tray entry names
+  what happened and where, never an arbitrary term.
   """
 
   alias Cyfr.Bus.Payload
@@ -91,10 +91,6 @@ defmodule Cyfr.Bus.Notify do
   defp payload(payload) do
     payload
     |> Map.take(@payload_keys)
-    |> then(fn kept ->
-      if Map.has_key?(kept, :reason),
-        do: Map.update!(kept, :reason, &Cyfr.Bus.bounded_reason/1),
-        else: kept
-    end)
+    |> Payload.refusals([:reason])
   end
 end

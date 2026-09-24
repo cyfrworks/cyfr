@@ -58,12 +58,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
           |> stream_events(ctx, execution_id, cursor, exec)
         else
           {:auth, _} ->
-            EmissaryWeb.ApiError.send(
-              conn,
-              401,
-              :auth_required,
-              Sanctum.Unauthorized.message(:unauthenticated)
-            )
+            EmissaryWeb.ApiError.send(conn, 401, :unauthenticated, nil)
 
           # Non-existent and not-yours both return 404 to avoid leaking which
           # execution IDs exist in the system via 403/404 distinction.
@@ -85,7 +80,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
             EmissaryWeb.ApiError.send(
               conn,
               429,
-              :too_many_streams,
+              :stream_limit,
               "Concurrent event-stream limit reached"
             )
         end

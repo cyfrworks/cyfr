@@ -389,7 +389,7 @@ defmodule Emissary.External.Proxy do
         {:error,
          {:refused,
           "Call to #{remote_tool} on server '#{server_name}' not admitted: " <>
-            (Grimoire.Error.render(reason) || inspect(reason))}}
+            Grimoire.Error.render(reason)}}
     end
   end
 
@@ -507,7 +507,7 @@ defmodule Emissary.External.Proxy do
     now = DateTime.utc_now()
 
     attrs = %{
-      error_message: Grimoire.Error.render(reason) || inspect(reason),
+      error_message: Grimoire.Error.render(reason),
       completed_at: now,
       duration_ms: DateTime.diff(now, started_at, :millisecond)
     }

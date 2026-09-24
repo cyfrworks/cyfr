@@ -48,8 +48,6 @@ defmodule Crucible.Emit do
   `flush/2` sends whatever is still held, masked, when the attempt closes.
   """
 
-  require Logger
-
   alias Prima.Authority
   alias Crucible.{Events, StepSpans, Telemetry}
   alias Prima.SecretMasker
@@ -254,16 +252,7 @@ defmodule Crucible.Emit do
     end
   end
 
-  defp render(reason) do
-    case Grimoire.Error.render(reason) do
-      nil ->
-        Logger.warning("[Crucible.Emit] unrenderable emit refusal: #{inspect(reason)}")
-        "the event was refused"
-
-      message ->
-        message
-    end
-  end
+  defp render(reason), do: Grimoire.Error.render(reason)
 
   defp safe_encode(data), do: Prima.WitResponse.safe_encode(data)
   defp encode_error(type, message), do: Prima.WitResponse.encode_error(type, message)

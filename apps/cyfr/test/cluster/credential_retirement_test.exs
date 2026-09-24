@@ -45,7 +45,7 @@ defmodule Cyfr.Cluster.CredentialRetirementTest do
       # before the denial cannot issue after the allow.
       refute match?({:ok, _}, Cell.call(:b, Fixtures, :establish, [person.token]))
       assert {:error, reason} = Cell.call(:b, Fixtures, :issue_key, [before])
-      assert reason in [:stale_generation, :not_standing]
+      assert reason in [:stale_generation, :unauthenticated]
     end
 
     test "a derived token minted on the peer is refused there after the denial and the allow" do
@@ -56,10 +56,10 @@ defmodule Cyfr.Cluster.CredentialRetirementTest do
       assert athanor == person.athanor_id
 
       assert Cell.call(:a, Fixtures, :deny!, [person.user_id]) == "denied"
-      assert {:error, :not_standing} = Cell.call(:b, Fixtures, :open_access, [token])
+      assert {:error, :unauthenticated} = Cell.call(:b, Fixtures, :open_access, [token])
 
       assert Cell.call(:a, Fixtures, :allow!, [person.user_id]) == "active"
-      assert {:error, :not_standing} = Cell.call(:b, Fixtures, :open_access, [token])
+      assert {:error, :unauthenticated} = Cell.call(:b, Fixtures, :open_access, [token])
 
       # Nor can the context the peer read before the denial mint a new one.
       assert {:error, :not_standing} = Cell.call(:b, Fixtures, :mint_access, [before])
@@ -83,7 +83,7 @@ defmodule Cyfr.Cluster.CredentialRetirementTest do
       # the denial issues nothing there, because the issuance rereads the
       # rows the denial changed.
       assert {:error, reason} = Cell.call(:b, Fixtures, :issue_key, [before])
-      assert reason in [:stale_generation, :not_standing]
+      assert reason in [:stale_generation, :unauthenticated]
 
       # A derived token needs no announcement either: its every use rereads
       # the rows.

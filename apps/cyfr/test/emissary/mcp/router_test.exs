@@ -202,8 +202,8 @@ defmodule Emissary.MCP.RouterTest do
         params: %{"uri" => "unknown://resource/path"}
       }
 
-      assert {:error, :resource_not_found, message} = Router.dispatch(ctx, msg)
-      # The typed argument refusal renders through its vocabulary.
+      # An argument refusal answers by its class: invalid params.
+      assert {:error, :invalid_params, message} = Router.dispatch(ctx, msg)
       assert message =~ "No provider found for scheme: unknown"
     end
 
@@ -215,7 +215,7 @@ defmodule Emissary.MCP.RouterTest do
         params: %{"uri" => "invalid-uri-no-scheme"}
       }
 
-      assert {:error, :resource_not_found, message} = Router.dispatch(ctx, msg)
+      assert {:error, :invalid_params, message} = Router.dispatch(ctx, msg)
       assert message =~ "Invalid URI format"
     end
 

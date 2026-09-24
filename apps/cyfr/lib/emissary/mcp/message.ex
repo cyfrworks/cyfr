@@ -56,9 +56,9 @@ defmodule Emissary.MCP.Message do
   # Transport errors: -33300 to -33399
   @cyfr_transport_codes %{
     rate_limited: -33304,
-    # Never reaches a client — by the time it is recorded the caller has already
-    # closed the stream. It exists so the request log distinguishes "the caller
-    # went away" from a genuine failure.
+    # A call stopped by cancellation. Recorded when the caller closed the
+    # stream, so the request log tells "the caller went away" from a
+    # genuine failure; answered when a read ends cancelled.
     request_cancelled: -33305
   }
 
@@ -69,9 +69,16 @@ defmodule Emissary.MCP.Message do
     insufficient_permissions: -33004
   }
 
-  # Execution errors: -33100 to -33199
+  # Execution errors: -33100 to -33199, one per refusal class a call can
+  # end in once it was admitted.
   @cyfr_execution_codes %{
-    execution_failed: -33100
+    internal: -33100,
+    conflict: -33101,
+    not_owner: -33102,
+    unavailable: -33103,
+    corrupt: -33104,
+    timeout: -33105,
+    uncertain: -33106
   }
 
   # Consent remediation signals use codes -33500 to -33599.
@@ -98,6 +105,51 @@ defmodule Emissary.MCP.Message do
   """
   @spec cyfr_error_codes() :: %{atom() => integer()}
   def cyfr_error_codes, do: @cyfr_error_codes
+
+  @doc "Whether `name` is a code name from this module's tables."
+  @spec code?(term()) :: boolean()
+  def code?(name) when is_atom(name),
+    do: Map.has_key?(@error_codes, name) or Map.has_key?(@cyfr_error_codes, name)
+
+  def code?(_name), do: false
+
+  @doc """
+  The code name a refusal answers with: its row's override when it has
+  one (`Grimoire.Error.code_override/1`), a consent signal's own tag, and
+  otherwise its class's code. `where` is the method it answers —
+  `:resources_read` answers an absent resource with the MCP resource code,
+  `:tools_call` and `:transport` with invalid params.
+  """
+  @spec refusal_code(Prima.Refusal.t(), :tools_call | :resources_read | :transport) :: atom()
+  def refusal_code(%Prima.Refusal{} = refusal, where) do
+    cond do
+      override = Grimoire.Error.code_override(refusal) -> override
+      Prima.ConsentSignal.signal?(refusal.reason) -> elem(refusal.reason, 0)
+      true -> class_code(refusal.class, where)
+    end
+  end
+
+  defp class_code(:invalid_argument, _where), do: :invalid_params
+  defp class_code(:not_found, :resources_read), do: :resource_not_found
+  defp class_code(:not_found, _where), do: :invalid_params
+  defp class_code(:unauthenticated, _where), do: :auth_required
+  defp class_code(:forbidden, _where), do: :insufficient_permissions
+  defp class_code(:setup_required, _where), do: :setup_required
+  defp class_code(:consent_required, _where), do: :consent_required
+  defp class_code(:rate_limited, _where), do: :rate_limited
+  defp class_code(:cancelled, _where), do: :request_cancelled
+
+  defp class_code(class, _where)
+       when class in [
+              :conflict,
+              :not_owner,
+              :unavailable,
+              :corrupt,
+              :timeout,
+              :uncertain,
+              :internal
+            ],
+       do: class
 
   @doc """
   Decode a JSON-RPC message from a map (already parsed from JSON).

@@ -34,6 +34,31 @@ defmodule Cyfr.Bus.Payload do
     end
   end
 
+  @refusal_max_bytes 200
+
+  @doc false
+  # A refusal fit for a payload: its class and its public sentence
+  # (`Prima.Refusal.classify/1`, which keeps a refusal the bridge already
+  # classified), the sentence cut to 200 bytes on a character boundary —
+  # never an arbitrary term. No refusal is `nil`.
+  @spec refusal(term()) :: %{class: Prima.Refusal.class(), message: String.t()} | nil
+  def refusal(nil), do: nil
+
+  def refusal(reason) do
+    %Prima.Refusal{class: class, message: message} = Prima.Refusal.classify(reason)
+    {message, _cut?} = cap(message, @refusal_max_bytes)
+    %{class: class, message: message}
+  end
+
+  @doc false
+  # `refusal/1` over the named fields of `fields` that are present.
+  @spec refusals(map(), [atom()]) :: map()
+  def refusals(fields, keys) do
+    Enum.reduce(keys, fields, fn key, acc ->
+      if Map.has_key?(acc, key), do: Map.update!(acc, key, &refusal/1), else: acc
+    end)
+  end
+
   @doc false
   # `text` cut to at most `max` bytes on a character boundary, and whether
   # anything was cut.

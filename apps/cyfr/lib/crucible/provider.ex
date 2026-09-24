@@ -742,16 +742,9 @@ defmodule Crucible.Provider do
   end
 
   defp format_root_result({:error, reason}) when not is_binary(reason) do
-    # Render typed refusals through the shared seam. Log internal terms
-    # without returning them to the client.
-    case Grimoire.Error.render(reason) do
-      nil ->
-        Logger.warning("[Crucible.Provider] unrenderable authority error: #{inspect(reason)}")
-        {:error, "authority_error: the request could not be authorized"}
-
-      msg ->
-        {:error, "authority_error: #{msg}"}
-    end
+    # Render refusals through the gate's renderer; an internal term reads
+    # as the fixed sentence and is logged by its shape.
+    {:error, "authority_error: #{Grimoire.Error.render(reason)}"}
   end
 
   defp format_root_result(other), do: other

@@ -102,7 +102,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
       from(s in Arca.Schemas.Session, where: s.token_hash == ^ctx.session_token_hash)
     )
 
-    assert {:error, :not_standing} = OAuthGrant.complete(state, "code", @redirect)
+    assert {:error, :unauthenticated} = OAuthGrant.complete(state, "code", @redirect)
     assert entries(ctx.athanor_id) == []
   end
 
@@ -114,7 +114,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
       set: [status: "denied"]
     )
 
-    assert {:error, :not_standing} = OAuthGrant.complete(state, "code", @redirect)
+    assert {:error, :unauthenticated} = OAuthGrant.complete(state, "code", @redirect)
     assert entries(ctx.athanor_id) == []
   end
 
@@ -128,7 +128,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
       )
     )
 
-    assert {:error, :not_standing} = OAuthGrant.complete(state, "code", @redirect)
+    assert {:error, :unauthenticated} = OAuthGrant.complete(state, "code", @redirect)
     assert entries(ctx.athanor_id) == []
   end
 
@@ -148,7 +148,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
       set: [status: "archived"]
     )
 
-    assert {:error, :not_standing} = OAuthGrant.complete(state, "code", @redirect)
+    assert {:error, :unauthenticated} = OAuthGrant.complete(state, "code", @redirect)
     assert entries(ctx.athanor_id) == []
   end
 
@@ -157,6 +157,6 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
     state = for_context(ctx)
 
     assert {:error, reason} = OAuthGrant.complete(state, "code", @redirect)
-    refute reason in [:not_standing, :unavailable]
+    refute reason in [:unauthenticated, :unavailable]
   end
 end

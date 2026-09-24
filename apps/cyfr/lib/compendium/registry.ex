@@ -201,8 +201,8 @@ defmodule Compendium.Registry do
   # `:stale_writer` and `:stale_revision` are another writer, not a
   # broken store, and two of them say the unit is not the publish's to
   # clean up: `{:finish_failed, _}` is a PUBLISHED unit whose move to the
-  # served location did not finish, and `:unavailable` is a commit whose
-  # outcome the store could not state. Nothing here deletes the unit
+  # served location did not finish, and `:outcome_unknown` is a commit
+  # whose outcome the store could not state. Nothing here deletes the unit
   # after either — a delete would retire a row that stands, or one that
   # may stand — and no component row lands, so the tree and the rows
   # disagree only until the storage sweep repairs the move and the

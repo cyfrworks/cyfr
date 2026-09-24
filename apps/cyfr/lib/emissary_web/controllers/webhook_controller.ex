@@ -64,7 +64,7 @@ defmodule EmissaryWeb.WebhookController do
           {:ok, ctx} ->
             invoke_active(conn, ctx, webhook, conn.assigns[:raw_body], request_id)
 
-          {:error, :not_standing} ->
+          {:error, :unauthenticated} ->
             # The athanor is archived or the creator was denied on this
             # server — the stored row must not remain a standing execution
             # channel. Same response shape as a disabled webhook so

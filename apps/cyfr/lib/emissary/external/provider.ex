@@ -849,7 +849,7 @@ defmodule Emissary.External.Provider do
               "[Emissary.External.Provider] refresh failed for #{name}: #{inspect(r)}"
             )
 
-            %{name: name, error: Grimoire.Error.render(r) || "refresh failed"}
+            %{name: name, error: Grimoire.Error.render(r)}
           end
 
         if refreshed != [], do: Proxy.invalidate_external_tools_cache(ctx)

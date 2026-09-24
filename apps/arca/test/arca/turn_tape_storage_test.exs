@@ -313,7 +313,7 @@ defmodule Arca.TurnTapeStorageTest do
       # Another member's turn on the same thread claims nothing while this
       # one holds it: the claim is not something a peer takes over.
       %{turn: second} = accept_turn!(actor, thread, "@aqua again")
-      assert {:error, {:busy, ^held}} = start_with(actor, second, [])
+      assert {:error, {:held_elsewhere, ^held}} = start_with(actor, second, [])
       assert %{active_turn_id: ^held} = reread(actor, thread)
 
       # The turn that is over holds nothing.
@@ -476,14 +476,14 @@ defmodule Arca.TurnTapeStorageTest do
       assert holder == turn.id
       assert runner == peer.owner
 
-      assert {:error, :busy} =
+      assert {:error, :held_elsewhere} =
                TurnStorage.recover(actor, turn.id, %{
                  grant: :stored,
                  verify: &Arca.Test.Actor.admits/1,
                  fence: started.fence
                })
 
-      assert {:error, :busy} =
+      assert {:error, :held_elsewhere} =
                TurnStorage.takeover(actor, turn.id, %{
                  grant: :stored,
                  verify: &Arca.Test.Actor.admits/1,

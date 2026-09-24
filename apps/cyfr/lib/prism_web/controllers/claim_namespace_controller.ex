@@ -171,18 +171,11 @@ defmodule PrismWeb.ClaimNamespaceController do
     )
   end
 
-  defp claim_error_message(other) do
-    # One renderer (Grimoire.Error.render covers the OCI struct and crafted
-    # binaries too); nil means internal — logged, never reflected.
-    case Grimoire.Error.render(other) do
-      nil ->
-        Logger.error("[ClaimNamespaceController] claim failed: #{inspect(other)}")
-        "The claim failed — try again."
-
-      msg ->
-        msg
-    end
-  end
+  # One renderer: a registry's own error becomes its refusal first
+  # (`Compendium.Providers.Shared.refusal/1`), and an internal term reads
+  # as the fixed sentence, never reflected.
+  defp claim_error_message(other),
+    do: other |> Compendium.Providers.Shared.refusal() |> Grimoire.Error.render()
 
   defp suggestion(conn) do
     with {:ok, %{user_id: id, provider: provider}} when is_binary(id) <-

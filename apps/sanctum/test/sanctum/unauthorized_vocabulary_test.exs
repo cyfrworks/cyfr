@@ -5,7 +5,8 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
   @moduledoc """
   The refusal vocabulary and its `@type reason` union stay one thing.
 
-  Each exemplar must be accepted by `reason?/1`, `code/1`, and `message/2`.
+  Each exemplar must be accepted by `reason?/1`, `class/1`, and
+  `message/2`, classify to its row's class, and read as a public sentence.
   The `Sanctum.Unauthorized.reason()` union must contain the same number
   of variants as the exemplar roster.
   """
@@ -14,32 +15,74 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
 
   alias Sanctum.Unauthorized
 
-  # One exemplar per union member, in the union's order.
+  # One exemplar per union member, in the union's order, with its class.
   @exemplars [
-    :unauthenticated,
-    :missing_tenant,
-    :tenant_mismatch,
-    :malformed_record,
-    :untagged_tenant_resource,
-    :platform_admin_required,
-    {:missing_tenant, :no_membership},
-    {:missing_permission, :vault_read},
-    {:guest_plane, :vault_read},
-    {:guest_plane_call, "vault"},
-    {:tool_auth_required, "vault"},
-    {:malformed_resource, :execution},
-    {:consent_class_required, %{}},
-    {:authorization_required, "grant expired"}
+    {:unauthenticated, :unauthenticated},
+    {:missing_tenant, :forbidden},
+    {:tenant_mismatch, :forbidden},
+    {:malformed_record, :internal},
+    {:untagged_tenant_resource, :internal},
+    {:platform_admin_required, :forbidden},
+    {{:missing_tenant, :no_membership}, :forbidden},
+    {{:missing_permission, :vault_read}, :forbidden},
+    {{:guest_plane, :vault_read}, :forbidden},
+    {{:guest_plane_call, "vault"}, :forbidden},
+    {{:tool_auth_required, "vault"}, :unauthenticated},
+    {{:malformed_resource, :execution}, :internal},
+    {{:consent_class_required, :no_capability}, :forbidden},
+    {{:authorization_required, "grant expired"}, :setup_required}
   ]
 
-  test "every union member is accepted by reason?/1, code/1 and message/2" do
-    for reason <- @exemplars do
+  # The JSON-RPC codes these rows have always answered with, where the
+  # class's own code is another.
+  @overrides %{
+    {:authorization_required, "grant expired"} => :auth_required,
+    :malformed_record => :insufficient_permissions,
+    :untagged_tenant_resource => :insufficient_permissions,
+    {:malformed_resource, :execution} => :insufficient_permissions,
+    {:consent_class_required, :not_authenticated} => :insufficient_permissions
+  }
+
+  test "every union member is accepted by reason?/1, class/1 and message/2" do
+    for {reason, class} <- @exemplars do
       assert Unauthorized.reason?(reason), "reason?/1 rejects #{inspect(reason)}"
-      assert is_atom(Unauthorized.code(reason)), "code/1 fails for #{inspect(reason)}"
+      assert Unauthorized.class(reason) == class, "#{inspect(reason)} is not #{class}"
+      assert Unauthorized.class(reason) in Prima.Refusal.classes()
       assert is_binary(Unauthorized.message(reason)), "message/2 fails for #{inspect(reason)}"
 
       assert is_binary(Unauthorized.message(reason, :api_key)),
              "message/2 with a method fails for #{inspect(reason)}"
+    end
+  end
+
+  test "a consent class refused for want of a sign-in is unauthenticated" do
+    assert Unauthorized.class({:consent_class_required, :not_authenticated}) == :unauthenticated
+    assert Unauthorized.class({:consent_class_required, :anonymous}) == :forbidden
+  end
+
+  test "no sentence names an internal field or spells a term" do
+    for {reason, _class} <- @exemplars, method <- [nil, :api_key, :oidc] do
+      message = Unauthorized.message(reason, method)
+
+      for private <- ["athanor_id", "{:", "%{", "=>", "consent_class_required", "guest-plane"] do
+        refute message =~ private, "#{inspect(reason)} reads #{inspect(message)}"
+      end
+    end
+  end
+
+  test "the rows whose wire code is not their class's carry it as an override" do
+    for {reason, _class} <- @exemplars do
+      assert Unauthorized.code_override(reason) == Map.get(@overrides, reason)
+    end
+
+    assert Unauthorized.code_override({:consent_class_required, :not_authenticated}) ==
+             :insufficient_permissions
+  end
+
+  test "a raised refusal answers 401 for want of a sign-in and 403 for anything else" do
+    for {reason, class} <- @exemplars do
+      status = Plug.Exception.status(%Sanctum.UnauthorizedError{reason: reason})
+      assert status == if(class == :unauthenticated, do: 401, else: 403)
     end
   end
 
