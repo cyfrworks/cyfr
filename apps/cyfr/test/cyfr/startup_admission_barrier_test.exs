@@ -74,6 +74,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Emissary.MCP.RunningTasks,
     Compendium.ProvisioningSupervisor,
     Compendium.Provisioning,
+    Compendium.ProjectionReconciler,
     Prism.TinctureRegistry,
     Aqua.WorkerTree,
     Aqua.RunnerTree,

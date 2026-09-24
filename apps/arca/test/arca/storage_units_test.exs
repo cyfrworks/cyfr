@@ -285,6 +285,57 @@ defmodule Arca.StorageUnitsTest do
     end
   end
 
+  describe "the projection generation" do
+    defp change(actor, key) do
+      {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, @root, units: [key])
+      Enum.find(token.units, &(&1.unit_key == key))
+    end
+
+    test "a commit stamps its unit at a new generation, not ready, naming its revision", %{
+      actor: actor,
+      key: key
+    } do
+      token = StorageUnits.new_writer_token()
+      {:ok, draft} = StorageUnits.register_draft(actor, @root, key, token)
+      assert %{generation: 0} = change(actor, key)
+
+      assert {:committed, generation} =
+               StorageUnits.stamped_commit(actor, draft, nil, token, identity("rev_1"))
+
+      assert %{generation: ^generation, ready: false, source_revision: "rev_1", pending: true} =
+               change(actor, key)
+
+      assert {:ok, %{epoch: ^generation}} = Arca.StorageProjectionRoots.epoch(actor, @root)
+    end
+
+    test "a refused commit stamps nothing", %{actor: actor, key: key} do
+      commit!(actor, key, "rev_1")
+      stamped = change(actor, key)
+      {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_2")
+
+      assert {:error, :stale_revision} =
+               StorageUnits.stamped_commit(actor, draft, "rev_0", "wrt_2", identity("rev_2"))
+
+      assert change(actor, key) == stamped
+    end
+
+    test "a retirement stamps a tombstone, whether or not a row named the unit", %{
+      actor: actor,
+      other: other,
+      key: key
+    } do
+      commit!(actor, key, "rev_1")
+
+      assert {:retired, retired} = StorageUnits.stamped_retire(actor, @root, key)
+      assert %{generation: ^retired, tombstone: true, ready: false, source_revision: nil} =
+               change(actor, key)
+
+      assert {:not_found, absent} = StorageUnits.stamped_retire(other, @root, key)
+      assert %{generation: ^absent, tombstone: true} = change(other, key)
+      assert {:error, :not_found} = StorageUnits.current(other, @root, key)
+    end
+  end
+
   describe "abandon_draft/3, retire/3, current_under/2, stage_prefix/3" do
     test "an abandoned first draft is retired; an abandoned next draft leaves the unit committed",
          %{actor: actor, key: key} do

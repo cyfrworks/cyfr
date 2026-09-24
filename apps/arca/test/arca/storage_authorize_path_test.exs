@@ -16,6 +16,10 @@ defmodule Arca.StorageAuthorizePathTest do
   alias Cyfr.Actor
 
   setup do
+    # A write inside a unit stamps the unit's pending generation for the
+    # root's projection before its bytes move.
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+
     base = Path.join(System.tmp_dir!(), "arca_authz_#{System.unique_integer([:positive])}")
     File.mkdir_p!(base)
 

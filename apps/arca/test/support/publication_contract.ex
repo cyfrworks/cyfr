@@ -275,6 +275,13 @@ defmodule Arca.PublicationContract do
       defp staged_object?(path), do: staging?(path) and not marker?(path)
       defp served?(path, unit), do: List.starts_with?(path, unit)
 
+      # The unit's change as the root's projection sees it.
+      defp change(actor, unit) do
+        {root, key} = UnitLocator.unit_key(unit)
+        {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, root, units: [key])
+        Enum.find(token.units, &(&1.unit_key == key))
+      end
+
       # A writer that dies at the operation `fault` exits on.
       defp writer_dies(fun) do
         {pid, ref} = spawn_monitor(fun)
@@ -327,6 +334,11 @@ defmodule Arca.PublicationContract do
 
           assert staged(actor, unit) == []
           assert Arca.Overlay.unit_status(actor, unit) == {:ok, :own}
+
+          # Stamped for the root's projection by the commit, and ready once
+          # the move finished.
+          assert %{ready: true, pending: true, source_revision: ^revision, tombstone: false} =
+                   change(actor, unit)
         end
 
         test "registers its prefix before any upload", %{actor: actor, unit: unit} do
@@ -551,6 +563,44 @@ defmodule Arca.PublicationContract do
           assert {:ok, :nothing_pending} =
                    Arca.Overlay.repair_unit(actor, unit)
         end
+
+        test "an interrupted promotion stays pending until the repair marks a newer generation ready",
+             %{actor: actor, unit: unit} do
+          Faults.inject(fn op, path ->
+            if op in [:put, :replace_tree] and served?(path, unit),
+              do: exit(:died_mid_promotion),
+              else: :pass
+          end)
+
+          assert :died_mid_promotion = writer_dies(fn -> commit(actor, unit, "one") end)
+
+          {root, key} = UnitLocator.unit_key(unit)
+          assert {:ok, %{current_revision: revision}} = StorageUnits.current(actor, root, key)
+
+          # The commit's generation stands, not ready: the projection must
+          # not take the served location for the revision the row names.
+          committed = change(actor, unit)
+          assert %{ready: false, pending: true, source_revision: ^revision} = committed
+
+          # Nor may the dead writer's mark land after a repair took over.
+          assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
+          repaired = change(actor, unit)
+          assert %{ready: true, source_revision: ^revision, tombstone: false} = repaired
+          assert repaired.generation > committed.generation
+
+          assert {:error, :stale_generation} =
+                   Arca.StorageProjectionChanges.mark_ready(
+                     actor,
+                     root,
+                     key,
+                     committed.generation,
+                     revision
+                   )
+
+          assert change(actor, unit) == repaired
+          assert {_revision, served} = read(actor, unit)
+          assert served == whole("one")
+        end
       end
 
       # ---------------------------------------------------------------------------
@@ -584,6 +634,7 @@ defmodule Arca.PublicationContract do
           {root, key} = UnitLocator.unit_key(unit)
           assert {:ok, %{current_revision: revision}} = StorageUnits.current(actor, root, key)
           assert [%{new_revision: ^revision}] = journal(actor, unit)
+          assert %{ready: false} = change(actor, unit)
 
           # The repair fails where the commit's own move did.
           assert {:error, {:finish_failed, :enospc}} =
@@ -591,6 +642,7 @@ defmodule Arca.PublicationContract do
 
           assert {:ok, %{current_revision: ^revision}} = StorageUnits.current(actor, root, key)
           assert "b.txt" in staged(actor, unit)
+          assert %{ready: false} = change(actor, unit)
 
           Faults.clear()
           assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
@@ -598,6 +650,7 @@ defmodule Arca.PublicationContract do
           assert served == whole("one")
           assert staged(actor, unit) == []
           assert [_one_commit_throughout] = journal(actor, unit)
+          assert %{ready: true, source_revision: ^revision} = change(actor, unit)
         end
 
         @tag :capture_log
@@ -782,6 +835,63 @@ defmodule Arca.PublicationContract do
           assert read(actor, unit) == :unpublished
           assert journal(actor, unit) == []
           assert staged(actor, unit) == []
+        end
+      end
+
+      # ---------------------------------------------------------------------------
+      # Edits and deletes
+      # ---------------------------------------------------------------------------
+
+      describe "a plain write inside a unit" do
+        test "is pending before its write and ready at a newer generation after it", %{
+          actor: actor,
+          unit: unit
+        } do
+          assert {:ok, _} = commit(actor, unit, "one")
+          published = change(actor, unit)
+          test_pid = self()
+
+          Faults.inject(fn op, path ->
+            if op == :put and path == unit ++ ["a.txt"], do: park(test_pid), else: :pass
+          end)
+
+          edit = Task.async(fn -> Arca.put(actor, unit ++ ["a.txt"], "edited") end)
+          assert_receive {:parked, writer}, 10_000
+
+          # While the bytes move the unit is pending, never ready.
+          pending = change(actor, unit)
+          assert %{ready: false} = pending
+          assert pending.generation > published.generation
+
+          send(writer, :proceed)
+          assert :ok = Task.await(edit, 30_000)
+          Faults.clear()
+
+          ready = change(actor, unit)
+          assert %{ready: true} = ready
+          assert ready.generation > pending.generation
+        end
+
+        test "a delete at the unit is a tombstone, pending until the tenant delete returns", %{
+          actor: actor,
+          unit: unit
+        } do
+          assert {:ok, _} = commit(actor, unit, "one")
+          test_pid = self()
+
+          Faults.inject(fn op, path ->
+            if op == :delete_tree and path == unit, do: park(test_pid), else: :pass
+          end)
+
+          drop = Task.async(fn -> Arca.Overlay.drop_unit(actor, unit) end)
+          assert_receive {:parked, writer}, 10_000
+          assert %{tombstone: true, ready: false} = change(actor, unit)
+
+          send(writer, :proceed)
+          assert {:ok, :deleted} = Task.await(drop, 30_000)
+          Faults.clear()
+
+          assert %{tombstone: true, ready: true, source_revision: nil} = change(actor, unit)
         end
       end
 

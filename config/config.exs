@@ -222,6 +222,16 @@ config :cyfr, :provisioning_required_pull_budget_ms, :timer.minutes(10)
 config :cyfr, :returning_probe_ms, 5_000
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 
+# The reconciler of the component registry and the agent index
+# (`Compendium.ProjectionReconciler`): whether it runs, how often it
+# recovers every estate a seeded root is behind in while this member holds
+# its slot, and how old a pending change must be before its writer is
+# taken for gone — given one repair attempt, then settled where it stands.
+config :cyfr, Compendium.ProjectionReconciler,
+  enabled: true,
+  interval_ms: :timer.minutes(1),
+  settle_after_ms: :timer.seconds(60)
+
 # How long an approval card waits for a decision before it expires as a
 # denial the agent observes, in hours. An estate overrides it in its
 # settings under `approvals.expiry_hours`.

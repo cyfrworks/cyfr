@@ -612,6 +612,51 @@ defmodule Prism.TinctureRegistryTest do
     end
   end
 
+  describe "the registry's acknowledged epoch" do
+    # A tincture laid beneath the storage layer: nothing stamps it, and
+    # nothing announces it.
+    defp lay_quietly(name) do
+      dir = fixture_dir("ath_test", "local", name, "0.1.0")
+      File.mkdir_p!(dir)
+
+      File.write!(
+        Path.join(dir, "cyfr-manifest.json"),
+        Jason.encode!(%{
+          "name" => name,
+          "type" => "tincture",
+          "version" => "0.1.0",
+          "publisher" => "local",
+          "tincture" => %{"entry" => "index.html"}
+        })
+      )
+    end
+
+    test "a read that finds it moved rescans the athanor, with no announcement heard" do
+      name = :test_epoch_marker
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
+      ctx = lookup("ath_test")
+
+      assert ["test-dash"] = Enum.map(TinctureRegistry.list_tinctures(name, ctx), & &1.name)
+
+      lay_quietly("quiet-dash")
+
+      # The marker still stands at the epoch the scan began from.
+      assert ["test-dash"] = Enum.map(TinctureRegistry.list_tinctures(name, ctx), & &1.name)
+
+      # Any change under components/ the registry acknowledges moves the
+      # epoch — here one that touches no tincture, so nothing announces it.
+      actor = Sanctum.Context.actor(ctx)
+      key = "catalysts/local/elsewhere-#{System.unique_integer([:positive])}/1.0.0"
+      {:ok, pending} = Arca.StorageProjectionChanges.begin_edit(actor, "components", key)
+      {:ok, _} = Arca.StorageProjectionChanges.finish_edit(actor, "components", key, pending)
+
+      assert ["quiet-dash", "test-dash"] =
+               name |> TinctureRegistry.list_tinctures(ctx) |> Enum.map(& &1.name) |> Enum.sort()
+
+      GenServer.stop(pid)
+    end
+  end
+
   describe "startup" do
     test "the table starts empty and the first list populates its athanor" do
       # init only creates the table — there is no boot walk. The first

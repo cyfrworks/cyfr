@@ -40,6 +40,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     cell()
     components()
     storage_units()
+    storage_projections()
     agents()
     executions()
     logs()
@@ -562,6 +563,79 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create index(:storage_commits, [:storage_unit_id, :committed_at])
     create index(:storage_commits, [:athanor_id, :committed_at])
+  end
+
+  # ==========================================================================
+  # Storage projections
+  # ==========================================================================
+
+  # How far each domain projection of a seeded root has caught up with the
+  # root's units. A root row holds the root's epoch, raised by one in the
+  # transaction of every publication, retirement, repair and edit of a unit
+  # under it, and never lowered or deleted: a unit recreated after its
+  # deletion takes a generation no earlier change of it held. A change row
+  # holds the last generation a unit took, whether the bytes it names are
+  # served yet (`ready`), the revision it names or that it was deleted
+  # (`tombstone`), and the generation the projection has acknowledged. No
+  # row references `storage_units`: a hand-laid unit has none, and the
+  # evidence of a deletion outlives the unit's row.
+  defp storage_projections do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    epoch_positive = %{name: "storage_projection_roots_epoch_positive", expr: "epoch > 0"}
+
+    acknowledged_epoch_counted = %{
+      name: "storage_projection_roots_acknowledged_epoch_counted",
+      expr: "acknowledged_epoch >= 0"
+    }
+
+    create table(:storage_projection_roots, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      # The seeded root (`Arca.Storage.overlay_roots/0`).
+      add :root, :string, null: false
+      add :epoch, :bigint, null: false, check: if(sqlite?, do: epoch_positive)
+
+      # The epoch up to which the projection reflects every change of the
+      # root.
+      add :acknowledged_epoch, :bigint,
+        null: false,
+        default: 0,
+        check: if(sqlite?, do: acknowledged_epoch_counted)
+    end
+
+    unless sqlite? do
+      create constraint(:storage_projection_roots, epoch_positive.name,
+               check: epoch_positive.expr
+             )
+
+      create constraint(:storage_projection_roots, acknowledged_epoch_counted.name,
+               check: acknowledged_epoch_counted.expr
+             )
+    end
+
+    create unique_index(:storage_projection_roots, [:athanor_id, :root])
+
+    create table(:storage_projection_changes, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :root, :string, null: false
+      # The unit's key inside its root, as `storage_units` spells it.
+      add :unit_key, :string, null: false
+      # The root epoch the unit's last change took.
+      add :generation, :bigint, null: false
+      # Whether the bytes that change names are served.
+      add :ready, :boolean, null: false, default: false
+      # The revision the change names; null for a deletion and for a unit
+      # no commit has published.
+      add :source_revision, :string
+      add :tombstone, :boolean, null: false, default: false
+      add :acknowledged_generation, :bigint, null: false, default: 0
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:storage_projection_changes, [:athanor_id, :root, :unit_key])
   end
 
   # ==========================================================================

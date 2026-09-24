@@ -214,20 +214,15 @@ defmodule Aqua.AquaToolEditsTest do
     assert Cyfr.Refusal.reason?({:finish_failed, :enospc})
     assert Cyfr.Refusal.message({:finish_failed, :enospc}) =~ "published"
 
-    # The resync ran rather than being skipped with the refusal: it reads
-    # the served tree, which does not hold the role's bytes yet, so it
-    # keeps what is served and names nothing more.
-    {:ok, rows} = Compendium.AgentIndex.list(ctx)
-    assert Enum.any?(rows, &(&1.name == "scout"))
-    refute Enum.any?(rows, &(&1.name == "tracker"))
+    # The commit stamped the role pending and its move never finished: the
+    # index is behind the tree, and says so rather than answer the rows it
+    # held before the role was published.
+    assert {:error, :projection_unavailable} = Compendium.AgentIndex.list(ctx)
     refute Arca.exists?(Sanctum.Context.actor(ctx), role)
 
-    # The move is what was left, and the storage sweep is the only thing
-    # that finishes it. It re-derives the index too: the three writers of
-    # the index are the aqua tool, `Cyfr.Files` and provisioning, and none
-    # of them runs because a sweep repaired something — so without that,
-    # a role published by this commit stays out of the index until the
-    # next write to the tree, which may be days away or never.
+    # The move is what was left, and the storage sweep finishes it: its
+    # repair marks the role's change ready at a newer generation, so the
+    # next read of the index derives the role with nothing else asked.
     # No grace, so the move this commit left is overdue at once.
     assert {:ok, _collected} = Cyfr.Retention.StagedRevisions.prune(ctx, 0, false)
     assert Arca.exists?(Sanctum.Context.actor(ctx), role)

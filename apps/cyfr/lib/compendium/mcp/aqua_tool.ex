@@ -853,8 +853,6 @@ defmodule Compendium.MCP.AquaTool do
           "disable it instead (update name=#{name} disabled=true)"
   end
 
-  # The tree changed; the derived index follows it. Never the write's
-  # failure: an index that lags is re-synced by the next write or sync.
   # One unit back to what ships; the estate's own work refuses in words.
   defp restore_unit(ctx, unit, noun, name) do
     case Compendium.AquaTemplate.restore(ctx, unit) do
@@ -876,6 +874,10 @@ defmodule Compendium.MCP.AquaTool do
     end
   end
 
+  # The tree changed; the derived index follows it now, and the estate's
+  # consent caches with it. Never the write's failure: the write stamped
+  # its unit, so an index that could not follow here is brought up to the
+  # tree by its next read (`Compendium.ProjectionReconciler`).
   defp resync_index(ctx) do
     case Compendium.AgentIndex.sync(ctx) do
       {:ok, _} -> :ok

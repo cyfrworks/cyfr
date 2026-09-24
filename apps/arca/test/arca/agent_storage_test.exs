@@ -3,14 +3,15 @@
 
 defmodule Arca.AgentStorageTest do
   @moduledoc """
-  The `agents` rows, and the claim a provisioning attempt publishes them
-  under.
+  The `agents` rows, the `aqua` root's projection, and the claim a
+  provisioning attempt publishes them under.
 
   The index speaks for the estate, so an attempt whose claim a successor
-  took must not publish one. The guard and the rewrite are one
-  transaction, which is what makes the answer a decision and not a
-  guess: a takeover racing it either lands first and the rewrite writes
-  nothing, or waits behind the commit.
+  took must not publish one. The guard, the rewrite and its
+  acknowledgment are one transaction, which is what makes the answer a
+  decision and not a guess: a takeover racing it either lands first and
+  the rewrite writes nothing, or waits behind the commit — and a rewrite
+  that writes nothing acknowledges nothing.
 
   Every case works in an athanor of its own, so what it counts is its own.
   """
@@ -23,8 +24,10 @@ defmodule Arca.AgentStorageTest do
 
   alias Arca.AgentStorage
   alias Arca.ProvisioningClaims, as: Claims
+  alias Arca.{StorageProjectionChanges, StorageProjectionRoots}
 
   @lease_ms 60_000
+  @root "aqua"
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -50,16 +53,45 @@ defmodule Arca.AgentStorageTest do
     Enum.map(rows, & &1.name)
   end
 
+  defp token(actor) do
+    {:ok, token} = StorageProjectionChanges.snapshot(actor, @root)
+    token
+  end
+
+  defp standing(actor) do
+    {:ok, standing} = StorageProjectionRoots.epoch(actor, @root)
+    standing
+  end
+
+  # A role edited in the tree: its pending generation, then a ready one.
+  defp edited!(actor, name) do
+    {:ok, pending} = StorageProjectionChanges.begin_edit(actor, @root, "roles/#{name}.md")
+    {:ok, ready} = StorageProjectionChanges.finish_edit(actor, @root, "roles/#{name}.md", pending)
+    ready
+  end
+
   test "a rewrite with no claim stands on its own", %{actor: actor, athanor_id: athanor_id} do
-    assert {:ok, _} = AgentStorage.replace_all(actor, [row(athanor_id, "alpha")])
+    assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
     assert names(actor) == ["alpha"]
 
     # A whole rewrite, never a merge.
-    assert {:ok, _} = AgentStorage.replace_all(actor, [row(athanor_id, "beta")])
+    assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "beta")])
     assert names(actor) == ["beta"]
 
-    assert {:ok, _} = AgentStorage.replace_all(actor, [])
+    assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [])
     assert names(actor) == []
+  end
+
+  test "a rewrite acknowledges the root it was made against", %{
+    actor: actor,
+    athanor_id: athanor_id
+  } do
+    generation = edited!(actor, "alpha")
+    assert %{epoch: ^generation, acknowledged_epoch: 0} = standing(actor)
+
+    assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
+    assert %{epoch: ^generation, acknowledged_epoch: ^generation} = standing(actor)
+    assert {:ok, %{units: []}} = StorageProjectionChanges.snapshot(actor, @root)
   end
 
   test "an attempt holding its claim publishes the index", %{
@@ -69,7 +101,7 @@ defmodule Arca.AgentStorageTest do
     assert {:ok, claim} = Claims.claim(actor, "boot_a", "first_need", @lease_ms)
 
     assert {:ok, _} =
-             AgentStorage.replace_all(actor, [row(athanor_id, "alpha")],
+             AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")],
                claim: %{owner: claim.owner, fence: claim.fence}
              )
 
@@ -83,7 +115,7 @@ defmodule Arca.AgentStorageTest do
     assert {:ok, first} = Claims.claim(actor, "boot_a", "first_need", @lease_ms)
 
     assert {:ok, _} =
-             AgentStorage.replace_all(actor, [row(athanor_id, "alpha")],
+             AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")],
                claim: %{owner: first.owner, fence: first.fence}
              )
 
@@ -97,7 +129,7 @@ defmodule Arca.AgentStorageTest do
     # have deleted are still there, so a lost claim cannot even empty the
     # index on its way out.
     assert {:error, :claim_lost} =
-             AgentStorage.replace_all(actor, [row(athanor_id, "beta")],
+             AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "beta")],
                claim: %{owner: first.owner, fence: first.fence}
              )
 
@@ -105,7 +137,7 @@ defmodule Arca.AgentStorageTest do
 
     # And the successor publishes under its own claim.
     assert {:ok, _} =
-             AgentStorage.replace_all(actor, [row(athanor_id, "beta")],
+             AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "beta")],
                claim: %{owner: second.owner, fence: second.fence}
              )
 
@@ -120,17 +152,79 @@ defmodule Arca.AgentStorageTest do
     assert :ok = Claims.settle(actor, claim.owner, claim.fence, "ready", nil)
 
     assert {:error, :claim_lost} =
-             AgentStorage.replace_all(actor, [row(athanor_id, "alpha")],
+             AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")],
                claim: %{owner: claim.owner, fence: claim.fence}
              )
 
     assert names(actor) == []
   end
 
-  test "an actor without an athanor is refused before any query" do
-    nobody = %Cyfr.Actor{athanor_id: nil, user_id: "someone"}
+  describe "the rows and their acknowledgment" do
+    test "roll back together when the claim is lost", %{actor: actor, athanor_id: athanor_id} do
+      assert {:ok, claim} = Claims.claim(actor, "boot_a", "first_need", @lease_ms)
+      assert :ok = Claims.settle(actor, claim.owner, claim.fence, "failed", nil)
+      generation = edited!(actor, "alpha")
 
-    assert AgentStorage.replace_all(nobody, []) == {:error, :no_athanor}
+      assert {:error, :claim_lost} =
+               AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")],
+                 claim: %{owner: claim.owner, fence: claim.fence}
+               )
+
+      assert names(actor) == []
+      assert %{epoch: ^generation, acknowledged_epoch: 0} = standing(actor)
+      assert {:ok, %{units: [%{acknowledged_generation: 0}]}} = StorageProjectionChanges.snapshot(actor, @root)
+    end
+
+    @tag :capture_log
+    test "roll back together when a row cannot be written", %{
+      actor: actor,
+      athanor_id: athanor_id
+    } do
+      assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
+      generation = edited!(actor, "beta")
+
+      # `kind` is NOT NULL: the insert fails after the delete, inside the
+      # transaction that would have acknowledged the edit.
+      broken = %{row(athanor_id, "beta") | kind: nil}
+
+      assert {:error, :database_error} =
+               AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha"), broken])
+
+      assert names(actor) == ["alpha"]
+      assert %{epoch: ^generation, acknowledged_epoch: previous} = standing(actor)
+      assert previous < generation
+    end
+
+    test "a change the snapshot did not see refuses the whole rewrite", %{
+      actor: actor,
+      athanor_id: athanor_id
+    } do
+      stale = token(actor)
+      _created_since = edited!(actor, "gamma")
+
+      assert {:error, :generation_conflict} =
+               AgentStorage.replace_projection(actor, stale, [row(athanor_id, "alpha")])
+
+      assert names(actor) == []
+    end
+  end
+
+  test "an actor without an athanor, and another athanor's token, are refused before any write",
+       %{actor: actor, athanor_id: athanor_id} do
+    nobody = %Cyfr.Actor{athanor_id: nil, user_id: "someone"}
+    assert AgentStorage.replace_projection(nobody, token(actor), []) == {:error, :no_athanor}
+    assert AgentStorage.replace_projection(%{nobody | athanor_id: ""}, token(actor), []) ==
+             {:error, :no_athanor}
+
     assert AgentStorage.list(nobody) == {:error, :no_athanor}
+
+    other = %Cyfr.Actor{athanor_id: "#{athanor_id}_other"}
+    assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
+
+    assert {:error, :cross_tenant} =
+             AgentStorage.replace_projection(other, token(actor), [row(other.athanor_id, "x")])
+
+    assert names(other) == []
+    assert names(actor) == ["alpha"]
   end
 end

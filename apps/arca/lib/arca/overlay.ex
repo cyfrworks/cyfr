@@ -96,6 +96,21 @@ defmodule Arca.Overlay do
   edit. The athanor's own units delete plainly, and a delete AT a unit
   retires its row first.
 
+  ## What the root's projection is told
+
+  Every change of a unit's served bytes stamps a generation on the unit
+  for the root's domain projection (`Arca.StorageProjectionChanges`), not
+  ready while the bytes move and ready once they are served: a commit
+  when its move finishes, a repair around its move, a delete at a unit
+  around the tenant delete (a tombstone when it deletes, and otherwise a
+  generation the unit is derived again under), and a plain edit inside a
+  unit — a put, an append, a conditional put, a delete or a tree delete
+  or replacement below the unit's root — with a pending generation before
+  its write and a newer, ready one after it. An edit whose pending mark cannot be
+  written is refused before any byte moves. The internal-write scope and
+  the staging areas stamp nothing: their writes are a commit's or a
+  repair's, which stamp their own, or bookkeeping no reader sees.
+
   ## The internal-write scope
 
   Shipped copies and unit commits write back through the `Arca` facade —
@@ -113,7 +128,7 @@ defmodule Arca.Overlay do
   require Logger
 
   alias Arca.Storage.UnitLocator
-  alias Arca.StorageUnits
+  alias Arca.{StorageProjectionChanges, StorageUnits}
 
   @internal_writes_key {__MODULE__, :internal_writes}
 
@@ -161,49 +176,147 @@ defmodule Arca.Overlay do
 
   @impl true
   def put(%Cyfr.Actor{} = actor, path, content) do
-    with :ok <- writable(path), do: tenant().put(actor, path, content)
+    with :ok <- writable(path),
+         do: edit(actor, path, fn -> tenant().put(actor, path, content) end)
   end
 
   @impl true
   def append(%Cyfr.Actor{} = actor, path, content) do
-    with :ok <- writable(path), do: tenant().append(actor, path, content)
+    with :ok <- writable(path),
+         do: edit(actor, path, fn -> tenant().append(actor, path, content) end)
   end
 
   @impl true
   def delete(%Cyfr.Actor{} = actor, path) do
     with :ok <- deletable(path),
-         :ok <- retire_at_unit(actor, path),
-         :ok <- tenant().delete(actor, path) do
-      clear_staging_at_unit(actor, path)
-    end
+         do: removal(actor, path, fn -> tenant().delete(actor, path) end)
   end
 
   @impl true
   def delete_tree(%Cyfr.Actor{} = actor, path) do
     with :ok <- tree_deletable(actor, path),
          :ok <- deletable(path),
-         :ok <- retire_at_unit(actor, path),
-         :ok <- tenant().delete_tree(actor, path) do
-      clear_staging_at_unit(actor, path)
-    end
+         do: removal(actor, path, fn -> tenant().delete_tree(actor, path) end)
   end
 
   # A delete AT a unit is the unit's removal, so its row goes first: a
   # reader never finds a committed pointer over a tree being cleared. A
-  # unit with no row, or one already retired, deletes as plain bytes.
-  defp retire_at_unit(actor, path) do
+  # unit with no row, or one already retired, deletes as plain bytes, and
+  # either way the root's projection is told the unit is going — a
+  # tombstone, pending until the tenant delete returns. Only a delete that
+  # answered `:ok` marks it ready: any other answer leaves bytes the
+  # projection must still see, so the unit takes a ready generation that
+  # is no tombstone instead, as a failed edit does, and is derived again
+  # from what is there. A delete below a unit's root is an edit.
+  defp removal(actor, path, delete) do
     case at_unit(path) do
       nil ->
-        :ok
+        edit(actor, path, delete)
 
       unit ->
         {root, key} = UnitLocator.unit_key(unit)
 
-        case StorageUnits.retire(actor, root, key) do
-          :ok -> :ok
-          {:error, :not_found} -> :ok
-          {:error, _} = error -> error
+        case StorageUnits.stamped_retire(actor, root, key) do
+          {outcome, generation} when outcome in [:retired, :not_found] ->
+            case delete.() do
+              :ok ->
+                mark_ready(actor, root, key, generation, nil)
+                clear_staging_at_unit(actor, path)
+
+              failed ->
+                still_there(actor, unit, generation)
+                failed
+            end
+
+          {:error, _} = error ->
+            error
         end
+    end
+  end
+
+  # A removal whose tenant delete failed: the bytes are the tree's still,
+  # and the projection derives from them rather than acknowledge a
+  # deletion that was not made.
+  defp still_there(actor, unit, tombstone) do
+    {root, key} = UnitLocator.unit_key(unit)
+
+    case StorageProjectionChanges.finish_edit(actor, root, key, tombstone) do
+      {:ok, _generation_or_covered} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Arca.Overlay] #{Enum.join(unit, "/")} was not deleted and its tombstone " <>
+            "#{tombstone} could not be superseded (#{inspect(reason)}); the settle marks it " <>
+            "once it is stale"
+        )
+    end
+  end
+
+  # A plain edit inside a unit: a pending generation before the write and
+  # a newer, ready one after it, whatever the write answered — the bytes
+  # are what they are, and the projection derives from them. An edit whose
+  # pending mark cannot be written moves no byte: the projection would
+  # never learn of it.
+  defp edit(actor, path, write) do
+    case edited_unit(path) do
+      nil ->
+        write.()
+
+      unit ->
+        {root, key} = UnitLocator.unit_key(unit)
+
+        with {:ok, pending} <- StorageProjectionChanges.begin_edit(actor, root, key) do
+          written = write.()
+
+          case StorageProjectionChanges.finish_edit(actor, root, key, pending) do
+            {:ok, _generation_or_covered} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning(
+                "[Arca.Overlay] #{Enum.join(unit, "/")} was written and its generation " <>
+                  "#{pending} could not be marked ready (#{inspect(reason)}); the settle " <>
+                  "marks it once it is stale"
+              )
+          end
+
+          written
+        end
+    end
+  end
+
+  # The unit a plain write lands inside: at a file unit's file, or below a
+  # directory unit's root. Not inside the internal-write scope, whose
+  # writes are a commit's, a repair's or bookkeeping; never under a
+  # staging area, which locates above the units.
+  defp edited_unit(path) do
+    if internal_writes?() do
+      nil
+    else
+      case Arca.Storage.locate(path) do
+        {:file, ^path} -> path
+        {:dir, unit, _sentinel} when unit != path -> unit
+        _at_above_below_or_outside -> nil
+      end
+    end
+  end
+
+  defp mark_ready(actor, root, key, generation, revision) do
+    case StorageProjectionChanges.mark_ready(actor, root, key, generation, revision) do
+      :ok ->
+        :ok
+
+      # A later change of the unit overtook this one; it is that change's
+      # writer that marks.
+      {:error, :stale_generation} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Arca.Overlay] #{root}/#{key} generation #{generation} could not be marked ready " <>
+            "(#{inspect(reason)}); the settle marks it once it is stale"
+        )
     end
   end
 
@@ -262,7 +375,11 @@ defmodule Arca.Overlay do
 
   @impl true
   def put_if_match(%Cyfr.Actor{} = actor, path, content, precondition) do
-    with :ok <- writable(path), do: tenant().put_if_match(actor, path, content, precondition)
+    with :ok <- writable(path),
+         do:
+           edit(actor, path, fn ->
+             tenant().put_if_match(actor, path, content, precondition)
+           end)
   end
 
   @impl true
@@ -281,7 +398,7 @@ defmodule Arca.Overlay do
       adapter = tenant()
 
       if Code.ensure_loaded?(adapter) and function_exported?(adapter, :replace_tree, 3),
-        do: adapter.replace_tree(actor, path, files),
+        do: edit(actor, path, fn -> adapter.replace_tree(actor, path, files) end),
         else: {:error, :atomic_replace_unsupported}
     end
   end
@@ -828,9 +945,16 @@ defmodule Arca.Overlay do
           {:ok, :nothing_pending}
 
         relatives ->
+          # The unit's pending generation is written before the move
+          # touches a served byte, and marked ready only once the move has
+          # finished and only if no later change overtook it.
           with :ok <- staged_as_committed(actor, internal, loc, revision, relatives),
-               {:ok, _written} <- finish(internal, loc, revision, in_write_order(loc, relatives)),
-               do: {:ok, :repaired}
+               {:ok, generation} <-
+                 StorageProjectionChanges.begin_repair(actor, root, key, revision),
+               {:ok, _written} <- finish(internal, loc, revision, in_write_order(loc, relatives)) do
+            mark_ready(actor, root, key, generation, revision)
+            {:ok, :repaired}
+          end
       end
     end
   end
@@ -1074,9 +1198,14 @@ defmodule Arca.Overlay do
           commit_identity: actor.user_id || "system"
         }
 
-        case StorageUnits.commit(actor, draft, draft.current_revision, token, identity) do
-          :committed ->
-            finish(internal, loc, revision, Enum.map(manifest, &elem(&1, 0)))
+        case StorageUnits.stamped_commit(actor, draft, draft.current_revision, token, identity) do
+          {:committed, generation} ->
+            with {:ok, _written} = served <-
+                   finish(internal, loc, revision, Enum.map(manifest, &elem(&1, 0))) do
+              {root, key} = UnitLocator.unit_key(unit)
+              mark_ready(actor, root, key, generation, revision)
+              served
+            end
 
           {:error, :unavailable} = unknown ->
             unknown

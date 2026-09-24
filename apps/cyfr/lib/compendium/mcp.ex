@@ -171,11 +171,21 @@ defmodule Compendium.MCP do
   # Tool Handlers — delegated to per-tool modules
   # ============================================================================
 
-  def handle("component", ctx, args), do: Compendium.MCP.ComponentTool.handle(ctx, args)
-  def handle("aqua", ctx, args), do: Compendium.MCP.AquaTool.handle(ctx, args)
-  def handle("registry", ctx, args), do: Compendium.MCP.RegistryTool.handle(ctx, args)
+  def handle("component", ctx, args),
+    do: ctx |> Compendium.MCP.ComponentTool.handle(args) |> index("Component index")
+
+  def handle("aqua", ctx, args),
+    do: ctx |> Compendium.MCP.AquaTool.handle(args) |> index("Agent index")
+
+  def handle("registry", ctx, args),
+    do: ctx |> Compendium.MCP.RegistryTool.handle(args) |> index("Component index")
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
   end
+
+  # A projection the tree has moved past, answered by a facade the tool
+  # reached without saying so itself: unavailable, in the surface's words.
+  defp index({:error, :projection_unavailable}, noun), do: {:error, {:unavailable, noun}}
+  defp index(answer, _noun), do: answer
 end

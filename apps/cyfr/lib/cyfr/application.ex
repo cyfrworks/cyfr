@@ -255,6 +255,12 @@ defmodule Cyfr.Application do
       # The estate filler itself — it reacts to the identity domain's
       # announcement that an athanor needs filling.
       Compendium.Provisioning,
+      # The registry and the agent index follow the seeded roots' changes:
+      # it reconciles the estate a change names, and recovers every estate
+      # a root is behind in once started and on every tick this member
+      # holds its slot. Every read passes its own barrier, so nothing
+      # waits on this child to be right.
+      Compendium.ProjectionReconciler,
       # Prism dashboard
       Prism.TinctureRegistry,
       group(Aqua.WorkerTree, [

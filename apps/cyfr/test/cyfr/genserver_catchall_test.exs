@@ -29,7 +29,8 @@ defmodule Cyfr.GenServerCatchallTest do
     {Cyfr.RateLimiter, "RateLimiter"},
     {Cyfr.Execution.Slots, "Slots"},
     {Cyfr.Execution.Events.Sequence, "Events.Sequence"},
-    {Compendium.Provisioning, "Provisioning"}
+    {Compendium.Provisioning, "Provisioning"},
+    {Compendium.ProjectionReconciler, "ProjectionReconciler"}
   ]
 
   # Named adopters not probed live, each with the reason it cannot be:
