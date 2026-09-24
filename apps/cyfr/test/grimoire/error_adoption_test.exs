@@ -78,7 +78,6 @@ defmodule Grimoire.ErrorAdoptionTest do
     # three this ratchet could not see until the scan followed a tool
     # module into what it calls.
     "apps/cyfr/lib/compendium/builds.ex" => 3,
-    "apps/cyfr/lib/emissary/external/proxy.ex" => 3,
     "apps/sanctum/lib/sanctum/providers/oauth.ex" => 3,
     # Two of the three are the capacity refusals a poller sees when the
     # server will not mint them an athanor: remediation prose (wait, or ask

@@ -55,8 +55,19 @@ defmodule Emissary.External.ProxyTest do
         enabled: false
       })
 
-      assert {:error, "Server 'disabled-srv' is disabled"} =
+      assert {:error, {:invalid_argument, "Server 'disabled-srv' is disabled"}} =
                Proxy.try_handle("disabled-srv:tool", ctx, chained(ctx, %{}), :in_chain)
+    end
+
+    test "refuses a tool the server's patterns do not expose, in the table's words", %{ctx: ctx} do
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        name: "narrow",
+        url: "https://x.com/mcp",
+        config_json: Jason.encode!(%{"tool_patterns" => ["read_*"]})
+      })
+
+      assert {:error, {:invalid_argument, "Tool 'write_page' is not exposed by server 'narrow'"}} =
+               Proxy.try_handle("narrow:write_page", ctx, chained(ctx, %{}), :in_chain)
     end
 
     test "a row handed in is the revision dispatch speaks to, not a second read", %{ctx: ctx} do
@@ -69,18 +80,18 @@ defmodule Emissary.External.ProxyTest do
 
       # The caller judged a revision that is now disabled: dispatch sees
       # that revision, whatever the row says by now.
-      assert {:error, "Server 'one-rev' is disabled"} =
+      assert {:error, {:invalid_argument, "Server 'one-rev' is disabled"}} =
                Proxy.try_handle("one-rev:tool", ctx, chained(ctx, %{}), :in_chain,
                  server: %{stored | enabled: false}
                )
 
       # A row for another server is nobody's revision of this one.
-      assert {:error, msg} =
+      assert {:error, reason} =
                Proxy.try_handle("one-rev:tool", ctx, chained(ctx, %{}), :in_chain,
                  server: %{stored | name: "other"}
                )
 
-      refute msg =~ "disabled"
+      refute Grimoire.Error.render(reason) =~ "disabled"
       Emissary.External.ServerSupervisor.stop("one-rev", ctx.athanor_id)
     end
 
@@ -93,7 +104,9 @@ defmodule Emissary.External.ProxyTest do
       # In-chain is the declared plane and passes the gate (the dispatch
       # itself then fails on the unreachable URL — that failure is not the
       # plane refusal).
-      assert {:error, msg} = Proxy.try_handle("chain-only:tool", ctx, %{}, :external)
+      assert {:error, {:invalid_argument, msg}} =
+               Proxy.try_handle("chain-only:tool", ctx, %{}, :external)
+
       assert msg =~ "only from inside a chain"
 
       Emissary.External.ServerSupervisor.stop("chain-only", ctx.athanor_id)
@@ -108,9 +121,9 @@ defmodule Emissary.External.ProxyTest do
 
       # Past the plane gate: the refusal (if any) is the unreachable server,
       # never the plane sentence.
-      assert {:error, msg} = Proxy.try_handle("console-ok:tool", ctx, %{}, :external)
-      refute msg =~ "only from inside a chain"
-      refute msg == :not_external
+      assert {:error, reason} = Proxy.try_handle("console-ok:tool", ctx, %{}, :external)
+      refute reason == :not_external
+      refute Grimoire.Error.render(reason) =~ "only from inside a chain"
 
       Emissary.External.ServerSupervisor.stop("console-ok", ctx.athanor_id)
     end
@@ -147,7 +160,7 @@ defmodule Emissary.External.ProxyTest do
         url: "https://localhost:99999/mcp"
       })
 
-      assert {:error, msg} =
+      assert {:error, {:invalid_argument, msg}} =
                Grimoire.Catalog.call_external("plane-pin:sometool", ctx, %{})
 
       assert msg =~ "only from inside a chain"
@@ -181,9 +194,13 @@ defmodule Emissary.External.ProxyTest do
                  {"autostart", athanor_id}
                )
 
-      # Result will be an error since the server can't connect, but it shouldn't be :not_external
-      assert {:error, msg} = result
-      refute msg == :not_external
+      # Result will be an error since the server can't connect, but it
+      # shouldn't be :not_external — and it is a classified refusal, never
+      # a bare sentence.
+      assert {:error, reason} = result
+      refute reason == :not_external
+      refute is_binary(reason)
+      assert %Prima.Refusal{} = Grimoire.Error.classify(reason)
 
       # Cleanup
       Emissary.External.ServerSupervisor.stop("autostart", athanor_id)
@@ -205,7 +222,7 @@ defmodule Emissary.External.ProxyTest do
       )
 
       # try_handle should dispatch (will fail at HTTP level, but not :not_external)
-      assert {:error, msg} =
+      assert {:error, reason} =
                Proxy.try_handle(
                  "dispatch-test:tool",
                  ctx,
@@ -213,7 +230,8 @@ defmodule Emissary.External.ProxyTest do
                  :in_chain
                )
 
-      refute msg == :not_external
+      refute reason == :not_external
+      refute is_binary(reason)
 
       # Cleanup
       Emissary.External.ServerSupervisor.stop("dispatch-test", athanor_id)
@@ -310,6 +328,9 @@ defmodule Emissary.External.ProxyTest do
     end
 
     @impl true
+    def handle_call({:call_tool, _tool, _args}, _from, {:refuse, reply} = answer),
+      do: {:reply, {:error, reply}, answer}
+
     def handle_call({:call_tool, _tool, _args}, _from, answer),
       do: {:reply, {:ok, answer}, answer}
   end
@@ -403,14 +424,15 @@ defmodule Emissary.External.ProxyTest do
     end
 
     test "a hold or a step the barriers cannot find refuses admission", %{ctx: ctx} do
-      assert {:error, {:refused, why}} =
+      assert {:error, %Prima.Refusal{message: why}} =
                Proxy.try_handle("kept:probe", ctx, chained(ctx, %{}), :in_chain,
                  hold: %{reservation_id: "bgt_gone", id: "chg_gone"}
                )
 
-      assert why =~ "not admitted"
+      assert why =~ "Call to probe on server 'kept' not admitted: "
 
-      assert {:error, {:refused, _}} =
+      assert {:error,
+              %Prima.Refusal{message: "Call to probe on server 'kept' not admitted: " <> _}} =
                Proxy.try_handle("kept:probe", ctx, chained(ctx, %{}), :in_chain,
                  step: %{id: "stp_gone", generation: 0}
                )
@@ -422,11 +444,40 @@ defmodule Emissary.External.ProxyTest do
       args = chained(ctx, %{"x" => 1})
       Application.put_env(:arca, :execution_payload_store, __MODULE__.RefusingStore)
 
-      assert {:error, {:refused, why}} =
+      assert {:error,
+              %Prima.Refusal{class: :unavailable, reason: {:payload_not_retained, _}} = why} =
                Proxy.try_handle("kept:probe", ctx, args, :in_chain)
 
-      assert why =~ "not admitted"
+      assert why.message =~ "not admitted"
       assert [] = tool_calls()
+    end
+
+    test "an upstream server's own error sentence comes back classified, and closes the row failed",
+         %{ctx: ctx, server: server} do
+      {:ok, pid} = __MODULE__.AnsweringServer.start(ctx, server, {:refuse, "quota exhausted"})
+      id = Prima.UUID7.execution_id()
+
+      assert {:error, %Prima.Refusal{class: :internal, message: "quota exhausted"}} =
+               Proxy.try_handle("kept:probe", ctx, chained(ctx, %{}), :in_chain, execution_id: id)
+
+      assert %{status: "failed", error_message: "quota exhausted"} =
+               Arca.Repo.get(Arca.Schemas.Execution, id)
+
+      GenServer.stop(pid)
+    end
+
+    test "an upstream refusal the table already knows passes as it is", %{
+      ctx: ctx,
+      server: server
+    } do
+      {:ok, pid} =
+        __MODULE__.AnsweringServer.start(ctx, server, {:refuse, {:uncertain, "cut off"}})
+
+      # The unknown outcome stays one, for the caller that reads it as such.
+      assert {:error, {:uncertain, "cut off"}} =
+               Proxy.try_handle("kept:probe", ctx, chained(ctx, %{}), :in_chain)
+
+      GenServer.stop(pid)
     end
 
     test "the answer is the caller's once its result is kept and the row closed", %{

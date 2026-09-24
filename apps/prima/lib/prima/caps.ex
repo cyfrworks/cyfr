@@ -43,7 +43,7 @@ defmodule Prima.Caps do
   `{:error, :storage_unverifiable}` — never `:ok`, because a ceiling that
   admits whenever the store blinks is not a ceiling.
 
-  The port itself keeps the same posture. `impl/0` raises
+  The port itself keeps the same posture. `impl!/0` raises
   `Prima.Caps.NotInstalledError` when nothing has been installed, so a
   process that checks a cap before boot wired one fails where it asked
   rather than reading an uninstalled port as a server with no caps.
@@ -156,8 +156,8 @@ defmodule Prima.Caps do
   port is not a server without caps: it is a server that cannot say, and
   a write it cannot measure does not land.
   """
-  @spec impl() :: module()
-  def impl do
+  @spec impl!() :: module()
+  def impl! do
     case :persistent_term.get(@key, :not_installed) do
       :not_installed -> raise Prima.Caps.NotInstalledError
       module -> module
@@ -168,12 +168,12 @@ defmodule Prima.Caps do
   @spec check_counted(Actor.t(), key(), count()) :: counted_decision()
   def check_counted(%Actor{} = actor, key, count)
       when key in @keys and is_function(count, 0) do
-    impl().check_counted(actor, key, count)
+    impl!().check_counted(actor, key, count)
   end
 
   @doc "Ask the installed implementation `c:check_storage/2`."
   @spec check_storage(Actor.t(), non_neg_integer()) :: storage_decision()
   def check_storage(%Actor{} = actor, incoming) when is_integer(incoming) and incoming >= 0 do
-    impl().check_storage(actor, incoming)
+    impl!().check_storage(actor, incoming)
   end
 end

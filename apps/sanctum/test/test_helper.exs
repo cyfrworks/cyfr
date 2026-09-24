@@ -25,15 +25,16 @@ File.mkdir_p!(Path.join(seed_path, "components"))
 # implementation itself — before the first test that writes a tenant byte.
 Prima.Caps.install!(Sanctum.Tenancy.Caps)
 
-# Port 5's wiring: the overlaid roots' unit boundaries are the component
-# domain's to spell. An umbrella run is configured with that domain's
-# locators and keeps them; this build has no component domain, and takes
-# the persistence suite's stand-ins.
-if Application.get_env(:arca, :overlay_locators) in [nil, %{}] do
-  Application.put_env(:arca, :overlay_locators, Arca.Test.UnitLocator.locators())
+# The unit-locator port: the overlaid roots' unit boundaries are the
+# component domain's to spell. An umbrella run's boot installed that
+# domain's locators and keeps them; this build has no component domain,
+# and installs the persistence suite's stand-ins.
+try do
+  Arca.Storage.UnitLocator.impl!()
+rescue
+  Arca.Storage.UnitLocator.NotInstalledError ->
+    Arca.Storage.UnitLocator.install!(Arca.Test.UnitLocator.locators())
 end
-
-Arca.Storage.install_locators!()
 
 # The one redaction vocabulary, which the host feeds Phoenix at boot.
 # Nothing boots here, so the suite does what the boot does, before any

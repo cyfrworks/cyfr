@@ -185,7 +185,7 @@ defmodule Grimoire.Provider do
     tools = Grimoire.Catalog.list_tools()
 
     # Augment with tenant-specific external MCP server tools
-    external_tools = Emissary.External.Proxy.list_external_tools(ctx)
+    external_tools = Grimoire.Proxy.impl!().list_external_tools(ctx)
 
     all_tools = tools ++ external_tools
     all_tools = Grimoire.Visibility.filter_for_context(all_tools, ctx)

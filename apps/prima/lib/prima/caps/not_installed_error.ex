@@ -3,7 +3,7 @@
 
 defmodule Prima.Caps.NotInstalledError do
   @moduledoc """
-  Raised by `Prima.Caps.impl/0` when nothing has installed the cap port.
+  Raised by `Prima.Caps.impl!/0` when nothing has installed the cap port.
 
   The port is written once at boot (`Prima.Caps.install!/1`, from
   `Cyfr.Application`), and the implementation is `Sanctum.Tenancy.Caps`.

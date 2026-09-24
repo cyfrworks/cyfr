@@ -57,7 +57,7 @@ defmodule Prima.CapsTest do
   setup do
     installed =
       try do
-        {:installed, Caps.impl()}
+        {:installed, Caps.impl!()}
       rescue
         NotInstalledError -> :none
       end
@@ -72,11 +72,11 @@ defmodule Prima.CapsTest do
     :ok
   end
 
-  describe "impl/0 before the boot write" do
+  describe "impl!/0 before the boot write" do
     test "raises its named error, saying what is missing" do
       Caps.reset()
 
-      error = assert_raise NotInstalledError, fn -> Caps.impl() end
+      error = assert_raise NotInstalledError, fn -> Caps.impl!() end
 
       assert error.message =~ "Prima.Caps.install!/1"
       assert error.message =~ "no installed implementation"
@@ -94,9 +94,9 @@ defmodule Prima.CapsTest do
   end
 
   describe "install!/1" do
-    test "writes the implementation impl/0 reads" do
+    test "writes the implementation impl!/0 reads" do
       assert Stub == Caps.install!(Stub)
-      assert Caps.impl() == Stub
+      assert Caps.impl!() == Stub
     end
 
     test "refuses a module that does not answer both questions" do
@@ -109,7 +109,7 @@ defmodule Prima.CapsTest do
       end
 
       # A refused install leaves the port uninstalled, not half-wired.
-      assert_raise NotInstalledError, fn -> Caps.impl() end
+      assert_raise NotInstalledError, fn -> Caps.impl!() end
     end
   end
 

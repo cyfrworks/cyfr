@@ -35,20 +35,21 @@ File.mkdir_p!(Path.join(seed_path, "components"))
 # admitted, which is how `mix test apps/arca/test apps/cyfr/test/arca`
 # found three of them failing.
 try do
-  Prima.Caps.impl()
+  Prima.Caps.impl!()
 rescue
   Prima.Caps.NotInstalledError -> Prima.Caps.install!(Arca.Test.Caps)
 end
 
-# Port 5's wiring, likewise: the overlaid roots' unit boundaries are the
-# component domain's to spell. An umbrella run is configured with that
-# domain's locators and keeps them; a build of the contracts and this app
-# alone has no component domain, and takes the suite's stand-ins.
-if Application.get_env(:arca, :overlay_locators) in [nil, %{}] do
-  Application.put_env(:arca, :overlay_locators, Arca.Test.UnitLocator.locators())
+# The unit-locator port, likewise: the overlaid roots' unit boundaries
+# are the component domain's to spell. An umbrella run's boot installed
+# that domain's locators and keeps them; a build of the contracts and this
+# app alone has no component domain, and installs the suite's stand-ins.
+try do
+  Arca.Storage.UnitLocator.impl!()
+rescue
+  Arca.Storage.UnitLocator.NotInstalledError ->
+    Arca.Storage.UnitLocator.install!(Arca.Test.UnitLocator.locators())
 end
-
-Arca.Storage.install_locators!()
 
 # A suite database built from a different schema would run stale, since
 # the baseline still reads as applied; refuse it before any test touches it.

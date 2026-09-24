@@ -6,8 +6,12 @@ defmodule Arca.Storage.UnitLocator do
   How an overlaid root's shadow units are shaped — answered from the path
   grammar alone, by the domain module that owns the root's spelling
   (`Compendium.ComponentPath` for `components/`, `Compendium.AquaPath` for
-  `aqua/`), wired through the `:overlay_locators` config so `Arca` never
-  gains a compile edge on Compendium.
+  `aqua/`), so `Arca` never gains a compile edge on Compendium.
+
+  The locators are one installed registry, a map from each overlaid root
+  to its locator: `Cyfr.Application` writes it at boot with `install!/1`,
+  and `Arca.Storage.locate/1` reads it through `impl!/0` for every leaf a
+  batch walk classifies.
 
   The layout table (`Arca.Storage`) says only WHETHER a root overlays;
   the locator says HOW: given a logical path inside its root, it answers
@@ -52,8 +56,85 @@ defmodule Arca.Storage.UnitLocator do
               | {:file, unit :: Arca.Storage.path()}
               | {:dir, unit :: Arca.Storage.path(), sentinel :: String.t()}
 
+  defmodule NotInstalledError do
+    @moduledoc """
+    Raised by `Arca.Storage.UnitLocator.impl!/0` when nothing has installed
+    the overlaid roots' locators.
+    """
+
+    defexception message:
+                   "Arca.Storage.UnitLocator has no installed locators: nothing called " <>
+                     "Arca.Storage.UnitLocator.install!/1. An overlaid path cannot be " <>
+                     "located until boot installs them."
+  end
+
+  # The port's own term: the verified registry, written once at boot and
+  # read per leaf, so a batch walk never re-reads anything to classify.
+  @key {__MODULE__, :impl}
+
   @staging ".staging"
   @marker ".in-progress"
+
+  @typedoc "Each overlaid root, and the locator that shapes its units."
+  @type registry :: %{String.t() => module()}
+
+  @doc """
+  Assert the locator registry and install it: `locators` must name exactly
+  the overlaid roots (`Arca.Storage.overlay_roots/0`), each value a module
+  exporting `locate/1`. Called once by `Cyfr.Application` at boot, before
+  anything scans the union, so a forgotten root fails there instead of on
+  the first touch of it. A refused registry leaves the installed one in
+  place.
+  """
+  @spec install!(registry()) :: registry()
+  def install!(locators) when is_map(locators) do
+    roots = MapSet.new(Arca.Storage.overlay_roots())
+    keys = MapSet.new(Map.keys(locators))
+
+    unless MapSet.equal?(roots, keys) do
+      raise ArgumentError, """
+      the unit locators must name exactly the overlaid roots.
+        overlaid roots (Arca.Storage layout): #{inspect(Enum.sort(roots))}
+        installed locators:                   #{inspect(Enum.sort(keys))}
+      Remedy: add the missing root's Arca.Storage.UnitLocator to the map
+      the boot installs, or add/remove the root's row in the layout
+      table — the two must always agree.
+      """
+    end
+
+    for {root, mod} <- locators,
+        not (is_atom(mod) and Code.ensure_loaded?(mod) and function_exported?(mod, :locate, 1)) do
+      raise ArgumentError,
+            "locator for #{inspect(root)} (#{inspect(mod)}) does not implement " <>
+              "Arca.Storage.UnitLocator"
+    end
+
+    :persistent_term.put(@key, locators)
+    locators
+  end
+
+  @doc """
+  Erase the installed registry, leaving the port as boot found it. The
+  inverse of `install!/1`, for a test that installs one of its own.
+  """
+  @spec reset() :: :ok
+  def reset do
+    :persistent_term.erase(@key)
+    :ok
+  end
+
+  @doc """
+  The installed registry. Raises `Arca.Storage.UnitLocator.NotInstalledError`
+  when there is none: a path the storage layer cannot place is not a path
+  outside every unit.
+  """
+  @spec impl!() :: registry()
+  def impl! do
+    case :persistent_term.get(@key, nil) do
+      nil -> raise NotInstalledError
+      locators -> locators
+    end
+  end
 
   @doc """
   The row key of a unit path: its seeded root, and the rest of the path

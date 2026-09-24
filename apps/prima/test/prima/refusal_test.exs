@@ -83,6 +83,7 @@ defmodule Prima.RefusalTest do
     {:unsupported_protocol_version, :invalid_argument},
     {:method_not_found, :not_found},
     {{:unknown_tool, "nope"}, :not_found},
+    {:not_external, :not_found},
     {:database_error, :unavailable},
     {:forbidden, :not_found},
     {:not_found, :not_found},

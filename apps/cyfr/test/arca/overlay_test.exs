@@ -180,9 +180,9 @@ defmodule Arca.OverlayTest do
   end
 
   describe "the locator wiring matches the component path's shape" do
-    # The unit grammar is `Compendium.ComponentPath`'s to own; the
-    # `:overlay_locators` config wires it in so `Arca` never gains a
-    # compile dependency on Compendium. This witness is the link.
+    # The unit grammar is `Compendium.ComponentPath`'s to own; the boot
+    # installs it as the root's `Arca.Storage.UnitLocator` so `Arca` never
+    # gains a compile dependency on Compendium. This witness is the link.
     test "a components path locates to its version_dir unit, manifest sentinel" do
       vd = Compendium.ComponentPath.version_dir("catalyst", "local", "n", "1.0.0")
 
