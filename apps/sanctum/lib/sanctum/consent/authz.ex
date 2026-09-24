@@ -158,39 +158,39 @@ defmodule Sanctum.Consent.Authz do
   end
 
   @doc """
-  Render a refusal as the `consent_class_required:` sentence the caller
-  reads — the ONE spelling of this vocabulary's prose. Every surface that
-  answers a consent refusal (`Sanctum.Providers.Profile`, the MCP dispatch
-  gate via `Sanctum.Unauthorized`) renders through here, so the phrasing
-  cannot fork per surface. The tag prefix is wire-stable: clients grep it.
+  Render a refusal as the sentence the caller reads — the ONE spelling of
+  this vocabulary's prose. Every surface that answers a consent refusal
+  (`Sanctum.Providers.Profile`, the MCP dispatch gate via
+  `Sanctum.Unauthorized`) renders through here, so the phrasing cannot
+  fork per surface.
   """
   @spec message(refusal() | term()) :: String.t()
   def message({:surface_not_permitted, method}),
-    do: "consent_class_required: this surface (#{method}) cannot consent"
+    do: "Consent needs an interactive sign-in; this surface (#{method}) cannot consent"
 
-  def message(:guest_plane), do: "consent_class_required: guest-plane contexts cannot consent"
-  def message(:not_authenticated), do: "consent_class_required: authentication required"
-  def message(:anonymous), do: "consent_class_required: anonymous callers cannot consent"
+  def message(:guest_plane), do: "A call from inside a running component cannot consent"
+  def message(:not_authenticated), do: "Consent requires authentication"
+  def message(:anonymous), do: "An anonymous caller cannot consent"
 
   def message(:no_capability),
-    do: "consent_class_required: this key carries no consent capability"
+    do: "This key carries no consent capability"
 
   def message(:capability_digest_mismatch),
-    do: "consent_class_required: the key's capability pins a different commit digest"
+    do: "The key's consent capability pins a different commit digest"
 
-  def message(:capability_expired), do: "consent_class_required: the key's capability has expired"
+  def message(:capability_expired), do: "The key's consent capability has expired"
 
   def message(:override_requires_interactive),
-    do: "consent_class_required: overrides are always interactive"
+    do: "A consent override needs an interactive sign-in"
 
-  def message(:invalid_request), do: "consent_class_required: invalid consent request"
+  def message(:invalid_request), do: "The consent request is not valid"
 
   # This IS the vocabulary module — an unknown term here is a producer bug,
   # logged and generalized, never inspected onto the wire (the catch-all
   # `inspect/1` undid the closed union above).
   def message(other) do
     Logger.warning("[Sanctum.Consent.Authz] unrenderable consent refusal: #{inspect(other)}")
-    "consent_class_required: invalid consent request"
+    "The consent request is not valid"
   end
 
   # ============================================================================

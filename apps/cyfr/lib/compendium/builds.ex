@@ -83,7 +83,7 @@ defmodule Compendium.Builds do
 
   Answers the operation's result — `status`, `reference`, `digest`,
   `size`, `files`, `exports`, `language`, `target_type` and
-  `registration: "pending"` — or a refusal `Grimoire.Error.render/2`
+  `registration: "pending"` — or a refusal `Grimoire.Error.render/1`
   renders.
   """
   @spec compile(Context.t(), String.t(), [option()]) :: {:ok, map()} | {:error, term()}
@@ -234,9 +234,7 @@ defmodule Compendium.Builds do
     do: BuildRecords.record_finished(Context.actor(ctx), build_id, "compiled", result)
 
   defp record_outcome(%{ctx: ctx, build_id: build_id}, {:error, reason}) do
-    sentence =
-      Grimoire.Error.render(reason) ||
-        "The build failed for an unexpected reason — see the server log"
+    sentence = Grimoire.Error.render(reason)
 
     BuildRecords.record_finished(Context.actor(ctx), build_id, "failed", sentence)
   end

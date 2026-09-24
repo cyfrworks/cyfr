@@ -47,10 +47,10 @@ defmodule Prima.GuestErrorTest do
     assert GuestError.render(:invalid_objects) =~ "nothing was published"
     assert GuestError.render({:finish_failed, :enospc}) =~ "published"
 
-    # Named, this is a service to retry; bare, it is a call whose outcome
-    # is unknown, and the advice is to check instead.
+    # Named, this is a service to retry; a unit commit whose outcome is
+    # unknown asks the caller to check instead.
     assert GuestError.render({:unavailable, "The registry"}) =~ "retry shortly"
-    assert GuestError.render(:unavailable) =~ "check before asking again"
+    assert GuestError.render(:outcome_unknown) =~ "check before asking again"
   end
 
   test "an internal term renders as nothing" do

@@ -47,7 +47,7 @@ defmodule Compendium.OCI.Auth do
       # The decoder refuses a push token with no usable token; one that got
       # past it is still damaged, never a reason to go anonymous.
       {:ok, _unusable} ->
-        {:error, credential_unreadable(:corrupt, namespace_slug)}
+        {:error, credential_unreadable({:corrupt, :registry_credential}, namespace_slug)}
 
       {:error, reason} ->
         {:error, credential_unreadable(reason, namespace_slug)}
@@ -62,14 +62,14 @@ defmodule Compendium.OCI.Auth do
   never shared across users.
 
   A credential that cannot be read is not absent: `{:error, :unavailable}`
-  when the store cannot answer and `{:error, :corrupt}` when the stored
-  row does not open. Either is logged, without the token, and the caller
+  when the store cannot answer and `{:error, {:corrupt,
+  :registry_credential}}` when the stored row does not open. Either is logged, without the token, and the caller
   refuses rather than going anonymous.
   """
   @spec fetch_credential(String.t(), String.t(), Sanctum.Context.t() | nil) ::
           {:ok, RegistryCredentials.credential()}
           | :anonymous
-          | {:error, :unavailable | :corrupt}
+          | {:error, :unavailable | {:corrupt, :registry_credential}}
   def fetch_credential(registry, namespace_slug, ctx)
       when is_binary(registry) and is_binary(namespace_slug) do
     case ctx do
@@ -77,7 +77,7 @@ defmodule Compendium.OCI.Auth do
         case CredentialStore.get(ctx, registry, namespace_slug) do
           {:ok, cred} -> {:ok, cred}
           {:error, :not_found} -> :anonymous
-          {:error, :corrupt} -> unreadable(namespace_slug, :corrupt)
+          {:error, :corrupt} -> unreadable(namespace_slug, {:corrupt, :registry_credential})
           {:error, _unavailable} -> unreadable(namespace_slug, :unavailable)
         end
 
@@ -89,7 +89,8 @@ defmodule Compendium.OCI.Auth do
   defp unreadable(namespace_slug, reason) do
     Logger.warning(
       "[Compendium.OCI.Auth] push token for namespace #{inspect(namespace_slug)} " <>
-        "unreadable (#{reason}) — request refused"
+        "unreadable (#{if reason == :unavailable, do: "unavailable", else: "corrupt"}) — " <>
+        "request refused"
     )
 
     {:error, reason}
@@ -105,12 +106,12 @@ defmodule Compendium.OCI.Auth do
     }
   end
 
-  defp credential_unreadable(:corrupt, namespace_slug) do
+  # The row's own refusal sentence (`Prima.Refusal`), carried by the
+  # registry error the OCI client answers with.
+  defp credential_unreadable({:corrupt, :registry_credential} = corrupt, _namespace_slug) do
     %Errors{
       reason: :registry_unavailable,
-      message:
-        "The push token stored for namespace '#{namespace_slug}' could not be opened — " <>
-          "sign in again to re-mint it",
+      message: Prima.Refusal.message(corrupt),
       registry: nil,
       status: nil,
       detail: %{credential_store: :corrupt}

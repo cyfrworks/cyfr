@@ -51,7 +51,7 @@ defmodule PrismWeb.OpsTest do
   end
 
   test "anything else becomes one failure vocabulary", %{socket: socket} do
-    assert {:error, "The request failed — try again."} =
+    assert {:error, "The outcome could not be confirmed."} =
              Ops.fetch_list(socket, "helper_list_probe/shapeless", :items)
 
     assert {:error, "Not allowed."} =
@@ -63,6 +63,6 @@ defmodule PrismWeb.OpsTest do
 
   test "error_message passes refusal sentences and hides raw terms" do
     assert Ops.error_message("Unauthorized: nope") == "Unauthorized: nope"
-    assert Ops.error_message({:weird, :term}) == "The request failed — try again."
+    assert Ops.error_message({:weird, :term}) == "The outcome could not be confirmed."
   end
 end

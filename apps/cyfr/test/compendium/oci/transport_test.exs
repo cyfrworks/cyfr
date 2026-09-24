@@ -193,7 +193,7 @@ defmodule Compendium.OCI.TransportTest do
                Transport.request_url(ctx, :get, @url, @registry, @repository)
 
       assert err.detail == %{credential_store: :corrupt}
-      assert Errors.to_string(err) =~ "namespace 'testns' could not be opened"
+      assert Errors.to_string(err) =~ "The stored registry credential is damaged"
       assert attempts() == 0
     end
 

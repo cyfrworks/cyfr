@@ -156,7 +156,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
         |> post("/hooks/" <> slug, ~s({}))
 
       assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "unauthorized"
+      assert json_response(conn, 401)["code"] == "unauthenticated"
     end
 
     test "401 on signature mismatch", %{conn: conn, ctx: ctx} do

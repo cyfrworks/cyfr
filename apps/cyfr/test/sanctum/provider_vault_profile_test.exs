@@ -118,7 +118,7 @@ defmodule Sanctum.ProviderVaultProfileTest do
       Sanctum.Provider.handle("profile", ctx, %{"action" => "preview", "decisions" => decisions})
 
     # Typed to the boundary: the wire router promotes this to a protocol
-    # error (-33503 + error.data via Emissary.MCP.ConsentSignal).
+    # error (-33503 + error.data via Prima.ConsentSignal).
     assert {:error, {:consent_conflict, payload}} =
              Sanctum.Provider.handle("profile", ctx, %{
                "action" => "commit",
@@ -130,7 +130,7 @@ defmodule Sanctum.ProviderVaultProfileTest do
              })
 
     assert %{cause: :stale_plan, actual_revision: 0} = payload
-    assert Emissary.MCP.ConsentSignal.signal?({:consent_conflict, payload})
+    assert Prima.ConsentSignal.signal?({:consent_conflict, payload})
   end
 
   test "the tincture session surface is named in the refusal", %{ctx: ctx} do

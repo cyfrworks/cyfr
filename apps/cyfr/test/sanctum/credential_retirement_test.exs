@@ -222,7 +222,7 @@ defmodule Sanctum.CredentialRetirementTest do
       {:ok, _} = Users.allow(denied)
 
       assert {:error, reason} = ApiKey.create(ctx, %{name: "late-#{uniq()}"})
-      assert reason in [:stale_generation, :not_standing]
+      assert reason in [:stale_generation, :unauthenticated]
 
       # And the session itself stays retired: the allow restores no
       # credential, and signing in again mints a different one.
@@ -264,11 +264,11 @@ defmodule Sanctum.CredentialRetirementTest do
       {:ok, ctx} = Context.focus(ctx, group.id)
 
       :ok = Members.remove_member(group, user_id: user.id)
-      assert {:error, :not_standing} = ApiKey.create(ctx, %{name: "gone-#{uniq()}"})
+      assert {:error, :unauthenticated} = ApiKey.create(ctx, %{name: "gone-#{uniq()}"})
 
       # Rejoining is a new row: the old focus is not restored by it.
       {:ok, :added} = Members.add(group, [user_id: user.id], other.id)
-      assert {:error, :not_standing} = ApiKey.create(ctx, %{name: "rejoined-#{uniq()}"})
+      assert {:error, :unauthenticated} = ApiKey.create(ctx, %{name: "rejoined-#{uniq()}"})
     end
   end
 
@@ -484,7 +484,7 @@ defmodule Sanctum.CredentialRetirementLockTest do
 
     send(denier.pid, :go)
     assert {:ok, _} = Task.await(denier, 25_000)
-    assert {:error, :not_standing} = Task.await(issuer, 25_000)
+    assert {:error, :unauthenticated} = Task.await(issuer, 25_000)
 
     refute unboxed(fn -> Arca.Repo.exists?(where(Arca.Schemas.Session, user_id: ^user.id)) end)
   end

@@ -121,7 +121,7 @@ defmodule Aqua.Runner do
   The runner for a thread, started if it is not running. A member that
   holds no cell slot starts none (`{:error, :control_plane_lost}`), and
   neither does one whose thread row says a live peer is running a turn
-  there (`{:error, :busy}`).
+  there (`{:error, :held_elsewhere}`).
   """
   @spec ensure(String.t(), String.t()) :: {:ok, pid()} | {:error, term()}
   def ensure(thread_id, athanor_id)
@@ -156,7 +156,7 @@ defmodule Aqua.Runner do
   defp not_a_peers(thread_id, athanor_id) do
     case Tape.claim_holder(internal_context(athanor_id), thread_id) do
       {:ok, %{live_peer?: false}} -> :ok
-      {:ok, %{live_peer?: true}} -> {:error, :busy}
+      {:ok, %{live_peer?: true}} -> {:error, :held_elsewhere}
       {:error, :not_found} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
@@ -288,7 +288,8 @@ defmodule Aqua.Runner do
   which is recorded on the turn and shown in the transcript.
 
   A thread with no runner here is not this member's to set down: a turn a
-  live peer runs is `{:error, :busy}` and anything else is already down,
+  live peer runs is `{:error, :held_elsewhere}` and anything else is
+  already down,
   `{:error, :not_running}`.
   """
   @spec suspend_turn(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -307,7 +308,7 @@ defmodule Aqua.Runner do
 
   defp nothing_to_suspend(ctx, thread_id) do
     case Tape.claim_holder(ctx, thread_id) do
-      {:ok, %{live_peer?: true}} -> {:error, :busy}
+      {:ok, %{live_peer?: true}} -> {:error, :held_elsewhere}
       {:ok, _free_or_ours} -> {:error, :not_running}
       {:error, reason} -> {:error, reason}
     end
@@ -319,7 +320,7 @@ defmodule Aqua.Runner do
 
   What the rows call for is the recovery table's to say, and the take is
   the thread's claim — refused for a turn a live peer runs
-  (`{:error, :busy}`) and for one still running here
+  (`{:error, :held_elsewhere}`) and for one still running here
   (`{:error, :not_suspended}`). The turn's pinned consent head and
   capability identity are read again first: a recovery asked for by hand
   is a fresh admission of old work. Past the recovery cap the turn ends
@@ -371,7 +372,7 @@ defmodule Aqua.Runner do
         {:error, :not_suspended}
 
       match?({:ok, %{live_peer?: true}}, Tape.claim_holder(ctx, thread.id)) ->
-        {:error, :busy}
+        {:error, :held_elsewhere}
 
       true ->
         :ok

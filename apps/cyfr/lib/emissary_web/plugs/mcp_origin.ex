@@ -42,12 +42,7 @@ defmodule EmissaryWeb.Plugs.MCPOrigin do
         else
           Logger.warning("[MCP Origin] Rejected origin: #{origin}")
 
-          errors.halt(
-            conn,
-            403,
-            :insufficient_permissions,
-            "Origin not allowed: #{origin}"
-          )
+          errors.halt(conn, 403, :origin_rejected, "Origin not allowed: #{origin}")
         end
 
       [] ->

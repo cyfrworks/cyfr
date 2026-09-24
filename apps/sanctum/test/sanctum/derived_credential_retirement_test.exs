@@ -108,14 +108,15 @@ defmodule Sanctum.DerivedCredentialRetirementTest do
 
   # What each token is answered, side by side: `:ok`, or the refusal. An
   # access token's use is answered in the request vocabulary
-  # (`Sanctum.Caller`), an asset token's in the check's own.
+  # (`Sanctum.Caller`: a presented credential that opens nothing is
+  # `:unauthenticated`), an asset token's in the check's own.
   defp answers({access, asset}), do: {answer(use_access(access)), answer(use_asset(asset))}
 
   defp answer({:ok, %Context{}}), do: :ok
   defp answer({:error, reason}), do: reason
 
   @opens {:ok, :ok}
-  @retired {:not_standing, :not_standing}
+  @retired {:unauthenticated, :not_standing}
 
   # ---- §15 recipe 1 ----------------------------------------------------------
 
@@ -128,10 +129,10 @@ defmodule Sanctum.DerivedCredentialRetirementTest do
       assert answers(tokens) == @opens
 
       {:ok, denied} = Users.deny(user)
-      assert use_access(elem(tokens, 0)) == {:error, :not_standing}
+      assert use_access(elem(tokens, 0)) == {:error, :unauthenticated}
 
       {:ok, _} = Users.allow(denied)
-      assert use_access(elem(tokens, 0)) == {:error, :not_standing}
+      assert use_access(elem(tokens, 0)) == {:error, :unauthenticated}
       assert {:error, :not_standing} = use_asset(elem(tokens, 1))
     end
   end
@@ -217,10 +218,10 @@ defmodule Sanctum.DerivedCredentialRetirementTest do
       tokens = minted!(ctx)
       {:ok, athanor} = Athanors.get("ath_acme")
       :ok = Members.remove_member(athanor, user_id: user.id)
-      assert answers(tokens) == {:not_standing, :not_member}
+      assert answers(tokens) == {:unauthenticated, :not_member}
 
       {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: "ath_acme")
-      assert answers(tokens) == {:not_standing, :not_member}
+      assert answers(tokens) == {:unauthenticated, :not_member}
     end
 
     test "the key creator leaves while the key, the creator and the tenant stand", %{
@@ -254,10 +255,10 @@ defmodule Sanctum.DerivedCredentialRetirementTest do
       assert answers(tokens) == @opens
 
       :ok = Members.revoke_platform(operator.id)
-      assert answers(tokens) == {:not_standing, :not_member}
+      assert answers(tokens) == {:unauthenticated, :not_member}
 
       {:ok, _} = Members.ensure_platform(operator.id)
-      assert answers(tokens) == {:not_standing, :not_member}
+      assert answers(tokens) == {:unauthenticated, :not_member}
     end
 
     test "the store cannot answer: unavailable, and nothing is minted or opened", %{
@@ -424,13 +425,13 @@ defmodule Sanctum.DerivedCredentialRetirementTest do
       }
 
       assert use_access(Phoenix.Token.sign(secret, "tincture_access_v5", forged)) ==
-               {:error, :not_standing}
+               {:error, :unauthenticated}
 
       # Nor may a key-sourced claim borrow a session's focus.
       as_key = %{payload | source_kind: "api_key", focus_basis: "key"}
 
       assert use_access(Phoenix.Token.sign(secret, "tincture_access_v5", as_key)) ==
-               {:error, :not_standing}
+               {:error, :unauthenticated}
     end
 
     test "a token expires with a source that expires sooner than the hour", %{user: user} do

@@ -123,9 +123,9 @@ defmodule Cyfr.Cluster.Fixtures do
   claim is taken in the same transaction naming the sequence the claimant
   read, and `turns.runner_id` becomes this member's boot.
 
-  Answers `{:ok, turn}` or the refusal — `{:error, {:busy, holder}}` when
-  another turn holds the thread, `{:error, :stale}` when a peer accepted
-  the next message first.
+  Answers `{:ok, turn}` or the refusal — `{:error, {:held_elsewhere,
+  holder}}` when another turn holds the thread, `{:error, :stale}` when a
+  peer accepted the next message first.
   """
   @spec start_turn(String.t(), String.t(), non_neg_integer(), pos_integer(), keyword()) ::
           {:ok, map()} | {:error, term()}

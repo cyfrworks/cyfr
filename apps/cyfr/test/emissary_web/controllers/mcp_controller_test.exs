@@ -1024,8 +1024,14 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert Message.error_code(:auth_invalid) == -33002
       assert Message.error_code(:insufficient_permissions) == -33004
 
-      # Execution: -33100 to -33199
-      assert Message.error_code(:execution_failed) == -33100
+      # Execution: -33100 to -33199, one per refusal class
+      assert Message.error_code(:internal) == -33100
+      assert Message.error_code(:conflict) == -33101
+      assert Message.error_code(:not_owner) == -33102
+      assert Message.error_code(:unavailable) == -33103
+      assert Message.error_code(:corrupt) == -33104
+      assert Message.error_code(:timeout) == -33105
+      assert Message.error_code(:uncertain) == -33106
 
       # Registry: -33200 to -33299
 
@@ -1043,7 +1049,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       error = Message.encode_error(2, :auth_required, "Auth needed")
       assert error["error"]["code"] == -33001
 
-      error = Message.encode_error(3, :execution_failed, "Exec failed")
+      error = Message.encode_error(3, :internal, "Exec failed")
       assert error["error"]["code"] == -33100
     end
   end

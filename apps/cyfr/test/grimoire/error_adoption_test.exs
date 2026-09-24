@@ -46,7 +46,7 @@ defmodule Grimoire.ErrorAdoptionTest do
     # the action-coverage case reads one vocabulary.
     "apps/cyfr/lib/crucible/schedules/provider.ex" => 18,
     "apps/sanctum/lib/sanctum/providers/webhook.ex" => 18,
-    "apps/cyfr/lib/crucible/provider.ex" => 13,
+    "apps/cyfr/lib/crucible/provider.ex" => 12,
     # An upstream registry's own diagnostics, which are its words and not
     # this vocabulary's.
     "apps/cyfr/lib/compendium/oci/client.ex" => 12,

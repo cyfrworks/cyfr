@@ -116,17 +116,10 @@ defmodule Aqua.Ops do
   def child_execution?(tool, action), do: Grimoire.Catalog.host_intercepted?(tool, action)
 
   @doc """
-  One sentence for a refusal: the shared renderer first (crafted binaries,
-  consent signals, the crash vocabulary — the same sentence everywhere),
-  and an internal term sanitized BEFORE inspect — this text persists as a
-  thread message every member reads, and a flattened string is past
-  the sanitizer's reach.
+  One sentence for a refusal: the gate's renderer (`Grimoire.Error.render/1`),
+  the same sentence everywhere — this text persists as a thread message
+  every member reads, so an internal term is never spelled into it.
   """
   @spec render_refusal(term()) :: String.t()
-  def render_refusal(reason) do
-    case Grimoire.Error.render(reason) do
-      nil -> inspect(Prima.Sanitizer.sanitize(reason), limit: 20, printable_limit: 200)
-      sentence -> sentence
-    end
-  end
+  def render_refusal(reason), do: Grimoire.Error.render(reason)
 end

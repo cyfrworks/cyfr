@@ -191,8 +191,10 @@ defmodule Compendium.Providers.Source do
 
   @impl true
   def handle("source", %Context{} = ctx, %{"action" => action} = args) do
-    with {:ok, path} <- scoped(Map.get(args, "path"), action) do
-      dispatch(action, Context.actor(ctx), path, args)
+    with {:ok, path} <- scoped(Map.get(args, "path"), action),
+         {:error, reason} <- dispatch(action, Context.actor(ctx), path, args) do
+      # A registry's own error leaves as its refusal, never the struct.
+      {:error, Compendium.Providers.Shared.refusal(reason)}
     end
   end
 

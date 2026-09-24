@@ -192,7 +192,7 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
   end
 
   defp deny_401(conn) do
-    EmissaryWeb.ApiError.halt(conn, 401, :unauthorized, "Signature verification failed")
+    EmissaryWeb.ApiError.halt(conn, 401, :signature_invalid, nil)
   end
 
   # The sender used a content type no parser matches, so `RawBodyReader`
@@ -204,8 +204,8 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
     EmissaryWeb.ApiError.halt(
       conn,
       400,
-      :bad_request,
-      "Unsupported content type — send the delivery as application/json"
+      :unsupported_content_type,
+      nil
     )
   end
 

@@ -40,7 +40,7 @@ defmodule Grimoire.ErrorRenderersTest do
     :stale_revision,
     :missing_unit,
     :invalid_objects,
-    :unavailable,
+    :outcome_unknown,
     {:finish_failed, :enospc}
   ]
 
@@ -60,8 +60,8 @@ defmodule Grimoire.ErrorRenderersTest do
       # unit is published, the other that nothing may be assumed — so
       # neither tells the caller to simply retry.
       assert Refusal.message({:finish_failed, :enospc}) =~ "published"
-      assert Refusal.message(:unavailable) =~ "check before asking again"
-      refute Refusal.message(:unavailable) =~ "retry"
+      assert Refusal.message(:outcome_unknown) =~ "check before asking again"
+      refute Refusal.message(:outcome_unknown) =~ "retry"
 
       # And the one that does: another commit landed first.
       assert Refusal.message(:stale_revision) =~ "landed first"
@@ -83,8 +83,8 @@ defmodule Grimoire.ErrorRenderersTest do
       end
     end
 
-    test "a bare :unavailable is not the named-service one" do
-      refute Refusal.message(:unavailable) == Refusal.message({:unavailable, "Storage"})
+    test "an unknown outcome is not the named-service outage" do
+      refute Refusal.message(:outcome_unknown) == Refusal.message({:unavailable, "Storage"})
       assert Refusal.message({:unavailable, "Storage"}) =~ "retry shortly"
     end
   end
@@ -172,6 +172,53 @@ defmodule Grimoire.ErrorRenderersTest do
       unauthorized = {:missing_permission, :vault_read}
       assert Sanctum.Unauthorized.reason?(unauthorized)
       assert Opus.FormulaHandler.render_reason(unauthorized) == "The call failed."
+    end
+  end
+
+  describe "the gate's classification" do
+    test "asks the authorization vocabulary first, then the table" do
+      assert %Refusal{class: :forbidden, message: message} =
+               Grimoire.Error.classify({:missing_permission, :vault_read})
+
+      assert message == Sanctum.Unauthorized.message({:missing_permission, :vault_read})
+
+      assert %Refusal{class: :unauthenticated} = Grimoire.Error.classify(:unauthenticated)
+      assert %Refusal{class: :setup_required} = Grimoire.Error.classify({:setup_required, %{}})
+      assert %Refusal{class: :rate_limited} = Grimoire.Error.classify(:busy)
+      assert %Refusal{class: :conflict} = Grimoire.Error.classify(:held_elsewhere)
+    end
+
+    test "keeps a refusal a provider built, and never needs a registry struct" do
+      built =
+        Compendium.Providers.Shared.refusal(%Compendium.OCI.Errors{
+          reason: :not_found,
+          message: "Resource not found on cyfr.run",
+          registry: "cyfr.run",
+          status: 404
+        })
+
+      assert %Refusal{class: :not_found, reason: {:registry, :not_found}} = built
+      assert Grimoire.Error.classify(built) == built
+    end
+
+    test "renders every term to a sentence, an unknown one to the fixed sentence" do
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert Grimoire.Error.render({:some_internal, %{"secret" => "leak"}}) ==
+                 "The outcome could not be confirmed."
+      end)
+
+      assert Grimoire.Error.render("a crafted sentence") == "a crafted sentence"
+    end
+
+    test "carries the wire codes the rows have always answered with" do
+      assert Grimoire.Error.code_override(Grimoire.Error.classify(:invalid_api_key)) ==
+               :auth_invalid
+
+      assert Grimoire.Error.code_override(
+               Grimoire.Error.classify({:authorization_required, "grant expired"})
+             ) == :auth_required
+
+      assert Grimoire.Error.code_override(Grimoire.Error.classify(:auth_provider_error)) == nil
     end
   end
 end

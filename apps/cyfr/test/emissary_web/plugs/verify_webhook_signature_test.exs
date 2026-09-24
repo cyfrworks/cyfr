@@ -176,7 +176,7 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignatureTest do
 
     assert result.halted
     assert result.status == 401
-    assert result.resp_body =~ "unauthorized"
+    assert result.resp_body =~ "unauthenticated"
   end
 
   test "401 on malformed signature header", %{ctx: ctx} do

@@ -95,7 +95,8 @@ defmodule Compendium.OCI.AuthTest do
           ] do
         plant!("alice", plaintext)
 
-        assert Auth.fetch_credential(@registry, "alice", ctx()) == {:error, :corrupt},
+        assert Auth.fetch_credential(@registry, "alice", ctx()) ==
+                 {:error, {:corrupt, :registry_credential}},
                "#{plaintext} read as something other than corrupt"
       end
     end
@@ -113,7 +114,8 @@ defmodule Compendium.OCI.AuthTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert {:error, :corrupt} = Auth.fetch_credential(@registry, "alice", ctx())
+          assert {:error, {:corrupt, :registry_credential}} =
+                   Auth.fetch_credential(@registry, "alice", ctx())
         end)
 
       assert log =~ "alice"
@@ -135,7 +137,7 @@ defmodule Compendium.OCI.AuthTest do
     end
 
     @tag :capture_log
-    test "a corrupt token refuses as unavailable and names the namespace, not the token" do
+    test "a corrupt token refuses as unavailable with the damaged-credential sentence" do
       plant!("alice", ~s({"type":"push_token","token":42}))
 
       assert {:error,
@@ -146,8 +148,7 @@ defmodule Compendium.OCI.AuthTest do
               }} = Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
 
       assert message ==
-               "The push token stored for namespace 'alice' could not be opened — " <>
-                 "sign in again to re-mint it"
+               "The stored registry credential is damaged; sign in to the registry again."
     end
 
     @tag :capture_log

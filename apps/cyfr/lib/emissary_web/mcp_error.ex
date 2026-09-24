@@ -26,10 +26,14 @@ defmodule EmissaryWeb.MCPError do
   @doc """
   Render a JSON-RPC error, echoing the request id when the body carried one.
 
-  `code` is an atom from `Emissary.MCP.Message`'s tables or a numeric code.
+  `code` is a numeric code, a code name from `Emissary.MCP.Message`'s
+  tables, or a refusal — a `%Prima.Refusal{}` or a reason term — answered
+  with its class's code (`Emissary.MCP.Message.refusal_code/2`).
   """
   @impl true
   def send(%Plug.Conn{} = conn, status, code, message) do
+    {code, message} = wire(code, message)
+
     conn
     # Declared here rather than at each call site. Every rejection from the MCP
     # endpoint has to carry it, and when each caller remembered separately one
@@ -38,6 +42,17 @@ defmodule EmissaryWeb.MCPError do
     |> challenge(status)
     |> put_status(status)
     |> Phoenix.Controller.json(Message.encode_error(request_id(conn), code, message))
+  end
+
+  defp wire(code, message) when is_integer(code), do: {code, message}
+
+  defp wire(code, message) do
+    if Message.code?(code) do
+      {code, message}
+    else
+      refusal = Grimoire.Error.classify(code)
+      {Message.refusal_code(refusal, :transport), message || refusal.message}
+    end
   end
 
   # HTTP 401 requires a WWW-Authenticate challenge (RFC 9110).

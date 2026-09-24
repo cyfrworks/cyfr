@@ -512,13 +512,13 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 403
-      assert json_response(conn, 403)["code"] == "not_member"
+      assert json_response(conn, 403)["code"] == "forbidden"
     end
 
     test "an invalid token is refused by name", %{conn: conn} do
       conn = get(conn, "/t/test/local/auth-dash/_s/garbage_token/app.js")
       assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "asset_token_invalid"
+      assert json_response(conn, 401)["code"] == "unauthenticated"
     end
 
     test "a token scoped to a different tincture is refused as invalid", %{conn: conn, ctx: ctx} do
@@ -526,7 +526,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "asset_token_invalid"
+      assert json_response(conn, 401)["code"] == "unauthenticated"
     end
 
     test "a token with the wrong publisher is refused as invalid", %{conn: conn, ctx: ctx} do
@@ -534,7 +534,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "asset_token_invalid"
+      assert json_response(conn, 401)["code"] == "unauthenticated"
     end
 
     test "a token whose athanor differs from the URL is refused as invalid", %{
@@ -553,7 +553,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       conn = get(conn, "/t/other/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "asset_token_invalid"
+      assert json_response(conn, 401)["code"] == "unauthenticated"
     end
 
     test "blocks data.db even with valid token", %{conn: conn, ctx: ctx} do
@@ -596,7 +596,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       :ok = Sanctum.Session.destroy(session.token)
       gone = get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js")
-      assert json_response(gone, 403)["code"] == "not_standing"
+      assert json_response(gone, 403)["code"] == "forbidden"
     end
 
     test "a ?_t= token opens no more than its :execute: no private index, no asset prefix",
@@ -635,7 +635,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
 
       body = json_response(mint, 403)
-      assert body["code"] == "missing_generation"
+      assert body["code"] == "unauthenticated"
       refute Map.has_key?(body, "token")
 
       page =
@@ -643,7 +643,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         |> put_req_header("authorization", "Bearer #{key}")
         |> get("/t/test/local/auth-dash")
 
-      assert json_response(page, 403)["code"] == "missing_generation"
+      assert json_response(page, 403)["code"] == "unauthenticated"
       refute page.resp_body =~ "_s/"
     end
 
@@ -678,7 +678,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         %{build_conn() | remote_ip: {198, 51, 100, 1}}
         |> get("/t/test/local/auth-dash/_s/#{token}/app.js")
 
-      assert json_response(elsewhere, 403)["code"] == "ip_not_allowed"
+      assert json_response(elsewhere, 403)["code"] == "forbidden"
     end
 
     test "a store that cannot answer serves nothing", %{conn: conn, session: session} do
@@ -728,7 +728,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       conn = get(conn, "/t/test/local/auth-dash/_s/#{expired_token}/app.js")
       assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "asset_token_invalid"
+      assert json_response(conn, 401)["code"] == "unauthenticated"
     end
   end
 
@@ -755,7 +755,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         |> post("/t/test/local/pub-dash/invoke", Jason.encode!(%{input: %{}}))
 
       body = json_response(conn, 400)
-      assert body["error"] == "missing reference"
+      assert body["message"] == "missing reference"
     end
 
     test "rejects invoke for private tincture without auth", %{conn: conn} do

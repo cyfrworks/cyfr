@@ -75,7 +75,7 @@ defmodule Arca.ExecutionAttemptsTest do
 
     assert :lost = ExecutionAttempts.renew(attempt.attempt, until, Arca.Test.Actor.stored())
 
-    assert {:error, :not_owner} =
+    assert {:error, :attempt_not_owner} =
              ExecutionAttempts.close(
                actor,
                attempt.attempt,
@@ -168,7 +168,7 @@ defmodule Arca.ExecutionAttemptsTest do
              ExecutionAttempts.get(actor, attempt.attempt)
 
     # The stale attempt cannot complete its work.
-    assert {:error, :not_owner} =
+    assert {:error, :attempt_not_owner} =
              ExecutionAttempts.close(
                actor,
                attempt.attempt,

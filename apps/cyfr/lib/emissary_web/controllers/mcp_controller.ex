@@ -101,11 +101,11 @@ defmodule EmissaryWeb.MCPController do
     # (outside the tool-task boundary, which converts its own) — answered
     # in the JSON-RPC envelope as the auth error it is, never as a 500.
     e in Sanctum.UnauthorizedError ->
-      # The reason picks the code: absent identity is `:auth_required`,
-      # which is what a client retries on. Answering every refusal
-      # `:insufficient_permissions` told an unauthenticated caller their
-      # permissions were the problem.
-      code = Sanctum.Unauthorized.code(e.reason)
+      # The reason's class picks the code: absent identity is
+      # `:auth_required`, which is what a client retries on. Answering
+      # every refusal `:insufficient_permissions` told an unauthenticated
+      # caller their permissions were the problem.
+      code = e.reason |> Grimoire.Error.classify() |> Message.refusal_code(:transport)
 
       # Re-rendered from the reason rather than `Exception.message/1`: the
       # struct bakes its prose at raise time without the auth method, and
@@ -422,12 +422,14 @@ defmodule EmissaryWeb.MCPController do
 
   # The listen request answered with the refusal its credential now earns:
   # retryable when the store could not answer, a sign-in otherwise.
-  defp refuse_stream(conn, id, :unavailable),
-    do:
-      sse_event(
-        conn,
-        Message.encode_error(id, :auth_invalid, "Authentication service unavailable")
-      )
+  defp refuse_stream(conn, id, :unavailable) do
+    refusal = Grimoire.Error.classify(:auth_provider_error)
+
+    sse_event(
+      conn,
+      Message.encode_error(id, Message.refusal_code(refusal, :transport), refusal.message)
+    )
+  end
 
   defp refuse_stream(conn, id, _refused) do
     sse_event(
@@ -659,6 +661,9 @@ defmodule EmissaryWeb.MCPController do
   # policies and alerting read the status, not the JSON-RPC body, and a
   # store outage disguised as Bad Request never trips a 5xx alarm.
   defp http_status_for(:internal_error), do: 500
+  defp http_status_for(:unavailable), do: 503
+  defp http_status_for(:timeout), do: 504
+  defp http_status_for(code) when code in [:internal, :corrupt, :uncertain], do: 500
   defp http_status_for(_code), do: 400
 
   defp extract_tool(%{"method" => "tools/call", "params" => %{"name" => name}}), do: name

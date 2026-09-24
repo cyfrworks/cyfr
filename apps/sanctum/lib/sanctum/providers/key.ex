@@ -11,7 +11,7 @@ defmodule Sanctum.Providers.Key do
 
   require Logger
 
-  @standing_refusals [:missing_generation, :stale_generation, :not_standing]
+  @standing_refusals [:missing_generation, :stale_generation, :unauthenticated]
 
   alias Sanctum.Context
 
@@ -238,7 +238,7 @@ defmodule Sanctum.Providers.Key do
   defp standing_refusal(:stale_generation),
     do: "Your standing changed since this session was read; sign in again"
 
-  defp standing_refusal(:not_standing),
+  defp standing_refusal(:unauthenticated),
     do: "Your session, membership or athanor no longer stands; sign in again"
 
   defp parse_key_type_arg("application"), do: {:ok, :application}

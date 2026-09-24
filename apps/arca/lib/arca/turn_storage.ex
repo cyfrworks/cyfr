@@ -237,7 +237,7 @@ defmodule Arca.TurnStorage do
   decided this turn runs next. A claim refused because a peer accepted
   the next message first answers `{:error, :stale}`, and the caller reads
   the thread again; one refused because another turn holds the thread
-  answers `{:error, {:busy, turn_id}}`. Without `:turn_seq` the sequence
+  answers `{:error, {:held_elsewhere, turn_id}}`. Without `:turn_seq` the sequence
   the transaction reads is used, which checks the holder and not the
   caller's view of the thread.
   """
@@ -606,7 +606,7 @@ defmodule Arca.TurnStorage do
   The fence is compared and raised first. The claim is admitted only by a
   thread nobody holds, one this turn already holds, or one whose holder's
   boot is no longer a live member — never by a live peer's, which is
-  `{:error, :busy}`. A running turn is adopted as `takeover/3` adopts
+  `{:error, :held_elsewhere}`. A running turn is adopted as `takeover/3` adopts
   one: the predecessor attempt retired, a successor opened, the
   predecessor's unaccounted interval added. A paused turn keeps the
   attempt its pause left; the loop that continues it resumes that one.
@@ -661,7 +661,7 @@ defmodule Arca.TurnStorage do
   successor attempt is opened. `attrs`: `:fence` (the one the caller read)
   and `:lease_until`. The turn's fence is compared and renewed first, then
   the thread's claim is taken — never from a live peer, which is
-  `{:error, :busy}` — the predecessor is retired, the successor opened
+  `{:error, :held_elsewhere}` — the predecessor is retired, the successor opened
   with the next fence and the pointer moved, `recovery_attempts` counted
   and the predecessor's unaccounted running interval added. The claim and
   the count are the one transaction, so a member that did not take the
@@ -2472,7 +2472,7 @@ defmodule Arca.TurnStorage do
       # exactly the race the statement is here to lose.
       {0, _} ->
         case thread!(athanor_id, turn.thread_id) do
-          %Thread{active_turn_id: held} when is_binary(held) -> Arca.Repo.rollback({:busy, held})
+          %Thread{active_turn_id: held} when is_binary(held) -> Arca.Repo.rollback({:held_elsewhere, held})
           %Thread{} -> Arca.Repo.rollback(:stale)
         end
     end

@@ -110,7 +110,7 @@ defmodule Arca.TurnFenceRaceTest do
       |> Enum.map(&Task.await(&1, 25_000))
 
     assert Enum.count(results, &match?({:ok, _}, &1)) == 1
-    assert [{:error, {:busy, held}}] = Enum.filter(results, &match?({:error, _}, &1))
+    assert [{:error, {:held_elsewhere, held}}] = Enum.filter(results, &match?({:error, _}, &1))
 
     {:ok, after_claim} = unboxed(fn -> Threads.get(actor, thread.id) end)
     assert after_claim.active_turn_id == held

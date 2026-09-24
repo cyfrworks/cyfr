@@ -147,9 +147,10 @@ defmodule Crucible.Close do
   `{:consent_required, payload}` refusal, or an internal term. A sentence
   is recorded as it is. A typed refusal records its readable message,
   announces a `setup_required` event on the run's root or parent stream,
-  and answers `{:error, typed}` whole. An internal term is recorded as the
-  sentence `Grimoire.Error.render/1` gives it, or `"internal error"`
-  (logged). Answers `{:error, masked_message}` otherwise.
+  and answers `{:error, typed}` whole. Any other term is recorded as the
+  sentence `Grimoire.Error.render/1` gives it — an internal one as the
+  fixed sentence, logged by its shape. Answers `{:error, masked_message}`
+  otherwise.
   """
   @spec fail(t(), [String.t()], term()) :: {:error, term()}
   def fail(%__MODULE__{} = close, secrets, reason) when is_binary(reason) do
@@ -456,17 +457,7 @@ defmodule Crucible.Close do
 
   defp failure_message(reason), do: "Execution failed: #{client_reason(reason)}"
 
-  # A typed refusal gets its one sentence (`Grimoire.Error.render/1`); an
-  # internal term goes to the log and never into a message that outlives
-  # this call.
-  defp client_reason(reason) do
-    case Grimoire.Error.render(reason) do
-      nil ->
-        Logger.warning("[Crucible.Close] unrenderable failure reason: #{inspect(reason)}")
-        "internal error"
-
-      msg ->
-        msg
-    end
-  end
+  # A refusal gets its one sentence (`Grimoire.Error.render/1`); an
+  # internal term is never spelled into a message that outlives this call.
+  defp client_reason(reason), do: Grimoire.Error.render(reason)
 end

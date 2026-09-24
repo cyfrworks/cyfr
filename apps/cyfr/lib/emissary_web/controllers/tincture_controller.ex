@@ -65,12 +65,7 @@ defmodule EmissaryWeb.TinctureController do
         # the primary credential; expiry means re-authenticating with it.
         # 403, not 401: the caller IS authenticated, just not with a
         # credential that may mint.
-        EmissaryWeb.ApiError.send(
-          conn,
-          403,
-          :token_cannot_renew_itself,
-          "A minted tincture token cannot mint another"
-        )
+        EmissaryWeb.ApiError.send(conn, 403, :not_primary, nil)
 
       {:ok, ctx} ->
         # The token opens one tincture, so the mint asks which. Without that
@@ -93,8 +88,8 @@ defmodule EmissaryWeb.TinctureController do
             EmissaryWeb.ApiError.send(
               conn,
               400,
-              :tincture_required,
-              "Name the tincture: publisher and tincture_name"
+              {:invalid_argument, "Name the tincture: publisher and tincture_name"},
+              nil
             )
         end
 
@@ -311,12 +306,12 @@ defmodule EmissaryWeb.TinctureController do
         EmissaryWeb.ApiError.send(
           conn,
           401,
-          :asset_token_expired,
+          :expired_credential,
           "Signed asset token expired — reload the tincture"
         )
 
       {:error, :invalid_credential} ->
-        EmissaryWeb.ApiError.send(conn, 401, :asset_token_invalid, "Signed asset token invalid")
+        EmissaryWeb.ApiError.send(conn, 401, :invalid_credential, "Signed asset token invalid")
 
       {:error, :not_member} ->
         EmissaryWeb.ApiError.send(conn, 403, :not_member, "No longer a member of this athanor")

@@ -35,7 +35,7 @@ defmodule EmissaryWeb.OAuthCallbackController do
       {:error, :unknown_state} ->
         error_page(conn, "Authorization failed", "invalid or expired state parameter")
 
-      {:error, :not_standing} ->
+      {:error, :unauthenticated} ->
         error_page(
           conn,
           "Authorization failed",

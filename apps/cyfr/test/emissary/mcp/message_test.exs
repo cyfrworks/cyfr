@@ -186,6 +186,50 @@ defmodule Emissary.MCP.MessageTest do
     end
   end
 
+  describe "refusal_code/2" do
+    defp code(reason, where \\ :tools_call),
+      do:
+        reason |> Grimoire.Error.classify() |> Message.refusal_code(where) |> Message.error_code()
+
+    test "each class answers with its code" do
+      assert code({:invalid_argument, "x"}) == -32602
+      assert code({:not_found, "component", "x"}, :resources_read) == -32002
+      assert code({:not_found, "component", "x"}, :tools_call) == -32602
+      assert code(:unauthenticated) == -33001
+      assert code({:missing_permission, :execute}) == -33004
+      assert code(:no_agent) == -33501
+      assert code({:consent_required, %{}}) == -33502
+      assert code(:rate_limited) == -33304
+      assert code({:cancelled, "stopped"}) == -33305
+      assert code({:conflict, "moved"}) == -33101
+      assert code(:control_plane_lost) == -33102
+      assert code(:database_error) == -33103
+      assert code({:corrupt, "The artifact"}) == -33104
+      assert code({:timeout, "slow"}) == -33105
+      assert code(:outcome_unknown) == -33106
+      assert code({:exit, "Tool x exited unexpectedly"}) == -33100
+    end
+
+    test "a store the authentication provider could not reach is unavailable, never auth_invalid" do
+      assert code(:auth_provider_error) == -33103
+    end
+
+    test "the rows that answered with another code keep it" do
+      for reason <- [:invalid_bearer, :invalid_api_key, :api_key_revoked],
+          do: assert(code(reason) == -33002)
+
+      assert code({:authorization_required, "grant expired"}) == -33001
+      assert code(:malformed_record) == -33004
+      assert code({:consent_class_required, :not_authenticated}) == -33004
+    end
+
+    test "a consent signal answers with its own tag's code" do
+      assert code({:consent_conflict, %{}}) == -33503
+      assert code({:restart_required, %{}}) == -33504
+      assert code({:setup_required, %{}}) == -33501
+    end
+  end
+
   describe "encode_notification/2" do
     test "encodes a notification without params" do
       result = Message.encode_notification("notifications/progress")

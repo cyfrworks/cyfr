@@ -17,7 +17,7 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
       conn = get(conn, "/api/executions/exec_does_not_exist/events")
 
       assert conn.status == 404
-      assert json_response(conn, 404)["error"] =~ "not found"
+      assert json_response(conn, 404)["message"] =~ "not found"
     end
 
     test "a store that cannot answer is a 503, not a crash", %{conn: conn} do
@@ -60,7 +60,7 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
 
       refute Map.has_key?(body, "jsonrpc")
       refute Map.has_key?(body, "error") and is_map(body["error"])
-      assert body["code"] == "auth_invalid"
+      assert body["code"] == "unauthenticated"
       # RFC 9110 §15.5.2 still applies wherever the 401 is rendered.
       assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
     end

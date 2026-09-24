@@ -800,7 +800,8 @@ defmodule Arca.ExecutionAttempts do
   @doc """
   Entry-point form of `close!/5` under the attempt's grant (`grant:` and
   `verify:`, `Arca.ExecutionStanding`): `{:ok, ran_ms}`,
-  `{:error, :not_owner}`, or the check's refusal.
+  `{:error, :attempt_not_owner}` when the attempt is not the open owner,
+  or the check's refusal.
   """
   @spec close(Prima.Actor.t(), String.t(), String.t(), String.t(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, atom()}
@@ -808,12 +809,12 @@ defmodule Arca.ExecutionAttempts do
       when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.close", fn ->
       with {:ok, grant, verify} <-
-             standing_inputs(athanor_id, attempt, opts, {:error, :not_owner}) do
+             standing_inputs(athanor_id, attempt, opts, {:error, :attempt_not_owner}) do
         fn ->
           Arca.ExecutionStanding.verify!(grant, verify)
 
           case close!(actor, attempt, state, outcome, grant) do
-            nil -> Arca.Repo.rollback(:not_owner)
+            nil -> Arca.Repo.rollback(:attempt_not_owner)
             ran -> ran
           end
         end

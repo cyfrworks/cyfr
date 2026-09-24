@@ -142,13 +142,13 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # Sanctum.Consent declares the vocabulary; the tuples stay TYPED to the
     # wire router, which promotes them to protocol errors — one -335xx code
     # per tag (Emissary.MCP.Message), the payload in error.data
-    # (Emissary.MCP.ConsentSignal) — and codex recovers them from the code
+    # (Prima.ConsentSignal) — and codex recovers them from the code
     # and data (mcp.ConsentError). A tag or code renamed on one side
     # silently stops being explained (Go) or stops crossing the boundary —
     # this pins every roster.
     consent = read!("apps/sanctum/lib/sanctum/consent.ex")
     execution_mcp = read!("apps/cyfr/lib/crucible/provider.ex")
-    signal = read!("apps/cyfr/lib/emissary/mcp/consent_signal.ex")
+    signal = read!("apps/prima/lib/prima/consent_signal.ex")
     message = read!("apps/cyfr/lib/emissary/mcp/message.ex")
     root_go = read!("apps/codex/cmd/root.go")
     client_go = read!("apps/codex/internal/mcp/client.go")
@@ -167,7 +167,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "tag #{tag} missing from Sanctum.Consent's authority_error union"
 
       assert signal =~ ":#{tag}",
-             "tag #{tag} missing from Emissary.MCP.ConsentSignal's roster"
+             "tag #{tag} missing from Prima.ConsentSignal's roster"
 
       assert message =~ "#{tag}: #{codes[tag]}",
              "code #{codes[tag]} for #{tag} missing from Emissary.MCP.Message"

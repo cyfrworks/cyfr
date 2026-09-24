@@ -375,8 +375,15 @@ on the wire.
 | -33001 | `auth_required` | Not authenticated — tool requires login (see [Public Tools](#public-tools-no-auth-required) for exceptions) |
 | -33002 | `auth_invalid` | Invalid API key or token |
 | -33004 | `insufficient_permissions` | Key scope doesn't cover this action, the caller is not a platform admin, or the IP is not in the allowlist |
-| -33100 | `execution_failed` | Component execution failed |
+| -33100 | `internal` | The call failed for a reason the server could not confirm — check before retrying |
+| -33101 | `conflict` | The state moved on — read it again and retry |
+| -33102 | `not_owner` | This server does not currently own its control plane — retry shortly |
+| -33103 | `unavailable` | A service the call needs could not answer — retry shortly |
+| -33104 | `corrupt` | Stored data does not match what was recorded; retrying will not help |
+| -33105 | `timeout` | The call timed out |
+| -33106 | `uncertain` | The call may or may not have taken effect — check before retrying |
 | -33304 | `rate_limited` | Too many requests — back off and retry. Honour `Retry-After` when present |
+| -33305 | `request_cancelled` | The call was cancelled |
 | -33501 | `setup_required` | A dependency needs configuring before this can run ([Readiness and typed errors](#readiness-and-typed-errors)) |
 | -33502 | `consent_required` | The caller has no consent for this component |
 | -33503 | `consent_conflict` | Consent exists but does not cover what was asked |
@@ -384,7 +391,9 @@ on the wire.
 
 `-33304` is the one to branch on for backoff; the `-335xx` band is the
 remediation vocabulary, whose `error.data` payload is described under
-[Readiness and typed errors](#readiness-and-typed-errors).
+[Readiness and typed errors](#readiness-and-typed-errors). The `-331xx`
+band answers a `resources/read` by the class of its refusal; a store that
+cannot answer is `-33103`, never a missing resource.
 
 Everything else a tool refuses arrives as a **successful** JSON-RPC response
 whose `result.isError` is `true` and whose content carries the sentence —
@@ -424,9 +433,10 @@ same gate as a tool call: `compendium://` by `component.read_resource`
 `resource.read` (both `storage_read`), and `sanctum://identity` and
 `sanctum://permissions` by `session.read_resource`, the one resource read an
 uncredentialed caller may make. A read the gate refuses for authentication
-or permission answers the same `-33001` or `-33004` a tool call gets; an
-unknown scheme or a missing file answers the JSON-RPC `-32002` resource
-error.
+or permission answers the same `-33001` or `-33004` a tool call gets; a
+missing file answers the JSON-RPC `-32002` resource error; a malformed URI,
+an unknown scheme or a path outside the caller's roots `-32602` (invalid
+params); and any other refusal the code of its class in the table above.
 
 A second tier sits between public and fully authenticated: actions
 annotated `auth: :signed_in` serve a caller holding a live session that

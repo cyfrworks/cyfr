@@ -9,12 +9,12 @@ defmodule Sanctum.UnauthorizedError do
   accessors such as `Sanctum.Context.require_tenant!/1` and `athanor!/1`.
   Returned and raised refusals share the same reason vocabulary.
 
-  It now carries the reason itself: `Sanctum.Unauthorized.message/2` writes
-  the sentence and `code/1` maps it to a JSON-RPC code, exactly as for the
-  returned form.
+  It carries the reason itself: `Sanctum.Unauthorized.message/2` writes
+  the sentence and `class/1` places it, exactly as for the returned form.
 
-  Carries a `Plug.Exception` status of 403, so a raise that escapes to the
-  endpoint renders as the authorization refusal it is — never a 500.
+  Its `Plug.Exception` status is 401 for a reason of class
+  `unauthenticated` and 403 for every other, so a raise that escapes to
+  the endpoint renders as the authorization refusal it is — never a 500.
   """
 
   defexception [:reason, :message]
@@ -37,6 +37,12 @@ defmodule Sanctum.UnauthorizedError do
 end
 
 defimpl Plug.Exception, for: Sanctum.UnauthorizedError do
-  def status(_exception), do: 403
+  def status(%{reason: reason}) do
+    if Sanctum.Unauthorized.reason?(reason) and
+         Sanctum.Unauthorized.class(reason) == :unauthenticated,
+       do: 401,
+       else: 403
+  end
+
   def actions(_exception), do: []
 end

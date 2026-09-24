@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ConsentSignal do
+defmodule Prima.ConsentSignal do
   @moduledoc """
-  Maps four consent remediation signals to JSON-RPC errors with distinct
-  codes and structured data that clients can branch on.
+  The four consent remediation signals: `{tag, payload}` with a map
+  payload, the shape the consent owner produces and every surface reads.
 
-  Each signal includes a -335xx code, a human-readable sentence and
-  `error.data` shaped as `{"tag": ..., "payload": ...}`.
+  Each signal has a sentence, a refusal class (`Prima.Refusal`) and
+  `error.data` shaped as `{"tag": ..., "payload": ...}`; the MCP wire
+  answers each tag with its own -335xx code.
 
   The GUEST wire is not this: in-chain formula children keep the
   remediation object shape `Prima.Remediation` owns (component-guide

@@ -85,7 +85,7 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
       |> put_req_header("authorization", "Bearer #{key}")
       |> get("/t/access-token")
 
-    assert json_response(resp, 400)["code"] == "tincture_required"
+    assert json_response(resp, 400)["code"] == "invalid_argument"
   end
 
   test "a ?_t= token cannot mint its own successor", %{conn: conn} do
@@ -109,6 +109,6 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
         "/t/access-token?publisher=acme&tincture_name=dash&_t=#{minted["token"]}"
       )
 
-    assert json_response(renew, 403)["code"] == "token_cannot_renew_itself"
+    assert json_response(renew, 403)["code"] == "forbidden"
   end
 end

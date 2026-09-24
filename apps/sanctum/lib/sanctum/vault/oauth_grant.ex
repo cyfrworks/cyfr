@@ -133,8 +133,8 @@ defmodule Sanctum.Vault.OAuthGrant do
   answers 400, since an expired or foreign `state` proves nothing. The
   grant's actor must still stand where it started the grant, read before
   the exchange and again before anything is written: `{:error,
-  :not_standing}` when it does not, `{:error, :unavailable}` when the store
-  cannot say.
+  :unauthenticated}` when it does not — the presented `state` opens
+  nothing — and `{:error, :unavailable}` when the store cannot say.
   """
   @spec complete(String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def complete(state, code, redirect_uri) do
@@ -166,7 +166,7 @@ defmodule Sanctum.Vault.OAuthGrant do
     case Sanctum.Caller.revalidate_session(ctx) do
       {:ok, %Context{} = fresh} -> same_estate(fresh, actor)
       {:error, :unavailable} -> {:error, :unavailable}
-      {:error, _refused} -> {:error, :not_standing}
+      {:error, _refused} -> {:error, :unauthenticated}
     end
   end
 
@@ -174,7 +174,7 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   defp same_estate(%Context{session_token_hash: hash, athanor_id: athanor_id}, actor)
        when is_binary(hash) do
-    if athanor_id == actor.athanor_id, do: :ok, else: {:error, :not_standing}
+    if athanor_id == actor.athanor_id, do: :ok, else: {:error, :unauthenticated}
   end
 
   defp same_estate(%Context{}, actor), do: channel(actor)
@@ -182,7 +182,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   defp channel(%Prima.Actor{athanor_id: athanor_id, user_id: user_id}) do
     if Sanctum.Tenancy.channel_active?(athanor_id, user_id),
       do: :ok,
-      else: {:error, :not_standing}
+      else: {:error, :unauthenticated}
   end
 
   # ---------------------------------------------------------------------------

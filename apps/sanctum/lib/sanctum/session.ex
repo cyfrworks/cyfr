@@ -114,8 +114,8 @@ defmodule Sanctum.Session do
   A context with no binding is `{:error, :missing_generation}` — except
   where `generation_snapshot:` supplies one read from the rows
   (`Sanctum.Tenancy.generation_snapshot/2`), which only a test fixture
-  building a context by hand does. `{:error, :not_standing}` is a person,
-  estate or membership that no longer stands.
+  building a context by hand does. `{:error, :unauthenticated}` is a
+  person, estate or membership that no longer stands.
 
   Returns a session map containing the token and identity fields.
   """

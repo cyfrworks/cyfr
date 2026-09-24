@@ -115,7 +115,7 @@ defmodule Cyfr.Cluster.SuspendTest do
                athanor,
                accepted.turn_id,
                running.fence
-             ]) == {:error, :busy},
+             ]) == {:error, :held_elsewhere},
              "a peer recovered a turn a live member was running"
 
       assert Observer.turn(accepted.turn_id)["recovery_attempts"] == 0,

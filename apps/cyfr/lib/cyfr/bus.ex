@@ -69,7 +69,6 @@ defmodule Cyfr.Bus do
 
   @pubsub Cyfr.PubSub
   @tenant "tenant:"
-  @reason_max_bytes 200
 
   # The roster. `match` is how a topic string is recognised (its whole
   # base, or a base followed by a subject id); `template` is how it reads.
@@ -422,21 +421,6 @@ defmodule Cyfr.Bus do
   def prefix(other) do
     raise ArgumentError, "a tenant topic requires a Prima.Actor, got #{inspect(other, limit: 3)}"
   end
-
-  @doc """
-  A reason fit for a payload: an atom as it is, a string cut to 200 bytes
-  on a character boundary, anything else `"error"` — never an inspected
-  term.
-  """
-  @spec bounded_reason(term()) :: atom() | String.t()
-  def bounded_reason(reason) when is_atom(reason), do: reason
-
-  def bounded_reason(reason) when is_binary(reason) do
-    {cut, _cut?} = Cyfr.Bus.Payload.cap(reason, @reason_max_bytes)
-    cut
-  end
-
-  def bounded_reason(_reason), do: "error"
 
   # ---------------------------------------------------------------------------
   # Tenant topics
