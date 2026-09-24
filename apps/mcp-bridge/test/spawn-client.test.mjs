@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// The spawner client speaks the protocol cyfr-spawn validates: its frames
+// The spawner client speaks the protocol cyfr-keeper validates: its frames
 // and requests match the shared vectors, it understands every reply, a
 // backend's stdio flows through a relay that presents the spawn's token,
 // and exit, refusal, release and loss of the channel settle as documented.
@@ -27,7 +27,7 @@ import {
 } from "../spawn-client.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
-const V = JSON.parse(readFileSync(path.join(DIR, "..", "..", "..", "tests", "fixtures", "spawn_protocol.json"), "utf8"));
+const V = JSON.parse(readFileSync(path.join(DIR, "..", "..", "..", "tests", "fixtures", "keeper_protocol.json"), "utf8"));
 
 const SPAWN_ID = "00112233445566778899aabbccddeeff";
 

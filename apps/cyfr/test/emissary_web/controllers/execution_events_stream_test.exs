@@ -25,13 +25,13 @@ defmodule EmissaryWeb.ExecutionEventsStreamTest do
       )
 
     # The stream's own deadline, short: a test that leaves it open ends.
-    prev = Application.get_env(:cyfr, :execution_events_max_ms)
-    Application.put_env(:cyfr, :execution_events_max_ms, 3_000)
+    prev = Application.get_env(:cyfr, :crucible_events_max_ms)
+    Application.put_env(:cyfr, :crucible_events_max_ms, 3_000)
 
     on_exit(fn ->
       if prev,
-        do: Application.put_env(:cyfr, :execution_events_max_ms, prev),
-        else: Application.delete_env(:cyfr, :execution_events_max_ms)
+        do: Application.put_env(:cyfr, :crucible_events_max_ms, prev),
+        else: Application.delete_env(:cyfr, :crucible_events_max_ms)
     end)
 
     {:ok, conn: conn, ctx: ctx, exec: execution}

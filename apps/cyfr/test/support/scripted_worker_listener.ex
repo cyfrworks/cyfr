@@ -163,7 +163,7 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
   defp run(_worker, _callback, _args), do: :malformed
 
   defp dispatch_key(service) do
-    {:ok, worker_key} = Keys.worker_key(service)
+    {:ok, worker_key} = Keys.opus_key(service)
     WorkerAuth.dispatch_key(worker_key)
   end
 end

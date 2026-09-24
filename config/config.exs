@@ -110,8 +110,8 @@ config :phoenix, :json_library, Jason
 # (nil for any). A run goes to the first entry whose status answers its id,
 # over `Crucible.WorkerClient`. With none, a run is refused as
 # :execution_unavailable. The runtime configuration replaces this list with
-# `CYFR_WORKERS`; the default names the Opus service of a local boot.
-config :cyfr, :workers, [%{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}]
+# `CYFR_OPUS_WORKERS`; the default names the Opus service of a local boot.
+config :cyfr, :opus_workers, [%{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}]
 
 # The Opus worker service's own id, which every assignment it accepts must
 # name, where it reaches CYFR's host API, and where its listener binds (the

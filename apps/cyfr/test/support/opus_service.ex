@@ -16,11 +16,11 @@ defmodule Cyfr.Test.OpusService do
   step bench, gives the service `wrk_local` its credentials — the key CYFR
   derives for it and where its runners reach CYFR — restarting it when they
   are not the ones it holds, and puts the service's endpoint in
-  `config :cyfr, :workers`, where `Crucible.Dispatch` finds it. For
+  `config :cyfr, :opus_workers`, where `Crucible.Dispatch` finds it. For
   the suite, the runners reach the host listener through the suite's wire
   (`Cyfr.Test.TwoServices.Wire`), which a test watches, holds a call on or
   loses a call on without restarting the service; the bench run alone
-  (`mix cyfr.bench.step`) reaches it directly. A test that replaces `:workers` restores what it found.
+  (`mix cyfr.bench.step`) reaches it directly. A test that replaces `:opus_workers` restores what it found.
 
   `status/0` and `boot/0` ask the service over the wire, `request!/3` and
   `start!/3` post a `Prima.WorkerAPI` request to the service's listener
@@ -53,7 +53,7 @@ defmodule Cyfr.Test.OpusService do
     unless Process.whereis(Opus.Supervisor),
       do: raise("the Opus worker service is not running: run the suite from the umbrella root")
 
-    {:ok, worker_key} = Keys.worker_key(@service)
+    {:ok, worker_key} = Keys.opus_key(@service)
 
     reached =
       if Keyword.get(opts, :proxy, true),
@@ -78,7 +78,7 @@ defmodule Cyfr.Test.OpusService do
     end
 
     endpoint = endpoint()
-    Application.put_env(:cyfr, :workers, [endpoint])
+    Application.put_env(:cyfr, :opus_workers, [endpoint])
     endpoint
   end
 
@@ -135,7 +135,7 @@ defmodule Cyfr.Test.OpusService do
   """
   @spec request!(atom(), map(), keyword()) :: {non_neg_integer(), map()}
   def request!(callback, args, opts \\ []) do
-    {:ok, worker_key} = Keys.worker_key(@service)
+    {:ok, worker_key} = Keys.opus_key(@service)
     body = Jason.encode!(WorkerWire.request_body(callback, args))
 
     request = %{

@@ -557,21 +557,21 @@ defmodule Cyfr.Test.TwoServices do
 
   @doc """
   Send the runs of `refs`, which the scripted service scripts, to
-  `:scripted` or to `:opus` from now on: `config :cyfr, :workers` with the
+  `:scripted` or to `:opus` from now on: `config :cyfr, :opus_workers` with the
   scripted service's entry for them ahead of the rest, or without it. A run
   is routed when it is dispatched, so one already dispatched stays where it
-  is. The caller restores `:workers` when its test ends.
+  is. The caller restores `:opus_workers` when its test ends.
   """
   @spec route!(:scripted | :opus, [String.t()] | String.t()) :: :ok
   def route!(:scripted, refs) do
-    configured = Application.get_env(:cyfr, :workers)
-    Application.put_env(:cyfr, :workers, ScriptedWorker.workers(refs, configured))
+    configured = Application.get_env(:cyfr, :opus_workers)
+    Application.put_env(:cyfr, :opus_workers, ScriptedWorker.workers(refs, configured))
   end
 
   def route!(:opus, _refs) do
-    configured = Application.get_env(:cyfr, :workers, [])
+    configured = Application.get_env(:cyfr, :opus_workers, [])
     scripted = ScriptedWorker.service()
-    Application.put_env(:cyfr, :workers, Enum.reject(configured, &(&1[:id] == scripted)))
+    Application.put_env(:cyfr, :opus_workers, Enum.reject(configured, &(&1[:id] == scripted)))
   end
 
   # ---------------------------------------------------------------------------

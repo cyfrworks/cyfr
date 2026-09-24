@@ -76,7 +76,7 @@ defmodule Locus.BuilderService do
     the link ends the build process, whose executor's own watch ends the
     build (the spawner releases a dead caller's spawn, the direct launcher's
     janitor kills the group), and the slots' monitor gives the slot back.
-  - **cyfr-spawn lost**: the spawner answers every run in flight and stops;
+  - **cyfr-keeper lost**: the spawner answers every run in flight and stops;
     each build's terminal line is `unavailable`, its slot is released, and
     the listener, which depends on the spawner, stops with it
     (`Locus.Application`).

@@ -113,7 +113,7 @@ defmodule Locus.ConfigTest do
 
   test "the memory bound takes the whole of the keeper's range, both ends, and nothing outside it" do
     vectors =
-      Path.expand("../../../../tests/fixtures/spawn_protocol.json", __DIR__)
+      Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)
       |> File.read!()
       |> Jason.decode!()
 
@@ -149,7 +149,7 @@ defmodule Locus.ConfigTest do
   end
 
   test "a control-plane variable in the environment refuses the boot before anything else is read" do
-    for variable <- ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_WORKER_KEY CYFR_MCP_BRIDGE_KEY) do
+    for variable <- ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY CYFR_MCP_BRIDGE_KEY) do
       assert Config.refused_environment(env(%{variable => "x"})) == [variable]
 
       assert {:error, message} = Config.from_env(env(Map.put(full(), variable, "x")))
@@ -163,9 +163,9 @@ defmodule Locus.ConfigTest do
     assert Config.refused_environment(env(full())) == []
 
     assert {:error, message} =
-             Config.from_env(env(%{"CYFR_DATABASE_URL" => "x", "CYFR_WORKER_KEY" => "y"}))
+             Config.from_env(env(%{"CYFR_DATABASE_URL" => "x", "CYFR_OPUS_KEY" => "y"}))
 
-    assert message =~ "CYFR_DATABASE_URL, CYFR_WORKER_KEY"
+    assert message =~ "CYFR_DATABASE_URL, CYFR_OPUS_KEY"
   end
 
   test "an unread environment leaves every accessor at its default and no key held" do
@@ -196,7 +196,7 @@ defmodule Locus.RuntimeConfigFileTest do
   @config_file Path.join(@root, "config/locus_runtime.exs")
   @key_hex "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f"
 
-  @cleared ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_WORKER_KEY CYFR_MCP_BRIDGE_KEY
+  @cleared ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY CYFR_MCP_BRIDGE_KEY
               LOCUS_BUILDS_KEY LOCUS_BUILDS_BIND LOCUS_BUILDS_PORT LOCUS_BUILDS_TIMEOUT_MS
               LOCUS_BUILDS_MAX_CONCURRENT LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT
               LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CARGO_SEED LOCUS_BUILDS_LOG_LEVEL LOCUS_BUILDS_LOG_FORMAT)

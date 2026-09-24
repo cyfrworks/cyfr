@@ -3,14 +3,14 @@
 
 defmodule Opus.Keeper.Direct do
   @moduledoc """
-  The keeper for a machine without `cyfr-spawn`: a runner is a child
+  The keeper for a machine without `cyfr-keeper`: a runner is a child
   process of this VM, started with the argv and the explicit environment
   the pool gives it and nothing inherited (`env -i`), as this VM's own
   user, in a temporary home of its own. Its control channel is its
   standard input and output (`OPUS_CONTROL_FD=0`), since a plain port
   hands a child no other descriptor; its standard error is a fifo in its
   home that a reader of its own relays to the process that spawned it, as
-  `cyfr-spawn` relays a runner's, so its log lines are this VM's log's. It
+  `cyfr-keeper` relays a runner's, so its log lines are this VM's log's. It
   isolates nothing: a runner can read and signal this VM. A deployment
   runs the image, whose keeper isolates.
 
@@ -48,7 +48,7 @@ defmodule Opus.Keeper.Direct do
     if Opus.Settings.channel_inherited?(env),
       do:
         {:error,
-         "a keeper channel was inherited (#{Opus.Settings.channel_env()}); only cyfr-spawn may start runners here"},
+         "a keeper channel was inherited (#{Opus.Settings.channel_env()}); only cyfr-keeper may start runners here"},
       else: :ok
   end
 

@@ -6,8 +6,8 @@ defmodule Crucible.WorkerWatch do
   Hears from each configured worker service, and lapses what a boot the
   cell stopped hearing from, or saw replaced, was running.
 
-  Every poll interval (`config :cyfr, :worker_watch`, `poll_ms`, 5 s by
-  default) the watch asks each worker service of `config :cyfr, :workers`
+  Every poll interval (`config :cyfr, :opus_watch`, `poll_ms`, 5 s by
+  default) the watch asks each worker service of `config :cyfr, :opus_workers`
   for its status (`Crucible.WorkerClient.status/1`), every entry at
   once, each poll bounded by the client. A status of the contract's shape
   (`Prima.WorkerAPI.valid_status?/1`) that names the entry's configured id
@@ -116,8 +116,8 @@ defmodule Crucible.WorkerWatch do
   lapsed counts for nothing: the rows are the holder's to settle.
 
   Started by `Cyfr.Application` with no options, the watch reads its
-  worker services from `config :cyfr, :workers` and its bounds from
-  `config :cyfr, :worker_watch` (`poll_ms` and `misses`, positive
+  worker services from `config :cyfr, :opus_workers` and its bounds from
+  `config :cyfr, :opus_watch` (`poll_ms` and `misses`, positive
   integers; any other value refuses the start with the reason), and
   starts only when `config :cyfr, :worker_watch_enabled` is true. That
   key defaults to `config :cyfr, :execution_sweeper_enabled` (itself true
@@ -164,8 +164,8 @@ defmodule Crucible.WorkerWatch do
 
   @doc """
   Start the watch. `opts`: `:workers` (the endpoints to poll; default
-  `config :cyfr, :workers`, and then only when the watch is enabled),
-  `:poll_ms` and `:misses` (default `config :cyfr, :worker_watch`, then
+  `config :cyfr, :opus_workers`, and then only when the watch is enabled),
+  `:poll_ms` and `:misses` (default `config :cyfr, :opus_watch`, then
   5 000 and 3), `:lease_ms` (default twice the poll interval; see the
   module doc for why the width is what makes a partitioned member
   harmless), `:owner` (default `Prima.Boot.id/0`) and `:name` (default
@@ -679,7 +679,9 @@ defmodule Crucible.WorkerWatch do
          {:ok, lease_ms} <- lease(bounds, poll_ms),
          {:ok, workers} <-
            workers(
-             Keyword.get_lazy(opts, :workers, fn -> Application.get_env(:cyfr, :workers, []) end)
+             Keyword.get_lazy(opts, :workers, fn ->
+               Application.get_env(:cyfr, :opus_workers, [])
+             end)
            ) do
       {:ok,
        %{
@@ -697,15 +699,15 @@ defmodule Crucible.WorkerWatch do
   defp name(other), do: {:error, "worker watch: the name must be an atom, got #{inspect(other)}"}
 
   defp configured_bounds do
-    case Application.get_env(:cyfr, :worker_watch, []) do
+    case Application.get_env(:cyfr, :opus_watch, []) do
       bounds when is_list(bounds) ->
         if Keyword.keyword?(bounds),
           do: {:ok, bounds},
-          else: {:error, "worker watch: config :cyfr, :worker_watch must be a keyword list"}
+          else: {:error, "worker watch: config :cyfr, :opus_watch must be a keyword list"}
 
       other ->
         {:error,
-         "worker watch: config :cyfr, :worker_watch must be a keyword list, got #{inspect(other)}"}
+         "worker watch: config :cyfr, :opus_watch must be a keyword list, got #{inspect(other)}"}
     end
   end
 

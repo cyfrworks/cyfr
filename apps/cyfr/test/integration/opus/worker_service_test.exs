@@ -376,7 +376,7 @@ defmodule Opus.WorkerServiceWireTest do
   end
 
   defp worker_key!(worker) do
-    {:ok, key} = Keys.worker_key(worker)
+    {:ok, key} = Keys.opus_key(worker)
     key
   end
 

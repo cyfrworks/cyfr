@@ -9,12 +9,12 @@ defmodule Locus.Executor do
 
   The executor supplies `HOME` (a directory of the build's own), `TMPDIR`
   inside it, `USER`, `LOGNAME` and `PATH`; `env` is everything else the
-  command sees. `Locus.Spawner` runs the command through cyfr-spawn: under
+  command sees. `Locus.Keeper` runs the command through cyfr-keeper: under
   a pooled uid, inside the memory bound the builder runs every build under
   (`Locus.Config.memory_bytes/0`). `Locus.DirectLauncher` runs it as this
   node's own user with no bound at all, so it is an executor of the test
   build alone (`executors/0`): no release and no development node knows
-  it, whatever its configuration says, and a node that holds no cyfr-spawn
+  it, whatever its configuration says, and a node that holds no cyfr-keeper
   channel there runs no build (`executor/0`).
 
   A run ends on every path with everything the command started gone: at
@@ -67,8 +67,8 @@ defmodule Locus.Executor do
   # where the suites run and nowhere else: a release is compiled without it
   # and no setting brings it back.
   @executors if Mix.env() == :test,
-               do: [Locus.Spawner, Locus.DirectLauncher],
-               else: [Locus.Spawner]
+               do: [Locus.Keeper, Locus.DirectLauncher],
+               else: [Locus.Keeper]
 
   @doc "The executors this build knows: the spawner, and the direct launcher under the test environment alone."
   @spec executors() :: [module()]
@@ -78,11 +78,11 @@ defmodule Locus.Executor do
   The executor builds run with: the spawner when its client is running,
   the direct launcher otherwise where this build knows it, and
   `{:error, :no_keeper}` everywhere else. A build is never run outside
-  cyfr-spawn by a release.
+  cyfr-keeper by a release.
   """
   @spec executor() :: {:ok, module()} | {:error, :no_keeper}
   def executor do
-    executor = if Locus.Spawner.running?(), do: Locus.Spawner, else: Locus.DirectLauncher
+    executor = if Locus.Keeper.running?(), do: Locus.Keeper, else: Locus.DirectLauncher
     if executor in @executors, do: {:ok, executor}, else: {:error, :no_keeper}
   end
 

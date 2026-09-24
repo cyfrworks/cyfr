@@ -211,7 +211,7 @@ config :sanctum,
 # this file is read. `CrucibleTest` pins the two spellings to each
 # other.
 test_worker_root = :crypto.hash(:sha256, "cyfr-test-worker-root")
-config :cyfr, :worker_key, test_worker_root
+config :cyfr, :opus_key, test_worker_root
 
 # The Opus service of a test boot listens on a port of the system's choosing,
 # and so does CYFR's host API listener; `Cyfr.Test.OpusService` points each
@@ -223,7 +223,7 @@ config :cyfr, :worker_key, test_worker_root
 config :opus,
   service_key:
     :hmac
-    |> :crypto.mac(:sha256, test_worker_root, "cyfr-worker/v1/worker\nwrk_local")
+    |> :crypto.mac(:sha256, test_worker_root, "cyfr-opus/v1/worker\nwrk_local")
     |> Base.encode16(case: :lower),
   port: 0,
   keeper: :direct

@@ -597,9 +597,9 @@ jobs:
       - name: Build a component through its lock lifecycle, and a tincture
         run: python3 scripts/builder-smoke.py cyfr-locus:smoke
 
-      # Under the same settings: cyfr-spawn holds exactly SETUID|SETGID|KILL
+      # Under the same settings: cyfr-keeper holds exactly SETUID|SETGID|KILL
       # and the release none, with no distribution listener, and the release
-      # refuses to serve without cyfr-spawn; a build runs under a pooled uid
+      # refuses to serve without cyfr-keeper; a build runs under a pooled uid
       # in a 0700 home, cannot read or signal the release (whose environ
       # holds the builds key), list the home root or read a concurrent
       # build's tree; a daemon a build.rs starts is gone, with the home, when
@@ -1120,6 +1120,20 @@ jobs:
             'Emissary\.MCP\.(McpServersTool|ExternalProvider|Bridge|ExternalServer\w*|ApprovalTool|NotesTool|ThreadTool|BackendDefinition|StatusRedaction)\b' \
             'Compendium\.MCP\b' \
             'Sanctum\.MCP\b' \
+            'apps/spawn/' \
+            'cyfr-spawn' \
+            'spawn_protocol\.json' \
+            'CYFR_SPAWN_CHANNEL' \
+            'cyfr-worker/v1' \
+            'cyfr\.worker\.key' \
+            'Locus\.Spawner\b' \
+            'Locus\.Test\.FakeSpawner\b' \
+            'Opus\.Keeper\.Spawn\b' \
+            'CYFR_WORKER_KEY' \
+            'CYFR_WORKERS\b' \
+            'CYFR_EXECUTION_EVENTS_' \
+            'CYFR_MAX_CONCURRENT_EXECUTIONS' \
+            'CYFR_WORKER_WATCH_' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then

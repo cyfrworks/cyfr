@@ -256,7 +256,7 @@ defmodule Cyfr.RuntimeConfigTest do
                RuntimeConfig.resolve_workers(env(%{}))
 
       assert {:ok, [%{id: "wrk_local"}]} =
-               RuntimeConfig.resolve_workers(env(%{"CYFR_WORKERS" => " "}))
+               RuntimeConfig.resolve_workers(env(%{"CYFR_OPUS_WORKERS" => " "}))
     end
 
     test "entries are <service_id>=<url>, comma-separated, in order, each running any component" do
@@ -267,7 +267,7 @@ defmodule Cyfr.RuntimeConfigTest do
               ]} =
                RuntimeConfig.resolve_workers(
                  env(%{
-                   "CYFR_WORKERS" =>
+                   "CYFR_OPUS_WORKERS" =>
                      " wrk_opus = http://opus:4200/ ,, wrk_b-2=https://b.internal "
                  })
                )
@@ -284,8 +284,10 @@ defmodule Cyfr.RuntimeConfigTest do
             "wrk_opus=http://opus:4200/worker",
             "wrk_opus=ftp://opus:4200"
           ] do
-        assert {:error, message} = RuntimeConfig.resolve_workers(env(%{"CYFR_WORKERS" => bad}))
-        assert message =~ "CYFR_WORKERS"
+        assert {:error, message} =
+                 RuntimeConfig.resolve_workers(env(%{"CYFR_OPUS_WORKERS" => bad}))
+
+        assert message =~ "CYFR_OPUS_WORKERS"
         assert message =~ String.trim(bad)
       end
     end
@@ -293,7 +295,7 @@ defmodule Cyfr.RuntimeConfigTest do
     test "two entries of one service id refuse the boot" do
       assert {:error, message} =
                RuntimeConfig.resolve_workers(
-                 env(%{"CYFR_WORKERS" => "wrk_a=http://a:4200,wrk_a=http://b:4200"})
+                 env(%{"CYFR_OPUS_WORKERS" => "wrk_a=http://a:4200,wrk_a=http://b:4200"})
                )
 
       assert message =~ ~s("wrk_a")
@@ -441,43 +443,43 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
-  describe "resolve_worker_watch/1 — the watch's bounds, only the set ones" do
+  describe "resolve_opus_watch/1 — the watch's bounds, only the set ones" do
     test "unset => nothing configured, so the code's defaults stand" do
-      assert {:ok, []} = RuntimeConfig.resolve_worker_watch(env(%{}))
+      assert {:ok, []} = RuntimeConfig.resolve_opus_watch(env(%{}))
 
       assert {:ok, []} =
-               RuntimeConfig.resolve_worker_watch(
-                 env(%{"CYFR_WORKER_WATCH_POLL_MS" => " ", "CYFR_WORKER_WATCH_MISSES" => ""})
+               RuntimeConfig.resolve_opus_watch(
+                 env(%{"CYFR_OPUS_WATCH_POLL_MS" => " ", "CYFR_OPUS_WATCH_MISSES" => ""})
                )
     end
 
     test "a poll interval in milliseconds and a count of misses, each within its range" do
       assert {:ok, [poll_ms: 2_000, misses: 5]} =
-               RuntimeConfig.resolve_worker_watch(
-                 env(%{"CYFR_WORKER_WATCH_POLL_MS" => "2000", "CYFR_WORKER_WATCH_MISSES" => "5"})
+               RuntimeConfig.resolve_opus_watch(
+                 env(%{"CYFR_OPUS_WATCH_POLL_MS" => "2000", "CYFR_OPUS_WATCH_MISSES" => "5"})
                )
 
       assert {:ok, [misses: 1]} =
-               RuntimeConfig.resolve_worker_watch(env(%{"CYFR_WORKER_WATCH_MISSES" => "1"}))
+               RuntimeConfig.resolve_opus_watch(env(%{"CYFR_OPUS_WATCH_MISSES" => "1"}))
 
       assert {:ok, [poll_ms: 60_000]} =
-               RuntimeConfig.resolve_worker_watch(env(%{"CYFR_WORKER_WATCH_POLL_MS" => "60000"}))
+               RuntimeConfig.resolve_opus_watch(env(%{"CYFR_OPUS_WATCH_POLL_MS" => "60000"}))
     end
 
     test "a value outside its range, or not a whole number, refuses the boot naming it" do
       for bad <- ~w(999 60001 5s 1.5 -5000 five) do
         assert {:error, message} =
-                 RuntimeConfig.resolve_worker_watch(env(%{"CYFR_WORKER_WATCH_POLL_MS" => bad}))
+                 RuntimeConfig.resolve_opus_watch(env(%{"CYFR_OPUS_WATCH_POLL_MS" => bad}))
 
-        assert message =~ "CYFR_WORKER_WATCH_POLL_MS"
+        assert message =~ "CYFR_OPUS_WATCH_POLL_MS"
         assert message =~ bad
       end
 
       for bad <- ~w(0 101 3x -1 many) do
         assert {:error, message} =
-                 RuntimeConfig.resolve_worker_watch(env(%{"CYFR_WORKER_WATCH_MISSES" => bad}))
+                 RuntimeConfig.resolve_opus_watch(env(%{"CYFR_OPUS_WATCH_MISSES" => bad}))
 
-        assert message =~ "CYFR_WORKER_WATCH_MISSES"
+        assert message =~ "CYFR_OPUS_WATCH_MISSES"
         assert message =~ bad
       end
     end

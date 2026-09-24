@@ -34,7 +34,7 @@ const stack = new Stack(PROJECT);
 let c;
 
 const underUid = (uid) => processes(stack.container).filter((p) => p.uids.includes(uid));
-const relays = (target = stack.container) => processes(target).filter((p) => p.cmdline.startsWith("cyfr-spawn relay"));
+const relays = (target = stack.container) => processes(target).filter((p) => p.cmdline.startsWith("cyfr-keeper relay"));
 
 // Runs a script in a separate container sharing the bridge's PID and
 // network namespaces with CAP_SYS_PTRACE, which reading another process's
@@ -85,9 +85,9 @@ const ALPHA_SECRET = "alpha-secret-value";
 
 test("the spawner holds exactly SETUID, SETGID and KILL and no inet socket; the bridge holds no capability", () => {
   const procs = processes(stack.container);
-  spawner = procs.find((p) => p.cmdline.startsWith("cyfr-spawn serve"));
+  spawner = procs.find((p) => p.cmdline.startsWith("cyfr-keeper serve"));
   bridge = procs.find((p) => p.cmdline === "node server.mjs");
-  assert.ok(spawner, "no cyfr-spawn serve process");
+  assert.ok(spawner, "no cyfr-keeper serve process");
   assert.ok(bridge, "no bridge process");
 
   assert.deepEqual(spawner.uids, [0, 0, 0, 0]);
@@ -303,7 +303,7 @@ test("stopping the service retires every backend and the spawner exits 0", async
   assert.equal(run("docker", ["inspect", "--format", "{{.State.ExitCode}}", stack.container]).stdout.trim(), "0");
   const text = stack.compose("logs", "--no-color", "mcp-bridge").stdout;
   assert.match(text, /SIGTERM — stopping/);
-  assert.match(text, /\[cyfr-spawn\] info: stopped/);
+  assert.match(text, /\[cyfr-keeper\] info: stopped/);
   assert.doesNotMatch(text, /quarantined|did not finish/, `uid ${who.uid} was not retired cleanly`);
   // The sealed values never reach the bridge's log.
   assert.ok(!text.includes(ALPHA_SECRET), "a backend's credential reached the bridge's log");

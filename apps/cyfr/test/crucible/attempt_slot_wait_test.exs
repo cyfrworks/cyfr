@@ -123,7 +123,7 @@ defmodule Crucible.AttemptSlotWaitTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "slot_wait_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, cyfr: :workers]
+    keys = [arca: :base_path, cyfr: :opus_workers]
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, run_dir)
     ctx = Sanctum.TestContext.local()
@@ -527,8 +527,8 @@ defmodule Crucible.AttemptSlotWaitTest do
 
     Application.put_env(
       :cyfr,
-      :workers,
-      Enum.map(Application.get_env(:cyfr, :workers), fn
+      :opus_workers,
+      Enum.map(Application.get_env(:cyfr, :opus_workers), fn
         %{id: ^scripted} = entry -> %{entry | url: gate}
         entry -> entry
       end)

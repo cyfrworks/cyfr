@@ -7,6 +7,6 @@
 # canary (tests/fixtures/residue-canary.go) the probe backend runs.
 services:
   mcp-bridge:
-    entrypoint: ["cyfr-spawn", "serve", "--pool", "backends:20001-20001", "--home-root", "/var/lib/cyfr-bridge/homes", "--client-user", "cyfr-bridge", "--", "node", "server.mjs"]
+    entrypoint: ["cyfr-keeper", "serve", "--pool", "backends:20001-20001", "--home-root", "/var/lib/cyfr-bridge/homes", "--client-user", "cyfr-bridge", "--", "node", "server.mjs"]
     volumes:
       - ${CANARY_DIR:?set CANARY_DIR}:/canary:ro

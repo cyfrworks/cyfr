@@ -98,11 +98,11 @@ defmodule Opus.CredentialsTest do
              []
 
     assert Credentials.refused_environment(%{
-             "CYFR_WORKER_KEY" => "x",
+             "CYFR_OPUS_KEY" => "x",
              "CYFR_DATABASE_URL" => "postgres://",
              "CYFR_CRYPTO_KEYRING" => "y",
              "OPUS_PORT" => "4200"
-           }) == ["CYFR_WORKER_KEY", "CYFR_CRYPTO_KEYRING", "CYFR_DATABASE_URL"]
+           }) == ["CYFR_OPUS_KEY", "CYFR_CRYPTO_KEYRING", "CYFR_DATABASE_URL"]
   end
 
   test "a credential's inspection shows its identity and never its keys" do

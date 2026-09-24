@@ -17,7 +17,7 @@ defmodule Crucible do
   is taken before the run is dispatched (`Crucible.Dispatch.run/4`,
   `Crucible.Dispatch.claim/4`); a refusal runs nothing.
 
-  A run is dispatched to the first worker service `config :cyfr, :workers`
+  A run is dispatched to the first worker service `config :cyfr, :opus_workers`
   names that is loaded and answers; with none, `available?/0` is false and
   a dispatched run answers `{:error, :execution_unavailable}`.
 

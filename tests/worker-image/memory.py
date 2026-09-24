@@ -3,8 +3,8 @@
 # Copyright 2026 CYFR Works Inc.
 """A runner cannot take more memory than its bound, run as docker-compose.yml's opus service.
 
-The service asks cyfr-spawn for a memory bound on every runner it spawns
-(`Opus.Keeper.Spawn`, the pool's `:runner_memory_bytes`): cyfr-spawn gives
+The service asks cyfr-keeper for a memory bound on every runner it spawns
+(`Opus.Keeper.Channel`, the pool's `:runner_memory_bytes`): cyfr-keeper gives
 the runner a cgroup v2 group of its own at that bound, with no swap and the
 group killed whole, charged for the runner's VM, every guest's linear
 memory, the pages of its home and the kernel memory it causes, together. It
@@ -111,7 +111,7 @@ MARGIN = 1.8
 
 
 def group(uid):
-    return f"/sys/fs/cgroup/spawn-{uid}"
+    return f"/sys/fs/cgroup/keeper-{uid}"
 
 
 def read_group(stack, uid):
@@ -148,7 +148,7 @@ def brief_stat(stat):
 
 
 def keeper_group(stack):
-    """The keeper's group (cyfr-spawn, the service and every spawn without a bound): its peak and current use."""
+    """The keeper's group (cyfr-keeper, the service and every spawn without a bound): its peak and current use."""
     out = stack.exec("cat /sys/fs/cgroup/keeper/memory.peak /sys/fs/cgroup/keeper/memory.current").stdout.split()
     return {"peak": int(out[0]), "current": int(out[1])} if len(out) == 2 else None
 
@@ -186,7 +186,7 @@ class GroupSampler(threading.Thread):
 
     SCRIPT = r"""
       echo "pid $$"
-      g=/sys/fs/cgroup/spawn-UID
+      g=/sys/fs/cgroup/keeper-UID
       while :; do
         p=; c=; k=; o=; ok=
         { read -r p < $g/memory.peak; read -r c < $g/memory.current; } 2>/dev/null
@@ -614,7 +614,7 @@ def test_bound_unavailable(image, plane, window_s=5.0):
               f"last {counts[-1] if counts else None}; the start answered {code} {answer}", flush=True)
         expect(seen == set() and stack.homes() == [], "no runner process ever ran under a pooled uid, and no home was made",
                {"pids": sorted(seen), "homes": stack.homes()})
-        expect(len(refusals) == 1, "the service logged once that cyfr-spawn cannot bound a runner, naming writable-cgroups=true",
+        expect(len(refusals) == 1, "the service logged once that cyfr-keeper cannot bound a runner, naming writable-cgroups=true",
                [line for line in logs if "memory" in line or "Keeper" in line][-10:])
         expect(counts and all(c == {"fresh": 0, "idle": 0, "busy": 0, "tainted": 0} for c in counts),
                f"the pool kept no runner it was refused, tainted or otherwise, in any of {len(counts)} samples",
@@ -774,7 +774,7 @@ def measure(image, rounds):
             print(f"round {n + 1}: {label}: {len(runners)} runner(s), peaked at {mib(group_['peak'])} ({group_['peak']} bytes)", flush=True)
             keeper = keeper_group(stack)
             keeper_peaks.append(keeper["peak"])
-            print(f"round {n + 1}: the keeper group (cyfr-spawn and the service) peaked at {mib(keeper['peak'])}", flush=True)
+            print(f"round {n + 1}: the keeper group (cyfr-keeper and the service) peaked at {mib(keeper['peak'])}", flush=True)
         finally:
             stack.down()
             plane.stop()

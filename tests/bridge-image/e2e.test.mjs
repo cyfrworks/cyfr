@@ -536,8 +536,8 @@ test("a crash of cyfr between an update's commit and its sync leaves no backend 
 test("killing the spawner takes every backend down with the container, compose restarts it, and cyfr syncs again", async (t) => {
   const before = probe("updatable", "whoami");
   const restarts = Number(stack.inspect(stack.bridge, "{{.RestartCount}}"));
-  const spawner = processes(stack.bridge).find((p) => p.cmdline.startsWith("cyfr-spawn serve"));
-  assert.ok(spawner, "no cyfr-spawn serve process");
+  const spawner = processes(stack.bridge).find((p) => p.cmdline.startsWith("cyfr-keeper serve"));
+  assert.ok(spawner, "no cyfr-keeper serve process");
 
   run("docker", ["exec", stack.bridge, "kill", "-KILL", String(spawner.pid)]);
 
@@ -579,7 +579,7 @@ test("the canary is in no request-log row, no execution payload and nothing unde
 
     payloads =
       for row <- rows.("SELECT * FROM execution_payloads") do
-        {:ok, _row, bytes} = Arca.ExecutionPayloads.get(ctx, row["execution_id"], row["kind"])
+        {:ok, _row, bytes} = Arca.ExecutionPayloads.get(Sanctum.Context.actor(ctx), row["execution_id"], row["kind"])
         Map.put(row, "bytes_read", bytes)
       end
 

@@ -13,18 +13,18 @@ defmodule Opus.Settings do
   (`:watchdog_grace_ms`, 5 000), how long a released runner is given to
   report its open attempts before its process group is killed
   (`:release_grace_ms`, 2 000), which keeper starts its runners
-  (`:keeper`: `:spawn`, the `cyfr-spawn` channel the image inherits, or
+  (`:keeper`: `:channel`, the `cyfr-keeper` channel the image inherits, or
   `:direct`, a launcher of plain OS processes for a machine without a
   keeper), where the keeper's relays attach (`:attach_dir`,
-  `/run/opus`), and the memory bound of every runner `cyfr-spawn` starts
+  `/run/opus`), and the memory bound of every runner `cyfr-keeper` starts
   (`:runner_memory_bytes`, 384 MiB). Unset, the keeper follows the
-  environment: `:spawn` when `CYFR_SPAWN_CHANNEL` names an inherited
+  environment: `:channel` when `KEEPER_CHANNEL` names an inherited
   channel, `:direct` otherwise; set, it is checked against that
   environment when the pool starts (`Opus.Keeper`). A value that is not a
   positive integer, or a keeper that is not one of the two (`keepers/0`),
   refuses the boot with the key named.
 
-  `:runner_memory_bytes` is what `Opus.Keeper.Spawn` asks `cyfr-spawn` to
+  `:runner_memory_bytes` is what `Opus.Keeper.Channel` asks `cyfr-keeper` to
   hold each runner to (`runner_memory_bytes/1`): a cgroup of the runner's
   own at that many bytes for its VM, every guest's linear memory, the
   pages of its home and the kernel memory charged to it, together. A
@@ -56,11 +56,11 @@ defmodule Opus.Settings do
   @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
   @id ~r/\A[\x21-\x7E]{1,256}\z/
 
-  @keepers [:spawn, :direct]
-  @channel_env "CYFR_SPAWN_CHANNEL"
+  @keepers [:channel, :direct]
+  @channel_env "KEEPER_CHANNEL"
 
-  # cyfr-spawn's range for a spawn's `memory_bytes`
-  # (`apps/spawn/internal/protocol`: MinMemoryBytes, MaxMemoryBytes).
+  # cyfr-keeper's range for a spawn's `memory_bytes`
+  # (`apps/keeper/internal/protocol`: MinMemoryBytes, MaxMemoryBytes).
   @runner_memory_range 16_777_216..1_099_511_627_776
 
   @pool_defaults %{
@@ -78,7 +78,7 @@ defmodule Opus.Settings do
           idle_ttl_ms: pos_integer(),
           watchdog_grace_ms: pos_integer(),
           release_grace_ms: pos_integer(),
-          keeper: :spawn | :direct,
+          keeper: :channel | :direct,
           attach_dir: String.t(),
           runner_memory_bytes: pos_integer()
         }
@@ -93,7 +93,7 @@ defmodule Opus.Settings do
           watchdog_grace_ms: pos_integer()
         }
 
-  @doc "The keeper choices: `:spawn` and `:direct`."
+  @doc "The keeper choices: `:channel` and `:direct`."
   @spec keepers() :: [atom()]
   def keepers, do: @keepers
 
@@ -101,7 +101,7 @@ defmodule Opus.Settings do
   @spec channel_env() :: String.t()
   def channel_env, do: @channel_env
 
-  @doc "Whether this process inherited a keeper channel (`CYFR_SPAWN_CHANNEL` is set)."
+  @doc "Whether this process inherited a keeper channel (`KEEPER_CHANNEL` is set)."
   @spec channel_inherited?() :: boolean()
   def channel_inherited?, do: channel_inherited?(System.get_env())
 
@@ -143,7 +143,7 @@ defmodule Opus.Settings do
 
   @doc """
   The memory bound `env` (the `:opus` application environment) gives
-  every runner `cyfr-spawn` starts: its `:runner_memory_bytes`, or the
+  every runner `cyfr-keeper` starts: its `:runner_memory_bytes`, or the
   default when unset. A value that is not an integer from 16 MiB to 1 TiB
   refuses.
   """
@@ -156,7 +156,7 @@ defmodule Opus.Settings do
     end
   end
 
-  @doc "The least and the most a runner's memory bound may be, in bytes: `cyfr-spawn`'s range."
+  @doc "The least and the most a runner's memory bound may be, in bytes: `cyfr-keeper`'s range."
   @spec runner_memory_range() :: Range.t()
   def runner_memory_range, do: @runner_memory_range
 
@@ -243,7 +243,7 @@ defmodule Opus.Settings do
     end
   end
 
-  defp keeper(nil, system), do: {:ok, if(channel_inherited?(system), do: :spawn, else: :direct)}
+  defp keeper(nil, system), do: {:ok, if(channel_inherited?(system), do: :channel, else: :direct)}
   defp keeper(keeper, _system) when keeper in @keepers, do: {:ok, keeper}
   defp keeper(_keeper, _system), do: {:error, {:malformed, :keeper}}
 

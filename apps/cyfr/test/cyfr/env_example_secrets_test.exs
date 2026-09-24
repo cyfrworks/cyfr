@@ -48,7 +48,7 @@ defmodule Cyfr.EnvExampleSecretsTest do
   # The keys are generated per deployment: shipped with a value, every
   # deployment that copied the example would share it.
   test "every key the stack needs is shipped empty" do
-    for key <- ~w(CYFR_WORKER_KEY CYFR_MCP_BRIDGE_KEY OPUS_SERVICE_KEY CYFR_LOCUS_BUILDS_KEY) do
+    for key <- ~w(CYFR_OPUS_KEY CYFR_MCP_BRIDGE_KEY OPUS_SERVICE_KEY CYFR_LOCUS_BUILDS_KEY) do
       text = File.read!(Path.join(@root, ".env.example"))
       assert text =~ ~r/^(# )?#{key}=$/m, ".env.example must ship #{key} empty"
     end

@@ -12,7 +12,7 @@ defmodule Cyfr.Test.LocusService do
   `serve!/0`, run once by `test_helper.exs`, gives it the builds key and
   starts its listener (`Locus.Application.listener/1`) under
   `Locus.Supervisor`, where the builds run through `Locus.DirectLauncher`,
-  the one executor the test build knows beside cyfr-spawn: as this
+  the one executor the test build knows beside cyfr-keeper: as this
   machine's user, with no uid or memory bound of their own. `stop!/0`, run
   when the suite ends, takes both away again, so a suite that runs after
   this one in the same VM finds Locus as it started.

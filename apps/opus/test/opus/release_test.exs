@@ -33,7 +33,7 @@ defmodule Opus.ReleaseTest do
       "LANG" => "C.UTF-8",
       "ELIXIR_ERL_OPTIONS" => "+fnu",
       "OPUS_SERVICE_KEY" => String.duplicate("0", 64),
-      "CYFR_SPAWN_CHANNEL" => "socket:[7]",
+      "KEEPER_CHANNEL" => "socket:[7]",
       "RELEASE_COOKIE" => "secret"
     }
 

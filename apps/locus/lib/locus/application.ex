@@ -4,21 +4,21 @@
 defmodule Locus.Application do
   @moduledoc """
   The builder's supervision tree, in dependency order: the build slots,
-  the client of cyfr-spawn when this node was started by it, and the
+  the client of cyfr-keeper when this node was started by it, and the
   builds service's listener when this node serves builds.
 
   A node serves builds when it holds a builds key
   (`Locus.Config.request_key/0`): the `locus` release always does, since
   its boot refuses without one (`config/locus_runtime.exs`), and a node
   whose environment was never read serves none. A node that serves runs
-  every build through cyfr-spawn, under a uid and a memory bound of the
+  every build through cyfr-keeper, under a uid and a memory bound of the
   build's own, so serving without the spawner's channel refuses the boot.
   The one build that serves without it is the test environment's, through
   `Locus.DirectLauncher`, and that choice is compiled into no other
   (`Locus.Executor.executors/0`): no setting of a release reaches it.
 
   The tree restarts `:rest_for_one`. The listener depends on the spawner:
-  when cyfr-spawn's channel is lost the spawner stops, the listener stops
+  when cyfr-keeper's channel is lost the spawner stops, the listener stops
   with it, and a spawner that cannot come back ends the application, and
   with it the release.
   """
@@ -28,7 +28,7 @@ defmodule Locus.Application do
   @impl true
   def start(_type, _args) do
     serve? = Locus.Config.request_key() != nil
-    keeper? = Locus.Spawner.channel_inherited?()
+    keeper? = Locus.Keeper.channel_inherited?()
 
     if serve?, do: configure_logging()
 
@@ -44,7 +44,7 @@ defmodule Locus.Application do
 
   @doc """
   The children of `Locus.Supervisor` for a node that serves builds or does
-  not, started by cyfr-spawn or not, under the executors this build knows.
+  not, started by cyfr-keeper or not, under the executors this build knows.
   Serving without the spawner where the direct launcher is unknown raises:
   the boot is refused.
   """
@@ -57,16 +57,16 @@ defmodule Locus.Application do
     if Locus.DirectLauncher in executors do
       [build_slots(), listener()]
     else
-      raise "[Locus] FATAL: the builds service runs a build only through cyfr-spawn, which " <>
-              "starts it with its channel on fd 3 (CYFR_SPAWN_CHANNEL); fd 3 is not that " <>
-              "channel. Start the release through `cyfr-spawn serve --pool build:… -- " <>
+      raise "[Locus] FATAL: the builds service runs a build only through cyfr-keeper, which " <>
+              "starts it with its channel on fd 3 (KEEPER_CHANNEL); fd 3 is not that " <>
+              "channel. Start the release through `cyfr-keeper serve --pool build:… -- " <>
               "/app/bin/locus start` (the image's entrypoint)."
     end
   end
 
   def children(serve?, keeper?, _executors) do
     [build_slots()] ++
-      if(keeper?, do: [Locus.Spawner], else: []) ++
+      if(keeper?, do: [Locus.Keeper], else: []) ++
       if(serve?, do: [listener()], else: [])
   end
 

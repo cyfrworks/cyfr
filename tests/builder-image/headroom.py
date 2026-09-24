@@ -5,8 +5,8 @@
 
 Every build runs in a cgroup of its own, bounded at
 LOCUS_BUILDS_MEMORY_BYTES (tests/builder-image/memory.py proves that
-bound). What is not a build runs in the group cyfr-spawn keeps for itself,
-`keeper`: cyfr-spawn, the locus release and the relays. Nothing bounds
+bound). What is not a build runs in the group cyfr-keeper keeps for itself,
+`keeper`: cyfr-keeper, the locus release and the relays. Nothing bounds
 that group but the container's own limit, so docker-compose.yml's limit
 must hold LOCUS_BUILDS_MAX_CONCURRENT bounds and the most the service
 takes, or a build the kernel kills for the container's limit is lost
@@ -63,8 +63,8 @@ COMPOSE_SETTINGS = {"LOCUS_BUILDS_MEMORY_LIMIT", "LOCUS_BUILDS_CPU_LIMIT"}
 SAMPLER = r"""
 while :; do
   groups=""
-  for d in /sys/fs/cgroup/spawn-*; do
-    [ -d "$d" ] && groups="$groups${d##*spawn-}:$(cat "$d/memory.current" 2>/dev/null):$(cat "$d/memory.peak" 2>/dev/null),"
+  for d in /sys/fs/cgroup/keeper-*; do
+    [ -d "$d" ] && groups="$groups${d##*keeper-}:$(cat "$d/memory.current" 2>/dev/null):$(cat "$d/memory.peak" 2>/dev/null),"
   done
   printf '%s|%s|%s|%s\n' "$(cat /sys/fs/cgroup/keeper/memory.current)" \
     "$(awk '$1 == "anon" {a = $2} $1 == "file" {f = $2} END {print a "|" f}' /sys/fs/cgroup/keeper/memory.stat)" \

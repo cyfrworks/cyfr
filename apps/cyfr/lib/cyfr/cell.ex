@@ -159,7 +159,7 @@ defmodule Cyfr.Cell do
       &tls_distribution/1,
       &cell_cookie/1,
       &topology/1,
-      &worker_key/1,
+      &opus_key/1,
       &host_api_url/1
     ]
     |> Enum.flat_map(fn check -> List.wrap(check.(facts)) end)
@@ -178,7 +178,7 @@ defmodule Cyfr.Cell do
       cell_cookie: Application.get_env(:cyfr, :cell_cookie),
       node_cookie: node_cookie(),
       topologies: Application.get_env(:libcluster, :topologies, []),
-      worker_key: Application.get_env(:cyfr, :worker_key),
+      opus_key: Application.get_env(:cyfr, :opus_key),
       host_api_url: Cyfr.RuntimeConfig.host_api_url()
     }
   end
@@ -271,11 +271,11 @@ defmodule Cyfr.Cell do
     """
   end
 
-  defp worker_key(%{worker_key: <<_::binary-size(32)>>}), do: []
+  defp opus_key(%{opus_key: <<_::binary-size(32)>>}), do: []
 
-  defp worker_key(_facts) do
+  defp opus_key(_facts) do
     """
-    CYFR_CLUSTER=1 needs CYFR_WORKER_KEY set and identical on every member. \
+    CYFR_CLUSTER=1 needs CYFR_OPUS_KEY set and identical on every member. \
     Unset, the worker root is random per boot, so a worker's report to a \
     peer fails MAC verification and its assignment is refused. Generate one \
     with `openssl rand -hex 32` and set the same value on every member, or \

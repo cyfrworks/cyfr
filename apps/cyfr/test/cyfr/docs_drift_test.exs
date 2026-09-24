@@ -24,6 +24,47 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
+  # The glossary names each part once, with the environment prefixes it
+  # owns. The prefixes are this roster, each named by one row.
+  @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_CRUCIBLE_ CYFR_HOST_API_ OPUS_ LOCUS_BUILDS_ KEEPER_ MCP_BRIDGE_)
+  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Opus Locus keeper)
+
+  defp glossary do
+    [_, section] = Regex.run(~r/^## Glossary\n(.*?)(?=^## )/ms, File.read!(@readme))
+
+    [header, _rule | rows] =
+      for line <- String.split(section, "\n"),
+          String.starts_with?(line, "|"),
+          do: line |> String.trim("|") |> String.split("|") |> Enum.map(&String.trim/1)
+
+    {header, rows}
+  end
+
+  test "README's glossary names every part, and its prefix column is the environment roster" do
+    {header, rows} = glossary()
+
+    assert Enum.all?(rows, &(length(&1) == length(header))), "a glossary row has the wrong width"
+
+    names = Enum.map(rows, &hd/1)
+
+    for name <- @glossary_names do
+      assert name in names, "the glossary has no row for #{name}"
+    end
+
+    column = Enum.find_index(header, &(&1 == "Environment prefix"))
+    assert column, "the glossary has no environment prefix column"
+
+    prefixes =
+      for row <- rows,
+          [prefix] <-
+            Regex.scan(~r/`([A-Z][A-Z0-9_]*)`/, Enum.at(row, column), capture: :all_but_first),
+          do: prefix
+
+    assert Enum.sort(prefixes) == Enum.sort(@env_prefixes),
+           "the glossary's environment prefixes #{inspect(prefixes)} are not the roster " <>
+             "#{inspect(@env_prefixes)}, each once"
+  end
+
   # Check storage trees in the three compile-embedded operator guides.
   @guides ~w(component-guide.md tincture-guide.md integration-guide.md)
 
@@ -183,7 +224,7 @@ defmodule Cyfr.DocsDriftTest do
       for file <- ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex),
           [name] <-
             Regex.scan(
-              ~r/"(CYFR_WORKERS|CYFR_WORKER_[A-Z0-9_]+|CYFR_HOST_API_[A-Z0-9_]+)"/,
+              ~r/"(CYFR_OPUS_WORKERS|CYFR_OPUS_[A-Z0-9_]+|CYFR_HOST_API_[A-Z0-9_]+)"/,
               File.read!(Path.join(@repo_root, file)),
               capture: :all_but_first
             ),

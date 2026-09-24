@@ -43,11 +43,11 @@ defmodule Prima.RunnerControlTest do
       service: "wrk_4f3c2a1e9d8b7c6a"
     },
     call:
-      Base.decode16!("b6f70404d43dd76ebe621ce95b8b41b1eebdba5d0243808e1925d48f7965a6c1",
+      Base.decode16!("3cb8492ec8c02995ea05e6baaaf6fd9fbee331348c98737e0e0efee507405c6d",
         case: :lower
       ),
     seal:
-      Base.decode16!("15de96100d0612975e8d5a64bb2d07eaa0c72e9bd3dca340c0d4c22c31a91621",
+      Base.decode16!("573d6c336e49b5565f81ab9d5e029854bf3e2c7393cdb8fad2e3a07b5f962237",
         case: :lower
       )
   }

@@ -85,32 +85,74 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
-  describe "CYFR_WORKER_KEY" do
+  describe "CYFR_OPUS_KEY" do
     test "is the 32-byte root its 64 hexadecimal digits spell, in either case" do
       root = :crypto.strong_rand_bytes(32)
 
       for text <- [Base.encode16(root, case: :lower), Base.encode16(root)] do
-        with_env(%{"CYFR_WORKER_KEY" => text}, fn ->
-          assert get_in(read_prod_config!(), [:cyfr, :worker_key]) == root
+        with_env(%{"CYFR_OPUS_KEY" => text}, fn ->
+          assert get_in(read_prod_config!(), [:cyfr, :opus_key]) == root
         end)
       end
     end
 
     test "unset or blank configures no root" do
       for value <- [nil, ""] do
-        with_env(%{"CYFR_WORKER_KEY" => value}, fn ->
-          assert get_in(read_prod_config!(), [:cyfr, :worker_key]) == nil
+        with_env(%{"CYFR_OPUS_KEY" => value}, fn ->
+          assert get_in(read_prod_config!(), [:cyfr, :opus_key]) == nil
         end)
       end
     end
 
     test "a malformed key refuses the boot" do
       for text <- ["abc", String.duplicate("g", 64), Base.encode64(:crypto.strong_rand_bytes(32))] do
-        with_env(%{"CYFR_WORKER_KEY" => text}, fn ->
+        with_env(%{"CYFR_OPUS_KEY" => text}, fn ->
           error = assert_raise RuntimeError, fn -> read_prod_config!() end
-          assert Exception.message(error) =~ "CYFR_WORKER_KEY must be exactly 64 hexadecimal"
+          assert Exception.message(error) =~ "CYFR_OPUS_KEY must be exactly 64 hexadecimal"
         end)
       end
+    end
+  end
+
+  describe "a setting under a replaced name" do
+    # Each old name and the name that replaced it. The old names are spelled
+    # in two parts, as config/runtime.exs spells them, so the vocabulary
+    # gate, which refuses them everywhere else, stays whole.
+    @replaced [
+      {"CYFR_WORKER" <> "_KEY", "CYFR_OPUS_KEY"},
+      {"CYFR_WORKER" <> "S", "CYFR_OPUS_WORKERS"},
+      {"CYFR_WORKER" <> "_WATCH_POLL_MS", "CYFR_OPUS_WATCH_POLL_MS"},
+      {"CYFR_WORKER" <> "_WATCH_MISSES", "CYFR_OPUS_WATCH_MISSES"},
+      {"CYFR_SPAWN" <> "_CHANNEL", "KEEPER_CHANNEL"},
+      {"CYFR_EXECUTION" <> "_EVENTS_MAX_CONCURRENT", "CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT"},
+      {"CYFR_EXECUTION" <> "_EVENTS_MAX_MS", "CYFR_CRUCIBLE_EVENTS_MAX_MS"},
+      {"CYFR_MAX_CONCURRENT" <> "_EXECUTIONS", "CYFR_CRUCIBLE_MAX_CONCURRENT"},
+      {"CYFR_MAX_CONCURRENT" <> "_EXECUTIONS_PER_TENANT",
+       "CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT"}
+    ]
+
+    test "refuses the boot of either release, set or blank, naming its replacement and never its value" do
+      value = "0123456789abcdef" <> "0123456789abcdef"
+
+      for {old, new} <- @replaced, release <- ["cyfr", "opus"], set <- [value, ""] do
+        with_env(%{old => set, "RELEASE_NAME" => release}, fn ->
+          error = assert_raise RuntimeError, fn -> read_prod_config!() end
+          message = Exception.message(error)
+
+          assert message =~ "#{old} (now #{new})", "#{old} under #{release}: #{message}"
+          refute message =~ value
+        end)
+      end
+    end
+
+    test "names every one that is set" do
+      [{first, first_new}, {second, second_new} | _] = @replaced
+
+      with_env(%{first => "x", second => "y"}, fn ->
+        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+        assert message =~ "#{first} (now #{first_new})"
+        assert message =~ "#{second} (now #{second_new})"
+      end)
     end
   end
 
@@ -236,6 +278,25 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
+  describe "OPUS_KEEPER" do
+    test "names the channel keeper or the direct one, and nothing else" do
+      for {value, keeper} <- [{"channel", :channel}, {"direct", :direct}] do
+        with_env(opus_env(%{"OPUS_KEEPER" => value}), fn ->
+          assert read_prod_config!()[:opus][:keeper] == keeper
+        end)
+      end
+
+      for bad <- ["spawn", "local", "Channel"] do
+        with_env(opus_env(%{"OPUS_KEEPER" => bad}), fn ->
+          error = assert_raise RuntimeError, fn -> read_prod_config!() end
+
+          assert Exception.message(error) =~
+                   "OPUS_KEEPER=#{inspect(bad)} names no keeper; use channel or direct"
+        end)
+      end
+    end
+  end
+
   describe "the releases this file configures" do
     test "the opus release configures nothing of CYFR's, and any other release is CYFR" do
       with_env(
@@ -250,7 +311,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
       with_env(%{"RELEASE_NAME" => "cyfr"}, fn ->
         config = read_prod_config!()
-        assert Keyword.has_key?(config[:cyfr], :workers)
+        assert Keyword.has_key?(config[:cyfr], :opus_workers)
         refute Keyword.has_key?(config, :opus)
       end)
     end
@@ -305,11 +366,11 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   describe "the worker wire" do
     test "the cyfr release takes the local worker and loopback host API by default" do
       with_env(
-        %{"CYFR_WORKERS" => nil, "CYFR_HOST_API_BIND" => nil, "CYFR_HOST_API_PORT" => nil},
+        %{"CYFR_OPUS_WORKERS" => nil, "CYFR_HOST_API_BIND" => nil, "CYFR_HOST_API_PORT" => nil},
         fn ->
           cyfr = read_prod_config!()[:cyfr]
 
-          assert cyfr[:workers] == [
+          assert cyfr[:opus_workers] == [
                    %{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}
                  ]
 
@@ -325,10 +386,10 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       )
     end
 
-    test "CYFR_WORKERS, CYFR_HOST_API_BIND, _PORT and _URL are taken as set" do
+    test "CYFR_OPUS_WORKERS, CYFR_HOST_API_BIND, _PORT and _URL are taken as set" do
       with_env(
         %{
-          "CYFR_WORKERS" => "wrk_opus=http://opus:4200, wrk_b=https://b.internal/",
+          "CYFR_OPUS_WORKERS" => "wrk_opus=http://opus:4200, wrk_b=https://b.internal/",
           "CYFR_HOST_API_BIND" => "0.0.0.0",
           "CYFR_HOST_API_PORT" => "4301",
           "CYFR_HOST_API_URL" => "http://cyfr-1:4301"
@@ -336,7 +397,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         fn ->
           cyfr = read_prod_config!()[:cyfr]
 
-          assert cyfr[:workers] == [
+          assert cyfr[:opus_workers] == [
                    %{id: "wrk_opus", url: "http://opus:4200", components: nil},
                    %{id: "wrk_b", url: "https://b.internal", components: nil}
                  ]
@@ -350,8 +411,8 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "a malformed worker entry, address or port refuses the boot by name" do
       for {var, value} <- [
-            {"CYFR_WORKERS", "opus=http://opus:4200"},
-            {"CYFR_WORKERS", "wrk_opus=opus:4200"},
+            {"CYFR_OPUS_WORKERS", "opus=http://opus:4200"},
+            {"CYFR_OPUS_WORKERS", "wrk_opus=opus:4200"},
             {"CYFR_HOST_API_BIND", "cyfr"},
             {"CYFR_HOST_API_PORT", "65536"}
           ] do
@@ -421,12 +482,12 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       with_env(
         %{
           "RELEASE_NAME" => nil,
-          "CYFR_WORKER_KEY" => Base.encode16(root),
+          "CYFR_OPUS_KEY" => Base.encode16(root),
           "OPUS_SERVICE_KEY" => nil
         },
         fn ->
           config = read_prod_config!()
-          assert config[:cyfr][:worker_key] == root
+          assert config[:cyfr][:opus_key] == root
           assert config[:opus][:service_id] == "wrk_local"
           assert config[:opus][:service_key] == Base.encode16(derived, case: :lower)
           assert config[:opus][:host_url] == "http://127.0.0.1:4300"
@@ -435,10 +496,10 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       )
 
       with_env(
-        %{"RELEASE_NAME" => nil, "CYFR_WORKER_KEY" => nil, "OPUS_SERVICE_KEY" => nil},
+        %{"RELEASE_NAME" => nil, "CYFR_OPUS_KEY" => nil, "OPUS_SERVICE_KEY" => nil},
         fn ->
           config = read_prod_config!()
-          minted = config[:cyfr][:worker_key]
+          minted = config[:cyfr][:opus_key]
           assert byte_size(minted) == 32
           {:ok, key} = Prima.WorkerAuth.worker_key(minted, "wrk_local")
           assert config[:opus][:service_key] == Base.encode16(key, case: :lower)

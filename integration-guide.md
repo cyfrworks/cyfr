@@ -1148,7 +1148,7 @@ named refusal at boot.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CYFR_CLUSTER` | `false` | Several members share this database as one cell. Needs Postgres, `CYFR_STORAGE=s3`, TLS distribution, `CYFR_CELL_COOKIE`, a topology, `CYFR_WORKER_KEY` and this member's own `CYFR_HOST_API_URL` |
+| `CYFR_CLUSTER` | `false` | Several members share this database as one cell. Needs Postgres, `CYFR_STORAGE=s3`, TLS distribution, `CYFR_CELL_COOKIE`, a topology, `CYFR_OPUS_KEY` and this member's own `CYFR_HOST_API_URL` |
 | `CYFR_CELL_COOKIE` | — | The cookie that bounds this cell: at least 32 characters, the same on every member, and the value each member's BEAM runs under (`RELEASE_COOKIE`, or `-setcookie`). An ambient `~/.erlang.cookie` is the machine's, not the cell's |
 | `CYFR_CLUSTER_NODES` | — | The members, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`) |
 | `CYFR_CLUSTER_DNS_QUERY` / `CYFR_CLUSTER_NODE_BASENAME` | — | The alternative to the list: a headless service to resolve, and the basename each member's node name uses (`<basename>@<address>`) |
@@ -1175,10 +1175,10 @@ What a cell changes for a client and an operator:
   call, a lease renewal included, so one worker service can serve several
   members and a misrouted call is lost loudly rather than answered for
   work the member does not hold. Each member still lists the workers it
-  dispatches to in its own `CYFR_WORKERS`.
+  dispatches to in its own `CYFR_OPUS_WORKERS`.
 - **Stdio MCP servers are not available** in a cell.
-- **Per-member ceilings multiply.** `CYFR_MAX_CONCURRENT_EXECUTIONS`,
-  `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT` and the per-credential
+- **Per-member ceilings multiply.** `CYFR_CRUCIBLE_MAX_CONCURRENT`,
+  `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT` and the per-credential
   stream cap on `execution.subscribe` and `notifications/listen` are each
   member's, so N members admit N times each. The tenant's durable
   ceilings are rows and hold for the cell: its consented invocation rate,
@@ -1197,12 +1197,12 @@ Compose](#running-a-worker-outside-compose) what compose sets for it.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CYFR_WORKER_KEY` | — | The root every worker key derives from, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`). Only CYFR holds it; without it no worker service can authenticate, so no component runs |
-| `CYFR_WORKERS` | `wrk_local=http://127.0.0.1:4200` | The worker services runs are dispatched to: comma-separated `<service_id>=<url>` entries, tried in order. A service id is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`; the URL is the base URL of the service's listener. Compose sets `wrk_opus=http://opus:4200` |
+| `CYFR_OPUS_KEY` | — | The root every worker key derives from, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`). Only CYFR holds it; without it no worker service can authenticate, so no component runs |
+| `CYFR_OPUS_WORKERS` | `wrk_local=http://127.0.0.1:4200` | The worker services runs are dispatched to: comma-separated `<service_id>=<url>` entries, tried in order. A service id is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`; the URL is the base URL of the service's listener. Compose sets `wrk_opus=http://opus:4200` |
 | `CYFR_HOST_API_BIND` / `CYFR_HOST_API_PORT` | `127.0.0.1` / `4300` | Where CYFR's host API listens for the workers' host calls and exit reports |
 | `CYFR_HOST_API_URL` | — | The address a worker service reaches *this* member's host API at (`http://cyfr:4300`). Every assignment this member issues carries it, and a worker posts that attempt's host calls there. Unset, the assignment carries no address and the worker uses `OPUS_HOST_URL`; a cell refuses to boot without it |
-| `OPUS_SERVICE_ID` | `wrk_local` (compose: `wrk_opus`) | The worker's service id, the one CYFR lists it under in `CYFR_WORKERS` |
-| `OPUS_SERVICE_KEY` | — | The worker's key, derived from the root for its id: `cyfr init` derives it, and `CYFR_WORKER_KEY=… mix cyfr.worker.key <service_id>` prints it. Required by the `opus` release |
+| `OPUS_SERVICE_ID` | `wrk_local` (compose: `wrk_opus`) | The worker's service id, the one CYFR lists it under in `CYFR_OPUS_WORKERS` |
+| `OPUS_SERVICE_KEY` | — | The worker's key, derived from the root for its id: `cyfr init` derives it, and `CYFR_OPUS_KEY=… mix cyfr.opus.key <service_id>` prints it. Required by the `opus` release |
 | `OPUS_HOST_URL` | — | The base URL of CYFR's host API as the worker reaches it (compose: `http://cyfr:4300`). Required by the `opus` release. It is where an attempt's host calls go only when the attempt's assignment names no address of its own; an assignment that names one wins, because it knows which member issued the work |
 | `OPUS_RUNNER_MEMORY_BYTES` | `402653184` (384 MiB) | The memory bound of every runner, 16 MiB to 1 TiB: its VM, every guest's linear memory, its home and the kernel memory charged to it. A runner that reaches it is ended whole and never reused |
 | `OPUS_MEMORY_LIMIT` / `OPUS_CPU_LIMIT` | `4G` / `4` | The `opus` container's limits, read by compose from `.env`: the memory limit holds all eight runner uids at their bound and the service (8 × 384 MiB + 1 GiB) |
@@ -1235,7 +1235,7 @@ hardening the compose file gives the service: `cap_drop`, `cap_add`,
 
 The execution worker takes `OPUS_SERVICE_ID`, `OPUS_SERVICE_KEY` and
 `OPUS_HOST_URL` as `.env.example` documents them, and the two below, which
-compose fixes for its container. CYFR lists the worker in `CYFR_WORKERS`
+compose fixes for its container. CYFR lists the worker in `CYFR_OPUS_WORKERS`
 under its service id at the URL of this listener, and binds
 `CYFR_HOST_API_BIND` to an address the worker reaches at `OPUS_HOST_URL`
 — or, where several members share the worker, at each member's own
@@ -1257,7 +1257,7 @@ listener.
 ### Docker requirement
 
 The `opus` and `locus-builds` containers hold every runner and every build
-to a memory bound of its own, a cgroup `cyfr-spawn` makes for it. That
+to a memory bound of its own, a cgroup `cyfr-keeper` makes for it. That
 needs **Docker Engine 28 or later on a cgroup v2 host** and the containers'
 `security_opt: writable-cgroups=true`, which the shipped
 `docker-compose.yml` sets and which adds no capability. Without it nothing
@@ -1285,7 +1285,7 @@ service's log says which), not as the container running out of memory.
 | `CYFR_MCP_ALLOWED_ORIGINS` | — | Comma-separated origins allowed to call `/mcp` cross-origin (e.g. a PWA hosted on another domain) |
 | `CYFR_LOG_FORMAT` | text | Set to `json` for structured (machine-parseable) logs |
 | `CYFR_OTEL_ENABLED` | `false` | Set to `true` to enable OpenTelemetry distributed tracing |
-| `CYFR_MAX_CONCURRENT_EXECUTIONS` | runtime default | Cap on concurrent component executions |
+| `CYFR_CRUCIBLE_MAX_CONCURRENT` | runtime default | Cap on concurrent component executions |
 
 ---
 

@@ -36,7 +36,7 @@ defmodule Crucible.WorkerClientTest do
     def call(conn, opts) do
       {:ok, body, conn} = read_body(conn)
       [header] = get_req_header(conn, WorkerWire.auth_header())
-      {:ok, worker_key} = Keys.worker_key(opts.service)
+      {:ok, worker_key} = Keys.opus_key(opts.service)
       key = WorkerAuth.dispatch_key(worker_key)
       verified = WorkerAuth.verify_request(key, header, body, System.system_time(:millisecond))
       send(opts.test, {:request, conn.request_path, verified, Jason.decode!(body)})
@@ -231,7 +231,7 @@ defmodule Crucible.WorkerClientTest do
 
   test "a start the service refuses 503 with its sentence is its refusal, answered once" do
     sentence =
-      "cyfr-spawn cannot bound a runner's memory in this container, so it starts none: " <>
+      "cyfr-keeper cannot bound a runner's memory in this container, so it starts none: " <>
         "start the opus service with the security option writable-cgroups=true"
 
     endpoint =

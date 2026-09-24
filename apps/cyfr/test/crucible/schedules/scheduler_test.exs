@@ -25,14 +25,14 @@ defmodule Crucible.Schedules.SchedulerTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "scheduler_#{System.unique_integer([:positive])}")
-    keys = [cyfr: :cron_scheduler_enabled, cyfr: :workers, arca: :base_path]
+    keys = [cyfr: :cron_scheduler_enabled, cyfr: :opus_workers, arca: :base_path]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:cyfr, :cron_scheduler_enabled, true)
 
     Application.put_env(
       :cyfr,
-      :workers,
-      ScriptedWorker.workers(@reference, prev[{:cyfr, :workers}])
+      :opus_workers,
+      ScriptedWorker.workers(@reference, prev[{:cyfr, :opus_workers}])
     )
 
     Application.put_env(:arca, :base_path, test_path)

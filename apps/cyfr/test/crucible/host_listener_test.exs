@@ -143,7 +143,7 @@ defmodule Crucible.HostListenerTest do
   end
 
   defp dispatch_key(service) do
-    {:ok, worker_key} = Keys.worker_key(service)
+    {:ok, worker_key} = Keys.opus_key(service)
     WorkerAuth.dispatch_key(worker_key)
   end
 

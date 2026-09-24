@@ -16,8 +16,8 @@ defmodule Locus.ExecutorTest do
   @source Path.expand("../../lib/locus/executor.ex", __DIR__)
 
   test "this build, the test environment's, knows the direct launcher and picks it without a spawner" do
-    assert Executor.executors() == [Locus.Spawner, Locus.DirectLauncher]
-    refute Locus.Spawner.running?()
+    assert Executor.executors() == [Locus.Keeper, Locus.DirectLauncher]
+    refute Locus.Keeper.running?()
     assert Executor.executor() == {:ok, Locus.DirectLauncher}
   end
 
@@ -25,7 +25,7 @@ defmodule Locus.ExecutorTest do
     code = @source |> File.read!() |> CodeLines.lines() |> Enum.join("\n")
 
     assert code =~
-             ~r/@executors if Mix\.env\(\) == :test,\s+do: \[Locus\.Spawner, Locus\.DirectLauncher\],\s+else: \[Locus\.Spawner\]/
+             ~r/@executors if Mix\.env\(\) == :test,\s+do: \[Locus\.Keeper, Locus\.DirectLauncher\],\s+else: \[Locus\.Keeper\]/
 
     # The launcher is named by the roster and the pick from it, and by
     # nothing a setting could reach.
@@ -44,7 +44,7 @@ defmodule Locus.ExecutorTest do
           line =~ "DirectLauncher",
           do: {Path.basename(path), String.trim(line)}
 
-    # The boot's check that serving without cyfr-spawn is this build's to do.
+    # The boot's check that serving without cyfr-keeper is this build's to do.
     assert named == [{"application.ex", "if Locus.DirectLauncher in executors do"}]
   end
 

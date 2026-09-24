@@ -84,10 +84,10 @@ defmodule PrismWeb.ConnCase do
   scripted worker service's pid.
   """
   def script_model!(items \\ []) do
-    previous = Application.get_env(:cyfr, :workers)
+    previous = Application.get_env(:cyfr, :opus_workers)
 
     ExUnit.Callbacks.on_exit(fn ->
-      Application.put_env(:cyfr, :workers, previous)
+      Application.put_env(:cyfr, :opus_workers, previous)
     end)
 
     ExUnit.Callbacks.start_supervised!(

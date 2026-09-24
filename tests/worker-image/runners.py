@@ -16,7 +16,7 @@ scrubbed, the container's CPU flat).
   stays flat afterwards.
 - A sibling subtree in another runner completes while the first is
   killed, and its runner survives.
-- Killing the service's VM ends every runner with it (cyfr-spawn retires
+- Killing the service's VM ends every runner with it (cyfr-keeper retires
   every spawn when its client dies), the container restarts, and the new
   boot inherits nothing.
 - With the control plane cut, a running attempt keeps running to its
@@ -77,7 +77,7 @@ REFS = {
 STUB_KEY = {"STUB_API_KEY": "sk-worker-image-test"}
 # A runner is a VM booting from nothing: its first attach takes seconds.
 BOOT_S = 60
-# cyfr-spawn gives every spawn a second when its client dies (lostGrace).
+# cyfr-keeper gives every spawn a second when its client dies (lostGrace).
 LOST_GRACE_S = 1.0
 
 WASM = {}
@@ -162,11 +162,11 @@ def since(stack, plane, execution_id, t):
 
 def test_process_model(stack):
     procs = stack.processes()
-    spawner = [p for p in procs if p["cmd"].startswith("cyfr-spawn serve")]
+    spawner = [p for p in procs if p["cmd"].startswith("cyfr-keeper serve")]
     service = [p for p in procs if p["uids"][0] == SERVICE_UID and "beam.smp" in p["cmd"]]
     runners = stack.runner_processes()
     expect(len(spawner) == 1 and spawner[0]["uids"] == [0, 0, 0, 0] and spawner[0]["cap_eff"] == SPAWNER_CAPS,
-           "cyfr-spawn runs as root holding exactly SETUID, SETGID and KILL", procs)
+           "cyfr-keeper runs as root holding exactly SETUID, SETGID and KILL", procs)
     expect(len(service) == 1 and [p for p in procs if p["pid"] == service[0]["pid"]][0]["cap_eff"] == "0000000000000000",
            "the service runs as opus with no capability", procs)
     expect(len(runners) == stack.pool_size and all(POOL_FIRST <= r["uid"] <= POOL_LAST for r in runners)
@@ -258,7 +258,7 @@ def test_service_death(stack, plane):
     t_cut = plane.elapsed()
     gone = wait_gone(stack, runner, LOST_GRACE_S + 10, "the busy runner's process to be gone")
     expect(all(uid_gone(stack, r["uid"]) for r in others),
-           f"detection: every runner was retired {ms(gone - t_kill)} ms after the service's VM died (cyfr-spawn's lost grace is {LOST_GRACE_S} s)",
+           f"detection: every runner was retired {ms(gone - t_kill)} ms after the service's VM died (cyfr-keeper's lost grace is {LOST_GRACE_S} s)",
            stack.runner_processes())
 
     restarted = wait_until(lambda: (lambda s: s if s["restarts"] > state["restarts"] and s["running"] else None)(stack.container_state()),

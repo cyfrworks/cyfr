@@ -50,7 +50,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
              {:exec, %{id: _} = exec} <-
                {:exec, Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), execution_id)},
              :ok <- authorize_execution_read(ctx, exec),
-             :ok <- EmissaryWeb.SSE.claim_slot(:sse_slot, ctx, :execution_events_max_concurrent) do
+             :ok <- EmissaryWeb.SSE.claim_slot(:sse_slot, ctx, :crucible_events_max_concurrent) do
           cursor = parse_last_event_id(conn)
 
           conn
@@ -119,7 +119,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
         close(conn, execution_id, exec, watch)
 
       {conn, cursor, false} ->
-        deadline = EmissaryWeb.SSE.deadline(:execution_events_max_ms)
+        deadline = EmissaryWeb.SSE.deadline(:crucible_events_max_ms)
         event_loop(conn, {execution_id, exec, watch}, cursor, deadline)
     end
   end

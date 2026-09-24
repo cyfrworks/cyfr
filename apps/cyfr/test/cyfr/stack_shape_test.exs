@@ -74,7 +74,10 @@ defmodule Cyfr.StackShapeTest do
 
     [_, cyfr_block | _] = Regex.split(~r/^  cyfr:\s*$/m, services_block)
     [cyfr_block | _] = Regex.split(~r/^  [a-z]/m, cyfr_block)
-    assert cyfr_block =~ ~r/^\s*- CYFR_WORKERS=\$\{CYFR_WORKERS:-wrk_opus=http:\/\/opus:4200\}$/m
+
+    assert cyfr_block =~
+             ~r/^\s*- CYFR_OPUS_WORKERS=\$\{CYFR_OPUS_WORKERS:-wrk_opus=http:\/\/opus:4200\}$/m
+
     assert cyfr_block =~ ~r/^\s*- CYFR_HOST_API_BIND=0\.0\.0\.0$/m
     assert cyfr_block =~ ~r/^\s*- worker$/m
 
@@ -157,7 +160,7 @@ defmodule Cyfr.StackShapeTest do
       assert list_entries(block, "cap_drop") == ["ALL"], service
       assert list_entries(block, "cap_add") == ["SETUID", "SETGID", "KILL"], service
 
-      # cyfr-spawn bounds a spawn's memory only where the container's
+      # cyfr-keeper bounds a spawn's memory only where the container's
       # cgroup is mounted writable; without the option every bounded spawn
       # is refused, so the shipped services carry it.
       assert list_entries(block, "security_opt") == [
@@ -286,10 +289,11 @@ defmodule Cyfr.StackShapeTest do
     env = read!(".env.example")
     # Spelled with the underscore split so the vocabulary gate itself does
     # not trip on this file.
-    refute env =~ ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|CYFR_COMPONENT[S]_PATH|4001|CYFR_WORKER_I[D]/
+    refute env =~
+             ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|CYFR_COMPONENT[S]_PATH|4001|CYFR_WORKE[R]_|CYFR_WORKER[S]\b|CYFR_EXECUTIO[N]_EVENTS_|CYFR_MAX_CONCURRENT_EXECUTION[S]|CYFR_SPAWN_CHANNE[L]/
 
     for knob <-
-          ~w(CYFR_WORKER_KEY OPUS_SERVICE_ID OPUS_SERVICE_KEY OPUS_HOST_URL CYFR_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT) do
+          ~w(CYFR_OPUS_KEY OPUS_SERVICE_ID OPUS_SERVICE_KEY OPUS_HOST_URL CYFR_OPUS_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT) do
       assert env =~ ~r/^#? ?#{knob}=/m, "#{knob} is missing from .env.example"
     end
 
@@ -320,6 +324,6 @@ defmodule Cyfr.StackShapeTest do
     guide = read!("integration-guide.md")
     assert guide =~ ~r/^\| `OPUS_BIND` \|/m and guide =~ ~r/^\| `OPUS_PORT` \|/m
 
-    refute opus =~ ~r/CYFR_WORKER_KE[Y]|CYFR_DATABASE_UR[L]|CYFR_CRYPTO_KEYRIN[G]=/
+    refute opus =~ ~r/CYFR_OPUS_KEY|CYFR_DATABASE_UR[L]|CYFR_CRYPTO_KEYRIN[G]=/
   end
 end

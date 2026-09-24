@@ -39,7 +39,7 @@ defmodule Opus.Credentials do
 
   @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
   @key {__MODULE__, :current}
-  @control_plane_only ~w(CYFR_WORKER_KEY CYFR_CRYPTO_KEYRING CYFR_DATABASE_URL)
+  @control_plane_only ~w(CYFR_OPUS_KEY CYFR_CRYPTO_KEYRING CYFR_DATABASE_URL)
 
   @derive {Inspect, except: [:worker_key, :dispatch_key, :dispatch_seal_key]}
   @enforce_keys [

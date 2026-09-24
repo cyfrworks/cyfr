@@ -438,7 +438,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
     Base.url_encode64(bytes, padding: false) <> "." <> Base.url_encode64(mac, padding: false)
   end
 
-  defp root, do: Application.fetch_env!(:cyfr, :worker_key)
+  defp root, do: Application.fetch_env!(:cyfr, :opus_key)
 
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 end
