@@ -33,7 +33,8 @@ defmodule EmissaryWeb.MCPController do
   Closing the response stream cancels the request — the only cancellation
   signal this transport has. It is noticed on the next write, which is either
   the next notification or the keep-alive comment, and it kills the tool task
-  through `Grimoire.RunningTasks` as well as the wrapper waiting on it.
+  through the gate (`Grimoire.cancel_request/1`) as well as the wrapper
+  waiting on it.
 
   ## Telemetry
 
@@ -586,12 +587,12 @@ defmodule EmissaryWeb.MCPController do
   end
 
   # "Closing the SSE response stream MUST be treated by the server as
-  # cancellation of that request." The tool task is killed through
-  # `RunningTasks`, which is keyed on the same request id; the wrapper task is
+  # cancellation of that request." The tool task is killed through the
+  # gate, which tracks it under the same request id; the wrapper task is
   # killed after it, since killing the wrapper alone would leave the
   # `async_nolink`'d tool task running with nobody waiting on it.
   defp cancel_work(%Task{} = task, request_id) do
-    Grimoire.RunningTasks.cancel(request_id)
+    Grimoire.cancel_request(request_id)
     Task.shutdown(task, :brutal_kill)
     :cancelled
   end

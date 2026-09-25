@@ -70,6 +70,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Emissary.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,
     Grimoire.RunningTasks,
+    Grimoire.TaskSupervisor,
     Compendium.ProvisioningSupervisor,
     Compendium.Provisioning,
     Compendium.ProjectionReconciler,

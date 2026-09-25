@@ -46,10 +46,18 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnershipTest do
     ctx = Sanctum.TestContext.local()
     ControlPlane.record(:lost)
 
-    assert {:error, :control_plane_lost} =
-             Grimoire.call_external("system", ctx, %{"action" => "status"})
+    # A stale owner admits no work: the gate refuses before any handler,
+    # and the refusal is its own, of class not_owner.
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              class: :not_owner,
+              reason: :control_plane_lost,
+              message: message
+            }} = Grimoire.call_external("system", ctx, %{"action" => "status"})
 
-    assert Grimoire.Error.render(:control_plane_lost) =~ "control plane"
+    assert message == Grimoire.Error.render(:control_plane_lost)
+    assert message =~ "control plane"
 
     ControlPlane.record(:unclaimed)
     assert {:ok, _} = Grimoire.call_external("system", ctx, %{"action" => "status"})
@@ -59,7 +67,25 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnershipTest do
     ctx = Sanctum.TestContext.local()
     ControlPlane.record(:lost)
 
-    assert {:error, :control_plane_lost} =
+    assert {:error, %Prima.Refusal{stage: :admission, reason: :control_plane_lost}} =
              Grimoire.call_external("notion:create_page", ctx, %{"action" => "create"})
+  end
+
+  # Over `/mcp` the gate's admission refusal is a JSON-RPC error by its
+  # class, not a failed tool result.
+  test "a tools/call to a member that lost its slot answers the not_owner error code" do
+    ctx = Sanctum.TestContext.local()
+    ControlPlane.record(:lost)
+
+    call = %Emissary.MCP.Message{
+      type: :request,
+      id: 1,
+      method: "tools/call",
+      params: %{"name" => "system", "arguments" => %{"action" => "status"}}
+    }
+
+    assert {:error, :not_owner, message} = Emissary.MCP.Router.dispatch(ctx, call)
+    assert message == Grimoire.Error.render(:control_plane_lost)
+    assert Emissary.MCP.Message.error_code(:not_owner) == -33_102
   end
 end

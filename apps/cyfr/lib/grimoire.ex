@@ -72,15 +72,25 @@ defmodule Grimoire do
   @spec resources() :: Grimoire.Resources.table()
   defdelegate resources(), to: Grimoire.Resources, as: :table
 
-  @doc "Stop the supervised handler of the call named by `handle`, started or not."
+  @doc """
+  Stop the supervised handler of the call named by `handle`: a running
+  handler is killed and a claimed one never runs. A handle released or
+  never claimed is left alone, with nothing written for it.
+  """
   @spec cancel_call(term()) :: :ok
   defdelegate cancel_call(handle), to: RunningTasks, as: :cancel_handle
 
-  @doc "Forget a call's cancellation handle once its caller is done with it."
+  @doc """
+  Forget a call's cancellation handle once its caller is done with it:
+  a later cancel of it does nothing.
+  """
   @spec release_call(term()) :: :ok
   defdelegate release_call(handle), to: RunningTasks, as: :release_handle
 
-  @doc "Stop the supervised call running under an ingress request id."
+  @doc """
+  Stop the supervised calls running under an ingress request id:
+  `{:error, :not_found}` when none runs under it any longer.
+  """
   @spec cancel_request(String.t()) :: :ok | {:error, :not_found}
   defdelegate cancel_request(request_id), to: RunningTasks, as: :cancel
 end

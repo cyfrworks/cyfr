@@ -13,7 +13,7 @@ defmodule Grimoire.RunningTasksTest do
     # the supervisor for the registered name, and the race the supervisor
     # loses is the expensive one: its child start fails with
     # `{:already_started, _}`, it retries, and at ten failures inside a
-    # minute the whole tier goes down — `Emissary.TaskSupervisor`, the Finch
+    # minute the whole tier goes down — `Grimoire.TaskSupervisor`, the Finch
     # pools, the registries — failing whichever tests happen to be running.
     pid = await_running()
     # Drain the mailbox so each test starts from a settled state.
@@ -34,7 +34,7 @@ defmodule Grimoire.RunningTasksTest do
   # propagate the `:cancelled` exit straight into the test process. Production
   # tasks come from `Task.Supervisor.async_nolink/2` for the same reason — the
   # dispatcher must survive a handler dying — so the tests use it too.
-  defp forever, do: Task.Supervisor.async_nolink(Emissary.TaskSupervisor, &sleep_forever/0)
+  defp forever, do: Task.Supervisor.async_nolink(Grimoire.TaskSupervisor, &sleep_forever/0)
 
   defp sleep_forever, do: Process.sleep(:infinity)
 
@@ -53,7 +53,7 @@ defmodule Grimoire.RunningTasksTest do
     end
 
     test "cancel returns :not_found once the work has already finished" do
-      task = Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn -> :ok end)
+      task = Task.Supervisor.async_nolink(Grimoire.TaskSupervisor, fn -> :ok end)
       :ok = RunningTasks.register("req_done", task)
       Task.await(task)
 
@@ -101,7 +101,7 @@ defmodule Grimoire.RunningTasksTest do
       # deleted the whole key, so after an in-chain call returned, cancelling
       # the request reached nothing at all.
       %Task{ref: ref_outer} = outer = forever()
-      inner = Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn -> :ok end)
+      inner = Task.Supervisor.async_nolink(Grimoire.TaskSupervisor, fn -> :ok end)
 
       :ok = RunningTasks.register("req_chain_done", outer)
       :ok = RunningTasks.register("req_chain_done", inner)
@@ -130,7 +130,7 @@ defmodule Grimoire.RunningTasksTest do
     end
 
     test "ETS entry is auto-cleaned when the task process dies" do
-      task = Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn -> :ok end)
+      task = Task.Supervisor.async_nolink(Grimoire.TaskSupervisor, fn -> :ok end)
       :ok = RunningTasks.register("req_cleanup", task)
 
       Task.await(task)
@@ -210,7 +210,7 @@ defmodule Grimoire.RunningTasksTest do
       assert :ok = RunningTasks.claim(handle)
 
       task =
-        Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
+        Task.Supervisor.async_nolink(Grimoire.TaskSupervisor, fn ->
           :ok = RunningTasks.register_handle(handle, self())
           sleep_forever()
         end)
@@ -226,19 +226,103 @@ defmodule Grimoire.RunningTasksTest do
       RunningTasks.release_handle(handle)
     end
 
-    test "cancelled before it is claimed, or between the claim and the registration, it never runs" do
-      early = {:turn, System.unique_integer([:positive])}
-      assert :ok = RunningTasks.cancel_handle(early)
-      assert :cancelled = RunningTasks.claim(early)
-      RunningTasks.release_handle(early)
+    test "cancelled between the claim and the registration, it never runs" do
+      handle = {:turn, System.unique_integer([:positive])}
+      assert :ok = RunningTasks.claim(handle)
+      assert :ok = RunningTasks.cancel_handle(handle)
+      assert :cancelled = RunningTasks.claim(handle)
+      assert :cancelled = RunningTasks.register_handle(handle, self())
+      RunningTasks.release_handle(handle)
+      assert :ok = RunningTasks.claim(handle)
+      RunningTasks.release_handle(handle)
+    end
+  end
 
-      late = {:turn, System.unique_integer([:positive])}
-      assert :ok = RunningTasks.claim(late)
-      assert :ok = RunningTasks.cancel_handle(late)
-      assert :cancelled = RunningTasks.register_handle(late, self())
-      RunningTasks.release_handle(late)
-      assert :ok = RunningTasks.claim(late)
-      RunningTasks.release_handle(late)
+  # A handle's row lives from its claim to its release. A cancel marks a
+  # live row; with no row there is no work to stop and nothing is written,
+  # so neither a released handle nor one this member never claimed leaves
+  # a marker behind.
+  describe "a handle's row" do
+    defp handle, do: {:turn, System.unique_integer([:positive])}
+    defp row(handle), do: :ets.lookup(Grimoire.RunningTasks.Handles, handle)
+
+    # A running handler, registered under `handle` as the gate registers one.
+    defp running(handle) do
+      :ok = RunningTasks.claim(handle)
+      test = self()
+
+      task =
+        Task.Supervisor.async_nolink(Grimoire.TaskSupervisor, fn ->
+          :ok = RunningTasks.register_handle(handle, self())
+          send(test, :registered)
+          sleep_forever()
+        end)
+
+      assert_receive :registered, 1_000
+      task
+    end
+
+    test "cancel then release: the handler is stopped, and the release deletes the marker" do
+      handle = handle()
+      %Task{ref: ref, pid: pid} = running(handle)
+      assert [{^handle, ^pid}] = row(handle)
+
+      assert :ok = RunningTasks.cancel_handle(handle)
+      assert_receive {:DOWN, ^ref, :process, _, :cancelled}, 1_000
+      assert [{^handle, :cancelled}] = row(handle)
+
+      assert :ok = RunningTasks.release_handle(handle)
+      assert [] = row(handle)
+    end
+
+    test "release then cancel: the cancel is a no-op and no row is left" do
+      handle = handle()
+      assert :ok = RunningTasks.claim(handle)
+      assert :ok = RunningTasks.release_handle(handle)
+
+      assert :ok = RunningTasks.cancel_handle(handle)
+      assert [] = row(handle)
+      assert :ok = RunningTasks.claim(handle)
+      RunningTasks.release_handle(handle)
+    end
+
+    test "a second cancel stops nothing more and writes nothing new" do
+      handle = handle()
+      %Task{ref: ref} = running(handle)
+
+      assert :ok = RunningTasks.cancel_handle(handle)
+      assert_receive {:DOWN, ^ref, :process, _, :cancelled}, 1_000
+      assert :ok = RunningTasks.cancel_handle(handle)
+      assert [{^handle, :cancelled}] = row(handle)
+
+      RunningTasks.release_handle(handle)
+      assert :ok = Grimoire.cancel_call(handle)
+      assert [] = row(handle)
+    end
+
+    test "a cancel of a handle never claimed here writes nothing" do
+      handle = handle()
+      assert :ok = Grimoire.cancel_call(handle)
+      assert [] = row(handle)
+
+      assert :ok = RunningTasks.claim(handle)
+      assert [{^handle, :pending}] = row(handle)
+      assert :ok = Grimoire.release_call(handle)
+      assert [] = row(handle)
+    end
+  end
+
+  describe "a duplicate cancel of a request" do
+    test "answers not_found once the first cancel's unregister has run" do
+      %Task{ref: ref} = task = forever()
+      :ok = RunningTasks.register("req_twice", task)
+
+      assert :ok = Grimoire.cancel_request("req_twice")
+      assert_receive {:DOWN, ^ref, :process, _pid, :cancelled}, 1_000
+
+      :sys.get_state(RunningTasks)
+      assert {:error, :not_found = reason} = Grimoire.cancel_request("req_twice")
+      assert %Prima.Refusal{class: :not_found} = Grimoire.Error.classify(reason)
     end
   end
 end

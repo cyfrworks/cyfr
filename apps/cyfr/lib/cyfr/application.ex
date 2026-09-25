@@ -255,6 +255,9 @@ defmodule Cyfr.Application do
       # publishes nothing.
       {Task.Supervisor, name: Compendium.Builds.TaskSupervisor},
       Grimoire.RunningTasks,
+      # The gate's supervised handlers, after the tables they register
+      # in, so a shutdown stops them first.
+      Grimoire.TaskSupervisor,
       # Filling an athanor's component estate: the background fills the
       # first-need hook and a sign-in ask for, and the registry pulls each
       # attempt runs under its own deadline.

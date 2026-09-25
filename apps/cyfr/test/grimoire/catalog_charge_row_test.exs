@@ -142,7 +142,10 @@ defmodule Grimoire.CatalogChargeRowTest do
     before = Sanctum.Authority.budget(auth)
     Arca.ControlPlane.record(:lost)
 
-    assert {:error, :control_plane_lost} = call(ctx, auth, charge, lineage)
+    # A stale owner admits no work: the gate's own refusal, before any handler.
+    assert {:error,
+            %Prima.Refusal{stage: :admission, class: :not_owner, reason: :control_plane_lost}} =
+             call(ctx, auth, charge, lineage)
 
     Arca.ControlPlane.record(:unclaimed)
     assert Sanctum.Authority.budget(auth) == before

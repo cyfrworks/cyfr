@@ -46,6 +46,7 @@ defmodule Cyfr.Test.Sandbox do
     Aqua.RunnerSupervisor,
     Aqua.TaskSupervisor,
     Emissary.TaskSupervisor,
+    Grimoire.TaskSupervisor,
     Sanctum.ProvisioningSupervisor,
     Compendium.ProvisioningSupervisor,
     Crucible.Schedules.TaskSupervisor,
