@@ -17,7 +17,7 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
       conn = get(conn, "/api/executions/exec_does_not_exist/events")
 
       assert conn.status == 404
-      assert json_response(conn, 404)["message"] =~ "not found"
+      assert json_response(conn, 404)["message"] == Prima.Refusal.message(:not_found)
     end
 
     test "a store that cannot answer is a 503, not a crash", %{conn: conn} do

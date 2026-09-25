@@ -28,8 +28,11 @@ defmodule Compendium.ComponentTest do
   end
 
   test "an unknown component answers not-found", %{ctx: ctx} do
-    assert {:error, "Component not found: " <> _} =
+    assert {:error, {:not_found, {:component, "reagent:local.no-such-thing:9.9.9"}} = reason} =
              Component.resolve_component(ctx, "reagent:local.no-such-thing:9.9.9")
+
+    assert Prima.Refusal.message(reason) ==
+             "Component not found: reagent:local.no-such-thing:9.9.9"
   end
 
   test "the MCP tool surface delegates — the two resolvers cannot drift", %{ctx: ctx} do

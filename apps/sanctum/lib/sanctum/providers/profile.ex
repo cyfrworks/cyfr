@@ -472,9 +472,8 @@ defmodule Sanctum.Providers.Profile do
       value when is_map_key(mapping, value) ->
         {:ok, Map.fetch!(mapping, value)}
 
-      other ->
-        {:error,
-         "#{key} must be one of #{Enum.join(Map.keys(mapping), ", ")}, got: #{inspect(other)}"}
+      _other ->
+        {:error, "#{key} must be one of #{Enum.join(Map.keys(mapping), ", ")}"}
     end
   end
 
@@ -494,11 +493,11 @@ defmodule Sanctum.Providers.Profile do
               is_map(payload),
        do: signal
 
-  defp fmt({:plan_token, reason}),
-    do: "plan_token_invalid: #{inspect(reason)} — re-run plan to stage fresh facts"
+  defp fmt({:plan_token, _reason}),
+    do: "plan_token_invalid — re-run plan to stage fresh facts"
 
-  defp fmt({:proof, reason}),
-    do: "proof_invalid: #{inspect(reason)} — re-run preview to mint a fresh proof"
+  defp fmt({:proof, _reason}),
+    do: "proof_invalid — re-run preview to mint a fresh proof"
 
   # The consent-class vocabulary renders through its owner — one spelling
   # for this tool and the MCP dispatch gate alike.
@@ -548,7 +547,11 @@ defmodule Sanctum.Providers.Profile do
   defp fmt(:profile_revoked), do: "profile_revoked"
   defp fmt({:component_not_found, _reason}), do: "component_not_found"
   defp fmt({:invalid_ref, reason}), do: "invalid_ref: #{reason}"
-  defp fmt(reason), do: inspect(reason)
+  defp fmt(reason) do
+    if Sanctum.Unauthorized.reason?(reason),
+      do: Sanctum.Unauthorized.message(reason),
+      else: Prima.Refusal.message(reason)
+  end
 
   defp action_enum, do: Prima.Provider.action_enum(definition())
 end

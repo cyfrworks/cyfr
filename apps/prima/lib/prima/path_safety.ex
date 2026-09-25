@@ -153,9 +153,8 @@ defmodule Prima.PathSafety do
     end
   end
 
-  defp check_segment(other) do
-    {:error,
-     {:non_string_segment, "Path traversal rejected: non-string segment #{inspect(other)}"}}
+  defp check_segment(_other) do
+    {:error, {:non_string_segment, "Path traversal rejected: non-string segment"}}
   end
 
   # Decode URI-encoded segments until output stabilizes, catching multi-layer encoding.

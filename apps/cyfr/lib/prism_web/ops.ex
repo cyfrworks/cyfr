@@ -83,16 +83,14 @@ defmodule PrismWeb.Ops do
   @doc """
   One user-facing sentence for a tool failure.
 
-  Tool refusals are already sentences and pass through; an authorization
-  refusal renders through its vocabulary; anything else is logged and
-  generalized — internal terms never reach the page.
+  Every refusal renders through the table (`Grimoire.render/1`), the
+  same sentence on the wire and the page: a bare sentence as its own
+  words, an authorization refusal through its vocabulary, anything else
+  logged and generalized — internal terms never reach the page.
   """
   def error_message(reason)
-  def error_message(message) when is_binary(message), do: message
   def error_message(:no_context), do: "Not signed in."
-
-  # The gate's renderer, the same sentence on the wire and the page.
-  def error_message(reason), do: Grimoire.Error.render(reason)
+  def error_message(reason), do: Grimoire.render(reason)
 
   defp normalize_tool_call(tool_name, args) do
     case String.split(tool_name, "/", parts: 2) do

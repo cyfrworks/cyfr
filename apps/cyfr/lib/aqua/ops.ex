@@ -116,10 +116,10 @@ defmodule Aqua.Ops do
   def child_execution?(tool, action), do: Grimoire.host_intercepted?(tool, action)
 
   @doc """
-  One sentence for a refusal: the gate's renderer (`Grimoire.Error.render/1`),
+  One sentence for a refusal: the gate's renderer (`Grimoire.render/1`),
   the same sentence everywhere — this text persists as a thread message
   every member reads, so an internal term is never spelled into it.
   """
   @spec render_refusal(term()) :: String.t()
-  def render_refusal(reason), do: Grimoire.Error.render(reason)
+  def render_refusal(reason), do: Grimoire.render(reason)
 end

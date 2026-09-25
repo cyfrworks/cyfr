@@ -10,9 +10,9 @@ defmodule EmissaryWeb.ApiError do
   `EmissaryWeb.MCPError`, which answers in JSON-RPC.
 
   A rejection is a refusal (`Prima.Refusal`): the body is
-  `{"code": <class>, "message": <sentence>}`, plus `data` for a consent
-  signal, and a 401 carries the `www-authenticate` challenge. `status/1`
-  is the class→HTTP table.
+  `{"code": <class>, "message": <sentence>}`, the sentence always the
+  refusal's own, plus `data` for a consent signal, and a 401 carries the
+  `www-authenticate` challenge. `status/1` is the class→HTTP table.
   """
 
   @behaviour EmissaryWeb.ErrorRenderer
@@ -53,18 +53,19 @@ defmodule EmissaryWeb.ApiError do
   end
 
   @doc """
-  Render `reason` at `status`. The body's `code` is the reason's class;
-  its `message` is `message` when the adapter words the refusal for its
-  route, else the refusal's own sentence.
+  Render `reason` at `status`. The body's `code` is the reason's class
+  and its `message` the refusal's own sentence, for every caller: the
+  message argument, which `EmissaryWeb.MCPError` reads, is not read
+  here, so no route words a refusal apart from the table.
   """
   @impl true
-  def send(%Plug.Conn{} = conn, status, reason, message) do
+  def send(%Plug.Conn{} = conn, status, reason, _message) do
     refusal = Grimoire.Error.classify(reason)
 
     conn
     |> challenge(status)
     |> put_status(status)
-    |> Phoenix.Controller.json(body(refusal, message))
+    |> Phoenix.Controller.json(body(refusal))
   end
 
   @doc "Render a refusal and halt the pipeline. The plug form of `refuse/2`."
@@ -85,11 +86,8 @@ defmodule EmissaryWeb.ApiError do
     |> Plug.Conn.halt()
   end
 
-  defp body(%Prima.Refusal{} = refusal, message) do
-    %{
-      "code" => Atom.to_string(refusal.class),
-      "message" => if(is_binary(message), do: message, else: refusal.message)
-    }
+  defp body(%Prima.Refusal{} = refusal) do
+    %{"code" => Atom.to_string(refusal.class), "message" => refusal.message}
     |> with_data(refusal.reason)
   end
 

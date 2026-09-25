@@ -237,6 +237,96 @@ defmodule Crucible.TinctureTest do
     end
   end
 
+  describe "a member of one athanor at another's public address" do
+    setup do
+      ref = make_ref()
+      test = self()
+
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:cyfr, :crucible, :tincture, :invoke, :start],
+        fn _event, _measurements, meta, _ -> send(test, {ref, :start, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+      {:ok, ref: ref}
+    end
+
+    test "runs as that address's public identity, never as themself", %{ctx: ctx, ref: ref} do
+      {:ok, other} =
+        Sanctum.Tenancy.Athanors.create(%{
+          id: "ath_tinc_other",
+          kind: "group",
+          name: "Other",
+          slug: "tinc-other",
+          created_by: "system"
+        })
+
+      owner_b = %{ctx | athanor_id: other.id}
+
+      {:ok, _dep} =
+        Compendium.Registry.publish_bytes(owner_b, File.read!(@math_wasm_path), %{
+          name: "tinc-dep",
+          version: "0.1.0",
+          type: "reagent"
+        })
+
+      node = tincture!(owner_b, "tinc-across")
+      _public = profile!(owner_b, node, :public)
+      worker!([%{"answer" => 3}])
+      ScriptedWorker.fresh_limits!(owner_b, [@dep_ref])
+
+      # The caller is an authenticated member of the fixture athanor; the
+      # address names the other one.
+      assert ctx.authenticated and ctx.athanor_id != other.id
+
+      # The context the run is rooted under is read where the run receives
+      # it: this process's own call into the root admission, traced to a
+      # collector (a process's call trace is not delivered to itself).
+      test = self()
+
+      collector =
+        spawn_link(fn ->
+          receive do
+            {:trace, _pid, :call, call} -> send(test, {:rooted, call})
+          end
+        end)
+
+      :erlang.trace_pattern({Crucible, :run_root_edge, 5}, true, [:global])
+      on_exit(fn -> :erlang.trace_pattern({Crucible, :run_root_edge, 5}, false, [:global]) end)
+      :erlang.trace(self(), true, [:call, {:tracer, collector}])
+
+      result =
+        Crucible.invoke_tincture(
+          ctx,
+          Map.put(args("tinc-across", :public), "athanor", other.slug),
+          :public
+        )
+
+      :erlang.trace(self(), false, [:call])
+      assert {:ok, %{status: :completed}} = result
+
+      assert_receive {:rooted, {Crucible, :run_root_edge, [run_ctx | _rest]}}
+
+      # The run is the address's public identity: anonymous, holding
+      # `[:execute]` and nothing else, the tincture's own id as its user, in
+      # the address's athanor — never the caller's own standing.
+      assert run_ctx.anonymous
+      assert run_ctx.permissions == MapSet.new([:execute])
+      assert run_ctx.athanor_id == other.id
+      assert run_ctx.user_id == node
+      refute run_ctx.user_id == ctx.user_id
+
+      assert_receive {^ref, :start, start}
+      assert start.athanor_id == other.id
+      assert start.user_id == run_ctx.user_id
+
+      assert [%{authority: authority}] = ScriptedWorker.calls()
+      assert authority.profile_kind == :public
+    end
+  end
+
   describe "the tincture and its profile are read on every call" do
     test "a profile revoked since the tincture was read refuses as unconsented", %{ctx: ctx} do
       node = tincture!(ctx, "tinc-stale")
@@ -293,6 +383,27 @@ defmodule Crucible.TinctureTest do
                 %Prima.Refusal{class: :forbidden, reason: {:guest_plane_call, "tincture"}}} =
                  Crucible.invoke_tincture(guest, args("tinc-any", route), route)
       end
+    end
+
+    test "an empty reference is the caller's argument refused, before anything runs",
+         %{ctx: ctx} do
+      node = tincture!(ctx, "tinc-empty-ref")
+      _owner = profile!(ctx, node, :owner)
+      worker!()
+
+      # The gate's cast admits any string for a required string argument;
+      # admission's reference grammar refuses the empty one.
+      assert {:error,
+              %Prima.Refusal{class: :invalid_argument, reason: {:invalid_reference, _}} =
+                refusal} =
+               Crucible.invoke_tincture(
+                 ctx,
+                 Map.put(args("tinc-empty-ref", :protected), "reference", ""),
+                 :protected
+               )
+
+      assert refusal.message =~ "Invalid reference"
+      assert ScriptedWorker.calls() == []
     end
 
     test "with no worker service answering, the engine is not ready", %{ctx: ctx} do

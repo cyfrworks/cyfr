@@ -86,7 +86,8 @@ defmodule Opus.Egress do
             {:ok, ip_tuple}
 
           {:error, reason} ->
-            {:error, :dns_error, "DNS resolution failed for #{hostname}: #{inspect(reason)}"}
+            {:error, :dns_error,
+             "DNS resolution failed for #{hostname}: #{:inet.format_error(reason)}"}
         end
     end
   end

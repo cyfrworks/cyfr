@@ -219,7 +219,7 @@ defmodule Crucible.Schedules.Scheduler do
       load_retry(state, Exception.message(e), level)
   catch
     :exit, reason ->
-      load_retry(state, "exited: " <> inspect(reason), :warning)
+      load_retry(state, "exited: " <> Exception.format_exit(reason), :warning)
   end
 
   defp load_retry(state, why, level \\ :error) do
@@ -263,7 +263,7 @@ defmodule Crucible.Schedules.Scheduler do
         "[Crucible.Schedules.Scheduler] failed to load schedule #{schedule.id}: exited #{inspect(reason)}"
       )
 
-      timer_failed(schedule.id, inspect(reason))
+      timer_failed(schedule.id, Grimoire.render(reason))
       acc
   end
 
@@ -614,7 +614,7 @@ defmodule Crucible.Schedules.Scheduler do
             )
 
           emit_schedule_failed(schedule.id, ctx, {:spawn_failed, reason})
-          record_error(ctx, schedule.id, "spawn_failed: #{inspect(reason)}")
+          record_error(ctx, schedule.id, Grimoire.render(:unavailable))
           schedule_timer(schedule.id, state)
         else
           defer_occurrence(schedule.id, state)
@@ -726,7 +726,7 @@ defmodule Crucible.Schedules.Scheduler do
             )
 
           Grimoire.RequestLog.safe_log_failed(ctx, request_id, %{
-            error: inspect(reason),
+            error: Grimoire.render(reason),
             duration_ms: duration_ms,
             routed_to: Crucible.service()
           })
@@ -736,7 +736,7 @@ defmodule Crucible.Schedules.Scheduler do
           )
 
           emit_schedule_failed(schedule.id, ctx, reason, execution_id)
-          record_error(ctx, schedule.id, inspect(reason))
+          record_error(ctx, schedule.id, Grimoire.render(reason))
       end
     end
   end
@@ -751,7 +751,7 @@ defmodule Crucible.Schedules.Scheduler do
     _ =
       ScheduleOccurrences.settle_dead(Prima.Actor.in_athanor(task.athanor_id), task.occurrence_id)
 
-    record_error(task.ctx, schedule_id, inspect(reason))
+    record_error(task.ctx, schedule_id, Grimoire.render(reason))
   end
 
   defp record_run(ctx, schedule_id, execution_id) do

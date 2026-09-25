@@ -75,5 +75,26 @@ defmodule Compendium.Registry.IdentityTest do
 
       assert {:error, {:unavailable, "Registry credentials"}} = Identity.identity(ctx)
     end
+
+    test "a stored row that does not open is shown as damaged, not refused or dropped",
+         %{ctx: ctx} do
+      aad = Sanctum.CipherAAD.registry_token(ctx.user_id, registry(), "alice")
+      {:ok, ciphertext} = Sanctum.Cipher.encrypt("not json", aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: ctx.user_id,
+          registry: registry(),
+          namespace_slug: "alice",
+          credential_ciphertext: ciphertext
+        })
+
+      result = Identity.identity(ctx)
+      assert [%{id: id, status: :corrupt}] = result.damaged_credentials
+      assert is_binary(id)
+      assert result.authenticated == false
+      assert result.personal_namespace == nil
+      assert result.memberships == []
+    end
   end
 end

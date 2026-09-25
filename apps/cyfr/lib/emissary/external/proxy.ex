@@ -518,7 +518,8 @@ defmodule Emissary.External.Proxy do
             _ = Arca.ExecutionPayloads.discard(staged)
 
             {:error,
-             {:not_recorded, "the call's ending could not be recorded: #{inspect(reason)}"}}
+             {:not_recorded,
+              "the call's ending could not be recorded: " <> Grimoire.render(reason)}}
         end
 
       {:error, reason} ->
@@ -605,11 +606,13 @@ defmodule Emissary.External.Proxy do
         |> Emissary.External.Server.call_tool(remote_tool, Map.delete(args, "action"))
         |> classified()
 
-      # The start failure itself is the supervisor's report to read; its
-      # reason may carry the row's configuration, so it is not repeated
-      # here or handed to the caller.
-      {:error, _reason} ->
+      # The start failure's reason may carry the row's configuration, its
+      # credentials among them: the log names the server and reports the
+      # reason's shape, never its value, and the caller is told only that
+      # the server is unavailable.
+      {:error, reason} ->
         Logger.warning("[Emissary.External.Proxy] server '#{server_name}' could not be started")
+        Prima.LoggerContext.unexpected(__MODULE__, reason)
         {:error, {:unavailable, "Server '#{server_name}'"}}
     end
   end

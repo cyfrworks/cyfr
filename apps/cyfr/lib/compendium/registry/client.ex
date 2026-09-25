@@ -27,13 +27,17 @@ defmodule Compendium.Registry.Client do
 
   # -- Public API --
 
+  # The caller's stored push token does not open: nothing is sent, under
+  # this token or any other.
+  @type corrupt :: {:corrupt, :registry_credential}
+
   @doc """
   Search for components on the cyfr.run registry.
 
   Sends GET /v1/components with query parameters (q, type, category, tags, license, limit, offset).
   Auth is not required for search (public endpoint).
   """
-  @spec search(Context.t(), map()) :: {:ok, map()} | {:error, Errors.t()}
+  @spec search(Context.t(), map()) :: {:ok, map()} | {:error, Errors.t() | corrupt()}
   def search(%Context{} = ctx, params) when is_map(params) do
     query = build_search_query(params)
     path = "/v1/components" <> query
@@ -60,6 +64,9 @@ defmodule Compendium.Registry.Client do
 
       {:error, %Errors{} = err} ->
         {:error, err}
+
+      {:error, {:corrupt, :registry_credential}} = corrupt ->
+        corrupt
     end
   end
 
@@ -69,7 +76,7 @@ defmodule Compendium.Registry.Client do
   Sends GET /v1/components with publisher/namespace filter.
   Replaces the fragile _catalog approach for default-mode deployments.
   """
-  @spec discover(Context.t(), map()) :: {:ok, map()} | {:error, Errors.t()}
+  @spec discover(Context.t(), map()) :: {:ok, map()} | {:error, Errors.t() | corrupt()}
   def discover(%Context{} = ctx, params) when is_map(params) do
     query = build_discover_query(params)
     path = "/v1/components" <> query
@@ -97,6 +104,9 @@ defmodule Compendium.Registry.Client do
 
       {:error, %Errors{} = err} ->
         {:error, err}
+
+      {:error, {:corrupt, :registry_credential}} = corrupt ->
+        corrupt
     end
   end
 
@@ -106,7 +116,7 @@ defmodule Compendium.Registry.Client do
   Sends GET /v1/components/:type/:publisher/:name[/:version].
   """
   @spec get_component(Context.t(), String.t(), String.t(), String.t(), String.t() | nil) ::
-          {:ok, map()} | {:error, Errors.t()}
+          {:ok, map()} | {:error, Errors.t() | corrupt()}
   def get_component(%Context{} = ctx, type, publisher, name, version \\ nil) do
     path =
       if version do
@@ -133,6 +143,9 @@ defmodule Compendium.Registry.Client do
 
       {:error, %Errors{} = err} ->
         {:error, err}
+
+      {:error, {:corrupt, :registry_credential}} = corrupt ->
+        corrupt
     end
   end
 
@@ -668,8 +681,10 @@ defmodule Compendium.Registry.Client do
   # calls. For non-namespace-scoped endpoints (e.g. `/v1/identity/probe`,
   # `/v1/search`), picks the first usable token of `list_for_user/2` — the
   # user's personal-namespace token when present, falling back to the first
-  # publisher membership token. A store that cannot be read refuses the
-  # request: sending it anonymously would come back as "sign in again".
+  # publisher membership token. A store that cannot be read, or a listing
+  # holding a damaged row, refuses the request before it leaves: sending it
+  # anonymously, or under another namespace's token, would come back as
+  # some other refusal.
   defp auth_headers(ctx) do
     registry = Compendium.RegistryHost.canonical_host()
 
@@ -678,8 +693,9 @@ defmodule Compendium.Registry.Client do
         case CredentialStore.list_for_user(ctx, registry) do
           {:ok, entries} ->
             case CredentialStore.push_tokens(entries) do
-              [%{token: token} | _] when token != "" -> {:ok, bearer(token)}
-              _ -> {:ok, []}
+              {:ok, [%{token: token} | _]} when token != "" -> {:ok, bearer(token)}
+              {:ok, _none} -> {:ok, []}
+              {:error, {:corrupt, :registry_credential}} = corrupt -> corrupt
             end
 
           {:error, _unreadable} ->

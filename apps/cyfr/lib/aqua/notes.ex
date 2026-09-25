@@ -600,10 +600,8 @@ defmodule Aqua.Notes do
     with :ok <- guest_may_cross(ctx), do: personal(ctx)
   end
 
-  defp read_context(_ctx, other, _none) do
-    {:error,
-     {:invalid_argument,
-      "scope must be one of #{Enum.join(@scopes, ", ")}, got #{inspect(other)}"}}
+  defp read_context(_ctx, _other, _none) do
+    {:error, {:invalid_argument, "scope must be one of #{Enum.join(@scopes, ", ")}"}}
   end
 
   # The estate a locator names, as the reader may open it: a seat they do

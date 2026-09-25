@@ -43,6 +43,8 @@ defmodule Arca.Health do
   collapses them loses the decision the probe exists to make.
   """
 
+  require Logger
+
   @type refusal :: {:error, {:unavailable, String.t()} | :not_system}
 
   @doc """
@@ -73,5 +75,9 @@ defmodule Arca.Health do
   # the operator's log never mixes Ecto structs, atoms and exception
   # messages.
   defp unavailable(reason) when is_binary(reason), do: {:error, {:unavailable, reason}}
-  defp unavailable(reason), do: {:error, {:unavailable, inspect(reason)}}
+
+  defp unavailable(reason) do
+    Logger.warning("[Arca.Health] the database did not answer: #{inspect(reason)}")
+    {:error, {:unavailable, "The database"}}
+  end
 end

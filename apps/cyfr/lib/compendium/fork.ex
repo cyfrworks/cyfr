@@ -72,7 +72,7 @@ defmodule Compendium.Fork do
            }}
 
         {:error, reason} ->
-          {:error, "Fork failed: #{inspect(reason)}"}
+          {:error, "Fork failed: #{failure_text(reason)}"}
       end
     end
   end
@@ -126,7 +126,7 @@ defmodule Compendium.Fork do
       # holds the unit's draft while it stages, and its pointer
       # compare-and-set refuses a revision another writer landed first.
       {:error, reason} ->
-        {:error, "Could not check the fork target: #{inspect(reason)}"}
+        {:error, "Could not check the fork target: #{failure_text(reason)}"}
     end
   end
 
@@ -213,4 +213,8 @@ defmodule Compendium.Fork do
       "Register: use component.register to index the compiled binary"
     ]
   end
+
+  # A fork's own refusal in its words; any other as the table's sentence.
+  defp failure_text({:invalid_manifest, sentence}) when is_binary(sentence), do: sentence
+  defp failure_text(reason), do: Grimoire.render(reason)
 end

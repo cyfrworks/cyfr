@@ -44,6 +44,20 @@ defmodule Sanctum.Consent.RegistrationBinding do
     end
   end
 
+  @doc """
+  The sentence a refusal of `authorize/3` reads as: the consent class's
+  own for a caller the class refused, and a plain account of which check
+  failed otherwise.
+  """
+  @spec message(error()) :: String.t()
+  def message({:consent_refused, refusal}),
+    do: Sanctum.Unauthorized.message({:consent_class_required, refusal})
+
+  def message({:invalid_target, _reason}), do: "the target reference is not valid"
+  def message(:profile_not_for_target), do: "the profile belongs to another component"
+  def message({:no_head_consent, _profile_id}), do: "the profile has no live consent"
+  def message(reason), do: Prima.Refusal.message(reason)
+
   defp name_level(target_ref) do
     case Prima.ComponentRef.to_name_ref(target_ref) do
       {:ok, name_ref} -> {:ok, name_ref}

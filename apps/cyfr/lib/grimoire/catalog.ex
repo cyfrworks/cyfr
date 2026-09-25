@@ -1167,8 +1167,8 @@ defmodule Grimoire.Catalog do
 
     case external_result do
       {:error, :not_external} ->
-        error = "Unknown tool: #{name}"
-        {{:error, Error.admission(error)}, %{code: -32_601, error_text: error}}
+        refusal = Error.admission({:unknown_tool, name})
+        {{:error, refusal}, %{code: -32_601, error_text: refusal.message}}
 
       result ->
         {result, %{routed_to: "external:#{name}"}}

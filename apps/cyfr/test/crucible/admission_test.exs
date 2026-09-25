@@ -263,15 +263,19 @@ defmodule Crucible.AdmissionTest do
         )
 
       # A default or routed selection could be the damaged row's: never a guess.
-      assert {:error, {:unavailable, "Consent profile prof-chain-damaged"}} =
+      assert {:error, {:corrupt, {:profile, "prof-chain-damaged"}}} =
                Admission.authority_for(ctx, :default, "#{@root_node}:0.1.0")
 
-      assert {:error, {:unavailable, "Consent profile prof-chain-damaged"}} =
+      assert {:error, {:corrupt, {:profile, "prof-chain-damaged"}}} =
                Admission.authority_for(ctx, {:id, "prof-chain-damaged"}, @root_node)
 
       # A pinned id naming another profile is not about the damaged row.
       assert {:ok, %Authority{profile_id: "prof-chain"}} =
                Admission.authority_for(ctx, {:id, "prof-chain"}, @root_node)
+
+      # The consent status reads the damaged row as damage, never as an
+      # outage or as current.
+      assert {:error, :corrupt} = Aqua.ConsentStatus.state(ctx, @root_node)
     end
 
     @tag :capture_log
@@ -452,8 +456,8 @@ defmodule Crucible.AdmissionTest do
                Admission.inspect_component(ctx, reference)
     end
 
-    test "an unresolvable reference answers a sentence", %{ctx: ctx} do
-      assert {:error, "Failed to resolve component 'reagent:local.gone:1.0.0': " <> _} =
+    test "an unresolvable reference answers Compendium's own refusal", %{ctx: ctx} do
+      assert {:error, {:not_found, {:component, "reagent:local.gone:1.0.0"}}} =
                Admission.inspect_component(ctx, "reagent:local.gone:1.0.0")
     end
   end
@@ -465,7 +469,7 @@ defmodule Crucible.AdmissionTest do
 
       # Every road into the engine passes here, so the check that refuses
       # is a term read: it must not put a query in front of every start.
-      assert {:error, "control plane ownership lost" <> _} =
+      assert {:error, :control_plane_lost} =
                Arca.Test.QueryCounter.assert_queries(0, fn ->
                  Admission.admit(ctx, "reagent:local.chain-root:0.1.0", %{}, [])
                end)
@@ -475,7 +479,7 @@ defmodule Crucible.AdmissionTest do
       Arca.ControlPlane.record(:unclaimed)
 
       assert {:error, refusal} = Admission.admit(ctx, "reagent:local.chain-root:0.1.0", %{}, [])
-      refute refusal =~ "control plane ownership lost"
+      refute refusal == :control_plane_lost
     end
   end
 

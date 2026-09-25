@@ -87,12 +87,26 @@ defmodule Prima.Authority.Transition do
           | {:allow_emit, {:attributed, String.t()} | :untrusted}
           | {:invalid, {:malformed_target, guest_fn(), atom()}}
 
-  @doc """
-  Render a deny reason as the sentence the refused guest reads — the one
-  spelling of this closed vocabulary, so a dispatcher never `inspect`s
-  internal terms onto its wire.
+  @typedoc """
+  A chain-authority refusal as a caller holds it: a deny reason the
+  invoke budget added (`:stale_attempt`, `:reservation_released`), a
+  delegation refused in its own sentence, a malformed target, or a need
+  the chain's request could not name.
   """
-  @spec deny_message(deny_reason()) :: String.t()
+  @type refusal ::
+          deny_reason()
+          | :stale_attempt
+          | :reservation_released
+          | {:delegation_refused, String.t()}
+          | {:invoke_invalid, {:malformed_target, guest_fn(), atom()}}
+          | {:invalid_need, term()}
+
+  @doc """
+  Render a chain-authority refusal as the sentence the refused guest
+  reads — the one spelling of this closed vocabulary, so a dispatcher
+  never `inspect`s internal terms onto its wire.
+  """
+  @spec deny_message(refusal()) :: String.t()
   def deny_message(:depth_cap), do: "invocation depth cap reached"
   def deny_message(:invoke_budget_exhausted), do: "invoke budget exhausted"
   def deny_message(:edge_only), do: "this need is edge-only and cannot be invoked"
@@ -105,6 +119,40 @@ defmodule Prima.Authority.Transition do
 
   def deny_message(:unbound_control_plane),
     do: "an unbound context cannot reach the control plane"
+
+  def deny_message(:stale_attempt), do: "the invoking attempt no longer holds its execution"
+
+  def deny_message(:reservation_released),
+    do: "the invocation's budget reservation was already released"
+
+  def deny_message({:delegation_refused, sentence}) when is_binary(sentence), do: sentence
+
+  def deny_message({:invoke_invalid, {:malformed_target, _fun, _tag}}),
+    do: "The chain named a target that does not exist."
+
+  def deny_message({:invalid_need, _need}),
+    do: "The chain asked for a need its authority does not grant."
+
+  @doc "Whether `deny_message/1` renders `refusal`."
+  @spec refusal?(term()) :: boolean()
+  def refusal?(reason)
+      when reason in [
+             :depth_cap,
+             :invoke_budget_exhausted,
+             :edge_only,
+             :tool_not_granted,
+             :tool_server_not_granted,
+             :unbound_control_plane,
+             :stale_attempt,
+             :reservation_released
+           ],
+      do: true
+
+  def refusal?({:need, why}) when why in [:required, :undeclared], do: true
+  def refusal?({:delegation_refused, sentence}) when is_binary(sentence), do: true
+  def refusal?({:invoke_invalid, {:malformed_target, _fun, _tag}}), do: true
+  def refusal?({:invalid_need, _need}), do: true
+  def refusal?(_reason), do: false
 
   @outcome_tags [:child, :child_zero, :deny, :allow_tool, :allow_async, :allow_emit, :invalid]
 

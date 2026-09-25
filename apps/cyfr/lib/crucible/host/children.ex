@@ -280,27 +280,29 @@ defmodule Crucible.Host.Children do
     end
   end
 
-  defp child_refusal({:delegation_refused, why}),
-    do: guest_error(:tool_denied, "Invocation denied: #{why}")
+  # The chain's authority refused: its own sentence
+  # (`Prima.Authority.Transition.deny_message/1`), never the reason's name.
+  defp child_refusal({:delegation_refused, _why} = refusal),
+    do: guest_error(:tool_denied, "Invocation denied: " <> deny_message(refusal))
 
   defp child_refusal({:invoke_denied, reason})
        when reason in [:depth_cap, :invoke_budget_exhausted],
-       do: guest_error(:resource_limit, "Invocation denied: #{reason}")
+       do: guest_error(:resource_limit, "Invocation denied: " <> deny_message(reason))
 
-  defp child_refusal({:invoke_denied, {:need, why}}),
-    do: guest_error(:invalid_request, "Invocation denied: need #{guest_reason(why)}")
+  defp child_refusal({:invoke_denied, {:need, _why} = reason}),
+    do: guest_error(:invalid_request, "Invocation denied: " <> deny_message(reason))
 
   defp child_refusal({:invoke_denied, reason}),
-    do: guest_error(:tool_denied, "Invocation denied: #{guest_reason(reason)}")
+    do: guest_error(:tool_denied, "Invocation denied: " <> deny_message(reason))
 
-  defp child_refusal({:invoke_invalid, reason}),
-    do: guest_error(:invalid_request, "Invalid invocation: #{guest_reason(reason)}")
+  defp child_refusal({:invoke_invalid, _reason} = refusal),
+    do: guest_error(:invalid_request, deny_message(refusal))
 
-  defp child_refusal({:invalid_need, need}),
-    do: guest_error(:invalid_request, "Invalid need: #{guest_reason(need)}")
+  defp child_refusal({:invalid_need, _need} = refusal),
+    do: guest_error(:invalid_request, deny_message(refusal))
 
-  defp child_refusal({:invalid_reference, reason}),
-    do: guest_error(:invalid_request, "Invalid reference: #{guest_reason(reason)}")
+  defp child_refusal({:invalid_reference, _reason} = refusal),
+    do: guest_error(:invalid_request, render(refusal))
 
   defp child_refusal({:setup_required, %{node_ref: node_ref}} = reason) do
     {:setup_required, remediation} = Prima.Remediation.analyze(reason)
@@ -359,14 +361,11 @@ defmodule Crucible.Host.Children do
 
   defp guest_error(type, message), do: {:guest_error, Atom.to_string(type), message}
 
-  # A refusal's one sentence (`Grimoire.Error.render/1`); an internal term
+  # A refusal's one sentence (`Grimoire.render/1`); an internal term
   # is never rendered.
-  defp render(reason), do: Grimoire.Error.render(reason)
+  defp render(reason), do: Grimoire.render(reason)
 
-  # A bare reason atom names itself verbatim: the transition's denial tokens
-  # (`edge_only`, `depth_cap`) are what a guest branches on.
-  defp guest_reason(reason) when is_binary(reason), do: reason
-  defp guest_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-
-  defp guest_reason(reason), do: Grimoire.Error.render(reason)
+  # A chain-authority refusal in the authority vocabulary's own words; the
+  # guest branches on the error's type, never on a reason's name.
+  defp deny_message(refusal), do: Prima.Authority.Transition.deny_message(refusal)
 end

@@ -256,7 +256,8 @@ defmodule Crucible.Host.ChildrenTest do
       assert %{"error" => "guest_error", "type" => "tool_denied", "message" => message} =
                admit(fixture, "#{@target}:1.0.0", %{}, extra: %{"authority" => widened})
 
-      assert message =~ "edge_only"
+      assert message ==
+               "Invocation denied: " <> Prima.Authority.Transition.deny_message(:edge_only)
 
       assert %{"error" => "guest_error", "type" => "dispatch_error", "message" => denied} =
                tool(fixture, "tools", %{"action" => "list"}, %{"authority" => widened})

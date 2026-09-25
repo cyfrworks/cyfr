@@ -1314,8 +1314,11 @@ defmodule Aqua.Loop do
         {:error, {:denied, message}} ->
           {"denied", message, true}
 
+        # The authority vocabulary's own sentence
+        # (`Prima.Authority.Transition.deny_message/1`).
         {:error, {:invoke_denied, reason}} ->
-          {"denied", "Denied by chain authority: #{inspect(reason)}", true}
+          {"denied",
+           "Denied by chain authority: " <> Prima.Authority.Transition.deny_message(reason), true}
 
         {:error, message} when is_binary(message) ->
           if String.starts_with?(message, "Denied by chain authority"),

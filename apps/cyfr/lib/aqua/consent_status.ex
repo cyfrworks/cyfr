@@ -146,6 +146,9 @@ defmodule Aqua.ConsentStatus do
 
   defp classify(tenant) when tenant in [:no_athanor, :missing_tenant], do: {:error, :forbidden}
   defp classify(:corrupt), do: {:error, :corrupt}
+  # Admission's damaged profile row or stored manifest (`Prima.Refusal`'s
+  # corrupt rows).
+  defp classify({:corrupt, _what}), do: {:error, :corrupt}
   defp classify({damage, _}) when damage in @corrupt, do: {:error, :corrupt}
   defp classify(_unreadable), do: {:error, :unavailable}
 end

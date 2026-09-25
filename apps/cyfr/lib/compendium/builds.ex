@@ -395,7 +395,7 @@ defmodule Compendium.Builds do
         {:ok, parsed.version}
 
       {:error, reason} ->
-        {:error, "Cannot resolve version for #{reference}: #{reason}"}
+        {:error, "Cannot resolve version for #{reference}: #{Grimoire.render(reason)}"}
     end
   end
 

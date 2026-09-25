@@ -198,7 +198,9 @@ defmodule Compendium.Builds.Provider do
   # binary's own bytes or sizes after its tag, and only the tag is the
   # answer.
   defp validation_failure(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp validation_failure(reason) when is_tuple(reason), do: inspect(elem(reason, 0))
+
+  defp validation_failure(reason) when is_tuple(reason) and is_atom(elem(reason, 0)),
+    do: Atom.to_string(elem(reason, 0))
 
   defp check_validate_rate(ctx) do
     who = ctx.user_id || ctx.athanor_id || "public"

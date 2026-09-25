@@ -428,8 +428,8 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  defp transport_args(other, _config),
-    do: {:error, {:invalid_argument, "Unknown transport #{inspect(other)} — use http or stdio"}}
+  defp transport_args(_other, _config),
+    do: {:error, {:invalid_argument, "Unknown transport — use http or stdio"}}
 
   defp stdio_available do
     cond do
@@ -556,7 +556,7 @@ defmodule Emissary.External.Provider do
       {:error, reason} ->
         summary(server, %{
           status: "error",
-          error: "Failed to start server process: #{inspect(reason)}"
+          error: "Failed to start server process: #{error_text(reason)}"
         })
     end
   end
@@ -574,8 +574,11 @@ defmodule Emissary.External.Provider do
     )
   end
 
+  # A server's own sentence as it wrote it; any other reason as the
+  # table's sentence — a start failure can carry the row's configuration,
+  # and a term is never spelled back.
   defp error_text(reason) when is_binary(reason), do: reason
-  defp error_text(reason), do: inspect(reason)
+  defp error_text(reason), do: Grimoire.render(reason)
 
   # The row is deleted first; stopping the process then releases what it
   # ran.
@@ -754,7 +757,8 @@ defmodule Emissary.External.Provider do
               end
 
             {:error, reason} ->
-              {:ok, %{name: name, status: "error", error: "Failed to start: #{inspect(reason)}"}}
+              {:ok,
+               %{name: name, status: "error", error: "Failed to start: #{error_text(reason)}"}}
           end
 
         {:error, :not_found} ->
@@ -790,11 +794,11 @@ defmodule Emissary.External.Provider do
                 {:ok, %{refreshed: [name]}}
 
               {:error, reason} ->
-                {:error, "Failed to refresh #{name}: #{inspect(reason)}"}
+                {:error, "Failed to refresh #{name}: #{error_text(reason)}"}
             end
 
           {:error, reason} ->
-            {:error, "Failed to start server '#{name}': #{inspect(reason)}"}
+            {:error, "Failed to start server '#{name}': #{error_text(reason)}"}
         end
 
       {:error, :not_found} ->
@@ -889,7 +893,7 @@ defmodule Emissary.External.Provider do
           {:error, {:not_found, "Server", name}}
 
         {:error, reason} ->
-          {:error, "Failed to #{action_name} server: #{inspect(reason)}"}
+          {:error, "Failed to #{action_name} server: #{error_text(reason)}"}
       end
     end
   end

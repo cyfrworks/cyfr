@@ -360,14 +360,15 @@ defmodule Crucible.Schedules.ProviderTest do
           "reference" => "reagent:local.test:1.0.0"
         })
 
-      assert {:error, message} =
+      assert {:error, {:invalid_argument, message}} =
                Provider.handle("schedule", ctx, %{
                  "action" => "update",
                  "schedule_id" => created.schedule_id,
                  "reference" => "reagent:local.unblessed:1.0.0"
                })
 
-      assert message =~ "profile binding refused"
+      assert message ==
+               "profile binding refused: the profile belongs to another component"
 
       # The row was not moved.
       {:ok, row} =

@@ -53,7 +53,7 @@ defmodule EmissaryWeb.WebhookController do
     case conn.assigns[:webhook] do
       nil ->
         # Defensive — verify plug should have halted before us.
-        EmissaryWeb.ApiError.send(conn, 500, :internal_error, "Internal error")
+        EmissaryWeb.ApiError.send(conn, 500, :internal_error, nil)
 
       webhook ->
         request_id = Prima.UUID7.request_id()
@@ -74,7 +74,7 @@ defmodule EmissaryWeb.WebhookController do
                 "#{inspect(webhook.created_by)} no longer active — refusing slug=#{webhook.slug}"
             )
 
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
 
           {:error, :no_athanor} ->
             # Webhook row with no resolved athanor — should never happen for
@@ -83,7 +83,7 @@ defmodule EmissaryWeb.WebhookController do
               "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved athanor — rejecting"
             )
 
-            EmissaryWeb.ApiError.send(conn, 500, :internal_error, "Internal error")
+            EmissaryWeb.ApiError.send(conn, 500, :internal_error, nil)
         end
     end
   end
@@ -104,7 +104,7 @@ defmodule EmissaryWeb.WebhookController do
           "[WebhookInvoke] stored input_template invalid slug=#{webhook.slug} reason=#{inspect(reason)}"
         )
 
-        EmissaryWeb.ApiError.send(conn, 500, :internal_error, "Internal error")
+        EmissaryWeb.ApiError.send(conn, 500, :internal_error, nil)
     end
   end
 
@@ -207,8 +207,12 @@ defmodule EmissaryWeb.WebhookController do
 
         duration_ms = duration_ms(start_time)
 
+        # The stored row and the telemetry read the table's sentence; the
+        # term itself goes only to the log line above.
+        error = Grimoire.render(reason)
+
         RequestLog.safe_log_failed(ctx, request_id, %{
-          error: "task_spawn_failed: #{inspect(Prima.Sanitizer.sanitize(reason))}",
+          error: error,
           duration_ms: duration_ms,
           routed_to: Crucible.service()
         })
@@ -218,14 +222,14 @@ defmodule EmissaryWeb.WebhookController do
           %{duration_ms: duration_ms},
           telemetry_meta
           |> Map.put(:status, :error)
-          |> Map.put(:error, "task_spawn_failed: #{inspect(Prima.Sanitizer.sanitize(reason))}")
+          |> Map.put(:error, error)
         )
 
         EmissaryWeb.ApiError.send(
           conn,
           503,
           :service_unavailable,
-          "Service unavailable — try again shortly"
+          nil
         )
     end
   end
@@ -297,18 +301,14 @@ defmodule EmissaryWeb.WebhookController do
           Logger.warning("[WebhookInvoke] error slug=#{webhook.slug}: #{inspect(reason)}")
 
           RequestLog.safe_log_failed(ctx, request_id, %{
-            error:
-              if(is_binary(reason),
-                do: reason,
-                else: inspect(Prima.Sanitizer.sanitize(reason))
-              ),
+            error: Grimoire.render(reason),
             duration_ms: duration_ms,
             routed_to: Crucible.service()
           })
 
           # A fixed slug, never the raw term: telemetry metadata fans out
-          # to consumers that must not see internal reasons. The sanitized
-          # detail lives in the request log above.
+          # to consumers that must not see internal reasons. The rendered
+          # sentence lives in the request log above.
           :telemetry.execute(
             [:cyfr, :emissary, :webhook, :invoke, :stop],
             %{duration_ms: duration_ms},
@@ -324,13 +324,12 @@ defmodule EmissaryWeb.WebhookController do
         Logger.error("[WebhookInvoke] crashed slug=#{webhook.slug}\n#{formatted}")
 
         # The crash arm obeys the same two rules as the {:error, reason}
-        # arm above: the stored row gets the exception SANITIZED AS A
-        # STRUCT then rendered (a KeyError's message quotes the map it
-        # raised on — flattened first, the sanitizer could no longer see
-        # it), and telemetry gets the fixed slug — its consumers must not
-        # see internal reasons.
+        # arm above: the stored row gets the table's sentence for the
+        # exception, which is classified by its shape alone (a KeyError's
+        # message quotes the map it raised on), and telemetry gets the
+        # fixed slug — its consumers must not see internal reasons.
         RequestLog.safe_log_failed(ctx, request_id, %{
-          error: inspect(Prima.Sanitizer.sanitize(e)),
+          error: Grimoire.Error.classify(e).message,
           duration_ms: duration_ms,
           routed_to: Crucible.service()
         })

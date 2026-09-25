@@ -44,7 +44,7 @@ defmodule Grimoire.ErrorAdoptionTest do
     # The concurrency argument's own refusal is a sentence about the value
     # offered; the two that were the tool's catch-alls are typed now, so
     # the action-coverage case reads one vocabulary.
-    "apps/cyfr/lib/crucible/schedules/provider.ex" => 18,
+    "apps/cyfr/lib/crucible/schedules/provider.ex" => 17,
     "apps/sanctum/lib/sanctum/providers/webhook.ex" => 18,
     "apps/cyfr/lib/crucible/provider.ex" => 12,
     # An upstream registry's own diagnostics, which are its words and not
@@ -62,15 +62,15 @@ defmodule Grimoire.ErrorAdoptionTest do
     # The entry rule's sentences, which the tincture validators return to
     # a publisher; the facade answers the same rule typed.
     "apps/cyfr/lib/compendium/tincture.ex" => 7,
-    "apps/sanctum/lib/sanctum/providers/profile.ex" => 7,
-    "apps/sanctum/lib/sanctum/webhook.ex" => 7,
+    "apps/sanctum/lib/sanctum/providers/profile.ex" => 8,
+    "apps/sanctum/lib/sanctum/webhook.ex" => 6,
     "apps/cyfr/lib/emissary/external/provider.ex" => 6,
     "apps/cyfr/lib/compendium/fork.ex" => 5,
     "apps/cyfr/lib/compendium/oci/reference.ex" => 5,
-    "apps/prima/lib/prima/limits.ex" => 5,
+    "apps/prima/lib/prima/limits.ex" => 7,
     "apps/sanctum/lib/sanctum/provider_credentials.ex" => 5,
     "apps/cyfr/lib/aqua/approvals.ex" => 4,
-    "apps/cyfr/lib/compendium/component.ex" => 4,
+    "apps/cyfr/lib/compendium/component.ex" => 3,
     "apps/cyfr/lib/compendium/providers/shared.ex" => 4,
     "apps/cyfr/lib/compendium/registry.ex" => 4,
     "apps/cyfr/lib/grimoire/catalog.ex" => 4,

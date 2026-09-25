@@ -167,10 +167,8 @@ defmodule Prima.Authority.Blob do
       {:ok, decoded} when is_map(decoded) ->
         parse(decoded)
 
-      {:ok, other} ->
-        {:error,
-         {:invalid_structure, "",
-          "must be an object, got: #{inspect(Prima.Sanitizer.sanitize(other))}"}}
+      {:ok, _other} ->
+        {:error, {:invalid_structure, "", "must be an object"}}
 
       {:error, err} ->
         {:error, {:invalid_json, err}}
@@ -582,8 +580,7 @@ defmodule Prima.Authority.Blob do
     end
   end
 
-  defp validate_resource(_kind, raw),
-    do: {:error, "unexpected shape: #{inspect(Prima.Sanitizer.sanitize(raw))}"}
+  defp validate_resource(_kind, _raw), do: {:error, "unexpected shape"}
 
   defp validate_lender(nil), do: {:ok, nil}
 
@@ -623,13 +620,12 @@ defmodule Prima.Authority.Blob do
     end
   end
 
-  defp validate_tool_server(raw),
-    do: {:error, "tool server must be an object, got: #{inspect(Prima.Sanitizer.sanitize(raw))}"}
+  defp validate_tool_server(_raw), do: {:error, "tool server must be an object"}
 
   defp validate_tool_patterns(patterns) do
     case Enum.reject(patterns, &Prima.ToolPattern.valid?/1) do
       [] -> :ok
-      bad -> {:error, "invalid tool patterns: #{inspect(bad)}"}
+      bad -> {:error, "invalid tool patterns: #{Enum.join(bad, ", ")}"}
     end
   end
 
@@ -643,8 +639,7 @@ defmodule Prima.Authority.Blob do
     end
   end
 
-  defp validate_projection(raw),
-    do: {:error, "projection must be an object, got: #{inspect(Prima.Sanitizer.sanitize(raw))}"}
+  defp validate_projection(_raw), do: {:error, "projection must be an object"}
 
   defp string_list_resource(raw, keys) do
     with :ok <- keys_or_reason(raw, Enum.map(keys, &elem(&1, 0))) do
@@ -693,7 +688,7 @@ defmodule Prima.Authority.Blob do
   defp keys_or_reason(map, allowed) do
     case Enum.find(Map.keys(map), &(&1 not in allowed)) do
       nil -> :ok
-      key -> {:error, "unknown key #{inspect(key)}"}
+      key -> {:error, "unknown key \"#{key}\""}
     end
   end
 
@@ -710,7 +705,7 @@ defmodule Prima.Authority.Blob do
   defp required_string(map, key) do
     case Map.get(map, key) do
       value when is_binary(value) and value != "" -> {:ok, value}
-      other -> {:error, "#{key} must be a non-empty string, got: #{inspect(other)}"}
+      _other -> {:error, "#{key} must be a non-empty string"}
     end
   end
 
@@ -718,7 +713,7 @@ defmodule Prima.Authority.Blob do
     case Map.get(map, key) do
       nil -> {:ok, nil}
       value when is_binary(value) and value != "" -> {:ok, value}
-      other -> {:error, "#{key} must be a non-empty string when present, got: #{inspect(other)}"}
+      _other -> {:error, "#{key} must be a non-empty string when present"}
     end
   end
 
@@ -731,8 +726,8 @@ defmodule Prima.Authority.Blob do
           {:error, "#{key} must be a list of strings"}
         end
 
-      other ->
-        {:error, "#{key} must be a list of strings, got: #{inspect(other)}"}
+      _other ->
+        {:error, "#{key} must be a list of strings"}
     end
   end
 

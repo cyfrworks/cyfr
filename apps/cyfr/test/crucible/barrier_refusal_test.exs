@@ -154,7 +154,7 @@ defmodule Crucible.BarrierRefusalTest do
     oversized = %{"blob" => String.duplicate("x", Authority.zero_limits().max_request_size + 1)}
     {answer, execution_id, _log} = admit(ctx, oversized, [])
 
-    assert {:error, "Input size" <> _} = answer
+    assert {:error, "Execution failed: Input size" <> _} = answer
     assert %{status: "failed"} = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
     assert_received {:lifecycle, [:cyfr, :opus, :execute, :start], ^execution_id}
     assert_received {:lifecycle, [:cyfr, :opus, :execute, :exception], ^execution_id}

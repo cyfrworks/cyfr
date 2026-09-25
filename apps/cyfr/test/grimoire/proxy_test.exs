@@ -100,8 +100,13 @@ defmodule Grimoire.ProxyTest do
     end
 
     test "a name the port does not know is an unknown tool", %{ctx: ctx} do
-      assert {:error, %Prima.Refusal{stage: :admission, reason: "Unknown tool: other:echo"}} =
-               Grimoire.Catalog.call_external("other:echo", ctx, %{})
+      assert {:error,
+              %Prima.Refusal{
+                stage: :admission,
+                class: :not_found,
+                reason: {:unknown_tool, "other:echo"},
+                message: "Unknown tool: other:echo"
+              }} = Grimoire.Catalog.call_external("other:echo", ctx, %{})
     end
 
     test "consent's view of the tool servers is the port's", %{ctx: ctx} do

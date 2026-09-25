@@ -29,13 +29,14 @@ defmodule Compendium.OCI.Auth do
   Build authorization headers for an OCI registry request.
 
   Returns bearer headers for the caller's push token, `[]` when the
-  caller has none (an anonymous request), or a `:registry_unavailable`
-  refusal when the stored token cannot be read — the store is down or the
-  row does not open. That refusal is never sent anonymously: the 401 that
-  would follow reads as a missing sign-in.
+  caller has none (an anonymous request), a `:registry_unavailable`
+  refusal when the store cannot answer, or `{:corrupt,
+  :registry_credential}` when the stored row does not open. Neither is
+  sent anonymously: the 401 that would follow reads as a missing sign-in.
   """
   @spec auth_headers(String.t(), String.t(), String.t(), Sanctum.Context.t() | nil) ::
-          {:ok, [{String.t(), String.t()}]} | {:error, Errors.t()}
+          {:ok, [{String.t(), String.t()}]}
+          | {:error, Errors.t() | {:corrupt, :registry_credential}}
   def auth_headers(registry, _repository, namespace_slug, ctx \\ nil) do
     case fetch_credential(registry, namespace_slug, ctx) do
       {:ok, %{type: :push_token, token: token}} when is_binary(token) and token != "" ->
@@ -106,15 +107,8 @@ defmodule Compendium.OCI.Auth do
     }
   end
 
-  # The row's own refusal sentence (`Prima.Refusal`), carried by the
-  # registry error the OCI client answers with.
-  defp credential_unreadable({:corrupt, :registry_credential} = corrupt, _namespace_slug) do
-    %Errors{
-      reason: :registry_unavailable,
-      message: Prima.Refusal.message(corrupt),
-      registry: nil,
-      status: nil,
-      detail: %{credential_store: :corrupt}
-    }
-  end
+  # A damaged row is not an outage: it answers as itself, the table's
+  # corrupt row, whose sentence says to sign in to the registry again.
+  defp credential_unreadable({:corrupt, :registry_credential} = corrupt, _namespace_slug),
+    do: corrupt
 end

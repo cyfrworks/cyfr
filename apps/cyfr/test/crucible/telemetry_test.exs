@@ -193,7 +193,7 @@ defmodule Crucible.TelemetryTest do
       assert measurements.duration >= 10 * 1_000_000
     end
 
-    test "formats non-string errors", %{ctx: ctx} do
+    test "renders a non-string error through the table", %{ctx: ctx} do
       record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
       failed = Record.fail(record, "error")
 
@@ -202,7 +202,9 @@ defmodule Crucible.TelemetryTest do
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _measurements,
                       metadata}
 
-      assert metadata.error == "{:badmatch, :unexpected}"
+      # Rendered through the table: an unknown term reads as the fixed
+      # sentence, never its spelling.
+      assert metadata.error == Prima.Refusal.unconfirmed()
     end
 
     test "includes all required metadata", %{ctx: ctx} do

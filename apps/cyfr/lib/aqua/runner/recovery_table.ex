@@ -202,7 +202,7 @@ defmodule Aqua.Runner.RecoveryTable do
         nil
 
       {:error, reason} ->
-        {:uncertain, turn, "the launch could not be settled: #{inspect(reason)}"}
+        {:uncertain, turn, "the launch could not be settled: " <> Aqua.Ops.render_refusal(reason)}
 
       _settled_on_continue ->
         {:continue, turn}
@@ -217,9 +217,14 @@ defmodule Aqua.Runner.RecoveryTable do
            turn,
            "the server restarted while a call's outcome was unknown"
          ) do
-      {:ok, paused} -> {:wait, paused}
-      {:error, reason} when reason in @moved -> nil
-      {:error, reason} -> {:uncertain, turn, "the turn could not be set down: #{inspect(reason)}"}
+      {:ok, paused} ->
+        {:wait, paused}
+
+      {:error, reason} when reason in @moved ->
+        nil
+
+      {:error, reason} ->
+        {:uncertain, turn, "the turn could not be set down: " <> Aqua.Ops.render_refusal(reason)}
     end
   end
 
@@ -238,7 +243,8 @@ defmodule Aqua.Runner.RecoveryTable do
         nil
 
       {:error, reason} ->
-        {:uncertain, turn, "the turn could not be taken over: #{inspect(reason)}"}
+        {:uncertain, turn,
+         "the turn could not be taken over: " <> Aqua.Ops.render_refusal(reason)}
     end
   end
 end

@@ -43,7 +43,8 @@ defmodule PrismWeb.DisplayHelpers do
     end
   end
 
-  def principal_label(other), do: inspect(other)
+  # Not a principal this console names: a label, never a term's spelling.
+  def principal_label(_other), do: "Unknown"
 
   @doc """
   Truncate a value for a table cell: at most `max` characters plus an

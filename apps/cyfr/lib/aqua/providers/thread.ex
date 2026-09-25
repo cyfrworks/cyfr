@@ -655,9 +655,14 @@ defmodule Aqua.Providers.Thread do
          {:ok, refs} <- Aqua.Attachments.store(ctx, id, message_id, decoded) do
       {:ok, %{message_id: message_id, attachments: refs}}
     else
-      {:error, :not_found} -> {:error, {:not_found, "thread", id}}
-      {:error, {:invalid_argument, _} = reason} -> {:error, reason}
-      {:error, reason} -> {:error, {:invalid_argument, "attach refused: #{inspect(reason)}"}}
+      {:error, :not_found} ->
+        {:error, {:not_found, "thread", id}}
+
+      {:error, {:invalid_argument, _} = reason} ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, {:invalid_argument, "attach refused: " <> Grimoire.render(reason)}}
     end
   end
 

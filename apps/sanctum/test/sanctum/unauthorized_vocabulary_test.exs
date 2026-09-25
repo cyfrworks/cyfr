@@ -33,14 +33,11 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
     {{:authorization_required, "grant expired"}, :setup_required}
   ]
 
-  # The JSON-RPC codes these rows have always answered with, where the
-  # class's own code is another.
+  # The one row whose JSON-RPC code is not its class's: a connection to
+  # re-authorize keeps the identity code it has always carried. Every other
+  # reason answers with its class's code.
   @overrides %{
-    {:authorization_required, "grant expired"} => :auth_required,
-    :malformed_record => :insufficient_permissions,
-    :untagged_tenant_resource => :insufficient_permissions,
-    {:malformed_resource, :execution} => :insufficient_permissions,
-    {:consent_class_required, :not_authenticated} => :insufficient_permissions
+    {:authorization_required, "grant expired"} => :auth_required
   }
 
   test "every union member is accepted by reason?/1, class/1 and message/2" do
@@ -75,8 +72,15 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
       assert Unauthorized.code_override(reason) == Map.get(@overrides, reason)
     end
 
-    assert Unauthorized.code_override({:consent_class_required, :not_authenticated}) ==
-             :insufficient_permissions
+    for reason <- [
+          :malformed_record,
+          :untagged_tenant_resource,
+          {:malformed_resource, :tenant},
+          {:consent_class_required, :not_authenticated}
+        ] do
+      assert Unauthorized.code_override(reason) == nil,
+             "#{inspect(reason)} still overrides its class's code"
+    end
   end
 
   test "a raised refusal answers 401 for want of a sign-in and 403 for anything else" do

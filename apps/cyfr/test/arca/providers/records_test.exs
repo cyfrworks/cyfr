@@ -479,11 +479,11 @@ defmodule Arca.Providers.RecordsTest do
             %{"action" => "set", "settings" => %{"builds" => 3}},
             %{"action" => "cleanup", "cleanup_type" => "executions"}
           ] do
-        assert {:error, {:corrupt, "Retention settings"} = reason} =
+        assert {:error, {:corrupt, {:settings, :retention}} = reason} =
                  Grimoire.call_external("retention", ctx, args),
                args["action"]
 
-        assert err_msg(reason) =~ "Retention settings"
+        assert err_msg(reason) == "The stored retention settings are damaged."
       end
     end
 

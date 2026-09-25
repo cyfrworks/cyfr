@@ -10,9 +10,9 @@ defmodule Prima.GuestError do
   (`Prima.WorkerWire`): a guest error's `type` and `message`, a `failed`
   message, a `setup_required` payload, or a refusal of the one vocabulary.
   This renders those, the `Prima.HostAPI` tuples a host client answers them
-  as, and the reasons a runner produces itself. Nothing here names a
-  product module: a sentence CYFR wants a guest to see crosses the wire
-  already rendered.
+  as, and the reasons a runner produces itself, through `Prima.Refusal`'s
+  table. Nothing here names a product module: a sentence CYFR wants a
+  guest to see crosses the wire already rendered.
 
   What a refusal *means* is `Prima.Refusal`'s, and this module holds no
   sentence of its own for one. That is the whole point: a guest in a chain
@@ -32,28 +32,16 @@ defmodule Prima.GuestError do
 
   @doc "The client-safe sentence for `reason`, or `nil` for a term this vocabulary does not know."
   @spec render(term()) :: String.t() | nil
-  def render(reason) when is_binary(reason), do: reason
-
-  # What a runner's own wire carries, which is not a refusal of the shared
-  # vocabulary: an answer already rendered on the other side, and the two
-  # shapes a host call ends in.
+  # A runner's own wire answer, already rendered on the other side; it is
+  # no refusal term, so the table does not read it.
   def render(%{"type" => type, "message" => message})
       when is_binary(type) and is_binary(message),
       do: message
 
-  def render({:guest_error, type, message}) when is_binary(type) and is_binary(message),
-    do: message
-
-  def render({:guest_error, type, message, %{} = _remediation})
-      when is_binary(type) and is_binary(message),
-      do: message
-
-  def render({:setup_required, %{} = _payload}),
-    do: "The call needs setup before it can run"
-
-  def render({:failed, message}) when is_binary(message), do: message
-
+  # Everything else is the table's: a guest error, a failure sentence, a
+  # setup signal, a refusal of the one vocabulary — and a bare sentence,
+  # which the table renders as its own words.
   def render(reason) do
-    if Prima.Refusal.reason?(reason), do: Prima.Refusal.message(reason)
+    if is_binary(reason) or Prima.Refusal.reason?(reason), do: Prima.Refusal.message(reason)
   end
 end

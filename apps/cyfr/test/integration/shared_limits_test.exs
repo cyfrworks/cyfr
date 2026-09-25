@@ -132,7 +132,7 @@ defmodule Cyfr.SharedLimitsTest do
     for service <- [@local, @other] do
       id = Prima.UUID7.execution_id()
       route!(service)
-      assert {:error, "Rate limit exceeded. Retry in " <> _} = invoke(ctx, id)
+      assert {:error, "Execution failed: Too many requests; retry in " <> _} = invoke(ctx, id)
       assert %{state: "failed", service_id: ^service, claimed_by: nil} = attempt(ctx, id)
     end
 

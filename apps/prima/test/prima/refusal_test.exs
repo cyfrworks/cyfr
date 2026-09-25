@@ -22,8 +22,28 @@ defmodule Prima.RefusalTest do
     {{:invalid_argument, "name is required"}, :invalid_argument},
     {{:conflict, "the draft moved on"}, :conflict},
     {{:unavailable, "Storage"}, :unavailable},
-    {{:corrupt, "The artifact"}, :corrupt},
+    {{:not_found, {:component, "c:local.x:1.0.0"}}, :not_found},
+    {{:not_found, {:blob, "sha256:ab12"}}, :not_found},
+    {{:invalid_reference, "Invalid reference format: x"}, :invalid_argument},
+    {{:invalid_reference, :empty}, :invalid_argument},
+    {{:corrupt, {:digest, "The artifact"}}, :corrupt},
+    {{:corrupt, {:profile, "prof_1"}}, :corrupt},
+    {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},
+    {{:corrupt, {:settings, :retention}}, :corrupt},
     {{:corrupt, :registry_credential}, :corrupt},
+    {{:timeout, :parent_deadline}, :timeout},
+    {{:rate_limited, 5}, :rate_limited},
+    {{:attestation_failed, :signed_pulls_required}, :forbidden},
+    {{:setup_required, :registry_binding}, :setup_required},
+    {{:invoke_denied, :depth_cap}, :forbidden},
+    {{:invoke_denied, :invoke_budget_exhausted}, :forbidden},
+    {{:invoke_denied, :edge_only}, :forbidden},
+    {{:invoke_denied, {:need, :undeclared}}, :forbidden},
+    {{:invoke_denied, :stale_attempt}, :forbidden},
+    {{:invoke_denied, :reservation_released}, :forbidden},
+    {{:delegation_refused, "a delegate must name a role its roster lists"}, :forbidden},
+    {{:invoke_invalid, {:malformed_target, :call, :task}}, :forbidden},
+    {{:invalid_need, "a|b"}, :forbidden},
     {{:crashed, "Tool x crashed"}, :internal},
     {{:exit, "Tool x exited unexpectedly"}, :internal},
     {{:cancelled, "Tool x was cancelled"}, :cancelled},
@@ -97,7 +117,7 @@ defmodule Prima.RefusalTest do
     {:service_unavailable, :unavailable},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},
-    {:missing_token, :invalid_argument},
+    {:missing_token, :unauthenticated},
     {{:bootstrap_refused, :slot_not_held}, :not_owner},
     {{:bootstrap_refused, :busy}, :conflict},
     {{:bootstrap_refused, :malformed_configuration}, :invalid_argument},
@@ -250,6 +270,62 @@ defmodule Prima.RefusalTest do
     test "the corrupt registry credential says what to do" do
       assert Refusal.classify({:corrupt, :registry_credential}).message ==
                "The stored registry credential is damaged; sign in to the registry again."
+    end
+
+    test "each damaged store reads as what it is, not as a digest mismatch" do
+      assert Refusal.message({:corrupt, {:digest, "Payload x/input"}}) ==
+               "Payload x/input does not match its recorded digest and was not served"
+
+      assert Refusal.message({:corrupt, {:profile, "prof_secret"}}) ==
+               "The stored profile is damaged and cannot be used."
+
+      assert Refusal.message({:corrupt, {:manifest, "c:local.x:1.0.0"}}) ==
+               "The stored manifest is damaged."
+
+      assert Refusal.message({:corrupt, {:settings, :retention}}) ==
+               "The stored retention settings are damaged."
+    end
+
+    test "admission's refusals read as their rows" do
+      assert Refusal.message({:rate_limited, 7}) == "Too many requests; retry in 7 s."
+
+      assert Refusal.message({:attestation_failed, :signer_mismatch}) ==
+               "The component's signature could not be verified; signed pulls are required."
+
+      assert Refusal.message({:setup_required, :registry_binding}) ==
+               "The component has no registry binding; register it again."
+
+      assert Refusal.message({:not_found, {:component, "c:local.x:1.0.0"}}) ==
+               "Component not found: c:local.x:1.0.0"
+
+      assert Refusal.message({:invalid_reference, "Invalid reference format: x"}) =~
+               "Invalid reference format: x"
+    end
+
+    test "a chain-authority refusal reads as the authority vocabulary's own sentence" do
+      for reason <- [
+            {:invoke_denied, :depth_cap},
+            {:invoke_denied, :edge_only},
+            {:invoke_denied, :stale_attempt},
+            {:invoke_denied, {:need, :required}}
+          ] do
+        {:invoke_denied, deny} = reason
+        assert Refusal.message(reason) == Prima.Authority.Transition.deny_message(deny)
+      end
+
+      assert Refusal.message({:invoke_invalid, {:malformed_target, :call, :task}}) ==
+               "The chain named a target that does not exist."
+
+      assert Refusal.message({:invalid_need, "a|b"}) ==
+               "The chain asked for a need its authority does not grant."
+
+      assert Refusal.message({:delegation_refused, "the roster lists no such role"}) ==
+               "the roster lists no such role"
+
+      capture_log(fn ->
+        assert %Refusal{class: :internal} = Refusal.classify({:invoke_denied, :novel})
+        assert %Refusal{class: :internal} = Refusal.classify({:invoke_invalid, :malformed})
+      end)
     end
 
     test "the split atoms read apart" do

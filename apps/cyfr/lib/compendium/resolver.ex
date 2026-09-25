@@ -55,7 +55,7 @@ defmodule Compendium.Resolver do
   Returns `{:ok, resolved_ref_string, metadata}` or `{:error, reason}`.
   """
   @spec resolve(Context.t(), String.t()) ::
-          {:ok, String.t(), resolution_metadata()} | {:error, String.t()}
+          {:ok, String.t(), resolution_metadata()} | {:error, term()}
   def resolve(%Context{} = ctx, ref) when is_binary(ref) do
     case ComponentRef.normalize_flexible(ref) do
       {:ok, %ComponentRef{version: nil}} ->

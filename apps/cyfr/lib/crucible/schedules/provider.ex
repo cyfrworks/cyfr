@@ -11,6 +11,9 @@ defmodule Crucible.Schedules.Provider do
   run while another of the same schedule is still open.
   """
 
+  # The refusals a profile binding answers besides its sentences.
+  @binding_refusals [:invalid_argument, :consent_class_required]
+
   @behaviour Prima.Provider
 
   def service, do: "crucible"
@@ -441,7 +444,7 @@ defmodule Crucible.Schedules.Provider do
             re_resolve_to(ctx, schedule, pinned, id)
 
           {:error, reason} ->
-            {:error, "Failed to re-resolve '#{schedule.reference}': #{reason}"}
+            {:error, "Failed to re-resolve '#{schedule.reference}': #{Grimoire.render(reason)}"}
         end
     end
   end
@@ -584,7 +587,7 @@ defmodule Crucible.Schedules.Provider do
         {:ok, pinned, pinned}
 
       {:error, reason} ->
-        {:error, "Cannot #{label}: failed to resolve '#{reference}'. #{reason}"}
+        {:error, "Cannot #{label}: failed to resolve '#{reference}'. #{Grimoire.render(reason)}"}
     end
   end
 
@@ -601,6 +604,7 @@ defmodule Crucible.Schedules.Provider do
       {:ok, format_schedule(updated)}
     else
       {:error, reason} when is_binary(reason) -> {:error, reason}
+      {:error, {tag, _detail}} = refused when tag in @binding_refusals -> refused
       {:error, reason} -> {:error, format_store_error(reason, id)}
     end
   end
@@ -643,8 +647,18 @@ defmodule Crucible.Schedules.Provider do
 
   defp authorize_profile_binding(ctx, target_ref, profile_id) when is_binary(profile_id) do
     case Sanctum.Consent.RegistrationBinding.authorize(ctx, target_ref, profile_id) do
-      :ok -> :ok
-      {:error, reason} -> {:error, "profile binding refused: #{inspect(reason)}"}
+      :ok ->
+        :ok
+
+      # A caller the consent class refused is refused by the class; any
+      # other failed check is the binding's own argument refusal.
+      {:error, {:consent_refused, refusal}} ->
+        {:error, {:consent_class_required, refusal}}
+
+      {:error, reason} ->
+        {:error,
+         {:invalid_argument,
+          "profile binding refused: " <> Sanctum.Consent.RegistrationBinding.message(reason)}}
     end
   end
 

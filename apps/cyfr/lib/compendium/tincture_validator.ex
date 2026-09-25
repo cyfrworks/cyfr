@@ -84,7 +84,7 @@ defmodule Compendium.TinctureValidator do
     case File.read(path) do
       {:ok, content} -> {:ok, content}
       {:error, :enoent} -> {:error, "#{Compendium.ComponentPath.manifest_name()} not found"}
-      {:error, reason} -> {:error, "cannot read manifest: #{inspect(reason)}"}
+      {:error, reason} -> {:error, "cannot read manifest: #{:file.format_error(reason)}"}
     end
   end
 

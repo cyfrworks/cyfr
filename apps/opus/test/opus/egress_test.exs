@@ -134,7 +134,7 @@ defmodule Opus.EgressTest do
 
   test "a host that does not resolve is a DNS error" do
     assert {:error, :dns_error, message} = Egress.pin("https://nonexistent.test/", @resolver)
-    assert message == "DNS resolution failed for nonexistent.test: :nxdomain"
+    assert message == "DNS resolution failed for nonexistent.test: non-existing domain"
   end
 
   test "an IPv6 literal is bracketed in the pinned URL" do

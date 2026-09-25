@@ -236,6 +236,20 @@ defmodule Prima.Refusal do
   defp row({:not_found, resource, id}) when is_binary(resource) and is_binary(id),
     do: {:not_found, "#{resource} not found: #{id}"}
 
+  defp row({:not_found, {:component, ref}}) when is_binary(ref),
+    do: {:not_found, "Component not found: #{ref}"}
+
+  # The registry row names bytes the store no longer holds.
+  defp row({:not_found, {:blob, digest}}) when is_binary(digest),
+    do: {:not_found, "The component's bytes were not found (#{digest})"}
+
+  # A reference the grammar refuses, in `Prima.ComponentRef`'s own words
+  # about the caller's string.
+  defp row({:invalid_reference, reason}) when is_binary(reason),
+    do: {:invalid_argument, "Invalid reference: #{reason}"}
+
+  defp row({:invalid_reference, _reason}), do: {:invalid_argument, "Invalid reference"}
+
   defp row({:invalid_argument, message}) when is_binary(message),
     do: {:invalid_argument, message}
 
@@ -252,14 +266,28 @@ defmodule Prima.Refusal do
   # Stored bytes that no longer match the digest their row recorded: an
   # integrity refusal, not an outage — a retry will not help, and the
   # bytes are not served under the digest a caller would trust.
-  defp row({:corrupt, what}) when is_binary(what),
+  defp row({:corrupt, {:digest, what}}) when is_binary(what),
     do: {:corrupt, "#{what} does not match its recorded digest and was not served"}
+
+  # A stored row that no longer decodes: nothing is served from it, and
+  # nothing but writing it again repairs it.
+  defp row({:corrupt, {:profile, _id}}),
+    do: {:corrupt, "The stored profile is damaged and cannot be used."}
+
+  defp row({:corrupt, {:manifest, _ref}}), do: {:corrupt, "The stored manifest is damaged."}
+
+  defp row({:corrupt, {:settings, :retention}}),
+    do: {:corrupt, "The stored retention settings are damaged."}
 
   # A supervised call's own ending, already a client-safe sentence.
   defp row({:crashed, message}) when is_binary(message), do: {:internal, message}
   defp row({:exit, message}) when is_binary(message), do: {:internal, message}
   defp row({:cancelled, message}) when is_binary(message), do: {:cancelled, message}
   defp row({:timeout, message}) when is_binary(message), do: {:timeout, message}
+
+  # A child asked for after its parent's subtree deadline passed.
+  defp row({:timeout, :parent_deadline}),
+    do: {:timeout, "The parent execution's deadline has passed"}
 
   defp row(:action_missing), do: {:invalid_argument, "Missing required argument: action"}
 
@@ -375,11 +403,37 @@ defmodule Prima.Refusal do
 
   defp row({:failed, message}) when is_binary(message), do: {:internal, message}
 
+  # A component whose registry row carries no type: registering it again
+  # writes one.
+  defp row({:setup_required, :registry_binding}),
+    do: {:setup_required, "The component has no registry binding; register it again."}
+
+  # A component whose signature or attestation does not verify.
+  defp row({:attestation_failed, _what}),
+    do:
+      {:forbidden, "The component's signature could not be verified; signed pulls are required."}
+
+  # A chain's authority refused what the chain asked, in the authority
+  # vocabulary's own sentence (`Prima.Authority.Transition.deny_message/1`).
+  defp row({:invoke_denied, reason}) do
+    if Prima.Authority.Transition.refusal?(reason),
+      do: {:forbidden, Prima.Authority.Transition.deny_message(reason)}
+  end
+
+  defp row({tag, _detail} = refusal)
+       when tag in [:delegation_refused, :invoke_invalid, :invalid_need] do
+    if Prima.Authority.Transition.refusal?(refusal),
+      do: {:forbidden, Prima.Authority.Transition.deny_message(refusal)}
+  end
+
   # The consent remediation signals (`Prima.ConsentSignal`).
   defp row({tag, payload} = signal) when tag in @signal_tags and is_map(payload),
     do: {signal_class(tag), Prima.ConsentSignal.message(signal)}
 
   defp row(:rate_limited), do: {:rate_limited, "Too many requests — slow down and retry"}
+
+  defp row({:rate_limited, retry_after_s}) when is_integer(retry_after_s) and retry_after_s >= 0,
+    do: {:rate_limited, "Too many requests; retry in #{retry_after_s} s."}
 
   defp row(:stream_limit),
     do: {:rate_limited, "Too many open streams — close one and retry"}
@@ -471,7 +525,7 @@ defmodule Prima.Refusal do
   defp row(:missing_idempotency_key),
     do: {:invalid_argument, "This webhook requires an idempotency key on every delivery"}
 
-  defp row(:missing_token), do: {:invalid_argument, "No session token provided"}
+  defp row(:missing_token), do: {:unauthenticated, "No session token provided"}
 
   defp row(:unsupported_content_type),
     do: {:invalid_argument, "Unsupported content type — send the delivery as application/json"}

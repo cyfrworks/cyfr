@@ -91,6 +91,9 @@ defmodule EmissaryWeb.HealthController do
     }
   end
 
+  # A check failure is kept as it came, for the not-ready log line, the
+  # only place it is read: the probe's body says pass or fail.
+  #
   # `Arca.Health` owns what "the database answers" means and keeps an
   # outage apart from an empty database: the probe reads no table, so a
   # freshly migrated node is ready and an unreachable one is not. The
@@ -100,16 +103,11 @@ defmodule EmissaryWeb.HealthController do
     case Arca.Health.check(Prima.Actor.system()) do
       :ok -> :ok
       {:error, {:unavailable, why}} -> {:error, why}
-      {:error, reason} -> {:error, describe(reason)}
+      {:error, reason} -> {:error, reason}
     end
   rescue
     e -> {:error, Exception.message(e)}
   end
-
-  # Every check failure reads as one shape — a string — so the logged map
-  # never mixes Ecto structs, atoms and exception messages.
-  defp describe(reason) when is_binary(reason), do: reason
-  defp describe(reason), do: inspect(reason)
 
   defp check_cache do
     if :ets.whereis(Arca.Cache.table_name()) != :undefined do
@@ -158,10 +156,10 @@ defmodule EmissaryWeb.HealthController do
           :ok
 
         {:error, reason} ->
-          {:error, describe(reason)}
+          {:error, reason}
       end
     else
-      {:error, reason} -> {:error, describe(reason)}
+      {:error, reason} -> {:error, reason}
     end
   rescue
     e -> {:error, Exception.message(e)}

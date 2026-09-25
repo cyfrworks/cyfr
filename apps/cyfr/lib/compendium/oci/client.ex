@@ -120,7 +120,11 @@ defmodule Compendium.OCI.Client do
 
       {:error, reason} ->
         Logger.error("[Compendium.OCI.Client] Pull failed for #{oci_ref}: #{inspect(reason)}")
-        {:error, "OCI operation failed: #{inspect(reason)}"}
+        # A refusal of the table (a damaged stored credential) answers as
+        # itself; anything else is this operation's failure, in words.
+        if Prima.Refusal.reason?(reason),
+          do: {:error, reason},
+          else: {:error, "OCI operation failed: #{failure_text(reason)}"}
     end
   end
 
@@ -158,7 +162,11 @@ defmodule Compendium.OCI.Client do
           "[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{inspect(reason)}"
         )
 
-        {:error, "OCI operation failed: #{inspect(reason)}"}
+        # A refusal of the table (a damaged stored credential) answers as
+        # itself; anything else is this operation's failure, in words.
+        if Prima.Refusal.reason?(reason),
+          do: {:error, reason},
+          else: {:error, "OCI operation failed: #{failure_text(reason)}"}
     end
   end
 
@@ -263,7 +271,11 @@ defmodule Compendium.OCI.Client do
           "[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{inspect(reason)}"
         )
 
-        {:error, "OCI operation failed: #{inspect(reason)}"}
+        # A refusal of the table (a damaged stored credential) answers as
+        # itself; anything else is this operation's failure, in words.
+        if Prima.Refusal.reason?(reason),
+          do: {:error, reason},
+          else: {:error, "OCI operation failed: #{failure_text(reason)}"}
     end
   end
 
@@ -329,7 +341,7 @@ defmodule Compendium.OCI.Client do
                 {comps ++ entries, errs}
 
               {:error, reason} ->
-                {comps, errs ++ ["Failed to list tags for #{repo}: #{inspect(reason)}"]}
+                {comps, errs ++ ["Failed to list tags for #{repo}: #{failure_text(reason)}"]}
             end
           end)
 
@@ -386,6 +398,9 @@ defmodule Compendium.OCI.Client do
               # never asked, so the cached copy is not served in its place —
               # the pull refuses as the credential store answered.
               {:error, %Errors{detail: %{credential_store: _}}} = refused ->
+                refused
+
+              {:error, {:corrupt, :registry_credential}} = refused ->
                 refused
 
               {:error, _} ->
@@ -627,7 +642,7 @@ defmodule Compendium.OCI.Client do
         {:error, "Component not found locally: #{Prima.ComponentRef.to_string(cref)}"}
 
       {:error, reason} ->
-        {:error, "Component lookup failed: #{inspect(reason)}"}
+        {:error, "Component lookup failed: #{failure_text(reason)}"}
     end
   end
 
@@ -706,7 +721,7 @@ defmodule Compendium.OCI.Client do
     else
       {:error, reason} ->
         {:error,
-         "cannot read #{Compendium.ComponentPath.manifest_name()} for #{cref.name}@#{cref.version}: #{inspect(reason)}"}
+         "cannot read #{Compendium.ComponentPath.manifest_name()} for #{cref.name}@#{cref.version}: #{failure_text(reason)}"}
     end
   end
 
@@ -804,7 +819,7 @@ defmodule Compendium.OCI.Client do
     case Jason.decode(config_bytes) do
       {:ok, config} when is_map(config) -> {:ok, config}
       {:ok, _} -> {:error, "Config blob is not a JSON object"}
-      {:error, reason} -> {:error, "Failed to parse config blob: #{inspect(reason)}"}
+      {:error, reason} -> {:error, "Failed to parse config blob: #{Exception.message(reason)}"}
     end
   end
 
@@ -985,4 +1000,12 @@ defmodule Compendium.OCI.Client do
         nil
     end)
   end
+
+  # A failure as the sentence a caller reads: a registry error in its own
+  # words, a decode error as its message, a refusal of the table as its
+  # sentence — never an `inspect/1` of the term.
+  defp failure_text(%Errors{} = err), do: Errors.to_string(err)
+  defp failure_text(reason) when is_binary(reason), do: reason
+  defp failure_text(%{__exception__: true} = exception), do: Exception.message(exception)
+  defp failure_text(reason), do: Grimoire.render(reason)
 end

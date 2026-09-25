@@ -116,7 +116,7 @@ defmodule Sanctum.EgressTest do
       assert {:error, msg} =
                Egress.pinned_request(:get, "https://nonexistent.test/", [], nil, @resolver)
 
-      assert msg == "DNS resolution failed for nonexistent.test: :nxdomain"
+      assert msg == "DNS resolution failed for nonexistent.test: non-existing domain"
     end
   end
 

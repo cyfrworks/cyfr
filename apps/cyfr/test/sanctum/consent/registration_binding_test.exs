@@ -196,7 +196,9 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
     test "schedule create with a profile binding requires the consent class", %{ctx: ctx} do
       key_ctx = %{ctx | auth_method: :api_key}
 
-      assert {:error, message} =
+      # The class refuses the key: the schedule tool answers the class's
+      # own refusal.
+      assert {:error, {:consent_class_required, _refusal}} =
                Crucible.Schedules.Provider.handle("schedule", key_ctx, %{
                  "action" => "create",
                  "name" => "bound-sched",
@@ -204,8 +206,6 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
                  "reference" => "#{@target}:1.0.0",
                  "profile_id" => "prof-bind"
                })
-
-      assert message =~ "profile binding refused"
 
       assert {:ok, created} =
                Crucible.Schedules.Provider.handle("schedule", ctx, %{

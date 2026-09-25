@@ -69,13 +69,13 @@ defmodule Compendium.Providers.Shared do
         {:ok, token}
 
       # A store that cannot answer, and a stored token that cannot be
-      # opened, are neither "no token": each refuses as unavailable, never
-      # as a prompt to sign in again over a credential that is there.
+      # opened, are neither "no token": the first refuses as unavailable,
+      # the second as the damaged credential it is.
       {:error, :unavailable} ->
         {:error, {:unavailable, "Registry credentials"}}
 
       {:error, :corrupt} ->
-        {:error, {:unavailable, "The push token stored for namespace '#{slug}'"}}
+        {:error, {:corrupt, :registry_credential}}
 
       _ ->
         {:error, "no push token for namespace '#{slug}' — run `cyfr login`"}
