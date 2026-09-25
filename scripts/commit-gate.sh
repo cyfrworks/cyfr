@@ -6,17 +6,23 @@
 # Runs the checks a commit must pass as concurrent legs, one log per leg
 # under LOGDIR, and ends with one `_EXIT=<status>` line on stdout, which
 # scripts/await-task.sh waits for. Legs:
-#   static    SQLite test compile (warnings as errors), credo, ops.gen.cli
-#             --check, dialyzer, then the full SQLite suite in N partitions
+#   static    SQLite test compile (warnings as errors), format, credo,
+#             ops.gen.cli --check, dialyzer, then the full SQLite suite in
+#             N partitions
 #   postgres  PostgreSQL test compile, then the given test paths (default:
 #             the storage set) in one partition; with --close the whole
-#             suite in N partitions and the cluster suite
+#             suite in N partitions, started once the SQLite suite's
+#             partitions have exited (four pools across the adapter jobs)
+#   cluster   with --close only, after every other leg: the real-member
+#             suite alone on its own database
 #   vocab     the CI vocabulary job's own script, read from test.yml
 #   islands   prima, arca and sanctum compiled and tested from a copy that
 #             holds only what CI gives them; opus and locus with --close
 # With --close the static leg also forces a rebuild on both adapters and
-# compiles the SQLite dev target. Image suites and the benchmark are not
-# part of this gate.
+# compiles the SQLite dev target. Image suites, the S3 suite, the Go and
+# Node checks, the security scanners and the benchmark are not part of
+# this gate: a closing record names each of those with its own result.
+# Stopping the gate (INT, TERM) stops its legs.
 set -uo pipefail
 
 LOGDIR=""; PARTS=4; CLOSE=false
@@ -57,6 +63,7 @@ leg_static() {
     step static compile_sqlite_dev env CYFR_DATABASE=sqlite mix compile --warnings-as-errors || return 1
     step static compile_sqlite_force env CYFR_DATABASE=sqlite MIX_ENV=test mix compile --warnings-as-errors --force || return 1
   fi
+  step static format mix format --check-formatted || return 1
   step static credo mix credo --only=warning || return 1
   step static opsgen mix ops.gen.cli --check || return 1
   step static dialyzer mix dialyzer || return 1
@@ -68,11 +75,10 @@ leg_postgres() {
   step postgres compile_pg_test env CYFR_DATABASE=postgres MIX_ENV=test mix compile --warnings-as-errors || return 1
   if $CLOSE; then
     step postgres compile_pg_force env CYFR_DATABASE=postgres MIX_ENV=test mix compile --warnings-as-errors --force || return 1
+    # Four pools are allocated across the adapter jobs: the PostgreSQL
+    # suite's partitions start once the SQLite suite's have exited.
+    await_marker "$LOGDIR/static.done"
     step postgres pg_suite scripts/test-partitioned.sh -n "$PARTS" -a postgres -- --warnings-as-errors || return 1
-    step postgres cluster env CYFR_DATABASE_URL=postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test \
-      CYFR_CLUSTER_DATABASE_URL=postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test \
-      CYFR_SECRET_KEY_BASE="${CYFR_SECRET_KEY_BASE:-JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk}" \
-      scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors --only cluster apps/cyfr/test/cluster || return 1
   else
     step postgres pg_tests scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors "${PG_PATHS[@]}" || return 1
   fi
@@ -123,24 +129,59 @@ island() {
 
 leg_islands() {
   local status=0
+  # The islands run their own SQLite suites: under --close they start
+  # once the static leg's four partitions have exited, so no two SQLite
+  # suites share the machine's I/O with the closing runs.
+  if $CLOSE; then await_marker "$LOGDIR/static.done"; fi
   island prima apps/prima tests/fixtures seed/components & local p1=$!
   island arca apps/prima apps/arca config/database_choice.exs & local p2=$!
   island sanctum apps/prima apps/arca apps/sanctum config/database_choice.exs & local p3=$!
   wait $p1 || status=1; wait $p2 || status=1; wait $p3 || status=1
   if $CLOSE; then
     island opus apps/prima apps/opus tests/fixtures & local p4=$!
-    island locus apps/prima apps/locus tests/fixtures & local p5=$!
+    island locus apps/prima apps/locus tests/fixtures config/locus_runtime.exs & local p5=$!
     wait $p4 || status=1; wait $p5 || status=1
   fi
   return $status
 }
 
+# The cluster suite runs alone: real members on their own database, after
+# every other leg's pools have exited.
+leg_cluster() {
+  step cluster cluster env CYFR_DATABASE_URL=postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test \
+    CYFR_CLUSTER_DATABASE_URL=postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test \
+    CYFR_SECRET_KEY_BASE="${CYFR_SECRET_KEY_BASE:-JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk}" \
+    MIX_BUILD_PATH=_build/test_pg \
+    scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors --only cluster apps/cyfr/test/cluster
+}
+
+# A leg that must follow another waits for the marker the other leaves
+# when it ends, whatever its status.
+await_marker() { until [ -e "$1" ]; do sleep 2; done; }
+
+# Stopping the gate stops its legs: each runs in its own process group,
+# and the trap ends every group before the gate exits.
+leg_pids=()
+on_signal() {
+  echo "==> gate interrupted, stopping its legs" >&2
+  for pid in "${leg_pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done
+  for pid in "${leg_pids[@]}"; do wait "$pid" 2>/dev/null; done
+  echo "_EXIT=130"
+  exit 130
+}
+trap on_signal INT TERM
+
 # The islands compile from deps the static leg's compile has already
 # fetched; nothing else is shared, so the four legs run at once.
-leg_static & pid_static=$!
-leg_postgres & pid_postgres=$!
-leg_vocab & pid_vocab=$!
-leg_islands & pid_islands=$!
+run_leg() { local leg=$1; ( "leg_$leg"; s=$?; : > "$LOGDIR/$leg.done"; exit "$s" ); }
+# Job control puts each background leg in a process group of its own,
+# which is what the trap kills.
+set -m
+( run_leg static ) & pid_static=$!
+( run_leg postgres ) & pid_postgres=$!
+( run_leg vocab ) & pid_vocab=$!
+( run_leg islands ) & pid_islands=$!
+leg_pids=("$pid_static" "$pid_postgres" "$pid_vocab" "$pid_islands")
 
 status=0
 for leg in static postgres vocab islands; do
@@ -148,7 +189,13 @@ for leg in static postgres vocab islands; do
   if wait "${!pid_var}"; then r=ok; else r=FAILED; status=1; fi
   printf '==> %-9s %-7s %s\n' "$leg" "$r" "$(tr '\n' ' ' < "$LOGDIR/$leg.summary" 2>/dev/null)"
 done
-for f in "$LOGDIR"/static.sqlite_suite.log "$LOGDIR"/postgres.pg_tests.log "$LOGDIR"/postgres.pg_suite.log "$LOGDIR"/postgres.cluster.log "$LOGDIR"/islands.*.log; do
+if $CLOSE; then
+  ( run_leg cluster ) & pid_cluster=$!
+  leg_pids=("$pid_cluster")
+  if wait "$pid_cluster"; then r=ok; else r=FAILED; status=1; fi
+  printf '==> %-9s %-7s %s\n' cluster "$r" "$(tr '\n' ' ' < "$LOGDIR/cluster.summary" 2>/dev/null)"
+fi
+for f in "$LOGDIR"/static.sqlite_suite.log "$LOGDIR"/postgres.pg_tests.log "$LOGDIR"/postgres.pg_suite.log "$LOGDIR"/cluster.cluster.log "$LOGDIR"/islands.*.log; do
   [ -f "$f" ] || continue
   printf '    %s: %s\n' "$(basename "$f" .log)" "$(grep -E '^(Result:|==> [0-9]+ partitions)' "$f" | tr '\n' ' ')"
 done
