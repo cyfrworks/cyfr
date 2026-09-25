@@ -87,6 +87,24 @@ defmodule Cyfr.ApplicationTest do
                children
     end
 
+    # A child of the infra tier restarts everything after it, the gate
+    # among them; the web tier restarts a child alone, so an endpoint in a
+    # crash loop exhausts only its own budget; the root restarts a failed
+    # tier and every tier after it.
+    test "the root and the infra tier restart the rest, the web tier each child alone" do
+      for {supervisor, strategy} <- [
+            {Cyfr.Supervisor, :rest_for_one},
+            {Cyfr.InfraSupervisor, :rest_for_one},
+            {Cyfr.WebSupervisor, :one_for_one}
+          ] do
+        state = :sys.get_state(supervisor)
+
+        assert {supervisor_state(state, :strategy), supervisor_state(state, :intensity),
+                supervisor_state(state, :period)} == {strategy, 10, 60},
+               "#{inspect(supervisor)} runs with another strategy or intensity"
+      end
+    end
+
     test "data/infra children live under the infra tier" do
       ids =
         Cyfr.InfraSupervisor
