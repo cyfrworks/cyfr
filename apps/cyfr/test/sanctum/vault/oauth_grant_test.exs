@@ -60,7 +60,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     # authority and no other.
     pending = %{
       target: target,
-      redirect_uri: EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback",
+      redirect_uri: CyfrWeb.Endpoint.url() <> "/auth/oauth/callback",
       code_verifier: "verifier-1",
       actor: Sanctum.Context.actor(ctx)
     }

@@ -130,7 +130,7 @@ defmodule PrismWeb.LoginLiveTest do
       # `connect_info` from the test conn rather than from the endpoint's
       # socket declaration, so removing `:peer_data` from the endpoint
       # would NOT fail here — that half is pinned in
-      # `EmissaryWeb.EndpointSocketTest`.
+      # `CyfrWeb.EndpointSocketTest`.
       ip = Application.get_env(:sanctum, :device_flow_last_ip)
 
       assert is_binary(ip), "the LiveView must budget the device flow by client address"

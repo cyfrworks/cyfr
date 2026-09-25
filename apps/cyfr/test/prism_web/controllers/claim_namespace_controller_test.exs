@@ -11,7 +11,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
   below exercise the controller's cookie/session guards and form rendering
   without making any HTTP calls to cyfr.run.
   """
-  use EmissaryWeb.ConnCase
+  use CyfrWeb.ConnCase
 
   import Ecto.Query, only: [from: 2]
 
@@ -171,7 +171,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       # and assert the controller gets PAST the expired branch.
       csrf = get_csrf_from_form(build_conn())
       access_token = "gho_fake_probe_token"
-      endpoint_secret = EmissaryWeb.Endpoint.config(:secret_key_base)
+      endpoint_secret = CyfrWeb.Endpoint.config(:secret_key_base)
 
       writing_conn =
         build_conn()
@@ -276,7 +276,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
 
     defp submit(username, session_token) do
       csrf = get_csrf_from_form(build_conn())
-      endpoint_secret = EmissaryWeb.Endpoint.config(:secret_key_base)
+      endpoint_secret = CyfrWeb.Endpoint.config(:secret_key_base)
 
       %{value: cookie_value} =
         build_conn()

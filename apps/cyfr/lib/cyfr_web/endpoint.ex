@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.Endpoint do
+defmodule CyfrWeb.Endpoint do
   @moduledoc """
   The one endpoint. The API, the MCP transport, tinctures and the Prism
   LiveViews all answer here — one origin, one cookie, one login, one
@@ -105,7 +105,7 @@ defmodule EmissaryWeb.Endpoint do
   # pipelines carry the closed set (`CyfrWeb.Plugs.ApiSecurityHeaders`),
   # the browser pipeline the LiveView-compatible one
   # (`CyfrWeb.Plugs.BrowserCSP`), and tinctures their own.
-  plug(EmissaryWeb.Router)
+  plug(CyfrWeb.Router)
 
   defp dynamic_session(conn, _opts) do
     # Session config is boot-static; the first request pays Plug.Session.init/1
@@ -132,7 +132,7 @@ defmodule EmissaryWeb.Endpoint do
       require Logger
 
       Logger.warning(
-        "[EmissaryWeb.Endpoint] No CYFR_EMISSARY_SESSION_SALT set — session cookies " <>
+        "[CyfrWeb.Endpoint] No CYFR_EMISSARY_SESSION_SALT set — session cookies " <>
           "are signed under the repo's default salt. Signing strength still " <>
           "comes from CYFR_SECRET_KEY_BASE; set an explicit salt to decouple " <>
           "this deployment's cookie domain from every other CYFR install."

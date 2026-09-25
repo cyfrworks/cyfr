@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule CyfrWeb.Ingress.HealthControllerTest do
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   describe "GET /api/health" do
     test "returns ok status", %{conn: conn} do

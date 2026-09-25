@@ -117,7 +117,7 @@ defmodule PrismWeb.LegalAcceptControllerTest do
     defp submit_ticked(conn) do
       %{value: cookie} =
         build_conn()
-        |> Map.put(:secret_key_base, EmissaryWeb.Endpoint.config(:secret_key_base))
+        |> Map.put(:secret_key_base, CyfrWeb.Endpoint.config(:secret_key_base))
         |> put_resp_cookie("_cyfr_pending_probe", "gho_probe", encrypt: true, max_age: 600)
         |> Map.fetch!(:resp_cookies)
         |> Map.fetch!("_cyfr_pending_probe")

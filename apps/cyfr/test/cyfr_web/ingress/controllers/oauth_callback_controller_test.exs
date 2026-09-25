@@ -8,7 +8,7 @@ defmodule CyfrWeb.Ingress.OAuthCallbackControllerTest do
   while the code was being exchanged writes nothing.
   """
 
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   import Ecto.Query
 

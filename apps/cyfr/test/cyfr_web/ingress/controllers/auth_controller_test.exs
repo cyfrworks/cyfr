@@ -11,7 +11,7 @@ defmodule CyfrWeb.Ingress.AuthControllerTest do
   - logout/2: Session destruction
   - whoami/2: Current user info
   """
-  use EmissaryWeb.ConnCase
+  use CyfrWeb.ConnCase
 
   import Ecto.Query, only: [from: 2]
 
@@ -816,7 +816,7 @@ defmodule CyfrWeb.Ingress.AuthControllerTest do
     end
 
     defp probe_cookie do
-      secret = EmissaryWeb.Endpoint.config(:secret_key_base)
+      secret = CyfrWeb.Endpoint.config(:secret_key_base)
 
       %{value: value} =
         build_conn()

@@ -526,10 +526,10 @@ defmodule Cyfr.Cluster.Cell do
         {:host_api_bind, {127, 0, 0, 1}},
         {:host_api_url, member.host_api},
         {:opus_workers, []},
-        {EmissaryWeb.Endpoint,
+        {CyfrWeb.Endpoint,
          [
            http: [ip: {127, 0, 0, 1}, port: 0],
-           secret_key_base: Application.fetch_env!(:cyfr, EmissaryWeb.Endpoint)[:secret_key_base],
+           secret_key_base: Application.fetch_env!(:cyfr, CyfrWeb.Endpoint)[:secret_key_base],
            server: true
          ]}
       ],

@@ -31,8 +31,8 @@ defmodule Cyfr.Boundaries do
       module, and `sanctum_exports/0` the identity domain's functions the
       host application calls, one by one.
     * `route_postures/0` and `public_routes/0` — how every HTTP route is
-      authenticated. The posture travels with the route
-      (`EmissaryWeb.Router` declares it as route metadata); this catalog
+      authenticated. The posture travels with the route (each route
+      provider declares it as route metadata); this catalog
       owns the vocabulary and the roster of routes that are public by
       design.
     * `config_key_classes/0` — the configuration schema: every
@@ -172,7 +172,7 @@ defmodule Cyfr.Boundaries do
   # The product namespaces, so a scan can tell a module of this repository
   # from one of Elixir, OTP or a fetched dependency.
   @product_roots ~w(
-    Arca Sanctum Aqua Compendium Crucible Emissary EmissaryWeb Grimoire
+    Arca Sanctum Aqua Compendium Crucible Emissary Grimoire
     Prism PrismWeb Cyfr CyfrWeb Opus Locus Codex Prima
   )
 
@@ -549,8 +549,7 @@ defmodule Cyfr.Boundaries do
     %{
       from: [
         "apps/cyfr/lib/emissary/**/*.ex",
-        "apps/cyfr/lib/emissary.ex",
-        "apps/cyfr/lib/emissary_web/**/*.ex"
+        "apps/cyfr/lib/emissary.ex"
       ],
       into: "Aqua",
       allow: [],
@@ -561,8 +560,7 @@ defmodule Cyfr.Boundaries do
     %{
       from: [
         "apps/cyfr/lib/emissary/**/*.ex",
-        "apps/cyfr/lib/emissary.ex",
-        "apps/cyfr/lib/emissary_web/**/*.ex"
+        "apps/cyfr/lib/emissary.ex"
       ],
       into: "Crucible",
       allow: ~w(Crucible),
@@ -587,8 +585,7 @@ defmodule Cyfr.Boundaries do
     %{
       from: [
         "apps/cyfr/lib/emissary/**/*.ex",
-        "apps/cyfr/lib/emissary.ex",
-        "apps/cyfr/lib/emissary_web/**/*.ex"
+        "apps/cyfr/lib/emissary.ex"
       ],
       into: "Compendium",
       allow: [],
@@ -683,13 +680,21 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/cyfr_web/**/*.ex",
         "apps/cyfr/lib/cyfr_web.ex"
       ],
-      except: ["apps/cyfr/lib/cyfr/application.ex"],
+      except: [
+        "apps/cyfr/lib/cyfr/application.ex",
+        "apps/cyfr/lib/cyfr_web/router.ex",
+        "apps/cyfr/lib/cyfr_web/endpoint.ex"
+      ],
       into: "Emissary",
       allow: [],
       reason:
         "the host names nothing of the MCP surface: a surface sits above it and is " <>
           "wired only by the composition root (`Cyfr.Application`), which installs " <>
-          "the proxied-tool port and starts the surface's trees, and is excepted."
+          "the proxied-tool port and starts the surface's trees, and is excepted. " <>
+          "The composition router (`CyfrWeb.Router`, which invokes `Emissary.Router`) " <>
+          "and the endpoint (`CyfrWeb.Endpoint`, whose parser wrapper answers `/mcp` " <>
+          "in `Emissary.Web.MCPError`) are composition boundaries beside it, and are " <>
+          "excepted too."
     },
     %{
       from: ["apps/sanctum/lib/**/*.ex"],
@@ -703,14 +708,52 @@ defmodule Cyfr.Boundaries do
 
     # --- the console and the web layer ---
     %{
-      from: ["apps/cyfr/lib/prism_web/**/*.ex", "apps/cyfr/lib/prism_web.ex"],
-      into: "EmissaryWeb",
-      allow: ~w(EmissaryWeb.Endpoint EmissaryWeb.Router),
+      from: [
+        "apps/cyfr/lib/prism/**/*.ex",
+        "apps/cyfr/lib/prism.ex",
+        "apps/cyfr/lib/prism_web/**/*.ex",
+        "apps/cyfr/lib/prism_web.ex"
+      ],
+      into: "CyfrWeb",
+      depth: 3,
+      allow: ~w(
+        CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.PendingProbe
+        CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
+        CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SafeRedirect CyfrWeb.SignInResponse
+      ),
       reason:
-        "one direction only. Building a copy-link's public URL reads a global fact " <>
-          "off the endpoint, and `PrismWeb.verified_routes/0` names the endpoint and " <>
-          "the router beside `CyfrWeb.static_paths/0`, because that is the triple " <>
-          "`use Phoenix.VerifiedRoutes` takes."
+        "the console reads the host's shared web tier and the composition triple its " <>
+          "verified routes need, and never another adapter. Building a copy-link's " <>
+          "public URL reads a global fact off the endpoint, `PrismWeb.verified_routes/0` " <>
+          "names the endpoint and the router beside `CyfrWeb.static_paths/0`, because " <>
+          "that is the triple `use Phoenix.VerifiedRoutes` takes, and `Prism.Router` " <>
+          "declares its pipelines from the shared browser definition and plugs."
+    },
+    %{
+      from: [
+        "apps/cyfr/lib/prism/**/*.ex",
+        "apps/cyfr/lib/prism.ex",
+        "apps/cyfr/lib/prism_web/**/*.ex",
+        "apps/cyfr/lib/prism_web.ex"
+      ],
+      into: "Emissary",
+      allow: [],
+      reason:
+        "an adapter names no other surface: the console and the MCP adapter meet " <>
+          "only below them, in the host's shared web tier and the domains."
+    },
+    %{
+      from: [
+        "apps/cyfr/lib/prism/**/*.ex",
+        "apps/cyfr/lib/prism.ex",
+        "apps/cyfr/lib/prism_web/**/*.ex",
+        "apps/cyfr/lib/prism_web.ex"
+      ],
+      into: "CyfrWeb.Ingress",
+      allow: [],
+      reason:
+        "an adapter names no other surface: the console and the host's HTTP ingress " <>
+          "meet only below them, in the shared web tier and the domains."
     },
     %{
       from: [
@@ -748,24 +791,6 @@ defmodule Cyfr.Boundaries do
       reason:
         "the console is two namespaces and an engine may name neither: `Prism` is " <>
           "its domain and `PrismWeb` its LiveViews, layouts and hooks."
-    },
-    %{
-      from: [
-        "apps/prima/lib/**/*.ex",
-        "apps/opus/lib/**/*.ex",
-        "apps/locus/lib/**/*.ex",
-        "apps/sanctum/lib/**/*.ex",
-        "apps/cyfr/lib/aqua/**/*.ex",
-        "apps/cyfr/lib/aqua.ex",
-        "apps/cyfr/lib/compendium/**/*.ex",
-        "apps/cyfr/lib/compendium.ex"
-      ],
-      into: "EmissaryWeb",
-      allow: [],
-      reason:
-        "Emissary — the MCP contract — is the engines' honest dependency; the " <>
-          "endpoint, the router and the plugs are not. The auth domain reads key " <>
-          "material and the public origin from configuration, not from the endpoint."
     },
     %{
       from: [
@@ -970,8 +995,7 @@ defmodule Cyfr.Boundaries do
   # depend on who publishes or hears it.
   @bus_free %{
     from: ["apps/cyfr/lib/cyfr/bus.ex", "apps/cyfr/lib/cyfr/bus/**/*.ex"],
-    roots:
-      ~w(Sanctum Aqua Compendium Crucible Grimoire Emissary EmissaryWeb Prism PrismWeb CyfrWeb),
+    roots: ~w(Sanctum Aqua Compendium Crucible Grimoire Emissary Prism PrismWeb CyfrWeb),
     namespaces: ~w(Crucible Crucible.Schedules),
     reason:
       "`Cyfr.Bus` owns every topic and payload and checks every publish against the " <>
@@ -1010,7 +1034,7 @@ defmodule Cyfr.Boundaries do
   # stale the day the gate stops making it.
   @gate_free %{
     from: ["apps/cyfr/lib/grimoire.ex", "apps/cyfr/lib/grimoire/**/*.ex"],
-    roots: ~w(Emissary EmissaryWeb Aqua Compendium Crucible Prism PrismWeb CyfrWeb),
+    roots: ~w(Emissary Aqua Compendium Crucible Prism PrismWeb CyfrWeb),
     allow: [],
     reason:
       "the operation table dispatches for every domain and surface; naming one " <>
@@ -1349,7 +1373,7 @@ defmodule Cyfr.Boundaries do
   why.
 
   The posture itself is declared where the route is
-  (`metadata: %{auth: …}` in `EmissaryWeb.Router`), so it travels with the
+  (`metadata: %{auth: …}` in its provider), so it travels with the
   route and a deleted route takes its posture with it. What lives here is
   the vocabulary.
 
@@ -1379,7 +1403,7 @@ defmodule Cyfr.Boundaries do
   # Every posture, public-roster and `route_info` consumer reads the route
   # table through this one name, so splitting the route providers and
   # changing the root router are each made here, in one place.
-  @router EmissaryWeb.Router
+  @router CyfrWeb.Router
 
   @doc "The composition router: the one module whose table is every HTTP route."
   @spec router() :: module()
@@ -1387,7 +1411,7 @@ defmodule Cyfr.Boundaries do
 
   # The route providers the composition router invokes, so another cannot
   # appear silently: each hands its routes to the root by macro.
-  @routers [Emissary.Router, CyfrWeb.Ingress.Router]
+  @routers [Emissary.Router, CyfrWeb.Ingress.Router, Prism.Router]
 
   @doc "The route providers whose routes the composition router's table holds."
   @spec routers() :: [module()]

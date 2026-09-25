@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule CyfrWeb.Ingress.WebhookControllerTest do
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   require Arca.Repo.Errors
 

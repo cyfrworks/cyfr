@@ -7,7 +7,7 @@ defmodule CyfrWeb.PwaStaticTest do
   the one endpoint: the web manifest and the service worker. Both are named
   in `CyfrWeb.static_paths/0`; dropping either would 404 silently.
   """
-  use EmissaryWeb.ConnCase, async: true
+  use CyfrWeb.ConnCase, async: true
 
   test "the manifest and the service worker are served" do
     manifest = get(build_conn(), "/manifest.webmanifest")

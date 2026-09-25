@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule CyfrWeb.Ingress.ExecutionEventsControllerTest do
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   # Execution-event access requires authentication and an ownership check.
   # Unknown and inaccessible ids return the same 404. This fixture uses the

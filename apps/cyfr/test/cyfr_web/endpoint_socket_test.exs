@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.EndpointSocketTest do
+defmodule CyfrWeb.EndpointSocketTest do
   @moduledoc """
   Pins what the `/live` socket is told about its caller.
 
-  The LiveView socket is handled by `EmissaryWeb.Endpoint` before the
+  The LiveView socket is handled by `CyfrWeb.Endpoint` before the
   router (`router.ex` says so where it explains why `CyfrWeb.ContextGuard`
   gates LiveView mounts), so it passes no plug at all — not `MCPRateLimit`, not
   `AuthRateLimit`. A LiveView that starts an anonymous device flow
@@ -27,7 +27,7 @@ defmodule EmissaryWeb.EndpointSocketTest do
 
   test "the /live socket carries the connect_info ClientIp needs, on both transports" do
     {"/live", Phoenix.LiveView.Socket, opts} =
-      Enum.find(EmissaryWeb.Endpoint.__sockets__(), &match?({"/live", _, _}, &1))
+      Enum.find(CyfrWeb.Endpoint.__sockets__(), &match?({"/live", _, _}, &1))
 
     for transport <- [:websocket, :longpoll] do
       connect_info = opts |> Keyword.fetch!(transport) |> Keyword.fetch!(:connect_info)

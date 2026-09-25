@@ -38,7 +38,7 @@ defmodule PrismWeb.AuthHelpers do
   The client address behind a LiveView socket, for the anonymous flows
   that must budget by IP themselves.
 
-  The `/live` socket is handled by `EmissaryWeb.Endpoint` before the
+  The `/live` socket is handled by `CyfrWeb.Endpoint` before the
   router, so it passes no rate-limit plug: a LiveView that starts a device
   flow (sign-in, the registry appeal) is the only thing standing between
   one address and the server-wide budget. `connect_info` is readable only

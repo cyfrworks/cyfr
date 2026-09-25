@@ -648,7 +648,7 @@ if config_env() != :test do
         "https://[::1]:#{port}"
       ]
 
-      config :cyfr, EmissaryWeb.Endpoint,
+      config :cyfr, CyfrWeb.Endpoint,
         url: [host: host, port: port],
         http: [
           ip: emissary_bind,
@@ -678,7 +678,7 @@ if config_env() != :test do
           |> binary_part(0, 16)
 
       config :cyfr, :emissary_session_salt, emissary_salt
-      config :cyfr, EmissaryWeb.Endpoint, live_view: [signing_salt: lv_salt]
+      config :cyfr, CyfrWeb.Endpoint, live_view: [signing_salt: lv_salt]
 
       # Session cookies must be secure in production (HTTPS-only).
       # Dev/test leave this false so http://localhost works.

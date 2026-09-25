@@ -9,7 +9,7 @@ defmodule Sanctum.ClientIp do
   Two entry points, one decision: `resolve/1` for a `Plug.Conn` and
   `from_connect_info/1` for a LiveView socket. The socket needs its own
   door because the `/live` socket is handled by the endpoint before the
-  router (`EmissaryWeb.Endpoint`), so it never passes a plug and has no
+  router (`CyfrWeb.Endpoint`), so it never passes a plug and has no
   conn to hand over — and a synthesised one would be a second place the
   hop rules could drift. Both spellings reduce to the same
   `(peer, forwarded-header values)` pair.

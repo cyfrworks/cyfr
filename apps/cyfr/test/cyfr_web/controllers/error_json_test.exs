@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule CyfrWeb.ErrorJSONTest do
-  use EmissaryWeb.ConnCase, async: true
+  use CyfrWeb.ConnCase, async: true
 
   test "renders 404" do
     assert CyfrWeb.ErrorJSON.render("404.json", %{}) == %{errors: %{detail: "Not Found"}}

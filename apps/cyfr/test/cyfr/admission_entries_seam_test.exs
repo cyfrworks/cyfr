@@ -213,7 +213,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
       conn
       |> put_req_header("content-type", "application/json")
       |> Phoenix.ConnTest.dispatch(
-        EmissaryWeb.Endpoint,
+        CyfrWeb.Endpoint,
         :post,
         "/mcp",
         Jason.encode!([%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"}])

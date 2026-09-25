@@ -1116,7 +1116,7 @@ defmodule Emissary.Web.MCPControllerTest do
         conn
         |> put_req_header("content-type", "application/json")
         |> Plug.Conn.put_req_header("content-type", "application/json")
-        |> Phoenix.ConnTest.dispatch(EmissaryWeb.Endpoint, :post, "/mcp", batch_body)
+        |> Phoenix.ConnTest.dispatch(CyfrWeb.Endpoint, :post, "/mcp", batch_body)
 
       # Through the real pipeline Plug.Parsers delivers the array as
       # %{"_json" => [...]} — assert the dedicated batch rejection fires,
