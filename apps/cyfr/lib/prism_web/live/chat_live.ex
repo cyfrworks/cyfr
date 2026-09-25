@@ -43,7 +43,7 @@ defmodule PrismWeb.ChatLive do
   def mount(_params, session, socket) do
     # The tray is the session's (`Prism.Tray`): opening an estate here is
     # looking at it, so its badge is read the same as focusing the bench.
-    token = session[to_string(PrismWeb.SignInResponse.session_key())]
+    token = session[to_string(CyfrWeb.SignInResponse.session_key())]
 
     {:ok,
      socket

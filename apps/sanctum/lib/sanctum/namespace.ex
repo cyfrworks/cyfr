@@ -15,7 +15,7 @@ defmodule Sanctum.Namespace do
   re-probe, never the identity.
 
   This module is the one-line lookup callers use to materialize
-  `ctx.namespace` from `ctx.user_id`: `EmissaryWeb.Plugs.Authenticate`,
+  `ctx.namespace` from `ctx.user_id`: `CyfrWeb.Plugs.Authenticate`,
   `PrismWeb.AuthHelpers`, `Sanctum.Session.row_to_context/2`, the auth
   providers, API-key and webhook attribution.
   """

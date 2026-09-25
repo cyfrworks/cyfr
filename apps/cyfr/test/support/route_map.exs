@@ -10,79 +10,79 @@
     "EmissaryWeb.Router" => %{
       file: "apps/cyfr/lib/emissary_web/router.ex",
       pipelines: %{
-        "api" => [":accepts", "EmissaryWeb.Plugs.ApiSecurityHeaders"],
+        "api" => [":accepts", "CyfrWeb.Plugs.ApiSecurityHeaders"],
         "attachment" => [
-          "EmissaryWeb.Plugs.Headless",
+          "CyfrWeb.Plugs.Headless",
           ":fetch_session",
           ":protect_from_forgery",
           ":put_secure_browser_headers",
-          "EmissaryWeb.Plugs.ApiSecurityHeaders"
+          "CyfrWeb.Plugs.ApiSecurityHeaders"
         ],
-        "attachment_throttle" => ["EmissaryWeb.Plugs.AuthRateLimit"],
-        "auth_api_throttle" => ["EmissaryWeb.Plugs.AuthRateLimit"],
+        "attachment_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "auth_api_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "authenticated_api" => [
-          "EmissaryWeb.Plugs.CallIdentity",
+          "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
-          "EmissaryWeb.Plugs.ApiSecurityHeaders",
-          "EmissaryWeb.Plugs.CORS",
-          "EmissaryWeb.Plugs.MCPOrigin",
-          "EmissaryWeb.Plugs.MCPRateLimit",
-          "EmissaryWeb.Plugs.Authenticate"
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.CORS",
+          "CyfrWeb.Plugs.MCPOrigin",
+          "CyfrWeb.Plugs.MCPRateLimit",
+          "CyfrWeb.Plugs.Authenticate"
         ],
         "browser" => [
-          "EmissaryWeb.Plugs.Headless",
+          "CyfrWeb.Plugs.Headless",
           ":accepts",
           ":fetch_session",
           ":fetch_live_flash",
           ":put_root_layout",
           ":protect_from_forgery",
           ":put_secure_browser_headers",
-          "EmissaryWeb.Plugs.BrowserCSP"
+          "CyfrWeb.Plugs.BrowserCSP"
         ],
-        "claim_submit_throttle" => ["EmissaryWeb.Plugs.AuthRateLimit"],
-        "device_complete_throttle" => ["EmissaryWeb.Plugs.AuthRateLimit"],
-        "health_throttle" => ["EmissaryWeb.Plugs.AuthRateLimit"],
-        "legal_accept_throttle" => ["EmissaryWeb.Plugs.AuthRateLimit"],
+        "claim_submit_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "health_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "legal_accept_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "mcp" => [
-          "EmissaryWeb.Plugs.CallIdentity",
+          "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
-          "EmissaryWeb.Plugs.ApiSecurityHeaders",
-          "EmissaryWeb.Plugs.CORS",
-          "EmissaryWeb.Plugs.MCPOrigin",
-          "EmissaryWeb.Plugs.MCPRateLimit",
-          "EmissaryWeb.Plugs.Authenticate",
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.CORS",
+          "CyfrWeb.Plugs.MCPOrigin",
+          "CyfrWeb.Plugs.MCPRateLimit",
+          "CyfrWeb.Plugs.Authenticate",
           "EmissaryWeb.Plugs.MCPRequestMetadata"
         ],
-        "oauth_callback" => [":accepts", "EmissaryWeb.Plugs.ApiSecurityHeaders"],
-        "oauth_callback_throttle" => ["EmissaryWeb.Plugs.AuthRateLimit"],
-        "oauth_start_throttle" => ["EmissaryWeb.Plugs.AuthRateLimit"],
+        "oauth_callback" => [":accepts", "CyfrWeb.Plugs.ApiSecurityHeaders"],
+        "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "tincture" => [
-          "EmissaryWeb.Plugs.CallIdentity",
+          "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
-          "EmissaryWeb.Plugs.ApiSecurityHeaders",
-          "EmissaryWeb.Plugs.ScrubTinctureCredentials",
-          "EmissaryWeb.Plugs.TinctureRateLimit"
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.ScrubTinctureCredentials",
+          "CyfrWeb.Plugs.TinctureRateLimit"
         ],
         "tincture_asset" => [
-          "EmissaryWeb.Plugs.ApiSecurityHeaders",
-          "EmissaryWeb.Plugs.ScrubTinctureCredentials",
-          "EmissaryWeb.Plugs.TinctureRateLimit"
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.ScrubTinctureCredentials",
+          "CyfrWeb.Plugs.TinctureRateLimit"
         ],
         "tincture_invoke" => [
-          "EmissaryWeb.Plugs.CallIdentity",
+          "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
-          "EmissaryWeb.Plugs.ApiSecurityHeaders",
-          "EmissaryWeb.Plugs.CORS",
-          "EmissaryWeb.Plugs.ScrubTinctureCredentials",
-          "EmissaryWeb.Plugs.TinctureRateLimit"
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.CORS",
+          "CyfrWeb.Plugs.ScrubTinctureCredentials",
+          "CyfrWeb.Plugs.TinctureRateLimit"
         ],
         "webhook" => [
-          "EmissaryWeb.Plugs.CallIdentity",
+          "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
-          "EmissaryWeb.Plugs.ApiSecurityHeaders",
-          "EmissaryWeb.Plugs.WebhookRateLimit",
-          "EmissaryWeb.Plugs.VerifyWebhookSignature",
-          "EmissaryWeb.Plugs.WebhookIdempotency"
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.WebhookRateLimit",
+          "CyfrWeb.Plugs.VerifyWebhookSignature",
+          "CyfrWeb.Plugs.WebhookIdempotency"
         ]
       },
       routes: [

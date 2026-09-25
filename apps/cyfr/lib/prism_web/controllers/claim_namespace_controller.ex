@@ -10,10 +10,10 @@ defmodule PrismWeb.ClaimNamespaceController do
   - `GET /claim-namespace` — renders a form prompting the user for a slug
     (default = a suggestion from their screen name or email).
   - `POST /claim-namespace/submit` — reads the pending-probe cookie
-    (`PrismWeb.PendingProbe`), claims the namespace
+    (`CyfrWeb.PendingProbe`), claims the namespace
     (`Compendium.claim_personal_namespace/3`), records it, stores the issued
     push token (`Compendium.store_push_token/3`), and redirects to the
-    configured post-login landing target via `PrismWeb.SafeRedirect`.
+    configured post-login landing target via `CyfrWeb.SafeRedirect`.
 
   Accepted cross-layer coupling — this controller is part of the auth
   sliver in spirit but calls Compendium for the post-claim token storage.
@@ -23,7 +23,7 @@ defmodule PrismWeb.ClaimNamespaceController do
 
   require Logger
 
-  alias PrismWeb.PendingProbe
+  alias CyfrWeb.PendingProbe
 
   def show(conn, _params) do
     page(conn, 200, suggestion(conn), nil)
@@ -74,7 +74,7 @@ defmodule PrismWeb.ClaimNamespaceController do
 
           conn
           |> PendingProbe.clear()
-          |> PrismWeb.SafeRedirect.post_login()
+          |> CyfrWeb.SafeRedirect.post_login()
 
         {:error, reason} ->
           Logger.error(
@@ -162,7 +162,7 @@ defmodule PrismWeb.ClaimNamespaceController do
 
   defp suggestion(conn) do
     with {:ok, %{user_id: id, provider: provider}} when is_binary(id) <-
-           Sanctum.Caller.peek(get_session(conn, PrismWeb.SignInResponse.session_key())),
+           Sanctum.Caller.peek(get_session(conn, CyfrWeb.SignInResponse.session_key())),
          {:ok, user} <- Sanctum.Tenancy.Users.get(id) do
       Sanctum.SignIn.suggested_slug(user, provider || "github") || ""
     else
@@ -174,7 +174,7 @@ defmodule PrismWeb.ClaimNamespaceController do
   # stored session and the person's standing: the claim writes on that
   # person's row, so a look at who the cookie names is not enough.
   defp standing_caller(conn) do
-    token = get_session(conn, PrismWeb.SignInResponse.session_key())
+    token = get_session(conn, CyfrWeb.SignInResponse.session_key())
 
     with {:ok, ctx} <- Sanctum.Caller.establish(token, refresh: false) do
       still_standing(conn, ctx)

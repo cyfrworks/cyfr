@@ -141,7 +141,7 @@ defmodule Sanctum.Auth.OIDCTest do
 
   describe "authenticate/1 with API key params" do
     test "API keys are not an OIDC credential" do
-      # Keys authenticate only through EmissaryWeb.Plugs.Authenticate, which
+      # Keys authenticate only through CyfrWeb.Plugs.Authenticate, which
       # resolves the client IP for the allowlist check.
       assert {:error, :invalid_credentials} = OIDC.authenticate(%{api_key: "cyfr_ak_anything"})
     end

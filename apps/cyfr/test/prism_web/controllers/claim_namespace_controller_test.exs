@@ -73,7 +73,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
 
       conn =
         conn
-        |> init_test_session(%{PrismWeb.SignInResponse.session_key() => session.token})
+        |> init_test_session(%{CyfrWeb.SignInResponse.session_key() => session.token})
         |> get(~p"/claim-namespace/")
 
       body = response(conn, 200)

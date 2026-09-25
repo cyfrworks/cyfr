@@ -95,7 +95,7 @@ defmodule Sanctum.Auth.OIDC do
   @doc """
   This provider issues no bearer credential of its own: a session token or
   an API key on a request is established by the one recipe
-  (`Sanctum.Caller.establish/2`) in `EmissaryWeb.Plugs.Authenticate`
+  (`Sanctum.Caller.establish/2`) in `CyfrWeb.Plugs.Authenticate`
   before the provider is asked. Always `nil`.
   """
   def current_user(_conn), do: nil

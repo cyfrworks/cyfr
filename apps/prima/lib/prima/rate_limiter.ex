@@ -64,7 +64,7 @@ defmodule Prima.RateLimiter do
   advisory limit (not a security boundary); the storage/authority caps
   make the same call explicitly at their own sites.
 
-  The transport plugs (`EmissaryWeb.Plugs.*RateLimit`) all share `check/3`:
+  The transport plugs (`CyfrWeb.Plugs.*RateLimit`) all share `check/3`:
 
       case Prima.RateLimiter.check(key, max, window_ms) do
         :ok -> conn

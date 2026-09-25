@@ -57,7 +57,7 @@ defmodule PrismWeb.TopbarLive do
   # guard refuses never reaches here.
   @impl true
   def mount(_params, session, socket) do
-    token = session[to_string(PrismWeb.SignInResponse.session_key())]
+    token = session[to_string(CyfrWeb.SignInResponse.session_key())]
     ctx = socket.assigns.context
     ui_mode = Prism.Labels.mode(session["ui_mode"], ctx)
 

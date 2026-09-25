@@ -48,7 +48,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     # `Session.token_hash/1` for the same reason; the socket now matches.
     user = test_user()
     conn = log_in_user(conn, user)
-    token = Plug.Conn.get_session(conn, PrismWeb.SignInResponse.session_key())
+    token = Plug.Conn.get_session(conn, CyfrWeb.SignInResponse.session_key())
     assert is_binary(token)
 
     {view, _html} = mount_athanor(conn, "/settings")

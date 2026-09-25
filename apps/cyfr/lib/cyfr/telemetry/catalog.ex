@@ -14,7 +14,7 @@ defmodule Cyfr.Telemetry.Catalog do
     from this table (`consumed_by(:audit)`).
   - `:bridge` — `Cyfr.TelemetryBridge` → `Cyfr.Bus`. Its attach is this
     roster (`consumed_by(:bridge)`).
-  - `:metrics` — `EmissaryWeb.Telemetry` metric definitions. Pinned equal
+  - `:metrics` — `CyfrWeb.Telemetry` metric definitions. Pinned equal
     by test.
   - `:log` — a dedicated Logger attach (`Cyfr.Application`).
   - `:estate` — `Compendium.Provisioning`, the component domain's answer

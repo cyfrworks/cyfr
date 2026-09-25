@@ -63,7 +63,7 @@ defmodule EmissaryWeb.Endpoint do
     at: "/",
     from: :cyfr,
     gzip: not code_reloading?,
-    only: EmissaryWeb.static_paths(),
+    only: CyfrWeb.static_paths(),
     cache_static_manifest: "priv/static/cache_manifest.json"
   )
 
@@ -75,16 +75,17 @@ defmodule EmissaryWeb.Endpoint do
     plug(Phoenix.CodeReloader)
   end
 
-  plug(EmissaryWeb.MetricsPlug)
+  plug(CyfrWeb.MetricsPlug)
   plug(Plug.RequestId)
   # A boot that lost the control plane serves nothing but health.
-  plug(EmissaryWeb.Plugs.ControlPlaneOwnership)
+  plug(CyfrWeb.Plugs.ControlPlaneOwnership)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
   # Plug.Parsers behind the wrapper that answers /mcp parser failures in
   # JSON-RPC (-32700) and gates its content type; everything else keeps
   # Phoenix's rendering.
-  plug(EmissaryWeb.Plugs.ParserErrors,
+  plug(CyfrWeb.Plugs.ParserErrors,
+    jsonrpc: {"/mcp", EmissaryWeb.MCPError},
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library(),
@@ -94,16 +95,16 @@ defmodule EmissaryWeb.Endpoint do
     # plus JSON envelope headroom. Webhooks keep their own smaller cap in
     # RawBodyReader.
     length: 28_000_000,
-    body_reader: {EmissaryWeb.Plugs.RawBodyReader, :read_body, []}
+    body_reader: {CyfrWeb.Plugs.RawBodyReader, :read_body, []}
   )
 
   plug(Plug.MethodOverride)
   plug(Plug.Head)
   plug(:dynamic_session)
   # Security headers are a pipeline concern now: the API/MCP/webhook
-  # pipelines carry the closed set (`EmissaryWeb.Plugs.ApiSecurityHeaders`),
+  # pipelines carry the closed set (`CyfrWeb.Plugs.ApiSecurityHeaders`),
   # the browser pipeline the LiveView-compatible one
-  # (`EmissaryWeb.Plugs.BrowserCSP`), and tinctures their own.
+  # (`CyfrWeb.Plugs.BrowserCSP`), and tinctures their own.
   plug(EmissaryWeb.Router)
 
   defp dynamic_session(conn, _opts) do

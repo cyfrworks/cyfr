@@ -73,7 +73,7 @@ defmodule Cyfr.App.MixProject do
       # supervisor and `config/runtime.exs` carries the topology.
       {:libcluster, "~> 3.5"},
       # The Ueberauth route table the web face builds from the configured
-      # providers (`EmissaryWeb.Plugs.ConfiguredUeberauth`); the strategies
+      # providers (`CyfrWeb.Plugs.ConfiguredUeberauth`); the strategies
       # themselves are Sanctum's.
       {:ueberauth, "~> 0.10.8"},
       # Ecto, for the errors the surfaces rescue and the sandbox the suite

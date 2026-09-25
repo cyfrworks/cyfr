@@ -47,7 +47,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Cluster.Supervisor,
     Cyfr.Cell,
     Arca.AuditHandler,
-    EmissaryWeb.Telemetry,
+    CyfrWeb.Telemetry,
     Phoenix.PubSub.Supervisor,
     Cyfr.StandingWatch,
     Cyfr.TelemetryBridge
@@ -65,7 +65,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Crucible.Sweeper,
     Crucible.WorkerWatch,
     Crucible.HostListener,
-    Emissary.MCP.SubscriptionRegistry,
+    CyfrWeb.SSE.Registry,
     Emissary.External.ServerTree,
     Emissary.TaskSupervisor,
     Compendium.Builds.TaskSupervisor,

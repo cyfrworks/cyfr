@@ -425,7 +425,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     stale =
       Plug.Test.init_test_session(build_conn(), %{
-        to_string(PrismWeb.SignInResponse.session_key()) => "not-a-session"
+        to_string(CyfrWeb.SignInResponse.session_key()) => "not-a-session"
       })
 
     assert {:error, {:redirect, %{to: "/login"}}} =

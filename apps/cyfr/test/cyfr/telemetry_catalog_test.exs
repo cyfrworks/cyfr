@@ -88,7 +88,7 @@ defmodule Cyfr.TelemetryCatalogTest do
 
   test "the metric definitions cover exactly the catalog's :metrics roster" do
     metric_events =
-      EmissaryWeb.Telemetry.metrics()
+      CyfrWeb.Telemetry.metrics()
       |> Enum.map(& &1.event_name)
       |> Enum.filter(&match?([:cyfr | _], &1))
       |> Enum.uniq()

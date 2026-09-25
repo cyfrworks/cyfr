@@ -24,19 +24,19 @@ defmodule EmissaryWeb.ExecutionEventsController do
   reconnect is then answered by the authentication plug.
   """
 
-  use EmissaryWeb, :controller
+  use CyfrWeb, :controller
 
   require CyfrWeb.ContextGuard
 
   alias CyfrWeb.ContextGuard
 
-  @keep_alive_interval_ms EmissaryWeb.SSE.keep_alive_ms()
+  @keep_alive_interval_ms CyfrWeb.SSE.keep_alive_ms()
   @terminal_types Arca.ExecutionEvents.terminal_types()
 
   def stream(conn, %{"id" => execution_id}) do
     cond do
       not Crucible.available?() ->
-        EmissaryWeb.ApiError.send(
+        CyfrWeb.ApiError.send(
           conn,
           503,
           :execution_unavailable,
@@ -50,20 +50,20 @@ defmodule EmissaryWeb.ExecutionEventsController do
              {:exec, %{id: _} = exec} <-
                {:exec, Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), execution_id)},
              :ok <- authorize_execution_read(ctx, exec),
-             :ok <- EmissaryWeb.SSE.claim_slot(:sse_slot, ctx, :crucible_events_max_concurrent) do
+             :ok <- CyfrWeb.SSE.claim_slot(:sse_slot, ctx, :crucible_events_max_concurrent) do
           cursor = parse_last_event_id(conn)
 
           conn
-          |> EmissaryWeb.SSE.open()
+          |> CyfrWeb.SSE.open()
           |> stream_events(ctx, execution_id, cursor, exec)
         else
           {:auth, _} ->
-            EmissaryWeb.ApiError.send(conn, 401, :unauthenticated, nil)
+            CyfrWeb.ApiError.send(conn, 401, :unauthenticated, nil)
 
           # Non-existent and not-yours both return 404 to avoid leaking which
           # execution IDs exist in the system via 403/404 distinction.
           {:exec, nil} ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
+            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
 
           # The lookup is `with_db_rescue`-wrapped, so a store that cannot
           # answer arrives here rather than raising. It is neither "no such
@@ -71,13 +71,13 @@ defmodule EmissaryWeb.ExecutionEventsController do
           # execution is gone during a blip — so it answers the same 503 the
           # engine-unavailable branch above does.
           {:exec, {:error, :database_error}} ->
-            EmissaryWeb.ApiError.send(conn, 503, :unavailable, nil)
+            CyfrWeb.ApiError.send(conn, 503, :unavailable, nil)
 
           {:error, :forbidden} ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
+            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
 
           {:error, :stream_limit} ->
-            EmissaryWeb.ApiError.send(
+            CyfrWeb.ApiError.send(
               conn,
               429,
               :stream_limit,
@@ -114,7 +114,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
         close(conn, execution_id, exec, watch)
 
       {conn, cursor, false} ->
-        deadline = EmissaryWeb.SSE.deadline(:crucible_events_max_ms)
+        deadline = CyfrWeb.SSE.deadline(:crucible_events_max_ms)
         event_loop(conn, {execution_id, exec, watch}, cursor, deadline)
     end
   end
@@ -180,7 +180,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
           end
       after
         @keep_alive_interval_ms ->
-          case chunk(conn, EmissaryWeb.SSE.keep_alive_comment()) do
+          case chunk(conn, CyfrWeb.SSE.keep_alive_comment()) do
             {:ok, conn} ->
               event_loop(conn, stream, cursor, deadline)
 

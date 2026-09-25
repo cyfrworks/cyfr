@@ -43,7 +43,7 @@ defmodule PrismWeb.AquaPanelLive do
 
   @impl true
   def mount(_params, session, socket) do
-    token = session[to_string(PrismWeb.SignInResponse.session_key())]
+    token = session[to_string(CyfrWeb.SignInResponse.session_key())]
     room_feed = session["room_feed"]
 
     socket =

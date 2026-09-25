@@ -138,7 +138,7 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   Whether this node is headless (`CYFR_HEADLESS`): the API, MCP and public
   tinctures are served and every browser route answers 404 — a Codex-only
-  node. Read at request time by `EmissaryWeb.Plugs.Headless`.
+  node. Read at request time by `CyfrWeb.Plugs.Headless`.
   """
   @spec headless?() :: boolean()
   def headless?, do: Application.get_env(:cyfr, :headless, false) == true

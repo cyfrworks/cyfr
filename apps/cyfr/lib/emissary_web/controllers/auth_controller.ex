@@ -22,24 +22,24 @@ defmodule EmissaryWeb.AuthController do
   - `DELETE /auth/logout` - Destroys session
   """
 
-  use EmissaryWeb, :controller
+  use CyfrWeb, :controller
 
   require Logger
 
-  plug EmissaryWeb.Plugs.ConfiguredUeberauth
+  plug CyfrWeb.Plugs.ConfiguredUeberauth
 
-  alias PrismWeb.SignInResponse
+  alias CyfrWeb.SignInResponse
   alias Sanctum.Session
 
   @doc """
   Answers a sign-in start for a provider this server does not configure.
 
-  `EmissaryWeb.Plugs.ConfiguredUeberauth` redirects a configured OIDC start
+  `CyfrWeb.Plugs.ConfiguredUeberauth` redirects a configured OIDC start
   before this action runs.
   """
   def request(conn, _params) do
     # Render the no-strategy branch as HTML; Ueberauth handles configured redirects.
-    PrismWeb.MinimalPage.send_page(
+    CyfrWeb.MinimalPage.send_page(
       conn,
       404,
       "Unknown sign-in provider",
@@ -167,17 +167,17 @@ defmodule EmissaryWeb.AuthController do
       {:error, {:door, _reason}} ->
         # Refused at the door: no session, no cookie, no cyfr.run call. One
         # message whichever branch refused.
-        PrismWeb.MinimalPage.send_page(
+        CyfrWeb.MinimalPage.send_page(
           conn,
           403,
           "Not allowed on this server",
-          "<p>#{PrismWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>"
+          "<p>#{CyfrWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>"
         )
 
       {:error, :unavailable} ->
         # A transient membership read during authenticate — a 503, never a
         # 401: the person's credentials were fine and retrying fixes it.
-        PrismWeb.MinimalPage.send_page(
+        CyfrWeb.MinimalPage.send_page(
           conn,
           503,
           "Temporarily unavailable",
@@ -187,28 +187,28 @@ defmodule EmissaryWeb.AuthController do
         )
 
       {:error, reason} ->
-        PrismWeb.MinimalPage.send_page(
+        CyfrWeb.MinimalPage.send_page(
           conn,
           401,
           "Sign-in failed",
-          "<p>#{PrismWeb.MinimalPage.h(friendly_error_message(reason))}</p>" <>
+          "<p>#{CyfrWeb.MinimalPage.h(friendly_error_message(reason))}</p>" <>
             "<p><a href=\"/login\">Try again</a></p>"
         )
     end
   end
 
   def callback(%{assigns: %{ueberauth_failure: failure}} = conn, _params) do
-    PrismWeb.MinimalPage.send_page(
+    CyfrWeb.MinimalPage.send_page(
       conn,
       401,
       "Sign-in failed",
-      "<p>#{PrismWeb.MinimalPage.h(failure_message(failure))}</p>" <>
+      "<p>#{CyfrWeb.MinimalPage.h(failure_message(failure))}</p>" <>
         "<p><a href=\"/login\">Try again</a></p>"
     )
   end
 
   def callback(conn, _params) do
-    PrismWeb.MinimalPage.send_page(
+    CyfrWeb.MinimalPage.send_page(
       conn,
       400,
       "Invalid sign-in callback",
@@ -227,7 +227,7 @@ defmodule EmissaryWeb.AuthController do
     probe → policy required → /legal/accept → /auth/post-legal-accept → probe → ok
   """
   def post_legal_accept(conn, _params) do
-    case PrismWeb.PendingProbe.pop(conn) do
+    case CyfrWeb.PendingProbe.pop(conn) do
       {:ok, conn, access_token} ->
         do_post_legal_accept(conn, access_token)
 
@@ -246,7 +246,7 @@ defmodule EmissaryWeb.AuthController do
   # stands now: established, then revalidated against the stored session
   # and the person's standing — never a look at who the cookie names.
   defp do_post_legal_accept(conn, access_token) do
-    session_token = get_session(conn, PrismWeb.SignInResponse.session_key())
+    session_token = get_session(conn, CyfrWeb.SignInResponse.session_key())
 
     with {:ok, ctx} <- Sanctum.Caller.establish(session_token, refresh: false),
          {:ok, ctx} <- Sanctum.Caller.revalidate_session(ctx),
@@ -263,7 +263,7 @@ defmodule EmissaryWeb.AuthController do
       )
     else
       {:error, :unavailable} ->
-        PrismWeb.MinimalPage.send_page(
+        CyfrWeb.MinimalPage.send_page(
           conn,
           503,
           "Try again shortly",
@@ -298,10 +298,10 @@ defmodule EmissaryWeb.AuthController do
           |> json(%{ok: true, message: "Logged out successfully"})
 
         {:error, reason} ->
-          EmissaryWeb.ApiError.refuse(conn, reason)
+          CyfrWeb.ApiError.refuse(conn, reason)
       end
     else
-      EmissaryWeb.ApiError.refuse(conn, :missing_token)
+      CyfrWeb.ApiError.refuse(conn, :missing_token)
     end
   end
 
@@ -313,7 +313,7 @@ defmodule EmissaryWeb.AuthController do
   def whoami(conn, _params) do
     case get_bearer_token(conn) do
       nil ->
-        EmissaryWeb.ApiError.refuse(conn, :missing_token)
+        CyfrWeb.ApiError.refuse(conn, :missing_token)
 
       token ->
         case Session.get(token) do
@@ -331,7 +331,7 @@ defmodule EmissaryWeb.AuthController do
             })
 
           {:error, _} ->
-            EmissaryWeb.ApiError.send(conn, 401, :invalid_session, nil)
+            CyfrWeb.ApiError.send(conn, 401, :invalid_session, nil)
         end
     end
   end

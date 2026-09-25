@@ -624,7 +624,7 @@ defmodule Grimoire.AdmissionLatencyTest do
   defp gate_outcome({:error, _}), do: :refused
 
   # The transport mints the request's identity itself and ignores the
-  # client's `x-request-id` (`EmissaryWeb.Plugs.CallIdentity`): the id it
+  # client's `x-request-id` (`CyfrWeb.Plugs.CallIdentity`): the id it
   # answers is the one the run keeps.
   defp mcp(token) do
     conn =

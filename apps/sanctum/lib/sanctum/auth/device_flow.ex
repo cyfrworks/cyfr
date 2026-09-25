@@ -113,7 +113,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   `client_ip` is the address the budget is charged to, from
   `Sanctum.ClientIp`. Pass `nil` only from a surface that is already
   metered per address by the transport — today that is the MCP route
-  behind `EmissaryWeb.Plugs.MCPRateLimit`, and nothing else. It is a
+  behind `CyfrWeb.Plugs.MCPRateLimit`, and nothing else. It is a
   required argument rather than an option because a caller that has no
   answer has to say so, and the next anonymous surface must not inherit
   "unbudgeted" by omission.
