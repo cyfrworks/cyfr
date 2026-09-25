@@ -1352,14 +1352,14 @@ defmodule Cyfr.BoundariesTest do
                ["Compendium", "Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
     end
 
-    test "the console names the assistant's root and its task supervisor, nothing more" do
+    test "the console names the assistant's root, nothing more" do
       row =
         Enum.find(
           Boundaries.surfaces(),
           &(&1.into == "Aqua" and "apps/cyfr/lib/prism_web/**/*.ex" in &1.from)
         ) || flunk("no surface row fences the console into the assistant's root")
 
-      assert row.allow == ["Aqua", "Aqua.TaskSupervisor"]
+      assert row.allow == ["Aqua"]
       assert "apps/cyfr/lib/prism/**/*.ex" in row.from
 
       planted = [
@@ -1378,7 +1378,7 @@ defmodule Cyfr.BoundariesTest do
       ]
 
       assert Boundaries.surface_violations(row, planted) ==
-               ["Aqua.Kinds", "Aqua.Loop", "Aqua.Runner"]
+               ["Aqua.Kinds", "Aqua.Loop", "Aqua.Runner", "Aqua.TaskSupervisor"]
     end
 
     test "the host names no domain but the component and execution domains' roots" do

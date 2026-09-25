@@ -8,15 +8,17 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   work, and only its checked success lets the rest of the tree — and the
   endpoint after it — start.
 
-  The census is read from `Cyfr.Application.tiers/0`, the list the boot
-  starts, and pinned exactly: a child added before the gate, or moved
-  across it, fails here until someone decides where it belongs.
+  The census is read from `Cyfr.Application.tiers/0`, the tree the boot
+  starts down through every subtree, and pinned exactly: a child added
+  before the gate, or moved across it or between subtrees, fails here
+  until someone decides where it belongs.
 
   The barrier is exercised on that same list under a supervisor of the
   test's own. The real `Cyfr.Bootstrap` runs its real reconcile against
   the database, paused behind a barrier the test lifts; every other child
-  is a stand-in that records being started, because the running suite's
-  own tree already holds those names. With a due schedule, an open turn,
+  is a stand-in that records being started, under supervisors built with
+  the product's strategies, because the running suite's own tree already
+  holds those names. With a due schedule, an open turn,
   an enabled backend and a delisted operator in the database, nothing
   after the gate starts, nothing is dispensed and nothing is published
   until the reconcile has committed, released and re-verified — and when
@@ -53,32 +55,75 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Cyfr.TelemetryBridge
   ]
 
+  # A supervisor the census describes is `{id, children}`, in start order.
   @post_gate [
     Cyfr.RetentionScheduler,
-    Aqua.ScheduleNotes,
+    CyfrWeb.SSE.Registry,
+    {Grimoire.Supervisor, [Grimoire.RunningTasks, Grimoire.TaskSupervisor]},
+    {Compendium.Supervisor,
+     [
+       Compendium.Builds.TaskSupervisor,
+       Compendium.ProvisioningSupervisor,
+       Compendium.Provisioning,
+       Compendium.ProjectionReconciler
+     ]},
+    {Crucible.Supervisor,
+     [
+       Crucible.Slots,
+       {Crucible.Tree,
+        [
+          Crucible.Registry,
+          Crucible.Events.Registry,
+          Crucible.Events.Sequence,
+          Crucible.Events.Supervisor,
+          Crucible.Attempt.Registry,
+          Crucible.Attempt.Supervisor
+        ]},
+       Crucible.TaskSupervisor,
+       Crucible.ArchiveWatch,
+       Crucible.Sweeper,
+       Crucible.WorkerWatch,
+       Crucible.HostListener
+     ]},
+    {Aqua.Supervisor,
+     [
+       Aqua.ScheduleNotes,
+       {Aqua.WorkerTree, [Aqua.Loop.Worker, Aqua.TaskSupervisor]},
+       {Aqua.RunnerTree, [Aqua.RunnerRegistry, Aqua.RunnerSupervisor, Aqua.RunnerRecovery]}
+     ]},
+    {Emissary.Supervisor,
+     [
+       {Emissary.External.ServerTree,
+        [
+          Emissary.External.ServerRegistry,
+          Emissary.External.Backends,
+          Emissary.External.ServerSupervisor,
+          Emissary.External.Reconciler
+        ]},
+       Emissary.TaskSupervisor
+     ]},
     Crucible.Schedules.TaskSupervisor,
     Crucible.Schedules.Scheduler,
-    Crucible.Slots,
-    Crucible.Tree,
-    Crucible.TaskSupervisor,
-    Crucible.ArchiveWatch,
-    Crucible.Sweeper,
-    Crucible.WorkerWatch,
-    Crucible.HostListener,
-    CyfrWeb.SSE.Registry,
-    Emissary.External.ServerTree,
-    Emissary.TaskSupervisor,
-    Compendium.Builds.TaskSupervisor,
-    Grimoire.RunningTasks,
-    Grimoire.TaskSupervisor,
-    Compendium.ProvisioningSupervisor,
-    Compendium.Provisioning,
-    Compendium.ProjectionReconciler,
     Prism.TinctureRegistry,
-    Aqua.WorkerTree,
-    Aqua.RunnerTree,
+    Prism.TaskSupervisor,
     Cyfr.SeedOffer
   ]
+
+  # Every supervisor the census describes, with its strategy and its
+  # restart intensity.
+  @supervisors %{
+    Cyfr.InfraSupervisor => {:one_for_one, {10, 60}},
+    Cyfr.WebSupervisor => {:one_for_one, {10, 60}},
+    Grimoire.Supervisor => {:rest_for_one, {10, 60}},
+    Compendium.Supervisor => {:one_for_one, {10, 60}},
+    Crucible.Supervisor => {:rest_for_one, {10, 60}},
+    Crucible.Tree => {:rest_for_one, {10, 60}},
+    Aqua.Supervisor => {:rest_for_one, {10, 60}},
+    Aqua.WorkerTree => {:rest_for_one, {10, 60}},
+    Aqua.RunnerTree => {:rest_for_one, {10, 60}},
+    Emissary.Supervisor => {:one_for_one, {10, 60}},
+    Emissary.External.ServerTree => {:rest_for_one, {10, 60}}
+  }
 
   @web [CyfrWeb.Ingress.TaskSupervisor, CyfrWeb.Endpoint]
 
@@ -126,19 +171,22 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
   describe "the census" do
     test "only the reconcile's needs start before the gate; everything that admits work after it" do
-      [{Cyfr.InfraSupervisor, infra}, {Cyfr.WebSupervisor, web}] = Cyfr.Application.tiers()
-      ids = Enum.map(infra, &id/1)
+      tiers = Cyfr.Application.tiers()
+
+      [{Cyfr.InfraSupervisor, _, _, infra}, {Cyfr.WebSupervisor, _, _, web}] = tiers
+      ids = Enum.map(infra, &shape/1)
 
       {pre, [Cyfr.Bootstrap | post]} = Enum.split_while(ids, &(&1 != Cyfr.Bootstrap))
 
       assert pre == @pre_gate
       assert post == @post_gate
-      assert Enum.map(web, &id/1) == @web
+      assert Enum.map(web, &shape/1) == @web
+      assert Map.new(Enum.flat_map(tiers, &strategies/1)) == @supervisors
 
       # The gate is temporary: it answers once and leaves no process, and a
       # refusal it returns is the supervisor's failure to start.
-      assert %{restart: :temporary} = infra |> Enum.find(&(id(&1) == Cyfr.Bootstrap)) |> spec()
-      assert %{restart: :temporary} = infra |> Enum.find(&(id(&1) == Cyfr.SeedOffer)) |> spec()
+      assert %{restart: :temporary} = infra |> Enum.find(&(shape(&1) == Cyfr.Bootstrap)) |> spec()
+      assert %{restart: :temporary} = infra |> Enum.find(&(shape(&1) == Cyfr.SeedOffer)) |> spec()
     end
 
     test "only a test build with boot work switched off omits the gate" do
@@ -148,8 +196,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       assert Cyfr.Application.bootstrap_skipped?(true, false)
 
       Application.put_env(:cyfr, :provisioning_boot_enabled, false)
-      [{_, infra}, _web] = Cyfr.Application.tiers()
-      ids = Enum.map(infra, &id/1)
+      [{_, _, _, infra}, _web] = Cyfr.Application.tiers()
+      ids = Enum.map(infra, &shape/1)
       refute Cyfr.Bootstrap in ids
       refute Cyfr.SeedOffer in ids
     end
@@ -208,7 +256,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       assert_receive {:tree, ^starter, {:ok, _root}}, 10_000
       # The endpoint is last: it starts only after the gate returned and
       # every child that admits work is up.
-      assert started() == @post_gate ++ @web
+      assert started() == leaves(@post_gate) ++ @web
 
       refute platform?(delisted.user.id)
       assert {:error, _} = Sanctum.Session.load(delisted.token, surface: :console)
@@ -288,7 +336,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
       send(gate, {:lift, &Sanctum.reconcile_platform_admins/2})
       assert_receive {:tree, ^starter, {:ok, _root}}, 10_000
-      assert started() == @post_gate ++ @web
+      assert started() == leaves(@post_gate) ++ @web
       refute platform?(delisted.user.id)
       stop_tree(starter)
     end
@@ -308,11 +356,12 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
   defp start_tree!(bootstrap_opts) do
     test = self()
-    [{_, infra}, {_, web}] = Cyfr.Application.tiers()
+    [infra, web] = Cyfr.Application.tiers()
 
+    # The tiers under ids of the test's own, so a refusal names them.
     root = [
-      tier(:barrier_infra, Enum.map(infra, &stand_in(&1, test, bootstrap_opts))),
-      tier(:barrier_web, Enum.map(web, &stand_in(&1, test, bootstrap_opts)))
+      %{stand_in(infra, test, bootstrap_opts) | id: :barrier_infra},
+      %{stand_in(web, test, bootstrap_opts) | id: :barrier_web}
     ]
 
     spawn(fn ->
@@ -331,6 +380,21 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     assert_receive {:DOWN, ^ref, :process, ^starter, _}, 5_000
   end
 
+  # A supervisor the census describes is built, unnamed, with the
+  # product's strategy and intensity over its children's stand-ins.
+  defp stand_in({id, strategy, {max_restarts, max_seconds}, children}, test, bootstrap_opts) do
+    %{
+      id: id,
+      start:
+        {Supervisor, :start_link,
+         [
+           Enum.map(children, &stand_in(&1, test, bootstrap_opts)),
+           [strategy: strategy, max_restarts: max_restarts, max_seconds: max_seconds]
+         ]},
+      type: :supervisor
+    }
+  end
+
   defp stand_in(child, test, bootstrap_opts) do
     case id(child) do
       Cyfr.Bootstrap ->
@@ -341,16 +405,26 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end
   end
 
-  defp tier(id, children) do
-    %{
-      id: id,
-      start: {Supervisor, :start_link, [children, [strategy: :one_for_one]]},
-      type: :supervisor
-    }
-  end
-
   defp spec(child), do: Supervisor.child_spec(child, [])
   defp id(child), do: spec(child).id
+
+  # A child's place in the census: its id, or a supervisor's id and its
+  # children's places.
+  defp shape({id, _strategy, _intensity, children}), do: {id, Enum.map(children, &shape/1)}
+  defp shape(child), do: id(child)
+
+  defp strategies({id, strategy, intensity, children}),
+    do: [{id, {strategy, intensity}} | Enum.flat_map(children, &strategies/1)]
+
+  defp strategies(_child), do: []
+
+  # The children a shape starts, in start order.
+  defp leaves(shapes),
+    do:
+      Enum.flat_map(shapes, fn
+        {_id, children} -> leaves(children)
+        id -> [id]
+      end)
 
   # Every stand-in started so far, in start order.
   defp started(acc \\ []) do

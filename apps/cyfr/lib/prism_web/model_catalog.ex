@@ -64,7 +64,7 @@ defmodule PrismWeb.ModelCatalog do
     lv = self()
     logger_metadata = Prima.LoggerContext.capture()
 
-    Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
+    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
       Prima.LoggerContext.restore(logger_metadata)
       result = Aqua.models(ctx)
       with {:ok, catalogue} <- result, do: remember(athanor_id, catalogue)

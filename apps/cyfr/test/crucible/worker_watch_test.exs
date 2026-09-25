@@ -504,7 +504,7 @@ defmodule Crucible.WorkerWatchTest do
     end
 
     test "the application's watch is a child beside the sweeper, gated off in this environment" do
-      children = Supervisor.which_children(Cyfr.InfraSupervisor)
+      children = Supervisor.which_children(Crucible.Supervisor)
 
       assert {WorkerWatch, :undefined, :worker, [WorkerWatch]} =
                List.keyfind(children, WorkerWatch, 0)

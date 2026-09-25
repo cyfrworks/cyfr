@@ -45,6 +45,7 @@ defmodule Cyfr.Test.Sandbox do
   @supervisors [
     Aqua.RunnerSupervisor,
     Aqua.TaskSupervisor,
+    Prism.TaskSupervisor,
     Emissary.TaskSupervisor,
     CyfrWeb.Ingress.TaskSupervisor,
     Grimoire.TaskSupervisor,

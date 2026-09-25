@@ -535,7 +535,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:error, %Compendium.OCI.Errors{reason: :registry_unconfigured}} =
                Compendium.Pull.oci_reference_for("catalyst:moonmoon69.claude")
 
-      before = Task.Supervisor.children(Aqua.TaskSupervisor)
+      before = Task.Supervisor.children(Prism.TaskSupervisor)
 
       view
       |> element("button[phx-click=install_catalyst]")
@@ -564,7 +564,7 @@ defmodule PrismWeb.AquaLiveTest do
       # The fetch has answered; it is gone before the registry setting it
       # read is restored and before the sandbox it queried is released.
       Prima.Test.Wait.wait_until(
-        fn -> not Enum.any?(Task.Supervisor.children(Aqua.TaskSupervisor), &(&1 in fetch)) end,
+        fn -> not Enum.any?(Task.Supervisor.children(Prism.TaskSupervisor), &(&1 in fetch)) end,
         5_000,
         "the install's fetch to end"
       )
@@ -832,11 +832,11 @@ defmodule PrismWeb.AquaLiveTest do
   # answers, so a card's new state is awaited rather than read at once.
   defp settled(fun, label), do: Prima.Test.Wait.wait_until(fun, 2_000, label)
 
-  # The tasks the page itself started on the Aqua supervisor since `before`
+  # The tasks the page itself started on the console's supervisor since `before`
   # was read: a task names the process that started it first in its
   # `$callers`, which leaves out the tasks those tasks start in turn.
   defp page_tasks(%{pid: page}, before) do
-    for pid <- Task.Supervisor.children(Aqua.TaskSupervisor) -- before,
+    for pid <- Task.Supervisor.children(Prism.TaskSupervisor) -- before,
         {:dictionary, dictionary} <- [Process.info(pid, :dictionary)],
         match?([^page | _], dictionary[:"$callers"]),
         do: pid

@@ -175,7 +175,7 @@ defmodule PrismWeb.ComponentsLive do
 
     logger_metadata = Prima.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
+    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
            Prima.LoggerContext.restore(logger_metadata)
 
            result =
@@ -238,7 +238,7 @@ defmodule PrismWeb.ComponentsLive do
 
     logger_metadata = Prima.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
+    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
            Prima.LoggerContext.restore(logger_metadata)
 
            result =
@@ -322,7 +322,7 @@ defmodule PrismWeb.ComponentsLive do
 
     logger_metadata = Prima.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
+    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
            Prima.LoggerContext.restore(logger_metadata)
 
            result =
@@ -800,7 +800,7 @@ defmodule PrismWeb.ComponentsLive do
 
     logger_metadata = Prima.LoggerContext.capture()
 
-    Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
+    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
       Prima.LoggerContext.restore(logger_metadata)
 
       # Fetch setup plans with bounded concurrency; result ordering is irrelevant.
