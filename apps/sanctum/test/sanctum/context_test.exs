@@ -730,6 +730,17 @@ defmodule Sanctum.ContextTest do
       assert %{Context.actor(guest) | plane: :external} == Context.actor(external)
     end
 
+    test "the admission a context is inside is not the actor's, and survives the guest plane" do
+      ctx = Context.build(Keyword.put(@external, :call_id, "call_1"))
+
+      assert ctx.call_id == "call_1"
+      assert Context.actor(ctx) == Context.actor(Context.build(@external))
+      refute Map.has_key?(Map.from_struct(Context.actor(ctx)), :call_id)
+      assert Context.enter_guest(ctx).call_id == "call_1"
+
+      assert_raise ArgumentError, fn -> Context.build(Keyword.put(@external, :call_id, 1)) end
+    end
+
     test "marks an anonymous caller that still has a tenant" do
       ctx =
         @external

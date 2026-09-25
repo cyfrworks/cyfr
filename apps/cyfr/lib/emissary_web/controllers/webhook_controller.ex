@@ -16,10 +16,14 @@ defmodule EmissaryWeb.WebhookController do
   `Crucible.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
   returns `200 {"status":"accepted","request_id":...}` immediately — webhook
   senders only need a 2xx ack to consider delivery successful (Stripe /
-  GitHub / Twilio / PayPal docs all converge on this). Component outcome is
-  recorded in `RequestLog` and emitted via `[:cyfr, :emissary, :webhook,
-  :invoke, :stop]` telemetry from inside the spawned task, correlated to the
-  HTTP response by `request_id`.
+  GitHub / Twilio / PayPal docs all converge on this). The delivery is
+  one admission decision (`Grimoire.open_decision/3`), recorded with its
+  request-log row before the run is spawned, under a call id minted beside
+  the request id and carried on the context, so the root execution's row
+  names it; the component outcome is its completion
+  (`Grimoire.close_decision/3`), recorded and emitted via `[:cyfr,
+  :emissary, :webhook, :invoke, :stop]` telemetry from inside the spawned
+  task, correlated to the HTTP response by `request_id`.
 
   No controller-level timeout: the executor enforces the consented node
   timeout (`Prima.Limits`). A layered controller timeout would just
@@ -30,7 +34,6 @@ defmodule EmissaryWeb.WebhookController do
 
   require Logger
 
-  alias Grimoire.RequestLog
   alias Sanctum.Webhook
 
   # Headers the component is allowed to see on the inbound POST. Anything
@@ -57,11 +60,13 @@ defmodule EmissaryWeb.WebhookController do
 
       webhook ->
         request_id = Prima.UUID7.request_id()
-        # Same key on the log lines as on the RequestLog row this run files.
+        call_id = Prima.UUID7.generate_id("call")
+        # Same key on the log lines as on the request-log row this run files.
         Prima.LoggerContext.set_request_id(request_id)
 
         case Sanctum.Caller.establish({:webhook, webhook}, request_id: request_id) do
           {:ok, ctx} ->
+            ctx = %{ctx | call_id: call_id}
             invoke_active(conn, ctx, webhook, conn.assigns[:raw_body], request_id)
 
           {:error, :unauthenticated} ->
@@ -164,12 +169,20 @@ defmodule EmissaryWeb.WebhookController do
       user_id: ctx.user_id
     }
 
-    RequestLog.safe_log_started(ctx, request_id, %{
-      tool: "webhook",
-      action: "invoke",
-      method: "POST /hooks/:slug",
-      input: log_input
-    })
+    decision =
+      Prima.Decision.new(
+        call_id: ctx.call_id,
+        request_id: request_id,
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        plane: :external,
+        tool: "webhook",
+        action: "invoke",
+        inserted_at: DateTime.utc_now(),
+        admission: :admitted
+      )
+
+    Grimoire.open_decision(ctx, decision, %{method: "POST /hooks/:slug", input: log_input})
 
     start_time = System.monotonic_time()
 
@@ -192,7 +205,7 @@ defmodule EmissaryWeb.WebhookController do
 
         Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
           Prima.LoggerContext.restore(logger_metadata)
-          run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time, claim)
+          run_in_task(ctx, webhook, input, telemetry_meta, start_time, claim)
         end)
       else
         {:error, :engine_starting}
@@ -211,8 +224,8 @@ defmodule EmissaryWeb.WebhookController do
         # term itself goes only to the log line above.
         error = Grimoire.render(reason)
 
-        RequestLog.safe_log_failed(ctx, request_id, %{
-          error: error,
+        Grimoire.close_decision(ctx, ctx.call_id, %{
+          result: {:error, reason},
           duration_ms: duration_ms,
           routed_to: Crucible.service()
         })
@@ -234,12 +247,13 @@ defmodule EmissaryWeb.WebhookController do
     end
   end
 
-  # Task body. Wrapped in try/rescue so the audit trail (`RequestLog` row +
-  # `:invoke, :stop` telemetry) closes whether `Crucible.run_root/5` returns
-  # `{:ok, _}`, `{:error, _}`, or raises. The supervisor would log a crash
-  # otherwise, but the structured audit row would dangle in `pending`.
-  defp run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time, claim) do
-    outcome = run_and_audit(ctx, request_id, webhook, input, telemetry_meta, start_time)
+  # Task body. Wrapped in try/rescue so the audit trail (the decision's
+  # completion + `:invoke, :stop` telemetry) closes whether
+  # `Crucible.run_root/5` returns `{:ok, _}`, `{:error, _}`, or raises. The
+  # supervisor would log a crash otherwise, but the decision would stay
+  # without a completion.
+  defp run_in_task(ctx, webhook, input, telemetry_meta, start_time, claim) do
+    outcome = run_and_audit(ctx, webhook, input, telemetry_meta, start_time)
     settle_claim(claim, outcome)
   end
 
@@ -269,7 +283,7 @@ defmodule EmissaryWeb.WebhookController do
     end
   end
 
-  defp run_and_audit(ctx, request_id, webhook, input, telemetry_meta, start_time) do
+  defp run_and_audit(ctx, webhook, input, telemetry_meta, start_time) do
     try do
       # A webhook fires under its bound profile's consent — the binding is
       # enforced at create/update and by the NOT NULL column.
@@ -282,8 +296,8 @@ defmodule EmissaryWeb.WebhookController do
         {:ok, result} ->
           duration_ms = duration_ms(start_time)
 
-          RequestLog.safe_log_completed(ctx, request_id, %{
-            output: result.output,
+          Grimoire.close_decision(ctx, ctx.call_id, %{
+            result: {:ok, result.output},
             duration_ms: duration_ms,
             routed_to: Crucible.service()
           })
@@ -300,8 +314,8 @@ defmodule EmissaryWeb.WebhookController do
           duration_ms = duration_ms(start_time)
           Logger.warning("[WebhookInvoke] error slug=#{webhook.slug}: #{inspect(reason)}")
 
-          RequestLog.safe_log_failed(ctx, request_id, %{
-            error: Grimoire.render(reason),
+          Grimoire.close_decision(ctx, ctx.call_id, %{
+            result: {:error, reason},
             duration_ms: duration_ms,
             routed_to: Crucible.service()
           })
@@ -328,8 +342,8 @@ defmodule EmissaryWeb.WebhookController do
         # exception, which is classified by its shape alone (a KeyError's
         # message quotes the map it raised on), and telemetry gets the
         # fixed slug — its consumers must not see internal reasons.
-        RequestLog.safe_log_failed(ctx, request_id, %{
-          error: Grimoire.Error.classify(e).message,
+        Grimoire.close_decision(ctx, ctx.call_id, %{
+          result: {:error, e},
           duration_ms: duration_ms,
           routed_to: Crucible.service()
         })

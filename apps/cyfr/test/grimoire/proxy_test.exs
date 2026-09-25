@@ -11,10 +11,15 @@ defmodule Grimoire.ProxyTest.Stub do
   def server_tools(_ctx, name), do: {:ok, [%{"name" => "#{name}-tool"}]}
 
   @impl true
-  def try_handle("stub:" <> tool, _ctx, _args, plane, _opts),
-    do: {:ok, %{"answered_by" => "stub", "tool" => tool, "plane" => Atom.to_string(plane)}}
+  def resolve("stub:closed", _ctx, _plane, _opts),
+    do: {:error, {:invalid_argument, "Server 'stub' is disabled"}}
 
-  def try_handle(_name, _ctx, _args, _plane, _opts), do: {:error, :not_external}
+  def resolve("stub:" <> tool, _ctx, _plane, _opts), do: {:ok, {:stub, tool}}
+  def resolve(_name, _ctx, _plane, _opts), do: {:error, :not_external}
+
+  @impl true
+  def dispatch({:stub, tool}, _ctx, _args, plane, _opts),
+    do: {:ok, %{"answered_by" => "stub", "tool" => tool, "plane" => Atom.to_string(plane)}}
 
   @impl true
   def consent_candidates(_ctx),
@@ -97,6 +102,35 @@ defmodule Grimoire.ProxyTest do
     test "a proxied name is dispatched to it, from the caller's plane", %{ctx: ctx} do
       assert {:ok, %{"answered_by" => "stub", "tool" => "echo", "plane" => "external"}} =
                Grimoire.Catalog.call_external("stub:echo", ctx, %{})
+    end
+
+    test "a name the port resolves is admitted, then dispatched: one decision", %{ctx: ctx} do
+      ctx = %{ctx | request_id: Prima.UUID7.request_id()}
+
+      assert {:ok, %{"answered_by" => "stub"}} =
+               Grimoire.Catalog.call_external("stub:echo", ctx, %{})
+
+      assert {:ok, [decision]} =
+               Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+
+      assert decision.tool == "stub:echo"
+      assert decision.admission == :admitted
+      assert decision.completion == :succeeded
+    end
+
+    test "a name the port refuses to resolve is refused at admission, never dispatched",
+         %{ctx: ctx} do
+      ctx = %{ctx | request_id: Prima.UUID7.request_id()}
+
+      assert {:error, %Prima.Refusal{stage: :admission, class: :invalid_argument}} =
+               Grimoire.Catalog.call_external("stub:closed", ctx, %{})
+
+      assert {:ok, [decision]} =
+               Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+
+      assert decision.admission == :refused
+      assert decision.refusal_class == :invalid_argument
+      assert decision.completion == nil
     end
 
     test "a name the port does not know is an unknown tool", %{ctx: ctx} do

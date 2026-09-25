@@ -15,13 +15,24 @@ defmodule Grimoire.Proxy do
   `Cyfr.Application` writes it in at boot with `install!/1`. Nothing in
   the gate names the transport.
 
+  ## Two questions
+
+  A proxied call is admitted before it runs, like any other. The gate
+  asks `c:resolve/4` first — is there such a tool the caller may reach
+  from its plane — and records its decision on the answer; only an
+  admitted call is then run through `c:dispatch/5`, with the target
+  `c:resolve/4` answered. The target is the implementation's own and the
+  gate never looks inside it.
+
   ## Refusals
 
-  `c:try_handle/5` answers `{:error, :not_external}` for a name that is
+  `c:resolve/4` answers `{:error, :not_external}` for a name that is
   not an external tool — no `server:` prefix, or no server of that name
   in the caller's athanor — and the table then answers the name as
-  unknown. Every other refusal is a reason `Grimoire.Error.classify/1`
-  knows, or a `%Prima.Refusal{}` already built, never a bare sentence.
+  unknown. Every other refusal either callback makes is a reason
+  `Grimoire.Error.classify/1` knows, or a `%Prima.Refusal{}` already
+  built, never a bare sentence: `c:resolve/4`'s are the admission's,
+  `c:dispatch/5`'s the call's.
 
   ## Fail closed
 
@@ -57,6 +68,9 @@ defmodule Grimoire.Proxy do
   """
   @type reason :: :not_external | Prima.Refusal.t() | term()
 
+  @typedoc "What `c:resolve/4` resolved a name to: the implementation's own, opaque to the gate."
+  @type target :: term()
+
   @doc """
   The tools one of the caller's athanor's servers answers with now, as
   its running process last listed them.
@@ -65,19 +79,23 @@ defmodule Grimoire.Proxy do
               {:ok, [map()]} | {:error, term()}
 
   @doc """
-  Dispatch `name` as a proxied `server:tool` call from `plane`.
-
-  `opts` carries what an in-chain call is admitted under: `:server` (the
-  server row the caller already judged), `:execution_id`, `:step`,
-  `:hold` and `:retention_class`.
+  Resolve `name` as a proxied `server:tool` a caller on `plane` may call:
+  the server present in the caller's athanor and enabled, the tool one
+  its patterns expose, and the plane one the server is reachable from.
+  `opts[:server]` is the server row the caller already judged, which the
+  target then names; without it the row is read once.
   """
-  @callback try_handle(
-              name :: String.t(),
-              Context.t(),
-              args :: map(),
-              plane(),
-              opts :: keyword()
-            ) :: {:ok, map()} | {:error, reason()}
+  @callback resolve(name :: String.t(), Context.t(), plane(), opts :: keyword()) ::
+              {:ok, target()} | {:error, reason()}
+
+  @doc """
+  Run the call `target` names from `plane`: the call an admitted
+  `c:resolve/4` answer names. `opts` carries what an in-chain call is
+  admitted under: `:execution_id`, `:step`, `:hold` and
+  `:retention_class`.
+  """
+  @callback dispatch(target(), Context.t(), args :: map(), plane(), opts :: keyword()) ::
+              {:ok, map()} | {:error, reason()}
 
   @doc "Every external tool server of the caller's athanor, each as a grant candidate."
   @callback consent_candidates(Context.t()) :: [Sanctum.Grimoire.tool_server_candidate()]
@@ -93,7 +111,7 @@ defmodule Grimoire.Proxy do
   The plane every proxied tool is reached from.
 
   An upstream catalogue carries no annotation, so the whole bucket takes
-  one default: in-chain. `c:try_handle/5` refuses an external-plane call
+  one default: in-chain. `c:resolve/4` refuses an external-plane call
   unless the server's own configuration opts in.
   """
   @spec default_planes() :: [Prima.Provider.plane(), ...]

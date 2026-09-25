@@ -22,6 +22,8 @@ defmodule Arca.Schemas.Execution do
   - `input` - JSON-encoded execution input
   - `output` - JSON-encoded execution output
   - `host_policy` - JSON-encoded host policy snapshot
+  - `call_id` - The admission the run was started under
+    (`Arca.DecisionLog`), nil when none recorded one
   """
 
   use Ecto.Schema
@@ -96,6 +98,10 @@ defmodule Arca.Schemas.Execution do
     # The durable event counter: `Arca.ExecutionEvents` allocates a seq by
     # incrementing it inside the writer's transaction.
     field :event_seq, :integer, default: 0
+    # The admission decision the run was started under
+    # (`Arca.DecisionLog`): the calls its chain makes name it as their
+    # parent call.
+    field :call_id, :string
   end
 
   # Every column a start writes — the write path's half of the row shape,
@@ -124,7 +130,8 @@ defmodule Arca.Schemas.Execution do
     :turn_id,
     :schedule_id,
     :current_attempt,
-    :event_seq
+    :event_seq,
+    :call_id
   ]
 
   @doc "The columns `start_changeset/1` casts, for the write path to pin against."

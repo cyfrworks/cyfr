@@ -861,7 +861,9 @@ defmodule Arca.Providers.Records do
       status: log.status,
       duration_ms: log.duration_ms,
       routed_to: log.routed_to,
-      error_code: log.error_code,
+      # The row's meaning: a refused call's class. A JSON-RPC code is a
+      # transport's rendering of it, and the rows carry none.
+      refusal_class: log.refusal_class,
       input: decode_json(log.input, "input"),
       output: decode_json(log.output, "output"),
       error: log.error

@@ -6,11 +6,10 @@ defmodule Arca.RecordSink do
   The write-behind for the hot path's bookkeeping rows.
 
   Batches bookkeeping writes every 250 ms or 200 items in one transaction:
-  allowed policy checks, MCP log completions and vault last-used timestamps.
-  Denials and a transport's or a chain's request starts remain synchronous;
-  their completion updates the row that exists. An in-process call's start
-  rides here too, with a close that carries the whole row: whichever lands
-  first, and whether the start was shed, one complete row results.
+  allowed policy checks and vault last-used timestamps. Denials remain
+  synchronous. The MCP request log is not bookkeeping here: its rows are
+  projections of admission decisions, written in the decision's own
+  transaction (`Arca.DecisionLog`).
 
   `flush/0` drains synchronously (the retention scheduler runs it before a
   sweep; tests use it for ordering); `terminate/2` drains the buffered
@@ -28,8 +27,8 @@ defmodule Arca.RecordSink do
   drains are written through a repo that is still up; started before the
   repo, the same drain would meet a closed pool and every row held at
   shutdown would be lost silently. Anything that starts later and
-  enqueues on its way down (the retention scheduler, the MCP request log)
-  is likewise still above the sink when it flushes.
+  enqueues on its way down (the retention scheduler) is likewise still
+  above the sink when it flushes.
   """
 
   use GenServer
@@ -56,9 +55,6 @@ defmodule Arca.RecordSink do
 
   @type item ::
           {:policy_log, map()}
-          | {:mcp_log_update, Prima.Actor.t(), String.t(), map()}
-          | {:mcp_log_started, map()}
-          | {:mcp_log_close, map(), map()}
           | {:vault_touch, String.t(), String.t()}
 
   def start_link(opts \\ []) do
@@ -180,9 +176,6 @@ defmodule Arca.RecordSink do
 
     Arca.Repo.transaction(fn ->
       write_policy_logs(Map.get(grouped, :policy_log, []))
-      write_mcp_starts(Map.get(grouped, :mcp_log_started, []))
-      write_mcp_closes(Map.get(grouped, :mcp_log_close, []))
-      write_mcp_updates(Map.get(grouped, :mcp_log_update, []))
       write_vault_touches(Map.get(grouped, :vault_touch, []))
     end)
     |> case do
@@ -256,50 +249,6 @@ defmodule Arca.RecordSink do
 
     if rows != [], do: Arca.Repo.insert_all(Arca.Schemas.PolicyLog, rows)
     :ok
-  end
-
-  # A start inserts only where no row exists, a close writes the whole row
-  # and replaces the fields it closes: order between the two, within a
-  # batch or across batches, changes nothing.
-  defp write_mcp_starts(items) do
-    Enum.each(items, fn {:mcp_log_started, row} ->
-      case Arca.McpLog.record_started(row) do
-        {:ok, _} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("[Arca.RecordSink] mcp log start failed: #{inspect(reason)}")
-      end
-    end)
-  end
-
-  defp write_mcp_closes(items) do
-    Enum.each(items, fn {:mcp_log_close, row, close} ->
-      case Arca.McpLog.record_close(row, close) do
-        {:ok, _} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("[Arca.RecordSink] mcp log close failed: #{inspect(reason)}")
-      end
-    end)
-  end
-
-  defp write_mcp_updates([]), do: :ok
-
-  defp write_mcp_updates(items) do
-    Enum.each(items, fn {:mcp_log_update, actor, call_id, attrs} ->
-      case Arca.McpLog.record_update(actor, call_id, attrs) do
-        {:ok, _} ->
-          :ok
-
-        {:error, :not_found} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("[Arca.RecordSink] mcp log update failed: #{inspect(reason)}")
-      end
-    end)
   end
 
   # One update per entry however many times it was read in the window.

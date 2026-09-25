@@ -284,29 +284,25 @@ defmodule EmissaryWeb.MCPControllerTest do
   end
 
   describe "request logging" do
-    test "logs requests to mcp_logs", %{conn: conn} do
+    # The request's rows: the gate's decisions' projections, correlated to
+    # the response by its request id.
+    defp rows(request_id) do
+      import Ecto.Query
+      Arca.Repo.all(from(l in Arca.Schemas.McpLog, where: l.request_id == ^request_id))
+    end
+
+    test "discovery writes no row: the transport records nothing of its own", %{conn: conn} do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
         |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
 
       [request_id] = get_resp_header(conn, "x-request-id")
-
-      # Logging is synchronous — no wait needed
-
-      # Verify log was created
-      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
-
-      assert log.id == request_id
-      assert log.method == "server/discover"
-      assert log.status == "success"
-      assert is_integer(log.duration_ms)
-
-      # Cleanup
-      Arca.Repo.delete(log)
+      assert json_response(conn, 200)
+      assert rows(request_id) == []
     end
 
-    test "logs tool calls with tool and action", %{conn: conn} do
+    test "a tool call is one row, the gate's, under its own call id", %{conn: conn} do
       tool_conn =
         conn
         |> recycle()
@@ -316,25 +312,44 @@ defmodule EmissaryWeb.MCPControllerTest do
           "id" => 2,
           "method" => "tools/call",
           "params" => %{
-            "name" => "system",
-            "arguments" => %{"action" => "status"}
+            "name" => "session",
+            "arguments" => %{"action" => "whoami"}
           }
         })
 
       [request_id] = get_resp_header(tool_conn, "x-request-id")
+      assert json_response(tool_conn, 200)
 
-      # Logging is synchronous — no wait needed
-
-      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
-
+      assert [log] = rows(request_id)
+      assert "call_" <> _ = log.id
       assert log.method == "tools/call"
-      assert log.tool == "system"
-      assert log.action == "status"
+      assert log.tool == "session"
+      assert log.action == "whoami"
       assert log.status == "success"
-      assert log.routed_to == "grimoire"
+      assert log.routed_to == "sanctum"
+      assert is_integer(log.duration_ms)
 
-      # Cleanup
-      Arca.Repo.delete(log)
+      assert %{admission: "admitted", completion: "succeeded", request_id: ^request_id} =
+               Arca.Repo.get(Arca.Schemas.DecisionLog, log.id)
+    end
+
+    test "a resources/read row keeps the wire method", %{conn: conn} do
+      read_conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 3,
+          "method" => "resources/read",
+          "params" => %{"uri" => "arca://files/data/nothing-here.txt"}
+        })
+
+      [request_id] = get_resp_header(read_conn, "x-request-id")
+
+      assert [log] = rows(request_id)
+      assert log.method == "resources/read"
+      assert "call_" <> _ = log.id
     end
   end
 
@@ -808,19 +823,21 @@ defmodule EmissaryWeb.MCPControllerTest do
   end
 
   describe "tool routing" do
+    # An admitted call's row names the service that answered it.
     @tool_routing_cases [
-      {"component", "compendium"},
-      {"retention", "arca"},
-      {"session", "sanctum"},
-      {"key", "sanctum"},
-      {"system", "grimoire"}
+      {"component", "status", "compendium"},
+      {"build", "toolchains", "compendium"},
+      {"retention", "get", "arca"},
+      {"session", "whoami", "sanctum"},
+      {"execution", "status", "crucible"}
     ]
 
-    for {tool, expected_service} <- @tool_routing_cases do
+    for {tool, action, expected_service} <- @tool_routing_cases do
       @tool tool
+      @action action
       @expected_service expected_service
 
-      test "routes #{tool} tool to #{expected_service}", %{conn: conn} do
+      test "routes #{tool}.#{action} to #{expected_service}", %{conn: conn} do
         tool_conn =
           conn
           |> recycle()
@@ -831,52 +848,19 @@ defmodule EmissaryWeb.MCPControllerTest do
             "method" => "tools/call",
             "params" => %{
               "name" => @tool,
-              "arguments" => %{"action" => "status"}
+              "arguments" => %{"action" => @action}
             }
           })
 
         [request_id] = get_resp_header(tool_conn, "x-request-id")
 
-        # Logging is synchronous — no wait needed
-        log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
-        assert log.routed_to == @expected_service
+        assert [log] = rows(request_id)
 
-        # Cleanup
-        Arca.Repo.delete(log)
+        assert log.routed_to == @expected_service
       end
     end
 
-    for {tool, expected_service} <- [{"execution", "crucible"}, {"build", "compendium"}] do
-      @tool tool
-      @expected_service expected_service
-
-      test "routes #{tool} tool to #{expected_service}", %{conn: conn} do
-        tool_conn =
-          conn
-          |> recycle()
-          |> put_req_header("content-type", "application/json")
-          |> mcp_post(%{
-            "jsonrpc" => "2.0",
-            "id" => 2,
-            "method" => "tools/call",
-            "params" => %{
-              "name" => @tool,
-              "arguments" => %{"action" => "status"}
-            }
-          })
-
-        [request_id] = get_resp_header(tool_conn, "x-request-id")
-
-        # Logging is synchronous — no wait needed
-        log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
-        assert log.routed_to == @expected_service
-
-        # Cleanup
-        Arca.Repo.delete(log)
-      end
-    end
-
-    test "routes unknown tools to grimoire", %{conn: conn} do
+    test "a tool the router does not know reaches no gate and writes no row", %{conn: conn} do
       tool_conn =
         conn
         |> recycle()
@@ -893,13 +877,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       [request_id] = get_resp_header(tool_conn, "x-request-id")
 
-      # Logging is synchronous — no wait needed
-
-      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
-      assert log.routed_to == "grimoire"
-
-      # Cleanup
-      Arca.Repo.delete(log)
+      assert [] = rows(request_id)
     end
   end
 

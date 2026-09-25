@@ -855,6 +855,34 @@ defmodule Arca.Providers.RecordsTest do
     end
   end
 
+  describe "mcp_log rows" do
+    test "a row answers the refusal's class, never a JSON-RPC code", %{ctx: ctx} do
+      decision =
+        Prima.Decision.new(
+          call_id: Prima.UUID7.generate_id("call"),
+          request_id: Prima.UUID7.request_id(),
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          plane: :external,
+          tool: "storage",
+          action: "get",
+          inserted_at: DateTime.utc_now(),
+          admission: :refused,
+          refusal_class: :forbidden,
+          reason: "Not allowed."
+        )
+
+      :ok = Grimoire.open_decision(ctx, decision, %{input: %{}})
+
+      assert {:ok, row} =
+               MCP.handle("mcp_log", actor(ctx), %{"action" => "get", "id" => decision.call_id})
+
+      assert row.refusal_class == "forbidden"
+      assert row.error == "Not allowed."
+      refute Map.has_key?(row, :error_code)
+    end
+  end
+
   describe "policy_log tool schema" do
     test "only exposes read-only actions" do
       tools = MCP.tools()

@@ -249,18 +249,18 @@ defmodule Emissary.External.Proxy do
   # ============================================================================
 
   @doc """
-  Try to handle a tool call as an external server tool.
+  Resolve a `server_name:tool_name` call from `plane`: the server of that
+  name in the caller's athanor, enabled, exposing the tool through its
+  patterns, and reachable from the caller's plane. Answers the target
+  `dispatch/5` calls — `%{server: row, server_name: name, remote_tool:
+  tool}` — or why not.
 
-  Parses `server_name:tool_name` format and dispatches to the appropriate
-  external server. Returns `{:error, :not_external}` if the tool name
-  doesn't match an external server. Every other refusal is a reason the
-  refusal table knows (`Grimoire.Error.classify/1`) or a
-  `%Prima.Refusal{}` already classified — never a bare sentence: a
-  disabled server, a tool its patterns do not expose and an
-  external-plane call to a chain-only server are `{:invalid_argument, _}`;
-  an in-chain call its lineage does not admit is a refusal of the
-  admission's own class; an upstream server's own error sentence is
-  classified as it arrives.
+  `{:error, :not_external}` when the name does not match an external
+  server. Every other refusal is a reason the refusal table knows
+  (`Grimoire.Error.classify/1`), never a bare sentence: a disabled
+  server, a tool its patterns do not expose and an external-plane call to
+  a chain-only server are `{:invalid_argument, _}`; a server row that
+  cannot be read is the store's own refusal.
 
   `plane` is the caller's plane — `:in_chain` from a running chain,
   `:external` from the console or any other direct caller. There is
@@ -277,44 +277,19 @@ defmodule Emissary.External.Proxy do
   setting it never invalidates existing grants.
 
   `server:` is the row a caller already read and judged — an in-chain
-  call's transition was stepped on that row's digest — and dispatch then
-  speaks to exactly that revision; without it the row is read here, once.
+  call's transition was stepped on that row's digest — and the target
+  then names exactly that revision; without it the row is read here, once.
   """
   @impl Grimoire.Proxy
-  @spec try_handle(String.t(), Context.t(), map(), :in_chain | :external, keyword()) ::
+  @spec resolve(String.t(), Context.t(), :in_chain | :external, keyword()) ::
           {:ok, map()} | {:error, Grimoire.Proxy.reason()}
-  def try_handle(tool_name, %Context{} = ctx, args, plane, opts \\ [])
+  def resolve(tool_name, %Context{} = ctx, plane, opts \\ [])
       when plane in [:in_chain, :external] do
     case String.split(tool_name, ":", parts: 2) do
       [server_name, remote_tool] ->
         case server_row(ctx, server_name, Keyword.get(opts, :server)) do
           {:ok, server} ->
-            patterns = Sanctum.ToolServerDigest.tool_patterns(server)
-
-            cond do
-              not server.enabled ->
-                {:error, {:invalid_argument, "Server '#{server_name}' is disabled"}}
-
-              not Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, remote_tool)) ->
-                {:error,
-                 {:invalid_argument,
-                  "Tool '#{remote_tool}' is not exposed by server '#{server_name}'"}}
-
-              plane == :external and not console_reachable?(server) ->
-                {:error,
-                 {:invalid_argument,
-                  "Tool '#{remote_tool}' on server '#{server_name}' is reachable " <>
-                    "only from inside a chain — set \"console\": true in the " <>
-                    "server's config to call it from the console"}}
-
-              plane == :in_chain ->
-                attempted(ctx, server, server_name, remote_tool, args, opts, fn ->
-                  dispatch_external(server, server_name, remote_tool, ctx, args)
-                end)
-
-              true ->
-                dispatch_external(server, server_name, remote_tool, ctx, args)
-            end
+            reachable(server, server_name, remote_tool, plane)
 
           {:error, :not_found} ->
             {:error, :not_external}
@@ -327,6 +302,67 @@ defmodule Emissary.External.Proxy do
       _ ->
         {:error, :not_external}
     end
+  end
+
+  defp reachable(server, server_name, remote_tool, plane) do
+    patterns = Sanctum.ToolServerDigest.tool_patterns(server)
+
+    cond do
+      not server.enabled ->
+        {:error, {:invalid_argument, "Server '#{server_name}' is disabled"}}
+
+      not Enum.any?(patterns, &Prima.ToolPattern.matches?(&1, remote_tool)) ->
+        {:error,
+         {:invalid_argument, "Tool '#{remote_tool}' is not exposed by server '#{server_name}'"}}
+
+      plane == :external and not console_reachable?(server) ->
+        {:error,
+         {:invalid_argument,
+          "Tool '#{remote_tool}' on server '#{server_name}' is reachable " <>
+            "only from inside a chain — set \"console\": true in the " <>
+            "server's config to call it from the console"}}
+
+      true ->
+        {:ok, %{server: server, server_name: server_name, remote_tool: remote_tool}}
+    end
+  end
+
+  @doc """
+  Run the call a `resolve/4` target names, from `plane`.
+
+  An in-chain call is an execution of its own, admitted under the
+  caller's lineage before the call and closed after it (the row's
+  admission refuses a caller whose grant no longer stands, and says so
+  in the admission's own class); an external-plane call writes no row.
+  An upstream server's own error sentence is classified as it arrives.
+  `opts` carries what an in-chain call is admitted under:
+  `:execution_id`, `:step`, `:hold` and `:retention_class`.
+  """
+  @impl Grimoire.Proxy
+  @spec dispatch(map(), Context.t(), map(), :in_chain | :external, keyword()) ::
+          {:ok, map()} | {:error, Grimoire.Proxy.reason()}
+  def dispatch(target, ctx, args, plane, opts \\ [])
+
+  def dispatch(
+        %{server: server, server_name: server_name, remote_tool: remote_tool},
+        %Context{} = ctx,
+        args,
+        :in_chain,
+        opts
+      ) do
+    attempted(ctx, server, server_name, remote_tool, args, opts, fn ->
+      dispatch_external(server, server_name, remote_tool, ctx, args)
+    end)
+  end
+
+  def dispatch(
+        %{server: server, server_name: server_name, remote_tool: remote_tool},
+        %Context{} = ctx,
+        args,
+        :external,
+        _opts
+      ) do
+    dispatch_external(server, server_name, remote_tool, ctx, args)
   end
 
   defp server_row(_ctx, server_name, %{name: server_name} = server), do: {:ok, server}
@@ -372,6 +408,9 @@ defmodule Emissary.External.Proxy do
     attrs = %{
       id: id,
       request_id: ctx.request_id,
+      # The in-chain call this row is the execution of: the gate set its
+      # id on the context it handed the call.
+      call_id: ctx.call_id,
       reference: "#{server_name}:#{remote_tool}",
       input_hash: Arca.Execution.hash_input(input),
       user_id: ctx.user_id,

@@ -14,6 +14,36 @@ defmodule Grimoire.CatalogTest.ReplaySafeWrite do
   def handle(_name, _ctx, _args), do: {:ok, %{}}
 end
 
+defmodule Grimoire.CatalogTest.Counting do
+  @moduledoc false
+  # Counts its runs: each one tells the process registered as
+  # `:catalog_counting_observer`, and answers with the call it ran inside.
+  @behaviour Prima.Provider
+
+  def tool, do: "decision_counter"
+
+  @impl true
+  def service, do: "probe"
+
+  @impl true
+  def tools do
+    [
+      Prima.Operation.tool([
+        Prima.Operation.new("decision_counter", "bump", "Count a run", [],
+          kind: :write,
+          planes: [:external, :in_chain]
+        )
+      ])
+    ]
+  end
+
+  @impl true
+  def handle(_tool, ctx, %{"action" => "bump"}) do
+    send(:catalog_counting_observer, {:bumped, self(), ctx.call_id})
+    {:ok, %{"bumped" => true, "call_id" => ctx.call_id}}
+  end
+end
+
 defmodule Grimoire.CatalogTest do
   @moduledoc """
   Tests for the operation table and its gate.
@@ -470,8 +500,15 @@ defmodule Grimoire.CatalogTest do
         # still in flight for the assertions below — no sleeping, no racing.
         assert_receive {:handler_running, handler_pid}, 5_000
 
-        assert [{"req_tracked", ^handler_pid}] =
-                 :ets.lookup(Grimoire.RunningTasks, "req_tracked")
+        # The caller registers the task once it has started it, so the entry
+        # can land just after the handler's first message: a bounded wait.
+        Prima.Test.Wait.wait_until(
+          fn ->
+            :ets.lookup(Grimoire.RunningTasks, "req_tracked") == [{"req_tracked", handler_pid}]
+          end,
+          5_000,
+          "the in-flight task registered under its request id"
+        )
 
         # The gate runs the handler under its own task supervisor.
         assert handler_pid in Task.Supervisor.children(Grimoire.TaskSupervisor)
@@ -858,6 +895,156 @@ defmodule Grimoire.CatalogTest do
 
         assert Catalog.operations() == before
       end)
+    end
+  end
+
+  describe "each call is one recorded decision" do
+    alias Grimoire.CatalogTest.Counting
+
+    setup do
+      Process.register(self(), :catalog_counting_observer)
+      :ok
+    end
+
+    defp attach_lost do
+      ref = make_ref()
+      test = self()
+
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:cyfr, :grimoire, :decision, :lost],
+        fn _name, _measurements, metadata, _ -> send(test, {ref, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+      ref
+    end
+
+    # Run `fun` in a process of its own while no process holds a sandbox
+    # connection — the decision log cannot write — then hand the test its
+    # own again.
+    defp without_connection(fun) do
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
+
+      try do
+        Task.async(fn ->
+          Process.delete(:"$callers")
+          fun.()
+        end)
+        |> Task.await()
+      after
+        :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+        Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      end
+    end
+
+    defp decision(ctx, call_id),
+      do: Arca.DecisionLog.get(Sanctum.Context.actor(ctx), call_id)
+
+    test "an admitted call: one decision under the entry's call id, completed by the gate" do
+      Catalog.with_providers([Counting], fn ->
+        ctx = Sanctum.TestContext.local()
+        call_id = Prima.UUID7.generate_id("call")
+
+        assert {:ok, %{"call_id" => ^call_id}} =
+                 Catalog.call_external(Counting.tool(), ctx, %{"action" => "bump"},
+                   call_id: call_id
+                 )
+
+        # The handler is handed the admission it runs inside.
+        assert_received {:bumped, _pid, ^call_id}
+
+        assert {:ok, decision} = decision(ctx, call_id)
+        assert decision.admission == :admitted
+        assert decision.plane == :external
+        assert decision.tool == Counting.tool()
+        assert decision.action == "bump"
+        assert decision.completion == :succeeded
+        assert is_integer(decision.duration_ms)
+        assert "req_" <> _ = decision.request_id
+
+        assert %{status: "success", id: ^call_id, method: "tools/call"} =
+                 Arca.Repo.get(Arca.Schemas.McpLog, call_id)
+      end)
+    end
+
+    test "without an entry's call id the gate mints one before its first check" do
+      Catalog.with_providers([Counting], fn ->
+        ctx = Sanctum.TestContext.local()
+
+        assert {:ok, %{"call_id" => "call_" <> _ = call_id}} =
+                 Catalog.call_external(Counting.tool(), ctx, %{"action" => "bump"})
+
+        assert {:ok, %{admission: :admitted}} = decision(ctx, call_id)
+      end)
+    end
+
+    test "an entry's call id that is not a call_ id is refused loudly" do
+      ctx = Sanctum.TestContext.local()
+
+      assert_raise ArgumentError, fn ->
+        Catalog.call_external("system", ctx, %{"action" => "notify"}, call_id: "req_x")
+      end
+    end
+
+    test "a refusal at the gate is one refused decision with its class, and no completion" do
+      ctx = %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}
+
+      assert {:error, %Refusal{stage: :admission, class: :not_found}} =
+               Catalog.call_external("completely/unknown/tool", ctx, %{"action" => "x"})
+
+      assert {:ok, [refused]} =
+               Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+
+      assert refused.admission == :refused
+      assert refused.refusal_class == :not_found
+      assert refused.reason =~ "Unknown tool"
+      assert refused.completion == nil
+      assert "call_" <> _ = refused.call_id
+
+      assert %{status: "error", refusal_class: "not_found"} =
+               Arca.Repo.get(Arca.Schemas.McpLog, refused.call_id)
+    end
+
+    test "a failure the handler answers is an admitted decision whose completion failed" do
+      Catalog.with_providers([Probe.Crashing], fn ->
+        ctx = %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}
+
+        assert {:error, {:crashed, _}} =
+                 Catalog.call_external(Probe.Crashing.tool(), ctx, %{"action" => "raise"})
+
+        assert {:ok, [decision]} =
+                 Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+
+        assert decision.admission == :admitted
+        assert decision.completion == :failed
+        assert decision.completion_class == :internal
+      end)
+    end
+
+    @tag capture_log: true
+    test "a decision log that cannot write runs the handler once and leaves its result" do
+      lost = attach_lost()
+
+      Catalog.with_providers([Counting], fn ->
+        ctx = Sanctum.TestContext.local()
+        call_id = Prima.UUID7.generate_id("call")
+
+        result =
+          without_connection(fn ->
+            Catalog.call_external(Counting.tool(), ctx, %{"action" => "bump"}, call_id: call_id)
+          end)
+
+        assert result == {:ok, %{"bumped" => true, "call_id" => call_id}}
+      end)
+
+      # Exactly one run: a lost audit is never a reason to run it again.
+      assert_received {:bumped, _pid, _call_id}
+      refute_received {:bumped, _pid, _call_id}
+
+      assert_received {^lost, %{stage: :append, kind: :unavailable}}
+      assert_received {^lost, %{stage: :finish, kind: :unavailable}}
     end
   end
 end

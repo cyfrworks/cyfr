@@ -9,7 +9,9 @@ defmodule Aqua.Loop.Turn do
   roles the soul may clone into, the effective policy composed with the
   standing rows, the resolved model catalyst with its capabilities, the
   system prompt, the tool surface, the room excerpt the sender attached,
-  and the deadline the authority allows.
+  and the deadline the authority allows, and the admission decision the
+  turn's root execution was started under (`call_id`), which every call
+  the turn makes names as its parent call.
 
   A clone's spec is built the same way from the role's definition, under
   the parent's authority and catalyst.
@@ -29,6 +31,7 @@ defmodule Aqua.Loop.Turn do
     :ctx,
     :guest,
     :turn,
+    :call_id,
     :thread,
     :agent,
     :roster,
@@ -83,6 +86,7 @@ defmodule Aqua.Loop.Turn do
         ctx: ctx,
         guest: Context.enter_guest(ctx),
         turn: turn,
+        call_id: root_call_id(ctx, turn),
         thread: thread,
         agent: agent,
         roster: roster,
@@ -116,6 +120,18 @@ defmodule Aqua.Loop.Turn do
       {:ok, spec}
     end
   end
+
+  # The admission the turn's root execution was started under, read off
+  # its row once: the parent call of the calls the turn makes. It is audit
+  # correlation, so a row that cannot be read names none.
+  defp root_call_id(ctx, %{root_execution_id: id}) when is_binary(id) do
+    case Crucible.get(ctx, id) do
+      {:ok, %{call_id: call_id}} -> call_id
+      _ -> nil
+    end
+  end
+
+  defp root_call_id(_ctx, _turn), do: nil
 
   @doc "The turn row replaced, everything else kept."
   @spec with_turn(t(), Tape.turn()) :: t()

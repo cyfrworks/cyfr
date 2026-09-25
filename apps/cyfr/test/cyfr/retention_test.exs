@@ -703,15 +703,31 @@ defmodule Arca.RetentionTest do
     |> Enum.sort()
   end
 
+  # A request-log row as the gate writes one: the projection of an
+  # admission decision, appended with it in one transaction.
   defp create_mcp_log(id, %DateTime{} = timestamp, actor) do
-    Arca.McpLog.record(%{
-      id: id,
-      user_id: actor.user_id,
-      athanor_id: actor.athanor_id,
-      timestamp: timestamp,
-      status: "success",
-      tool: "test",
-      action: "test"
-    })
+    decision =
+      Prima.Decision.new(
+        call_id: id,
+        plane: :external,
+        tool: "test",
+        action: "test",
+        inserted_at: timestamp,
+        admission: :admitted
+      )
+
+    :ok =
+      Arca.DecisionLog.append(actor, decision,
+        mcp_log: %{
+          id: id,
+          user_id: actor.user_id,
+          timestamp: timestamp,
+          status: "success",
+          tool: "test",
+          action: "test"
+        }
+      )
+
+    {:ok, id}
   end
 end

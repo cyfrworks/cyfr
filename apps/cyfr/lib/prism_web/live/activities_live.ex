@@ -6,9 +6,12 @@ defmodule PrismWeb.ActivitiesLive do
   Unified activity view: every CYFR request and the executions it spawned.
 
   Each row is one Arca.McpLog record (real MCP request, tincture invoke, or
-  cron firing — all share the same shape). Expanding a row
-  calls `mcp_log/correlate` to fetch the full causal tree (executions +
-  policy logs).
+  cron firing — all share the same shape): one recorded call, whose own
+  id is its call id. A row is keyed by the request it belongs to — its
+  `request_id`, which the calls of one chain share: expanding it calls
+  `mcp_log/correlate` for that request's full causal tree (executions +
+  policy logs), the fan-out counts are the request's, and `?id=req_…`
+  focuses the request.
 
   Shows a flat causal feed. `ExecutionsLive` at `/executions` groups
   activity by execution for run inspection and control.
@@ -156,7 +159,9 @@ defmodule PrismWeb.ActivitiesLive do
       is_nil(socket.assigns.expanded_id) ->
         {:noreply, socket}
 
-      Enum.any?(socket.assigns.logs, fn log -> f(log, :id) == socket.assigns.expanded_id end) ->
+      Enum.any?(socket.assigns.logs, fn log ->
+        f(log, :request_id) == socket.assigns.expanded_id
+      end) ->
         # Expanded row still present — re-correlate so drill-down reflects fresh data.
         send(self(), {:load_correlate, socket.assigns.expanded_id})
         {:noreply, assign(socket, :expanded_loading, true)}
@@ -228,12 +233,13 @@ defmodule PrismWeb.ActivitiesLive do
   end
 
   # Fan-out count per request_id: how many executions share this request's id?
-  # Single GROUP BY via `mcp_log/fan_outs`, scoped to the current page's IDs.
+  # Single GROUP BY via `mcp_log/fan_outs`, scoped to the current page's requests.
   defp build_fan_outs(socket, logs) do
     ids =
       logs
-      |> Enum.map(fn log -> log[:id] end)
+      |> Enum.map(fn log -> f(log, :request_id) end)
       |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
 
     case ids != [] &&
            call_tool(socket, "mcp_log", %{"action" => "fan_outs", "request_ids" => ids}) do
@@ -426,7 +432,7 @@ defmodule PrismWeb.ActivitiesLive do
           </thead>
           <tbody>
             <%= for log <- @logs do %>
-              <% id = f(log, :id) || "-" %>
+              <% id = f(log, :request_id) || "-" %>
               <% {label, badge_class} = source_badge(f(log, :tool)) %>
               <% fan_out = Map.get(@fan_outs, id, 0) %>
               <tr
@@ -521,10 +527,12 @@ defmodule PrismWeb.ActivitiesLive do
         <div class="min-w-0">
           <dt class="text-xs text-gray-500 uppercase">Request ID</dt>
           <dd class="text-white mt-0.5 font-mono text-xs flex items-center gap-1.5">
-            <span class="truncate" title={f(@log, :id)}>{f(@log, :id) || "—"}</span>
+            <span class="truncate" title={f(@log, :request_id)}>
+              {f(@log, :request_id) || "—"}
+            </span>
             <button
-              :if={f(@log, :id)}
-              phx-click={JS.dispatch("phx:clipboard", detail: %{text: f(@log, :id)})}
+              :if={f(@log, :request_id)}
+              phx-click={JS.dispatch("phx:clipboard", detail: %{text: f(@log, :request_id)})}
               class="text-gray-500 hover:text-gray-300 shrink-0"
               title="Copy"
             >

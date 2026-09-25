@@ -3,8 +3,6 @@
 
 defmodule Arca.RecordSinkTest do
   # async: false — flips the sink out of inline mode for the duration.
-  import Ecto.Query, only: [from: 2]
-
   use ExUnit.Case, async: false
 
   alias Arca.RecordSink
@@ -53,24 +51,6 @@ defmodule Arca.RecordSinkTest do
     {:ok, rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
     assert Enum.any?(rows, &(&1.id == good))
     refute Enum.any?(rows, &(&1.id == "plog_bad"))
-  end
-
-  test "an MCP log completion reaches the started row" do
-    ctx = Sanctum.TestContext.local()
-    call_id = Prima.UUID7.generate_id("call")
-
-    :ok =
-      Grimoire.RequestLog.log_started(ctx, call_id, %{
-        tool: "system",
-        action: "status",
-        input: %{}
-      })
-
-    :ok = Grimoire.RequestLog.log_completed(ctx, call_id, %{duration_ms: 3, output: %{}})
-    assert Arca.McpLog.get_tenant(Sanctum.Context.actor(ctx), call_id).status == "pending"
-
-    :ok = RecordSink.flush()
-    assert Arca.McpLog.get_tenant(Sanctum.Context.actor(ctx), call_id).status == "success"
   end
 
   test "vault touches are deduplicated into one update per entry" do
@@ -182,53 +162,5 @@ defmodule Arca.RecordSinkTest do
              is_pid(Process.whereis(Arca.RecordSink))
            end),
            "the record sink did not come back"
-  end
-
-  describe "an in-process call's row" do
-    defp started_row(id) do
-      %{
-        id: id,
-        request_id: id,
-        user_id: "usr_x",
-        athanor_id: "ath_test",
-        timestamp: DateTime.utc_now(),
-        tool: "athanor",
-        action: "get",
-        method: "tools/call",
-        status: "pending",
-        input: "{}"
-      }
-    end
-
-    test "a close that lands before its start, or without it, leaves one complete row" do
-      id = "call_#{System.unique_integer([:positive])}"
-      close = %{status: "success", duration_ms: 3, routed_to: "x", output: "{}"}
-
-      Arca.RecordSink.enqueue({:mcp_log_close, started_row(id), close})
-      :ok = Arca.RecordSink.flush()
-
-      assert %{status: "success", duration_ms: 3, tool: "athanor"} =
-               Arca.Repo.get(Arca.Schemas.McpLog, id)
-
-      # The start, shed or late, does not reopen the row.
-      Arca.RecordSink.enqueue({:mcp_log_started, started_row(id)})
-      :ok = Arca.RecordSink.flush()
-      assert %{status: "success", duration_ms: 3} = Arca.Repo.get(Arca.Schemas.McpLog, id)
-      assert 1 == Arca.Repo.aggregate(from(l in Arca.Schemas.McpLog, where: l.id == ^id), :count)
-    end
-
-    test "a start then its close, in one batch or two, is the same row" do
-      id = "call_#{System.unique_integer([:positive])}"
-      Arca.RecordSink.enqueue({:mcp_log_started, started_row(id)})
-
-      Arca.RecordSink.enqueue(
-        {:mcp_log_close, started_row(id), %{status: "error", error_code: -1, error: "no"}}
-      )
-
-      :ok = Arca.RecordSink.flush()
-
-      assert %{status: "error", error_code: -1, error: "no"} =
-               Arca.Repo.get(Arca.Schemas.McpLog, id)
-    end
   end
 end

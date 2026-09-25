@@ -39,6 +39,9 @@ defmodule Crucible.Record do
   All IDs use UUID v7 (RFC 9562) format for time-ordering:
   - `execution_id`: `exec_<uuid7>` - Generated for each execution
   - `request_id`: `req_<uuid7>` - From the MCP request context (if available)
+  - `call_id`: `call_<uuid7>` - The admission decision the run was started
+    under (`Sanctum.Context`'s `call_id`), which the calls its chain makes
+    name as their parent call
   """
 
   require Logger
@@ -58,6 +61,7 @@ defmodule Crucible.Record do
   @type t :: %__MODULE__{
           id: String.t(),
           request_id: String.t() | nil,
+          call_id: String.t() | nil,
           user_id: String.t(),
           athanor_id: String.t() | nil,
           reference: String.t() | nil,
@@ -89,9 +93,16 @@ defmodule Crucible.Record do
           grant: Prima.ExecutionGrant.t() | nil
         }
 
+  # One execution row and the admission inputs that travel with it: the
+  # 32nd field makes the struct a hashed map rather than a flat one, a
+  # cost paid once per execution, not per call.
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
     :id,
     :request_id,
+    # The admission decision the run was started under: the context's
+    # `call_id` when the record is made (`Arca.DecisionLog`).
+    :call_id,
     :user_id,
     :athanor_id,
     :reference,
@@ -175,6 +186,7 @@ defmodule Crucible.Record do
     %__MODULE__{
       id: id,
       request_id: ctx.request_id,
+      call_id: ctx.call_id,
       user_id: ctx.user_id,
       athanor_id: ctx.athanor_id,
       reference: reference,
@@ -400,6 +412,7 @@ defmodule Crucible.Record do
            %{
              id: record.id,
              request_id: record.request_id,
+             call_id: record.call_id,
              reference: encode_reference(record.reference),
              input_hash: Arca.Execution.hash_input(record.input),
              user_id: record.user_id,
@@ -788,6 +801,7 @@ defmodule Crucible.Record do
     %__MODULE__{
       id: result.id,
       request_id: result.request_id,
+      call_id: result[:call_id],
       user_id: result.user_id,
       athanor_id: result[:athanor_id],
       reference: parse_reference(result.reference),

@@ -131,6 +131,29 @@ defmodule Arca.ExecutionTest do
     end
   end
 
+  describe "the admitting call" do
+    test "a start keeps the call id of the admission it was started under" do
+      Arca.Test.Actor.athanor!()
+      actor = Arca.Test.Actor.local()
+      id = "exec_call_#{System.unique_integer([:positive])}"
+
+      {:ok, _row} =
+        Execution.record_start(%{
+          id: id,
+          reference: "catalyst:local.call:1.0.0",
+          user_id: "user_test",
+          athanor_id: @athanor,
+          started_at: DateTime.utc_now(),
+          status: "running",
+          component_type: "catalyst",
+          call_id: "call_admitting"
+        })
+
+      assert :call_id in Execution.start_fields()
+      assert %{call_id: "call_admitting"} = Execution.get_tenant(actor, id)
+    end
+  end
+
   describe "complete_changeset/2" do
     test "creates valid changeset for completion" do
       execution = %Row{

@@ -408,7 +408,7 @@ defmodule Arca.TenantIsolationTest do
 
       # Insert old log for tenant A
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "log_tenant_a",
           user_id: ctx_a.user_id,
           athanor_id: ctx_a.athanor_id,
@@ -420,7 +420,7 @@ defmodule Arca.TenantIsolationTest do
 
       # Insert old log for tenant B
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "log_tenant_b",
           user_id: ctx_b.user_id,
           athanor_id: ctx_b.athanor_id,
@@ -447,7 +447,7 @@ defmodule Arca.TenantIsolationTest do
       old_time = DateTime.utc_now() |> DateTime.add(-60 * 86_400, :second)
 
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "log_dry_a",
           user_id: ctx_a.user_id,
           athanor_id: ctx_a.athanor_id,
@@ -456,7 +456,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "log_dry_b",
           user_id: ctx_b.user_id,
           athanor_id: ctx_b.athanor_id,
@@ -614,7 +614,7 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "mlog_cross_a",
           user_id: ctx_a.user_id,
           athanor_id: ctx_a.athanor_id,
@@ -636,7 +636,7 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, _ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
-        Arca.McpLog.record(%{
+        seed_log(%{
           id: "mlog_platform_test",
           user_id: ctx_a.user_id,
           athanor_id: ctx_a.athanor_id,
@@ -782,7 +782,7 @@ defmodule Arca.TenantIsolationTest do
       # Insert 3 logs for tenant A
       for i <- 1..3 do
         {:ok, _} =
-          Arca.McpLog.record(%{
+          seed_log(%{
             id: "stats_a_#{i}",
             user_id: ctx_a.user_id,
             athanor_id: ctx_a.athanor_id,
@@ -795,7 +795,7 @@ defmodule Arca.TenantIsolationTest do
       # Insert 2 logs for tenant B
       for i <- 1..2 do
         {:ok, _} =
-          Arca.McpLog.record(%{
+          seed_log(%{
             id: "stats_b_#{i}",
             user_id: ctx_b.user_id,
             athanor_id: ctx_b.athanor_id,
@@ -894,5 +894,24 @@ defmodule Arca.TenantIsolationTest do
       |> binary_part(0, 16)
 
     "comp_#{hash}"
+  end
+
+  # A request-log row as the gate writes one: the projection of an
+  # admission decision, appended with it in one transaction.
+  defp seed_log(%{id: id, athanor_id: athanor_id, user_id: user_id, timestamp: at} = attrs) do
+    actor = %{Prima.Actor.in_athanor(athanor_id) | user_id: user_id}
+
+    decision =
+      Prima.Decision.new(
+        call_id: id,
+        plane: :external,
+        tool: attrs[:tool],
+        action: attrs[:action],
+        inserted_at: at,
+        admission: :admitted
+      )
+
+    :ok = Arca.DecisionLog.append(actor, decision, mcp_log: Map.delete(attrs, :athanor_id))
+    {:ok, attrs}
   end
 end

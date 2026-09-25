@@ -16,6 +16,14 @@ defmodule Sanctum.Context do
   makes is attributable to the request that started it — which is what lets
   `Arca.McpLog` show a chain as one group.
 
+  `call_id` is the admission this context is inside: the gate call (or the
+  entry's own admission) that is running now, `call_<uuid7>`. The entry
+  that decides sets it, the gate sets it on the context it hands a
+  handler, and an execution admitted under the context records it
+  (`Crucible.Record`). It identifies one decision in `Arca.DecisionLog`,
+  authorizes nothing, is not projected onto the actor and survives
+  `enter_guest/1` unchanged. It is nil outside any admission.
+
   Tests construct permissive single-user contexts via
   `Sanctum.TestContext.local/0`, which lives in test support and so is
   compiled only in `:test`.
@@ -86,6 +94,7 @@ defmodule Sanctum.Context do
           auth_method: auth_method(),
           api_key_type: api_key_type(),
           request_id: String.t() | nil,
+          call_id: String.t() | nil,
           api_key_id: String.t() | nil,
           session_token_hash: binary() | nil,
           credential_binding: credential_binding() | nil,
@@ -108,6 +117,7 @@ defmodule Sanctum.Context do
     :auth_method,
     :api_key_type,
     :request_id,
+    :call_id,
     :api_key_id,
     # The session row's key, when a Sanctum session token authenticated the
     # request. It is the SHA-256 of the token, so it addresses the row
@@ -203,6 +213,7 @@ defmodule Sanctum.Context do
   - `:api_key_id` - API key identifier
   - `:session_token_hash` - session row key (SHA-256 of the session token)
   - `:request_id` - MCP request ID
+  - `:call_id` - the admission the context is inside (`call_<uuid7>`)
   - `:authenticated` - Boolean (default: false)
 
   ## Examples
@@ -253,6 +264,7 @@ defmodule Sanctum.Context do
           :namespace,
           :athanor_id,
           :request_id,
+          :call_id,
           :api_key_id,
           :client_ip
         ] do
@@ -311,6 +323,7 @@ defmodule Sanctum.Context do
       auth_method: Map.get(attrs, :auth_method),
       api_key_type: Map.get(attrs, :api_key_type),
       request_id: Map.get(attrs, :request_id),
+      call_id: Map.get(attrs, :call_id),
       api_key_id: Map.get(attrs, :api_key_id),
       session_token_hash: Map.get(attrs, :session_token_hash),
       credential_binding: binding!(Map.get(attrs, :credential_binding)),
