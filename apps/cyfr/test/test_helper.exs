@@ -58,6 +58,13 @@ File.cp_r!(Path.expand("../../../seed/aqua", __DIR__), Path.join(seed_path, "aqu
 # baseline still reads as applied; refuse it before any test touches it.
 Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, &Arca.SchemaFingerprint.verify!/0)
 
+# Every connection is lent by a test's sandbox owner, and never taken by a
+# process on its own: in the pool's default automatic mode a process no
+# test allowed (the decision log's writer, spawned from an asynchronous
+# test) is handed a real connection and its rows commit for the tests
+# after it to see.
+Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
+
 # The athanor rows the fixtures name by hand, committed once for the run.
 Sanctum.TestContext.seed_athanors!()
 

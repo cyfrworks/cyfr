@@ -6,7 +6,7 @@ defmodule EmissaryWeb.WireDialectTest do
 
   @moduledoc """
   Every non-empty error body on the EmissaryWeb surface renders through an
-  `EmissaryWeb.ErrorRenderer` (`ApiError` for plain HTTP, `MCPError` for
+  `CyfrWeb.ErrorRenderer` (`ApiError` for plain HTTP, `MCPError` for
   JSON-RPC). A hand-rolled `send_resp` is how one resource once answered
   the same condition in two wire dialects — the tincture GET's text/plain
   "Not Found" beside its invoke's JSON `{"code":"not_found"}` — and how a
@@ -47,7 +47,7 @@ defmodule EmissaryWeb.WireDialectTest do
 
     assert offenders == [],
            "bare send_resp outside the renderer seam in #{inspect(offenders)} — " <>
-             "route the refusal through EmissaryWeb.ApiError / EmissaryWeb.MCPError, " <>
+             "route the refusal through CyfrWeb.ApiError / EmissaryWeb.MCPError, " <>
              "or add the file to @allowed with its reason"
   end
 end

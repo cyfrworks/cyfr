@@ -82,7 +82,7 @@ config :cyfr, EmissaryWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [html: PrismWeb.ErrorHTML, json: EmissaryWeb.ErrorJSON],
+    formats: [html: PrismWeb.ErrorHTML, json: CyfrWeb.ErrorJSON],
     layout: false
   ],
   pubsub_server: Cyfr.PubSub,

@@ -25,9 +25,9 @@
   {"lib/prima/json_formatter.ex", :unknown_type},
   {"lib/cyfr/retention_scheduler.ex", :pattern_match},
   {"lib/emissary_web/controllers/auth_controller.ex", :pattern_match_cov},
-  {"lib/emissary_web/plugs/verify_webhook_signature.ex", :pattern_match},
-  {"lib/emissary_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
-  {"lib/emissary_web/sse.ex", :missing_range},
+  {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match},
+  {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
+  {"lib/cyfr_web/sse.ex", :missing_range},
   # The step bench's harness, `Cyfr.Test.StepBench`, is test support: it is
   # compiled only under MIX_ENV=test, the one environment the task runs in.
   {"lib/mix/tasks/cyfr.bench.step.ex", :unknown_function},
@@ -39,7 +39,7 @@
   {"lib/opus/runtime.ex", :extra_range},
   {"lib/opus/runtime.ex", :pattern_match},
   {"lib/prism_web/controllers/legal_accept_controller.ex", :pattern_match_cov},
-  {"lib/prism_web/minimal_page.ex", :extra_range},
+  {"lib/cyfr_web/minimal_page.ex", :extra_range},
   {"lib/sanctum/auth/device_flow.ex", :pattern_match},
   {"lib/prima/cidr.ex", :pattern_match_cov},
   {"lib/sanctum/consent/shape_diff.ex", :guard_fail},

@@ -194,7 +194,7 @@ defmodule CyfrWeb.RouterTest do
         assert declared(name) != [], "no section declares the #{name} pipeline"
 
         for {provider, plugs} <- declared(name) do
-          assert "EmissaryWeb.Plugs.MCPOrigin" in plugs,
+          assert "CyfrWeb.Plugs.MCPOrigin" in plugs,
                  "#{provider}'s #{name} pipeline does not check the origin: #{inspect(plugs)}"
         end
       end
@@ -202,7 +202,7 @@ defmodule CyfrWeb.RouterTest do
       assert declared("tincture_invoke") != [], "no section declares tincture_invoke"
 
       for {provider, plugs} <- declared("tincture_invoke") do
-        refute "EmissaryWeb.Plugs.MCPOrigin" in plugs,
+        refute "CyfrWeb.Plugs.MCPOrigin" in plugs,
                "#{provider}'s tincture_invoke pipeline checks the origin; a public " <>
                  "tincture is cross-origin by design"
       end
@@ -213,7 +213,7 @@ defmodule CyfrWeb.RouterTest do
       assert pages != [], "no section declares a browser or attachment pipeline"
 
       for name <- ["browser", "attachment"], {provider, plugs} <- declared(name) do
-        assert List.first(plugs) == "EmissaryWeb.Plugs.Headless",
+        assert List.first(plugs) == "CyfrWeb.Plugs.Headless",
                "#{provider}'s #{name} pipeline does not begin with the headless refusal: " <>
                  inspect(plugs)
       end
@@ -229,8 +229,8 @@ defmodule CyfrWeb.RouterTest do
       assert tinctures != [], "no section declares a tincture pipeline"
 
       for {provider, name, plugs} <- tinctures do
-        scrub = Enum.find_index(plugs, &(&1 == "EmissaryWeb.Plugs.ScrubTinctureCredentials"))
-        limit = Enum.find_index(plugs, &(&1 == "EmissaryWeb.Plugs.TinctureRateLimit"))
+        scrub = Enum.find_index(plugs, &(&1 == "CyfrWeb.Plugs.ScrubTinctureCredentials"))
+        limit = Enum.find_index(plugs, &(&1 == "CyfrWeb.Plugs.TinctureRateLimit"))
 
         assert scrub != nil and limit != nil and scrub < limit,
                "#{provider}'s #{name} pipeline must scrub the credential before it " <>

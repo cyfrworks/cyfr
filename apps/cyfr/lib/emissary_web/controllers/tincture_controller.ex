@@ -17,7 +17,7 @@ defmodule EmissaryWeb.TinctureController do
   GET  /t/:athanor/:publisher/:tincture_name/*path     — serve static assets
   """
 
-  use EmissaryWeb, :controller
+  use CyfrWeb, :controller
 
   # A public URL is the public route regardless of authentication, and
   # names the tincture by its address; the private fallback is the
@@ -56,7 +56,7 @@ defmodule EmissaryWeb.TinctureController do
 
   def access_token(conn, _params) do
     # Credential query params are scrubbed for every response on these routes by
-    # `EmissaryWeb.Plugs.ScrubTinctureCredentials` (a `before_send` callback), so
+    # `CyfrWeb.Plugs.ScrubTinctureCredentials` (a `before_send` callback), so
     # `authenticate/1` still sees the raw value here and nothing downstream does.
     result = Sanctum.TinctureAuth.authenticate(conn)
 
@@ -67,7 +67,7 @@ defmodule EmissaryWeb.TinctureController do
         # the primary credential; expiry means re-authenticating with it.
         # 403, not 401: the caller IS authenticated, just not with a
         # credential that may mint.
-        EmissaryWeb.ApiError.send(conn, 403, :not_primary, nil)
+        CyfrWeb.ApiError.send(conn, 403, :not_primary, nil)
 
       {:ok, ctx} ->
         # The token opens one tincture, so the mint asks which. Without that
@@ -87,7 +87,7 @@ defmodule EmissaryWeb.TinctureController do
             end
 
           _ ->
-            EmissaryWeb.ApiError.send(
+            CyfrWeb.ApiError.send(
               conn,
               400,
               {:invalid_argument, "Name the tincture: publisher and tincture_name"},
@@ -97,7 +97,7 @@ defmodule EmissaryWeb.TinctureController do
 
       :unauthenticated ->
         # ApiError attaches the RFC 9110 §15.5.2 challenge on every 401.
-        EmissaryWeb.ApiError.send(
+        CyfrWeb.ApiError.send(
           conn,
           401,
           :unauthenticated,
@@ -105,13 +105,13 @@ defmodule EmissaryWeb.TinctureController do
         )
 
       {:error, :unavailable} ->
-        EmissaryWeb.ApiError.send(conn, 503, :unavailable, nil)
+        CyfrWeb.ApiError.send(conn, 503, :unavailable, nil)
 
       {:error, reason} ->
         # A presented-but-dead credential says so, at its class's status —
         # the named refusal is what tells a client "re-authenticate" apart
         # from "you never sent anything".
-        EmissaryWeb.ApiError.refuse(conn, reason)
+        CyfrWeb.ApiError.refuse(conn, reason)
     end
   end
 
@@ -143,7 +143,7 @@ defmodule EmissaryWeb.TinctureController do
             )
 
           {:error, _no_entry} ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
+            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
         end
 
       {:ok, tincture, :private, ctx} ->
@@ -171,14 +171,14 @@ defmodule EmissaryWeb.TinctureController do
             end
 
           {:error, _no_entry} ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
+            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
         end
 
       {:error, :unavailable} ->
         unavailable(conn)
 
       {:error, :not_found} ->
-        EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
+        CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
     end
   end
 
@@ -211,10 +211,10 @@ defmodule EmissaryWeb.TinctureController do
         |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
       # The context carries the request's identity (the pipeline's,
-      # `EmissaryWeb.Plugs.CallIdentity`), so the gate's decision is this
+      # `CyfrWeb.Plugs.CallIdentity`), so the gate's decision is this
       # request's; a refusal it answers is its row, and the renderer
       # appends no second one.
-      ctx = EmissaryWeb.Plugs.CallIdentity.stamp(conn, ctx)
+      ctx = CyfrWeb.Plugs.CallIdentity.stamp(conn, ctx)
 
       case Grimoire.call_external(
              "tincture",
@@ -227,15 +227,15 @@ defmodule EmissaryWeb.TinctureController do
 
         {:error, refusal} ->
           conn
-          |> EmissaryWeb.Plugs.CallIdentity.decided()
-          |> EmissaryWeb.ApiError.refuse(refusal)
+          |> CyfrWeb.Plugs.CallIdentity.decided()
+          |> CyfrWeb.ApiError.refuse(refusal)
       end
     else
       {:error, :unavailable} ->
         unavailable(conn)
 
       {:error, :not_found} ->
-        EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
+        CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
     end
   end
 
@@ -285,7 +285,7 @@ defmodule EmissaryWeb.TinctureController do
             unavailable(conn)
 
           {:error, :not_found} ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
+            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
         end
     end
   end
@@ -312,7 +312,7 @@ defmodule EmissaryWeb.TinctureController do
         )
 
       {:error, :expired_credential} ->
-        EmissaryWeb.ApiError.send(
+        CyfrWeb.ApiError.send(
           conn,
           401,
           :expired_credential,
@@ -320,19 +320,19 @@ defmodule EmissaryWeb.TinctureController do
         )
 
       {:error, :invalid_credential} ->
-        EmissaryWeb.ApiError.send(conn, 401, :invalid_credential, nil)
+        CyfrWeb.ApiError.send(conn, 401, :invalid_credential, nil)
 
       {:error, :not_member} ->
-        EmissaryWeb.ApiError.send(conn, 403, :not_member, nil)
+        CyfrWeb.ApiError.send(conn, 403, :not_member, nil)
 
       {:error, reason} when reason in [:not_standing, :ip_not_allowed] ->
-        EmissaryWeb.ApiError.send(conn, 403, reason, nil)
+        CyfrWeb.ApiError.send(conn, 403, reason, nil)
 
       {:error, :unavailable} ->
         unavailable(conn)
 
       _ ->
-        EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
+        CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
     end
   end
 
@@ -341,7 +341,7 @@ defmodule EmissaryWeb.TinctureController do
   defp unavailable(conn) do
     conn
     |> put_resp_header("retry-after", "5")
-    |> EmissaryWeb.ApiError.send(503, :unavailable, nil)
+    |> CyfrWeb.ApiError.send(503, :unavailable, nil)
   end
 
   # A mint that did not happen is a named state, never a URL: an outage or
@@ -352,12 +352,12 @@ defmodule EmissaryWeb.TinctureController do
   defp mint_refused(conn, :not_owner) do
     conn
     |> put_resp_header("retry-after", "5")
-    |> EmissaryWeb.ApiError.send(503, :not_owner, nil)
+    |> CyfrWeb.ApiError.send(503, :not_owner, nil)
   end
 
   # A credential presented and refused is `unauthenticated` — a 401 with
   # its challenge — and one that stands but may not mint is `forbidden`.
-  defp mint_refused(conn, reason), do: EmissaryWeb.ApiError.refuse(conn, reason)
+  defp mint_refused(conn, reason), do: CyfrWeb.ApiError.refuse(conn, reason)
 
   # -------------------------------------------------------------------
   # Private helpers

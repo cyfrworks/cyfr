@@ -659,7 +659,7 @@ if config_env() != :test do
         secret_key_base: secret_key_base,
         server: true
 
-      # MCP origin allowlist (EmissaryWeb.Plugs.MCPOrigin). Same set as
+      # MCP origin allowlist (CyfrWeb.Plugs.MCPOrigin). Same set as
       # check_origin above; the CYFR_MCP_ALLOWED_ORIGINS extras are appended
       # by Cyfr.RuntimeConfig in every env (hoisted above the prod block).
       config :cyfr, :mcp_allowed_origins, host_origins ++ localhost_origins

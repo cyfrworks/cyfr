@@ -1676,7 +1676,7 @@ defmodule Cyfr.BoundariesTest do
     test "the identity plug decides nothing and is not an entry" do
       refute Enum.any?(
                Boundaries.admission_entries(),
-               &(&1.module == EmissaryWeb.Plugs.CallIdentity)
+               &(&1.module == CyfrWeb.Plugs.CallIdentity)
              )
     end
 

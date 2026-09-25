@@ -24,7 +24,7 @@ defmodule PrismWeb.FileController do
   @inline_types ~w(image/png image/jpeg image/gif image/webp application/pdf text/plain text/csv text/markdown application/json)
 
   def show(conn, %{"athanor" => route, "path" => segments}) when is_list(segments) do
-    token = get_session(conn, PrismWeb.SignInResponse.session_key())
+    token = get_session(conn, CyfrWeb.SignInResponse.session_key())
 
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, ctx} <- authenticate(token, athanor.id),

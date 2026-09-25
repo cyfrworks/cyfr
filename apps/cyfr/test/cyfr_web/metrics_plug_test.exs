@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule CyfrWeb.MetricsPlugTest do
+  use ExUnit.Case, async: false
+
+  import Plug.Test
+
+  alias CyfrWeb.MetricsPlug
+
+  test "returns 404 when metrics are disabled (the default)" do
+    conn = conn(:get, "/metrics") |> MetricsPlug.call([])
+
+    assert conn.status == 404
+    assert conn.halted
+    assert conn.resp_body == "Metrics disabled"
+  end
+
+  test "serves the Prometheus scrape when enabled" do
+    # Under the disabled default the app never starts the Core reporter, so
+    # the enabled path has to bring its own.
+    start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [], name: :cyfr_prometheus})
+
+    previous = Application.get_env(:cyfr, :prometheus_metrics_enabled, false)
+    Application.put_env(:cyfr, :prometheus_metrics_enabled, true)
+    on_exit(fn -> Application.put_env(:cyfr, :prometheus_metrics_enabled, previous) end)
+
+    conn = conn(:get, "/metrics") |> MetricsPlug.call([])
+
+    assert conn.status == 200
+    assert conn.halted
+    assert {"content-type", "text/plain; charset=utf-8"} in conn.resp_headers
+  end
+
+  test "passes through non-metrics requests untouched" do
+    conn = conn(:get, "/api/health")
+
+    assert MetricsPlug.call(conn, []) == conn
+  end
+
+  test "a configured token gates the scrape with a bearer" do
+    start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [], name: :cyfr_prometheus})
+
+    previous = Application.get_env(:cyfr, :prometheus_metrics_enabled, false)
+    Application.put_env(:cyfr, :prometheus_metrics_enabled, true)
+    Application.put_env(:cyfr, :metrics_token, "scrape-secret")
+
+    on_exit(fn ->
+      Application.put_env(:cyfr, :prometheus_metrics_enabled, previous)
+      Application.delete_env(:cyfr, :metrics_token)
+    end)
+
+    # No bearer, wrong bearer: 401. The right one scrapes.
+    assert (conn(:get, "/metrics") |> MetricsPlug.call([])).status == 401
+
+    wrong =
+      conn(:get, "/metrics")
+      |> Plug.Conn.put_req_header("authorization", "Bearer nope")
+      |> MetricsPlug.call([])
+
+    assert wrong.status == 401
+
+    right =
+      conn(:get, "/metrics")
+      |> Plug.Conn.put_req_header("authorization", "Bearer scrape-secret")
+      |> MetricsPlug.call([])
+
+    assert right.status == 200
+  end
+end

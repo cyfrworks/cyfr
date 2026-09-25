@@ -14,11 +14,11 @@ defmodule EmissaryWeb.MCPError do
   those cases — which is the only case JSON-RPC allows it.
 
   A rejection rendered here is the request's refused decision, recorded
-  once (`EmissaryWeb.Plugs.CallIdentity.refused/2`) when the pipeline
+  once (`CyfrWeb.Plugs.CallIdentity.refused/2`) when the pipeline
   minted a call id and nothing recorded it before.
   """
 
-  @behaviour EmissaryWeb.ErrorRenderer
+  @behaviour CyfrWeb.ErrorRenderer
 
   import Plug.Conn
 
@@ -36,7 +36,7 @@ defmodule EmissaryWeb.MCPError do
   """
   @impl true
   def send(%Plug.Conn{} = conn, status, code, message) do
-    conn = EmissaryWeb.Plugs.CallIdentity.refused(conn, code)
+    conn = CyfrWeb.Plugs.CallIdentity.refused(conn, code)
     {code, message} = wire(code, message)
 
     conn

@@ -25,7 +25,7 @@ defmodule EmissaryWeb.ConnCase do
       # The default endpoint for testing
       @endpoint EmissaryWeb.Endpoint
 
-      use EmissaryWeb, :verified_routes
+      use CyfrWeb, :verified_routes
 
       # Import conveniences for testing with connections
       import Plug.Conn

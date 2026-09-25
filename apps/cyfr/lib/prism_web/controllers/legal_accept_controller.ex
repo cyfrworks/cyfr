@@ -13,7 +13,7 @@ defmodule PrismWeb.LegalAcceptController do
       `POLICY_ACCEPTANCE_REQUIRED` on a claim attempt.
 
   The IdP `access_token` is read from the same pending-probe cookie
-  (`PrismWeb.PendingProbe`) that `ClaimNamespaceController` consumes
+  (`CyfrWeb.PendingProbe`) that `ClaimNamespaceController` consumes
   (so the user's OAuth roundtrip happens once and feeds both the
   acceptance and the claim).
 
@@ -26,7 +26,7 @@ defmodule PrismWeb.LegalAcceptController do
 
   require Logger
 
-  alias PrismWeb.PendingProbe
+  alias CyfrWeb.PendingProbe
 
   def show(conn, params) do
     case Compendium.registry_legal_version() do

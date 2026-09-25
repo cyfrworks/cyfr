@@ -18,13 +18,13 @@ defmodule Emissary.TelemetryTest do
   describe "telemetry metrics definition" do
     # No protocol-session lifecycle counter is exposed.
     test "no metric is declared without an emitter behind it" do
-      names = Enum.map(EmissaryWeb.Telemetry.metrics(), & &1.name)
+      names = Enum.map(CyfrWeb.Telemetry.metrics(), & &1.name)
 
       refute [:cyfr, :emissary, :session, :count] in names
     end
 
-    test "EmissaryWeb.Telemetry.metrics/0 includes request duration" do
-      metrics = EmissaryWeb.Telemetry.metrics()
+    test "CyfrWeb.Telemetry.metrics/0 includes request duration" do
+      metrics = CyfrWeb.Telemetry.metrics()
 
       request_metric =
         Enum.find(metrics, fn m ->
@@ -35,8 +35,8 @@ defmodule Emissary.TelemetryTest do
       assert request_metric.tags == [:method, :tool, :status]
     end
 
-    test "EmissaryWeb.Telemetry.metrics/0 includes Phoenix metrics" do
-      metrics = EmissaryWeb.Telemetry.metrics()
+    test "CyfrWeb.Telemetry.metrics/0 includes Phoenix metrics" do
+      metrics = CyfrWeb.Telemetry.metrics()
 
       # Should include standard Phoenix metrics
       metric_names =
@@ -51,7 +51,7 @@ defmodule Emissary.TelemetryTest do
 
   describe "admission decision telemetry" do
     test "the loss is a counter an operator can alert on, by stage and kind" do
-      metrics = Map.new(EmissaryWeb.Telemetry.metrics(), &{&1.name, &1})
+      metrics = Map.new(CyfrWeb.Telemetry.metrics(), &{&1.name, &1})
 
       lost = metrics[[:cyfr, :grimoire, :decision, :lost, :total]]
       assert %Telemetry.Metrics.Counter{} = lost
@@ -183,7 +183,7 @@ defmodule Emissary.TelemetryTest do
     # reverse — an emitted event no metric consumes. Both webhook and
     # tincture invokes were emitted into the void for a while.
     test "every execution ingress has a metric over its event" do
-      event_names = Enum.map(EmissaryWeb.Telemetry.metrics(), &metric_event/1)
+      event_names = Enum.map(CyfrWeb.Telemetry.metrics(), &metric_event/1)
 
       for event <- [
             [:cyfr, :emissary, :webhook, :invoke, :stop],

@@ -30,7 +30,7 @@ defmodule Emissary.MCP.Router do
   (tenant presence, ownership, definition authority, the domain's finer
   consent arms).
 
-  Authentication itself happens earlier, in `EmissaryWeb.Plugs.Authenticate`.
+  Authentication itself happens earlier, in `CyfrWeb.Plugs.Authenticate`.
 
   ## Public Tool Actions
 

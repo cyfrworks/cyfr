@@ -218,7 +218,7 @@ defmodule Crucible.TinctureParityTest do
   defp assert_same_refusal({status, body}, %{error: iframe}, class) do
     assert iframe == %{code: Atom.to_string(class), message: body["message"]}
     assert body["code"] == Atom.to_string(class)
-    assert status == EmissaryWeb.ApiError.status(class)
+    assert status == CyfrWeb.ApiError.status(class)
   end
 
   defp rows(ctx) do
@@ -304,7 +304,7 @@ defmodule Crucible.TinctureParityTest do
       assert {:error, %Prima.Refusal{class: :forbidden, stage: :admission} = refusal} =
                Grimoire.call_external("tincture", guest, arguments)
 
-      http = EmissaryWeb.ApiError.refuse(build_conn(), refusal)
+      http = CyfrWeb.ApiError.refuse(build_conn(), refusal)
 
       assert_same_refusal(
         {http.status, Jason.decode!(http.resp_body)},

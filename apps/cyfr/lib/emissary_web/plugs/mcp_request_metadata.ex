@@ -17,7 +17,7 @@ defmodule EmissaryWeb.Plugs.MCPRequestMetadata do
   HTTP headers, and because a violation must answer `400` before any handler
   runs.
 
-  It sits after `EmissaryWeb.Plugs.Authenticate`, which carries no protocol
+  It sits after `CyfrWeb.Plugs.Authenticate`, which carries no protocol
   knowledge and also serves routes that do not speak MCP. Keeping the two apart
   is what stops a non-JSON-RPC endpoint from inheriting these rules along with
   its credential handling.

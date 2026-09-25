@@ -83,7 +83,7 @@ defmodule PrismWeb do
       use Phoenix.VerifiedRoutes,
         endpoint: EmissaryWeb.Endpoint,
         router: EmissaryWeb.Router,
-        statics: EmissaryWeb.static_paths()
+        statics: CyfrWeb.static_paths()
     end
   end
 

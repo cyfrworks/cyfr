@@ -5,8 +5,8 @@ defmodule EmissaryWeb.WebhookController do
   @moduledoc """
   Inbound webhook receiver.
 
-  This controller runs after `EmissaryWeb.Plugs.WebhookRateLimit` and
-  `EmissaryWeb.Plugs.VerifyWebhookSignature`, which together guarantee:
+  This controller runs after `CyfrWeb.Plugs.WebhookRateLimit` and
+  `CyfrWeb.Plugs.VerifyWebhookSignature`, which together guarantee:
 
     * `conn.assigns[:webhook]` is the looked-up, enabled webhook row.
     * `conn.assigns[:raw_body]` is the verified raw request body.
@@ -30,7 +30,7 @@ defmodule EmissaryWeb.WebhookController do
   produce inconsistent error reasons for the same kill.
   """
 
-  use EmissaryWeb, :controller
+  use CyfrWeb, :controller
 
   require Logger
 
@@ -56,18 +56,18 @@ defmodule EmissaryWeb.WebhookController do
     case conn.assigns[:webhook] do
       nil ->
         # Defensive — verify plug should have halted before us.
-        EmissaryWeb.ApiError.send(conn, 500, :internal_error, nil)
+        CyfrWeb.ApiError.send(conn, 500, :internal_error, nil)
 
       webhook ->
         # The request's identity is the pipeline's
-        # (`EmissaryWeb.Plugs.CallIdentity`): the same key on the log lines
+        # (`CyfrWeb.Plugs.CallIdentity`): the same key on the log lines
         # as on the request-log row this run files, and the call id the
         # delivery's decision and its execution row carry.
         request_id = conn.assigns.request_id
 
         case Sanctum.Caller.establish({:webhook, webhook}, request_id: request_id) do
           {:ok, ctx} ->
-            ctx = EmissaryWeb.Plugs.CallIdentity.stamp(conn, ctx)
+            ctx = CyfrWeb.Plugs.CallIdentity.stamp(conn, ctx)
             invoke_active(conn, ctx, webhook, conn.assigns[:raw_body], request_id)
 
           {:error, :unauthenticated} ->
@@ -80,7 +80,7 @@ defmodule EmissaryWeb.WebhookController do
                 "#{inspect(webhook.created_by)} no longer active — refusing slug=#{webhook.slug}"
             )
 
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
+            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
 
           {:error, :no_athanor} ->
             # Webhook row with no resolved athanor — should never happen for
@@ -89,7 +89,7 @@ defmodule EmissaryWeb.WebhookController do
               "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved athanor — rejecting"
             )
 
-            EmissaryWeb.ApiError.send(conn, 500, :internal_error, nil)
+            CyfrWeb.ApiError.send(conn, 500, :internal_error, nil)
         end
     end
   end
@@ -110,7 +110,7 @@ defmodule EmissaryWeb.WebhookController do
           "[WebhookInvoke] stored input_template invalid slug=#{webhook.slug} reason=#{inspect(reason)}"
         )
 
-        EmissaryWeb.ApiError.send(conn, 500, :internal_error, nil)
+        CyfrWeb.ApiError.send(conn, 500, :internal_error, nil)
     end
   end
 
@@ -193,7 +193,7 @@ defmodule EmissaryWeb.WebhookController do
     )
 
     # Capture Logger metadata before spawn — `Task.Supervisor.start_child` does
-    # not inherit it. Same idiom as `EmissaryWeb.Plugs.Authenticate`.
+    # not inherit it. Same idiom as `CyfrWeb.Plugs.Authenticate`.
     logger_metadata = Prima.LoggerContext.capture()
 
     # The release starts :cyfr (binding this endpoint) before :opus brings
@@ -241,8 +241,8 @@ defmodule EmissaryWeb.WebhookController do
         # The delivery's decision was opened above and closed just now: the
         # renderer appends no second one.
         conn
-        |> EmissaryWeb.Plugs.CallIdentity.decided()
-        |> EmissaryWeb.ApiError.send(503, :service_unavailable, nil)
+        |> CyfrWeb.Plugs.CallIdentity.decided()
+        |> CyfrWeb.ApiError.send(503, :service_unavailable, nil)
     end
   end
 

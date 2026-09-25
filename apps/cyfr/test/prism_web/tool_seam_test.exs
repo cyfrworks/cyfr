@@ -12,16 +12,30 @@ defmodule PrismWeb.ToolSeamTest do
 
   use ExUnit.Case, async: true
 
+  # The refused call below is recorded, so the test owns a sandbox.
+  setup do
+    Cyfr.Test.Sandbox.setup!(%{async: true})
+    :ok
+  end
+
   @seam "apps/cyfr/lib/prism_web/ops.ex"
   @direct_call ~r/\bCatalog\.call_external\(/
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
+  # The console's tree, and the page helpers it shares with the sign-in
+  # controllers: they transcribe a console flow's outcome and stay under
+  # its rules.
+  @page_helpers ~w(minimal_page sign_in_response pending_probe safe_redirect)
+
+  defp console_files do
+    Prima.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")) ++
+      for(helper <- @page_helpers, do: Path.join(root(), "apps/cyfr/lib/cyfr_web/#{helper}.ex"))
+  end
+
   test "the console reaches the tool surface only through its seam" do
     offenders =
-      root()
-      |> Path.join("apps/cyfr/lib/prism_web/**/*.ex")
-      |> Prima.Test.SourceTree.files!()
+      console_files()
       |> Enum.reject(&String.ends_with?(&1, "/ops.ex"))
       |> Enum.flat_map(fn path ->
         path
@@ -59,7 +73,7 @@ defmodule PrismWeb.ToolSeamTest do
     # The one transcription of a sign-in outcome to a browser response —
     # it mints the person's OWN session, before any console exists for
     # them. Door placement is pinned by Sanctum.DoorPlacementTest.
-    {"apps/cyfr/lib/prism_web/sign_in_response.ex", "Sanctum.Session.create"},
+    {"apps/cyfr/lib/cyfr_web/sign_in_response.ex", "Sanctum.Session.create"},
     # Signing out: the same act as above, from the browser's own form post.
     # A person retiring their OWN session, with no agent equivalent.
     {"apps/cyfr/lib/prism_web/controllers/session_controller.ex", "Sanctum.Session.destroy"},
@@ -144,9 +158,7 @@ defmodule PrismWeb.ToolSeamTest do
     allowed = MapSet.new(@console_owned)
 
     found =
-      root()
-      |> Path.join("apps/cyfr/lib/prism_web/**/*.ex")
-      |> Prima.Test.SourceTree.files!()
+      console_files()
       |> Enum.flat_map(fn path ->
         rel = Path.relative_to(path, root())
         source = Prima.Test.SourceTree.read(path)

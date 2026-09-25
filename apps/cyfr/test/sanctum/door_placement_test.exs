@@ -19,7 +19,7 @@ defmodule Sanctum.DoorPlacementTest do
   # the shared sign-in responder.
   @device_flow "apps/sanctum/lib/sanctum/auth/device_flow.ex"
   @browser_callback "apps/cyfr/lib/emissary_web/controllers/auth_controller.ex"
-  @minters ["apps/cyfr/lib/prism_web/sign_in_response.ex", @device_flow]
+  @minters ["apps/cyfr/lib/cyfr_web/sign_in_response.ex", @device_flow]
 
   defp lib_files do
     for dir <- Prima.Test.SourceTree.app_libs(@root),

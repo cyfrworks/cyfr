@@ -369,10 +369,10 @@ defmodule Cyfr.Boundaries do
           "Sanctum.ExecutionStanding as it is admitted and closed"
     },
     %{
-      from: ["apps/cyfr/lib/emissary_web/**/*.ex", "apps/cyfr/lib/emissary_web.ex"],
+      from: ["apps/cyfr/lib/emissary_web/**/*.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
+        Sanctum Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
         Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Session Sanctum.SignIn
         Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.TinctureAuth
         Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Webhook
@@ -392,23 +392,26 @@ defmodule Cyfr.Boundaries do
       from: [
         "apps/cyfr/lib/prism_web/**/*.ex",
         "apps/cyfr/lib/prism_web.ex",
-        "apps/cyfr/lib/cyfr_web/**/*.ex"
+        "apps/cyfr/lib/cyfr_web/**/*.ex",
+        "apps/cyfr/lib/cyfr_web.ex"
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum.ApiKey Sanctum.Auth Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
-        Sanctum.Context Sanctum.Door Sanctum.Session Sanctum.SignIn
-        Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Webhook
+        Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp
+        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Session Sanctum.SignIn
+        Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
       ),
       reason:
-        "the console and its context guard (`CyfrWeb.ContextGuard`, which names " <>
-          "`Sanctum.Caller` and `Sanctum.Context` alone). `Sanctum.Consent` is the " <>
-          "shell's read of whether a tincture has an active public profile " <>
-          "(`Sanctum.Consent.profiles/2`). " <>
-          "`Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` alone: the " <>
-          "`/live` socket is handled by the endpoint BEFORE the router, so it passes " <>
-          "no rate-limit plug, which makes the console the only per-address bound on " <>
-          "the anonymous device flows it starts."
+        "the console, its context guard (`CyfrWeb.ContextGuard`, which names " <>
+          "`Sanctum.Caller` and `Sanctum.Context` alone) and the web tier's shared " <>
+          "ingress plugs (`CyfrWeb.Plugs.*`), which are the auth fabric's own " <>
+          "ingress — a wide roster is the front door doing its job. " <>
+          "`Sanctum.Consent` is the shell's read of whether a tincture has an active " <>
+          "public profile (`Sanctum.Consent.profiles/2`). " <>
+          "In the console, `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` " <>
+          "alone: the `/live` socket is handled by the endpoint BEFORE the router, so " <>
+          "it passes no rate-limit plug, which makes the console the only per-address " <>
+          "bound on the anonymous device flows it starts."
     },
     %{
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
@@ -427,7 +430,8 @@ defmodule Cyfr.Boundaries do
       from: [
         "apps/cyfr/lib/prism_web/**/*.ex",
         "apps/cyfr/lib/prism_web.ex",
-        "apps/cyfr/lib/cyfr_web/**/*.ex"
+        "apps/cyfr/lib/cyfr_web/**/*.ex",
+        "apps/cyfr/lib/cyfr_web.ex"
       ],
       into: "Sanctum.Consent",
       depth: 3,
@@ -538,8 +542,7 @@ defmodule Cyfr.Boundaries do
       from: [
         "apps/cyfr/lib/emissary/**/*.ex",
         "apps/cyfr/lib/emissary.ex",
-        "apps/cyfr/lib/emissary_web/**/*.ex",
-        "apps/cyfr/lib/emissary_web.ex"
+        "apps/cyfr/lib/emissary_web/**/*.ex"
       ],
       into: "Aqua",
       allow: [],
@@ -551,8 +554,7 @@ defmodule Cyfr.Boundaries do
       from: [
         "apps/cyfr/lib/emissary/**/*.ex",
         "apps/cyfr/lib/emissary.ex",
-        "apps/cyfr/lib/emissary_web/**/*.ex",
-        "apps/cyfr/lib/emissary_web.ex"
+        "apps/cyfr/lib/emissary_web/**/*.ex"
       ],
       into: "Crucible",
       allow: ~w(Crucible),
@@ -578,8 +580,7 @@ defmodule Cyfr.Boundaries do
       from: [
         "apps/cyfr/lib/emissary/**/*.ex",
         "apps/cyfr/lib/emissary.ex",
-        "apps/cyfr/lib/emissary_web/**/*.ex",
-        "apps/cyfr/lib/emissary_web.ex"
+        "apps/cyfr/lib/emissary_web/**/*.ex"
       ],
       into: "Compendium",
       allow: ~w(Compendium),
@@ -624,7 +625,11 @@ defmodule Cyfr.Boundaries do
           "the publisher and version vocabularies it reads are Prima's."
     },
     %{
-      from: ["apps/cyfr/lib/cyfr/**/*.ex", "apps/cyfr/lib/cyfr_web/**/*.ex"],
+      from: [
+        "apps/cyfr/lib/cyfr/**/*.ex",
+        "apps/cyfr/lib/cyfr_web/**/*.ex",
+        "apps/cyfr/lib/cyfr_web.ex"
+      ],
       except: ["apps/cyfr/lib/cyfr/application.ex"],
       into: "Aqua",
       allow: [],
@@ -635,7 +640,11 @@ defmodule Cyfr.Boundaries do
           "excepted."
     },
     %{
-      from: ["apps/cyfr/lib/cyfr/**/*.ex", "apps/cyfr/lib/cyfr_web/**/*.ex"],
+      from: [
+        "apps/cyfr/lib/cyfr/**/*.ex",
+        "apps/cyfr/lib/cyfr_web/**/*.ex",
+        "apps/cyfr/lib/cyfr_web.ex"
+      ],
       except: ["apps/cyfr/lib/cyfr/application.ex"],
       into: "Compendium",
       allow: ~w(Compendium),
@@ -646,7 +655,11 @@ defmodule Cyfr.Boundaries do
           "`Compendium.tincture_asset_rules/0`). The composition root is excepted."
     },
     %{
-      from: ["apps/cyfr/lib/cyfr/**/*.ex", "apps/cyfr/lib/cyfr_web/**/*.ex"],
+      from: [
+        "apps/cyfr/lib/cyfr/**/*.ex",
+        "apps/cyfr/lib/cyfr_web/**/*.ex",
+        "apps/cyfr/lib/cyfr_web.ex"
+      ],
       except: ["apps/cyfr/lib/cyfr/application.ex"],
       into: "Crucible",
       allow: [],
@@ -656,7 +669,11 @@ defmodule Cyfr.Boundaries do
           "execution's trees, and is excepted."
     },
     %{
-      from: ["apps/cyfr/lib/cyfr/**/*.ex", "apps/cyfr/lib/cyfr_web/**/*.ex"],
+      from: [
+        "apps/cyfr/lib/cyfr/**/*.ex",
+        "apps/cyfr/lib/cyfr_web/**/*.ex",
+        "apps/cyfr/lib/cyfr_web.ex"
+      ],
       except: ["apps/cyfr/lib/cyfr/application.ex"],
       into: "Emissary",
       allow: [],
@@ -679,11 +696,11 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/prism_web/**/*.ex", "apps/cyfr/lib/prism_web.ex"],
       into: "EmissaryWeb",
-      allow: ~w(EmissaryWeb EmissaryWeb.Endpoint EmissaryWeb.Router),
+      allow: ~w(EmissaryWeb.Endpoint EmissaryWeb.Router),
       reason:
         "one direction only. Building a copy-link's public URL reads a global fact " <>
-          "off the endpoint, and `PrismWeb.verified_routes/0` names the endpoint, the " <>
-          "router and `EmissaryWeb.static_paths/0`, because that is the triple " <>
+          "off the endpoint, and `PrismWeb.verified_routes/0` names the endpoint and " <>
+          "the router beside `CyfrWeb.static_paths/0`, because that is the triple " <>
           "`use Phoenix.VerifiedRoutes` takes."
     },
     %{
@@ -824,7 +841,7 @@ defmodule Cyfr.Boundaries do
   Which namespaces `named` reaches into, for a surface row: the reach
   truncated to the row's depth, so `Sanctum.Context.focus/2` is
   `Sanctum.Context`. A call on the root itself
-  (`EmissaryWeb.static_paths/0`) is the root.
+  (`CyfrWeb.static_paths/0`) is the root.
   """
   @spec surface_reaches(map(), named()) :: MapSet.t(String.t())
   def surface_reaches(row, named) do
@@ -1442,16 +1459,15 @@ defmodule Cyfr.Boundaries do
 
   @config_keys_read_by_name %{
     api_rate_limit_max:
-      "the `:api` bucket's own budget, read by `EmissaryWeb.Plugs.MCPRateLimit` " <>
+      "the `:api` bucket's own budget, read by `CyfrWeb.Plugs.MCPRateLimit` " <>
         "under a key it builds from the bucket's name",
     api_rate_limit_window_ms: "the same bucket's window, built the same way",
     crucible_events_max_concurrent:
-      "handed to `EmissaryWeb.SSE.claim_slot/3` as the key to read, so the two SSE " <>
+      "handed to `CyfrWeb.SSE.claim_slot/3` as the key to read, so the two SSE " <>
         "surfaces share one reader",
-    crucible_events_max_ms: "handed to `EmissaryWeb.SSE.deadline/1` as the key to read",
-    mcp_subscription_max_concurrent:
-      "handed to `EmissaryWeb.SSE.claim_slot/3` as the key to read",
-    mcp_subscription_max_ms: "handed to `EmissaryWeb.SSE.deadline/1` as the key to read"
+    crucible_events_max_ms: "handed to `CyfrWeb.SSE.deadline/1` as the key to read",
+    mcp_subscription_max_concurrent: "handed to `CyfrWeb.SSE.claim_slot/3` as the key to read",
+    mcp_subscription_max_ms: "handed to `CyfrWeb.SSE.deadline/1` as the key to read"
   }
 
   @config_keys_read_outside_lib %{
@@ -1615,7 +1631,7 @@ defmodule Cyfr.Boundaries do
   # instead of, the gate, and so records the decision itself. Each row is
   # the deciding module, the function (a plug's `call/2`, a controller
   # action, a gate head, a server's message handler) and the plane its
-  # refusals are recorded on. `EmissaryWeb.Plugs.CallIdentity` is not a
+  # refusals are recorded on. `CyfrWeb.Plugs.CallIdentity` is not a
   # row: it mints the identity and decides nothing.
   @admission_entries [
     # The gate's heads: refusals made before its own checks and identity.
@@ -1629,25 +1645,25 @@ defmodule Cyfr.Boundaries do
     %{module: EmissaryWeb.MCPController, site: :handle, plane: :external},
     %{module: EmissaryWeb.MCPController, site: :method_not_allowed, plane: :external},
     # The MCP pipeline's plugs, after routing.
-    %{module: EmissaryWeb.Plugs.Authenticate, site: :call, plane: :external},
-    %{module: EmissaryWeb.Plugs.MCPOrigin, site: :call, plane: :external},
-    %{module: EmissaryWeb.Plugs.MCPRateLimit, site: :call, plane: :external},
+    %{module: CyfrWeb.Plugs.Authenticate, site: :call, plane: :external},
+    %{module: CyfrWeb.Plugs.MCPOrigin, site: :call, plane: :external},
+    %{module: CyfrWeb.Plugs.MCPRateLimit, site: :call, plane: :external},
     %{module: EmissaryWeb.Plugs.MCPRequestMetadata, site: :call, plane: :external},
     # The endpoint's ownership plug: a stale owner refusing is an admission
     # refusal, class not_owner.
-    %{module: EmissaryWeb.Plugs.ControlPlaneOwnership, site: :call, plane: :external},
+    %{module: CyfrWeb.Plugs.ControlPlaneOwnership, site: :call, plane: :external},
     # The tincture routes: a tincture the address does not resolve, a mint
     # without a credential that may mint, and the routes' rate limit.
     %{module: EmissaryWeb.TinctureController, site: :index, plane: :external},
     %{module: EmissaryWeb.TinctureController, site: :invoke, plane: :external},
     %{module: EmissaryWeb.TinctureController, site: :access_token, plane: :external},
-    %{module: EmissaryWeb.Plugs.TinctureRateLimit, site: :call, plane: :external},
+    %{module: CyfrWeb.Plugs.TinctureRateLimit, site: :call, plane: :external},
     # The webhook route: the caller the row establishes, its signature,
     # its idempotency key and its rate limit.
     %{module: EmissaryWeb.WebhookController, site: :invoke, plane: :external},
-    %{module: EmissaryWeb.Plugs.VerifyWebhookSignature, site: :call, plane: :external},
-    %{module: EmissaryWeb.Plugs.WebhookIdempotency, site: :call, plane: :external},
-    %{module: EmissaryWeb.Plugs.WebhookRateLimit, site: :call, plane: :external},
+    %{module: CyfrWeb.Plugs.VerifyWebhookSignature, site: :call, plane: :external},
+    %{module: CyfrWeb.Plugs.WebhookIdempotency, site: :call, plane: :external},
+    %{module: CyfrWeb.Plugs.WebhookRateLimit, site: :call, plane: :external},
     # The execution-events stream: an execution the caller may not read (or
     # that does not exist), an unauthenticated caller, and the stream limit.
     %{module: EmissaryWeb.ExecutionEventsController, site: :stream, plane: :external},
@@ -1769,8 +1785,8 @@ defmodule Cyfr.Boundaries do
     %{
       responsibility: "resolve an inbound webhook delivery's slug before any caller is known",
       modules: ~w(
-        Sanctum.Webhook EmissaryWeb.Plugs.WebhookRateLimit
-        EmissaryWeb.Plugs.VerifyWebhookSignature
+        Sanctum.Webhook CyfrWeb.Plugs.WebhookRateLimit
+        CyfrWeb.Plugs.VerifyWebhookSignature
       ),
       check: "Sanctum.Webhook.resolve_ingress/1",
       reason:

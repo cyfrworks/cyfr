@@ -9,7 +9,7 @@ defmodule EmissaryWeb.HealthController do
   - `/api/health/ready` — readiness probe (checks DB + cache)
   """
 
-  use EmissaryWeb, :controller
+  use CyfrWeb, :controller
 
   require Logger
 

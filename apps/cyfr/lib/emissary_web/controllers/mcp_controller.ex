@@ -52,7 +52,7 @@ defmodule EmissaryWeb.MCPController do
   - Metadata: `%{method: String.t(), tool: String.t() | nil, status: :success | :error | :cancelled, action: String.t() | nil, request_id: String.t()}`
   """
 
-  use EmissaryWeb, :controller
+  use CyfrWeb, :controller
 
   alias Emissary.MCP
   alias Emissary.MCP.{Progress, Subscriptions}
@@ -87,7 +87,7 @@ defmodule EmissaryWeb.MCPController do
 
   def handle(conn, params) do
     # The request's identity was minted at the pipeline's head
-    # (`EmissaryWeb.Plugs.CallIdentity`) and stamped on the context by
+    # (`CyfrWeb.Plugs.CallIdentity`) and stamped on the context by
     # `Authenticate`: nested component calls retain the root request's
     # correlation id, and the gate takes the call id as its own.
     request_id = conn.assigns.request_id
@@ -129,7 +129,7 @@ defmodule EmissaryWeb.MCPController do
       case conn.state do
         :chunked ->
           conn
-          |> EmissaryWeb.Plugs.CallIdentity.refused(e.reason)
+          |> CyfrWeb.Plugs.CallIdentity.refused(e.reason)
           |> respond_error(code, Message.encode_error(params["id"], code, message))
 
         _unsent ->
@@ -162,7 +162,7 @@ defmodule EmissaryWeb.MCPController do
 
     # Headers go on before anything can commit the response: once the stream
     # below is opened they can no longer be set. `x-request-id` is the
-    # pipeline's (`EmissaryWeb.Plugs.CallIdentity`).
+    # pipeline's (`CyfrWeb.Plugs.CallIdentity`).
     conn = put_resp_header(conn, @protocol_version_header, @protocol_version)
 
     {conn, outcome} = dispatch(conn, context, params, request_id)
@@ -201,9 +201,9 @@ defmodule EmissaryWeb.MCPController do
   # subscriptions/listen
   # ============================================================================
 
-  # The per-caller stream bounds live in EmissaryWeb.SSE, shared with the
+  # The per-caller stream bounds live in CyfrWeb.SSE, shared with the
   # execution-events surface under per-surface tags and budgets.
-  @keep_alive_ms EmissaryWeb.SSE.keep_alive_ms()
+  @keep_alive_ms CyfrWeb.SSE.keep_alive_ms()
 
   # An open stream pins a process and a socket for up to the full stream
   # window, and the dispatcher's auth gate never sees this method — the stream
@@ -223,7 +223,7 @@ defmodule EmissaryWeb.MCPController do
         "Unauthorized: subscriptions/listen requires authentication"
       )
     else
-      case EmissaryWeb.SSE.claim_slot(:mcp_listen, context, :mcp_subscription_max_concurrent) do
+      case CyfrWeb.SSE.claim_slot(:mcp_listen, context, :mcp_subscription_max_concurrent) do
         :ok ->
           open_subscription_stream(conn, context, params, request_id, id)
 
@@ -240,17 +240,17 @@ defmodule EmissaryWeb.MCPController do
 
   # Distinct name from `open_stream/1` below (the bare SSE open): this one
   # opens the SUBSCRIPTION stream and adds the two MCP-specific headers;
-  # the four SSE mechanics belong to `EmissaryWeb.SSE.open/1`.
+  # the four SSE mechanics belong to `CyfrWeb.SSE.open/1`.
   defp open_subscription_stream(conn, context, params, request_id, id) do
     filter = get_in(params, ["params", "notifications"]) || %{}
     {:ok, acknowledged} = Subscriptions.listen(context, filter)
     watch = ContextGuard.watch(context)
-    deadline = EmissaryWeb.SSE.deadline(:mcp_subscription_max_ms)
+    deadline = CyfrWeb.SSE.deadline(:mcp_subscription_max_ms)
 
     conn
     |> put_resp_header(@protocol_version_header, @protocol_version)
     |> put_resp_header("x-request-id", request_id)
-    |> EmissaryWeb.SSE.open()
+    |> CyfrWeb.SSE.open()
     |> acknowledge(id, acknowledged)
     |> listen_loop(id, deadline, watch)
   end
@@ -516,13 +516,13 @@ defmodule EmissaryWeb.MCPController do
     :cancelled
   end
 
-  defp open_stream(conn), do: EmissaryWeb.SSE.open(conn)
+  defp open_stream(conn), do: CyfrWeb.SSE.open(conn)
 
   # Nothing to keep alive until the stream exists. Once it does, the comment
   # line doubles as the disconnect probe: a quiet subscription and a dead client
   # look identical until something is written.
   defp keep_alive(%Plug.Conn{state: :chunked} = conn),
-    do: chunk(conn, EmissaryWeb.SSE.keep_alive_comment()) |> tag(conn)
+    do: chunk(conn, CyfrWeb.SSE.keep_alive_comment()) |> tag(conn)
 
   defp keep_alive(conn), do: {:ok, conn}
 

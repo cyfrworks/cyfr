@@ -82,7 +82,7 @@ defmodule Prima.Test.CodeLines do
   makes it exact: a name written inside a string or a comment is prose and
   is not here, a name written inside an interpolation is code and
   is, and `alias Foo.{A, B}` is spelled out as `Foo.A` and `Foo.B`. A call
-  on a root module (`EmissaryWeb.static_paths/0`) yields the root, because
+  on a root module (`CyfrWeb.static_paths/0`) yields the root, because
   naming it is reaching for it.
 
   This is what the architecture rosters read. `code_lines/1` is the other
