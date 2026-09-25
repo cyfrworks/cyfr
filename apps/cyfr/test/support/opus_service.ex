@@ -86,7 +86,7 @@ defmodule Cyfr.Test.OpusService do
   @spec host_url() :: String.t()
   def host_url do
     {_id, listener, _type, _modules} =
-      Cyfr.InfraSupervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0)
+      Crucible.Supervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0)
 
     "http://127.0.0.1:#{HostListener.port(listener)}"
   end
@@ -180,7 +180,7 @@ defmodule Cyfr.Test.OpusService do
   def listeners do
     host =
       with {_id, listener, _type, _modules} <-
-             Cyfr.InfraSupervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0),
+             Crucible.Supervisor |> Supervisor.which_children() |> List.keyfind(HostListener, 0),
            {_id, server, _type, _modules} <-
              listener |> Supervisor.which_children() |> List.keyfind(:server, 0) do
         [server]

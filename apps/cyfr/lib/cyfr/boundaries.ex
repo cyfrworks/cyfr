@@ -601,15 +601,11 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/prism_web.ex"
       ],
       into: "Aqua",
-      allow: ~w(Aqua Aqua.TaskSupervisor),
+      allow: ~w(Aqua),
       reason:
         "the console reads threads, approvals, attachments, notes, the virtual-tool " <>
           "catalogue and the reply stream through the assistant's root facade, and " <>
-          "follows a thread on `Cyfr.Bus`. `Aqua.TaskSupervisor` is the supervisor " <>
-          "eight console sites start their page tasks under " <>
-          "(`PrismWeb.ModelCatalog`, `ShellLive`, `BuildsLive`, " <>
-          "`AquaLive.AgentsComponent` and four in `ComponentsLive`); the allowance " <>
-          "retires when S5 starts `Prism.TaskSupervisor`."
+          "follows a thread on `Cyfr.Bus`."
     },
     %{
       from: [

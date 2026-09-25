@@ -5,7 +5,7 @@ defmodule PrismWeb.ToolSeamTest do
   @moduledoc """
   `PrismWeb.Ops` is the console's seam onto the operation catalog — one
   place that splits `"tool/action"`, one `error_message/1` vocabulary.
-  `call_tool/3` takes a context, so work handed to `Aqua.TaskSupervisor`
+  `call_tool/3` takes a context, so work handed to `Prism.TaskSupervisor`
   has no reason to reach past it; this test keeps every other console
   module from calling the catalog directly.
   """

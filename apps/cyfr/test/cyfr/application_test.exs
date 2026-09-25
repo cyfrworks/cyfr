@@ -4,6 +4,19 @@
 defmodule Cyfr.ApplicationTest do
   use ExUnit.Case, async: true
 
+  require Record
+
+  # The supervisor's own state, read for its strategy and intensity:
+  # neither `Supervisor.count_children/1` nor a child spec carries them.
+  Record.defrecordp(
+    :supervisor_state,
+    :state,
+    for(
+      {field, _default} <- Record.extract(:state, from_lib: "stdlib/src/supervisor.erl"),
+      do: {field, nil}
+    )
+  )
+
   # A wildcard CORS origin once authentication is configured must fail closed
   # at boot in a real release, not merely warn. cors_enforcement/3 is the pure
   # decision seam the boot guard uses (first arg: auth configured?).
@@ -122,20 +135,65 @@ defmodule Cyfr.ApplicationTest do
       assert is_pid(Process.whereis(Sanctum.Auth.Finch))
     end
 
-    test "execution slots, event streams and attempts start under the infra tier after PubSub" do
-      # `which_children/1` lists the most recently started child first.
+    # Each domain's processes are one subtree of the infra tier, started
+    # after PubSub in the order the domains call one another; the schedule
+    # pair follows them, so a fire never reaches a tree that is not up,
+    # and the console's children come last.
+    test "the domains' subtrees start under the infra tier after PubSub, in order" do
       started = Cyfr.InfraSupervisor |> started_ids()
-      at = fn id -> Enum.find_index(started, &(&1 == id)) end
       pubsub = Enum.find_index(started, &(&1 in [Cyfr.PubSub, Phoenix.PubSub.Supervisor]))
+
+      order = [
+        Grimoire.Supervisor,
+        Compendium.Supervisor,
+        Crucible.Supervisor,
+        Aqua.Supervisor,
+        Emissary.Supervisor,
+        Crucible.Schedules.TaskSupervisor,
+        Crucible.Schedules.Scheduler,
+        Prism.TinctureRegistry,
+        Prism.TaskSupervisor
+      ]
+
+      assert Enum.filter(started, &(&1 in order)) == order
+      assert Enum.find_index(started, &(&1 == Grimoire.Supervisor)) > pubsub
+
+      for {supervisor, children} <- [
+            {Grimoire.Supervisor, [Grimoire.RunningTasks, Grimoire.TaskSupervisor]},
+            {Compendium.Supervisor,
+             [
+               Compendium.Builds.TaskSupervisor,
+               Compendium.ProvisioningSupervisor,
+               Compendium.Provisioning,
+               Compendium.ProjectionReconciler
+             ]},
+            {Crucible.Supervisor,
+             [
+               Crucible.Slots,
+               Crucible.Tree,
+               Crucible.TaskSupervisor,
+               Crucible.ArchiveWatch,
+               Crucible.Sweeper,
+               Crucible.WorkerWatch,
+               Crucible.HostListener
+             ]},
+            {Aqua.Supervisor, [Aqua.ScheduleNotes, Aqua.WorkerTree, Aqua.RunnerTree]},
+            {Emissary.Supervisor, [Emissary.External.ServerTree, Emissary.TaskSupervisor]}
+          ] do
+        assert started_ids(supervisor) == children,
+               "#{inspect(supervisor)} must hold #{inspect(children)} in start order"
+
+        for child <- children, do: refute(child in started)
+      end
+    end
+
+    test "execution slots, event streams and attempts start first in the execution subtree" do
+      started = Crucible.Supervisor |> started_ids()
 
       # The consented rate is not among them: its window is a shared row,
       # so this boot starts nothing for it.
       refute Crucible.Rates in started
-
-      for id <- [Crucible.Slots, Crucible.Tree] do
-        assert is_integer(at.(id)) and at.(id) > pubsub,
-               "#{inspect(id)} must start under the infra tier after PubSub"
-      end
+      assert [Crucible.Slots, Crucible.Tree | _] = started
 
       assert [
                Crucible.Registry,
@@ -148,36 +206,33 @@ defmodule Cyfr.ApplicationTest do
     end
 
     test "background roots and the stale-execution sweeper start after the execution group" do
-      started = Cyfr.InfraSupervisor |> started_ids()
+      started = Crucible.Supervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
 
       # The sweeper is a child even where `:execution_sweeper_enabled` is off
       # and it did not start.
       for id <- [Crucible.TaskSupervisor, Crucible.Sweeper] do
         assert is_integer(at.(id)) and at.(id) > at.(Crucible.Tree),
-               "#{inspect(id)} must start under the infra tier after Crucible.Tree"
+               "#{inspect(id)} must start under the execution subtree after Crucible.Tree"
       end
     end
 
     # Builds run on the control plane's own task supervisor and nowhere
     # else: this server starts no builder, and a build's request, watcher and
     # registration stop before the bookkeeping they write through.
-    test "the builds' task supervisor starts under the infra tier after PubSub, and no builder does" do
-      started = Cyfr.InfraSupervisor |> started_ids()
-      at = fn id -> Enum.find_index(started, &(&1 == id)) end
+    test "the builds' task supervisor starts under the component subtree, and no builder does" do
+      started = Compendium.Supervisor |> started_ids()
 
-      builds = at.(Compendium.Builds.TaskSupervisor)
-      assert is_integer(builds)
-
-      pubsub = Enum.find_index(started, &(&1 in [Cyfr.PubSub, Phoenix.PubSub.Supervisor]))
-      assert builds > pubsub
-
+      assert Compendium.Builds.TaskSupervisor in started
       assert is_pid(Process.whereis(Compendium.Builds.TaskSupervisor))
-      refute Enum.any?(started, &(inspect(&1) =~ "Locus"))
+
+      for supervisor <- [Cyfr.InfraSupervisor, Compendium.Supervisor] do
+        refute supervisor |> started_ids() |> Enum.any?(&(inspect(&1) =~ "Locus"))
+      end
     end
 
-    test "the host API listener starts under the infra tier after the attempts it serves" do
-      started = Cyfr.InfraSupervisor |> started_ids()
+    test "the host API listener starts under the execution subtree after the attempts it serves" do
+      started = Crucible.Supervisor |> started_ids()
       at = fn id -> Enum.find_index(started, &(&1 == id)) end
 
       # Shutdown is reverse start order: the listener stops taking host
@@ -189,7 +244,7 @@ defmodule Cyfr.ApplicationTest do
       # Bound where the configuration says, on the port the suite asked for
       # (0: one of the system's choosing), and answering as the host API.
       {_, listener, :supervisor, _} =
-        Cyfr.InfraSupervisor
+        Crucible.Supervisor
         |> Supervisor.which_children()
         |> List.keyfind(Crucible.HostListener, 0)
 
@@ -208,6 +263,21 @@ defmodule Cyfr.ApplicationTest do
       assert Jason.decode!(body) == %{"error" => "lost"}
     end
 
+    # The census the admission barrier test pins is the tree that runs:
+    # every supervisor it describes is running under that id, with that
+    # strategy and intensity, over exactly those children in that order.
+    test "the census names exactly the running tree" do
+      tiers = Cyfr.Application.tiers()
+      assert started_ids(Cyfr.Supervisor) == Enum.map(tiers, &elem(&1, 0))
+
+      for {id, _, _, _} = tier <- tiers do
+        {^id, pid, :supervisor, _} =
+          Cyfr.Supervisor |> Supervisor.which_children() |> List.keyfind(id, 0)
+
+        assert_runs(tier, pid)
+      end
+    end
+
     test "the endpoint lives under the web tier" do
       ids =
         Cyfr.WebSupervisor
@@ -218,6 +288,28 @@ defmodule Cyfr.ApplicationTest do
       refute Arca.Repo in ids
     end
   end
+
+  defp assert_runs({id, strategy, intensity, children}, pid) do
+    state = :sys.get_state(pid)
+
+    assert {supervisor_state(state, :strategy),
+            {supervisor_state(state, :intensity), supervisor_state(state, :period)}} ==
+             {strategy, intensity},
+           "#{inspect(id)} runs with another strategy or intensity than the census says"
+
+    assert started_ids(pid) == Enum.map(children, &census_id/1),
+           "#{inspect(id)} runs other children than the census says"
+
+    running = Supervisor.which_children(pid)
+
+    for {child_id, _, _, _} = nested <- children do
+      {^child_id, child, :supervisor, _} = List.keyfind(running, child_id, 0)
+      assert_runs(nested, child)
+    end
+  end
+
+  defp census_id({id, _strategy, _intensity, _children}), do: id
+  defp census_id(child), do: Supervisor.child_spec(child, []).id
 
   defp started_ids(supervisor) do
     supervisor

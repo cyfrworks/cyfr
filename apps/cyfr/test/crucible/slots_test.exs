@@ -4,7 +4,7 @@
 defmodule Crucible.SlotsTest do
   @moduledoc """
   The execution slots CYFR boots: one `Prima.Slots` instance named
-  `Crucible.Slots` under the infra tier, on the caps the operator
+  `Crucible.Slots` under `Crucible.Supervisor`, on the caps the operator
   configured, keyed by athanor, with a child reserve the authority depth
   cap fits inside, and the boot warning that says when one athanor's
   roots can fill the node.
@@ -20,7 +20,7 @@ defmodule Crucible.SlotsTest do
 
   @slots Crucible.Slots
 
-  test "the instance runs on the configured caps, as the infra tier's child" do
+  test "the instance runs on the configured caps, as the execution subtree's child" do
     {max, key_max} = Cyfr.Application.execution_slot_caps()
 
     assert max == Application.get_env(:cyfr, :crucible_max_concurrent, Slots.default_max())
@@ -36,7 +36,7 @@ defmodule Crucible.SlotsTest do
     assert reserve == Slots.child_reserve(max)
 
     assert {@slots, pid, :worker, [Prima.Slots]} =
-             Cyfr.InfraSupervisor |> Supervisor.which_children() |> List.keyfind(@slots, 0)
+             Crucible.Supervisor |> Supervisor.which_children() |> List.keyfind(@slots, 0)
 
     assert pid == Process.whereis(@slots)
   end

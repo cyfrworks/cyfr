@@ -70,8 +70,6 @@ defmodule Cyfr.Application do
       OpentelemetryPhoenix.setup(adapter: :bandit)
     end
 
-    # Grimoire: RunningTasks GenServer is now in the supervision tree
-
     # CORS hardening once authentication is configured (and thus users other
     # than the operator can make credentialed cross-origin requests).
     enforce_cors_not_wildcard_with_auth()
@@ -95,6 +93,8 @@ defmodule Cyfr.Application do
     # sink (e.g. forwarding to SIEM via a Telemetry Metrics consumer).
     attach_webhook_verify_failed_logger()
 
+    warn_if_one_athanor_fills_the_slots()
+
     # Two tiers under a :rest_for_one root so each has its own restart budget:
     # a crash-looping endpoint exhausts only the web tier (infra keeps running,
     # then the root restarts just the web tier), while an infra collapse
@@ -103,21 +103,48 @@ defmodule Cyfr.Application do
     # the `arca` application's and restarts under its own supervisor;
     # everything here reaches it by name. Shutdown is reverse start order:
     # endpoints drain before infra goes down.
-    children = for {name, tier_children} <- tiers(), do: tier(name, tier_children)
+    children = Enum.map(layout(), &tier/1)
 
     opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
     Supervisor.start_link(children, opts)
   end
 
+  @typedoc """
+  A supervisor as the census describes it: its id, its strategy, its
+  restart intensity (`{max_restarts, max_seconds}`) and its children in
+  start order, each a child spec or a supervisor described the same way.
+  """
+  @type census() ::
+          {term(), Supervisor.strategy(), {non_neg_integer(), pos_integer()},
+           [census() | Supervisor.child_spec()]}
+
+  # The domains' subtrees: the census reads each one's children through
+  # its own `init/1`, the definition its start runs.
+  @owners [
+    Grimoire.Supervisor,
+    Compendium.Supervisor,
+    Crucible.Supervisor,
+    Aqua.Supervisor,
+    Emissary.Supervisor
+  ]
+
   @doc false
-  # The two tiers in start order, each with its children in start order —
-  # the census `Cyfr.StartupAdmissionBarrierTest` reads, so the test and
-  # the boot cannot describe different trees.
-  @spec tiers() :: [{module(), [Supervisor.child_spec() | module() | {module(), term()}]}]
-  def tiers do
+  # The two tiers in start order, each with its children in start order,
+  # down through every subtree the tree names — the census
+  # `Cyfr.StartupAdmissionBarrierTest` reads. It is read from the child
+  # specs `start/2` starts, each supervisor's children through the same
+  # `init/1` its start runs, so the test and the boot cannot describe
+  # different trees.
+  @spec tiers() :: [census()]
+  def tiers, do: Enum.map(layout(), &(&1 |> tier() |> census()))
+
+  # The tiers as the boot builds them: id, strategy, intensity and
+  # children in start order.
+  defp layout do
     [
-      {Cyfr.InfraSupervisor, List.flatten([pre_gate(), gate(), post_gate(), seed_offer()])},
-      {Cyfr.WebSupervisor, web()}
+      {Cyfr.InfraSupervisor, :one_for_one, {10, 60},
+       List.flatten([pre_gate(), gate(), post_gate(), seed_offer()])},
+      {Cyfr.WebSupervisor, :one_for_one, {10, 60}, web()}
     ]
   end
 
@@ -189,116 +216,36 @@ defmodule Cyfr.Application do
   defp post_gate do
     [
       Cyfr.RetentionScheduler,
-      # Keeps a completed schedule's outcome as a note when the schedule
-      # asked for it: subscribed to the committed completions before the
-      # scheduler can fire, and acting only on its own member's.
-      Aqua.ScheduleNotes,
-      # Recurring component executions: the runs the scheduler fires are
-      # tasks of their own, monitored by it.
-      Supervisor.child_spec({Task.Supervisor, name: Crucible.Schedules.TaskSupervisor},
-        shutdown: 30_000
-      ),
-      Crucible.Schedules.Scheduler,
-      # Execution admission: the slots a member's own work holds. The
-      # consented rate has no child here — its window is a row every
-      # member of the cell claims in (`Arca.RateWindows`), so there is
-      # nothing in this boot to start, own or lose.
-      execution_slots(),
-      # Execution bookkeeping, after PubSub (the buffers broadcast on it):
-      # the execution_id → driving-process registry, the per-execution
-      # event-buffer registry, the emit counter, the buffers, and the open
-      # attempts' registry and supervisor. The counter comes before the
-      # buffers, so a restart of this group rebuilds the numbering source
-      # first and then the buffers that read it; the attempts, which push
-      # onto the buffers, come last; a dead registry restarts what
-      # registers in it.
-      group(Crucible.Tree, [
-        {Registry, keys: :unique, name: Crucible.Registry},
-        {Registry, keys: :unique, name: Crucible.Events.Registry},
-        Crucible.Events.Sequence,
-        {DynamicSupervisor, name: Crucible.Events.Supervisor, strategy: :one_for_one},
-        {Registry, keys: :unique, name: Crucible.Attempt.Registry},
-        {DynamicSupervisor, name: Crucible.Attempt.Supervisor, strategy: :one_for_one}
-      ]),
-      # Roots run in the background (`execution.run_stream`), after the
-      # registry each one registers in; shutdown waits up to 30 s for them.
-      Supervisor.child_spec({Task.Supervisor, name: Crucible.TaskSupervisor},
-        shutdown: 30_000
-      ),
-      # Stops an archived athanor's running work. The archive announces and
-      # this reacts: what is still running is the execution domain's, and
-      # the identity domain must not name it.
-      Crucible.ArchiveWatch,
-      # Periodic sweep that fails running executions whose lease lapsed;
-      # started only when `:execution_sweeper_enabled`.
-      Crucible.Sweeper,
-      # Hears from each configured worker service every poll interval and
-      # lapses what a boot it stopped hearing from, or saw replaced, was
-      # running; started only when `:worker_watch_enabled`, which follows
-      # `:execution_sweeper_enabled`.
-      Crucible.WorkerWatch,
-      # The host API: where the worker services' runners post their host
-      # calls and the services their exit reports (`CYFR_HOST_API_BIND`,
-      # `CYFR_HOST_API_PORT`). After the attempt tree it serves, so a
-      # shutdown stops taking calls before the attempts they reach go.
-      {Crucible.HostListener,
-       bind: Cyfr.RuntimeConfig.host_api_bind(), port: Cyfr.RuntimeConfig.host_api_port()},
       # The SSE stream slots (`CyfrWeb.SSE.claim_slot/3`): one entry per open
       # stream, which dies with its conn process, so a vanished client frees
       # its slot without bookkeeping.
       CyfrWeb.SSE.Registry,
-      # Use :rest_for_one for the external-server registry, the MCP bridge
-      # controller, servers and reconciler. A failure restarts its
-      # dependents. The controller starts before the servers and stops after
-      # them, because a stopping stdio server releases its owner through it.
-      group(Emissary.External.ServerTree, [
-        {Registry, keys: :unique, name: Emissary.External.ServerRegistry},
-        Emissary.External.Backends,
-        {DynamicSupervisor, name: Emissary.External.ServerSupervisor, strategy: :one_for_one},
-        Emissary.External.Reconciler
-      ]),
-      {Task.Supervisor, name: Emissary.TaskSupervisor},
-      # Builds (`Compendium.Builds`): a started build, the process watching
-      # it, each request to the Locus builds service and the registration
-      # after it. After the catalog, the bus and the bookkeeping they write
-      # through, so a shutdown ends the builds before them; a build it ends
-      # publishes nothing.
-      {Task.Supervisor, name: Compendium.Builds.TaskSupervisor},
-      Grimoire.RunningTasks,
-      # The gate's supervised handlers, after the tables they register
-      # in, so a shutdown stops them first.
-      Grimoire.TaskSupervisor,
-      # Filling an athanor's component estate: the background fills the
-      # first-need hook and a sign-in ask for, and the registry pulls each
-      # attempt runs under its own deadline.
-      {Task.Supervisor, name: Compendium.ProvisioningSupervisor},
-      # The estate filler itself — it reacts to the identity domain's
-      # announcement that an athanor needs filling.
-      Compendium.Provisioning,
-      # The registry and the agent index follow the seeded roots' changes:
-      # it reconciles the estate a change names, and recovers every estate
-      # a root is behind in once started and on every tick this member
-      # holds its slot. Every read passes its own barrier, so nothing
-      # waits on this child to be right.
-      Compendium.ProjectionReconciler,
-      # Prism dashboard
+      # The domains' subtrees, in order: the gate's handlers, the
+      # component estate, execution, the assistant, then the MCP surface.
+      Grimoire.Supervisor,
+      Compendium.Supervisor,
+      # The slots' caps and the host API's bind and port
+      # (`CYFR_HOST_API_BIND`, `CYFR_HOST_API_PORT`) are read here and
+      # handed down: a domain's subtree reads no configuration.
+      {Crucible.Supervisor,
+       slot_caps: execution_slot_caps(),
+       bind: Cyfr.RuntimeConfig.host_api_bind(),
+       port: Cyfr.RuntimeConfig.host_api_port()},
+      # Off in the test env: suites drive runners directly.
+      {Aqua.Supervisor, thread_recovery: Application.get_env(:cyfr, :thread_recovery, true)},
+      Emissary.Supervisor,
+      # Recurring component executions: the runs the scheduler fires are
+      # tasks of their own, monitored by it. Last among the domains, so a
+      # fire never reaches a tree that is not up, and the first to stop at
+      # shutdown.
+      Supervisor.child_spec({Task.Supervisor, name: Crucible.Schedules.TaskSupervisor},
+        shutdown: 30_000
+      ),
+      Crucible.Schedules.Scheduler,
+      # The console's: the tincture registry, and the task supervisor its
+      # pages start their asynchronous work on.
       Prism.TinctureRegistry,
-      group(Aqua.WorkerTree, [
-        Aqua.Loop.Worker,
-        {Task.Supervisor, name: Aqua.TaskSupervisor}
-      ]),
-      # Thread runners: one process per thread with open
-      # turns, started on demand; the recovery task starts one for every
-      # thread holding an open turn when the server last stopped. The
-      # registry names each runner by its thread and each loop by the root
-      # turn it holds (`Aqua.Loop.holder/1`). Registry and the supervisor
-      # whose children register in it restart together; a runner's loop
-      # dies with the runner.
-      group(Aqua.RunnerTree, [
-        {Registry, keys: :unique, name: Aqua.RunnerRegistry},
-        {DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one},
-        maybe_thread_recovery()
-      ])
+      {Task.Supervisor, name: Prism.TaskSupervisor}
     ]
   end
 
@@ -321,20 +268,18 @@ defmodule Cyfr.Application do
 
   defp boot_work_enabled?, do: Application.get_env(:cyfr, :provisioning_boot_enabled, true)
 
-  # The execution slots: one `Prima.Slots` instance, keyed by athanor, on
-  # the caps the operator configured (`CYFR_CRUCIBLE_MAX_CONCURRENT`,
-  # `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT`), else the shipped ones.
-  # The ratio warning is said once here, at boot, where an operator can
-  # act on it.
-  defp execution_slots do
+  # The execution slots (`Crucible.Slots`) boot on the caps the operator
+  # configured (`CYFR_CRUCIBLE_MAX_CONCURRENT`,
+  # `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT`), else the shipped ones. The
+  # ratio warning is said once here, at boot, where an operator can act
+  # on it.
+  defp warn_if_one_athanor_fills_the_slots do
     {max, key_max} = execution_slot_caps()
 
     case execution_slot_footprint(max, key_max) do
       :ok -> :ok
       {:warn, message} -> Logger.warning(message)
     end
-
-    {Prima.Slots, name: Crucible.Slots, max: max, key_max: key_max}
   end
 
   @doc false
@@ -374,47 +319,44 @@ defmodule Cyfr.Application do
     end
   end
 
-  # Off in the test env: suites drive runners directly.
-  defp maybe_thread_recovery do
-    if Application.get_env(:cyfr, :thread_recovery, true) do
-      [
-        Supervisor.child_spec(
-          {Task, &Aqua.Runner.recover_all/0},
-          id: Aqua.RunnerRecovery,
-          restart: :temporary
-        )
-      ]
-    else
-      []
-    end
-  end
-
-  # A registry and the processes that hold references into it restart
-  # together: :rest_for_one from the registry (or table owner) down, so a
-  # restart never leaves dependents holding a name that resolves to
-  # nothing — and the dependents' own hand-rolled recovery loops retire.
-  defp group(name, children) do
+  defp tier({name, strategy, {max_restarts, max_seconds}, children}) do
     %{
       id: name,
       start:
         {Supervisor, :start_link,
          [
-           List.flatten(children),
-           [strategy: :rest_for_one, name: name, max_restarts: 10, max_seconds: 60]
+           children,
+           [
+             strategy: strategy,
+             name: name,
+             max_restarts: max_restarts,
+             max_seconds: max_seconds
+           ]
          ]},
       type: :supervisor
     }
   end
 
-  defp tier(name, children) do
-    %{
-      id: name,
-      start:
-        {Supervisor, :start_link,
-         [children, [strategy: :one_for_one, name: name, max_restarts: 10, max_seconds: 60]]},
-      type: :supervisor
-    }
+  # A child as the census describes it: a supervisor the tree builds
+  # (a tier or a group, started through `Supervisor.start_link/2`) or a
+  # domain's subtree is read through the `init/1` its start runs; any
+  # other child is its spec.
+  defp census(child) do
+    case Supervisor.child_spec(child, []) do
+      %{id: id, start: {Supervisor, :start_link, [children, opts]}} ->
+        flags = Keyword.take(opts, [:strategy, :max_restarts, :max_seconds])
+        described(id, Supervisor.init(children, flags))
+
+      %{id: id, start: {owner, :start_link, [opts]}} when owner in @owners ->
+        described(id, owner.init(opts))
+
+      spec ->
+        spec
+    end
   end
+
+  defp described(id, {:ok, {flags, children}}),
+    do: {id, flags.strategy, {flags.intensity, flags.period}, Enum.map(children, &census/1)}
 
   # Tell Phoenix to update the endpoint configuration
   # whenever the application is updated.
