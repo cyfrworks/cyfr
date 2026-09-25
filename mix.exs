@@ -49,10 +49,24 @@ defmodule Cyfr.MixProject do
       setup: ["deps.get", "ecto.setup"],
       "ecto.setup": ["ecto.create", "ecto.migrate"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      test: [&test_after_database/1],
       "cyfr.bench.step": ["ecto.create --quiet", "ecto.migrate --quiet", "cyfr.bench.step"],
       "assets.deploy": ["tailwind prism --minify", "esbuild prism --minify", "phx.digest"]
     ]
+  end
+
+  # `mix test` prepares the database, then tests. The database steps take
+  # the compile switches from the same arguments, because a string alias
+  # hands its arguments to the last step only: a root `compile` inside one
+  # partition of `scripts/test-partitioned.sh` deletes and rebuilds the
+  # umbrella's shared protocol consolidation (every child compiles with
+  # consolidation off and cleans the shared path first) while the other
+  # partitions are loading from it.
+  defp test_after_database(args) do
+    switches = Enum.filter(args, &(&1 in ["--no-compile", "--no-deps-check"]))
+    Mix.Task.run("ecto.create", ["--quiet" | switches])
+    Mix.Task.run("ecto.migrate", ["--quiet" | switches])
+    Mix.Task.run("test", args)
   end
 
   defp releases do
