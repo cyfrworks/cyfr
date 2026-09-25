@@ -242,11 +242,17 @@ async function tool(name, args) {
 }
 
 /**
- * Calls a stdio server's tool as `plane` does: `console` through the
- * catalog's external entry (`Grimoire.Catalog.call_external/4`, which logs
- * the call), `in_chain` through the dispatch a chain's call reaches past its
- * authority (`Emissary.External.Proxy.try_handle/5`, which keeps it as
- * a tool_call execution with its payloads). Answers `{ok: result}` or
+ * Calls a stdio server's tool as `plane` does: `console` through the gate's
+ * external entry (`Grimoire.call_external/4`, which logs the call),
+ * `in_chain` from inside a chain. The chain's root is admitted as every root
+ * is, under the grant its estate stands at now
+ * (`Sanctum.ExecutionStanding.capture/1`), which the root's attempt stores
+ * (`Crucible.Record.write_started/2`); the call names the root as its parent
+ * and root and reaches the dispatch a chain's call reaches past its
+ * authority (`Emissary.External.Proxy.try_handle/5`), which keeps it as a
+ * tool_call execution with its payloads under the grant it inherits; the
+ * root then closes with the call's outcome. A call that names no parent has
+ * no grant to inherit and is refused. Answers `{ok: result}` or
  * `{error: text}`.
  */
 function callTool(name, args = {}, plane = "console") {
@@ -256,8 +262,31 @@ function callTool(name, args = {}, plane = "console") {
 
     reply =
       case args["plane"] do
-        "console" -> Grimoire.Catalog.call_external(args["name"], ctx, args["arguments"])
-        "in_chain" -> Emissary.External.Proxy.try_handle(args["name"], ctx, args["arguments"], :in_chain)
+        "console" ->
+          Grimoire.call_external(args["name"], ctx, args["arguments"])
+
+        "in_chain" ->
+          {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
+
+          root =
+            Crucible.Record.new(ctx, "formula:local.bridge-e2e-chain:0.1.0", %{},
+              component_type: :formula,
+              grant: grant
+            )
+
+          :ok = Crucible.Record.write_started(root)
+          lineage = %{"parent_execution_id" => root.id, "root_execution_id" => root.id}
+
+          reply =
+            Emissary.External.Proxy.try_handle(args["name"], ctx, Map.merge(args["arguments"], lineage), :in_chain)
+
+          :ok =
+            case reply do
+              {:ok, answer} -> root |> Crucible.Record.complete(answer) |> Crucible.Record.write_completed()
+              {:error, reason} -> root |> Crucible.Record.fail(Grimoire.render(reason)) |> Crucible.Record.write_failed()
+            end
+
+          reply
       end
 
     answer =
