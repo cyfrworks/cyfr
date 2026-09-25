@@ -910,7 +910,6 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.stale_gate_allowances(named) == []
 
       assert Enum.map(Boundaries.gate_free().allow, & &1.name) == [
-               "Emissary.TaskSupervisor",
                "Emissary.MCP.Protocol",
                "Compendium.RegistryHost"
              ]
@@ -937,6 +936,7 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.gate_violations(planted) == [
                "apps/cyfr/lib/grimoire/planted.ex:2 names Emissary.External.Proxy",
                "apps/cyfr/lib/grimoire/planted.ex:4 names Aqua.Runner",
+               "apps/cyfr/lib/grimoire/planted.ex:5 names Emissary.TaskSupervisor",
                "apps/cyfr/lib/grimoire/planted.ex:6 names PrismWeb.Focus"
              ]
 

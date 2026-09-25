@@ -767,13 +767,6 @@ defmodule Cyfr.Boundaries do
     roots: ~w(Emissary EmissaryWeb Aqua Compendium Crucible Prism PrismWeb CyfrWeb),
     allow: [
       %{
-        name: "Emissary.TaskSupervisor",
-        owner: "Grimoire.TaskSupervisor",
-        reason:
-          "the gate's supervised calls run under the transport's task supervisor " <>
-            "until the gate starts one of its own."
-      },
-      %{
         name: "Emissary.MCP.Protocol",
         owner: "Prima",
         reason:

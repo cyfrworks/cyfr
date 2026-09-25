@@ -473,15 +473,54 @@ defmodule Grimoire.CatalogTest do
         assert [{"req_tracked", ^handler_pid}] =
                  :ets.lookup(Grimoire.RunningTasks, "req_tracked")
 
-        assert :ok = Grimoire.RunningTasks.cancel("req_tracked")
+        # The gate runs the handler under its own task supervisor.
+        assert handler_pid in Task.Supervisor.children(Grimoire.TaskSupervisor)
+
+        assert :ok = Grimoire.cancel_request("req_tracked")
 
         # Killing the handler surfaces to the caller as a typed error rather than
         # taking the dispatcher down with it.
-        assert_receive {:result, {:error, {:exit, message}}}, 5_000
+        assert_receive {:result, {:error, {:cancelled, message} = reason}}, 5_000
         assert message =~ "cancelled"
+        assert %Prima.Refusal{class: :cancelled} = Grimoire.Error.classify(reason)
 
+        # A second cancel, once the first one's unregister has run, finds nothing.
         :sys.get_state(Grimoire.RunningTasks)
-        assert {:error, :not_found} = Grimoire.RunningTasks.cancel("req_tracked")
+        assert {:error, :not_found = gone} = Grimoire.cancel_request("req_tracked")
+        assert %Prima.Refusal{class: :not_found} = Grimoire.Error.classify(gone)
+      end)
+    end
+
+    # A caller that holds no request id cancels by its own handle: the
+    # handler is stopped, the call answers cancelled, and the gate releases
+    # the handle, so a cancel that arrives after it writes nothing.
+    test "in-flight work is cancellable by the caller's handle, which the gate releases" do
+      with_blocking_tool(fn ->
+        ctx = Sanctum.TestContext.local()
+        handle = {:catalog_test, System.unique_integer([:positive])}
+        caller = self()
+
+        spawn(fn ->
+          send(
+            caller,
+            {:result,
+             Catalog.call_external(@blocking_tool, ctx, %{"action" => "block"},
+               runner: :supervised,
+               cancel_handle: handle
+             )}
+          )
+        end)
+
+        assert_receive {:handler_running, handler_pid}, 5_000
+        ref = Process.monitor(handler_pid)
+        assert [{^handle, ^handler_pid}] = :ets.lookup(Grimoire.RunningTasks.Handles, handle)
+
+        assert :ok = Grimoire.cancel_call(handle)
+        assert_receive {:DOWN, ^ref, :process, _, :cancelled}, 5_000
+        assert_receive {:result, {:error, {:cancelled, "Tool " <> _}}}, 5_000
+
+        assert :ok = Grimoire.cancel_call(handle)
+        assert [] = :ets.lookup(Grimoire.RunningTasks.Handles, handle)
       end)
     end
 
@@ -492,7 +531,7 @@ defmodule Grimoire.CatalogTest do
         Catalog.call_external("system", ctx, %{"action" => "status"}, runner: :supervised)
 
       :sys.get_state(Grimoire.RunningTasks)
-      assert {:error, :not_found} = Grimoire.RunningTasks.cancel("req_finished")
+      assert {:error, :not_found} = Grimoire.cancel_request("req_finished")
     end
 
     # The in-process runner: the console and the assistant hold an

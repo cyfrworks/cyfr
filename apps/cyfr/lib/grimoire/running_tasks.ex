@@ -24,6 +24,16 @@ defmodule Grimoire.RunningTasks do
   Uses a GenServer to monitor task processes and auto-clean ETS entries when
   tasks die. The main ETS table remains `:public` for fast reads from any process.
 
+  ## Handles
+
+  A caller that holds no request id names its call by a handle of its
+  own. A handle's row lives from its claim to its release: `:pending`,
+  then the task's pid, or `:cancelled` once cancelled. Every change to a
+  handle's row is made by this process, one at a time, so a cancel, a
+  registration and a release never interleave: a cancel that reaches a
+  row the release already deleted finds nothing and writes nothing, and
+  a registration never overwrites a cancel.
+
   ## Why there is no authorization check
 
   Cancellation is not reachable from the wire. MCP 2026-07-28 has no
@@ -83,7 +93,8 @@ defmodule Grimoire.RunningTasks do
 
   Returns `:ok` when at least one task was found and killed, `{:error,
   :not_found}` otherwise — which is the ordinary outcome when the work had
-  already finished by the time the caller hung up.
+  already finished by the time the caller hung up, and a second cancel's
+  once the first one's unregister has run.
   """
   @spec cancel(String.t()) :: :ok | {:error, :not_found}
   def cancel(request_id) when is_binary(request_id) do
@@ -105,16 +116,11 @@ defmodule Grimoire.RunningTasks do
 
   @doc """
   Claim `handle` before the task it names starts: `:ok`, or `:cancelled`
-  when the caller already cancelled it, in which case the handler must
-  not run.
+  when the claimed call was cancelled before its release, in which case
+  the handler must not run.
   """
   @spec claim(handle()) :: :ok | :cancelled
-  def claim(handle) do
-    case :ets.lookup(@handles, handle) do
-      [{_, :cancelled}] -> :cancelled
-      _ -> if :ets.insert_new(@handles, {handle, :pending}), do: :ok, else: :ok
-    end
-  end
+  def claim(handle), do: GenServer.call(__MODULE__, {:claim, handle})
 
   @doc """
   Register the task doing the work for `handle`, from inside that task
@@ -122,39 +128,22 @@ defmodule Grimoire.RunningTasks do
   between, and the task exits without running the handler.
   """
   @spec register_handle(handle(), pid()) :: :ok | :cancelled
-  def register_handle(handle, pid) when is_pid(pid) do
-    case :ets.lookup(@handles, handle) do
-      [{_, :cancelled}] ->
-        :cancelled
-
-      _ ->
-        :ets.insert(@handles, {handle, pid})
-        :ok
-    end
-  end
+  def register_handle(handle, pid) when is_pid(pid),
+    do: GenServer.call(__MODULE__, {:register_handle, handle, pid})
 
   @doc """
-  Cancel the work named by `handle`, whether it has started or not: a
-  registered task is killed, a pending or unclaimed one is refused when
-  it registers or claims. Nothing else under the same request is touched.
+  Cancel the work named by `handle` while its row lives: a registered
+  task is killed, and a claimed one not yet registered is refused when
+  it registers. A handle already cancelled, released or never claimed
+  has no work to stop, and nothing is written for it. Nothing else under
+  the same request is touched.
   """
   @spec cancel_handle(handle()) :: :ok
-  def cancel_handle(handle) do
-    case :ets.lookup(@handles, handle) do
-      [{_, pid}] when is_pid(pid) -> Process.exit(pid, :cancelled)
-      _ -> :ok
-    end
+  def cancel_handle(handle), do: GenServer.call(__MODULE__, {:cancel_handle, handle})
 
-    :ets.insert(@handles, {handle, :cancelled})
-    :ok
-  end
-
-  @doc "Forget `handle` once its caller is done with it."
+  @doc "Forget `handle` once its caller is done with it: its row is deleted."
   @spec release_handle(handle()) :: :ok
-  def release_handle(handle) do
-    :ets.delete(@handles, handle)
-    :ok
-  end
+  def release_handle(handle), do: GenServer.call(__MODULE__, {:release_handle, handle})
 
   @doc false
   # The tasks currently registered for a request — for tests and diagnostics.
@@ -185,12 +174,67 @@ defmodule Grimoire.RunningTasks do
     end
 
     if :ets.whereis(@handles) == :undefined do
-      :ets.new(@handles, [:named_table, :public, :set, read_concurrency: true])
+      # Written only here (`handle_call/3`), so each change is atomic.
+      :ets.new(@handles, [:named_table, :protected, :set, read_concurrency: true])
     end
 
     # monitors: %{monitor_ref => {request_id, pid}}
     # refs:     %{{request_id, pid} => monitor_ref}
     {:ok, %{monitors: %{}, refs: %{}}}
+  end
+
+  @impl true
+  def handle_call({:claim, handle}, _from, state) do
+    reply =
+      case :ets.lookup(@handles, handle) do
+        [{_, :cancelled}] ->
+          :cancelled
+
+        [] ->
+          :ets.insert(@handles, {handle, :pending})
+          :ok
+
+        _ ->
+          :ok
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:register_handle, handle, pid}, _from, state) do
+    reply =
+      case :ets.lookup(@handles, handle) do
+        [{_, :cancelled}] ->
+          :cancelled
+
+        _ ->
+          :ets.insert(@handles, {handle, pid})
+          :ok
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:cancel_handle, handle}, _from, state) do
+    case :ets.lookup(@handles, handle) do
+      [{_, pid}] when is_pid(pid) ->
+        Process.exit(pid, :cancelled)
+        :ets.insert(@handles, {handle, :cancelled})
+
+      [{_, :pending}] ->
+        :ets.insert(@handles, {handle, :cancelled})
+
+      # Already cancelled, or no row: released, or never claimed here.
+      _ ->
+        :ok
+    end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:release_handle, handle}, _from, state) do
+    :ets.delete(@handles, handle)
+    {:reply, :ok, state}
   end
 
   @impl true

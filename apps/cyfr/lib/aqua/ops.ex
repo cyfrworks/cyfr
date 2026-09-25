@@ -47,13 +47,13 @@ defmodule Aqua.Ops do
     end
   end
 
-  @doc "Stop the supervised handler of the in-chain call named by `handle`, started or not."
+  @doc "Stop the supervised handler of the in-chain call named by `handle`."
   @spec cancel_call(term()) :: :ok
-  def cancel_call(handle), do: Grimoire.RunningTasks.cancel_handle(handle)
+  def cancel_call(handle), do: Grimoire.cancel_call(handle)
 
   @doc "Forget a call's cancellation handle once the loop is done with it."
   @spec release_call(term()) :: :ok
-  def release_call(handle), do: Grimoire.RunningTasks.release_handle(handle)
+  def release_call(handle), do: Grimoire.release_call(handle)
 
   @doc """
   Whether `tool`/`action` is reviewed as safe to re-dispatch after an

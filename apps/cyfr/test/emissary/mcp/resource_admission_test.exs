@@ -308,7 +308,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
       on_exit(fn -> ControlPlane.record(:unclaimed) end)
 
       for {tool, action, _permission, _auth, _scheme, uri} <- @declarations do
-        assert {:error, :control_plane_lost} =
+        assert {:error, %Prima.Refusal{stage: :admission, reason: :control_plane_lost}} =
                  Grimoire.call_external(tool, ctx, %{"action" => action, "uri" => uri})
 
         assert {:error, :not_owner, message} = read(ctx, uri)

@@ -344,7 +344,7 @@ defmodule Grimoire.Catalog do
   the assistant, which already hold an authenticated context and a
   process of their own; `:supervised` runs it in a task under a timeout,
   registered under `ctx.request_id` so a transport whose caller
-  disconnects can stop it (`Grimoire.RunningTasks`), for the wire.
+  disconnects can stop it (`Grimoire.cancel_request/1`), for the wire.
   """
   def call_external(name, ctx, args, opts \\ [])
 
@@ -391,8 +391,8 @@ defmodule Grimoire.Catalog do
   transition step and releases it when the synchronous dispatch returns.
 
   Options: `:guest_fn` (`:call` | `:spawn`, default `:call`), `:cancel_handle`
-  (a caller-owned name for this call, `Grimoire.RunningTasks.cancel_handle/1`
-  stops the supervised handler by it alone), plus `call_external/4`'s
+  (a caller-owned name for this call, by which `Grimoire.cancel_call/1`
+  stops the supervised handler alone), plus `call_external/4`'s
   options. The runner defaults to `:supervised` here: the handler runs on
   a guest's behalf, and a crash or a hang inside it must not take the
   chain's host process with it. A supervised handler that dies, exits or
@@ -1012,7 +1012,7 @@ defmodule Grimoire.Catalog do
       if Arca.ControlPlane.held?() do
         route(name, ctx, args, opts, in_chain?)
       else
-        {{:error, :control_plane_lost}, %{}}
+        {{:error, Error.admission(:control_plane_lost)}, %{}}
       end
     end)
   end
@@ -1479,7 +1479,7 @@ defmodule Grimoire.Catalog do
         # seen when the task registers, and the handler never runs.
         case Grimoire.RunningTasks.claim(handle) do
           :ok -> supervise(name, ctx, opts, handle, execute_fn)
-          :cancelled -> {:error, {:exit, "Tool #{name} was cancelled"}}
+          :cancelled -> {:error, {:cancelled, "Tool #{name} was cancelled"}}
         end
     end
   end
@@ -1497,7 +1497,7 @@ defmodule Grimoire.Catalog do
     logger_metadata = Prima.LoggerContext.capture()
 
     task =
-      Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
+      Task.Supervisor.async_nolink(Grimoire.TaskSupervisor, fn ->
         Prima.LoggerContext.restore(logger_metadata)
 
         if handle && Grimoire.RunningTasks.register_handle(handle, self()) == :cancelled,
@@ -1545,7 +1545,7 @@ defmodule Grimoire.Catalog do
         {:exit, :cancelled} ->
           if uncertain?,
             do: {:error, {:uncertain, "Tool #{name} was cancelled; its outcome is unknown"}},
-            else: {:error, {:exit, "Tool #{name} was cancelled"}}
+            else: {:error, {:cancelled, "Tool #{name} was cancelled"}}
 
         {:exit, reason} ->
           Logger.error("[Grimoire.Catalog] Tool #{name} exited: #{inspect(reason)}")
