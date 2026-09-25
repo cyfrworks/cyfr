@@ -68,7 +68,8 @@ defmodule Aqua.SeedContractTest do
     # never a turn of its own, so an `ask` on it is a verb nothing can
     # fire. (A role addressed by `@mention` runs as a turn and could raise
     # a card; the shipped roles are only ever cloned, and the `aqua` door
-    # refuses `ask` on any role — `Aqua.Policy`.)
+    # refuses `ask` on any role —
+    # `Compendium.AquaAgent.validate_tool_policy/2`.)
     asking =
       for {name, key, mode} <- seed_policy(),
           name != Compendium.AquaPath.soul_name(),

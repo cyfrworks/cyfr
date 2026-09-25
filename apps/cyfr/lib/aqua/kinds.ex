@@ -6,8 +6,9 @@ defmodule Aqua.Kinds do
   What an operation is to the assistant: its kind, whether it may ever
   run without a card, the verbs a tool has, and whether a chat can run
   it at all — read from the catalog's annotations and the virtual-tool
-  catalog, one rule for the AQUA page, the `aqua` tool's door and the
-  runtime ceiling alike.
+  catalog, one rule for the AQUA page and the runtime ceiling alike. The
+  `aqua` tool's door classifies by the same declarations in the component
+  domain (`Compendium.AquaAgent.validate_tool_policy/2`).
   """
 
   # Resolve the kind of a tool.action.
@@ -53,9 +54,9 @@ defmodule Aqua.Kinds do
   execute kind. Destructive and external actions always ask, and an
   action whose kind is unknown is refused too — "not known" and "not yet
   loaded" read the same here, and only the second could otherwise run
-  something destructive with no card. The one rule the AQUA page, the
-  `aqua` tool's door and the runtime ceiling (`Aqua.ToolGrants.effective/2`)
-  all read.
+  something destructive with no card. The one rule the AQUA page and the
+  runtime ceiling (`Aqua.ToolGrants.effective/2`) read; the kinds it admits
+  are `Prima.VirtualTools.auto_permitted_kinds/0`.
   """
 
   @spec auto_permitted?(String.t(), String.t()) :: boolean()

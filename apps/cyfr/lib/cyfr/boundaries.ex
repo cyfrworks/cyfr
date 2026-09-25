@@ -476,14 +476,15 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Aqua",
-      allow: ~w(Aqua.Hands Aqua.Policy),
+      allow: [],
       reason:
         "the assistant reads the component domain, never the reverse: the model " <>
           "catalysts, the agent sources and the local formulas are component facts " <>
-          "Compendium answers and the assistant composes. The two reaches rostered " <>
-          "are the catalyst a tool family runs on (`Aqua.Hands`), which an agent " <>
-          "source's dependencies name, and the authored-policy check " <>
-          "(`Aqua.Policy`) the `aqua` tool holds a write to; nothing else is."
+          "Compendium answers and the assistant composes, so Compendium names " <>
+          "nothing of the assistant. The catalyst a tool family runs on is " <>
+          "`Prima.VirtualTools`'s, and the authored-policy check is " <>
+          "`Compendium.AquaAgent.validate_tool_policy/2`, beside the agent file it " <>
+          "validates."
     },
     %{
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
@@ -507,14 +508,11 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Compendium",
-      allow: ~w(Compendium Compendium.AquaAgent),
+      allow: ~w(Compendium),
       reason:
         "the assistant reads its agents, their snapshots and consent rows, its skills " <>
           "and its model catalysts through the component domain's root facade alone, " <>
-          "and the agent-reference and version vocabularies it reads are Prima's. " <>
-          "`Compendium.AquaAgent` is the authored-policy check (`Aqua.Policy`), named " <>
-          "directly until that check moves into the component domain beside the agent " <>
-          "file it validates."
+          "and the agent-reference and version vocabularies it reads are Prima's."
     },
     %{
       from: ["apps/cyfr/lib/crucible/**/*.ex", "apps/cyfr/lib/crucible.ex"],

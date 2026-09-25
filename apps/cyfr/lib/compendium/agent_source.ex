@@ -114,7 +114,7 @@ defmodule Compendium.AgentSource do
       tools
       |> Enum.map(&tool_family/1)
       |> Enum.uniq()
-      |> Enum.map(&Aqua.Hands.catalyst_for/1)
+      |> Enum.map(&Prima.VirtualTools.catalyst_for/1)
       |> Enum.reject(&is_nil/1)
 
     required =

@@ -1134,30 +1134,23 @@ defmodule Compendium.Providers.Aqua do
          {:invalid_argument, "Invalid name #{inspect(name)} — use letters, digits, '_' and '-'"}}
   end
 
-  # Two rules at this door. The grammar is `Compendium.AquaAgent
-  # .check_tool_policy/1` — the same rule the file parser applies, so
-  # nothing this door admits can fail to parse back. The meaning is
-  # `Aqua.Policy.check_authored/2` — what a person may WRITE: no automatic
+  # One rule at this door, `Compendium.AquaAgent.validate_tool_policy/2`:
+  # the grammar the file parser applies, so nothing this door admits can
+  # fail to parse back, and then what a person may WRITE — no automatic
   # destructive or external action on any agent, no `ask` on a role (a
   # cloned role has no card to raise), no UI event held at ask. The parser
   # keeps grammar only, so a hand-edited file still loads and the runtime
-  # ceiling (`Aqua.ToolGrants.effective/2`) demotes what this door would
-  # have refused. An absent argument leaves the policy alone
-  # (`apply_updates/2`).
+  # ceiling demotes what this door would have refused. An absent argument
+  # leaves the policy alone (`apply_updates/2`).
   defp validate_tool_policy(nil, _type), do: :ok
 
   defp validate_tool_policy(policy, type) do
-    with :ok <- check_grammar(policy),
-         :ok <- Aqua.Policy.check_auto_only(policy),
-         :ok <- Aqua.Policy.check_authored(policy, type) do
-      :ok
-    else
+    case AquaAgent.validate_tool_policy(policy, type) do
+      :ok -> :ok
       {:error, reason} when is_binary(reason) -> {:error, {:invalid_argument, reason}}
       {:error, reason} -> {:error, {:invalid_argument, tool_policy_message(reason)}}
     end
   end
-
-  defp check_grammar(policy), do: AquaAgent.check_tool_policy(policy)
 
   defp type_of_name(name),
     do: if(AquaPath.soul?(name), do: AquaAgent.soul_type(), else: AquaAgent.role_type())
