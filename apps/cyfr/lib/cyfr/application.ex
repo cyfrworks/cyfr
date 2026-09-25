@@ -142,7 +142,11 @@ defmodule Cyfr.Application do
   # children in start order.
   defp layout do
     [
-      {Cyfr.InfraSupervisor, :one_for_one, {10, 60},
+      # Every child after the claim holds something before it: the cell's
+      # generation, a subscription in `Cyfr.PubSub`, the gate's verdict. So
+      # a restart takes down everything after the child and starts it again
+      # in order, and the gate reruns before the first child that admits work.
+      {Cyfr.InfraSupervisor, :rest_for_one, {10, 60},
        List.flatten([pre_gate(), gate(), post_gate(), seed_offer()])},
       {Cyfr.WebSupervisor, :one_for_one, {10, 60}, web()}
     ]
@@ -207,7 +211,7 @@ defmodule Cyfr.Application do
   defp gate do
     if bootstrap_skipped?(@bootstrap_skip_permitted, boot_work_enabled?()),
       do: [],
-      else: [Supervisor.child_spec(Cyfr.Bootstrap, restart: :temporary)]
+      else: [Supervisor.child_spec(Cyfr.Bootstrap, restart: :transient)]
   end
 
   # After the gate: everything that admits work — fires a schedule,

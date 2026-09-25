@@ -33,11 +33,13 @@ defmodule Aqua.Supervisor do
         ]),
         # Thread runners: one process per thread with open turns, started on
         # demand; the recovery task starts one for every thread holding an
-        # open turn when the server last stopped. The registry names each
-        # runner by its thread and each loop by the root turn it holds
-        # (`Aqua.Loop.holder/1`). Registry and the supervisor whose children
-        # register in it restart together; a runner's loop dies with the
-        # runner.
+        # open turn when the server last stopped. It is transient, so it
+        # stays listed once it has run and runs again whenever the group
+        # restarts over a fresh, empty runner supervisor. The registry
+        # names each runner by its thread and each loop by the root turn it
+        # holds (`Aqua.Loop.holder/1`). Registry and the supervisor whose
+        # children register in it restart together; a runner's loop dies
+        # with the runner.
         group(Aqua.RunnerTree, [
           {Registry, keys: :unique, name: Aqua.RunnerRegistry},
           {DynamicSupervisor, name: Aqua.RunnerSupervisor, strategy: :one_for_one}
@@ -56,7 +58,7 @@ defmodule Aqua.Supervisor do
       Supervisor.child_spec(
         {Task, &Aqua.Runner.recover_all/0},
         id: Aqua.RunnerRecovery,
-        restart: :temporary
+        restart: :transient
       )
     ]
   end

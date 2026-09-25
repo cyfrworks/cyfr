@@ -32,6 +32,12 @@ defmodule Cyfr.Bootstrap do
   `{:bootstrap_refused, reason}`, the supervisor's start fails, and the
   application does not boot. There is no wait-and-continue.
 
+  The child is `:transient`, so its supervisor keeps it listed after the
+  `:ignore` and starts it again on a `rest_for_one` cascade: the verdict
+  stands under this member's slot, so any restart of the slot's claimant
+  or of what precedes it reruns the reconcile. A refused rerun fails the
+  cascade, and nothing after the gate starts again.
+
   A refusal is logged by its class alone. Nothing it carries is a
   credential, and nothing is printed from an exception but its module.
 
@@ -43,7 +49,7 @@ defmodule Cyfr.Bootstrap do
   work under a claim of its own, started after everything this gates.
   """
 
-  use GenServer, restart: :temporary
+  use GenServer, restart: :transient
 
   require Logger
   require Arca.Repo.Errors
