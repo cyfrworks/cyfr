@@ -119,7 +119,7 @@ defmodule Cyfr.Boundaries do
       lib: "apps/locus/lib",
       umbrella_deps: [:prima],
       note: "the builds island; CYFR reaches it over the build wire alone",
-      dependency_roots: ~w(Jason Plug Bandit ThousandIsland)
+      dependency_roots: ~w(Plug Bandit ThousandIsland)
     }
   ]
 
