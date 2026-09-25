@@ -311,6 +311,54 @@ defmodule Grimoire.Catalog do
   end
 
   @doc """
+  What `tool.action` is, for every caller that classifies an action: a
+  virtual hand's kind from `Prima.VirtualTools`; `:external` for an
+  upstream `server:tool`, which is namespaced and enumerates no verbs,
+  whatever the action; otherwise the catalogued tool's declared kind. No
+  default: an unknown tool or an undeclared action is nil, a visible gap.
+  """
+  @spec tool_kind(String.t(), String.t()) :: atom() | nil
+  def tool_kind(tool, action) when is_binary(tool) and is_binary(action) do
+    cond do
+      kind = Prima.VirtualTools.kind_for(tool, action) ->
+        kind
+
+      String.contains?(tool, ":") ->
+        :external
+
+      true ->
+        case get_tool(tool) do
+          {:ok, tool_def} -> Annotations.kind(tool_def, action)
+          {:error, :not_found} -> nil
+        end
+    end
+  end
+
+  def tool_kind(_tool, _action), do: nil
+
+  @doc """
+  The action verbs a tool has — a virtual hand's from `Prima.VirtualTools`,
+  a catalogued tool's `action` enum in declared order — and `[]` for a
+  tool neither holds. What a `tool.*` glob stands for.
+  """
+  @spec tool_actions(String.t()) :: [String.t()]
+  def tool_actions(tool) when is_binary(tool) do
+    if Prima.VirtualTools.tool?(tool) do
+      Prima.VirtualTools.actions_of(tool)
+    else
+      with {:ok, tool_def} <- get_tool(tool),
+           verbs when is_list(verbs) <-
+             get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) do
+        Enum.filter(verbs, &is_binary/1)
+      else
+        _ -> []
+      end
+    end
+  end
+
+  def tool_actions(_tool), do: []
+
+  @doc """
   Restrict a wire tool definition to the selected actions.
 
   A registered tool's schema is rebuilt from its declarations, so the
@@ -1322,7 +1370,7 @@ defmodule Grimoire.Catalog do
   Proxied `server:tool` tools are not audited: they are no provider's
   declarations (the `mcp_servers` tool that manages the servers is, and
   is audited). They are classified as `:external` by
-  `Aqua.Kinds.kind_for/2` via namespacing, and get their plane from
+  `tool_kind/2` via namespacing, and get their plane from
   `Grimoire.Proxy.default_planes/0`.
 
   Returns `:ok` when all tools are clean, or `{:error, [missing]}` where

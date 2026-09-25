@@ -310,6 +310,72 @@ defmodule Compendium.ProviderTest do
   end
 
   # ============================================================================
+  # Status
+  # ============================================================================
+
+  describe "status/0 — the registry's health" do
+    # The probe is off in the suite (it is a DNS and TLS round trip); these
+    # turn it on against the closed loopback port the suite configures as
+    # the registry, so the answer is immediate and never leaves this machine.
+    setup do
+      previous = Application.get_env(:cyfr, :registry_health_probe)
+      key = {:registry_health, Compendium.RegistryHost.canonical_host()}
+      Arca.Cache.invalidate(key)
+
+      on_exit(fn ->
+        Application.put_env(:cyfr, :registry_health_probe, previous)
+        Arca.Cache.invalidate(key)
+      end)
+
+      {:ok, key: key}
+    end
+
+    test "a configured registry that does not answer is unreachable, within the probe's timeout" do
+      Application.put_env(:cyfr, :registry_health_probe, true)
+      started = System.monotonic_time(:millisecond)
+
+      assert Provider.status() == %{"registry" => "unreachable"}
+      assert System.monotonic_time(:millisecond) - started < 5_000
+    end
+
+    test "the probe's answer is memoized per registry", %{key: key} do
+      Application.put_env(:cyfr, :registry_health_probe, true)
+
+      assert Provider.status() == %{"registry" => "unreachable"}
+      assert Arca.Cache.get(key) == {:ok, "unreachable"}
+
+      # A memoized answer is served without probing again.
+      Arca.Cache.put(key, "ok", 30_000)
+      assert Provider.status() == %{"registry" => "ok"}
+    end
+
+    test "what configuration decides is answered afresh, never from a cached probe" do
+      Application.put_env(:cyfr, :registry_health_probe, true)
+      assert Provider.status() == %{"registry" => "unreachable"}
+
+      Application.put_env(:cyfr, :registry_health_probe, false)
+      assert Provider.status() == %{"registry" => "unknown"}
+    end
+
+    test "with the probe off the answer is unknown, never a guess" do
+      Application.put_env(:cyfr, :registry_health_probe, false)
+      assert Provider.status() == %{"registry" => "unknown"}
+    end
+
+    test "system.status reports the registry under the component domain's scope" do
+      Application.put_env(:cyfr, :registry_health_probe, false)
+
+      {:ok, result} =
+        Grimoire.call_external("system", Sanctum.TestContext.local(), %{
+          "action" => "status",
+          "scope" => "compendium"
+        })
+
+      assert result.services.registry == "unknown"
+    end
+  end
+
+  # ============================================================================
   # Tool Discovery
   # ============================================================================
 
@@ -2152,7 +2218,7 @@ defmodule Compendium.ProviderTest do
                })
     end
 
-    test "component.push is a person's act — an API key with every permission is still refused" do
+    test "component.push is a person's act — an API key with every permission is refused at the gate" do
       key_ctx = %Context{
         user_id: "github|https://github.com|keyholder",
         athanor_id: "ath_test",
@@ -2163,13 +2229,40 @@ defmodule Compendium.ProviderTest do
         authenticated: true
       }
 
-      {:error, msg} =
-        Grimoire.call_external("component", key_ctx, %{
-          "action" => "push",
-          "reference" => "reagent:local.test:0.1.0"
-        })
+      # The interactive consent class admits a surface, never a permission
+      # atom: the refusal is the gate's, before any handler runs.
+      assert {:error,
+              %Prima.Refusal{
+                stage: :admission,
+                class: :forbidden,
+                reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+              } = refusal} =
+               Grimoire.call_external("component", key_ctx, %{
+                 "action" => "push",
+                 "reference" => "reagent:local.test:0.1.0"
+               })
 
-      assert err_msg(msg) =~ "person's act"
+      assert Grimoire.render(refusal) =~ "interactive sign-in"
+
+      # Discovery agrees with dispatch: the key is not shown the push.
+      refute "push" in visible_component_actions(key_ctx)
+      assert "search" in visible_component_actions(key_ctx)
+    end
+
+    test "component.push is shown to and dispatched for a signed-in person", %{ctx: ctx} do
+      assert ctx.auth_method == :oidc
+      assert "push" in visible_component_actions(ctx)
+
+      # Admitted: the handler runs and answers the domain's own refusal (no
+      # claimed namespace), not the gate's.
+      assert {:error, msg} =
+               Grimoire.call_external("component", ctx, %{
+                 "action" => "push",
+                 "reference" => "c:local.my-tool:1.0.0"
+               })
+
+      refute match?(%Prima.Refusal{stage: :admission}, msg)
+      assert err_msg(msg) =~ "personal namespace"
     end
 
     test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
@@ -2332,6 +2425,15 @@ defmodule Compendium.ProviderTest do
   # Providers answer typed reasons where the class is clear; the shared
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
+  # The component actions `ctx` is shown by `tools/list`.
+  defp visible_component_actions(ctx) do
+    {:ok, %{tools: tools}} = Grimoire.call_external("tools", ctx, %{"action" => "list"})
+
+    tools
+    |> Enum.find(&(&1["name"] == "component"))
+    |> get_in(["inputSchema", "properties", "action", "enum"])
+  end
+
   defp err_msg(reason) do
     Grimoire.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")

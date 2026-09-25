@@ -94,53 +94,86 @@ defmodule Grimoire.ProviderTest do
     end
   end
 
-  describe "registry health" do
-    # The probe is off in the suite (it is a DNS and TLS round trip); these
-    # turn it on against the closed loopback port the suite configures as
-    # the registry, so the answer is immediate and never leaves this machine.
+  describe "status aggregation" do
+    # Two planted providers of their own services: one reports a state of
+    # what it depends on, one whose `status/0` raises.
+    defmodule Reporting do
+      @moduledoc false
+      def service, do: "probe_reporting"
+      def tools, do: []
+      def handle(_tool, _ctx, _args), do: {:error, :not_found}
+      def status, do: %{"widget" => "unreachable"}
+    end
+
+    defmodule Crashing do
+      @moduledoc false
+      def service, do: "probe_crashing"
+      def tools, do: []
+      def handle(_tool, _ctx, _args), do: {:error, :not_found}
+      def status, do: raise("the status probe fell over")
+    end
+
+    defmodule Malformed do
+      @moduledoc false
+      def service, do: "probe_malformed"
+      def tools, do: []
+      def handle(_tool, _ctx, _args), do: {:error, :not_found}
+      def status, do: [:not, :a, :map]
+    end
+
     setup do
-      previous = Application.get_env(:cyfr, :registry_health_probe)
-      key = {:registry_health, Compendium.RegistryHost.canonical_host()}
-      Arca.Cache.invalidate(key)
+      previous = Application.get_env(:cyfr, :tool_providers)
 
-      on_exit(fn ->
-        Application.put_env(:cyfr, :registry_health_probe, previous)
-        Arca.Cache.invalidate(key)
-      end)
+      Application.put_env(
+        :cyfr,
+        :tool_providers,
+        previous ++ [Reporting, Crashing, Malformed]
+      )
 
+      on_exit(fn -> Application.put_env(:cyfr, :tool_providers, previous) end)
       :ok
     end
 
-    test "a configured registry that does not answer is unreachable, within the probe's timeout" do
-      Application.put_env(:cyfr, :registry_health_probe, true)
-      started = System.monotonic_time(:millisecond)
-
+    test "all merges every provider's status beside the service checks" do
       {:ok, result} =
         Provider.handle("system", Sanctum.TestContext.local(), %{"action" => "status"})
 
-      assert result.services.registry == "unreachable"
-      assert System.monotonic_time(:millisecond) - started < 5_000
-    end
-
-    test "what configuration decides is answered afresh, never from a cached probe" do
-      Application.put_env(:cyfr, :registry_health_probe, true)
-      ctx = Sanctum.TestContext.local()
-
-      {:ok, probed} = Provider.handle("system", ctx, %{"action" => "status"})
-      assert probed.services.registry == "unreachable"
-
-      Application.put_env(:cyfr, :registry_health_probe, false)
-      {:ok, unprobed} = Provider.handle("system", ctx, %{"action" => "status"})
-      assert unprobed.services.registry == "unknown"
-    end
-
-    test "with the probe off the answer is unknown, never a guess" do
-      Application.put_env(:cyfr, :registry_health_probe, false)
-
-      {:ok, result} =
-        Provider.handle("system", Sanctum.TestContext.local(), %{"action" => "status"})
-
+      # The component domain answers the registry's state (the probe is off
+      # in the suite).
       assert result.services.registry == "unknown"
+      assert result.services.compendium == "ok"
+      assert result.services.widget == "unreachable"
+      assert result.services.probe_reporting == "ok"
+      assert result.status == "degraded"
+    end
+
+    test "a status/0 that raises or answers no map reads crashed and never fails the call" do
+      {:ok, result} =
+        Provider.handle("system", Sanctum.TestContext.local(), %{"action" => "status"})
+
+      assert result.services.probe_crashing == "crashed"
+      assert result.services.probe_malformed == "crashed"
+      assert result.status == "degraded"
+
+      {:ok, scoped} =
+        Provider.handle("system", Sanctum.TestContext.local(), %{
+          "action" => "status",
+          "scope" => "probe_crashing"
+        })
+
+      assert scoped.services == %{probe_crashing: "crashed"}
+      assert scoped.status == "degraded"
+    end
+
+    test "a scope answers its service and its providers' states alone" do
+      {:ok, result} =
+        Provider.handle("system", Sanctum.TestContext.local(), %{
+          "action" => "status",
+          "scope" => "probe_reporting"
+        })
+
+      assert result.services == %{probe_reporting: "ok", widget: "unreachable"}
+      assert result.status == "degraded"
     end
   end
 
@@ -244,13 +277,15 @@ defmodule Grimoire.ProviderTest do
       assert result.services.crucible == "ok"
     end
 
-    test "scope compendium returns only compendium status" do
+    test "scope compendium returns the compendium status and the registry's" do
       ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         Provider.handle("system", ctx, %{"action" => "status", "scope" => "compendium"})
 
-      assert Map.keys(result.services) == [:compendium]
+      assert Enum.sort(Map.keys(result.services)) == [:compendium, :registry]
+      assert result.services.registry == "unknown"
+      assert result.status == "ok"
     end
 
     test "scoped status includes version and uptime" do
@@ -271,14 +306,23 @@ defmodule Grimoire.ProviderTest do
       {:ok, result} =
         Provider.handle("system", ctx, %{"action" => "status", "scope" => "compendium"})
 
-      assert Map.keys(result.services) == [:compendium]
+      assert Enum.sort(Map.keys(result.services)) == [:compendium, :registry]
     end
 
-    test "the scope enum is the derived roster" do
+    test "the scope enum is the derived roster, with no scope of its own for the registry" do
       tool = Enum.find(Provider.tools(), &(&1.name == "system"))
+      scopes = action_schema(tool, "status")["properties"]["scope"]["enum"]
 
-      assert action_schema(tool, "status")["properties"]["scope"]["enum"] ==
-               ["all"] ++ Grimoire.Services.service_names() ++ ["registry"]
+      assert scopes == ["all"] ++ Grimoire.Services.service_names()
+      refute "registry" in scopes
+
+      {:error, message} =
+        Provider.handle("system", Sanctum.TestContext.local(), %{
+          "action" => "status",
+          "scope" => "registry"
+        })
+
+      assert message =~ "Invalid scope"
     end
 
     test "invalid scope returns error" do

@@ -7,47 +7,20 @@ defmodule Aqua.Kinds do
   run without a card, the verbs a tool has, and whether a chat can run
   it at all — read from the catalog's annotations and the virtual-tool
   catalog, one rule for the AQUA page and the runtime ceiling alike. The
-  `aqua` tool's door classifies by the same declarations in the component
-  domain (`Compendium.AquaAgent.validate_tool_policy/2`).
+  classification is the gate's (`Grimoire.tool_kind/2`,
+  `Grimoire.tool_actions/1`), which the `aqua` tool's door in the
+  component domain (`Compendium.AquaAgent.validate_tool_policy/2`) reads
+  too.
   """
 
-  # Resolve the kind of a tool.action.
-  #
-
-  # 1. AQUA virtual-tool catalog (`files`/`storage`/`http`/`request_setup`).
-
-  # 2. External upstream MCP tools are namespaced `server:tool` and have no
-
-  #    enumerable action verbs — short-circuit to `:external` regardless of
-
-  #    the action arg.
-
-  # 3. Internal cyfr tools must declare `kind` per action in
-
-  #    `annotations.actions[verb].kind`. No `_default` fallback — a missing
-
-  #    annotation returns `nil` so the gap is visible (and caught by the
-
-  #    `audit_action_kinds/0` startup check).
-
+  @doc """
+  The kind of `tool.action` — the gate's one classification
+  (`Grimoire.tool_kind/2`): a virtual hand's kind, `:external` for a
+  `server:tool`, else the catalogued tool's declared kind, nil when
+  unknown.
+  """
   @spec kind_for(String.t(), String.t()) :: atom() | nil
-
-  def kind_for(tool, action) when is_binary(tool) and is_binary(action) do
-    cond do
-      kind = Prima.VirtualTools.kind_for(tool, action) ->
-        kind
-
-      String.contains?(tool, ":") ->
-        :external
-
-      true ->
-        lookup_internal_kind(tool, action)
-    end
-  end
-
-  def kind_for(_, _), do: nil
-
-  defp lookup_internal_kind(tool, action), do: Aqua.Ops.action_kind(tool, action)
+  defdelegate kind_for(tool, action), to: Grimoire, as: :tool_kind
 
   @doc """
   Whether `tool.action` may ever run without a card: only a read, write or
@@ -71,14 +44,7 @@ defmodule Aqua.Kinds do
   """
 
   @spec actions_of(String.t()) :: [String.t()]
-
-  def actions_of(tool) when is_binary(tool) do
-    if Prima.VirtualTools.tool?(tool),
-      do: Prima.VirtualTools.actions_of(tool),
-      else: Aqua.Ops.actions_of(tool)
-  end
-
-  def actions_of(_tool), do: []
+  defdelegate actions_of(tool), to: Grimoire, as: :tool_actions
 
   @doc "Whether the virtual catalog or the registry holds a tool of this name."
 

@@ -32,6 +32,84 @@ defmodule Compendium.Provider do
 
   require Logger
 
+  # ============================================================================
+  # Status
+  # ============================================================================
+
+  @doc """
+  The registry's health, for `system.status`: `"disabled"` when no registry
+  is configured, `"unknown"` when the probe is switched off (the suite's
+  `:registry_health_probe`), else the probe's answer — `"ok"`, `"error"`
+  or `"unreachable"`. A degraded registry is a state, never a raise.
+  """
+  def status, do: %{"registry" => registry_health()}
+
+  # The probe's answer is memoized per registry: it is an outbound HTTPS
+  # probe with 3s connect + 3s read timeouts, and system/status is called
+  # from the dev topbar on page loads. What configuration alone decides is
+  # answered afresh.
+  @registry_health_ttl_ms 30_000
+
+  defp registry_health do
+    cond do
+      not Compendium.RegistryHost.configured?() ->
+        # No registry is not a registry that is down.
+        "disabled"
+
+      Application.get_env(:cyfr, :registry_health_probe, true) ->
+        probed_registry_health(Compendium.RegistryHost.canonical_host())
+
+      true ->
+        # The test env turns the probe off: a real DNS + TLS round-trip with
+        # a 3s timeout inside a test is 3s of wall clock and a straggling
+        # socket at test exit, and the answer means nothing there.
+        "unknown"
+    end
+  end
+
+  defp probed_registry_health(host) do
+    key = {:registry_health, host}
+
+    case Arca.Cache.get(key) do
+      {:ok, cached} ->
+        cached
+
+      :miss ->
+        health = probe_registry_health(host)
+        Arca.Cache.put(key, health, @registry_health_ttl_ms)
+        health
+    end
+  end
+
+  # Shared TLS verification, SSRF checks and DNS pinning.
+  defp probe_registry_health(host) do
+    case Sanctum.Egress.pinned_request(:get, "https://#{host}/health", [], nil,
+           receive_timeout: 3_000,
+           max_response_bytes: 64 * 1024
+         ) do
+      {:ok, 200, _headers, _body} ->
+        "ok"
+
+      {:ok, status_code, _headers, _body} ->
+        Logger.warning(
+          "[Compendium.Provider] Registry health check returned status #{status_code}"
+        )
+
+        "error"
+
+      {:error, reason} ->
+        Logger.warning("[Compendium.Provider] Registry health check failed: #{inspect(reason)}")
+        "unreachable"
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[Compendium.Provider] Registry health check exception: #{Exception.message(e)}"
+      )
+
+      "error"
+  end
+
   alias Sanctum.Context
   alias Compendium.Providers.Shared
 

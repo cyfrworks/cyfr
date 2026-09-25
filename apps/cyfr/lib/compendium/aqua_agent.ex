@@ -317,9 +317,9 @@ defmodule Compendium.AquaAgent do
   assistant's runtime ceiling demotes whatever loaded anyway, so a file
   written past this door reaches the guest already demoted.
 
-  A virtual hand's kind is `Prima.VirtualTools`'s, a `server:tool` name is
-  `:external`, and a catalogued tool's kind is its annotation in the
-  operation table (`Grimoire.get_tool/1`); only a kind
+  An action's kind is the gate's classification (`Grimoire.tool_kind/2`:
+  a virtual hand's from `Prima.VirtualTools`, `:external` for a
+  `server:tool`, else the catalogued tool's annotation); only a kind
   `Prima.VirtualTools.auto_permitted_kind?/1` admits may be `auto`, and an
   action whose kind is unknown is left to that ceiling.
 
@@ -395,45 +395,15 @@ defmodule Compendium.AquaAgent do
     end)
   end
 
-  # A virtual hand answers from its table; an upstream MCP tool is
-  # namespaced `server:tool` and enumerates no verbs, so it is external
-  # whatever the action; a catalogued tool answers from its declared
-  # annotation, with no default — a missing one is nil, a visible gap.
-  defp kind_for(tool, action) do
-    cond do
-      kind = VirtualTools.kind_for(tool, action) -> kind
-      String.contains?(tool, ":") -> :external
-      true -> catalogued_kind(tool, action)
-    end
-  end
-
-  defp catalogued_kind(tool, action) do
-    case Grimoire.get_tool(tool) do
-      {:ok, tool_def} -> Grimoire.annotation_kind(tool_def, action)
-      _ -> nil
-    end
-  end
+  # The gate's one classification: a virtual hand's kind, `:external` for
+  # a `server:tool`, else the catalogued tool's annotation, nil unknown.
+  defp kind_for(tool, action), do: Grimoire.tool_kind(tool, action)
 
   defp auto_permitted?(tool, action),
     do: VirtualTools.auto_permitted_kind?(kind_for(tool, action))
 
-  # What a `tool.*` glob stands for: the virtual table's actions, or the
-  # catalogued tool's `action` enum, and `[]` for a tool neither holds.
-  defp actions_of(tool) do
-    if VirtualTools.tool?(tool),
-      do: VirtualTools.actions_of(tool),
-      else: catalogued_actions(tool)
-  end
-
-  defp catalogued_actions(tool) do
-    with {:ok, tool_def} <- Grimoire.get_tool(tool),
-         verbs when is_list(verbs) <-
-           get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) do
-      Enum.filter(verbs, &is_binary/1)
-    else
-      _ -> []
-    end
-  end
+  # What a `tool.*` glob stands for, in declared order.
+  defp actions_of(tool), do: Grimoire.tool_actions(tool)
 
   defp valid_policy_key?("native_search"), do: true
 

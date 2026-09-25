@@ -135,6 +135,11 @@ defmodule Compendium.Providers.Component do
           ],
           kind: :write,
           planes: [:external],
+          # A push goes out as the person who triggered it, under a
+          # namespace they hold; an API key is an athanor's credential and
+          # is nobody's publisher, so the gate admits a signed-in session
+          # alone and discovery shows a key nothing it cannot run.
+          consent: :interactive,
           permission: :component_manage
         ),
         Operation.new(
@@ -490,13 +495,8 @@ defmodule Compendium.Providers.Component do
     end
   end
 
-  # Push action — upload an already-registered local component to an OCI registry.
-  # A push goes out as the person who triggered it, under a namespace they
-  # hold; an API key is an athanor's credential and is nobody's publisher.
-  def handle(%Context{auth_method: :api_key}, %{"action" => "push"}) do
-    {:error, "component.push is a person's act — sign in; an API key cannot publish"}
-  end
-
+  # Push action — upload an already-registered local component to an OCI
+  # registry. The gate admitted a signed-in session (`consent: :interactive`).
   def handle(%Context{} = ctx, %{"action" => "push"} = args) do
     reference = args["reference"]
     registry = args["registry"] || default_registry()

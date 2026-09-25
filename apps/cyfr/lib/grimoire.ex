@@ -121,6 +121,18 @@ defmodule Grimoire do
   @spec get_tool(String.t()) :: {:ok, map()} | {:error, :not_found}
   defdelegate get_tool(name), to: Catalog
 
+  @doc """
+  What `tool.action` is: a virtual hand's kind, `:external` for a
+  `server:tool`, else the catalogued tool's declared kind, nil when
+  unknown (`Grimoire.Catalog.tool_kind/2`).
+  """
+  @spec tool_kind(String.t(), String.t()) :: atom() | nil
+  defdelegate tool_kind(tool, action), to: Catalog
+
+  @doc "The action verbs a virtual hand or a catalogued tool has, `[]` for neither (`Grimoire.Catalog.tool_actions/1`)."
+  @spec tool_actions(String.t()) :: [String.t()]
+  defdelegate tool_actions(tool), to: Catalog
+
   @doc "A wire tool definition narrowed to `actions`."
   @spec restrict_tool(map(), [String.t()]) :: map()
   defdelegate restrict_tool(tool_def, actions), to: Catalog

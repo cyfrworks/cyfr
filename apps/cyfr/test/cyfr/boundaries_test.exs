@@ -104,6 +104,70 @@ defmodule Cyfr.BoundariesTest do
         do: {caller, callee, "#{function}/#{arity}"}
   end
 
+  # Every Sanctum function a beam (a path or a compiled binary) calls or
+  # captures. A call is in the import table; an external capture
+  # (`&Sanctum.Egress.pinned_request/5`) emits no import and is a fun in
+  # the literal table instead, so both are read.
+  defp sanctum_reaches(beam) do
+    for {module, function, arity} <- beam_imports(beam) ++ beam_captures(beam),
+        name = inspect(module),
+        name == "Sanctum" or String.starts_with?(name, "Sanctum."),
+        uniq: true,
+        do: {name, function, arity}
+  end
+
+  defp beam_imports(beam) do
+    {:ok, {_mod, [imports: imports]}} = :beam_lib.chunks(beam, [:imports])
+    imports
+  end
+
+  # The literal table is `<<size::32, data>>`, `data` zlib-compressed unless
+  # `size` is 0, and holds a count and then each term length-prefixed.
+  defp beam_captures(beam) do
+    case :beam_lib.chunks(beam, [~c"LitT"]) do
+      {:ok, {_mod, [{~c"LitT", <<size::32, data::binary>>}]}} ->
+        <<count::32, terms::binary>> = if size == 0, do: data, else: :zlib.uncompress(data)
+        terms |> literal_terms(count) |> Enum.flat_map(&external_funs/1)
+
+      _ ->
+        []
+    end
+  end
+
+  defp literal_terms(_binary, 0), do: []
+
+  defp literal_terms(<<size::32, term::binary-size(size), rest::binary>>, count),
+    do: [:erlang.binary_to_term(term) | literal_terms(rest, count - 1)]
+
+  defp external_funs(fun) when is_function(fun) do
+    info = Function.info(fun)
+
+    if info[:type] == :external,
+      do: [{info[:module], info[:name], info[:arity]}],
+      else: []
+  end
+
+  defp external_funs(list) when is_list(list), do: improper_flat_map(list)
+  defp external_funs(tuple) when is_tuple(tuple), do: external_funs(Tuple.to_list(tuple))
+
+  defp external_funs(map) when is_map(map),
+    do: map |> Map.to_list() |> external_funs()
+
+  defp external_funs(_term), do: []
+
+  defp improper_flat_map([head | tail]), do: external_funs(head) ++ improper_flat_map(tail)
+  defp improper_flat_map([]), do: []
+  defp improper_flat_map(tail), do: external_funs(tail)
+
+  # The host application's production beams, as the Sanctum roster reads them.
+  defp host_sanctum_reaches do
+    for path <- beams(:cyfr),
+        production?(path),
+        reach <- sanctum_reaches(String.to_charlist(path)),
+        uniq: true,
+        do: reach
+  end
+
   # The test build compiles `test/support` into the same ebin. A support
   # module is not the app, and its reaches are the suite's.
   defp production?(path) do
@@ -591,6 +655,74 @@ defmodule Cyfr.BoundariesTest do
   # 3. The routes
   # ---------------------------------------------------------------------------
 
+  describe "the Sanctum exports" do
+    test "the host calls exactly the rostered Sanctum functions" do
+      reaches = host_sanctum_reaches()
+
+      assert length(reaches) > 100,
+             "the Sanctum scan found #{length(reaches)} functions — it is not reading"
+
+      assert Boundaries.sanctum_export_violations(reaches) == [],
+             """
+             The host calls a Sanctum function the export roster does not
+             list. Add it to `Cyfr.Boundaries.sanctum_exports/0`, or call an
+             entry already listed.
+
+             #{Enum.join(Boundaries.sanctum_export_violations(reaches), "\n")}
+             """
+
+      assert Boundaries.stale_sanctum_exports(reaches) == [],
+             """
+             The export roster lists Sanctum functions the host no longer
+             calls. Remove them from `Cyfr.Boundaries.sanctum_exports/0`.
+
+             #{Enum.join(Boundaries.stale_sanctum_exports(reaches), "\n")}
+             """
+    end
+
+    test "every rostered function is a public function of a Sanctum module, listed once in order" do
+      for {module, functions} <- Boundaries.sanctum_exports() do
+        assert module == "Sanctum" or String.starts_with?(module, "Sanctum.")
+        assert functions == Enum.sort(Enum.uniq(functions)), "#{module}'s list is not sorted"
+
+        mod = Module.concat([module])
+        assert Code.ensure_loaded?(mod), "#{module} is not a module"
+
+        for {function, arity} <- functions do
+          assert function_exported?(mod, function, arity),
+                 "#{module}.#{function}/#{arity} is not exported"
+        end
+      end
+    end
+
+    test "a planted call or capture outside the roster is reported, and a dropped one is stale" do
+      [{Cyfr.PlantedSanctumReach, binary}] =
+        Code.compile_string(~S'''
+        defmodule Cyfr.PlantedSanctumReach do
+          def a(ctx), do: Sanctum.Context.tenant_ok(ctx)
+          def b, do: &Sanctum.Egress.pinned_request/2
+          def c(ctx), do: Sanctum.Context.actor(ctx)
+        end
+        ''')
+
+      :code.purge(Cyfr.PlantedSanctumReach)
+      :code.delete(Cyfr.PlantedSanctumReach)
+
+      planted = sanctum_reaches(binary)
+
+      assert Boundaries.sanctum_export_violations(planted) == [
+               "Sanctum.Context.tenant_ok/1",
+               "Sanctum.Egress.pinned_request/2"
+             ]
+
+      reaches = host_sanctum_reaches()
+      assert Boundaries.sanctum_export_violations(reaches ++ planted) != []
+
+      dropped = List.delete(reaches, {"Sanctum.Context", :actor, 1})
+      assert Boundaries.stale_sanctum_exports(dropped) == ["Sanctum.Context.actor/1"]
+    end
+  end
+
   describe "the routes" do
     test "every HTTP route declares an auth posture from the vocabulary" do
       assert Boundaries.route_violations(EmissaryWeb.Router.__routes__()) == [],
@@ -950,10 +1082,7 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.gate_violations(named) == []
       assert Boundaries.stale_gate_allowances(named) == []
 
-      assert Enum.map(Boundaries.gate_free().allow, & &1.name) == [
-               "Emissary.MCP.Protocol",
-               "Compendium.RegistryHost"
-             ]
+      assert Enum.map(Boundaries.gate_free().allow, & &1.name) == ["Emissary.MCP.Protocol"]
 
       for entry <- Boundaries.gate_free().allow do
         assert is_binary(entry.reason) and entry.reason != ""
@@ -981,10 +1110,7 @@ defmodule Cyfr.BoundariesTest do
                "apps/cyfr/lib/grimoire/planted.ex:6 names PrismWeb.Focus"
              ]
 
-      assert Boundaries.stale_gate_allowances(planted) == [
-               "Emissary.MCP.Protocol",
-               "Compendium.RegistryHost"
-             ]
+      assert Boundaries.stale_gate_allowances(planted) == ["Emissary.MCP.Protocol"]
     end
 
     test "a direct read of a security row in a surface is reported, however it is spelled" do

@@ -35,10 +35,9 @@ defmodule Grimoire.Provider do
   alias Sanctum.Context
   require Logger
 
-  # The status scopes are derived from the provider roster — "all" and the
-  # registry (an HTTP peer, not a provider) are the two extras.
+  # The status scopes are derived from the provider roster, with "all".
   defp scope_enum, do: ["all"] ++ service_scopes()
-  defp service_scopes, do: Grimoire.Services.service_names() ++ ["registry"]
+  defp service_scopes, do: Grimoire.Services.service_names()
 
   # ============================================================================
   # ToolProvider Callbacks
@@ -236,16 +235,9 @@ defmodule Grimoire.Provider do
   defp handle_status(ctx, "all") do
     services = check_all_services(ctx)
 
-    # "unknown" is a probe that deliberately did not run (test env) — not
-    # evidence of degradation.
-    overall =
-      if Enum.all?(services, fn {_k, v} -> v in ["ok", "stub", "unknown"] end),
-        do: "ok",
-        else: "degraded"
-
     {:ok,
      %{
-       status: overall,
+       status: overall(services),
        version: Prima.Version.current(),
        uptime_seconds: uptime(),
        services: services,
@@ -257,26 +249,29 @@ defmodule Grimoire.Provider do
      }}
   end
 
-  defp handle_status(ctx, scope) do
+  defp handle_status(_ctx, scope) do
     if scope in service_scopes() do
-      service_status = check_service_by_scope(ctx, scope)
+      services = service_status(scope)
 
       {:ok,
        %{
-         status: if(service_status in ["ok", "stub", "unknown"], do: "ok", else: "degraded"),
+         status: overall(services),
          version: Prima.Version.current(),
          uptime_seconds: uptime(),
-         # `scope` was just checked against the closed derived set, so the
-         # atom table stays bounded.
-         services: %{String.to_atom(scope) => service_status}
+         services: services
        }}
     else
       {:error, "Invalid scope: #{scope}. Valid scopes: #{Enum.join(scope_enum(), ", ")}"}
     end
   end
 
-  defp check_service_by_scope(_ctx, "registry"), do: check_registry_health()
-  defp check_service_by_scope(_ctx, scope), do: check_service_named(scope)
+  # "unknown" is a probe that deliberately did not run (test env) — not
+  # evidence of degradation.
+  defp overall(services) do
+    if Enum.all?(services, fn {_k, v} -> v in ["ok", "stub", "unknown"] end),
+      do: "ok",
+      else: "degraded"
+  end
 
   # A service is answering when every configured provider it owns is; the
   # first provider that is not carries the answer.
@@ -362,72 +357,64 @@ defmodule Grimoire.Provider do
   # ============================================================================
 
   defp check_all_services(_ctx) do
-    Grimoire.Services.service_names()
-    |> Map.new(fn service -> {String.to_atom(service), check_service_named(service)} end)
-    |> Map.put(:registry, check_registry_health())
+    Enum.reduce(service_scopes(), %{}, &Map.merge(&2, service_status(&1)))
   end
 
-  # The probe's answer is memoized per registry: it is an outbound HTTPS
-  # probe with 3s connect + 3s read timeouts, and system/status is called
-  # from the dev topbar on page loads. What configuration alone decides is
-  # answered afresh.
-  @registry_health_ttl_ms 30_000
+  # A service's own check merged with the states its providers report of
+  # what they depend on (`c:Prima.Provider.status/0`). A provider without
+  # the callback adds nothing; one whose answer raises, exits or is not a
+  # map of strings reads "crashed" under its service — the report degrades,
+  # the call never fails. Service names come from the configured roster and
+  # state names from provider code, so the atom table stays bounded.
+  defp service_status(service) do
+    service_key = String.to_atom(service)
 
-  defp check_registry_health do
-    cond do
-      not Compendium.RegistryHost.configured?() ->
-        # No registry is not a registry that is down.
-        "disabled"
+    {states, crashed?} =
+      service
+      |> Grimoire.Services.providers_for()
+      |> Enum.reduce({%{}, false}, fn module, {states, crashed?} ->
+        case provider_status(module) do
+          {:ok, reported} -> {Map.merge(states, reported), crashed?}
+          :crashed -> {states, true}
+        end
+      end)
 
-      Application.get_env(:cyfr, :registry_health_probe, true) ->
-        probed_registry_health(registry_url())
-
-      true ->
-        # The test env turns the probe off: a real DNS + TLS round-trip with
-        # a 3s timeout inside a test is 3s of wall clock and a straggling
-        # socket at test exit, and the answer means nothing there.
-        "unknown"
-    end
+    own = if crashed?, do: "crashed", else: check_service_named(service)
+    Map.put(states, service_key, own)
   end
 
-  defp probed_registry_health(url) do
-    key = {:registry_health, url}
-
-    case Arca.Cache.get(key) do
-      {:ok, cached} ->
-        cached
-
-      :miss ->
-        health = probe_registry_health(url)
-        Arca.Cache.put(key, health, @registry_health_ttl_ms)
-        health
-    end
-  end
-
-  # Apply shared TLS verification, SSRF checks, and DNS pinning.
-  defp probe_registry_health(url) do
-    case Sanctum.Egress.pinned_request(:get, "https://#{url}/health", [], nil,
-           receive_timeout: 3_000,
-           max_response_bytes: 64 * 1024
-         ) do
-      {:ok, 200, _headers, _body} ->
-        "ok"
-
-      {:ok, status_code, _headers, _body} ->
-        Logger.warning("[Grimoire.Provider] Registry health check returned status #{status_code}")
-        "error"
-
-      {:error, reason} ->
-        Logger.warning("[Grimoire.Provider] Registry health check failed: #{inspect(reason)}")
-        "unreachable"
+  defp provider_status(module) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :status, 0) do
+      module.status() |> reported_states(module)
+    else
+      {:ok, %{}}
     end
   rescue
+    # Its shape only: a provider's message can carry the values it probed.
     e ->
-      Logger.warning(
-        "[Grimoire.Provider] Registry health check exception: #{Exception.message(e)}"
+      Logger.error(
+        "[Grimoire.Provider] #{inspect(module)}.status/0 raised #{inspect(e.__struct__)}"
       )
 
-      "error"
+      :crashed
+  catch
+    kind, _reason ->
+      Logger.error("[Grimoire.Provider] #{inspect(module)}.status/0 failed (#{kind})")
+      :crashed
+  end
+
+  defp reported_states(states, module) when is_map(states) do
+    if Enum.all?(states, fn {k, v} -> is_binary(k) and is_binary(v) end) do
+      {:ok, Map.new(states, fn {name, state} -> {String.to_atom(name), state} end)}
+    else
+      Logger.error("[Grimoire.Provider] #{inspect(module)}.status/0 answered a malformed map")
+      :crashed
+    end
+  end
+
+  defp reported_states(_states, module) do
+    Logger.error("[Grimoire.Provider] #{inspect(module)}.status/0 answered no map")
+    :crashed
   end
 
   # Status reports whether the module is loaded and implements the
@@ -495,8 +482,6 @@ defmodule Grimoire.Provider do
   # ============================================================================
   # Helpers
   # ============================================================================
-
-  defp registry_url, do: Compendium.RegistryHost.canonical_host()
 
   defp uptime do
     {uptime_ms, _} = :erlang.statistics(:wall_clock)

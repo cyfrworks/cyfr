@@ -36,8 +36,9 @@ defmodule Aqua.Ops do
 
   @doc """
   The registry's `kind` annotation for `tool`/`action` — nil when the tool
-  or the annotation is unknown, so the gap stays visible (the
-  `Aqua.Kinds.kind_for/2` rule: no `_default` fallback).
+  or the annotation is unknown, so the gap stays visible (no `_default`
+  fallback). A catalogued tool's kind alone: `Grimoire.tool_kind/2` also
+  classifies the virtual hands and the external namespace.
   """
   @spec action_kind(String.t(), String.t()) :: atom() | nil
   def action_kind(tool, action) do
@@ -79,27 +80,6 @@ defmodule Aqua.Ops do
       _ -> nil
     end
   end
-
-  @doc """
-  The action verbs a registry tool enumerates — its input schema's
-  `action` enum — or `[]` for a tool the registry does not hold or one
-  with no verbs. What a `tool.*` glob expands to.
-  """
-  @spec actions_of(String.t()) :: [String.t()]
-  def actions_of(tool) when is_binary(tool) do
-    case Grimoire.get_tool(tool) do
-      {:ok, tool_def} ->
-        case get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) do
-          verbs when is_list(verbs) -> Enum.filter(verbs, &is_binary/1)
-          _ -> []
-        end
-
-      _ ->
-        []
-    end
-  end
-
-  def actions_of(_tool), do: []
 
   @doc "Whether a running chain would refuse `tool`/`action` (nothing a chain can run)."
   @spec in_chain_refused?(String.t(), String.t()) :: boolean()
