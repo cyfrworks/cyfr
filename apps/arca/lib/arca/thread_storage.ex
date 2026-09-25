@@ -982,7 +982,7 @@ defmodule Arca.ThreadStorage do
   defp stale_before(%Prima.Actor{athanor_id: athanor_id} = actor, cutoff) do
     open =
       from(t in Arca.Schemas.Turn,
-        where: t.athanor_id == ^athanor_id and t.status in ^Arca.TurnStorage.open_statuses(),
+        where: t.athanor_id == ^athanor_id and t.status in ^Prima.TurnState.open_statuses(),
         select: t.thread_id
       )
 

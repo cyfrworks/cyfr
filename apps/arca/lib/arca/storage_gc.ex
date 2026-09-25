@@ -904,7 +904,7 @@ defmodule Arca.StorageGC do
     rescuing_db("live_holders", fn ->
       turns =
         from(t in where_athanor(Turn, athanor),
-          where: t.id in ^turn_ids and t.status in ^Arca.TurnStorage.open_statuses(),
+          where: t.id in ^turn_ids and t.status in ^Prima.TurnState.open_statuses(),
           select: t.id
         )
         |> Arca.Repo.all()

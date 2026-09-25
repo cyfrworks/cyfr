@@ -3,10 +3,10 @@
 
 defmodule Aqua.ModelsTest do
   @moduledoc """
-  The assistant's door for callers outside it, and the model listing's
-  refusals: the root answers exactly its delegating functions, the
-  listing reads the estate's catalysts through the component domain's
-  facade and refuses as it refuses, and a model status needs a context.
+  The model listing's refusals: the listing reads the estate's catalysts
+  through the component domain's facade and refuses as it refuses, and a
+  model status needs a context. The assistant's root roster is
+  `Aqua.FacadeTest`'s.
   """
 
   use ExUnit.Case, async: false
@@ -17,22 +17,6 @@ defmodule Aqua.ModelsTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     :ok
-  end
-
-  test "the root answers exactly its six delegating functions" do
-    exported =
-      Aqua.__info__(:functions)
-      |> Enum.reject(fn {name, _arity} -> name in [:__info__, :module_info] end)
-      |> Enum.sort()
-
-    assert exported == [
-             consent_state: 1,
-             consent_state: 2,
-             model_capabilities: 5,
-             model_status: 2,
-             models: 1,
-             stale_consent_refs: 1
-           ]
   end
 
   test "the listing refuses a caller the component facts refuse, and runs nothing" do

@@ -495,6 +495,67 @@ defmodule Cyfr.Boundaries do
           "listing reads `Compendium.model_catalysts/1` and runs each catalyst there."
     },
     %{
+      from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
+      into: "Crucible",
+      allow: ~w(Crucible),
+      reason:
+        "the assistant runs what it runs through the execution domain's root facade " <>
+          "alone: a turn claims, pauses, resumes and releases its root there, and a " <>
+          "model listing or a consent status derives an authority there; nothing of " <>
+          "admission, dispatch or the attempt's rows is the assistant's to name."
+    },
+    %{
+      from: ["apps/cyfr/lib/crucible/**/*.ex", "apps/cyfr/lib/crucible.ex"],
+      into: "Aqua",
+      allow: [],
+      reason:
+        "execution runs components and turn roots for whoever asks and knows nothing " <>
+          "of the assistant: the assistant calls down into `Crucible`, never the " <>
+          "reverse."
+    },
+    %{
+      from: [
+        "apps/cyfr/lib/emissary/**/*.ex",
+        "apps/cyfr/lib/emissary.ex",
+        "apps/cyfr/lib/emissary_web/**/*.ex",
+        "apps/cyfr/lib/emissary_web.ex"
+      ],
+      into: "Aqua",
+      allow: [],
+      reason:
+        "the MCP surface reaches the assistant only as operations through the gate " <>
+          "(the `aqua` and thread tools); it names no function of the domain."
+    },
+    %{
+      from: [
+        "apps/cyfr/lib/emissary/**/*.ex",
+        "apps/cyfr/lib/emissary.ex",
+        "apps/cyfr/lib/emissary_web/**/*.ex",
+        "apps/cyfr/lib/emissary_web.ex"
+      ],
+      into: "Crucible",
+      allow: ~w(Crucible Crucible.LeaseWatch),
+      reason:
+        "the MCP surface follows executions, serves webhooks and reports health through " <>
+          "the execution domain's root facade. `Crucible.LeaseWatch` is the outbound " <>
+          "proxy's lease keeper (`Emissary.External.Proxy`), named directly until that " <>
+          "call moves to `Crucible.start_lease_watch/3` and `stop_lease_watch/1`."
+    },
+    %{
+      from: [
+        "apps/cyfr/lib/prism/**/*.ex",
+        "apps/cyfr/lib/prism.ex",
+        "apps/cyfr/lib/prism_web/**/*.ex",
+        "apps/cyfr/lib/prism_web.ex"
+      ],
+      into: "Crucible",
+      allow: ~w(Crucible),
+      reason:
+        "the console reads executions, invokes tinctures and checks the executor " <>
+          "through the execution domain's root facade under the caller's context, and " <>
+          "names none of its internals."
+    },
+    %{
       from: ["apps/sanctum/lib/**/*.ex"],
       into: "Compendium",
       allow: [],
@@ -635,7 +696,9 @@ defmodule Cyfr.Boundaries do
   A row's `depth` is how many segments a reach is rostered by — two
   (`Sanctum.Context`) unless it says otherwise. A row's `only`, when it
   has one, narrows it to those namespaces under `into`: every other reach
-  into `into` is some other row's business.
+  into `into` is some other row's business. A row's `except`, when it has
+  one, lists globs of files under `from` the row does not read — a file
+  the composition root owns, whose reaches another row decides.
   """
   @spec surfaces() :: [map()]
   def surfaces, do: @surfaces

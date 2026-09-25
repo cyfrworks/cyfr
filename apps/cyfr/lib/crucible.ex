@@ -470,4 +470,17 @@ defmodule Crucible do
   """
   @spec list(Context.t(), keyword()) :: {:ok, [Record.t()]} | {:error, term()}
   defdelegate list(ctx, opts \\ []), to: Record
+
+  @doc """
+  Keep the lease of `attempt` of `execution_id` held outside the engine,
+  exiting `holder` when it is lost (`Crucible.LeaseWatch.start/4`).
+  """
+  @spec start_lease_watch(pid(), String.t(), String.t(), keyword()) :: {:ok, pid()}
+  defdelegate start_lease_watch(holder, execution_id, attempt, opts \\ []),
+    to: Crucible.LeaseWatch,
+    as: :start
+
+  @doc "Stop a lease keeper; a keeper that is gone answers `:ok` (`Crucible.LeaseWatch.stop/1`)."
+  @spec stop_lease_watch(pid() | nil) :: :ok
+  defdelegate stop_lease_watch(keeper), to: Crucible.LeaseWatch, as: :stop
 end

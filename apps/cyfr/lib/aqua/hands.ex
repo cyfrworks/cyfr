@@ -3,11 +3,12 @@
 
 defmodule Aqua.Hands do
   @moduledoc """
-  The one table of AQUA's hands — `files`, `storage`, `http`,
-  `request_setup`: the model-visible operations that run a local catalyst
-  under the pinned authority, and the UI event that is none.
+  AQUA's hands — `files`, `storage`, `http`, `request_setup`: the
+  model-visible operations that run a local catalyst under the pinned
+  authority, and the UI event that is none. Their table is
+  `Prima.VirtualTools`; this module reads it.
 
-  Every question about a hand is answered from these rows:
+  Every question about a hand is answered from those rows:
 
     * **kind** — what `Aqua.Kinds.kind_for/2` and the AQUA page classify
       a `tool.action` as, and which reads are reviewed as safe to
@@ -29,156 +30,57 @@ defmodule Aqua.Hands do
   request may do.
   """
 
-  @files_catalyst "catalyst:local.files"
-  @http_catalyst "catalyst:local.http"
+  alias Prima.VirtualTools
+
+  # The table is `Prima.VirtualTools`'s; the catalysts are read from it at
+  # compile time so the patterns below match what it declares.
+  @files_catalyst VirtualTools.catalyst_for("files")
+  @http_catalyst VirtualTools.catalyst_for("http")
   @storage_prefix "data/storage/"
   @storage_root "data/storage"
   @components_prefix "components/"
   @components_root "components"
 
-  @catalog %{
-    "files" => %{
-      title: "Files",
-      description: "Athanor file ops. Wraps catalyst:local.files.",
-      catalyst: @files_catalyst,
-      actions: %{
-        "read" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "list" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "search" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "grep" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "tree" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "write" => %{kind: :write, planes: [:in_chain]},
-        "edit" => %{kind: :write, planes: [:in_chain]},
-        "delete" => %{kind: :destructive, planes: [:in_chain]}
-      }
-    },
-    "storage" => %{
-      title: "Storage",
-      description: "Persistent k/v under data/storage/. Wraps catalyst:local.files.",
-      catalyst: @files_catalyst,
-      actions: %{
-        "read" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "list" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "write" => %{kind: :write, planes: [:in_chain]},
-        "delete" => %{kind: :destructive, planes: [:in_chain]}
-      }
-    },
-    "http" => %{
-      title: "HTTP",
-      description: "Outbound HTTP. Wraps catalyst:local.http.",
-      catalyst: @http_catalyst,
-      actions: %{
-        "read" => %{kind: :read, planes: [:in_chain]},
-        "links" => %{kind: :read, planes: [:in_chain]},
-        "metadata" => %{kind: :read, planes: [:in_chain]},
-        "get" => %{kind: :read, planes: [:in_chain]},
-        "head" => %{kind: :read, planes: [:in_chain]},
-        "options" => %{kind: :read, planes: [:in_chain]},
-        "put" => %{kind: :write, planes: [:in_chain]},
-        "patch" => %{kind: :write, planes: [:in_chain]},
-        "post" => %{kind: :execute, planes: [:in_chain]},
-        "delete" => %{kind: :destructive, planes: [:in_chain]}
-      }
-    },
-    "request_setup" => %{
-      title: "Setup form",
-      description: "Open the inline setup form for a component needing credentials.",
-      catalyst: nil,
-      actions: %{"open" => %{kind: :write, planes: [:in_chain], auto_only: true}}
-    }
-  }
-
-  @doc """
-  The catalyst a virtual tool family runs on (`"files"` and `"storage"`
-  on the files catalyst, `"http"` on the http catalyst), or nil for a
-  family that is not a virtual tool or runs on none.
-  """
+  @doc "The catalyst a virtual tool family runs on (`Prima.VirtualTools.catalyst_for/1`)."
   @spec catalyst_for(String.t()) :: String.t() | nil
-  def catalyst_for(tool) when is_binary(tool) do
-    case Map.get(@catalog, tool) do
-      %{catalyst: catalyst} -> catalyst
-      nil -> nil
-    end
-  end
+  defdelegate catalyst_for(tool), to: VirtualTools
 
   @http_page_ops ~w(read links metadata head)
   @http_methods ~w(get options post put patch delete)
 
   @type canonical :: %{tool: String.t(), action: String.t(), args: map()}
 
-  @doc "Full catalog map. Source of truth for virtual-tool schema on the harness side."
-  @spec catalog() :: %{
-          String.t() => %{
-            title: String.t(),
-            description: String.t(),
-            catalyst: String.t() | nil,
-            actions: %{String.t() => map()}
-          }
-        }
-  def catalog, do: @catalog
+  @doc "The whole virtual-tool table (`Prima.VirtualTools.table/0`)."
+  @spec catalog() :: %{String.t() => VirtualTools.family()}
+  defdelegate catalog, to: VirtualTools, as: :table
 
-  @doc "Lookup the kind of a virtual `tool.action`. Returns `nil` if not a virtual tool/action."
+  @doc "The kind of a virtual `tool.action`, or nil (`Prima.VirtualTools.kind_for/2`)."
   @spec kind_for(String.t(), String.t()) :: atom() | nil
-  def kind_for(tool, action) do
-    case annotation(tool, action) do
-      %{kind: kind} -> kind
-      _ -> nil
-    end
-  end
+  defdelegate kind_for(tool, action), to: VirtualTools
 
   @doc """
   Whether `tool.action` may only ever be `auto`: a UI event the guest
-  answers in place, never a catalyst call a card could run.
+  answers in place, never a catalyst call a card could run
+  (`Prima.VirtualTools.auto_only?/2`).
   """
   @spec auto_only?(String.t(), String.t()) :: boolean()
-  def auto_only?(tool, action) do
-    case annotation(tool, action) do
-      %{auto_only: true} -> true
-      _ -> false
-    end
-  end
+  defdelegate auto_only?(tool, action), to: VirtualTools
 
-  defp annotation(tool, action) when is_binary(tool) and is_binary(action) do
-    case @catalog[tool] do
-      %{actions: actions} -> actions[action]
-      _ -> nil
-    end
-  end
-
-  defp annotation(_tool, _action), do: nil
-
-  @doc "The actions a virtual tool has, or `[]` for a tool the catalog does not hold."
+  @doc "The actions a virtual tool has, or `[]` (`Prima.VirtualTools.actions_of/1`)."
   @spec actions_of(String.t()) :: [String.t()]
-  def actions_of(tool) do
-    case @catalog[tool] do
-      %{actions: actions} -> actions |> Map.keys() |> Enum.sort()
-      _ -> []
-    end
-  end
+  defdelegate actions_of(tool), to: VirtualTools
 
   @doc """
   Return `[{tool, [{action, kind}]}]` shaped like the MCP path's enumeration,
   so the AQUA harness can merge MCP + virtual + external surfaces into one
-  uniform list.
+  uniform list (`Prima.VirtualTools.action_kinds/0`).
   """
   @spec list_for_panel() :: [{String.t(), [{String.t(), atom()}]}]
-  def list_for_panel do
-    @catalog
-    |> Enum.map(fn {tool, %{actions: actions}} ->
-      pairs =
-        actions
-        |> Enum.map(fn {action, %{kind: kind}} -> {action, kind} end)
-        |> Enum.sort()
-
-      {tool, pairs}
-    end)
-    |> Enum.sort_by(&elem(&1, 0))
-  end
+  defdelegate list_for_panel, to: VirtualTools, as: :action_kinds
 
   @doc "Whether `tool` is a virtual tool managed by AQUA."
-  @spec hand?(String.t()) :: boolean()
-  def hand?(tool) when is_binary(tool), do: Map.has_key?(@catalog, tool)
-  def hand?(_), do: false
+  @spec hand?(term()) :: boolean()
+  defdelegate hand?(tool), to: VirtualTools, as: :tool?
 
   @doc """
   The second arm of the plane taxonomy audit.
@@ -194,7 +96,7 @@ defmodule Aqua.Hands do
   @spec audit_planes() :: :ok | {:error, [map()]}
   def audit_planes do
     missing =
-      Enum.flat_map(@catalog, fn {tool, %{actions: actions}} ->
+      Enum.flat_map(VirtualTools.table(), fn {tool, %{actions: actions}} ->
         Enum.flat_map(actions, fn {action, annotation} ->
           case annotation do
             %{kind: kind, planes: [:in_chain]} when is_atom(kind) and not is_nil(kind) ->
@@ -217,13 +119,7 @@ defmodule Aqua.Hands do
   dispatch list must agree with.
   """
   @spec action_pairs() :: [String.t()]
-  def action_pairs do
-    @catalog
-    |> Enum.flat_map(fn {tool, %{actions: actions}} ->
-      Enum.map(Map.keys(actions), &"#{tool}.#{&1}")
-    end)
-    |> Enum.sort()
-  end
+  defdelegate action_pairs, to: VirtualTools
 
   # ---------------------------------------------------------------------------
   # References
@@ -243,8 +139,7 @@ defmodule Aqua.Hands do
   @doc "Whether a reference names a catalyst a hand runs on, at any version."
   @spec hand_catalyst?(String.t()) :: boolean()
   def hand_catalyst?(reference) when is_binary(reference) do
-    name = name_level(reference)
-    Enum.any?(@catalog, fn {_tool, %{catalyst: catalyst}} -> catalyst == name end)
+    name_level(reference) in VirtualTools.catalysts()
   end
 
   def hand_catalyst?(_), do: false
@@ -419,7 +314,7 @@ defmodule Aqua.Hands do
     path = str(args, if(action == "search", do: "base_path", else: "path"))
 
     cond do
-      not Map.has_key?(@catalog["files"].actions, action) ->
+      is_nil(VirtualTools.action("files", action)) ->
         {:error, :unknown_operation}
 
       component_source_path?(path) ->

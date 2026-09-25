@@ -171,7 +171,14 @@ defmodule Prima.Provider do
   """
   @callback resource_templates() :: [map()]
 
-  @optional_callbacks context_kind: 0, resources: 0, resource_templates: 0
+  @doc """
+  The health of the services a provider depends on, for `system.status`:
+  service name to state (`"ok"`, `"disabled"`, `"unreachable"`, …).
+  A degraded service is a state in the map, never a failed call.
+  """
+  @callback status() :: %{String.t() => String.t()}
+
+  @optional_callbacks context_kind: 0, resources: 0, resource_templates: 0, status: 0
 
   @doc """
   A provider's declared `c:context_kind/0`: `:context` when it exports

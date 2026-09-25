@@ -60,22 +60,23 @@ defmodule Arca.TurnStorage do
 
   alias Arca.Schemas.{Approval, Thread, Message, Turn, TurnStep}
 
-  @statuses ["accepted", "running", "paused", "completed", "failed", "cancelled", "uncertain"]
-  @open ["accepted", "running", "paused"]
-  @terminal ["completed", "failed", "cancelled", "uncertain"]
-  @step_kinds ["model", "tool", "ui", "approval", "clone", "launch"]
-  @outcomes ["ok", "error", "denied", "skipped", "cancelled", "uncertain"]
-  @decisions ["approved", "declined", "expired", "error"]
+  # The turn vocabulary is `Prima.TurnState`'s; these are its sets, bound
+  # at compile time so guards can test membership.
+  @open Prima.TurnState.open_statuses()
+  @terminal Prima.TurnState.terminal_statuses()
+  @step_kinds Prima.TurnState.step_kinds()
+  @outcomes Prima.TurnState.outcomes()
+  @decisions Prima.TurnState.decisions()
   @recovery_cap 3
 
-  @doc "Every status a turn can carry."
-  def statuses, do: @statuses
+  @doc "Every status a turn can carry (`Prima.TurnState.statuses/0`)."
+  defdelegate statuses, to: Prima.TurnState
 
-  @doc "The statuses of a turn that still owns work."
-  def open_statuses, do: @open
+  @doc "The statuses of a turn that still owns work (`Prima.TurnState.open_statuses/0`)."
+  defdelegate open_statuses, to: Prima.TurnState
 
-  @doc "The statuses of a turn that is over."
-  def terminal_statuses, do: @terminal
+  @doc "The statuses of a turn that is over (`Prima.TurnState.terminal_statuses/0`)."
+  defdelegate terminal_statuses, to: Prima.TurnState
 
   @doc "How many automatic recoveries a turn gets before it is `uncertain`."
   def recovery_cap, do: @recovery_cap
@@ -465,7 +466,7 @@ defmodule Arca.TurnStorage do
 
         ran =
           if turn.attempt do
-            {attempt_state, outcome} = attempt_end(status)
+            {attempt_state, outcome} = Prima.TurnState.attempt_end(status)
 
             Arca.ExecutionAttempts.close!(
               Prima.Actor.in_athanor(athanor_id),
@@ -483,7 +484,7 @@ defmodule Arca.TurnStorage do
             athanor_id,
             turn.root_execution_id,
             ["running", "paused"],
-            status_of(status),
+            Prima.TurnState.status_of(status),
             error: Map.get(attrs, :error)
           )
 
@@ -2281,14 +2282,6 @@ defmodule Arca.TurnStorage do
     :ok
   end
 
-  defp attempt_end("completed"), do: {"completed", "ok"}
-  defp attempt_end("failed"), do: {"failed", "error"}
-  defp attempt_end("cancelled"), do: {"cancelled", "cancelled"}
-  defp attempt_end("uncertain"), do: {"failed", "uncertain"}
-
-  defp status_of("uncertain"), do: "failed"
-  defp status_of(status), do: status
-
   # The highest seq a turn may read when it starts: its own initiating
   # message, and every unattached row or row of a settled turn.
   # arca:db-raise-ok inside the caller's transaction
@@ -2472,8 +2465,11 @@ defmodule Arca.TurnStorage do
       # exactly the race the statement is here to lose.
       {0, _} ->
         case thread!(athanor_id, turn.thread_id) do
-          %Thread{active_turn_id: held} when is_binary(held) -> Arca.Repo.rollback({:held_elsewhere, held})
-          %Thread{} -> Arca.Repo.rollback(:stale)
+          %Thread{active_turn_id: held} when is_binary(held) ->
+            Arca.Repo.rollback({:held_elsewhere, held})
+
+          %Thread{} ->
+            Arca.Repo.rollback(:stale)
         end
     end
   end
