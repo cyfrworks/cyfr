@@ -478,7 +478,10 @@ defmodule Sanctum.Context do
   `auth_method == :system`, the provenance that lets the server's own work
   mutate seed, global and tenant-reserved paths; every other
   `auth_method` records where a caller came from and grants nothing, so it
-  projects `system: false`. Neither crosses the wire (`Prima.Actor`).
+  projects `system: false`. `platform_admin` is the context's operator
+  capability, copied as it stands: it widens no scope, and it is what the
+  global audit reads require. None of the three crosses the wire
+  (`Prima.Actor`).
 
   A context whose athanor is unresolved projects `athanor_id: nil`, never a
   sentinel: the facade refuses it before any query, and it stays
@@ -496,7 +499,8 @@ defmodule Sanctum.Context do
       authenticated: ctx.authenticated,
       client_ip: ctx.client_ip,
       scope: ctx.scope,
-      system: ctx.auth_method == :system
+      system: ctx.auth_method == :system,
+      platform_admin: ctx.platform_admin == true
     }
   end
 

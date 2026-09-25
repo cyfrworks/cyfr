@@ -1143,7 +1143,7 @@ jobs:
             fi
           done
           # Check athanor_id constraints in every migration. Only the baseline's
-          # memberships and sessions columns may be nullable.
+          # memberships, sessions and decision_logs columns may be nullable.
           # `grep -c` exits 1 when the count is zero, and the job's shell is
           # `bash -e`, so an unguarded count on a migration that adds no
           # athanor_id column kills the job silently — which is what every
@@ -1151,15 +1151,15 @@ jobs:
           m=apps/arca/priv/repo/migrations/20260815000000_baseline.exs
           nullable="$(grep -cE 'add :athanor_id' "$m" || true)"
           notnull="$(grep -cE 'add :athanor_id.*null: false' "$m" || true)"
-          if [ "$((nullable - notnull))" -ne 2 ]; then
-            echo "::error::exactly two nullable athanor_id columns are allowed (memberships, sessions); found $((nullable - notnull))"; fail=1
+          if [ "$((nullable - notnull))" -ne 3 ]; then
+            echo "::error::exactly three nullable athanor_id columns are allowed (memberships, sessions, decision_logs); found $((nullable - notnull))"; fail=1
           fi
           for other in apps/arca/priv/repo/migrations/*.exs; do
             [ "$other" = "$m" ] && continue
             n="$(grep -cE 'add :athanor_id' "$other" || true)"
             nn="$(grep -cE 'add :athanor_id.*null: false' "$other" || true)"
             if [ "$n" -ne "$nn" ]; then
-              echo "::error file=$other::athanor_id must be null: false outside the baseline (the two nullable fabrics are baseline-only)"; fail=1
+              echo "::error file=$other::athanor_id must be null: false outside the baseline (the three nullable fabrics are baseline-only)"; fail=1
             fi
           done
           if grep -nE 'add :athanor_id.*default:' apps/arca/priv/repo/migrations/*.exs; then

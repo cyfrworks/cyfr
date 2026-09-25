@@ -16,7 +16,12 @@ end
 # running the whole application against one Postgres and one object store.
 # It costs two operating-system processes and a full boot each, and it
 # needs a database of its own, so it runs only when it is asked for.
-ExUnit.configure(exclude: [:cluster, :s3_integration, :public_dns | toolchain_excludes])
+# :benchmark is the admission latency matrix (`Grimoire.AdmissionLatencyTest`):
+# minutes of timed samples against committed rows, run alone with
+# `--only benchmark` so nothing else competes for the pool it measures.
+ExUnit.configure(
+  exclude: [:cluster, :s3_integration, :public_dns, :benchmark | toolchain_excludes]
+)
 
 # The suite runs from the umbrella root, where the Opus worker service is
 # up beside CYFR: its listener and CYFR's host API listener each bound a

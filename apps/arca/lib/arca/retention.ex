@@ -56,6 +56,7 @@ defmodule Arca.Retention do
     Arca.Retention.Builds,
     Arca.Retention.McpLogs,
     Arca.Retention.PolicyLogs,
+    Arca.Retention.Decisions,
     Arca.Retention.Threads,
     Arca.Retention.StagedRevisions,
     Arca.Retention.WriteIntents,

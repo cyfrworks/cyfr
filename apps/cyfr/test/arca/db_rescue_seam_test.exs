@@ -46,7 +46,12 @@ defmodule Arca.DbRescueSeamTest do
     # run/1: the security reconcile is fail-closed, and a raised database
     # error refuses the boot as `:database_error`, a class of its own and
     # distinct from any other raise (`:exception`). Nothing is tolerated.
-    "apps/cyfr/lib/cyfr/bootstrap.ex" => 1
+    "apps/cyfr/lib/cyfr/bootstrap.ex" => 1,
+    # the budgeted append and finish: the answer is a typed audit failure
+    # that tells a timeout from an outage (a `DBConnection.ConnectionError`
+    # past the deadline, or SQLite's lock wait, is `:timeout`; the rest are
+    # `:unavailable`), which the helper's single `:database_error` collapses.
+    "apps/arca/lib/arca/decision_log.ex" => 1
   }
 
   test "inline db-errors rescues exist only at the enumerated exceptions" do

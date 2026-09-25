@@ -10,9 +10,10 @@ defmodule Prima.Actor do
   (`authenticated`), the caller's resolved address (`client_ip`), the
   authorization plane the call is on (`plane`), whether the originating
   caller presented no credentials (`anonymous`), the tenancy scope its
-  reads run under (`scope`) and whether it is the server acting as itself
-  (`system`). It attributes work and authorizes nothing: what an execution
-  may do is its authority's (`Prima.Authority`).
+  reads run under (`scope`), whether it is the server acting as itself
+  (`system`) and whether the person holds the platform-admin capability
+  (`platform_admin`). It attributes work and authorizes nothing: what an
+  execution may do is its authority's (`Prima.Authority`).
 
   `plane` is `:external` for every real ingress and `:guest` once the
   context has entered a WASM closure (`Sanctum.Context.enter_guest/1`); an
@@ -37,13 +38,18 @@ defmodule Prima.Actor do
   `scope: :athanor` and still reads that one tenant. One field could not
   carry both without widening whichever of the two it was asked for.
 
+  `platform_admin` is the operator capability the identity domain derived
+  for the person (`Sanctum.Context`), projected so the global audit reads
+  (`Arca.DecisionLog`) can require it. It widens no scope: a platform
+  admin's actor still reads its own athanor everywhere else.
+
   On the wire (`to_wire/1`) an actor is a JCS-ready map with string keys
   carrying exactly four members: `authenticated`, always present, and
   `user_id`, `request_id` and `client_ip`, each only when it is set. The
   athanor is a top-level field of the assignment, and the plane, the
-  anonymous flag, the scope and the system flag never cross the wire:
-  `from_wire/1` refuses all four as unknown members and yields their
-  defaults. A worker holds only the authority its assignment was issued
+  anonymous flag, the scope, the system flag and the platform-admin
+  capability never cross the wire: `from_wire/1` refuses all five as
+  unknown members and yields their defaults. A worker holds only the authority its assignment was issued
   with, so the two members that would let a returned actor read another
   tenant's rows or write a shared path are exactly the two the decoder
   will not take from it.
@@ -57,7 +63,8 @@ defmodule Prima.Actor do
             plane: :external,
             anonymous: false,
             scope: :athanor,
-            system: false
+            system: false,
+            platform_admin: false
 
   @type plane :: :external | :guest
 
@@ -80,7 +87,8 @@ defmodule Prima.Actor do
           plane: plane(),
           anonymous: boolean(),
           scope: scope(),
-          system: boolean()
+          system: boolean(),
+          platform_admin: boolean()
         }
 
   @optional ["user_id", "request_id", "client_ip"]
@@ -139,9 +147,10 @@ defmodule Prima.Actor do
   four, a missing or non-boolean `authenticated`, or a present member that
   is not a string of 1 to 256 bytes is `{:error, :invalid_actor}`. An absent
   `user_id`, `request_id` or `client_ip` is nil. `athanor_id`, `plane`,
-  `anonymous`, `scope` and `system` are not wire members: present, they are
-  refused as unknown; the decoded actor carries their defaults, so what
-  comes back from a worker is athanor-scoped and not the system.
+  `anonymous`, `scope`, `system` and `platform_admin` are not wire
+  members: present, they are refused as unknown; the decoded actor carries
+  their defaults, so what comes back from a worker is athanor-scoped, not
+  the system and no platform admin.
   """
   @spec from_wire(term()) :: {:ok, t()} | {:error, :invalid_actor}
   def from_wire(%{"authenticated" => authenticated} = wire) when is_boolean(authenticated) do

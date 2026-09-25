@@ -144,18 +144,30 @@ defmodule Prima.ActorTest do
     assert {:ok, decoded} = wire |> json_round_trip() |> Actor.from_wire()
     assert decoded == @full
 
-    assert {decoded.athanor_id, decoded.plane, decoded.anonymous, decoded.scope, decoded.system} ==
-             {nil, :external, false, :athanor, false}
+    assert {decoded.athanor_id, decoded.plane, decoded.anonymous, decoded.scope, decoded.system,
+            decoded.platform_admin} ==
+             {nil, :external, false, :athanor, false, false}
 
     for {key, value} <- [
           {"athanor_id", "ath_01a09fee"},
           {"plane", "guest"},
           {"anonymous", true},
           {"scope", "platform"},
-          {"system", true}
+          {"system", true},
+          {"platform_admin", true}
         ] do
       assert {:error, :invalid_actor} = Actor.from_wire(Map.put(wire, key, value)), key
     end
+  end
+
+  test "the platform-admin capability is off unless projected, and never crosses the wire" do
+    refute %Actor{}.platform_admin
+    refute Actor.system().platform_admin
+    refute Actor.in_athanor("ath_1").platform_admin
+
+    admin = %{Actor.in_athanor("ath_1") | platform_admin: true}
+    refute Map.has_key?(Actor.to_wire(admin), "platform_admin")
+    assert {:ok, %Actor{platform_admin: false}} = admin |> Actor.to_wire() |> Actor.from_wire()
   end
 
   test "the server's own actor comes back from the wire with neither authority" do

@@ -166,6 +166,33 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
   end
 
+  test "the estate's decisions go with it, and the host's decisions stay", %{group: group, ctx: ctx} do
+    decision = fn admission ->
+      Prima.Decision.new(
+        call_id: "call_destroy_#{uniq()}",
+        plane: :external,
+        admission: admission,
+        refusal_class: if(admission == :refused, do: :unauthenticated),
+        inserted_at: DateTime.utc_now()
+      )
+    end
+
+    estate = decision.(:admitted)
+    host = decision.(:refused)
+    :ok = Arca.DecisionLog.append(Sanctum.Context.actor(ctx), estate)
+    :ok = Arca.DecisionLog.append(nil, host)
+    assert count("decision_logs", group.id) == 1
+
+    {:ok, archived} = Athanors.archive(group)
+    assert {:ok, %{"decision_logs" => 1}} = Athanors.destroy(archived)
+
+    assert count("decision_logs", group.id) == 0
+
+    admin = %{Prima.Actor.system() | platform_admin: true}
+    assert {:error, :not_found} = Arca.DecisionLog.get_global(admin, estate.call_id)
+    assert {:ok, %{athanor_id: nil}} = Arca.DecisionLog.get_global(admin, host.call_id)
+  end
+
   test "the sealed payload itself is gone, not merely unreferenced", %{group: group, ctx: ctx} do
     :ok = seed_rows!(ctx)
 

@@ -10,7 +10,9 @@ defmodule Cyfr.RetentionScheduler do
   starts. When enabled, each tick asks for the cell's `retention` claim
   (`Arca.JobClaims`, key `"cell"`) and, holding it, runs one cycle: every
   kind in `Arca.Retention.kinds/0` inside every active athanor, each
-  under its own settings, plus the declared sweeps below. The tick
+  under its own settings, plus the declared sweeps below — among them the
+  host's own decisions, the ones made before any tenant was resolved,
+  purged past `CYFR_DECISION_RETENTION_DAYS`. The tick
   repeats on a configurable interval (default 6 hours) to prevent
   unbounded storage growth. Every step runs behind one crash barrier: a
   fault in one is logged and the cycle moves on.
@@ -89,6 +91,7 @@ defmodule Cyfr.RetentionScheduler do
   alias Arca.JobClaims
 
   @default_interval_ms :timer.hours(6)
+  @decision_retention_days 365
 
   @kind "retention"
   @lease_ms :timer.minutes(5)
@@ -100,6 +103,7 @@ defmodule Cyfr.RetentionScheduler do
   @steps [
     {"flush", "record sink flush"},
     {"retention", "retention cleanup"},
+    {"decisions_global", "host decision purge"},
     {"sessions", "expired session sweep"},
     {"webhooks", "webhook delivery sweep"},
     {"rates", "rate window sweep"},
@@ -420,6 +424,7 @@ defmodule Cyfr.RetentionScheduler do
     fn -> Arca.RecordSink.flush() end
   end
 
+  defp step_fun("decisions_global"), do: &purge_host_decisions/0
   defp step_fun("sessions"), do: &sweep_expired_sessions/0
   defp step_fun("webhooks"), do: &sweep_webhook_deliveries/0
   defp step_fun("rates"), do: &sweep_rate_windows/0
@@ -440,6 +445,26 @@ defmodule Cyfr.RetentionScheduler do
     case Arca.RateWindows.purge_expired() do
       0 -> :ok
       count -> Logger.info("[RetentionScheduler] Removed #{count} expired rate window(s)")
+    end
+  end
+
+  # The admission decisions made before any tenant was resolved carry no
+  # athanor, so no estate's retention reaches them: the host purges them
+  # under the claim it holds, as the platform's own actor, once they are
+  # older than CYFR_DECISION_RETENTION_DAYS. Never an estate's row.
+  defp purge_host_decisions do
+    days = Application.get_env(:cyfr, :decision_retention_days, @decision_retention_days)
+    cutoff = DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
+
+    case Arca.DecisionLog.purge_global(Prima.Actor.system(), cutoff) do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("[RetentionScheduler] Purged #{count} host decision row(s)")
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Host decision purge failed: #{inspect(reason)}")
     end
   end
 

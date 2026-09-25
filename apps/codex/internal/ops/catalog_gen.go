@@ -2872,6 +2872,8 @@ type RetentionSetArgsSettings struct {
 	// Days of records kept per athanor
 	PolicyLogDays Field[int] `json:"policy_log_days,omitzero"`
 	// Days of records kept per athanor
+	DecisionsDays Field[int] `json:"decisions_days,omitzero"`
+	// Days of records kept per athanor
 	MessagesDays Field[int] `json:"messages_days,omitzero"`
 	// Days of records kept per athanor
 	StagingDays Field[int] `json:"staging_days,omitzero"`

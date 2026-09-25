@@ -250,6 +250,10 @@ config :arca, Arca.Retention,
   policy_log_days: 30,
   # Days of MCP request log kept.
   mcp_log_days: 30,
+  # Days an athanor keeps its admission decisions. The decisions made
+  # before any tenant was resolved are the host's, kept for
+  # CYFR_DECISION_RETENTION_DAYS (`Cyfr.RetentionScheduler`).
+  decisions_days: 90,
   # Days of thread messages kept.
   messages_days: 365,
   # Days a settled storage write intent is kept — the evidence of what
