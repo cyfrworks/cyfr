@@ -57,8 +57,8 @@ defmodule CyfrWeb do
   def verified_routes do
     quote do
       use Phoenix.VerifiedRoutes,
-        endpoint: EmissaryWeb.Endpoint,
-        router: EmissaryWeb.Router,
+        endpoint: CyfrWeb.Endpoint,
+        router: CyfrWeb.Router,
         statics: CyfrWeb.static_paths()
     end
   end

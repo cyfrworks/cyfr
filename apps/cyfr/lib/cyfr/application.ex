@@ -127,7 +127,7 @@ defmodule Cyfr.Application do
   defp web do
     [
       {Task.Supervisor, name: CyfrWeb.Ingress.TaskSupervisor},
-      EmissaryWeb.Endpoint
+      CyfrWeb.Endpoint
     ]
   end
 
@@ -420,7 +420,7 @@ defmodule Cyfr.Application do
   # whenever the application is updated.
   @impl true
   def config_change(changed, _new, removed) do
-    EmissaryWeb.Endpoint.config_change(changed, removed)
+    CyfrWeb.Endpoint.config_change(changed, removed)
     :ok
   end
 

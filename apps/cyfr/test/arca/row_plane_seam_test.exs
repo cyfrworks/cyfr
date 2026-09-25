@@ -25,7 +25,7 @@ defmodule Arca.RowPlaneSeamTest do
   # reaches through Arca modules), not by this roster.
   @surface_dirs ~w(
     apps/cyfr/lib/emissary
-    apps/cyfr/lib/emissary_web
+    apps/cyfr/lib/cyfr_web
     apps/cyfr/lib/prism
     apps/cyfr/lib/prism_web
     apps/cyfr/lib/aqua

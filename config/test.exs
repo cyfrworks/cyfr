@@ -8,7 +8,7 @@ import Config
 # revalidated before each action it is used for.
 config :sanctum, :caller_memo_ttl_ms, 0
 
-config :cyfr, EmissaryWeb.Endpoint,
+config :cyfr, CyfrWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "test-secret-key-base-minimum-64-characters-long-for-testing-only",
   server: false

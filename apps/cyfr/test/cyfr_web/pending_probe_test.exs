@@ -7,7 +7,7 @@ defmodule CyfrWeb.PendingProbeTest do
   provider a flow reports: an explicit valid parameter, else the one the
   session signed in with, else the device-flow roster's first.
   """
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   alias CyfrWeb.PendingProbe
   alias CyfrWeb.SignInResponse

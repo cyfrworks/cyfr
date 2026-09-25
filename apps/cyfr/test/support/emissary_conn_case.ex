@@ -3,7 +3,7 @@
 
 defmodule Emissary.Web.ConnCase do
   @moduledoc """
-  The test case for the MCP adapter: `EmissaryWeb.ConnCase` with the
+  The test case for the MCP adapter: `CyfrWeb.ConnCase` with the
   helper that speaks to `/mcp` as a conforming client.
 
       use Emissary.Web.ConnCase, async: false
@@ -11,7 +11,7 @@ defmodule Emissary.Web.ConnCase do
 
   defmacro __using__(opts) do
     quote do
-      use EmissaryWeb.ConnCase, unquote(opts)
+      use CyfrWeb.ConnCase, unquote(opts)
       import Emissary.Web.ConnCase
     end
   end
@@ -32,7 +32,7 @@ defmodule Emissary.Web.ConnCase do
     conn
     |> Plug.Conn.put_req_header("mcp-protocol-version", Prima.MCP.Protocol.version())
     |> put_mcp_routing_headers(body)
-    |> Phoenix.ConnTest.dispatch(EmissaryWeb.Endpoint, :post, "/mcp", conform_mcp_body(body))
+    |> Phoenix.ConnTest.dispatch(CyfrWeb.Endpoint, :post, "/mcp", conform_mcp_body(body))
   end
 
   defp put_mcp_routing_headers(conn, body) do

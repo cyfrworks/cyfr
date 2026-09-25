@@ -273,8 +273,8 @@
         }
       ]
     },
-    "EmissaryWeb.Router" => %{
-      file: "apps/cyfr/lib/emissary_web/router.ex",
+    "Prism.Router" => %{
+      file: "apps/cyfr/lib/prism/router.ex",
       pipelines: %{
         "attachment" => [
           "CyfrWeb.Plugs.Headless",

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.EndpointSessionOptionsTest do
+defmodule CyfrWeb.EndpointSessionOptionsTest do
   # Session cookies must be http_only + SameSite=Lax unconditionally; the
   # `secure` flag must track the :cookie_secure application env (true in prod,
   # false in dev/test) — runtime.exs sets it to true under the prod block.
@@ -21,7 +21,7 @@ defmodule EmissaryWeb.EndpointSessionOptionsTest do
     :ok
   end
 
-  for endpoint <- [EmissaryWeb.Endpoint] do
+  for endpoint <- [CyfrWeb.Endpoint] do
     describe "#{inspect(endpoint)}.session_options/0" do
       @endpoint endpoint
 
@@ -63,7 +63,7 @@ defmodule EmissaryWeb.EndpointSessionOptionsTest do
     test "emitted Set-Cookie includes HttpOnly, SameSite=Lax, Secure when :cookie_secure=true" do
       Application.put_env(:cyfr, :cookie_secure, true)
 
-      conn = run_through_session(EmissaryWeb.Endpoint.session_options(), "_cyfr_key")
+      conn = run_through_session(CyfrWeb.Endpoint.session_options(), "_cyfr_key")
 
       attrs = conn_set_cookie(conn, "_cyfr_key")
       assert attrs =~ ~r/HttpOnly/i
@@ -74,7 +74,7 @@ defmodule EmissaryWeb.EndpointSessionOptionsTest do
     test "emitted Set-Cookie omits Secure when :cookie_secure=false" do
       Application.put_env(:cyfr, :cookie_secure, false)
 
-      conn = run_through_session(EmissaryWeb.Endpoint.session_options(), "_cyfr_key")
+      conn = run_through_session(CyfrWeb.Endpoint.session_options(), "_cyfr_key")
 
       attrs = conn_set_cookie(conn, "_cyfr_key")
       assert attrs =~ ~r/HttpOnly/i

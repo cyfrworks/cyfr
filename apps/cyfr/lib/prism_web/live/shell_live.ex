@@ -160,7 +160,7 @@ defmodule PrismWeb.ShellLive do
     if tincture do
       # The public address: the one origin plus the tincture's path.
       url =
-        EmissaryWeb.Endpoint.url() <>
+        CyfrWeb.Endpoint.url() <>
           Prima.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
 
       {:noreply,

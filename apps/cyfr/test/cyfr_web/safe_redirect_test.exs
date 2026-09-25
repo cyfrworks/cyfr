@@ -6,7 +6,7 @@ defmodule CyfrWeb.SafeRedirectTest do
   Every login gate lands on the console root through this one helper —
   the target is fixed, never configuration and never user input.
   """
-  use EmissaryWeb.ConnCase, async: true
+  use CyfrWeb.ConnCase, async: true
 
   test "lands on the console root as an internal redirect", %{conn: conn} do
     conn = CyfrWeb.SafeRedirect.post_login(conn)

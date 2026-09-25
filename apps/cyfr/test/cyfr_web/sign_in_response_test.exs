@@ -7,7 +7,7 @@ defmodule CyfrWeb.SignInResponseTest do
   proceed is a redirect to the console root carrying the session, an
   outage is a page, and the pending-probe cookie is carried or retired.
   """
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   import ExUnit.CaptureLog
 

@@ -184,7 +184,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     end)
 
     state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    redirect_uri = EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback"
+    redirect_uri = CyfrWeb.Endpoint.url() <> "/auth/oauth/callback"
 
     pending = %{
       target: %{

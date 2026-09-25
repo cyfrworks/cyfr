@@ -20,7 +20,7 @@ defmodule PrismWeb.ConnCase do
 
   using do
     quote do
-      @endpoint EmissaryWeb.Endpoint
+      @endpoint CyfrWeb.Endpoint
 
       use PrismWeb, :verified_routes
 

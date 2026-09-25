@@ -69,7 +69,7 @@ defmodule Emissary.Web.MCPErrorTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> Phoenix.ConnTest.dispatch(EmissaryWeb.Endpoint, :post, "/mcp", batch_body)
+        |> Phoenix.ConnTest.dispatch(CyfrWeb.Endpoint, :post, "/mcp", batch_body)
 
       body = json_response(conn, 400)
       assert body["id"] == nil

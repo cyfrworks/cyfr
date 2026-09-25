@@ -163,11 +163,21 @@ defmodule CyfrWeb.RouterTest do
 
   describe "the roster" do
     test "the map's sections are the modules the root's table comes from" do
-      # The root keeps its own section while it still declares routes itself.
-      assert Map.keys(@providers) ==
-               Enum.sort([
-                 inspect(Boundaries.router()) | Enum.map(Boundaries.routers(), &inspect/1)
-               ])
+      assert Map.keys(@providers) == Enum.sort(Enum.map(Boundaries.routers(), &inspect/1))
+    end
+
+    test "the root composes a table and declares no route or pipeline of its own" do
+      assert [_ | _] = Boundaries.router().__routes__()
+
+      root = Path.join(@root, "apps/cyfr/lib/cyfr_web/router.ex")
+
+      assert RouterSource.routes(root) == [],
+             "the root router declares routes of its own: " <>
+               Enum.map_join(RouterSource.routes(root), ", ", &label/1)
+
+      assert RouterSource.pipelines(root) == %{},
+             "the root router declares pipelines of its own: " <>
+               Enum.join(Map.keys(RouterSource.pipelines(root)), ", ")
     end
   end
 

@@ -5,7 +5,7 @@ defmodule CyfrWeb.Ingress.TinctureAccessTokenTest do
   @moduledoc """
   Tests exchanging a header credential for a short-lived tincture `?_t=` token.
   """
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   require Ecto.Query
 

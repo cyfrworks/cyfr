@@ -870,7 +870,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | Compendium | components: the registry, sources and builds | `apps/cyfr/lib/compendium` | the `cyfr` release | — | — | `compendium` | `[Compendium…]` |
 | Aqua | the assistant: threads, notes and approvals | `apps/cyfr/lib/aqua` | the `cyfr` release | — | — | `aqua` | `[Aqua…]` |
 | Crucible | execution: admission, attempts, the host and worker protocols, schedules | `apps/cyfr/lib/crucible` | the `cyfr` release | `CYFR_CRUCIBLE_`, `CYFR_HOST_API_` | — | `crucible` | `[Crucible…]` |
-| Emissary | MCP in both directions: `/mcp`, and external MCP servers over HTTP or on the bridge | `apps/cyfr/lib/emissary`, `apps/cyfr/lib/emissary_web` | the `cyfr` release | — | — | `emissary` | `[Emissary…]` |
+| Emissary | MCP in both directions: `/mcp`, and external MCP servers over HTTP or on the bridge | `apps/cyfr/lib/emissary` | the `cyfr` release | — | — | `emissary` | `[Emissary…]` |
 | Prism | the console | `apps/cyfr/lib/prism`, `apps/cyfr/lib/prism_web` | the `cyfr` release | — | — | — | `[Prism…]` |
 | Codex | the command-line client | `apps/codex` | the `cyfr` binary | — | — | — | — |
 | Opus | the WASM engine: a worker service and the runners it starts under the keeper | `apps/opus` | the `opus` release, image `cyfr-opus` | `OPUS_`, `CYFR_OPUS_` | `cyfr-opus/v1` | — | `[Opus…]` |

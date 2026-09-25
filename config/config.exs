@@ -78,7 +78,7 @@ config :sanctum, :fallback_origin, "http://localhost:4000"
 # Configures the endpoint
 # The one endpoint: the API, the MCP transport, tinctures, and the Prism
 # LiveViews all answer on it — one origin, one cookie, one login.
-config :cyfr, EmissaryWeb.Endpoint,
+config :cyfr, CyfrWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [

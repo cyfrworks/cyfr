@@ -17,7 +17,7 @@ defmodule CyfrWeb.Plugs.ConfiguredUeberauthTest do
   `providers: []`. Only a request through the router can tell a table baked
   at compile time from one read per call.
   """
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   setup do
     original = Application.get_env(:ueberauth, Ueberauth)

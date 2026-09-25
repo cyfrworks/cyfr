@@ -402,7 +402,7 @@ defmodule Emissary.Web.MCPTransportTest do
     |> Plug.Conn.put_req_header("mcp-protocol-version", Prima.MCP.Protocol.version())
     |> Plug.Conn.put_req_header("mcp-method", body["method"])
     |> Phoenix.ConnTest.dispatch(
-      EmissaryWeb.Endpoint,
+      CyfrWeb.Endpoint,
       :post,
       "/mcp",
       Map.put(body, "params", Map.put(params, "_meta", meta))

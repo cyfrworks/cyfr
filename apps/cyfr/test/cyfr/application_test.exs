@@ -90,7 +90,7 @@ defmodule Cyfr.ApplicationTest do
       refute Emissary.MCP.ResourceRegistry in ids
       assert is_map(Grimoire.operations())
       refute Arca.Repo in ids
-      refute EmissaryWeb.Endpoint in ids
+      refute CyfrWeb.Endpoint in ids
     end
 
     # The persistence layer's own tree: the pool, the write-behind that
@@ -214,7 +214,7 @@ defmodule Cyfr.ApplicationTest do
         |> Supervisor.which_children()
         |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
 
-      assert EmissaryWeb.Endpoint in ids
+      assert CyfrWeb.Endpoint in ids
       refute Arca.Repo in ids
     end
   end

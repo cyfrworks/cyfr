@@ -10,7 +10,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   exercised end-to-end through the pipeline in
   `Emissary.Web.MCPControllerTest`.
   """
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
 

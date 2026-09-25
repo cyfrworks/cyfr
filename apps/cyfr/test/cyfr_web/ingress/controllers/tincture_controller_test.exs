@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule CyfrWeb.Ingress.TinctureControllerTest do
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   require Ecto.Query
 
@@ -725,7 +725,7 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
       # same way, which is the path under test.
       expired_token =
         Phoenix.Token.sign(
-          EmissaryWeb.Endpoint,
+          CyfrWeb.Endpoint,
           "wrong_salt",
           {"test", "local", "auth-dash"}
         )

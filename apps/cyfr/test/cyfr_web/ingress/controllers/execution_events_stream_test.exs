@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule CyfrWeb.Ingress.ExecutionEventsStreamTest do
-  use EmissaryWeb.ConnCase, async: false
+  use CyfrWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
 

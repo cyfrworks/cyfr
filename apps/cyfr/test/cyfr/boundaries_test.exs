@@ -1287,7 +1287,6 @@ defmodule Cyfr.BoundariesTest do
         ) || flunk("no surface row fences the MCP surface out of the assistant")
 
       assert from_execution.allow == [] and from_mcp.allow == []
-      assert "apps/cyfr/lib/emissary_web/**/*.ex" in from_mcp.from
 
       planted = [
         {"apps/cyfr/lib/crucible/planted.ex",
@@ -1297,9 +1296,9 @@ defmodule Cyfr.BoundariesTest do
            def turn(ctx, id), do: Aqua.Runner.state(id, ctx.athanor_id)
          end
          ''')},
-        {"apps/cyfr/lib/emissary_web/planted_controller.ex",
+        {"apps/cyfr/lib/emissary/web/planted_controller.ex",
          CodeLines.aliases(~S'''
-         defmodule EmissaryWeb.PlantedController do
+         defmodule Emissary.Web.PlantedController do
            alias Aqua.Notes
            def pinned(ctx), do: Notes.pinned_page(ctx)
          end
@@ -1346,12 +1345,11 @@ defmodule Cyfr.BoundariesTest do
                  ["Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
       end
 
-      for row <- Enum.uniq(Enum.map(["emissary", "emissary_web"], find)) do
-        assert row.allow == []
+      mcp = find.("emissary")
+      assert mcp.allow == []
 
-        assert Boundaries.surface_violations(row, planted) ==
-                 ["Compendium", "Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
-      end
+      assert Boundaries.surface_violations(mcp, planted) ==
+               ["Compendium", "Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
     end
 
     test "the console names the assistant's root and its task supervisor, nothing more" do
@@ -1393,10 +1391,24 @@ defmodule Cyfr.BoundariesTest do
                  &(&1.into == into and "apps/cyfr/lib/cyfr/**/*.ex" in &1.from)
                ) || flunk("no surface row fences the host out of #{into}")}
 
-      for {_into, row} <- rows do
+      # The composition router and the endpoint wire the MCP adapter in, as
+      # the composition root does, so the host's row into it excepts them too.
+      composition = %{
+        "Emissary" => [
+          "apps/cyfr/lib/cyfr/application.ex",
+          "apps/cyfr/lib/cyfr_web/router.ex",
+          "apps/cyfr/lib/cyfr_web/endpoint.ex"
+        ]
+      }
+
+      for {into, row} <- rows do
+        except = Map.get(composition, into, ["apps/cyfr/lib/cyfr/application.ex"])
+        read = for {path, _} <- names(row), do: path
+
         assert "apps/cyfr/lib/cyfr_web/**/*.ex" in row.from
-        assert row.except == ["apps/cyfr/lib/cyfr/application.ex"]
-        refute "apps/cyfr/lib/cyfr/application.ex" in for({path, _} <- names(row), do: path)
+        assert row.except == except
+
+        for path <- except, do: refute(path in read)
       end
 
       planted = [

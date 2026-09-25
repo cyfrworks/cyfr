@@ -119,7 +119,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> allow_upload(:attachments,
         accept: :any,
         max_entries: Aqua.attachment_limits().max_files,
-        # 20 MB — sized with EmissaryWeb.Endpoint's Plug.Parsers :length so a
+        # 20 MB — sized with CyfrWeb.Endpoint's Plug.Parsers :length so a
         # base64-encoded attachment of this size fits through POST /mcp.
         max_file_size: Aqua.attachment_limits().max_file_bytes,
         auto_upload: true
