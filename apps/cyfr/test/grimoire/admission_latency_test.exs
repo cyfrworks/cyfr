@@ -88,7 +88,7 @@ defmodule Grimoire.AdmissionLatencyTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
-  import Plug.Conn, only: [put_req_header: 3]
+  import Plug.Conn, only: [get_resp_header: 2, put_req_header: 3]
 
   alias Grimoire.AdmissionLatencyTest.NoOp
   alias Prima.Authority
@@ -117,12 +117,29 @@ defmodule Grimoire.AdmissionLatencyTest do
   # Longer than the audit budget and its scheduler allowance together, so a
   # stall the budget bounds and one it does not read apart.
   @hold_ms 1_500
+  # §14.14: an audit write's stall settles within its budget and a
+  # scheduler allowance on the documented unloaded runner. A refused call
+  # makes one audit write (its append); an admitted call makes two (its
+  # append and its finish), each under its own budget, so its stall is
+  # two budgets and the allowance. On PostgreSQL the held lock is the
+  # decision table's alone, so every scenario is bounded; on SQLite
+  # `BEGIN IMMEDIATE` holds every writer, so only the scenarios whose one
+  # write is the audit's are: the refusals before any tenant work, which
+  # the baseline shows answering under the lock in a fraction of a
+  # millisecond and every other scenario waiting until it is released.
+  @stall_bound_ms 750
+  @admitted_stall_bound_ms 1_250
+  @audit_only_on_sqlite ~w(anonymous_refusal invalid_session)
+  # The request ids the run stamped or the transport minted, for the rows
+  # it deletes and the one-row-per-request check.
+  @ids :admission_bench_request_ids
 
   @node "formula:local.admission-bench"
 
   test "the admission latency matrix" do
     Arca.Cache.init()
     preload!()
+    :ets.new(@ids, [:named_table, :public, :bag])
     restore_busy = production_busy_timeout!()
     # Every process takes a connection of its own, as a deployment's does.
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :auto)
@@ -138,11 +155,16 @@ defmodule Grimoire.AdmissionLatencyTest do
 
     try do
       Grimoire.Catalog.with_providers([NoOp], fn -> measure!(fixture) end)
+      # A write that landed after its caller's answer is the same row: once
+      # every straggler has ended, no request has more than one decision.
+      await_stragglers!()
+      isolated(&assert_one_decision_per_request!/0)
     after
       await_stragglers!()
       restore.()
       isolated(fn -> cleanup!(fixture) end)
       isolated(&delete_bench_decisions!/0)
+      :ets.delete(@ids)
       restore_busy.()
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
     end
@@ -307,6 +329,12 @@ defmodule Grimoire.AdmissionLatencyTest do
         "blocked_c1" => @blocked_samples
       },
       "unit" => "ms",
+      "bounds" => %{
+        "stall_p95_ms" => @stall_bound_ms,
+        "admitted_stall_p95_ms" => @admitted_stall_bound_ms,
+        "stall_bounded_scenarios" => stall_bounded(adapter),
+        "asserted" => phase() != "baseline"
+      },
       "scenarios" =>
         Map.new(results, fn {scenario, %{conditions: c}} -> {Atom.to_string(scenario), c} end),
       "throughput" => %{"memo_hit_warm_c16_admissions_per_s" => throughput}
@@ -327,6 +355,51 @@ defmodule Grimoire.AdmissionLatencyTest do
              "#{scenario} #{condition}: #{conditions[condition]["unexpected"]} sample(s) " <>
                "answered other than #{@expected[String.to_existing_atom(scenario)]}"
     end
+
+    # The stall the audit's budget bounds settles within the bound: a
+    # sample held longer was waiting on more than the audit. The bound is
+    # the tree's with the decision log: a baseline without one has no
+    # budget and answers only when the lock goes, which its record shows.
+    for scenario <- stall_bounded(adapter), phase() != "baseline" do
+      p95 = report["scenarios"][scenario]["blocked_c1"]["p95"]
+
+      bound =
+        if @expected[String.to_existing_atom(scenario)] == :admitted,
+          do: @admitted_stall_bound_ms,
+          else: @stall_bound_ms
+
+      assert p95 <= bound,
+             "#{scenario} blocked_c1 p95 #{p95} ms exceeds the #{bound} ms stall bound"
+    end
+  end
+
+  defp stall_bounded("sqlite"), do: @audit_only_on_sqlite
+  defp stall_bounded(_adapter), do: Enum.map(@scenarios, &Atom.to_string/1)
+
+  # Every request the run made has at most one decision row: an audit
+  # write that landed late is the row itself, never a second one.
+  defp assert_one_decision_per_request! do
+    if decision_log?() do
+      ids = @ids |> :ets.tab2list() |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+
+      duplicated =
+        ids
+        |> Enum.chunk_every(500)
+        |> Enum.flat_map(fn chunk ->
+          Arca.Repo.all(
+            from(r in "decision_logs",
+              where: r.request_id in ^chunk,
+              group_by: r.request_id,
+              having: count(r.call_id) > 1,
+              select: r.request_id
+            )
+          )
+        end)
+
+      assert duplicated == [], "requests with more than one decision: #{inspect(duplicated)}"
+    end
+
+    :ok
   end
 
   defp progress(scenario, condition, fun) do
@@ -541,17 +614,22 @@ defmodule Grimoire.AdmissionLatencyTest do
   # found by it and deleted when the run ends, with or without a tenant.
   @bench_prefix "bench_"
 
-  defp bench_request_id,
-    do: @bench_prefix <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
+  defp bench_request_id do
+    id = @bench_prefix <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
+    :ets.insert(@ids, {id})
+    id
+  end
 
   defp gate_outcome({:ok, _}), do: :admitted
   defp gate_outcome({:error, _}), do: :refused
 
+  # The transport mints the request's identity itself and ignores the
+  # client's `x-request-id` (`EmissaryWeb.Plugs.CallIdentity`): the id it
+  # answers is the one the run keeps.
   defp mcp(token) do
     conn =
       Phoenix.ConnTest.build_conn()
       |> put_req_header("content-type", "application/json")
-      |> put_req_header("x-request-id", bench_request_id())
 
     conn = if token, do: put_req_header(conn, "authorization", "Bearer " <> token), else: conn
 
@@ -562,6 +640,11 @@ defmodule Grimoire.AdmissionLatencyTest do
         "method" => "tools/call",
         "params" => %{"name" => NoOp.tool(), "arguments" => %{"action" => "run"}}
       })
+
+    case get_resp_header(conn, "x-request-id") do
+      [request_id] -> :ets.insert(@ids, {request_id})
+      _ -> :ok
+    end
 
     with 200 <- conn.status,
          {:ok, %{"result" => %{"isError" => false}}} <- Jason.decode(conn.resp_body) do
@@ -661,8 +744,9 @@ defmodule Grimoire.AdmissionLatencyTest do
     :ok
   end
 
-  # The run's decision rows, a tenant's and the host's alike. A tree that
-  # has no decision log yet has nothing to delete.
+  # The run's decision rows, a tenant's and the host's alike: the ones
+  # under the run's own prefix, and the ones under the ids the transport
+  # minted. A tree that has no decision log yet has nothing to delete.
   defp delete_bench_decisions! do
     if decision_log?() do
       Arca.Repo.delete_all(
@@ -671,6 +755,16 @@ defmodule Grimoire.AdmissionLatencyTest do
             fragment("substr(?, 1, ?)", r.request_id, ^byte_size(@bench_prefix)) == ^@bench_prefix
         )
       )
+
+      if :ets.whereis(@ids) != :undefined do
+        @ids
+        |> :ets.tab2list()
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.chunk_every(500)
+        |> Enum.each(fn chunk ->
+          Arca.Repo.delete_all(from(r in "decision_logs", where: r.request_id in ^chunk))
+        end)
+      end
     end
 
     :ok
