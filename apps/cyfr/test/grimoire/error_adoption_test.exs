@@ -58,7 +58,7 @@ defmodule Grimoire.ErrorAdoptionTest do
     "apps/cyfr/lib/crucible/schedules/cron.ex" => 10,
     "apps/cyfr/lib/compendium/scaffold.ex" => 8,
     "apps/cyfr/lib/compendium/provider.ex" => 6,
-    "apps/cyfr/lib/compendium/providers/component.ex" => 7,
+    "apps/cyfr/lib/compendium/providers/component.ex" => 6,
     # The entry rule's sentences, which the tincture validators return to
     # a publisher; the facade answers the same rule typed.
     "apps/cyfr/lib/compendium/tincture.ex" => 7,

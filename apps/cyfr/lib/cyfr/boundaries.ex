@@ -26,9 +26,10 @@ defmodule Cyfr.Boundaries do
       what reaches back up into the component domain, and which storage
       modules hold security rows only Sanctum may read
       (`sanctum_only_storage/0`). Beside them, `http_free/0` names the
-      domain trees no line of which names an HTTP type, and `bus_free/0`
+      domain trees no line of which names an HTTP type, `bus_free/0`
       the bus's own tree, which names no identity, domain or surface
-      module.
+      module, and `sanctum_exports/0` the identity domain's functions the
+      host application calls, one by one.
     * `route_postures/0` and `public_routes/0` — how every HTTP route is
       authenticated. The posture travels with the route
       (`EmissaryWeb.Router` declares it as route metadata); this catalog
@@ -948,13 +949,6 @@ defmodule Cyfr.Boundaries do
         reason:
           "`system.status` reports the MCP protocol version, which the transport " <>
             "spells until the MCP message and protocol shapes are shared contracts."
-      },
-      %{
-        name: "Compendium.RegistryHost",
-        owner: "Compendium.Provider",
-        reason:
-          "`system.status` reports the registry scope from the component domain's " <>
-            "host configuration until the component provider answers its own status."
       }
     ],
     reason:
@@ -992,6 +986,212 @@ defmodule Cyfr.Boundaries do
 
     for %{name: name} <- @gate_free.allow, not MapSet.member?(reached, name), do: name
   end
+
+  # What the host application calls of the identity domain, function by
+  # function. The namespace rows above say which Sanctum namespaces a tree
+  # may name; this says which functions of them `apps/cyfr/lib` calls at
+  # all, so the domain's export set is a reviewed list rather than whatever
+  # is public. The compiled beams are its reader: a call the host starts
+  # making without a row here fails, and a row nothing calls any longer is
+  # reported stale.
+  @sanctum_exports %{
+    "Sanctum" => [
+      auth_configured?: 0,
+      build_tincture_context: 2,
+      internal_context: 1,
+      origin: 0,
+      public_url: 0,
+      reconcile_platform_admins: 2,
+      system_context: 0
+    ],
+    "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
+    "Sanctum.Atoms" => [known_permissions: 0],
+    "Sanctum.Auth" => [provider: 0],
+    "Sanctum.Auth.DeviceFlow" => [configured_providers: 0, impl: 0, provider?: 1, providers: 0],
+    "Sanctum.Auth.EmailVerification" => [verify_with_claim: 3],
+    "Sanctum.Auth.Identity" => [reserved_issuer?: 1],
+    "Sanctum.Auth.OIDC" => [issuer: 0],
+    "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
+    "Sanctum.Authority.BudgetCounter" => [release: 1],
+    "Sanctum.BearerToken" => [read: 1],
+    "Sanctum.Caller" => [
+      drop_memo: 1,
+      establish: 2,
+      establish_context: 1,
+      fresh?: 1,
+      peek: 1,
+      revalidate_session: 1
+    ],
+    "Sanctum.Cipher" => [keyring!: 0],
+    "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
+    "Sanctum.ClientIp" => [from_connect_info: 1, resolve: 1],
+    "Sanctum.Consent" => [head_consent: 2, profiles: 2, revoke_source: 2],
+    "Sanctum.Consent.Authz" => [
+      authorize_interactive: 1,
+      authorize_interactive_in_chain: 1,
+      authorize_staging: 1
+    ],
+    "Sanctum.Consent.Components" => [install!: 1],
+    "Sanctum.Consent.Loader" => [load_root: 3, pinned_intact?: 2],
+    "Sanctum.Consent.Proof" => [store: 0],
+    "Sanctum.Consent.RegistrationBinding" => [authorize: 3, message: 1],
+    "Sanctum.Consent.ShapeDerivation" => [expand_tools: 1, live_digest: 2, manifest_blocks: 2],
+    "Sanctum.Consent.ShapeDiff" => [compute: 3],
+    "Sanctum.Context" => [
+      actor: 1,
+      athanor!: 1,
+      authorize: 2,
+      authorize: 3,
+      build: 1,
+      enter_guest: 1,
+      focus: 2,
+      for_scheduled: 2,
+      has_permission?: 2,
+      internal: 1,
+      refocus: 2,
+      require_permission: 2,
+      require_permission: 3,
+      require_tenant!: 1
+    ],
+    "Sanctum.Door" => [admit_identity: 2, platform_admin_emails: 0, refusal_message: 0],
+    "Sanctum.Door.Store" => [requests: 0],
+    "Sanctum.Egress" => [pinned_request: 5],
+    "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
+    "Sanctum.Grimoire" => [install!: 1],
+    "Sanctum.Namespace" => [lookup_status: 1],
+    "Sanctum.Network" => [validate_redirect_url: 2],
+    "Sanctum.Notify" => [broadcast: 3],
+    "Sanctum.Policy.Enforcement" => [record: 1],
+    "Sanctum.Provisioning" => [
+      athanor: 1,
+      await_claim: 5,
+      bootstrap_consents: 2,
+      bootstrap_consents_for: 3,
+      bounded_work: 3,
+      fill_event: 0,
+      filled_athanors: 0,
+      hold: 3,
+      holding: 2,
+      lost: 1,
+      mark_filled: 1,
+      ready: 1,
+      record_failure: 4,
+      release: 2,
+      seed_ctx: 1,
+      settle: 4,
+      start_provisioning: 1,
+      take_claim: 2,
+      under_claim: 3
+    ],
+    "Sanctum.RegistryCredentials" => [delete: 3, get: 3, list: 2, put_push_token: 6],
+    "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1, get: 1],
+    "Sanctum.SignIn" => [admitted: 2, record_namespace: 2, suggested_slug: 2],
+    "Sanctum.Tenancy" => [
+      channel_active?: 2,
+      continuation: 2,
+      list_athanors: 1,
+      resolve_status: 2,
+      revalidate: 1
+    ],
+    "Sanctum.Tenancy.Athanors" => [
+      active?: 1,
+      by_route_slug: 1,
+      get: 1,
+      list_active: 0,
+      provisioning_failure: 1,
+      route_slug: 1,
+      settings: 1
+    ],
+    "Sanctum.Tenancy.Caps" => [check_storage: 2],
+    "Sanctum.Tenancy.Members" => [list_by_athanor: 1, member?: 2, solo?: 1],
+    "Sanctum.Tenancy.Users" => [
+      display_name: 1,
+      get: 1,
+      own_athanor?: 2,
+      personal_athanor_id: 1,
+      prefs: 1,
+      put_prefs: 2
+    ],
+    "Sanctum.TinctureAccess" => [get_private: 3, get_public: 3, lookup: 3, public_context: 1],
+    "Sanctum.TinctureAuth" => [
+      authenticate: 1,
+      expires_in: 1,
+      issue_access_token: 3,
+      issue_asset_token: 3,
+      scrub_conn: 1,
+      verify_asset_token: 4
+    ],
+    "Sanctum.ToolGrants" => [for_thread: 2, grant_row: 2, put: 2, revoke: 2],
+    "Sanctum.ToolServerDigest" => [
+      descriptions_digest: 2,
+      from_server: 1,
+      normalize_input_schema: 1,
+      tool_patterns: 1
+    ],
+    "Sanctum.Unauthorized" => [class: 1, code_override: 1, message: 1, message: 2, reason?: 1],
+    "Sanctum.Vault.OAuthGrant" => [complete: 3, redirect_uri: 0],
+    "Sanctum.VaultReader" => [
+      fetch: 2,
+      oauth_token: 3,
+      revisions: 2,
+      unseal_by_name: 2,
+      usable: 3
+    ],
+    "Sanctum.Webhook" => [
+      decode_input_template: 1,
+      default_signature_header: 0,
+      disable_for_component: 2,
+      resolve_ingress: 1,
+      verify_with_grace: 4
+    ]
+  }
+
+  @doc """
+  Every Sanctum function the host application's `lib` calls, as the
+  namespace module to its sorted `{function, arity}` list: remote calls
+  and external captures (`&Sanctum.Egress.pinned_request/5`) alike. A
+  typespec or a struct pattern is not a call and is not listed.
+  """
+  @spec sanctum_exports() :: %{String.t() => [{atom(), non_neg_integer()}]}
+  def sanctum_exports, do: @sanctum_exports
+
+  @typedoc "A remote function as the compiled scan reads it: module name, function, arity."
+  @type reach :: {String.t(), atom(), non_neg_integer()}
+
+  @doc "The Sanctum functions `reaches` holds that the roster does not, as `Module.function/arity`."
+  @spec sanctum_export_violations([reach()]) :: [String.t()]
+  def sanctum_export_violations(reaches) do
+    rostered = rostered_sanctum_exports()
+
+    reaches
+    |> Enum.filter(fn {module, _function, _arity} -> sanctum_module?(module) end)
+    |> Enum.reject(&MapSet.member?(rostered, &1))
+    |> Enum.map(&reach_label/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  @doc "The rostered Sanctum functions `reaches` no longer holds, as `Module.function/arity`."
+  @spec stale_sanctum_exports([reach()]) :: [String.t()]
+  def stale_sanctum_exports(reaches) do
+    reached = MapSet.new(reaches)
+
+    rostered_sanctum_exports()
+    |> Enum.reject(&MapSet.member?(reached, &1))
+    |> Enum.map(&reach_label/1)
+    |> Enum.sort()
+  end
+
+  defp rostered_sanctum_exports do
+    for {module, functions} <- @sanctum_exports,
+        {function, arity} <- functions,
+        into: MapSet.new(),
+        do: {module, function, arity}
+  end
+
+  defp sanctum_module?(module), do: module == "Sanctum" or String.starts_with?(module, "Sanctum.")
+
+  defp reach_label({module, function, arity}), do: "#{module}.#{function}/#{arity}"
 
   # ---------------------------------------------------------------------------
   # 3. The routes
@@ -1204,6 +1404,7 @@ defmodule Cyfr.Boundaries do
 
   @test_only_config_key_classes %{
     namespace_cache_ttl_ms: :seam,
+    # The registry probe's switch, read by `Compendium.Provider.status/0`.
     registry_health_probe: :seam,
 
     # `TinctureRateLimit`'s own moduledoc calls this an override an operator
@@ -1253,10 +1454,10 @@ defmodule Cyfr.Boundaries do
 
   @config_keys_read_outside_lib %{
     default_test_namespace:
-      "read by `Sanctum.TestContext`, a test-support fixture. The schema reads each " <>
-        "application's `lib` alone: widening it to test support would change what it " <>
-        "means — keys the application reads becomes keys anything reads — and pull " <>
-        "in every fixture's own reads with it."
+      "read by the Sanctum suite's context fixture, in `apps/sanctum/test/support`. " <>
+        "The schema reads each application's `lib` alone: widening it to test " <>
+        "support would change what it means — keys the application reads becomes " <>
+        "keys anything reads — and pull in every fixture's own reads with it."
   }
 
   @doc """

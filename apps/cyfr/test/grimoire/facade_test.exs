@@ -5,7 +5,8 @@ defmodule Grimoire.FacadeTest do
   @moduledoc """
   The gate's door for callers outside it is an exact roster: an entry
   added without a roster change fails here. The refusal, annotation,
-  resource and visibility entries answer as the internals they name do.
+  resource and visibility entries answer as the internals they name do,
+  and the tool classification is the one rule every classifier reads.
   """
 
   use ExUnit.Case, async: true
@@ -45,6 +46,8 @@ defmodule Grimoire.FacadeTest do
     restrict_tool: 2,
     standing_scope: 1,
     standing_to_wire: 1,
+    tool_actions: 1,
+    tool_kind: 2,
     visible_tools: 2
   ]
 
@@ -89,6 +92,47 @@ defmodule Grimoire.FacadeTest do
     for value <- [:thread, "thread", false, nil, "always"] do
       assert Grimoire.standing_scope(value) == Grimoire.Annotations.standing(value)
       assert Grimoire.standing_to_wire(value) == Grimoire.Annotations.standing_to_wire(value)
+    end
+  end
+
+  describe "the tool classification" do
+    test "a virtual hand answers from Prima.VirtualTools" do
+      assert Grimoire.tool_kind("files", "read") == Prima.VirtualTools.kind_for("files", "read")
+      assert Grimoire.tool_kind("files", "read") == :read
+      assert Grimoire.tool_kind("files", "delete") == :destructive
+      assert Grimoire.tool_actions("files") == Prima.VirtualTools.actions_of("files")
+      assert Grimoire.tool_actions("files") != []
+    end
+
+    test "an upstream server:tool is external whatever the action, with no verbs" do
+      assert Grimoire.tool_kind("server:tool", "anything") == :external
+      assert Grimoire.tool_kind("server:tool", "") == :external
+      assert Grimoire.tool_actions("server:tool") == []
+    end
+
+    test "a catalogued tool answers from its annotation and its action enum" do
+      {:ok, tool_def} = Grimoire.get_tool("system")
+
+      assert Grimoire.tool_kind("system", "status") == :read
+      assert Grimoire.tool_kind("system", "notify") == :write
+
+      assert Grimoire.tool_kind("system", "status") ==
+               Grimoire.annotation_kind(tool_def, "status")
+
+      # An action the tool does not declare has no kind, and no default.
+      assert Grimoire.tool_kind("system", "reboot") == nil
+
+      assert Grimoire.tool_actions("system") ==
+               get_in(tool_def, ["inputSchema", "properties", "action", "enum"])
+
+      assert "status" in Grimoire.tool_actions("system")
+    end
+
+    test "an unknown tool has no kind and no verbs" do
+      assert Grimoire.tool_kind("no_such_tool", "read") == nil
+      assert Grimoire.tool_actions("no_such_tool") == []
+      assert Grimoire.tool_kind(nil, "read") == nil
+      assert Grimoire.tool_actions(nil) == []
     end
   end
 

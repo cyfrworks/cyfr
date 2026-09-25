@@ -55,7 +55,7 @@ defmodule Emissary.External.Reconciler do
 
   @relevant_verbs [:rotate, :rebind, :revoke, :delete, :rename]
 
-  @doc "The vault verbs this reconciler acts on — pinned by `Sanctum.VaultTest`."
+  @doc "The vault verbs this reconciler acts on."
   @spec relevant_verbs() :: [atom()]
   def relevant_verbs, do: @relevant_verbs
 
