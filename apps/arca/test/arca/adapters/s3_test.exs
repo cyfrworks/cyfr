@@ -171,6 +171,30 @@ defmodule Arca.Adapters.S3Test do
     end
   end
 
+  describe "a redirecting endpoint" do
+    test "is refused, not followed", %{actor: actor} do
+      parent = self()
+
+      Req.Test.stub(:s3, fn conn ->
+        send(parent, {:req, conn.method, conn.request_path, conn.req_headers, read_body(conn)})
+
+        case conn.request_path do
+          "/test-bucket/athanors/ath_test/data/moved.txt" ->
+            conn
+            |> Plug.Conn.put_resp_header("location", "http://elsewhere.example/stolen")
+            |> Plug.Conn.send_resp(302, "")
+
+          _ ->
+            Plug.Conn.send_resp(conn, 200, "followed")
+        end
+      end)
+
+      assert {:error, _} = S3.get(actor, ["data", "moved.txt"])
+      assert_received {:req, "GET", "/test-bucket/athanors/ath_test/data/moved.txt", _, _}
+      refute_received {:req, _, _, _, _}
+    end
+  end
+
   describe "exists?/2" do
     test "returns true on 200", %{actor: actor} do
       assert S3.exists?(actor, ["data", "exists.txt"])

@@ -1652,8 +1652,13 @@ defmodule Grimoire.Catalog do
     # a context without one (an internal call that bypassed `do_call/4`'s
     # minting) simply is not cancellable that way — its caller cancels by
     # handle.
+    #
+    # The claim is taken before the task exists and the task registers
+    # against it from inside itself before the handler runs, so a cancel
+    # that lands in between is seen at the registration and the handler
+    # never runs.
     request_id = ctx.request_id
-    trackable? = is_binary(request_id)
+    claim = if is_binary(request_id), do: Grimoire.RunningTasks.claim_request(request_id)
 
     logger_metadata = Prima.LoggerContext.capture()
 
@@ -1661,12 +1666,11 @@ defmodule Grimoire.Catalog do
       Task.Supervisor.async_nolink(Grimoire.TaskSupervisor, fn ->
         Prima.LoggerContext.restore(logger_metadata)
 
-        if handle && Grimoire.RunningTasks.register_handle(handle, self()) == :cancelled,
-          do: exit(:cancelled),
-          else: execute_fn.()
+        case register_task(request_id, claim, handle) do
+          :ok -> execute_fn.()
+          _refused -> exit(:cancelled)
+        end
       end)
-
-    if trackable?, do: Grimoire.RunningTasks.register(request_id, task)
 
     # An in-chain effect the handler may have made before it died is not
     # undone by its death: unless the action is reviewed as replay-safe,
@@ -1723,9 +1727,18 @@ defmodule Grimoire.Catalog do
             else: {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
       end
 
-    if trackable?, do: Grimoire.RunningTasks.unregister(request_id, task)
+    if claim, do: Grimoire.RunningTasks.unregister(request_id, claim)
     if handle, do: Grimoire.RunningTasks.release_handle(handle)
     result
+  end
+
+  # Run from inside the task. `:cancelled` or `:released` from either
+  # registration means the handler must not run.
+  defp register_task(request_id, claim, handle) do
+    with :ok <-
+           if(claim, do: Grimoire.RunningTasks.register(request_id, claim, self()), else: :ok) do
+      if handle, do: Grimoire.RunningTasks.register_handle(handle, self()), else: :ok
+    end
   end
 
   defp replay_safe?(name, action) when is_binary(action) do

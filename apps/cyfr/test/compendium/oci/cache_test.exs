@@ -61,6 +61,48 @@ defmodule Compendium.OCI.CacheTest do
     end
   end
 
+  describe "the entitlement memo" do
+    setup do
+      {:ok, registry: "memo-#{System.unique_integer([:positive])}.example"}
+    end
+
+    test "is one credential's, for one repository", %{registry: registry} do
+      refute Cache.entitled?("cred_a", registry, "alice/reagents/x")
+      assert :ok = Cache.entitle("cred_a", registry, "alice/reagents/x")
+      assert Cache.entitled?("cred_a", registry, "alice/reagents/x")
+
+      refute Cache.entitled?("cred_b", registry, "alice/reagents/x")
+      refute Cache.entitled?("anonymous", registry, "alice/reagents/x")
+      refute Cache.entitled?("cred_a", registry, "alice/reagents/y")
+      refute Cache.entitled?("cred_a", "other.example", "alice/reagents/x")
+    end
+
+    test "is forgotten when the registry refuses", %{registry: registry} do
+      :ok = Cache.entitle("cred_a", registry, "alice/reagents/x")
+      :ok = Cache.entitle("cred_b", registry, "alice/reagents/x")
+      assert :ok = Cache.forget_entitlement("cred_a", registry, "alice/reagents/x")
+
+      refute Cache.entitled?("cred_a", registry, "alice/reagents/x")
+      assert Cache.entitled?("cred_b", registry, "alice/reagents/x")
+    end
+
+    test "stands for five minutes and is never written to storage", %{registry: registry} do
+      before = System.monotonic_time(:millisecond)
+      :ok = Cache.entitle("cred_a", registry, "alice/reagents/x")
+
+      assert [{_key, true, expires_at}] =
+               :ets.match_object(
+                 Arca.Cache.table_name(),
+                 {{:oci_entitlement, registry, :_, :_}, :_, :_}
+               )
+
+      assert (expires_at - before) in 1..300_000
+      assert expires_at - before > 290_000
+
+      refute Arca.exists?(Prima.Actor.system(), ["cache", "oci", "entitlements"])
+    end
+  end
+
   describe "clear/0" do
     test "removes all cached data" do
       content = "test"

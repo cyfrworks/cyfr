@@ -63,8 +63,8 @@ defmodule Compendium.OCI.Client do
          # README and src/ ride the same unit commit as the artifact and
          # the manifest sentinel: one unit, one outcome — a local write
          # failure fails the pull and rolls the unit back, and the DB row
-         # is minted only after the unit is whole. Fetch failures for the
-         # optional layers stay best-effort (maybe_fetch_layer above).
+         # is minted only after the unit is whole. An optional layer the
+         # registry does not hold is skipped (maybe_fetch_layer above).
          unit_files = source_unit_files(source_bytes) ++ readme_unit_files(readme_bytes),
          {:ok, component} <-
            store_component(
@@ -377,68 +377,103 @@ defmodule Compendium.OCI.Client do
   # Private: Manifest Operations
   # ============================================================================
 
+  # A cached manifest is served only under the caller's entitlement
+  # (`Compendium.OCI.Cache`). A tag's entry is re-checked by a HEAD under
+  # the caller's credential, whose 200 is that entitlement; a pin's is
+  # served on the memo, else on the same HEAD. A registry that refuses the
+  # caller (401, 403, 404) is never answered from the cache; one that
+  # cannot be reached is, for a tag only while the memo stands.
   defp fetch_manifest(ctx, ref) do
     tag = ref.tag || ref.digest || "latest"
 
-    # Check cache first (for tag refs)
-    case Cache.get_manifest(ref.registry, ref.repository, tag) do
-      {:ok, cached_manifest, cached_digest} ->
-        cond do
-          # For tag refs, verify digest hasn't changed via HEAD
-          ref.tag ->
-            case head_manifest(ctx, ref, tag) do
-              {:ok, remote_digest} when remote_digest == cached_digest ->
-                {:ok, cached_manifest, cached_digest, []}
+    with {:ok, credential} <- Transport.credential_key(ctx, ref) do
+      case Cache.get_manifest(ref.registry, ref.repository, tag) do
+        {:ok, cached_manifest, cached_digest} ->
+          if is_nil(ref.tag) and is_binary(ref.digest),
+            do: cached_pin(ctx, ref, credential, cached_manifest),
+            else: cached_tag(ctx, ref, tag, credential, cached_manifest, cached_digest)
 
-              {:ok, _remote_digest} ->
-                # Digest changed, re-fetch
-                fetch_manifest_remote(ctx, ref, tag)
-
-              # The caller's push token could not be read: the registry was
-              # never asked, so the cached copy is not served in its place —
-              # the pull refuses as the credential store answered.
-              {:error, %Errors{detail: %{credential_store: _}}} = refused ->
-                refused
-
-              {:error, {:corrupt, :registry_credential}} = refused ->
-                refused
-
-              {:error, _} ->
-                Logger.warning(
-                  "[Compendium.OCI.Client] Stale cache: registry unreachable for digest check, " <>
-                    "serving potentially stale manifest for #{ref.registry}/#{ref.repository}:#{tag}"
-                )
-
-                {:ok, cached_manifest, cached_digest, [stale: true]}
-            end
-
-          # A digest-pinned ref must serve exactly the pinned bytes even from
-          # cache — recompute from the cached body rather than trust the
-          # recorded digest. A mismatch means the entry is corrupt or was
-          # written outside the verified path; refetch and let the remote
-          # verification decide (a genuine pull then overwrites the entry).
-          ref.digest ->
-            if Blob.compute_digest(cached_manifest) == ref.digest do
-              {:ok, cached_manifest, ref.digest, []}
-            else
-              Logger.warning(
-                "[Compendium.OCI.Client] Cached manifest for #{ref.registry}/#{ref.repository}" <>
-                  "@#{ref.digest} does not hash to its pin — discarding and refetching"
-              )
-
-              fetch_manifest_remote(ctx, ref, tag)
-            end
-
-          true ->
-            {:ok, cached_manifest, cached_digest, []}
-        end
-
-      :miss ->
-        fetch_manifest_remote(ctx, ref, tag)
+        :miss ->
+          fetch_manifest_remote(ctx, ref, tag, credential)
+      end
     end
   end
 
-  defp fetch_manifest_remote(ctx, ref, tag) do
+  defp cached_tag(ctx, ref, tag, credential, cached_manifest, cached_digest) do
+    case head_manifest(ctx, ref, tag) do
+      {:ok, remote_digest} when remote_digest == cached_digest ->
+        Cache.entitle(credential, ref.registry, ref.repository)
+        {:ok, cached_manifest, cached_digest, []}
+
+      {:ok, _remote_digest} ->
+        # Digest changed, re-fetch
+        fetch_manifest_remote(ctx, ref, tag, credential)
+
+      {:error, reason} = refused ->
+        if unreachable?(reason) and Cache.entitled?(credential, ref.registry, ref.repository) do
+          Logger.warning(
+            "[Compendium.OCI.Client] Stale cache: registry unreachable for digest check, " <>
+              "serving potentially stale manifest for #{ref.registry}/#{ref.repository}:#{tag}"
+          )
+
+          {:ok, cached_manifest, cached_digest, [stale: true]}
+        else
+          refused(refused, credential, ref)
+        end
+    end
+  end
+
+  # A digest-pinned ref must serve exactly the pinned bytes even from
+  # cache — recompute from the cached body rather than trust the recorded
+  # digest. A mismatch means the entry is corrupt or was written outside
+  # the verified path; refetch and let the remote verification decide (a
+  # genuine pull then overwrites the entry).
+  defp cached_pin(ctx, ref, credential, cached_manifest) do
+    if Blob.compute_digest(cached_manifest) == ref.digest do
+      with :ok <- entitled(ctx, ref, credential), do: {:ok, cached_manifest, ref.digest, []}
+    else
+      Logger.warning(
+        "[Compendium.OCI.Client] Cached manifest for #{ref.registry}/#{ref.repository}" <>
+          "@#{ref.digest} does not hash to its pin — discarding and refetching"
+      )
+
+      fetch_manifest_remote(ctx, ref, ref.digest, credential)
+    end
+  end
+
+  # The caller's entitlement to `ref`'s repository: the memo, or a HEAD of
+  # the ref's manifest under the caller's credential.
+  defp entitled(ctx, ref, credential) do
+    if Cache.entitled?(credential, ref.registry, ref.repository) do
+      :ok
+    else
+      case head_manifest(ctx, ref, ref.tag || ref.digest || "latest") do
+        {:ok, _digest} ->
+          Cache.entitle(credential, ref.registry, ref.repository)
+
+        {:error, _} = refused ->
+          refused(refused, credential, ref)
+      end
+    end
+  end
+
+  # A registry that refused the credential takes its memo with it.
+  defp refused({:error, %Errors{reason: reason}} = refused, credential, ref)
+       when reason in [:unauthorized, :not_found] do
+    Cache.forget_entitlement(credential, ref.registry, ref.repository)
+    refused
+  end
+
+  defp refused(refused, _credential, _ref), do: refused
+
+  # The registry could not be reached or answered with its own failure:
+  # not the credential store (which never reached it) and not a refusal.
+  defp unreachable?(%Errors{detail: %{credential_store: _}}), do: false
+  defp unreachable?(%Errors{reason: :registry_unavailable}), do: true
+  defp unreachable?(_), do: false
+
+  # A 200 under the caller's credential is its entitlement as well.
+  defp fetch_manifest_remote(ctx, ref, tag, credential) do
     path = "/v2/#{ref.repository}/manifests/#{tag}"
 
     accept_headers = [
@@ -462,6 +497,8 @@ defmodule Compendium.OCI.Client do
           )
         end
 
+        Cache.entitle(credential, ref.registry, ref.repository)
+
         if ref.digest && computed != ref.digest do
           {:error, Errors.digest_mismatch(ref.digest, computed)}
         else
@@ -469,7 +506,7 @@ defmodule Compendium.OCI.Client do
         end
 
       {:ok, status, _headers, body} ->
-        {:error, Errors.from_response(status, body, ref.registry)}
+        refused({:error, Errors.from_response(status, body, ref.registry)}, credential, ref)
 
       {:error, _} = error ->
         error
@@ -524,30 +561,50 @@ defmodule Compendium.OCI.Client do
   # Private: Blob Operations
   # ============================================================================
 
-  defp fetch_blob(ctx, ref, digest) do
-    # Check cache first
-    case Cache.get_blob(digest) do
+  @doc false
+  # Public for its tests: the blob path's own entitlement check, which a
+  # pull reaches only after the manifest path has proven the same one.
+  #
+  # A cached blob is shared by digest; serving it to this caller needs
+  # the caller's entitlement to `ref`'s repository. A download is its own
+  # proof.
+  @spec fetch_blob(Context.t() | nil, Reference.t(), String.t()) ::
+          {:ok, binary()} | {:error, term()}
+  def fetch_blob(ctx, %Reference{} = ref, digest) do
+    with {:ok, credential} <- Transport.credential_key(ctx, ref) do
+      case Cache.get_blob(digest) do
+        {:ok, bytes} ->
+          with :ok <- entitled(ctx, ref, credential), do: {:ok, bytes}
+
+        :miss ->
+          download_blob(ctx, ref, digest, credential)
+      end
+    end
+  end
+
+  defp download_blob(ctx, ref, digest, credential) do
+    case Blob.download(ctx, ref, digest) do
       {:ok, bytes} ->
+        Cache.entitle(credential, ref.registry, ref.repository)
+
+        case Cache.put_blob(digest, bytes) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "[Compendium.OCI.Client] Failed to cache blob #{digest}: #{inspect(reason)}"
+            )
+        end
+
         {:ok, bytes}
 
-      :miss ->
-        case Blob.download(ctx, ref, digest) do
-          {:ok, bytes} ->
-            case Cache.put_blob(digest, bytes) do
-              :ok ->
-                :ok
+      # A blob's 404 says nothing of the repository; a refused credential does.
+      {:error, %Errors{reason: :unauthorized}} = refused ->
+        refused(refused, credential, ref)
 
-              {:error, reason} ->
-                Logger.warning(
-                  "[Compendium.OCI.Client] Failed to cache blob #{digest}: #{inspect(reason)}"
-                )
-            end
-
-            {:ok, bytes}
-
-          {:error, _} = error ->
-            error
-        end
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -829,23 +886,25 @@ defmodule Compendium.OCI.Client do
 
   # Fetch an optional layer if present in the manifest.
   # extractor_fn is a function like &Manifest.readme_layer/1 that returns {:ok, layer} | :none
+  #
+  # Only an absent layer is `{:ok, nil}`: none in the manifest, or the
+  # registry's 404 for its blob once the caller's entitlement stands. A
+  # credential, entitlement or transport failure fails the pull.
   defp maybe_fetch_layer(ctx, ref, parsed, extractor_fn) do
-    case extractor_fn.(parsed) do
-      {:ok, layer} ->
-        case fetch_blob(ctx, ref, layer["digest"]) do
-          {:ok, bytes} ->
-            {:ok, bytes}
+    with {:ok, layer} <- extractor_fn.(parsed),
+         {:ok, credential} <- Transport.credential_key(ctx, ref),
+         :ok <- entitled(ctx, ref, credential) do
+      case fetch_blob(ctx, ref, layer["digest"]) do
+        {:error, %Errors{reason: :not_found, status: 404}} ->
+          Logger.warning("[Compendium.OCI.Client] Optional layer #{layer["digest"]} is absent")
+          {:ok, nil}
 
-          {:error, reason} ->
-            Logger.warning(
-              "[Compendium.OCI.Client] Failed to fetch optional layer: #{inspect(reason)}"
-            )
-
-            {:ok, nil}
-        end
-
-      :none ->
-        {:ok, nil}
+        fetched ->
+          fetched
+      end
+    else
+      :none -> {:ok, nil}
+      {:error, _} = refused -> refused
     end
   end
 

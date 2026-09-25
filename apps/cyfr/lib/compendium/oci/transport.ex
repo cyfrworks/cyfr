@@ -109,6 +109,26 @@ defmodule Compendium.OCI.Transport do
     do_request_with_retry(method, url, registry, repository, extra_headers, body, ctx, opts, 0)
   end
 
+  @doc """
+  The credential a request for `ref` would carry, as an opaque key: the
+  SHA-256 of its authorization header, or `"anonymous"` when the caller
+  holds none for the repository's namespace. A credential that cannot be
+  read answers as `request/7` would, with nothing sent.
+
+  The OCI cache keys its entitlement memo by it, so a revoked or rotated
+  credential never inherits another's proof.
+  """
+  @spec credential_key(Sanctum.Context.t() | nil, Reference.t()) :: {:ok, String.t()} | error()
+  def credential_key(ctx, %Reference{registry: registry, repository: repository}) do
+    with {:ok, headers} <-
+           Auth.auth_headers(registry, repository, namespace_from_repository(repository), ctx) do
+      case List.keyfind(headers, "authorization", 0) do
+        {_, value} -> {:ok, Prima.Digest.sha256_hex(value)}
+        nil -> {:ok, "anonymous"}
+      end
+    end
+  end
+
   # ============================================================================
   # Private
   # ============================================================================

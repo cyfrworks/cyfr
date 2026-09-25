@@ -500,15 +500,9 @@ defmodule Grimoire.CatalogTest do
         # still in flight for the assertions below — no sleeping, no racing.
         assert_receive {:handler_running, handler_pid}, 5_000
 
-        # The caller registers the task once it has started it, so the entry
-        # can land just after the handler's first message: a bounded wait.
-        Prima.Test.Wait.wait_until(
-          fn ->
-            :ets.lookup(Grimoire.RunningTasks, "req_tracked") == [{"req_tracked", handler_pid}]
-          end,
-          5_000,
-          "the in-flight task registered under its request id"
-        )
+        # The task registers itself before its handler runs, so the entry is
+        # there by the handler's first message.
+        assert :ets.lookup(Grimoire.RunningTasks, "req_tracked") == [{"req_tracked", handler_pid}]
 
         # The gate runs the handler under its own task supervisor.
         assert handler_pid in Task.Supervisor.children(Grimoire.TaskSupervisor)

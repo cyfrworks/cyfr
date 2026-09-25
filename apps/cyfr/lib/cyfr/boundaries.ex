@@ -555,12 +555,10 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/emissary_web.ex"
       ],
       into: "Crucible",
-      allow: ~w(Crucible Crucible.LeaseWatch),
+      allow: ~w(Crucible),
       reason:
-        "the MCP surface follows executions, serves webhooks and reports health through " <>
-          "the execution domain's root facade. `Crucible.LeaseWatch` is the outbound " <>
-          "proxy's lease keeper (`Emissary.External.Proxy`), named directly until that " <>
-          "call moves to `Crucible.start_lease_watch/3` and `stop_lease_watch/1`."
+        "the MCP surface follows executions, serves webhooks, keeps an outbound call's " <>
+          "lease and reports health through the execution domain's root facade."
     },
     %{
       from: [
@@ -1102,7 +1100,6 @@ defmodule Cyfr.Boundaries do
       route_slug: 1,
       settings: 1
     ],
-    "Sanctum.Tenancy.Caps" => [check_storage: 2],
     "Sanctum.Tenancy.Members" => [list_by_athanor: 1, member?: 2, solo?: 1],
     "Sanctum.Tenancy.Users" => [
       display_name: 1,
