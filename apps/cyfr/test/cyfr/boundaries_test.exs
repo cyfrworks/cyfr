@@ -725,7 +725,7 @@ defmodule Cyfr.BoundariesTest do
 
   describe "the routes" do
     test "every HTTP route declares an auth posture from the vocabulary" do
-      assert Boundaries.route_violations(EmissaryWeb.Router.__routes__()) == [],
+      assert Boundaries.route_violations(Boundaries.routes()) == [],
              """
              A route does not say how it is authenticated. The posture is route
              metadata (`metadata: %{auth: …}`) so it travels with the route and a
@@ -734,12 +734,12 @@ defmodule Cyfr.BoundariesTest do
              accident from a scope, and a route that admits a caller with no
              credential is named in `public_routes/0` as well.
 
-             #{Enum.join(Boundaries.route_violations(EmissaryWeb.Router.__routes__()), "\n")}
+             #{Enum.join(Boundaries.route_violations(Boundaries.routes()), "\n")}
              """
     end
 
     test "every rostered public route still exists" do
-      stale = Boundaries.stale_public_routes(EmissaryWeb.Router.__routes__())
+      stale = Boundaries.stale_public_routes(Boundaries.routes())
 
       assert stale == [],
              "the public-route roster names routes that are gone: #{inspect(stale)}"
@@ -747,7 +747,7 @@ defmodule Cyfr.BoundariesTest do
 
     test "every posture in the vocabulary is declared by at least one route" do
       declared =
-        EmissaryWeb.Router.__routes__()
+        Boundaries.routes()
         |> Enum.map(& &1.metadata[:auth])
         |> MapSet.new()
 
@@ -772,7 +772,7 @@ defmodule Cyfr.BoundariesTest do
 
     test "the rostered routes are exactly the ones whose posture admits nothing" do
       anyone =
-        EmissaryWeb.Router.__routes__()
+        Boundaries.routes()
         |> Enum.filter(&(&1.metadata[:auth] in Boundaries.public_postures()))
         |> Enum.map(&{&1.verb, &1.path})
         |> Enum.sort()
