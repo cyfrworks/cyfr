@@ -11,6 +11,10 @@ defmodule Cyfr.Test.RouterSource do
   declared a row or what a pipeline contains; this reads the file, so a
   route map can say both. Nothing is compiled or expanded, and no
   Phoenix internals are read.
+
+  A route provider's file holds `defmacro routes do quote do … end end`
+  and declares nothing outside it, so its pipelines and routes are read
+  from that quote's body.
   """
 
   @verbs ~w(get post put patch delete options head)a
@@ -50,7 +54,22 @@ defmodule Cyfr.Test.RouterSource do
   defp module_body(file) do
     ast = file |> File.read!() |> Code.string_to_quoted!(file: file)
     {:defmodule, _, [_name, [do: body]]} = ast
-    {body, aliases(body)}
+    {provided(body), aliases(body)}
+  end
+
+  # A provider's routes are the body of its `routes` macro's quote; any
+  # other file's are its module body.
+  defp provided(body) do
+    quoted =
+      for {:defmacro, _, [{:routes, _, args}, [do: {:quote, _, [[do: quoted]]}]]} <-
+            statements(body),
+          args in [nil, []],
+          do: quoted
+
+    case quoted do
+      [quoted] -> quoted
+      [] -> body
+    end
   end
 
   defp statements({:__block__, _, statements}), do: statements

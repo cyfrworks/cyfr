@@ -10,7 +10,7 @@ defmodule Emissary.SecurityTest do
   - Header security (null bytes, oversized headers)
   - Input validation edge cases
   """
-  use EmissaryWeb.ConnCase
+  use Emissary.Web.ConnCase
 
   # The Mcp-Session-Id header must have no effect on authentication, regardless of its value.
   describe "the retired session header is inert" do

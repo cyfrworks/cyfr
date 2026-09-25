@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.MCPTransportTest do
+defmodule Emissary.Web.MCPTransportTest do
   @moduledoc """
   The transport shape of 2026-07-28: POST only, and a response that is either one
   JSON object or a stream the client asked for.
   """
-  use EmissaryWeb.ConnCase, async: false
+  use Emissary.Web.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
 

@@ -360,13 +360,16 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.Context Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Network
-        Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.VaultReader
+        Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.UnauthorizedError
+        Sanctum.VaultReader
       ),
       reason:
         "the MCP transport carries tenancy, reads a server's vault edge, and uses " <>
           "Sanctum.Network/Egress for external servers and the bridge. " <>
           "An outbound call's row runs under its caller's grant, checked through " <>
-          "Sanctum.ExecutionStanding as it is admitted and closed"
+          "Sanctum.ExecutionStanding as it is admitted and closed, and the MCP " <>
+          "controller answers a `Sanctum.UnauthorizedError` raised in the request " <>
+          "process as a JSON-RPC refusal"
     },
     %{
       from: ["apps/cyfr/lib/emissary_web/**/*.ex"],
@@ -374,8 +377,8 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
         Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Session Sanctum.SignIn
-        Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.TinctureAuth
-        Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Webhook
+        Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.TinctureAuth Sanctum.Vault
+        Sanctum.Webhook
       ),
       reason: "the auth fabric's own ingress — a wide roster is the front door doing its job"
     },
@@ -777,6 +780,27 @@ defmodule Cyfr.Boundaries do
           "that turn a domain's answer into an HTTP response. A domain hands a " <>
           "surface plain data and a typed refusal and never names the adapter " <>
           "that renders it."
+    },
+    %{
+      from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
+      into: "PrismWeb",
+      allow: [],
+      reason:
+        "an adapter names no other surface: the MCP adapter and the console meet " <>
+          "only below them, in the host's shared web tier and the domains."
+    },
+    %{
+      from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
+      into: "CyfrWeb",
+      depth: 3,
+      allow: ~w(
+        CyfrWeb.ContextGuard CyfrWeb.ErrorRenderer CyfrWeb.Plugs.ApiSecurityHeaders
+        CyfrWeb.Plugs.Authenticate CyfrWeb.Plugs.CORS CyfrWeb.Plugs.CallIdentity
+        CyfrWeb.Plugs.MCPOrigin CyfrWeb.Plugs.MCPRateLimit CyfrWeb.SSE
+      ),
+      reason:
+        "the MCP adapter reads the host's shared web tier and never its root router, " <>
+          "its endpoint or another adapter."
     },
 
     # --- the security rows: Sanctum is their only reader ---
@@ -1331,6 +1355,14 @@ defmodule Cyfr.Boundaries do
   @spec router() :: module()
   def router, do: @router
 
+  # The route providers the composition router invokes, so another cannot
+  # appear silently: each hands its routes to the root by macro.
+  @routers [Emissary.Router]
+
+  @doc "The route providers whose routes the composition router's table holds."
+  @spec routers() :: [module()]
+  def routers, do: @routers
+
   @doc "The total route table, `router/0`'s `__routes__/0`."
   @spec routes() :: [map()]
   def routes, do: @router.__routes__()
@@ -1642,13 +1674,13 @@ defmodule Cyfr.Boundaries do
     %{module: Emissary.MCP.Router, site: :dispatch, plane: :external},
     # The MCP transport: a batch, a method the endpoint does not serve, an
     # authorization refusal raised in the request process.
-    %{module: EmissaryWeb.MCPController, site: :handle, plane: :external},
-    %{module: EmissaryWeb.MCPController, site: :method_not_allowed, plane: :external},
+    %{module: Emissary.Web.MCPController, site: :handle, plane: :external},
+    %{module: Emissary.Web.MCPController, site: :method_not_allowed, plane: :external},
     # The MCP pipeline's plugs, after routing.
     %{module: CyfrWeb.Plugs.Authenticate, site: :call, plane: :external},
     %{module: CyfrWeb.Plugs.MCPOrigin, site: :call, plane: :external},
     %{module: CyfrWeb.Plugs.MCPRateLimit, site: :call, plane: :external},
-    %{module: EmissaryWeb.Plugs.MCPRequestMetadata, site: :call, plane: :external},
+    %{module: Emissary.Web.Plugs.MCPRequestMetadata, site: :call, plane: :external},
     # The endpoint's ownership plug: a stale owner refusing is an admission
     # refusal, class not_owner.
     %{module: CyfrWeb.Plugs.ControlPlaneOwnership, site: :call, plane: :external},

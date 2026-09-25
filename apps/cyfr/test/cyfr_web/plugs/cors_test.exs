@@ -85,7 +85,7 @@ defmodule CyfrWeb.Plugs.CORSTest do
 
       assert missing == [],
              """
-             These headers are required by EmissaryWeb.Plugs.MCPRequestMetadata but are not
+             These headers are required by Emissary.Web.Plugs.MCPRequestMetadata but are not
              advertised in the CORS preflight, so a cross-origin client cannot send
              them and the browser refuses the request:
 

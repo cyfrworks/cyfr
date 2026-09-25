@@ -163,8 +163,11 @@ defmodule CyfrWeb.RouterTest do
 
   describe "the roster" do
     test "the map's sections are the modules the root's table comes from" do
-      # C2 rewrites this assertion when the first provider other than the root appears.
-      assert Map.keys(@providers) == [inspect(Boundaries.router())]
+      # The root keeps its own section while it still declares routes itself.
+      assert Map.keys(@providers) ==
+               Enum.sort([
+                 inspect(Boundaries.router()) | Enum.map(Boundaries.routers(), &inspect/1)
+               ])
     end
   end
 

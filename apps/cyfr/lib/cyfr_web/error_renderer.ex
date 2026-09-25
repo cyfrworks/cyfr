@@ -8,7 +8,7 @@ defmodule CyfrWeb.ErrorRenderer do
   `Plugs.Authenticate`, `Plugs.MCPOrigin` and `Plugs.MCPRateLimit` decide
   *whether* to reject a request; the pipeline they are mounted in decides what
   the rejection looks like on the wire. The MCP endpoint answers in JSON-RPC
-  (`EmissaryWeb.MCPError`); an ordinary HTTP route answers in plain JSON
+  (`Emissary.Web.MCPError`); an ordinary HTTP route answers in plain JSON
   (`CyfrWeb.ApiError`).
 
   Splitting it this way is what stops the two from drifting apart: one
@@ -25,7 +25,7 @@ defmodule CyfrWeb.ErrorRenderer do
 
   The full rejection vocabulary, for every surface:
 
-    * **`EmissaryWeb.MCPError`** — `/mcp` and anything else speaking
+    * **`Emissary.Web.MCPError`** — `/mcp` and anything else speaking
       JSON-RPC. Every deliberate rejection is a JSON-RPC error object.
     * **`CyfrWeb.ApiError`** — every *deliberate* rejection on an
       ordinary HTTP route: `{"code": class, "message": sentence}`, one

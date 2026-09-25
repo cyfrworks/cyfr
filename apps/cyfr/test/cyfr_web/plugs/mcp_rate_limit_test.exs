@@ -49,10 +49,10 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
     ip = {127, 0, 0, 11}
 
     for _ <- 1..3 do
-      refute MCPRateLimit.call(conn_from(ip), errors: EmissaryWeb.MCPError).halted
+      refute MCPRateLimit.call(conn_from(ip), errors: Emissary.Web.MCPError).halted
     end
 
-    blocked = MCPRateLimit.call(conn_from(ip), errors: EmissaryWeb.MCPError)
+    blocked = MCPRateLimit.call(conn_from(ip), errors: Emissary.Web.MCPError)
     assert blocked.halted
     assert blocked.status == 429
     assert [retry_after] = Plug.Conn.get_resp_header(blocked, "retry-after")

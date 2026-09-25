@@ -35,7 +35,7 @@ defmodule Emissary.MCP do
   `{:ok, result, id}`, `:ok` for a notification, or `{:error, code, message}`.
 
   There is no list-of-messages clause. The specification requires the POST body
-  to be a single request or notification, and `EmissaryWeb.MCPController`
+  to be a single request or notification, and `Emissary.Web.MCPController`
   rejects a batch before it reaches here.
   """
   def handle_message(%Context{} = ctx, params) when is_map(params) do

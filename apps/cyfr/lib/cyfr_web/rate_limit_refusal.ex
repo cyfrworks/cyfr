@@ -25,7 +25,7 @@ defmodule CyfrWeb.RateLimitRefusal do
   Halt with 429, a `retry-after` header, and the one refusal sentence.
 
   `errors` is an `CyfrWeb.ErrorRenderer` — `CyfrWeb.ApiError` for an
-  ordinary HTTP route, `EmissaryWeb.MCPError` for JSON-RPC.
+  ordinary HTTP route, `Emissary.Web.MCPError` for JSON-RPC.
   """
   @spec halt(Plug.Conn.t(), non_neg_integer(), module()) :: Plug.Conn.t()
   def halt(%Plug.Conn{} = conn, retry_after, errors) do

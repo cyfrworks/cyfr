@@ -6,7 +6,7 @@ defmodule CyfrWeb.Plugs.ParserErrorsTest do
   `Plug.Parsers` with one path prefix's failures answered through the
   renderer the caller names, and Phoenix's behaviour everywhere else.
   The endpoint's own `/mcp` wiring is exercised end to end in
-  `EmissaryWeb.MCPErrorTest`.
+  `Emissary.Web.MCPErrorTest`.
   """
   use ExUnit.Case, async: true
 

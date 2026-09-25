@@ -105,7 +105,7 @@ defmodule Compendium.GuideProtocolDriftTest do
       assert String.contains?(String.downcase(text), header),
              """
              integration-guide.md never mentions the `#{header}` header, which
-             EmissaryWeb.Plugs.MCPRequestMetadata requires on every request. A reader
+             Emissary.Web.Plugs.MCPRequestMetadata requires on every request. A reader
              following this guide would build a client that is refused.
              """
     end

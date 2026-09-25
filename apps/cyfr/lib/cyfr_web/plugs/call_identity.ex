@@ -24,7 +24,7 @@ defmodule CyfrWeb.Plugs.CallIdentity do
   ## One append per refusal
 
   A refusal an entry renders before the gate — a plug's, a controller's —
-  goes through `EmissaryWeb.MCPError` or `CyfrWeb.ApiError`, which
+  goes through `Emissary.Web.MCPError` or `CyfrWeb.ApiError`, which
   record it here (`refused/2`) exactly once per request: under the minted
   call id, with the context's actor when the pipeline had established
   one and none otherwise, and with the operation's names when the request

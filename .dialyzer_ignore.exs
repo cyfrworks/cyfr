@@ -58,5 +58,5 @@
   # noise from the loose `%__MODULE__{}` schema types, not a defect.
   ~r{lib/arca/adapters/s3\.ex:\d+:\d+:.*opaque},
   ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque},
-  ~r{lib/emissary_web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}
+  ~r{lib/emissary/web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}
 ]

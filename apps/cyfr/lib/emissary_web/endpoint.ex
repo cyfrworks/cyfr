@@ -85,7 +85,7 @@ defmodule EmissaryWeb.Endpoint do
   # JSON-RPC (-32700) and gates its content type; everything else keeps
   # Phoenix's rendering.
   plug(CyfrWeb.Plugs.ParserErrors,
-    jsonrpc: {"/mcp", EmissaryWeb.MCPError},
+    jsonrpc: {"/mcp", Emissary.Web.MCPError},
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library(),

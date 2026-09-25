@@ -12,7 +12,7 @@ defmodule Emissary.IntegrationTest do
   - Telemetry event emission
   - Error handling propagation
   """
-  use EmissaryWeb.ConnCase, async: false
+  use Emissary.Web.ConnCase, async: false
 
   alias Emissary.MCP
 

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.MCPController do
+defmodule Emissary.Web.MCPController do
   @moduledoc """
   MCP HTTP controller implementing the Streamable HTTP transport.
 
@@ -12,7 +12,7 @@ defmodule EmissaryWeb.MCPController do
   One JSON-RPC 2.0 request or notification per POST — never a batch. Every
   request authenticates and declares its own protocol version and client
   capabilities in `params._meta`, so there is no handshake and nothing to
-  establish. `EmissaryWeb.Plugs.MCPRequestMetadata` enforces that before this
+  establish. `Emissary.Web.Plugs.MCPRequestMetadata` enforces that before this
   controller
   runs.
 
@@ -52,7 +52,7 @@ defmodule EmissaryWeb.MCPController do
   - Metadata: `%{method: String.t(), tool: String.t() | nil, status: :success | :error | :cancelled, action: String.t() | nil, request_id: String.t()}`
   """
 
-  use CyfrWeb, :controller
+  use Emissary.Web, :controller
 
   alias Emissary.MCP
   alias Emissary.MCP.{Progress, Subscriptions}
@@ -78,7 +78,7 @@ defmodule EmissaryWeb.MCPController do
     # A batch has no single id, so `nil` here is correct rather than lossy.
     conn
     |> put_resp_header(@protocol_version_header, @protocol_version)
-    |> EmissaryWeb.MCPError.send(
+    |> Emissary.Web.MCPError.send(
       400,
       :invalid_request,
       "Batch requests not supported. Send one message per request."
@@ -133,7 +133,7 @@ defmodule EmissaryWeb.MCPController do
           |> respond_error(code, Message.encode_error(params["id"], code, message))
 
         _unsent ->
-          EmissaryWeb.MCPError.send(conn, http_status_for(code), e.reason, message)
+          Emissary.Web.MCPError.send(conn, http_status_for(code), e.reason, message)
       end
   end
 
@@ -146,7 +146,7 @@ defmodule EmissaryWeb.MCPController do
     conn
     |> put_resp_header(@protocol_version_header, @protocol_version)
     |> put_resp_header("allow", "POST, OPTIONS")
-    |> EmissaryWeb.MCPError.send(
+    |> Emissary.Web.MCPError.send(
       405,
       :invalid_request,
       "#{conn.method} is not supported on the MCP endpoint. " <>
@@ -265,7 +265,7 @@ defmodule EmissaryWeb.MCPController do
 
     conn
     |> put_resp_header("x-request-id", request_id)
-    |> EmissaryWeb.MCPError.send(http_status_for(code), reason, message)
+    |> Emissary.Web.MCPError.send(http_status_for(code), reason, message)
   end
 
   # The acknowledgment must be the first message on the stream, and must carry

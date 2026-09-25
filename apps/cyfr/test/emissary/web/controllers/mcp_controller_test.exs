@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.MCPControllerTest do
-  use EmissaryWeb.ConnCase, async: false
+defmodule Emissary.Web.MCPControllerTest do
+  use Emissary.Web.ConnCase, async: false
 
   describe "POST /mcp - tool calls" do
     test "lists available tools", %{conn: conn} do

@@ -15,7 +15,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   """
 
   # Flips rate limits, ownership standing and scheduler configuration.
-  use EmissaryWeb.ConnCase, async: false
+  use Emissary.Web.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
@@ -63,12 +63,12 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Grimoire, :call_external} => :gate_external_head,
     {Grimoire, :call_in_chain} => :gate_in_chain_head,
     {Emissary.MCP.Router, :dispatch} => :router_unknown_tool,
-    {EmissaryWeb.MCPController, :handle} => :mcp_batch,
-    {EmissaryWeb.MCPController, :method_not_allowed} => :mcp_get,
+    {Emissary.Web.MCPController, :handle} => :mcp_batch,
+    {Emissary.Web.MCPController, :method_not_allowed} => :mcp_get,
     {CyfrWeb.Plugs.Authenticate, :call} => :invalid_api_key,
     {CyfrWeb.Plugs.MCPOrigin, :call} => :origin_rejected,
     {CyfrWeb.Plugs.MCPRateLimit, :call} => :mcp_rate_limited,
-    {EmissaryWeb.Plugs.MCPRequestMetadata, :call} => :missing_protocol_header,
+    {Emissary.Web.Plugs.MCPRequestMetadata, :call} => :missing_protocol_header,
     {CyfrWeb.Plugs.ControlPlaneOwnership, :call} => :slot_lost,
     {EmissaryWeb.TinctureController, :index} => :tincture_index_unknown,
     {EmissaryWeb.TinctureController, :invoke} => :tincture_invoke_unknown,

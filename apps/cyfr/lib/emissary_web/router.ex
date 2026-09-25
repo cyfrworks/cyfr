@@ -4,6 +4,8 @@
 defmodule EmissaryWeb.Router do
   use CyfrWeb, :router
 
+  require Emissary.Router
+
   # Pipelines define authentication and transport rules for the scopes below.
 
   # The browser pipeline serves the Prism LiveViews and the auth pages.
@@ -38,19 +40,8 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
-  # MCP accepts POST only. GET and DELETE return 405; preflight must
-  # advertise only the supported method.
-  pipeline :mcp do
-    plug CyfrWeb.Plugs.CallIdentity
-    plug :accepts, ["json", "event-stream"]
-    plug CyfrWeb.Plugs.ApiSecurityHeaders
-    plug CyfrWeb.Plugs.CORS, methods: ~w(POST)
-    plug CyfrWeb.Plugs.MCPOrigin, errors: EmissaryWeb.MCPError
-    # Before Authenticate so unauthenticated floods never touch DB state.
-    plug CyfrWeb.Plugs.MCPRateLimit, errors: EmissaryWeb.MCPError
-    plug CyfrWeb.Plugs.Authenticate, errors: EmissaryWeb.MCPError
-    plug EmissaryWeb.Plugs.MCPRequestMetadata
-  end
+  # The MCP adapter's `:mcp` pipeline and `/mcp` scope.
+  Emissary.Router.routes()
 
   # Authenticated HTTP routes use the shared context resolver with API
   # error rendering and a separate rate-limit bucket.
@@ -295,17 +286,6 @@ defmodule EmissaryWeb.Router do
 
     get "/", LegalAcceptController, :show, metadata: %{auth: :browser_public_legal}
     post "/submit", LegalAcceptController, :submit, metadata: %{auth: :browser_public_legal}
-  end
-
-  # MCP endpoint. POST is the only verb this revision defines: a request's own
-  # response stream carries its progress, so there is no standalone stream to
-  # open, and there is no session to terminate.
-  scope "/mcp", EmissaryWeb do
-    pipe_through :mcp
-
-    post "/", MCPController, :handle, metadata: %{auth: :authenticate_plug}
-    get "/", MCPController, :method_not_allowed, metadata: %{auth: :authenticate_plug}
-    delete "/", MCPController, :method_not_allowed, metadata: %{auth: :authenticate_plug}
   end
 
   scope "/t", EmissaryWeb do

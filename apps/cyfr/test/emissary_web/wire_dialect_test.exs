@@ -47,7 +47,7 @@ defmodule EmissaryWeb.WireDialectTest do
 
     assert offenders == [],
            "bare send_resp outside the renderer seam in #{inspect(offenders)} — " <>
-             "route the refusal through CyfrWeb.ApiError / EmissaryWeb.MCPError, " <>
+             "route the refusal through CyfrWeb.ApiError / Emissary.Web.MCPError, " <>
              "or add the file to @allowed with its reason"
   end
 end

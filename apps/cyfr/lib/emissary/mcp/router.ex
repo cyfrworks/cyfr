@@ -411,7 +411,7 @@ defmodule Emissary.MCP.Router do
   # confines that notification to stdio — "on Streamable HTTP, closing the SSE
   # response stream is itself the cancellation signal and no
   # `notifications/cancelled` message is expected" — and this server speaks
-  # only Streamable HTTP. `EmissaryWeb.MCPController` cancels on stream close;
+  # only Streamable HTTP. `Emissary.Web.MCPController` cancels on stream close;
   # accepting the notification as well would be a second, unspecified way in.
   defp dispatch_notification(_ctx, method, _params) do
     require Logger
