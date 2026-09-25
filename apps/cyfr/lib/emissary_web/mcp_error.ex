@@ -12,6 +12,10 @@ defmodule EmissaryWeb.MCPError do
   `Plug.Parsers` runs in the endpoint, ahead of the router pipeline. It is
   genuinely absent for a GET (no body) and for a batch, and `nil` is correct in
   those cases — which is the only case JSON-RPC allows it.
+
+  A rejection rendered here is the request's refused decision, recorded
+  once (`EmissaryWeb.Plugs.CallIdentity.refused/2`) when the pipeline
+  minted a call id and nothing recorded it before.
   """
 
   @behaviour EmissaryWeb.ErrorRenderer
@@ -32,6 +36,7 @@ defmodule EmissaryWeb.MCPError do
   """
   @impl true
   def send(%Plug.Conn{} = conn, status, code, message) do
+    conn = EmissaryWeb.Plugs.CallIdentity.refused(conn, code)
     {code, message} = wire(code, message)
 
     conn

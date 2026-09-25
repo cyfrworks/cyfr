@@ -354,8 +354,8 @@ defmodule Grimoire.Catalog do
   """
   def call_external(name, ctx, args, opts \\ [])
 
-  def call_external(name, %Context{plane: :guest}, _args, _opts) do
-    {:error, Error.admission({:guest_plane_call, name})}
+  def call_external(name, %Context{plane: :guest} = ctx, _args, opts) do
+    head_refused(name, ctx, opts, :external, Error.admission({:guest_plane_call, name}))
   end
 
   def call_external(name, %Context{} = ctx, args, opts) when is_map(args) do
@@ -365,8 +365,8 @@ defmodule Grimoire.Catalog do
     do_call(name, ctx, args, Keyword.drop(opts, [:in_chain, :authority]))
   end
 
-  def call_external(_name, %Context{}, _args, _opts),
-    do: {:error, Error.admission({:invalid_argument, "Arguments must be an object"})}
+  def call_external(name, %Context{} = ctx, _args, opts),
+    do: head_refused(name, ctx, opts, :external, not_an_object())
 
   @doc """
   Call a tool from **inside a running chain** — the only entry that accepts
@@ -442,8 +442,35 @@ defmodule Grimoire.Catalog do
     do_call(name, ctx, args, opts)
   end
 
-  def call_in_chain(_name, %Context{}, _args, %Prima.Authority{}, _opts),
-    do: {:error, Error.admission({:invalid_argument, "Arguments must be an object"})}
+  def call_in_chain(name, %Context{} = ctx, _args, %Prima.Authority{}, opts),
+    do: head_refused(name, ctx, opts, :in_chain, not_an_object())
+
+  defp not_an_object, do: Error.admission({:invalid_argument, "Arguments must be an object"})
+
+  # A refusal at the entry's head — a guest plane, arguments that are not
+  # an object — made before `do_call/4` and its identity: recorded as the
+  # gate records every refusal, under the entry's call id or a fresh one,
+  # on the head's plane, with a request-log row when the caller has an
+  # athanor. The refusal is the answer either way.
+  defp head_refused(name, %Context{} = ctx, opts, plane, %Prima.Refusal{} = refusal) do
+    # An internal caller with no ingress request is its own root, as in
+    # `do_call/4`.
+    decision =
+      Grimoire.Decisions.refused(ctx, refusal,
+        call_id: Keyword.get(opts, :call_id),
+        request_id: ctx.request_id || Prima.UUID7.request_id(),
+        plane: plane,
+        parent_call_id: if(plane == :in_chain, do: parent_call_id(Keyword.get(opts, :lineage))),
+        tool: name
+      )
+
+    Grimoire.Decisions.open(ctx, decision, %{
+      method: Keyword.get(opts, :method) || "tools/call",
+      input: %{}
+    })
+
+    {:error, refusal}
+  end
 
   # The calling execution's grant, found by the host's lineage: an open
   # attempt of the parent execution, in the caller's own athanor, storing
@@ -1024,25 +1051,16 @@ defmodule Grimoire.Catalog do
   end
 
   # The call's identity: the entry's, when it minted one before its own
-  # checks, else a new one.
-  defp call_id!(nil), do: Prima.UUID7.generate_id("call")
-  defp call_id!("call_" <> rest = call_id) when rest != "", do: call_id
-
-  defp call_id!(_other),
-    do: raise(ArgumentError, "a gate call's :call_id is a call_ id minted by its entry")
+  # checks, else a new one (`Grimoire.Decisions.call_id!/1`).
+  defp call_id!(call_id), do: Grimoire.Decisions.call_id!(call_id)
 
   # The call that admitted the calling execution, as the host stamped it
   # on the lineage — never anything the guest's arguments carry.
   defp parent_call_id(%{call_id: "call_" <> _ = call_id}), do: call_id
   defp parent_call_id(_lineage), do: nil
 
-  # A decision's operation names, as stored: a name that is not a string
-  # names nothing, and the columns hold 255 characters on PostgreSQL, so a
-  # longer name — a guest's own — is cut rather than costing the record.
-  defp bounded(value) when is_binary(value),
-    do: value |> String.codepoints() |> Enum.take(255) |> Enum.join()
-
-  defp bounded(_value), do: nil
+  # A decision's operation names, as stored (`Grimoire.Decisions.bounded/1`).
+  defp bounded(value), do: Grimoire.Decisions.bounded(value)
 
   defp action_of(args), do: bounded(args["action"] || args[:action])
 

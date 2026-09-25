@@ -159,17 +159,31 @@ defmodule Emissary.MCP.Router do
 
   defp dispatch_method(ctx, "tools/call", params, _id) do
     name = params["name"]
+    arguments = Map.get(params, "arguments", %{})
 
     unless is_binary(name) do
-      {:error, :invalid_params, "Missing required field: name"}
+      refused(
+        ctx,
+        :invalid_params,
+        :invalid_params,
+        "Missing required field: name",
+        nil,
+        arguments
+      )
     else
       # Check tool existence first — unknown tools are protocol errors per spec
       case Grimoire.get_tool(name) do
         {:error, :not_found} ->
-          {:error, :invalid_params, "Unknown tool: #{name}"}
+          refused(
+            ctx,
+            :invalid_params,
+            {:not_found, "tool", name},
+            "Unknown tool: #{name}",
+            name,
+            arguments
+          )
 
         {:ok, tool_def} ->
-          arguments = Map.get(params, "arguments", %{})
           has_output_schema = Map.has_key?(tool_def, "outputSchema")
 
           case Grimoire.call_external(name, ctx, arguments,
@@ -217,10 +231,26 @@ defmodule Emissary.MCP.Router do
         read_resource(ctx, uri, id)
 
       %{"uri" => _} ->
-        {:error, :invalid_params, ~s(resources/read requires a non-empty string "uri")}
+        refused(
+          ctx,
+          :invalid_params,
+          :invalid_params,
+          ~s(resources/read requires a non-empty string "uri"),
+          nil,
+          %{},
+          "resources/read"
+        )
 
       _ ->
-        {:error, :invalid_params, ~s(resources/read requires a "uri" parameter)}
+        refused(
+          ctx,
+          :invalid_params,
+          :invalid_params,
+          ~s(resources/read requires a "uri" parameter),
+          nil,
+          %{},
+          "resources/read"
+        )
     end
   end
 
@@ -228,9 +258,47 @@ defmodule Emissary.MCP.Router do
   # Unknown Method
   # ============================================================================
 
-  defp dispatch_method(_ctx, method, _params, _id) do
-    {:error, :method_not_found, "Unknown method: #{method}"}
+  defp dispatch_method(ctx, method, _params, _id) do
+    refused(
+      ctx,
+      :method_not_found,
+      :method_not_found,
+      "Unknown method: #{method}",
+      nil,
+      %{},
+      method
+    )
   end
+
+  # A refusal this router makes before the gate — a request that names
+  # no tool, a tool or method the table does not know, a read that names
+  # no resource — is the request's admission decision, recorded under its
+  # call id (the pipeline's, or one minted here for a caller that arrived
+  # with none) with the names the request said, and answered as the
+  # protocol error it is: `code` is the wire's, `reason` the refusal's.
+  defp refused(ctx, code, reason, message, tool, input, method \\ "tools/call") do
+    record_refusal(ctx, reason, tool, input, method)
+    {:error, code, message}
+  end
+
+  defp record_refusal(ctx, reason, tool, input, method) do
+    input = if is_map(input) and not is_struct(input), do: input, else: %{}
+
+    # Under the pipeline's call id, or one the decision mints for a caller
+    # that arrived with none.
+    decision =
+      Grimoire.refused_decision(ctx, reason,
+        call_id: ctx.call_id,
+        plane: :external,
+        tool: tool,
+        action: input_action(input)
+      )
+
+    Grimoire.open_decision(ctx, decision, %{method: method, input: input})
+  end
+
+  defp input_action(%{"action" => action}) when is_binary(action), do: action
+  defp input_action(_input), do: nil
 
   defp read_resource(ctx, uri, _id) do
     read =
@@ -240,6 +308,12 @@ defmodule Emissary.MCP.Router do
           call_id: ctx.call_id,
           method: "resources/read"
         )
+      else
+        # A URI no declared operation reads: refused here, before the gate,
+        # and answered below by its class like every other refusal.
+        {:error, reason} = refused ->
+          record_refusal(ctx, reason, nil, %{"uri" => uri}, "resources/read")
+          refused
       end
 
     case read do

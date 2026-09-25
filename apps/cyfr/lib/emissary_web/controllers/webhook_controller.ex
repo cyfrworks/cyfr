@@ -59,14 +59,15 @@ defmodule EmissaryWeb.WebhookController do
         EmissaryWeb.ApiError.send(conn, 500, :internal_error, nil)
 
       webhook ->
-        request_id = Prima.UUID7.request_id()
-        call_id = Prima.UUID7.generate_id("call")
-        # Same key on the log lines as on the request-log row this run files.
-        Prima.LoggerContext.set_request_id(request_id)
+        # The request's identity is the pipeline's
+        # (`EmissaryWeb.Plugs.CallIdentity`): the same key on the log lines
+        # as on the request-log row this run files, and the call id the
+        # delivery's decision and its execution row carry.
+        request_id = conn.assigns.request_id
 
         case Sanctum.Caller.establish({:webhook, webhook}, request_id: request_id) do
           {:ok, ctx} ->
-            ctx = %{ctx | call_id: call_id}
+            ctx = EmissaryWeb.Plugs.CallIdentity.stamp(conn, ctx)
             invoke_active(conn, ctx, webhook, conn.assigns[:raw_body], request_id)
 
           {:error, :unauthenticated} ->
@@ -135,7 +136,6 @@ defmodule EmissaryWeb.WebhookController do
 
   defp parsed_body_json(%Plug.Conn{body_params: %Plug.Conn.Unfetched{}}), do: nil
   defp parsed_body_json(%Plug.Conn{body_params: %{} = params}), do: params
-  defp parsed_body_json(_), do: nil
 
   # Every known signature-carrying header is dropped, not just the one this
   # webhook verifies with: a GitHub-configured hook has no business handing
@@ -238,12 +238,11 @@ defmodule EmissaryWeb.WebhookController do
           |> Map.put(:error, error)
         )
 
-        EmissaryWeb.ApiError.send(
-          conn,
-          503,
-          :service_unavailable,
-          nil
-        )
+        # The delivery's decision was opened above and closed just now: the
+        # renderer appends no second one.
+        conn
+        |> EmissaryWeb.Plugs.CallIdentity.decided()
+        |> EmissaryWeb.ApiError.send(503, :service_unavailable, nil)
     end
   end
 

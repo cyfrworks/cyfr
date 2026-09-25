@@ -47,6 +47,15 @@ defmodule Grimoire do
   defdelegate close_decision(ctx, call_id, completion), to: Grimoire.Decisions, as: :close
 
   @doc """
+  A refusal an entry makes before the gate, as the decision `open_decision/3`
+  records (`Grimoire.Decisions.refused/3`): the reason's class and sentence,
+  the context's identity or none, the plane, the names the entry knows.
+  """
+  @spec refused_decision(Sanctum.Context.t() | nil, term(), keyword() | map()) ::
+          Prima.Decision.t()
+  defdelegate refused_decision(ctx, reason, fields), to: Grimoire.Decisions, as: :refused
+
+  @doc """
   The public sentence for any refusal, whichever vocabulary it came from
   (`Grimoire.Error.render/1`): never `nil`, never an `inspect/1` of the
   term.

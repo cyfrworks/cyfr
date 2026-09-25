@@ -38,7 +38,16 @@ defmodule Grimoire.Decisions do
 
   Discovery and the audit's own reads (`recorded?/2`): what a caller
   reads to learn what exists or what was decided is neither appended nor
-  emitted.
+  emitted. An entry refusing before the gate does not know the operation
+  and records whatever the method (`refused/3`).
+
+  ## What a tag carries
+
+  A refused call's names are the caller's own — a guest names any tool,
+  an anonymous request any action — so a metric tag holds only a name
+  the operation table knows and `"unknown"` otherwise: a tag is a series,
+  and a series per guessed name is a series an attacker mints. The row
+  keeps the name as sent, cut to the column (`bounded/1`).
   """
 
   require Logger
@@ -46,6 +55,8 @@ defmodule Grimoire.Decisions do
   alias Arca.DecisionLog.AuditFailure
   alias Prima.Decision
   alias Sanctum.Context
+
+  @unknown "unknown"
 
   # The tools whose every action reads what exists or what was decided.
   @unrecorded_tools ~w(mcp_log record)
@@ -62,6 +73,61 @@ defmodule Grimoire.Decisions do
   @spec recorded?(term(), term()) :: boolean()
   def recorded?(tool, _action) when tool in @unrecorded_tools, do: false
   def recorded?(tool, action), do: {tool, action} not in @unrecorded_actions
+
+  @doc """
+  The call's identity: `id` when the entry minted one before its own
+  checks (a `call_` id), a new one when it minted none. Anything else
+  raises `ArgumentError`: an identity is minted, never carried in from a
+  caller's arguments.
+  """
+  @spec call_id!(String.t() | nil) :: String.t()
+  def call_id!(nil), do: Prima.UUID7.generate_id("call")
+  def call_id!("call_" <> rest = call_id) when rest != "", do: call_id
+
+  def call_id!(_other),
+    do: raise(ArgumentError, "a decision's :call_id is a call_ id minted by its entry")
+
+  @doc """
+  An operation name as a decision stores it: a name that is not a string
+  names nothing, and the columns hold 255 characters on PostgreSQL, so a
+  longer name — a guest's own — is cut rather than costing the record.
+  """
+  @spec bounded(term()) :: String.t() | nil
+  def bounded(value) when is_binary(value),
+    do: value |> String.codepoints() |> Enum.take(255) |> Enum.join()
+
+  def bounded(_value), do: nil
+
+  @doc """
+  A refusal an entry makes before the gate, as a decision: `reason` is a
+  `%Prima.Refusal{}` or a reason term (`Grimoire.Error.classify/1`), whose
+  class and sentence the decision carries. `fields` name the `:plane`
+  (required) and may name `:call_id` (`call_id!/1`), `:request_id`
+  (default the context's), `:parent_call_id`, `:tool` and `:action`. The
+  identity is the context's when one exists and none otherwise: a refusal
+  before authentication has no actor and a null tenant. `inserted_at` is
+  now. `open/3` records it.
+  """
+  @spec refused(Context.t() | nil, term(), keyword() | map()) :: Decision.t()
+  def refused(ctx, reason, fields) when is_nil(ctx) or is_struct(ctx, Context) do
+    fields = Map.new(fields)
+    refusal = Grimoire.Error.classify(reason)
+
+    %Decision{
+      call_id: call_id!(Map.get(fields, :call_id)),
+      parent_call_id: Map.get(fields, :parent_call_id),
+      request_id: Map.get(fields, :request_id) || (ctx && ctx.request_id),
+      user_id: ctx && ctx.user_id,
+      athanor_id: ctx && ctx.athanor_id,
+      plane: Map.fetch!(fields, :plane),
+      tool: bounded(Map.get(fields, :tool)),
+      action: bounded(Map.get(fields, :action)),
+      inserted_at: DateTime.utc_now(),
+      admission: :refused,
+      refusal_class: refusal.class,
+      reason: refusal.message
+    }
+  end
 
   @doc """
   Append `decision` under the context's actor — or under none, for a
@@ -216,8 +282,34 @@ defmodule Grimoire.Decisions do
     })
   end
 
-  # Metric tags need a value: an operation not yet named reads as "".
-  defp metadata(%Decision{} = decision) do
+  # Metric tags need a value: an operation not yet named reads as "". An
+  # admitted call's names are the table's; a refused call's are whatever
+  # the caller sent, so its tags hold only names the table knows.
+  defp metadata(%Decision{admission: :admitted} = decision) do
     %{plane: decision.plane, tool: decision.tool || "", action: decision.action || ""}
   end
+
+  defp metadata(%Decision{} = decision) do
+    {tool, action} = catalogued(decision.tool, decision.action)
+    %{plane: decision.plane, tool: tool, action: action}
+  end
+
+  defp catalogued(nil, _action), do: {"", ""}
+
+  defp catalogued(tool, action) do
+    case Grimoire.Catalog.lookup(tool) do
+      {:ok, {_module, meta}} -> {tool, action_tag(meta, action)}
+      :miss -> {@unknown, if(is_nil(action), do: "", else: @unknown)}
+    end
+  end
+
+  defp action_tag(_meta, nil), do: ""
+
+  defp action_tag(%{operations: operations}, action) when is_list(operations) do
+    if Enum.any?(operations, &(is_map(&1) and Map.get(&1, :action) == action)),
+      do: action,
+      else: @unknown
+  end
+
+  defp action_tag(_meta, _action), do: @unknown
 end

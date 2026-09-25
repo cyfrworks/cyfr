@@ -860,7 +860,8 @@ defmodule EmissaryWeb.MCPControllerTest do
       end
     end
 
-    test "a tool the router does not know reaches no gate and writes no row", %{conn: conn} do
+    test "a tool the router does not know reaches no gate and is one refused decision",
+         %{conn: conn} do
       tool_conn =
         conn
         |> recycle()
@@ -875,9 +876,25 @@ defmodule EmissaryWeb.MCPControllerTest do
           }
         })
 
+      assert json_response(tool_conn, 400)
       [request_id] = get_resp_header(tool_conn, "x-request-id")
 
-      assert [] = rows(request_id)
+      # The router refused it before the gate, under the request's call id:
+      # the row is the refusal's, with its class, and there is one.
+      assert [log] = rows(request_id)
+      assert "call_" <> _ = log.id
+      assert log.status == "error"
+      assert log.refusal_class == "not_found"
+      assert log.tool == "unknown_tool"
+
+      import Ecto.Query
+
+      assert [%{admission: "refused", refusal_class: "not_found", call_id: call_id}] =
+               Arca.Repo.all(
+                 from(d in Arca.Schemas.DecisionLog, where: d.request_id == ^request_id)
+               )
+
+      assert call_id == log.id
     end
   end
 

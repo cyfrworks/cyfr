@@ -11,11 +11,12 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnershipTest do
   alias EmissaryWeb.Plugs.ControlPlaneOwnership
 
   setup do
+    Cyfr.Test.Sandbox.setup!()
     on_exit(fn -> ControlPlane.record(:unclaimed) end)
     :ok
   end
 
-  test "a member that lost its cell slot answers 503 to everything but health" do
+  test "a member that lost its cell slot answers 503 to everything but health, as one refused decision" do
     ControlPlane.record(:lost)
 
     conn = ControlPlaneOwnership.call(conn(:get, "/a/home/chat"), [])
@@ -24,14 +25,36 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnershipTest do
     assert get_resp_header(conn, "retry-after") == ["5"]
     assert %{"code" => "not_owner"} = Jason.decode!(conn.resp_body)
 
+    # The refusal is an admission refusal made before any pipeline: the
+    # plug minted the request's identity itself, and the decision is
+    # recorded once under it, with no actor and a null tenant.
+    assert [request_id] = get_resp_header(conn, "x-request-id")
+    assert request_id == conn.assigns.request_id
+
+    import Ecto.Query, only: [from: 2]
+
+    assert [decision] =
+             Arca.Repo.all(
+               from(d in Arca.Schemas.DecisionLog, where: d.request_id == ^request_id)
+             )
+
+    assert decision.call_id == conn.assigns.call_id
+    assert decision.admission == "refused"
+    assert decision.refusal_class == "not_owner"
+    assert is_nil(decision.athanor_id)
+
+    assert Arca.Repo.all(from(l in Arca.Schemas.McpLog, where: l.request_id == ^request_id)) ==
+             []
+
     probe = ControlPlaneOwnership.call(conn(:get, "/api/health/ready"), [])
     refute probe.halted
   end
 
-  test "a member holding its slot is not touched" do
+  test "a member holding its slot is not touched and mints nothing" do
     ControlPlane.record({:held, 60_000})
     conn = ControlPlaneOwnership.call(conn(:get, "/a/home/chat"), [])
     refute conn.halted
+    refute Map.has_key?(conn.assigns, :call_id)
     assert ControlPlane.held?()
   end
 

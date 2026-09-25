@@ -41,6 +41,7 @@ defmodule EmissaryWeb.Router do
   # MCP accepts POST only. GET and DELETE return 405; preflight must
   # advertise only the supported method.
   pipeline :mcp do
+    plug EmissaryWeb.Plugs.CallIdentity
     plug :accepts, ["json", "event-stream"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.CORS, methods: ~w(POST)
@@ -54,6 +55,7 @@ defmodule EmissaryWeb.Router do
   # Authenticated HTTP routes use the shared context resolver with API
   # error rendering and a separate rate-limit bucket.
   pipeline :authenticated_api do
+    plug EmissaryWeb.Plugs.CallIdentity, tool: "execution"
     plug :accepts, ["json", "event-stream"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.CORS, methods: ~w(GET), headers: ~w(last-event-id)
@@ -128,6 +130,7 @@ defmodule EmissaryWeb.Router do
   # supplies what it does not touch (nosniff, referrer policy, HSTS) — the
   # controller replaces the CSP and framing headers on what it serves.
   pipeline :tincture do
+    plug EmissaryWeb.Plugs.CallIdentity, tool: "tincture"
     plug :accepts, ["html", "json"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.ScrubTinctureCredentials
@@ -139,6 +142,7 @@ defmodule EmissaryWeb.Router do
   end
 
   pipeline :tincture_invoke do
+    plug EmissaryWeb.Plugs.CallIdentity, tool: "tincture"
     plug :accepts, ["json"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
     # Deliberately NO MCPOrigin here, unlike /mcp and /api: a public
@@ -187,6 +191,7 @@ defmodule EmissaryWeb.Router do
   # `Plug.Parsers` body_reader on the endpoint) so HMAC verification sees the
   # exact bytes the sender signed.
   pipeline :webhook do
+    plug EmissaryWeb.Plugs.CallIdentity, tool: "webhook"
     plug :accepts, ["json"]
     plug EmissaryWeb.Plugs.ApiSecurityHeaders
     plug EmissaryWeb.Plugs.WebhookRateLimit
