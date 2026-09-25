@@ -123,6 +123,20 @@ defmodule Crucible do
   end
 
   @doc """
+  Invoke one of a tincture's dependencies for a caller, rooted at the
+  profile `route` selects — `:public` the published public profile at the
+  tincture's public address, `:protected` its owner profile in the
+  caller's athanor — with `args` the gate's cast of the
+  `tincture.invoke_public`/`invoke_protected` arguments: `"publisher"`,
+  `"tincture_name"`, `"reference"` and `"input"`, and for `:public` the
+  address, `"athanor"`. The tincture and its profile are read again on
+  every call. A guest-planed context refuses. See `Crucible.Tincture`.
+  """
+  @spec invoke_tincture(Context.t(), map(), Crucible.Tincture.route()) ::
+          {:ok, Crucible.Tincture.result()} | {:error, Prima.Refusal.t()}
+  defdelegate invoke_tincture(ctx, args, route), to: Crucible.Tincture, as: :invoke
+
+  @doc """
   Derive, without running anything, the authority a `run_root/5` of this
   selector and reference would run under. See
   `Crucible.Admission.authority_for/4`.

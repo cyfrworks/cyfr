@@ -307,8 +307,7 @@ defmodule EmissaryWeb.WebhookController do
           })
 
           # A fixed slug, never the raw term: telemetry metadata fans out
-          # to consumers that must not see internal reasons (the rule
-          # Emissary.Tincture.Invoke's emit_stop states). The sanitized
+          # to consumers that must not see internal reasons. The sanitized
           # detail lives in the request log above.
           :telemetry.execute(
             [:cyfr, :emissary, :webhook, :invoke, :stop],

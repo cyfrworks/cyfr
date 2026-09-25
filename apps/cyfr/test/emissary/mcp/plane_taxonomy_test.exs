@@ -204,7 +204,10 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
                  {"session", "device_poll"},
                  # The caller's own self-description, from its context alone.
                  {"session", "read_resource"},
-                 {"system", "status"}
+                 {"system", "status"},
+                 # A published tincture is public by definition; the action
+                 # runs under its public profile and nothing else.
+                 {"tincture", "invoke_public"}
                ])
              )
     end

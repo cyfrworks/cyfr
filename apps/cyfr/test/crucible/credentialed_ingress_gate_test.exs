@@ -131,15 +131,15 @@ defmodule Crucible.CredentialedIngressGateTest do
     # so inherits the shared resolution above) or falls back to the legacy
     # path when no profile exists. This pins which is which, so a change
     # in routing has to be deliberate.
-    # The console tincture surface shares the :tincture flag — one
-    # ingress, two transports, and since the extraction ONE implementation
-    # (Emissary.Tincture.Invoke), so one kill switch and one row here.
+    # Every tincture surface shares the :tincture flag — one ingress,
+    # three transports, ONE implementation (`Crucible.invoke_tincture/3`,
+    # behind the declared `tincture` operations), so one row here.
     @ingresses [
       {:mcp, "apps/cyfr/lib/crucible/provider.ex", :falls_back},
       {:cron, "apps/cyfr/lib/crucible/schedules/scheduler.ex", :no_fallback_when_bound},
       {:webhook, "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex",
        :no_fallback_when_bound},
-      {:tincture, "apps/cyfr/lib/emissary/tincture/invoke.ex", :falls_back}
+      {:tincture, "apps/cyfr/lib/crucible/tincture.ex", :falls_back}
     ]
 
     test "each ingress routes through the chain" do

@@ -4,8 +4,8 @@
 defmodule PrismWeb.ShellLiveInvokeLogTest do
   @moduledoc """
   The console shell's invoke is a run ingress like the HTTP tincture
-  route, so it files the same request-log rows. It was the one run
-  ingress that logged nothing.
+  route, so it files the same request-log row: the gate's, one per call,
+  naming the declared action it called.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -80,7 +80,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
     end
   end
 
-  test "an invoke files started and finished request-log rows", %{conn: conn, estate: estate} do
+  test "an invoke files one request-log row, the gate's", %{conn: conn, estate: estate} do
     {view, html} = mount_athanor(conn, "/tinctures")
     assert html =~ @tincture
 
@@ -97,13 +97,15 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
     rows =
       Arca.Repo.all(
         from(l in Arca.Schemas.McpLog,
-          where: l.method == "LIVE /shell/invoke" and l.athanor_id == ^estate.id
+          where: l.tool == "tincture" and l.athanor_id == ^estate.id
         )
       )
 
+    # One row: nothing but the gate logs the call.
     assert [row] = rows
-    assert row.tool == "tincture"
-    assert row.action == "invoke"
+    assert row.method == "tools/call"
+    assert row.action == "invoke_protected"
+    assert row.id == row.request_id
     # This tincture has no granted profile, so the invoke fails — and the
     # failure is on the row, with its duration, like the HTTP ingress.
     assert row.status in ["error", "failed"]

@@ -200,7 +200,7 @@ The SDK is **auto-injected** into every tincture's `<head>` at serve time — no
 | Function | Description |
 |----------|-------------|
 | `cyfr.mode` | `"shell"` or `"public"` — the SDK detects context automatically |
-| `cyfr.invoke(reference, input)` | Invoke a backend component. Returns `Promise<{status, output, execution_id, duration_ms}>` |
+| `cyfr.invoke(reference, input)` | Invoke a backend component. Returns `Promise<{status, output, execution_id, duration_ms}>`; a refusal rejects with an `Error` whose `message` is its sentence and whose `code` is its class (`consent_required`, `rate_limited`, `not_found`, …) |
 | `cyfr.ready()` | Signal the shell that the tincture has finished initializing |
 | `cyfr.setTitle(title)` | Update the window title in the Prism shell |
 | `cyfr.close()` | Close this tincture's window |
@@ -472,6 +472,7 @@ Why formulas are safer:
 | Error | Context | Fix |
 |-------|---------|-----|
 | `component not in dependencies` | Invoke ref not in manifest deps | Add the component to `dependencies.static` in `cyfr-manifest.json` |
+| `consent_required` | The tincture has no active profile for the route: its public profile on a public page, its owner profile in the Prism shell | Grant the tincture its owner profile, or publish its public one with `profile.publish` |
 | `Rate limit exceeded` | Public tincture hit rate limit | Wait for `Retry-After` header value. Limit is consent-configured (default 100/min) |
 | `rate_limited` | Private tincture hit rate limit | Reduce invoke frequency or batch requests in a formula. Limit is consent-configured |
 | `Request timed out` | SDK got no response in 30s | Check if shell is responsive, check component execution time |

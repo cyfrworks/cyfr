@@ -571,49 +571,53 @@ defmodule PrismWeb.ShellLive do
   end
 
   defp handle_invoke(socket, window_id, tincture, msg) do
-    reference = get_in(msg, ["payload", "reference"])
-    input = get_in(msg, ["payload", "input"]) || %{}
+    ctx = socket.assigns.context
 
-    if invoke_throttled?(socket.assigns.context, tincture) do
-      response = %{type: "cyfr:response", id: msg["id"], error: "rate limited — retry shortly"}
-      {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-    else
-      # One implementation for both invoke surfaces (the HTTP route is the
-      # other) — validation, context, logging, telemetry and the readiness
-      # gate live in Emissary.Tincture.Invoke. Before the extraction this
-      # surface emitted no telemetry, so console invocations were invisible
-      # to the activity feed. The console shell is an owner surface: the
-      # protected-route profile roots the invocation whatever the
-      # tincture's public visibility, and there is no client IP to pass —
-      # the socket authenticated the person instead.
-      result =
-        Emissary.Tincture.Invoke.run(socket.assigns.context, tincture, reference, input,
-          route: :protected,
-          method: "LIVE /shell/invoke"
-        )
+    response =
+      if invoke_throttled?(ctx, tincture) do
+        iframe_refusal(msg["id"], :rate_limited)
+      else
+        # The same declared operation the HTTP route and `/mcp` call,
+        # through the one gate, which authorizes, casts and logs it;
+        # `Crucible.invoke_tincture/3` reads the tincture again, so the
+        # card this socket holds is never authority. The console shell is
+        # an owner surface: the protected action roots the invocation
+        # whatever the tincture's public visibility, and there is no client
+        # IP to pass — the socket authenticated the person instead.
+        args =
+          %{
+            "action" => "invoke_protected",
+            "publisher" => tincture.publisher,
+            "tincture_name" => tincture.name,
+            "reference" => get_in(msg, ["payload", "reference"]),
+            "input" => get_in(msg, ["payload", "input"]) || %{}
+          }
+          |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
-      response =
-        case result do
-          {:ok, ok} ->
-            %{type: "cyfr:response", id: msg["id"], result: ok}
-
-          {:error, :consent_required, message} ->
-            %{type: "cyfr:response", id: msg["id"], error: "consent_required: " <> message}
-
-          {:error, _code, message} ->
-            %{type: "cyfr:response", id: msg["id"], error: message}
+        case call_tool(ctx, "tincture", args) do
+          {:ok, result} -> %{type: "cyfr:response", id: msg["id"], result: result}
+          {:error, reason} -> iframe_refusal(msg["id"], reason)
         end
+      end
 
-      {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-    end
+    {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
   end
 
-  # Build a scoped execution context for tincture invoke.
-  # Preserves the operator's user_id for audit trails, but limits
-  # permissions to [:execute] only. Guards against nil fields to
-  # satisfy NOT NULL constraints on execution_records.
-  # Tincture execution context is built by `Sanctum.build_tincture_context/2`
-  # (single source of truth, shared with the tincture controller).
+  @doc """
+  The `cyfr:response` answering request `id` with a refusal, as the
+  tincture SDK reads it: `error` is the refusal's class and sentence, never
+  a term — the body the HTTP invoke route answers the same refusal with.
+  """
+  @spec iframe_refusal(term(), term()) :: map()
+  def iframe_refusal(id, reason) do
+    refusal = Grimoire.Error.classify(reason)
+
+    %{
+      type: "cyfr:response",
+      id: id,
+      error: %{code: Atom.to_string(refusal.class), message: refusal.message}
+    }
+  end
 
   # The refresh's answer, taken only under the focus it was started for.
   @impl true

@@ -332,7 +332,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Grimoire
         Sanctum.Policy Sanctum.Session
-        Sanctum.Tenancy Sanctum.ToolServerDigest Sanctum.Unauthorized
+        Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.VaultReader
       ),
       reason:
@@ -341,8 +341,8 @@ defmodule Cyfr.Boundaries do
           "the policy record of every admission. `Sanctum` bare is the domain's own " <>
           "front door — `internal_context/1` and `system_context/0` mint the contexts " <>
           "the server's own work runs under, `auth_configured?/0` says whether this " <>
-          "deployment has sign-in, and `build_tincture_context/2` is the tincture " <>
-          "surface's. A call on the root is a reach like any other and is rostered " <>
+          "deployment has sign-in, and `build_tincture_context/2` is a tincture " <>
+          "invocation's. A call on the root is a reach like any other and is rostered " <>
           "like one; no roster before this one could see it. `Sanctum.Caller` is " <>
           "here for `drop_memo/1` alone: the identity domain announces that an " <>
           "established-caller memo is no longer good and never broadcasts, so the " <>
@@ -350,13 +350,15 @@ defmodule Cyfr.Boundaries do
           "every member and calls back down to make it. `Sanctum.ExecutionStanding` " <>
           "decides whether an admitted execution's grant still stands: admission, " <>
           "every host effect, the in-chain gate and the sweep ask it. `Sanctum.Egress` " <>
-          "is `Grimoire.Provider`'s registry probe and `system.notify` webhook."
+          "is `Grimoire.Provider`'s registry probe and `system.notify` webhook. " <>
+          "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
+          "roots at: its public-profile and private-access policy."
     },
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Context Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Network
+        Sanctum.Context Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Network
         Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.VaultReader
       ),
       reason:

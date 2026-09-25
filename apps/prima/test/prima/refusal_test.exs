@@ -93,6 +93,7 @@ defmodule Prima.RefusalTest do
     {:internal_error, :internal},
     {:invalid_params, :invalid_argument},
     {:consent_required, :consent_required},
+    {{:ambiguous, ["prof_a", "prof_b"]}, :conflict},
     {:service_unavailable, :unavailable},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},

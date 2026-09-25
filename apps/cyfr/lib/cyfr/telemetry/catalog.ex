@@ -252,6 +252,10 @@ defmodule Cyfr.Telemetry.Catalog do
           "the operator's posture made visible at the moment it is exercised, so " <>
           "'we allow unsigned pulls' does not read the same as 'we have none'"
     },
+    # A tincture invoking one of its dependencies (`Crucible.invoke_tincture/3`),
+    # whichever surface asked.
+    [:cyfr, :crucible, :tincture, :invoke, :start] => %{consumers: [:bridge, :metrics]},
+    [:cyfr, :crucible, :tincture, :invoke, :stop] => %{consumers: [:bridge, :metrics]},
 
     # ——— guest activity (high-frequency observability) ———
     [:cyfr, :opus, :http, :request] => %{
@@ -325,10 +329,8 @@ defmodule Cyfr.Telemetry.Catalog do
       note: "scheduler self-alarm: a failure could not be recorded on the schedule row"
     },
 
-    # ——— MCP transport & tinctures & webhooks ———
+    # ——— MCP transport & webhooks ———
     [:cyfr, :emissary, :request] => %{consumers: [:bridge, :metrics]},
-    [:cyfr, :emissary, :tincture, :invoke, :start] => %{consumers: [:bridge, :metrics]},
-    [:cyfr, :emissary, :tincture, :invoke, :stop] => %{consumers: [:bridge, :metrics]},
     [:cyfr, :emissary, :webhook, :invoke, :start] => %{consumers: [:metrics]},
     [:cyfr, :emissary, :webhook, :invoke, :stop] => %{consumers: [:metrics]},
     [:cyfr, :emissary, :webhook, :verify_succeeded] => %{consumers: [:metrics]},

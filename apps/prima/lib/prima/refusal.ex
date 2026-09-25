@@ -452,11 +452,15 @@ defmodule Prima.Refusal do
   # leaks; `:not_found` is the same answer.
   defp row(reason) when reason in [:forbidden, :not_found], do: {:not_found, "Not found"}
 
-  # A tincture invocation's outcomes (`Emissary.Tincture.Invoke`).
+  # A tincture invocation's outcomes (`Crucible.invoke_tincture/3`).
   defp row(:invalid_params), do: {:invalid_argument, "The request's arguments are not valid"}
 
   defp row(:consent_required),
     do: {:consent_required, "The tincture is not consented to run here"}
+
+  # More than one active profile answers the route: nothing says which.
+  defp row({:ambiguous, ids}) when is_list(ids),
+    do: {:conflict, "The reference matches more than one tincture."}
 
   defp row(:service_unavailable),
     do: {:unavailable, "The service is unavailable — retry shortly"}

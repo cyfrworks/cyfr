@@ -27,10 +27,10 @@ defmodule Cyfr.IngressInventoryTest do
     "apps/cyfr/lib/crucible/provider.ex" => :mcp,
     "apps/cyfr/lib/crucible/schedules/scheduler.ex" => :cron,
     "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex" => :webhook,
-    # One implementation behind two tincture surfaces (the HTTP controller
-    # and the console shell render its outcomes; neither calls run_root
-    # itself any more).
-    "apps/cyfr/lib/emissary/tincture/invoke.ex" => :tincture,
+    # A tincture's invocation, behind the declared `tincture` operations
+    # every surface reaches through the gate (the HTTP controller, the
+    # console shell and `/mcp` render its outcomes; none calls run_root).
+    "apps/cyfr/lib/crucible/tincture.ex" => :tincture,
     # Formula children run under the authority CYFR holds for the parent's
     # attempt, never their own, admitted for the parent's runner.
     "apps/cyfr/lib/crucible/host/children.ex" => :in_chain,
@@ -100,7 +100,7 @@ defmodule Cyfr.IngressInventoryTest do
     apps/cyfr/lib/crucible/provider.ex
     apps/cyfr/lib/crucible/schedules/scheduler.ex
     apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex
-    apps/cyfr/lib/emissary/tincture/invoke.ex
+    apps/cyfr/lib/crucible/tincture.ex
   )
 
   # Where execution is defined, and where a formula's children are

@@ -634,8 +634,11 @@ defmodule EmissaryWeb.TinctureControllerTest do
         |> put_req_header("authorization", "Bearer #{key}")
         |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
 
-      body = json_response(mint, 403)
+      # A credential that cannot vouch for itself is `unauthenticated`: a
+      # 401 with its challenge, which tells a client to sign in again.
+      body = json_response(mint, 401)
       assert body["code"] == "unauthenticated"
+      assert get_resp_header(mint, "www-authenticate") == ["Bearer"]
       refute Map.has_key?(body, "token")
 
       page =
@@ -643,7 +646,8 @@ defmodule EmissaryWeb.TinctureControllerTest do
         |> put_req_header("authorization", "Bearer #{key}")
         |> get("/t/test/local/auth-dash")
 
-      assert json_response(page, 403)["code"] == "unauthenticated"
+      assert json_response(page, 401)["code"] == "unauthenticated"
+      assert get_resp_header(page, "www-authenticate") == ["Bearer"]
       refute page.resp_body =~ "_s/"
     end
 
@@ -754,8 +758,37 @@ defmodule EmissaryWeb.TinctureControllerTest do
         |> put_req_header("content-type", "application/json")
         |> post("/t/test/local/pub-dash/invoke", Jason.encode!(%{input: %{}}))
 
+      # The gate casts the declared arguments, and says which is missing.
       body = json_response(conn, 400)
-      assert body["message"] == "missing reference"
+      assert body["code"] == "invalid_argument"
+      assert body["message"] == "Missing required field: reference"
+    end
+
+    test "a public tincture's invoke is the public action, named by the URL's address",
+         %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post(
+          "/t/test/local/pub-dash/invoke",
+          Jason.encode!(%{reference: "reagent:local.echo:1.0.0", input: %{}})
+        )
+
+      # Past the gate's cast: whatever the run answers, the address was the
+      # path's.
+      refute conn.status in [400, 404]
+
+      athanor_id = Sanctum.TestContext.athanor_id()
+
+      assert [row] =
+               Arca.Repo.all(
+                 Ecto.Query.from(l in Arca.Schemas.McpLog,
+                   where: l.tool == "tincture" and l.athanor_id == ^athanor_id
+                 )
+               )
+
+      assert row.action == "invoke_public"
+      assert %{"athanor" => "test", "publisher" => "local"} = Jason.decode!(row.input)
     end
 
     test "rejects invoke for private tincture without auth", %{conn: conn} do
