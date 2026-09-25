@@ -42,7 +42,7 @@ defmodule Aqua.Ops do
   @spec action_kind(String.t(), String.t()) :: atom() | nil
   def action_kind(tool, action) do
     case Grimoire.get_tool(tool) do
-      {:ok, tool_def} -> Grimoire.Annotations.kind(tool_def, action)
+      {:ok, tool_def} -> Grimoire.annotation_kind(tool_def, action)
       _ -> nil
     end
   end
@@ -63,7 +63,7 @@ defmodule Aqua.Ops do
   @spec replay_safe?(String.t(), String.t()) :: boolean()
   def replay_safe?(tool, action) do
     case Grimoire.get_tool(tool) do
-      {:ok, tool_def} -> Grimoire.Annotations.recovery(tool_def, action) == :replay_safe
+      {:ok, tool_def} -> Grimoire.annotation_recovery(tool_def, action) == :replay_safe
       _ -> false
     end
   end
@@ -75,7 +75,7 @@ defmodule Aqua.Ops do
   @spec action_standing(String.t(), String.t()) :: :thread | false | nil
   def action_standing(tool, action) do
     case Grimoire.get_tool(tool) do
-      {:ok, tool_def} -> Grimoire.Annotations.standing(tool_def, action)
+      {:ok, tool_def} -> Grimoire.annotation_standing(tool_def, action)
       _ -> nil
     end
   end

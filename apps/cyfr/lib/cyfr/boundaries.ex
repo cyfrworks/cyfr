@@ -505,6 +505,18 @@ defmodule Cyfr.Boundaries do
           "admission, dispatch or the attempt's rows is the assistant's to name."
     },
     %{
+      from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
+      into: "Compendium",
+      allow: ~w(Compendium Compendium.AquaAgent),
+      reason:
+        "the assistant reads its agents, their snapshots and consent rows, its skills " <>
+          "and its model catalysts through the component domain's root facade alone, " <>
+          "and the agent-reference and version vocabularies it reads are Prima's. " <>
+          "`Compendium.AquaAgent` is the authored-policy check (`Aqua.Policy`), named " <>
+          "directly until that check moves into the component domain beside the agent " <>
+          "file it validates."
+    },
+    %{
       from: ["apps/cyfr/lib/crucible/**/*.ex", "apps/cyfr/lib/crucible.ex"],
       into: "Aqua",
       allow: [],

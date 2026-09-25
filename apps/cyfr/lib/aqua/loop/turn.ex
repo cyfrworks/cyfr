@@ -71,7 +71,7 @@ defmodule Aqua.Loop.Turn do
     with {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          {:ok, agent} <- agent(ctx, turn, roster),
-         soul? = Compendium.AgentSource.soul?(agent["name"]),
+         soul? = Prima.AgentRef.soul?(agent["name"]),
          roles = if(soul?, do: roles(roster), else: []),
          {:ok, grants} <-
            Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [agent["name"]]),
@@ -171,8 +171,8 @@ defmodule Aqua.Loop.Turn do
   end
 
   defp pinned_agent(turn, bytes) do
-    with {:ok, parsed} <- Compendium.AquaAgent.parse(turn.agent, bytes),
-         {:ok, digest} <- Compendium.AquaAgent.capability_digest(parsed) do
+    with {:ok, parsed} <- Compendium.parse_agent(turn.agent, bytes),
+         {:ok, digest} <- Compendium.agent_capability_digest(parsed) do
       if is_nil(turn.agent_capability_digest) or digest == turn.agent_capability_digest,
         do: {:ok, agent_map(parsed)},
         else: {:error, :agent_changed}
@@ -223,7 +223,7 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
-  defp role_type, do: Compendium.AquaAgent.role_type()
+  defp role_type, do: Compendium.agent_role_type()
 
   # ---------------------------------------------------------------------------
   # The model

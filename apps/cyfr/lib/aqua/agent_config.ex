@@ -8,7 +8,7 @@ defmodule Aqua.AgentConfig do
   The soul's and the roles' definitions, as a turn reads them.
 
   Reads are in-process: `roster/1` and `agent/2` read the athanor's
-  `aqua/` tree through `Compendium.AquaAgent` — the same files the `aqua`
+  `aqua/` tree through the `Compendium` facade — the same files the `aqua`
   tool serves, without the tool's round trip — and answer string-keyed
   maps in the tool's own projection, so a consumer reads one key spelling
   whether a definition came from here or over the wire. Every write, and
@@ -19,8 +19,6 @@ defmodule Aqua.AgentConfig do
   definitions from those results with `role_definitions/4`.
   """
 
-  alias Compendium.AquaAgent
-  alias Compendium.AquaPath
   alias Sanctum.Context
 
   # The authored tool_policy is edited on the AQUA page. Chat approvals are
@@ -41,7 +39,7 @@ defmodule Aqua.AgentConfig do
   `{:error, {:unavailable, _}}`, never an empty roster a turn would
   quietly run without a crew. A single file that fails to parse is skipped
   and logged — one broken role must not take the soul down
-  (`Compendium.AquaAgent.list/1`).
+  (`Compendium.agents/1`).
 
   The read is also where an estate gets its bundle on first need
   (`Sanctum.Provisioning.start_provisioning/1`): a group estate is minted
@@ -53,7 +51,7 @@ defmodule Aqua.AgentConfig do
   def roster(%Context{} = ctx) do
     Sanctum.Provisioning.start_provisioning(ctx)
 
-    case AquaAgent.list(ctx) do
+    case Compendium.agents(ctx) do
       {:ok, agents, errors} ->
         Enum.each(errors, fn {name, reason} ->
           Logger.warning(
@@ -78,10 +76,10 @@ defmodule Aqua.AgentConfig do
   """
   @spec agent(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def agent(%Context{} = ctx, name) when is_binary(name) do
-    if AquaPath.valid_name?(name) do
+    if Compendium.valid_agent_name?(name) do
       Sanctum.Provisioning.start_provisioning(ctx)
 
-      with {:ok, agent} <- AquaAgent.get(ctx, name), do: {:ok, project(agent)}
+      with {:ok, agent} <- Compendium.agent(ctx, name), do: {:ok, project(agent)}
     else
       {:error, :not_found}
     end
@@ -94,7 +92,7 @@ defmodule Aqua.AgentConfig do
       "name" => agent.name,
       "title" => agent.title,
       "description" => agent.description,
-      "type" => AquaAgent.type_of(agent),
+      "type" => Compendium.agent_type_of(agent),
       "content" => agent.prompt,
       "tool_policy" => agent.tool_policy,
       "catalyst_ref" => agent.catalyst_ref,
@@ -126,7 +124,7 @@ defmodule Aqua.AgentConfig do
   @spec role_definitions([map()], [map()], String.t() | nil, String.t() | nil, map()) :: [map()]
   def role_definitions(roster, listing, fallback_catalyst, fallback_model, role_grants \\ %{})
       when is_list(roster) and is_list(listing) and is_map(role_grants) do
-    role_type = AquaAgent.role_type()
+    role_type = Compendium.agent_role_type()
 
     for %{"type" => ^role_type, "name" => name} = role <- roster do
       {catalyst_ref, model} =
@@ -228,7 +226,7 @@ defmodule Aqua.AgentConfig do
       components
       |> Enum.filter(fn c -> String.starts_with?(c["component_ref"] || "", prefix) end)
       # Semver precedence, not lexicographic max — "10.0.0" outranks "9.0.0".
-      |> Compendium.Semver.sort_desc_by(fn c -> c["version"] || "0" end)
+      |> Prima.Semver.sort_desc_by(fn c -> c["version"] || "0" end)
       |> List.first()
 
     case match do
