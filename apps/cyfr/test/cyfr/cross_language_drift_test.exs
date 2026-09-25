@@ -141,7 +141,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
   test "the consent-tag vocabulary agrees across Sanctum, the MCP boundary and the CLI" do
     # Sanctum.Consent declares the vocabulary; the tuples stay TYPED to the
     # wire router, which promotes them to protocol errors — one -335xx code
-    # per tag (Emissary.MCP.Message), the payload in error.data
+    # per tag (Prima.MCP.Message), the payload in error.data
     # (Prima.ConsentSignal) — and codex recovers them from the code
     # and data (mcp.ConsentError). A tag or code renamed on one side
     # silently stops being explained (Go) or stops crossing the boundary —
@@ -149,7 +149,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     consent = read!("apps/sanctum/lib/sanctum/consent.ex")
     execution_mcp = read!("apps/cyfr/lib/crucible/provider.ex")
     signal = read!("apps/prima/lib/prima/consent_signal.ex")
-    message = read!("apps/cyfr/lib/emissary/mcp/message.ex")
+    message = read!("apps/prima/lib/prima/mcp/message.ex")
     root_go = read!("apps/codex/cmd/root.go")
     client_go = read!("apps/codex/internal/mcp/client.go")
 
@@ -170,7 +170,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "tag #{tag} missing from Prima.ConsentSignal's roster"
 
       assert message =~ "#{tag}: #{codes[tag]}",
-             "code #{codes[tag]} for #{tag} missing from Emissary.MCP.Message"
+             "code #{codes[tag]} for #{tag} missing from Prima.MCP.Message"
 
       assert client_go =~ ~s(#{codes[tag]}: "#{tag}"),
              "code #{codes[tag]} for #{tag} missing from client.go's consentTagByCode"
@@ -203,8 +203,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
   test "the MCP conformance vocabulary is spelled the same in every client" do
     # Check shared metadata keys, request headers and binary sentinels across bundled clients.
-    protocol = read!("apps/cyfr/lib/emissary/mcp/protocol.ex")
-    message = read!("apps/cyfr/lib/emissary/mcp/message.ex")
+    protocol = read!("apps/prima/lib/prima/mcp/protocol.ex")
+    message = read!("apps/prima/lib/prima/mcp/message.ex")
     mjs = read!("apps/mcp-bridge/server.mjs")
     client_go = read!("apps/codex/internal/mcp/client.go")
     types_go = read!("apps/codex/internal/mcp/types.go")

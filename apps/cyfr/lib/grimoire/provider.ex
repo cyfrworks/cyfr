@@ -242,7 +242,7 @@ defmodule Grimoire.Provider do
        uptime_seconds: uptime(),
        services: services,
        mcp: %{
-         protocol_version: Emissary.MCP.Protocol.version(),
+         protocol_version: Prima.MCP.Protocol.version(),
          tools_count: tool_count(),
          resources_count: resource_count()
        }

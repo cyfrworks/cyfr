@@ -60,7 +60,7 @@ defmodule Emissary.External.Server do
   use GenServer
   require Logger
 
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.{Message, Protocol}
 
   @initialize_timeout_ms 15_000
   # How long a caller waits for a connect, which for a stdio server includes
@@ -379,7 +379,7 @@ defmodule Emissary.External.Server do
         {request_id, state} = next_request_id(state)
 
         body =
-          Emissary.MCP.Message.encode_request(request_id, "tools/call", %{
+          Message.encode_request(request_id, "tools/call", %{
             "name" => tool_name,
             "arguments" => arguments || %{}
           })
@@ -646,17 +646,17 @@ defmodule Emissary.External.Server do
       #
       # Parsing it as a completed result would be worse than refusing: the
       # guest would receive an interim answer as though it were final.
-      {:ok, %{"result" => %{"resultType" => @input_required}}} ->
+      {:ok, %Message{type: :response, result: %{"resultType" => @input_required}}} ->
         Logger.warning(
           "[Emissary.External.Server] #{state.name} returned input_required for #{tool_name}; refused"
         )
 
         {:error, "#{state.name} asked for additional input, which external servers may not do."}
 
-      {:ok, %{"result" => result}} ->
+      {:ok, %Message{type: :response, result: result}} ->
         {:ok, mask_credentials(result, state)}
 
-      {:ok, %{"error" => error}} ->
+      {:ok, %Message{type: :error, error: error}} ->
         {:error, mask_credentials(upstream_message(error), state)}
 
       {:legacy, _state} ->
@@ -916,7 +916,7 @@ defmodule Emissary.External.Server do
     {request_id, state} = next_request_id(state)
 
     body =
-      Emissary.MCP.Message.encode_request(request_id, "initialize", %{
+      Message.encode_request(request_id, "initialize", %{
         "protocolVersion" => @legacy_protocol_version,
         "capabilities" => %{},
         "clientInfo" => %{
@@ -926,14 +926,14 @@ defmodule Emissary.External.Server do
       })
 
     case http_post(state, body) do
-      {:ok, %{"result" => result}} -> {:ok, result, state}
-      {:ok, %{"error" => error}} -> {:error, upstream_message(error)}
+      {:ok, %Message{type: :response, result: result}} -> {:ok, result, state}
+      {:ok, %Message{type: :error, error: error}} -> {:error, upstream_message(error)}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp send_initialized_notification(state) do
-    body = Emissary.MCP.Message.encode_notification("notifications/initialized")
+    body = Message.encode_notification("notifications/initialized")
 
     case http_post(state, body) do
       # Notifications may return empty or accepted
@@ -947,17 +947,17 @@ defmodule Emissary.External.Server do
   defp send_tools_list(state) do
     {request_id, state} = next_request_id(state)
 
-    body = Emissary.MCP.Message.encode_request(request_id, "tools/list", %{})
+    body = Message.encode_request(request_id, "tools/list", %{})
 
     case http_post(state, body) do
-      {:ok, %{"result" => %{"tools" => tools}}} ->
+      {:ok, %Message{type: :response, result: %{"tools" => tools}}} ->
         {:ok, tools, state}
 
-      {:ok, %{"result" => result}} ->
+      {:ok, %Message{type: :response, result: result}} ->
         # Some servers return tools at top level
         {:ok, Map.get(result, "tools", []), state}
 
-      {:ok, %{"error" => error}} ->
+      {:ok, %Message{type: :error, error: error}} ->
         {:error, upstream_message(error)}
 
       {:legacy, state} ->
@@ -1032,9 +1032,7 @@ defmodule Emissary.External.Server do
 
     case Sanctum.Egress.pinned_request(:post, state.url, headers, json_body, opts) do
       {:ok, status, _headers, resp_body} when status in 200..299 ->
-        with {:ok, parsed} <- parse_response(resp_body) do
-          check_response_id(parsed, body)
-        end
+        read_reply(state, resp_body, body)
 
       {:error, {:response_too_large, _size, _max}} ->
         {:error, "Response too large (max 10MB)"}
@@ -1141,7 +1139,7 @@ defmodule Emissary.External.Server do
 
     case Protocol.named_subject(body) do
       nil -> base
-      name -> [{Protocol.name_header(), encode_header_value(name)} | base]
+      name -> [{Protocol.name_header(), Protocol.encode_header_value(name)} | base]
     end ++ param_headers(body, tools)
   end
 
@@ -1166,7 +1164,7 @@ defmodule Emissary.External.Server do
            value when not is_nil(value) <- arguments[property] do
         [
           {Protocol.param_header_prefix() <> String.downcase(header),
-           encode_header_value(to_header_value(value))}
+           Protocol.encode_header_value(to_header_value(value))}
         ]
       else
         _ -> []
@@ -1180,17 +1178,6 @@ defmodule Emissary.External.Server do
   defp to_header_value(value) when is_integer(value), do: Integer.to_string(value)
   defp to_header_value(value), do: to_string(value)
 
-  # A value that cannot travel as a plain header goes in the specification's
-  # Base64 sentinel, which the receiving server decodes before comparing.
-  defp encode_header_value(value) do
-    safe? =
-      value != "" and value == String.trim(value) and
-        not String.starts_with?(value, "=?base64?") and
-        String.to_charlist(value) |> Enum.all?(&(&1 >= 0x20 and &1 <= 0x7E))
-
-    if safe?, do: value, else: "=?base64?" <> Base.encode64(value) <> "?="
-  end
-
   # A modern server answers 4xx with a JSON-RPC error for an unsupported version,
   # a missing capability or a header mismatch. Seeing one means the peer is
   # current and the request was wrong — retry differently rather than fall back.
@@ -1201,37 +1188,52 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # A response speaks only for the request whose id it carries: a peer
-  # answering some other id — or an SSE stream whose last event was not
-  # the reply — must not be folded into this call's result. A missing or
-  # null id passes (JSON-RPC error responses may carry id: null); a
-  # DIFFERENT id never does.
-  defp check_response_id(parsed, %{"id" => request_id}) when is_map(parsed) do
-    case Map.get(parsed, "id") do
-      ^request_id -> {:ok, parsed}
-      nil -> {:ok, parsed}
-      _other -> {:error, "The response answers a different request"}
+  # The reply to a request is one message, read through the codec: a
+  # response or an error response carrying this request's id, and nothing
+  # else. A message carrying `method` is the peer's own request or
+  # notification, never this call's answer; one carrying both `result` and
+  # `error`, or a null or missing id, is refused by the codec; a DIFFERENT
+  # id — or an SSE stream whose last event was not the reply — is some
+  # other request's answer and must not be folded into this call's result.
+  # A notification expects no answer, so any JSON body is accepted. The
+  # refusal names which of these it was in the log, never the body: that
+  # may carry internal diagnostics.
+  defp read_reply(_state, "", _request), do: {:error, :empty_response}
+
+  defp read_reply(state, resp_body, request) do
+    case Message.decode_json(reply_json(resp_body)) do
+      {:error, :parse_error, _} ->
+        {:error, "Invalid JSON response"}
+
+      _decoded when not is_map_key(request, "id") ->
+        {:ok, :accepted}
+
+      decoded ->
+        case refused_reply(decoded, request["id"]) do
+          nil ->
+            decoded
+
+          why ->
+            Logger.debug("[Emissary.External.Server] #{state.name} reply refused: #{why}")
+            {:error, "The server's reply is not the response to this request"}
+        end
     end
   end
 
-  defp check_response_id(parsed, _notification), do: {:ok, parsed}
+  defp refused_reply({:ok, %Message{type: type, id: id}}, id) when type in [:response, :error],
+    do: nil
 
-  defp parse_response(""), do: {:error, :empty_response}
+  defp refused_reply({:ok, %Message{type: type}}, _id) when type in [:response, :error],
+    do: "it answers another request id"
 
-  defp parse_response(body) when is_binary(body) do
-    # Handle SSE-wrapped responses (some MCP servers use text/event-stream)
-    body =
-      if String.starts_with?(body, "event:") or String.starts_with?(body, "data:") do
-        extract_sse_data(body)
-      else
-        body
-      end
+  defp refused_reply({:ok, %Message{}}, _id), do: "it is a request of the server's own"
+  defp refused_reply({:error, :invalid_request, _}, _id), do: "it is not a valid response"
 
-    case Jason.decode(body) do
-      {:ok, parsed} -> {:ok, parsed}
-      # Don't reflect the raw body — it may carry internal diagnostics.
-      {:error, _} -> {:error, "Invalid JSON response"}
-    end
+  # Handle SSE-wrapped responses (some MCP servers use text/event-stream)
+  defp reply_json(body) do
+    if String.starts_with?(body, "event:") or String.starts_with?(body, "data:"),
+      do: extract_sse_data(body),
+      else: body
   end
 
   # Extract the JSON-RPC response from the last SSE event.

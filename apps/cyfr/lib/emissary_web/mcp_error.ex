@@ -22,17 +22,17 @@ defmodule EmissaryWeb.MCPError do
 
   import Plug.Conn
 
-  alias Emissary.MCP.Message
+  alias Prima.MCP.Message
 
-  @protocol_version Emissary.MCP.Protocol.version()
-  @protocol_version_header Emissary.MCP.Protocol.protocol_version_header()
+  @protocol_version Prima.MCP.Protocol.version()
+  @protocol_version_header Prima.MCP.Protocol.protocol_version_header()
 
   @doc """
   Render a JSON-RPC error, echoing the request id when the body carried one.
 
-  `code` is a numeric code, a code name from `Emissary.MCP.Message`'s
+  `code` is a numeric code, a code name from `Prima.MCP.Message`'s
   tables, or a refusal — a `%Prima.Refusal{}` or a reason term — answered
-  with its class's code (`Emissary.MCP.Message.refusal_code/2`).
+  with its class's code (`Prima.MCP.Message.refusal_code/3`).
   """
   @impl true
   def send(%Plug.Conn{} = conn, status, code, message) do
@@ -56,7 +56,8 @@ defmodule EmissaryWeb.MCPError do
       {code, message}
     else
       refusal = Grimoire.classify(code)
-      {Message.refusal_code(refusal, :transport), message || refusal.message}
+      code = Message.refusal_code(refusal, :transport, Grimoire.code_override(refusal))
+      {code, message || refusal.message}
     end
   end
 

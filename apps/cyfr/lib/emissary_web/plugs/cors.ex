@@ -18,7 +18,7 @@ defmodule EmissaryWeb.Plugs.CORS do
   error can explain it — and the failure is invisible to the bundled deployment,
   where the PWA is proxied same-origin and never preflights at all.
 
-  Both sides therefore read `Emissary.MCP.Protocol.request_headers/0`, and
+  Both sides therefore read `Prima.MCP.Protocol.request_headers/0`, and
   `EmissaryWeb.Plugs.CORSTest` asserts they agree.
 
   ## Configuration
@@ -39,17 +39,17 @@ defmodule EmissaryWeb.Plugs.CORS do
 
   @behaviour Plug
 
-  # Derived from `Emissary.MCP.Protocol` rather than written out, because the
+  # Derived from `Prima.MCP.Protocol` rather than written out, because the
   # plug that *requires* these headers reads the same list. A preflight that
   # omits a required header rejects the request in the browser, before any of
   # this server's own error handling can explain why.
   @base_headers ~w(content-type authorization accept)
 
   @default_headers @base_headers
-                   |> Enum.concat(Emissary.MCP.Protocol.request_headers())
+                   |> Enum.concat(Prima.MCP.Protocol.request_headers())
                    |> Enum.uniq()
 
-  @expose_headers Emissary.MCP.Protocol.exposed_headers() |> Enum.join(", ")
+  @expose_headers Prima.MCP.Protocol.exposed_headers() |> Enum.join(", ")
 
   # Each mount declares the verbs it actually routes.
   @default_methods ~w(GET POST)

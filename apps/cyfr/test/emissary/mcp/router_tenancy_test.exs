@@ -33,7 +33,7 @@ defmodule Emissary.MCP.RouterTenancyTest do
   end
 
   defp tool_call_msg(tool_name, action) do
-    %Emissary.MCP.Message{
+    %Prima.MCP.Message{
       type: :request,
       method: "tools/call",
       id: "test-#{System.unique_integer([:positive])}",

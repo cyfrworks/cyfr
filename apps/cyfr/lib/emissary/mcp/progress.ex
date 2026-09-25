@@ -30,7 +30,7 @@ defmodule Emissary.MCP.Progress do
   require Logger
 
   alias Cyfr.Bus.Progress, as: Step
-  alias Emissary.MCP.Message
+  alias Prima.MCP.Message
 
   @doc """
   Bind `progress_token` to `request_id` in the calling process — the

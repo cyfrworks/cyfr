@@ -55,13 +55,14 @@ defmodule EmissaryWeb.MCPController do
   use EmissaryWeb, :controller
 
   alias Emissary.MCP
-  alias Emissary.MCP.{Message, Progress, Subscriptions}
+  alias Emissary.MCP.{Progress, Subscriptions}
+  alias Prima.MCP.Message
   alias CyfrWeb.ContextGuard
   require CyfrWeb.ContextGuard
   require Logger
 
-  @protocol_version Emissary.MCP.Protocol.version()
-  @protocol_version_header Emissary.MCP.Protocol.protocol_version_header()
+  @protocol_version Prima.MCP.Protocol.version()
+  @protocol_version_header Prima.MCP.Protocol.protocol_version_header()
 
   @doc """
   Handle MCP POST requests.
@@ -115,7 +116,8 @@ defmodule EmissaryWeb.MCPController do
       # `:auth_required`, which is what a client retries on. Answering
       # every refusal `:insufficient_permissions` told an unauthenticated
       # caller their permissions were the problem.
-      code = e.reason |> Grimoire.classify() |> Message.refusal_code(:transport)
+      refusal = Grimoire.classify(e.reason)
+      code = Message.refusal_code(refusal, :transport, Grimoire.code_override(refusal))
 
       # Re-rendered from the reason rather than `Exception.message/1`: the
       # struct bakes its prose at raise time without the auth method, and
@@ -258,7 +260,8 @@ defmodule EmissaryWeb.MCPController do
   # decision and echoes the request's JSON-RPC id. `reason` is the
   # refusal's term; its class picks the code and the HTTP status.
   defp listen_error(conn, request_id, reason, message) do
-    code = reason |> Grimoire.classify() |> Message.refusal_code(:transport)
+    refusal = Grimoire.classify(reason)
+    code = Message.refusal_code(refusal, :transport, Grimoire.code_override(refusal))
 
     conn
     |> put_resp_header("x-request-id", request_id)
@@ -340,7 +343,11 @@ defmodule EmissaryWeb.MCPController do
 
     sse_event(
       conn,
-      Message.encode_error(id, Message.refusal_code(refusal, :transport), refusal.message)
+      Message.encode_error(
+        id,
+        Message.refusal_code(refusal, :transport, Grimoire.code_override(refusal)),
+        refusal.message
+      )
     )
   end
 

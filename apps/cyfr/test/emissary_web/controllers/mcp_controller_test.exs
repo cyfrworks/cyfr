@@ -497,7 +497,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       assert json_response(conn, 200)
       response = json_response(conn, 200)
-      assert response["result"]["supportedVersions"] == Emissary.MCP.Protocol.supported()
+      assert response["result"]["supportedVersions"] == Prima.MCP.Protocol.supported()
     end
   end
 
@@ -644,7 +644,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       # A non-string method cannot be mirrored into `Mcp-Method`, so the
       # transport rejects it before the JSON-RPC layer sees it. That the message
       # layer also rejects it is asserted directly in message_test.
-      assert response["error"]["code"] == Emissary.MCP.Message.error_code(:header_mismatch)
+      assert response["error"]["code"] == Prima.MCP.Message.error_code(:header_mismatch)
     end
 
     test "rejects array as method (invalid per spec)", %{conn: conn} do
@@ -662,7 +662,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       # A non-string method cannot be mirrored into `Mcp-Method`, so the
       # transport rejects it before the JSON-RPC layer sees it. That the message
       # layer also rejects it is asserted directly in message_test.
-      assert response["error"]["code"] == Emissary.MCP.Message.error_code(:header_mismatch)
+      assert response["error"]["code"] == Prima.MCP.Message.error_code(:header_mismatch)
     end
 
     test "handles negative integer id", %{conn: conn} do
@@ -968,7 +968,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       response = json_response(conn, 400)
 
       assert response["error"]["code"] == -32022
-      assert response["error"]["message"] =~ Emissary.MCP.Protocol.version()
+      assert response["error"]["message"] =~ Prima.MCP.Protocol.version()
     end
 
     test "a header that disagrees with _meta returns -32020", %{conn: conn} do
@@ -978,7 +978,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-protocol-version", Emissary.MCP.Protocol.version())
+        |> put_req_header("mcp-protocol-version", Prima.MCP.Protocol.version())
         |> post("/mcp", %{
           "jsonrpc" => "2.0",
           "id" => 1,
@@ -1008,7 +1008,7 @@ defmodule EmissaryWeb.MCPControllerTest do
     end
 
     test "CYFR error codes keep their numbers" do
-      alias Emissary.MCP.Message
+      alias Prima.MCP.Message
 
       # Wire error codes are stable client contracts; unused numbers must not be reassigned.
       assert Message.error_code(:rate_limited) == -33304
@@ -1035,7 +1035,7 @@ defmodule EmissaryWeb.MCPControllerTest do
     end
 
     test "encode_error/4 handles CYFR error code atoms", %{conn: _conn} do
-      alias Emissary.MCP.Message
+      alias Prima.MCP.Message
 
       # Verify encode_error produces correct code for CYFR atoms
       error = Message.encode_error(1, :rate_limited, "Test error")
@@ -1057,7 +1057,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
 
       assert json_response(conn, 200)
-      assert get_resp_header(conn, "mcp-protocol-version") == [Emissary.MCP.Protocol.version()]
+      assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
     end
 
     test "included on notification 202 response", %{conn: conn} do
@@ -1068,7 +1068,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> mcp_post(%{"jsonrpc" => "2.0", "method" => "notifications/cancelled"})
 
       assert response(conn, 202)
-      assert get_resp_header(conn, "mcp-protocol-version") == [Emissary.MCP.Protocol.version()]
+      assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
     end
 
     test "included on a protocol error response", %{conn: conn} do
@@ -1079,7 +1079,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> post("/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
 
       assert json_response(conn, 400)
-      assert get_resp_header(conn, "mcp-protocol-version") == [Emissary.MCP.Protocol.version()]
+      assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
     end
 
     test "included on error responses", %{conn: conn} do
@@ -1100,7 +1100,7 @@ defmodule EmissaryWeb.MCPControllerTest do
         })
 
       assert json_response(conn, 400)
-      assert get_resp_header(conn, "mcp-protocol-version") == [Emissary.MCP.Protocol.version()]
+      assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
     end
 
     test "included on batch rejection response", %{conn: conn} do
@@ -1124,7 +1124,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       response = json_response(conn, 400)
       assert response["error"]["code"] == -32600
       assert response["error"]["message"] =~ "Batch requests not supported"
-      assert get_resp_header(conn, "mcp-protocol-version") == [Emissary.MCP.Protocol.version()]
+      assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
     end
   end
 
@@ -1159,7 +1159,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       assert conn.status == 401
       response = json_response(conn, 401)
-      assert response["error"]["code"] == Emissary.MCP.Message.error_code(:auth_required)
+      assert response["error"]["code"] == Prima.MCP.Message.error_code(:auth_required)
     end
 
     test "the uncredentialed listen is one recorded refusal, rendered once", %{conn: conn} do
@@ -1181,8 +1181,8 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert response["id"] == 7
       assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
 
-      assert [Emissary.MCP.Protocol.version()] ==
-               get_resp_header(conn, Emissary.MCP.Protocol.protocol_version_header())
+      assert [Prima.MCP.Protocol.version()] ==
+               get_resp_header(conn, Prima.MCP.Protocol.protocol_version_header())
 
       assert [request_id] = get_resp_header(conn, "x-request-id")
 
@@ -1271,7 +1271,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       assert conn.status == 429
       response = json_response(conn, 429)
-      assert response["error"]["code"] == Emissary.MCP.Message.error_code(:rate_limited)
+      assert response["error"]["code"] == Prima.MCP.Message.error_code(:rate_limited)
     end
   end
 end

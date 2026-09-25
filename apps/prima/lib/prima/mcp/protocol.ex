@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.Protocol do
+defmodule Prima.MCP.Protocol do
   @moduledoc """
   The MCP protocol revision this server speaks, and the vocabulary that goes
   with it.
@@ -152,6 +152,22 @@ defmodule Emissary.MCP.Protocol do
   end
 
   def decode_header_value(value) when is_binary(value), do: {:ok, value}
+
+  @doc """
+  Encode a header value, in the specification's Base64 sentinel when it
+  cannot travel as a plain header: empty, carrying surrounding whitespace,
+  outside visible ASCII, or itself starting with the sentinel.
+  `decode_header_value/1` reads either form back to `value`.
+  """
+  @spec encode_header_value(String.t()) :: String.t()
+  def encode_header_value(value) when is_binary(value) do
+    safe? =
+      value != "" and value == String.trim(value) and
+        not String.starts_with?(value, "=?base64?") and
+        String.to_charlist(value) |> Enum.all?(&(&1 >= 0x20 and &1 <= 0x7E))
+
+    if safe?, do: value, else: "=?base64?" <> Base.encode64(value) <> "?="
+  end
 
   @doc """
   The value a request's `Mcp-Name` header must carry, or `nil` when the method

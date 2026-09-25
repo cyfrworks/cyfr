@@ -120,9 +120,9 @@ defmodule Cyfr.DocsDriftTest do
     for {code, name} <- guide_error_codes() do
       atom = String.to_existing_atom(name)
 
-      assert Emissary.MCP.Message.error_code(atom) == code,
+      assert Prima.MCP.Message.error_code(atom) == code,
              "integration-guide documents #{code} `#{name}`, which " <>
-               "Emissary.MCP.Message does not define under that name — a client " <>
+               "Prima.MCP.Message does not define under that name — a client " <>
                "branching on it waits for a code that never arrives"
     end
   end
@@ -131,7 +131,7 @@ defmodule Cyfr.DocsDriftTest do
     documented = guide_error_codes() |> Map.keys() |> MapSet.new()
 
     missing =
-      for {name, code} <- Emissary.MCP.Message.cyfr_error_codes(),
+      for {name, code} <- Prima.MCP.Message.cyfr_error_codes(),
           not MapSet.member?(documented, code),
           do: "#{code} #{name}"
 

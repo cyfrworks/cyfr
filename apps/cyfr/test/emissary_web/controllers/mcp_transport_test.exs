@@ -30,7 +30,7 @@ defmodule EmissaryWeb.MCPTransportTest do
 
     test "the answer still declares the protocol version", %{conn: conn} do
       assert get_resp_header(get(conn, "/mcp"), "mcp-protocol-version") ==
-               [Emissary.MCP.Protocol.version()]
+               [Prima.MCP.Protocol.version()]
     end
   end
 
@@ -393,13 +393,13 @@ defmodule EmissaryWeb.MCPTransportTest do
 
     meta =
       %{
-        Emissary.MCP.Protocol.meta_protocol_version_key() => Emissary.MCP.Protocol.version(),
-        Emissary.MCP.Protocol.meta_client_capabilities_key() => %{}
+        Prima.MCP.Protocol.meta_protocol_version_key() => Prima.MCP.Protocol.version(),
+        Prima.MCP.Protocol.meta_client_capabilities_key() => %{}
       }
       |> Map.merge(extra_meta)
 
     conn
-    |> Plug.Conn.put_req_header("mcp-protocol-version", Emissary.MCP.Protocol.version())
+    |> Plug.Conn.put_req_header("mcp-protocol-version", Prima.MCP.Protocol.version())
     |> Plug.Conn.put_req_header("mcp-method", body["method"])
     |> Phoenix.ConnTest.dispatch(
       EmissaryWeb.Endpoint,

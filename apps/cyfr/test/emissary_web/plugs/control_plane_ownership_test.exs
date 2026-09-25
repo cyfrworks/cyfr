@@ -100,7 +100,7 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnershipTest do
     ctx = Sanctum.TestContext.local()
     ControlPlane.record(:lost)
 
-    call = %Emissary.MCP.Message{
+    call = %Prima.MCP.Message{
       type: :request,
       id: 1,
       method: "tools/call",
@@ -109,6 +109,6 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnershipTest do
 
     assert {:error, :not_owner, message} = Emissary.MCP.Router.dispatch(ctx, call)
     assert message == Grimoire.Error.render(:control_plane_lost)
-    assert Emissary.MCP.Message.error_code(:not_owner) == -33_102
+    assert Prima.MCP.Message.error_code(:not_owner) == -33_102
   end
 end
