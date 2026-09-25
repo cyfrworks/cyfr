@@ -1518,6 +1518,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       # by every host transition that takes the turn from its holder.
       add :fence, :integer, null: false
       add :recovery_attempts, :integer, null: false, default: 0
+      # The recoveries this turn is allowed, the assistant's policy written
+      # when the turn starts or is first claimed; null while it is only
+      # accepted. No default: the limit is the policy's, never storage's.
+      add :recovery_limit, :integer
       add :profile_id, :string
       add :consent_id, :string
       add :agent_revision_digest, :string

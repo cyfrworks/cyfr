@@ -903,7 +903,12 @@ defmodule Arca.ExecutionAttempts do
   — one transaction, so two attempts never both own the row. `opts[:grant]`
   (required) is the grant whose check the caller asked first; a
   predecessor stamped otherwise rolls the transaction back as
-  `:not_standing`. Answers `%{previous: t | nil, attempt: t, ran_ms: n}`
+  `:not_standing`. The execution must be open — `running` or `paused` —
+  or `failed` by a lapse of its current attempt (`lapsed`, the sweep's
+  retirement of a lease its holder stopped renewing), which is the one
+  failure a successor may take up; any other row rolls the transaction
+  back as `{:execution_not_in, ["running", "paused", "failed"]}`.
+  Answers `%{previous: t | nil, attempt: t, ran_ms: n}`
   where `ran_ms` is the predecessor's unaccounted running interval (0
   when it had none).
   """
@@ -925,6 +930,15 @@ defmodule Arca.ExecutionAttempts do
     %Prima.ExecutionGrant{athanor_id: ^athanor_id, generation: generation} =
       Keyword.fetch!(opts, :grant)
 
+    # The execution row first, then its attempts: the lock order every
+    # execution write follows.
+    execution =
+      from(e in Arca.Schemas.Execution,
+        where: e.athanor_id == ^athanor_id and e.id == ^execution_id
+      )
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.one()
+
     previous =
       from(a in ExecutionAttempt,
         where: a.athanor_id == ^athanor_id and a.execution_id == ^execution_id,
@@ -932,6 +946,9 @@ defmodule Arca.ExecutionAttempts do
       )
       |> Arca.QueryHelpers.for_update()
       |> Arca.Repo.one()
+
+    unless successor_admitted?(execution, previous),
+      do: Arca.Repo.rollback({:execution_not_in, ["running", "paused", "failed"]})
 
     # A successor inherits its predecessor's stamp unchanged: a grant of
     # any other generation is not this execution's.
@@ -992,6 +1009,15 @@ defmodule Arca.ExecutionAttempts do
 
   def takeover!(%Prima.Actor{}, _execution_id, _opts),
     do: Arca.QueryHelpers.no_athanor!("Arca.ExecutionAttempts.takeover!/3")
+
+  # A successor takes up an open execution, or one a lapse failed: its
+  # current attempt `lapsed`, never closed. A row that ended by its own
+  # close — completed, cancelled, or failed by its owner — stays ended.
+  defp successor_admitted?(%{status: status}, _previous) when status in ["running", "paused"],
+    do: true
+
+  defp successor_admitted?(%{status: "failed"}, %ExecutionAttempt{state: "lapsed"}), do: true
+  defp successor_admitted?(_execution, _previous), do: false
 
   @doc """
   Entry-point form of `takeover!/3`, under the execution's grant

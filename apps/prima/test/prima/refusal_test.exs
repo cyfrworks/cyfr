@@ -184,6 +184,7 @@ defmodule Prima.RefusalTest do
     {{:no_claim, "thr_1"}, :conflict},
     {:fence_required, :internal},
     {:seq_conflict, :internal},
+    {:illegal_transition, :internal},
     {{:execution_not_in, "running"}, :internal},
     {{:grant_failed, :database_error}, :internal},
     {:thread_not_found, :not_found},

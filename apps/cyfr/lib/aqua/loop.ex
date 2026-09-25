@@ -377,7 +377,8 @@ defmodule Aqua.Loop do
                profile_id: claim.authority.profile_id,
                consent_id: claim.authority.consent_id,
                agent_revision_digest: snapshot.revision_digest,
-               agent_capability_digest: snapshot.capability_digest
+               agent_capability_digest: snapshot.capability_digest,
+               recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
              }),
            {:ok, spec} <- Turn.build(ctx, started, authority: claim.authority),
            {:ok, started} <- Tape.pin_catalyst(ctx, started, spec.catalyst) do

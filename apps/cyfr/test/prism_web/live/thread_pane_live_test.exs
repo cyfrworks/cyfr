@@ -79,7 +79,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         root_execution_id: execution.id,
         attempt: attempt.attempt,
         profile_id: "prof_x",
-        consent_id: "consent_x"
+        consent_id: "consent_x",
+        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 
     {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})

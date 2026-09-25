@@ -4,9 +4,10 @@
 defmodule Prima.TurnStateTest do
   @moduledoc """
   The durable turn's vocabulary is one definition: the status sets
-  partition every status into open and terminal, the step, outcome and
-  decision sets are exact, and a terminal status maps to exactly one
-  attempt end and one execution status.
+  partition every status into open and terminal, the step, outcome,
+  decision, pause, scope and recovery sets are exact, a decision writes
+  one resolution, and a terminal status maps to exactly one attempt end
+  and one execution status.
   """
   use ExUnit.Case, async: true
 
@@ -41,6 +42,32 @@ defmodule Prima.TurnStateTest do
              ["ok", "error", "denied", "skipped", "cancelled", "uncertain"]
 
     assert TurnState.decisions() == ["approved", "declined", "expired", "error"]
+    assert TurnState.pause_reasons() == ["approval", "launch"]
+    assert TurnState.opening_states() == ["proposed", "dispatched"]
+    assert TurnState.recoveries() == ["replay_safe"]
+    assert TurnState.approval_scopes() == ["once", "thread", "always", "never"]
+  end
+
+  test "a decision writes one resolution and never turns a step into a launch" do
+    assert TurnState.resolution_kind("approved", "launch") == "launch"
+
+    for kind <- TurnState.step_kinds() -- ["launch"] do
+      assert TurnState.resolution_kind("approved", kind) == "continue"
+    end
+
+    for kind <- TurnState.step_kinds() do
+      assert TurnState.resolution_kind("declined", kind) == "denied"
+      assert TurnState.resolution_kind("expired", kind) == "expired"
+      assert TurnState.resolution_kind("error", kind) == "denied"
+    end
+
+    assert_raise FunctionClauseError, fn -> TurnState.resolution_kind("maybe", "tool") end
+  end
+
+  test "a replay-safe recovery is the one Prima.TurnStep replays" do
+    for recovery <- TurnState.recoveries() do
+      assert Prima.TurnStep.unresolved(%{kind: "tool", recovery: recovery}) == :replay
+    end
   end
 
   test "a terminal status writes one attempt end and one execution status" do

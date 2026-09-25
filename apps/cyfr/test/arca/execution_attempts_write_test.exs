@@ -91,14 +91,14 @@ defmodule Arca.ExecutionAttemptsWriteTest do
 
   defp states(test), do: for(i <- intents(test), do: {i.state, i.reason})
 
-  defp cancel!(%{actor: actor, execution: execution}) do
+  defp cancel!(%{actor: actor, execution: execution, attempt: attempt}) do
     {:ok, _} =
       Arca.Execution.record_end(
         actor,
         execution.id,
         "cancelled",
         %{completed_at: DateTime.utc_now(), duration_ms: 1},
-        nil,
+        attempt,
         Arca.Test.Actor.stored()
       )
 

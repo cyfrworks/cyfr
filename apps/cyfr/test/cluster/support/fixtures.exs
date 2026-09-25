@@ -131,7 +131,15 @@ defmodule Cyfr.Cluster.Fixtures do
           {:ok, map()} | {:error, term()}
   def start_turn(athanor_id, turn_id, turn_seq, fence, opts \\ []) do
     attrs =
-      with_root(%{fence: fence, turn_seq: turn_seq}, Keyword.get(opts, :root, false), athanor_id)
+      with_root(
+        %{
+          fence: fence,
+          turn_seq: turn_seq,
+          recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+        },
+        Keyword.get(opts, :root, false),
+        {athanor_id, turn_id}
+      )
 
     case Arca.TurnStorage.start(actor(athanor_id), turn_id, attrs) do
       {:ok, turn} -> {:ok, %{id: turn.id, status: turn.status, runner_id: turn.runner_id}}
@@ -144,15 +152,17 @@ defmodule Cyfr.Cluster.Fixtures do
   # with no attempt has none to close.
   defp with_root(attrs, false, _athanor_id), do: attrs
 
-  defp with_root(attrs, true, athanor_id) do
+  defp with_root(attrs, true, {athanor_id, turn_id}) do
     {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(
         %{
           id: Prima.UUID7.execution_id(),
-          reference: "formula:local.cluster-turn:1.0.0",
+          reference: "agent:local.aqua",
           user_id: "usr_cluster",
           athanor_id: athanor_id,
-          component_type: "formula"
+          component_type: "agent",
+          kind: "turn",
+          turn_id: turn_id
         },
         standing(athanor_id)
       )
@@ -280,15 +290,18 @@ defmodule Cyfr.Cluster.Fixtures do
     end
   end
 
-  @doc "Spend `turn_id`'s recovery budget down to the cap, as three recoveries would."
+  @doc "Spend `turn_id`'s recovery budget down to its stored limit, as that many recoveries would."
   @spec spend_recoveries(String.t(), String.t()) :: :ok
   def spend_recoveries(athanor_id, turn_id) do
     import Ecto.Query, only: [from: 2]
 
     {1, _} =
       Arca.Repo.update_all(
-        from(t in Arca.Schemas.Turn, where: t.id == ^turn_id and t.athanor_id == ^athanor_id),
-        set: [recovery_attempts: Arca.TurnStorage.recovery_cap()]
+        from(t in Arca.Schemas.Turn,
+          where: t.id == ^turn_id and t.athanor_id == ^athanor_id,
+          update: [set: [recovery_attempts: t.recovery_limit]]
+        ),
+        []
       )
 
     :ok

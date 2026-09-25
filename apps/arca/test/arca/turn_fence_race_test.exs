@@ -35,7 +35,6 @@ defmodule Arca.TurnFenceRaceTest do
             message: %{author: actor.user_id, content: "@aqua go"},
             turn: %{agent: "aqua", requested_by: actor.user_id}
           })
-
         {thread, turn}
       end)
 
@@ -46,6 +45,12 @@ defmodule Arca.TurnFenceRaceTest do
   test "a takeover waits behind a runner's write, lands after it, and the runner writes nothing more",
        %{actor: actor, turn: turn} do
     test = self()
+
+    # A running turn: a runner records steps only on one.
+    {:ok, turn} =
+      unboxed(fn ->
+        TurnStorage.start(actor, turn.id, %{fence: turn.fence, recovery_limit: 3})
+      end)
 
     runner =
       Task.async(fn ->

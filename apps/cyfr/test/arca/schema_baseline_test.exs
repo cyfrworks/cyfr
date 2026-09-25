@@ -185,12 +185,17 @@ defmodule Arca.SchemaBaselineTest do
     assert :athanor_generation in Arca.Schemas.ExecutionAttempt.__schema__(:fields)
   end
 
-  test "a turn is fenced and pins its catalyst release" do
+  test "a turn is fenced, pins its catalyst release and stores its recovery limit" do
     columns = Map.new(columns("turns"), &{&1.name, &1})
 
     assert columns["fence"].not_null?
     refute columns["catalyst_ref"].not_null?
     assert columns["thread_id"].not_null?
+
+    # The limit is the assistant's policy, written when the turn starts: an
+    # accepted turn has none, and storage never supplies one.
+    refute columns["recovery_limit"].not_null?
+    assert is_nil(columns["recovery_limit"].default)
   end
 
   test "threads hold the messages and subscriptions" do

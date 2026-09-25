@@ -751,7 +751,8 @@ defmodule Aqua.RunnerTest do
         profile_id: claim.authority.profile_id,
         consent_id: claim.authority.consent_id,
         agent_revision_digest: revision,
-        agent_capability_digest: capability
+        agent_capability_digest: capability,
+        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 
     # The dead boot's slot and keeper are gone; the rows say running.
@@ -883,13 +884,16 @@ defmodule Aqua.RunnerTest do
       assert {:ok, _} = Runner.suspend_turn(ctx, thread.id, turn: turn_id)
       send(pids.call, :continue)
 
-      # The cap is the turn's own count, so spend it on the row and ask
-      # again: the answer is the refusal, and the turn is ended rather
+      # The limit is the turn's own stored one, so spend it on the row and
+      # ask again: the answer is the refusal, and the turn is ended rather
       # than carried on under a recovery nobody may spend.
+      {:ok, %{recovery_limit: limit}} = Tape.turn(ctx, turn_id)
+      assert limit == Aqua.Runner.RecoveryPolicy.max_attempts()
+
       {1, _} =
         Arca.Repo.update_all(
           spend_recoveries(turn_id),
-          set: [recovery_attempts: Tape.recovery_cap()]
+          set: [recovery_attempts: limit]
         )
 
       assert {:error, :recovery_exhausted} = Runner.recover_turn(ctx, thread.id, turn_id)
