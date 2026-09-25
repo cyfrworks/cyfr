@@ -384,7 +384,7 @@ defmodule Emissary.External.Proxy do
   # barriers — its input retained with admission, its lease kept while
   # the call is in flight, its result retained and the row closed after.
   # A cancel asked of the attempt, or a lease lost, exits the caller
-  # mid-call (`Crucible.LeaseWatch`) — the step that made the call
+  # mid-call (`Crucible.start_lease_watch/3`) — the step that made the call
   # closes uncertain, never with a result that arrived after. The answer
   # is the caller's only once it is kept and the row is closed: a result
   # that cannot be kept is `result_lost`, a close that cannot be written
@@ -400,7 +400,7 @@ defmodule Emissary.External.Proxy do
   defp attempted(ctx, server, server_name, remote_tool, args, opts, call) do
     id = Keyword.get(opts, :execution_id) || Prima.UUID7.execution_id()
     started_at = DateTime.utc_now()
-    input = Map.drop(args, ["action", "parent_execution_id", "root_execution_id", "attempt"])
+    input = upstream_args(args)
 
     class =
       Keyword.get(opts, :retention_class) || Arca.Retention.default_class(Context.actor(ctx))
@@ -432,12 +432,12 @@ defmodule Emissary.External.Proxy do
            |> Arca.QueryHelpers.maybe_put(:step, Keyword.get(opts, :step)),
          {:ok, staged} <- stage(ctx, id, "input", input, class),
          {:ok, attempt} <- admit(attrs, [{:payloads, [staged]} | admission], staged) do
-      {:ok, watch} = Crucible.LeaseWatch.start(self(), id, attempt)
+      {:ok, watch} = Crucible.start_lease_watch(self(), id, attempt)
 
       try do
         close(ctx, id, {attempt, grant}, started_at, class, call.())
       after
-        Crucible.LeaseWatch.stop(watch)
+        Crucible.stop_lease_watch(watch)
       end
     else
       # Nothing ran: the refusal keeps the admission's own class, and says
@@ -642,7 +642,7 @@ defmodule Emissary.External.Proxy do
         # called — never a lookup by name that a replacement in between
         # could answer with another revision's process.
         pid
-        |> Emissary.External.Server.call_tool(remote_tool, Map.delete(args, "action"))
+        |> Emissary.External.Server.call_tool(remote_tool, upstream_args(args))
         |> classified()
 
       # The start failure's reason may carry the row's configuration, its
@@ -655,6 +655,14 @@ defmodule Emissary.External.Proxy do
         {:error, {:unavailable, "Server '#{server_name}'"}}
     end
   end
+
+  # The arguments a backend sees: the guest's own, without the action the
+  # gate routed on or the lineage the host stamped for its own records.
+  # The lineage names internal executions, attempts, threads and calls,
+  # and a third-party server is told none of them.
+  @host_stamped ~w(action parent_execution_id root_execution_id attempt thread_id call_id parent_call_id)
+
+  defp upstream_args(args), do: Map.drop(args, @host_stamped)
 
   # An upstream call's refusal in the table's terms. A reason the table
   # knows passes as it is — an `{:uncertain, _}` among them, which the

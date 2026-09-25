@@ -74,7 +74,8 @@ if config_env() == :test do
         queue_target: 500,
         queue_interval: 5_000,
         journal_mode: :wal,
-        busy_timeout: 20_000
+        # Below DBConnection's 15 s client timeout (see `config/test.exs`).
+        busy_timeout: 10_000
 
     :postgres ->
       config :arca, Arca.Repo,

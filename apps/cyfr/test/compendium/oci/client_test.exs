@@ -4,7 +4,8 @@
 defmodule Compendium.OCI.ClientTest do
   use ExUnit.Case, async: false
 
-  alias Compendium.OCI.{Blob, Cache, Client, Errors, Reference}
+  alias Compendium.OCI.{Blob, Cache, Client, Errors, Reference, Transport}
+  alias Compendium.Registry.CredentialStore
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -321,7 +322,7 @@ defmodule Compendium.OCI.ClientTest do
       assert bytes == good_wasm
     end
 
-    test "a verified pinned manifest is served from cache without touching the network" do
+    test "a verified pinned manifest is served from cache without touching the network while the entitlement stands" do
       wasm = "wasm-bytes-under-test"
       {manifest_json, wasm_digest} = manifest_fixture(wasm)
       pin = Blob.compute_digest(manifest_json)
@@ -332,18 +333,80 @@ defmodule Compendium.OCI.ClientTest do
 
       :ok = Cache.put_manifest(registry, "alice/reagents/pinned", pin, manifest_json, pin)
       :ok = Cache.put_blob(wasm_digest, wasm)
+      :ok = Cache.entitle("anonymous", registry, "alice/reagents/pinned")
 
       assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/alice/reagents/pinned@#{pin}")
     end
   end
 
   # ============================================================================
-  # A cached tag under an unreadable push token
+  # Cache authorization
   # ============================================================================
 
-  describe "a cached tag under a push token that cannot be read" do
+  # A registry that answers only the credentials it is told to allow:
+  # 401 to an anonymous caller, 403 to a credential it does not know.
+  defmodule Registry do
+    @moduledoc false
+    @behaviour Plug
+
+    alias Compendium.OCI.Blob
+
+    @impl Plug
+    def init(agent), do: agent
+
+    @impl Plug
+    def call(conn, agent) do
+      auth = conn |> Plug.Conn.get_req_header("authorization") |> List.first()
+
+      state =
+        Agent.get_and_update(agent, fn state ->
+          {state, %{state | requests: [{conn.method, conn.request_path, auth} | state.requests]}}
+        end)
+
+      cond do
+        (auth || :anonymous) in state.allowed -> serve(conn, state)
+        auth == nil -> Plug.Conn.send_resp(conn, 401, "")
+        true -> Plug.Conn.send_resp(conn, 403, "")
+      end
+    end
+
+    defp serve(conn, state) do
+      case conn.path_info do
+        ["v2", "alice", "reagents", "pinned", "manifests", _ref]
+        when state.manifest_status == 200 ->
+          conn
+          |> Plug.Conn.put_resp_header(
+            "docker-content-digest",
+            Blob.compute_digest(state.manifest)
+          )
+          |> Plug.Conn.send_resp(200, state.manifest)
+
+        ["v2", "alice", "reagents", "pinned", "manifests", _ref] ->
+          Plug.Conn.send_resp(conn, state.manifest_status, "")
+
+        ["v2", "alice", "reagents", "pinned", "blobs", digest] ->
+          case Map.get(state.blobs, digest) do
+            nil -> Plug.Conn.send_resp(conn, 404, "")
+            {:status, status} -> Plug.Conn.send_resp(conn, status, "")
+            bytes -> Plug.Conn.send_resp(conn, 200, bytes)
+          end
+
+        _ ->
+          Plug.Conn.send_resp(conn, 404, "")
+      end
+    end
+  end
+
+  # The cache is shared by digest, the permission to read it is not: a
+  # caller is served cached bytes only once the registry has answered its
+  # own credential for the repository.
+  describe "cache authorization" do
+    @repo "alice/reagents/pinned"
+
     setup do
-      test_dir = Path.join(System.tmp_dir!(), "cyfr_oci_cred_test_#{:rand.uniform(1_000_000)}")
+      test_dir =
+        Path.join(System.tmp_dir!(), "cyfr_oci_entitle_#{System.unique_integer([:positive])}")
+
       File.mkdir_p!(test_dir)
 
       original_base = Application.get_env(:arca, :base_path)
@@ -351,9 +414,31 @@ defmodule Compendium.OCI.ClientTest do
       original_auth = Application.get_env(:sanctum, :auth_provider)
 
       Application.put_env(:arca, :base_path, test_dir)
-      # No auth provider → localhost registries are reachable, so a request
-      # that went out would land on the listener below and be counted.
       Application.delete_env(:sanctum, :auth_provider)
+
+      # The smallest valid module: a pull that gets as far as storing it
+      # stores it.
+      wasm = <<0, ?a, ?s, ?m, 1, 0, 0, 0>>
+      {manifest_json, wasm_digest} = manifest_fixture(wasm)
+      pin = Blob.compute_digest(manifest_json)
+
+      blobs = %{
+        Blob.compute_digest(config_fixture()) => config_fixture(),
+        wasm_digest => wasm
+      }
+
+      agent = start_supervised!({Agent, fn -> registry_state(manifest_json, blobs) end})
+
+      server =
+        start_supervised!(
+          {Bandit,
+           plug: {__MODULE__.Registry, agent}, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
+          id: :registry
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+      registry = "localhost:#{port}"
+      Application.put_env(:cyfr, :oci_registry_url, registry)
 
       on_exit(fn ->
         File.rm_rf!(test_dir)
@@ -362,52 +447,201 @@ defmodule Compendium.OCI.ClientTest do
         restore_env(:sanctum, :auth_provider, original_auth)
       end)
 
-      :ok
+      a = caller("oci_entitle_a")
+      b = caller("oci_entitle_b")
+      :ok = CredentialStore.put_push_token(a, registry, "alice", "tok_a", "personal")
+      :ok = CredentialStore.put_push_token(b, registry, "alice", "tok_b", "personal")
+
+      {:ok,
+       registry: registry,
+       agent: agent,
+       a: a,
+       b: b,
+       wasm: wasm,
+       wasm_digest: wasm_digest,
+       manifest: manifest_json,
+       pin: pin,
+       ref: %Reference{registry: registry, repository: @repo, tag: "1.0.0"}}
     end
 
     @tag :capture_log
-    test "the pull refuses with the credential error, sends nothing and serves no cache" do
-      wasm = "wasm-bytes-under-test"
-      {manifest_json, wasm_digest} = manifest_fixture(wasm)
-      manifest_digest = Blob.compute_digest(manifest_json)
+    test "a private reference one caller warmed is refused to another on every path", ctx do
+      %{registry: registry, a: a, b: b, ref: ref, wasm: wasm} = ctx
+      allow(ctx.agent, ["Bearer tok_a"])
 
-      # The registry would vouch for the cached copy were it asked.
-      port = start_canned_server("", [{"docker-content-digest", manifest_digest}], self())
-      registry = "localhost:#{port}"
-      Application.put_env(:cyfr, :oci_registry_url, registry)
+      # A's reads warm the cache: its blobs, and the manifest entries a
+      # pull leaves under the tag and under the pin.
+      for digest <- Map.keys(Agent.get(ctx.agent, & &1.blobs)) do
+        assert {:ok, _} = Client.fetch_blob(a, ref, digest)
+      end
 
-      # Everything the pull needs is cached: the tag's manifest and both blobs.
-      :ok =
-        Cache.put_manifest(
-          registry,
-          "alice/reagents/pinned",
-          "1.0.0",
-          manifest_json,
-          manifest_digest
-        )
+      :ok = Cache.put_manifest(registry, @repo, "1.0.0", ctx.manifest, ctx.pin)
+      :ok = Cache.put_manifest(registry, @repo, ctx.pin, ctx.manifest, ctx.pin)
+      assert {:ok, ^wasm} = Cache.get_blob(ctx.wasm_digest)
+      requests(ctx.agent)
 
-      :ok = Cache.put_blob(Blob.compute_digest(config_fixture()), config_fixture())
-      :ok = Cache.put_blob(wasm_digest, wasm)
+      # B holds a credential the registry refuses for the repository.
+      assert {:error, tag_refusal} = Client.pull(b, "#{registry}/#{@repo}:1.0.0")
+      assert tag_refusal =~ "cyfr login"
 
-      # The caller's push token for the namespace does not open.
-      ctx = Sanctum.TestContext.local()
-      aad = Sanctum.CipherAAD.registry_token(ctx.user_id, registry, "alice")
-      {:ok, ciphertext} = Sanctum.Cipher.encrypt(~s({"type":"push_token","token":""}), aad)
+      assert {:error, pin_refusal} = Client.pull(b, "#{registry}/#{@repo}@#{ctx.pin}")
+      assert pin_refusal =~ "cyfr login"
 
-      :ok =
-        Arca.RegistryTokenStorage.put(%{
-          user_id: ctx.user_id,
-          registry: registry,
-          namespace_slug: "alice",
-          credential_ciphertext: ciphertext
-        })
+      assert {:error, %Errors{reason: :unauthorized, status: 403}} =
+               Client.fetch_blob(b, ref, ctx.wasm_digest)
 
-      assert {:error, {:corrupt, :registry_credential} = reason} =
-               Client.pull(ctx, "#{registry}/alice/reagents/pinned:1.0.0")
-
-      assert Prima.Refusal.message(reason) =~ "The stored registry credential is damaged"
-      refute_received {:registry_contacted, _}
+      # Every refusal was the registry's answer to B's own credential.
+      assert [_ | _] = seen = requests(ctx.agent)
+      assert Enum.all?(seen, fn {_method, _path, auth} -> auth == "Bearer tok_b" end)
+      refute Cache.entitled?(key(b, ref), registry, @repo)
     end
+
+    @tag :capture_log
+    test "a revoked credential is refused once its memo expires", ctx do
+      %{a: a, ref: ref, wasm: wasm} = ctx
+      allow(ctx.agent, ["Bearer tok_a"])
+      assert {:ok, ^wasm} = Client.fetch_blob(a, ref, ctx.wasm_digest)
+
+      # Revoked at the registry: the memo still stands, and the cached
+      # blob is served without asking.
+      allow(ctx.agent, [])
+      requests(ctx.agent)
+      assert {:ok, ^wasm} = Client.fetch_blob(a, ref, ctx.wasm_digest)
+      assert [] = requests(ctx.agent)
+
+      # The memo lapses: the registry is asked again, refuses, and nothing
+      # is served or remembered.
+      :ok = Cache.forget_entitlement(key(a, ref), ctx.registry, @repo)
+
+      assert {:error, %Errors{reason: :unauthorized}} =
+               Client.fetch_blob(a, ref, ctx.wasm_digest)
+
+      assert [{"HEAD", _, "Bearer tok_a"}] = requests(ctx.agent)
+      refute Cache.entitled?(key(a, ref), ctx.registry, @repo)
+    end
+
+    @tag :capture_log
+    test "an unreachable registry serves a cached tag while the entitlement memo holds", ctx do
+      %{registry: registry, wasm: wasm} = ctx
+      allow(ctx.agent, [:anonymous])
+
+      # An anonymous 200 is a public repository's entitlement.
+      assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      :ok = Cache.put_manifest(registry, @repo, "1.0.0", ctx.manifest, ctx.pin)
+
+      stop_supervised!(:registry)
+      assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+    end
+
+    @tag :capture_log
+    test "an unreachable registry serves nothing cached once the entitlement memo is gone", ctx do
+      %{registry: registry, wasm: wasm, ref: ref} = ctx
+      allow(ctx.agent, [:anonymous])
+
+      assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      :ok = Cache.put_manifest(registry, @repo, "1.0.0", ctx.manifest, ctx.pin)
+      :ok = Cache.forget_entitlement(key(nil, ref), registry, @repo)
+
+      stop_supervised!(:registry)
+      assert {:error, message} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      assert message =~ "Failed to connect"
+    end
+
+    @tag :capture_log
+    test "a registry that no longer holds the tag is never answered from the cache", ctx do
+      %{registry: registry, wasm: wasm, ref: ref} = ctx
+      allow(ctx.agent, [:anonymous])
+
+      assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      :ok = Cache.put_manifest(registry, @repo, "1.0.0", ctx.manifest, ctx.pin)
+      assert Cache.entitled?(key(nil, ref), registry, @repo)
+
+      Agent.update(ctx.agent, &%{&1 | manifest_status: 404})
+      assert {:error, message} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      assert message =~ "not found"
+      refute Cache.entitled?(key(nil, ref), registry, @repo)
+    end
+
+    @tag :capture_log
+    test "an optional layer the registry does not hold is skipped", ctx do
+      %{registry: registry, a: a} = ctx
+      allow(ctx.agent, ["Bearer tok_a"])
+      readme = with_readme(ctx.agent, 404)
+
+      assert {:ok, %{status: "pulled"}} = Client.pull(a, "#{registry}/#{@repo}:1.0.0")
+      assert {"GET", "/v2/#{@repo}/blobs/#{readme}", "Bearer tok_a"} in requests(ctx.agent)
+    end
+
+    @tag :capture_log
+    test "an optional layer the registry refuses fails the pull", ctx do
+      %{registry: registry, a: a} = ctx
+      allow(ctx.agent, ["Bearer tok_a"])
+      _readme = with_readme(ctx.agent, 401)
+
+      assert {:error, message} = Client.pull(a, "#{registry}/#{@repo}:1.0.0")
+      assert message =~ "cyfr login"
+    end
+  end
+
+  defp caller(user_id) do
+    Sanctum.Context.build(
+      user_id: "#{user_id}_#{System.unique_integer([:positive])}",
+      athanor_id: Sanctum.TestContext.local().athanor_id,
+      permissions: [:*],
+      scope: :athanor,
+      auth_method: :oidc,
+      namespace: "alice",
+      authenticated: true
+    )
+  end
+
+  defp key(ctx, ref) do
+    {:ok, key} = Transport.credential_key(ctx, ref)
+    key
+  end
+
+  defp registry_state(manifest_json, blobs) do
+    %{
+      allowed: [],
+      manifest: manifest_json,
+      manifest_status: 200,
+      blobs: blobs,
+      requests: []
+    }
+  end
+
+  defp allow(agent, credentials), do: Agent.update(agent, &%{&1 | allowed: credentials})
+
+  # The requests the registry saw since the last call, oldest first.
+  defp requests(agent),
+    do: Agent.get_and_update(agent, &{Enum.reverse(&1.requests), %{&1 | requests: []}})
+
+  # Adds a README layer to the manifest whose blob the registry answers
+  # with `status`, and answers its digest.
+  defp with_readme(agent, status) do
+    readme = "readme-#{System.unique_integer([:positive])}"
+    digest = Blob.compute_digest(readme)
+
+    Agent.update(agent, fn state ->
+      manifest =
+        state.manifest
+        |> Jason.decode!()
+        |> Map.update!("layers", fn layers ->
+          layers ++
+            [
+              %{
+                "mediaType" => "application/vnd.cyfr.readme.v1+markdown",
+                "size" => byte_size(readme),
+                "digest" => digest
+              }
+            ]
+        end)
+        |> Jason.encode!()
+
+      %{state | manifest: manifest, blobs: Map.put(state.blobs, digest, {:status, status})}
+    end)
+
+    digest
   end
 
   defp config_fixture,

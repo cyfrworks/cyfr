@@ -440,17 +440,25 @@ defmodule PrismWeb.ChatLiveTest do
     # a per-group setting.
     assert bob_html =~ "Talk to the group"
 
+    # Alice's pane hears Bob's message on the thread's topic, as the test does.
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread.id))
+
     pane(bob_view)
     |> form("form[phx-submit=submit]", %{"message" => "sure"})
     |> render_submit()
 
-    Process.sleep(50)
+    assert_receive %Cyfr.Bus.ThreadEvent{kind: :message, data: %{content: "sure"}}, 5_000
     assert render(pane(alice_view)) =~ "sure"
     assert {:ok, []} = Aqua.Tape.open_turns(ctx, thread.id)
 
     # Bob is removed: his tab is sent away, and a fresh open is refused.
+    :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.memberships(bob.user_id))
     :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: bob.user_id)
-    assert_redirect(bob_view, "/")
+    bob_id = bob.user_id
+
+    assert_receive %Cyfr.Bus.Membership{user_id: ^bob_id, change: :left}, 5_000
+    assert_redirect(bob_view, "/", 5_000)
 
     {:ok, _view, redirected_html} =
       case live(bob_conn, chat_path(group, thread.id)) do

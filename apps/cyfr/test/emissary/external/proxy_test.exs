@@ -326,6 +326,65 @@ defmodule Emissary.External.ProxyTest do
     end
   end
 
+  describe "the request a backend receives" do
+    setup do
+      bypass = Bypass.open()
+      {:ok, bypass: bypass, url: "http://127.0.0.1:#{bypass.port}/mcp"}
+    end
+
+    # The host stamps the chain's lineage into an in-chain call's arguments
+    # for its own records; the backend is a third party and is told none of
+    # it, nor the action the gate routed on.
+    test "carries the guest's arguments and nothing the host stamped", %{
+      ctx: ctx,
+      bypass: bypass,
+      url: url
+    } do
+      {:ok, _} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{name: "upstream", url: url})
+
+      test = self()
+
+      Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        body = Jason.decode!(raw)
+
+        result =
+          case body["method"] do
+            "tools/list" ->
+              %{"tools" => [%{"name" => "probe", "inputSchema" => %{"type" => "object"}}]}
+
+            "tools/call" ->
+              send(test, {:tools_call, body})
+              %{"content" => [%{"type" => "text", "text" => "ok"}]}
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => body["id"], "result" => result})
+        )
+      end)
+
+      args =
+        chained(ctx, %{
+          "q" => 1,
+          "action" => "probe",
+          "thread_id" => "thr_stamped",
+          "call_id" => "call_stamped",
+          "parent_call_id" => "call_parent_stamped"
+        })
+
+      assert {:ok, %{"content" => [_]}} = call("upstream:probe", ctx, args, :in_chain)
+
+      assert_received {:tools_call, %{"params" => %{"name" => "probe", "arguments" => sent}}}
+      assert sent == %{"q" => 1}
+
+      Emissary.External.ServerSupervisor.stop("upstream", ctx.athanor_id)
+    end
+  end
+
   describe "list_external_tools/1" do
     test "returns empty list when no servers configured", %{ctx: ctx} do
       assert [] = Proxy.list_external_tools(ctx)

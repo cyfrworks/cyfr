@@ -161,7 +161,6 @@ defmodule Crucible.TurnRoot do
 
       case Arca.TurnStorage.resume(Sanctum.Context.actor(ctx), Keyword.fetch!(opts, :turn_id), %{
              fence: Keyword.get(opts, :fence),
-             lease_until: until,
              grant: :stored,
              verify: &Sanctum.ExecutionStanding.verify/1
            }) do

@@ -18,6 +18,22 @@ defmodule Aqua.AttachmentsTest.UnverifiableUsageAdapter do
   def usage(_ctx, _path), do: {:error, {:usage_walk, "unreachable", :eacces}}
 end
 
+defmodule Aqua.AttachmentsTest.PlantedCaps do
+  @moduledoc false
+  # A cap implementation that reports each storage question to the asking
+  # process and refuses it, so a test sees that the port was asked.
+  @behaviour Prima.Caps
+
+  @impl Prima.Caps
+  def check_counted(%Prima.Actor{}, _key, _count), do: :ok
+
+  @impl Prima.Caps
+  def check_storage(%Prima.Actor{} = actor, incoming) do
+    send(self(), {:check_storage, actor, incoming})
+    {:error, {:limit_reached, :athanor_storage_bytes, 0}}
+  end
+end
+
 defmodule Aqua.AttachmentsTest do
   use ExUnit.Case, async: false
 
@@ -161,6 +177,19 @@ defmodule Aqua.AttachmentsTest do
     over = [%{"filename" => "more", "media_type" => "text/plain", "bytes" => "1234567"}]
     assert {:error, :storage_full} = Attachments.store(ctx, "c", "m2", over)
     refute Arca.exists?(Sanctum.Context.actor(ctx), ["threads", "c", "m2", "0-more"])
+  end
+
+  test "the storage cap is the port's decision", %{ctx: ctx} do
+    installed = Prima.Caps.impl!()
+    Prima.Caps.install!(Aqua.AttachmentsTest.PlantedCaps)
+    on_exit(fn -> Prima.Caps.install!(installed) end)
+
+    files = [%{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => "12345"}]
+    assert {:error, :storage_full} = Attachments.store(ctx, "c", "m", files)
+
+    actor = Sanctum.Context.actor(ctx)
+    assert_received {:check_storage, ^actor, 5}
+    refute Arca.exists?(actor, ["threads", "c", "m", "0-a.txt"])
   end
 
   test "an unverifiable usage walk surfaces as itself, not a generic error", %{ctx: ctx} do

@@ -75,8 +75,11 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
       queue_target: 500,
       queue_interval: 5_000,
       journal_mode: :wal,
-      # Allow SQLite writers to wait for contention between concurrent test fixtures.
-      busy_timeout: 20_000
+      # Long enough for writers to wait out contention between concurrent
+      # test fixtures, and below DBConnection's 15 s client timeout: a
+      # statement still waiting inside the driver when the client gives up
+      # has its connection closed under it, which crashes the VM.
+      busy_timeout: 10_000
 
   :postgres ->
     # A partitioned run that names no URL still gets one database per

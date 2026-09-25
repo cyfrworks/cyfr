@@ -17,15 +17,14 @@ defmodule Aqua.Attachments do
   Filenames are the uploader's and are reduced to a safe basename: `Prima.PathSafety`
   refuses traversal but not an embedded `/`, and the local adapter would turn one
   into a subdirectory. Two uploads with the same name in one message get
-  distinct paths (an index prefix). The athanor's storage cap
-  (`Sanctum.Tenancy.Caps.check_storage/2`) is checked before the first byte
-  is written.
+  distinct paths (an index prefix). The athanor's storage cap is asked of
+  the cap port (`Prima.Caps.check_storage/2`) before the first byte is
+  written.
   """
 
   require Logger
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.Caps
 
   @max_files 10
   @max_file_bytes 20_000_000
@@ -246,7 +245,7 @@ defmodule Aqua.Attachments do
   defp check_quota(ctx, files) do
     incoming = files |> Enum.map(&byte_size(&1["bytes"] || "")) |> Enum.sum()
 
-    case Caps.check_storage(Sanctum.Context.actor(ctx), incoming) do
+    case Prima.Caps.check_storage(Context.actor(ctx), incoming) do
       :ok -> :ok
       {:error, {:limit_reached, :athanor_storage_bytes, _cap}} -> {:error, :storage_full}
       # Pass through — the cap layer worked to tell "over the cap" from

@@ -362,6 +362,23 @@ defmodule Arca.SqliteBusyWaitTest do
     assert {:ok, :ok} = Task.await(holder, 5_000)
   end
 
+  # The repo's migrations as `{version, module}`, each module the one this
+  # VM already holds when the `ecto.migrate` alias loaded it: recompiling a
+  # file whose module is loaded redefines it, and the warning that raises
+  # would fail a warnings-as-errors run depending on test order.
+  defp loaded_migrations do
+    for file <- Enum.sort(Path.wildcard(Path.join(Arca.Repo.migrations_path(), "*.exs"))) do
+      [version, name] = file |> Path.basename(".exs") |> String.split("_", parts: 2)
+      module = Module.concat(Arca.Repo.Migrations, Macro.camelize(name))
+
+      unless Code.ensure_loaded?(module) do
+        Code.compile_file(file)
+      end
+
+      {String.to_integer(version), module}
+    end
+  end
+
   test "a fresh database migrates through the hook, its first transaction taking the lock" do
     watch_lock_steps!()
     dir = Path.join(System.tmp_dir!(), "arca-fresh-#{System.unique_integer([:positive])}")
@@ -381,7 +398,7 @@ defmodule Arca.SqliteBusyWaitTest do
 
     try do
       assert [_ | _] =
-               Ecto.Migrator.run(Arca.Repo, Arca.Repo.migrations_path(), :up,
+               Ecto.Migrator.run(Arca.Repo, loaded_migrations(), :up,
                  all: true,
                  dynamic_repo: repo,
                  log: false

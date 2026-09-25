@@ -661,6 +661,9 @@ defmodule Arca.Adapters.S3 do
       body: body,
       decode_body: false,
       retry: false,
+      # A redirect would carry the signed request to a host the operator
+      # did not configure; the answer is the endpoint's own or nothing.
+      redirect: false,
       receive_timeout: config(:receive_timeout_ms) || 60_000
     )
   end
