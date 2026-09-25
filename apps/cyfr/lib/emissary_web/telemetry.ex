@@ -13,6 +13,14 @@ defmodule EmissaryWeb.Telemetry do
     - Tags: `:method`, `:tool`, `:status` (success/error/cancelled)
     - Unit: milliseconds
 
+  ## Admission Metrics
+
+  - `cyfr.grimoire.decision.admitted.count` / `.refused.count` - Admission
+    decisions, tagged `:plane`, `:tool`, `:action` (and `:refusal_class`)
+  - `cyfr.grimoire.decision.lost.total` (`cyfr_grimoire_decision_lost_total`)
+    - Decisions or completions the decision log could not write, tagged
+      `:stage` (append/finish) and `:kind` (timeout/unavailable/conflict/not_found)
+
   """
 
   use Supervisor
@@ -107,6 +115,26 @@ defmodule EmissaryWeb.Telemetry do
         event_name: [:cyfr, :sanctum, :policy, :decision],
         tags: [:decision],
         description: "Policy decisions"
+      ),
+
+      # Admission decisions (`Grimoire.Decisions`), and the ones the audit
+      # could not write: exported as cyfr_grimoire_decision_lost_total, the
+      # counter an operator alerts on, since the operation is never retried
+      # and the gap shows nowhere else.
+      counter("cyfr.grimoire.decision.admitted.count",
+        event_name: [:cyfr, :grimoire, :decision, :admitted],
+        tags: [:plane, :tool, :action],
+        description: "Calls the gate admitted"
+      ),
+      counter("cyfr.grimoire.decision.refused.count",
+        event_name: [:cyfr, :grimoire, :decision, :refused],
+        tags: [:plane, :tool, :action, :refusal_class],
+        description: "Calls the gate refused, by refusal class"
+      ),
+      counter("cyfr.grimoire.decision.lost.total",
+        event_name: [:cyfr, :grimoire, :decision, :lost],
+        tags: [:stage, :kind],
+        description: "Admission decisions or completions the decision log could not write"
       ),
 
       # Phoenix Metrics

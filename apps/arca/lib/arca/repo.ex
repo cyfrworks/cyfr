@@ -36,6 +36,10 @@ defmodule Arca.Repo do
   @quantum_ms 100
   @pause_ms 5..25
   @read_only :arca_read_transaction
+  @pool_deadline :pool_deadline
+  # What must still fit inside a pool deadline once the lock is taken: the
+  # last quantum, the pause before it, the caller's writes and the commit.
+  @commit_slack_ms 500
   @default_busy_timeout_ms 5_000
   # A busy answer to a statement, in the driver's two spellings.
   @busy ["Database busy", "database is locked"]
@@ -98,39 +102,42 @@ defmodule Arca.Repo do
   def prepare_transaction(fun_or_multi, opts) do
     case adapter() do
       Ecto.Adapters.SQLite3 -> prepare_sqlite(fun_or_multi, opts)
-      _postgres -> {fun_or_multi, opts}
+      # The lock step is SQLite's; the pool deadline it takes has no
+      # reader here and does not reach the driver.
+      _postgres -> {fun_or_multi, Keyword.delete(opts, @pool_deadline)}
     end
   end
 
   defp prepare_sqlite(fun_or_multi, opts) do
     {read_only?, opts} = Keyword.pop(opts, @read_only, false)
+    {pool_deadline, opts} = Keyword.pop(opts, @pool_deadline)
 
     cond do
       in_transaction?() -> {fun_or_multi, opts}
       read_only? -> {fun_or_multi, Keyword.put(opts, :mode, :deferred)}
-      true -> {locking(fun_or_multi), Keyword.put(opts, :mode, :deferred)}
+      true -> {locking(fun_or_multi, pool_deadline), Keyword.put(opts, :mode, :deferred)}
     end
   end
 
-  defp locking(fun) when is_function(fun, 0) do
+  defp locking(fun, pool_deadline) when is_function(fun, 0) do
     fn ->
-      take_write_lock!()
+      take_write_lock!(pool_deadline)
       fun.()
     end
   end
 
-  defp locking(fun) when is_function(fun, 1) do
+  defp locking(fun, pool_deadline) when is_function(fun, 1) do
     fn repo ->
-      take_write_lock!()
+      take_write_lock!(pool_deadline)
       fun.(repo)
     end
   end
 
   # Ecto's transaction accepts a fun or a Multi and nothing else, so what is
   # not a fun is the Multi; matching its struct would break its opaque type.
-  defp locking(multi) do
+  defp locking(multi, pool_deadline) do
     Ecto.Multi.new()
-    |> Ecto.Multi.run(:arca_lock, fn _repo, _changes -> {:ok, take_write_lock!()} end)
+    |> Ecto.Multi.run(:arca_lock, fn _repo, _changes -> {:ok, take_write_lock!(pool_deadline)} end)
     |> Ecto.Multi.append(multi)
   end
 
@@ -138,9 +145,23 @@ defmodule Arca.Repo do
   # before it opens the first migration's transaction, so it is there for
   # every transaction this hook sees, the baseline migration's included.
   # `WHERE 0` touches no row, and SQLite takes the lock before planning it.
-  defp take_write_lock! do
+  #
+  # A caller whose connection the pool will close at an absolute deadline
+  # (`:pool_deadline`, in `System.monotonic_time(:millisecond)`) names it,
+  # and the wait is cut so that it ends, with the caller's own writes and
+  # the commit, before the pool acts: a lock quantum, the pause and the
+  # commit's fsync all fit inside `@commit_slack_ms`. Out of that slack
+  # before the first attempt — a wait for the connection itself took the
+  # time — the step raises at once and touches no lock. The pool's deadline
+  # counts from the checkout request, so no fixed margin above the busy
+  # timeout could promise this on its own.
+  defp take_write_lock!(pool_deadline) do
     config = config()
-    deadline_ms = busy_timeout_ms(config)
+    deadline_ms = lock_wait_ms(busy_timeout_ms(config), pool_deadline)
+
+    if deadline_ms <= 0,
+      do: raise(Arca.Repo.BusyTimeoutError, deadline_ms: 0)
+
     source = config[:migration_source] || "schema_migrations"
     statement = ~s(UPDATE "#{source}" SET version = version WHERE 0)
     started = System.monotonic_time(:millisecond)
@@ -149,8 +170,14 @@ defmodule Arca.Repo do
     try do
       attempt_write_lock(statement, started, deadline_ms)
     after
-      query!("PRAGMA busy_timeout = #{deadline_ms}", [], log: false)
+      query!("PRAGMA busy_timeout = #{busy_timeout_ms(config)}", [], log: false)
     end
+  end
+
+  defp lock_wait_ms(busy_ms, nil), do: busy_ms
+
+  defp lock_wait_ms(busy_ms, pool_deadline) do
+    min(busy_ms, pool_deadline - System.monotonic_time(:millisecond) - @commit_slack_ms)
   end
 
   defp attempt_write_lock(statement, started, deadline_ms) do

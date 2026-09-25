@@ -129,6 +129,75 @@ defmodule Cyfr.RetentionSchedulerTest do
     end
   end
 
+  describe "the host's decisions" do
+    setup do
+      prev = Application.fetch_env(:cyfr, :decision_retention_days)
+      Application.put_env(:cyfr, :decision_retention_days, 30)
+
+      on_exit(fn ->
+        case prev do
+          {:ok, days} -> Application.put_env(:cyfr, :decision_retention_days, days)
+          :error -> Application.delete_env(:cyfr, :decision_retention_days)
+        end
+      end)
+    end
+
+    test "the cycle purges the rows without a tenant past the host's days, under its claim",
+         %{key: key} do
+      decision = fn days_ago, admission ->
+        Prima.Decision.new(
+          call_id: "call_host_#{System.unique_integer([:positive])}",
+          plane: :external,
+          admission: admission,
+          refusal_class: if(admission == :refused, do: :unauthenticated),
+          inserted_at:
+            DateTime.utc_now()
+            |> DateTime.add(-days_ago * 86_400, :second)
+            |> DateTime.truncate(:microsecond)
+        )
+      end
+
+      actor = Sanctum.Context.actor(Sanctum.TestContext.local())
+      old_host = decision.(40, :refused)
+      recent_host = decision.(10, :refused)
+      old_tenant = decision.(40, :admitted)
+      :ok = Arca.DecisionLog.append(nil, old_host)
+      :ok = Arca.DecisionLog.append(nil, recent_host)
+      :ok = Arca.DecisionLog.append(actor, old_tenant)
+
+      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+      assert "decisions_global" in summary.steps
+
+      admin = %{Prima.Actor.system() | platform_admin: true}
+      assert {:error, :not_found} = Arca.DecisionLog.get_global(admin, old_host.call_id)
+      assert {:ok, _} = Arca.DecisionLog.get_global(admin, recent_host.call_id)
+      # An estate's decisions are its own policy's (90 days by default), never the host's.
+      assert {:ok, _} = Arca.DecisionLog.get(actor, old_tenant.call_id)
+    end
+
+    test "a member without the claim runs no host decision purge", %{key: key} do
+      old_host =
+        Prima.Decision.new(
+          call_id: "call_host_#{System.unique_integer([:positive])}",
+          plane: :external,
+          admission: :refused,
+          refusal_class: :unauthenticated,
+          inserted_at:
+            DateTime.utc_now()
+            |> DateTime.add(-40 * 86_400, :second)
+            |> DateTime.truncate(:microsecond)
+        )
+
+      :ok = Arca.DecisionLog.append(nil, old_host)
+      {:ok, _held} = JobClaims.claim(@kind, key, "member-a", 60_000)
+
+      assert {:busy, "member-a"} = RetentionScheduler.cycle(key: key, owner: "member-b")
+
+      admin = %{Prima.Actor.system() | platform_admin: true}
+      assert {:ok, _} = Arca.DecisionLog.get_global(admin, old_host.call_id)
+    end
+  end
+
   describe "losing the claim mid-cycle" do
     test "a lapse stops the cycle and still records the cursor a successor inherits", %{key: key} do
       first = List.first(active_ids())

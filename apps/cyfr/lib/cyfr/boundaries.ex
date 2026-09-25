@@ -1375,6 +1375,19 @@ defmodule Cyfr.Boundaries do
           "layer refuses any other actor, and refuses the whole estate when its settings " <>
           "are corrupt or cannot be read. An archived estate is passed over, so its " <>
           "records freeze with it."
+    },
+    %{
+      responsibility: "Host purges null-tenant decision rows under its held claim",
+      modules: ~w(Cyfr.RetentionScheduler),
+      check: "Arca.DecisionLog.purge_global/2",
+      reason:
+        "a decision refused before any caller or tenant was established is appended " <>
+          "with no athanor, so no estate's retention reaches it and no tenant reads it: " <>
+          "the scheduler's `decisions_global` step, holding the cell's retention claim " <>
+          "and its slot, deletes those rows once they are older than " <>
+          "CYFR_DECISION_RETENTION_DAYS. The storage layer takes only the platform's own " <>
+          "system actor for it and matches only rows without an athanor, so the purge " <>
+          "can reach no estate's decisions, which go with the estate or its own policy."
     }
   ]
 

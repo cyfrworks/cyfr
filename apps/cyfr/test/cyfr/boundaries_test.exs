@@ -1352,6 +1352,10 @@ defmodule Cyfr.BoundariesTest do
         [module, fun, arity] =
           Regex.run(~r/^(.+)\.(\w+)\/(\d+)$/, row.check, capture: :all_but_first)
 
+        # `function_exported?/3` answers false for a module not yet loaded,
+        # and a check no boot path calls is loaded on first use.
+        Code.ensure_loaded(Module.concat([module]))
+
         assert function_exported?(
                  Module.concat([module]),
                  String.to_atom(fun),
@@ -1397,6 +1401,27 @@ defmodule Cyfr.BoundariesTest do
       assert {:error, :forbidden} = Arca.Retention.cleanup_athanor(%{estate | system: false})
       assert {:error, :forbidden} = Arca.Retention.cleanup_athanor(%{estate | scope: :platform})
       assert {:error, :no_athanor} = Arca.Retention.cleanup_athanor(%{estate | athanor_id: nil})
+    end
+
+    test "the host's decision purge is rostered, and its check refuses any other actor" do
+      assert %{modules: ["Cyfr.RetentionScheduler"]} =
+               Enum.find(
+                 Boundaries.system_responsibilities(),
+                 &(&1.check == "Arca.DecisionLog.purge_global/2")
+               ),
+             "the host's decision purge is not a rostered system responsibility"
+
+      # Refused before any query: only the platform's own system actor.
+      cutoff = DateTime.utc_now()
+      system = Prima.Actor.system()
+
+      for actor <- [
+            %{system | system: false},
+            %{system | scope: :athanor, athanor_id: "ath_boundaries"},
+            %{Prima.Actor.in_athanor("ath_boundaries") | platform_admin: true}
+          ] do
+        assert {:error, :forbidden} = Arca.DecisionLog.purge_global(actor, cutoff)
+      end
     end
 
     test "every module that passes a retirement's check is rostered with it" do

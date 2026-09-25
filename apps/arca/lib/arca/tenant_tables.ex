@@ -32,7 +32,10 @@ defmodule Arca.TenantTables do
 
   # Every table carrying `athanor_id`, children first. `verify_roster!/0`
   # checks this against the live schema, so a new athanor-scoped table
-  # fails the boot rather than surviving erasure silently.
+  # fails the boot rather than surviving erasure silently. Three of them
+  # may hold rows with no athanor — `memberships`, `sessions` and
+  # `decision_logs` — and erasure matches the athanor, so those rows stay:
+  # a null-tenant decision is the host's, purged under its own retention.
   @roster [
     "execution_events",
     "rate_windows",
@@ -66,6 +69,7 @@ defmodule Arca.TenantTables do
     "executions",
     "mcp_logs",
     "policy_logs",
+    "decision_logs",
     "retention_settings",
     "oauth_provider_credentials",
     "mcp_servers",

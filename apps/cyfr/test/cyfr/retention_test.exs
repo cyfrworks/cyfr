@@ -86,8 +86,8 @@ defmodule Arca.RetentionTest do
       assert keys == Enum.uniq(keys)
     end
 
-    test "the projection tombstones are the thirteenth kind, in days, a week by default" do
-      assert length(Retention.kinds()) == 13
+    test "the projection tombstones are the last of fourteen kinds, in days, a week by default" do
+      assert length(Retention.kinds()) == 14
       assert List.last(Retention.kinds()) == Retention.ProjectionTombstones
       assert Retention.ProjectionTombstones.key() == "projection_tombstone_days"
       assert Retention.ProjectionTombstones.unit() == :days
@@ -418,6 +418,40 @@ defmodule Arca.RetentionTest do
 
       assert Arca.Repo.get(Arca.Schemas.McpLog, "dry_log_1") != nil
       assert Arca.Repo.get(Arca.Schemas.McpLog, "dry_log_2") != nil
+    end
+  end
+
+  describe "cleanup/3 decisions" do
+    test "deletes the athanor's decisions older than the value in days, and no others",
+         %{actor: actor} do
+      decision = fn days_ago ->
+        Prima.Decision.new(
+          call_id: "call_retention_#{System.unique_integer([:positive])}",
+          plane: :external,
+          admission: :admitted,
+          inserted_at:
+            DateTime.utc_now()
+            |> DateTime.add(-days_ago * 86_400, :second)
+            |> DateTime.truncate(:microsecond)
+        )
+      end
+
+      old = decision.(120)
+      recent = decision.(10)
+      host_old = %{decision.(120) | admission: :refused, refusal_class: :unauthenticated}
+      :ok = Arca.DecisionLog.append(actor, old)
+      :ok = Arca.DecisionLog.append(actor, recent)
+      :ok = Arca.DecisionLog.append(nil, host_old)
+
+      assert Retention.Decisions.default() == 90
+      assert {:ok, 1} = Retention.cleanup(actor, "decisions_days", dry_run: true)
+      assert {:ok, 1} = Retention.cleanup(actor, "decisions_days")
+
+      assert {:error, :not_found} = Arca.DecisionLog.get(actor, old.call_id)
+      assert {:ok, _} = Arca.DecisionLog.get(actor, recent.call_id)
+
+      admin = %{Prima.Actor.system() | platform_admin: true}
+      assert {:ok, _} = Arca.DecisionLog.get_global(admin, host_old.call_id)
     end
   end
 

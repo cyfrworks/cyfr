@@ -17,9 +17,10 @@ defmodule Arca.Repo.Migrations.Baseline do
   silently truncates on SQLite, so every composite is a two-column pair and
   its parent carries a unique `(id, athanor_id)` index created first.
 
-  The two nullable `athanor_id` columns are `memberships` (a platform
-  assignment has no athanor) and `sessions` (a session exists before its
-  athanor is resolved). `server_meta`, `registry_tokens`,
+  The three nullable `athanor_id` columns are `memberships` (a platform
+  assignment has no athanor), `sessions` (a session exists before its
+  athanor is resolved) and `decision_logs` (a call refused before any
+  tenant was resolved is the host's record, not a tenant's). `server_meta`, `registry_tokens`,
   `external_identities`, `cell_leases` and `job_claims` are not
   athanor-scoped: the first three are the server's own facts and the last
   two the cell's, and a cell has no estate.
@@ -997,6 +998,35 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:policy_logs, [:athanor_id])
     create index(:policy_logs, [:athanor_id, :timestamp])
     create index(:policy_logs, [:consent_id])
+
+    # One row per admission decision (`Arca.DecisionLog`): the call the gate
+    # admitted or refused, and later, separately, how the admitted work
+    # ended. A refusal before any caller or tenant was established has no
+    # `user_id` and no `athanor_id`; such a row is the host's, purged under
+    # its own retention, and no tenant reads it. The index names are spelled
+    # so both adapters carry the same ones.
+    create table(:decision_logs, primary_key: false) do
+      add :call_id, :string, primary_key: true
+      add :parent_call_id, :string
+      add :request_id, :string
+      add :user_id, :string
+      add :athanor_id, :string
+      add :plane, :string, null: false
+      add :tool, :string
+      add :action, :string
+      add :admission, :string, null: false
+      add :refusal_class, :string
+      add :reason, :text
+      add :inserted_at, :utc_datetime_usec, null: false
+      add :completion, :string
+      add :completion_class, :string
+      add :completed_at, :utc_datetime_usec
+      add :duration_ms, :integer
+    end
+
+    create index(:decision_logs, [:athanor_id, :inserted_at], name: :decision_logs_athanor_time)
+    create index(:decision_logs, [:request_id], name: :decision_logs_request)
+    create index(:decision_logs, [:refusal_class], name: :decision_logs_refusal_class)
   end
 
   # ==========================================================================

@@ -545,6 +545,15 @@ if config_env() != :test do
       config :cyfr, :webhook_idempotency_ttl_seconds, ttl
     end
 
+    # How long the host keeps the admission decisions made before any tenant
+    # was resolved (days, default 365): the `decision_logs` rows without an
+    # athanor, which no athanor's retention reaches and
+    # `Cyfr.RetentionScheduler` purges under its held claim.
+    if days = env_int.("CYFR_DECISION_RETENTION_DAYS", nil) do
+      if days <= 0, do: raise("CYFR_DECISION_RETENTION_DAYS must be > 0")
+      config :cyfr, :decision_retention_days, days
+    end
+
     # How long `/health/ready` reuses its last probe (default 5000ms). On an
     # object store the write probe is a billable PUT per uncached hit, so a
     # frequent prober is a line item; the code documented this as settable

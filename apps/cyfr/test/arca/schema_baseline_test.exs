@@ -9,8 +9,8 @@ defmodule Arca.SchemaBaselineTest do
   so a table or column added there is checked without a second list here.
 
   The athanor is the only tenant column: the tables that carry `athanor_id`
-  are exactly `Arca.TenantTables`'s roster, only `memberships` and
-  `sessions` may leave it null, and the tables without it are the ones the
+  are exactly `Arca.TenantTables`'s roster, only `memberships`,
+  `sessions` and `decision_logs` may leave it null, and the tables without it are the ones the
   roster names as not athanor-scoped or reached through a parent, the
   athanors themselves, and the server's people and door.
 
@@ -70,14 +70,14 @@ defmodule Arca.SchemaBaselineTest do
     end
   end
 
-  test "the tables carrying athanor_id are Arca.TenantTables's roster, NOT NULL but two",
+  test "the tables carrying athanor_id are Arca.TenantTables's roster, NOT NULL but three",
        %{declared: declared} do
     scoped = for {table, %{"athanor_id" => column}} <- declared, into: %{}, do: {table, column}
 
     assert Enum.sort(Map.keys(scoped)) == Enum.sort(Arca.TenantTables.roster())
 
     nullable = for {table, %{not_null?: false}} <- scoped, do: table
-    assert Enum.sort(nullable) == ["memberships", "sessions"]
+    assert Enum.sort(nullable) == ["decision_logs", "memberships", "sessions"]
 
     for table <- Map.keys(scoped) do
       athanor = Enum.find(columns(table), &(&1.name == "athanor_id"))

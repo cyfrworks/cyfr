@@ -329,6 +329,17 @@ defmodule Cyfr.Telemetry.Catalog do
       note: "scheduler self-alarm: a failure could not be recorded on the schedule row"
     },
 
+    # ——— admission decisions ———
+    [:cyfr, :grimoire, :decision, :admitted] => %{consumers: [:metrics]},
+    [:cyfr, :grimoire, :decision, :refused] => %{consumers: [:metrics]},
+    [:cyfr, :grimoire, :decision, :lost] => %{
+      consumers: [:metrics, :operator],
+      note:
+        "an admission decision or its completion the decision log could not write within " <>
+          "its budget: the operation's result stands and nothing is retried, so this is " <>
+          "the one signal of a gap in the trail, counted for an operator to alert on"
+    },
+
     # ——— MCP transport & webhooks ———
     [:cyfr, :emissary, :request] => %{consumers: [:bridge, :metrics]},
     [:cyfr, :emissary, :webhook, :invoke, :start] => %{consumers: [:metrics]},

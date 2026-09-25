@@ -708,8 +708,18 @@ defmodule Sanctum.ContextTest do
                authenticated: true,
                client_ip: "203.0.113.7",
                scope: :athanor,
-               system: false
+               system: false,
+               platform_admin: false
              }
+    end
+
+    test "projects the platform-admin capability as it stands, widening no scope" do
+      admin = Context.build(Keyword.put(@external, :platform_admin, true))
+
+      assert %Prima.Actor{platform_admin: true, scope: :athanor, athanor_id: "ath_1"} =
+               Context.actor(admin)
+
+      refute Context.actor(Context.build(@external)).platform_admin
     end
 
     test "keeps the guest plane a context has entered" do
