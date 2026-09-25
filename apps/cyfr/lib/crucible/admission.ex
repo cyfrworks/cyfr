@@ -209,7 +209,7 @@ defmodule Crucible.Admission do
         {:ok, cached["component_ref"], cached["type"], cached}
 
       :miss ->
-        case Compendium.Component.inspect_component(ctx, reference) do
+        case Compendium.inspect_component(ctx, reference) do
           {:ok, component} ->
             Arca.Cache.put(cache_key, component, :timer.minutes(5))
             {:ok, component["component_ref"], component["type"], component}
@@ -360,7 +360,7 @@ defmodule Crucible.Admission do
   end
 
   defp resolve(ctx, reference) do
-    case Compendium.Resolver.resolve(ctx, reference) do
+    case Compendium.resolve(ctx, reference) do
       {:ok, pinned, %{was_resolved: true} = meta} ->
         {:ok, pinned, %{resolved_from: reference, resolver_digest: meta[:digest]}}
 
@@ -455,7 +455,7 @@ defmodule Crucible.Admission do
       # An authority-rooted execution resolved and verified its activation
       # in the consent loader; the row records what was authorized.
       stamp = opts[:activation_stamp] ->
-        case Compendium.Activation.encode_graph(stamp.activation_graph) do
+        case Compendium.encode_activation_graph(stamp.activation_graph) do
           {:ok, encoded} ->
             %{record | activation_digest: stamp.activation_digest, activation_graph: encoded}
 
@@ -468,8 +468,8 @@ defmodule Crucible.Admission do
 
       is_nil(opts[:parent_execution_id]) ->
         with {:ok, %{digest: digest, graph: graph}} <-
-               Compendium.Activation.resolve(ctx, component),
-             {:ok, encoded} <- Compendium.Activation.encode_graph(graph) do
+               Compendium.resolve_activation(ctx, component),
+             {:ok, encoded} <- Compendium.encode_activation_graph(graph) do
           %{record | activation_digest: digest, activation_graph: encoded}
         else
           {:error, _reason} -> record
@@ -984,7 +984,7 @@ defmodule Crucible.Admission do
 
   defp load_authority(ctx, profile, component, opts) do
     live =
-      case Compendium.Activation.resolve_verified(ctx, component) do
+      case Compendium.resolve_verified_activation(ctx, component) do
         {:ok, _} = ok -> ok
         {:error, {:incomplete, _}} = incomplete -> incomplete
         {:error, _other} -> {:error, {:incomplete, :invalid_graph}}

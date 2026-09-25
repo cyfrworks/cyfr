@@ -9,7 +9,7 @@ defmodule Crucible.Artifacts do
   `Crucible.Host.Storage`).
 
   Bytes are content-addressed and immutable. They are read from the
-  registry's blob store (`Compendium.Component.get_blob/2`), hashed, and
+  registry's blob store (`Compendium.get_blob/2`), hashed, and
   cached for ten minutes only once their sha256 matched the digest, so a
   cached entry is verified by construction and is not hashed again. Each
   answer fires `[:cyfr, :opus, :fetch]` with the reference and whether the
@@ -35,7 +35,7 @@ defmodule Crucible.Artifacts do
         {:ok, bytes}
 
       _miss ->
-        with {:ok, bytes} <- Compendium.Component.get_blob(ctx, digest) do
+        with {:ok, bytes} <- Compendium.get_blob(ctx, digest) do
           fetched(reference, true)
 
           with :ok <- verify(digest, Prima.Digest.sha256(bytes), reference) do

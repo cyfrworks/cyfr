@@ -439,7 +439,7 @@ defmodule Crucible.Schedules.Provider do
         {:error, format_store_error(reason, id)}
 
       {:ok, schedule} ->
-        case Compendium.Resolver.resolve(ctx, schedule.reference) do
+        case Compendium.resolve(ctx, schedule.reference) do
           {:ok, pinned, _metadata} ->
             re_resolve_to(ctx, schedule, pinned, id)
 
@@ -579,7 +579,7 @@ defmodule Crucible.Schedules.Provider do
   end
 
   defp resolve_for_schedule(ctx, reference, label) do
-    case Compendium.Resolver.resolve(ctx, reference) do
+    case Compendium.resolve(ctx, reference) do
       {:ok, pinned, %{was_resolved: true}} ->
         {:ok, reference, pinned}
 
@@ -610,7 +610,7 @@ defmodule Crucible.Schedules.Provider do
   end
 
   defp verify_component_exists(ctx, resolved_reference) do
-    case Compendium.Component.inspect_component(ctx, resolved_reference) do
+    case Compendium.inspect_component(ctx, resolved_reference) do
       {:ok, _} ->
         :ok
 

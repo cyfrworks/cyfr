@@ -278,7 +278,7 @@ defmodule Crucible.TurnRoot do
 
     case stamp do
       %{activation_digest: digest, activation_graph: graph} ->
-        case Compendium.Activation.encode_graph(graph) do
+        case Compendium.encode_activation_graph(graph) do
           {:ok, encoded} -> %{record | activation_digest: digest, activation_graph: encoded}
           {:error, _} -> %{record | activation_digest: digest}
         end
