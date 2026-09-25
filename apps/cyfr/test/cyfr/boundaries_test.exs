@@ -1079,18 +1079,23 @@ defmodule Cyfr.BoundariesTest do
           &(&1.into == "Crucible" and "apps/cyfr/lib/compendium/**/*.ex" in &1.from)
         ) || flunk("no surface row fences the component domain out of execution")
 
+      assert into_aqua.allow == []
+
       planted = [
         {"apps/cyfr/lib/compendium/planted.ex",
          CodeLines.aliases(~S'''
          defmodule Compendium.Planted do
            def models(ctx), do: Aqua.Models.catalogue(ctx)
            def status(ctx), do: Aqua.model_status(ctx, [])
+           def hand(tool), do: Aqua.Hands.catalyst_for(tool)
            def run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
          end
          ''')}
       ]
 
-      assert Boundaries.surface_violations(into_aqua, planted) == ["Aqua", "Aqua.Models"]
+      assert Boundaries.surface_violations(into_aqua, planted) ==
+               ["Aqua", "Aqua.Hands", "Aqua.Models"]
+
       assert Boundaries.surface_violations(into_execution, planted) == ["Crucible"]
     end
 
@@ -1126,7 +1131,7 @@ defmodule Cyfr.BoundariesTest do
           &(&1.into == "Compendium" and "apps/cyfr/lib/aqua/**/*.ex" in &1.from)
         ) || flunk("no surface row fences the assistant into the component domain's root")
 
-      assert "Compendium" in row.allow
+      assert row.allow == ["Compendium"]
       assert "apps/cyfr/lib/aqua.ex" in row.from
 
       planted = [

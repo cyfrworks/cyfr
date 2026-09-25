@@ -89,7 +89,9 @@ defmodule Grimoire.ErrorAdoptionTest do
     # the operator), not a resource that is missing or briefly away.
     "apps/sanctum/lib/sanctum/providers/session.ex" => 3,
     "apps/sanctum/lib/sanctum/vault/oauth_grant.ex" => 3,
-    "apps/cyfr/lib/aqua/policy.ex" => 2,
+    # The authored-policy door's sentences, the person's own, which the
+    # `aqua` tool wraps as `{:invalid_argument, …}`.
+    "apps/cyfr/lib/compendium/aqua_agent.ex" => 2,
     # A tool this provider does not define, and the validation rate a
     # caller reached, with the seconds to wait.
     "apps/cyfr/lib/compendium/builds/provider.ex" => 2,
