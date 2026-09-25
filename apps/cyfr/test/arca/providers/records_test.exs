@@ -38,9 +38,17 @@ defmodule Arca.Providers.RecordsTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns the three record tools and the retention tool" do
+    test "returns the four record tools and the retention tool" do
       tools = MCP.tools()
-      assert Enum.map(tools, & &1.name) == ["record", "mcp_log", "policy_log", "retention"]
+
+      assert Enum.map(tools, & &1.name) == [
+               "record",
+               "mcp_log",
+               "policy_log",
+               "decision",
+               "retention"
+             ]
+
       assert MCP.service() == "arca"
       refute Code.ensure_loaded?(Cyfr.Retention)
     end
@@ -1039,6 +1047,7 @@ defmodule Arca.Providers.RecordsTest do
       # fails on the missing-arg error otherwise, forcing the pin.
       extra_args = fn
         {"retention", "get"} -> %{}
+        {"decision", action} when action in ["get", "get_global"] -> %{"call_id" => "guard_probe"}
         {_, action} when action in ["get", "payload"] -> %{"id" => "guard_probe"}
         {_, "correlate"} -> %{"request_id" => "guard_probe"}
         {_, "fan_outs"} -> %{"request_ids" => ["guard_probe"]}
@@ -1094,7 +1103,397 @@ defmodule Arca.Providers.RecordsTest do
     end
   end
 
+  # ============================================================================
+  # Decision Tool
+  # ============================================================================
+
+  describe "decision tool schema" do
+    test "declares the tenant readers and the platform admin's global readers" do
+      tool = Enum.find(MCP.tools(), &(&1.name == "decision"))
+
+      assert tool.input_schema["properties"]["action"]["enum"] ==
+               ["list", "get", "correlate", "list_global", "get_global"]
+
+      for operation <- tool.operations do
+        assert operation.kind == :read
+        assert operation.planes == [:external]
+        assert operation.permission == :storage_read
+
+        assert operation.scope ==
+                 if(operation.action in ["list_global", "get_global"], do: :platform)
+      end
+
+      assert action_schema(tool, "list")["properties"]["admission"]["enum"] ==
+               ["admitted", "refused"]
+    end
+  end
+
+  describe "decision tenant readers" do
+    setup %{ctx: ctx} do
+      other =
+        Sanctum.Context.build(
+          user_id: "user_other_decision",
+          athanor_id: "ath_other_decision",
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      request_id = Prima.UUID7.request_id()
+      admitted = append!(ctx, request_id: request_id)
+
+      refused =
+        append!(ctx, request_id: request_id, admission: :refused, refusal_class: :forbidden)
+
+      foreign = append!(other, request_id: request_id)
+
+      host =
+        append!(nil, request_id: request_id, admission: :refused, refusal_class: :unauthenticated)
+
+      {:ok,
+       other: other,
+       request_id: request_id,
+       admitted: admitted,
+       refused: refused,
+       foreign: foreign,
+       host: host}
+    end
+
+    test "list answers the caller's athanor's decisions and never the host's", %{
+      ctx: ctx,
+      request_id: request_id,
+      admitted: admitted,
+      refused: refused
+    } do
+      assert {:ok, %{decisions: rows}} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "list",
+                 "request_id" => request_id
+               })
+
+      assert ids(rows) == Enum.sort([admitted.call_id, refused.call_id])
+      assert Enum.all?(rows, &(&1["athanor_id"] == ctx.athanor_id))
+    end
+
+    test "list filters by admission and class, and refuses a name outside the vocabulary",
+         %{ctx: ctx, request_id: request_id, refused: refused} do
+      assert {:ok, %{decisions: [row]}} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "list",
+                 "request_id" => request_id,
+                 "refusal_class" => "forbidden"
+               })
+
+      assert row["call_id"] == refused.call_id
+
+      assert {:ok, %{decisions: [^row]}} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "list",
+                 "request_id" => request_id,
+                 "admission" => "refused"
+               })
+
+      assert {:error, {:invalid_argument, message}} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "list",
+                 "refusal_class" => "not_a_class"
+               })
+
+      assert message =~ "refusal_class"
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("decision", actor(ctx), %{"action" => "list", "since" => "yesterday"})
+    end
+
+    test "get renders every decision field under its own name", %{ctx: ctx, refused: refused} do
+      assert {:ok, %{decision: row}} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "get",
+                 "call_id" => refused.call_id
+               })
+
+      fields = Prima.Decision.__struct__() |> Map.from_struct() |> Map.keys()
+      assert Enum.sort(Map.keys(row)) == Enum.sort(Enum.map(fields, &Atom.to_string/1))
+
+      assert row["call_id"] == refused.call_id
+      assert row["plane"] == "external"
+      assert row["admission"] == "refused"
+      assert row["refusal_class"] == "forbidden"
+      assert row["completion"] == nil
+      assert {:ok, _, _} = DateTime.from_iso8601(row["inserted_at"])
+    end
+
+    test "get of another tenant's or the host's call id answers not found", %{
+      ctx: ctx,
+      foreign: foreign,
+      host: host
+    } do
+      for call_id <- [foreign.call_id, host.call_id, "call_missing"] do
+        assert {:error, {:not_found, "Decision", ^call_id} = reason} =
+                 MCP.handle("decision", actor(ctx), %{"action" => "get", "call_id" => call_id})
+
+        assert err_msg(reason) =~ "not found"
+      end
+    end
+
+    test "an actor with no athanor is refused", %{ctx: ctx} do
+      tenantless = %{actor(ctx) | athanor_id: nil}
+
+      assert {:error, :missing_tenant} =
+               MCP.handle("decision", tenantless, %{"action" => "list"})
+
+      assert {:error, :missing_tenant} =
+               MCP.handle("decision", tenantless, %{"action" => "get", "call_id" => "call_x"})
+    end
+
+    test "decision.correlate joins the request's decisions to its other legs", %{
+      ctx: ctx,
+      request_id: request_id,
+      admitted: admitted,
+      refused: refused
+    } do
+      assert {:ok, result} =
+               MCP.handle("decision", actor(ctx), %{
+                 "action" => "correlate",
+                 "request_id" => request_id
+               })
+
+      assert result.request_id == request_id
+      assert ids(result.decisions) == Enum.sort([admitted.call_id, refused.call_id])
+
+      for leg <- [:mcp_logs, :executions, :policy_logs],
+          do: assert(is_list(Map.fetch!(result, leg)))
+    end
+
+    test "mcp_log.correlate carries the decisions leg beside its own", %{
+      ctx: ctx,
+      request_id: request_id,
+      admitted: admitted,
+      refused: refused
+    } do
+      assert {:ok, result} =
+               MCP.handle("mcp_log", actor(ctx), %{
+                 "action" => "correlate",
+                 "request_id" => request_id
+               })
+
+      assert ids(result.decisions) == Enum.sort([admitted.call_id, refused.call_id])
+
+      assert Enum.sort(Map.keys(result) -- [:decisions]) == [
+               :executions,
+               :mcp_logs,
+               :policy_logs,
+               :request_id
+             ]
+    end
+
+    test "a storage outage is a refusal", %{ctx: ctx} do
+      Arca.Repo.query!("DROP TABLE decision_logs")
+
+      for args <- [
+            %{"action" => "get", "call_id" => "call_x"},
+            %{"action" => "list"},
+            %{"action" => "correlate", "request_id" => "req_x"}
+          ] do
+        assert {:error, {:unavailable, "Storage"}} = MCP.handle("decision", actor(ctx), args)
+      end
+    end
+  end
+
+  describe "decision global readers" do
+    setup %{ctx: ctx} do
+      request_id = Prima.UUID7.request_id()
+      tenant = append!(ctx, request_id: request_id)
+
+      host =
+        append!(nil, request_id: request_id, admission: :refused, refusal_class: :unauthenticated)
+
+      admin = %{ctx | platform_admin: true}
+
+      {:ok, request_id: request_id, tenant: tenant, host: host, admin: admin}
+    end
+
+    test "a platform admin reads every tenant's decisions and the host's", %{
+      admin: admin,
+      request_id: request_id,
+      tenant: tenant,
+      host: host
+    } do
+      assert {:ok, %{decisions: rows}} =
+               Grimoire.call_external("decision", admin, %{
+                 "action" => "list_global",
+                 "request_id" => request_id
+               })
+
+      assert ids(rows) == Enum.sort([tenant.call_id, host.call_id])
+
+      assert {:ok, %{decision: %{"call_id" => call_id, "athanor_id" => nil}}} =
+               Grimoire.call_external("decision", admin, %{
+                 "action" => "get_global",
+                 "call_id" => host.call_id
+               })
+
+      assert call_id == host.call_id
+    end
+
+    test "athanor_id none answers only the host's rows, an id only that athanor's", %{
+      ctx: ctx,
+      admin: admin,
+      request_id: request_id,
+      tenant: tenant,
+      host: host
+    } do
+      list = fn athanor ->
+        {:ok, %{decisions: rows}} =
+          MCP.handle("decision", actor(admin), %{
+            "action" => "list_global",
+            "request_id" => request_id,
+            "athanor_id" => athanor
+          })
+
+        ids(rows)
+      end
+
+      assert list.("none") == [host.call_id]
+      assert list.(ctx.athanor_id) == [tenant.call_id]
+      assert list.("ath_nobody") == []
+
+      assert {:error, {:invalid_argument, _}} =
+               MCP.handle("decision", actor(admin), %{
+                 "action" => "list_global",
+                 "athanor_id" => ""
+               })
+    end
+
+    test "the gate refuses a caller without the operator capability", %{ctx: ctx, host: host} do
+      for args <- [
+            %{"action" => "list_global"},
+            %{"action" => "get_global", "call_id" => host.call_id}
+          ] do
+        assert {:error, %Prima.Refusal{stage: :admission, reason: :platform_admin_required}} =
+                 Grimoire.call_external("decision", ctx, args)
+      end
+    end
+
+    test "the log refuses a caller without the operator capability on its own", %{
+      ctx: ctx,
+      host: host
+    } do
+      for args <- [
+            %{"action" => "list_global"},
+            %{"action" => "get_global", "call_id" => host.call_id}
+          ] do
+        assert {:error, :platform_admin_required = reason} =
+                 MCP.handle("decision", actor(ctx), args)
+
+        assert err_msg(reason) =~ "platform admin"
+      end
+    end
+  end
+
+  describe "decision through the gate" do
+    test "reading decisions records no decision", %{ctx: ctx} do
+      ref = make_ref()
+      test = self()
+
+      :telemetry.attach_many(
+        {__MODULE__, ref},
+        [[:cyfr, :grimoire, :decision, :admitted], [:cyfr, :grimoire, :decision, :refused]],
+        fn _event, _measurements, metadata, _ -> send(test, {ref, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+
+      request_id = Prima.UUID7.request_id()
+      ctx = %{ctx | request_id: request_id}
+      admin = %{ctx | platform_admin: true}
+
+      for {caller, args} <- [
+            {ctx, %{"action" => "list"}},
+            {ctx, %{"action" => "get", "call_id" => "call_missing"}},
+            {ctx, %{"action" => "correlate", "request_id" => request_id}},
+            {admin, %{"action" => "list_global"}},
+            {admin, %{"action" => "get_global", "call_id" => "call_missing"}}
+          ] do
+        Grimoire.call_external("decision", caller, args)
+      end
+
+      refute_received {^ref, _}
+      assert {:ok, []} = Arca.DecisionLog.correlate(actor(ctx), request_id)
+    end
+
+    test "no decision action is reachable from a running chain", %{ctx: ctx} do
+      tool = Enum.find(MCP.tools(), &(&1.name == "decision"))
+      actions = tool.input_schema["properties"]["action"]["enum"]
+      authority = granting(Enum.map(actions, &"decision.#{&1}"))
+
+      lineage =
+        ctx |> Cyfr.Test.AttemptFixtures.lineage!() |> Map.take([:parent_execution_id, :attempt])
+
+      guest = Sanctum.Context.enter_guest(%{ctx | platform_admin: true})
+
+      for action <- actions do
+        refute Grimoire.Catalog.in_chain_reachable?("decision", action)
+
+        args =
+          if action in ["get", "get_global"],
+            do: %{"action" => action, "call_id" => "call_x"},
+            else: %{"action" => action, "request_id" => "req_x"}
+
+        assert {:error, %Prima.Refusal{stage: :admission, message: message}} =
+                 Grimoire.call_in_chain("decision", guest, args, authority, lineage: lineage)
+
+        assert message =~ "not reachable from a running chain"
+      end
+    end
+  end
+
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
+
+  # One decision appended under `ctx`'s actor, or under none for the
+  # host's row, with `fields` over an admitted default.
+  defp append!(ctx, fields) do
+    decision =
+      Prima.Decision.new(
+        Keyword.merge(
+          [
+            call_id: Prima.UUID7.generate_id("call"),
+            user_id: ctx && ctx.user_id,
+            athanor_id: ctx && ctx.athanor_id,
+            plane: :external,
+            tool: "storage",
+            action: "get",
+            inserted_at: DateTime.utc_now(),
+            admission: :admitted
+          ],
+          fields
+        )
+      )
+
+    :ok = Arca.DecisionLog.append(ctx && actor(ctx), decision)
+    decision
+  end
+
+  defp ids(rows), do: rows |> Enum.map(& &1["call_id"]) |> Enum.sort()
+
+  defp granting(tools) do
+    alias Prima.Test.AuthorityFixtures
+    source = AuthorityFixtures.formula_ref()
+
+    {:ok, blob} =
+      AuthorityFixtures.graph_map()
+      |> put_in(["nodes", source, "edges", "@ingress", "tools"], Enum.sort(tools))
+      |> Prima.Authority.Blob.parse()
+
+    {:ok, authority} =
+      Prima.Authority.root(AuthorityFixtures.profile(), blob,
+        ceiling: AuthorityFixtures.ceiling()
+      )
+
+    authority
+  end
 
   defp all_roots, do: Arca.Storage.tenant_roots()
 

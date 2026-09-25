@@ -1162,6 +1162,43 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert response["error"]["code"] == Emissary.MCP.Message.error_code(:auth_required)
     end
 
+    test "the uncredentialed listen is one recorded refusal, rendered once", %{conn: conn} do
+      import Ecto.Query, only: [from: 2]
+
+      Application.put_env(:sanctum, :auth_provider, AnonymousAuthProvider)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 7,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{}}
+        })
+
+      response = json_response(conn, 401)
+      assert response["id"] == 7
+      assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
+
+      assert [Emissary.MCP.Protocol.version()] ==
+               get_resp_header(conn, Emissary.MCP.Protocol.protocol_version_header())
+
+      assert [request_id] = get_resp_header(conn, "x-request-id")
+
+      assert [decision] =
+               Arca.Repo.all(
+                 from(d in Arca.Schemas.DecisionLog,
+                   where: d.request_id == ^request_id
+                 )
+               )
+
+      assert decision.admission == "refused"
+      assert decision.refusal_class == "unauthenticated"
+      assert decision.plane == "external"
+      assert is_nil(decision.athanor_id)
+    end
+
     test "an install with no auth provider still refuses an uncredentialed caller", %{conn: conn} do
       # The operator authenticates with an API key on these installs too, so
       # a request carrying nothing is a stranger here as well.

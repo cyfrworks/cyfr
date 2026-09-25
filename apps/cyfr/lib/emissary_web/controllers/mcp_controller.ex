@@ -217,8 +217,7 @@ defmodule EmissaryWeb.MCPController do
       listen_error(
         conn,
         request_id,
-        id,
-        :auth_required,
+        :unauthenticated,
         "Unauthorized: subscriptions/listen requires authentication"
       )
     else
@@ -230,8 +229,7 @@ defmodule EmissaryWeb.MCPController do
           listen_error(
             conn,
             request_id,
-            id,
-            :rate_limited,
+            :stream_limit,
             "Too many concurrent subscription streams for this caller"
           )
       end
@@ -255,11 +253,16 @@ defmodule EmissaryWeb.MCPController do
     |> listen_loop(id, deadline, watch)
   end
 
-  defp listen_error(conn, request_id, id, code, message) do
+  # A refusal of the listen itself, before any stream opens: rendered
+  # through the renderer, which records it once as the request's refused
+  # decision and echoes the request's JSON-RPC id. `reason` is the
+  # refusal's term; its class picks the code and the HTTP status.
+  defp listen_error(conn, request_id, reason, message) do
+    code = reason |> Grimoire.Error.classify() |> Message.refusal_code(:transport)
+
     conn
-    |> put_resp_header(@protocol_version_header, @protocol_version)
     |> put_resp_header("x-request-id", request_id)
-    |> respond_error(code, Message.encode_error(id, code, message))
+    |> EmissaryWeb.MCPError.send(http_status_for(code), reason, message)
   end
 
   # The acknowledgment must be the first message on the stream, and must carry

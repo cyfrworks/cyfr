@@ -59,15 +59,15 @@ defmodule Grimoire.Decisions do
   @unknown "unknown"
 
   # The tools whose every action reads what exists or what was decided.
-  @unrecorded_tools ~w(mcp_log record)
+  @unrecorded_tools ~w(decision mcp_log record)
 
   # Single discovery actions of tools that also act.
   @unrecorded_actions [{"tools", "list"}, {"system", "status"}]
 
   @doc """
   Whether a call of `tool.action` is recorded. False for discovery and
-  the audit's own reads: every `mcp_log` and `record` action, `tools.list`
-  and `system.status`. Every other call — every `tools/call` and
+  the audit's own reads: every `decision`, `mcp_log` and `record` action,
+  `tools.list` and `system.status`. Every other call — every `tools/call` and
   `resources/read` among them — is.
   """
   @spec recorded?(term(), term()) :: boolean()

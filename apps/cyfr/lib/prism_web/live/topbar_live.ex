@@ -884,7 +884,7 @@ defmodule PrismWeb.TopbarLive do
                 <% end %>
               </ul>
               <.link
-                navigate={PrismWeb.Focus.path(@athanor_route, "/activities?status=pending")}
+                navigate={PrismWeb.Focus.path(@athanor_route, "/activities")}
                 class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
               >
                 View activity →

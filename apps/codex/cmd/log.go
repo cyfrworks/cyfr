@@ -88,10 +88,10 @@ var logListCmd = &cobra.Command{
 }
 
 var logGetCmd = &cobra.Command{
-	Use:     "get <request_id>",
+	Use:     "get <call_id>",
 	Short:   "Show full detail for a request log",
-	Long:    "Show all fields for a single MCP request log including input and output payloads.",
-	Example: "  cyfr log get req_01abc123",
+	Long:    "Show all fields for a single MCP request log, including input and output payloads, by the row's call ID (call_…).",
+	Example: "  cyfr log get call_01abc123",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
@@ -105,8 +105,8 @@ var logGetCmd = &cobra.Command{
 
 var logCorrelateCmd = &cobra.Command{
 	Use:     "correlate <request_id>",
-	Short:   "Cross-reference a request with executions and policy logs",
-	Long:    "Show all related records (executions, policy logs) for a given request ID.",
+	Short:   "Cross-reference a request with its decisions, executions and policy logs",
+	Long:    "Show all related records (request logs, admission decisions, executions, policy logs) for a given request ID.",
 	Example: "  cyfr log correlate req_01abc123",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
