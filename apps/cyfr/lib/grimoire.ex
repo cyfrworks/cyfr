@@ -10,8 +10,9 @@ defmodule Grimoire do
   a key or the console, `call_in_chain/5` for a running chain under its
   authority — and every refusal either makes before a handler runs is a
   `%Prima.Refusal{stage: :admission}`. The rest reads the table this
-  member wrote at boot (`Grimoire.Catalog.load!/0`) or cancels a call the
-  gate is running. Every call either entry decides is recorded as one
+  member wrote at boot (`Grimoire.Catalog.load!/0`) and the annotations
+  its declarations carry, classifies and renders a refusal, or cancels a
+  call the gate is running. Every call either entry decides is recorded as one
   admission decision (`Grimoire.Decisions`), and an entry that decides on
   its own — a webhook, a schedule's fire — records its decision through
   `open_decision/3` and `close_decision/3`. `Grimoire.Catalog` is the
@@ -19,7 +20,7 @@ defmodule Grimoire do
   load its table and install it as consent's port.
   """
 
-  alias Grimoire.{Catalog, RunningTasks}
+  alias Grimoire.{Annotations, Catalog, Resources, RunningTasks}
 
   @doc "Call a tool from the external plane (`Grimoire.Catalog.call_external/4`)."
   @spec call_external(String.t(), Sanctum.Context.t(), term(), keyword()) ::
@@ -62,6 +63,55 @@ defmodule Grimoire do
   """
   @spec render(term()) :: String.t()
   defdelegate render(reason), to: Grimoire.Error
+
+  @doc "The normalized refusal for any reason (`Grimoire.Error.classify/1`)."
+  @spec classify(term()) :: Prima.Refusal.t()
+  defdelegate classify(reason), to: Grimoire.Error
+
+  @doc "The wire code a refusal carries in place of its class's, or nil (`Grimoire.Error.code_override/1`)."
+  @spec code_override(Prima.Refusal.t()) :: atom() | nil
+  defdelegate code_override(refusal), to: Grimoire.Error
+
+  @doc "The action map a tool definition declares, in any spelling (`Grimoire.Annotations.actions_of/1`)."
+  @spec declared_actions(Annotations.source()) :: %{optional(String.t()) => map()}
+  defdelegate declared_actions(tool_def), to: Annotations, as: :actions_of
+
+  @doc "An action's declared kind, or nil (`Grimoire.Annotations.kind/2`)."
+  @spec annotation_kind(Annotations.source(), String.t() | nil) :: atom() | nil
+  defdelegate annotation_kind(tool_def, action), to: Annotations, as: :kind
+
+  @doc "An action's declared standing rule, or nil for none (`Grimoire.Annotations.standing/2`)."
+  @spec annotation_standing(Annotations.source(), String.t() | nil) :: :thread | false | nil
+  defdelegate annotation_standing(tool_def, action), to: Annotations, as: :standing
+
+  @doc "`:replay_safe` for a read declared safe to re-dispatch, nil otherwise (`Grimoire.Annotations.recovery/2`)."
+  @spec annotation_recovery(Annotations.source(), String.t()) :: :replay_safe | nil
+  defdelegate annotation_recovery(tool_def, action), to: Annotations, as: :recovery
+
+  @doc "A standing value in any spelling, decoded (`Grimoire.Annotations.standing/1`)."
+  @spec standing_scope(term()) :: :thread | false | nil
+  defdelegate standing_scope(value), to: Annotations, as: :standing
+
+  @doc "A standing value as the intent carries it (`Grimoire.Annotations.standing_to_wire/1`)."
+  @spec standing_to_wire(term()) :: String.t() | false | nil
+  defdelegate standing_to_wire(value), to: Annotations
+
+  @doc "The concrete resources the providers advertise (`Grimoire.Resources.list_resources/0`)."
+  @spec list_resources() :: [map()]
+  defdelegate list_resources(), to: Resources
+
+  @doc "The resource templates the providers advertise (`Grimoire.Resources.list_resource_templates/0`)."
+  @spec list_resource_templates() :: [map()]
+  defdelegate list_resource_templates(), to: Resources
+
+  @doc "The tool and action a resource URI reads (`Grimoire.Resources.resolve/1`)."
+  @spec resolve_resource(String.t()) ::
+          {:ok, String.t(), String.t()} | {:error, {:invalid_argument, String.t()}}
+  defdelegate resolve_resource(uri), to: Resources, as: :resolve
+
+  @doc "The tool definitions a context may see, narrowed to its actions (`Grimoire.Visibility.filter_for_context/2`)."
+  @spec visible_tools([map()], Sanctum.Context.t()) :: [map()]
+  defdelegate visible_tools(tools, ctx), to: Grimoire.Visibility, as: :filter_for_context
 
   @doc "A tool's provider and its declarations: `{:ok, {module, tool}}` or `:miss`."
   @spec lookup(String.t()) :: {:ok, {module(), map()}} | :miss

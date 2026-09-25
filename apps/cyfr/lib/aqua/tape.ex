@@ -43,7 +43,7 @@ defmodule Aqua.Tape do
 
   @doc "Whether the turn has a terminal status in the durable lifecycle."
   @spec terminal?(turn()) :: boolean()
-  def terminal?(%{status: status}), do: status in TurnStorage.terminal_statuses()
+  def terminal?(%{status: status}), do: Prima.TurnState.terminal?(status)
 
   @doc "How many automatic recoveries a turn gets before it ends `uncertain`."
   @spec recovery_cap() :: pos_integer()

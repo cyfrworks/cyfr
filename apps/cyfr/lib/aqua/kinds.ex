@@ -33,7 +33,7 @@ defmodule Aqua.Kinds do
 
   def kind_for(tool, action) when is_binary(tool) and is_binary(action) do
     cond do
-      kind = Aqua.Hands.kind_for(tool, action) ->
+      kind = Prima.VirtualTools.kind_for(tool, action) ->
         kind
 
       String.contains?(tool, ":") ->
@@ -48,8 +48,6 @@ defmodule Aqua.Kinds do
 
   defp lookup_internal_kind(tool, action), do: Aqua.Ops.action_kind(tool, action)
 
-  @auto_kinds [:read, :write, :execute]
-
   @doc """
   Whether `tool.action` may ever run without a card: only a read, write or
   execute kind. Destructive and external actions always ask, and an
@@ -62,7 +60,8 @@ defmodule Aqua.Kinds do
 
   @spec auto_permitted?(String.t(), String.t()) :: boolean()
 
-  def auto_permitted?(tool, action), do: kind_for(tool, action) in @auto_kinds
+  def auto_permitted?(tool, action),
+    do: Prima.VirtualTools.auto_permitted_kind?(kind_for(tool, action))
 
   @doc """
   The action verbs a catalogued tool has — the virtual catalog's for a
@@ -73,8 +72,8 @@ defmodule Aqua.Kinds do
   @spec actions_of(String.t()) :: [String.t()]
 
   def actions_of(tool) when is_binary(tool) do
-    if Aqua.Hands.hand?(tool),
-      do: Aqua.Hands.actions_of(tool),
+    if Prima.VirtualTools.tool?(tool),
+      do: Prima.VirtualTools.actions_of(tool),
       else: Aqua.Ops.actions_of(tool)
   end
 
@@ -85,7 +84,7 @@ defmodule Aqua.Kinds do
   @spec catalogued?(String.t()) :: boolean()
 
   def catalogued?(tool) when is_binary(tool),
-    do: Aqua.Hands.hand?(tool) or actions_of(tool) != []
+    do: Prima.VirtualTools.tool?(tool) or actions_of(tool) != []
 
   def catalogued?(_tool), do: false
 
@@ -101,7 +100,7 @@ defmodule Aqua.Kinds do
 
   def standing_for(tool, action) when is_binary(tool) and is_binary(action) do
     cond do
-      Aqua.Hands.hand?(tool) -> nil
+      Prima.VirtualTools.tool?(tool) -> nil
       String.contains?(tool, ":") -> nil
       true -> Aqua.Ops.action_standing(tool, action)
     end
@@ -125,7 +124,7 @@ defmodule Aqua.Kinds do
 
   defp auto_only?(key) do
     case String.split(key, ".", parts: 2) do
-      [tool, action] -> Aqua.Hands.auto_only?(tool, action)
+      [tool, action] -> Prima.VirtualTools.auto_only?(tool, action)
       _ -> false
     end
   end
@@ -141,8 +140,8 @@ defmodule Aqua.Kinds do
   @doc "Whether a chat would refuse `tool.action` outright."
   @spec refused?(String.t(), String.t()) :: boolean()
   def refused?(tool, action) do
-    if Aqua.Hands.hand?(tool) do
-      is_nil(Aqua.Hands.kind_for(tool, action))
+    if Prima.VirtualTools.tool?(tool) do
+      is_nil(Prima.VirtualTools.kind_for(tool, action))
     else
       Aqua.Ops.in_chain_refused?(tool, action)
     end

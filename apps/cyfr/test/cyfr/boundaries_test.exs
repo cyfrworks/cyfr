@@ -53,15 +53,26 @@ defmodule Cyfr.BoundariesTest do
   end
 
   # The other view of the same files: every module name they name, read
-  # from the token stream, so a name in prose is not one.
-  defp names(globs) do
-    skip = MapSet.new(Boundaries.scan_exclusions())
+  # from the token stream, so a name in prose is not one. Given a surface
+  # row, the files its `except` lists are not read.
+  defp names(%{from: from} = row), do: names(from, Map.get(row, :except, []))
+  defp names(globs), do: names(globs, [])
+
+  defp names(globs, except) do
+    skip = MapSet.new(Boundaries.scan_exclusions() ++ excepted(except))
 
     for glob <- List.wrap(globs),
         path <- SourceTree.files!(Path.join(root(), glob)),
         rel = Path.relative_to(path, root()),
         not MapSet.member?(skip, rel),
         do: {rel, SourceTree.aliases(path)}
+  end
+
+  # Every file an `except` glob matches, relative to the root.
+  defp excepted(globs) do
+    for glob <- globs,
+        path <- Path.wildcard(Path.join(root(), glob)),
+        do: Path.relative_to(path, root())
   end
 
   defp lines_read(scanned), do: Enum.sum(for {_path, lines} <- scanned, do: length(lines))
@@ -132,7 +143,7 @@ defmodule Cyfr.BoundariesTest do
       for row <- Boundaries.surfaces() do
         where = "the surface #{row.into} <- #{inspect(row.from)}"
         lines = lines_read(scan(row.from))
-        named = Enum.sum(for {_path, names} <- names(row.from), do: length(names))
+        named = Enum.sum(for {_path, names} <- names(row), do: length(names))
 
         assert lines > 100, "#{where} read #{lines} code lines — it is not reading"
 
@@ -443,7 +454,7 @@ defmodule Cyfr.BoundariesTest do
     test "no source reaches a namespace its surface does not name" do
       found =
         for row <- Boundaries.surfaces(),
-            extra = Boundaries.surface_violations(row, names(row.from)),
+            extra = Boundaries.surface_violations(row, names(row)),
             extra != [],
             do: "#{inspect(row.from)} -> #{row.into}: #{inspect(extra)}\n  #{row.reason}"
 
@@ -462,7 +473,7 @@ defmodule Cyfr.BoundariesTest do
     test "no surface names something it has stopped reaching" do
       found =
         for row <- Boundaries.surfaces(),
-            stale = Boundaries.stale_surface_entries(row, names(row.from)),
+            stale = Boundaries.stale_surface_entries(row, names(row)),
             stale != [],
             do: "#{inspect(row.from)} -> #{row.into}: #{inspect(stale)}"
 
@@ -487,7 +498,7 @@ defmodule Cyfr.BoundariesTest do
 
       assert Enum.sort(row.from) == Enum.sort(expected)
 
-      assert Boundaries.surface_violations(row, names(row.from)) == [],
+      assert Boundaries.surface_violations(row, names(row)) == [],
              "a module outside Sanctum names a security-row store — read it through Sanctum"
 
       # The one reader does name them, so a scan that found none above it
@@ -510,6 +521,36 @@ defmodule Cyfr.BoundariesTest do
       for name <- Boundaries.sanctum_only_storage() do
         assert Code.ensure_loaded?(Module.concat([name])), "#{name} is not a module"
       end
+    end
+
+    test "a row's except names files its sources hold, and they go unread" do
+      for %{except: except} = row <- Boundaries.surfaces() do
+        read = MapSet.new(for {path, _names} <- names(row.from), do: path)
+
+        for glob <- except do
+          matched = MapSet.new(excepted([glob]))
+
+          assert MapSet.size(MapSet.intersection(matched, read)) > 0,
+                 "the surface #{inspect(row.from)} -> #{row.into} excepts #{glob}, " <>
+                   "which names no file it reads"
+        end
+      end
+
+      planted = %{
+        from: ["apps/cyfr/lib/cyfr/**/*.ex"],
+        except: ["apps/cyfr/lib/cyfr/application.ex"],
+        into: "Aqua",
+        allow: []
+      }
+
+      paths = for {path, _names} <- names(planted), do: path
+      assert "apps/cyfr/lib/cyfr/bus.ex" in paths
+      refute "apps/cyfr/lib/cyfr/application.ex" in paths
+
+      assert "apps/cyfr/lib/cyfr/application.ex" in for(
+               {path, _} <- names(planted.from),
+               do: path
+             )
     end
 
     test "every row says why its roster reads as it does" do
@@ -1051,6 +1092,72 @@ defmodule Cyfr.BoundariesTest do
 
       assert Boundaries.surface_violations(into_aqua, planted) == ["Aqua", "Aqua.Models"]
       assert Boundaries.surface_violations(into_execution, planted) == ["Crucible"]
+    end
+
+    test "execution or the MCP surface naming the assistant is reported" do
+      from_execution =
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Aqua" and "apps/cyfr/lib/crucible/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences execution out of the assistant")
+
+      from_mcp =
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Aqua" and "apps/cyfr/lib/emissary/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences the MCP surface out of the assistant")
+
+      assert from_execution.allow == [] and from_mcp.allow == []
+      assert "apps/cyfr/lib/emissary_web/**/*.ex" in from_mcp.from
+
+      planted = [
+        {"apps/cyfr/lib/crucible/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Crucible.Planted do
+           def kind(tool, action), do: Aqua.tool_kind(tool, action)
+           def turn(ctx, id), do: Aqua.Runner.state(id, ctx.athanor_id)
+         end
+         ''')},
+        {"apps/cyfr/lib/emissary_web/planted_controller.ex",
+         CodeLines.aliases(~S'''
+         defmodule EmissaryWeb.PlantedController do
+           alias Aqua.Notes
+           def pinned(ctx), do: Notes.pinned_page(ctx)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(from_execution, planted) ==
+               ["Aqua", "Aqua.Notes", "Aqua.Runner"]
+
+      assert Boundaries.surface_violations(from_mcp, planted) ==
+               ["Aqua", "Aqua.Notes", "Aqua.Runner"]
+    end
+
+    test "the assistant, the MCP surface and the console name only execution's root" do
+      rows =
+        for tree <- ["aqua", "emissary", "prism_web"],
+            do:
+              Enum.find(
+                Boundaries.surfaces(),
+                &(&1.into == "Crucible" and "apps/cyfr/lib/#{tree}/**/*.ex" in &1.from)
+              ) || flunk("no surface row fences #{tree} into execution's root")
+
+      planted = [
+        {"apps/cyfr/lib/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Planted do
+           def run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
+           def admit(ctx, ref), do: Crucible.Admission.authority_for(ctx, :default, ref, [])
+           def charge(authority), do: Crucible.Charge.take(authority, [])
+         end
+         ''')}
+      ]
+
+      for row <- rows do
+        assert Boundaries.surface_violations(row, planted) ==
+                 ["Crucible.Admission", "Crucible.Charge"]
+      end
     end
 
     test "the assistant reads consent's derivation and nothing of the plane that writes it" do

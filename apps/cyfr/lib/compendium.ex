@@ -9,13 +9,30 @@ defmodule Compendium do
   cyfr.run. Component references are parsed by `Prima.ComponentRef`.
 
   The functions below are the domain's door for callers outside it: the
-  tincture rules (`Compendium.Tincture`), and the component facts the
-  assistant reads — its model catalysts, its agent sources and the
-  estate's own formulas. Every fact is read under the caller's context
-  and names nothing it did not read; running a catalyst is not here.
+  tincture rules (`Compendium.Tincture`); component inspection,
+  resolution, activation and blobs for the execution domain; the
+  component facts the assistant reads — its model catalysts, its agents,
+  skills and agent sources and the estate's own formulas — with the path
+  grammars of those trees; and the registry's sign-in probe and legal
+  pages. Every fact is read under the caller's context and names nothing
+  it did not read; running a catalyst is not here.
   """
 
-  alias Compendium.{AgentIndex, AquaAgent, Registry, Tincture}
+  alias Compendium.{
+    Activation,
+    AgentIndex,
+    AgentSource,
+    AquaAgent,
+    AquaPath,
+    AquaSkills,
+    Catalogue,
+    Component,
+    ComponentPath,
+    Registry,
+    Tincture
+  }
+
+  alias Compendium.Registry.Client
   alias Sanctum.Context
 
   # The most rows one listing of the estate's catalysts reads.
@@ -158,4 +175,249 @@ defmodule Compendium do
         {:error, :unavailable}
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Components: inspection, resolution, activation and blobs
+  # ---------------------------------------------------------------------------
+
+  @doc "A component's manifest and metadata by reference (`Compendium.Component.inspect_component/2`)."
+  @spec inspect_component(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  defdelegate inspect_component(ctx, reference), to: Component
+
+  @doc "The concrete reference a flexible one resolves to (`Compendium.Resolver.resolve/2`)."
+  @spec resolve(Context.t(), String.t()) ::
+          {:ok, String.t(), Compendium.Resolver.resolution_metadata()} | {:error, term()}
+  defdelegate resolve(ctx, reference), to: Compendium.Resolver
+
+  @doc "An activation graph's canonical encoding (`Compendium.Activation.encode_graph/1`)."
+  @spec encode_activation_graph(Activation.graph()) ::
+          {:ok, String.t()} | {:error, Activation.error()}
+  defdelegate encode_activation_graph(graph), to: Activation, as: :encode_graph
+
+  @doc "A component's activation over the current projection (`Compendium.Activation.resolve/2`)."
+  @spec resolve_activation(Context.t(), map()) ::
+          {:ok, Activation.t()} | {:error, Activation.error()}
+  defdelegate resolve_activation(ctx, component), to: Activation, as: :resolve
+
+  @doc "A component's activation with every node's integrity verified (`Compendium.Activation.resolve_verified/2`)."
+  @spec resolve_verified_activation(Context.t(), map()) ::
+          {:ok,
+           %{
+             digest: String.t(),
+             graph: Activation.graph(),
+             nodes: %{String.t() => Activation.verified_node()}
+           }}
+          | {:error, Activation.error()}
+  defdelegate resolve_verified_activation(ctx, component), to: Activation, as: :resolve_verified
+
+  @doc "A component blob's raw bytes by digest (`Compendium.Component.get_blob/2`)."
+  @spec get_blob(Context.t(), String.t()) :: {:ok, binary()} | {:error, :blob_not_found | term()}
+  defdelegate get_blob(ctx, digest), to: Component
+
+  @doc "Every manifest path a component tree holds (`Compendium.AutoIndexer.discover/1`)."
+  @spec discover_components(Context.t()) :: {:ok, [[String.t()]]} | {:error, term()}
+  defdelegate discover_components(ctx), to: Compendium.AutoIndexer, as: :discover
+
+  @doc "Merged-search rows grouped one entry per component (`Compendium.Catalogue.group_search_results/1`)."
+  @spec group_search_results([map()]) :: [map()]
+  defdelegate group_search_results(rows), to: Catalogue
+
+  @doc "Installed rows grouped by their name ref, newest first (`Compendium.Catalogue.group_by_component/1`)."
+  @spec group_by_component([map()]) :: [map()]
+  defdelegate group_by_component(rows), to: Catalogue
+
+  @doc "The component a storage path names, or `:error` (`Compendium.ComponentPath.parse/1`)."
+  @spec parse_component_path([String.t()]) ::
+          {:ok,
+           %{
+             type: String.t(),
+             publisher: String.t(),
+             name: String.t(),
+             version: String.t(),
+             rest: [String.t()]
+           }}
+          | :error
+  defdelegate parse_component_path(segments), to: ComponentPath, as: :parse
+
+  @doc "Walked leaves filtered down to manifest files (`Compendium.ComponentPath.manifest_leaves/1`)."
+  @spec manifest_leaves([[String.t()]]) :: [[String.t()]]
+  defdelegate manifest_leaves(leaves), to: ComponentPath
+
+  @doc """
+  The projection epoch the estate's `root` has acknowledged, after its
+  barrier unless `await: false` (`Compendium.ProjectionReconciler.acknowledged_epoch/3`).
+  """
+  @spec acknowledged_projection_epoch(Context.t(), String.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  defdelegate acknowledged_projection_epoch(ctx, root, opts \\ []),
+    to: Compendium.ProjectionReconciler,
+    as: :acknowledged_epoch
+
+  @doc "Refresh every filled estate's seeded components (`Compendium.Provisioning.sync_seeds/0`)."
+  @spec sync_seeds() :: :ok
+  defdelegate sync_seeds(), to: Compendium.Provisioning
+
+  # ---------------------------------------------------------------------------
+  # The assistant's agents and skills
+  # ---------------------------------------------------------------------------
+
+  @doc "The estate's agents and the files that did not parse (`Compendium.AquaAgent.list/1`)."
+  @spec agents(Context.t()) :: {:ok, [AquaAgent.t()], [{String.t(), term()}]} | {:error, term()}
+  defdelegate agents(ctx), to: AquaAgent, as: :list
+
+  @doc "One agent of the estate by name (`Compendium.AquaAgent.get/2`)."
+  @spec agent(Context.t(), String.t()) :: {:ok, AquaAgent.t()} | {:error, term()}
+  defdelegate agent(ctx, name), to: AquaAgent, as: :get
+
+  @doc "An agent's type: the soul's or a role's (`Compendium.AquaAgent.type_of/1`)."
+  @spec agent_type_of(AquaAgent.t()) :: String.t()
+  defdelegate agent_type_of(agent), to: AquaAgent, as: :type_of
+
+  @doc "The type a role agent carries (`Compendium.AquaAgent.role_type/0`)."
+  @spec agent_role_type() :: String.t()
+  defdelegate agent_role_type(), to: AquaAgent, as: :role_type
+
+  @doc "The type the soul carries (`Compendium.AquaAgent.soul_type/0`)."
+  @spec agent_soul_type() :: String.t()
+  defdelegate agent_soul_type(), to: AquaAgent, as: :soul_type
+
+  @doc "The digest of an agent's declared capabilities (`Compendium.AquaAgent.capability_digest/1`)."
+  @spec agent_capability_digest(AquaAgent.t()) :: {:ok, String.t()} | {:error, term()}
+  defdelegate agent_capability_digest(agent), to: AquaAgent, as: :capability_digest
+
+  @doc "The policy glob a clone into `name` is granted by (`Compendium.AquaAgent.clone_glob/1`)."
+  @spec agent_clone_glob(String.t()) :: String.t()
+  defdelegate agent_clone_glob(name), to: AquaAgent, as: :clone_glob
+
+  @doc "An agent parsed from its file's bytes (`Compendium.AquaAgent.parse/2`)."
+  @spec parse_agent(String.t(), binary()) :: {:ok, AquaAgent.t()} | {:error, term()}
+  defdelegate parse_agent(name, binary), to: AquaAgent, as: :parse
+
+  @doc "An agent file's frontmatter and body (`Compendium.AquaAgent.parse_frontmatter/1`)."
+  @spec parse_agent_frontmatter(binary()) :: {:ok, map(), String.t()} | {:error, term()}
+  defdelegate parse_agent_frontmatter(binary), to: AquaAgent, as: :parse_frontmatter
+
+  @doc """
+  An agent as it stands now, with the revision it was read at and its
+  capability digest (`Compendium.AgentIndex.snapshot/2`).
+  """
+  @spec agent_snapshot(Context.t(), String.t()) ::
+          {:ok,
+           %{
+             agent: AquaAgent.t(),
+             revision_digest: String.t(),
+             capability_digest: String.t()
+           }}
+          | {:error, term()}
+  defdelegate agent_snapshot(ctx, name), to: AgentIndex, as: :snapshot
+
+  @doc "The consent row an agent projects under an enabled roster (`Compendium.AgentSource.row/2`)."
+  @spec agent_row(AquaAgent.t(), MapSet.t(String.t())) :: map()
+  defdelegate agent_row(agent, roster), to: AgentSource, as: :row
+
+  @doc "The names of the estate's enabled agents (`Compendium.AgentSource.enabled_roster/1`)."
+  @spec enabled_agent_roster(Context.t()) :: {:ok, MapSet.t(String.t())} | {:error, term()}
+  defdelegate enabled_agent_roster(ctx), to: AgentSource, as: :enabled_roster
+
+  @doc "The estate's skills, at most `limit` of them (`Compendium.AquaSkills.index/2`)."
+  @spec skills_index(Context.t(), pos_integer() | :all) ::
+          {:ok, %{entries: [AquaSkills.entry()], more: non_neg_integer()}} | {:error, term()}
+  defdelegate skills_index(ctx, limit), to: AquaSkills, as: :index
+
+  @doc "The most skills a prompt lists (`Compendium.AquaSkills.index_limit/0`)."
+  @spec skills_index_limit() :: pos_integer()
+  defdelegate skills_index_limit(), to: AquaSkills, as: :index_limit
+
+  @doc "Whether a name is a valid agent or skill name (`Compendium.AquaPath.valid_name?/1`)."
+  @spec valid_agent_name?(term()) :: boolean()
+  defdelegate valid_agent_name?(name), to: AquaPath, as: :valid_name?
+
+  @doc "The storage path of an agent's file (`Compendium.AquaPath.agent_file/1`)."
+  @spec agent_file_path(String.t()) :: [String.t()]
+  defdelegate agent_file_path(name), to: AquaPath, as: :agent_file
+
+  @doc "The storage path of a skill's directory (`Compendium.AquaPath.skill_dir/1`)."
+  @spec skill_dir(String.t()) :: [String.t()]
+  defdelegate skill_dir(name), to: AquaPath
+
+  @doc "Whether an agent name is the soul's (`Compendium.AquaPath.soul?/1`)."
+  @spec soul_agent_file?(term()) :: boolean()
+  defdelegate soul_agent_file?(name), to: AquaPath, as: :soul?
+
+  # ---------------------------------------------------------------------------
+  # The registry: sign-in and its legal pages
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Probe the registry with the person's IdP `access_token` and absorb what
+  it says; always `{:proceed, user, report}` (`Compendium.SignInSync.complete/4`).
+  """
+  @spec complete_sign_in(
+          Context.t(),
+          %{required(:id) => String.t(), optional(atom()) => term()},
+          String.t() | atom(),
+          String.t() | nil
+        ) :: Sanctum.SignIn.outcome()
+  defdelegate complete_sign_in(ctx, user, provider, access_token),
+    to: Compendium.SignInSync,
+    as: :complete
+
+  @doc """
+  Claim `username` as the person's personal namespace on the registry,
+  proving their identity with the IdP `access_token`: `{:ok, %{slug,
+  token}}` with the namespace claimed and its fresh push token, which
+  nothing has stored yet (`store_push_token/3`). A refusal is the
+  registry's, as `Compendium.Providers.Shared.refusal/1` renders it: a
+  policy the person has not accepted is the reason
+  `{:registry, :policy_acceptance_required}`, a spent IdP token
+  `:invalid_access_token`.
+  """
+  @spec claim_personal_namespace(String.t(), atom() | String.t(), String.t()) ::
+          {:ok, %{slug: String.t(), token: String.t() | nil}} | {:error, Prima.Refusal.t()}
+  def claim_personal_namespace(username, provider, access_token) do
+    case Client.claim_personal_namespace(username, provider, access_token) do
+      {:ok, body} -> {:ok, %{slug: body["slug"] || username, token: body["token"]}}
+      {:error, reason} -> {:error, Compendium.Providers.Shared.refusal(reason)}
+    end
+  end
+
+  @doc """
+  Store a personal namespace's push token as the caller's credential for
+  this deployment's registry (`Compendium.Registry.CredentialStore.put_push_token/5`).
+  """
+  @spec store_push_token(Context.t(), String.t(), String.t() | nil) ::
+          :ok | :skipped | {:error, :unavailable | :forbidden}
+  def store_push_token(%Context{} = ctx, slug, token) do
+    Registry.CredentialStore.put_push_token(
+      ctx,
+      Compendium.RegistryHost.canonical_host(),
+      slug,
+      token,
+      "personal"
+    )
+  end
+
+  @doc "The registry's current policy version and policies (`Compendium.Registry.Client.get_legal_version/0`)."
+  @spec registry_legal_version() :: {:ok, map()} | {:error, Compendium.OCI.Errors.t()}
+  defdelegate registry_legal_version(), to: Client, as: :get_legal_version
+
+  @doc "One registry policy page (`Compendium.Registry.Client.get_legal_page/1`)."
+  @spec registry_legal_page(String.t()) :: {:ok, map()} | {:error, Compendium.OCI.Errors.t()}
+  defdelegate registry_legal_page(name), to: Client, as: :get_legal_page
+
+  @doc "Record the person's acceptance of a policy version (`Compendium.Registry.Client.accept_policies/4`)."
+  @spec accept_registry_policies(
+          atom() | String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          String.t()
+        ) ::
+          {:ok, map()} | {:error, Compendium.OCI.Errors.t() | :invalid_access_token}
+  defdelegate accept_registry_policies(provider, access_token, id_token, policy_version),
+    to: Client,
+    as: :accept_policies
+
+  @doc "The policy version a registry refusal requires, or nil (`Compendium.OCI.Errors.required_version/1`)."
+  @spec registry_required_version(Compendium.OCI.Errors.t()) :: String.t() | nil
+  defdelegate registry_required_version(error), to: Compendium.OCI.Errors, as: :required_version
 end
