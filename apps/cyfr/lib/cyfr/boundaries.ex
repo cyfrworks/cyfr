@@ -1271,6 +1271,9 @@ defmodule Cyfr.Boundaries do
     %{module: EmissaryWeb.Plugs.VerifyWebhookSignature, site: :call, plane: :external},
     %{module: EmissaryWeb.Plugs.WebhookIdempotency, site: :call, plane: :external},
     %{module: EmissaryWeb.Plugs.WebhookRateLimit, site: :call, plane: :external},
+    # The execution-events stream: an execution the caller may not read (or
+    # that does not exist), an unauthenticated caller, and the stream limit.
+    %{module: EmissaryWeb.ExecutionEventsController, site: :stream, plane: :external},
     # The scheduler's fire: its own admission is the occurrence claimed
     # under a held generation, and a run admission refusal is that fire's
     # failed completion.

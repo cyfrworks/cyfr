@@ -445,7 +445,7 @@ has not yet claimed a namespace, which is how the first-login flow
 (`registry.probe`, `registry.claim_personal`) completes. Those are not
 public — they need the session — but they do not need a claimed identity.
 
-Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
+Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `decision.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
 ---
 
@@ -824,8 +824,17 @@ Every MCP tool call is recorded with full input/output, status, and duration. In
 ```bash
 cyfr log list                              # Recent logs
 cyfr log list --tool execution --status error  # Filter by tool and status
-cyfr log get <id>                          # Full details for a specific log entry
-cyfr log correlate <request_id>            # Find related log entries
+cyfr log get <call_id>                     # Full details for a specific log entry
+cyfr log correlate <request_id>            # Find related log entries and decisions
+```
+
+Every call the server admitted or refused is also recorded once as an admission decision under its call ID, with how the admitted work ended. Inspect decisions via the `decision` tool or `cyfr decision` CLI commands; a platform admin reads every athanor's decisions and the host's own with `--global`:
+
+```bash
+cyfr decision list --admission refused     # Recent refusals
+cyfr decision get <call_id>                # One decision
+cyfr decision correlate <request_id>       # A request's decisions, logs and executions
+cyfr decision list --global --athanor none # The host's own decisions (platform admins)
 ```
 
 ### Concrete Example: User Management

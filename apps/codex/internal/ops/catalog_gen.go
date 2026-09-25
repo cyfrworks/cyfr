@@ -17,6 +17,7 @@ const (
 	Athanor            = "athanor"
 	Build              = "build"
 	Component          = "component"
+	Decision           = "decision"
 	Door               = "door"
 	Execution          = "execution"
 	File               = "file"
@@ -94,6 +95,11 @@ const (
 	ComponentSetupPlan      = "setup_plan"
 	ComponentStatus         = "status"
 	ComponentYank           = "yank"
+	DecisionCorrelate       = "correlate"
+	DecisionGet             = "get"
+	DecisionGetGlobal       = "get_global"
+	DecisionList            = "list"
+	DecisionListGlobal      = "list_global"
 	DoorAllow               = "allow"
 	DoorDeny                = "deny"
 	DoorList                = "list"
@@ -243,6 +249,7 @@ var Actions = map[string][]string{
 	"athanor":             {"archive", "create", "destroy", "get", "list", "pair", "provision", "purge", "rename", "settings", "unarchive"},
 	"build":               {"compile", "status", "toolchains", "validate"},
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
+	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
 	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status"},
 	"file":                {"delete", "list", "read", "write"},
@@ -1078,6 +1085,103 @@ func (args ComponentYankArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ComponentYank, fields: fields(args)})
+}
+
+// DecisionCorrelateArgs carries arguments for decision.correlate.
+type DecisionCorrelateArgs struct {
+	// The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it.
+	RequestId string `json:"request_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DecisionCorrelateArgs) MarshalJSON() ([]byte, error) {
+	type fields DecisionCorrelateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DecisionCorrelate, fields: fields(args)})
+}
+
+// DecisionGetArgs carries arguments for decision.get.
+type DecisionGetArgs struct {
+	// Call ID
+	CallId string `json:"call_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DecisionGetArgs) MarshalJSON() ([]byte, error) {
+	type fields DecisionGetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DecisionGet, fields: fields(args)})
+}
+
+// DecisionGetGlobalArgs carries arguments for decision.get_global.
+type DecisionGetGlobalArgs struct {
+	// Call ID
+	CallId string `json:"call_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DecisionGetGlobalArgs) MarshalJSON() ([]byte, error) {
+	type fields DecisionGetGlobalArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DecisionGetGlobal, fields: fields(args)})
+}
+
+// DecisionListArgs carries arguments for decision.list.
+type DecisionListArgs struct {
+	// The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it.
+	RequestId Field[string] `json:"request_id,omitzero"`
+	// Tool name filter
+	Tool Field[string] `json:"tool,omitzero"`
+	// Filter by admission
+	Admission Field[string] `json:"admission,omitzero"`
+	// Filter by refusal class
+	RefusalClass Field[string] `json:"refusal_class,omitzero"`
+	// ISO8601 timestamp — return decisions made at or after this time
+	Since Field[string] `json:"since,omitzero"`
+	// Max results (default: 20)
+	Limit Field[int] `json:"limit,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DecisionListArgs) MarshalJSON() ([]byte, error) {
+	type fields DecisionListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DecisionList, fields: fields(args)})
+}
+
+// DecisionListGlobalArgs carries arguments for decision.list_global.
+type DecisionListGlobalArgs struct {
+	// The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it.
+	RequestId Field[string] `json:"request_id,omitzero"`
+	// Tool name filter
+	Tool Field[string] `json:"tool,omitzero"`
+	// Filter by admission
+	Admission Field[string] `json:"admission,omitzero"`
+	// Filter by refusal class
+	RefusalClass Field[string] `json:"refusal_class,omitzero"`
+	// ISO8601 timestamp — return decisions made at or after this time
+	Since Field[string] `json:"since,omitzero"`
+	// Max results (default: 20)
+	Limit Field[int] `json:"limit,omitzero"`
+	// global only: one athanor's decisions, or none for the host's own
+	AthanorId Field[string] `json:"athanor_id,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args DecisionListGlobalArgs) MarshalJSON() ([]byte, error) {
+	type fields DecisionListGlobalArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: DecisionListGlobal, fields: fields(args)})
 }
 
 // DoorAllowArgs carries arguments for door.allow.

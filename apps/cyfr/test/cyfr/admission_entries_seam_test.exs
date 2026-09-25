@@ -78,6 +78,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {EmissaryWeb.Plugs.VerifyWebhookSignature, :call} => :webhook_unsigned,
     {EmissaryWeb.Plugs.WebhookIdempotency, :call} => :webhook_missing_idempotency_key,
     {EmissaryWeb.Plugs.WebhookRateLimit, :call} => :webhook_rate_limited,
+    {EmissaryWeb.ExecutionEventsController, :stream} => :execution_events_unknown,
     {Crucible.Schedules.Scheduler, :handle_info} => :schedule_fire_refused,
     {Crucible.Host.Children, :call} => :host_api_lost_attempt
   }
@@ -396,6 +397,16 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     second = conn |> recycle() |> post_signed(slug, secret, ~s({}))
     assert second.status == 429
     {request_id_of(second), refused("rate_limited", :none)}
+  end
+
+  # ==========================================================================
+  # Drivers: the execution-events stream
+  # ==========================================================================
+
+  def execution_events_unknown(conn, _ctx) do
+    conn = get(conn, "/api/executions/exec_nope/events")
+    assert conn.status == 404
+    {request_id_of(conn), refused(api_class(conn), :established)}
   end
 
   # ==========================================================================

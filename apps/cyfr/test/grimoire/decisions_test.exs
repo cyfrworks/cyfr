@@ -76,6 +76,10 @@ defmodule Grimoire.DecisionsTest do
         refute Decisions.recorded?("record", action)
       end
 
+      for action <- ~w(list get correlate list_global get_global) do
+        refute Decisions.recorded?("decision", action)
+      end
+
       refute Decisions.recorded?("tools", "list")
       refute Decisions.recorded?("system", "status")
     end
