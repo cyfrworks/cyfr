@@ -1,32 +1,38 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.Message do
+defmodule Prima.MCP.Message do
   @moduledoc """
-  JSON-RPC 2.0 message parsing and serialization for MCP.
+  The JSON-RPC 2.0 message codec for MCP: pure framing and validation,
+  shared by every side that reads or writes an MCP message.
 
   Handles encoding/decoding of:
   - Requests (method call with id)
   - Notifications (method call without id)
-  - Responses (result or error)
+  - Responses (result or error, never both)
   - Batches are refused at the transport (one message per request)
+
+  A message carrying `method` is a request or a notification whatever
+  else it carries, so a peer's request is never read as the answer to a
+  pending call.
 
   ## Examples
 
-      iex> Emissary.MCP.Message.decode(%{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
-      {:ok, %Emissary.MCP.Message{type: :request, id: 1, method: "tools/list", params: nil}}
+      iex> Prima.MCP.Message.decode(%{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+      {:ok, %Prima.MCP.Message{type: :request, id: 1, method: "tools/list", params: nil}}
 
-      iex> encoded = Emissary.MCP.Message.encode_result(1, %{"tools" => []})
+      iex> encoded = Prima.MCP.Message.encode_result(1, %{"tools" => []})
       iex> encoded["result"]["resultType"]
       "complete"
   """
 
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.Protocol
 
   @type message_type :: :request | :notification | :response | :error
+  @type id :: integer() | String.t()
   @type t :: %__MODULE__{
           type: message_type(),
-          id: integer() | String.t() | nil,
+          id: id() | nil,
           method: String.t() | nil,
           params: map() | nil,
           result: any() | nil,
@@ -114,42 +120,54 @@ defmodule Emissary.MCP.Message do
   def code?(_name), do: false
 
   @doc """
-  The code name a refusal answers with: its row's override when it has
-  one (`Grimoire.code_override/1`), a consent signal's own tag, and
-  otherwise its class's code. `where` is the method it answers —
-  `:resources_read` answers an absent resource with the MCP resource code,
-  `:tools_call` and `:transport` with invalid params.
+  The code name a refusal answers with: `override` when the refusal's row
+  carries one, a consent signal's own tag, and otherwise its class's code
+  (`class_code/2`).
+
+  `override` is required: the caller that classified the refusal reads
+  it from the row (`Grimoire.code_override/1`), and a row's override —
+  Sanctum's `:auth_required`, for one — outranks the class.
   """
-  @spec refusal_code(Prima.Refusal.t(), :tools_call | :resources_read | :transport) :: atom()
-  def refusal_code(%Prima.Refusal{} = refusal, where) do
+  @spec refusal_code(
+          Prima.Refusal.t(),
+          :tools_call | :resources_read | :transport,
+          atom() | nil
+        ) :: atom()
+  def refusal_code(%Prima.Refusal{} = refusal, where, override) do
     cond do
-      override = Grimoire.code_override(refusal) -> override
+      override -> override
       Prima.ConsentSignal.signal?(refusal.reason) -> elem(refusal.reason, 0)
       true -> class_code(refusal.class, where)
     end
   end
 
-  defp class_code(:invalid_argument, _where), do: :invalid_params
-  defp class_code(:not_found, :resources_read), do: :resource_not_found
-  defp class_code(:not_found, _where), do: :invalid_params
-  defp class_code(:unauthenticated, _where), do: :auth_required
-  defp class_code(:forbidden, _where), do: :insufficient_permissions
-  defp class_code(:setup_required, _where), do: :setup_required
-  defp class_code(:consent_required, _where), do: :consent_required
-  defp class_code(:rate_limited, _where), do: :rate_limited
-  defp class_code(:cancelled, _where), do: :request_cancelled
+  @doc """
+  The code name a refusal class answers with. `where` is the method it
+  answers — `:resources_read` answers an absent resource with the MCP
+  resource code, `:tools_call` and `:transport` with invalid params.
+  """
+  @spec class_code(Prima.Refusal.class(), :tools_call | :resources_read | :transport) :: atom()
+  def class_code(:invalid_argument, _where), do: :invalid_params
+  def class_code(:not_found, :resources_read), do: :resource_not_found
+  def class_code(:not_found, _where), do: :invalid_params
+  def class_code(:unauthenticated, _where), do: :auth_required
+  def class_code(:forbidden, _where), do: :insufficient_permissions
+  def class_code(:setup_required, _where), do: :setup_required
+  def class_code(:consent_required, _where), do: :consent_required
+  def class_code(:rate_limited, _where), do: :rate_limited
+  def class_code(:cancelled, _where), do: :request_cancelled
 
-  defp class_code(class, _where)
-       when class in [
-              :conflict,
-              :not_owner,
-              :unavailable,
-              :corrupt,
-              :timeout,
-              :uncertain,
-              :internal
-            ],
-       do: class
+  def class_code(class, _where)
+      when class in [
+             :conflict,
+             :not_owner,
+             :unavailable,
+             :corrupt,
+             :timeout,
+             :uncertain,
+             :internal
+           ],
+      do: class
 
   @doc """
   Decode a JSON-RPC message from a map (already parsed from JSON).
@@ -158,7 +176,25 @@ defmodule Emissary.MCP.Message do
   JSON-RPC *request* or *notification*." A batch arrives as a list and is
   refused at the transport, so nothing reaches here that this could not decode.
   """
+  @spec decode(map()) :: {:ok, t()} | {:error, :invalid_request, String.t()}
   def decode(message) when is_map(message), do: decode_single(message)
+
+  @doc """
+  Decode one JSON-RPC message from its JSON text.
+
+  Text that is not JSON is a `:parse_error`; JSON that is not a single
+  message object — a batch, a scalar — is an `:invalid_request`, as is
+  every shape `decode/1` refuses.
+  """
+  @spec decode_json(binary()) ::
+          {:ok, t()} | {:error, :parse_error | :invalid_request, String.t()}
+  def decode_json(json) when is_binary(json) do
+    case Prima.Json.decode(json) do
+      {:ok, message} when is_map(message) -> decode(message)
+      {:ok, _other} -> {:error, :invalid_request, "Expected a single JSON-RPC message"}
+      {:error, :invalid_json} -> {:error, :parse_error, "Invalid JSON"}
+    end
+  end
 
   defp decode_single(%{"jsonrpc" => @jsonrpc_version} = msg) do
     cond do
@@ -188,6 +224,11 @@ defmodule Emissary.MCP.Message do
            method: msg["method"],
            params: msg["params"]
          }}
+
+      # A response carries result or error, never both: which one it
+      # answers is not decidable.
+      Map.has_key?(msg, "result") and Map.has_key?(msg, "error") ->
+        {:error, :invalid_request, "Response must not carry both result and error"}
 
       # Response: has result and id (MCP: id MUST NOT be null)
       Map.has_key?(msg, "result") and Map.has_key?(msg, "id") ->
@@ -236,14 +277,14 @@ defmodule Emissary.MCP.Message do
   whether this is a finished answer or a request for more input, and the server's
   identity under `_meta`.
 
-  Both are applied here rather than in `Emissary.MCP.Router` because the router
-  is not the only producer — the discovery path in `EmissaryWeb.MCPController`
-  encodes its own result — and a result that reaches the wire without a
-  `resultType` is invalid to a conforming client.
+  Both are applied here rather than by each producer — a router and a
+  discovery path each encode results — because a result that reaches the
+  wire without a `resultType` is invalid to a conforming client.
 
   Any `_meta` a handler already built is preserved; the server identity is merged
   into it, never over it.
   """
+  @spec encode_result(id(), term(), :complete | :input_required) :: map()
   def encode_result(id, result, kind \\ :complete) do
     %{
       "jsonrpc" => @jsonrpc_version,
@@ -273,6 +314,7 @@ defmodule Emissary.MCP.Message do
 
   Accepts either an atom error code (from standard codes) or a numeric code.
   """
+  @spec encode_error(id() | nil, atom() | integer(), String.t(), term()) :: map()
   def encode_error(id, code, message, data \\ nil)
 
   def encode_error(id, code, message, data) when is_atom(code) do
@@ -309,6 +351,7 @@ defmodule Emissary.MCP.Message do
   `encode_result/3`, on responses this node serves — never on what it
   asks an upstream.
   """
+  @spec encode_request(id(), String.t(), term()) :: map()
   def encode_request(id, method, params \\ nil) do
     %{
       "jsonrpc" => @jsonrpc_version,
@@ -321,6 +364,7 @@ defmodule Emissary.MCP.Message do
   @doc """
   Encode a notification (no id, no response expected).
   """
+  @spec encode_notification(String.t(), term()) :: map()
   def encode_notification(method, params \\ nil) do
     %{
       "jsonrpc" => @jsonrpc_version,
@@ -337,6 +381,7 @@ defmodule Emissary.MCP.Message do
 
   Supports both standard JSON-RPC 2.0 codes and CYFR-specific codes.
   """
+  @spec error_code(atom()) :: integer()
   def error_code(atom) when is_atom(atom) do
     Map.get(@error_codes, atom) ||
       Map.get(@cyfr_error_codes, atom) ||

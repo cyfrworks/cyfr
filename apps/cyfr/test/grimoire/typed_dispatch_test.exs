@@ -7,7 +7,8 @@ defmodule Grimoire.TypedDispatchTest do
   alias Grimoire.{Catalog, Probe, Visibility}
   alias Prima.{Operation, Refusal}
   alias Prima.Test.AuthorityFixtures
-  alias Emissary.MCP.{Message, Router}
+  alias Emissary.MCP.Router
+  alias Prima.MCP.Message
 
   setup do
     Cyfr.Test.Sandbox.setup!()

@@ -7,7 +7,7 @@ defmodule EmissaryWeb.MCPErrorTest do
   """
   use EmissaryWeb.ConnCase, async: true
 
-  alias Emissary.MCP.Message
+  alias Prima.MCP.Message
 
   describe "request id echoing" do
     test "a rate-limit rejection echoes the request id", %{conn: conn} do

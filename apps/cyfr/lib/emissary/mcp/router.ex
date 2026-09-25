@@ -58,7 +58,7 @@ defmodule Emissary.MCP.Router do
 
   require Logger
 
-  alias Emissary.MCP.{Message, Protocol}
+  alias Prima.MCP.{Message, Protocol}
 
   @server_capabilities %{
     # `listChanged: true` is a promise to actually push. It is true for tools
@@ -383,7 +383,7 @@ defmodule Emissary.MCP.Router do
   # credential, a consent signal's with its `error.data`.
   defp protocol_error(ctx, reason, where) do
     refusal = Grimoire.classify(reason)
-    code = Message.refusal_code(refusal, where)
+    code = Message.refusal_code(refusal, where, Grimoire.code_override(refusal))
     inner = refusal.reason
 
     cond do

@@ -23,7 +23,8 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
   alias Grimoire.Catalog
   alias Prima.{Arg, Operation}
   alias Prima.Test.AuthorityFixtures
-  alias Emissary.MCP.{Message, Router}
+  alias Emissary.MCP.Router
+  alias Prima.MCP.Message
   alias Grimoire.Resources
   alias Sanctum.Context
 

@@ -25,7 +25,7 @@ defmodule EmissaryWeb.Plugs.MCPRequestMetadata do
 
   import Plug.Conn
 
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.Protocol
 
   def init(opts), do: opts
 

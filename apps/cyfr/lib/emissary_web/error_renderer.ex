@@ -21,7 +21,7 @@ defmodule EmissaryWeb.ErrorRenderer do
   `code` is the refusal: a reason term or a `%Prima.Refusal{}`. Each renderer
   maps it to whatever its wire format calls an error code — its class for
   `ApiError`, its JSON-RPC code for `MCPError`, which also takes a code name
-  from `Emissary.MCP.Message`'s tables as itself.
+  from `Prima.MCP.Message`'s tables as itself.
 
   The full rejection vocabulary, for every surface:
 

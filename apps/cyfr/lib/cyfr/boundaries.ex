@@ -940,15 +940,7 @@ defmodule Cyfr.Boundaries do
   @gate_free %{
     from: ["apps/cyfr/lib/grimoire.ex", "apps/cyfr/lib/grimoire/**/*.ex"],
     roots: ~w(Emissary EmissaryWeb Aqua Compendium Crucible Prism PrismWeb CyfrWeb),
-    allow: [
-      %{
-        name: "Emissary.MCP.Protocol",
-        owner: "Prima",
-        reason:
-          "`system.status` reports the MCP protocol version, which the transport " <>
-            "spells until the MCP message and protocol shapes are shared contracts."
-      }
-    ],
+    allow: [],
     reason:
       "the operation table dispatches for every domain and surface; naming one " <>
         "would make the gate depend on what it gates. Proxied tools reach it " <>

@@ -18,7 +18,7 @@ defmodule Emissary.External.ServerEraTest do
   use ExUnit.Case, async: false
 
   alias Emissary.External.Server
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.Protocol
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -159,6 +159,63 @@ defmodule Emissary.External.ServerEraTest do
       # It never tried the handshake: the body identified a current server.
       assert_received {:method, "tools/list"}
       refute_received {:method, "initialize"}
+    end
+  end
+
+  describe "a reply is this request's response or it is refused" do
+    # The reply is read through the codec: a peer's own request is never the
+    # answer to this one, a response carrying both result and error is not
+    # decidable, and an answer to another id belongs to another call. Each
+    # is refused with one sentence of this node's, never the body's.
+    defp answering(bypass, reply) do
+      Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+        {body, conn} = read_body(conn)
+        json(conn, reply.(body["id"]))
+      end)
+    end
+
+    test "a request carrying this request's id is not its response", %{bypass: bypass, url: url} do
+      answering(bypass, fn id ->
+        %{"jsonrpc" => "2.0", "id" => id, "method" => "sampling/createMessage", "params" => %{}}
+      end)
+
+      {pid, {:error, reason}} = connect(url, "asking-peer")
+      assert reason =~ "not the response to this request"
+      assert %{status: :error, tool_count: 0} = GenServer.call(pid, :status, 5_000)
+    end
+
+    test "a response carrying both result and error is refused", %{bypass: bypass, url: url} do
+      answering(bypass, fn id ->
+        %{
+          "jsonrpc" => "2.0",
+          "id" => id,
+          "result" => %{"tools" => [%{"name" => "t"}]},
+          "error" => %{"code" => -32603, "message" => "secret-diagnostic"}
+        }
+      end)
+
+      {pid, {:error, reason}} = connect(url, "both-peer")
+      assert reason =~ "not the response to this request"
+      refute reason =~ "secret-diagnostic"
+      assert %{status: :error, tool_count: 0} = GenServer.call(pid, :status, 5_000)
+    end
+
+    test "an answer to another id is not this request's", %{bypass: bypass, url: url} do
+      answering(bypass, fn id ->
+        %{"jsonrpc" => "2.0", "id" => "not-#{id}", "result" => %{"tools" => []}}
+      end)
+
+      {_pid, {:error, reason}} = connect(url, "other-id-peer")
+      assert reason =~ "not the response to this request"
+    end
+
+    test "an error response with a null id is refused", %{bypass: bypass, url: url} do
+      answering(bypass, fn _id ->
+        %{"jsonrpc" => "2.0", "id" => nil, "error" => %{"code" => -32603, "message" => "x"}}
+      end)
+
+      {_pid, {:error, reason}} = connect(url, "null-id-peer")
+      assert reason =~ "not the response to this request"
     end
   end
 end

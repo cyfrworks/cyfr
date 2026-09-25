@@ -48,7 +48,7 @@ defmodule EmissaryWeb.ConnCase do
   """
   def mcp_post(conn, body) when is_map(body) do
     conn
-    |> Plug.Conn.put_req_header("mcp-protocol-version", Emissary.MCP.Protocol.version())
+    |> Plug.Conn.put_req_header("mcp-protocol-version", Prima.MCP.Protocol.version())
     |> put_mcp_routing_headers(body)
     |> Phoenix.ConnTest.dispatch(EmissaryWeb.Endpoint, :post, "/mcp", conform_mcp_body(body))
   end
@@ -60,7 +60,7 @@ defmodule EmissaryWeb.ConnCase do
         _ -> conn
       end
 
-    case Emissary.MCP.Protocol.named_subject(body) do
+    case Prima.MCP.Protocol.named_subject(body) do
       name when is_binary(name) -> Plug.Conn.put_req_header(conn, "mcp-name", name)
       _ -> conn
     end
@@ -70,9 +70,9 @@ defmodule EmissaryWeb.ConnCase do
     params = Map.get(body, "params") || %{}
 
     meta = %{
-      Emissary.MCP.Protocol.meta_protocol_version_key() => Emissary.MCP.Protocol.version(),
-      Emissary.MCP.Protocol.meta_client_info_key() => %{"name" => "test", "version" => "0.0.0"},
-      Emissary.MCP.Protocol.meta_client_capabilities_key() => %{}
+      Prima.MCP.Protocol.meta_protocol_version_key() => Prima.MCP.Protocol.version(),
+      Prima.MCP.Protocol.meta_client_info_key() => %{"name" => "test", "version" => "0.0.0"},
+      Prima.MCP.Protocol.meta_client_capabilities_key() => %{}
     }
 
     Map.put(body, "params", Map.put(params, "_meta", meta))

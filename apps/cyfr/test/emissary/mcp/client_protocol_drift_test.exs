@@ -3,7 +3,7 @@
 
 defmodule Emissary.MCP.ClientProtocolDriftTest do
   @moduledoc """
-  The protocol version has one Elixir source (`Emissary.MCP.Protocol`), but
+  The protocol version has one Elixir source (`Prima.MCP.Protocol`), but
   two first-party clients live outside the BEAM and must carry their own
   literal: the Go CLI and the mcp-bridge. This test binds those literals to
   the server's version so a revision bump cannot strand a bundled client on
@@ -13,7 +13,7 @@ defmodule Emissary.MCP.ClientProtocolDriftTest do
   """
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.Protocol
 
   @project_root Path.expand("../../../../..", __DIR__)
 

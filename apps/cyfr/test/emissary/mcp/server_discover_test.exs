@@ -9,7 +9,7 @@ defmodule Emissary.MCP.ServerDiscoverTest do
   """
   use EmissaryWeb.ConnCase, async: false
 
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.Protocol
 
   defp discover(conn, id \\ 1) do
     conn

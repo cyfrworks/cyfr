@@ -4,7 +4,8 @@
 defmodule Emissary.MCP.RouterTest do
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.{Message, Router}
+  alias Emissary.MCP.Router
+  alias Prima.MCP.Message
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -20,7 +21,7 @@ defmodule Emissary.MCP.RouterTest do
       msg = %Message{type: :request, id: 1, method: "server/discover", params: %{}}
 
       assert {:ok, result} = Router.dispatch(ctx, msg)
-      assert result["supportedVersions"] == Emissary.MCP.Protocol.supported()
+      assert result["supportedVersions"] == Prima.MCP.Protocol.supported()
       assert is_map(result["capabilities"])
 
       # Identity is stamped onto every result by the encoder, so the router's

@@ -6,7 +6,8 @@ defmodule Emissary.MCP.ResourceReadAuditTest do
   # runs reads through the shared-mode sandbox.
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.{Message, Router}
+  alias Emissary.MCP.Router
+  alias Prima.MCP.Message
   alias Grimoire.Resources
   alias Sanctum.Context
 

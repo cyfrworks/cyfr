@@ -14,7 +14,7 @@ defmodule Compendium.GuideProtocolDriftTest do
   """
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.Protocol
 
   @project_root Path.expand("../../../..", __DIR__)
   @guides ~w(integration-guide.md component-guide.md tincture-guide.md)

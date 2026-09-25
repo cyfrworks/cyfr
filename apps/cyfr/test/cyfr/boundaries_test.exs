@@ -1082,12 +1082,7 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.gate_violations(named) == []
       assert Boundaries.stale_gate_allowances(named) == []
 
-      assert Enum.map(Boundaries.gate_free().allow, & &1.name) == ["Emissary.MCP.Protocol"]
-
-      for entry <- Boundaries.gate_free().allow do
-        assert is_binary(entry.reason) and entry.reason != ""
-        assert is_binary(entry.owner) and entry.owner != ""
-      end
+      assert Boundaries.gate_free().allow == []
 
       planted = [
         {"apps/cyfr/lib/grimoire/planted.ex",
@@ -1110,7 +1105,7 @@ defmodule Cyfr.BoundariesTest do
                "apps/cyfr/lib/grimoire/planted.ex:6 names PrismWeb.Focus"
              ]
 
-      assert Boundaries.stale_gate_allowances(planted) == ["Emissary.MCP.Protocol"]
+      assert Boundaries.stale_gate_allowances(planted) == []
     end
 
     test "a direct read of a security row in a surface is reported, however it is spelled" do

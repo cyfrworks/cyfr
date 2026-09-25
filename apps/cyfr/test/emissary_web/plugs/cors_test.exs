@@ -6,7 +6,7 @@ defmodule EmissaryWeb.Plugs.CORSTest do
   import Plug.Test
   import Plug.Conn
 
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.Protocol
   alias EmissaryWeb.Plugs.CORS
 
   # An OPTIONS preflight against the real plug, wildcard origin.
@@ -91,7 +91,7 @@ defmodule EmissaryWeb.Plugs.CORSTest do
 
                #{Enum.join(missing, "\n  ")}
 
-             Both sides read Emissary.MCP.Protocol.request_headers/0 — add it there.
+             Both sides read Prima.MCP.Protocol.request_headers/0 — add it there.
              """
     end
 
